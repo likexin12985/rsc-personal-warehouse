@@ -322,6 +322,9 @@ def test_list_is_read_only_stable_pagination_and_works_with_writes_disabled(
         "items": [],
         "next_after_id": None,
     }
+    assert response.headers["Cache-Control"] == "no-store, max-age=0"
+    assert response.headers["Pragma"] == "no-cache"
+    assert response.headers["Referrer-Policy"] == "no-referrer"
     assert captured == {
         "actor": principal_box["value"],
         "limit": 25,

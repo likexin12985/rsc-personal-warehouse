@@ -33,6 +33,8 @@ export type FormalMaterialRequestAccess = Readonly<{
   authorization_version: number;
   can_read: boolean;
   can_create: boolean;
+  can_withdraw: boolean;
+  can_cancel: boolean;
   can_read_material_catalog: boolean;
   can_approve_region: boolean;
   can_approve_headquarters: boolean;
@@ -175,6 +177,33 @@ function validateSupportedMutationBody(
     exactObject(body, ["expected_version"], "正式需求提交内容");
     return;
   }
+  if (action === "withdraw") {
+    const object = exactObject(body, ["expected_version", "reason"], "正式需求撤回内容");
+    boundedText(object.reason, "reason", 4000, false);
+    return;
+  }
+  if (action === "cancel") {
+    const object = exactObject(body, ["expected_version", "reason", "lines"], "正式需求安全取消内容");
+    boundedText(object.reason, "reason", 4000, false);
+    if (!Array.isArray(object.lines) || object.lines.length > 200) {
+      return adapterError("正式需求取消明细无效");
+    }
+    const lineIds = object.lines.map((row, index) => {
+      const line = exactObject(
+        row,
+        ["request_line_id", "cancelled_qty", "reason"],
+        `取消明细 ${index + 1}`,
+      );
+      const lineId = requiredUuid(line.request_line_id, "request_line_id");
+      decimalText(line.cancelled_qty, "cancelled_qty", true);
+      boundedText(line.reason, "line.reason", 4000, false);
+      return lineId;
+    });
+    if (new Set(lineIds).size !== lineIds.length) {
+      return adapterError("正式需求取消明细包含重复行");
+    }
+    return;
+  }
   if (["approve", "return", "reject"].includes(action)) {
     const object = exactObject(body, [
       "expected_request_version", "expected_step_version", "action", "lines", "return_lines", "comment",
@@ -288,6 +317,8 @@ function projectAccessContext(
     authorization_version: authorizationVersion,
     can_read: canRead,
     can_create: canCreate,
+    can_withdraw: canRead && permissionKeys.includes("material_request\u0000withdraw\u0000"),
+    can_cancel: canRead && permissionKeys.includes("material_request\u0000cancel\u0000"),
     can_read_material_catalog: permissionKeys.includes("inventory\u0000read\u0000"),
     can_approve_region: permissionKeys.includes("material_request\u0000approve_region\u0000approval_decision"),
     can_approve_headquarters: permissionKeys.includes("material_request\u0000approve_headquarters\u0000approval_decision"),
@@ -301,6 +332,7 @@ export function validateFormalMaterialRequestAccess(value: unknown): FormalMater
     value,
     [
       "schema_version", "person_id", "authorization_version", "can_read", "can_create",
+      "can_withdraw", "can_cancel",
       "can_read_material_catalog", "can_approve_region", "can_approve_headquarters",
       "can_register_external", "can_verify_external",
     ],
@@ -310,14 +342,14 @@ export function validateFormalMaterialRequestAccess(value: unknown): FormalMater
     return adapterError("正式需求访问上下文版本不受支持");
   }
   const capabilityFields = [
-    "can_read", "can_create", "can_read_material_catalog", "can_approve_region",
+    "can_read", "can_create", "can_withdraw", "can_cancel", "can_read_material_catalog", "can_approve_region",
     "can_approve_headquarters", "can_register_external", "can_verify_external",
   ] as const;
   if (capabilityFields.some((field) => typeof object[field] !== "boolean")) {
     return adapterError("正式需求访问授权无效");
   }
-  if (object.can_create && !object.can_read) {
-    return adapterError("正式需求创建权限缺少必需的读取回验权限");
+  if ((object.can_create || object.can_withdraw || object.can_cancel) && !object.can_read) {
+    return adapterError("正式需求写权限缺少必需的读取回验权限");
   }
   return Object.freeze({
     schema_version: MATERIAL_REQUEST_SCHEMA_VERSION,
@@ -325,6 +357,8 @@ export function validateFormalMaterialRequestAccess(value: unknown): FormalMater
     authorization_version: version(object.authorization_version, "authorization_version"),
     can_read: object.can_read as boolean,
     can_create: object.can_create as boolean,
+    can_withdraw: object.can_withdraw as boolean,
+    can_cancel: object.can_cancel as boolean,
     can_read_material_catalog: object.can_read_material_catalog as boolean,
     can_approve_region: object.can_approve_region as boolean,
     can_approve_headquarters: object.can_approve_headquarters as boolean,
@@ -407,6 +441,12 @@ function mutationMethod(intent: MaterialRequestMutationIntent): "PUT" | "POST" {
     case "submit":
       expectedPath = `${root}/submit`;
       break;
+    case "withdraw":
+      expectedPath = `${root}/withdraw`;
+      break;
+    case "cancel":
+      expectedPath = `${root}/cancel`;
+      break;
     case "approve":
     case "return":
     case "reject":
@@ -457,10 +497,16 @@ export function createFormalMaterialRequestAdapter(
       const suffix = afterId === null
         ? ""
         : `&after_id=${encodeURIComponent(requiredUuid(afterId, "after_id"))}`;
-      return requester(`/v1/material-requests?limit=50${suffix}`);
+      return requester(`/v1/material-requests?limit=50${suffix}`, {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+      });
     },
     detail(requestId: string) {
-      return requester(`/v1/material-requests/${requiredUuid(requestId, "request_id")}`);
+      return requester(`/v1/material-requests/${requiredUuid(requestId, "request_id")}`, {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+      });
     },
     loadDraftForEdit(requestId: string) {
       return requester(

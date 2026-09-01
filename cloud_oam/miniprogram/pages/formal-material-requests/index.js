@@ -5,6 +5,10 @@ const materialCatalog = require('../../utils/material-catalog-contract')
 const formalFileUpload = require('../../utils/formal-file-upload')
 
 const transport = adapterModule.formalMaterialRequestAdapter
+const lifecycleRuntime = {
+  registry: contract.createMaterialRequestIntentRegistry(),
+  context: null
+}
 
 const AXES = [
   ['request_status', '申请'],
@@ -34,6 +38,9 @@ const STATUS_LABELS = {
 const NONZERO_UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const AWARE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
 const SAFE_EXTERNAL_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,199}$/
+const ACTIVE_WITHDRAW_STEP_STATUSES = new Set([
+  'pending', 'open', 'awaiting_external_evidence', 'evidence_pending_verification'
+])
 
 function nextLineKey(page) {
   page._lineKey = (page._lineKey || 0) + 1
@@ -234,6 +241,109 @@ function approvalLinePayload(process) {
   }, { lines: [], return_lines: [] })
 }
 
+function isPositiveDecimal(value) {
+  const parsed = decimalUnits(value)
+  return parsed !== null && (parsed.whole !== '0' || parsed.fraction !== '000')
+}
+
+function cancellationInputLines(detail) {
+  return detail.lines
+    .filter((line) => isPositiveDecimal(line.final_approved_qty))
+    .map((line) => ({
+      requestLineId: line.request_line_id,
+      lineNo: line.line_no,
+      materialId: line.material_id,
+      cancelledQty: line.final_approved_qty,
+      reason: ''
+    }))
+}
+
+function lifecycleConfirmationFromPending(before, intent) {
+  if (
+    !before || !intent || intent.request_id !== before.request_id ||
+    !['withdraw', 'cancel'].includes(intent.action) ||
+    intent.expected_version !== before.request_version ||
+    !intent.body || intent.body.expected_version !== before.request_version ||
+    typeof intent.body.reason !== 'string'
+  ) return null
+  let lines = []
+  if (intent.action === 'cancel') {
+    if (!Array.isArray(intent.body.lines)) return null
+    const byId = new Map(intent.body.lines.map((line) => [line.request_line_id, line]))
+    const expected = cancellationInputLines(before)
+    if (
+      byId.size !== intent.body.lines.length ||
+      expected.length !== intent.body.lines.length ||
+      expected.some((line) => {
+        const pendingLine = byId.get(line.requestLineId)
+        return !pendingLine || pendingLine.cancelled_qty !== line.cancelledQty ||
+          typeof pendingLine.reason !== 'string'
+      })
+    ) return null
+    lines = expected.map((line) => Object.assign({}, line, {
+      reason: byId.get(line.requestLineId).reason
+    }))
+  }
+  return {
+    action: intent.action,
+    title: intent.action === 'withdraw' ? '二次确认撤回需求' : '二次确认安全取消',
+    requestId: before.request_id,
+    expectedVersion: before.request_version,
+    reason: intent.body.reason,
+    lines,
+    pendingMessage: `结果仍未确认（${intent.headers['X-Request-ID']}）；禁止生成新坐标或执行其他动作。`,
+    error: ''
+  }
+}
+
+function lifecycleResultNotice(action) {
+  return action === 'withdraw'
+    ? '需求已撤回并精确回读；其他九个状态轴未被合并。'
+    : '需求已安全取消并精确回读；取消明细与最终批准量一致。'
+}
+
+function lifecycleContextMatches(context, before, confirmation, identity) {
+  return Boolean(
+    context && before && confirmation &&
+    context.identity === identity &&
+    context.before.request_id === before.request_id &&
+    context.before.request_version === before.request_version &&
+    context.intent.request_id === before.request_id &&
+    context.intent.expected_version === before.request_version &&
+    context.intent.action === confirmation.action &&
+    confirmation.requestId === before.request_id &&
+    confirmation.expectedVersion === before.request_version
+  )
+}
+
+function pendingLifecycleContext() {
+  const context = lifecycleRuntime.context
+  if (!context || context.status !== 'pending') return null
+  const pending = lifecycleRuntime.registry.get(context.intent.request_id)
+  return pending && pending.signature === context.intent.signature ? context : null
+}
+
+function consumeLifecycleCompletion(page, context, access) {
+  if (
+    !context || context.status !== 'confirmed' || !context.terminalDetail ||
+    context.identity !== accessUploadIdentity(access) ||
+    lifecycleRuntime.context !== context
+  ) return false
+  page._lifecycleBefore = null
+  page._lifecyclePendingIdentity = ''
+  page.setData({
+    detail: presentDetail(context.terminalDetail, access),
+    lifecycleConfirm: null,
+    notice: lifecycleResultNotice(context.intent.action)
+  })
+  lifecycleRuntime.context = null
+  return true
+}
+
+function lifecyclePageIsActive(page, generation) {
+  return !page._unloaded && (page._lifecycleGeneration || 0) === generation
+}
+
 function approvalNotice(detail) {
   const current = detail.approval_instance && detail.approval_instance.current_step_id
   const step = current
@@ -273,6 +383,8 @@ function presentDetail(detail, access) {
     approvalSteps: detail.approval_instance ? detail.approval_instance.steps : [],
     canEdit: editable && detail.allowed_actions.includes('update'),
     canSubmit: editable && detail.allowed_actions.includes('submit'),
+    canWithdraw: access.can_withdraw && actions.has('withdraw'),
+    canCancel: access.can_cancel && actions.has('cancel'),
     canProcessInternal: !!(
       step &&
       step.source_mode === 'internal' &&
@@ -311,6 +423,100 @@ function approvalMutationMatches(result, detail) {
     result.current_step_id === (instance ? instance.current_step_id : null)
 }
 
+function sameProjection(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function lifecycleInvariantProjectionMatches(before, detail) {
+  return before.schema_version === detail.schema_version &&
+    before.request_id === detail.request_id &&
+    before.request_no === detail.request_no &&
+    before.current_revision_id === detail.current_revision_id &&
+    before.current_revision_no === detail.current_revision_no &&
+    before.work_order_id === detail.work_order_id &&
+    before.requester_person_id === detail.requester_person_id &&
+    before.requester_org_id === detail.requester_org_id &&
+    before.purpose === detail.purpose &&
+    before.urgency === detail.urgency &&
+    before.expected_date === detail.expected_date &&
+    before.note === detail.note &&
+    before.approval_mode === detail.approval_mode &&
+    before.created_at === detail.created_at &&
+    before.submitted_at === detail.submitted_at &&
+    sameProjection(before.address_snapshot, detail.address_snapshot) &&
+    sameProjection(before.contact_masked, detail.contact_masked) &&
+    sameProjection(before.attachment_refs, detail.attachment_refs) &&
+    sameProjection(before.revision_history, detail.revision_history) &&
+    sameProjection(before.supply_tasks, detail.supply_tasks) &&
+    before.approval_history.length === detail.approval_history.length &&
+    sameProjection(
+      before.approval_history.slice(0, -1),
+      detail.approval_history.slice(0, -1)
+    )
+}
+
+function lifecycleMutationMatches(result, before, detail, action, cancellationLines) {
+  const expectedStatus = action === 'withdraw' ? 'withdrawn' : 'cancelled'
+  const beforeInstance = before.approval_instance
+  const afterInstance = detail.approval_instance
+  if (
+    !approvalMutationMatches(result, detail) ||
+    !lifecycleInvariantProjectionMatches(before, detail) ||
+    result.current_step_id !== null ||
+    detail.states.request_status !== expectedStatus ||
+    !beforeInstance ||
+    !afterInstance ||
+    result.approval_instance_id !== beforeInstance.instance_id ||
+    result.approval_attempt_no !== beforeInstance.attempt_no ||
+    detail.current_revision_id !== before.current_revision_id ||
+    detail.current_revision_no !== before.current_revision_no ||
+    AXES.slice(1).some(([key]) => detail.states[key] !== before.states[key]) ||
+    detail.allowed_actions.length !== 0 ||
+    detail.lines.length !== before.lines.length
+  ) return false
+  if (action === 'withdraw') {
+    const cancellableStepCount = beforeInstance.steps.filter(
+      (step) => ACTIVE_WITHDRAW_STEP_STATUSES.has(step.status)
+    ).length
+    const expectedInstance = Object.assign({}, beforeInstance, {
+      status: 'withdrawn',
+      current_step_no: null,
+      current_step_id: null,
+      version: beforeInstance.version + 1,
+      steps: beforeInstance.steps.map((step) => (
+        ACTIVE_WITHDRAW_STEP_STATUSES.has(step.status)
+          ? Object.assign({}, step, {
+            status: 'cancelled',
+            decided_at: null,
+            version: step.version + 1
+          })
+          : step
+      ))
+    })
+    return cancellableStepCount > 0 &&
+      sameProjection(afterInstance, expectedInstance) &&
+      sameProjection(detail.lines, before.lines)
+  }
+  const requested = new Map(cancellationLines.map((line) => [
+    line.request_line_id,
+    line.cancelled_qty
+  ]))
+  const positiveBefore = before.lines.filter((line) => isPositiveDecimal(line.final_approved_qty))
+  if (
+    requested.size !== cancellationLines.length ||
+    requested.size !== positiveBefore.length ||
+    positiveBefore.some((line) => requested.get(line.request_line_id) !== line.final_approved_qty)
+  ) return false
+  const expectedLines = before.lines.map((line) => Object.assign({}, line, {
+    cancelled_qty: line.final_approved_qty,
+    status: 'cancelled',
+    version: line.version + 1
+  }))
+  return ['completed', 'returned'].includes(beforeInstance.status) &&
+    sameProjection(afterInstance, beforeInstance) &&
+    sameProjection(detail.lines, expectedLines)
+}
+
 function toast(error, fallback) {
   wx.showToast({ title: (error && error.message) || fallback, icon: 'none' })
 }
@@ -330,6 +536,7 @@ function ensureFileUploadControllers(page) {
       purpose: 'request_attachment',
       multiple: true,
       onChange(snapshot) {
+        if (page._unloaded) return
         page.setData({
           requestUploadFiles: snapshot.files,
           requestUploadBlocking: snapshot.blocking,
@@ -343,6 +550,7 @@ function ensureFileUploadControllers(page) {
       purpose: 'external_approval_evidence',
       multiple: false,
       onChange(snapshot) {
+        if (page._unloaded) return
         page.setData({
           externalUploadFiles: snapshot.files,
           externalUploadBlocking: snapshot.blocking,
@@ -397,6 +605,7 @@ Page({
     externalUploadBlocking: false,
     externalUploadCanChoose: true,
     submitConfirm: false,
+    lifecycleConfirm: null,
     writePending: false,
     pendingWriteMessage: '',
     notice: ''
@@ -404,6 +613,7 @@ Page({
 
   onShow() {
     if (!session.ensureLogin()) return
+    this._unloaded = false
     this.load()
   },
 
@@ -413,19 +623,32 @@ Page({
 
   onUnload() {
     this._loadGeneration = (this._loadGeneration || 0) + 1
+    this._lifecycleGeneration = (this._lifecycleGeneration || 0) + 1
+    this._unloaded = true
     this._createRegistry = null
     this._mutationRegistry = null
     this._access = null
     this._uploadIdentity = ''
+    this._lifecycleBefore = null
+    this._lifecyclePendingIdentity = ''
     clearFileUploadMemory(this)
     this._requestAttachmentUploads = null
     this._externalEvidenceUploads = null
-    this.setData({ form: null, materialPicker: null, processing: null, detail: null, submitConfirm: false })
+    Object.assign(this.data, {
+      form: null,
+      materialPicker: null,
+      processing: null,
+      detail: null,
+      submitConfirm: false,
+      lifecycleConfirm: null
+    })
   },
 
   async load() {
+    this._unloaded = false
     const generation = (this._loadGeneration || 0) + 1
     this._loadGeneration = generation
+    ensureRegistries(this)
     this._access = null
     this.setData({
       loading: true,
@@ -434,6 +657,7 @@ Page({
       accessMessage: '正在校验正式需求权限',
       requests: [],
       detail: null,
+      lifecycleConfirm: null,
       notice: ''
     })
     try {
@@ -456,12 +680,50 @@ Page({
       }
       this._uploadIdentity = nextUploadIdentity
       this._access = access
+      const runtimeContext = lifecycleRuntime.context
+      const pendingContext = pendingLifecycleContext()
+      const lifecycleBefore = pendingContext ? pendingContext.before : null
+      const restoredLifecycle = pendingContext
+        ? lifecycleConfirmationFromPending(lifecycleBefore, pendingContext.intent)
+        : null
+      const lifecycleIdentityMatches = Boolean(
+        restoredLifecycle &&
+        pendingContext.identity === nextUploadIdentity
+      )
+      const runtimeIdentityChanged = Boolean(
+        runtimeContext && runtimeContext.identity !== nextUploadIdentity
+      )
+      this._lifecycleBefore = lifecycleIdentityMatches ? lifecycleBefore : null
+      this._lifecyclePendingIdentity = lifecycleIdentityMatches ? pendingContext.identity : ''
       this.setData({
         accessAllowed: true,
         canCreate: access.can_create,
-        accessMessage: '仅展示当前主体正式授权范围内的脱敏需求',
-        requests: response.items.map(presentSummary)
+        accessMessage: runtimeIdentityChanged
+          ? '未确认写入的身份或授权版本已变化，已隐藏原详情并停止自动重试'
+          : runtimeContext && runtimeContext.status === 'rejected'
+            ? '上次终止写入已被明确拒绝；请重新读取详情后再决定是否操作'
+            : runtimeContext && runtimeContext.status === 'pending' && !restoredLifecycle
+              ? '终止写入运行时锚点不完整，已失败关闭并禁止生成新坐标'
+          : '仅展示当前主体正式授权范围内的脱敏需求',
+        requests: response.items.map(presentSummary),
+        detail: lifecycleIdentityMatches ? lifecycleBefore : null,
+        lifecycleConfirm: lifecycleIdentityMatches ? restoredLifecycle : null,
+        notice: runtimeContext && runtimeContext.status === 'rejected' && !runtimeIdentityChanged
+          ? runtimeContext.errorMessage
+          : ''
       })
+      if (
+        runtimeContext && runtimeContext.status === 'confirmed' &&
+        runtimeContext.identity === nextUploadIdentity
+      ) {
+        consumeLifecycleCompletion(this, runtimeContext, access)
+      } else if (
+        runtimeContext && runtimeContext.status === 'rejected' &&
+        runtimeContext.identity === nextUploadIdentity &&
+        lifecycleRuntime.context === runtimeContext
+      ) {
+        lifecycleRuntime.context = null
+      }
     } catch (error) {
       if (generation !== this._loadGeneration) return
       this.setData({
@@ -485,6 +747,10 @@ Page({
       toast(null, '需求标识已失效，请刷新')
       return
     }
+    if (lifecycleRuntime.context) {
+      toast(null, '已有终止写入等待收口，必须先恢复原详情或重新读取终态')
+      return
+    }
     ensureFileUploadControllers(this)
     this._externalEvidenceUploads.clear()
     this.setData({ busy: true, notice: '' })
@@ -494,7 +760,12 @@ Page({
         requestId
       )
       if (!this._access) throw new Error('正式需求访问上下文已失效')
-      this.setData({ detail: presentDetail(detail, this._access), processing: null })
+      this.setData({
+        detail: presentDetail(detail, this._access),
+        processing: null,
+        submitConfirm: false,
+        lifecycleConfirm: null
+      })
     } catch (error) {
       this.setData({ detail: null })
       toast(error, '需求详情读取失败')
@@ -505,12 +776,18 @@ Page({
 
   closeDetail() {
     ensureRegistries(this)
-    if (this.data.detail && this._mutationRegistry.get(this.data.detail.request_id)) {
+    if (
+      this.data.detail && (
+        this._mutationRegistry.get(this.data.detail.request_id) ||
+        (lifecycleRuntime.context &&
+          lifecycleRuntime.context.before.request_id === this.data.detail.request_id)
+      )
+    ) {
       toast(null, '写入结果尚未确认，必须保留当前详情与请求坐标')
       return
     }
     if (this._externalEvidenceUploads) this._externalEvidenceUploads.clear()
-    this.setData({ detail: null, submitConfirm: false })
+    this.setData({ detail: null, submitConfirm: false, lifecycleConfirm: null })
   },
 
   startCreate() {
@@ -986,6 +1263,340 @@ Page({
       toast(error, '需求提交失败')
     } finally {
       this.setData({ busy: false })
+    }
+  },
+
+  openLifecycleConfirm(event) {
+    const action = String(event.currentTarget.dataset.action || '')
+    const detail = this.data.detail
+    const access = this._access
+    if (!detail || !access || !['withdraw', 'cancel'].includes(action)) return
+    ensureRegistries(this)
+    const context = lifecycleRuntime.context
+    if (context) {
+      if (
+        context.status === 'confirmed' &&
+        lifecycleContextMatches(
+          context,
+          detail,
+          { action, requestId: detail.request_id, expectedVersion: detail.request_version },
+          accessUploadIdentity(access)
+        ) &&
+        consumeLifecycleCompletion(this, context, access)
+      ) return
+      const pending = pendingLifecycleContext()
+      const restored = pending
+        ? lifecycleConfirmationFromPending(pending.before, pending.intent)
+        : null
+      if (
+        restored &&
+        pending.before.request_id === detail.request_id &&
+        pending.identity === accessUploadIdentity(access)
+      ) {
+        this._lifecycleBefore = pending.before
+        this._lifecyclePendingIdentity = pending.identity
+        this.setData({ detail: pending.before, lifecycleConfirm: restored })
+      } else {
+        toast(null, '当前需求已有结果未确认的写入，无法创建新坐标，请人工核验')
+      }
+      return
+    }
+    const permissionAllowed = action === 'withdraw'
+      ? access.can_withdraw
+      : access.can_cancel
+    if (!permissionAllowed || !detail.allowed_actions.includes(action)) {
+      toast(null, '当前权限或详情允许动作不满足，已停止操作')
+      return
+    }
+    const lines = action === 'cancel' ? cancellationInputLines(detail) : []
+    this.setData({
+      processing: null,
+      submitConfirm: false,
+      lifecycleConfirm: {
+        action,
+        title: action === 'withdraw' ? '二次确认撤回需求' : '二次确认安全取消',
+        requestId: detail.request_id,
+        expectedVersion: detail.request_version,
+        reason: '',
+        lines,
+        pendingMessage: '',
+        error: ''
+      }
+    })
+  },
+
+  lifecycleReasonInput(event) {
+    const confirmation = this.data.lifecycleConfirm
+    if (!confirmation || confirmation.pendingMessage) return
+    this.setData({
+      lifecycleConfirm: Object.assign({}, confirmation, {
+        reason: String(event.detail.value || ''),
+        error: ''
+      })
+    })
+  },
+
+  lifecycleLineReasonInput(event) {
+    const confirmation = this.data.lifecycleConfirm
+    if (!confirmation || confirmation.action !== 'cancel' || confirmation.pendingMessage) return
+    const requestLineId = String(event.currentTarget.dataset.id || '')
+    this.setData({
+      lifecycleConfirm: Object.assign({}, confirmation, {
+        lines: confirmation.lines.map((line) => line.requestLineId === requestLineId
+          ? Object.assign({}, line, { reason: String(event.detail.value || '') })
+          : line),
+        error: ''
+      })
+    })
+  },
+
+  cancelLifecycleConfirm() {
+    const confirmation = this.data.lifecycleConfirm
+    if (!confirmation) return
+    const pending = pendingLifecycleContext()
+    if (
+      confirmation.pendingMessage ||
+      (pending && pending.before.request_id === confirmation.requestId)
+    ) {
+      toast(null, '写入结果尚未确认，必须保留原理由和请求坐标')
+      return
+    }
+    this.setData({ lifecycleConfirm: null })
+  },
+
+  async confirmLifecycleAction() {
+    if (this.data.busy) return
+    const before = this.data.detail
+    const confirmation = this.data.lifecycleConfirm
+    const access = this._access
+    if (!before || !confirmation || !access) return
+    const action = confirmation.action
+    const permissionAllowed = action === 'withdraw'
+      ? access.can_withdraw
+      : action === 'cancel' && access.can_cancel
+    if (
+      !permissionAllowed ||
+      !before.allowed_actions.includes(action) ||
+      confirmation.requestId !== before.request_id ||
+      confirmation.expectedVersion !== before.request_version
+    ) {
+      this.setData({
+        lifecycleConfirm: Object.assign({}, confirmation, {
+          error: '当前权限、允许动作或需求版本已变化，请重新读取详情'
+        })
+      })
+      return
+    }
+    let body
+    try {
+      const reason = confirmation.reason.trim()
+      if (!reason || reason.length > 4000 || /[\u0000-\u001f\u007f]/.test(reason)) {
+        throw new Error(action === 'withdraw' ? '请填写有效撤回理由' : '请填写有效取消理由')
+      }
+      if (action === 'withdraw') {
+        body = { expected_version: before.request_version, reason }
+      } else {
+        const exactLines = cancellationInputLines(before)
+        if (
+          exactLines.length !== confirmation.lines.length ||
+          exactLines.some((line, index) => (
+            line.requestLineId !== confirmation.lines[index].requestLineId ||
+            line.cancelledQty !== confirmation.lines[index].cancelledQty
+          ))
+        ) throw new Error('取消明细与当前最终批准数量不一致，请重新读取详情')
+        const lines = confirmation.lines.map((line) => {
+          const lineReason = line.reason.trim()
+          if (!lineReason || lineReason.length > 4000 || /[\u0000-\u001f\u007f]/.test(lineReason)) {
+            throw new Error(`第 ${line.lineNo} 行必须填写有效取消原因`)
+          }
+          return {
+            request_line_id: line.requestLineId,
+            cancelled_qty: line.cancelledQty,
+            reason: lineReason
+          }
+        })
+        body = { expected_version: before.request_version, reason, lines }
+      }
+    } catch (error) {
+      this.setData({
+        lifecycleConfirm: Object.assign({}, confirmation, { error: error.message })
+      })
+      return
+    }
+
+    const identity = accessUploadIdentity(access)
+    const existingContext = lifecycleRuntime.context
+    if (existingContext && existingContext.status === 'confirmed') {
+      if (
+        lifecycleContextMatches(existingContext, before, confirmation, identity) &&
+        consumeLifecycleCompletion(this, existingContext, access)
+      ) {
+        wx.showToast({
+          title: action === 'withdraw' ? '需求已撤回' : '需求已取消',
+          icon: 'success'
+        })
+      } else {
+        this.setData({
+          lifecycleConfirm: Object.assign({}, confirmation, {
+            error: '已确认终态与当前身份、动作或版本锚点不一致，必须重新读取'
+          })
+        })
+      }
+      return
+    }
+    if (
+      existingContext && (
+        existingContext.status !== 'pending' ||
+        !lifecycleContextMatches(existingContext, before, confirmation, identity)
+      )
+    ) {
+      this.setData({
+        lifecycleConfirm: Object.assign({}, confirmation, {
+          error: '已有终止写入尚未安全收口，禁止生成新坐标'
+        })
+      })
+      return
+    }
+
+    const registry = lifecycleRuntime.registry
+    const lifecycleGeneration = this._lifecycleGeneration || 0
+    let responseValidated = false
+    let intent
+    try {
+      intent = registry.begin({
+        requestId: before.request_id,
+        action,
+        path: `/v1/material-requests/${before.request_id}/${action}`,
+        body,
+        expectedVersion: before.request_version
+      })
+      if (
+        existingContext && (
+          lifecycleRuntime.context !== existingContext ||
+          existingContext.intent.signature !== intent.signature
+        )
+      ) throw new Error('未确认终止写入的请求坐标发生漂移，已停止处理')
+      if (!existingContext) {
+        lifecycleRuntime.context = Object.freeze({
+          status: 'pending',
+          identity,
+          before,
+          intent,
+          terminalDetail: null,
+          errorMessage: ''
+        })
+      }
+      this._lifecycleBefore = before
+      this._lifecyclePendingIdentity = identity
+      this.setData({
+        busy: true,
+        notice: '',
+        lifecycleConfirm: Object.assign({}, confirmation, {
+          reason: body.reason,
+          lines: confirmation.lines.map((line, index) => Object.assign({}, line, {
+            reason: body.lines ? body.lines[index].reason : line.reason
+          })),
+          error: '',
+          pendingMessage: `结果确认中（${intent.headers['X-Request-ID']}）；重试只复用原坐标。`
+        })
+      })
+      const result = contract.validateMaterialRequestMutationResult(
+        await transport.mutate(intent),
+        { requestId: before.request_id, action, previousVersion: before.request_version }
+      )
+      responseValidated = true
+      const reread = contract.validateMaterialRequestDetail(
+        await transport.detail(before.request_id),
+        before.request_id
+      )
+      if (!lifecycleMutationMatches(result, before, reread, action, body.lines || [])) {
+        throw new Error('终止响应与版本、审批锚点、明细或独立状态轴回读不一致，仍待人工核验')
+      }
+      registry.confirm(intent.request_id, intent.signature)
+      const pendingContext = lifecycleRuntime.context
+      if (
+        !pendingContext || pendingContext.status !== 'pending' ||
+        pendingContext.intent.signature !== intent.signature
+      ) throw new Error('终止写入运行时锚点已变化，必须人工核验')
+      const confirmedContext = Object.freeze({
+        status: 'confirmed',
+        identity: pendingContext.identity,
+        before: pendingContext.before,
+        intent: pendingContext.intent,
+        terminalDetail: reread,
+        errorMessage: ''
+      })
+      lifecycleRuntime.context = confirmedContext
+      if (lifecyclePageIsActive(this, lifecycleGeneration)) {
+        consumeLifecycleCompletion(this, confirmedContext, access)
+        wx.showToast({
+          title: action === 'withdraw' ? '需求已撤回' : '需求已取消',
+          icon: 'success'
+        })
+      }
+    } catch (error) {
+      const pending = registry.get(before.request_id)
+      const confirmedByPeer = lifecycleRuntime.context
+      if (
+        !pending && intent && confirmedByPeer && confirmedByPeer.status === 'confirmed' &&
+        confirmedByPeer.intent.signature === intent.signature
+      ) {
+        if (lifecyclePageIsActive(this, lifecycleGeneration)) {
+          consumeLifecycleCompletion(this, confirmedByPeer, access)
+          wx.showToast({
+            title: action === 'withdraw' ? '需求已撤回' : '需求已取消',
+            icon: 'success'
+          })
+        }
+      } else if (!responseValidated && pending && adapterModule.isDefinitiveRejection(error)) {
+        registry.clearDefinitiveRejection(pending.request_id, pending.signature)
+        const runtimeContext = lifecycleRuntime.context
+        if (
+          runtimeContext && runtimeContext.status === 'pending' &&
+          runtimeContext.intent.signature === pending.signature
+        ) {
+          lifecycleRuntime.context = Object.freeze({
+            status: 'rejected',
+            identity: runtimeContext.identity,
+            before: runtimeContext.before,
+            intent: runtimeContext.intent,
+            terminalDetail: null,
+            errorMessage: error.message || '需求终止操作被明确拒绝'
+          })
+        }
+        if (lifecyclePageIsActive(this, lifecycleGeneration)) {
+          this._lifecycleBefore = null
+          this._lifecyclePendingIdentity = ''
+          this.setData({
+            lifecycleConfirm: Object.assign({}, this.data.lifecycleConfirm || confirmation, {
+              error: error.message || '需求终止操作被明确拒绝',
+              pendingMessage: ''
+            })
+          })
+          if (
+            lifecycleRuntime.context && lifecycleRuntime.context.status === 'rejected' &&
+            lifecycleRuntime.context.intent.signature === pending.signature
+          ) lifecycleRuntime.context = null
+        }
+      } else if (pending) {
+        if (lifecyclePageIsActive(this, lifecycleGeneration)) {
+          this.setData({
+            lifecycleConfirm: Object.assign({}, this.data.lifecycleConfirm || confirmation, {
+              error: error.message || '需求终止结果未确认',
+              pendingMessage: `结果仍未确认（${pending.headers['X-Request-ID']}）；禁止生成新坐标或执行其他动作。`
+            })
+          })
+        }
+      } else if (lifecyclePageIsActive(this, lifecycleGeneration)) {
+        this.setData({
+          lifecycleConfirm: Object.assign({}, this.data.lifecycleConfirm || confirmation, {
+            error: error.message || '需求终止失败',
+            pendingMessage: ''
+          })
+        })
+      }
+    } finally {
+      if (lifecyclePageIsActive(this, lifecycleGeneration)) this.setData({ busy: false })
     }
   },
 

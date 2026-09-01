@@ -59,7 +59,7 @@ function approvalSteps(thirdStatus = "pending"): any[] {
       reopened_from_step_id: null,
       source_mode: "internal",
       status: "approved",
-      assignee_snapshot: { name_masked: "区＊负责人", role_code: "provincial_manager" },
+      assignee_snapshot: { name_masked: "区＊＊＊＊", role_code: "provincial_manager" },
       candidate_pool_summary: null,
       opened_at: "2026-08-31T11:30:00+08:00",
       decided_at: "2026-08-31T11:40:00+08:00",
@@ -139,11 +139,11 @@ function requestDetail(): any {
       province_name: "江苏省",
       city_name: "南京市",
       district_name: "建邺区",
-      detail_masked: "江东中路***号",
+      detail_masked: "******",
     },
     contact_masked: {
       name_masked: "李*",
-      mobile_masked: "138****0000",
+      mobile_masked: "*******0000",
     },
     note: "",
     attachment_refs: [],
@@ -177,7 +177,7 @@ function requestDetail(): any {
     }],
     approval_history: [],
     supply_tasks: [],
-    allowed_actions: ["update", "submit", "cancel"],
+    allowed_actions: ["update", "submit"],
     created_at: "2026-08-31T11:00:00+08:00",
     updated_at: "2026-08-31T11:00:00+08:00",
     submitted_at: null,
@@ -233,7 +233,7 @@ function approvedDetail(): any {
       external_action: "partial_approve",
       status: "accepted",
       evidence_file_id: "90000000-0000-4000-8000-000000000002",
-      external_approver_name_masked: "星＊审批人",
+      external_approver_name_masked: "星＊＊＊＊",
       external_decided_at: "2026-08-31T12:20:00+08:00",
       registered_at: "2026-08-31T12:25:00+08:00",
       verified_at: "2026-08-31T12:30:00+08:00",
@@ -322,7 +322,7 @@ function twoAttemptDetail(): any {
         reopened_from_step_id: null,
         source_mode: "internal",
         status: "open",
-        assignee_snapshot: { name_masked: "区＊负责人", role_code: "provincial_manager" },
+        assignee_snapshot: { name_masked: "区＊＊＊＊", role_code: "provincial_manager" },
         candidate_pool_summary: null,
         opened_at: "2026-08-31T13:30:00+08:00",
         decided_at: null,
@@ -541,7 +541,7 @@ describe("formal material request response contracts", () => {
     expect(() => validateMaterialRequestDetail(leaked)).toThrow(/精确包含正式字段/);
     const rawExternal = approvedDetail();
     rawExternal.approval_instance.external_evidence_summaries[0].external_approver_name_masked = "张三";
-    expect(() => validateMaterialRequestDetail(rawExternal)).toThrow(/必须脱敏/);
+    expect(() => validateMaterialRequestDetail(rawExternal)).toThrow(/脱敏/);
   });
 
   it("fails closed on schema drift, extra fields, UUID and version errors", () => {
@@ -601,11 +601,23 @@ describe("formal material request response contracts", () => {
   it("requires an explicit masked request header and the formal line fields", () => {
     const plaintextContact = requestDetail();
     plaintextContact.contact_masked.mobile_masked = "13800000000";
-    expect(() => validateMaterialRequestDetail(plaintextContact)).toThrow(/必须脱敏/);
+    expect(() => validateMaterialRequestDetail(plaintextContact)).toThrow(/脱敏/);
 
     const plaintextAddress = requestDetail();
     plaintextAddress.address_snapshot.detail_masked = "江东中路 100 号";
-    expect(() => validateMaterialRequestDetail(plaintextAddress)).toThrow(/必须脱敏/);
+    expect(() => validateMaterialRequestDetail(plaintextAddress)).toThrow(/脱敏/);
+
+    const maskedSuffixAddress = requestDetail();
+    maskedSuffixAddress.address_snapshot.detail_masked = "江东中路100号*";
+    expect(() => validateMaterialRequestDetail(maskedSuffixAddress)).toThrow(/固定脱敏/);
+
+    const maskedSuffixName = requestDetail();
+    maskedSuffixName.contact_masked.name_masked = "张三*";
+    expect(() => validateMaterialRequestDetail(maskedSuffixName)).toThrow(/脱敏形状/);
+
+    const interleavedMobile = requestDetail();
+    interleavedMobile.contact_masked.mobile_masked = "1*3*8*0*0*1*3*8*0*0*0";
+    expect(() => validateMaterialRequestDetail(interleavedMobile)).toThrow(/手机号形状/);
 
     const badUrgency = requestDetail();
     badUrgency.urgency = "highest";
@@ -624,6 +636,52 @@ describe("formal material request response contracts", () => {
     const badRoute = approvedDetail();
     badRoute.approval_instance.steps[2].source_mode = "internal";
     expect(() => validateMaterialRequestDetail(badRoute)).toThrow(/审批路由/);
+  });
+
+  it("requires service-owned approval shapes for cancelled and withdrawn projections", () => {
+    const cancelledProjection = () => {
+      const value = approvedDetail();
+      value.states = stateAxes("cancelled");
+      value.allowed_actions = [];
+      value.supply_tasks = [];
+      value.lines[0].cancelled_qty = value.lines[0].final_approved_qty;
+      value.lines[0].status = "cancelled";
+      return value;
+    };
+    expect(validateMaterialRequestDetail(cancelledProjection()).states.request_status).toBe("cancelled");
+
+    const incompleteLine = cancelledProjection();
+    incompleteLine.lines[0].status = "approved";
+    incompleteLine.lines[0].cancelled_qty = "0.000";
+    expect(() => validateMaterialRequestDetail(incompleteLine)).toThrow(/每条明细都必须完整取消/);
+
+    const missingInstance = cancelledProjection();
+    missingInstance.approval_instance = null;
+    missingInstance.approval_history = [];
+    expect(() => validateMaterialRequestDetail(missingInstance)).toThrow(/必须保留原有/);
+
+    const wrongInstance = cancelledProjection();
+    wrongInstance.approval_instance.status = "withdrawn";
+    expect(() => validateMaterialRequestDetail(wrongInstance)).toThrow(/必须保留原有/);
+
+    const withdrawnProjection = () => {
+      const value = approvedDetail();
+      value.states = stateAxes("withdrawn");
+      value.allowed_actions = [];
+      value.supply_tasks = [];
+      value.approval_instance.status = "withdrawn";
+      return value;
+    };
+    expect(validateMaterialRequestDetail(withdrawnProjection()).states.request_status).toBe("withdrawn");
+
+    const leakedActiveStep = withdrawnProjection();
+    leakedActiveStep.approval_instance.steps[0].status = "open";
+    leakedActiveStep.approval_instance.steps[0].decided_at = null;
+    expect(() => validateMaterialRequestDetail(leakedActiveStep)).toThrow(/不能保留活动审批步骤/);
+
+    const draftWithCancel = requestDetail();
+    draftWithCancel.allowed_actions = ["update", "submit", "cancel"];
+    expect(() => validateMaterialRequestDetail(draftWithCancel)).toThrow(/cancel与当前申请状态不一致/);
   });
 
   it("validates allowed_actions against exact enum and current step facts", () => {
@@ -722,6 +780,57 @@ describe("formal material request response contracts", () => {
       action: "submit",
       previousVersion: 0,
     })).toThrow(/版本未精确递增/);
+  });
+
+  it("requires exact terminal lifecycle state and approval anchors for withdraw and cancel", () => {
+    const terminal = (action: "withdraw" | "cancel", requestStatus: "withdrawn" | "cancelled") => ({
+      schema_version: "1.0",
+      request_id: REQUEST_ID,
+      action,
+      request_version: 4,
+      revision_id: REVISION_ID,
+      revision_no: 1,
+      approval_instance_id: INSTANCE_ID,
+      approval_attempt_no: 1,
+      current_step_id: null,
+      states: stateAxes(requestStatus),
+      idempotency_replayed: false,
+    });
+    expect(validateMaterialRequestMutationResult(terminal("withdraw", "withdrawn"), {
+      requestId: REQUEST_ID,
+      action: "withdraw",
+      previousVersion: 3,
+    }).states.request_status).toBe("withdrawn");
+    expect(validateMaterialRequestMutationResult(terminal("cancel", "cancelled"), {
+      requestId: REQUEST_ID,
+      action: "cancel",
+      previousVersion: 3,
+    }).states.request_status).toBe("cancelled");
+
+    const missingInstance: any = terminal("withdraw", "withdrawn");
+    missingInstance.approval_instance_id = null;
+    missingInstance.approval_attempt_no = null;
+    expect(() => validateMaterialRequestMutationResult(missingInstance, {
+      requestId: REQUEST_ID,
+      action: "withdraw",
+      previousVersion: 3,
+    })).toThrow(/缺少实例尝试锚点/);
+
+    const wrongState: any = terminal("cancel", "cancelled");
+    wrongState.states = stateAxes("approved");
+    expect(() => validateMaterialRequestMutationResult(wrongState, {
+      requestId: REQUEST_ID,
+      action: "cancel",
+      previousVersion: 3,
+    })).toThrow(/必须进入已取消申请状态/);
+
+    const leakedStep: any = terminal("withdraw", "withdrawn");
+    leakedStep.current_step_id = "70000000-0000-4000-8000-000000000001";
+    expect(() => validateMaterialRequestMutationResult(leakedStep, {
+      requestId: REQUEST_ID,
+      action: "withdraw",
+      previousVersion: 3,
+    })).toThrow(/不能保留当前审批步骤/);
   });
 
   it("validates create independently at version zero and neutral ten-axis state", () => {

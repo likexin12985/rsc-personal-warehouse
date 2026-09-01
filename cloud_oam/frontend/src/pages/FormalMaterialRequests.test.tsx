@@ -61,9 +61,9 @@ function detail(version = 0): any {
       province_name: "江苏省",
       city_name: "南京市",
       district_name: "建邺区",
-      detail_masked: "江东中路***号",
+      detail_masked: "******",
     },
-    contact_masked: { name_masked: "李*", mobile_masked: "138****0000" },
+    contact_masked: { name_masked: "李*", mobile_masked: "*******0000" },
     note: "请及时处理",
     attachment_refs: [{
       revision_id: REVISION_ID,
@@ -103,7 +103,7 @@ function detail(version = 0): any {
     }],
     approval_history: [],
     supply_tasks: [],
-    allowed_actions: ["update", "submit", "cancel"],
+    allowed_actions: ["update", "submit"],
     created_at: "2026-09-01T08:00:00+08:00",
     updated_at: version ? "2026-09-01T08:10:00+08:00" : "2026-09-01T08:00:00+08:00",
     submitted_at: null,
@@ -130,7 +130,7 @@ function submittedDetail(): any {
         step_id: STEP_1_ID, step_no: 1, attempt_no: 1,
         predecessor_step_id: null, supersedes_step_id: null, reopened_from_step_id: null,
         source_mode: "internal", status: "open",
-        assignee_snapshot: { name_masked: "区＊负责人", role_code: "provincial_manager" },
+        assignee_snapshot: { name_masked: "区＊＊＊＊", role_code: "provincial_manager" },
         candidate_pool_summary: null, opened_at: "2026-09-01T08:10:00+08:00",
         decided_at: null, version: 0, line_decisions: [],
       },
@@ -300,6 +300,71 @@ function externalVerificationDetail(): any {
   return value;
 }
 
+function withdrawnDetail(): any {
+  const value = submittedDetail();
+  value.request_version = 2;
+  value.states = axes("withdrawn");
+  value.updated_at = "2026-09-01T08:20:00+08:00";
+  value.approval_instance.status = "withdrawn";
+  value.approval_instance.current_step_no = null;
+  value.approval_instance.current_step_id = null;
+  value.approval_instance.version = 1;
+  value.approval_instance.steps = value.approval_instance.steps.map((step: any) => ({
+    ...step,
+    status: "cancelled",
+    decided_at: null,
+    version: step.version + 1,
+  }));
+  value.allowed_actions = [];
+  return value;
+}
+
+function approvedDetail(): any {
+  const value = externalVerificationDetail();
+  value.request_version = 5;
+  value.states = axes("approved");
+  value.updated_at = "2026-09-01T08:50:00+08:00";
+  value.approval_instance.status = "completed";
+  value.approval_instance.current_step_no = null;
+  value.approval_instance.current_step_id = null;
+  value.approval_instance.version = 4;
+  value.approval_instance.steps[2] = {
+    ...value.approval_instance.steps[2],
+    status: "approved",
+    decided_at: "2026-09-01T08:50:00+08:00",
+    version: 2,
+    line_decisions: [lineDecision(
+      STEP_3_ID,
+      "73000000-0000-4000-8000-000000000001",
+      "external_registration",
+      REGISTRATION_ID,
+    )],
+  };
+  value.approval_instance.external_evidence_summaries[0] = {
+    ...value.approval_instance.external_evidence_summaries[0],
+    status: "accepted",
+    verified_at: "2026-09-01T08:50:00+08:00",
+    version: 1,
+  };
+  value.lines[0].status = "approved";
+  value.lines[0].final_approved_qty = "12.345";
+  value.lines[0].version = 1;
+  value.allowed_actions = ["cancel"];
+  return value;
+}
+
+function cancelledDetail(): any {
+  const value = approvedDetail();
+  value.request_version = 6;
+  value.states = axes("cancelled");
+  value.updated_at = "2026-09-01T09:00:00+08:00";
+  value.lines[0].status = "cancelled";
+  value.lines[0].cancelled_qty = "12.345";
+  value.lines[0].version = 2;
+  value.allowed_actions = [];
+  return value;
+}
+
 function draft() {
   return {
     work_order_id: null,
@@ -345,6 +410,8 @@ function access(canCreate = true) {
     authorization_version: 1,
     can_read: true,
     can_create: canCreate,
+    can_withdraw: false,
+    can_cancel: false,
     can_read_material_catalog: true,
     can_approve_region: false,
     can_approve_headquarters: false,
@@ -481,7 +548,7 @@ describe("formal material request PC vertical slice", () => {
     expect(document.body.textContent).not.toContain(RAW_MOBILE);
     expect(document.body.textContent).not.toContain(RAW_ADDRESS);
     const panel = await openDetail();
-    expect(within(panel).getByText(/138\*\*\*\*0000/)).toBeTruthy();
+    expect(within(panel).getByText(/\*{7}0000/)).toBeTruthy();
     expect(within(panel).getByLabelText("需求十个独立状态轴").children).toHaveLength(10);
     expect(within(panel).getByText("供给计划（只读）")).toBeTruthy();
     expect(panel.textContent).not.toContain(RAW_MOBILE);
@@ -619,6 +686,274 @@ describe("formal material request PC vertical slice", () => {
     await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
     expect(mutate.mock.calls[0][0].body).toEqual({ expected_version: 0 });
     expect(await screen.findByText(/分配、履约和通知仍为独立状态/)).toBeTruthy();
+  });
+
+  it("withdraws only after permission, allowed action, reason confirmation and exact terminal reread", async () => {
+    const before = submittedDetail();
+    const after = withdrawnDetail();
+    const mutate = vi.fn().mockResolvedValue({
+      schema_version: "1.0",
+      request_id: REQUEST_ID,
+      action: "withdraw",
+      request_version: 2,
+      revision_id: REVISION_ID,
+      revision_no: 1,
+      approval_instance_id: INSTANCE_ID,
+      approval_attempt_no: 1,
+      current_step_id: null,
+      states: axes("withdrawn"),
+      idempotency_replayed: false,
+    });
+    const withoutPermission = adapter({
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValue(before),
+    });
+    await renderReady(withoutPermission);
+    let panel = await openDetail();
+    expect(within(panel).queryByRole("button", { name: "撤回申请" })).toBeNull();
+    cleanup();
+
+    const client = adapter({
+      loadAccess: vi.fn().mockResolvedValue({ ...access(), can_withdraw: true }),
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(after),
+      mutate,
+    });
+    await renderReady(client);
+    panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "撤回申请" }));
+    const confirmation = await screen.findByRole("dialog", { name: "撤回需求" });
+    expect(confirmation.textContent).toContain("撤回只终止当前申请与审批轴");
+    fireEvent.click(within(confirmation).getByRole("button", { name: "确认撤回" }));
+    expect(mutate).not.toHaveBeenCalled();
+    expect(within(confirmation).getByText(/必须填写不超过 4000 字的整单原因/)).toBeTruthy();
+    fireEvent.change(within(confirmation).getByLabelText("撤回原因"), {
+      target: { value: "申请信息\n需重新整理" },
+    });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "确认撤回" }));
+    expect(mutate).not.toHaveBeenCalled();
+    expect(within(confirmation).getByText(/不能包含换行或控制字符/)).toBeTruthy();
+    fireEvent.change(within(confirmation).getByLabelText("撤回原因"), {
+      target: { value: "申请信息需重新整理" },
+    });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "确认撤回" }));
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    expect(mutate.mock.calls[0][0]).toMatchObject({
+      action: "withdraw",
+      path: `/v1/material-requests/${REQUEST_ID}/withdraw`,
+      expected_version: 1,
+      body: { expected_version: 1, reason: "申请信息需重新整理" },
+    });
+    expect(await screen.findByText(/其他九个状态轴未被合并/)).toBeTruthy();
+  });
+
+  it("keeps a lifecycle intent pending when reread advances another independent axis", async () => {
+    const before = submittedDetail();
+    const after = withdrawnDetail();
+    after.states.allocation_status = "allocated";
+    const responseStates = { ...axes("withdrawn"), allocation_status: "allocated" };
+    const mutate = vi.fn().mockResolvedValue({
+      schema_version: "1.0",
+      request_id: REQUEST_ID,
+      action: "withdraw",
+      request_version: 2,
+      revision_id: REVISION_ID,
+      revision_no: 1,
+      approval_instance_id: INSTANCE_ID,
+      approval_attempt_no: 1,
+      current_step_id: null,
+      states: responseStates,
+      idempotency_replayed: false,
+    });
+    const client = adapter({
+      loadAccess: vi.fn().mockResolvedValue({ ...access(), can_withdraw: true }),
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(after),
+      mutate,
+    });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "撤回申请" }));
+    const confirmation = await screen.findByRole("dialog", { name: "撤回需求" });
+    fireEvent.change(within(confirmation).getByLabelText("撤回原因"), {
+      target: { value: "申请信息需重新整理" },
+    });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "确认撤回" }));
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    expect(within(confirmation).getByText(/仍待人工核验/)).toBeTruthy();
+    expect(within(confirmation).getByText(/禁止生成新坐标或执行其他动作/)).toBeTruthy();
+  });
+
+  it("keeps withdrawal pending when reread changes request content or leaves an approval step active", async () => {
+    const scenarios = [
+      {
+        mutateAfter: (after: any) => { after.purpose = "被错误改写的需求用途"; },
+        expectedError: /仍待人工核验/,
+      },
+      {
+        mutateAfter: (after: any) => {
+          after.approval_instance.steps[0].status = "open";
+          after.approval_instance.steps[0].version = 0;
+        },
+        expectedError: /不能保留活动审批步骤/,
+      },
+    ];
+    for (const { mutateAfter, expectedError } of scenarios) {
+      const before = submittedDetail();
+      const after = withdrawnDetail();
+      mutateAfter(after);
+      const mutate = vi.fn().mockResolvedValue({
+        schema_version: "1.0",
+        request_id: REQUEST_ID,
+        action: "withdraw",
+        request_version: 2,
+        revision_id: REVISION_ID,
+        revision_no: 1,
+        approval_instance_id: INSTANCE_ID,
+        approval_attempt_no: 1,
+        current_step_id: null,
+        states: axes("withdrawn"),
+        idempotency_replayed: false,
+      });
+      const client = adapter({
+        loadAccess: vi.fn().mockResolvedValue({ ...access(), can_withdraw: true }),
+        list: vi.fn().mockResolvedValue(page(before)),
+        detail: vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(after),
+        mutate,
+      });
+      await renderReady(client);
+      const panel = await openDetail();
+      fireEvent.click(within(panel).getByRole("button", { name: "撤回申请" }));
+      const confirmation = await screen.findByRole("dialog", { name: "撤回需求" });
+      fireEvent.change(within(confirmation).getByLabelText("撤回原因"), {
+        target: { value: "申请信息需重新整理" },
+      });
+      fireEvent.click(within(confirmation).getByRole("button", { name: "确认撤回" }));
+      await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+      expect(within(confirmation).getByText(expectedError)).toBeTruthy();
+      expect(within(confirmation).getByText(/禁止生成新坐标或执行其他动作/)).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  it("safe-cancels the exact full approved line manifest and verifies line facts on reread", async () => {
+    const before = approvedDetail();
+    const after = cancelledDetail();
+    const mutate = vi.fn().mockResolvedValue({
+      schema_version: "1.0",
+      request_id: REQUEST_ID,
+      action: "cancel",
+      request_version: 6,
+      revision_id: REVISION_ID,
+      revision_no: 1,
+      approval_instance_id: INSTANCE_ID,
+      approval_attempt_no: 1,
+      current_step_id: null,
+      states: axes("cancelled"),
+      idempotency_replayed: false,
+    });
+    const client = adapter({
+      loadAccess: vi.fn().mockResolvedValue({ ...access(), can_cancel: true }),
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(after),
+      mutate,
+    });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "安全取消" }));
+    const confirmation = await screen.findByRole("dialog", { name: "安全取消需求" });
+    expect(confirmation.textContent).toContain("不存在分配、占用、出库、发货、物流、入库、通知、对账或其他补偿事实");
+    expect(confirmation.textContent).toContain("12.345");
+    fireEvent.change(within(confirmation).getByLabelText("整单取消原因"), {
+      target: { value: "现场需求已取消" },
+    });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "确认安全取消" }));
+    expect(mutate).not.toHaveBeenCalled();
+    expect(within(confirmation).getByText(/每条有批准数量的明细都必须填写/)).toBeTruthy();
+    fireEvent.change(within(confirmation).getByLabelText("取消明细原因 1"), {
+      target: { value: "本行已无需求" },
+    });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "确认安全取消" }));
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    expect(mutate.mock.calls[0][0]).toMatchObject({
+      action: "cancel",
+      path: `/v1/material-requests/${REQUEST_ID}/cancel`,
+      expected_version: 5,
+      body: {
+        expected_version: 5,
+        reason: "现场需求已取消",
+        lines: [{
+          request_line_id: LINE_ID,
+          cancelled_qty: "12.345",
+          reason: "本行已无需求",
+        }],
+      },
+    });
+    expect(await screen.findByText(/逐行事实与十个状态轴精确回读/)).toBeTruthy();
+  });
+
+  it("keeps cancellation pending when reread rewrites immutable approval history", async () => {
+    const before = approvedDetail();
+    const after = cancelledDetail();
+    after.approval_instance.steps[2].line_decisions[0].reason = "被错误改写的审批事实";
+    const mutate = vi.fn().mockResolvedValue({
+      schema_version: "1.0",
+      request_id: REQUEST_ID,
+      action: "cancel",
+      request_version: 6,
+      revision_id: REVISION_ID,
+      revision_no: 1,
+      approval_instance_id: INSTANCE_ID,
+      approval_attempt_no: 1,
+      current_step_id: null,
+      states: axes("cancelled"),
+      idempotency_replayed: false,
+    });
+    const client = adapter({
+      loadAccess: vi.fn().mockResolvedValue({ ...access(), can_cancel: true }),
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(after),
+      mutate,
+    });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "安全取消" }));
+    const confirmation = await screen.findByRole("dialog", { name: "安全取消需求" });
+    fireEvent.change(within(confirmation).getByLabelText("整单取消原因"), {
+      target: { value: "现场需求已取消" },
+    });
+    fireEvent.change(within(confirmation).getByLabelText("取消明细原因 1"), {
+      target: { value: "本行已无需求" },
+    });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "确认安全取消" }));
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    expect(within(confirmation).getByText(/仍待人工核验/)).toBeTruthy();
+    expect(within(confirmation).getByText(/禁止生成新坐标或执行其他动作/)).toBeTruthy();
+  });
+
+  it("reuses one lifecycle intent after an uncertain result and blocks changing the confirmation", async () => {
+    const before = submittedDetail();
+    const mutate = vi.fn().mockRejectedValue(new TypeError("network uncertain"));
+    const client = adapter({
+      loadAccess: vi.fn().mockResolvedValue({ ...access(), can_withdraw: true }),
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValue(before),
+      mutate,
+    });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "撤回申请" }));
+    const confirmation = await screen.findByRole("dialog", { name: "撤回需求" });
+    fireEvent.change(within(confirmation).getByLabelText("撤回原因"), {
+      target: { value: "申请信息需重整" },
+    });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "确认撤回" }));
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    expect(within(confirmation).getByText(/禁止生成新坐标或执行其他动作/)).toBeTruthy();
+    expect(within(confirmation).getByLabelText("撤回原因").hasAttribute("disabled")).toBe(true);
+    fireEvent.click(within(confirmation).getByRole("button", { name: "按原请求坐标重试" }));
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(2));
+    expect(mutate.mock.calls[1][0]).toBe(mutate.mock.calls[0][0]);
   });
 
   it("sends exact region approve/return/reject bodies only when permission and allowed_actions agree", async () => {

@@ -29,8 +29,8 @@ from pydantic import (
 from .demand_schemas import MaterialRequestStateAxesOut
 
 
-_MASK = re.compile(r"[＊*•]")
-_LONG_PLAINTEXT_DIGITS = re.compile(r"\d{7,}")
+_CANONICAL_MASKED_NAME = re.compile(r"^(?:[^\s＊*•][＊*•]+|[＊*•]+)$")
+_CANONICAL_MASKED_MOBILE = re.compile(r"^[＊*•]{2,20}[0-9]{4}$")
 
 QuantityOut = Annotated[
     Decimal,
@@ -95,8 +95,8 @@ class MaterialRequestAddressSnapshotOut(_StrictOutputModel):
     def validate_trimmed(cls, value: str, info) -> str:
         if value != value.strip():
             raise ValueError(f"{info.field_name} cannot have surrounding whitespace")
-        if info.field_name == "detail_masked" and _MASK.search(value) is None:
-            raise ValueError("address detail must be masked")
+        if info.field_name == "detail_masked" and value != "******":
+            raise ValueError("address detail must use the fixed masked projection")
         return value
 
 
@@ -107,10 +107,13 @@ class MaterialRequestContactMaskedOut(_StrictOutputModel):
     @field_validator("name_masked", "mobile_masked")
     @classmethod
     def validate_masked(cls, value: str, info) -> str:
-        if value != value.strip() or _MASK.search(value) is None:
-            raise ValueError(f"{info.field_name} must be masked")
-        if info.field_name == "mobile_masked" and _LONG_PLAINTEXT_DIGITS.search(value):
-            raise ValueError("masked mobile contains a plaintext digit run")
+        pattern = (
+            _CANONICAL_MASKED_NAME
+            if info.field_name == "name_masked"
+            else _CANONICAL_MASKED_MOBILE
+        )
+        if value != value.strip() or pattern.fullmatch(value) is None:
+            raise ValueError(f"{info.field_name} must use the canonical masked shape")
         return value
 
 
@@ -161,8 +164,8 @@ class MaterialRequestApprovalAssigneeSnapshotOut(_StrictOutputModel):
     @field_validator("name_masked")
     @classmethod
     def validate_name_masked(cls, value: str) -> str:
-        if value != value.strip() or _MASK.search(value) is None:
-            raise ValueError("approval assignee name must be masked")
+        if value != value.strip() or _CANONICAL_MASKED_NAME.fullmatch(value) is None:
+            raise ValueError("approval assignee name must use the canonical masked shape")
         return value
 
 
@@ -240,11 +243,12 @@ class MaterialRequestExternalEvidenceSummaryOut(_StrictOutputModel):
     def validate_text(cls, value: str, info) -> str:
         if value != value.strip():
             raise ValueError(f"{info.field_name} cannot have surrounding whitespace")
-        if (
-            info.field_name == "external_approver_name_masked"
-            and _MASK.search(value) is None
+        if info.field_name == "external_approver_name_masked" and (
+            _CANONICAL_MASKED_NAME.fullmatch(value) is None
         ):
-            raise ValueError("external approver name must be masked")
+            raise ValueError(
+                "external approver name must use the canonical masked shape"
+            )
         return value
 
     @model_validator(mode="after")
@@ -656,6 +660,28 @@ class _MaterialRequestCommonOut(_StrictOutputModel):
             or self.approval_instance.status != expected_instance_status
         ):
             raise ValueError("request and approval instance states disagree")
+        if status == "cancelled" and (
+            self.approval_instance is None
+            or self.approval_instance.status not in {"returned", "completed"}
+        ):
+            raise ValueError(
+                "cancelled request requires its unchanged terminal approval instance"
+            )
+        if (
+            status == "withdrawn"
+            and self.approval_instance is not None
+            and any(
+                step.status
+                in {
+                    "pending",
+                    "open",
+                    "awaiting_external_evidence",
+                    "evidence_pending_verification",
+                }
+                for step in self.approval_instance.steps
+            )
+        ):
+            raise ValueError("withdrawn request cannot expose an active approval step")
         self._validate_allowed_actions(status)
         return self
 
@@ -665,7 +691,6 @@ class _MaterialRequestCommonOut(_StrictOutputModel):
             "submit": {"draft", "returned"},
             "withdraw": {"submitted", "approval_in_progress"},
             "cancel": {
-                "draft",
                 "returned",
                 "partially_approved",
                 "approved",
@@ -736,6 +761,14 @@ class MaterialRequestDetailOut(_MaterialRequestCommonOut):
             for line in self.lines
         ):
             raise ValueError("request line is not anchored to current revision")
+        if self.states.request_status == "cancelled" and any(
+            line.status != "cancelled"
+            or line.cancelled_qty != line.final_approved_qty
+            for line in self.lines
+        ):
+            raise ValueError(
+                "cancelled request requires every line to be fully cancelled"
+            )
         revisions = self.revision_history
         if tuple(item.revision_no for item in revisions) != tuple(
             range(1, len(revisions) + 1)

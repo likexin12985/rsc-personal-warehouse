@@ -127,6 +127,26 @@ function approvalShape(object, action) {
   }
 }
 
+function cancellationLines(value) {
+  if (!Array.isArray(value) || value.length > 200) {
+    throw adapterError('取消明细数量无效')
+  }
+  const ids = value.map((row, index) => {
+    const object = exactObject(
+      row,
+      ['request_line_id', 'cancelled_qty', 'reason'],
+      `取消明细 ${index + 1}`
+    )
+    const id = uuidValue(object.request_line_id, 'request_line_id')
+    decimalText(object.cancelled_qty, 'cancelled_qty', true)
+    boundedText(object.reason, 'reason', 4000, false)
+    return id
+  })
+  if (new Set(ids).size !== ids.length) {
+    throw adapterError('取消明细不能重复')
+  }
+}
+
 function validateSupportedMutationBody(action, body) {
   if (action === 'update') {
     const object = exactObject(body, [
@@ -140,6 +160,25 @@ function validateSupportedMutationBody(action, body) {
   }
   if (action === 'submit') {
     exactObject(body, ['expected_version'], '正式需求提交内容')
+    return
+  }
+  if (action === 'withdraw') {
+    const object = exactObject(
+      body,
+      ['expected_version', 'reason'],
+      '正式需求撤回内容'
+    )
+    boundedText(object.reason, 'reason', 4000, false)
+    return
+  }
+  if (action === 'cancel') {
+    const object = exactObject(
+      body,
+      ['expected_version', 'reason', 'lines'],
+      '正式需求安全取消内容'
+    )
+    boundedText(object.reason, 'reason', 4000, false)
+    cancellationLines(object.lines)
     return
   }
   if (['approve', 'return', 'reject'].includes(action)) {
@@ -201,7 +240,7 @@ function validateAccess(value) {
     [
       'schema_version', 'person_id', 'authorization_version', 'can_read', 'can_create',
       'can_read_material_catalog', 'can_approve_region', 'can_approve_headquarters',
-      'can_register_external', 'can_verify_external'
+      'can_register_external', 'can_verify_external', 'can_withdraw', 'can_cancel'
     ],
     '正式需求访问上下文'
   )
@@ -210,12 +249,16 @@ function validateAccess(value) {
   }
   if ([
     'can_read', 'can_create', 'can_read_material_catalog', 'can_approve_region',
-    'can_approve_headquarters', 'can_register_external', 'can_verify_external'
+    'can_approve_headquarters', 'can_register_external', 'can_verify_external',
+    'can_withdraw', 'can_cancel'
   ].some((field) => typeof object[field] !== 'boolean')) {
     throw adapterError('正式需求访问授权无效')
   }
-  if (object.can_create && !object.can_read) {
-    throw adapterError('正式需求创建权限缺少必需的读取回验权限')
+  if (
+    (object.can_create || object.can_withdraw || object.can_cancel) &&
+    !object.can_read
+  ) {
+    throw adapterError('正式需求写权限缺少必需的读取回验权限')
   }
   return Object.freeze({
     schema_version: contract.MATERIAL_REQUEST_SCHEMA_VERSION,
@@ -227,7 +270,9 @@ function validateAccess(value) {
     can_approve_region: object.can_approve_region,
     can_approve_headquarters: object.can_approve_headquarters,
     can_register_external: object.can_register_external,
-    can_verify_external: object.can_verify_external
+    can_verify_external: object.can_verify_external,
+    can_withdraw: object.can_withdraw,
+    can_cancel: object.can_cancel
   })
 }
 
@@ -311,6 +356,12 @@ function projectAccessContext(value, expectedIdentity) {
     ),
     can_verify_external: permissionKeys.includes(
       'material_request\u0000verify_external\u0000approval_evidence'
+    ),
+    can_withdraw: canRead && permissionKeys.includes(
+      'material_request\u0000withdraw\u0000'
+    ),
+    can_cancel: canRead && permissionKeys.includes(
+      'material_request\u0000cancel\u0000'
     )
   })
 }
@@ -397,6 +448,12 @@ function mutationMethod(intent) {
     case 'submit':
       expectedPath = `${root}/submit`
       break
+    case 'withdraw':
+      expectedPath = `${root}/withdraw`
+      break
+    case 'cancel':
+      expectedPath = `${root}/cancel`
+      break
     case 'approve':
     case 'return':
     case 'reject':
@@ -456,10 +513,16 @@ function createFormalMaterialRequestAdapter(options = {}) {
       const suffix = afterId === null
         ? ''
         : `&after_id=${encodeURIComponent(uuidValue(afterId, 'after_id'))}`
-      return transport.get(`/v1/material-requests?limit=50${suffix}`)
+      return transport.request(`/v1/material-requests?limit=50${suffix}`, {
+        method: 'GET',
+        header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
+      })
     },
     detail(requestId) {
-      return transport.get(`/v1/material-requests/${uuidValue(requestId, 'request_id')}`)
+      return transport.request(`/v1/material-requests/${uuidValue(requestId, 'request_id')}`, {
+        method: 'GET',
+        header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
+      })
     },
     loadDraftForEdit(requestId) {
       return transport.request(

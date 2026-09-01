@@ -49,6 +49,10 @@ const REQUEST_STATUS_LABELS: Record<string, string> = {
 const NONZERO_UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const AWARE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 const SAFE_EXTERNAL_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,199}$/;
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+const ACTIVE_WITHDRAW_STEP_STATUSES = new Set([
+  "pending", "open", "awaiting_external_evidence", "evidence_pending_verification",
+]);
 
 const AXIS_LABELS: ReadonlyArray<readonly [keyof MaterialRequestDetail["states"], string]> = [
   ["request_status", "申请"],
@@ -102,6 +106,20 @@ type ApprovalProcessState = {
   externalDecidedAt: string;
   registrationId: string;
   verificationDecision: "accept" | "reject";
+  error: string;
+  pendingMessage: string;
+};
+
+type LifecycleProcessState = {
+  kind: "withdraw" | "cancel";
+  requestId: string;
+  requestVersion: number;
+  reason: string;
+  lines: Array<{
+    requestLineId: string;
+    cancelledQty: string;
+    reason: string;
+  }>;
   error: string;
   pendingMessage: string;
 };
@@ -323,6 +341,97 @@ function approvalMutationMatches(result: MaterialRequestMutationResult, detail: 
     && result.current_step_id === (instance?.current_step_id || null);
 }
 
+function sameProjection(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function lifecycleInvariantProjectionMatches(
+  before: MaterialRequestDetail,
+  detail: MaterialRequestDetail,
+): boolean {
+  return before.schema_version === detail.schema_version
+    && before.request_id === detail.request_id
+    && before.request_no === detail.request_no
+    && before.current_revision_id === detail.current_revision_id
+    && before.current_revision_no === detail.current_revision_no
+    && before.work_order_id === detail.work_order_id
+    && before.requester_person_id === detail.requester_person_id
+    && before.requester_org_id === detail.requester_org_id
+    && before.purpose === detail.purpose
+    && before.urgency === detail.urgency
+    && before.expected_date === detail.expected_date
+    && before.note === detail.note
+    && before.approval_mode === detail.approval_mode
+    && before.created_at === detail.created_at
+    && before.submitted_at === detail.submitted_at
+    && sameProjection(before.address_snapshot, detail.address_snapshot)
+    && sameProjection(before.contact_masked, detail.contact_masked)
+    && sameProjection(before.attachment_refs, detail.attachment_refs)
+    && sameProjection(before.revision_history, detail.revision_history)
+    && sameProjection(before.supply_tasks, detail.supply_tasks)
+    && before.approval_history.length === detail.approval_history.length
+    && sameProjection(
+      before.approval_history.slice(0, -1),
+      detail.approval_history.slice(0, -1),
+    );
+}
+
+function lifecycleMutationMatches(
+  result: MaterialRequestMutationResult,
+  before: MaterialRequestDetail,
+  detail: MaterialRequestDetail,
+  action: LifecycleProcessState["kind"],
+): boolean {
+  const beforeInstance = before.approval_instance;
+  const afterInstance = detail.approval_instance;
+  if (!approvalMutationMatches(result, detail)
+      || !lifecycleInvariantProjectionMatches(before, detail)
+      || result.current_step_id !== null
+      || !beforeInstance
+      || !afterInstance
+      || result.approval_instance_id !== beforeInstance.instance_id
+      || result.approval_attempt_no !== beforeInstance.attempt_no
+      || afterInstance.current_step_id !== null
+      || afterInstance.current_step_no !== null
+      || detail.current_revision_id !== before.current_revision_id
+      || detail.current_revision_no !== before.current_revision_no
+      || detail.states.request_status !== (action === "withdraw" ? "withdrawn" : "cancelled")
+      || AXIS_LABELS.slice(1).some(([key]) => detail.states[key] !== before.states[key])
+      || detail.allowed_actions.length !== 0
+      || detail.lines.length !== before.lines.length) {
+    return false;
+  }
+  if (action === "withdraw") {
+    const cancellableStepCount = beforeInstance.steps.filter(
+      (step) => ACTIVE_WITHDRAW_STEP_STATUSES.has(step.status),
+    ).length;
+    const expectedInstance = {
+      ...beforeInstance,
+      status: "withdrawn" as const,
+      current_step_no: null,
+      current_step_id: null,
+      version: beforeInstance.version + 1,
+      steps: beforeInstance.steps.map((step) => (
+        ACTIVE_WITHDRAW_STEP_STATUSES.has(step.status)
+          ? { ...step, status: "cancelled" as const, decided_at: null, version: step.version + 1 }
+          : step
+      )),
+    };
+    return cancellableStepCount > 0
+      && sameProjection(afterInstance, expectedInstance)
+      && sameProjection(detail.lines, before.lines);
+  }
+  const expectedLines = before.lines.map((line) => ({
+    ...line,
+    cancelled_qty: line.final_approved_qty,
+    status: "cancelled" as const,
+    version: line.version + 1,
+  }));
+  return (beforeInstance.status === "completed" || beforeInstance.status === "returned")
+    && sameProjection(afterInstance, beforeInstance)
+    && sameProjection(detail.lines, expectedLines);
+}
+
 function approvalNotice(detail: MaterialRequestDetail): string {
   const currentStepId = detail.approval_instance?.current_step_id;
   const step = currentStepId
@@ -344,6 +453,7 @@ function DetailPanel({
   onEdit,
   onSubmit,
   onProcess,
+  onLifecycle,
 }: {
   detail: MaterialRequestDetail;
   access: FormalMaterialRequestAccess;
@@ -351,6 +461,7 @@ function DetailPanel({
   onEdit: () => void;
   onSubmit: () => void;
   onProcess: (kind: ApprovalProcessState["kind"]) => void;
+  onLifecycle: (kind: LifecycleProcessState["kind"]) => void;
 }) {
   const actions = new Set(detail.allowed_actions);
   const editableDraft = ["draft", "returned"].includes(detail.states.request_status);
@@ -377,6 +488,8 @@ function DetailPanel({
     && actions.has("verify_external_approval")
     && pendingEvidence.length === 1,
   );
+  const canWithdraw = access.can_withdraw && actions.has("withdraw");
+  const canCancel = access.can_cancel && actions.has("cancel");
   return <section aria-label="正式需求详情内容">
     <div className="detail-heading">
       <div>
@@ -452,8 +565,10 @@ function DetailPanel({
     <div className="form-actions">
       {editableDraft && actions.has("update") && <Button tone="secondary" icon={<Edit3 size={17} />} disabled={busy} onClick={onEdit}>编辑草稿</Button>}
       {editableDraft && actions.has("submit") && <Button icon={<Send size={17} />} disabled={busy} onClick={onSubmit}>提交前确认</Button>}
-      {editableDraft && !actions.has("update") && !actions.has("submit") && <span className="opening-no-action">当前主体没有可执行的提报动作</span>}
-      {!editableDraft && <span className="opening-no-action">当前主体没有可执行的提报动作</span>}
+      {canWithdraw && <Button tone="secondary" disabled={busy} onClick={() => onLifecycle("withdraw")}>撤回申请</Button>}
+      {canCancel && <Button tone="secondary" disabled={busy} onClick={() => onLifecycle("cancel")}>安全取消</Button>}
+      {!((editableDraft && (actions.has("update") || actions.has("submit"))) || canWithdraw || canCancel)
+        && <span className="opening-no-action">当前主体没有可执行的提报动作</span>}
     </div>
   </section>;
 }
@@ -686,6 +801,64 @@ function ApprovalProcessForm({
   </Modal>;
 }
 
+function LifecycleProcessForm({
+  process,
+  busy,
+  onReason,
+  onLineReason,
+  onCancel,
+  onSubmit,
+}: {
+  process: LifecycleProcessState;
+  busy: boolean;
+  onReason: (reason: string) => void;
+  onLineReason: (requestLineId: string, reason: string) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  const pending = Boolean(process.pendingMessage);
+  const cancelling = process.kind === "cancel";
+  return <Modal title={cancelling ? "安全取消需求" : "撤回需求"} onClose={onCancel}>
+    <div className="form-stack" aria-label={cancelling ? "需求安全取消确认" : "需求撤回确认"}>
+      <div className="alert alert-warning">
+        {cancelling
+          ? "安全取消仅在服务端确认不存在分配、占用、出库、发货、物流、入库、通知、对账或其他补偿事实时可执行；本页不会自行释放或推断任何下游事实。"
+          : "撤回只终止当前申请与审批轴，不代表或改写分配、占用、出库、发货、物流签收、OAM收货、RSC/个人仓入库、通知送达或对账同步。"}
+      </div>
+      <p><strong>对象：</strong><span className="mono">{process.requestId}</span> · 版本 v{process.requestVersion}</p>
+      {process.pendingMessage && <div className="alert alert-warning">{process.pendingMessage}</div>}
+      {process.error && <div className="alert alert-error">{process.error}</div>}
+      <Field label={cancelling ? "整单取消原因" : "撤回原因"}>
+        <textarea
+          aria-label={cancelling ? "整单取消原因" : "撤回原因"}
+          disabled={busy || pending}
+          value={process.reason}
+          onChange={(event) => onReason(event.target.value)}
+        />
+      </Field>
+      {cancelling && (process.lines.length ? <div className="table-wrap"><table>
+        <thead><tr><th>需求明细</th><th>完整取消数量（只读）</th><th>逐行取消原因</th></tr></thead>
+        <tbody>{process.lines.map((line, index) => <tr key={line.requestLineId}>
+          <td>{index + 1}<span className="cell-subtitle mono">{line.requestLineId}</span></td>
+          <td className="mono">{line.cancelledQty}</td>
+          <td><input
+            aria-label={`取消明细原因 ${index + 1}`}
+            disabled={busy || pending}
+            value={line.reason}
+            onChange={(event) => onLineReason(line.requestLineId, event.target.value)}
+          /></td>
+        </tr>)}</tbody>
+      </table></div> : <div className="alert alert-info">当前修订没有最终批准数量，取消明细按后端契约提交空数组。</div>)}
+      <div className="form-actions">
+        <Button tone="secondary" disabled={busy} onClick={onCancel}>返回检查</Button>
+        <Button disabled={busy} onClick={onSubmit}>
+          {busy ? "正在精确回读" : pending ? "按原请求坐标重试" : cancelling ? "确认安全取消" : "确认撤回"}
+        </Button>
+      </div>
+    </div>
+  </Modal>;
+}
+
 export default function FormalMaterialRequestsPage({
   adapter,
   fileUploadClient = defaultFormalFileUploadClient,
@@ -709,6 +882,7 @@ export default function FormalMaterialRequestsPage({
   const [submitConfirm, setSubmitConfirm] = useState(false);
   const [materialPicker, setMaterialPicker] = useState<MaterialPickerState | null>(null);
   const [approvalProcess, setApprovalProcess] = useState<ApprovalProcessState | null>(null);
+  const [lifecycleProcess, setLifecycleProcess] = useState<LifecycleProcessState | null>(null);
   const [draftUploadFiles, setDraftUploadFiles] = useState<readonly AvailableFormalFile[]>([]);
   const [draftUploadBlocking, setDraftUploadBlocking] = useState(false);
   const [externalUploadBlocking, setExternalUploadBlocking] = useState(false);
@@ -770,6 +944,7 @@ export default function FormalMaterialRequestsPage({
     generation.current += 1;
     const currentGeneration = generation.current;
     setApprovalProcess(null);
+    setLifecycleProcess(null);
     setExternalUploadBlocking(false);
     setDraftUploadFiles([]);
     setDraftUploadBlocking(false);
@@ -807,6 +982,7 @@ export default function FormalMaterialRequestsPage({
     setError("");
     setNotice("");
     setApprovalProcess(null);
+    setLifecycleProcess(null);
     setExternalUploadBlocking(false);
     try {
       setDetail(validateMaterialRequestDetail(await adapter.detail(requestId), requestId));
@@ -1100,6 +1276,183 @@ export default function FormalMaterialRequestsPage({
     }
   }
 
+  function startLifecycleProcess(kind: LifecycleProcessState["kind"]): void {
+    if (!detail || !access) return;
+    const pending = mutationRegistry.current.get(detail.request_id);
+    if (pending) {
+      setError(`当前需求已有结果未确认的 ${pending.action} 写入（请求坐标 ${pending.headers["X-Request-ID"]}），禁止开始其他动作`);
+      return;
+    }
+    const allowed = detail.allowed_actions.includes(kind);
+    const permitted = kind === "withdraw" ? access.can_withdraw : access.can_cancel;
+    if (!allowed || !permitted) {
+      setError("当前访问权限与详情允许动作不一致，已停止生命周期操作");
+      return;
+    }
+    const lines: LifecycleProcessState["lines"] = [];
+    if (kind === "cancel") {
+      for (const line of detail.lines) {
+        const approved = decimalUnits(line.final_approved_qty);
+        if (approved === null) {
+          setError("需求明细批准数量无效，已停止安全取消");
+          return;
+        }
+        if (approved > 0n) {
+          lines.push({
+            requestLineId: line.request_line_id,
+            cancelledQty: line.final_approved_qty,
+            reason: "",
+          });
+        }
+      }
+    }
+    setLifecycleProcess({
+      kind,
+      requestId: detail.request_id,
+      requestVersion: detail.request_version,
+      reason: "",
+      lines,
+      error: "",
+      pendingMessage: "",
+    });
+    setError("");
+  }
+
+  function cancelLifecycleProcess(): void {
+    if (lifecycleProcess && mutationRegistry.current.get(lifecycleProcess.requestId)) {
+      setLifecycleProcess((current) => current ? {
+        ...current,
+        error: "操作结果尚未确认，必须保留原内容与请求坐标以便精确重试或人工核验",
+      } : current);
+      return;
+    }
+    setLifecycleProcess(null);
+  }
+
+  async function submitLifecycleProcess(): Promise<void> {
+    if (!detail || !access || !lifecycleProcess) return;
+    const before = detail;
+    const process = lifecycleProcess;
+    const permitted = process.kind === "withdraw" ? access.can_withdraw : access.can_cancel;
+    if (
+      process.requestId !== before.request_id
+      || process.requestVersion !== before.request_version
+      || !before.allowed_actions.includes(process.kind)
+      || !permitted
+    ) {
+      setLifecycleProcess((current) => current ? {
+        ...current,
+        error: "需求版本、权限或允许动作已变化，请关闭后重新读取详情",
+      } : current);
+      return;
+    }
+    const reason = process.reason.trim();
+    if (!reason || reason.length > 4000 || CONTROL_CHARACTERS.test(reason)) {
+      setLifecycleProcess((current) => current ? {
+        ...current,
+        error: "必须填写不超过 4000 字的整单原因，且不能包含换行或控制字符",
+      } : current);
+      return;
+    }
+    const body: Record<string, unknown> = {
+      expected_version: before.request_version,
+      reason,
+    };
+    if (process.kind === "cancel") {
+      const expectedLines = before.lines.filter((line) => {
+        const quantity = decimalUnits(line.final_approved_qty);
+        return quantity !== null && quantity > 0n;
+      });
+      if (
+        expectedLines.length !== process.lines.length
+        || expectedLines.some((line, index) => (
+          process.lines[index]?.requestLineId !== line.request_line_id
+          || process.lines[index]?.cancelledQty !== line.final_approved_qty
+        ))
+      ) {
+        setLifecycleProcess((current) => current ? {
+          ...current,
+          error: "完整取消明细与当前最终批准数量不一致，请重新读取详情",
+        } : current);
+        return;
+      }
+      if (process.lines.some((line) => (
+        !line.reason.trim()
+        || line.reason.trim().length > 4000
+        || CONTROL_CHARACTERS.test(line.reason.trim())
+      ))) {
+        setLifecycleProcess((current) => current ? {
+          ...current,
+          error: "每条有批准数量的明细都必须填写不超过 4000 字且不含控制字符的取消原因",
+        } : current);
+        return;
+      }
+      const cancellationLines = process.lines.map((line) => ({
+        request_line_id: line.requestLineId,
+        cancelled_qty: line.cancelledQty,
+        reason: line.reason.trim(),
+      }));
+      body.lines = cancellationLines;
+    }
+
+    setBusy(true);
+    let responseValidated = false;
+    try {
+      const intent = mutationRegistry.current.begin({
+        requestId: before.request_id,
+        action: process.kind,
+        path: `/v1/material-requests/${before.request_id}/${process.kind}`,
+        body,
+        expectedVersion: before.request_version,
+      });
+      setLifecycleProcess((current) => current ? {
+        ...current,
+        error: "",
+        pendingMessage: `操作结果确认中（请求坐标 ${intent.headers["X-Request-ID"]}）；重试只复用原坐标。`,
+      } : current);
+      const result = validateMaterialRequestMutationResult(await adapter.mutate(intent), {
+        requestId: before.request_id,
+        action: process.kind,
+        previousVersion: before.request_version,
+      });
+      responseValidated = true;
+      const reread = validateMaterialRequestDetail(
+        await adapter.detail(before.request_id),
+        before.request_id,
+      );
+      if (!lifecycleMutationMatches(result, before, reread, process.kind)) {
+        throw new Error("生命周期响应与同一需求终态、审批锚点或逐行取消事实回读不一致，仍待人工核验");
+      }
+      mutationRegistry.current.confirm(intent.request_id, intent.signature);
+      setDetail(reread);
+      setLifecycleProcess(null);
+      setNotice(process.kind === "withdraw"
+        ? "需求已撤回并完成终态精确回读；其他九个状态轴未被合并。"
+        : "需求已安全取消并完成逐行事实与十个状态轴精确回读；未推断任何下游补偿。"
+      );
+    } catch (error) {
+      const pending = mutationRegistry.current.get(before.request_id);
+      if (!responseValidated && pending && isDefinitiveMaterialRequestRejection(error)) {
+        mutationRegistry.current.clearDefinitiveRejection(pending.request_id, pending.signature);
+        setLifecycleProcess((current) => current ? {
+          ...current,
+          error: showError(error),
+          pendingMessage: "",
+        } : current);
+      } else if (pending) {
+        setLifecycleProcess((current) => current ? {
+          ...current,
+          error: showError(error),
+          pendingMessage: `操作结果仍未确认（请求坐标 ${pending.headers["X-Request-ID"]}）；禁止生成新坐标或执行其他动作。`,
+        } : current);
+      } else {
+        setLifecycleProcess((current) => current ? { ...current, error: showError(error) } : current);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function startApprovalProcess(kind: ApprovalProcessState["kind"]): void {
     if (!detail || !access) return;
     const step = currentApprovalStep(detail);
@@ -1351,9 +1704,9 @@ export default function FormalMaterialRequestsPage({
     </section>
 
     {detail && access && <Modal title="正式需求详情" wide onClose={() => {
-      if (!approvalProcess) setDetail(null);
+      if (!approvalProcess && !lifecycleProcess) setDetail(null);
     }}>
-      <DetailPanel detail={detail} access={access} busy={busy} onEdit={() => void startEdit()} onSubmit={() => setSubmitConfirm(true)} onProcess={startApprovalProcess} />
+      <DetailPanel detail={detail} access={access} busy={busy} onEdit={() => void startEdit()} onSubmit={() => setSubmitConfirm(true)} onProcess={startApprovalProcess} onLifecycle={startLifecycleProcess} />
     </Modal>}
 
     {formMode && <Modal title={formMode.kind === "create" ? "新建需求草稿" : "编辑需求草稿"} wide onClose={cancelRawForm}>
@@ -1416,6 +1769,19 @@ export default function FormalMaterialRequestsPage({
       onUploadBlocking={setExternalUploadBlocking}
       onCancel={cancelApprovalProcess}
       onSubmit={() => void submitApprovalProcess()}
+    />}
+
+    {lifecycleProcess && <LifecycleProcessForm
+      process={lifecycleProcess}
+      busy={busy}
+      onReason={(reason) => setLifecycleProcess((current) => current ? { ...current, reason, error: "" } : current)}
+      onLineReason={(requestLineId, reason) => setLifecycleProcess((current) => current ? {
+        ...current,
+        error: "",
+        lines: current.lines.map((line) => line.requestLineId === requestLineId ? { ...line, reason } : line),
+      } : current)}
+      onCancel={cancelLifecycleProcess}
+      onSubmit={() => void submitLifecycleProcess()}
     />}
   </>;
 }

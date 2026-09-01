@@ -27,7 +27,9 @@ function accessContext() {
       { resource: 'material_request', action: 'approve_region', field_code: 'approval_decision' },
       { resource: 'material_request', action: 'approve_headquarters', field_code: 'approval_decision' },
       { resource: 'material_request', action: 'register_external', field_code: 'approval_evidence' },
-      { resource: 'material_request', action: 'verify_external', field_code: 'approval_evidence' }
+      { resource: 'material_request', action: 'verify_external', field_code: 'approval_evidence' },
+      { resource: 'material_request', action: 'withdraw', field_code: '' },
+      { resource: 'material_request', action: 'cancel', field_code: '' }
     ]
   }
 }
@@ -117,7 +119,9 @@ test('loadAccess projects only fresh matching material-request read/create grant
     can_approve_region: true,
     can_approve_headquarters: true,
     can_register_external: true,
-    can_verify_external: true
+    can_verify_external: true,
+    can_withdraw: true,
+    can_cancel: true
   })
   assert.deepEqual(transport.calls, [
     { method: 'GET', path: '/access/context', params: undefined }
@@ -181,6 +185,12 @@ test('formal reads use canonical endpoints and plaintext edit requests are expli
     method: 'GET',
     header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
   })
+  for (const index of [0, 1, 2]) {
+    assert.deepEqual(transport.calls[index].options, {
+      method: 'GET',
+      header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
+    })
+  }
 })
 
 test('create and update pass exact intent path, body and coordinates to api.js', async () => {
@@ -217,7 +227,7 @@ test('create and update pass exact intent path, body and coordinates to api.js',
   assert.equal(updateCall.options.header, updateIntent.headers)
 })
 
-test('transport admits only implemented approval/evidence paths and blocks dormant actions', async () => {
+test('transport admits implemented lifecycle, approval and evidence paths and blocks dormant actions', async () => {
   const transport = fakeTransport()
   const client = adapter(transport)
   const approve = contract.createMaterialRequestIntentRegistry({
@@ -275,18 +285,70 @@ test('transport admits only implemented approval/evidence paths and blocks dorma
     expectedVersion: 5
   })
   await client.mutate(verify)
+
+  const withdraw = contract.createMaterialRequestIntentRegistry({
+    coordinateFactory: coordinateFactory()
+  }).begin({
+    requestId: REQUEST_ID,
+    action: 'withdraw',
+    path: `/v1/material-requests/${REQUEST_ID}/withdraw`,
+    body: { expected_version: 6, reason: '审批中需求变更' },
+    expectedVersion: 6
+  })
+  await client.mutate(withdraw)
+
+  const cancel = contract.createMaterialRequestIntentRegistry({
+    coordinateFactory: coordinateFactory()
+  }).begin({
+    requestId: REQUEST_ID,
+    action: 'cancel',
+    path: `/v1/material-requests/${REQUEST_ID}/cancel`,
+    body: {
+      expected_version: 7,
+      reason: '需求不再存在',
+      lines: [{
+        request_line_id: MATERIAL_ID,
+        cancelled_qty: '1.000',
+        reason: '取消全部批准数量'
+      }]
+    },
+    expectedVersion: 7
+  })
+  await client.mutate(cancel)
+
+  const zeroApprovedCancel = contract.createMaterialRequestIntentRegistry({
+    coordinateFactory: coordinateFactory()
+  }).begin({
+    requestId: REQUEST_ID,
+    action: 'cancel',
+    path: `/v1/material-requests/${REQUEST_ID}/cancel`,
+    body: {
+      expected_version: 8,
+      reason: '退回后取消且无最终批准量',
+      lines: []
+    },
+    expectedVersion: 8
+  })
+  await client.mutate(zeroApprovedCancel)
   assert.deepEqual(
     transport.calls.map((call) => call.path),
-    [approve.path, register.path, verify.path]
+    [
+      approve.path,
+      register.path,
+      verify.path,
+      withdraw.path,
+      cancel.path,
+      zeroApprovedCancel.path
+    ]
   )
 
   const unsupported = contract.createMaterialRequestIntentRegistry({
     coordinateFactory: coordinateFactory()
   }).begin({
     requestId: REQUEST_ID,
-    action: 'withdraw',
-    path: `/v1/material-requests/${REQUEST_ID}/withdraw`,
-    body: { expected_version: 4 },
+    action: 'propose_substitution',
+    path: `/v1/material-requests/${REQUEST_ID}/substitutions`,
+    body: { expected_request_version: 4 },
     expectedVersion: 4
   })
   await assert.rejects(
@@ -314,7 +376,7 @@ test('transport admits only implemented approval/evidence paths and blocks dorma
     client.mutate(staleApprovalPath),
     (error) => error.status === 409
   )
-  assert.equal(transport.calls.length, 3)
+  assert.equal(transport.calls.length, 6)
 })
 
 test('transport rejects malformed approval bodies before api.js', async () => {
@@ -330,6 +392,21 @@ test('transport rejects malformed approval bodies before api.js', async () => {
     expectedVersion: 3
   })
   await assert.rejects(client.mutate(malformed), (error) => error.status === 409)
+
+  const malformedCancel = contract.createMaterialRequestIntentRegistry({
+    coordinateFactory: coordinateFactory()
+  }).begin({
+    requestId: REQUEST_ID,
+    action: 'cancel',
+    path: `/v1/material-requests/${REQUEST_ID}/cancel`,
+    body: {
+      expected_version: 3,
+      reason: '需求不再存在',
+      lines: [{ request_line_id: MATERIAL_ID, cancelled_qty: '1.000' }]
+    },
+    expectedVersion: 3
+  })
+  await assert.rejects(client.mutate(malformedCancel), (error) => error.status === 409)
   assert.equal(transport.calls.length, 0)
 })
 

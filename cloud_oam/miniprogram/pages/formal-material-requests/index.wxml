@@ -147,6 +147,27 @@
 
       <view class="section"><text class="section-title">供给计划（只读）</text><view class="small muted section-note">供给任务只是计划/参考，不代表已分配、发运或收货。</view><view wx:if="{{detail.supply_tasks.length}}" wx:for="{{detail.supply_tasks}}" wx:key="id" class="list-card"><view class="row between"><text>{{item.task_no}}</text><text>{{item.status}}</text></view><view class="small mono">{{item.supply_type}} · {{item.expected_qty}}</view></view><view wx:else class="empty"><text class="empty-title">暂无供给计划</text></view></view>
 
+      <view wx:if="{{lifecycleConfirm}}" class="card confirm-card lifecycle-card">
+        <text class="section-title">{{lifecycleConfirm.title}}</text>
+        <view class="fact"><text class="muted">需求号 / 预期版本</text><text class="mono">{{detail.request_no}} / v{{lifecycleConfirm.expectedVersion}}</text></view>
+        <view wx:if="{{lifecycleConfirm.action === 'withdraw'}}" class="notice warning">撤回只终止当前审批链，不代表分配、占用、出库、发货、签收、OAM收货、个人仓入库、通知或对账发生。
+        </view>
+        <view wx:else class="notice warning">安全取消仅在服务端确认下游状态轴均为中性且无需补偿时执行；否则必须失败关闭。
+        </view>
+        <view class="field"><text class="field-label">{{lifecycleConfirm.action === 'withdraw' ? '撤回理由' : '整单取消理由'}}</text><textarea class="textarea" disabled="{{busy || lifecycleConfirm.pendingMessage}}" value="{{lifecycleConfirm.reason}}" bindinput="lifecycleReasonInput" /></view>
+        <block wx:if="{{lifecycleConfirm.action === 'cancel'}}">
+          <view wx:if="{{lifecycleConfirm.lines.length}}" class="section-note small muted">以下每条最终批准量必须完整取消；数量为只读回读事实。</view>
+          <view wx:for="{{lifecycleConfirm.lines}}" wx:key="requestLineId" class="line-card">
+            <view class="fact"><text class="muted">明细 / 物料 / 取消量</text><text>第 {{item.lineNo}} 行 · <text class="mono">{{item.materialId}}</text> · {{item.cancelledQty}}</text></view>
+            <view class="field"><text class="field-label">逐行取消原因</text><input class="input" disabled="{{busy || lifecycleConfirm.pendingMessage}}" value="{{item.reason}}" data-id="{{item.requestLineId}}" bindinput="lifecycleLineReasonInput" /></view>
+          </view>
+          <view wx:else class="notice info">当前没有最终批准量大于 0 的明细，本次将提交空的取消明细集。</view>
+        </block>
+        <view wx:if="{{lifecycleConfirm.pendingMessage}}" class="notice warning">{{lifecycleConfirm.pendingMessage}}</view>
+        <view wx:if="{{lifecycleConfirm.error}}" class="notice warning">{{lifecycleConfirm.error}}</view>
+        <view class="action-grid"><button class="button button-secondary" disabled="{{busy}}" bindtap="cancelLifecycleConfirm">返回检查</button><button class="button button-primary" disabled="{{busy}}" bindtap="confirmLifecycleAction">{{lifecycleConfirm.action === 'withdraw' ? '确认撤回' : '确认安全取消'}}</button></view>
+      </view>
+
       <view wx:if="{{submitConfirm}}" class="card confirm-card">
         <text class="section-title">提交前确认</text>
         <view class="fact"><text class="muted">用途</text><text>{{detail.purpose}}</text></view>
@@ -155,7 +176,7 @@
         <view class="notice warning">提交只进入审批。审批通过不等于分配、占用、出库、发货、物流签收、OAM收货、RSC/个人仓入库、通知送达或对账同步完成。</view>
         <view class="action-grid"><button class="button button-secondary" bindtap="cancelSubmit">返回检查</button><button class="button button-primary" disabled="{{busy}}" bindtap="confirmSubmit">确认提交</button></view>
       </view>
-      <view wx:elif="{{!processing}}" class="action-grid detail-actions"><button class="button button-secondary" bindtap="closeDetail">返回列表</button><button wx:if="{{detail.canEdit}}" class="button button-secondary" disabled="{{busy}}" bindtap="startEdit">编辑草稿</button><button wx:if="{{detail.canSubmit}}" class="button button-primary" disabled="{{busy}}" bindtap="openSubmitConfirm">提交前确认</button></view>
+      <view wx:elif="{{!processing && !lifecycleConfirm}}" class="action-grid detail-actions"><button class="button button-secondary" bindtap="closeDetail">返回列表</button><button wx:if="{{detail.canEdit}}" class="button button-secondary" disabled="{{busy}}" bindtap="startEdit">编辑草稿</button><button wx:if="{{detail.canSubmit}}" class="button button-primary" disabled="{{busy}}" bindtap="openSubmitConfirm">提交前确认</button><button wx:if="{{detail.canWithdraw}}" class="button button-secondary" disabled="{{busy}}" data-action="withdraw" bindtap="openLifecycleConfirm">撤回需求</button><button wx:if="{{detail.canCancel}}" class="button button-danger" disabled="{{busy}}" data-action="cancel" bindtap="openLifecycleConfirm">安全取消</button></view>
     </block>
 
     <block wx:else>

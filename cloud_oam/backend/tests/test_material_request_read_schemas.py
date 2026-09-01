@@ -40,7 +40,7 @@ def _axes(status: str = "draft") -> dict[str, str]:
 
 
 def _assignee(role_code: str) -> dict[str, str]:
-    return {"name_masked": "审＊人", "role_code": role_code}
+    return {"name_masked": "审＊＊", "role_code": role_code}
 
 
 def _decision(
@@ -189,7 +189,7 @@ def _detail(*, status: str = "draft") -> dict[str, object]:
                     "external_action": "approve",
                     "status": "accepted",
                     "evidence_file_id": _uuid(),
-                    "external_approver_name_masked": "星＊审批人",
+                    "external_approver_name_masked": "星＊＊＊＊",
                     "external_decided_at": NOW,
                     "registered_at": NOW,
                     "verified_at": NOW,
@@ -216,11 +216,11 @@ def _detail(*, status: str = "draft") -> dict[str, object]:
             "province_name": "江苏省",
             "city_name": "南京市",
             "district_name": "建邺区",
-            "detail_masked": "江东中路＊＊号",
+            "detail_masked": "******",
         },
         "contact_masked": {
             "name_masked": "李＊",
-            "mobile_masked": "138****1234",
+            "mobile_masked": "*******1234",
         },
         "note": "",
         "attachment_refs": [
@@ -269,7 +269,7 @@ def _detail(*, status: str = "draft") -> dict[str, object]:
         "supply_tasks": [],
         "allowed_actions": ["create_supply_task"]
         if terminal
-        else ["update", "submit", "cancel"],
+        else ["update", "submit"],
         "created_at": NOW,
         "updated_at": NOW,
         "submitted_at": NOW if terminal else None,
@@ -525,7 +525,11 @@ def test_detail_preserves_complete_ordered_approval_instance_history() -> None:
     ("path", "value"),
     [
         (("contact_masked", "mobile_masked"), "13800138000"),
+        (("contact_masked", "mobile_masked"), "1*3*8*0*0*1*3*8*0*0*0"),
+        (("contact_masked", "mobile_masked"), "*******１２３４"),
+        (("contact_masked", "name_masked"), "张三*"),
         (("address_snapshot", "detail_masked"), "江东中路100号"),
+        (("address_snapshot", "detail_masked"), "江东中路100号*"),
         (("approval_mode",), "direct_star"),
     ],
 )
@@ -629,8 +633,18 @@ def test_external_evidence_and_assignee_reject_raw_sensitive_fields() -> None:
         MaterialRequestDetailOut.model_validate(payload)
 
     payload = _detail(status="approved")
+    payload["approval_instance"]["steps"][0]["assignee_snapshot"]["name_masked"] = "张三*"  # type: ignore[index]
+    with pytest.raises(ValidationError, match="canonical masked shape"):
+        MaterialRequestDetailOut.model_validate(payload)
+
+    payload = _detail(status="approved")
     payload["approval_instance"]["external_evidence_summaries"][0]["external_approver_name_masked"] = "张三"  # type: ignore[index]
     with pytest.raises(ValidationError, match="masked"):
+        MaterialRequestDetailOut.model_validate(payload)
+
+    payload = _detail(status="approved")
+    payload["approval_instance"]["external_evidence_summaries"][0]["external_approver_name_masked"] = "张三*"  # type: ignore[index]
+    with pytest.raises(ValidationError, match="canonical masked shape"):
         MaterialRequestDetailOut.model_validate(payload)
 
     payload = _detail(status="approved")
@@ -692,6 +706,57 @@ def test_returned_request_can_expose_amend_and_resubmit_actions() -> None:
     payload["allowed_actions"] = ["update", "submit"]
     result = MaterialRequestDetailOut.model_validate(payload)
     assert result.allowed_actions == ("update", "submit")
+
+
+def test_terminal_request_projection_requires_the_service_owned_approval_shape() -> None:
+    cancelled = _detail(status="approved")
+    cancelled["states"] = _axes("cancelled")
+    cancelled["allowed_actions"] = []
+    cancelled_line = cancelled["lines"][0]  # type: ignore[index]
+    cancelled_line["cancelled_qty"] = cancelled_line["final_approved_qty"]
+    cancelled_line["status"] = "cancelled"
+    assert (
+        MaterialRequestDetailOut.model_validate(cancelled).states.request_status
+        == "cancelled"
+    )
+
+    incomplete_line = deepcopy(cancelled)
+    incomplete_line["lines"][0]["status"] = "approved"  # type: ignore[index]
+    incomplete_line["lines"][0]["cancelled_qty"] = Decimal("0")  # type: ignore[index]
+    with pytest.raises(ValidationError, match="every line to be fully cancelled"):
+        MaterialRequestDetailOut.model_validate(incomplete_line)
+
+    missing_instance = deepcopy(cancelled)
+    missing_instance["approval_instance"] = None
+    missing_instance["approval_history"] = []
+    with pytest.raises(ValidationError, match="unchanged terminal approval instance"):
+        MaterialRequestDetailOut.model_validate(missing_instance)
+
+    wrong_instance = deepcopy(cancelled)
+    wrong_instance["approval_instance"]["status"] = "withdrawn"  # type: ignore[index]
+    with pytest.raises(ValidationError, match="unchanged terminal approval instance"):
+        MaterialRequestDetailOut.model_validate(wrong_instance)
+
+    withdrawn = _detail(status="approved")
+    withdrawn["states"] = _axes("withdrawn")
+    withdrawn["allowed_actions"] = []
+    withdrawn["approval_instance"]["status"] = "withdrawn"  # type: ignore[index]
+    assert (
+        MaterialRequestDetailOut.model_validate(withdrawn).states.request_status
+        == "withdrawn"
+    )
+
+    leaked_active_step = deepcopy(withdrawn)
+    active_step = leaked_active_step["approval_instance"]["steps"][0]  # type: ignore[index]
+    active_step["status"] = "open"
+    active_step["decided_at"] = None
+    with pytest.raises(ValidationError, match="active approval step"):
+        MaterialRequestDetailOut.model_validate(leaked_active_step)
+
+    draft_with_cancel = _detail()
+    draft_with_cancel["allowed_actions"] = ["update", "submit", "cancel"]
+    with pytest.raises(ValidationError, match="cancel is incompatible"):
+        MaterialRequestDetailOut.model_validate(draft_with_cancel)
 
 
 def test_page_and_mutations_keep_exact_revision_and_state_contract() -> None:

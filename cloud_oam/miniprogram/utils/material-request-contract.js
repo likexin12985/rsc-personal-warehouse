@@ -205,8 +205,8 @@ function nullableTimestamp(value, name) {
 
 function maskedText(value, name) {
   const checked = textValue(value, name)
-  if (!/[＊*•]/.test(checked)) {
-    fail('material_request_contract_mask_invalid', `正式需求响应中的 ${name} 必须脱敏`)
+  if (!/^(?:[^\s＊*•][＊*•]+|[＊*•]+)$/u.test(checked)) {
+    fail('material_request_contract_mask_invalid', `正式需求响应中的 ${name} 脱敏形状无效`)
   }
   return checked
 }
@@ -223,16 +223,18 @@ function validateAddressSnapshot(value) {
     province_name: textValue(own(object, 'province_name'), 'province_name'),
     city_name: textValue(own(object, 'city_name'), 'city_name'),
     district_name: textValue(own(object, 'district_name'), 'district_name'),
-    detail_masked: maskedText(own(object, 'detail_masked'), 'detail_masked')
+    detail_masked: own(object, 'detail_masked') === '******'
+      ? '******'
+      : fail('material_request_contract_mask_invalid', '正式需求地址必须使用固定脱敏投影')
   }
 }
 
 function validateContactMasked(value) {
   const object = objectValue(value, '脱敏联系人')
   exactKeys(object, ['name_masked', 'mobile_masked'], '脱敏联系人')
-  const mobile = maskedText(own(object, 'mobile_masked'), 'mobile_masked')
-  if (/\d{7,}/.test(mobile)) {
-    fail('material_request_contract_mask_invalid', '脱敏手机号包含连续明文号码')
+  const mobile = textValue(own(object, 'mobile_masked'), 'mobile_masked')
+  if (!/^[＊*•]{2,20}\d{4}$/.test(mobile)) {
+    fail('material_request_contract_mask_invalid', '脱敏手机号形状无效')
   }
   return {
     name_masked: maskedText(own(object, 'name_masked'), 'name_masked'),
@@ -999,6 +1001,26 @@ function validateApprovalPhaseOne(requestStatus, mode, instance) {
   if (expected && (!instance || instance.status !== expected)) {
     fail('material_request_contract_approval_instance_mismatch', '需求状态与审批实例状态不一致')
   }
+  if (
+    requestStatus === 'cancelled' &&
+    (!instance || !['returned', 'completed'].includes(instance.status))
+  ) {
+    fail(
+      'material_request_contract_approval_instance_mismatch',
+      '已取消需求必须保留原有退回或已完成审批实例'
+    )
+  }
+  if (
+    requestStatus === 'withdrawn' && instance &&
+    instance.steps.some((step) => [
+      'pending', 'open', 'awaiting_external_evidence', 'evidence_pending_verification'
+    ].includes(step.status))
+  ) {
+    fail(
+      'material_request_contract_approval_instance_mismatch',
+      '已撤回需求不能保留活动审批步骤'
+    )
+  }
 }
 
 function validateActionCompatibility(actions, status, instance) {
@@ -1007,7 +1029,7 @@ function validateActionCompatibility(actions, status, instance) {
     update: ['draft', 'returned'],
     submit: ['draft', 'returned'],
     withdraw: ['submitted', 'approval_in_progress'],
-    cancel: ['draft', 'returned', 'partially_approved', 'approved', 'cancellation_pending'],
+    cancel: ['returned', 'partially_approved', 'approved', 'cancellation_pending'],
     propose_substitution: ['partially_approved', 'approved'],
     confirm_substitution: ['partially_approved', 'approved'],
     reject_substitution: ['partially_approved', 'approved'],
@@ -1159,6 +1181,17 @@ function validateMaterialRequestDetail(value, expectedRequestId = '') {
     line.revision_id !== summary.current_revision_id ||
     line.revision_no !== summary.current_revision_no
   ))) fail('material_request_contract_revision_anchor_invalid', '需求明细未锚定当前修订')
+  if (
+    summary.states.request_status === 'cancelled' &&
+    lines.some((line) => (
+      line.status !== 'cancelled' || line.cancelled_qty !== line.final_approved_qty
+    ))
+  ) {
+    fail(
+      'material_request_contract_cancellation_projection_invalid',
+      '已取消需求的每条明细都必须完整取消'
+    )
+  }
   const rawRevisions = own(object, 'revision_history')
   if (!Array.isArray(rawRevisions) || !rawRevisions.length) {
     fail('material_request_contract_revision_history_invalid', '修订历史不能为空')
@@ -1307,12 +1340,13 @@ function validateMaterialRequestMutationResult(value, expected) {
   const rawAttempt = own(object, 'approval_attempt_no')
   const attemptNo = rawAttempt === null ? null : positiveInteger(rawAttempt, 'approval_attempt_no')
   const currentStepId = nullableUuid(own(object, 'current_step_id'), 'current_step_id')
+  const states = validateMaterialRequestStateAxes(own(object, 'states'))
   if (
     (instanceId === null) !== (attemptNo === null) ||
     (instanceId === null && currentStepId !== null)
   ) fail('material_request_contract_approval_anchor_invalid', '审批实例、尝试和当前步骤锚点不一致')
   const approvalActions = [
-    'submit', 'approve', 'return', 'reject',
+    'submit', 'withdraw', 'cancel', 'approve', 'return', 'reject',
     'register_external_approval', 'verify_external_approval'
   ]
   if (approvalActions.includes(action) && instanceId === null) {
@@ -1320,6 +1354,19 @@ function validateMaterialRequestMutationResult(value, expected) {
   }
   if (action === 'submit' && currentStepId === null) {
     fail('material_request_contract_approval_anchor_invalid', '提交响应缺少已打开当前步骤')
+  }
+  const lifecycleStatus = { withdraw: 'withdrawn', cancel: 'cancelled' }[action]
+  if (lifecycleStatus && states.request_status !== lifecycleStatus) {
+    fail(
+      'material_request_contract_lifecycle_state_invalid',
+      '需求终止写响应与申请状态不一致'
+    )
+  }
+  if (lifecycleStatus && currentStepId !== null) {
+    fail(
+      'material_request_contract_approval_anchor_invalid',
+      '需求终止写响应不得保留当前审批步骤'
+    )
   }
   const expectedVersion = nonnegativeInteger(expected.previousVersion, 'previousVersion')
   if (
@@ -1348,7 +1395,7 @@ function validateMaterialRequestMutationResult(value, expected) {
     approval_instance_id: instanceId,
     approval_attempt_no: attemptNo,
     current_step_id: currentStepId,
-    states: validateMaterialRequestStateAxes(own(object, 'states')),
+    states,
     idempotency_replayed: replayed
   }
 }

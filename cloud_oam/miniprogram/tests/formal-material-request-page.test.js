@@ -125,9 +125,9 @@ function detail(version = 0) {
       province_name: '江苏省',
       city_name: '南京市',
       district_name: '建邺区',
-      detail_masked: '江东中路***号'
+      detail_masked: '******'
     },
-    contact_masked: { name_masked: '李*', mobile_masked: '138****0000' },
+    contact_masked: { name_masked: '李*', mobile_masked: '*******0000' },
     note: '请及时处理',
     attachment_refs: [{
       revision_id: REVISION_ID,
@@ -167,7 +167,7 @@ function detail(version = 0) {
     }],
     approval_history: [],
     supply_tasks: [],
-    allowed_actions: ['update', 'submit', 'cancel'],
+    allowed_actions: ['update', 'submit'],
     created_at: '2026-09-01T08:00:00+08:00',
     updated_at: version ? '2026-09-01T08:10:00+08:00' : '2026-09-01T08:00:00+08:00',
     submitted_at: null
@@ -199,7 +199,7 @@ function submittedDetail() {
         reopened_from_step_id: null,
         source_mode: 'internal',
         status: 'open',
-        assignee_snapshot: { name_masked: '省＊负责人', role_code: 'provincial_manager' },
+        assignee_snapshot: { name_masked: '省＊＊＊＊', role_code: 'provincial_manager' },
         candidate_pool_summary: null,
         opened_at: '2026-09-01T08:10:00+08:00',
         decided_at: null,
@@ -281,6 +281,44 @@ function returnedDetail() {
     occurred_at: '2026-09-01T08:20:00+08:00'
   }]
   value.allowed_actions = ['update', 'submit']
+  return value
+}
+
+function withdrawnDetail() {
+  const value = submittedDetail()
+  value.request_version = 2
+  value.updated_at = '2026-09-01T08:20:00+08:00'
+  value.states = axes('withdrawn')
+  value.allowed_actions = []
+  value.approval_instance.status = 'withdrawn'
+  value.approval_instance.current_step_no = null
+  value.approval_instance.current_step_id = null
+  value.approval_instance.version = 1
+  value.approval_instance.steps = value.approval_instance.steps.map((step) => Object.assign({}, step, {
+    status: 'cancelled',
+    decided_at: null,
+    version: step.version + 1,
+    line_decisions: []
+  }))
+  return value
+}
+
+function cancellableReturnedDetail() {
+  const value = returnedDetail()
+  value.allowed_actions = ['cancel']
+  value.lines[0].final_approved_qty = '4.000'
+  return value
+}
+
+function cancelledDetail() {
+  const value = cancellableReturnedDetail()
+  value.request_version = 3
+  value.updated_at = '2026-09-01T08:30:00+08:00'
+  value.states = axes('cancelled')
+  value.allowed_actions = []
+  value.lines[0].cancelled_qty = '4.000'
+  value.lines[0].status = 'cancelled'
+  value.lines[0].version += 1
   return value
 }
 
@@ -457,7 +495,9 @@ function access() {
     can_approve_region: false,
     can_approve_headquarters: false,
     can_register_external: false,
-    can_verify_external: false
+    can_verify_external: false,
+    can_withdraw: false,
+    can_cancel: false
   }
 }
 
@@ -578,11 +618,11 @@ test('list and detail expose only masked projections and ten separate axes', asy
   })
   const instance = pageInstance(loaded.definition)
   await instance.load()
-  assert.equal(instance.data.requests[0].maskedContact, '李* · 138****0000')
+  assert.equal(instance.data.requests[0].maskedContact, '李* · *******0000')
   assert.equal(JSON.stringify(instance.data).includes(RAW_MOBILE), false)
   await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
   assert.equal(instance.data.detail.stateAxes.length, 10)
-  assert.equal(instance.data.detail.maskedAddress, '江苏省南京市建邺区江东中路***号')
+  assert.equal(instance.data.detail.maskedAddress, '江苏省南京市建邺区******')
   assert.equal(JSON.stringify(instance.data.detail).includes(RAW_ADDRESS), false)
 })
 
@@ -888,6 +928,342 @@ test('submit requires confirmation and keeps approval separate from every fulfil
     'utf8'
   )
   assert.match(wxml, /审批通过不等于分配、占用、出库、发货、物流签收、OAM收货、RSC\/个人仓入库、通知送达或对账同步完成/)
+})
+
+test('withdraw requires permission plus allowed action, reuses one intent and exact-rereads terminal axes', async (context) => {
+  globals()
+  const actionable = submittedDetail()
+  const terminal = withdrawnDetail()
+  const intents = []
+  let detailReads = 0
+  const loaded = loadWith(fakeTransport({
+    async loadAccess() {
+      return Object.assign({}, access(), { can_withdraw: true })
+    },
+    async detail() {
+      detailReads += 1
+      return detailReads === 1 ? actionable : terminal
+    },
+    async mutate(intent) {
+      intents.push(intent)
+      if (intents.length === 1) throw new Error('network uncertain')
+      return {
+        schema_version: '1.0', request_id: REQUEST_ID, action: 'withdraw',
+        request_version: 2, revision_id: REVISION_ID, revision_no: 1,
+        approval_instance_id: INSTANCE_ID, approval_attempt_no: 1,
+        current_step_id: null, states: axes('withdrawn'), idempotency_replayed: true
+      }
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  assert.equal(instance.data.detail.canWithdraw, true)
+  assert.equal(instance.data.detail.canCancel, false)
+  instance.openLifecycleConfirm({ currentTarget: { dataset: { action: 'withdraw' } } })
+  assert.equal(intents.length, 0)
+  assert.match(instance.data.lifecycleConfirm.title, /二次确认/)
+  instance.lifecycleReasonInput({ detail: { value: '工单需求已变更' } })
+
+  await instance.confirmLifecycleAction()
+  assert.match(instance.data.lifecycleConfirm.pendingMessage, /禁止生成新坐标/)
+  await instance.load()
+  assert.equal(instance.data.lifecycleConfirm.reason, '工单需求已变更')
+  assert.match(instance.data.lifecycleConfirm.pendingMessage, /禁止生成新坐标/)
+  await instance.confirmLifecycleAction()
+
+  assert.equal(intents.length, 2)
+  assert.equal(intents[0], intents[1])
+  assert.equal(intents[0].path, `/v1/material-requests/${REQUEST_ID}/withdraw`)
+  assert.deepEqual(intents[0].body, {
+    expected_version: 1,
+    reason: '工单需求已变更'
+  })
+  assert.equal(instance.data.detail.states.request_status, 'withdrawn')
+  assert.equal(instance.data.detail.states.allocation_status, 'not_allocated')
+  assert.equal(instance.data.lifecycleConfirm, null)
+})
+
+test('in-flight withdraw survives page unload and a restored page never creates replacement coordinates', async (context) => {
+  const { toasts } = globals()
+  const actionable = submittedDetail()
+  const terminal = withdrawnDetail()
+  const intents = []
+  let detailReads = 0
+  let resolveMutation
+  const mutationResult = new Promise((resolve) => { resolveMutation = resolve })
+  const transport = fakeTransport({
+    async loadAccess() {
+      return Object.assign({}, access(), { can_withdraw: true })
+    },
+    async detail() {
+      detailReads += 1
+      return detailReads === 1 ? actionable : terminal
+    },
+    async mutate(intent) {
+      intents.push(intent)
+      return mutationResult
+    }
+  })
+  const loaded = loadWith(transport)
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+
+  const oldInstance = pageInstance(loaded.definition)
+  let oldUnloaded = false
+  const oldSetData = oldInstance.setData
+  oldInstance.setData = function setData(update) {
+    if (oldUnloaded) throw new Error('unloaded page must not call setData')
+    oldSetData.call(this, update)
+  }
+  await oldInstance.load()
+  await oldInstance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  oldInstance.openLifecycleConfirm({ currentTarget: { dataset: { action: 'withdraw' } } })
+  oldInstance.lifecycleReasonInput({ detail: { value: '工单需求已变更' } })
+  const inFlightWrite = oldInstance.confirmLifecycleAction()
+  assert.equal(intents.length, 1)
+
+  oldUnloaded = true
+  oldInstance.onUnload()
+  const restoredInstance = pageInstance(loaded.definition)
+  await restoredInstance.load()
+  assert.equal(restoredInstance.data.lifecycleConfirm.reason, '工单需求已变更')
+  assert.match(restoredInstance.data.lifecycleConfirm.pendingMessage, /禁止生成新坐标/)
+
+  resolveMutation({
+    schema_version: '1.0', request_id: REQUEST_ID, action: 'withdraw',
+    request_version: 2, revision_id: REVISION_ID, revision_no: 1,
+    approval_instance_id: INSTANCE_ID, approval_attempt_no: 1,
+    current_step_id: null, states: axes('withdrawn'), idempotency_replayed: false
+  })
+  await inFlightWrite
+  assert.equal(intents.length, 1)
+  assert.equal(toasts.some((item) => item.icon === 'success'), false)
+
+  await restoredInstance.confirmLifecycleAction()
+  assert.equal(intents.length, 1)
+  assert.equal(detailReads, 2)
+  assert.equal(restoredInstance.data.detail.states.request_status, 'withdrawn')
+  assert.equal(restoredInstance.data.lifecycleConfirm, null)
+  assert.equal(toasts.filter((item) => item.icon === 'success').length, 1)
+})
+
+test('withdraw keeps the intent pending when request content or active approval steps drift on reread', async (context) => {
+  globals()
+  const scenarios = [
+    {
+      mutateTerminal: (terminal) => { terminal.purpose = '被错误改写的需求用途' },
+      expectedError: /仍待人工核验/
+    },
+    {
+      mutateTerminal: (terminal) => {
+        terminal.approval_instance.steps[0].status = 'open'
+        terminal.approval_instance.steps[0].version = 0
+      },
+      expectedError: /不能保留活动审批步骤/
+    }
+  ]
+  for (const { mutateTerminal, expectedError } of scenarios) {
+    const actionable = submittedDetail()
+    const terminal = withdrawnDetail()
+    mutateTerminal(terminal)
+    let detailReads = 0
+    const loaded = loadWith(fakeTransport({
+      async loadAccess() {
+        return Object.assign({}, access(), { can_withdraw: true })
+      },
+      async detail() {
+        detailReads += 1
+        return detailReads === 1 ? actionable : terminal
+      },
+      async mutate() {
+        return {
+          schema_version: '1.0', request_id: REQUEST_ID, action: 'withdraw',
+          request_version: 2, revision_id: REVISION_ID, revision_no: 1,
+          approval_instance_id: INSTANCE_ID, approval_attempt_no: 1,
+          current_step_id: null, states: axes('withdrawn'), idempotency_replayed: false
+        }
+      }
+    }))
+    const instance = pageInstance(loaded.definition)
+    await instance.load()
+    await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+    instance.openLifecycleConfirm({ currentTarget: { dataset: { action: 'withdraw' } } })
+    instance.lifecycleReasonInput({ detail: { value: '工单需求已变更' } })
+    await instance.confirmLifecycleAction()
+    assert.match(instance.data.lifecycleConfirm.error, expectedError)
+    assert.match(instance.data.lifecycleConfirm.pendingMessage, /禁止生成新坐标/)
+    loaded.restore()
+  }
+  context.after(() => { delete global.wx })
+})
+
+test('safe cancel submits the exact positive approved-line set and verifies line projection', async (context) => {
+  globals()
+  const actionable = cancellableReturnedDetail()
+  const terminal = cancelledDetail()
+  const intents = []
+  let detailReads = 0
+  const loaded = loadWith(fakeTransport({
+    async loadAccess() {
+      return Object.assign({}, access(), { can_cancel: true })
+    },
+    async list() { return page(actionable) },
+    async detail() {
+      detailReads += 1
+      return detailReads === 1 ? actionable : terminal
+    },
+    async mutate(intent) {
+      intents.push(intent)
+      return {
+        schema_version: '1.0', request_id: REQUEST_ID, action: 'cancel',
+        request_version: 3, revision_id: REVISION_ID, revision_no: 1,
+        approval_instance_id: INSTANCE_ID, approval_attempt_no: 1,
+        current_step_id: null, states: axes('cancelled'), idempotency_replayed: false
+      }
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  assert.equal(instance.data.detail.canCancel, true)
+  instance.openLifecycleConfirm({ currentTarget: { dataset: { action: 'cancel' } } })
+  assert.equal(instance.data.lifecycleConfirm.lines.length, 1)
+  assert.equal(instance.data.lifecycleConfirm.lines[0].cancelledQty, '4.000')
+  instance.lifecycleReasonInput({ detail: { value: '现场需求已取消' } })
+  instance.lifecycleLineReasonInput({
+    currentTarget: { dataset: { id: LINE_ID } },
+    detail: { value: '取消该行全部批准数量' }
+  })
+  await instance.confirmLifecycleAction()
+
+  assert.equal(intents.length, 1)
+  assert.equal(intents[0].path, `/v1/material-requests/${REQUEST_ID}/cancel`)
+  assert.deepEqual(intents[0].body, {
+    expected_version: 2,
+    reason: '现场需求已取消',
+    lines: [{
+      request_line_id: LINE_ID,
+      cancelled_qty: '4.000',
+      reason: '取消该行全部批准数量'
+    }]
+  })
+  assert.equal(instance.data.detail.lines[0].cancelled_qty, '4.000')
+  assert.equal(instance.data.detail.lines[0].status, 'cancelled')
+  assert.equal(instance.data.detail.states.reservation_status, 'not_reserved')
+})
+
+test('safe cancel keeps the intent pending when reread rewrites the terminal approval status', async (context) => {
+  globals()
+  const actionable = cancellableReturnedDetail()
+  const invalidTerminal = cancelledDetail()
+  invalidTerminal.approval_instance.status = 'cancelled'
+  let detailReads = 0
+  const loaded = loadWith(fakeTransport({
+    async loadAccess() {
+      return Object.assign({}, access(), { can_cancel: true })
+    },
+    async list() { return page(actionable) },
+    async detail() {
+      detailReads += 1
+      return detailReads === 1 ? actionable : invalidTerminal
+    },
+    async mutate() {
+      return {
+        schema_version: '1.0', request_id: REQUEST_ID, action: 'cancel',
+        request_version: 3, revision_id: REVISION_ID, revision_no: 1,
+        approval_instance_id: INSTANCE_ID, approval_attempt_no: 1,
+        current_step_id: null, states: axes('cancelled'), idempotency_replayed: false
+      }
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  instance.openLifecycleConfirm({ currentTarget: { dataset: { action: 'cancel' } } })
+  instance.lifecycleReasonInput({ detail: { value: '现场需求已取消' } })
+  instance.lifecycleLineReasonInput({
+    currentTarget: { dataset: { id: LINE_ID } },
+    detail: { value: '取消该行全部批准数量' }
+  })
+  await instance.confirmLifecycleAction()
+
+  assert.match(instance.data.lifecycleConfirm.error, /必须保留原有退回或已完成审批实例/)
+  assert.match(instance.data.lifecycleConfirm.pendingMessage, /禁止生成新坐标/)
+})
+
+test('safe cancel keeps the intent pending when reread rewrites approval step history', async (context) => {
+  globals()
+  const actionable = cancellableReturnedDetail()
+  const invalidTerminal = cancelledDetail()
+  invalidTerminal.approval_instance.steps[0].assignee_snapshot.name_masked = '另＊＊＊＊'
+  let detailReads = 0
+  const loaded = loadWith(fakeTransport({
+    async loadAccess() {
+      return Object.assign({}, access(), { can_cancel: true })
+    },
+    async list() { return page(actionable) },
+    async detail() {
+      detailReads += 1
+      return detailReads === 1 ? actionable : invalidTerminal
+    },
+    async mutate() {
+      return {
+        schema_version: '1.0', request_id: REQUEST_ID, action: 'cancel',
+        request_version: 3, revision_id: REVISION_ID, revision_no: 1,
+        approval_instance_id: INSTANCE_ID, approval_attempt_no: 1,
+        current_step_id: null, states: axes('cancelled'), idempotency_replayed: false
+      }
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  instance.openLifecycleConfirm({ currentTarget: { dataset: { action: 'cancel' } } })
+  instance.lifecycleReasonInput({ detail: { value: '现场需求已取消' } })
+  instance.lifecycleLineReasonInput({
+    currentTarget: { dataset: { id: LINE_ID } },
+    detail: { value: '取消该行全部批准数量' }
+  })
+  await instance.confirmLifecycleAction()
+
+  assert.match(instance.data.lifecycleConfirm.error, /仍待人工核验/)
+  assert.match(instance.data.lifecycleConfirm.pendingMessage, /禁止生成新坐标/)
+})
+
+test('lifecycle buttons fail closed unless both access permission and allowed action are present', async (context) => {
+  globals()
+  const actionable = submittedDetail()
+  const loaded = loadWith(fakeTransport({ async detail() { return actionable } }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  assert.equal(actionable.allowed_actions.includes('withdraw'), true)
+  assert.equal(instance.data.detail.canWithdraw, false)
+  instance.openLifecycleConfirm({ currentTarget: { dataset: { action: 'withdraw' } } })
+  assert.equal(instance.data.lifecycleConfirm, null)
 })
 
 test('region processing sends exact approve, return and reject intents', async (context) => {

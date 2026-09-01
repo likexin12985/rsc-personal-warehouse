@@ -473,8 +473,8 @@ function nullableTimestamp(value: unknown, name: string): string | null {
 
 function maskedText(value: unknown, name: string): string {
   const checked = text(value, name);
-  if (!/[＊*•]/.test(checked)) {
-    return invalid("material_request_contract_mask_invalid", `正式需求响应中的 ${name} 必须脱敏`);
+  if (!/^(?:[^\s＊*•][＊*•]+|[＊*•]+)$/u.test(checked)) {
+    return invalid("material_request_contract_mask_invalid", `正式需求响应中的 ${name} 脱敏形状无效`);
   }
   return checked;
 }
@@ -491,16 +491,18 @@ function validateAddressSnapshot(value: unknown): MaterialRequestAddressSnapshot
     province_name: text(field(object, "province_name"), "province_name"),
     city_name: text(field(object, "city_name"), "city_name"),
     district_name: text(field(object, "district_name"), "district_name"),
-    detail_masked: maskedText(field(object, "detail_masked"), "detail_masked"),
+    detail_masked: field(object, "detail_masked") === "******"
+      ? "******"
+      : invalid("material_request_contract_mask_invalid", "正式需求地址必须使用固定脱敏投影"),
   };
 }
 
 function validateContactMasked(value: unknown): MaterialRequestContactMasked {
   const object = record(value, "脱敏联系人");
   exactKeys(object, ["name_masked", "mobile_masked"], "脱敏联系人");
-  const mobile = maskedText(field(object, "mobile_masked"), "mobile_masked");
-  if (/\d{7,}/.test(mobile)) {
-    invalid("material_request_contract_mask_invalid", "脱敏手机号包含连续明文号码");
+  const mobile = text(field(object, "mobile_masked"), "mobile_masked");
+  if (!/^[＊*•]{2,20}\d{4}$/.test(mobile)) {
+    invalid("material_request_contract_mask_invalid", "脱敏手机号形状无效");
   }
   return {
     name_masked: maskedText(field(object, "name_masked"), "name_masked"),
@@ -1248,6 +1250,21 @@ function validateApprovalPhaseOne(
   if (expected && instance?.status !== expected) {
     invalid("material_request_contract_approval_instance_mismatch", "需求状态与审批实例状态不一致");
   }
+  if (requestStatus === "cancelled"
+      && (instance === null || !["returned", "completed"].includes(instance.status))) {
+    invalid(
+      "material_request_contract_approval_instance_mismatch",
+      "已取消需求必须保留原有退回或已完成审批实例",
+    );
+  }
+  if (requestStatus === "withdrawn" && instance?.steps.some((step) => [
+    "pending", "open", "awaiting_external_evidence", "evidence_pending_verification",
+  ].includes(step.status))) {
+    invalid(
+      "material_request_contract_approval_instance_mismatch",
+      "已撤回需求不能保留活动审批步骤",
+    );
+  }
 }
 
 function validateActionCompatibility(
@@ -1260,7 +1277,7 @@ function validateActionCompatibility(
     update: ["draft", "returned"],
     submit: ["draft", "returned"],
     withdraw: ["submitted", "approval_in_progress"],
-    cancel: ["draft", "returned", "partially_approved", "approved", "cancellation_pending"],
+    cancel: ["returned", "partially_approved", "approved", "cancellation_pending"],
     propose_substitution: ["partially_approved", "approved"],
     confirm_substitution: ["partially_approved", "approved"],
     reject_substitution: ["partially_approved", "approved"],
@@ -1381,6 +1398,14 @@ export function validateMaterialRequestDetail(value: unknown, expectedRequestId 
   if (lines.some((line) => line.revision_id !== summary.current_revision_id
       || line.revision_no !== summary.current_revision_no)) {
     invalid("material_request_contract_revision_anchor_invalid", "需求明细未锚定当前修订");
+  }
+  if (summary.states.request_status === "cancelled" && lines.some(
+    (line) => line.status !== "cancelled" || line.cancelled_qty !== line.final_approved_qty,
+  )) {
+    invalid(
+      "material_request_contract_cancellation_projection_invalid",
+      "已取消需求的每条明细都必须完整取消",
+    );
   }
   const rawRevisions = field(object, "revision_history");
   if (!Array.isArray(rawRevisions) || rawRevisions.length === 0) {
@@ -1533,18 +1558,29 @@ export function validateMaterialRequestMutationResult(
     ? null
     : positiveInteger(rawApprovalAttemptNo, "approval_attempt_no");
   const currentStepId = nullableUuid(field(object, "current_step_id"), "current_step_id");
+  const states = validateMaterialRequestStateAxes(field(object, "states"));
   if ((approvalInstanceId === null) !== (approvalAttemptNo === null)
       || (approvalInstanceId === null && currentStepId !== null)) {
     invalid("material_request_contract_approval_anchor_invalid", "审批实例、尝试和当前步骤锚点不一致");
   }
   const approvalActions: readonly MaterialRequestMutationAction[] = [
-    "submit", "approve", "return", "reject", "register_external_approval", "verify_external_approval",
+    "submit", "withdraw", "cancel", "approve", "return", "reject",
+    "register_external_approval", "verify_external_approval",
   ];
   if (approvalActions.includes(action) && approvalInstanceId === null) {
     invalid("material_request_contract_approval_anchor_invalid", "审批写响应缺少实例尝试锚点");
   }
   if (action === "submit" && currentStepId === null) {
     invalid("material_request_contract_approval_anchor_invalid", "提交响应缺少已打开当前步骤");
+  }
+  if (action === "withdraw" && states.request_status !== "withdrawn") {
+    invalid("material_request_contract_lifecycle_state_invalid", "撤回响应必须进入已撤回申请状态");
+  }
+  if (action === "cancel" && states.request_status !== "cancelled") {
+    invalid("material_request_contract_lifecycle_state_invalid", "取消响应必须进入已取消申请状态");
+  }
+  if ((action === "withdraw" || action === "cancel") && currentStepId !== null) {
+    invalid("material_request_contract_approval_anchor_invalid", "终态生命周期响应不能保留当前审批步骤");
   }
   const expectedVersion = nonnegativeInteger(expected.previousVersion, "previousVersion");
   if (requestId !== uuid(expected.requestId, "expected_request_id") || action !== expected.action) {
@@ -1567,7 +1603,7 @@ export function validateMaterialRequestMutationResult(
     approval_instance_id: approvalInstanceId,
     approval_attempt_no: approvalAttemptNo,
     current_step_id: currentStepId,
-    states: validateMaterialRequestStateAxes(field(object, "states")),
+    states,
     idempotency_replayed: replayed,
   };
 }

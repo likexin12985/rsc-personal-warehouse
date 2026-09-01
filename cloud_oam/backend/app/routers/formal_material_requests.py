@@ -71,6 +71,12 @@ _SAFE_HEADER_VALUE = re.compile(r"^[A-Za-z0-9._:-]+$")
 _PLACEHOLDERS = ("replace-with", "replace_me", "replace-me", "change-me", "changeme")
 
 
+def _set_read_no_store(response: Response) -> None:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Referrer-Policy"] = "no-referrer"
+
+
 class _MaterialRequestAdapterError(RuntimeError):
     def __init__(
         self,
@@ -155,6 +161,7 @@ def _require_internal_approval_permission(
 
 @router.get("", response_model=MaterialRequestPageOut)
 def list_formal_material_requests(
+    response: Response,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     after_id: Annotated[UUID | None, Query()] = None,
     principal: FormalPrincipal = Depends(
@@ -163,7 +170,7 @@ def list_formal_material_requests(
     db: Session = Depends(get_db),
 ):
     try:
-        return query_service.list_material_requests(
+        output = query_service.list_material_requests(
             db,
             actor=principal,
             limit=limit,
@@ -174,18 +181,21 @@ def list_formal_material_requests(
     except DBAPIError:
         db.rollback()
         _raise_database_unavailable(read_only=True)
+    _set_read_no_store(response)
+    return output
 
 
 @router.get("/{material_request_id}", response_model=MaterialRequestDetailOut)
 def formal_material_request_detail(
     material_request_id: UUID,
+    response: Response,
     principal: FormalPrincipal = Depends(
         require_permission("material_request", "read")
     ),
     db: Session = Depends(get_db),
 ):
     try:
-        return query_service.material_request_detail(
+        output = query_service.material_request_detail(
             db,
             actor=principal,
             request_id=material_request_id,
@@ -195,6 +205,8 @@ def formal_material_request_detail(
     except DBAPIError:
         db.rollback()
         _raise_database_unavailable(read_only=True)
+    _set_read_no_store(response)
+    return output
 
 
 @router.get(
@@ -230,9 +242,7 @@ def formal_material_request_editable_draft(
         )
     except Exception as exc:
         _rollback_and_raise(db, exc)
-    response.headers["Cache-Control"] = "no-store, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Referrer-Policy"] = "no-referrer"
+    _set_read_no_store(response)
     return output
 
 

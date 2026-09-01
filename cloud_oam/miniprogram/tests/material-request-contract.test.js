@@ -47,7 +47,7 @@ function approvalSteps(thirdStatus = 'pending') {
       reopened_from_step_id: null,
       source_mode: 'internal',
       status: 'approved',
-      assignee_snapshot: { name_masked: '区＊负责人', role_code: 'provincial_manager' },
+      assignee_snapshot: { name_masked: '区＊＊＊＊', role_code: 'provincial_manager' },
       candidate_pool_summary: null,
       opened_at: '2026-08-31T11:30:00+08:00',
       decided_at: '2026-08-31T11:40:00+08:00',
@@ -131,11 +131,11 @@ function detail() {
       province_name: '江苏省',
       city_name: '南京市',
       district_name: '建邺区',
-      detail_masked: '江东中路***号'
+      detail_masked: '******'
     },
     contact_masked: {
       name_masked: '李*',
-      mobile_masked: '138****0000'
+      mobile_masked: '*******0000'
     },
     note: '',
     attachment_refs: [],
@@ -169,7 +169,7 @@ function detail() {
     }],
     approval_history: [],
     supply_tasks: [],
-    allowed_actions: ['update', 'submit', 'cancel'],
+    allowed_actions: ['update', 'submit'],
     created_at: '2026-08-31T11:00:00+08:00',
     updated_at: '2026-08-31T11:00:00+08:00',
     submitted_at: null
@@ -225,7 +225,7 @@ function approvedDetail() {
       external_action: 'partial_approve',
       status: 'accepted',
       evidence_file_id: '90000000-0000-4000-8000-000000000002',
-      external_approver_name_masked: '星＊审批人',
+      external_approver_name_masked: '星＊＊＊＊',
       external_decided_at: '2026-08-31T12:20:00+08:00',
       registered_at: '2026-08-31T12:25:00+08:00',
       verified_at: '2026-08-31T12:30:00+08:00',
@@ -314,7 +314,7 @@ function twoAttemptDetail() {
         reopened_from_step_id: null,
         source_mode: 'internal',
         status: 'open',
-        assignee_snapshot: { name_masked: '区＊负责人', role_code: 'provincial_manager' },
+        assignee_snapshot: { name_masked: '区＊＊＊＊', role_code: 'provincial_manager' },
         candidate_pool_summary: null,
         opened_at: '2026-08-31T13:30:00+08:00',
         decided_at: null,
@@ -570,6 +570,27 @@ test('requires explicit masked request headers and formal line fields', () => {
     (error) => error.code === 'material_request_contract_mask_invalid'
   )
 
+  const maskedSuffixAddress = detail()
+  maskedSuffixAddress.address_snapshot.detail_masked = '江东中路100号*'
+  assert.throws(
+    () => contract.validateMaterialRequestDetail(maskedSuffixAddress),
+    (error) => error.code === 'material_request_contract_mask_invalid'
+  )
+
+  const maskedSuffixName = detail()
+  maskedSuffixName.contact_masked.name_masked = '张三*'
+  assert.throws(
+    () => contract.validateMaterialRequestDetail(maskedSuffixName),
+    (error) => error.code === 'material_request_contract_mask_invalid'
+  )
+
+  const interleavedMobile = detail()
+  interleavedMobile.contact_masked.mobile_masked = '1*3*8*0*0*1*3*8*0*0*0'
+  assert.throws(
+    () => contract.validateMaterialRequestDetail(interleavedMobile),
+    (error) => error.code === 'material_request_contract_mask_invalid'
+  )
+
   const badUrgency = detail()
   badUrgency.urgency = 'highest'
   assert.throws(
@@ -598,6 +619,73 @@ test('phase one rejects direct-star activation and route drift', () => {
   assert.throws(
     () => contract.validateMaterialRequestDetail(route),
     (error) => error.code === 'material_request_contract_approval_route_invalid'
+  )
+})
+
+test('terminal projections require service-owned approval shapes', () => {
+  const cancelledProjection = () => {
+    const value = approvedDetail()
+    value.states = states('cancelled')
+    value.allowed_actions = []
+    value.supply_tasks = []
+    value.lines[0].cancelled_qty = value.lines[0].final_approved_qty
+    value.lines[0].status = 'cancelled'
+    return value
+  }
+  assert.equal(
+    contract.validateMaterialRequestDetail(cancelledProjection()).states.request_status,
+    'cancelled'
+  )
+
+  const incompleteLine = cancelledProjection()
+  incompleteLine.lines[0].status = 'approved'
+  incompleteLine.lines[0].cancelled_qty = '0.000'
+  assert.throws(
+    () => contract.validateMaterialRequestDetail(incompleteLine),
+    (error) => error.code === 'material_request_contract_cancellation_projection_invalid'
+  )
+
+  const missingInstance = cancelledProjection()
+  missingInstance.approval_instance = null
+  missingInstance.approval_history = []
+  assert.throws(
+    () => contract.validateMaterialRequestDetail(missingInstance),
+    (error) => error.code === 'material_request_contract_approval_instance_mismatch'
+  )
+
+  const wrongInstance = cancelledProjection()
+  wrongInstance.approval_instance.status = 'withdrawn'
+  assert.throws(
+    () => contract.validateMaterialRequestDetail(wrongInstance),
+    (error) => error.code === 'material_request_contract_approval_instance_mismatch'
+  )
+
+  const withdrawnProjection = () => {
+    const value = approvedDetail()
+    value.states = states('withdrawn')
+    value.allowed_actions = []
+    value.supply_tasks = []
+    value.approval_instance.status = 'withdrawn'
+    return value
+  }
+  assert.equal(
+    contract.validateMaterialRequestDetail(withdrawnProjection()).states.request_status,
+    'withdrawn'
+  )
+
+  const leakedActiveStep = withdrawnProjection()
+  leakedActiveStep.approval_instance.steps[0].status = 'open'
+  leakedActiveStep.approval_instance.steps[0].decided_at = null
+  assert.throws(
+    () => contract.validateMaterialRequestDetail(leakedActiveStep),
+    (error) => error.code === 'material_request_contract_approval_instance_mismatch'
+  )
+
+  const draftWithCancel = detail()
+  draftWithCancel.allowed_actions = ['update', 'submit', 'cancel']
+  assert.throws(
+    () => contract.validateMaterialRequestDetail(draftWithCancel),
+    (error) => error.code === 'material_request_contract_action_state_mismatch'
   )
 })
 
@@ -731,6 +819,69 @@ test('anchors mutation results to exact object, action, version and states', () 
     }),
     (error) => error.code === 'material_request_contract_version_mismatch'
   )
+})
+
+test('withdraw and cancel mutation results require terminal state and approval anchors', () => {
+  for (const [action, requestStatus] of [
+    ['withdraw', 'withdrawn'],
+    ['cancel', 'cancelled']
+  ]) {
+    const result = {
+      schema_version: '1.0',
+      request_id: REQUEST_ID,
+      action,
+      request_version: 3,
+      revision_id: REVISION_ID,
+      revision_no: 1,
+      approval_instance_id: INSTANCE_ID,
+      approval_attempt_no: 1,
+      current_step_id: null,
+      states: states(requestStatus),
+      idempotency_replayed: false
+    }
+    assert.equal(
+      contract.validateMaterialRequestMutationResult(result, {
+        requestId: REQUEST_ID,
+        action,
+        previousVersion: 2
+      }).states.request_status,
+      requestStatus
+    )
+
+    const missingInstance = clone(result)
+    missingInstance.approval_instance_id = null
+    missingInstance.approval_attempt_no = null
+    assert.throws(
+      () => contract.validateMaterialRequestMutationResult(missingInstance, {
+        requestId: REQUEST_ID,
+        action,
+        previousVersion: 2
+      }),
+      (error) => error.code === 'material_request_contract_approval_anchor_invalid'
+    )
+
+    const activeStep = clone(result)
+    activeStep.current_step_id = '70000000-0000-4000-8000-000000000001'
+    assert.throws(
+      () => contract.validateMaterialRequestMutationResult(activeStep, {
+        requestId: REQUEST_ID,
+        action,
+        previousVersion: 2
+      }),
+      (error) => error.code === 'material_request_contract_approval_anchor_invalid'
+    )
+
+    const wrongStatus = clone(result)
+    wrongStatus.states.request_status = 'approval_in_progress'
+    assert.throws(
+      () => contract.validateMaterialRequestMutationResult(wrongStatus, {
+        requestId: REQUEST_ID,
+        action,
+        previousVersion: 2
+      }),
+      (error) => error.code === 'material_request_contract_lifecycle_state_invalid'
+    )
+  }
 })
 
 test('validates create result independently at version zero and neutral state', () => {

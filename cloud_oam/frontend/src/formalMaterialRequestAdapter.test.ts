@@ -29,6 +29,8 @@ function accessContext() {
       { resource: "material_request", action: "read", field_code: "" },
       { resource: "material_request", action: "create", field_code: "" },
       { resource: "material_request", action: "update_draft", field_code: "" },
+      { resource: "material_request", action: "withdraw", field_code: "" },
+      { resource: "material_request", action: "cancel", field_code: "" },
       { resource: "inventory", action: "read", field_code: "" },
       { resource: "material_request", action: "approve_region", field_code: "approval_decision" },
       { resource: "material_request", action: "approve_headquarters", field_code: "approval_decision" },
@@ -88,6 +90,8 @@ describe("formal material-request PC transport", () => {
       authorization_version: 7,
       can_read: true,
       can_create: true,
+      can_withdraw: true,
+      can_cancel: true,
       can_read_material_catalog: true,
       can_approve_region: true,
       can_approve_headquarters: true,
@@ -144,11 +148,16 @@ describe("formal material-request PC transport", () => {
     await adapter.listMaterials("SKU A", null);
     await adapter.listMaterials("SKU A", MATERIAL_ID.toUpperCase());
 
-    expect(requester.mock.calls[0]).toEqual(["/v1/material-requests?limit=50"]);
+    const noStore = {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+    };
+    expect(requester.mock.calls[0]).toEqual(["/v1/material-requests?limit=50", noStore]);
     expect(requester.mock.calls[1]).toEqual([
       `/v1/material-requests?limit=50&after_id=${REQUEST_ID}`,
+      noStore,
     ]);
-    expect(requester.mock.calls[2]).toEqual([`/v1/material-requests/${REQUEST_ID}`]);
+    expect(requester.mock.calls[2]).toEqual([`/v1/material-requests/${REQUEST_ID}`, noStore]);
     expect(requester.mock.calls[3][0]).toBe(
       `/v1/material-requests/${REQUEST_ID}/editable-draft`,
     );
@@ -196,7 +205,7 @@ describe("formal material-request PC transport", () => {
     expect(JSON.parse(String(updateInit.body))).toEqual(updateIntent.body);
   });
 
-  it("accepts only the implemented approval and external-evidence route shapes", async () => {
+  it("accepts only implemented lifecycle, approval and external-evidence route shapes", async () => {
     const requester = makeRequester(async () => ({ ok: true }));
     const adapter = createFormalMaterialRequestAdapter({
       person_id: PERSON_ID,
@@ -255,14 +264,27 @@ describe("formal material-request PC transport", () => {
       approve.path, register.path, verify.path,
     ]);
 
-    const unsupported = new MaterialRequestIntentRegistry().begin({
+    const withdraw = new MaterialRequestIntentRegistry().begin({
       requestId: REQUEST_ID,
       action: "withdraw",
       path: `/v1/material-requests/${REQUEST_ID}/withdraw`,
-      body: { expected_version: 4 },
-      expectedVersion: 4,
+      body: { expected_version: 6, reason: "申请信息需重新整理" },
+      expectedVersion: 6,
     });
-    await expect(adapter.mutate(unsupported)).rejects.toMatchObject({ status: 409 });
+    await adapter.mutate(withdraw);
+
+    const cancel = new MaterialRequestIntentRegistry().begin({
+      requestId: "20000000-0000-4000-8000-000000000002",
+      action: "cancel",
+      path: "/v1/material-requests/20000000-0000-4000-8000-000000000002/cancel",
+      body: {
+        expected_version: 7,
+        reason: "需求已不再需要",
+        lines: [{ request_line_id: MATERIAL_ID, cancelled_qty: "1.000", reason: "本行不再需要" }],
+      },
+      expectedVersion: 7,
+    });
+    await adapter.mutate(cancel);
 
     const staleApprovalPath = new MaterialRequestIntentRegistry().begin({
       requestId: REQUEST_ID,
@@ -279,7 +301,43 @@ describe("formal material-request PC transport", () => {
       expectedVersion: 4,
     });
     await expect(adapter.mutate(staleApprovalPath)).rejects.toMatchObject({ status: 409 });
-    expect(requester).toHaveBeenCalledTimes(3);
+    expect(requester).toHaveBeenCalledTimes(5);
+    expect(requester.mock.calls.slice(3).map(([path, init]) => [path, init?.method])).toEqual([
+      [withdraw.path, "POST"], [cancel.path, "POST"],
+    ]);
+  });
+
+  it("rejects incomplete or inexact lifecycle bodies before any network call", async () => {
+    const requester = makeRequester(async () => ({ ok: true }));
+    const adapter = createFormalMaterialRequestAdapter({
+      person_id: PERSON_ID,
+      authorization_version: 7,
+    }, requester);
+    const missingReason = new MaterialRequestIntentRegistry().begin({
+      requestId: REQUEST_ID,
+      action: "withdraw",
+      path: `/v1/material-requests/${REQUEST_ID}/withdraw`,
+      body: { expected_version: 4 },
+      expectedVersion: 4,
+    });
+    await expect(adapter.mutate(missingReason)).rejects.toMatchObject({ status: 409 });
+
+    const duplicateLines = new MaterialRequestIntentRegistry().begin({
+      requestId: "20000000-0000-4000-8000-000000000002",
+      action: "cancel",
+      path: "/v1/material-requests/20000000-0000-4000-8000-000000000002/cancel",
+      body: {
+        expected_version: 5,
+        reason: "整单取消",
+        lines: [
+          { request_line_id: MATERIAL_ID, cancelled_qty: "1.000", reason: "取消" },
+          { request_line_id: MATERIAL_ID, cancelled_qty: "1.000", reason: "重复" },
+        ],
+      },
+      expectedVersion: 5,
+    });
+    await expect(adapter.mutate(duplicateLines)).rejects.toMatchObject({ status: 409 });
+    expect(requester).not.toHaveBeenCalled();
   });
 
   it("rejects malformed approval bodies before any network call", async () => {
