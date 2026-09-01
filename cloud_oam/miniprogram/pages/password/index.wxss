@@ -1,0 +1,6 @@
+.password-form {
+  padding: 28rpx;
+  background: #ffffff;
+  border: 1rpx solid #dfe4e7;
+  border-radius: 12rpx;
+}

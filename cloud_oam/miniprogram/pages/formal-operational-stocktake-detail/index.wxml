@@ -1,0 +1,100 @@
+<view class="page">
+  <view wx:if="{{loading}}" class="loading">正在验证正式盘点证据</view>
+  <block wx:else>
+    <view class="card access-card status-{{accessAllowed ? 'success' : 'danger'}}">{{accessMessage}}</view>
+    <view wx:if="{{errorMessage}}" class="card error-card">{{errorMessage}}</view>
+    <view wx:if="{{pendingMessage}}" class="card pending-card"><text>{{pendingMessage}}</text><button wx:if="{{pendingRetryable}}" class="button button-secondary" bindtap="retryPending" loading="{{busy}}">按原坐标重试</button></view>
+    <block wx:if="{{detail}}">
+      <view class="card summary-card">
+        <view class="row between"><text class="mono task-no">{{detail.task_no}}</text><text class="status status-info">{{detail.statusLabel}}</text></view>
+        <view class="divider"></view>
+        <view class="row between small"><text>{{detail.typeLabel}} · {{detail.blind_count ? '盲盘' : '明盘'}}</text><text>v{{detail.version}}</text></view>
+      </view>
+      <view class="axes-grid">
+        <view wx:for="{{detail.axes}}" wx:key="label" class="axis-card"><text>{{item.label}}</text><strong>{{item.valueLabel}}</strong></view>
+      </view>
+      <view class="card safety-card">计数、差异、区域复核、总部复核、复盘、过账、内部对账和关闭是独立状态轴。posted 不等于 closed，绝不视为已关闭；对账与关闭只记录本地正式事实，不产生通知、同步或外部系统动作。</view>
+      <button wx:if="{{detail.canStart}}" class="button button-primary action-button" bindtap="startTask" loading="{{busy}}" disabled="{{busy || pendingMessage}}">启动个人自盘</button>
+
+      <view class="section"><view class="section-heading"><text class="section-title">盘点范围</text></view>
+        <view wx:for="{{detail.scopes}}" wx:key="scope_id" class="list-card scope-card {{selectedScopeId === item.scope_id ? 'selected' : ''}}" bindtap="chooseScope" data-id="{{item.scope_id}}">
+          <view class="row between"><text>范围 {{item.scope_no}}</text><text>{{item.assigned_to_me ? '分配给我' : '只读'}}</text></view>
+          <text class="small muted mono">库位 {{item.location_id}}</text><text class="small muted">{{item.snapshotLabel}}</text>
+          <text wx:if="{{item.canInitialCount || item.canRecountCount}}" class="action-hint">{{item.canInitialCount ? '点击录入初盘' : '点击录入复盘'}}</text>
+        </view>
+      </view>
+
+      <view wx:if="{{selectedScopeId}}" class="card count-card">
+        <text class="section-title">{{countAction === 'submit_initial_count' ? '初盘计数' : '复盘计数'}}</text>
+        <text class="small muted">{{detail.blind_count ? '盲盘不显示或回传账面数。' : '明盘必须逐个账户确认账面数并填写实盘数。'}}</text>
+        <view wx:for="{{accountDrafts}}" wx:key="stock_account_id" class="account-row">
+          <text class="small mono">{{item.material_id}}</text><text class="small muted">账面 {{item.book_qty}}</text>
+          <input class="input" value="{{item.counted_qty}}" bindinput="bindAccountQty" data-index="{{index}}" type="digit" placeholder="实盘数量" />
+          <input class="input" value="{{item.serial_ids_text}}" bindinput="bindAccountSerials" data-index="{{index}}" placeholder="正式 serial_id，逗号分隔" />
+        </view>
+        <view class="field"><text class="field-label">现场物料标识</text><input class="input" value="{{materialIdentifier}}" bindinput="bindMaterial" placeholder="SKU/二维码原文" /></view>
+        <button class="button button-secondary" bindtap="scanMaterial">扫描物料标识</button>
+        <view class="field"><text class="field-label">实盘数量</text><input class="input" value="{{quantity}}" bindinput="bindQuantity" type="digit" /></view>
+        <view class="field"><text class="field-label">成色</text><picker range="{{conditionOptions}}" range-key="label" value="{{conditionIndex}}" bindchange="changeCondition"><view class="picker-field">{{conditionOptions[conditionIndex].label}}</view></picker></view>
+        <view class="field"><text class="field-label">库存状态</text><picker range="{{availabilityOptions}}" range-key="label" value="{{availabilityIndex}}" bindchange="changeAvailability"><view class="picker-field">{{availabilityOptions[availabilityIndex].label}}</view></picker></view>
+        <view class="field"><text class="field-label">批次号（可选）</text><input class="input" value="{{lotNo}}" bindinput="bindLot" /></view>
+        <view class="field"><text class="field-label">SN（可选）</text><input class="input" value="{{serialNo}}" bindinput="bindSerial" /></view>
+        <button class="button button-secondary" bindtap="scanSerial">扫描 SN</button>
+        <view class="field"><text class="field-label">备注</text><input class="input" value="{{remark}}" bindinput="bindRemark" /></view>
+        <button class="button button-secondary" bindtap="addObservation" disabled="{{!materialIdentifier || !quantity}}">加入现场观察</button>
+        <view wx:for="{{observations}}" wx:key="index" class="observation-row"><text>{{item.material_identifier_raw}}</text><strong>{{item.counted_qty}}</strong><button class="mini-remove" bindtap="removeObservation" data-index="{{index}}">移除</button></view>
+        <view class="upload-card">
+          <view class="row between"><text class="field-label">盘点证据</text><button class="button button-secondary" disabled="{{busy || pendingMessage || !evidenceUploadCanChoose}}" bindtap="chooseCountEvidence">选择并上传</button></view>
+          <text wx:if="{{!evidenceUploadFiles.length}}" class="small muted">初盘与复盘证据独立上传；单文件最多 10 MB，只有 available 后才会加入当前范围计数。</text>
+          <view wx:for="{{evidenceUploadFiles}}" wx:key="key" class="upload-row">
+            <text>{{item.filename}} · {{item.sizeLabel}}</text><text class="small mono">SHA-256 {{item.sha256 || '计算中'}}</text><text class="small">{{item.statusLabel}}</text><text wx:if="{{item.error}}" class="small upload-error">{{item.error}}</text>
+            <button wx:if="{{item.canRetry}}" class="button button-secondary" disabled="{{busy || pendingMessage}}" data-key="{{item.key}}" bindtap="retryCountEvidence">按原上传坐标重试</button><button wx:if="{{item.canRemove}}" class="mini-remove" disabled="{{busy || pendingMessage}}" data-key="{{item.key}}" bindtap="removeCountEvidence">移除</button>
+          </view>
+        </view>
+        <button class="button button-primary" bindtap="submitCount" data-zero="false" loading="{{busy}}" disabled="{{busy || pendingMessage || evidenceUploadBlocking}}">提交并封存范围</button>
+        <button class="button button-secondary" bindtap="submitCount" data-zero="true" disabled="{{busy || observations.length || hasAccountInput || pendingMessage || evidenceUploadBlocking}}">确认本范围零库存</button>
+      </view>
+
+      <view wx:if="{{detail.currentRound}}" class="section">
+        <view class="section-heading"><text class="section-title">差异与复核</text></view>
+        <button wx:if="{{detail.canInitialDifference}}" class="button button-primary action-button" bindtap="generateDifference" data-action="generate_initial_differences" disabled="{{busy || pendingMessage}}">生成初盘差异</button>
+        <button wx:if="{{detail.canRecountDifference}}" class="button button-primary action-button" bindtap="generateDifference" data-action="generate_recount_differences" disabled="{{busy || pendingMessage}}">生成复盘差异</button>
+        <view wx:for="{{detail.currentRound.differences}}" wx:key="difference_id" class="list-card difference-card"><view class="row between"><text>差异 {{item.difference_no}} · {{item.typeLabel}}</text><strong>{{item.difference_qty}}</strong></view><text class="small muted">账面 {{item.book_qty}} · 实盘 {{item.counted_qty}} · 影响 {{item.affected_qty}}</text></view>
+      </view>
+
+      <view wx:if="{{detail.canReviewRegion || detail.canReviewHeadquarters}}" class="card review-card">
+        <text class="section-title">独立复核</text><text class="small muted">通过时逐项接受可过账差异；待核验差异保持 pending_verification。复盘/驳回必须填写意见。</text>
+        <textarea class="textarea" value="{{reviewComment}}" bindinput="bindReviewComment" placeholder="复核意见" />
+        <view wx:if="{{detail.canReviewRegion}}" class="review-actions"><button class="button button-primary" bindtap="submitReview" data-stage="region" data-decision="approve">区域通过</button><button class="button button-secondary" bindtap="submitReview" data-stage="region" data-decision="recount">区域要求复盘</button><button class="button button-danger" bindtap="submitReview" data-stage="region" data-decision="reject">区域驳回</button></view>
+        <view wx:if="{{detail.canReviewHeadquarters}}" class="review-actions"><button class="button button-primary" bindtap="submitReview" data-stage="headquarters" data-decision="approve">总部通过</button><button class="button button-secondary" bindtap="submitReview" data-stage="headquarters" data-decision="recount">总部要求复盘</button><button class="button button-danger" bindtap="submitReview" data-stage="headquarters" data-decision="reject">总部驳回</button></view>
+      </view>
+
+      <view wx:if="{{detail.canOpenRecount}}" class="card recount-card">
+        <text class="section-title">选择范围开复盘</text><text class="small muted">范围与人员均来自当前授权下的正式目录；复盘仅提交同一选项返回的 assignee_user_id，不使用或猜测 person_id。</text>
+        <view wx:for="{{detail.scopes}}" wx:for-item="scope" wx:key="scope_id" class="recount-scope-row">
+          <view class="check-row" bindtap="toggleRecountScope" data-id="{{scope.scope_id}}"><checkbox checked="{{scope.recountSelected}}" disabled="{{busy || recountLoadingScopeId === scope.scope_id}}" />范围 {{scope.scope_no}}</view>
+          <picker wx:if="{{scope.recountSelected}}" range="{{scope.recountOptions}}" range-key="label" value="{{scope.recountAssigneeIndex}}" bindchange="changeRecountAssignee" data-id="{{scope.scope_id}}"><view class="picker-field">{{scope.recountOptions[scope.recountAssigneeIndex].label}}</view></picker>
+        </view>
+        <textarea class="textarea" value="{{recountReason}}" bindinput="bindRecountReason" placeholder="复盘原因" />
+        <button class="button button-primary" bindtap="submitRecount" loading="{{busy}}" disabled="{{busy || pendingMessage || recountLoadingScopeId || !recountReady}}">按所选范围开复盘</button>
+      </view>
+      <view wx:if="{{detail.status === 'posted'}}" class="card warning-card">该任务已过账，但尚未关闭。内部对账和关闭必须分别执行、分别确认完成坐标。</view>
+      <view wx:if="{{detail.canReconcile || detail.canClose}}" class="card review-card">
+        <text class="section-title">盘点终态控制</text>
+        <text class="small muted">仅总部管理员且同时具备正式权限与当前 allowed_action 时可操作。每个动作都使用当前任务版本的独立写意图。</text>
+        <button wx:if="{{detail.canReconcile}}" class="button button-secondary action-button" bindtap="openTerminalConfirm" data-action="reconcile" disabled="{{busy || pendingMessage}}">记录内部对账</button>
+        <button wx:if="{{detail.canClose}}" class="button button-danger action-button" bindtap="openTerminalConfirm" data-action="close" disabled="{{busy || pendingMessage}}">关闭盘点任务</button>
+      </view>
+      <view wx:if="{{terminalConfirm === 'reconcile'}}" class="card warning-card">
+        <text class="section-title">确认记录内部对账？</text>
+        <text class="small">将以任务 v{{detail.version}} 核对账面、实物、库存流水与 SN，成功后任务仍为 posted，绝不代表已关闭。</text>
+        <view class="review-actions"><button class="button button-secondary" bindtap="cancelTerminalConfirm">取消</button><button class="button button-primary" bindtap="confirmTerminalAction" disabled="{{busy || pendingMessage}}">确认对账</button></view>
+      </view>
+      <view wx:if="{{terminalConfirm === 'close'}}" class="card warning-card">
+        <text class="section-title">确认关闭盘点？</text>
+        <text class="small">将以任务 v{{detail.version}} 绑定最新且仍有效的内部对账完成坐标，记录独立 closed 事实。本动作不发送通知、不同步外部系统。</text>
+        <view class="review-actions"><button class="button button-secondary" bindtap="cancelTerminalConfirm">取消</button><button class="button button-danger" bindtap="confirmTerminalAction" disabled="{{busy || pendingMessage}}">确认关闭</button></view>
+      </view>
+    </block>
+  </block>
+</view>

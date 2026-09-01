@@ -1,0 +1,4686 @@
+"""Fail-closed production database-role verification for the main API.
+
+The runtime API may append reviewed inventory/opening terminal facts and
+advance only the exact projection/head columns needed by those transactions.
+It must never own schema objects or hold DDL, TRUNCATE, trigger-control, or
+migrator membership.  This module performs read-only catalog checks before the
+API accepts traffic.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from datetime import datetime, timezone
+import hashlib
+import json
+import re
+from typing import Any
+import uuid
+
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
+
+from .formal_services.audit_chain import calculate_audit_event_hash
+
+
+class DatabaseSecurityBoundaryError(RuntimeError):
+    """The production database identity or ACL boundary is not proven."""
+
+
+RUNTIME_READ_TABLES = frozenset(
+    {
+        "audit_chain_heads",
+        "audit_events",
+        "approval_actions",
+        "approval_external_registration_lines",
+        "approval_external_registrations",
+        "approval_instances",
+        "approval_return_line_facts",
+        "approval_route_step_defs",
+        "approval_route_versions",
+        "approval_step_candidates",
+        "approval_step_line_decisions",
+        "approval_steps",
+        "auth_identities",
+        "auth_idempotency_operations",
+        "auth_login_rate_limit_buckets",
+        "auth_refresh_tokens",
+        "auth_sessions",
+        "custody_assignments",
+        "document_attachments",
+        "external_objects",
+        "external_object_versions",
+        "files",
+        "inventory_freezes",
+        "inventory_ledger_heads",
+        "inventory_lots",
+        "inventory_movement_serials",
+        "inventory_movements",
+        "inventory_opening_establishments",
+        "inventory_serials",
+        "inventory_transactions",
+        "login_challenges",
+        "material_request_cancellation_line_facts",
+        "material_request_commands",
+        "material_request_files",
+        "material_request_lines",
+        "material_request_revisions",
+        "material_requests",
+        "material_substitutions",
+        "material_inventory_policies",
+        "materials",
+        "notification_events",
+        "oam_work_orders",
+        "opening_control_reconciliation_items",
+        "opening_control_reconciliation_command_consumptions",
+        "opening_control_reconciliation_runs",
+        "organizations",
+        "outbox_events",
+        "people",
+        "permissions",
+        "qr_codes",
+        "reconciliation_commands",
+        "reconciliation_items",
+        "reconciliation_runs",
+        "role_assignments",
+        "role_permissions",
+        "roles",
+        "serial_current_positions",
+        "source_systems",
+        "state_transition_events",
+        "stock_accounts",
+        "stock_balances",
+        "stock_locations",
+        "stocktake_control_snapshot_lines",
+        "stocktake_count_lines",
+        "stocktake_count_observations",
+        "stocktake_count_serials",
+        "stocktake_close_completions",
+        "stocktake_close_reconciliation_accounts",
+        "stocktake_close_reconciliation_completions",
+        "stocktake_close_reconciliation_serials",
+        "stocktake_close_transition_acks",
+        "stocktake_difference_set_completions",
+        "stocktake_differences",
+        "stocktake_effective_approval_completions",
+        "stocktake_effective_approval_items",
+        "stocktake_effective_approval_scopes",
+        "stocktake_observation_dispositions",
+        "stocktake_posting_items",
+        "stocktake_posting_completion_items",
+        "stocktake_posting_completions",
+        "stocktake_postings",
+        "stocktake_recount_cases",
+        "stocktake_recount_scope_assignments",
+        "stocktake_review_items",
+        "stocktake_reviews",
+        "stocktake_round_submissions",
+        "stocktake_rounds",
+        "stocktake_scope_count_completions",
+        "stocktake_scopes",
+        "stocktake_snapshot_lines",
+        "stocktake_tasks",
+        "substitution_decisions",
+        "supply_tasks",
+        "sync_batches",
+        "sync_inbox_events",
+        "sync_runs",
+        "users",
+    }
+)
+RUNTIME_INSERT_TABLES = frozenset(
+    {
+        "audit_events",
+        "approval_actions",
+        "approval_external_registration_lines",
+        "approval_external_registrations",
+        "approval_instances",
+        "approval_return_line_facts",
+        "approval_step_candidates",
+        "approval_step_line_decisions",
+        "approval_steps",
+        "auth_idempotency_operations",
+        "auth_login_rate_limit_buckets",
+        "auth_refresh_tokens",
+        "auth_sessions",
+        "inventory_freezes",
+        "document_attachments",
+        "files",
+        "inventory_movement_serials",
+        "inventory_movements",
+        "inventory_opening_establishments",
+        "inventory_transactions",
+        "login_challenges",
+        "material_request_cancellation_line_facts",
+        "material_request_commands",
+        "material_request_files",
+        "material_request_lines",
+        "material_request_revisions",
+        "material_requests",
+        "opening_control_reconciliation_items",
+        "opening_control_reconciliation_command_consumptions",
+        "opening_control_reconciliation_runs",
+        "outbox_events",
+        "reconciliation_commands",
+        "reconciliation_items",
+        "reconciliation_runs",
+        "role_assignments",
+        "serial_current_positions",
+        "state_transition_events",
+        "stock_accounts",
+        "stock_balances",
+        "stocktake_control_snapshot_lines",
+        "stocktake_count_lines",
+        "stocktake_count_observations",
+        "stocktake_count_serials",
+        "stocktake_close_completions",
+        "stocktake_close_reconciliation_accounts",
+        "stocktake_close_reconciliation_completions",
+        "stocktake_close_reconciliation_serials",
+        "stocktake_difference_set_completions",
+        "stocktake_differences",
+        "stocktake_effective_approval_completions",
+        "stocktake_effective_approval_items",
+        "stocktake_effective_approval_scopes",
+        "stocktake_observation_dispositions",
+        "stocktake_posting_items",
+        "stocktake_posting_completion_items",
+        "stocktake_posting_completions",
+        "stocktake_postings",
+        "stocktake_recount_cases",
+        "stocktake_recount_scope_assignments",
+        "stocktake_review_items",
+        "stocktake_reviews",
+        "stocktake_round_submissions",
+        "stocktake_rounds",
+        "stocktake_scope_count_completions",
+        "stocktake_scopes",
+        "stocktake_snapshot_lines",
+        "stocktake_tasks",
+    }
+)
+RUNTIME_UPDATE_TABLES = frozenset(
+    {
+        "auth_idempotency_operations",
+        "auth_login_rate_limit_buckets",
+        "auth_refresh_tokens",
+        "auth_sessions",
+        "login_challenges",
+        "role_assignments",
+        "users",
+    }
+)
+RUNTIME_DELETE_TABLES = frozenset(
+    {
+        "auth_login_rate_limit_buckets",
+        "material_request_files",
+        "material_request_lines",
+    }
+)
+RUNTIME_UPDATE_COLUMNS = {
+    "audit_chain_heads": frozenset(
+        {"last_event_id", "last_hash", "version", "updated_at"}
+    ),
+    "inventory_freezes": frozenset(
+        {
+            "status",
+            "valid_to",
+            "released_by_user_id",
+            "release_reason",
+            "version",
+            "updated_at",
+        }
+    ),
+    "files": frozenset({"status", "metadata_jsonb"}),
+    "approval_external_registrations": frozenset(
+        {
+            "status",
+            "verified_by_user_id",
+            "verified_by_person_id",
+            "verified_role_assignment_id",
+            "verified_authorization_version",
+            "verified_at",
+            "verification_comment",
+            "version",
+            "updated_at",
+        }
+    ),
+    "approval_instances": frozenset(
+        {
+            "status",
+            "current_step_no",
+            "current_step_id",
+            "completed_at",
+            "version",
+            "updated_at",
+        }
+    ),
+    "approval_steps": frozenset(
+        {
+            "status",
+            "opened_at",
+            "decided_at",
+            "decision_manifest_sha256",
+            "version",
+            "updated_at",
+        }
+    ),
+    "material_request_lines": frozenset(
+        {
+            "status",
+            "final_approved_qty",
+            "cancelled_qty",
+            "version",
+            "updated_at",
+        }
+    ),
+    "material_request_revisions": frozenset(
+        {
+            "work_order_id",
+            "purpose",
+            "urgency",
+            "expected_date",
+            "address_snapshot_jsonb",
+            "address_masked_jsonb",
+            "contact_snapshot_jsonb",
+            "contact_masked_jsonb",
+            "note",
+            "status",
+            "content_manifest_sha256",
+            "sealed_at",
+            "sealed_by_user_id",
+            "updated_at",
+        }
+    ),
+    "material_requests": frozenset(
+        {
+            "work_order_id",
+            "purpose",
+            "urgency",
+            "expected_date",
+            "address_snapshot_jsonb",
+            "address_masked_jsonb",
+            "contact_snapshot_jsonb",
+            "contact_masked_jsonb",
+            "note",
+            "revision_no",
+            "status",
+            "submitted_at",
+            "decided_at",
+            "withdrawn_at",
+            "cancelled_at",
+            "version",
+            "updated_at",
+        }
+    ),
+    "inventory_ledger_heads": frozenset({"next_cursor", "updated_at"}),
+    "opening_control_reconciliation_items": frozenset(
+        {
+            "version",
+            "evidence_reference",
+            "evidence_file_sha256",
+            "evidence_file_size_bytes",
+            "evidence_file_mime_type",
+            "explained_by_user_id",
+            "explained_by_person_id",
+            "explained_role_assignment_id",
+            "explanation_authorization_version",
+            "explained_at",
+            "updated_at",
+        }
+    ),
+    "opening_control_reconciliation_runs": frozenset(
+        {
+            "version",
+            "approved_by_user_id",
+            "approved_by_person_id",
+            "approved_role_assignment_id",
+            "approved_authorization_version",
+            "approved_at",
+            "approval_comment",
+            "updated_at",
+        }
+    ),
+    "reconciliation_items": frozenset(
+        {"status", "explanation", "evidence_file_id", "updated_at"}
+    ),
+    "reconciliation_runs": frozenset({"status", "updated_at"}),
+    "serial_current_positions": frozenset(
+        {"stock_account_id", "last_movement_id", "updated_at"}
+    ),
+    "stock_balances": frozenset(
+        {"quantity", "ledger_cursor", "version", "updated_at"}
+    ),
+    "stocktake_rounds": frozenset(
+        {
+            "status",
+            "submitted_by_user_id",
+            "submitted_at",
+            "count_manifest_sha256",
+            "updated_at",
+        }
+    ),
+    "stocktake_tasks": frozenset(
+        {
+            "status",
+            "submitted_at",
+            "current_round_no",
+            "posted_at",
+            "closed_at",
+            "version",
+            "updated_at",
+        }
+    ),
+}
+TABLE_PRIVILEGES = (
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "TRUNCATE",
+    "REFERENCES",
+    "TRIGGER",
+)
+EXPECTED_AUDIT_HEAD_IDS = {
+    "authorization": "30000000-0000-4000-8000-000000000001",
+    "authentication": "30000000-0000-4000-8000-000000000002",
+    "inventory": "30000000-0000-4000-8000-000000000003",
+    "material_request": "30000000-0000-4000-8000-000000000004",
+}
+EXPECTED_AUDIT_TRIGGERS = {
+    "trg_audit_events_immutable_0015": (
+        "audit_events",
+        "rsc_reject_audit_event_mutation_0015",
+        27,
+        False,
+        False,
+        False,
+    ),
+    "trg_audit_events_immutable_truncate_0015": (
+        "audit_events",
+        "rsc_reject_audit_event_mutation_0015",
+        34,
+        False,
+        False,
+        False,
+    ),
+    "trg_audit_chain_heads_forward_only_0015": (
+        "audit_chain_heads",
+        "rsc_validate_audit_chain_head_mutation_0015",
+        27,
+        False,
+        False,
+        False,
+    ),
+    "trg_audit_chain_heads_no_truncate_0015": (
+        "audit_chain_heads",
+        "rsc_validate_audit_chain_head_mutation_0015",
+        34,
+        False,
+        False,
+        False,
+    ),
+    "trg_audit_chain_heads_stream_binding_0017": (
+        "audit_chain_heads",
+        "rsc_validate_audit_stream_head_binding_0017",
+        19,
+        False,
+        False,
+        False,
+    ),
+    "trg_audit_events_commit_binding_0017": (
+        "audit_events",
+        "rsc_require_audit_event_commit_binding_0017",
+        5,
+        True,
+        True,
+        True,
+    ),
+}
+EXPECTED_AUDIT_STREAM_CONSTRAINTS = {
+    "ck_audit_events_stream_key_0017": "check_stream_key",
+    "ck_audit_events_stream_version_0017": "check_stream_version",
+    "uq_audit_events_stream_version_0017": "unique_stream_version",
+    "fk_audit_events_stream_key_0017": "foreign_stream_head",
+}
+EXPECTED_STOCKTAKE_RECOUNT_COLUMNS = {
+    ("stocktake_rounds", "recount_case_id"): (False, "uuid"),
+    ("stocktake_recount_cases", "id"): (True, "uuid"),
+    ("stocktake_recount_cases", "task_id"): (True, "uuid"),
+    ("stocktake_recount_cases", "source_round_id"): (True, "uuid"),
+    ("stocktake_recount_cases", "source_round_submission_id"): (
+        True,
+        "uuid",
+    ),
+    ("stocktake_recount_cases", "source_difference_completion_id"): (
+        True,
+        "uuid",
+    ),
+    ("stocktake_recount_cases", "trigger_review_id"): (True, "uuid"),
+    ("stocktake_recount_cases", "next_round_no"): (True, "integer"),
+    ("stocktake_recount_cases", "scope_count"): (True, "integer"),
+    ("stocktake_recount_cases", "scope_manifest_sha256"): (
+        True,
+        "character varying(64)",
+    ),
+    ("stocktake_recount_cases", "assignment_manifest_sha256"): (
+        True,
+        "character varying(64)",
+    ),
+    ("stocktake_recount_cases", "recount_manifest_sha256"): (
+        True,
+        "character varying(64)",
+    ),
+    ("stocktake_recount_cases", "request_sha256"): (
+        True,
+        "character varying(64)",
+    ),
+    ("stocktake_recount_cases", "idempotency_key_hash"): (
+        True,
+        "character varying(64)",
+    ),
+    ("stocktake_recount_cases", "reason"): (True, "text"),
+    ("stocktake_recount_cases", "opened_by_user_id"): (
+        True,
+        "character varying(36)",
+    ),
+    ("stocktake_recount_cases", "opened_by_person_id"): (True, "uuid"),
+    ("stocktake_recount_cases", "opened_role_assignment_id"): (True, "uuid"),
+    ("stocktake_recount_cases", "authorization_version"): (True, "bigint"),
+    ("stocktake_recount_cases", "role_code"): (
+        True,
+        "character varying(40)",
+    ),
+    ("stocktake_recount_cases", "scope_type"): (
+        True,
+        "character varying(24)",
+    ),
+    ("stocktake_recount_cases", "scope_id_snapshot"): (
+        True,
+        "character varying(80)",
+    ),
+    ("stocktake_recount_cases", "authorization_sha256"): (
+        True,
+        "character varying(64)",
+    ),
+    ("stocktake_recount_cases", "opened_at"): (
+        True,
+        "timestamp with time zone",
+    ),
+    ("stocktake_recount_scope_assignments", "id"): (True, "uuid"),
+    ("stocktake_recount_scope_assignments", "recount_case_id"): (
+        True,
+        "uuid",
+    ),
+    ("stocktake_recount_scope_assignments", "task_id"): (True, "uuid"),
+    ("stocktake_recount_scope_assignments", "source_round_id"): (
+        True,
+        "uuid",
+    ),
+    ("stocktake_recount_scope_assignments", "scope_id"): (True, "uuid"),
+    ("stocktake_recount_scope_assignments", "assignee_user_id"): (
+        True,
+        "character varying(36)",
+    ),
+    ("stocktake_recount_scope_assignments", "assignee_person_id"): (
+        True,
+        "uuid",
+    ),
+    ("stocktake_recount_scope_assignments", "assignee_role_assignment_id"): (
+        True,
+        "uuid",
+    ),
+    ("stocktake_recount_scope_assignments", "authorization_version"): (
+        True,
+        "bigint",
+    ),
+    ("stocktake_recount_scope_assignments", "role_code"): (
+        True,
+        "character varying(40)",
+    ),
+    ("stocktake_recount_scope_assignments", "scope_type"): (
+        True,
+        "character varying(24)",
+    ),
+    ("stocktake_recount_scope_assignments", "scope_id_snapshot"): (
+        True,
+        "character varying(80)",
+    ),
+    ("stocktake_recount_scope_assignments", "authorization_sha256"): (
+        True,
+        "character varying(64)",
+    ),
+    ("stocktake_recount_scope_assignments", "assignment_sha256"): (
+        True,
+        "character varying(64)",
+    ),
+    ("stocktake_recount_scope_assignments", "assigned_at"): (
+        True,
+        "timestamp with time zone",
+    ),
+}
+EXPECTED_STOCKTAKE_RECOUNT_CONSTRAINTS = {
+    "pk_stocktake_recount_cases": {
+        "table": "stocktake_recount_cases",
+        "type": "p",
+        "columns": ("id",),
+    },
+    "pk_stocktake_recount_scope_assignments": {
+        "table": "stocktake_recount_scope_assignments",
+        "type": "p",
+        "columns": ("id",),
+    },
+    "fk_stocktake_rounds_recount_case_0018": {
+        "table": "stocktake_rounds",
+        "type": "f",
+        "columns": ("recount_case_id",),
+        "referenced_table": "stocktake_recount_cases",
+        "referenced_columns": ("id",),
+    },
+    "fk_stocktake_recount_cases_source_round_0018": {
+        "table": "stocktake_recount_cases",
+        "type": "f",
+        "columns": ("source_round_id", "task_id"),
+        "referenced_table": "stocktake_rounds",
+        "referenced_columns": ("id", "task_id"),
+    },
+    "fk_stocktake_recount_cases_trigger_review_0018": {
+        "table": "stocktake_recount_cases",
+        "type": "f",
+        "columns": ("trigger_review_id", "task_id", "source_round_id"),
+        "referenced_table": "stocktake_reviews",
+        "referenced_columns": ("id", "task_id", "round_id"),
+    },
+    "fk_stocktake_recount_scope_assignments_case_0018": {
+        "table": "stocktake_recount_scope_assignments",
+        "type": "f",
+        "columns": ("recount_case_id", "task_id", "source_round_id"),
+        "referenced_table": "stocktake_recount_cases",
+        "referenced_columns": ("id", "task_id", "source_round_id"),
+    },
+    "fk_stocktake_recount_scope_assignments_scope_0018": {
+        "table": "stocktake_recount_scope_assignments",
+        "type": "f",
+        "columns": ("scope_id", "task_id"),
+        "referenced_table": "stocktake_scopes",
+        "referenced_columns": ("id", "task_id"),
+    },
+    "ck_stocktake_recount_cases_round_0018": {
+        "table": "stocktake_recount_cases",
+        "type": "c",
+        "definition_tokens": ("next_round_no", "scope_count"),
+    },
+    "ck_stocktake_recount_cases_hashes_0018": {
+        "table": "stocktake_recount_cases",
+        "type": "c",
+        "definition_tokens": (
+            "scope_manifest_sha256",
+            "assignment_manifest_sha256",
+            "recount_manifest_sha256",
+            "request_sha256",
+            "idempotency_key_hash",
+            "authorization_sha256",
+        ),
+    },
+    "ck_stocktake_recount_scope_assignments_hashes_0018": {
+        "table": "stocktake_recount_scope_assignments",
+        "type": "c",
+        "definition_tokens": ("authorization_sha256", "assignment_sha256"),
+    },
+}
+EXPECTED_STOCKTAKE_RECOUNT_INDEXES = {
+    "uq_stocktake_rounds_recount_case_0018": {
+        "table": "stocktake_rounds",
+        "columns": ("recount_case_id",),
+        "predicate": "not_null_recount_case",
+    },
+    "uq_stocktake_rounds_one_counting_0018": {
+        "table": "stocktake_rounds",
+        "columns": ("task_id",),
+        "predicate": "counting",
+    },
+    "uq_stocktake_recount_cases_source_round_0018": {
+        "table": "stocktake_recount_cases",
+        "columns": ("source_round_id",),
+        "predicate": None,
+    },
+    "uq_stocktake_recount_cases_trigger_review_0018": {
+        "table": "stocktake_recount_cases",
+        "columns": ("trigger_review_id",),
+        "predicate": None,
+    },
+    "uq_stocktake_recount_cases_task_next_round_0018": {
+        "table": "stocktake_recount_cases",
+        "columns": ("task_id", "next_round_no"),
+        "predicate": None,
+    },
+    "uq_stocktake_recount_cases_idempotency_0018": {
+        "table": "stocktake_recount_cases",
+        "columns": ("idempotency_key_hash",),
+        "predicate": None,
+    },
+    "uq_stocktake_recount_scope_assignments_case_scope_0018": {
+        "table": "stocktake_recount_scope_assignments",
+        "columns": ("recount_case_id", "scope_id"),
+        "predicate": None,
+    },
+}
+POSTGRESQL_COMPLETION_PERSONAL_TRIGGER_0019 = (
+    "trg_stocktake_scope_count_completions_technician_personal_locat"
+)
+POSTGRESQL_RECOUNT_PERSONAL_TRIGGER_0019 = (
+    "trg_stocktake_recount_scope_assignments_technician_personal_loc"
+)
+EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS = {
+    "trg_stock_locations_stocktake_personal_continuity_0020": (
+        "stock_locations",
+        "rsc_preserve_stocktake_personal_location_0020",
+        "A",
+        19,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_scope_count_completions_immutable_0011": (
+        "stocktake_scope_count_completions",
+        "rsc_block_opening_count_fact_mutation_0011",
+        "O",
+        27,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_scope_completions_assignment_0021": (
+        "stocktake_scope_count_completions",
+        "rsc_validate_stocktake_scope_completion_insert_0021",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    POSTGRESQL_COMPLETION_PERSONAL_TRIGGER_0019: (
+        "stocktake_scope_count_completions",
+        "rsc_validate_stocktake_technician_personal_location_0019",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_recount_scope_assignments_validate_0018": (
+        "stocktake_recount_scope_assignments",
+        "rsc_validate_stocktake_recount_scope_assignment_0018",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    POSTGRESQL_RECOUNT_PERSONAL_TRIGGER_0019: (
+        "stocktake_recount_scope_assignments",
+        "rsc_validate_stocktake_technician_personal_location_0019",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_recount_scope_assignments_immutable_0018": (
+        "stocktake_recount_scope_assignments",
+        "rsc_block_stocktake_recount_fact_mutation_0018",
+        "A",
+        27,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_recount_scope_assignments_immutable_truncate_0018": (
+        "stocktake_recount_scope_assignments",
+        "rsc_block_stocktake_recount_fact_mutation_0018",
+        "A",
+        34,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_recount_graph_assignment_0018": (
+        "stocktake_recount_scope_assignments",
+        "rsc_require_stocktake_recount_graph_0018",
+        "A",
+        29,
+        True,
+        True,
+        True,
+    ),
+    "trg_stocktake_count_lines_submitted_immutable_0010": (
+        "stocktake_count_lines",
+        "rsc_block_submitted_stocktake_count_mutation_0010",
+        "O",
+        31,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_count_lines_immutable_0011": (
+        "stocktake_count_lines",
+        "rsc_block_opening_count_fact_mutation_0011",
+        "O",
+        27,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_count_lines_assignment_0021": (
+        "stocktake_count_lines",
+        "rsc_validate_stocktake_count_line_insert_0021",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_count_observations_immutable_0011": (
+        "stocktake_count_observations",
+        "rsc_block_opening_count_fact_mutation_0011",
+        "O",
+        27,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_count_observations_assignment_0021": (
+        "stocktake_count_observations",
+        "rsc_validate_stocktake_observation_insert_0021",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+}
+EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS = {
+    "trg_stocktake_recount_cases_review_path_0021": (
+        "stocktake_recount_cases",
+        "rsc_validate_stocktake_recount_case_0021",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_recount_cases_immutable_0018": (
+        "stocktake_recount_cases",
+        "rsc_block_stocktake_recount_fact_mutation_0018",
+        "A",
+        27,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_recount_cases_immutable_truncate_0018": (
+        "stocktake_recount_cases",
+        "rsc_block_stocktake_recount_fact_mutation_0018",
+        "A",
+        34,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_tasks_recount_causality_0018": (
+        "stocktake_tasks",
+        "rsc_validate_stocktake_recount_task_advance_0018",
+        "A",
+        19,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_rounds_recount_causality_0018": (
+        "stocktake_rounds",
+        "rsc_validate_stocktake_recount_round_0018",
+        "A",
+        23,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_recount_graph_task_0018": (
+        "stocktake_tasks",
+        "rsc_require_stocktake_recount_graph_0018",
+        "A",
+        29,
+        True,
+        True,
+        True,
+    ),
+    "trg_stocktake_recount_graph_round_0018": (
+        "stocktake_rounds",
+        "rsc_require_stocktake_recount_graph_0018",
+        "A",
+        29,
+        True,
+        True,
+        True,
+    ),
+    "trg_stocktake_recount_graph_case_0018": (
+        "stocktake_recount_cases",
+        "rsc_require_stocktake_recount_graph_0018",
+        "A",
+        29,
+        True,
+        True,
+        True,
+    ),
+}
+EXPECTED_STOCKTAKE_RECOUNT_TRIGGERS = {
+    **EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS,
+    **EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS,
+}
+EXPECTED_STOCKTAKE_SCOPE_TRIGGERS = {
+    "trg_stocktake_scopes_immutable_0010": (
+        "stocktake_scopes",
+        "rsc_block_stocktake_fact_mutation_0010",
+        "O",
+        27,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_scopes_sealed_insert_0010": (
+        "stocktake_scopes",
+        "rsc_seal_opening_start_evidence_0010",
+        "O",
+        7,
+        False,
+        False,
+        False,
+    ),
+    # Revision 0025 retains its catalog identity while the function enforces
+    # both the asset-owner and complete physical-location region graphs.
+    "trg_stocktake_scopes_region_owner_0025": (
+        "stocktake_scopes",
+        "rsc_validate_stocktake_scope_region_owner_0025",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+}
+EXPECTED_RECONCILIATION_TRIGGERS = {
+    "trg_opening_reconciliation_consumptions_guard_0026": (
+        "opening_control_reconciliation_command_consumptions",
+        "rsc_guard_opening_reconciliation_command_consumption_0026",
+        "A",
+        31,
+    ),
+    "trg_opening_reconciliation_consumptions_no_truncate_0026": (
+        "opening_control_reconciliation_command_consumptions",
+        "rsc_guard_opening_reconciliation_command_consumption_0026",
+        "A",
+        34,
+    ),
+    "trg_reconciliation_commands_immutable_0026": (
+        "reconciliation_commands",
+        "rsc_guard_reconciliation_command_0026",
+        "A",
+        31,
+    ),
+    "trg_reconciliation_commands_no_truncate_0026": (
+        "reconciliation_commands",
+        "rsc_guard_reconciliation_command_0026",
+        "A",
+        34,
+    ),
+    "trg_opening_reconciliation_runs_guard_0026": (
+        "opening_control_reconciliation_runs",
+        "rsc_guard_opening_reconciliation_run_0026",
+        "A",
+        23,
+    ),
+    "trg_opening_reconciliation_runs_no_delete_0026": (
+        "opening_control_reconciliation_runs",
+        "rsc_guard_opening_reconciliation_run_0026",
+        "A",
+        11,
+    ),
+    "trg_opening_reconciliation_runs_no_truncate_0026": (
+        "opening_control_reconciliation_runs",
+        "rsc_guard_opening_reconciliation_run_0026",
+        "A",
+        34,
+    ),
+    "trg_opening_reconciliation_items_guard_0026": (
+        "opening_control_reconciliation_items",
+        "rsc_guard_opening_reconciliation_item_0026",
+        "A",
+        23,
+    ),
+    "trg_opening_reconciliation_items_no_delete_0026": (
+        "opening_control_reconciliation_items",
+        "rsc_guard_opening_reconciliation_item_0026",
+        "A",
+        11,
+    ),
+    "trg_opening_reconciliation_items_no_truncate_0026": (
+        "opening_control_reconciliation_items",
+        "rsc_guard_opening_reconciliation_item_0026",
+        "A",
+        34,
+    ),
+    "trg_reconciliation_runs_formal_guard_0026": (
+        "reconciliation_runs",
+        "rsc_guard_reconciliation_run_projection_0026",
+        "A",
+        19,
+    ),
+    "trg_reconciliation_runs_formal_delete_0026": (
+        "reconciliation_runs",
+        "rsc_guard_reconciliation_run_projection_0026",
+        "A",
+        11,
+    ),
+    "trg_reconciliation_runs_no_truncate_0026": (
+        "reconciliation_runs",
+        "rsc_guard_reconciliation_run_projection_0026",
+        "A",
+        34,
+    ),
+    "trg_reconciliation_items_formal_guard_0026": (
+        "reconciliation_items",
+        "rsc_guard_reconciliation_item_projection_0026",
+        "A",
+        19,
+    ),
+    "trg_reconciliation_items_formal_delete_0026": (
+        "reconciliation_items",
+        "rsc_guard_reconciliation_item_projection_0026",
+        "A",
+        11,
+    ),
+    "trg_reconciliation_items_no_truncate_0026": (
+        "reconciliation_items",
+        "rsc_guard_reconciliation_item_projection_0026",
+        "A",
+        34,
+    ),
+    "trg_reconciliation_runs_formal_insert_0026": (
+        "reconciliation_runs",
+        "rsc_guard_reconciliation_run_projection_0026",
+        "A",
+        7,
+    ),
+    "trg_reconciliation_items_formal_insert_0026": (
+        "reconciliation_items",
+        "rsc_guard_reconciliation_item_projection_0026",
+        "A",
+        7,
+    ),
+    "trg_reconciliation_state_effect_guard_0026": (
+        "state_transition_events",
+        "rsc_guard_reconciliation_effect_0026",
+        "A",
+        31,
+    ),
+    "trg_reconciliation_outbox_effect_guard_0026": (
+        "outbox_events",
+        "rsc_guard_reconciliation_effect_0026",
+        "A",
+        31,
+    ),
+    "trg_reconciliation_audit_effect_guard_0026": (
+        "audit_events",
+        "rsc_guard_reconciliation_effect_0026",
+        "A",
+        31,
+    ),
+    "trg_reconciliation_state_effect_no_truncate_0026": (
+        "state_transition_events",
+        "rsc_guard_reconciliation_effect_0026",
+        "A",
+        34,
+    ),
+    "trg_reconciliation_outbox_effect_no_truncate_0026": (
+        "outbox_events",
+        "rsc_guard_reconciliation_effect_0026",
+        "A",
+        34,
+    ),
+    "trg_reconciliation_audit_effect_no_truncate_0026": (
+        "audit_events",
+        "rsc_guard_reconciliation_effect_0026",
+        "A",
+        34,
+    ),
+    "trg_stocktake_tasks_reconciliation_close_guard_0026": (
+        "stocktake_tasks",
+        "rsc_guard_opening_reconciliation_task_close_0026",
+        "A",
+        19,
+    ),
+}
+EXPECTED_RECONCILIATION_CONSTRAINTS = {
+    "fk_reconciliation_commands_consumption": {
+        "table": "reconciliation_commands",
+        "type": "f",
+        "columns": ("id", "run_id", "operation", "target_version"),
+        "referenced_table": (
+            "opening_control_reconciliation_command_consumptions"
+        ),
+        "referenced_columns": (
+            "command_id",
+            "run_id",
+            "operation",
+            "target_version",
+        ),
+        "deferred": True,
+    },
+    "fk_opening_control_reconciliation_runs_run": {
+        "table": "opening_control_reconciliation_runs",
+        "type": "f",
+        "columns": ("run_id",),
+        "referenced_table": "reconciliation_runs",
+        "referenced_columns": ("id",),
+        "deferred": True,
+    },
+    "fk_opening_control_reconciliation_runs_create_command": {
+        "table": "opening_control_reconciliation_runs",
+        "type": "f",
+        "columns": ("create_command_id", "run_id"),
+        "referenced_table": "reconciliation_commands",
+        "referenced_columns": ("id", "run_id"),
+        "deferred": True,
+    },
+    "fk_opening_control_reconciliation_items_item": {
+        "table": "opening_control_reconciliation_items",
+        "type": "f",
+        "columns": ("item_id",),
+        "referenced_table": "reconciliation_items",
+        "referenced_columns": ("id",),
+        "deferred": True,
+    },
+    "uq_reconciliation_commands_target": {
+        "table": "reconciliation_commands",
+        "type": "u",
+        "columns": ("run_id", "target_version"),
+    },
+    "uq_reconciliation_commands_id_run": {
+        "table": "reconciliation_commands",
+        "type": "u",
+        "columns": ("id", "run_id"),
+    },
+    "uq_opening_control_reconciliation_consumptions_command": {
+        "table": "opening_control_reconciliation_command_consumptions",
+        "type": "u",
+        "columns": ("command_id", "run_id", "operation", "target_version"),
+    },
+    "uq_opening_control_reconciliation_consumptions_target": {
+        "table": "opening_control_reconciliation_command_consumptions",
+        "type": "u",
+        "columns": ("run_id", "target_version"),
+    },
+    "ck_reconciliation_commands_target_version": {
+        "table": "reconciliation_commands",
+        "type": "c",
+        "tokens": ("target_version", ">= 0"),
+    },
+    "ck_reconciliation_commands_operation": {
+        "table": "reconciliation_commands",
+        "type": "c",
+        "tokens": (
+            "operation",
+            "create_opening",
+            "explain_opening",
+            "approve_opening",
+        ),
+    },
+    "ck_reconciliation_commands_request_reference": {
+        "table": "reconciliation_commands",
+        "type": "c",
+        "tokens": (
+            "request_reference",
+            "opening-reconciliation-request-",
+            "substr",
+            "= 95",
+            "replace",
+        ),
+    },
+    "ck_reconciliation_commands_hashes": {
+        "table": "reconciliation_commands",
+        "type": "c",
+        "tokens": (
+            "idempotency_key_hash",
+            "request_hash",
+            "result_hash",
+            "= 64",
+            "replace",
+        ),
+    },
+    "ck_opening_control_reconciliation_runs_manifest": {
+        "table": "opening_control_reconciliation_runs",
+        "type": "c",
+        "tokens": (
+            "item_manifest_sha256",
+            "= 64",
+            "replace",
+        ),
+    },
+    "ck_opening_control_reconciliation_items_evidence_snapshot": {
+        "table": "opening_control_reconciliation_items",
+        "type": "c",
+        "tokens": (
+            "evidence_file_sha256",
+            "evidence_file_size_bytes",
+            "evidence_file_mime_type",
+            "= 64",
+            ">= 0",
+        ),
+    },
+}
+EXPECTED_RECONCILIATION_PARTIAL_INDEXES = {
+    "uq_reconciliation_commands_create_run": "create_opening",
+    "uq_reconciliation_commands_approve_run": "approve_opening",
+}
+EXPECTED_OPENING_TERMINAL_TRIGGERS = {
+    "trg_stock_accounts_opening_observation_commit_0023": (
+        "stock_accounts",
+        "rsc_require_opening_observation_account_0023",
+        "A",
+        5,
+    ),
+    "trg_audit_events_opening_commit_0022": (
+        "audit_events",
+        "rsc_require_opening_terminal_graph_0022",
+        "A",
+        5,
+    ),
+    "trg_inventory_freezes_opening_commit_0022": (
+        "inventory_freezes",
+        "rsc_require_opening_terminal_graph_0022",
+        "A",
+        17,
+    ),
+    "trg_inventory_transactions_opening_commit_0022": (
+        "inventory_transactions",
+        "rsc_require_opening_terminal_graph_0022",
+        "A",
+        5,
+    ),
+    "trg_inventory_transactions_immutable_0022": (
+        "inventory_transactions",
+        "rsc_block_inventory_ledger_mutation_0022",
+        "A",
+        27,
+    ),
+    "trg_inventory_transactions_immutable_truncate_0022": (
+        "inventory_transactions",
+        "rsc_block_inventory_ledger_mutation_0022",
+        "A",
+        34,
+    ),
+    "trg_inventory_movements_opening_commit_0022": (
+        "inventory_movements",
+        "rsc_require_opening_terminal_graph_0022",
+        "A",
+        5,
+    ),
+    "trg_inventory_movements_immutable_0022": (
+        "inventory_movements",
+        "rsc_block_inventory_ledger_mutation_0022",
+        "A",
+        27,
+    ),
+    "trg_inventory_movements_immutable_truncate_0022": (
+        "inventory_movements",
+        "rsc_block_inventory_ledger_mutation_0022",
+        "A",
+        34,
+    ),
+    "trg_inventory_movement_serials_opening_commit_0022": (
+        "inventory_movement_serials",
+        "rsc_require_opening_terminal_graph_0022",
+        "A",
+        5,
+    ),
+    "trg_inventory_movement_serials_immutable_0022": (
+        "inventory_movement_serials",
+        "rsc_block_inventory_ledger_mutation_0022",
+        "A",
+        27,
+    ),
+    "trg_inventory_movement_serials_immutable_truncate_0022": (
+        "inventory_movement_serials",
+        "rsc_block_inventory_ledger_mutation_0022",
+        "A",
+        34,
+    ),
+    "trg_stocktake_tasks_opening_mutation_0010": (
+        "stocktake_tasks",
+        "rsc_validate_opening_task_mutation_0010",
+        "O",
+        27,
+    ),
+    "trg_inventory_freezes_transition_0010": (
+        "inventory_freezes",
+        "rsc_validate_inventory_freeze_mutation_0010",
+        "O",
+        27,
+    ),
+    "trg_stocktake_postings_opening_unique_0022": (
+        "stocktake_postings",
+        "rsc_validate_opening_posting_unique_0022",
+        "A",
+        7,
+    ),
+    "trg_stocktake_postings_opening_commit_0022": (
+        "stocktake_postings",
+        "rsc_require_opening_terminal_graph_0022",
+        "A",
+        5,
+    ),
+    "trg_stocktake_posting_items_opening_commit_0022": (
+        "stocktake_posting_items",
+        "rsc_require_opening_terminal_graph_0022",
+        "A",
+        5,
+    ),
+    "trg_stocktake_posting_items_validate_insert_0010": (
+        "stocktake_posting_items",
+        "rsc_validate_stocktake_posting_item_0010",
+        "A",
+        7,
+    ),
+    "trg_stocktake_postings_terminal_0022": (
+        "stocktake_postings",
+        "rsc_block_opening_terminal_mutation_0022",
+        "A",
+        27,
+    ),
+    "trg_stocktake_postings_terminal_truncate_0022": (
+        "stocktake_postings",
+        "rsc_block_opening_terminal_mutation_0022",
+        "A",
+        34,
+    ),
+    "trg_stocktake_posting_items_terminal_0022": (
+        "stocktake_posting_items",
+        "rsc_block_opening_terminal_mutation_0022",
+        "A",
+        27,
+    ),
+    "trg_stocktake_posting_items_terminal_truncate_0022": (
+        "stocktake_posting_items",
+        "rsc_block_opening_terminal_mutation_0022",
+        "A",
+        34,
+    ),
+    "trg_inventory_opening_establishments_terminal_0022": (
+        "inventory_opening_establishments",
+        "rsc_block_opening_terminal_mutation_0022",
+        "A",
+        27,
+    ),
+    "trg_inventory_opening_establishments_terminal_truncate_0022": (
+        "inventory_opening_establishments",
+        "rsc_block_opening_terminal_mutation_0022",
+        "A",
+        34,
+    ),
+    "trg_inventory_opening_establishments_commit_0022": (
+        "inventory_opening_establishments",
+        "rsc_require_opening_terminal_graph_0022",
+        "A",
+        5,
+    ),
+    "trg_outbox_events_opening_commit_0022": (
+        "outbox_events",
+        "rsc_require_opening_terminal_graph_0022",
+        "A",
+        5,
+    ),
+    "trg_state_transition_events_opening_commit_0022": (
+        "state_transition_events",
+        "rsc_require_opening_terminal_graph_0022",
+        "A",
+        5,
+    ),
+    "trg_stocktake_tasks_opening_commit_0022": (
+        "stocktake_tasks",
+        "rsc_require_opening_terminal_graph_0022",
+        "A",
+        17,
+    ),
+}
+EXPECTED_OPENING_TERMINAL_INDEX = (
+    "uq_stocktake_postings_one_opening_task_0022"
+)
+EXPECTED_FORMAL_FILE_TRIGGERS = {
+    "trg_files_formal_runtime_guard_0036": (
+        "files", "rsc_guard_formal_file_object_0036", "A", 31
+    ),
+    "trg_files_formal_no_truncate_0036": (
+        "files", "rsc_guard_formal_file_object_0036", "A", 34
+    ),
+    "trg_material_request_files_formal_guard_0036": (
+        "material_request_files", "rsc_guard_formal_file_binding_0036", "A", 7
+    ),
+    "trg_approval_external_registrations_evidence_guard_0036": (
+        "approval_external_registrations",
+        "rsc_guard_formal_file_binding_0036",
+        "A",
+        31,
+    ),
+    "trg_approval_external_registrations_evidence_no_truncate_0036": (
+        "approval_external_registrations",
+        "rsc_guard_formal_file_binding_0036",
+        "A",
+        34,
+    ),
+    "trg_document_attachments_stocktake_evidence_guard_0036": (
+        "document_attachments", "rsc_guard_formal_file_binding_0036", "A", 31
+    ),
+    "trg_document_attachments_stocktake_evidence_no_truncate_0036": (
+        "document_attachments", "rsc_guard_formal_file_binding_0036", "A", 34
+    ),
+}
+EXPECTED_FORMAL_FILE_INDEXES = {
+    "uq_approval_external_registrations_evidence_file_0036": {
+        "table": "approval_external_registrations",
+        "columns": ("evidence_file_id",),
+        "predicate": None,
+    },
+    "uq_document_attachments_stocktake_evidence_file_0036": {
+        "table": "document_attachments",
+        "columns": ("file_id",),
+        "predicate": "stocktake_evidence",
+    },
+}
+EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS = {
+    "trg_material_request_cancellation_facts_guard_0037": (
+        "material_request_cancellation_line_facts",
+        "rsc_guard_material_request_cancellation_fact_0037",
+        "A",
+        31,
+    ),
+    "trg_material_request_cancellation_facts_no_truncate_0037": (
+        "material_request_cancellation_line_facts",
+        "rsc_guard_material_request_cancellation_fact_0037",
+        "A",
+        34,
+    ),
+    "trg_approval_actions_cancel_guard_0037": (
+        "approval_actions", "rsc_guard_material_request_cancel_action_0037", "A", 7
+    ),
+    "trg_material_request_commands_parent_lock_0037": (
+        "material_request_commands",
+        "rsc_lock_material_request_parent_write_0037",
+        "A",
+        7,
+    ),
+    "trg_substitution_decisions_request_parent_lock_0037": (
+        "substitution_decisions",
+        "rsc_lock_material_request_parent_write_0037",
+        "A",
+        23,
+    ),
+    "trg_supply_tasks_request_parent_lock_0037": (
+        "supply_tasks", "rsc_lock_material_request_parent_write_0037", "A", 23
+    ),
+    "trg_inventory_transactions_request_parent_lock_0037": (
+        "inventory_transactions",
+        "rsc_lock_material_request_parent_write_0037",
+        "A",
+        7,
+    ),
+    "trg_notification_events_request_parent_lock_0037": (
+        "notification_events",
+        "rsc_lock_material_request_parent_write_0037",
+        "A",
+        7,
+    ),
+    "trg_outbox_events_request_parent_lock_0037": (
+        "outbox_events", "rsc_lock_material_request_parent_write_0037", "A", 7
+    ),
+    **{
+        f"trg_{table_name}_cancellation_graph_0037": (
+            table_name,
+            "rsc_require_material_request_cancellation_graph_0037",
+            "A",
+            trigger_type,
+        )
+        for table_name, trigger_type in {
+            "material_requests": 17,
+            "material_request_lines": 21,
+            "material_request_commands": 5,
+            "approval_instances": 17,
+            "approval_actions": 5,
+            "material_request_cancellation_line_facts": 5,
+            "substitution_decisions": 21,
+            "supply_tasks": 21,
+            "state_transition_events": 5,
+            "audit_events": 5,
+            "inventory_transactions": 5,
+            "notification_events": 5,
+            "outbox_events": 5,
+        }.items()
+    },
+}
+EXPECTED_MATERIAL_REQUEST_CANCELLATION_INDEXES = {
+    "uq_approval_actions_cancel_fact_identity_0037": {
+        "table": "approval_actions",
+        "columns": ("id", "instance_id", "command_id"),
+        "unique": True,
+    },
+    "ix_material_request_cancel_facts_instance_0037": {
+        "table": "material_request_cancellation_line_facts",
+        "columns": ("instance_id", "occurred_at"),
+        "unique": False,
+    },
+    "ix_material_request_cancel_facts_request_0037": {
+        "table": "material_request_cancellation_line_facts",
+        "columns": ("request_id",),
+        "unique": False,
+    },
+    "ix_material_request_cancel_facts_command_0037": {
+        "table": "material_request_cancellation_line_facts",
+        "columns": ("cancel_command_id",),
+        "unique": False,
+    },
+}
+_STOCKTAKE_CLOSE_FACT_TABLES = (
+    "stocktake_close_transition_acks",
+    "stocktake_close_reconciliation_completions",
+    "stocktake_close_reconciliation_accounts",
+    "stocktake_close_reconciliation_serials",
+    "stocktake_close_completions",
+)
+EXPECTED_NONOPENING_STOCKTAKE_CLOSE_TRIGGERS = {
+    "trg_stocktake_tasks_close_graph_0038": (
+        "stocktake_tasks",
+        "rsc_require_nonopening_stocktake_close_graph_0038",
+        "A",
+        29,
+        True,
+        True,
+        True,
+        False,
+    ),
+    "trg_stocktake_close_reconciliations_graph_0038": (
+        "stocktake_close_reconciliation_completions",
+        "rsc_require_nonopening_stocktake_close_graph_0038",
+        "A", 29, True, True, True, False,
+    ),
+    "trg_stocktake_close_reconciliation_accounts_graph_0038": (
+        "stocktake_close_reconciliation_accounts",
+        "rsc_require_nonopening_stocktake_close_graph_0038",
+        "A", 29, True, True, True, False,
+    ),
+    "trg_stocktake_close_reconciliation_serials_graph_0038": (
+        "stocktake_close_reconciliation_serials",
+        "rsc_require_nonopening_stocktake_close_graph_0038",
+        "A", 29, True, True, True, False,
+    ),
+    "trg_stocktake_close_completions_graph_0038": (
+        "stocktake_close_completions",
+        "rsc_require_nonopening_stocktake_close_graph_0038",
+        "A", 29, True, True, True, False,
+    ),
+    "trg_stocktake_close_transition_acks_graph_0038": (
+        "stocktake_close_transition_acks",
+        "rsc_require_nonopening_stocktake_close_graph_0038",
+        "A", 29, True, True, True, False,
+    ),
+    "trg_stocktake_tasks_close_ack_0038": (
+        "stocktake_tasks",
+        "rsc_record_nonopening_stocktake_close_ack_0038",
+        "A", 17, False, False, False, True,
+    ),
+    "trg_stocktake_close_transition_acks_insert_0038": (
+        "stocktake_close_transition_acks",
+        "rsc_guard_nonopening_stocktake_close_ack_0038",
+        "A", 7, False, False, False, False,
+    ),
+    "trg_audit_events_nonopening_stocktake_close_guard_0038": (
+        "audit_events",
+        "rsc_guard_nonopening_stocktake_close_event_0038",
+        "A", 7, False, False, False, False,
+    ),
+    "trg_state_events_nonopening_stocktake_close_guard_0038": (
+        "state_transition_events",
+        "rsc_guard_nonopening_stocktake_close_event_0038",
+        "A", 7, False, False, False, False,
+    ),
+    **{
+        f"trg_{table_name}_immutable_0038": (
+            table_name,
+            "rsc_reject_nonopening_stocktake_close_mutation_0038",
+            "A",
+            27,
+            False,
+            False,
+            False,
+            False,
+        )
+        for table_name in _STOCKTAKE_CLOSE_FACT_TABLES
+    },
+    **{
+        f"trg_{table_name}_no_truncate_0038": (
+            table_name,
+            "rsc_reject_nonopening_stocktake_close_mutation_0038",
+            "A",
+            34,
+            False,
+            False,
+            False,
+            False,
+        )
+        for table_name in _STOCKTAKE_CLOSE_FACT_TABLES
+    },
+}
+EXPECTED_NONOPENING_STOCKTAKE_CLOSE_INDEXES = {
+    "ix_stocktake_close_transition_acks_kind_0038": {
+        "table": "stocktake_close_transition_acks",
+        "columns": ("transition_kind", "occurred_at"),
+        "unique": False,
+    },
+    "ix_stocktake_close_reconciliation_task_0038": {
+        "table": "stocktake_close_reconciliation_completions",
+        "columns": ("task_id", "reconciliation_no"),
+        "unique": False,
+    },
+    "ix_stocktake_close_reconciliation_accounts_scope_0038": {
+        "table": "stocktake_close_reconciliation_accounts",
+        "columns": ("task_id", "scope_id"),
+        "unique": False,
+    },
+    "ix_stocktake_close_reconciliation_serials_scope_0038": {
+        "table": "stocktake_close_reconciliation_serials",
+        "columns": ("task_id", "evidence_scope_id"),
+        "unique": False,
+    },
+    "ix_stocktake_close_completions_actor_0038": {
+        "table": "stocktake_close_completions",
+        "columns": ("closed_by_user_id", "closed_at"),
+        "unique": False,
+    },
+}
+EXPECTED_NONOPENING_STOCKTAKE_CLOSE_CONSTRAINTS = {
+    "fk_stocktake_close_reconciliation_transition_ack_0038": {
+        "table": "stocktake_close_reconciliation_completions",
+        "columns": ("task_id", "reconciled_task_version", "id"),
+        "referenced_table": "stocktake_close_transition_acks",
+        "referenced_columns": (
+            "task_id",
+            "target_task_version",
+            "reconciliation_completion_id",
+        ),
+    },
+    "fk_stocktake_close_completion_transition_ack_0038": {
+        "table": "stocktake_close_completions",
+        "columns": ("task_id", "closed_task_version", "id"),
+        "referenced_table": "stocktake_close_transition_acks",
+        "referenced_columns": (
+            "task_id",
+            "target_task_version",
+            "close_completion_id",
+        ),
+    },
+}
+OPENING_COMMIT_TRIGGER_NAMES = frozenset(
+    {
+        "trg_audit_events_opening_commit_0022",
+        "trg_inventory_freezes_opening_commit_0022",
+        "trg_inventory_movement_serials_opening_commit_0022",
+        "trg_inventory_movements_opening_commit_0022",
+        "trg_inventory_transactions_opening_commit_0022",
+        "trg_inventory_opening_establishments_commit_0022",
+        "trg_outbox_events_opening_commit_0022",
+        "trg_state_transition_events_opening_commit_0022",
+        "trg_stock_accounts_opening_observation_commit_0023",
+        "trg_stocktake_posting_items_opening_commit_0022",
+        "trg_stocktake_postings_opening_commit_0022",
+        "trg_stocktake_tasks_opening_commit_0022",
+    }
+)
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_SQL_STRING_LITERAL_PATTERN = re.compile(r"'((?:''|[^'])*)'")
+RUNTIME_EXECUTE_FUNCTIONS = {
+    ("rsc_canonical_reconciliation_json_0026", "jsonb"): (
+        "i",
+        False,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_reconciliation_event_key_0026", "text, text, text"): (
+        "i",
+        False,
+        "sql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_lock_opening_reconciliation_source_0026", "uuid"): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_lock_opening_reconciliation_run_0026", "uuid"): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_lock_opening_reconciliation_files_0026", "uuid, uuid[]"): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_lock_formal_principal_graph_0026", "text[]"): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_lock_opening_control_import_0027", "uuid, uuid"): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    (
+        "rsc_lock_opening_stocktake_start_reference_0027",
+        "uuid, uuid[], uuid[], uuid[], timestamp with time zone",
+    ): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_lock_opening_stocktake_task_evidence_0027", "uuid, uuid"): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    (
+        "rsc_lock_inventory_reference_graph_0027",
+        "uuid[], timestamp with time zone",
+    ): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_lock_inventory_serial_graph_0027", "uuid[]"): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    (
+        "rsc_lock_opening_terminal_reference_union_0028",
+        "uuid[], uuid[], uuid[], uuid[], uuid[]",
+    ): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_lock_nonopening_stocktake_posting_graph_0035", "uuid"): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_lock_nonopening_stocktake_close_graph_0038", "uuid"): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+}
+RUNTIME_FUNCTION_SHAPES = {
+    coordinate: (
+        "f",
+        "text" if coordinate[0] in {
+            "rsc_canonical_reconciliation_json_0026",
+            "rsc_reconciliation_event_key_0026",
+        } else "void",
+        coordinate[0] in {
+            "rsc_canonical_reconciliation_json_0026",
+            "rsc_reconciliation_event_key_0026",
+        },
+    )
+    for coordinate in RUNTIME_EXECUTE_FUNCTIONS
+}
+RUNTIME_FUNCTION_BODY_SHA256 = {
+    ("rsc_canonical_reconciliation_json_0026", "jsonb"):
+        "35a956052a13a94d1c6b57f252273f46fa806b2e9c596531205a148114b7dc53",
+    ("rsc_reconciliation_event_key_0026", "text, text, text"):
+        "9ec2f326f040fa1cd223e570b83ae6d6ff3dad7eb81f56e55e3342b45d9e5446",
+    ("rsc_lock_opening_reconciliation_source_0026", "uuid"):
+        "6b83d273493cc9a264108eade1d3245dd0775194f4583903a453ddb442746d8b",
+    ("rsc_lock_opening_reconciliation_run_0026", "uuid"):
+        "655628a9fd8c27007a6697285f125d4c50f935c6ad6c8600f99e235dd753a028",
+    ("rsc_lock_opening_reconciliation_files_0026", "uuid, uuid[]"):
+        "fb97101626b1f5e67717f6f1f057e12c859d23e086f53ba50398545bbc036fac",
+    ("rsc_lock_formal_principal_graph_0026", "text[]"):
+        "4b7d3e47541a1de999f33af65d95a697ffd44cfea8930f6fbeb265d4fd727aaf",
+    ("rsc_lock_opening_control_import_0027", "uuid, uuid"):
+        "de1a1ada12225d2c38d695448a475ebf16f404fdefb7a438a1f8fb8f50d996d1",
+    (
+        "rsc_lock_opening_stocktake_start_reference_0027",
+        "uuid, uuid[], uuid[], uuid[], timestamp with time zone",
+    ): "dbd0d5a71b839a4c31a8defc7089177c2d4c37409cd323710b302f6b1ba1a2e9",
+    ("rsc_lock_opening_stocktake_task_evidence_0027", "uuid, uuid"):
+        "063707033407390c65b77a254a50b26e37b23b824009b14aeac67795c5988ff4",
+    (
+        "rsc_lock_inventory_reference_graph_0027",
+        "uuid[], timestamp with time zone",
+    ): "a7491fb40e05a7827cd1b73c4b6cfee07020b71d612098ece6a196cd44fc0de0",
+    ("rsc_lock_inventory_serial_graph_0027", "uuid[]"):
+        "75f4ab5039567650ad4867f29fa6b32c2c61e22782b65c5ec327e1a55b1bfea1",
+    (
+        "rsc_lock_opening_terminal_reference_union_0028",
+        "uuid[], uuid[], uuid[], uuid[], uuid[]",
+    ): "a5445f4651364a179223695d28ba7ce9434f0f20307098a9291067b64b07d066",
+    ("rsc_lock_nonopening_stocktake_posting_graph_0035", "uuid"):
+        "28f4e867f8a89cf1d40275f0bd02af92a28f010f6656b5daa3f3f55705aa63de",
+    ("rsc_lock_nonopening_stocktake_close_graph_0038", "uuid"):
+        "45c71e5a7129800399e1c20480bf7e2a000c478743635cff99db024c0b62118e",
+}
+FORMAL_FILE_INTERNAL_FUNCTIONS = {
+    ("rsc_guard_formal_file_object_0036", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_guard_formal_file_binding_0036", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_validate_material_request_cancellation_0037", "uuid"): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_require_material_request_cancellation_graph_0037", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_guard_material_request_cancellation_fact_0037", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_guard_material_request_cancel_action_0037", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_lock_material_request_parent_write_0037", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_require_nonopening_stocktake_close_graph_0038", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_reject_nonopening_stocktake_close_mutation_0038", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_record_nonopening_stocktake_close_ack_0038", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_guard_nonopening_stocktake_close_ack_0038", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_guard_nonopening_stocktake_close_event_0038", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+}
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES = {
+    coordinate: (
+        "f",
+        "void"
+        if coordinate == ("rsc_validate_material_request_cancellation_0037", "uuid")
+        else "trigger",
+        False,
+    )
+    for coordinate in FORMAL_FILE_INTERNAL_FUNCTIONS
+}
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
+    ("rsc_guard_formal_file_object_0036", ""):
+        "b40aec00c7dda886b556b309adfff1d660c03280295a559a5fc452bb106f4b4d",
+    ("rsc_guard_formal_file_binding_0036", ""):
+        "dc4d335bf59b02c6bff7714f523db54b1a1cd2f92669b34840552967f29dff65",
+    ("rsc_validate_material_request_cancellation_0037", "uuid"):
+        "64d7775a5013859d91f0ea6ec938f17a4bbfa4dd0d105069d35b6dc4db9c8617",
+    ("rsc_require_material_request_cancellation_graph_0037", ""):
+        "98c206ba9bca0a30a78420dc1e7f283f1c141082930f8b241cfcae19a21c8e36",
+    ("rsc_guard_material_request_cancellation_fact_0037", ""):
+        "cf22a8d853d9271bb8ef64a19d078e5f3c79aa2a255a302dcc17cc857f5040ed",
+    ("rsc_guard_material_request_cancel_action_0037", ""):
+        "32737f80f3404b132cba236d1f51a5dfc72a5b42fc2b3c15933c3da13c21b11d",
+    ("rsc_lock_material_request_parent_write_0037", ""):
+        "35566cd293d7fb29d35c1a452e7bc26529af9ab1fff90afaaf06f60272848dcf",
+    ("rsc_require_nonopening_stocktake_close_graph_0038", ""):
+        "bcb713005c869c909ec212ae6775f4894cc67bb339276cdbe88242601352f582",
+    ("rsc_reject_nonopening_stocktake_close_mutation_0038", ""):
+        "7f70f843d60fe72ad54970b12025cb4aa070c1062e5990ef805fa48d575bd593",
+    ("rsc_record_nonopening_stocktake_close_ack_0038", ""):
+        "916552fdb20506bf46dcaaf7909e9730de48f7ef08c46aa647b24425b5214559",
+    ("rsc_guard_nonopening_stocktake_close_ack_0038", ""):
+        "2e344060231cf933822dcb02677257b78584f8940cbc88f11264cd61b9a52782",
+    ("rsc_guard_nonopening_stocktake_close_event_0038", ""):
+        "acf4f3fe8a070ebf860b73de031d23a5f09a644a7a483af12316e69217bd9982",
+}
+
+
+_ROLE_EVIDENCE_SQL = text(
+    """
+SELECT
+    current_user AS role_name,
+    role_row.rolsuper AS is_superuser,
+    role_row.rolcreatedb AS can_create_database,
+    role_row.rolcreaterole AS can_create_role,
+    role_row.rolreplication AS can_replicate,
+    role_row.rolbypassrls AS can_bypass_rls,
+    has_database_privilege(current_user, current_database(), 'CREATE')
+        AS can_create_in_database,
+    has_database_privilege(current_user, current_database(), 'TEMPORARY')
+        AS can_create_temporary_tables,
+    EXISTS (
+        SELECT 1
+          FROM pg_database AS database_acl_row
+          CROSS JOIN LATERAL aclexplode(database_acl_row.datacl)
+            AS database_acl
+         WHERE database_acl_row.datname = current_database()
+           AND database_acl.grantee IN (0, role_row.oid)
+           AND database_acl.is_grantable
+    ) AS has_database_grant_option,
+    (SELECT pg_get_userbyid(database_row.datdba)
+       FROM pg_database AS database_row
+      WHERE database_row.datname = current_database()) AS database_owner,
+    has_schema_privilege(current_user, 'public', 'USAGE')
+        AS can_use_schema,
+    has_schema_privilege(current_user, 'public', 'CREATE')
+        AS can_create_in_schema,
+    EXISTS (
+        SELECT 1
+          FROM pg_namespace AS schema_acl_row
+          CROSS JOIN LATERAL aclexplode(schema_acl_row.nspacl) AS schema_acl
+         WHERE schema_acl_row.nspname = 'public'
+           AND schema_acl.grantee IN (0, role_row.oid)
+           AND schema_acl.is_grantable
+    ) AS has_schema_grant_option,
+    current_schema() AS current_schema_name,
+    current_schemas(FALSE) AS current_schema_path,
+    EXISTS (
+        SELECT 1
+          FROM pg_namespace AS candidate_schema
+         WHERE pg_get_userbyid(candidate_schema.nspowner) = current_user
+            OR has_schema_privilege(
+                current_user, candidate_schema.oid, 'CREATE'
+            )
+            OR (
+                candidate_schema.nspname NOT LIKE 'pg_%'
+                AND candidate_schema.nspname <> 'information_schema'
+                AND candidate_schema.nspname <> 'public'
+                AND has_schema_privilege(
+                    current_user, candidate_schema.oid, 'USAGE'
+                )
+           )
+    ) AS has_non_system_schema_control,
+    (SELECT pg_get_userbyid(namespace_row.nspowner)
+       FROM pg_namespace AS namespace_row
+      WHERE namespace_row.nspname = 'public') AS schema_owner,
+    (SELECT pg_get_userbyid(class_row.relowner)
+       FROM pg_class AS class_row
+       JOIN pg_namespace AS namespace_row
+         ON namespace_row.oid = class_row.relnamespace
+      WHERE namespace_row.nspname = 'public'
+        AND class_row.relname = 'audit_events') AS audit_events_owner,
+    (SELECT pg_get_userbyid(class_row.relowner)
+       FROM pg_class AS class_row
+       JOIN pg_namespace AS namespace_row
+         ON namespace_row.oid = class_row.relnamespace
+      WHERE namespace_row.nspname = 'public'
+        AND class_row.relname = 'audit_chain_heads') AS audit_heads_owner,
+    EXISTS (
+        SELECT 1 FROM pg_roles AS migration_role
+         WHERE migration_role.rolname = :migration_role
+    ) AS migration_role_exists,
+    EXISTS (
+        SELECT 1 FROM pg_auth_members AS membership
+         WHERE membership.member = role_row.oid
+    ) AS has_any_role_membership,
+    EXISTS (
+        SELECT 1 FROM pg_auth_members AS membership
+         WHERE membership.roleid = role_row.oid
+    ) AS has_any_role_members,
+    COALESCE((
+        SELECT migration_role.rolsuper
+          FROM pg_roles AS migration_role
+         WHERE migration_role.rolname = :migration_role
+    ), TRUE) AS migration_role_is_superuser,
+    COALESCE((
+        SELECT migration_role.rolcreatedb
+          FROM pg_roles AS migration_role
+         WHERE migration_role.rolname = :migration_role
+    ), TRUE) AS migration_role_can_create_database,
+    COALESCE((
+        SELECT migration_role.rolcreaterole
+          FROM pg_roles AS migration_role
+         WHERE migration_role.rolname = :migration_role
+    ), TRUE) AS migration_role_can_create_role,
+    COALESCE((
+        SELECT migration_role.rolreplication
+          FROM pg_roles AS migration_role
+         WHERE migration_role.rolname = :migration_role
+    ), TRUE) AS migration_role_can_replicate,
+    COALESCE((
+        SELECT migration_role.rolbypassrls
+          FROM pg_roles AS migration_role
+         WHERE migration_role.rolname = :migration_role
+    ), TRUE) AS migration_role_can_bypass_rls,
+    COALESCE((
+        SELECT EXISTS (
+            SELECT 1 FROM pg_auth_members AS migration_membership
+             WHERE migration_membership.member = migration_role.oid
+        )
+          FROM pg_roles AS migration_role
+         WHERE migration_role.rolname = :migration_role
+    ), TRUE) AS migration_role_has_any_membership,
+    COALESCE((
+        SELECT EXISTS (
+            SELECT 1 FROM pg_auth_members AS migration_members
+             WHERE migration_members.roleid = migration_role.oid
+        )
+          FROM pg_roles AS migration_role
+         WHERE migration_role.rolname = :migration_role
+    ), TRUE) AS migration_role_has_any_members,
+    COALESCE((
+        SELECT pg_has_role(current_user, migration_role.oid, 'MEMBER')
+          FROM pg_roles AS migration_role
+         WHERE migration_role.rolname = :migration_role
+    ), TRUE) AS is_migration_role_member,
+    has_parameter_privilege(
+        current_user, 'session_replication_role', 'SET'
+    ) AS can_disable_replication_guards,
+    current_setting('session_replication_role') AS session_replication_role,
+    has_table_privilege(current_user, 'public.audit_events', 'SELECT')
+        AS audit_can_select,
+    has_table_privilege(current_user, 'public.audit_events', 'INSERT')
+        AS audit_can_insert,
+    has_table_privilege(current_user, 'public.audit_events', 'UPDATE')
+        AS audit_can_update,
+    has_table_privilege(current_user, 'public.audit_events', 'DELETE')
+        AS audit_can_delete,
+    has_table_privilege(current_user, 'public.audit_events', 'TRUNCATE')
+        AS audit_can_truncate,
+    has_table_privilege(current_user, 'public.audit_events', 'TRIGGER')
+        AS audit_can_control_trigger,
+    has_table_privilege(current_user, 'public.audit_chain_heads', 'SELECT')
+        AS heads_can_select,
+    has_table_privilege(current_user, 'public.audit_chain_heads', 'UPDATE')
+        AS heads_can_update,
+    has_table_privilege(current_user, 'public.audit_chain_heads', 'INSERT')
+        AS heads_can_insert,
+    has_table_privilege(current_user, 'public.audit_chain_heads', 'DELETE')
+        AS heads_can_delete,
+    has_table_privilege(current_user, 'public.audit_chain_heads', 'TRUNCATE')
+        AS heads_can_truncate,
+    has_table_privilege(current_user, 'public.audit_chain_heads', 'TRIGGER')
+        AS heads_can_control_trigger,
+    has_table_privilege(current_user, 'public.alembic_version', 'SELECT')
+        AS alembic_can_select,
+    has_table_privilege(current_user, 'public.alembic_version', 'INSERT')
+        AS alembic_can_insert,
+    has_table_privilege(current_user, 'public.alembic_version', 'UPDATE')
+        AS alembic_can_update,
+    has_table_privilege(current_user, 'public.alembic_version', 'DELETE')
+        AS alembic_can_delete
+FROM pg_roles AS role_row
+WHERE role_row.rolname = current_user
+"""
+)
+
+_TABLE_ACL_SQL = text(
+    """
+SELECT
+    class_row.relname AS table_name,
+    pg_get_userbyid(class_row.relowner) AS owner_name,
+    has_table_privilege(current_user, class_row.oid, 'SELECT') AS can_select,
+    has_table_privilege(current_user, class_row.oid, 'INSERT') AS can_insert,
+    has_table_privilege(current_user, class_row.oid, 'UPDATE') AS can_update,
+    has_table_privilege(current_user, class_row.oid, 'DELETE') AS can_delete,
+    has_table_privilege(current_user, class_row.oid, 'TRUNCATE') AS can_truncate,
+    has_table_privilege(current_user, class_row.oid, 'REFERENCES') AS can_reference,
+    has_table_privilege(current_user, class_row.oid, 'TRIGGER') AS can_trigger
+    ,EXISTS (
+        SELECT 1
+          FROM pg_attribute AS attribute_row
+          CROSS JOIN LATERAL aclexplode(attribute_row.attacl) AS column_acl
+         WHERE attribute_row.attrelid = class_row.oid
+           AND attribute_row.attnum > 0
+           AND NOT attribute_row.attisdropped
+           AND column_acl.grantee IN (0, role_row.oid)
+    ) AS has_explicit_runtime_column_acl
+    ,EXISTS (
+        SELECT 1
+          FROM aclexplode(class_row.relacl) AS table_acl
+         WHERE table_acl.grantee = 0
+    ) AS has_public_table_acl
+    ,EXISTS (
+        SELECT 1
+          FROM aclexplode(class_row.relacl) AS table_acl
+         WHERE table_acl.grantee = role_row.oid
+           AND table_acl.is_grantable
+    ) AS has_runtime_grant_option
+FROM pg_class AS class_row
+JOIN pg_namespace AS namespace_row
+  ON namespace_row.oid = class_row.relnamespace
+JOIN pg_roles AS role_row
+  ON role_row.rolname = current_user
+WHERE namespace_row.nspname = 'public'
+  AND class_row.relkind IN ('r', 'p', 'v', 'm', 'f')
+ORDER BY class_row.relname
+"""
+)
+
+_COLUMN_ACL_SQL = text(
+    """
+SELECT
+    class_row.relname AS table_name,
+    attribute_row.attname AS column_name,
+    CASE
+        WHEN column_acl.grantee = 0 THEN 'PUBLIC'
+        ELSE pg_get_userbyid(column_acl.grantee)
+    END AS grantee_name,
+    upper(column_acl.privilege_type) AS privilege_type,
+    column_acl.is_grantable AS is_grantable
+FROM pg_class AS class_row
+JOIN pg_namespace AS namespace_row
+  ON namespace_row.oid = class_row.relnamespace
+JOIN pg_attribute AS attribute_row
+  ON attribute_row.attrelid = class_row.oid
+CROSS JOIN LATERAL aclexplode(attribute_row.attacl) AS column_acl
+WHERE namespace_row.nspname = 'public'
+  AND class_row.relkind IN ('r', 'p', 'v', 'm', 'f')
+  AND attribute_row.attnum > 0
+  AND NOT attribute_row.attisdropped
+ORDER BY class_row.relname, attribute_row.attnum, column_acl.grantee,
+         column_acl.privilege_type
+"""
+)
+
+_SEQUENCE_ACL_SQL = text(
+    """
+SELECT
+    class_row.relname AS sequence_name,
+    pg_get_userbyid(class_row.relowner) AS owner_name,
+    has_sequence_privilege(current_user, class_row.oid, 'USAGE') AS can_use,
+    has_sequence_privilege(current_user, class_row.oid, 'SELECT') AS can_select,
+    has_sequence_privilege(current_user, class_row.oid, 'UPDATE') AS can_update
+FROM pg_class AS class_row
+JOIN pg_namespace AS namespace_row
+  ON namespace_row.oid = class_row.relnamespace
+WHERE namespace_row.nspname = 'public'
+  AND class_row.relkind = 'S'
+ORDER BY class_row.relname
+"""
+)
+
+_FUNCTION_ACL_SQL = text(
+    """
+SELECT
+    function_row.oid AS function_id,
+    function_row.proname AS function_name,
+    oidvectortypes(function_row.proargtypes) AS argument_types,
+    function_row.prokind AS function_kind,
+    format_type(function_row.prorettype, NULL) AS result_type,
+    function_row.proargmodes AS argument_modes,
+    function_row.pronargdefaults AS argument_default_count,
+    function_row.proisstrict AS is_strict,
+    function_row.prosrc AS source_body,
+    function_row.provolatile AS volatility,
+    function_row.prosecdef AS is_security_definer,
+    language_row.lanname AS language_name,
+    function_row.proconfig AS configuration,
+    pg_get_userbyid(function_row.proowner) AS owner_name,
+    has_function_privilege(current_user, function_row.oid, 'EXECUTE')
+        AS can_execute,
+    EXISTS (
+        SELECT 1
+          FROM aclexplode(
+                   coalesce(
+                       function_row.proacl,
+                       acldefault('f', function_row.proowner)
+                   )
+               ) AS function_acl
+          JOIN pg_roles AS runtime_role
+            ON runtime_role.oid = function_acl.grantee
+         WHERE runtime_role.rolname = current_user
+           AND function_acl.privilege_type = 'EXECUTE'
+           AND function_acl.is_grantable
+    ) AS api_execute_is_grantable,
+    (
+        SELECT count(*)
+          FROM aclexplode(
+                   coalesce(
+                       function_row.proacl,
+                       acldefault('f', function_row.proowner)
+                   )
+               ) AS function_acl
+         WHERE function_acl.privilege_type = 'EXECUTE'
+           AND function_acl.grantee <> function_row.proowner
+           AND function_acl.grantee <> 0
+           AND NOT EXISTS (
+                SELECT 1
+                  FROM pg_roles AS runtime_role
+                 WHERE runtime_role.oid = function_acl.grantee
+                   AND runtime_role.rolname = current_user
+           )
+    ) AS unexpected_execute_grantee_count,
+    EXISTS (
+        SELECT 1
+          FROM aclexplode(
+                   coalesce(
+                       function_row.proacl,
+                       acldefault('f', function_row.proowner)
+                   )
+               ) AS function_acl
+         WHERE function_acl.grantee = 0
+           AND function_acl.privilege_type = 'EXECUTE'
+    ) AS public_can_execute,
+    coalesce((
+        SELECT has_function_privilege(
+                   role_row.oid, function_row.oid, 'EXECUTE'
+               )
+          FROM pg_roles AS role_row
+         WHERE role_row.rolname = 'star_oam_edge'
+    ), false) AS edge_can_execute,
+    coalesce((
+        SELECT has_function_privilege(
+                   role_row.oid, function_row.oid, 'EXECUTE'
+               )
+          FROM pg_roles AS role_row
+         WHERE role_row.rolname = 'star_oam_backup'
+    ), false) AS backup_can_execute
+FROM pg_proc AS function_row
+JOIN pg_namespace AS namespace_row
+  ON namespace_row.oid = function_row.pronamespace
+JOIN pg_language AS language_row
+  ON language_row.oid = function_row.prolang
+WHERE namespace_row.nspname = 'public'
+ORDER BY function_row.oid
+"""
+)
+
+_AUDIT_TRIGGER_SQL = text(
+    """
+SELECT
+    trigger_row.tgname AS trigger_name,
+    table_row.relname AS table_name,
+    function_row.proname AS function_name,
+    function_schema.nspname AS function_schema,
+    trigger_row.tgenabled AS enabled,
+    trigger_row.tgtype AS trigger_type,
+    trigger_row.tgconstraint <> 0 AS is_constraint_trigger,
+    trigger_row.tgdeferrable AS is_deferrable,
+    trigger_row.tginitdeferred AS is_initially_deferred,
+    trigger_row.tgqual IS NOT NULL AS has_when_clause,
+    trigger_row.tgattr::text <> '' AS has_column_filter
+FROM pg_trigger AS trigger_row
+JOIN pg_class AS table_row
+  ON table_row.oid = trigger_row.tgrelid
+JOIN pg_namespace AS table_schema
+  ON table_schema.oid = table_row.relnamespace
+JOIN pg_proc AS function_row
+  ON function_row.oid = trigger_row.tgfoid
+JOIN pg_namespace AS function_schema
+  ON function_schema.oid = function_row.pronamespace
+WHERE table_schema.nspname = 'public'
+  AND table_row.relname IN ('audit_events', 'audit_chain_heads')
+  AND NOT trigger_row.tgisinternal
+ORDER BY trigger_row.tgname
+"""
+)
+
+_AUDIT_STREAM_COLUMN_SQL = text(
+    """
+SELECT
+    attribute_row.attname AS column_name,
+    attribute_row.attnotnull AS is_not_null,
+    format_type(attribute_row.atttypid, attribute_row.atttypmod) AS data_type
+FROM pg_attribute AS attribute_row
+JOIN pg_class AS table_row
+  ON table_row.oid = attribute_row.attrelid
+JOIN pg_namespace AS schema_row
+  ON schema_row.oid = table_row.relnamespace
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname = 'audit_events'
+  AND attribute_row.attname IN ('stream_key', 'stream_version')
+  AND attribute_row.attnum > 0
+  AND NOT attribute_row.attisdropped
+ORDER BY attribute_row.attname
+"""
+)
+
+_AUDIT_STREAM_CONSTRAINT_SQL = text(
+    """
+SELECT
+    constraint_row.conname AS constraint_name,
+    constraint_row.contype AS constraint_type,
+    constraint_row.convalidated AS is_validated,
+    constraint_row.condeferrable AS is_deferrable,
+    constraint_row.condeferred AS is_initially_deferred,
+    pg_get_constraintdef(constraint_row.oid, TRUE) AS definition,
+    COALESCE((
+        SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+          FROM unnest(constraint_row.conkey) WITH ORDINALITY AS key_row(attnum, ordinality)
+          JOIN pg_attribute AS attribute_row
+            ON attribute_row.attrelid = constraint_row.conrelid
+           AND attribute_row.attnum = key_row.attnum
+    ), ARRAY[]::name[]) AS constrained_columns,
+    referenced_table.relname AS referenced_table,
+    COALESCE((
+        SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+          FROM unnest(constraint_row.confkey) WITH ORDINALITY AS key_row(attnum, ordinality)
+          JOIN pg_attribute AS attribute_row
+            ON attribute_row.attrelid = constraint_row.confrelid
+           AND attribute_row.attnum = key_row.attnum
+    ), ARRAY[]::name[]) AS referenced_columns,
+    constraint_row.confupdtype AS update_action,
+    constraint_row.confdeltype AS delete_action
+FROM pg_constraint AS constraint_row
+JOIN pg_class AS table_row
+  ON table_row.oid = constraint_row.conrelid
+JOIN pg_namespace AS schema_row
+  ON schema_row.oid = table_row.relnamespace
+LEFT JOIN pg_class AS referenced_table
+  ON referenced_table.oid = constraint_row.confrelid
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname = 'audit_events'
+  AND constraint_row.conname IN (
+      'ck_audit_events_stream_key_0017',
+      'ck_audit_events_stream_version_0017',
+      'uq_audit_events_stream_version_0017',
+      'fk_audit_events_stream_key_0017'
+  )
+ORDER BY constraint_row.conname
+"""
+)
+
+_STOCKTAKE_RECOUNT_COLUMN_SQL = text(
+    """
+SELECT
+    table_row.relname AS table_name,
+    table_row.relkind AS table_kind,
+    attribute_row.attname AS column_name,
+    attribute_row.attnotnull AS is_not_null,
+    format_type(attribute_row.atttypid, attribute_row.atttypmod) AS data_type
+FROM pg_attribute AS attribute_row
+JOIN pg_class AS table_row
+  ON table_row.oid = attribute_row.attrelid
+JOIN pg_namespace AS schema_row
+  ON schema_row.oid = table_row.relnamespace
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname IN (
+      'stocktake_rounds',
+      'stocktake_recount_cases',
+      'stocktake_recount_scope_assignments'
+  )
+  AND attribute_row.attnum > 0
+  AND NOT attribute_row.attisdropped
+ORDER BY table_row.relname, attribute_row.attnum
+"""
+)
+
+_STOCKTAKE_RECOUNT_CONSTRAINT_SQL = text(
+    """
+SELECT
+    constraint_row.conname AS constraint_name,
+    table_row.relname AS table_name,
+    constraint_row.contype AS constraint_type,
+    constraint_row.convalidated AS is_validated,
+    constraint_row.condeferrable AS is_deferrable,
+    constraint_row.condeferred AS is_initially_deferred,
+    pg_get_constraintdef(constraint_row.oid, TRUE) AS definition,
+    COALESCE((
+        SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+          FROM unnest(constraint_row.conkey) WITH ORDINALITY
+            AS key_row(attnum, ordinality)
+          JOIN pg_attribute AS attribute_row
+            ON attribute_row.attrelid = constraint_row.conrelid
+           AND attribute_row.attnum = key_row.attnum
+    ), ARRAY[]::name[]) AS constrained_columns,
+    referenced_table.relname AS referenced_table,
+    COALESCE((
+        SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+          FROM unnest(constraint_row.confkey) WITH ORDINALITY
+            AS key_row(attnum, ordinality)
+          JOIN pg_attribute AS attribute_row
+            ON attribute_row.attrelid = constraint_row.confrelid
+           AND attribute_row.attnum = key_row.attnum
+    ), ARRAY[]::name[]) AS referenced_columns,
+    constraint_row.confupdtype AS update_action,
+    constraint_row.confdeltype AS delete_action
+FROM pg_constraint AS constraint_row
+JOIN pg_class AS table_row
+  ON table_row.oid = constraint_row.conrelid
+JOIN pg_namespace AS schema_row
+  ON schema_row.oid = table_row.relnamespace
+LEFT JOIN pg_class AS referenced_table
+  ON referenced_table.oid = constraint_row.confrelid
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname IN (
+      'stocktake_rounds',
+      'stocktake_recount_cases',
+      'stocktake_recount_scope_assignments'
+  )
+ORDER BY constraint_row.conname
+"""
+)
+
+_STOCKTAKE_RECOUNT_INDEX_SQL = text(
+    """
+SELECT
+    index_row.relname AS index_name,
+    table_row.relname AS table_name,
+    access_method.amname AS access_method,
+    index_metadata.indisunique AS is_unique,
+    index_metadata.indisvalid AS is_valid,
+    index_metadata.indisready AS is_ready,
+    index_metadata.indislive AS is_live,
+    ARRAY(
+        SELECT pg_get_indexdef(
+            index_metadata.indexrelid,
+            key_position,
+            TRUE
+        )
+          FROM generate_series(
+              1,
+              index_metadata.indnkeyatts
+          ) AS key_position
+         ORDER BY key_position
+    ) AS key_columns,
+    pg_get_expr(index_metadata.indpred, index_metadata.indrelid, TRUE)
+        AS predicate
+FROM pg_index AS index_metadata
+JOIN pg_class AS index_row
+  ON index_row.oid = index_metadata.indexrelid
+JOIN pg_class AS table_row
+  ON table_row.oid = index_metadata.indrelid
+JOIN pg_namespace AS schema_row
+  ON schema_row.oid = table_row.relnamespace
+JOIN pg_am AS access_method
+  ON access_method.oid = index_row.relam
+WHERE schema_row.nspname = 'public'
+  AND index_row.relname IN (
+      'uq_stocktake_rounds_recount_case_0018',
+      'uq_stocktake_rounds_one_counting_0018',
+      'uq_stocktake_recount_cases_source_round_0018',
+      'uq_stocktake_recount_cases_trigger_review_0018',
+      'uq_stocktake_recount_cases_task_next_round_0018',
+      'uq_stocktake_recount_cases_idempotency_0018',
+      'uq_stocktake_recount_scope_assignments_case_scope_0018'
+  )
+ORDER BY index_row.relname
+"""
+)
+
+_STOCKTAKE_RECOUNT_TRIGGER_NAME_LITERALS = ",\n      ".join(
+    f"'{name}'"
+    for name in sorted(EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS)
+)
+_STOCKTAKE_SENSITIVE_TRIGGER_SQL = text(
+    """
+SELECT
+    trigger_row.tgname AS trigger_name,
+    table_row.relname AS table_name,
+    function_row.proname AS function_name,
+    function_schema.nspname AS function_schema,
+    trigger_row.tgenabled AS enabled,
+    trigger_row.tgtype AS trigger_type,
+    trigger_row.tgconstraint <> 0 AS is_constraint_trigger,
+    trigger_row.tgdeferrable AS is_deferrable,
+    trigger_row.tginitdeferred AS is_initially_deferred,
+    trigger_row.tgqual IS NOT NULL AS has_when_clause,
+    trigger_row.tgattr::text <> '' AS has_column_filter
+FROM pg_trigger AS trigger_row
+JOIN pg_class AS table_row
+  ON table_row.oid = trigger_row.tgrelid
+JOIN pg_namespace AS table_schema
+  ON table_schema.oid = table_row.relnamespace
+JOIN pg_proc AS function_row
+  ON function_row.oid = trigger_row.tgfoid
+JOIN pg_namespace AS function_schema
+  ON function_schema.oid = function_row.pronamespace
+WHERE table_schema.nspname = 'public'
+  AND table_row.relname IN (
+      'stock_locations',
+      'stocktake_count_lines',
+      'stocktake_count_observations',
+      'stocktake_scope_count_completions',
+      'stocktake_recount_scope_assignments'
+  )
+  AND NOT trigger_row.tgisinternal
+ORDER BY table_row.relname, trigger_row.tgname
+"""
+)
+_STOCKTAKE_RECOUNT_TRIGGER_SQL = text(
+    f"""
+SELECT
+    trigger_row.tgname AS trigger_name,
+    table_row.relname AS table_name,
+    function_row.proname AS function_name,
+    function_schema.nspname AS function_schema,
+    trigger_row.tgenabled AS enabled,
+    trigger_row.tgtype AS trigger_type,
+    trigger_row.tgconstraint <> 0 AS is_constraint_trigger,
+    trigger_row.tgdeferrable AS is_deferrable,
+    trigger_row.tginitdeferred AS is_initially_deferred,
+    trigger_row.tgqual IS NOT NULL AS has_when_clause,
+    trigger_row.tgattr::text <> '' AS has_column_filter
+FROM pg_trigger AS trigger_row
+JOIN pg_class AS table_row
+  ON table_row.oid = trigger_row.tgrelid
+JOIN pg_namespace AS table_schema
+  ON table_schema.oid = table_row.relnamespace
+JOIN pg_proc AS function_row
+  ON function_row.oid = trigger_row.tgfoid
+JOIN pg_namespace AS function_schema
+  ON function_schema.oid = function_row.pronamespace
+WHERE table_schema.nspname = 'public'
+  AND table_row.relname IN (
+      'stocktake_tasks',
+      'stocktake_rounds',
+      'stocktake_recount_cases'
+  )
+  AND trigger_row.tgname IN (
+      {_STOCKTAKE_RECOUNT_TRIGGER_NAME_LITERALS}
+  )
+  AND NOT trigger_row.tgisinternal
+ORDER BY trigger_row.tgname
+"""
+)
+
+_STOCKTAKE_SCOPE_TRIGGER_SQL = text(
+    """
+SELECT
+    trigger_row.tgname AS trigger_name,
+    table_row.relname AS table_name,
+    function_row.proname AS function_name,
+    function_schema.nspname AS function_schema,
+    trigger_row.tgenabled AS enabled,
+    trigger_row.tgtype AS trigger_type,
+    trigger_row.tgconstraint <> 0 AS is_constraint_trigger,
+    trigger_row.tgdeferrable AS is_deferrable,
+    trigger_row.tginitdeferred AS is_initially_deferred,
+    trigger_row.tgqual IS NOT NULL AS has_when_clause,
+    trigger_row.tgattr::text <> '' AS has_column_filter
+FROM pg_trigger AS trigger_row
+JOIN pg_class AS table_row
+  ON table_row.oid = trigger_row.tgrelid
+JOIN pg_namespace AS table_schema
+  ON table_schema.oid = table_row.relnamespace
+JOIN pg_proc AS function_row
+  ON function_row.oid = trigger_row.tgfoid
+JOIN pg_namespace AS function_schema
+  ON function_schema.oid = function_row.pronamespace
+WHERE table_schema.nspname = 'public'
+  AND table_row.relname = 'stocktake_scopes'
+  AND NOT trigger_row.tgisinternal
+ORDER BY trigger_row.tgname
+"""
+)
+
+_OPENING_TERMINAL_TRIGGER_NAME_LITERALS = ",\n      ".join(
+    f"'{name}'" for name in sorted(EXPECTED_OPENING_TERMINAL_TRIGGERS)
+)
+
+_RECONCILIATION_TRIGGER_NAME_LITERALS = ",\n      ".join(
+    f"'{name}'" for name in sorted(EXPECTED_RECONCILIATION_TRIGGERS)
+)
+_RECONCILIATION_TRIGGER_SQL = text(
+    """
+SELECT
+    trigger_row.tgname AS trigger_name,
+    table_row.relname AS table_name,
+    function_row.proname AS function_name,
+    function_schema.nspname AS function_schema,
+    trigger_row.tgenabled AS enabled,
+    trigger_row.tgtype AS trigger_type,
+    trigger_row.tgconstraint <> 0 AS is_constraint_trigger,
+    trigger_row.tgdeferrable AS is_deferrable,
+    trigger_row.tginitdeferred AS is_initially_deferred,
+    trigger_row.tgqual IS NOT NULL AS has_when_clause,
+    trigger_row.tgattr::text <> '' AS has_column_filter
+FROM pg_trigger AS trigger_row
+JOIN pg_class AS table_row
+  ON table_row.oid = trigger_row.tgrelid
+JOIN pg_namespace AS table_schema
+  ON table_schema.oid = table_row.relnamespace
+JOIN pg_proc AS function_row
+  ON function_row.oid = trigger_row.tgfoid
+JOIN pg_namespace AS function_schema
+  ON function_schema.oid = function_row.pronamespace
+WHERE table_schema.nspname = 'public'
+  AND trigger_row.tgname LIKE '%reconciliation%0026'
+  AND NOT trigger_row.tgisinternal
+ORDER BY trigger_row.tgname
+"""
+)
+_RECONCILIATION_CONSTRAINT_SQL = text(
+    """
+SELECT
+    constraint_row.conname AS constraint_name,
+    table_row.relname AS table_name,
+    constraint_row.contype AS constraint_type,
+    constraint_row.convalidated AS is_validated,
+    constraint_row.condeferrable AS is_deferrable,
+    constraint_row.condeferred AS is_initially_deferred,
+    pg_get_constraintdef(constraint_row.oid, TRUE) AS definition,
+    COALESCE((
+        SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+          FROM unnest(constraint_row.conkey) WITH ORDINALITY
+            AS key_row(attnum, ordinality)
+          JOIN pg_attribute AS attribute_row
+            ON attribute_row.attrelid = constraint_row.conrelid
+           AND attribute_row.attnum = key_row.attnum
+    ), ARRAY[]::name[]) AS constrained_columns,
+    referenced_table.relname AS referenced_table,
+    COALESCE((
+        SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+          FROM unnest(constraint_row.confkey) WITH ORDINALITY
+            AS key_row(attnum, ordinality)
+          JOIN pg_attribute AS attribute_row
+            ON attribute_row.attrelid = constraint_row.confrelid
+           AND attribute_row.attnum = key_row.attnum
+    ), ARRAY[]::name[]) AS referenced_columns,
+    constraint_row.confupdtype AS update_action,
+    constraint_row.confdeltype AS delete_action
+FROM pg_constraint AS constraint_row
+JOIN pg_class AS table_row ON table_row.oid = constraint_row.conrelid
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+LEFT JOIN pg_class AS referenced_table
+  ON referenced_table.oid = constraint_row.confrelid
+WHERE schema_row.nspname = 'public'
+  AND constraint_row.conname IN (
+      'fk_reconciliation_commands_consumption',
+      'fk_opening_control_reconciliation_runs_run',
+      'fk_opening_control_reconciliation_runs_create_command',
+      'fk_opening_control_reconciliation_items_item',
+      'uq_reconciliation_commands_target',
+      'uq_reconciliation_commands_id_run',
+      'uq_opening_control_reconciliation_consumptions_command',
+      'uq_opening_control_reconciliation_consumptions_target',
+      'ck_reconciliation_commands_target_version',
+      'ck_reconciliation_commands_operation',
+      'ck_reconciliation_commands_request_reference',
+      'ck_reconciliation_commands_hashes',
+      'ck_opening_control_reconciliation_runs_manifest',
+      'ck_opening_control_reconciliation_items_evidence_snapshot'
+  )
+ORDER BY constraint_row.conname
+"""
+)
+_RECONCILIATION_PARTIAL_INDEX_SQL = text(
+    """
+SELECT
+    index_row.relname AS index_name,
+    table_row.relname AS table_name,
+    access_method.amname AS access_method,
+    index_metadata.indisunique AS is_unique,
+    index_metadata.indisvalid AS is_valid,
+    index_metadata.indisready AS is_ready,
+    index_metadata.indislive AS is_live,
+    ARRAY(
+        SELECT pg_get_indexdef(index_metadata.indexrelid, key_position, TRUE)
+          FROM generate_series(1, index_metadata.indnkeyatts) AS key_position
+         ORDER BY key_position
+    ) AS key_columns,
+    pg_get_expr(index_metadata.indpred, index_metadata.indrelid, TRUE)
+        AS predicate
+FROM pg_index AS index_metadata
+JOIN pg_class AS index_row ON index_row.oid = index_metadata.indexrelid
+JOIN pg_class AS table_row ON table_row.oid = index_metadata.indrelid
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+JOIN pg_am AS access_method ON access_method.oid = index_row.relam
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname = 'reconciliation_commands'
+  AND index_metadata.indpred IS NOT NULL
+ORDER BY index_row.relname
+"""
+)
+_OPENING_TERMINAL_TRIGGER_SQL = text(
+    f"""
+SELECT
+    trigger_row.tgname AS trigger_name,
+    table_row.relname AS table_name,
+    function_row.proname AS function_name,
+    function_schema.nspname AS function_schema,
+    trigger_row.tgenabled AS enabled,
+    trigger_row.tgtype AS trigger_type,
+    trigger_row.tgconstraint <> 0 AS is_constraint_trigger,
+    trigger_row.tgdeferrable AS is_deferrable,
+    trigger_row.tginitdeferred AS is_initially_deferred,
+    trigger_row.tgqual IS NOT NULL AS has_when_clause,
+    trigger_row.tgattr::text <> '' AS has_column_filter
+FROM pg_trigger AS trigger_row
+JOIN pg_class AS table_row
+  ON table_row.oid = trigger_row.tgrelid
+JOIN pg_namespace AS table_schema
+  ON table_schema.oid = table_row.relnamespace
+JOIN pg_proc AS function_row
+  ON function_row.oid = trigger_row.tgfoid
+JOIN pg_namespace AS function_schema
+  ON function_schema.oid = function_row.pronamespace
+WHERE table_schema.nspname = 'public'
+  AND trigger_row.tgname IN (
+      {_OPENING_TERMINAL_TRIGGER_NAME_LITERALS}
+  )
+  AND NOT trigger_row.tgisinternal
+ORDER BY trigger_row.tgname
+"""
+)
+
+_OPENING_TERMINAL_INDEX_SQL = text(
+    f"""
+SELECT
+    index_row.relname AS index_name,
+    table_row.relname AS table_name,
+    access_method.amname AS access_method,
+    index_metadata.indisunique AS is_unique,
+    index_metadata.indisvalid AS is_valid,
+    index_metadata.indisready AS is_ready,
+    index_metadata.indislive AS is_live,
+    ARRAY(
+        SELECT pg_get_indexdef(
+            index_metadata.indexrelid,
+            key_position,
+            TRUE
+        )
+          FROM generate_series(1, index_metadata.indnkeyatts) AS key_position
+         ORDER BY key_position
+    ) AS key_columns,
+    pg_get_expr(index_metadata.indpred, index_metadata.indrelid, TRUE)
+        AS predicate
+FROM pg_index AS index_metadata
+JOIN pg_class AS index_row
+  ON index_row.oid = index_metadata.indexrelid
+JOIN pg_class AS table_row
+  ON table_row.oid = index_metadata.indrelid
+JOIN pg_namespace AS schema_row
+  ON schema_row.oid = table_row.relnamespace
+JOIN pg_am AS access_method
+  ON access_method.oid = index_row.relam
+WHERE schema_row.nspname = 'public'
+  AND index_row.relname = '{EXPECTED_OPENING_TERMINAL_INDEX}'
+"""
+)
+
+_FORMAL_FILE_TRIGGER_NAME_LITERALS = ",\n      ".join(
+    f"'{name}'" for name in sorted(EXPECTED_FORMAL_FILE_TRIGGERS)
+)
+_FORMAL_FILE_TRIGGER_SQL = text(
+    f"""
+SELECT
+    trigger_row.tgname AS trigger_name,
+    table_row.relname AS table_name,
+    function_row.proname AS function_name,
+    function_schema.nspname AS function_schema,
+    trigger_row.tgenabled AS enabled,
+    trigger_row.tgtype AS trigger_type,
+    trigger_row.tgconstraint <> 0 AS is_constraint_trigger,
+    trigger_row.tgdeferrable AS is_deferrable,
+    trigger_row.tginitdeferred AS is_initially_deferred,
+    trigger_row.tgqual IS NOT NULL AS has_when_clause,
+    trigger_row.tgattr::text <> '' AS has_column_filter
+FROM pg_trigger AS trigger_row
+JOIN pg_class AS table_row ON table_row.oid = trigger_row.tgrelid
+JOIN pg_namespace AS table_schema ON table_schema.oid = table_row.relnamespace
+JOIN pg_proc AS function_row ON function_row.oid = trigger_row.tgfoid
+JOIN pg_namespace AS function_schema
+  ON function_schema.oid = function_row.pronamespace
+WHERE table_schema.nspname = 'public'
+  AND trigger_row.tgname IN ({_FORMAL_FILE_TRIGGER_NAME_LITERALS})
+  AND NOT trigger_row.tgisinternal
+ORDER BY trigger_row.tgname
+"""
+)
+
+_FORMAL_FILE_INDEX_NAME_LITERALS = ",\n      ".join(
+    f"'{name}'" for name in sorted(EXPECTED_FORMAL_FILE_INDEXES)
+)
+_FORMAL_FILE_INDEX_SQL = text(
+    f"""
+SELECT
+    index_row.relname AS index_name,
+    table_row.relname AS table_name,
+    access_method.amname AS access_method,
+    index_metadata.indisunique AS is_unique,
+    index_metadata.indisvalid AS is_valid,
+    index_metadata.indisready AS is_ready,
+    index_metadata.indislive AS is_live,
+    ARRAY(
+        SELECT pg_get_indexdef(index_metadata.indexrelid, key_position, TRUE)
+          FROM generate_series(1, index_metadata.indnkeyatts) AS key_position
+         ORDER BY key_position
+    ) AS key_columns,
+    pg_get_expr(index_metadata.indpred, index_metadata.indrelid, TRUE)
+        AS predicate
+FROM pg_index AS index_metadata
+JOIN pg_class AS index_row ON index_row.oid = index_metadata.indexrelid
+JOIN pg_class AS table_row ON table_row.oid = index_metadata.indrelid
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+JOIN pg_am AS access_method ON access_method.oid = index_row.relam
+WHERE schema_row.nspname = 'public'
+  AND index_row.relname IN ({_FORMAL_FILE_INDEX_NAME_LITERALS})
+ORDER BY index_row.relname
+"""
+)
+
+_MATERIAL_REQUEST_CANCELLATION_TRIGGER_NAME_LITERALS = ",\n      ".join(
+    f"'{name}'"
+    for name in sorted(EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS)
+)
+_MATERIAL_REQUEST_CANCELLATION_TRIGGER_SQL = text(
+    f"""
+SELECT
+    trigger_row.tgname AS trigger_name,
+    table_row.relname AS table_name,
+    function_row.proname AS function_name,
+    function_schema.nspname AS function_schema,
+    trigger_row.tgenabled AS enabled,
+    trigger_row.tgtype AS trigger_type,
+    trigger_row.tgconstraint <> 0 AS is_constraint_trigger,
+    trigger_row.tgdeferrable AS is_deferrable,
+    trigger_row.tginitdeferred AS is_initially_deferred,
+    trigger_row.tgqual IS NOT NULL AS has_when_clause,
+    trigger_row.tgattr::text <> '' AS has_column_filter
+FROM pg_trigger AS trigger_row
+JOIN pg_class AS table_row ON table_row.oid = trigger_row.tgrelid
+JOIN pg_namespace AS table_schema ON table_schema.oid = table_row.relnamespace
+JOIN pg_proc AS function_row ON function_row.oid = trigger_row.tgfoid
+JOIN pg_namespace AS function_schema
+  ON function_schema.oid = function_row.pronamespace
+WHERE table_schema.nspname = 'public'
+  AND trigger_row.tgname IN (
+      {_MATERIAL_REQUEST_CANCELLATION_TRIGGER_NAME_LITERALS}
+  )
+  AND NOT trigger_row.tgisinternal
+ORDER BY trigger_row.tgname
+"""
+)
+
+_MATERIAL_REQUEST_CANCELLATION_INDEX_NAME_LITERALS = ",\n      ".join(
+    f"'{name}'"
+    for name in sorted(EXPECTED_MATERIAL_REQUEST_CANCELLATION_INDEXES)
+)
+_MATERIAL_REQUEST_CANCELLATION_INDEX_SQL = text(
+    f"""
+SELECT
+    index_row.relname AS index_name,
+    table_row.relname AS table_name,
+    access_method.amname AS access_method,
+    index_metadata.indisunique AS is_unique,
+    index_metadata.indisvalid AS is_valid,
+    index_metadata.indisready AS is_ready,
+    index_metadata.indislive AS is_live,
+    ARRAY(
+        SELECT pg_get_indexdef(index_metadata.indexrelid, key_position, TRUE)
+          FROM generate_series(1, index_metadata.indnkeyatts) AS key_position
+         ORDER BY key_position
+    ) AS key_columns,
+    pg_get_expr(index_metadata.indpred, index_metadata.indrelid, TRUE)
+        AS predicate
+FROM pg_index AS index_metadata
+JOIN pg_class AS index_row ON index_row.oid = index_metadata.indexrelid
+JOIN pg_class AS table_row ON table_row.oid = index_metadata.indrelid
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+JOIN pg_am AS access_method ON access_method.oid = index_row.relam
+WHERE schema_row.nspname = 'public'
+  AND index_row.relname IN (
+      {_MATERIAL_REQUEST_CANCELLATION_INDEX_NAME_LITERALS}
+  )
+ORDER BY index_row.relname
+"""
+)
+
+_NONOPENING_STOCKTAKE_CLOSE_FACT_TABLE_LITERALS = ",\n      ".join(
+    f"'{name}'" for name in sorted(_STOCKTAKE_CLOSE_FACT_TABLES)
+)
+_NONOPENING_STOCKTAKE_CLOSE_TRIGGER_SQL = text(
+    f"""
+SELECT
+    trigger_row.tgname AS trigger_name,
+    table_row.relname AS table_name,
+    function_row.proname AS function_name,
+    function_schema.nspname AS function_schema,
+    trigger_row.tgenabled AS enabled,
+    trigger_row.tgtype AS trigger_type,
+    trigger_row.tgconstraint <> 0 AS is_constraint_trigger,
+    trigger_row.tgdeferrable AS is_deferrable,
+    trigger_row.tginitdeferred AS is_initially_deferred,
+    trigger_row.tgqual IS NOT NULL AS has_when_clause,
+    trigger_row.tgattr::text <> '' AS has_column_filter
+FROM pg_trigger AS trigger_row
+JOIN pg_class AS table_row ON table_row.oid = trigger_row.tgrelid
+JOIN pg_namespace AS table_schema ON table_schema.oid = table_row.relnamespace
+JOIN pg_proc AS function_row ON function_row.oid = trigger_row.tgfoid
+JOIN pg_namespace AS function_schema
+  ON function_schema.oid = function_row.pronamespace
+WHERE table_schema.nspname = 'public'
+  AND (
+      table_row.relname IN (
+          {_NONOPENING_STOCKTAKE_CLOSE_FACT_TABLE_LITERALS}
+      )
+      OR trigger_row.tgname LIKE '%0038'
+  )
+  AND NOT trigger_row.tgisinternal
+ORDER BY trigger_row.tgname
+"""
+)
+
+_NONOPENING_STOCKTAKE_CLOSE_INDEX_NAME_LITERALS = ",\n      ".join(
+    f"'{name}'"
+    for name in sorted(EXPECTED_NONOPENING_STOCKTAKE_CLOSE_INDEXES)
+)
+_NONOPENING_STOCKTAKE_CLOSE_INDEX_SQL = text(
+    f"""
+SELECT
+    index_row.relname AS index_name,
+    table_row.relname AS table_name,
+    access_method.amname AS access_method,
+    index_metadata.indisunique AS is_unique,
+    index_metadata.indisvalid AS is_valid,
+    index_metadata.indisready AS is_ready,
+    index_metadata.indislive AS is_live,
+    ARRAY(
+        SELECT pg_get_indexdef(index_metadata.indexrelid, key_position, TRUE)
+          FROM generate_series(1, index_metadata.indnkeyatts) AS key_position
+         ORDER BY key_position
+    ) AS key_columns,
+    pg_get_expr(index_metadata.indpred, index_metadata.indrelid, TRUE)
+        AS predicate
+FROM pg_index AS index_metadata
+JOIN pg_class AS index_row ON index_row.oid = index_metadata.indexrelid
+JOIN pg_class AS table_row ON table_row.oid = index_metadata.indrelid
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+JOIN pg_am AS access_method ON access_method.oid = index_row.relam
+WHERE schema_row.nspname = 'public'
+  AND index_row.relname IN (
+      {_NONOPENING_STOCKTAKE_CLOSE_INDEX_NAME_LITERALS}
+  )
+ORDER BY index_row.relname
+"""
+)
+
+_NONOPENING_STOCKTAKE_CLOSE_CONSTRAINT_NAME_LITERALS = ",\n      ".join(
+    f"'{name}'"
+    for name in sorted(EXPECTED_NONOPENING_STOCKTAKE_CLOSE_CONSTRAINTS)
+)
+_NONOPENING_STOCKTAKE_CLOSE_CONSTRAINT_SQL = text(
+    f"""
+SELECT
+    constraint_row.conname AS constraint_name,
+    table_row.relname AS table_name,
+    constraint_row.contype AS constraint_type,
+    constraint_row.convalidated AS is_validated,
+    constraint_row.condeferrable AS is_deferrable,
+    constraint_row.condeferred AS is_initially_deferred,
+    COALESCE((
+        SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+          FROM unnest(constraint_row.conkey) WITH ORDINALITY
+            AS key_row(attnum, ordinality)
+          JOIN pg_attribute AS attribute_row
+            ON attribute_row.attrelid = constraint_row.conrelid
+           AND attribute_row.attnum = key_row.attnum
+    ), ARRAY[]::name[]) AS constrained_columns,
+    referenced_table.relname AS referenced_table,
+    COALESCE((
+        SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+          FROM unnest(constraint_row.confkey) WITH ORDINALITY
+            AS key_row(attnum, ordinality)
+          JOIN pg_attribute AS attribute_row
+            ON attribute_row.attrelid = constraint_row.confrelid
+           AND attribute_row.attnum = key_row.attnum
+    ), ARRAY[]::name[]) AS referenced_columns,
+    constraint_row.confupdtype AS update_action,
+    constraint_row.confdeltype AS delete_action
+FROM pg_constraint AS constraint_row
+JOIN pg_class AS table_row ON table_row.oid = constraint_row.conrelid
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+LEFT JOIN pg_class AS referenced_table
+  ON referenced_table.oid = constraint_row.confrelid
+WHERE schema_row.nspname = 'public'
+  AND constraint_row.conname IN (
+      {_NONOPENING_STOCKTAKE_CLOSE_CONSTRAINT_NAME_LITERALS}
+  )
+ORDER BY constraint_row.conname
+"""
+)
+
+_AUDIT_HEAD_SQL = text(
+    """
+SELECT
+    head.id,
+    head.stream_key,
+    head.version,
+    head.last_event_id,
+    head.last_hash,
+    event.id AS bound_event_id,
+    event.event_hash AS bound_event_hash
+FROM audit_chain_heads AS head
+LEFT JOIN audit_events AS event
+  ON event.id = head.last_event_id
+ AND event.event_hash = head.last_hash
+ORDER BY head.stream_key
+"""
+)
+
+_AUDIT_EVENT_SQL = text(
+    """
+SELECT
+    event.id,
+    event.stream_key,
+    event.stream_version,
+    event.actor_user_id,
+    event.action,
+    event.aggregate_type,
+    event.aggregate_id,
+    event.before_jsonb,
+    event.after_jsonb,
+    event.request_id,
+    event.previous_hash,
+    event.event_hash,
+    event.occurred_at
+FROM audit_events AS event
+ORDER BY event.id
+"""
+)
+
+
+def validate_production_database_security(
+    engine: Engine,
+    *,
+    expected_runtime_role: str,
+    expected_migration_role: str,
+) -> None:
+    """Read PostgreSQL catalogs and reject any over-privileged API identity."""
+
+    try:
+        with engine.connect() as raw_connection:
+            # Every catalog and audit-graph query must observe one database
+            # snapshot.  Another healthy API replica may append an event while
+            # this instance starts; READ COMMITTED could otherwise mix the old
+            # event set with the new head (or the reverse) and fail spuriously.
+            connection = raw_connection.execution_options(
+                isolation_level="REPEATABLE READ"
+            )
+            evidence = connection.execute(
+                _ROLE_EVIDENCE_SQL,
+                {"migration_role": expected_migration_role},
+            ).mappings().one_or_none()
+            table_acl = connection.execute(_TABLE_ACL_SQL).mappings().all()
+            column_acl = connection.execute(_COLUMN_ACL_SQL).mappings().all()
+            sequence_acl = connection.execute(_SEQUENCE_ACL_SQL).mappings().all()
+            function_acl = connection.execute(_FUNCTION_ACL_SQL).mappings().all()
+            audit_triggers = connection.execute(_AUDIT_TRIGGER_SQL).mappings().all()
+            audit_stream_columns = connection.execute(
+                _AUDIT_STREAM_COLUMN_SQL
+            ).mappings().all()
+            audit_stream_constraints = connection.execute(
+                _AUDIT_STREAM_CONSTRAINT_SQL
+            ).mappings().all()
+            stocktake_recount_columns = connection.execute(
+                _STOCKTAKE_RECOUNT_COLUMN_SQL
+            ).mappings().all()
+            stocktake_recount_constraints = connection.execute(
+                _STOCKTAKE_RECOUNT_CONSTRAINT_SQL
+            ).mappings().all()
+            stocktake_recount_indexes = connection.execute(
+                _STOCKTAKE_RECOUNT_INDEX_SQL
+            ).mappings().all()
+            stocktake_sensitive_triggers = connection.execute(
+                _STOCKTAKE_SENSITIVE_TRIGGER_SQL
+            ).mappings().all()
+            stocktake_recount_graph_triggers = connection.execute(
+                _STOCKTAKE_RECOUNT_TRIGGER_SQL
+            ).mappings().all()
+            stocktake_scope_triggers = connection.execute(
+                _STOCKTAKE_SCOPE_TRIGGER_SQL
+            ).mappings().all()
+            reconciliation_triggers = connection.execute(
+                _RECONCILIATION_TRIGGER_SQL
+            ).mappings().all()
+            reconciliation_constraints = connection.execute(
+                _RECONCILIATION_CONSTRAINT_SQL
+            ).mappings().all()
+            reconciliation_partial_indexes = connection.execute(
+                _RECONCILIATION_PARTIAL_INDEX_SQL
+            ).mappings().all()
+            opening_terminal_triggers = connection.execute(
+                _OPENING_TERMINAL_TRIGGER_SQL
+            ).mappings().all()
+            opening_terminal_indexes = connection.execute(
+                _OPENING_TERMINAL_INDEX_SQL
+            ).mappings().all()
+            formal_file_triggers = connection.execute(
+                _FORMAL_FILE_TRIGGER_SQL
+            ).mappings().all()
+            formal_file_indexes = connection.execute(
+                _FORMAL_FILE_INDEX_SQL
+            ).mappings().all()
+            material_request_cancellation_triggers = connection.execute(
+                _MATERIAL_REQUEST_CANCELLATION_TRIGGER_SQL
+            ).mappings().all()
+            material_request_cancellation_indexes = connection.execute(
+                _MATERIAL_REQUEST_CANCELLATION_INDEX_SQL
+            ).mappings().all()
+            nonopening_stocktake_close_triggers = connection.execute(
+                _NONOPENING_STOCKTAKE_CLOSE_TRIGGER_SQL
+            ).mappings().all()
+            nonopening_stocktake_close_indexes = connection.execute(
+                _NONOPENING_STOCKTAKE_CLOSE_INDEX_SQL
+            ).mappings().all()
+            nonopening_stocktake_close_constraints = connection.execute(
+                _NONOPENING_STOCKTAKE_CLOSE_CONSTRAINT_SQL
+            ).mappings().all()
+            audit_heads = connection.execute(_AUDIT_HEAD_SQL).mappings().all()
+            audit_events = connection.execute(_AUDIT_EVENT_SQL).mappings().all()
+    except Exception:
+        raise DatabaseSecurityBoundaryError(
+            "production database security evidence could not be verified"
+        ) from None
+    if evidence is None:
+        raise DatabaseSecurityBoundaryError(
+            "production database runtime role is not present"
+        )
+    _assert_production_database_evidence(
+        evidence,
+        expected_runtime_role=expected_runtime_role,
+        expected_migration_role=expected_migration_role,
+    )
+    _assert_runtime_table_acl(
+        table_acl,
+        expected_migration_role=expected_migration_role,
+    )
+    _assert_runtime_column_acl(
+        column_acl,
+        expected_runtime_role=expected_runtime_role,
+    )
+    _assert_runtime_sequence_acl(
+        sequence_acl,
+        expected_migration_role=expected_migration_role,
+    )
+    _assert_runtime_function_acl(
+        function_acl,
+        expected_migration_role=expected_migration_role,
+    )
+    _assert_audit_trigger_guards(audit_triggers)
+    _assert_audit_stream_schema(
+        columns=audit_stream_columns,
+        constraints=audit_stream_constraints,
+    )
+    _assert_stocktake_recount_schema(
+        columns=stocktake_recount_columns,
+        constraints=stocktake_recount_constraints,
+        indexes=stocktake_recount_indexes,
+        triggers=[
+            *stocktake_sensitive_triggers,
+            *stocktake_recount_graph_triggers,
+        ],
+    )
+    _assert_stocktake_scope_triggers(stocktake_scope_triggers)
+    _assert_reconciliation_triggers(reconciliation_triggers)
+    _assert_reconciliation_schema(
+        constraints=reconciliation_constraints,
+        partial_indexes=reconciliation_partial_indexes,
+    )
+    _assert_opening_terminal_triggers(opening_terminal_triggers)
+    _assert_opening_terminal_index(opening_terminal_indexes)
+    _assert_formal_file_guards(
+        triggers=formal_file_triggers,
+        indexes=formal_file_indexes,
+    )
+    _assert_material_request_cancellation_guards(
+        triggers=material_request_cancellation_triggers,
+        indexes=material_request_cancellation_indexes,
+    )
+    _assert_nonopening_stocktake_close_guards(
+        triggers=nonopening_stocktake_close_triggers,
+        indexes=nonopening_stocktake_close_indexes,
+        constraints=nonopening_stocktake_close_constraints,
+    )
+    _assert_fixed_audit_heads(audit_heads)
+    _assert_complete_audit_graph(heads=audit_heads, events=audit_events)
+
+
+def _assert_production_database_evidence(
+    evidence: Mapping[str, Any],
+    *,
+    expected_runtime_role: str,
+    expected_migration_role: str,
+) -> None:
+    expected_values: dict[str, Any] = {
+        "role_name": expected_runtime_role,
+        "is_superuser": False,
+        "can_create_database": False,
+        "can_create_role": False,
+        "can_replicate": False,
+        "can_bypass_rls": False,
+        "can_create_in_database": False,
+        "can_create_temporary_tables": False,
+        "has_database_grant_option": False,
+        "can_use_schema": True,
+        "can_create_in_schema": False,
+        "has_schema_grant_option": False,
+        "current_schema_name": "public",
+        "current_schema_path": ["public"],
+        "has_non_system_schema_control": False,
+        "migration_role_exists": True,
+        "has_any_role_membership": False,
+        "has_any_role_members": False,
+        "migration_role_is_superuser": False,
+        "migration_role_can_create_database": False,
+        "migration_role_can_create_role": False,
+        "migration_role_can_replicate": False,
+        "migration_role_can_bypass_rls": False,
+        "migration_role_has_any_membership": False,
+        "migration_role_has_any_members": False,
+        "is_migration_role_member": False,
+        "can_disable_replication_guards": False,
+        "session_replication_role": "origin",
+        "audit_can_select": True,
+        "audit_can_insert": True,
+        "audit_can_update": False,
+        "audit_can_delete": False,
+        "audit_can_truncate": False,
+        "audit_can_control_trigger": False,
+        "heads_can_select": True,
+        "heads_can_update": False,
+        "heads_can_insert": False,
+        "heads_can_delete": False,
+        "heads_can_truncate": False,
+        "heads_can_control_trigger": False,
+        "alembic_can_select": False,
+        "alembic_can_insert": False,
+        "alembic_can_update": False,
+        "alembic_can_delete": False,
+    }
+    failed = [
+        key
+        for key, expected in expected_values.items()
+        if evidence.get(key) != expected
+    ]
+    for owner_key in (
+        "database_owner",
+        "schema_owner",
+        "audit_events_owner",
+        "audit_heads_owner",
+    ):
+        if evidence.get(owner_key) != expected_migration_role:
+            failed.append(owner_key)
+    if failed:
+        raise DatabaseSecurityBoundaryError(
+            "production database role boundary failed: " + ", ".join(sorted(failed))
+        )
+
+
+def _expected_table_privileges(table_name: str) -> frozenset[str]:
+    privileges: set[str] = set()
+    if table_name in RUNTIME_READ_TABLES:
+        privileges.add("SELECT")
+    if table_name in RUNTIME_INSERT_TABLES:
+        privileges.add("INSERT")
+    if table_name in RUNTIME_UPDATE_TABLES:
+        privileges.add("UPDATE")
+    if table_name in RUNTIME_DELETE_TABLES:
+        privileges.add("DELETE")
+    return frozenset(privileges)
+
+
+def _assert_runtime_table_acl(
+    rows: list[Mapping[str, Any]],
+    *,
+    expected_migration_role: str,
+) -> None:
+    actual_names: set[str] = set()
+    failures: list[str] = []
+    field_by_privilege = {
+        "SELECT": "can_select",
+        "INSERT": "can_insert",
+        "UPDATE": "can_update",
+        "DELETE": "can_delete",
+        "TRUNCATE": "can_truncate",
+        "REFERENCES": "can_reference",
+        "TRIGGER": "can_trigger",
+    }
+    for row in rows:
+        table_name = row.get("table_name")
+        if not isinstance(table_name, str) or table_name in actual_names:
+            failures.append("table_identity")
+            continue
+        actual_names.add(table_name)
+        if row.get("owner_name") != expected_migration_role:
+            failures.append(f"{table_name}.owner")
+        expected = _expected_table_privileges(table_name)
+        for privilege in TABLE_PRIVILEGES:
+            actual = row.get(field_by_privilege[privilege])
+            if actual != (privilege in expected):
+                failures.append(f"{table_name}.{privilege.lower()}")
+        if row.get("has_explicit_runtime_column_acl") is not (
+            table_name in RUNTIME_UPDATE_COLUMNS
+        ):
+            failures.append(f"{table_name}.has_explicit_runtime_column_acl")
+        for field in (
+            "has_public_table_acl",
+            "has_runtime_grant_option",
+        ):
+            if row.get(field) is not False:
+                failures.append(f"{table_name}.{field}")
+    expected_names = (
+        RUNTIME_READ_TABLES
+        | RUNTIME_INSERT_TABLES
+        | RUNTIME_UPDATE_TABLES
+        | RUNTIME_DELETE_TABLES
+        | set(RUNTIME_UPDATE_COLUMNS)
+    )
+    missing = expected_names - actual_names
+    failures.extend(f"{name}.missing" for name in sorted(missing))
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database table ACL failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_runtime_column_acl(
+    rows: list[Mapping[str, Any]],
+    *,
+    expected_runtime_role: str,
+) -> None:
+    expected = {
+        (table_name, column_name, expected_runtime_role, "UPDATE", False)
+        for table_name, column_names in RUNTIME_UPDATE_COLUMNS.items()
+        for column_name in column_names
+    }
+    actual: set[tuple[Any, Any, Any, Any, Any]] = set()
+    failures: list[str] = []
+    for row in rows:
+        key = (
+            row.get("table_name"),
+            row.get("column_name"),
+            row.get("grantee_name"),
+            row.get("privilege_type"),
+            row.get("is_grantable"),
+        )
+        if key in actual:
+            failures.append("column_acl_identity")
+        actual.add(key)
+    for key in sorted(expected - actual, key=str):
+        failures.append(f"{key[0]}.{key[1]}.missing")
+    for key in sorted(actual - expected, key=str):
+        failures.append(f"{key[0]}.{key[1]}.excess")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database column ACL failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_runtime_sequence_acl(
+    rows: list[Mapping[str, Any]],
+    *,
+    expected_migration_role: str,
+) -> None:
+    failures: list[str] = []
+    for row in rows:
+        sequence_name = row.get("sequence_name")
+        if not isinstance(sequence_name, str):
+            failures.append("sequence_identity")
+            continue
+        if row.get("owner_name") != expected_migration_role:
+            failures.append(f"{sequence_name}.owner")
+        if any(
+            row.get(field) is not False
+            for field in ("can_use", "can_select", "can_update")
+        ):
+            failures.append(f"{sequence_name}.privilege")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database sequence ACL failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_runtime_function_acl(
+    rows: list[Mapping[str, Any]],
+    *,
+    expected_migration_role: str,
+) -> None:
+    failures: list[str] = []
+    function_ids: set[Any] = set()
+    allowed_seen: set[tuple[str, str]] = set()
+    internal_seen: set[tuple[str, str]] = set()
+    for row in rows:
+        function_id = row.get("function_id")
+        function_name = row.get("function_name")
+        label = function_name if isinstance(function_name, str) else "function"
+        if function_id is None or function_id in function_ids:
+            failures.append("function_identity")
+            continue
+        function_ids.add(function_id)
+        if row.get("api_execute_is_grantable") is not False:
+            failures.append(f"{label}.execute_grant_option")
+        if row.get("unexpected_execute_grantee_count") != 0:
+            failures.append(f"{label}.unexpected_execute_grantee")
+        if row.get("owner_name") != expected_migration_role:
+            failures.append(f"{label}.owner")
+        argument_types = str(row.get("argument_types") or "")
+        coordinate = (label, argument_types)
+        expected_helper = RUNTIME_EXECUTE_FUNCTIONS.get(coordinate)
+        expected_internal = FORMAL_FILE_INTERNAL_FUNCTIONS.get(coordinate)
+        if expected_helper is None and expected_internal is None:
+            if row.get("can_execute") is not False:
+                failures.append(f"{label}.execute")
+            continue
+        if expected_helper is not None:
+            allowed_seen.add(coordinate)
+            expected_shape = RUNTIME_FUNCTION_SHAPES.get(coordinate)
+            expected_body_hash = RUNTIME_FUNCTION_BODY_SHA256.get(coordinate)
+            expected_execute = True
+            expected_definition = expected_helper
+        else:
+            internal_seen.add(coordinate)
+            expected_shape = FORMAL_FILE_INTERNAL_FUNCTION_SHAPES.get(coordinate)
+            expected_body_hash = FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256.get(
+                coordinate
+            )
+            expected_execute = False
+            expected_definition = expected_internal
+        if expected_shape is None:
+            failures.append(f"{label}.shape_manifest")
+            continue
+        (
+            volatility,
+            is_security_definer,
+            language_name,
+            configuration,
+        ) = expected_definition
+        function_kind, result_type, is_strict = expected_shape
+        source_body = row.get("source_body")
+        if row.get("can_execute") is not expected_execute:
+            failures.append(f"{label}.execute")
+        if row.get("volatility") != volatility:
+            failures.append(f"{label}.volatility")
+        if row.get("is_security_definer") is not is_security_definer:
+            failures.append(f"{label}.security_definer")
+        if row.get("language_name") != language_name:
+            failures.append(f"{label}.language")
+        if row.get("function_kind") != function_kind:
+            failures.append(f"{label}.kind")
+        if row.get("result_type") != result_type:
+            failures.append(f"{label}.result_type")
+        if row.get("argument_modes") is not None:
+            failures.append(f"{label}.argument_modes")
+        if row.get("argument_default_count") != 0:
+            failures.append(f"{label}.argument_defaults")
+        if row.get("is_strict") is not is_strict:
+            failures.append(f"{label}.strict")
+        if (
+            not isinstance(source_body, str)
+            or hashlib.sha256(source_body.encode("utf-8")).hexdigest()
+            != expected_body_hash
+        ):
+            failures.append(f"{label}.body")
+        if tuple(row.get("configuration") or ()) != configuration:
+            failures.append(f"{label}.configuration")
+        for audience in (
+            "public_can_execute",
+            "edge_can_execute",
+            "backup_can_execute",
+        ):
+            if row.get(audience) is not False:
+                failures.append(f"{label}.{audience}")
+    if (
+        allowed_seen != set(RUNTIME_EXECUTE_FUNCTIONS)
+        or set(RUNTIME_FUNCTION_SHAPES) != set(RUNTIME_EXECUTE_FUNCTIONS)
+        or set(RUNTIME_FUNCTION_BODY_SHA256) != set(RUNTIME_EXECUTE_FUNCTIONS)
+        or internal_seen != set(FORMAL_FILE_INTERNAL_FUNCTIONS)
+        or set(FORMAL_FILE_INTERNAL_FUNCTION_SHAPES)
+        != set(FORMAL_FILE_INTERNAL_FUNCTIONS)
+        or set(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256)
+        != set(FORMAL_FILE_INTERNAL_FUNCTIONS)
+    ):
+        failures.append("runtime_helper_set")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database function ACL failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_audit_trigger_guards(rows: list[Mapping[str, Any]]) -> None:
+    failures: list[str] = []
+    actual: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        name = row.get("trigger_name")
+        if not isinstance(name, str) or name in actual:
+            failures.append("trigger_identity")
+            continue
+        actual[name] = row
+    if set(actual) != set(EXPECTED_AUDIT_TRIGGERS):
+        failures.append("trigger_set")
+    for name, (
+        table_name,
+        function_name,
+        trigger_type,
+        is_constraint_trigger,
+        is_deferrable,
+        is_initially_deferred,
+    ) in (
+        EXPECTED_AUDIT_TRIGGERS.items()
+    ):
+        row = actual.get(name)
+        if row is None:
+            continue
+        if row.get("table_name") != table_name:
+            failures.append(f"{name}.table")
+        if (
+            row.get("function_schema") != "public"
+            or row.get("function_name") != function_name
+        ):
+            failures.append(f"{name}.function")
+        if row.get("enabled") != "A":
+            failures.append(f"{name}.enabled")
+        if row.get("trigger_type") != trigger_type:
+            failures.append(f"{name}.type")
+        if row.get("is_constraint_trigger") is not is_constraint_trigger:
+            failures.append(f"{name}.constraint")
+        if row.get("is_deferrable") is not is_deferrable:
+            failures.append(f"{name}.deferrable")
+        if row.get("is_initially_deferred") is not is_initially_deferred:
+            failures.append(f"{name}.initially_deferred")
+        if row.get("has_when_clause") is not False:
+            failures.append(f"{name}.when")
+        if row.get("has_column_filter") is not False:
+            failures.append(f"{name}.columns")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database audit trigger guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_audit_stream_schema(
+    *,
+    columns: list[Mapping[str, Any]],
+    constraints: list[Mapping[str, Any]],
+) -> None:
+    failures: list[str] = []
+    actual_columns: dict[str, Mapping[str, Any]] = {}
+    for row in columns:
+        name = row.get("column_name")
+        if not isinstance(name, str) or name in actual_columns:
+            failures.append("column_identity")
+            continue
+        actual_columns[name] = row
+    expected_column_types = {
+        "stream_key": "character varying(160)",
+        "stream_version": "bigint",
+    }
+    if set(actual_columns) != set(expected_column_types):
+        failures.append("column_set")
+    for name, data_type in expected_column_types.items():
+        row = actual_columns.get(name)
+        if row is None:
+            continue
+        if row.get("is_not_null") is not True:
+            failures.append(f"{name}.not_null")
+        if str(row.get("data_type", "")).lower() != data_type:
+            failures.append(f"{name}.type")
+
+    actual_constraints: dict[str, Mapping[str, Any]] = {}
+    for row in constraints:
+        name = row.get("constraint_name")
+        if not isinstance(name, str) or name in actual_constraints:
+            failures.append("constraint_identity")
+            continue
+        actual_constraints[name] = row
+    if set(actual_constraints) != set(EXPECTED_AUDIT_STREAM_CONSTRAINTS):
+        failures.append("constraint_set")
+    for name, purpose in EXPECTED_AUDIT_STREAM_CONSTRAINTS.items():
+        row = actual_constraints.get(name)
+        if row is None:
+            continue
+        if row.get("is_validated") is not True:
+            failures.append(f"{name}.validated")
+        if row.get("is_deferrable") is not False:
+            failures.append(f"{name}.deferrable")
+        if row.get("is_initially_deferred") is not False:
+            failures.append(f"{name}.initially_deferred")
+        columns_tuple = tuple(row.get("constrained_columns") or ())
+        definition = " ".join(
+            str(row.get("definition") or "").lower().replace('"', "").split()
+        )
+        if purpose == "check_stream_key":
+            stream_key_literals = [
+                item.replace("''", "'")
+                for item in _SQL_STRING_LITERAL_PATTERN.findall(definition)
+            ]
+            if row.get("constraint_type") != "c" or columns_tuple != (
+                "stream_key",
+            ):
+                failures.append(f"{name}.shape")
+            if (
+                not definition.startswith("check")
+                or "stream_key" not in definition
+                or len(stream_key_literals) != len(EXPECTED_AUDIT_HEAD_IDS)
+                or set(stream_key_literals) != set(EXPECTED_AUDIT_HEAD_IDS)
+                or " or " in definition
+            ):
+                failures.append(f"{name}.definition")
+        elif purpose == "check_stream_version":
+            if row.get("constraint_type") != "c" or columns_tuple != (
+                "stream_version",
+            ):
+                failures.append(f"{name}.shape")
+            if (
+                not definition.startswith("check")
+                or "stream_version" not in definition
+                or re.search(r">\s*0", definition) is None
+                or " or " in definition
+            ):
+                failures.append(f"{name}.definition")
+        elif purpose == "unique_stream_version":
+            if row.get("constraint_type") != "u" or columns_tuple != (
+                "stream_key",
+                "stream_version",
+            ):
+                failures.append(f"{name}.shape")
+        elif (
+            row.get("constraint_type") != "f"
+            or columns_tuple != ("stream_key",)
+            or row.get("referenced_table") != "audit_chain_heads"
+            or tuple(row.get("referenced_columns") or ()) != ("stream_key",)
+            or row.get("update_action") != "r"
+            or row.get("delete_action") != "r"
+        ):
+            failures.append(f"{name}.shape")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database audit stream schema guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_stocktake_recount_schema(
+    *,
+    columns: list[Mapping[str, Any]],
+    constraints: list[Mapping[str, Any]],
+    indexes: list[Mapping[str, Any]],
+    triggers: list[Mapping[str, Any]],
+) -> None:
+    """Prove the recount graph guarded by revisions 0018 through 0024.
+
+    Revision 0024 grants only the INSERT and exact task/round column updates
+    required by the mounted recount workflow.  Fail-closed preflights,
+    deferred graph triggers and assignment-evidence triggers still own the
+    complete and contiguous row-graph enforcement.  Startup verifies those
+    catalog objects in the same repeatable-read snapshot as every other
+    database-security check.
+    """
+
+    failures: list[str] = []
+    actual_columns: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for row in columns:
+        table_name = row.get("table_name")
+        column_name = row.get("column_name")
+        key = (table_name, column_name)
+        if (
+            not isinstance(table_name, str)
+            or not isinstance(column_name, str)
+            or key in actual_columns
+        ):
+            failures.append("column_identity")
+            continue
+        actual_columns[key] = row
+    for key, (is_not_null, data_type) in EXPECTED_STOCKTAKE_RECOUNT_COLUMNS.items():
+        row = actual_columns.get(key)
+        label = ".".join(key)
+        if row is None:
+            failures.append(f"{label}.missing")
+            continue
+        if row.get("table_kind") not in {"r", "p"}:
+            failures.append(f"{label}.table_kind")
+        if row.get("is_not_null") is not is_not_null:
+            failures.append(f"{label}.not_null")
+        if str(row.get("data_type", "")).lower() != data_type:
+            failures.append(f"{label}.type")
+
+    actual_constraints: dict[str, Mapping[str, Any]] = {}
+    for row in constraints:
+        name = row.get("constraint_name")
+        if not isinstance(name, str) or name in actual_constraints:
+            failures.append("constraint_identity")
+            continue
+        actual_constraints[name] = row
+    for name, expected in EXPECTED_STOCKTAKE_RECOUNT_CONSTRAINTS.items():
+        row = actual_constraints.get(name)
+        if row is None:
+            failures.append(f"{name}.missing")
+            continue
+        if row.get("table_name") != expected["table"]:
+            failures.append(f"{name}.table")
+        if row.get("constraint_type") != expected["type"]:
+            failures.append(f"{name}.type")
+        if row.get("is_validated") is not True:
+            failures.append(f"{name}.validated")
+        if row.get("is_deferrable") is not False:
+            failures.append(f"{name}.deferrable")
+        if row.get("is_initially_deferred") is not False:
+            failures.append(f"{name}.initially_deferred")
+        definition = " ".join(
+            str(row.get("definition") or "").lower().replace('"', "").split()
+        )
+        if expected["type"] == "c":
+            definition_tokens = expected["definition_tokens"]
+            if (
+                not definition.startswith("check")
+                or " or " in definition
+                or any(token not in definition for token in definition_tokens)
+            ):
+                failures.append(f"{name}.definition")
+            elif name == "ck_stocktake_recount_cases_round_0018":
+                if (
+                    re.search(r"next_round_no\s*>\s*1", definition) is None
+                    or re.search(r"scope_count\s*>\s*0", definition) is None
+                ):
+                    failures.append(f"{name}.definition")
+            elif definition.count("= 64") < len(definition_tokens):
+                failures.append(f"{name}.definition")
+            continue
+        if expected["type"] == "p":
+            if tuple(row.get("constrained_columns") or ()) != expected[
+                "columns"
+            ]:
+                failures.append(f"{name}.shape")
+            continue
+        if (
+            tuple(row.get("constrained_columns") or ())
+            != expected["columns"]
+            or row.get("referenced_table") != expected["referenced_table"]
+            or tuple(row.get("referenced_columns") or ())
+            != expected["referenced_columns"]
+            or row.get("update_action") != "a"
+            or row.get("delete_action") != "r"
+        ):
+            failures.append(f"{name}.shape")
+
+    actual_indexes: dict[str, Mapping[str, Any]] = {}
+    for row in indexes:
+        name = row.get("index_name")
+        if not isinstance(name, str) or name in actual_indexes:
+            failures.append("index_identity")
+            continue
+        actual_indexes[name] = row
+    if set(actual_indexes) != set(EXPECTED_STOCKTAKE_RECOUNT_INDEXES):
+        failures.append("index_set")
+    for name, expected in EXPECTED_STOCKTAKE_RECOUNT_INDEXES.items():
+        row = actual_indexes.get(name)
+        if row is None:
+            continue
+        key_columns = tuple(
+            str(value).replace('"', "")
+            for value in (row.get("key_columns") or ())
+        )
+        if row.get("table_name") != expected["table"]:
+            failures.append(f"{name}.table")
+        if row.get("access_method") != "btree":
+            failures.append(f"{name}.method")
+        if any(
+            row.get(field) is not True
+            for field in ("is_unique", "is_valid", "is_ready", "is_live")
+        ):
+            failures.append(f"{name}.state")
+        if key_columns != expected["columns"]:
+            failures.append(f"{name}.columns")
+        predicate = " ".join(
+            str(row.get("predicate") or "")
+            .lower()
+            .replace('"', "")
+            .split()
+        )
+        predicate_purpose = expected["predicate"]
+        if predicate_purpose is None:
+            if predicate:
+                failures.append(f"{name}.predicate")
+        elif predicate_purpose == "not_null_recount_case":
+            if (
+                "recount_case_id is not null" not in predicate
+                or " or " in predicate
+            ):
+                failures.append(f"{name}.predicate")
+        elif predicate_purpose == "counting":
+            literals = [
+                item.replace("''", "'")
+                for item in _SQL_STRING_LITERAL_PATTERN.findall(predicate)
+            ]
+            if (
+                "status" not in predicate
+                or "=" not in predicate
+                or literals != ["counting"]
+                or " or " in predicate
+            ):
+                failures.append(f"{name}.predicate")
+
+    _collect_stocktake_recount_trigger_failures(triggers, failures)
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database stocktake recount schema guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _collect_stocktake_recount_trigger_failures(
+    rows: list[Mapping[str, Any]],
+    failures: list[str],
+) -> None:
+    actual: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        name = row.get("trigger_name")
+        if not isinstance(name, str) or name in actual:
+            failures.append("trigger_identity")
+            continue
+        actual[name] = row
+    if set(actual) != set(EXPECTED_STOCKTAKE_RECOUNT_TRIGGERS):
+        failures.append("trigger_set")
+    for name, (
+        table_name,
+        function_name,
+        enabled,
+        trigger_type,
+        is_constraint_trigger,
+        is_deferrable,
+        is_initially_deferred,
+    ) in EXPECTED_STOCKTAKE_RECOUNT_TRIGGERS.items():
+        row = actual.get(name)
+        if row is None:
+            continue
+        if row.get("table_name") != table_name:
+            failures.append(f"{name}.table")
+        if (
+            row.get("function_schema") != "public"
+            or row.get("function_name") != function_name
+        ):
+            failures.append(f"{name}.function")
+        if row.get("enabled") != enabled:
+            failures.append(f"{name}.enabled")
+        if row.get("trigger_type") != trigger_type:
+            failures.append(f"{name}.type")
+        if row.get("is_constraint_trigger") is not is_constraint_trigger:
+            failures.append(f"{name}.constraint")
+        if row.get("is_deferrable") is not is_deferrable:
+            failures.append(f"{name}.deferrable")
+        if row.get("is_initially_deferred") is not is_initially_deferred:
+            failures.append(f"{name}.initially_deferred")
+        if row.get("has_when_clause") is not False:
+            failures.append(f"{name}.when")
+        if row.get("has_column_filter") is not False:
+            failures.append(f"{name}.columns")
+
+
+def _assert_stocktake_scope_triggers(
+    rows: list[Mapping[str, Any]],
+) -> None:
+    """Prove the complete trigger catalog on immutable scope facts."""
+
+    failures: list[str] = []
+    actual: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        name = row.get("trigger_name")
+        if not isinstance(name, str) or name in actual:
+            failures.append("trigger_identity")
+            continue
+        actual[name] = row
+    if set(actual) != set(EXPECTED_STOCKTAKE_SCOPE_TRIGGERS):
+        failures.append("trigger_set")
+    for name, (
+        table_name,
+        function_name,
+        enabled,
+        trigger_type,
+        is_constraint_trigger,
+        is_deferrable,
+        is_initially_deferred,
+    ) in EXPECTED_STOCKTAKE_SCOPE_TRIGGERS.items():
+        row = actual.get(name)
+        if row is None:
+            continue
+        if row.get("table_name") != table_name:
+            failures.append(f"{name}.table")
+        if (
+            row.get("function_schema") != "public"
+            or row.get("function_name") != function_name
+        ):
+            failures.append(f"{name}.function")
+        if row.get("enabled") != enabled:
+            failures.append(f"{name}.enabled")
+        if row.get("trigger_type") != trigger_type:
+            failures.append(f"{name}.type")
+        if row.get("is_constraint_trigger") is not is_constraint_trigger:
+            failures.append(f"{name}.constraint")
+        if row.get("is_deferrable") is not is_deferrable:
+            failures.append(f"{name}.deferrable")
+        if row.get("is_initially_deferred") is not is_initially_deferred:
+            failures.append(f"{name}.initially_deferred")
+        if row.get("has_when_clause") is not False:
+            failures.append(f"{name}.when")
+        if row.get("has_column_filter") is not False:
+            failures.append(f"{name}.columns")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database stocktake scope trigger guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_reconciliation_triggers(
+    rows: list[Mapping[str, Any]],
+) -> None:
+    """Prove append-only and terminal reconciliation trigger coverage."""
+
+    failures: list[str] = []
+    actual: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        name = row.get("trigger_name")
+        if not isinstance(name, str) or name in actual:
+            failures.append("trigger_identity")
+            continue
+        actual[name] = row
+    if set(actual) != set(EXPECTED_RECONCILIATION_TRIGGERS):
+        failures.append("trigger_set")
+    for name, (
+        table_name,
+        function_name,
+        enabled,
+        trigger_type,
+    ) in EXPECTED_RECONCILIATION_TRIGGERS.items():
+        row = actual.get(name)
+        if row is None:
+            continue
+        if row.get("table_name") != table_name:
+            failures.append(f"{name}.table")
+        if (
+            row.get("function_schema") != "public"
+            or row.get("function_name") != function_name
+        ):
+            failures.append(f"{name}.function")
+        if row.get("enabled") != enabled:
+            failures.append(f"{name}.enabled")
+        if row.get("trigger_type") != trigger_type:
+            failures.append(f"{name}.type")
+        for field in (
+            "is_constraint_trigger",
+            "is_deferrable",
+            "is_initially_deferred",
+            "has_when_clause",
+            "has_column_filter",
+        ):
+            if row.get(field) is not False:
+                failures.append(f"{name}.{field}")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database reconciliation trigger guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_reconciliation_schema(
+    *,
+    constraints: list[Mapping[str, Any]],
+    partial_indexes: list[Mapping[str, Any]],
+) -> None:
+    failures: list[str] = []
+    actual_constraints = {
+        str(row.get("constraint_name")): row for row in constraints
+    }
+    if set(actual_constraints) != set(EXPECTED_RECONCILIATION_CONSTRAINTS):
+        failures.append("constraint_set")
+    for name, expected in EXPECTED_RECONCILIATION_CONSTRAINTS.items():
+        row = actual_constraints.get(name)
+        if row is None:
+            continue
+        if row.get("table_name") != expected["table"]:
+            failures.append(f"{name}.table")
+        if row.get("constraint_type") != expected["type"]:
+            failures.append(f"{name}.type")
+        if row.get("is_validated") is not True:
+            failures.append(f"{name}.validated")
+        columns = tuple(row.get("constrained_columns") or ())
+        if expected["type"] in {"f", "u"} and columns != expected["columns"]:
+            failures.append(f"{name}.columns")
+        if expected["type"] == "f":
+            if (
+                row.get("referenced_table") != expected["referenced_table"]
+                or tuple(row.get("referenced_columns") or ())
+                != expected["referenced_columns"]
+                or row.get("update_action") != "a"
+                or row.get("delete_action") != "a"
+                or row.get("is_deferrable") is not expected["deferred"]
+                or row.get("is_initially_deferred") is not expected["deferred"]
+            ):
+                failures.append(f"{name}.shape")
+        else:
+            if row.get("is_deferrable") is not False:
+                failures.append(f"{name}.deferrable")
+            if row.get("is_initially_deferred") is not False:
+                failures.append(f"{name}.initially_deferred")
+        if expected["type"] == "c":
+            definition = " ".join(
+                str(row.get("definition") or "")
+                .lower()
+                .replace('"', "")
+                .split()
+            )
+            if not definition.startswith("check") or any(
+                token not in definition for token in expected["tokens"]
+            ):
+                failures.append(f"{name}.definition")
+
+    actual_indexes = {
+        str(row.get("index_name")): row for row in partial_indexes
+    }
+    if set(actual_indexes) != set(EXPECTED_RECONCILIATION_PARTIAL_INDEXES):
+        failures.append("partial_index_set")
+    for name, operation in EXPECTED_RECONCILIATION_PARTIAL_INDEXES.items():
+        row = actual_indexes.get(name)
+        if row is None:
+            continue
+        predicate = " ".join(
+            str(row.get("predicate") or "")
+            .lower()
+            .replace('"', "")
+            .split()
+        )
+        if (
+            row.get("table_name") != "reconciliation_commands"
+            or row.get("access_method") != "btree"
+            or tuple(row.get("key_columns") or ()) != ("run_id",)
+            or any(
+                row.get(field) is not True
+                for field in ("is_unique", "is_valid", "is_ready", "is_live")
+            )
+            or operation not in predicate
+            or " or " in predicate
+        ):
+            failures.append(f"{name}.shape")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database reconciliation schema guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_opening_terminal_triggers(
+    rows: list[Mapping[str, Any]],
+) -> None:
+    failures: list[str] = []
+    actual: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        name = row.get("trigger_name")
+        if not isinstance(name, str) or name in actual:
+            failures.append("trigger_identity")
+            continue
+        actual[name] = row
+    if set(actual) != set(EXPECTED_OPENING_TERMINAL_TRIGGERS):
+        failures.append("trigger_set")
+    for name, (
+        table_name,
+        function_name,
+        enabled,
+        trigger_type,
+    ) in EXPECTED_OPENING_TERMINAL_TRIGGERS.items():
+        row = actual.get(name)
+        if row is None:
+            continue
+        if row.get("table_name") != table_name:
+            failures.append(f"{name}.table")
+        if (
+            row.get("function_schema") != "public"
+            or row.get("function_name") != function_name
+        ):
+            failures.append(f"{name}.function")
+        if row.get("enabled") != enabled:
+            failures.append(f"{name}.enabled")
+        if row.get("trigger_type") != trigger_type:
+            failures.append(f"{name}.type")
+        is_commit_guard = name in OPENING_COMMIT_TRIGGER_NAMES
+        for field in (
+            "is_constraint_trigger",
+            "is_deferrable",
+            "is_initially_deferred",
+        ):
+            if row.get(field) is not is_commit_guard:
+                failures.append(f"{name}.{field}")
+        for field in ("has_when_clause", "has_column_filter"):
+            if row.get(field) is not False:
+                failures.append(f"{name}.{field}")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database opening terminal trigger guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_opening_terminal_index(rows: list[Mapping[str, Any]]) -> None:
+    failures: list[str] = []
+    if len(rows) != 1:
+        failures.append("index_set")
+        row: Mapping[str, Any] | None = None
+    else:
+        row = rows[0]
+    if row is not None:
+        if row.get("index_name") != EXPECTED_OPENING_TERMINAL_INDEX:
+            failures.append("index_name")
+        if row.get("table_name") != "stocktake_postings":
+            failures.append("table")
+        if row.get("access_method") != "btree":
+            failures.append("method")
+        if any(
+            row.get(field) is not True
+            for field in ("is_unique", "is_valid", "is_ready", "is_live")
+        ):
+            failures.append("state")
+        if tuple(
+            str(value).replace('"', "")
+            for value in (row.get("key_columns") or ())
+        ) != ("task_id",):
+            failures.append("columns")
+        predicate = " ".join(
+            str(row.get("predicate") or "").lower().replace('"', "").split()
+        )
+        literals = [
+            item.replace("''", "'")
+            for item in _SQL_STRING_LITERAL_PATTERN.findall(predicate)
+        ]
+        if (
+            "posting_kind" not in predicate
+            or "=" not in predicate
+            or literals != ["opening"]
+            or " or " in predicate
+        ):
+            failures.append("predicate")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database opening terminal unique index failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_formal_file_guards(
+    *,
+    triggers: list[Mapping[str, Any]],
+    indexes: list[Mapping[str, Any]],
+) -> None:
+    """Prove the exact formal-file mutation and single-use evidence guards."""
+
+    failures: list[str] = []
+    actual_triggers: dict[str, Mapping[str, Any]] = {}
+    for row in triggers:
+        name = row.get("trigger_name")
+        if not isinstance(name, str) or name in actual_triggers:
+            failures.append("trigger_identity")
+            continue
+        actual_triggers[name] = row
+    if set(actual_triggers) != set(EXPECTED_FORMAL_FILE_TRIGGERS):
+        failures.append("trigger_set")
+    for name, (table_name, function_name, enabled, trigger_type) in (
+        EXPECTED_FORMAL_FILE_TRIGGERS.items()
+    ):
+        row = actual_triggers.get(name)
+        if row is None:
+            continue
+        if row.get("table_name") != table_name:
+            failures.append(f"{name}.table")
+        if (
+            row.get("function_schema") != "public"
+            or row.get("function_name") != function_name
+        ):
+            failures.append(f"{name}.function")
+        if row.get("enabled") != enabled:
+            failures.append(f"{name}.enabled")
+        if row.get("trigger_type") != trigger_type:
+            failures.append(f"{name}.type")
+        for field in (
+            "is_constraint_trigger",
+            "is_deferrable",
+            "is_initially_deferred",
+            "has_when_clause",
+            "has_column_filter",
+        ):
+            if row.get(field) is not False:
+                failures.append(f"{name}.{field}")
+
+    actual_indexes: dict[str, Mapping[str, Any]] = {}
+    for row in indexes:
+        name = row.get("index_name")
+        if not isinstance(name, str) or name in actual_indexes:
+            failures.append("index_identity")
+            continue
+        actual_indexes[name] = row
+    if set(actual_indexes) != set(EXPECTED_FORMAL_FILE_INDEXES):
+        failures.append("index_set")
+    for name, expected in EXPECTED_FORMAL_FILE_INDEXES.items():
+        row = actual_indexes.get(name)
+        if row is None:
+            continue
+        if row.get("table_name") != expected["table"]:
+            failures.append(f"{name}.table")
+        if row.get("access_method") != "btree":
+            failures.append(f"{name}.method")
+        if any(
+            row.get(field) is not True
+            for field in ("is_unique", "is_valid", "is_ready", "is_live")
+        ):
+            failures.append(f"{name}.state")
+        if tuple(
+            str(value).replace('"', "")
+            for value in (row.get("key_columns") or ())
+        ) != expected["columns"]:
+            failures.append(f"{name}.columns")
+        predicate = " ".join(
+            str(row.get("predicate") or "")
+            .lower()
+            .replace('"', "")
+            .split()
+        )
+        if expected["predicate"] is None:
+            if predicate:
+                failures.append(f"{name}.predicate")
+        elif (
+            "document_type" not in predicate
+            or "stocktake_scope_count_completion" not in predicate
+            or "attachment_type" not in predicate
+            or "stocktake_evidence" not in predicate
+            or "status" in predicate
+            or " or " in predicate
+        ):
+            failures.append(f"{name}.predicate")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database formal file guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_material_request_cancellation_guards(
+    *,
+    triggers: list[Mapping[str, Any]],
+    indexes: list[Mapping[str, Any]],
+) -> None:
+    """Prove direct-cancel parent locks, deferred graph and fact indexes."""
+
+    failures: list[str] = []
+    actual_triggers: dict[str, Mapping[str, Any]] = {}
+    for row in triggers:
+        name = row.get("trigger_name")
+        if not isinstance(name, str) or name in actual_triggers:
+            failures.append("trigger_identity")
+            continue
+        actual_triggers[name] = row
+    if set(actual_triggers) != set(EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS):
+        failures.append("trigger_set")
+    for name, (table_name, function_name, enabled, trigger_type) in (
+        EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS.items()
+    ):
+        row = actual_triggers.get(name)
+        if row is None:
+            continue
+        if row.get("table_name") != table_name:
+            failures.append(f"{name}.table")
+        if (
+            row.get("function_schema") != "public"
+            or row.get("function_name") != function_name
+        ):
+            failures.append(f"{name}.function")
+        if row.get("enabled") != enabled:
+            failures.append(f"{name}.enabled")
+        if row.get("trigger_type") != trigger_type:
+            failures.append(f"{name}.type")
+        is_deferred = function_name == (
+            "rsc_require_material_request_cancellation_graph_0037"
+        )
+        for field in (
+            "is_constraint_trigger",
+            "is_deferrable",
+            "is_initially_deferred",
+        ):
+            if row.get(field) is not is_deferred:
+                failures.append(f"{name}.{field}")
+        for field in ("has_when_clause", "has_column_filter"):
+            if row.get(field) is not False:
+                failures.append(f"{name}.{field}")
+
+    actual_indexes: dict[str, Mapping[str, Any]] = {}
+    for row in indexes:
+        name = row.get("index_name")
+        if not isinstance(name, str) or name in actual_indexes:
+            failures.append("index_identity")
+            continue
+        actual_indexes[name] = row
+    if set(actual_indexes) != set(EXPECTED_MATERIAL_REQUEST_CANCELLATION_INDEXES):
+        failures.append("index_set")
+    for name, expected in EXPECTED_MATERIAL_REQUEST_CANCELLATION_INDEXES.items():
+        row = actual_indexes.get(name)
+        if row is None:
+            continue
+        if row.get("table_name") != expected["table"]:
+            failures.append(f"{name}.table")
+        if row.get("access_method") != "btree":
+            failures.append(f"{name}.method")
+        if row.get("is_unique") is not expected["unique"]:
+            failures.append(f"{name}.unique")
+        if any(
+            row.get(field) is not True
+            for field in ("is_valid", "is_ready", "is_live")
+        ):
+            failures.append(f"{name}.state")
+        if tuple(
+            str(value).replace('"', "")
+            for value in (row.get("key_columns") or ())
+        ) != expected["columns"]:
+            failures.append(f"{name}.columns")
+        if row.get("predicate") not in (None, ""):
+            failures.append(f"{name}.predicate")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database material request cancellation guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_nonopening_stocktake_close_guards(
+    *,
+    triggers: list[Mapping[str, Any]],
+    indexes: list[Mapping[str, Any]],
+    constraints: list[Mapping[str, Any]],
+) -> None:
+    """Prove the independent non-opening reconcile/close commit boundary."""
+
+    failures: list[str] = []
+    actual_triggers: dict[str, Mapping[str, Any]] = {}
+    for row in triggers:
+        name = row.get("trigger_name")
+        if not isinstance(name, str) or name in actual_triggers:
+            failures.append("trigger_identity")
+            continue
+        actual_triggers[name] = row
+    if set(actual_triggers) != set(EXPECTED_NONOPENING_STOCKTAKE_CLOSE_TRIGGERS):
+        failures.append("trigger_set")
+    for name, expected in EXPECTED_NONOPENING_STOCKTAKE_CLOSE_TRIGGERS.items():
+        row = actual_triggers.get(name)
+        if row is None:
+            continue
+        (
+            table_name,
+            function_name,
+            enabled,
+            trigger_type,
+            is_constraint,
+            is_deferrable,
+            is_initially_deferred,
+            has_column_filter,
+        ) = expected
+        if row.get("table_name") != table_name:
+            failures.append(f"{name}.table")
+        if row.get("function_schema") != "public" or row.get(
+            "function_name"
+        ) != function_name:
+            failures.append(f"{name}.function")
+        if row.get("enabled") != enabled:
+            failures.append(f"{name}.enabled")
+        if row.get("trigger_type") != trigger_type:
+            failures.append(f"{name}.type")
+        if row.get("is_constraint_trigger") is not is_constraint:
+            failures.append(f"{name}.constraint")
+        if row.get("is_deferrable") is not is_deferrable:
+            failures.append(f"{name}.deferrable")
+        if row.get("is_initially_deferred") is not is_initially_deferred:
+            failures.append(f"{name}.initially_deferred")
+        if row.get("has_when_clause") is not False:
+            failures.append(f"{name}.when")
+        if row.get("has_column_filter") is not has_column_filter:
+            failures.append(f"{name}.columns")
+
+    actual_indexes: dict[str, Mapping[str, Any]] = {}
+    for row in indexes:
+        name = row.get("index_name")
+        if not isinstance(name, str) or name in actual_indexes:
+            failures.append("index_identity")
+            continue
+        actual_indexes[name] = row
+    if set(actual_indexes) != set(EXPECTED_NONOPENING_STOCKTAKE_CLOSE_INDEXES):
+        failures.append("index_set")
+    for name, expected in EXPECTED_NONOPENING_STOCKTAKE_CLOSE_INDEXES.items():
+        row = actual_indexes.get(name)
+        if row is None:
+            continue
+        if row.get("table_name") != expected["table"]:
+            failures.append(f"{name}.table")
+        if row.get("access_method") != "btree":
+            failures.append(f"{name}.method")
+        if row.get("is_unique") is not expected["unique"]:
+            failures.append(f"{name}.unique")
+        if any(
+            row.get(field) is not True
+            for field in ("is_valid", "is_ready", "is_live")
+        ):
+            failures.append(f"{name}.state")
+        if tuple(
+            str(value).replace('"', "")
+            for value in (row.get("key_columns") or ())
+        ) != expected["columns"]:
+            failures.append(f"{name}.columns")
+        if row.get("predicate") not in (None, ""):
+            failures.append(f"{name}.predicate")
+
+    actual_constraints: dict[str, Mapping[str, Any]] = {}
+    for row in constraints:
+        name = row.get("constraint_name")
+        if not isinstance(name, str) or name in actual_constraints:
+            failures.append("constraint_identity")
+            continue
+        actual_constraints[name] = row
+    if set(actual_constraints) != set(
+        EXPECTED_NONOPENING_STOCKTAKE_CLOSE_CONSTRAINTS
+    ):
+        failures.append("constraint_set")
+    for name, expected in EXPECTED_NONOPENING_STOCKTAKE_CLOSE_CONSTRAINTS.items():
+        row = actual_constraints.get(name)
+        if row is None:
+            continue
+        if (
+            row.get("table_name") != expected["table"]
+            or row.get("constraint_type") != "f"
+            or row.get("is_validated") is not True
+            or row.get("is_deferrable") is not True
+            or row.get("is_initially_deferred") is not True
+            or tuple(row.get("constrained_columns") or ()) != expected["columns"]
+            or row.get("referenced_table") != expected["referenced_table"]
+            or tuple(row.get("referenced_columns") or ())
+            != expected["referenced_columns"]
+            or row.get("update_action") != "a"
+            or row.get("delete_action") != "r"
+        ):
+            failures.append(f"{name}.shape")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database non-opening stocktake close guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_fixed_audit_heads(rows: list[Mapping[str, Any]]) -> None:
+    failures: list[str] = []
+    actual: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        stream_key = row.get("stream_key")
+        if not isinstance(stream_key, str) or stream_key in actual:
+            failures.append("head_identity")
+            continue
+        actual[stream_key] = row
+    if set(actual) != set(EXPECTED_AUDIT_HEAD_IDS):
+        failures.append("head_set")
+    for stream_key, expected_id in EXPECTED_AUDIT_HEAD_IDS.items():
+        row = actual.get(stream_key)
+        if row is None:
+            continue
+        if str(row.get("id")) != expected_id:
+            failures.append(f"{stream_key}.id")
+        version = row.get("version")
+        last_event_id = row.get("last_event_id")
+        last_hash = row.get("last_hash")
+        if isinstance(version, bool) or not isinstance(version, int) or version < 0:
+            failures.append(f"{stream_key}.version")
+            continue
+        if version == 0:
+            if last_event_id is not None or last_hash is not None:
+                failures.append(f"{stream_key}.empty_binding")
+        elif (
+            last_event_id is None
+            or last_hash is None
+            or row.get("bound_event_id") != last_event_id
+            or row.get("bound_event_hash") != last_hash
+        ):
+            failures.append(f"{stream_key}.event_binding")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database audit head guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_complete_audit_graph(
+    *,
+    heads: list[Mapping[str, Any]],
+    events: list[Mapping[str, Any]],
+) -> None:
+    """Prove that every persisted event belongs to exactly one fixed stream.
+
+    The persisted coordinates make membership indexable, while the complete
+    walk independently proves that no coordinate, predecessor or canonical v1
+    hash was forged.  This remains defense in depth for the deferred commit
+    binding installed by revision 0017.
+    """
+
+    try:
+        normalized_events: list[dict[str, Any]] = []
+        events_by_hash: dict[str, list[dict[str, Any]]] = {}
+        event_ids: set[uuid.UUID] = set()
+        stream_coordinates: set[tuple[str, int]] = set()
+        for row in events:
+            event_id = _canonical_audit_uuid(row.get("id"))
+            if event_id in event_ids:
+                raise ValueError("duplicate audit event id")
+            event_ids.add(event_id)
+            stream_key = row.get("stream_key")
+            stream_version = row.get("stream_version")
+            if (
+                not isinstance(stream_key, str)
+                or stream_key not in EXPECTED_AUDIT_HEAD_IDS
+                or isinstance(stream_version, bool)
+                or not isinstance(stream_version, int)
+                or stream_version <= 0
+            ):
+                raise ValueError("invalid audit stream coordinate")
+            coordinate = (stream_key, stream_version)
+            if coordinate in stream_coordinates:
+                raise ValueError("duplicate audit stream coordinate")
+            stream_coordinates.add(coordinate)
+            event_hash = _canonical_audit_hash(row.get("event_hash"))
+            previous_hash = (
+                None
+                if row.get("previous_hash") is None
+                else _canonical_audit_hash(row.get("previous_hash"))
+            )
+            event = {
+                "id": event_id,
+                "stream_key": stream_key,
+                "stream_version": stream_version,
+                "actor_user_id": row.get("actor_user_id"),
+                "action": row.get("action"),
+                "aggregate_type": row.get("aggregate_type"),
+                "aggregate_id": row.get("aggregate_id"),
+                "before_jsonb": _canonical_audit_json(row.get("before_jsonb")),
+                "after_jsonb": _canonical_audit_json(row.get("after_jsonb")),
+                "request_id": row.get("request_id"),
+                "previous_hash": previous_hash,
+                "event_hash": event_hash,
+                "occurred_at": _canonical_audit_datetime(
+                    row.get("occurred_at")
+                ),
+            }
+            normalized_events.append(event)
+            events_by_hash.setdefault(event_hash, []).append(event)
+
+        owned_event_ids: set[uuid.UUID] = set()
+        stream_keys: set[str] = set()
+        total_versions = 0
+        for head in heads:
+            stream_key = head.get("stream_key")
+            if (
+                not isinstance(stream_key, str)
+                or not stream_key
+                or stream_key in stream_keys
+                or stream_key not in EXPECTED_AUDIT_HEAD_IDS
+            ):
+                raise ValueError("invalid audit stream")
+            stream_keys.add(stream_key)
+            if str(_canonical_audit_uuid(head.get("id"))) != (
+                EXPECTED_AUDIT_HEAD_IDS[stream_key]
+            ):
+                raise ValueError("invalid audit head id")
+            version = head.get("version")
+            if isinstance(version, bool) or not isinstance(version, int) or version < 0:
+                raise ValueError("invalid audit head version")
+            total_versions += version
+            if version > len(normalized_events) or total_versions > len(
+                normalized_events
+            ):
+                raise ValueError("audit head version exceeds event count")
+            last_event_id = (
+                None
+                if head.get("last_event_id") is None
+                else _canonical_audit_uuid(head.get("last_event_id"))
+            )
+            last_hash = (
+                None
+                if head.get("last_hash") is None
+                else _canonical_audit_hash(head.get("last_hash"))
+            )
+            if (version == 0) != (last_event_id is None and last_hash is None):
+                raise ValueError("invalid audit head binding")
+            if (last_event_id is None) != (last_hash is None):
+                raise ValueError("partial audit head binding")
+
+            expected_hash = last_hash
+            visited_in_stream: set[uuid.UUID] = set()
+            for position in range(version):
+                candidates = events_by_hash.get(expected_hash or "", [])
+                if len(candidates) != 1:
+                    raise ValueError("audit hash is not unique and complete")
+                event = candidates[0]
+                if position == 0 and event["id"] != last_event_id:
+                    raise ValueError("audit head id/hash mismatch")
+                if event["id"] in visited_in_stream:
+                    raise ValueError("audit chain cycle")
+                if event["id"] in owned_event_ids:
+                    raise ValueError("audit event belongs to multiple streams")
+                if event["stream_key"] != stream_key or event[
+                    "stream_version"
+                ] != version - position:
+                    raise ValueError("audit event stream coordinate mismatch")
+                visited_in_stream.add(event["id"])
+                owned_event_ids.add(event["id"])
+                calculated_hash = calculate_audit_event_hash(
+                    stream_key=stream_key,
+                    event_id=event["id"],
+                    actor_user_id=event["actor_user_id"],
+                    action=event["action"],
+                    aggregate_type=event["aggregate_type"],
+                    aggregate_id=event["aggregate_id"],
+                    before_jsonb=event["before_jsonb"],
+                    after_jsonb=event["after_jsonb"],
+                    request_id=event["request_id"],
+                    previous_hash=event["previous_hash"],
+                    occurred_at=event["occurred_at"],
+                )
+                if calculated_hash != event["event_hash"]:
+                    raise ValueError("audit event hash mismatch")
+                expected_hash = event["previous_hash"]
+            if expected_hash is not None:
+                raise ValueError("audit chain does not reach genesis")
+
+        if stream_keys != set(EXPECTED_AUDIT_HEAD_IDS):
+            raise ValueError("fixed audit streams are incomplete")
+        if total_versions != len(normalized_events):
+            raise ValueError("audit event count does not match head versions")
+        if owned_event_ids != event_ids:
+            raise ValueError("orphan audit event")
+    except Exception:
+        raise DatabaseSecurityBoundaryError(
+            "production database audit graph guard failed"
+        ) from None
+
+
+def _canonical_audit_uuid(value: Any) -> uuid.UUID:
+    parsed = uuid.UUID(str(value))
+    if parsed.int == 0:
+        raise ValueError("zero UUID")
+    return parsed
+
+
+def _canonical_audit_hash(value: Any) -> str:
+    if not isinstance(value, str) or _SHA256_PATTERN.fullmatch(value) is None:
+        raise ValueError("invalid SHA-256 digest")
+    return value
+
+
+def _canonical_audit_json(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    parsed = json.loads(value) if isinstance(value, str) else value
+    if not isinstance(parsed, dict):
+        raise ValueError("audit snapshot must be an object")
+    return json.loads(
+        json.dumps(
+            parsed,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+
+
+def _canonical_audit_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    else:
+        raise ValueError("invalid audit timestamp")
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)

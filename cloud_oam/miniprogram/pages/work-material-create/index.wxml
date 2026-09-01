@@ -1,0 +1,48 @@
+<view class="page create-page">
+  <view wx:if="{{loading}}" class="loading">正在加载个人库存</view>
+  <block wx:else>
+    <view class="section form-section">
+      <view class="section-heading"><text class="section-title">工单信息</text></view>
+      <view class="field"><text class="field-label">工单号</text><input class="input" placeholder="请输入工单编号" data-field="workOrderNumber" value="{{workOrderNumber}}" bindinput="bindField" /></view>
+      <picker mode="selector" range="{{warehouses}}" range-key="name" value="{{warehouseIndex}}" data-field="warehouseIndex" bindchange="changePicker">
+        <view class="field"><text class="field-label">所属网点仓库</text><view class="picker-field"><text class="{{warehouseIndex < 0 ? 'placeholder' : ''}}">{{warehouseIndex < 0 ? '请选择个人库存所属仓库' : warehouses[warehouseIndex].name}}</text><text class="muted">选择</text></view></view>
+      </picker>
+      <picker mode="selector" range="{{holderOptions}}" range-key="name" value="{{holderIndex}}" data-field="holderIndex" bindchange="changePicker">
+        <view class="field"><text class="field-label">领用人</text><view class="picker-field"><text>{{holderOptions[holderIndex].name}}</text><text class="muted">选择</text></view></view>
+      </picker>
+    </view>
+
+    <view class="section">
+      <view class="section-heading"><text class="section-title">添加物料</text><text class="muted small">已选 {{items.length}} 种</text></view>
+      <view class="search-row">
+        <input class="input search-input" placeholder="编码或名称" data-field="materialQuery" value="{{materialQuery}}" bindinput="bindField" confirm-type="search" bindconfirm="searchMaterials" />
+        <button class="button button-secondary search-button" bindtap="searchMaterials">搜索</button>
+      </view>
+      <scroll-view class="material-results" scroll-y>
+        <view wx:for="{{materialResults}}" wx:key="id" class="material-result" data-id="{{item.id}}" bindtap="addMaterial">
+          <view><text class="mono result-code">{{item.code}}</text><text class="result-name">{{item.name}}</text></view>
+          <text class="add-text">添加</text>
+        </view>
+      </scroll-view>
+    </view>
+
+    <view wx:if="{{items.length}}" class="section">
+      <view class="section-heading"><text class="section-title">占用明细</text></view>
+      <view wx:for="{{items}}" wx:key="material_id" class="list-card selected-item">
+        <view class="row between"><text class="mono item-code">{{item.code}}</text><text class="remove" data-index="{{index}}" bindtap="removeItem">移除</text></view>
+        <text class="item-name">{{item.name}}</text>
+        <view class="item-controls">
+          <view class="field"><text class="field-label">数量</text><input class="input" type="number" data-index="{{index}}" value="{{item.quantity}}" bindinput="updateQuantity" /></view>
+          <picker mode="selector" range="{{conditionLabels}}" value="{{item.conditionIndex}}" data-index="{{index}}" bindchange="changeCondition">
+            <view class="field"><text class="field-label">状态</text><view class="picker-field">{{item.condition === 'old' ? '旧件' : '好件'}}</view></view>
+          </picker>
+        </view>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="field"><text class="field-label">备注</text><textarea class="textarea" maxlength="500" placeholder="选填" data-field="note" value="{{note}}" bindinput="bindField" /></view>
+    </view>
+    <view class="sticky-action"><button class="button button-primary" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submit">确认占用</button></view>
+  </block>
+</view>

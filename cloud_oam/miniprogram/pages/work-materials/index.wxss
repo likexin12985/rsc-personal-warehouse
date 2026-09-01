@@ -1,0 +1,11 @@
+.page-head { align-items: flex-start; }
+.filter-row { width: 100%; margin: 24rpx 0 20rpx; }
+.order-number { max-width: 480rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 24rpx; font-weight: 700; }
+.material-line { display: flex; align-items: flex-start; justify-content: space-between; gap: 18rpx; margin-top: 22rpx; }
+.material-code, .material-name { display: block; }
+.material-code { font-size: 24rpx; font-weight: 700; }
+.material-name { margin-top: 6rpx; color: #66727a; font-size: 23rpx; }
+.quantity { flex: 0 0 auto; color: #e65318; font-weight: 700; }
+.work-meta { display: grid; gap: 7rpx; margin-top: 18rpx; padding-top: 16rpx; border-top: 1rpx solid #e8ecee; color: #727d85; font-size: 22rpx; }
+.note { margin-top: 14rpx; padding: 14rpx 16rpx; background: #f3f6f7; border-radius: 8rpx; color: #53616a; font-size: 22rpx; }
+.action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12rpx; margin-top: 18rpx; }

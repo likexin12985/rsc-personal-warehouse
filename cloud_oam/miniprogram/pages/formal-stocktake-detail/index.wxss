@@ -1,0 +1,126 @@
+.access-card,
+.summary-card,
+.blind-card,
+.count-card,
+.pc-note,
+.pending-write-card {
+  padding: 24rpx;
+}
+
+.summary-card,
+.blind-card,
+.pc-note,
+.pending-write-card {
+  margin-top: 20rpx;
+}
+
+.pending-write-card {
+  border-left: 6rpx solid #c77b0b;
+}
+
+.pending-write-title,
+.pending-write-text,
+.pending-write-coordinates text {
+  display: block;
+}
+
+.pending-write-title {
+  font-size: 27rpx;
+  font-weight: 700;
+}
+
+.pending-write-text {
+  margin-top: 12rpx;
+  color: #66727a;
+  font-size: 24rpx;
+  line-height: 1.7;
+}
+
+.pending-write-coordinates {
+  margin-top: 16rpx;
+  padding: 16rpx;
+  border-radius: 12rpx;
+  background: #fff8eb;
+  overflow-wrap: anywhere;
+}
+
+.pending-write-coordinates text + text {
+  margin-top: 8rpx;
+}
+
+.task-no {
+  max-width: 480rpx;
+  font-size: 24rpx;
+  font-weight: 650;
+}
+
+.facts {
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+  font-size: 24rpx;
+}
+
+.facts text:last-child {
+  max-width: 430rpx;
+  text-align: right;
+}
+
+.blind-card {
+  border-left: 6rpx solid #c77b0b;
+}
+
+.blind-title,
+.blind-text {
+  display: block;
+}
+
+.blind-title {
+  font-size: 27rpx;
+  font-weight: 700;
+}
+
+.blind-text,
+.pc-note {
+  margin-top: 12rpx;
+  color: #66727a;
+  font-size: 24rpx;
+  line-height: 1.7;
+}
+
+.scope-card {
+  transition: border-color 0.15s ease;
+}
+
+.scope-selected {
+  border-color: #e65318;
+  box-shadow: 0 0 0 2rpx rgba(230, 83, 24, 0.1);
+}
+
+.scope-card .muted {
+  display: block;
+  margin-top: 14rpx;
+}
+
+.scope-meta {
+  margin-top: 12rpx;
+}
+
+.count-card {
+  margin-bottom: 18rpx;
+}
+
+.scan-button {
+  margin-top: -10rpx;
+  margin-bottom: 22rpx;
+}
+
+.draft-row .button {
+  margin-top: 16rpx;
+}
+
+.action-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14rpx;
+}

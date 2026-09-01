@@ -1,0 +1,54 @@
+<view class="page">
+  <view wx:if="{{user}}" class="home-head">
+    <view>
+      <view class="greeting">{{user.name}}，你好</view>
+      <view class="page-subtitle">{{organizationName}} · 正式工作台</view>
+    </view>
+    <image class="avatar" src="/assets/rsc-personal-warehouse-blue.png" mode="aspectFill" />
+  </view>
+
+  <view wx:if="{{loading}}" class="loading">正在校验正式访问上下文</view>
+
+  <block wx:else>
+    <view class="card gate-card">
+      <view class="row between gate-heading">
+        <text class="gate-kicker">个人仓与库存账</text>
+        <text class="status status-{{accessStatusTone}}">{{accessStatusLabel}}</text>
+      </view>
+      <text class="gate-title">{{moduleTitle}}</text>
+      <text class="gate-message">{{moduleMessage}}</text>
+      <view class="divider"></view>
+      <view class="gate-facts">
+        <view class="row between"><text class="muted">正式角色</text><text>{{roleLabel || '未验证'}}</text></view>
+        <view class="row between"><text class="muted">所属组织</text><text>{{organizationName || '未验证'}}</text></view>
+        <view class="row between"><text class="muted">授权版本</text><text>{{authorizationText}}</text></view>
+        <view class="row between"><text class="muted">账本游标</text><text>{{projectionCursorText}}</text></view>
+        <view class="row between"><text class="muted">最近过账</text><text>{{projectedAtText}}</text></view>
+        <view class="row between"><text class="muted">期初状态</text><text>{{openingStatusLabel}}</text></view>
+      </view>
+    </view>
+
+    <navigator wx:if="{{materialRequestAccessAllowed}}" class="card module-link" url="/pages/formal-material-requests/index">
+      <view>
+        <text class="module-link-kicker">需求中心</text>
+        <text class="module-link-title">需求提报与进度</text>
+        <text class="module-link-detail">新建、修改、提交需求；按正式权限处理三级审批，并查看十个独立状态轴。</text>
+      </view>
+      <text class="module-link-arrow">进入 ›</text>
+    </navigator>
+
+    <navigator wx:if="{{stocktakeAccessAllowed}}" class="card module-link" url="/pages/formal-operational-stocktakes/index">
+      <view>
+        <text class="module-link-kicker">日常盘点</text>
+        <text class="module-link-title">正式非期初盘点</text>
+        <text class="module-link-detail">个人自盘、初盘、差异、区域/总部复核与复盘分轴处理；过账和关闭独立展示。</text>
+      </view>
+      <text class="module-link-arrow">进入 ›</text>
+    </navigator>
+
+    <view class="card safety-card">
+      <text class="safety-title">正式库存口径</text>
+      <text class="safety-text">本页面只读取 /v1 正式账本状态，不读取 v0.9 余额，也不从 OAM 省级控制数推导个人仓。期初完成前数量保持空值；不同 SKU 或计量单位绝不直接求和。</text>
+    </view>
+  </block>
+</view>

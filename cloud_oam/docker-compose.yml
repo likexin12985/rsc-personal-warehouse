@@ -1,0 +1,149 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      OAM_DB_MIGRATOR_PASSWORD: ${OAM_DB_MIGRATOR_PASSWORD}
+      OAM_DB_API_PASSWORD: ${OAM_DB_API_PASSWORD}
+      OAM_DB_BACKUP_PASSWORD: ${OAM_DB_BACKUP_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deployment/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+
+  migrate:
+    image: star-oam-api:0.9.0
+    build: ./backend
+    restart: "no"
+    command: ["alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
+    environment:
+      OAM_ENVIRONMENT: production
+      OAM_DATABASE_URL: postgresql+psycopg://star_oam_migrator:${OAM_DB_MIGRATOR_PASSWORD}@db:5432/${POSTGRES_DB}
+      OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
+      OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api
+    volumes:
+      - ./alembic.ini:/app/alembic.ini:ro
+      - ./backend/alembic:/app/backend/alembic:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [backend]
+
+  api:
+    image: star-oam-api:0.9.0
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      OAM_ENVIRONMENT: production
+      OAM_DATABASE_URL: postgresql+psycopg://star_oam_api:${OAM_DB_API_PASSWORD}@db:5432/${POSTGRES_DB}
+      OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api
+      OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
+      OAM_DATABASE_SCHEMA_MODE: ${OAM_DATABASE_SCHEMA_MODE:-alembic}
+      OAM_LEGACY_PROTOTYPE_WRITES_ENABLED: ${OAM_LEGACY_PROTOTYPE_WRITES_ENABLED:-false}
+      OAM_JWT_SECRET: ${OAM_JWT_SECRET}
+      OAM_IDENTITY_HASH_SECRET: ${OAM_IDENTITY_HASH_SECRET}
+      OAM_IDENTITY_HASH_VERSION: ${OAM_IDENTITY_HASH_VERSION:-1}
+      OAM_AUTH_IDEMPOTENCY_TTL_SECONDS: ${OAM_AUTH_IDEMPOTENCY_TTL_SECONDS:-90}
+      OAM_AUTH_IDEMPOTENCY_HMAC_SECRET: ${OAM_AUTH_IDEMPOTENCY_HMAC_SECRET}
+      OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER: ${OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER:-aliyun_kms}
+      OAM_AUTH_IDEMPOTENCY_KMS_KEY_ID: ${OAM_AUTH_IDEMPOTENCY_KMS_KEY_ID}
+      OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION: ${OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION:-1}
+      OAM_AUTH_LOGIN_RATE_LIMIT_HMAC_SECRET: ${OAM_AUTH_LOGIN_RATE_LIMIT_HMAC_SECRET}
+      OAM_AUTH_LOGIN_RATE_LIMIT_HASH_VERSION: ${OAM_AUTH_LOGIN_RATE_LIMIT_HASH_VERSION:-1}
+      OAM_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${OAM_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-60}
+      OAM_AUTH_LOGIN_RATE_LIMIT_GLOBAL_LIMIT: ${OAM_AUTH_LOGIN_RATE_LIMIT_GLOBAL_LIMIT:-300}
+      OAM_AUTH_LOGIN_RATE_LIMIT_IP_LIMIT: ${OAM_AUTH_LOGIN_RATE_LIMIT_IP_LIMIT:-20}
+      OAM_AUTH_LOGIN_RATE_LIMIT_IDENTITY_LIMIT: ${OAM_AUTH_LOGIN_RATE_LIMIT_IDENTITY_LIMIT:-8}
+      OAM_MATERIAL_REQUEST_WRITES_ENABLED: ${OAM_MATERIAL_REQUEST_WRITES_ENABLED:-false}
+      OAM_MATERIAL_REQUEST_IDEMPOTENCY_HMAC_SECRET: ${OAM_MATERIAL_REQUEST_IDEMPOTENCY_HMAC_SECRET:-}
+      OAM_MATERIAL_REQUEST_CONTACT_MOBILE_HMAC_SECRET: ${OAM_MATERIAL_REQUEST_CONTACT_MOBILE_HMAC_SECRET:-}
+      OAM_MATERIAL_REQUEST_CONTACT_MOBILE_HASH_VERSION: ${OAM_MATERIAL_REQUEST_CONTACT_MOBILE_HASH_VERSION:-1}
+      OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_PROVIDER: ${OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_PROVIDER:-disabled}
+      OAM_MATERIAL_REQUEST_CONTACT_KMS_KEY_ID: ${OAM_MATERIAL_REQUEST_CONTACT_KMS_KEY_ID:-}
+      OAM_STOCKTAKE_WRITES_ENABLED: ${OAM_STOCKTAKE_WRITES_ENABLED:-false}
+      OAM_STOCKTAKE_IDEMPOTENCY_HMAC_SECRET: ${OAM_STOCKTAKE_IDEMPOTENCY_HMAC_SECRET:-}
+      OAM_FILE_STORAGE_ENABLED: ${OAM_FILE_STORAGE_ENABLED:-false}
+      OAM_FILE_STORAGE_PROVIDER: ${OAM_FILE_STORAGE_PROVIDER:-disabled}
+      OAM_FILE_STORAGE_REGION: ${OAM_FILE_STORAGE_REGION:-}
+      OAM_FILE_STORAGE_BUCKET: ${OAM_FILE_STORAGE_BUCKET:-}
+      OAM_FILE_UPLOAD_INTENT_TTL_SECONDS: ${OAM_FILE_UPLOAD_INTENT_TTL_SECONDS:-600}
+      OAM_FILE_DOWNLOAD_INTENT_TTL_SECONDS: ${OAM_FILE_DOWNLOAD_INTENT_TTL_SECONDS:-300}
+      OAM_FILE_IDEMPOTENCY_HMAC_SECRET: ${OAM_FILE_IDEMPOTENCY_HMAC_SECRET:-}
+      OAM_MAX_UPLOAD_BYTES: ${OAM_MAX_UPLOAD_BYTES:-125829120}
+      OAM_JWT_TTL_MINUTES: ${OAM_JWT_TTL_MINUTES:-15}
+      OAM_SESSION_TTL_DAYS: ${OAM_SESSION_TTL_DAYS:-30}
+      OAM_COOKIE_SECURE: ${OAM_COOKIE_SECURE:-true}
+      OAM_UPLOAD_DIR: /data/uploads
+      OAM_ADMIN_MOBILE: ${OAM_ADMIN_MOBILE:-}
+      OAM_ADMIN_NAME: ${OAM_ADMIN_NAME:-}
+      OAM_ADMIN_INITIAL_PASSWORD: ${OAM_ADMIN_INITIAL_PASSWORD:-}
+      OAM_APP_ORIGIN: https://${APP_DOMAIN}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      OAM_PASSWORD_LOGIN_ENABLED: ${OAM_PASSWORD_LOGIN_ENABLED:-false}
+      OAM_SMS_LOGIN_ENABLED: ${OAM_SMS_LOGIN_ENABLED:-false}
+      OAM_SMS_PROVIDER: ${OAM_SMS_PROVIDER:-disabled}
+      OAM_SMS_ACCESS_KEY_ID: ${OAM_SMS_ACCESS_KEY_ID:-}
+      OAM_SMS_ACCESS_KEY_SECRET: ${OAM_SMS_ACCESS_KEY_SECRET:-}
+      OAM_SMS_SIGN_NAME: ${OAM_SMS_SIGN_NAME:-}
+      OAM_SMS_TEMPLATE_CODE: ${OAM_SMS_TEMPLATE_CODE:-}
+      OAM_SMS_SCHEME_NAME: ${OAM_SMS_SCHEME_NAME:-RSC个人仓登录}
+      OAM_SMS_CODE_LENGTH: ${OAM_SMS_CODE_LENGTH:-6}
+      OAM_SMS_VALID_SECONDS: ${OAM_SMS_VALID_SECONDS:-300}
+      OAM_SMS_INTERVAL_SECONDS: ${OAM_SMS_INTERVAL_SECONDS:-60}
+      OAM_SMS_MAX_PER_MOBILE_HOUR: ${OAM_SMS_MAX_PER_MOBILE_HOUR:-5}
+      OAM_SMS_MAX_PER_IP_HOUR: ${OAM_SMS_MAX_PER_IP_HOUR:-20}
+      OAM_SMS_MAX_VERIFY_ATTEMPTS: ${OAM_SMS_MAX_VERIFY_ATTEMPTS:-5}
+      OAM_WECHAT_LOGIN_ENABLED: ${OAM_WECHAT_LOGIN_ENABLED:-false}
+      OAM_WECHAT_PROVIDER: ${OAM_WECHAT_PROVIDER:-disabled}
+      OAM_WECHAT_APP_ID: ${OAM_WECHAT_APP_ID:-}
+      OAM_WECHAT_APP_SECRET: ${OAM_WECHAT_APP_SECRET:-}
+      # Ingress credentials exist only in the isolated edge receiver runtime.
+      OAM_EDGE_SYNC_ENABLED: "false"
+      OAM_EDGE_SYNC_LEGACY_BATCHES_ENABLED: "false"
+      OAM_EDGE_SYNC_LEGACY_PERSONNEL_PROJECTION_ENABLED: "false"
+    volumes:
+      - uploads_data:/data/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+
+  web:
+    image: star-oam-web:0.9.0
+    build: ./frontend
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [backend]
+
+networks:
+  backend:
+
+volumes:
+  postgres_data:
+  uploads_data:
+  caddy_data:
+  caddy_config:

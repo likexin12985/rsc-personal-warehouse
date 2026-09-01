@@ -1,0 +1,26 @@
+.task-head { padding: 26rpx; }
+.task-number { max-width: 480rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 24rpx; font-weight: 700; }
+.task-warehouse { display: block; margin-top: 20rpx; font-size: 31rpx; font-weight: 700; }
+.task-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20rpx; margin-top: 24rpx; font-size: 23rpx; }
+.detail-label { display: block; margin-bottom: 5rpx; color: #7b858c; font-size: 20rpx; }
+.task-note { margin-top: 20rpx; padding: 16rpx; background: #f2f6f7; border-radius: 8rpx; color: #52646d; font-size: 22rpx; }
+.action-heading { margin-top: 28rpx; }
+.action-sub { display: block; margin-top: 4rpx; }
+.difference-item { border-left: 6rpx solid #c94b38; }
+.item-code { font-size: 24rpx; font-weight: 700; }
+.item-name { display: block; margin-top: 9rpx; font-weight: 600; }
+.count-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14rpx; margin-top: 20rpx; }
+.count-grid > view { min-height: 96rpx; padding: 14rpx; background: #f3f6f7; border-radius: 8rpx; text-align: center; }
+.count-label, .count-value { display: block; }
+.count-label { color: #78828a; font-size: 20rpx; }
+.count-value { margin-top: 8rpx; font-size: 29rpx; font-weight: 700; }
+.count-input { width: 100%; height: 48rpx; margin-top: 6rpx; padding: 0 8rpx; background: #ffffff; border: 1rpx solid #cfd6da; border-radius: 6rpx; font-size: 27rpx; text-align: center; }
+.difference-value { color: #b43c2d; }
+.remark-field { margin: 18rpx 0 0; }
+.saved-remark { display: block; margin-top: 16rpx; color: #7c5547; font-size: 22rpx; }
+.save-button { margin-top: 14rpx; }
+.evidence-warning { margin-bottom: 14rpx; padding: 16rpx; background: #fff1ed; border: 1rpx solid #efc7be; border-radius: 8rpx; color: #963c2d; font-size: 22rpx; }
+.compact-empty { padding: 44rpx 20rpx; }
+.media-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14rpx; }
+.media-tile { display: flex; align-items: center; gap: 14rpx; min-height: 100rpx; padding: 18rpx; background: #ffffff; border: 1rpx solid #dfe4e7; border-radius: 10rpx; }
+.media-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 22rpx; }

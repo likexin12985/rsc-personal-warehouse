@@ -1,0 +1,6 @@
+<view class="page">
+  <view class="card empty">
+    <text class="empty-title">v0.9 写入口已隔离</text>
+    <text class="empty-text">旧 Transfer 只保留历史查询，不提供新建或状态写入。</text>
+  </view>
+</view>

@@ -1,0 +1,51 @@
+services:
+  edge-api:
+    image: rsc-oam-edge-receiver:0.9.0
+    build:
+      context: ${EDGE_RELEASE_DIR}
+    command:
+      - uvicorn
+      - app.edge_main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips=127.0.0.1
+    restart: unless-stopped
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    mem_limit: 512m
+    cpus: 0.50
+    env_file:
+      - /opt/star-oam/edge-receiver/runtime.env
+    environment:
+      OAM_ENVIRONMENT: production
+      OAM_EDGE_SYNC_ENABLED: "true"
+      OAM_EDGE_SYNC_LEGACY_BATCHES_ENABLED: "false"
+      OAM_EDGE_SYNC_LEGACY_PERSONNEL_PROJECTION_ENABLED: "false"
+      OAM_EDGE_SYNC_MAX_CLOCK_SKEW_SECONDS: 300
+      OAM_EDGE_SYNC_MAX_BODY_BYTES: 8388608
+      OAM_EDGE_SYNC_MAX_RECORDS_PER_BATCH: 500
+    ports:
+      - "127.0.0.1:18000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+
+networks:
+  backend:
+    external: true
+    name: star-oam_backend

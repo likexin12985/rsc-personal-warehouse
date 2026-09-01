@@ -1,0 +1,35 @@
+<view class="page">
+  <view class="page-head">
+    <view>
+      <view class="page-title">OAM申请</view>
+      <view class="page-subtitle">当前账号关联的调拨申请</view>
+    </view>
+  </view>
+
+  <view class="search-row">
+    <input class="search-input" value="{{keyword}}" bindinput="onKeyword" confirm-type="search" bindconfirm="search" placeholder="申请单号或申请人" />
+    <button class="small-button" bindtap="search">查询</button>
+  </view>
+
+  <view wx:if="{{summary}}" class="summary-strip">
+    <text>全部 {{summary.total}}</text>
+    <text>待处理 {{summary.active}}</text>
+    <text>物料行 {{summary.activeLines}}</text>
+  </view>
+
+  <view wx:if="{{loading && !orders.length}}" class="loading">正在读取OAM申请</view>
+  <view wx:elif="{{!loading && !orders.length}}" class="card empty">
+    <text class="empty-title">暂无关联申请</text>
+  </view>
+
+  <view wx:for="{{orders}}" wx:key="materialApplyId" class="list-card order-card">
+    <view class="row between">
+      <text class="mono order-number">{{item.materialApplyId}}</text>
+      <text class="status status-info">{{item.statusLabel}}</text>
+    </view>
+    <view class="order-meta">{{item.typeLabel}} · {{item.applicantName || '-'}}</view>
+    <view class="order-target">{{item.warehouseLocationName || '-'}}</view>
+    <view wx:if="{{item.materialText}}" class="order-material">{{item.materialText}}</view>
+    <view class="muted small">{{item.createdText}}</view>
+  </view>
+</view>

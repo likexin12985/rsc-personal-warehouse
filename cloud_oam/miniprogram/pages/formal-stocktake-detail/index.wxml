@@ -1,0 +1,97 @@
+<view class="page">
+  <view wx:if="{{loading}}" class="loading">正在验证盘点证据</view>
+
+  <block wx:else>
+    <view class="card access-card status-{{accessAllowed ? 'success' : 'danger'}}">{{accessMessage}}</view>
+
+    <view wx:if="{{writePending}}" class="card pending-write-card">
+      <text class="pending-write-title">写请求结果待确认</text>
+      <text class="pending-write-text">{{pendingWriteMessage}}</text>
+      <view class="pending-write-coordinates">
+        <text class="small mono">{{pendingWriteTarget}}</text>
+        <text class="small mono">Idempotency-Key: {{pendingWriteIdempotencyKey}}</text>
+        <text class="small mono">X-Request-ID: {{pendingWriteRequestId}}</text>
+      </view>
+    </view>
+
+    <block wx:if="{{detail}}">
+      <view class="card summary-card">
+        <view class="row between">
+          <text class="task-no mono">{{detail.task_no}}</text>
+          <text class="status status-info">{{detail.statusLabel}}</text>
+        </view>
+        <view class="divider"></view>
+        <view class="facts">
+          <view class="row between"><text class="muted">当前轮次</text><text>{{detail.roundLabel}}</text></view>
+          <view class="row between"><text class="muted">方式</text><text>{{detail.blind_count ? '盲盘' : '明盘'}}</text></view>
+          <view class="row between"><text class="muted">任务版本</text><text>v{{detail.task_version}}</text></view>
+          <view class="row between"><text class="muted">当前可操作</text><text>{{detail.actionLabels}}</text></view>
+        </view>
+      </view>
+
+      <view wx:if="{{detail.blind_count && detail.evidence_status === 'counting_hidden'}}" class="card blind-card">
+        <text class="blind-title">盲盘数量已隐藏</text>
+        <text class="blind-text">服务端未返回账面数、控制数、差异或其他人的实盘数量；只能提交你现场看到的完整实物证据。</text>
+      </view>
+
+      <view class="section">
+        <view class="section-heading"><text class="section-title">盘点范围</text></view>
+        <view wx:for="{{detail.scopes}}" wx:key="scope_id" class="list-card scope-card {{selectedScopeId === item.scope_id ? 'scope-selected' : ''}}" bindtap="chooseScope" data-id="{{item.scope_id}}">
+          <view class="row between"><text>范围 {{item.scope_no}}</text><text class="status status-neutral">{{item.completionLabel}}</text></view>
+          <view class="small muted mono">{{item.location_id}}</view>
+          <view class="row between small scope-meta"><text>{{item.assigned_to_me ? '分配给我' : '仅可查看'}}</text><text>{{item.quantityLabel}}</text></view>
+        </view>
+      </view>
+
+      <view wx:if="{{detail.canCount && selectedScopeId}}" class="section">
+        <view class="section-heading"><text class="section-title">提交完整实盘</text></view>
+        <view class="card count-card">
+          <view class="field"><text class="field-label">物料标识类型</text><picker range="{{identifierOptions}}" range-key="label" value="{{identifierIndex}}" bindchange="changeIdentifierType" disabled="{{writePending}}"><view class="picker-field"><text>{{identifierOptions[identifierIndex].label}}</text><text class="muted">选择</text></view></picker></view>
+          <view class="field"><text class="field-label">物料号</text><input class="input" value="{{materialIdentifier}}" bindinput="bindMaterial" placeholder="输入 SKU 物料号" disabled="{{writePending}}" /></view>
+          <button class="button button-secondary scan-button" bindtap="scanMaterial" disabled="{{submitting || writePending}}">扫码读取物料标识</button>
+          <view class="field"><text class="field-label">成色</text><picker range="{{conditionOptions}}" range-key="label" value="{{conditionIndex}}" bindchange="changeCondition" disabled="{{writePending}}"><view class="picker-field"><text>{{conditionOptions[conditionIndex].label}}</text><text class="muted">选择</text></view></picker></view>
+          <view class="field"><text class="field-label">库存状态</text><picker range="{{availabilityOptions}}" range-key="label" value="{{availabilityIndex}}" bindchange="changeAvailability" disabled="{{writePending}}"><view class="picker-field"><text>{{availabilityOptions[availabilityIndex].label}}</text><text class="muted">选择</text></view></picker></view>
+          <view class="field"><text class="field-label">数量</text><input class="input" value="{{quantity}}" bindinput="bindQuantity" type="digit" placeholder="最多三位小数；SN 每条为 1" disabled="{{writePending}}" /></view>
+          <view class="field"><text class="field-label">批次号（可选）</text><input class="input" value="{{lotNo}}" bindinput="bindLot" placeholder="按物料追踪策略填写" disabled="{{writePending}}" /></view>
+          <view class="field"><text class="field-label">SN（可选）</text><input class="input" value="{{serialNo}}" bindinput="bindSerial" placeholder="SN 物料逐件添加" disabled="{{writePending}}" /></view>
+          <button class="button button-secondary scan-button" bindtap="scanSerial" disabled="{{submitting || writePending}}">扫码读取 SN</button>
+          <view class="field"><text class="field-label">备注（可选）</text><input class="input" value="{{remark}}" bindinput="bindRemark" placeholder="现场差异原因或说明" disabled="{{writePending}}" /></view>
+          <button class="button button-secondary" bindtap="addObservation" disabled="{{submitting || writePending}}">加入本次实盘明细</button>
+        </view>
+
+        <view wx:for="{{draftObservations}}" wx:key="index" class="list-card draft-row">
+          <view class="row between"><text class="mono">{{item.material_identifier_raw}}</text><text>{{item.counted_qty}}</text></view>
+          <view class="small muted">{{item.serial_no_raw ? 'SN ' + item.serial_no_raw : '非 SN 行'}}{{item.lot_no_raw ? ' · 批次 ' + item.lot_no_raw : ''}}</view>
+          <button class="button button-danger button-small" bindtap="removeObservation" data-index="{{index}}" disabled="{{submitting || writePending}}">移除</button>
+        </view>
+
+        <view class="action-stack">
+          <button class="button button-primary" bindtap="submitCount" data-zero="false" loading="{{submitting}}" disabled="{{submitting || !draftObservations.length || (writePending && !(pendingWriteRetryable && pendingWriteKind === 'count'))}}">提交全部实盘并封存范围</button>
+          <button class="button button-secondary" bindtap="submitCount" data-zero="true" disabled="{{submitting || draftObservations.length || (writePending && !(pendingWriteRetryable && pendingWriteKind === 'count'))}}">确认本范围零库存</button>
+        </view>
+      </view>
+
+      <view wx:if="{{detail.differences.length}}" class="section">
+        <view class="section-heading"><text class="section-title">已封存差异</text></view>
+        <view wx:for="{{detail.differences}}" wx:key="difference_id" class="list-card">
+          <view class="row between"><text>{{item.typeLabel}}</text><text class="mono">{{item.difference_qty}}</text></view>
+          <view class="small muted">账面 {{item.book_qty}} · 实盘 {{item.counted_qty}} · 影响 {{item.affected_qty}}</view>
+        </view>
+      </view>
+
+      <view wx:if="{{detail.reviews.length}}" class="section">
+        <view class="section-heading"><text class="section-title">独立复核事实</text></view>
+        <view wx:for="{{detail.reviews}}" wx:key="stage" class="list-card row between"><text>{{item.stageLabel}}</text><text>{{item.decisionLabel}}</text></view>
+      </view>
+
+      <view wx:if="{{detail.canReviewRegion || detail.canReviewHeadquarters || detail.canOpenRecount}}" class="card pc-note">
+        区域复核、总部复核和复盘人员分配必须逐项处理；当前小程序仅支持工程师实盘，复核与人员分配请在 PC 正式盘点中心完成。
+      </view>
+
+      <view wx:if="{{detail.canPost || detail.canClose}}" class="action-stack sticky-action">
+        <button wx:if="{{detail.canPost}}" class="button button-primary" bindtap="terminalAction" data-action="post" loading="{{submitting}}" disabled="{{submitting || (writePending && !(pendingWriteRetryable && pendingWriteKind === 'post'))}}">期初过账（不关闭）</button>
+        <button wx:if="{{detail.canClose}}" class="button button-secondary" bindtap="terminalAction" data-action="close" loading="{{submitting}}" disabled="{{submitting || (writePending && !(pendingWriteRetryable && pendingWriteKind === 'close'))}}">对账完成后关闭</button>
+      </view>
+    </block>
+  </block>
+</view>

@@ -1,0 +1,6 @@
+<view class="page">
+  <view class="card empty">
+    <text class="empty-title">密码入口已停用</text>
+    <text class="empty-text">正式客户端仅支持微信或手机验证码登录。</text>
+  </view>
+</view>

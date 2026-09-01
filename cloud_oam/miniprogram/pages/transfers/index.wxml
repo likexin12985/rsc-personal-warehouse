@@ -1,0 +1,44 @@
+<view class="page">
+  <view class="row between page-head">
+    <view>
+      <view class="page-title">v0.9 调拨历史</view>
+      <view class="page-subtitle">历史原型只读查询；旧状态不代表正式生产状态</view>
+    </view>
+  </view>
+
+  <view class="card form-hint">v0.9 历史原型/只读：审批、派发、收货、撤销及其他写入口均已隔离。</view>
+
+  <scroll-view class="chip-row filter-row" scroll-x enhanced enable-flex show-scrollbar="false">
+    <view wx:for="{{filters}}" wx:key="value" class="chip {{status === item.value ? 'chip-active' : ''}}" data-status="{{item.value}}" bindtap="setStatus">{{item.label}}</view>
+  </scroll-view>
+
+  <view wx:if="{{loading}}" class="loading">正在读取调拨单</view>
+  <view wx:elif="{{!rows.length}}" class="card empty">
+    <text class="empty-title">暂无调拨单</text>
+    <text class="empty-text">当前筛选条件下没有待处理记录。</text>
+  </view>
+
+  <view wx:else class="transfer-list">
+    <view wx:for="{{rows}}" wx:key="id" class="list-card" data-id="{{item.id}}" bindtap="openDetail">
+      <view class="row between">
+        <text class="mono transfer-number">{{item.number}}</text>
+        <text class="status status-{{item.statusTone}}">{{item.statusLabel}}</text>
+      </view>
+      <view class="route">
+        <view class="route-point source-point"></view>
+        <text class="route-name">{{item.sourceWarehouse ? item.sourceWarehouse.name : '外部 / 总部'}}</text>
+        <text class="route-arrow">→</text>
+        <view class="route-point target-point"></view>
+        <text class="route-name target-name">{{item.targetWarehouse.name}}</text>
+      </view>
+      <view class="row between meta-line">
+        <text class="muted small">{{item.typeLabel}} · {{item.items.length}} 种 / {{item.itemTotal}} 件</text>
+        <text class="muted small">{{item.createdText}}</text>
+      </view>
+      <view wx:if="{{item.trackingNumber}}" class="tracking-line">
+        <text>{{item.logisticsCompany || '物流'}}</text>
+        <text class="mono">{{item.trackingNumber}}</text>
+      </view>
+    </view>
+  </view>
+</view>

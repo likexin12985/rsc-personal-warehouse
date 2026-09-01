@@ -1,0 +1,19 @@
+<view class="page">
+  <view wx:if="{{loading}}" class="loading">正在加载仓库和人员</view>
+  <block wx:else>
+    <view class="section form-section">
+      <view class="section-heading"><text class="section-title">任务范围</text></view>
+      <picker mode="selector" range="{{warehouses}}" range-key="name" value="{{warehouseIndex}}" bindchange="changeWarehouse">
+        <view class="field"><text class="field-label">盘点仓库</text><view class="picker-field"><text class="{{warehouseIndex < 0 ? 'placeholder' : ''}}">{{warehouseIndex < 0 ? '请选择仓库' : warehouses[warehouseIndex].name}}</text><text class="muted">选择</text></view></view>
+      </picker>
+      <picker mode="selector" range="{{assignees}}" range-key="name" value="{{assigneeIndex}}" bindchange="changeAssignee">
+        <view class="field"><text class="field-label">盘点人</text><view class="picker-field"><text class="{{assigneeIndex < 0 ? 'placeholder' : ''}}">{{assigneeIndex < 0 ? '请选择盘点人' : assignees[assigneeIndex].name}}</text><text class="muted">选择</text></view></view>
+      </picker>
+      <picker mode="date" value="{{deadline}}" bindchange="changeDeadline">
+        <view class="field"><text class="field-label">截止日期</text><view class="picker-field"><text class="{{!deadline ? 'placeholder' : ''}}">{{deadline || '不设置'}}</text><text class="muted">选择</text></view></view>
+      </picker>
+      <view class="field"><text class="field-label">任务备注</text><textarea class="textarea" maxlength="2000" placeholder="选填" value="{{note}}" bindinput="bindNote" /></view>
+    </view>
+    <view class="sticky-action"><button class="button button-primary" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submit">创建盘点任务</button></view>
+  </block>
+</view>

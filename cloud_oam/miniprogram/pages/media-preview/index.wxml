@@ -1,0 +1,8 @@
+<view class="preview-page">
+  <view wx:if="{{loading}}" class="loading">正在下载凭证</view>
+  <block wx:elif="{{localPath}}">
+    <video wx:if="{{isVideo}}" class="preview-video" src="{{localPath}}" controls autoplay object-fit="contain" />
+    <image wx:else class="preview-image" src="{{localPath}}" mode="widthFix" bindtap="previewImage" />
+    <view class="file-name">{{attachment.name}}</view>
+  </block>
+</view>

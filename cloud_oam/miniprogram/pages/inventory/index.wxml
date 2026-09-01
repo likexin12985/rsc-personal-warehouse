@@ -1,0 +1,51 @@
+<view class="page inventory-page">
+  <view class="segmented">
+    <view class="segment {{mode === 'province' ? 'segment-active' : ''}}" data-mode="province" bindtap="setMode">省区库存</view>
+    <view class="segment {{mode === 'mine' ? 'segment-active' : ''}}" data-mode="mine" bindtap="setMode">个人仓</view>
+  </view>
+
+  <view class="search-row">
+    <input class="input search-input" placeholder="物料编码或名称" value="{{query}}" bindinput="bindQuery" confirm-type="search" bindconfirm="load" />
+    <button class="button button-primary search-button" bindtap="load">查询</button>
+  </view>
+
+  <picker mode="selector" range="{{conditions}}" range-key="label" value="{{conditionIndex}}" bindchange="changeCondition">
+    <view class="picker-field condition-picker">
+      <text>{{conditions[conditionIndex].label}}</text>
+      <text class="muted">筛选</text>
+    </view>
+  </picker>
+
+  <view class="summary-strip">
+    <view><text class="summary-value">{{totals.available}}</text><text class="summary-label">可用</text></view>
+    <view><text class="summary-value">{{totals.onHand}}</text><text class="summary-label">现有</text></view>
+    <view><text class="summary-value">{{totals.occupied}}</text><text class="summary-label">占用</text></view>
+    <view><text class="summary-value">{{totals.inTransit}}</text><text class="summary-label">在途</text></view>
+  </view>
+
+  <view wx:if="{{loading}}" class="loading">正在读取库存</view>
+  <view wx:elif="{{!rows.length}}" class="card empty">
+    <text class="empty-title">没有匹配库存</text>
+    <text class="empty-text">请调整物料编码、名称或状态。</text>
+  </view>
+
+  <view wx:else class="inventory-list">
+    <view wx:for="{{rows}}" wx:key="id" class="list-card inventory-row">
+      <view class="row between">
+        <text class="mono material-code">{{item.material.code}}</text>
+        <text class="status status-{{item.condition === 'bad' ? 'danger' : item.condition === 'old' ? 'warning' : 'success'}}">{{item.conditionLabel}}</text>
+      </view>
+      <text class="material-name">{{item.material.name}}</text>
+      <view class="location-line">
+        <text>{{item.warehouse.name}}</text>
+        <text wx:if="{{item.holder}}" class="holder">持有人：{{item.holder.name}}</text>
+      </view>
+      <view class="quantity-grid">
+        <view><text class="quantity-value available">{{item.available}}</text><text class="quantity-label">可用</text></view>
+        <view><text class="quantity-value">{{item.onHand}}</text><text class="quantity-label">现有</text></view>
+        <view><text class="quantity-value occupied">{{item.occupied}}</text><text class="quantity-label">占用</text></view>
+        <view><text class="quantity-value transit">{{item.inTransit}}</text><text class="quantity-label">在途</text></view>
+      </view>
+    </view>
+  </view>
+</view>

@@ -1,0 +1,34 @@
+<view class="page">
+  <view>
+    <view class="page-title">盘点中心</view>
+    <view class="page-subtitle">首次盘点、复盘、差异复核、过账和关闭保持独立状态。</view>
+  </view>
+
+  <view wx:if="{{loading}}" class="loading">正在读取正式盘点任务</view>
+
+  <block wx:else>
+    <view class="card access-card status-{{accessAllowed ? 'success' : 'danger'}}">
+      {{accessMessage}}
+    </view>
+
+    <view wx:if="{{accessAllowed && !tasks.length}}" class="empty">
+      <text class="empty-title">当前没有可见盘点任务</text>
+      <text class="empty-text">区域负责人尚未下发，或任务不在你的正式授权范围内。</text>
+    </view>
+
+    <view wx:for="{{tasks}}" wx:key="task_id" class="list-card task-card" bindtap="openTask" data-id="{{item.task_id}}">
+      <view class="row between">
+        <text class="task-no mono">{{item.task_no}}</text>
+        <text class="status status-info">{{item.statusLabel}}</text>
+      </view>
+      <view class="divider"></view>
+      <view class="task-facts">
+        <view class="row between"><text class="muted">当前轮次</text><text>第 {{item.current_round_no}} 轮</text></view>
+        <view class="row between"><text class="muted">范围进度</text><text>{{item.progressLabel}}</text></view>
+        <view class="row between"><text class="muted">盘点方式</text><text>{{item.blind_count ? '盲盘' : '明盘'}}</text></view>
+        <view class="row between"><text class="muted">截止时间</text><text>{{item.deadlineLabel}}</text></view>
+      </view>
+      <view class="task-actions">{{item.actionLabels}}</view>
+    </view>
+  </block>
+</view>

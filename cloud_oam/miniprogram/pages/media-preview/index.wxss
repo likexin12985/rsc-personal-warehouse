@@ -1,0 +1,20 @@
+.preview-page {
+  min-height: 100vh;
+  padding: 24rpx;
+  background: #111719;
+  color: #ffffff;
+}
+
+.preview-image,
+.preview-video {
+  width: 100%;
+  min-height: 500rpx;
+  background: #000000;
+}
+
+.file-name {
+  padding: 22rpx 4rpx;
+  color: #d9dfe2;
+  font-size: 23rpx;
+  word-break: break-all;
+}

@@ -1,0 +1,38 @@
+<view class="page">
+  <view class="row between page-head">
+    <view>
+      <view class="page-title">盘点任务</view>
+      <view class="page-subtitle">差异项必须填写原因并上传照片或视频</view>
+    </view>
+    <button wx:if="{{canManage}}" class="button button-primary button-small" bindtap="createTask">新建</button>
+  </view>
+
+  <scroll-view class="chip-row filter-row" scroll-x enhanced enable-flex show-scrollbar="false">
+    <view wx:for="{{filters}}" wx:key="value" class="chip {{status === item.value ? 'chip-active' : ''}}" data-status="{{item.value}}" bindtap="setStatus">{{item.label}}</view>
+  </scroll-view>
+
+  <view wx:if="{{loading}}" class="loading">正在读取盘点任务</view>
+  <view wx:elif="{{!rows.length}}" class="card empty">
+    <text class="empty-title">暂无盘点任务</text>
+    <text class="empty-text">当前筛选条件下没有记录。</text>
+  </view>
+
+  <view wx:else>
+    <view wx:for="{{rows}}" wx:key="id" class="list-card" data-id="{{item.id}}" bindtap="openDetail">
+      <view class="row between">
+        <text class="mono task-number">{{item.number}}</text>
+        <text class="status status-{{item.statusTone}}">{{item.statusLabel}}</text>
+      </view>
+      <text class="warehouse-name">{{item.warehouse.name}}</text>
+      <view class="row between task-meta">
+        <text class="muted small">盘点人：{{item.assignee.name}}</text>
+        <text class="muted small">{{item.createdText}}</text>
+      </view>
+      <view class="progress-row">
+        <view class="progress-track"><view class="progress-value" style="width: {{item.percent}}%;"></view></view>
+        <text class="progress-text">{{item.progress.counted}} / {{item.progress.total}}</text>
+      </view>
+      <view wx:if="{{item.difference !== 0}}" class="difference-line">当前差异 {{item.difference > 0 ? '+' : ''}}{{item.difference}}</view>
+    </view>
+  </view>
+</view>

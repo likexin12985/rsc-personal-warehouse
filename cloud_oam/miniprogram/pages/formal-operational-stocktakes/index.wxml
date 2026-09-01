@@ -1,0 +1,29 @@
+<view class="page">
+  <view class="page-header"><view><view class="page-title">日常盘点</view><view class="page-subtitle">正式非期初盘点</view></view></view>
+  <view wx:if="{{loading}}" class="loading">正在读取正式盘点</view>
+  <block wx:else>
+    <view class="card access-card status-{{accessAllowed ? 'success' : 'danger'}}">{{accessMessage}}</view>
+    <view wx:if="{{errorMessage}}" class="card error-card">{{errorMessage}}</view>
+    <view wx:if="{{pendingMessage}}" class="card pending-card"><text>{{pendingMessage}}</text><button wx:if="{{pendingRetryable}}" class="button button-secondary" bindtap="retryPending" loading="{{busy}}">按原坐标重试</button></view>
+    <view class="card safety-card">只访问 /v1/stocktakes 与 /access/context；不访问 legacy /stocktakes、/media、opening 路由或外部系统。过账与关闭分别展示，posted 不等于 closed。</view>
+
+    <view wx:if="{{accessAllowed}}" class="card create-card">
+      <text class="section-title">个人自盘</text>
+      <text class="small muted">人员、区域和个人库位均由服务端正式身份派生。</text>
+      <view class="field"><text class="field-label">盘点方式</text><picker range="{{modeOptions}}" range-key="label" value="{{blindCount ? 0 : 1}}" bindchange="changeMode"><view class="picker-field">{{blindCount ? '盲盘' : '明盘'}}</view></picker></view>
+      <view class="field"><text class="field-label">冻结方式</text><picker range="{{freezeOptions}}" range-key="label" value="{{freezeMode === 'cutoff_replay' ? 0 : 1}}" bindchange="changeFreeze"><view class="picker-field">{{freezeMode === 'cutoff_replay' ? '截止游标回放' : '硬冻结'}}</view></picker></view>
+      <view class="field"><text class="field-label">备注</text><input class="input" value="{{note}}" bindinput="bindNote" /></view>
+      <button class="button button-primary" bindtap="createPersonal" loading="{{busy}}" disabled="{{busy || pendingMessage}}">创建个人自盘草稿</button>
+    </view>
+
+    <view class="section">
+      <view class="section-heading"><text class="section-title">可见任务</text></view>
+      <view wx:if="{{!tasks.length}}" class="card empty">暂无可见正式日常盘点</view>
+      <view wx:for="{{tasks}}" wx:key="task_id" class="list-card task-card" bindtap="openTask" data-id="{{item.task_id}}">
+        <view class="row between"><text class="mono task-no">{{item.task_no}}</text><text class="status status-info">{{item.statusLabel}}</text></view>
+        <view class="divider"></view>
+        <view class="row between small"><text>{{item.typeLabel}} · {{item.modeLabel}}</text><text>{{item.progressLabel}} 范围 · v{{item.version}}</text></view>
+      </view>
+    </view>
+  </block>
+</view>

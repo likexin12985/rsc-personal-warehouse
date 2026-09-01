@@ -1,0 +1,13 @@
+{
+  "name": "RSC个人仓",
+  "short_name": "RSC个人仓",
+  "description": "库存、调拨、入库与移动盘点",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f6f7",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "/brand/rsc-personal-warehouse-blue-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/brand/rsc-personal-warehouse-blue.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

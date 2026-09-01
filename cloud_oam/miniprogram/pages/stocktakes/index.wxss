@@ -1,0 +1,10 @@
+.page-head { align-items: flex-start; }
+.filter-row { width: 100%; margin: 24rpx 0 20rpx; }
+.task-number { max-width: 470rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 24rpx; font-weight: 700; }
+.warehouse-name { display: block; margin-top: 18rpx; font-size: 29rpx; font-weight: 650; }
+.task-meta { margin-top: 12rpx; }
+.progress-row { display: flex; align-items: center; gap: 16rpx; margin-top: 22rpx; }
+.progress-track { flex: 1; height: 12rpx; overflow: hidden; background: #e4e9eb; border-radius: 6rpx; }
+.progress-value { height: 100%; background: #287b85; border-radius: 6rpx; }
+.progress-text { flex: 0 0 84rpx; color: #68747c; font-size: 22rpx; text-align: right; }
+.difference-line { margin-top: 14rpx; color: #b14332; font-size: 22rpx; }

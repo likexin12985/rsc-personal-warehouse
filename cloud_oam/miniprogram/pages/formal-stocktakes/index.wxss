@@ -1,0 +1,35 @@
+.access-card {
+  margin-top: 26rpx;
+  padding: 22rpx 24rpx;
+  font-size: 24rpx;
+  line-height: 1.6;
+}
+
+.task-card {
+  margin-top: 18rpx;
+}
+
+.task-no {
+  max-width: 480rpx;
+  font-size: 25rpx;
+  font-weight: 650;
+}
+
+.task-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+  font-size: 24rpx;
+}
+
+.task-facts text:last-child {
+  max-width: 430rpx;
+  text-align: right;
+}
+
+.task-actions {
+  margin-top: 20rpx;
+  color: #c94611;
+  font-size: 23rpx;
+  font-weight: 650;
+}

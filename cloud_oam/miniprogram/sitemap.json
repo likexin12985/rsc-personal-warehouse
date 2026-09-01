@@ -1,0 +1,9 @@
+{
+  "desc": "RSC个人仓小程序页面索引",
+  "rules": [
+    {
+      "action": "disallow",
+      "page": "*"
+    }
+  ]
+}

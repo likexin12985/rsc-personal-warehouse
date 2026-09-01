@@ -1,0 +1,58 @@
+<view class="page">
+  <view wx:if="{{loading && !task}}" class="loading">正在读取盘点详情</view>
+
+  <block wx:if="{{task}}">
+    <view class="card task-head">
+      <view class="row between"><text class="mono task-number">{{task.number}}</text><text class="status status-{{task.statusTone}}">{{task.statusLabel}}</text></view>
+      <text class="task-warehouse">{{task.warehouse.name}}</text>
+      <view class="task-info-grid">
+        <view><text class="detail-label">盘点人</text><text>{{task.assignee.name}}</text></view>
+        <view><text class="detail-label">任务进度</text><text>{{task.progress.counted}} / {{task.progress.total}}</text></view>
+        <view><text class="detail-label">创建时间</text><text>{{task.createdText}}</text></view>
+        <view><text class="detail-label">截止时间</text><text>{{task.deadlineText}}</text></view>
+      </view>
+      <view wx:if="{{task.note}}" class="task-note">{{task.note}}</view>
+    </view>
+
+    <view wx:if="{{editable}}" class="section-heading action-heading">
+      <view><text class="section-title">盘点明细</text><text class="muted small action-sub">未盘 {{missingCount}} 项</text></view>
+      <button class="button button-secondary button-small" loading="{{actionLoading}}" disabled="{{actionLoading}}" bindtap="setAllExpected">全部持平</button>
+    </view>
+    <view wx:else class="section-heading action-heading"><text class="section-title">盘点明细</text><text class="muted small">差异 {{task.difference}}</text></view>
+
+    <view wx:for="{{task.items}}" wx:key="id" class="list-card count-item {{item.difference !== null && item.difference !== 0 ? 'difference-item' : ''}}">
+      <view class="row between"><text class="mono item-code">{{item.code}}</text><text class="status status-{{item.condition === 'bad' ? 'danger' : item.condition === 'old' ? 'warning' : 'success'}}">{{item.conditionLabel}}</text></view>
+      <text class="item-name">{{item.name}}</text>
+      <view class="count-grid">
+        <view><text class="count-label">账面</text><text class="count-value">{{item.expected}}</text></view>
+        <view>
+          <text class="count-label">实盘</text>
+          <input wx:if="{{editable}}" class="count-input" type="number" value="{{item.countedInput}}" data-index="{{index}}" data-field="countedInput" bindinput="updateItem" />
+          <text wx:else class="count-value">{{item.counted}}</text>
+        </view>
+        <view><text class="count-label">差异</text><text class="count-value {{item.difference !== null && item.difference !== 0 ? 'difference-value' : ''}}">{{item.differenceText}}</text></view>
+      </view>
+      <view wx:if="{{editable}}" class="field remark-field">
+        <text class="field-label">差异原因</text>
+        <input class="input" placeholder="有差异时必填" value="{{item.remark}}" data-index="{{index}}" data-field="remark" bindinput="updateItem" />
+      </view>
+      <text wx:elif="{{item.remark}}" class="saved-remark">原因：{{item.remark}}</text>
+      <button wx:if="{{editable}}" class="button button-secondary button-small save-button" data-index="{{index}}" bindtap="saveItem">保存本项</button>
+    </view>
+
+    <view class="section">
+      <view class="section-heading"><text class="section-title">照片 / 视频凭证</text><button wx:if="{{editable}}" class="button button-secondary button-small" bindtap="chooseMedia">上传</button></view>
+      <view wx:if="{{hasDifference}}" class="evidence-warning">当前存在差异，提交前必须上传凭证并填写差异原因。</view>
+      <view wx:if="{{!attachments.length}}" class="card empty compact-empty"><text class="empty-title">暂无凭证</text></view>
+      <view wx:else class="media-grid">
+        <view wx:for="{{attachments}}" wx:key="id" class="media-tile" data-id="{{item.id}}" bindtap="previewMedia">
+          <icon type="{{item.isVideo ? 'waiting' : 'success'}}" size="26" color="#287b85" />
+          <text class="media-name">{{item.name}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view wx:if="{{editable}}" class="sticky-action"><button class="button button-primary" loading="{{actionLoading}}" disabled="{{actionLoading}}" bindtap="submitTask">提交盘点结果</button></view>
+    <view wx:if="{{canClose}}" class="sticky-action"><button class="button button-primary" loading="{{actionLoading}}" disabled="{{actionLoading}}" bindtap="closeTask">复核并关闭任务</button></view>
+  </block>
+</view>

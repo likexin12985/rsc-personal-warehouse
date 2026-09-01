@@ -1,0 +1,44 @@
+<view class="login-page">
+  <view class="login-top safe-top">
+    <image class="brand-mark" src="/assets/rsc-personal-warehouse-blue.png" mode="aspectFill" />
+    <view class="brand-name">RSC个人仓</view>
+    <view class="brand-subtitle">总部、网点与个人备件一体协同</view>
+  </view>
+
+  <view wx:if="{{checking}}" class="loading">正在检查登录状态</view>
+
+  <view wx:else class="login-panel">
+    <view wx:if="{{(options.wechat_enabled ? 1 : 0) + (options.sms_enabled ? 1 : 0) > 1}}" class="segmented login-mode">
+      <view wx:if="{{options.wechat_enabled}}" class="segment {{mode === 'wechat' ? 'segment-active' : ''}}" data-mode="wechat" bindtap="setMode">微信登录</view>
+      <view wx:if="{{options.sms_enabled}}" class="segment {{mode === 'sms' ? 'segment-active' : ''}}" data-mode="sms" bindtap="setMode">验证码登录</view>
+    </view>
+
+    <block wx:if="{{mode === 'wechat'}}">
+      <view class="wechat-login-copy">
+        <text class="wechat-login-title">微信手机号快捷登录</text>
+        <text class="wechat-login-text">首次授权后绑定已开通账号，后续打开小程序可直接登录。</text>
+      </view>
+      <button class="button wechat-login-button" open-type="getPhoneNumber" loading="{{loading}}" disabled="{{loading}}" bindgetphonenumber="wechatPhoneLogin">授权手机号并登录</button>
+    </block>
+
+    <view wx:if="{{mode === 'sms'}}" class="field">
+      <text class="field-label">手机号</text>
+      <input class="input" type="number" maxlength="11" placeholder="请输入已开通账号的手机号" data-field="mobile" value="{{mobile}}" bindinput="bindField" />
+    </view>
+
+    <view wx:if="{{mode === 'sms'}}" class="field">
+      <text class="field-label">短信验证码</text>
+      <view class="code-row">
+        <input class="input code-input" type="number" maxlength="8" placeholder="请输入验证码" data-field="code" value="{{code}}" bindinput="bindField" />
+        <button class="button button-secondary code-button" disabled="{{countdown > 0}}" bindtap="requestCode">{{countdown > 0 ? countdown + '秒' : '获取验证码'}}</button>
+      </view>
+    </view>
+
+    <button wx:if="{{mode === 'sms'}}" class="button button-primary login-button" loading="{{loading}}" disabled="{{loading}}" bindtap="submit">验证码登录</button>
+    <view wx:if="{{mode === 'unavailable'}}" class="card empty">
+      <text class="empty-title">当前未启用正式登录方式</text>
+      <text class="empty-text">正式客户端已关闭密码登录，请联系管理员启用微信或手机验证码。</text>
+    </view>
+    <view class="secure-line"><text class="secure-dot"></text>仅连接发布前审核通过的 HTTPS 服务</view>
+  </view>
+</view>

@@ -1,0 +1,75 @@
+<view class="page detail-page">
+  <view wx:if="{{loading && !transfer}}" class="loading">正在读取调拨历史</view>
+
+  <block wx:if="{{transfer}}">
+    <view class="card form-hint">v0.9 历史原型/只读：仅展示原始历史字段和旧状态，不提供审批、驳回、派发、收货、撤销或凭证写入，也不映射为正式版十条状态轴。</view>
+
+    <view class="card header-card">
+      <view class="row between">
+        <text class="mono detail-number">{{transfer.number}}</text>
+        <text class="status status-{{transfer.statusTone}}">{{transfer.statusLabel}}</text>
+      </view>
+      <view class="route-block">
+        <view class="route-column">
+          <text class="route-label">来源</text>
+          <text class="route-value">{{transfer.sourceWarehouse ? transfer.sourceWarehouse.name : (transfer.status === 'pending_approval' ? '审批后确定' : '外部 / 总部')}}</text>
+          <text wx:if="{{transfer.sourceHolder}}" class="route-person">{{transfer.sourceHolder.name}}</text>
+        </view>
+        <text class="route-arrow">→</text>
+        <view class="route-column route-target">
+          <text class="route-label">目标</text>
+          <text class="route-value">{{transfer.targetWarehouse.name}}</text>
+        </view>
+      </view>
+      <view class="detail-grid">
+        <view><text class="detail-label">创建时间</text><text>{{transfer.createdText}}</text></view>
+        <view><text class="detail-label">旧业务类型</text><text>{{transfer.typeLabel}}</text></view>
+        <view><text class="detail-label">接收人</text><text>{{transfer.recipient ? transfer.recipient.name : '仓库'}}</text></view>
+        <view><text class="detail-label">申请人</text><text>{{transfer.requester ? transfer.requester.name : '-'}}</text></view>
+        <view><text class="detail-label">外部单号</text><text class="mono">{{transfer.externalReference || '-'}}</text></view>
+        <view><text class="detail-label">关联工单</text><text class="mono">{{transfer.workOrderNumber || '-'}}</text></view>
+        <view><text class="detail-label">创建人</text><text>{{transfer.createdBy}}</text></view>
+      </view>
+      <view wx:if="{{transfer.note}}" class="note-line">{{transfer.note}}</view>
+    </view>
+
+    <view class="section">
+      <view class="section-heading"><text class="section-title">物料明细</text><text class="muted small">{{transfer.items.length}} 种</text></view>
+      <view wx:for="{{transfer.items}}" wx:key="id" class="list-card material-item">
+        <view class="row between">
+          <text class="mono item-code">{{item.code}}</text>
+          <text class="item-quantity">× {{item.quantity}} {{item.unit}}</text>
+        </view>
+        <text class="item-name">{{item.name}}</text>
+        <view class="row between item-foot">
+          <text class="muted small">{{item.conditionLabel}}</text>
+          <text wx:if="{{item.remark}}" class="remark">{{item.remark}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="section logistics-section">
+      <view class="section-heading"><text class="section-title">旧原型物流字段</text></view>
+      <view class="card logistics-card">
+        <view class="row between"><text class="muted">物流公司</text><text>{{transfer.logisticsCompany || '-'}}</text></view>
+        <view class="divider"></view>
+        <view class="row between"><text class="muted">运单号</text><text class="mono">{{transfer.trackingNumber || '-'}}</text></view>
+        <view class="divider"></view>
+        <view class="row between"><text class="muted">旧派发时间</text><text>{{transfer.dispatchedText}}</text></view>
+        <view class="divider"></view>
+        <view class="row between"><text class="muted">旧收货时间</text><text>{{transfer.receivedText}}</text></view>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="section-heading"><text class="section-title">历史照片 / 视频凭证</text></view>
+      <view wx:if="{{!attachments.length}}" class="card empty compact-empty"><text class="empty-title">暂无凭证</text></view>
+      <view wx:else class="media-grid">
+        <view wx:for="{{attachments}}" wx:key="id" class="media-tile" data-id="{{item.id}}" bindtap="previewMedia">
+          <icon type="{{item.isVideo ? 'waiting' : 'success'}}" size="26" color="#287b85" />
+          <text class="media-name">{{item.name}}</text>
+        </view>
+      </view>
+    </view>
+  </block>
+</view>

@@ -1,0 +1,1 @@
+20 3 * * * root /opt/star-oam/scripts/backup.sh >> /var/log/star-oam-backup.log 2>&1

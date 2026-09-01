@@ -1,0 +1,70 @@
+.page-head {
+  align-items: flex-start;
+}
+
+.filter-row {
+  width: 100%;
+  margin: 24rpx 0 20rpx;
+}
+
+.transfer-number {
+  max-width: 480rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 24rpx;
+  font-weight: 700;
+}
+
+.route {
+  display: grid;
+  grid-template-columns: 16rpx minmax(0, 1fr) 34rpx 16rpx minmax(0, 1fr);
+  align-items: center;
+  gap: 10rpx;
+  margin-top: 24rpx;
+}
+
+.route-point {
+  width: 14rpx;
+  height: 14rpx;
+  border-radius: 50%;
+}
+
+.source-point { background: #718089; }
+.target-point { background: #e65318; }
+
+.route-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 24rpx;
+}
+
+.target-name {
+  color: #263942;
+  font-weight: 600;
+}
+
+.route-arrow {
+  color: #9ba4aa;
+  text-align: center;
+}
+
+.meta-line {
+  margin-top: 22rpx;
+  padding-top: 18rpx;
+  border-top: 1rpx solid #e8ecee;
+}
+
+.tracking-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 14rpx;
+  margin-top: 14rpx;
+  padding: 14rpx 16rpx;
+  background: #f2f6f7;
+  border-radius: 8rpx;
+  color: #49626b;
+  font-size: 22rpx;
+}

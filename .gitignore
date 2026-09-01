@@ -1,0 +1,16 @@
+# Private cloud repository boundary.
+#
+# The Git repository intentionally lives at this workspace root so the
+# authoritative AGENTS.md and V1.0 product baseline travel with cloud_oam.
+# Everything else (work/, outputs/, sessions, operational scripts, and local
+# evidence) is denied by default and must never be added implicitly.
+/*
+!/.gitignore
+!/README.md
+!/AGENTS.md
+!/docs/
+!/cloud_oam/
+
+# Only the frozen product baseline is allowed from the workspace docs folder.
+/docs/*
+!/docs/RSC个人仓与物资运营扩展系统_正式生产版需求与架构设计_V1.0.md

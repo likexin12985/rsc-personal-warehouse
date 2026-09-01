@@ -1,0 +1,174 @@
+<view class="page">
+  <view>
+    <view class="page-title">需求提报</view>
+    <view class="page-subtitle">正式 V1.0 纵切；列表和详情只展示脱敏收货信息。</view>
+  </view>
+
+  <view class="notice info">正式 V1.0 客户端路由已接线；生产写入仍受服务端写 gate 与 runtime ACL 控制。写入只在响应契约与同一需求详情精确回读一致后确认；明文草稿仅驻留当前页面内存。</view>
+  <view wx:if="{{notice}}" class="notice info">{{notice}}</view>
+  <view wx:if="{{loading}}" class="loading">正在校验身份、权限与正式需求契约</view>
+
+  <block wx:else>
+    <view class="card access-card status-{{accessAllowed ? 'success' : 'danger'}}">{{accessMessage}}</view>
+
+    <block wx:if="{{formMode}}">
+      <view class="section-heading">
+        <text class="section-title">{{formMode === 'create' ? '新建需求草稿' : '编辑需求草稿'}}</text>
+      </view>
+      <view wx:if="{{writePending}}" class="notice warning">{{pendingWriteMessage}}</view>
+      <view wx:if="{{materialPicker}}" class="card picker-card">
+        <view class="row between"><text class="section-title">{{materialPicker.target === 'material' ? '选择正式物料' : '选择建议替代物料'}}</text><button class="remove" bindtap="closeMaterialPicker">关闭</button></view>
+        <view class="field"><text class="field-label">SKU / 名称 / 规格</text><input class="input" value="{{materialPicker.query}}" disabled="{{materialPicker.loading}}" bindinput="materialPickerQueryInput" /></view>
+        <button class="button button-primary" disabled="{{materialPicker.loading}}" bindtap="searchMaterialPicker">搜索正式目录</button>
+        <view wx:if="{{materialPicker.error}}" class="notice warning">{{materialPicker.error}}；不会回退旧物料接口或接受手填 UUID。</view>
+        <view wx:if="{{materialPicker.loading}}" class="loading">正在读取正式物料目录</view>
+        <view wx:for="{{materialPicker.items}}" wx:key="material_id" class="list-card">
+          <view class="row between"><text class="mono">{{item.sku_code}}</text><button class="button button-secondary button-small" data-id="{{item.material_id}}" bindtap="chooseMaterial">选择</button></view>
+          <view class="fact"><text class="muted">名称 / 规格</text><text>{{item.name}} / {{item.specification || '无规格'}}</text></view>
+          <view class="fact"><text class="muted">单位 / 追踪策略</text><text>{{item.base_unit}} / {{item.trackingLabel}}</text></view>
+          <view class="fact"><text class="muted">数量规则</text><text>{{item.quantity_scale}} 位小数 / {{item.fractionLabel}}</text></view>
+        </view>
+        <view wx:if="{{!materialPicker.loading && !materialPicker.error && !materialPicker.items.length}}" class="empty"><text class="empty-title">没有匹配的正式物料</text></view>
+        <button wx:if="{{materialPicker.nextAfterId}}" class="button button-secondary" disabled="{{materialPicker.loading}}" bindtap="loadMoreMaterials">加载更多正式物料</button>
+      </view>
+      <view class="card form-card">
+        <view class="field"><text class="field-label">关联工单 UUID（可空）</text><input class="input" value="{{form.workOrderId}}" data-field="workOrderId" bindinput="formInput" /></view>
+        <view class="field"><text class="field-label">用途</text><input class="input" value="{{form.purpose}}" data-field="purpose" bindinput="formInput" /></view>
+        <view class="field"><text class="field-label">紧急程度（normal / urgent / emergency）</text><input class="input" value="{{form.urgency}}" data-field="urgency" bindinput="formInput" /></view>
+        <view class="field"><text class="field-label">期望日期（YYYY-MM-DD，可空）</text><input class="input" value="{{form.expectedDate}}" data-field="expectedDate" bindinput="formInput" /></view>
+        <view class="field"><text class="field-label">联系人</text><input class="input" value="{{form.contactName}}" data-field="contactName" bindinput="formInput" /></view>
+        <view class="field"><text class="field-label">联系电话</text><input class="input" type="text" value="{{form.contactMobile}}" data-field="contactMobile" bindinput="formInput" /></view>
+        <view class="address-grid">
+          <view class="field"><text class="field-label">省代码</text><input class="input" value="{{form.provinceCode}}" data-field="provinceCode" bindinput="formInput" /></view>
+          <view class="field"><text class="field-label">省</text><input class="input" value="{{form.provinceName}}" data-field="provinceName" bindinput="formInput" /></view>
+          <view class="field"><text class="field-label">市</text><input class="input" value="{{form.cityName}}" data-field="cityName" bindinput="formInput" /></view>
+          <view class="field"><text class="field-label">区县</text><input class="input" value="{{form.districtName}}" data-field="districtName" bindinput="formInput" /></view>
+        </view>
+        <view class="field"><text class="field-label">详细地址</text><textarea class="textarea" value="{{form.addressDetail}}" data-field="addressDetail" bindinput="formInput" /></view>
+        <view class="upload-card">
+          <view class="row between"><text class="field-label">需求附件</text><button class="button button-secondary button-small" disabled="{{busy || writePending || !requestUploadCanChoose}}" bindtap="chooseRequestAttachment">选择并上传</button></view>
+          <text wx:if="{{form.attachmentFileIds.length}}" class="small muted">当前草稿已保留 {{form.attachmentFileIds.length}} 个正式附件引用。</text>
+          <text wx:if="{{!requestUploadFiles.length}}" class="small muted">支持 PDF、图片和 MP4/MOV，单文件最多 10 MB；只在 available 后绑定草稿。</text>
+          <view wx:for="{{requestUploadFiles}}" wx:key="key" class="upload-row">
+            <text>{{item.filename}} · {{item.sizeLabel}}</text><text class="small mono">SHA-256 {{item.sha256 || '计算中'}}</text><text class="small">{{item.statusLabel}}</text><text wx:if="{{item.error}}" class="small upload-error">{{item.error}}</text>
+            <button wx:if="{{item.canRetry}}" class="button button-secondary button-small" disabled="{{busy || writePending}}" data-key="{{item.key}}" bindtap="retryRequestAttachment">按原上传坐标重试</button><button wx:if="{{item.canRemove}}" class="remove" disabled="{{busy || writePending}}" data-key="{{item.key}}" bindtap="removeRequestAttachment">移除</button>
+          </view>
+        </view>
+        <view class="field"><text class="field-label">申请备注</text><textarea class="textarea" value="{{form.note}}" data-field="note" bindinput="formInput" /></view>
+
+        <view class="row between line-heading">
+          <view><text class="section-title">完整物料明细</text><text class="small muted block">数量必须为三位小数</text></view>
+          <button class="button button-secondary button-small" disabled="{{busy}}" bindtap="addLine">增加明细</button>
+        </view>
+        <view wx:for="{{form.lines}}" wx:key="key" class="line-card">
+          <view class="row between"><text class="small muted">明细 {{index + 1}}</text><button class="remove" disabled="{{busy || form.lines.length === 1}}" data-key="{{item.key}}" bindtap="removeLine">删除</button></view>
+          <view class="field"><text class="field-label">正式物料</text><button class="material-select" disabled="{{busy}}" data-key="{{item.key}}" data-target="material" bindtap="openMaterialPicker">{{item.material ? item.material.sku_code + '｜' + item.material.name : '从正式目录选择物料'}}</button><view wx:if="{{item.material}}" class="small muted">{{item.material.specification || '无规格'}} · {{item.material.base_unit}} · {{item.material.trackingLabel}}</view></view>
+          <view class="field"><text class="field-label">申请数量</text><input class="input" type="digit" value="{{item.requestedQty}}" data-key="{{item.key}}" data-field="requestedQty" bindinput="lineInput" /></view>
+          <view class="field"><text class="field-label">需用日期（YYYY-MM-DD，可空）</text><input class="input" value="{{item.requiredDate}}" data-key="{{item.key}}" data-field="requiredDate" bindinput="lineInput" /></view>
+          <view class="field"><text class="field-label">建议替代物料（可空）</text><button class="material-select" disabled="{{busy}}" data-key="{{item.key}}" data-target="substitute" bindtap="openMaterialPicker">{{item.substituteMaterial ? item.substituteMaterial.sku_code + '｜' + item.substituteMaterial.name : '从正式目录选择'}}</button><button wx:if="{{item.substituteMaterial}}" class="remove" data-key="{{item.key}}" bindtap="clearSubstitute">清除替代料</button></view>
+          <view class="field"><text class="field-label">明细备注</text><input class="input" value="{{item.note}}" data-key="{{item.key}}" data-field="note" bindinput="lineInput" /></view>
+        </view>
+
+        <view class="notice info">详细地址和联系电话只保留在当前页面内存中，不写入 storage、日志或列表/详情。</view>
+        <view class="action-grid"><button class="button button-secondary" disabled="{{busy}}" bindtap="cancelForm">取消</button><button class="button button-primary" loading="{{busy}}" disabled="{{busy || requestUploadBlocking}}" bindtap="saveDraft">{{formMode === 'create' ? '保存草稿' : '保存修改'}}</button></view>
+      </view>
+    </block>
+
+    <block wx:elif="{{detail}}">
+      <view class="section-heading"><text class="section-title">{{detail.request_no}}</text><text class="status status-info">{{detail.statusLabel}}</text></view>
+      <view class="notice info">{{detail.approvalNotice}}</view>
+      <view class="card detail-card">
+        <view class="fact"><text class="muted">工单</text><text class="mono">{{detail.work_order_id || '未关联'}}</text></view>
+        <view class="fact"><text class="muted">用途</text><text>{{detail.purpose}}</text></view>
+        <view class="fact"><text class="muted">紧急程度 / 期望日期</text><text>{{detail.urgency}} · {{detail.expected_date || '未填写'}}</text></view>
+        <view class="fact"><text class="muted">联系人（脱敏）</text><text>{{detail.maskedContact}}</text></view>
+        <view class="fact"><text class="muted">收货地址（脱敏）</text><text>{{detail.maskedAddress}}</text></view>
+        <view class="fact"><text class="muted">备注</text><text>{{detail.note || '无'}}</text></view>
+        <view class="fact"><text class="muted">附件引用</text><text wx:if="{{detail.attachment_refs.length}}" wx:for="{{detail.attachment_refs}}" wx:key="file_id">{{item.display_name}}</text><text wx:else>无</text></view>
+      </view>
+
+      <view class="section"><text class="section-title">十个独立状态轴</text><view class="axis-grid"><view wx:for="{{detail.stateAxes}}" wx:key="key" class="axis"><text class="muted small">{{item.label}}</text><text class="mono small">{{item.value}}</text></view></view></view>
+
+      <view class="section"><text class="section-title">完整物料明细</text><view wx:for="{{detail.lines}}" wx:key="request_line_id" class="list-card">
+        <view class="row between"><text>第 {{item.line_no}} 行</text><text class="status status-info">{{item.status}}</text></view>
+        <view class="fact"><text class="muted">物料</text><text class="mono">{{item.material_id}}</text></view>
+        <view class="fact"><text class="muted">申请 / 批准 / 取消</text><text>{{item.requested_qty}} / {{item.final_approved_qty}} / {{item.cancelled_qty}}</text></view>
+        <view class="fact"><text class="muted">需用日期 / 替代</text><text>{{item.required_date || '-'}} / {{item.suggested_substitute_material_id || '-'}}</text></view>
+        <view class="fact"><text class="muted">备注</text><text>{{item.note || '无'}}</text></view>
+      </view></view>
+
+      <view class="section"><text class="section-title">审批进度与处理</text><view class="small muted section-note">两级内部逐行审批 + 外部证据登记/独立复核；权限或证据缺失时失败关闭。</view><view wx:if="{{detail.approvalSteps.length}}" wx:for="{{detail.approvalSteps}}" wx:key="step_id" class="list-card"><view class="row between"><text>第 {{item.step_no}} 级 · {{item.source_mode}}</text><text>{{item.status}}</text></view></view><view wx:else class="empty"><text class="empty-title">尚未产生审批实例</text></view></view>
+
+      <view wx:if="{{detail.verificationBlocked}}" class="notice warning">当前步骤没有唯一待复核证据，已阻止复核写入。</view>
+      <view wx:if="{{detail.canProcessInternal || detail.canRegisterExternal || detail.canVerifyExternal}}" class="action-grid process-actions">
+        <button wx:if="{{detail.canProcessInternal}}" class="button button-primary" data-kind="internal" bindtap="openApprovalProcess">处理当前内部审批</button>
+        <button wx:if="{{detail.canRegisterExternal}}" class="button button-primary" data-kind="external_registration" bindtap="openApprovalProcess">登记星星总部审批证据</button>
+        <button wx:if="{{detail.canVerifyExternal}}" class="button button-primary" data-kind="external_verification" bindtap="openApprovalProcess">独立复核外部证据</button>
+      </view>
+
+      <view wx:if="{{processing}}" class="card process-card">
+        <text class="section-title">{{processing.kind === 'internal' ? '处理当前内部审批' : processing.kind === 'external_registration' ? '登记星星总部审批证据' : '独立复核外部审批证据'}}</text>
+        <view class="notice warning">本操作只更新审批事实，不代表分配、占用、出库、发货、签收、OAM收货、个人仓入库、通知或对账完成。</view>
+        <view wx:if="{{processing.pendingMessage}}" class="notice warning">{{processing.pendingMessage}}</view>
+        <view wx:if="{{processing.error}}" class="notice warning">{{processing.error}}</view>
+        <block wx:if="{{processing.kind !== 'external_verification'}}">
+          <view class="action-grid process-actions">
+            <button class="button {{processing.action === 'approve' ? 'button-primary' : 'button-secondary'}}" disabled="{{processing.pendingMessage || !processing.canApprove}}" data-action="approve" bindtap="chooseProcessAction">逐行批准</button>
+            <button class="button {{processing.action === 'return' ? 'button-primary' : 'button-secondary'}}" disabled="{{processing.pendingMessage || !processing.canReturn}}" data-action="return" bindtap="chooseProcessAction">逐行退回</button>
+            <button class="button {{processing.action === 'reject' ? 'button-primary' : 'button-secondary'}}" disabled="{{processing.pendingMessage || !processing.canReject}}" data-action="reject" bindtap="chooseProcessAction">整单驳回</button>
+          </view>
+          <view wx:if="{{processing.action !== 'reject'}}" wx:for="{{processing.lines}}" wx:key="requestLineId" class="line-card">
+            <view class="fact"><text class="muted">当前级输入</text><text>{{item.inputQty}}</text></view>
+            <view class="field"><text class="field-label">{{processing.action === 'approve' ? '批准数量' : '请求重审数量'}}</text><input class="input" type="digit" disabled="{{processing.pendingMessage}}" value="{{item.decisionQty}}" data-id="{{item.requestLineId}}" data-field="decisionQty" bindinput="processLineInput" /></view>
+            <view class="field"><text class="field-label">逐行原因</text><input class="input" disabled="{{processing.pendingMessage}}" value="{{item.reason}}" data-id="{{item.requestLineId}}" data-field="reason" bindinput="processLineInput" /></view>
+          </view>
+        </block>
+        <block wx:if="{{processing.kind === 'external_registration'}}">
+          <view class="upload-card">
+            <view class="row between"><text class="field-label">星星总部外部审批证据</text><button class="button button-secondary button-small" disabled="{{busy || processing.pendingMessage || !externalUploadCanChoose}}" bindtap="chooseExternalEvidence">选择并上传</button></view>
+            <text wx:if="{{!externalUploadFiles.length}}" class="small muted">必须独立上传 external_approval_evidence；不能复用需求附件，只有 available 后才能登记。</text>
+            <view wx:for="{{externalUploadFiles}}" wx:key="key" class="upload-row">
+              <text>{{item.filename}} · {{item.sizeLabel}}</text><text class="small mono">SHA-256 {{item.sha256 || '计算中'}}</text><text class="small">{{item.statusLabel}}</text><text wx:if="{{item.error}}" class="small upload-error">{{item.error}}</text>
+              <button wx:if="{{item.canRetry}}" class="button button-secondary button-small" disabled="{{busy || processing.pendingMessage}}" data-key="{{item.key}}" bindtap="retryExternalEvidence">按原上传坐标重试</button><button wx:if="{{item.canRemove}}" class="remove" disabled="{{busy || processing.pendingMessage}}" data-key="{{item.key}}" bindtap="removeExternalEvidence">移除</button>
+            </view>
+          </view>
+          <view class="field"><text class="field-label">星星总部审批人</text><input class="input" disabled="{{processing.pendingMessage}}" value="{{processing.externalApproverName}}" data-field="externalApproverName" bindinput="processFieldInput" /></view>
+          <view class="field"><text class="field-label">外部审批参考号</text><input class="input" disabled="{{processing.pendingMessage}}" value="{{processing.externalReferenceNo}}" data-field="externalReferenceNo" bindinput="processFieldInput" /></view>
+          <view class="field"><text class="field-label">外部决定时间（含时区 ISO8601）</text><input class="input" disabled="{{processing.pendingMessage}}" value="{{processing.externalDecidedAt}}" data-field="externalDecidedAt" bindinput="processFieldInput" /></view>
+        </block>
+        <block wx:if="{{processing.kind === 'external_verification'}}">
+          <view wx:if="{{processing.evidence}}" class="list-card"><view class="fact"><text class="muted">登记号 / 动作</text><text>{{processing.evidence.registration_no}} / {{processing.evidence.external_action}}</text></view><view class="fact"><text class="muted">正式证据引用（只读）</text><text class="mono">{{processing.evidence.evidence_file_id}}</text></view></view>
+          <view class="action-grid"><button class="button {{processing.verificationDecision === 'accept' ? 'button-primary' : 'button-secondary'}}" disabled="{{processing.pendingMessage}}" data-decision="accept" bindtap="chooseVerificationDecision">复核接受</button><button class="button {{processing.verificationDecision === 'reject' ? 'button-primary' : 'button-secondary'}}" disabled="{{processing.pendingMessage}}" data-decision="reject" bindtap="chooseVerificationDecision">复核拒绝</button></view>
+          <view class="notice info">复核必须由不同的蔚来总部管理员执行；服务端将独立校验。</view>
+        </block>
+        <view class="field"><text class="field-label">处理意见</text><textarea class="textarea" disabled="{{processing.pendingMessage}}" value="{{processing.comment}}" data-field="comment" bindinput="processFieldInput" /></view>
+        <view class="action-grid"><button class="button button-secondary" disabled="{{busy}}" bindtap="cancelApprovalProcess">取消</button><button class="button button-primary" disabled="{{busy || (processing.kind === 'external_registration' && (externalUploadBlocking || !externalUploadFiles.length)) || (processing.kind === 'external_verification' && !processing.evidence)}}" bindtap="submitApprovalProcess">确认处理</button></view>
+      </view>
+
+      <view class="section"><text class="section-title">供给计划（只读）</text><view class="small muted section-note">供给任务只是计划/参考，不代表已分配、发运或收货。</view><view wx:if="{{detail.supply_tasks.length}}" wx:for="{{detail.supply_tasks}}" wx:key="id" class="list-card"><view class="row between"><text>{{item.task_no}}</text><text>{{item.status}}</text></view><view class="small mono">{{item.supply_type}} · {{item.expected_qty}}</view></view><view wx:else class="empty"><text class="empty-title">暂无供给计划</text></view></view>
+
+      <view wx:if="{{submitConfirm}}" class="card confirm-card">
+        <text class="section-title">提交前确认</text>
+        <view class="fact"><text class="muted">用途</text><text>{{detail.purpose}}</text></view>
+        <view class="fact"><text class="muted">完整明细</text><text>{{detail.lines.length}} 条</text></view>
+        <view class="fact"><text class="muted">脱敏联系人</text><text>{{detail.maskedContact}}</text></view>
+        <view class="notice warning">提交只进入审批。审批通过不等于分配、占用、出库、发货、物流签收、OAM收货、RSC/个人仓入库、通知送达或对账同步完成。</view>
+        <view class="action-grid"><button class="button button-secondary" bindtap="cancelSubmit">返回检查</button><button class="button button-primary" disabled="{{busy}}" bindtap="confirmSubmit">确认提交</button></view>
+      </view>
+      <view wx:elif="{{!processing}}" class="action-grid detail-actions"><button class="button button-secondary" bindtap="closeDetail">返回列表</button><button wx:if="{{detail.canEdit}}" class="button button-secondary" disabled="{{busy}}" bindtap="startEdit">编辑草稿</button><button wx:if="{{detail.canSubmit}}" class="button button-primary" disabled="{{busy}}" bindtap="openSubmitConfirm">提交前确认</button></view>
+    </block>
+
+    <block wx:else>
+      <view wx:if="{{accessAllowed}}" class="toolbar"><button wx:if="{{canCreate}}" class="button button-primary" bindtap="startCreate">新建需求</button></view>
+      <view wx:if="{{accessAllowed && !requests.length}}" class="empty"><text class="empty-title">当前没有可见需求</text><text class="empty-text">不会回退读取非正式业务接口。</text></view>
+      <view wx:for="{{requests}}" wx:key="request_id" class="list-card" data-id="{{item.request_id}}" bindtap="openRequest">
+        <view class="row between"><text class="mono">{{item.request_no}}</text><text class="status status-info">{{item.statusLabel}}</text></view>
+        <view class="divider"></view>
+        <view class="fact"><text class="muted">用途 / 紧急程度</text><text>{{item.purpose}} · {{item.urgency}}</text></view>
+        <view class="fact"><text class="muted">脱敏联系人</text><text>{{item.maskedContact}}</text></view>
+        <view class="fact"><text class="muted">脱敏地址</text><text>{{item.maskedAddress}}</text></view>
+        <view class="fact"><text class="muted">明细 / 期望日期</text><text>{{item.line_count}} 条 · {{item.expected_date || '-'}}</text></view>
+      </view>
+    </block>
+  </block>
+</view>

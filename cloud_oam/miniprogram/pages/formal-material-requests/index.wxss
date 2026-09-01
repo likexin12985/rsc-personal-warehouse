@@ -1,0 +1,27 @@
+.notice { margin-top: 18rpx; padding: 20rpx 22rpx; border-radius: 10rpx; font-size: 24rpx; line-height: 1.55; }
+.notice.warning { color: #765516; background: #faf1da; border: 1rpx solid #ead8a7; }
+.notice.info { color: #245f67; background: #e7f2f3; border: 1rpx solid #bfdadd; }
+.access-card { margin-top: 20rpx; padding: 22rpx; line-height: 1.5; }
+.status-success { border-left: 6rpx solid #2b8b67; }
+.status-danger { border-left: 6rpx solid #c84444; }
+.toolbar { display: flex; justify-content: flex-end; margin: 22rpx 0 16rpx; }
+.form-card, .detail-card, .confirm-card { margin-top: 16rpx; padding: 24rpx; }
+.picker-card, .process-card { margin-top: 16rpx; padding: 24rpx; border: 2rpx solid #d8e4e7; }
+.material-select { width: 100%; min-height: 80rpx; margin: 0; padding: 14rpx 18rpx; text-align: left; color: #245f67; background: #ffffff; border: 1rpx solid #c9d5d8; border-radius: 8rpx; font-size: 24rpx; line-height: 1.45; }
+.address-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16rpx; }
+.line-heading { min-height: 82rpx; margin-top: 12rpx; }
+.line-card { margin: 14rpx 0; padding: 20rpx; border: 1rpx solid #dfe4e7; border-radius: 10rpx; background: #f8f9f9; }
+.remove { margin: 0; padding: 0 10rpx; color: #b63422; background: transparent; font-size: 24rpx; }
+.block { display: block; margin-top: 5rpx; }
+.action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16rpx; margin-top: 22rpx; }
+.detail-actions { grid-template-columns: repeat(3, 1fr); }
+.process-actions { grid-template-columns: repeat(3, 1fr); }
+.fact { display: grid; gap: 8rpx; margin-top: 20rpx; line-height: 1.5; overflow-wrap: anywhere; }
+.axis-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12rpx; margin-top: 16rpx; }
+.axis { min-height: 108rpx; display: flex; flex-direction: column; justify-content: center; gap: 10rpx; padding: 16rpx; border: 1rpx solid #dfe4e7; border-radius: 10rpx; background: #ffffff; }
+.section-note { margin-top: 8rpx; line-height: 1.5; }
+.divider { height: 1rpx; margin: 18rpx 0 4rpx; background: #e4e8ea; }
+.confirm-card { border: 2rpx solid #e65318; }
+.upload-card { margin: 18rpx 0; padding: 20rpx; border: 1rpx solid #c9dadd; border-radius: 10rpx; background: #f7fbfb; }
+.upload-row { display: grid; gap: 8rpx; margin-top: 14rpx; padding: 16rpx; border: 1rpx solid #dfe7e9; border-radius: 8rpx; background: #ffffff; overflow-wrap: anywhere; }
+.upload-error { color: #b63422; }

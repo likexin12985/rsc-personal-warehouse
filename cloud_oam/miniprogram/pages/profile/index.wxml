@@ -1,0 +1,47 @@
+<view class="page profile-page">
+  <view wx:if="{{loading && !user}}" class="loading">正在读取账号信息</view>
+  <block wx:if="{{user}}">
+    <view class="profile-head">
+      <image class="profile-avatar" src="/assets/rsc-personal-warehouse-blue.png" mode="aspectFill" />
+      <view class="profile-main">
+        <text class="profile-name">{{user.name}}</text>
+        <text class="profile-meta">{{roleLabel}} · {{organizationName}}</text>
+      </view>
+    </view>
+
+    <view class="card account-card">
+      <view class="row between"><text class="muted">登录身份</text><text>{{identityStatus}}</text></view>
+      <view class="divider"></view>
+      <view class="row between"><text class="muted">所属组织</text><text>{{organizationName}}</text></view>
+      <view class="divider"></view>
+      <view class="row between"><text class="muted">账号角色</text><text>{{roleLabel}}</text></view>
+      <view class="divider"></view>
+      <view class="row between"><text class="muted">授权版本</text><text>{{authorizationText}}</text></view>
+    </view>
+
+    <view class="section menu-list">
+      <view class="menu-row menu-row-disabled"><view><text>个人仓</text><text class="menu-note">{{inventoryAccessMessage}}</text></view><text class="status status-{{inventoryStatusTone}}">{{inventoryStatus}}</text></view>
+      <view wx:if="{{pcOrigin}}" class="menu-row" bindtap="copyPcAddress"><text>复制 PC 端地址</text><text class="menu-value">{{pcOrigin}}</text></view>
+    </view>
+
+    <view wx:if="{{personalWarehouse}}" class="card personal-card">
+      <view class="row between"><text class="muted">个人仓库位</text><text>{{personalLocationName}}</text></view>
+      <view class="divider"></view>
+      <view class="row between"><text class="muted">账本游标</text><text>{{personalLedgerCursor}}</text></view>
+      <view class="divider"></view>
+      <view class="row between"><text class="muted">期初状态</text><text>{{personalWarehouse.opening_balance_status === 'established' ? '已建立' : '未建立'}}</text></view>
+      <block wx:if="{{personalWarehouse.opening_balance_status === 'established'}}">
+        <view wx:if="{{!personalItems.length}}" class="personal-empty">当前个人仓没有库存账户。</view>
+        <view wx:for="{{personalItems}}" wx:key="stock_account_id" class="personal-item">
+          <view class="row between personal-item-head"><text>{{item.sku_code}}</text><text>{{item.quantity}} {{item.base_unit}}</text></view>
+          <text class="personal-item-name">{{item.material_name}}</text>
+          <text class="personal-item-meta">{{item.conditionLabel}} · {{item.availabilityLabel}} · {{item.location_name}}</text>
+        </view>
+      </block>
+      <view wx:else class="personal-empty">期初完整建立前，不显示零库存或任何余额数字。</view>
+    </view>
+
+    <button class="button button-danger logout-button" bindtap="logout">退出登录</button>
+    <view class="version">RSC个人仓 · V1.0 生产迁移</view>
+  </block>
+</view>
