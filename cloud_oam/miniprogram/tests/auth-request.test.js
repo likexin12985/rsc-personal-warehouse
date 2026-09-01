@@ -16,6 +16,86 @@ function getRandomValues({ length }) {
   return randomFillSync(new Uint8Array(length))
 }
 
+test('exact identity reads force no-store while ordinary reads keep default headers', async (context) => {
+  const requests = []
+  global.wx = {
+    getRandomValues,
+    getAccountInfoSync() {
+      return { miniProgram: { envVersion: 'develop' } }
+    },
+    getStorageSync() {
+      return ''
+    },
+    request(options) {
+      requests.push(options)
+      options.success({ statusCode: 200, data: { ok: true } })
+    }
+  }
+  global.getApp = () => ({ globalData: {} })
+  resetApiModules()
+  context.after(() => {
+    resetApiModules()
+    delete global.wx
+    delete global.getApp
+  })
+
+  const api = require('../utils/api')
+  await api.get('/auth/me')
+  await api.get('/access/context', { view: 'current' })
+  await api.get('/v1/inventory/summary')
+
+  for (const request of requests.slice(0, 2)) {
+    assert.equal(request.header['Cache-Control'], 'no-store')
+    assert.equal(request.header.Pragma, 'no-cache')
+  }
+  assert.equal(requests[2].header['Cache-Control'], undefined)
+  assert.equal(requests[2].header.Pragma, undefined)
+})
+
+test('lifecycle command-status GET preserves only the supplied trace request id', async (context) => {
+  const requests = []
+  global.wx = {
+    getRandomValues,
+    getAccountInfoSync() {
+      return { miniProgram: { envVersion: 'develop' } }
+    },
+    getStorageSync() {
+      return ''
+    },
+    request(options) {
+      requests.push(options)
+      options.success({
+        statusCode: 200,
+        data: { schema_version: '1.0', lookup_status: 'not_observed', command: null }
+      })
+    }
+  }
+  global.getApp = () => ({ globalData: {} })
+  resetApiModules()
+  context.after(() => {
+    resetApiModules()
+    delete global.wx
+    delete global.getApp
+  })
+
+  const api = require('../utils/api')
+  const requestId = `wxreq-${'a'.repeat(36)}`
+  await api.request('/v1/material-request-lifecycle-command-status', {
+    method: 'GET',
+    header: {
+      'X-Request-ID': requestId,
+      'Cache-Control': 'no-store',
+      Pragma: 'no-cache'
+    }
+  })
+
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].header['X-Request-ID'], requestId)
+  assert.equal(requests[0].header['Idempotency-Key'], undefined)
+  assert.equal(requests[0].header['Cache-Control'], 'no-store')
+  assert.equal(requests[0].method, 'GET')
+})
+
 test('all authentication writes use safe idempotency keys without sensitive values', async (context) => {
   const requests = []
   const storage = new Map()

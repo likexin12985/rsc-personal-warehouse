@@ -89,7 +89,18 @@ def records_sha256(records: list[dict]) -> str:
 def test_inventory_transfer_and_stocktake_flow():
     DB_PATH.unlink(missing_ok=True)
     with TestClient(app) as client:
-        assert client.get("/api/health").status_code == 200
+        health = client.get("/api/health")
+        assert health.status_code == 200
+        assert "cache-control" not in health.headers
+        for identity_path in ("/api/auth/me", "/api/access/context"):
+            anonymous_identity = client.get(identity_path)
+            assert anonymous_identity.status_code == 401
+            assert (
+                anonymous_identity.headers["cache-control"]
+                == "private, no-store, max-age=0"
+            )
+            assert anonymous_identity.headers["pragma"] == "no-cache"
+            assert anonymous_identity.headers["referrer-policy"] == "no-referrer"
         options = client.get("/api/auth/login-options")
         assert options.status_code == 200
         assert options.json()["sms_enabled"] is True
@@ -117,7 +128,20 @@ def test_inventory_transfer_and_stocktake_flow():
         )
         assert sms_login.status_code == 200, sms_login.text
         assert sms_login.json()["require_password_change"] is False
-        assert client.get("/api/auth/me").status_code == 200
+        current_identity = client.get("/api/auth/me")
+        assert current_identity.status_code == 200
+        assert (
+            current_identity.headers["cache-control"]
+            == "private, no-store, max-age=0"
+        )
+        current_access = client.get("/api/access/context")
+        # The compatibility bootstrap admin deliberately has no formal
+        # access-context grant; even this authenticated 403 must be private.
+        assert current_access.status_code == 403
+        assert (
+            current_access.headers["cache-control"]
+            == "private, no-store, max-age=0"
+        )
         assert client.post("/api/auth/logout").status_code == 200
 
         unknown = client.post(

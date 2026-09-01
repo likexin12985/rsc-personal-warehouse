@@ -5,6 +5,7 @@ const test = require('node:test')
 
 const adapterContract = require('../utils/material-request-adapter')
 const formalFileUpload = require('../utils/formal-file-upload')
+const lifecycleRecovery = require('../utils/material-request-lifecycle-recovery')
 
 function loadPage(relativePath, stubs) {
   const savedModules = []
@@ -501,9 +502,47 @@ function access() {
   }
 }
 
+function freshIdentity() {
+  return {
+    person_id: PERSON_ID,
+    name: '李工程师',
+    employee_no: 'E-001',
+    organization_code: 'ORG-JS',
+    organization_name: '江苏区域公司',
+    account_status: 'active',
+    employment_status: 'active',
+    access_mode: 'active',
+    authorization_version: 1,
+    role_codes: ['technician']
+  }
+}
+
+function confirmedLifecycleStatus(action = 'withdraw') {
+  return {
+    schema_version: '1.0',
+    lookup_status: 'confirmed',
+    command: {
+      action,
+      request_id: REQUEST_ID,
+      request_version: action === 'withdraw' ? 2 : 3,
+      revision_id: REVISION_ID,
+      revision_no: 1,
+      approval_instance_id: INSTANCE_ID,
+      approval_attempt_no: 1,
+      current_step_id: null,
+      states: axes(action === 'withdraw' ? 'withdrawn' : 'cancelled'),
+      occurred_at: '2026-09-01T08:20:00+08:00'
+    }
+  }
+}
+
 function fakeTransport(overrides = {}) {
   return Object.assign({
+    async loadIdentity() { return freshIdentity() },
     async loadAccess() { return access() },
+    async lifecycleCommandStatus() {
+      return { schema_version: '1.0', lookup_status: 'not_observed', command: null }
+    },
     async list() { return page() },
     async detail() { return detail() },
     async loadDraftForEdit() {
@@ -519,15 +558,33 @@ function adapterStub(transport) {
   return Object.assign({}, adapterContract, { formalMaterialRequestAdapter: transport })
 }
 
-function globals() {
+function globals(initialStorage = {}) {
+  const storage = new Map(Object.entries(initialStorage))
   const storageWrites = []
+  const storageRemovals = []
   const toasts = []
   global.wx = {
     showToast(value) { toasts.push(value) },
     stopPullDownRefresh() {},
-    setStorageSync(key, value) { storageWrites.push([key, value]) }
+    getStorageSync(key) { return storage.has(key) ? storage.get(key) : '' },
+    setStorageSync(key, value) {
+      storage.set(key, value)
+      storageWrites.push([key, value])
+    },
+    removeStorageSync(key) {
+      storage.delete(key)
+      storageRemovals.push(key)
+    }
   }
-  return { storageWrites, toasts }
+  return { storage, storageWrites, storageRemovals, toasts }
+}
+
+async function waitUntil(predicate, message) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (predicate()) return
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  assert.fail(message)
 }
 
 function uploadFixture(fileIds = {}) {
@@ -931,7 +988,7 @@ test('submit requires confirmation and keeps approval separate from every fulfil
 })
 
 test('withdraw requires permission plus allowed action, reuses one intent and exact-rereads terminal axes', async (context) => {
-  globals()
+  const { storage, storageWrites, storageRemovals } = globals()
   const actionable = submittedDetail()
   const terminal = withdrawnDetail()
   const intents = []
@@ -946,6 +1003,13 @@ test('withdraw requires permission plus allowed action, reuses one intent and ex
     },
     async mutate(intent) {
       intents.push(intent)
+      const sentinel = storage.get(lifecycleRecovery.STORAGE_KEY)
+      assert.deepEqual(Object.keys(sentinel).sort(), [
+        'created_at', 'kind', 'v', 'x_request_id'
+      ])
+      assert.equal(sentinel.x_request_id, intent.headers['X-Request-ID'])
+      assert.equal(JSON.stringify(sentinel).includes(intent.headers['Idempotency-Key']), false)
+      assert.equal(JSON.stringify(sentinel).includes(intent.body.reason), false)
       if (intents.length === 1) throw new Error('network uncertain')
       return {
         schema_version: '1.0', request_id: REQUEST_ID, action: 'withdraw',
@@ -986,6 +1050,9 @@ test('withdraw requires permission plus allowed action, reuses one intent and ex
   assert.equal(instance.data.detail.states.request_status, 'withdrawn')
   assert.equal(instance.data.detail.states.allocation_status, 'not_allocated')
   assert.equal(instance.data.lifecycleConfirm, null)
+  assert.equal(storage.has(lifecycleRecovery.STORAGE_KEY), false)
+  assert.equal(storageWrites.length, 1)
+  assert.deepEqual(storageRemovals, [lifecycleRecovery.STORAGE_KEY])
 })
 
 test('in-flight withdraw survives page unload and a restored page never creates replacement coordinates', async (context) => {
@@ -1054,8 +1121,548 @@ test('in-flight withdraw survives page unload and a restored page never creates 
   assert.equal(toasts.filter((item) => item.icon === 'success').length, 1)
 })
 
+test('process restart recovers a confirmed command only after fresh identity, access and exact detail', async (context) => {
+  const xRequestId = `wxreq-${'e'.repeat(36)}`
+  const sentinel = {
+    v: 1,
+    kind: 'material_request_lifecycle',
+    x_request_id: xRequestId,
+    created_at: '2026-09-01T00:19:59.000Z'
+  }
+  const { storage, storageRemovals } = globals({
+    [lifecycleRecovery.STORAGE_KEY]: sentinel
+  })
+  const calls = []
+  let mutations = 0
+  const terminal = withdrawnDetail()
+  const loaded = loadWith(fakeTransport({
+    async loadIdentity() {
+      calls.push('auth/me')
+      return freshIdentity()
+    },
+    async loadAccess(identity) {
+      calls.push('access/context')
+      assert.equal(identity.person_id, PERSON_ID)
+      assert.equal(identity.authorization_version, 1)
+      return Object.assign({}, access(), { can_withdraw: true })
+    },
+    async lifecycleCommandStatus(value) {
+      calls.push('command-status')
+      assert.equal(value, xRequestId)
+      return confirmedLifecycleStatus('withdraw')
+    },
+    async detail(value) {
+      calls.push('exact-detail')
+      assert.equal(value, REQUEST_ID)
+      return terminal
+    },
+    async list() {
+      calls.push('list')
+      return page(terminal)
+    },
+    async mutate() {
+      mutations += 1
+      throw new Error('recovery must not replay the POST')
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+
+  const instance = pageInstance(loaded.definition)
+  instance.onLoad()
+  assert.match(instance.data.lifecycleRecoveryMessage, /待核验/)
+  await instance.load()
+
+  assert.deepEqual(calls, [
+    'auth/me', 'access/context', 'command-status', 'exact-detail', 'list'
+  ])
+  assert.equal(mutations, 0)
+  assert.equal(storage.has(lifecycleRecovery.STORAGE_KEY), false)
+  assert.deepEqual(storageRemovals, [lifecycleRecovery.STORAGE_KEY])
+  assert.equal(instance.data.lifecycleRecoveryMessage, '')
+  assert.equal(instance.data.detail.states.request_status, 'withdrawn')
+  assert.equal(instance.data.detail.stateAxes.length, 10)
+  assert.match(instance.data.notice, /精确回读/)
+})
+
+test('process restart applies the independent cancel grant and exact cancelled projection', async (context) => {
+  const xRequestId = `wxreq-${'2'.repeat(36)}`
+  const { storage } = globals({
+    [lifecycleRecovery.STORAGE_KEY]: {
+      v: 1,
+      kind: 'material_request_lifecycle',
+      x_request_id: xRequestId,
+      created_at: '2026-09-01T00:29:59.000Z'
+    }
+  })
+  const terminal = cancelledDetail()
+  const loaded = loadWith(fakeTransport({
+    async loadIdentity() { return freshIdentity() },
+    async loadAccess() {
+      return Object.assign({}, access(), { can_cancel: true })
+    },
+    async lifecycleCommandStatus() { return confirmedLifecycleStatus('cancel') },
+    async detail() { return terminal },
+    async list() { return page(terminal) }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  assert.equal(storage.has(lifecycleRecovery.STORAGE_KEY), false)
+  assert.equal(instance.data.detail.states.request_status, 'cancelled')
+  assert.equal(instance.data.detail.lines[0].cancelled_qty, '4.000')
+  assert.equal(instance.data.detail.states.reservation_status, 'not_reserved')
+})
+
+test('confirmed recovery closes a late original POST only for the same exact lifecycle coordinate', async (context) => {
+  const { storage, storageRemovals, toasts } = globals()
+  const actionable = submittedDetail()
+  const terminal = withdrawnDetail()
+  let capturedIntent = null
+  let detailReads = 0
+  let listReads = 0
+  let statusReads = 0
+  let resolveMutation
+  let markMutationStarted
+  const mutationStarted = new Promise((resolve) => { markMutationStarted = resolve })
+  const mutationResult = new Promise((resolve) => { resolveMutation = resolve })
+  const loaded = loadWith(fakeTransport({
+    async loadAccess() {
+      return Object.assign({}, access(), { can_withdraw: true })
+    },
+    async list() {
+      listReads += 1
+      return page(listReads === 1 ? actionable : terminal)
+    },
+    async detail() {
+      detailReads += 1
+      return detailReads === 1 ? actionable : terminal
+    },
+    async mutate(intent) {
+      capturedIntent = intent
+      markMutationStarted()
+      return mutationResult
+    },
+    async lifecycleCommandStatus(xRequestId) {
+      statusReads += 1
+      assert.equal(xRequestId, capturedIntent.headers['X-Request-ID'])
+      return confirmedLifecycleStatus('withdraw')
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  instance.openLifecycleConfirm({ currentTarget: { dataset: { action: 'withdraw' } } })
+  instance.lifecycleReasonInput({ detail: { value: '工单需求已变更' } })
+  const originalWrite = instance.confirmLifecycleAction()
+  await mutationStarted
+
+  await instance.load()
+  assert.equal(statusReads, 1)
+  assert.equal(storage.has(lifecycleRecovery.STORAGE_KEY), false)
+  assert.equal(instance.data.detail.states.request_status, 'withdrawn')
+  assert.equal(instance.data.lifecycleConfirm, null)
+  assert.equal(toasts.some((item) => item.icon === 'success'), false)
+
+  resolveMutation({
+    schema_version: '1.0', request_id: REQUEST_ID, action: 'withdraw',
+    request_version: 2, revision_id: REVISION_ID, revision_no: 1,
+    approval_instance_id: INSTANCE_ID, approval_attempt_no: 1,
+    current_step_id: null, states: axes('withdrawn'), idempotency_replayed: false
+  })
+  await originalWrite
+
+  assert.equal(storage.has(lifecycleRecovery.STORAGE_KEY), false)
+  assert.deepEqual(storageRemovals, [lifecycleRecovery.STORAGE_KEY])
+  assert.equal(detailReads, 3)
+  assert.equal(instance.data.detail.states.request_status, 'withdrawn')
+  assert.equal(instance.data.lifecycleConfirm, null)
+  assert.equal(instance.data.lifecycleRecoveryMessage, '')
+  assert.match(instance.data.notice, /精确回读/)
+  assert.equal(toasts.filter((item) => item.icon === 'success').length, 1)
+})
+
+test('concurrent explicit loads share one local three-attempt recovery budget and a later load gets a new batch', async (context) => {
+  const xRequestId = `wxreq-${'3'.repeat(36)}`
+  const { storage } = globals({
+    [lifecycleRecovery.STORAGE_KEY]: {
+      v: 1,
+      kind: 'material_request_lifecycle',
+      x_request_id: xRequestId,
+      created_at: '2026-09-01T00:39:59.000Z'
+    }
+  })
+  let identityReads = 0
+  let accessReads = 0
+  let statusReads = 0
+  let resolveFirstStatus
+  const firstStatus = new Promise((resolve) => { resolveFirstStatus = resolve })
+  const notObserved = {
+    schema_version: '1.0', lookup_status: 'not_observed', command: null
+  }
+  const loaded = loadWith(fakeTransport({
+    async loadIdentity() {
+      identityReads += 1
+      return freshIdentity()
+    },
+    async loadAccess() {
+      accessReads += 1
+      return Object.assign({}, access(), { can_withdraw: true })
+    },
+    async lifecycleCommandStatus() {
+      statusReads += 1
+      return statusReads === 1 ? firstStatus : notObserved
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+
+  const instance = pageInstance(loaded.definition)
+  const firstLoad = instance.load()
+  const concurrentLoad = instance.load()
+  await waitUntil(() => statusReads === 1, '首个恢复状态查询未开始')
+  resolveFirstStatus(notObserved)
+  await Promise.all([firstLoad, concurrentLoad])
+
+  assert.equal(identityReads, 1)
+  assert.equal(accessReads, 1)
+  assert.equal(statusReads, 3)
+  assert.equal(storage.has(lifecycleRecovery.STORAGE_KEY), true)
+  assert.match(instance.data.lifecycleRecoveryMessage, /尚未观察到终止命令/)
+
+  await instance.load()
+  assert.equal(identityReads, 2)
+  assert.equal(accessReads, 2)
+  assert.equal(statusReads, 6)
+  assert.equal(storage.has(lifecycleRecovery.STORAGE_KEY), true)
+})
+
+test('not_observed is retried with a finite budget, retains the sentinel and blocks new lifecycle coordinates', async (context) => {
+  const xRequestId = `wxreq-${'f'.repeat(36)}`
+  const sentinel = {
+    v: 1,
+    kind: 'material_request_lifecycle',
+    x_request_id: xRequestId,
+    created_at: '2026-09-01T00:19:59.000Z'
+  }
+  const { storage, toasts } = globals({
+    [lifecycleRecovery.STORAGE_KEY]: sentinel
+  })
+  const actionable = submittedDetail()
+  let statusReads = 0
+  let mutations = 0
+  const loaded = loadWith(fakeTransport({
+    async loadIdentity() { return freshIdentity() },
+    async loadAccess() {
+      return Object.assign({}, access(), { can_withdraw: true })
+    },
+    async lifecycleCommandStatus() {
+      statusReads += 1
+      return { schema_version: '1.0', lookup_status: 'not_observed', command: null }
+    },
+    async list() { return page(actionable) },
+    async detail() { return actionable },
+    async mutate() {
+      mutations += 1
+      throw new Error('blocked recovery must not mutate')
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  assert.equal(statusReads, 3)
+  assert.equal(storage.has(lifecycleRecovery.STORAGE_KEY), true)
+  assert.match(instance.data.lifecycleRecoveryMessage, /尚未观察到终止命令/)
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  assert.equal(instance.data.detail.canWithdraw, false)
+  instance.openLifecycleConfirm({ currentTarget: { dataset: { action: 'withdraw' } } })
+  assert.equal(instance.data.lifecycleConfirm, null)
+  assert.equal(mutations, 0)
+  assert.match(toasts[toasts.length - 1].title, /禁止生成新的撤回或取消坐标/)
+
+  await instance.load()
+  assert.equal(statusReads, 6)
+  assert.equal(storage.has(lifecycleRecovery.STORAGE_KEY), true)
+})
+
+test('confirmed recovery without the matching fresh action grant retains the sentinel and skips detail', async (context) => {
+  const xRequestId = `wxreq-${'1'.repeat(36)}`
+  const { storage } = globals({
+    [lifecycleRecovery.STORAGE_KEY]: {
+      v: 1,
+      kind: 'material_request_lifecycle',
+      x_request_id: xRequestId,
+      created_at: '2026-09-01T00:19:59.000Z'
+    }
+  })
+  let detailReads = 0
+  const loaded = loadWith(fakeTransport({
+    async loadIdentity() { return freshIdentity() },
+    async loadAccess() { return access() },
+    async lifecycleCommandStatus() { return confirmedLifecycleStatus('withdraw') },
+    async detail() {
+      detailReads += 1
+      return withdrawnDetail()
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  assert.equal(instance.data.accessAllowed, false)
+  assert.equal(detailReads, 0)
+  assert.equal(storage.has(lifecycleRecovery.STORAGE_KEY), true)
+  assert.match(instance.data.lifecycleRecoveryMessage, /不包含已确认终止命令对应/)
+})
+
+test('authorization drift during a live recovery retains the sentinel before status or detail lookup', async (context) => {
+  const { storage } = globals()
+  const actionable = submittedDetail()
+  let statusReads = 0
+  let detailReads = 0
+  const loaded = loadWith(fakeTransport({
+    async loadIdentity() {
+      return Object.assign({}, freshIdentity(), { authorization_version: 2 })
+    },
+    async loadAccess(identity) {
+      return Object.assign({}, access(), {
+        authorization_version: identity ? 2 : 1,
+        can_withdraw: true
+      })
+    },
+    async list() { return page(actionable) },
+    async detail() {
+      detailReads += 1
+      return actionable
+    },
+    async lifecycleCommandStatus() {
+      statusReads += 1
+      return confirmedLifecycleStatus('withdraw')
+    },
+    async mutate() {
+      const error = new Error('network uncertain')
+      error.status = 0
+      error.responseReceived = false
+      throw error
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  instance.openLifecycleConfirm({ currentTarget: { dataset: { action: 'withdraw' } } })
+  instance.lifecycleReasonInput({ detail: { value: '工单需求已变更' } })
+  await instance.confirmLifecycleAction()
+  assert.equal(storage.has(lifecycleRecovery.STORAGE_KEY), true)
+
+  await instance.load()
+  assert.equal(statusReads, 0)
+  assert.equal(detailReads, 1)
+  assert.equal(storage.has(lifecycleRecovery.STORAGE_KEY), true)
+  assert.equal(instance.data.accessAllowed, false)
+  assert.match(instance.data.lifecycleRecoveryMessage, /身份或授权版本已变化/)
+})
+
+test('confirmed command and fresh detail anchor mismatch retains the recovery sentinel', async (context) => {
+  const xRequestId = `wxreq-${'4'.repeat(36)}`
+  const { storage, storageRemovals } = globals({
+    [lifecycleRecovery.STORAGE_KEY]: {
+      v: 1,
+      kind: 'material_request_lifecycle',
+      x_request_id: xRequestId,
+      created_at: '2026-09-01T00:49:59.000Z'
+    }
+  })
+  const status = confirmedLifecycleStatus('withdraw')
+  status.command.revision_no = 2
+  const loaded = loadWith(fakeTransport({
+    async loadAccess() {
+      return Object.assign({}, access(), { can_withdraw: true })
+    },
+    async lifecycleCommandStatus() { return status },
+    async detail() { return withdrawnDetail() }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  assert.equal(storage.has(lifecycleRecovery.STORAGE_KEY), true)
+  assert.deepEqual(storageRemovals, [])
+  assert.equal(instance.data.accessAllowed, false)
+  assert.match(instance.data.lifecycleRecoveryMessage, /版本、修订、审批锚点或十状态轴不一致/)
+})
+
+test('a malformed persisted lifecycle sentinel is retained and blocks every recovery request', async (context) => {
+  const malformed = {
+    v: 1,
+    kind: 'material_request_lifecycle',
+    x_request_id: `wxreq-${'5'.repeat(36)}`,
+    created_at: '2026-09-01T00:59:59.000Z',
+    reason: 'must-not-be-persisted'
+  }
+  const { storage } = globals({ [lifecycleRecovery.STORAGE_KEY]: malformed })
+  let identityReads = 0
+  let statusReads = 0
+  let listReads = 0
+  const loaded = loadWith(fakeTransport({
+    async loadIdentity() { identityReads += 1; return freshIdentity() },
+    async lifecycleCommandStatus() {
+      statusReads += 1
+      return confirmedLifecycleStatus('withdraw')
+    },
+    async list() { listReads += 1; return page() }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+
+  const instance = pageInstance(loaded.definition)
+  instance.onLoad()
+  await instance.load()
+  assert.deepEqual(storage.get(lifecycleRecovery.STORAGE_KEY), malformed)
+  assert.equal(identityReads, 0)
+  assert.equal(statusReads, 0)
+  assert.equal(listReads, 0)
+  assert.equal(instance.data.accessAllowed, false)
+  assert.match(instance.data.lifecycleRecoveryMessage, /含未知字段/)
+})
+
+test('a storage reread exception after sentinel removal remains a fail-closed pending write', async (context) => {
+  const fixture = globals()
+  const actionable = submittedDetail()
+  const terminal = withdrawnDetail()
+  const originalGet = global.wx.getStorageSync.bind(global.wx)
+  const originalRemove = global.wx.removeStorageSync.bind(global.wx)
+  let removed = false
+  global.wx.getStorageSync = (key) => {
+    if (removed && key === lifecycleRecovery.STORAGE_KEY) {
+      throw new Error('post-remove storage reread unavailable')
+    }
+    return originalGet(key)
+  }
+  global.wx.removeStorageSync = (key) => {
+    originalRemove(key)
+    if (key === lifecycleRecovery.STORAGE_KEY) removed = true
+  }
+  let detailReads = 0
+  const loaded = loadWith(fakeTransport({
+    async loadAccess() {
+      return Object.assign({}, access(), { can_withdraw: true })
+    },
+    async detail() {
+      detailReads += 1
+      return detailReads === 1 ? actionable : terminal
+    },
+    async mutate() {
+      return {
+        schema_version: '1.0', request_id: REQUEST_ID, action: 'withdraw',
+        request_version: 2, revision_id: REVISION_ID, revision_no: 1,
+        approval_instance_id: INSTANCE_ID, approval_attempt_no: 1,
+        current_step_id: null, states: axes('withdrawn'), idempotency_replayed: false
+      }
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  instance.openLifecycleConfirm({ currentTarget: { dataset: { action: 'withdraw' } } })
+  instance.lifecycleReasonInput({ detail: { value: '工单需求已变更' } })
+  await instance.confirmLifecycleAction()
+
+  assert.equal(fixture.storage.has(lifecycleRecovery.STORAGE_KEY), false)
+  assert.equal(fixture.toasts.some((item) => item.icon === 'success'), false)
+  assert.match(instance.data.lifecycleRecoveryMessage, /无法安全清理/)
+  assert.match(instance.data.lifecycleConfirm.pendingMessage, /禁止生成新坐标/)
+  assert.equal(instance.data.detail.states.request_status, 'approval_in_progress')
+})
+
+test('a definitive POST rejection clears the matching sentinel, while storage failure prevents POST', async (context) => {
+  const first = globals()
+  const actionable = submittedDetail()
+  let rejectedMutations = 0
+  const rejectedTransport = fakeTransport({
+    async loadAccess() {
+      return Object.assign({}, access(), { can_withdraw: true })
+    },
+    async detail() { return actionable },
+    async mutate() {
+      rejectedMutations += 1
+      const error = new Error('版本已变化')
+      error.status = 409
+      error.responseReceived = true
+      throw error
+    }
+  })
+  const rejectedLoaded = loadWith(rejectedTransport)
+  const rejectedPage = pageInstance(rejectedLoaded.definition)
+  await rejectedPage.load()
+  await rejectedPage.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  rejectedPage.openLifecycleConfirm({ currentTarget: { dataset: { action: 'withdraw' } } })
+  rejectedPage.lifecycleReasonInput({ detail: { value: '工单需求已变更' } })
+  await rejectedPage.confirmLifecycleAction()
+  assert.equal(rejectedMutations, 1)
+  assert.equal(first.storage.has(lifecycleRecovery.STORAGE_KEY), false)
+  assert.equal(rejectedPage.data.lifecycleConfirm.pendingMessage, '')
+  rejectedLoaded.restore()
+
+  const second = globals()
+  global.wx.setStorageSync = () => { throw new Error('storage unavailable') }
+  let blockedMutations = 0
+  const blockedLoaded = loadWith(fakeTransport({
+    async loadAccess() {
+      return Object.assign({}, access(), { can_withdraw: true })
+    },
+    async detail() { return actionable },
+    async mutate() { blockedMutations += 1 }
+  }))
+  const blockedPage = pageInstance(blockedLoaded.definition)
+  await blockedPage.load()
+  await blockedPage.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  blockedPage.openLifecycleConfirm({ currentTarget: { dataset: { action: 'withdraw' } } })
+  blockedPage.lifecycleReasonInput({ detail: { value: '工单需求已变更' } })
+  await blockedPage.confirmLifecycleAction()
+  assert.equal(blockedMutations, 0)
+  assert.equal(second.storage.has(lifecycleRecovery.STORAGE_KEY), false)
+  assert.match(blockedPage.data.lifecycleConfirm.pendingMessage, /禁止生成新坐标/)
+  assert.match(blockedPage.data.lifecycleRecoveryMessage, /无法确认需求终止恢复哨兵已持久化/)
+  blockedLoaded.restore()
+  context.after(() => { delete global.wx })
+})
+
 test('withdraw keeps the intent pending when request content or active approval steps drift on reread', async (context) => {
-  globals()
   const scenarios = [
     {
       mutateTerminal: (terminal) => { terminal.purpose = '被错误改写的需求用途' },
@@ -1070,6 +1677,7 @@ test('withdraw keeps the intent pending when request content or active approval 
     }
   ]
   for (const { mutateTerminal, expectedError } of scenarios) {
+    globals()
     const actionable = submittedDetail()
     const terminal = withdrawnDetail()
     mutateTerminal(terminal)

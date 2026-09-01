@@ -40,6 +40,21 @@ function accessContext() {
   };
 }
 
+function freshIdentity() {
+  return {
+    person_id: PERSON_ID,
+    name: "工程师",
+    employee_no: "E001",
+    organization_code: "ORG-JS",
+    organization_name: "江苏区域公司",
+    account_status: "active",
+    employment_status: "active",
+    access_mode: "active",
+    authorization_version: 7,
+    role_codes: ["technician"],
+  };
+}
+
 function draft() {
   return {
     work_order_id: null,
@@ -77,6 +92,48 @@ function makeRequester(
 }
 
 describe("formal material-request PC transport", () => {
+  it("fresh-reads the exact auth identity and command status without sending an idempotency key", async () => {
+    const requester = makeRequester(async (path) => (
+      path === "/auth/me"
+        ? freshIdentity()
+        : { schema_version: "1.0", lookup_status: "not_observed", command: null }
+    ));
+    const adapter = createFormalMaterialRequestAdapter({
+      person_id: PERSON_ID,
+      authorization_version: 7,
+    }, requester);
+
+    await expect(adapter.loadIdentity()).resolves.toEqual({
+      schema_version: "1.0",
+      person_id: PERSON_ID,
+      authorization_version: 7,
+    });
+    await adapter.lifecycleCommandStatus("web-12345678");
+    expect(requester.mock.calls).toEqual([
+      ["/auth/me", {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+      }],
+      ["/v1/material-request-lifecycle-command-status", {
+        method: "GET",
+        cache: "no-store",
+        headers: {
+          "X-Request-ID": "web-12345678",
+          "Cache-Control": "no-store",
+          Pragma: "no-cache",
+        },
+      }],
+    ]);
+
+    const leaked = { ...freshIdentity(), mobile: "13800000000" };
+    const leakedAdapter = createFormalMaterialRequestAdapter({
+      person_id: PERSON_ID,
+      authorization_version: 7,
+    }, makeRequester(async () => leaked));
+    await expect(leakedAdapter.loadIdentity()).rejects.toThrow(/精确包含正式字段/);
+    await expect(adapter.lifecycleCommandStatus("bad")).rejects.toMatchObject({ status: 409 });
+  });
+
   it("projects only fresh read/create grants from the exact matching access context", async () => {
     const requester = makeRequester(async () => accessContext());
     const adapter = createFormalMaterialRequestAdapter({
@@ -98,7 +155,10 @@ describe("formal material-request PC transport", () => {
       can_register_external: true,
       can_verify_external: true,
     });
-    expect(requester).toHaveBeenCalledWith("/access/context");
+    expect(requester).toHaveBeenCalledWith("/access/context", {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+    });
 
     const noRead = accessContext();
     noRead.permissions = [{ resource: "material_request", action: "create", field_code: "" }];

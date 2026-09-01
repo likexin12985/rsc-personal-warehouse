@@ -514,7 +514,7 @@ def test_cancel_lock_order_is_aggregate_then_parent_principal_and_children(
             cancellation=_cancel_input(line),
             idempotency_key="lifecycle-cancel-lock-order-key-0001",
             idempotency_hmac_secret=SECRET,
-            trace_request_id="trace-lifecycle-cancel-lock-order",
+            trace_request_id="trace-lifecycle-cancel-lock-order-command",
         )
 
     assert order[:4] == [

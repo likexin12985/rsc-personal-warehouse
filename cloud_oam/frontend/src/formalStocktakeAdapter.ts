@@ -282,7 +282,10 @@ async function verifyRecountAssignees(adapter: FormalStocktakeAdapter, detail: F
 
 export function createFormalStocktakeAdapter(expectedIdentity: FormalStocktakeExpectedIdentity, requester: Requester = api): FormalStocktakeAdapter {
   const expected = Object.freeze({ person_id: uuid(expectedIdentity.person_id, "expected.person_id"), authorization_version: positiveVersion(expectedIdentity.authorization_version, "expected.authorization_version") });
-  const noStore = { headers: { "Cache-Control": "no-store", Pragma: "no-cache" } };
+  const noStore = {
+    cache: "no-store" as RequestCache,
+    headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+  };
 
   const adapter: FormalStocktakeAdapter = {
     async loadAccess() {

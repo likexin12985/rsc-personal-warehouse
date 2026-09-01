@@ -25,6 +25,12 @@ function normalizedPath(path) {
   return (String(path || '').split('?', 1)[0].replace(/\/+$/, '') || '/')
 }
 
+function isPrivateIdentityRead(path, method) {
+  if (String(method || 'GET').toUpperCase() !== 'GET') return false
+  const cleanPath = normalizedPath(path)
+  return cleanPath === '/auth/me' || cleanPath === '/access/context'
+}
+
 function isAuthWriteRequest(path, method) {
   const cleanPath = normalizedPath(path)
   const verb = String(method || 'GET').toUpperCase()
@@ -221,6 +227,10 @@ function rawRequest(path, options = {}) {
   const token = session.getToken()
   const header = controlledHeaders(options.header, path, method)
   if (token) header.Authorization = `Bearer ${token}`
+  if (isPrivateIdentityRead(path, method)) {
+    header['Cache-Control'] = 'no-store'
+    header.Pragma = 'no-cache'
+  }
   const controlledWrite = (
     isAuthWriteRequest(path, method) ||
     isFormalBusinessWriteRequest(path, method)

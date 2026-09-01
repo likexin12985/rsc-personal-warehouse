@@ -34,6 +34,51 @@ function accessContext() {
   }
 }
 
+function formalIdentity() {
+  return {
+    person_id: PERSON_ID,
+    name: '李工程师',
+    employee_no: 'E-001',
+    organization_code: 'ORG-JS',
+    organization_name: '江苏区域公司',
+    account_status: 'active',
+    employment_status: 'active',
+    access_mode: 'active',
+    authorization_version: 7,
+    role_codes: ['technician']
+  }
+}
+
+function commandStatus(action = 'withdraw') {
+  return {
+    schema_version: '1.0',
+    lookup_status: 'confirmed',
+    command: {
+      action,
+      request_id: REQUEST_ID,
+      request_version: 2,
+      revision_id: '60000000-0000-4000-8000-000000000001',
+      revision_no: 1,
+      approval_instance_id: '70000000-0000-4000-8000-000000000001',
+      approval_attempt_no: 1,
+      current_step_id: null,
+      states: {
+        request_status: action === 'withdraw' ? 'withdrawn' : 'cancelled',
+        allocation_status: 'not_allocated',
+        reservation_status: 'not_reserved',
+        outbound_status: 'not_started',
+        shipment_status: 'not_started',
+        logistics_signature_status: 'not_signed',
+        oam_receipt_status: 'not_occurred',
+        personal_inbound_status: 'not_started',
+        notification_status: 'not_started',
+        reconciliation_status: 'not_started'
+      },
+      occurred_at: '2026-09-01T09:00:00+08:00'
+    }
+  }
+}
+
 function draft() {
   return {
     work_order_id: null,
@@ -124,7 +169,14 @@ test('loadAccess projects only fresh matching material-request read/create grant
     can_cancel: true
   })
   assert.deepEqual(transport.calls, [
-    { method: 'GET', path: '/access/context', params: undefined }
+    {
+      method: 'GET',
+      path: '/access/context',
+      options: {
+        method: 'GET',
+        header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
+      }
+    }
   ])
 
   const createOnly = accessContext()
@@ -134,6 +186,77 @@ test('loadAccess projects only fresh matching material-request read/create grant
   const projected = await adapter(fakeTransport(createOnly)).loadAccess()
   assert.equal(projected.can_read, false)
   assert.equal(projected.can_create, false)
+})
+
+test('fresh identity and lifecycle command status use exact no-store contracts', async () => {
+  const responseByPath = {
+    '/auth/me': formalIdentity(),
+    '/v1/material-request-lifecycle-command-status': commandStatus()
+  }
+  const transport = fakeTransport((path) => responseByPath[path])
+  const client = adapter(transport)
+
+  assert.deepEqual(await client.loadIdentity(), formalIdentity())
+  const status = await client.lifecycleCommandStatus(`wxreq-${'a'.repeat(36)}`)
+  assert.equal(status.lookup_status, 'confirmed')
+  assert.equal(status.command.action, 'withdraw')
+  assert.deepEqual(transport.calls, [
+    {
+      method: 'GET',
+      path: '/auth/me',
+      options: {
+        method: 'GET',
+        header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
+      }
+    },
+    {
+      method: 'GET',
+      path: '/v1/material-request-lifecycle-command-status',
+      options: {
+        method: 'GET',
+        header: {
+          'X-Request-ID': `wxreq-${'a'.repeat(36)}`,
+          'Cache-Control': 'no-store',
+          Pragma: 'no-cache'
+        }
+      }
+    }
+  ])
+
+  const notObserved = adapter(fakeTransport({
+    schema_version: '1.0', lookup_status: 'not_observed', command: null
+  }))
+  assert.deepEqual(
+    await notObserved.lifecycleCommandStatus(`wxreq-${'b'.repeat(36)}`),
+    { schema_version: '1.0', lookup_status: 'not_observed', command: null }
+  )
+})
+
+test('fresh identity or lifecycle command contract drift fails closed', async () => {
+  const changedIdentity = formalIdentity()
+  changedIdentity.authorization_version = 8
+  await assert.rejects(
+    adapter(fakeTransport(changedIdentity)).loadIdentity(),
+    /授权版本已变化/
+  )
+
+  const extraCommandField = commandStatus()
+  extraCommandField.command.idempotency_key_hash = 'forbidden'
+  await assert.rejects(
+    adapter(fakeTransport(extraCommandField)).lifecycleCommandStatus(
+      `wxreq-${'c'.repeat(36)}`
+    ),
+    /精确包含正式字段/
+  )
+
+  const wrongTerminalState = commandStatus()
+  wrongTerminalState.command.states.request_status = 'approval_in_progress'
+  await assert.rejects(
+    adapter(fakeTransport(wrongTerminalState)).lifecycleCommandStatus(
+      `wxreq-${'d'.repeat(36)}`
+    ),
+    /动作与申请终态不一致/
+  )
 })
 
 test('loadAccess fails closed on identity, authorization and permission-shape drift', async () => {

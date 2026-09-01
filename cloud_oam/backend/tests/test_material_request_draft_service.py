@@ -777,7 +777,7 @@ def test_submit_lock_order_is_aggregate_then_parent_principal_and_children(
             expected_version=created.request_version,
             idempotency_key="submit-lock-order-key-0001",
             idempotency_hmac_secret=SECRET,
-            trace_request_id="trace-submit-lock-order",
+            trace_request_id="trace-submit-lock-order-command",
         )
 
     assert order[:4] == [

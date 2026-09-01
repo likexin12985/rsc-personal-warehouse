@@ -25,6 +25,12 @@ export type FormalMaterialRequestExpectedIdentity = Readonly<{
   authorization_version: number;
 }>;
 
+export type FormalMaterialRequestFreshIdentity = Readonly<{
+  schema_version: typeof MATERIAL_REQUEST_SCHEMA_VERSION;
+  person_id: string;
+  authorization_version: number;
+}>;
+
 type FormalMaterialRequestRequester = <T>(path: string, init?: RequestInit) => Promise<T>;
 
 export type FormalMaterialRequestAccess = Readonly<{
@@ -50,13 +56,81 @@ export type FormalMaterialRequestEditableDraft = Readonly<{
 }>;
 
 export interface FormalMaterialRequestAdapter {
+  loadIdentity(): Promise<unknown>;
   loadAccess(): Promise<unknown>;
+  lifecycleCommandStatus(xRequestId: string): Promise<unknown>;
   list(afterId: string | null): Promise<unknown>;
   detail(requestId: string): Promise<unknown>;
   loadDraftForEdit(requestId: string): Promise<unknown>;
   listMaterials(query: string, afterId: string | null): Promise<unknown>;
   createDraft(intent: MaterialRequestCreateIntent): Promise<unknown>;
   mutate(intent: MaterialRequestMutationIntent): Promise<unknown>;
+}
+
+export function validateFormalMaterialRequestFreshIdentity(
+  value: unknown,
+): FormalMaterialRequestFreshIdentity {
+  const object = exactObject(
+    value,
+    ["schema_version", "person_id", "authorization_version"],
+    "正式需求新鲜登录身份",
+  );
+  if (object.schema_version !== MATERIAL_REQUEST_SCHEMA_VERSION) {
+    return adapterError("正式需求新鲜登录身份版本不受支持");
+  }
+  return Object.freeze({
+    schema_version: MATERIAL_REQUEST_SCHEMA_VERSION,
+    person_id: requiredUuid(object.person_id, "person_id"),
+    authorization_version: version(object.authorization_version, "authorization_version"),
+  });
+}
+
+function projectFreshIdentity(
+  value: unknown,
+  expectedIdentity: FormalMaterialRequestExpectedIdentity,
+): FormalMaterialRequestFreshIdentity {
+  const object = exactObject(value, [
+    "person_id", "name", "employee_no", "organization_code", "organization_name",
+    "account_status", "employment_status", "access_mode", "authorization_version", "role_codes",
+  ], "正式登录身份");
+  const personId = requiredUuid(object.person_id, "person_id");
+  const authorizationVersion = version(object.authorization_version, "authorization_version");
+  if (
+    personId !== requiredUuid(expectedIdentity.person_id, "expected_person_id")
+    || authorizationVersion !== version(
+      expectedIdentity.authorization_version,
+      "expected_authorization_version",
+    )
+  ) {
+    return adapterError("登录身份或授权版本已变化，生命周期命令保持待核验");
+  }
+  if (
+    object.account_status !== "active"
+    || object.employment_status !== "active"
+    || object.access_mode !== "active"
+  ) {
+    return adapterError("当前登录身份不是可执行需求生命周期操作的有效在职状态");
+  }
+  boundedText(object.name, "name", 160, false);
+  boundedText(object.employee_no, "employee_no", 80, false);
+  boundedText(object.organization_code, "organization_code", 120, false);
+  boundedText(object.organization_name, "organization_name", 240, false);
+  if (!Array.isArray(object.role_codes) || object.role_codes.length === 0) {
+    return adapterError("正式登录身份角色无效");
+  }
+  const roleCodes = object.role_codes.map((role) => requiredText(role, "role_code"));
+  if (
+    new Set(roleCodes).size !== roleCodes.length
+    || roleCodes.some((role) => !SUPPORTED_ROLES.has(role))
+    || !roleCodes.some((role) => INTERNAL_ROLES.has(role))
+  ) {
+    return adapterError("正式登录身份角色无效");
+  }
+  return validateFormalMaterialRequestFreshIdentity({
+    schema_version: MATERIAL_REQUEST_SCHEMA_VERSION,
+    person_id: personId,
+    authorization_version: authorizationVersion,
+  });
 }
 
 function adapterError(message: string): never {
@@ -490,8 +564,32 @@ export function createFormalMaterialRequestAdapter(
     ),
   });
   return Object.freeze({
+    async loadIdentity() {
+      return projectFreshIdentity(await requester<unknown>("/auth/me", {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+      }), frozenIdentity);
+    },
     async loadAccess() {
-      return projectAccessContext(await requester<unknown>("/access/context"), frozenIdentity);
+      return projectAccessContext(await requester<unknown>("/access/context", {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+      }), frozenIdentity);
+    },
+    lifecycleCommandStatus(xRequestId: string) {
+      const checkedRequestId = requiredText(xRequestId, "X-Request-ID");
+      if (!SAFE_COORDINATE.test(checkedRequestId)) {
+        return Promise.reject(new ApiError(409, "生命周期命令查询坐标无效"));
+      }
+      return requester("/v1/material-request-lifecycle-command-status", {
+        method: "GET",
+        cache: "no-store",
+        headers: {
+          "X-Request-ID": checkedRequestId,
+          "Cache-Control": "no-store",
+          Pragma: "no-cache",
+        },
+      });
     },
     list(afterId: string | null) {
       const suffix = afterId === null

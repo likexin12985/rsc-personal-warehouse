@@ -6,6 +6,7 @@
 
   <view class="notice info">正式 V1.0 客户端路由已接线；生产写入仍受服务端写 gate 与 runtime ACL 控制。写入只在响应契约与同一需求详情精确回读一致后确认；明文草稿仅驻留当前页面内存。</view>
   <view wx:if="{{notice}}" class="notice info">{{notice}}</view>
+  <view wx:if="{{lifecycleRecoveryMessage}}" class="notice warning">{{lifecycleRecoveryMessage}}</view>
   <view wx:if="{{loading}}" class="loading">正在校验身份、权限与正式需求契约</view>
 
   <block wx:else>

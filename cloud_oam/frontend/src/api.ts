@@ -473,6 +473,9 @@ function authenticationRefreshCoordinator(): AuthenticationRefreshCoordinator {
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = init.method || "GET";
   const normalizedPath = path.split("?", 1)[0].replace(/\/+$/, "") || "/";
+  const isPrivateIdentityRead = method.toUpperCase() === "GET" && (
+    normalizedPath === "/auth/me" || normalizedPath === "/access/context"
+  );
   const isLogoutWrite = normalizedPath === "/auth/logout" && method.toUpperCase() === "POST";
   const isSmsLoginWrite = normalizedPath === "/auth/sms/login" && method.toUpperCase() === "POST";
   const blockedReason = blockedClientWriteReason(path, method);
@@ -483,11 +486,21 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   requireSafeAuthenticationIdempotencyKey(headers, path, method);
   if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
+  if (isPrivateIdentityRead) {
+    headers.set("Cache-Control", "no-store");
+    headers.set("Pragma", "no-cache");
+  }
   const refreshCoordinator = (shouldRefresh(path) || isLogoutWrite || isSmsLoginWrite)
     ? authenticationRefreshCoordinator()
     : null;
   const refreshVersionBeforeRequest = refreshCoordinator?.captureVersion() ?? null;
-  const transport = () => fetch(`/api${path}`, { ...init, headers, credentials: "include" });
+  const preparedInit: RequestInit = {
+    ...init,
+    ...(isPrivateIdentityRead ? { cache: "no-store" as RequestCache } : {}),
+    headers,
+    credentials: "include",
+  };
+  const transport = () => fetch(`/api${path}`, preparedInit);
   let response = isLogoutWrite && refreshCoordinator
     ? await refreshCoordinator.logout(transport)
     : isSmsLoginWrite && refreshCoordinator
@@ -498,7 +511,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     && refreshCoordinator
     && await refreshCoordinator.refresh(refreshVersionBeforeRequest)
   ) {
-    response = await fetch(`/api${path}`, { ...init, headers, credentials: "include" });
+    response = await fetch(`/api${path}`, preparedInit);
   }
   if (!response.ok) {
     let message = `请求失败 (${response.status})`;

@@ -41,6 +41,7 @@ from ..demand_schemas import (
 from ..dependencies import get_formal_principal, require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import material_request_approval as approval_service
+from ..formal_services import material_request_command_status as command_status_service
 from ..formal_services import material_request_draft as draft_service
 from ..formal_services import material_request_edit as edit_service
 from ..formal_services import material_request_lifecycle as lifecycle_service
@@ -57,6 +58,8 @@ from ..formal_services.material_request_policy import (
 from ..material_request_read_schemas import (
     MaterialRequestCreateOut,
     MaterialRequestDetailOut,
+    MaterialRequestLifecycleCommandOut,
+    MaterialRequestLifecycleCommandStatusOut,
     MaterialRequestMutationOut,
     MaterialRequestPageOut,
 )
@@ -64,6 +67,10 @@ from ..material_request_read_schemas import (
 
 router = APIRouter(
     prefix="/v1/material-requests",
+    tags=["formal-material-requests"],
+)
+command_status_router = APIRouter(
+    prefix="/v1",
     tags=["formal-material-requests"],
 )
 
@@ -75,6 +82,68 @@ def _set_read_no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Referrer-Policy"] = "no-referrer"
+
+
+@command_status_router.get(
+    "/material-request-lifecycle-command-status",
+    response_model=MaterialRequestLifecycleCommandStatusOut,
+)
+def formal_material_request_lifecycle_command_status(
+    response: Response,
+    principal: FormalPrincipal = Depends(
+        require_permission("material_request", "read")
+    ),
+    db: Session = Depends(get_db),
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    checked_request_id = _required_safe_header(
+        "X-Request-ID",
+        request_id,
+        minimum=8,
+        maximum=160,
+    )
+    try:
+        result = command_status_service.material_request_lifecycle_command_status(
+            db,
+            actor=principal,
+            trace_request_id=checked_request_id,
+        )
+        command = (
+            None
+            if result.command is None
+            else MaterialRequestLifecycleCommandOut(
+                action=result.command.action,
+                request_id=result.command.request_id,
+                request_version=result.command.request_version,
+                revision_id=result.command.revision_id,
+                revision_no=result.command.revision_no,
+                approval_instance_id=result.command.approval_instance_id,
+                approval_attempt_no=result.command.approval_attempt_no,
+                current_step_id=None,
+                states=dict(result.command.states),
+                occurred_at=result.command.occurred_at,
+            )
+        )
+        output = MaterialRequestLifecycleCommandStatusOut(
+            lookup_status=result.lookup_status,
+            command=command,
+        )
+    except lifecycle_service.MaterialRequestLifecycleError as exc:
+        _raise_service_error(exc)
+    except ValidationError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "material_request_response_projection_invalid",
+                "category": "service_unavailable",
+                "message": "生命周期命令状态响应投影无效",
+            },
+        ) from None
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True)
+    _set_read_no_store(response)
+    return output
 
 
 class _MaterialRequestAdapterError(RuntimeError):
@@ -1040,6 +1109,7 @@ def _set_replay_header(response: Response, replayed: bool) -> None:
 
 
 __all__ = [
+    "command_status_router",
     "get_material_request_contact_cipher",
     "install_formal_material_request_validation_exception_handler",
     "router",

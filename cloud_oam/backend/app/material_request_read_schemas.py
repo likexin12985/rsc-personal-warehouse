@@ -947,6 +947,44 @@ class MaterialRequestMutationOut(_StrictOutputModel):
         return self
 
 
+class MaterialRequestLifecycleCommandOut(_StrictOutputModel):
+    """Minimal verified facts returned for command recovery.
+
+    The stored command JSON, idempotency hash, actor identifiers, request
+    reason and audit snapshots are deliberately not part of this wire shape.
+    """
+
+    action: Literal["withdraw", "cancel"]
+    request_id: UUID
+    request_version: int = Field(ge=1)
+    revision_id: UUID
+    revision_no: int = Field(ge=1)
+    approval_instance_id: UUID
+    approval_attempt_no: int = Field(ge=1)
+    current_step_id: None = None
+    states: MaterialRequestStateAxesOut
+    occurred_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def validate_terminal_state(self):
+        expected = "withdrawn" if self.action == "withdraw" else "cancelled"
+        if self.states.request_status != expected:
+            raise ValueError("lifecycle command and terminal request state disagree")
+        return self
+
+
+class MaterialRequestLifecycleCommandStatusOut(_StrictOutputModel):
+    schema_version: Literal["1.0"] = "1.0"
+    lookup_status: Literal["not_observed", "confirmed"]
+    command: MaterialRequestLifecycleCommandOut | None
+
+    @model_validator(mode="after")
+    def validate_observation(self):
+        if (self.lookup_status == "confirmed") != (self.command is not None):
+            raise ValueError("lookup status and lifecycle command fact disagree")
+        return self
+
+
 class MaterialRequestCreateOut(_StrictOutputModel):
     """Create is separate because no server request id exists beforehand."""
 
@@ -992,6 +1030,8 @@ __all__ = [
     "MaterialRequestCreateOut",
     "MaterialRequestDetailOut",
     "MaterialRequestLineOut",
+    "MaterialRequestLifecycleCommandOut",
+    "MaterialRequestLifecycleCommandStatusOut",
     "MaterialRequestMutationOut",
     "MaterialRequestPageOut",
     "MaterialRequestExternalEvidenceSummaryOut",

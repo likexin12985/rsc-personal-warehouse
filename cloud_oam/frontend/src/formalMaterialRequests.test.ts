@@ -11,6 +11,7 @@ import {
   validateMaterialRequestCreateResult,
   validateMaterialRequestDetail,
   validateMaterialRequestDraftInput,
+  validateMaterialRequestLifecycleCommandStatus,
   validateMaterialRequestMutationResult,
   validateMaterialRequestPage,
 } from "./formalMaterialRequests";
@@ -831,6 +832,45 @@ describe("formal material request response contracts", () => {
       action: "withdraw",
       previousVersion: 3,
     })).toThrow(/不能保留当前审批步骤/);
+  });
+
+  it("accepts only the minimal command-status union and terminal lifecycle anchors", () => {
+    expect(validateMaterialRequestLifecycleCommandStatus({
+      schema_version: "1.0",
+      lookup_status: "not_observed",
+      command: null,
+    })).toEqual({ schema_version: "1.0", lookup_status: "not_observed", command: null });
+
+    const confirmed = {
+      schema_version: "1.0",
+      lookup_status: "confirmed",
+      command: {
+        action: "withdraw",
+        request_id: REQUEST_ID,
+        request_version: 2,
+        revision_id: REVISION_ID,
+        revision_no: 1,
+        approval_instance_id: INSTANCE_ID,
+        approval_attempt_no: 1,
+        current_step_id: null,
+        states: stateAxes("withdrawn"),
+        occurred_at: "2026-09-01T08:20:00+08:00",
+      },
+    };
+    expect(validateMaterialRequestLifecycleCommandStatus(confirmed).command?.action).toBe("withdraw");
+    expect(() => validateMaterialRequestLifecycleCommandStatus({
+      ...confirmed,
+      command: { ...confirmed.command, reason: "禁止泄漏或恢复写入正文" },
+    })).toThrow(/精确包含正式字段/);
+    expect(() => validateMaterialRequestLifecycleCommandStatus({
+      ...confirmed,
+      command: { ...confirmed.command, states: stateAxes("cancelled") },
+    })).toThrow(/申请终态不一致/);
+    expect(() => validateMaterialRequestLifecycleCommandStatus({
+      schema_version: "1.0",
+      lookup_status: "not_observed",
+      command: confirmed.command,
+    })).toThrow(/不能包含命令事实/);
   });
 
   it("validates create independently at version zero and neutral ten-axis state", () => {

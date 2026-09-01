@@ -65,6 +65,7 @@ from .material_request_policy import (
 
 MATERIAL_REQUEST_AUDIT_STREAM: Final[str] = "material_request"
 MATERIAL_REQUEST_AGGREGATE: Final[str] = "material_request"
+_CANCEL_AUDIT_REQUEST_SCHEMA: Final[str] = "cancel_input_line_order_v1"
 _NEUTRAL_AXES: Final[dict[str, str]] = {
     "allocation_status": "not_allocated",
     "reservation_status": "not_reserved",
@@ -665,6 +666,10 @@ def _cancel_material_request_impl(
             "cancellation_fact_manifest_sha256": _cancellation_fact_manifest(
                 cancellation_facts
             ),
+            "request_payload_schema": _CANCEL_AUDIT_REQUEST_SCHEMA,
+            "request_line_order": [
+                str(line.request_line_id) for line in prepared.lines
+            ],
             "reason_sha256": _text_hash(prepared.reason),
         },
         request_id=trace_id,
@@ -800,14 +805,71 @@ def _lock_request(db: Session, request_id: uuid.UUID) -> MaterialRequest:
     return request
 
 
+def _read_request(db: Session, request_id: uuid.UUID) -> MaterialRequest:
+    """Load one request without acquiring a row/advisory lock.
+
+    Lifecycle command-status recovery is a strictly read-only operation.  It
+    must never join the write lock order merely to determine whether a prior
+    command was observed.  The complete graph verifier still fails closed on
+    any mixed or contradictory projection.
+    """
+
+    request = db.scalar(
+        select(MaterialRequest)
+        .where(MaterialRequest.id == request_id)
+        .execution_options(populate_existing=True)
+    )
+    if request is None:
+        _fail("material_request_not_found", "not_found", "需求单不存在")
+    return request
+
+
 def _lock_graph(
     db: Session,
     request_id: uuid.UUID,
     *,
     request: MaterialRequest | None = None,
 ) -> _LockedGraph:
+    return _load_graph(
+        db,
+        request_id,
+        request=request,
+        lock_rows=True,
+    )
+
+
+def _read_graph(
+    db: Session,
+    request_id: uuid.UUID,
+    *,
+    request: MaterialRequest | None = None,
+) -> _LockedGraph:
+    """Load the lifecycle graph with ordinary SELECTs only."""
+
+    return _load_graph(
+        db,
+        request_id,
+        request=request,
+        lock_rows=False,
+    )
+
+
+def _load_graph(
+    db: Session,
+    request_id: uuid.UUID,
+    *,
+    request: MaterialRequest | None,
+    lock_rows: bool,
+) -> _LockedGraph:
+    def selected(statement):
+        return statement.with_for_update() if lock_rows else statement
+
     if request is None:
-        request = _lock_request(db, request_id)
+        request = (
+            _lock_request(db, request_id)
+            if lock_rows
+            else _read_request(db, request_id)
+        )
     elif request.id != request_id:
         _fail(
             "material_request_lock_identity_invalid",
@@ -847,14 +909,14 @@ def _lock_graph(
     )
     current_lines = tuple(
         db.scalars(
-            select(MaterialRequestLine)
-            .where(
-                MaterialRequestLine.request_id == request_id,
-                MaterialRequestLine.revision_id == current[0].id,
-            )
-            .order_by(MaterialRequestLine.line_no, MaterialRequestLine.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+            selected(
+                select(MaterialRequestLine)
+                .where(
+                    MaterialRequestLine.request_id == request_id,
+                    MaterialRequestLine.revision_id == current[0].id,
+                )
+                .order_by(MaterialRequestLine.line_no, MaterialRequestLine.id)
+            ).execution_options(populate_existing=True)
         ).all()
     )
     preview_current_line_ids = tuple(
@@ -872,27 +934,27 @@ def _lock_graph(
         )
     instances = tuple(
         db.scalars(
-            select(ApprovalInstance)
-            .where(ApprovalInstance.request_id == request_id)
-            .order_by(ApprovalInstance.attempt_no, ApprovalInstance.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+            selected(
+                select(ApprovalInstance)
+                .where(ApprovalInstance.request_id == request_id)
+                .order_by(ApprovalInstance.attempt_no, ApprovalInstance.id)
+            ).execution_options(populate_existing=True)
         ).all()
     )
     instance_ids = tuple(row.id for row in instances)
     steps = (
         tuple(
             db.scalars(
-                select(ApprovalStep)
-                .where(ApprovalStep.instance_id.in_(instance_ids))
-                .order_by(
-                    ApprovalStep.instance_id,
-                    ApprovalStep.step_no,
-                    ApprovalStep.attempt_no,
-                    ApprovalStep.id,
-                )
-                .with_for_update()
-                .execution_options(populate_existing=True)
+                selected(
+                    select(ApprovalStep)
+                    .where(ApprovalStep.instance_id.in_(instance_ids))
+                    .order_by(
+                        ApprovalStep.instance_id,
+                        ApprovalStep.step_no,
+                        ApprovalStep.attempt_no,
+                        ApprovalStep.id,
+                    )
+                ).execution_options(populate_existing=True)
             ).all()
         )
         if instance_ids
@@ -1127,7 +1189,10 @@ def _validate_cancellation(value: MaterialRequestCancelInput) -> MaterialRequest
         quantity = _require_quantity(row.cancelled_qty)
         line_reason = _require_text("line_reason", row.reason, 4000, required=True)
         checked.append(MaterialRequestCancellationLineInput(line_id, quantity, line_reason))
-    return MaterialRequestCancelInput(reason=reason, lines=tuple(checked))
+    return MaterialRequestCancelInput(
+        reason=reason,
+        lines=tuple(checked),
+    )
 
 
 def _require_exact_cancellation_lines(

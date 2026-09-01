@@ -162,6 +162,51 @@ describe("API transport quarantine", () => {
     expect(headHeaders.has("Idempotency-Key")).toBe(false);
   });
 
+  it("forces no-store for exact identity reads without changing ordinary GET caching", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api("/auth/me");
+    await api("/access/context?view=current");
+    await api("/v1/inventory/summary");
+
+    for (const index of [0, 1]) {
+      const init = fetchMock.mock.calls[index][1] as RequestInit;
+      const headers = new Headers(init.headers);
+      expect(init.cache).toBe("no-store");
+      expect(headers.get("Cache-Control")).toBe("no-store");
+      expect(headers.get("Pragma")).toBe("no-cache");
+    }
+    const ordinary = fetchMock.mock.calls[2][1] as RequestInit;
+    const ordinaryHeaders = new Headers(ordinary.headers);
+    expect(ordinary.cache).toBeUndefined();
+    expect(ordinaryHeaders.has("Cache-Control")).toBe(false);
+    expect(ordinaryHeaders.has("Pragma")).toBe(false);
+  });
+
+  it("keeps identity no-store on the exact retry after authentication refresh", async () => {
+    installBrowserRefreshCoordination();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api<{ ok: boolean }>("/access/context")).resolves.toEqual({ ok: true });
+
+    for (const index of [0, 2]) {
+      const init = fetchMock.mock.calls[index][1] as RequestInit;
+      const headers = new Headers(init.headers);
+      expect(init.cache).toBe("no-store");
+      expect(headers.get("Cache-Control")).toBe("no-store");
+      expect(headers.get("Pragma")).toBe("no-cache");
+    }
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/auth/refresh");
+  });
+
   it("adds a unique request id, but no idempotency key, to each mutation", async () => {
     const fetchMock = vi.fn().mockImplementation(async () => new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);

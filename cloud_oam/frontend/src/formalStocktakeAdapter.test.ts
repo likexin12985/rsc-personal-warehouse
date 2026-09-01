@@ -83,7 +83,10 @@ describe("formal stocktake PC adapter", () => {
     const adapter = createFormalStocktakeAdapter({ person_id: PERSON, authorization_version: 7 }, requester);
     await adapter.list(null); await adapter.detail(TASK.toUpperCase());
     expect(requester.mock.calls.map((call) => call[0])).toEqual(["/v1/stocktakes?limit=50", `/v1/stocktakes/${TASK}`]);
-    expect(requester.mock.calls[0][1]).toEqual({ headers: { "Cache-Control": "no-store", Pragma: "no-cache" } });
+    expect(requester.mock.calls[0][1]).toEqual({
+      cache: "no-store",
+      headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+    });
   });
 
   it("validates both assignee identities from the authorization-bound option page", async () => {
@@ -94,7 +97,10 @@ describe("formal stocktake PC adapter", () => {
     });
     const page = await createFormalStocktakeAdapter({ person_id: PERSON, authorization_version: 7 }, requester).listAssignees(REGION, LOCATION, null);
     expect(page.items[0]).toMatchObject({ assignee_user_id: ASSIGNEE_USER, person_id: PERSON });
-    expect(requester.mock.calls[0][1]).toEqual({ headers: { "Cache-Control": "no-store", Pragma: "no-cache" } });
+    expect(requester.mock.calls[0][1]).toEqual({
+      cache: "no-store",
+      headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+    });
 
     const malformed = vi.fn(async (_path: string, _init?: RequestInit): Promise<unknown> => ({ schema_version: "1.0", region_org_id: REGION, location_id: LOCATION, items: [{ person_id: PERSON, name: "工程师", employee_no: "E001", role_codes: ["technician"] }], next_after_person_id: null, authorization_version: 7 }));
     await expect(createFormalStocktakeAdapter({ person_id: PERSON, authorization_version: 7 }, malformed).listAssignees(REGION, LOCATION, null)).rejects.toThrow(/精确包含正式字段/);

@@ -276,6 +276,123 @@ function validateAccess(value) {
   })
 }
 
+function validateFormalIdentity(value, expectedIdentity) {
+  const object = exactObject(value, [
+    'person_id', 'name', 'employee_no', 'organization_code', 'organization_name',
+    'account_status', 'employment_status', 'access_mode', 'authorization_version',
+    'role_codes'
+  ], '正式登录身份')
+  const personId = uuidValue(object.person_id, 'person_id')
+  const authorizationVersion = positiveVersion(
+    object.authorization_version,
+    'authorization_version'
+  )
+  if (!expectedIdentity || typeof expectedIdentity !== 'object') {
+    throw adapterError('本地登录身份不可用，已停止终止命令恢复', 401)
+  }
+  if (
+    personId !== uuidValue(expectedIdentity.person_id, 'expected_person_id') ||
+    authorizationVersion !== positiveVersion(
+      expectedIdentity.authorization_version,
+      'expected_authorization_version'
+    )
+  ) throw adapterError('新鲜登录身份或授权版本已变化，终止恢复哨兵已保留')
+  if (
+    object.account_status !== 'active' ||
+    object.employment_status !== 'active' ||
+    object.access_mode !== 'active'
+  ) throw adapterError('新鲜登录身份不是有效在职访问状态，终止恢复哨兵已保留')
+  const roleCodes = Array.isArray(object.role_codes)
+    ? object.role_codes.map((role) => requiredText(role, 'role_code'))
+    : []
+  if (
+    !roleCodes.length ||
+    new Set(roleCodes).size !== roleCodes.length ||
+    roleCodes.some((role) => !SUPPORTED_ROLES.has(role)) ||
+    !roleCodes.some((role) => INTERNAL_ROLES.has(role))
+  ) throw adapterError('新鲜登录身份角色无效，终止恢复哨兵已保留')
+  return Object.freeze({
+    person_id: personId,
+    name: requiredText(object.name, 'name'),
+    employee_no: requiredText(object.employee_no, 'employee_no'),
+    organization_code: requiredText(object.organization_code, 'organization_code'),
+    organization_name: requiredText(object.organization_name, 'organization_name'),
+    account_status: object.account_status,
+    employment_status: object.employment_status,
+    access_mode: object.access_mode,
+    authorization_version: authorizationVersion,
+    role_codes: Object.freeze(roleCodes)
+  })
+}
+
+function validateLifecycleCommandStatus(value) {
+  const object = exactObject(
+    value,
+    ['schema_version', 'lookup_status', 'command'],
+    '需求终止命令查询响应'
+  )
+  if (object.schema_version !== contract.MATERIAL_REQUEST_SCHEMA_VERSION) {
+    throw adapterError('需求终止命令查询响应版本不受支持')
+  }
+  if (!['not_observed', 'confirmed'].includes(object.lookup_status)) {
+    throw adapterError('需求终止命令查询状态无效')
+  }
+  if (object.lookup_status === 'not_observed') {
+    if (object.command !== null) {
+      throw adapterError('未观察到命令时不得返回命令内容')
+    }
+    return Object.freeze({
+      schema_version: contract.MATERIAL_REQUEST_SCHEMA_VERSION,
+      lookup_status: 'not_observed',
+      command: null
+    })
+  }
+  const command = exactObject(object.command, [
+    'action', 'request_id', 'request_version', 'revision_id', 'revision_no',
+    'approval_instance_id', 'approval_attempt_no', 'current_step_id', 'states',
+    'occurred_at'
+  ], '已确认需求终止命令')
+  if (!['withdraw', 'cancel'].includes(command.action)) {
+    throw adapterError('已确认命令不是撤回或取消')
+  }
+  const requestVersion = positiveVersion(command.request_version, 'request_version')
+  const states = Object.freeze(contract.validateMaterialRequestStateAxes(command.states))
+  const expectedStatus = command.action === 'withdraw' ? 'withdrawn' : 'cancelled'
+  if (states.request_status !== expectedStatus) {
+    throw adapterError('已确认命令动作与申请终态不一致')
+  }
+  if (command.current_step_id !== null) {
+    throw adapterError('已确认终止命令不得保留当前审批步骤')
+  }
+  if (
+    typeof command.occurred_at !== 'string' ||
+    !AWARE_TIMESTAMP.test(command.occurred_at) ||
+    !Number.isFinite(Date.parse(command.occurred_at))
+  ) throw adapterError('已确认终止命令发生时间无效')
+  return Object.freeze({
+    schema_version: contract.MATERIAL_REQUEST_SCHEMA_VERSION,
+    lookup_status: 'confirmed',
+    command: Object.freeze({
+      action: command.action,
+      request_id: uuidValue(command.request_id, 'request_id'),
+      request_version: requestVersion,
+      revision_id: uuidValue(command.revision_id, 'revision_id'),
+      revision_no: positiveVersion(command.revision_no, 'revision_no'),
+      approval_instance_id: uuidValue(
+        command.approval_instance_id,
+        'approval_instance_id'
+      ),
+      approval_attempt_no: positiveVersion(
+        command.approval_attempt_no,
+        'approval_attempt_no'
+      ),
+      current_step_id: null,
+      states,
+      occurred_at: command.occurred_at
+    })
+  })
+}
+
 function projectAccessContext(value, expectedIdentity) {
   const object = exactObject(value, [
     'person_id',
@@ -501,13 +618,43 @@ function createFormalMaterialRequestAdapter(options = {}) {
   ) throw adapterError('正式需求客户端 transport 配置无效', 503)
 
   return Object.freeze({
-    async loadAccess() {
+    async loadIdentity() {
       const expectedIdentity = expectedIdentityProvider()
       if (!expectedIdentity) throw adapterError('当前登录身份不可用', 401)
-      return projectAccessContext(
-        await transport.get('/access/context'),
+      return validateFormalIdentity(
+        await transport.request('/auth/me', {
+          method: 'GET',
+          header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
+        }),
         expectedIdentity
       )
+    },
+    async loadAccess(freshIdentity) {
+      const expectedIdentity = freshIdentity || expectedIdentityProvider()
+      if (!expectedIdentity) throw adapterError('当前登录身份不可用', 401)
+      return projectAccessContext(
+        await transport.request('/access/context', {
+          method: 'GET',
+          header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
+        }),
+        expectedIdentity
+      )
+    },
+    async lifecycleCommandStatus(xRequestId) {
+      if (typeof xRequestId !== 'string' || !SAFE_REQUEST_ID.test(xRequestId)) {
+        throw adapterError('需求终止命令查询请求标识无效')
+      }
+      return validateLifecycleCommandStatus(await transport.request(
+        '/v1/material-request-lifecycle-command-status',
+        {
+          method: 'GET',
+          header: {
+            'X-Request-ID': xRequestId,
+            'Cache-Control': 'no-store',
+            Pragma: 'no-cache'
+          }
+        }
+      ))
     },
     list(afterId) {
       const suffix = afterId === null
@@ -589,6 +736,8 @@ function isDefinitiveRejection(error) {
 
 module.exports = {
   validateAccess,
+  validateFormalIdentity,
+  validateLifecycleCommandStatus,
   projectAccessContext,
   validateEditableDraft,
   createFormalMaterialRequestAdapter,

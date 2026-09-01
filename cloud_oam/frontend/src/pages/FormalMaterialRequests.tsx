@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Edit3, Eye, Plus, RefreshCw, Send, Trash2 } from "lucide-react";
 
+import { ApiError } from "../api";
 import {
   type FormalMaterialCatalogItem,
   validateFormalMaterialCatalogPage,
@@ -27,6 +28,14 @@ import {
   validateFormalMaterialRequestAccess,
   validateFormalMaterialRequestEditableDraft,
 } from "../formalMaterialRequestAdapter";
+import {
+  createMaterialRequestLifecycleRecoveryStore,
+  lifecycleSentinelBlockingMessage,
+  recoverMaterialRequestLifecycleCommand,
+  type MaterialRequestLifecycleRecoveryStore,
+  type MaterialRequestLifecycleSentinel,
+  type MaterialRequestLifecycleSentinelRead,
+} from "../materialRequestLifecycleRecovery";
 import FormalFileUploadField, {
   type AvailableFormalFile,
   type FormalFileUploadClient,
@@ -53,6 +62,14 @@ const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 const ACTIVE_WITHDRAW_STEP_STATUSES = new Set([
   "pending", "open", "awaiting_external_evidence", "evidence_pending_verification",
 ]);
+
+function isLifecycleRejectionSafeToClear(error: unknown): boolean {
+  return isDefinitiveMaterialRequestRejection(error)
+    && error instanceof ApiError
+    // Authentication and authorization drift must keep the original trace coordinate. A 409 is
+    // also retained conservatively because it may be an authorization-version/idempotency conflict.
+    && ![401, 403, 409].includes(error.status);
+}
 
 const AXIS_LABELS: ReadonlyArray<readonly [keyof MaterialRequestDetail["states"], string]> = [
   ["request_status", "申请"],
@@ -123,6 +140,21 @@ type LifecycleProcessState = {
   error: string;
   pendingMessage: string;
 };
+
+type LifecycleRecoveryView = Readonly<{
+  phase: "ready" | "checking" | "blocked" | "recovered";
+  message: string;
+  retryable: boolean;
+}>;
+
+function recoveryView(read: MaterialRequestLifecycleSentinelRead): LifecycleRecoveryView {
+  if (read.kind === "missing") return { phase: "ready", message: "", retryable: false };
+  return {
+    phase: read.kind === "valid" ? "checking" : "blocked",
+    message: lifecycleSentinelBlockingMessage(read),
+    retryable: read.kind === "valid",
+  };
+}
 
 type DraftFormState = {
   workOrderId: string;
@@ -450,6 +482,7 @@ function DetailPanel({
   detail,
   access,
   busy,
+  lifecycleBlocked,
   onEdit,
   onSubmit,
   onProcess,
@@ -458,6 +491,7 @@ function DetailPanel({
   detail: MaterialRequestDetail;
   access: FormalMaterialRequestAccess;
   busy: boolean;
+  lifecycleBlocked: boolean;
   onEdit: () => void;
   onSubmit: () => void;
   onProcess: (kind: ApprovalProcessState["kind"]) => void;
@@ -565,8 +599,8 @@ function DetailPanel({
     <div className="form-actions">
       {editableDraft && actions.has("update") && <Button tone="secondary" icon={<Edit3 size={17} />} disabled={busy} onClick={onEdit}>编辑草稿</Button>}
       {editableDraft && actions.has("submit") && <Button icon={<Send size={17} />} disabled={busy} onClick={onSubmit}>提交前确认</Button>}
-      {canWithdraw && <Button tone="secondary" disabled={busy} onClick={() => onLifecycle("withdraw")}>撤回申请</Button>}
-      {canCancel && <Button tone="secondary" disabled={busy} onClick={() => onLifecycle("cancel")}>安全取消</Button>}
+      {canWithdraw && <Button tone="secondary" disabled={busy || lifecycleBlocked} onClick={() => onLifecycle("withdraw")}>撤回申请</Button>}
+      {canCancel && <Button tone="secondary" disabled={busy || lifecycleBlocked} onClick={() => onLifecycle("cancel")}>安全取消</Button>}
       {!((editableDraft && (actions.has("update") || actions.has("submit"))) || canWithdraw || canCancel)
         && <span className="opening-no-action">当前主体没有可执行的提报动作</span>}
     </div>
@@ -862,10 +896,16 @@ function LifecycleProcessForm({
 export default function FormalMaterialRequestsPage({
   adapter,
   fileUploadClient = defaultFormalFileUploadClient,
+  lifecycleRecoveryStore,
 }: {
   adapter: FormalMaterialRequestAdapter;
   fileUploadClient?: FormalFileUploadClient;
+  lifecycleRecoveryStore?: MaterialRequestLifecycleRecoveryStore;
 }) {
+  const recoveryStore = useRef(
+    lifecycleRecoveryStore ?? createMaterialRequestLifecycleRecoveryStore(),
+  );
+  const initialRecoveryRead = useRef(recoveryStore.current.read());
   const [access, setAccess] = useState<FormalMaterialRequestAccess | null>(null);
   const [items, setItems] = useState<MaterialRequestSummary[]>([]);
   const [nextAfterId, setNextAfterId] = useState<string | null>(null);
@@ -883,6 +923,9 @@ export default function FormalMaterialRequestsPage({
   const [materialPicker, setMaterialPicker] = useState<MaterialPickerState | null>(null);
   const [approvalProcess, setApprovalProcess] = useState<ApprovalProcessState | null>(null);
   const [lifecycleProcess, setLifecycleProcess] = useState<LifecycleProcessState | null>(null);
+  const [lifecycleRecovery, setLifecycleRecovery] = useState<LifecycleRecoveryView>(
+    () => recoveryView(initialRecoveryRead.current),
+  );
   const [draftUploadFiles, setDraftUploadFiles] = useState<readonly AvailableFormalFile[]>([]);
   const [draftUploadBlocking, setDraftUploadBlocking] = useState(false);
   const [externalUploadBlocking, setExternalUploadBlocking] = useState(false);
@@ -890,6 +933,13 @@ export default function FormalMaterialRequestsPage({
   const pickerGeneration = useRef(0);
   const createRegistry = useRef(new MaterialRequestCreateIntentRegistry());
   const mutationRegistry = useRef(new MaterialRequestIntentRegistry());
+  const lifecycleRecoveryInFlight = useRef<Readonly<{
+    xRequestId: string;
+    promise: ReturnType<typeof recoverMaterialRequestLifecycleCommand>;
+  }> | null>(null);
+
+  const lifecycleWritesBlocked = lifecycleRecovery.phase === "checking"
+    || lifecycleRecovery.phase === "blocked";
 
   const nextLineKey = useCallback(() => {
     lineKey.current += 1;
@@ -940,6 +990,48 @@ export default function FormalMaterialRequestsPage({
     }
   }, [adapter]);
 
+  const recoverStoredLifecycle = useCallback(async (
+    sentinel: MaterialRequestLifecycleSentinel,
+    currentGeneration: number,
+  ): Promise<FormalMaterialRequestAccess | null> => {
+    setLifecycleRecovery({
+      phase: "checking",
+      message: `正在核验生命周期请求坐标 ${sentinel.x_request_id}；核验完成前不会生成新坐标。`,
+      retryable: false,
+    });
+    let inFlight = lifecycleRecoveryInFlight.current;
+    if (!inFlight || inFlight.xRequestId !== sentinel.x_request_id) {
+      const promise = recoverMaterialRequestLifecycleCommand({
+        adapter,
+        store: recoveryStore.current,
+        sentinel,
+      });
+      inFlight = Object.freeze({ xRequestId: sentinel.x_request_id, promise });
+      lifecycleRecoveryInFlight.current = inFlight;
+      void promise.finally(() => {
+        if (lifecycleRecoveryInFlight.current?.promise === promise) {
+          lifecycleRecoveryInFlight.current = null;
+        }
+      });
+    }
+    const outcome = await inFlight.promise;
+    if (currentGeneration !== generation.current) return null;
+    if (outcome.access) setAccess(outcome.access);
+    if (outcome.kind === "confirmed") {
+      setDetail(outcome.detail);
+      setLifecycleProcess(null);
+      setLifecycleRecovery({
+        phase: "recovered",
+        message: `${outcome.command.action === "withdraw" ? "撤回" : "取消"}命令已从服务端事实恢复，并完成需求版本、修订、审批锚点及十状态轴精确回读。`,
+        retryable: false,
+      });
+      setNotice("生命周期命令已恢复确认；分配、占用、出库、发货、物流签收、OAM收货、RSC/个人仓入库、通知送达和对账同步仍是独立状态。");
+      return outcome.access;
+    }
+    setLifecycleRecovery({ phase: "blocked", message: outcome.message, retryable: true });
+    return outcome.access;
+  }, [adapter]);
+
   useEffect(() => {
     generation.current += 1;
     const currentGeneration = generation.current;
@@ -953,8 +1045,21 @@ export default function FormalMaterialRequestsPage({
     setLoading(true);
     void (async () => {
       try {
-        const checked = validateFormalMaterialRequestAccess(await adapter.loadAccess());
+        const stored = recoveryStore.current.read();
+        let checked: FormalMaterialRequestAccess | null;
+        if (stored.kind === "valid") {
+          checked = await recoverStoredLifecycle(stored.value, currentGeneration);
+        } else {
+          setLifecycleRecovery(recoveryView(stored));
+          checked = validateFormalMaterialRequestAccess(await adapter.loadAccess());
+        }
         if (currentGeneration !== generation.current) return;
+        if (!checked) {
+          setAccess(null);
+          setError("待核验生命周期命令的登录身份或新鲜授权不可用，页面已失败关闭");
+          setLoading(false);
+          return;
+        }
         setAccess(checked);
         if (!checked.can_read) {
           setError("当前主体没有正式需求读取权限，页面已失败关闭");
@@ -975,7 +1080,22 @@ export default function FormalMaterialRequestsPage({
       generation.current += 1;
       setForm(emptyForm(nextLineKey()));
     };
-  }, [adapter, loadList, nextLineKey]);
+  }, [adapter, loadList, nextLineKey, recoverStoredLifecycle]);
+
+  async function retryStoredLifecycleRecovery(): Promise<void> {
+    const stored = recoveryStore.current.read();
+    if (stored.kind !== "valid") {
+      setLifecycleRecovery(recoveryView(stored));
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await recoverStoredLifecycle(stored.value, generation.current);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const openDetail = useCallback(async (requestId: string) => {
     setBusy(true);
@@ -1278,6 +1398,10 @@ export default function FormalMaterialRequestsPage({
 
   function startLifecycleProcess(kind: LifecycleProcessState["kind"]): void {
     if (!detail || !access) return;
+    if (lifecycleWritesBlocked) {
+      setError("已有生命周期命令待核验或恢复存储不可用，禁止生成新的撤回/取消请求坐标");
+      return;
+    }
     const pending = mutationRegistry.current.get(detail.request_id);
     if (pending) {
       setError(`当前需求已有结果未确认的 ${pending.action} 写入（请求坐标 ${pending.headers["X-Request-ID"]}），禁止开始其他动作`);
@@ -1397,6 +1521,7 @@ export default function FormalMaterialRequestsPage({
 
     setBusy(true);
     let responseValidated = false;
+    let transportStarted = false;
     try {
       const intent = mutationRegistry.current.begin({
         requestId: before.request_id,
@@ -1405,11 +1530,18 @@ export default function FormalMaterialRequestsPage({
         body,
         expectedVersion: before.request_version,
       });
+      recoveryStore.current.persist(intent.headers["X-Request-ID"]);
+      setLifecycleRecovery({
+        phase: "blocked",
+        message: `生命周期请求坐标 ${intent.headers["X-Request-ID"]} 已在当前标签页持久化，服务端事实精确回读前保持阻断。`,
+        retryable: true,
+      });
       setLifecycleProcess((current) => current ? {
         ...current,
         error: "",
         pendingMessage: `操作结果确认中（请求坐标 ${intent.headers["X-Request-ID"]}）；重试只复用原坐标。`,
       } : current);
+      transportStarted = true;
       const result = validateMaterialRequestMutationResult(await adapter.mutate(intent), {
         requestId: before.request_id,
         action: process.kind,
@@ -1423,23 +1555,60 @@ export default function FormalMaterialRequestsPage({
       if (!lifecycleMutationMatches(result, before, reread, process.kind)) {
         throw new Error("生命周期响应与同一需求终态、审批锚点或逐行取消事实回读不一致，仍待人工核验");
       }
+      recoveryStore.current.clear(intent.headers["X-Request-ID"]);
       mutationRegistry.current.confirm(intent.request_id, intent.signature);
       setDetail(reread);
       setLifecycleProcess(null);
+      setLifecycleRecovery({
+        phase: "recovered",
+        message: `${process.kind === "withdraw" ? "撤回" : "取消"}命令已完成服务端响应和详情双重核验，当前标签页恢复坐标已安全清理。`,
+        retryable: false,
+      });
       setNotice(process.kind === "withdraw"
         ? "需求已撤回并完成终态精确回读；其他九个状态轴未被合并。"
         : "需求已安全取消并完成逐行事实与十个状态轴精确回读；未推断任何下游补偿。"
       );
     } catch (error) {
       const pending = mutationRegistry.current.get(before.request_id);
-      if (!responseValidated && pending && isDefinitiveMaterialRequestRejection(error)) {
-        mutationRegistry.current.clearDefinitiveRejection(pending.request_id, pending.signature);
+      if (!transportStarted && pending) {
+        setLifecycleRecovery({
+          phase: "blocked",
+          message: `${showError(error)}；POST 未发送，当前页仍保留原内存意图并禁止生成新坐标。`,
+          retryable: recoveryStore.current.read().kind === "valid",
+        });
         setLifecycleProcess((current) => current ? {
           ...current,
-          error: showError(error),
-          pendingMessage: "",
+          error: `${showError(error)}；生命周期 POST 未发送`,
+          pendingMessage: "原请求坐标仍保留在当前页面内存中；修复恢复存储后只能按原坐标重试。",
         } : current);
+      } else if (!responseValidated && pending && isLifecycleRejectionSafeToClear(error)) {
+        try {
+          recoveryStore.current.clear(pending.headers["X-Request-ID"]);
+          mutationRegistry.current.clearDefinitiveRejection(pending.request_id, pending.signature);
+          setLifecycleRecovery({ phase: "ready", message: "", retryable: false });
+          setLifecycleProcess((current) => current ? {
+            ...current,
+            error: showError(error),
+            pendingMessage: "",
+          } : current);
+        } catch (clearError) {
+          setLifecycleRecovery({
+            phase: "blocked",
+            message: `${showError(clearError)}；虽已收到明确拒绝，但恢复坐标尚未完成本地清理。`,
+            retryable: true,
+          });
+          setLifecycleProcess((current) => current ? {
+            ...current,
+            error: `${showError(error)}；${showError(clearError)}`,
+            pendingMessage: "明确拒绝已收到，但本地恢复坐标清理失败，继续阻断新的生命周期写。",
+          } : current);
+        }
       } else if (pending) {
+        setLifecycleRecovery({
+          phase: "blocked",
+          message: `生命周期请求坐标 ${pending.headers["X-Request-ID"]} 的服务端结果仍待核验，禁止生成新坐标。`,
+          retryable: true,
+        });
         setLifecycleProcess((current) => current ? {
           ...current,
           error: showError(error),
@@ -1683,6 +1852,17 @@ export default function FormalMaterialRequestsPage({
     <div className="alert alert-info">正式 V1.0 客户端路由已接线；生产写入仍受服务端写 gate 与 runtime ACL 控制。每次写入只在响应契约与同一需求详情精确回读一致后确认；明文草稿仅驻留当前页面内存。</div>
     {error && <div className="alert alert-error">{error}</div>}
     {notice && <div className="alert alert-info">{notice}</div>}
+    {(lifecycleRecovery.phase === "checking" || lifecycleRecovery.phase === "blocked") && <div className="alert alert-warning" role="status">
+      <strong>生命周期命令待核验：</strong>{lifecycleRecovery.message}
+      {lifecycleRecovery.retryable && <div className="form-actions">
+        <Button tone="secondary" disabled={busy || lifecycleRecovery.phase === "checking"} onClick={() => void retryStoredLifecycleRecovery()}>
+          {lifecycleRecovery.phase === "checking" ? "正在有限退避核验" : "重新核验原请求坐标"}
+        </Button>
+      </div>}
+    </div>}
+    {lifecycleRecovery.phase === "recovered" && <div className="alert alert-info" role="status">
+      <strong>生命周期命令已恢复：</strong>{lifecycleRecovery.message}
+    </div>}
 
     <section className="content-section" aria-label="正式需求列表">
       <div className="content-title"><div><h2>我的需求</h2><p>列表和详情只接受脱敏地址、脱敏联系人</p></div></div>
@@ -1706,7 +1886,7 @@ export default function FormalMaterialRequestsPage({
     {detail && access && <Modal title="正式需求详情" wide onClose={() => {
       if (!approvalProcess && !lifecycleProcess) setDetail(null);
     }}>
-      <DetailPanel detail={detail} access={access} busy={busy} onEdit={() => void startEdit()} onSubmit={() => setSubmitConfirm(true)} onProcess={startApprovalProcess} onLifecycle={startLifecycleProcess} />
+      <DetailPanel detail={detail} access={access} busy={busy} lifecycleBlocked={lifecycleWritesBlocked} onEdit={() => void startEdit()} onSubmit={() => setSubmitConfirm(true)} onProcess={startApprovalProcess} onLifecycle={startLifecycleProcess} />
     </Modal>}
 
     {formMode && <Modal title={formMode.kind === "create" ? "新建需求草稿" : "编辑需求草稿"} wide onClose={cancelRawForm}>

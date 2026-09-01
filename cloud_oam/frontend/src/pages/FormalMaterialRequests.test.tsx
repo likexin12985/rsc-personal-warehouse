@@ -1,17 +1,23 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../api";
 import type { FormalFileUploadClient } from "../FormalFileUploadField";
 import type { FormalFilePurpose, FormalUploadFile } from "../formalFileUpload";
 import type { FormalMaterialRequestAdapter } from "../formalMaterialRequestAdapter";
+import {
+  createMaterialRequestLifecycleRecoveryStore,
+  type MaterialRequestLifecycleRecoveryStore,
+} from "../materialRequestLifecycleRecovery";
 import FormalMaterialRequestsPage from "./FormalMaterialRequests";
 
 const REQUEST_ID = "10000000-0000-4000-8000-000000000001";
 const LINE_ID = "20000000-0000-4000-8000-000000000001";
 const PERSON_ID = "30000000-0000-4000-8000-000000000001";
+const OTHER_PERSON_ID = "30000000-0000-4000-8000-000000000002";
 const ORG_ID = "40000000-0000-4000-8000-000000000001";
 const MATERIAL_ID = "50000000-0000-4000-8000-000000000001";
 const MATERIAL_2_ID = "50000000-0000-4000-8000-000000000002";
@@ -26,6 +32,7 @@ const STEP_3_ID = "70000000-0000-4000-8000-000000000003";
 const REGISTRATION_ID = "80000000-0000-4000-8000-000000000001";
 const RAW_MOBILE = "138 0000 0000";
 const RAW_ADDRESS = "江东中路 100 号";
+const TRACE_ID = "web-12345678";
 
 function axes(requestStatus = "draft") {
   return {
@@ -365,6 +372,25 @@ function cancelledDetail(): any {
   return value;
 }
 
+function confirmedLifecycleStatus(action: "withdraw" | "cancel", value: any) {
+  return {
+    schema_version: "1.0",
+    lookup_status: "confirmed",
+    command: {
+      action,
+      request_id: value.request_id,
+      request_version: value.request_version,
+      revision_id: value.current_revision_id,
+      revision_no: value.current_revision_no,
+      approval_instance_id: value.approval_instance.instance_id,
+      approval_attempt_no: value.approval_instance.attempt_no,
+      current_step_id: value.approval_instance.current_step_id,
+      states: value.states,
+      occurred_at: value.updated_at,
+    },
+  };
+}
+
 function draft() {
   return {
     work_order_id: null,
@@ -451,7 +477,17 @@ function catalogItem2() {
 
 function adapter(overrides: Partial<FormalMaterialRequestAdapter> = {}): FormalMaterialRequestAdapter {
   return {
+    loadIdentity: vi.fn().mockResolvedValue({
+      schema_version: "1.0",
+      person_id: PERSON_ID,
+      authorization_version: 1,
+    }),
     loadAccess: vi.fn().mockResolvedValue(access()),
+    lifecycleCommandStatus: vi.fn().mockResolvedValue({
+      schema_version: "1.0",
+      lookup_status: "not_observed",
+      command: null,
+    }),
     list: vi.fn().mockResolvedValue(page()),
     detail: vi.fn().mockResolvedValue(detail()),
     loadDraftForEdit: vi.fn().mockResolvedValue({
@@ -498,9 +534,17 @@ function selectedFile(name = "现场照片.jpg"): File {
   return new File([new Uint8Array([1, 2, 3])], name, { type: "image/jpeg" });
 }
 
-async function renderReady(client: FormalMaterialRequestAdapter, uploads?: FormalFileUploadClient): Promise<void> {
-  render(<FormalMaterialRequestsPage adapter={client} fileUploadClient={uploads} />);
-  expect(await screen.findByText("MR-20260901-0001")).toBeTruthy();
+async function renderReady(
+  client: FormalMaterialRequestAdapter,
+  uploads?: FormalFileUploadClient,
+  lifecycleRecoveryStore?: MaterialRequestLifecycleRecoveryStore,
+): Promise<void> {
+  render(<FormalMaterialRequestsPage
+    adapter={client}
+    fileUploadClient={uploads}
+    lifecycleRecoveryStore={lifecycleRecoveryStore}
+  />);
+  expect((await screen.findAllByText("MR-20260901-0001")).length).toBeGreaterThan(0);
 }
 
 async function openDetail(): Promise<HTMLElement> {
@@ -535,6 +579,10 @@ async function fillCreateForm(uploadAttachment = false): Promise<void> {
   fireEvent.change(screen.getByLabelText("需用日期 1"), { target: { value: "2026-09-05" } });
   fireEvent.change(screen.getByLabelText("明细备注 1"), { target: { value: "故障替换" } });
 }
+
+beforeEach(() => {
+  sessionStorage.clear();
+});
 
 afterEach(() => {
   cleanup();
@@ -691,7 +739,7 @@ describe("formal material request PC vertical slice", () => {
   it("withdraws only after permission, allowed action, reason confirmation and exact terminal reread", async () => {
     const before = submittedDetail();
     const after = withdrawnDetail();
-    const mutate = vi.fn().mockResolvedValue({
+    const response = {
       schema_version: "1.0",
       request_id: REQUEST_ID,
       action: "withdraw",
@@ -703,6 +751,19 @@ describe("formal material request PC vertical slice", () => {
       current_step_id: null,
       states: axes("withdrawn"),
       idempotency_replayed: false,
+    };
+    const lifecycleStore = createMaterialRequestLifecycleRecoveryStore(sessionStorage, () => 1);
+    const mutate = vi.fn().mockImplementation(async (intent) => {
+      expect(lifecycleStore.read()).toMatchObject({
+        kind: "valid",
+        value: { x_request_id: intent.headers["X-Request-ID"] },
+      });
+      expect(sessionStorage.length).toBe(1);
+      const rawSentinel = sessionStorage.getItem("cloud-oam-material-request-lifecycle-sentinel-v1") ?? "";
+      expect(rawSentinel).not.toContain(intent.headers["Idempotency-Key"]);
+      expect(rawSentinel).not.toContain(REQUEST_ID);
+      expect(rawSentinel).not.toContain("申请信息需重新整理");
+      return response;
     });
     const withoutPermission = adapter({
       list: vi.fn().mockResolvedValue(page(before)),
@@ -719,7 +780,7 @@ describe("formal material request PC vertical slice", () => {
       detail: vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(after),
       mutate,
     });
-    await renderReady(client);
+    await renderReady(client, undefined, lifecycleStore);
     panel = await openDetail();
     fireEvent.click(within(panel).getByRole("button", { name: "撤回申请" }));
     const confirmation = await screen.findByRole("dialog", { name: "撤回需求" });
@@ -745,6 +806,7 @@ describe("formal material request PC vertical slice", () => {
       body: { expected_version: 1, reason: "申请信息需重新整理" },
     });
     expect(await screen.findByText(/其他九个状态轴未被合并/)).toBeTruthy();
+    expect(lifecycleStore.read()).toEqual({ kind: "missing" });
   });
 
   it("keeps a lifecycle intent pending when reread advances another independent axis", async () => {
@@ -799,6 +861,9 @@ describe("formal material request PC vertical slice", () => {
       },
     ];
     for (const { mutateAfter, expectedError } of scenarios) {
+      // Each loop entry models a separate browser tab; an unresolved sentinel from the prior
+      // scenario must not be erased by component cleanup in production.
+      sessionStorage.clear();
       const before = submittedDetail();
       const after = withdrawnDetail();
       mutateAfter(after);
@@ -954,6 +1019,234 @@ describe("formal material request PC vertical slice", () => {
     fireEvent.click(within(confirmation).getByRole("button", { name: "按原请求坐标重试" }));
     await waitFor(() => expect(mutate).toHaveBeenCalledTimes(2));
     expect(mutate.mock.calls[1][0]).toBe(mutate.mock.calls[0][0]);
+  });
+
+  it("recovers a confirmed hard-refresh sentinel only after fresh identity, access, status and exact detail", async () => {
+    const after = cancelledDetail();
+    const events: string[] = [];
+    const lifecycleStore = createMaterialRequestLifecycleRecoveryStore(sessionStorage, () => 1);
+    lifecycleStore.persist(TRACE_ID);
+    const client = adapter({
+      loadIdentity: vi.fn(async () => {
+        events.push("GET /auth/me");
+        return { schema_version: "1.0", person_id: PERSON_ID, authorization_version: 1 };
+      }),
+      loadAccess: vi.fn(async () => {
+        events.push("GET /access/context");
+        return { ...access(), can_cancel: true };
+      }),
+      lifecycleCommandStatus: vi.fn(async (xRequestId) => {
+        events.push(`GET command-status ${xRequestId}`);
+        return confirmedLifecycleStatus("cancel", after);
+      }),
+      detail: vi.fn(async (requestId) => {
+        events.push(`GET detail ${requestId}`);
+        return after;
+      }),
+      list: vi.fn(async () => {
+        events.push("GET list");
+        return page(after);
+      }),
+    });
+
+    await renderReady(client, undefined, lifecycleStore);
+    expect(await screen.findByText(/取消命令已从服务端事实恢复/)).toBeTruthy();
+    expect(events).toEqual([
+      "GET /auth/me",
+      "GET /access/context",
+      `GET command-status ${TRACE_ID}`,
+      `GET detail ${REQUEST_ID}`,
+      "GET list",
+    ]);
+    expect(lifecycleStore.read()).toEqual({ kind: "missing" });
+    const panel = await screen.findByRole("dialog", { name: "正式需求详情" });
+    expect(within(panel).getByLabelText("需求十个独立状态轴").textContent).toContain("cancelled");
+  });
+
+  it("single-flights hard-refresh recovery when React StrictMode replays effects", async () => {
+    const after = withdrawnDetail();
+    const lifecycleStore = createMaterialRequestLifecycleRecoveryStore(sessionStorage, () => 1);
+    lifecycleStore.persist(TRACE_ID);
+    const loadIdentity = vi.fn().mockResolvedValue({
+      schema_version: "1.0",
+      person_id: PERSON_ID,
+      authorization_version: 1,
+    });
+    const loadAccess = vi.fn().mockResolvedValue({ ...access(), can_withdraw: true });
+    const lifecycleCommandStatus = vi.fn().mockResolvedValue(confirmedLifecycleStatus("withdraw", after));
+    const readDetail = vi.fn().mockResolvedValue(after);
+    const client = adapter({
+      loadIdentity,
+      loadAccess,
+      lifecycleCommandStatus,
+      detail: readDetail,
+      list: vi.fn().mockResolvedValue(page(after)),
+    });
+
+    render(<StrictMode><FormalMaterialRequestsPage
+      adapter={client}
+      lifecycleRecoveryStore={lifecycleStore}
+    /></StrictMode>);
+    expect(await screen.findByText(/撤回命令已从服务端事实恢复/)).toBeTruthy();
+    expect(loadIdentity).toHaveBeenCalledTimes(1);
+    expect(loadAccess).toHaveBeenCalledTimes(1);
+    expect(lifecycleCommandStatus).toHaveBeenCalledTimes(1);
+    expect(readDetail).toHaveBeenCalledTimes(1);
+    expect(lifecycleStore.read()).toEqual({ kind: "missing" });
+  });
+
+  it("retains the hard-refresh sentinel when fresh identity and authorization drift", async () => {
+    const before = submittedDetail();
+    const lifecycleStore = createMaterialRequestLifecycleRecoveryStore(sessionStorage, () => 1);
+    lifecycleStore.persist(TRACE_ID);
+    const loadIdentity = vi.fn().mockResolvedValue({
+      schema_version: "1.0",
+      person_id: OTHER_PERSON_ID,
+      authorization_version: 2,
+    });
+    const loadAccess = vi.fn().mockResolvedValue({ ...access(), can_withdraw: true });
+    const lifecycleCommandStatus = vi.fn();
+    const client = adapter({
+      loadIdentity,
+      loadAccess,
+      lifecycleCommandStatus,
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValue(before),
+    });
+
+    await renderReady(client, undefined, lifecycleStore);
+    expect(loadIdentity).toHaveBeenCalledTimes(1);
+    expect(loadAccess).toHaveBeenCalledTimes(1);
+    expect(lifecycleCommandStatus).not.toHaveBeenCalled();
+    expect(await screen.findByText(/新鲜登录身份与访问授权不一致/)).toBeTruthy();
+    expect(lifecycleStore.read().kind).toBe("valid");
+    const panel = await openDetail();
+    expect(within(panel).getByRole("button", { name: "撤回申请" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("retains not_observed across finite backoff and disables new lifecycle coordinates", async () => {
+    const before = submittedDetail();
+    const lifecycleStore = createMaterialRequestLifecycleRecoveryStore(sessionStorage, () => 1);
+    lifecycleStore.persist(TRACE_ID);
+    const lifecycleCommandStatus = vi.fn().mockResolvedValue({
+      schema_version: "1.0",
+      lookup_status: "not_observed",
+      command: null,
+    });
+    const client = adapter({
+      loadAccess: vi.fn().mockResolvedValue({ ...access(), can_withdraw: true }),
+      lifecycleCommandStatus,
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValue(before),
+    });
+
+    await renderReady(client, undefined, lifecycleStore);
+    expect(lifecycleCommandStatus).toHaveBeenCalledTimes(3);
+    expect(lifecycleCommandStatus).toHaveBeenNthCalledWith(1, TRACE_ID);
+    expect(await screen.findByText(/服务端尚未观察到该请求坐标/)).toBeTruthy();
+    expect(lifecycleStore.read().kind).toBe("valid");
+    const panel = await openDetail();
+    const withdraw = within(panel).getByRole("button", { name: "撤回申请" });
+    expect(withdraw.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(withdraw);
+    expect(screen.queryByRole("dialog", { name: "撤回需求" })).toBeNull();
+  });
+
+  it("retains a corrupt sentinel visibly and fails lifecycle buttons closed", async () => {
+    sessionStorage.setItem("cloud-oam-material-request-lifecycle-sentinel-v1", "{bad-json");
+    const loadIdentity = vi.fn();
+    const lifecycleCommandStatus = vi.fn();
+    const before = submittedDetail();
+    const client = adapter({
+      loadIdentity,
+      lifecycleCommandStatus,
+      loadAccess: vi.fn().mockResolvedValue({ ...access(), can_withdraw: true }),
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValue(before),
+    });
+
+    await renderReady(client);
+    expect(await screen.findByText(/生命周期恢复标记已损坏/)).toBeTruthy();
+    expect(loadIdentity).not.toHaveBeenCalled();
+    expect(lifecycleCommandStatus).not.toHaveBeenCalled();
+    const panel = await openDetail();
+    expect(within(panel).getByRole("button", { name: "撤回申请" }).hasAttribute("disabled")).toBe(true);
+    expect(sessionStorage.getItem("cloud-oam-material-request-lifecycle-sentinel-v1")).toBe("{bad-json");
+  });
+
+  it("retains lifecycle coordinates on explicit authentication or authorization rejection", async () => {
+    const before = submittedDetail();
+    const lifecycleStore = createMaterialRequestLifecycleRecoveryStore(sessionStorage, () => 1);
+    const rejected = vi.fn().mockRejectedValue(new ApiError(403, "授权版本已变化", {}));
+    const client = adapter({
+      loadAccess: vi.fn().mockResolvedValue({ ...access(), can_withdraw: true }),
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValue(before),
+      mutate: rejected,
+    });
+
+    await renderReady(client, undefined, lifecycleStore);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "撤回申请" }));
+    const confirmation = await screen.findByRole("dialog", { name: "撤回需求" });
+    fireEvent.change(within(confirmation).getByLabelText("撤回原因"), {
+      target: { value: "申请信息需重新整理" },
+    });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "确认撤回" }));
+
+    await waitFor(() => expect(rejected).toHaveBeenCalledTimes(1));
+    expect(lifecycleStore.read().kind).toBe("valid");
+    expect(within(confirmation).getByText(/禁止生成新坐标或执行其他动作/)).toBeTruthy();
+    expect(screen.getByText(/生命周期命令待核验/)).toBeTruthy();
+  });
+
+  it("clears the sentinel only for a definite server rejection and never sends when persistence fails", async () => {
+    const before = submittedDetail();
+    const lifecycleStore = createMaterialRequestLifecycleRecoveryStore(sessionStorage, () => 1);
+    const rejected = vi.fn().mockRejectedValue(new ApiError(422, "明确拒绝测试", {}));
+    let client = adapter({
+      loadAccess: vi.fn().mockResolvedValue({ ...access(), can_withdraw: true }),
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValue(before),
+      mutate: rejected,
+    });
+    await renderReady(client, undefined, lifecycleStore);
+    let panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "撤回申请" }));
+    let confirmation = await screen.findByRole("dialog", { name: "撤回需求" });
+    fireEvent.change(within(confirmation).getByLabelText("撤回原因"), {
+      target: { value: "申请信息需重新整理" },
+    });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "确认撤回" }));
+    await waitFor(() => expect(rejected).toHaveBeenCalledTimes(1));
+    expect(await within(confirmation).findByText("明确拒绝测试")).toBeTruthy();
+    expect(lifecycleStore.read()).toEqual({ kind: "missing" });
+    expect(screen.queryByText(/生命周期命令待核验/)).toBeNull();
+
+    cleanup();
+    const failedStore: MaterialRequestLifecycleRecoveryStore = {
+      read: () => ({ kind: "missing" }),
+      persist: () => { throw new ApiError(409, "storage denied"); },
+      clear: () => { throw new Error("must not clear"); },
+    };
+    const neverSent = vi.fn();
+    client = adapter({
+      loadAccess: vi.fn().mockResolvedValue({ ...access(), can_withdraw: true }),
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValue(before),
+      mutate: neverSent,
+    });
+    await renderReady(client, undefined, failedStore);
+    panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "撤回申请" }));
+    confirmation = await screen.findByRole("dialog", { name: "撤回需求" });
+    fireEvent.change(within(confirmation).getByLabelText("撤回原因"), {
+      target: { value: "申请信息需重新整理" },
+    });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "确认撤回" }));
+    await waitFor(() => expect(within(confirmation).getByText(/生命周期 POST 未发送/)).toBeTruthy());
+    expect(neverSent).not.toHaveBeenCalled();
+    expect(screen.getByText(/当前页仍保留原内存意图并禁止生成新坐标/)).toBeTruthy();
   });
 
   it("sends exact region approve/return/reject bodies only when permission and allowed_actions agree", async () => {

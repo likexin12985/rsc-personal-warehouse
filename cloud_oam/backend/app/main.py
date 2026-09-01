@@ -69,6 +69,15 @@ PRODUCTION_AUTH_PATHS = frozenset(
         "/api/auth/sessions",
     }
 )
+PRIVATE_IDENTITY_READ_PATHS = frozenset(
+    {
+        "/api/auth/me",
+        "/api/access/context",
+    }
+)
+PRIVATE_COMMAND_RECOVERY_PATHS = frozenset(
+    {"/api/v1/material-request-lifecycle-command-status"}
+)
 
 
 def is_production_auth_path(method: str, path: str) -> bool:
@@ -189,6 +198,16 @@ async def block_legacy_prototype_writes(request, call_next):
             },
         )
     response = await call_next(request)
+    if request.url.path in (
+        PRIVATE_IDENTITY_READ_PATHS | PRIVATE_COMMAND_RECOVERY_PATHS
+    ):
+        # Identity/effective-RBAC documents and command-recovery evidence are
+        # authorization decisions, not cacheable application data. Apply this
+        # after ``call_next`` so framework-generated failures receive the same
+        # boundary as successful reads.
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Referrer-Policy"] = "no-referrer"
     if request.url.path.startswith("/api/v1/files"):
         # Cover framework-level 404/405/422 responses as well as successful
         # signed-intent responses; presigned URLs must never be cached or sent
@@ -211,6 +230,7 @@ app.include_router(formal_material_catalog.router, prefix="/api")
 # independently fail-closed behind their explicit feature/configuration gate
 # and request-scoped KMS cipher dependency.
 app.include_router(formal_material_requests.router, prefix="/api")
+app.include_router(formal_material_requests.command_status_router, prefix="/api")
 # Formal attachments use only private-object-store presigned intents.  The
 # adapter is disabled by default and never shares the quarantined legacy
 # ``/media`` filesystem route.

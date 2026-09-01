@@ -366,7 +366,7 @@ def test_approval_lock_order_is_aggregate_then_parent_principal_and_children(
             ),
             idempotency_key="approval-lock-order-key-0001",
             idempotency_hmac_secret=SECRET,
-            trace_request_id="trace-approval-lock-order",
+            trace_request_id="trace-approval-lock-order-command",
         )
 
     assert order[:4] == [

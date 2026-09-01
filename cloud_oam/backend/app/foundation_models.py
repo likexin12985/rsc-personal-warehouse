@@ -1866,6 +1866,19 @@ class AuditEvent(CreatedAtMixin, Base):
         ),
         Index("ix_audit_events_aggregate", "aggregate_type", "aggregate_id"),
         Index("ix_audit_events_request_id", "request_id"),
+        Index(
+            "uq_audit_events_material_request_request_id_0039",
+            "request_id",
+            unique=True,
+            postgresql_where=text(
+                "stream_key = 'material_request' AND action IN "
+                "('material_request.withdraw', 'material_request.cancel')"
+            ),
+            sqlite_where=text(
+                "stream_key = 'material_request' AND action IN "
+                "('material_request.withdraw', 'material_request.cancel')"
+            ),
+        ),
         Index("ix_audit_events_occurred_at", "occurred_at"),
     )
 

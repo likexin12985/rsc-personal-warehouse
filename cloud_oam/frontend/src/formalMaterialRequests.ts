@@ -377,6 +377,23 @@ export type MaterialRequestMutationResult = Readonly<{
   states: MaterialRequestStateAxes;
   idempotency_replayed: boolean;
 }>;
+export type MaterialRequestLifecycleCommand = Readonly<{
+  action: "withdraw" | "cancel";
+  request_id: string;
+  request_version: number;
+  revision_id: string;
+  revision_no: number;
+  approval_instance_id: string;
+  approval_attempt_no: number;
+  current_step_id: null;
+  states: MaterialRequestStateAxes;
+  occurred_at: string;
+}>;
+export type MaterialRequestLifecycleCommandStatus = Readonly<{
+  schema_version: typeof MATERIAL_REQUEST_SCHEMA_VERSION;
+  lookup_status: "not_observed" | "confirmed";
+  command: MaterialRequestLifecycleCommand | null;
+}>;
 export type MaterialRequestCreateResult = Readonly<{
   schema_version: typeof MATERIAL_REQUEST_SCHEMA_VERSION;
   request_id: string;
@@ -1605,6 +1622,64 @@ export function validateMaterialRequestMutationResult(
     current_step_id: currentStepId,
     states,
     idempotency_replayed: replayed,
+  };
+}
+
+export function validateMaterialRequestLifecycleCommandStatus(
+  value: unknown,
+): MaterialRequestLifecycleCommandStatus {
+  const object = record(value, "正式需求生命周期命令状态");
+  exactKeys(object, ["schema_version", "lookup_status", "command"], "正式需求生命周期命令状态");
+  if (field(object, "schema_version") !== MATERIAL_REQUEST_SCHEMA_VERSION) {
+    return invalid("material_request_contract_version_unknown", "正式需求生命周期命令状态版本不受支持");
+  }
+  const lookupStatus = exactEnum(
+    field(object, "lookup_status"),
+    ["not_observed", "confirmed"] as const,
+    "生命周期命令查询状态",
+  );
+  const rawCommand = field(object, "command");
+  if (lookupStatus === "not_observed") {
+    if (rawCommand !== null) {
+      invalid("material_request_contract_command_status_invalid", "未观察到的命令状态不能包含命令事实");
+    }
+    return {
+      schema_version: MATERIAL_REQUEST_SCHEMA_VERSION,
+      lookup_status: "not_observed",
+      command: null,
+    };
+  }
+  const command = record(rawCommand, "正式需求生命周期命令事实");
+  exactKeys(command, [
+    "action", "request_id", "request_version", "revision_id", "revision_no",
+    "approval_instance_id", "approval_attempt_no", "current_step_id", "states", "occurred_at",
+  ], "正式需求生命周期命令事实");
+  const action = exactEnum(field(command, "action"), ["withdraw", "cancel"] as const, "生命周期动作");
+  const states = validateMaterialRequestStateAxes(field(command, "states"));
+  if (states.request_status !== (action === "withdraw" ? "withdrawn" : "cancelled")) {
+    invalid("material_request_contract_lifecycle_state_invalid", "生命周期命令事实与申请终态不一致");
+  }
+  if (field(command, "current_step_id") !== null) {
+    invalid("material_request_contract_approval_anchor_invalid", "已确认生命周期命令不能保留当前审批步骤");
+  }
+  return {
+    schema_version: MATERIAL_REQUEST_SCHEMA_VERSION,
+    lookup_status: "confirmed",
+    command: {
+      action,
+      request_id: uuid(field(command, "request_id"), "command.request_id"),
+      request_version: positiveInteger(field(command, "request_version"), "command.request_version"),
+      revision_id: uuid(field(command, "revision_id"), "command.revision_id"),
+      revision_no: positiveInteger(field(command, "revision_no"), "command.revision_no"),
+      approval_instance_id: uuid(field(command, "approval_instance_id"), "command.approval_instance_id"),
+      approval_attempt_no: positiveInteger(
+        field(command, "approval_attempt_no"),
+        "command.approval_attempt_no",
+      ),
+      current_step_id: null,
+      states,
+      occurred_at: awareTimestamp(field(command, "occurred_at"), "command.occurred_at"),
+    },
   };
 }
 
