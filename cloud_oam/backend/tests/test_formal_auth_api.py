@@ -19,6 +19,7 @@ from app.formal_services.authentication_rate_limit import (
     consume_authentication_login_rate_limits,
 )
 from app.formal_services.authentication_idempotency import (
+    AuthenticationEncryptionKeyUnavailable,
     StaticAuthenticationKeyProvider,
     create_authentication_response_cipher,
     create_configured_authentication_response_cipher,
@@ -44,7 +45,7 @@ from app.models import AuthSession, User, WechatIdentity
 from app.routers import auth
 from app.security import hash_refresh_token
 from app.sms import SmsSendResult
-from app.wechat import WechatLoginIdentity
+from app.wechat import WechatLoginIdentity, WechatProviderError
 
 
 IDENTITY_SECRET = "formal-auth-api-identity-hmac-secret-2026"
@@ -957,6 +958,16 @@ def test_sms_login_same_key_replays_exact_tokens_without_second_verification(
             )
             == 1
         )
+        assert db.scalar(select(func.count()).select_from(AuthSession)) == 1
+        assert db.scalar(select(func.count()).select_from(AuthRefreshToken)) == 1
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(AuditEvent)
+                .where(AuditEvent.action == "authentication.session.created")
+            )
+            == 1
+        )
 
 
 def test_sms_login_same_key_with_different_device_is_a_conflict(
@@ -1159,6 +1170,141 @@ def test_sms_request_idempotency_replay_does_not_send_or_append_twice(
         challenge = db.scalar(select(LoginChallenge))
         assert challenge is not None
         assert idempotency_key not in challenge.idempotency_key
+
+
+def test_kms_preflight_failure_precedes_sms_and_all_persistent_side_effects(
+    api_world: ApiWorld,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _unavailable_cipher():
+        raise AuthenticationEncryptionKeyUnavailable("test KMS unavailable")
+
+    monkeypatch.setattr(
+        auth,
+        "_configured_authentication_response_cipher",
+        _unavailable_cipher,
+    )
+
+    response = _request_sms(
+        api_world,
+        request_id="auth-api-kms-preflight-failure-0001",
+        idempotency_key="formal-kms-preflight-failure-key-0001",
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "code": "authentication_idempotency_encryption_unavailable",
+        "category": "service_unavailable",
+        "message": "认证幂等加密服务不可用",
+    }
+    assert api_world.sms_provider.send_calls == []
+    with api_world.session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(LoginChallenge)) == 0
+        assert db.scalar(select(func.count()).select_from(AuditEvent)) == 0
+        assert db.scalar(select(func.count()).select_from(StateTransitionEvent)) == 0
+
+
+def test_kms_preflight_failure_precedes_login_limits_codes_and_providers(
+    api_world: ApiWorld,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wechat_provider = FakeWechatProvider(openid="kms-must-precede-this-openid")
+    monkeypatch.setattr(auth, "get_wechat_provider", lambda: wechat_provider)
+
+    def _unavailable_cipher():
+        raise AuthenticationEncryptionKeyUnavailable("test KMS unavailable")
+
+    monkeypatch.setattr(
+        auth,
+        "_configured_authentication_response_cipher",
+        _unavailable_cipher,
+    )
+
+    responses = [
+        _login_sms_web(
+            api_world,
+            request_id="auth-api-kms-before-web-login-0001",
+            idempotency_key="formal-kms-before-web-login-key-0001",
+        ),
+        _login_sms_miniprogram(
+            api_world,
+            request_id="auth-api-kms-before-mini-login-0001",
+            idempotency_key="formal-kms-before-mini-login-key-0001",
+        ),
+        api_world.client.post(
+            "/api/auth/miniprogram/wechat-login",
+            json={
+                "login_code": "kms-must-precede-this-login-code",
+                "device_id": "kms-before-wechat-device-0001",
+                "device_name": "KMS 前置验证设备",
+            },
+            headers=_formal_mutation_headers(
+                request_id="auth-api-kms-before-wechat-login-0001",
+                idempotency_key="formal-kms-before-wechat-login-key-0001",
+            ),
+        ),
+    ]
+
+    assert [response.status_code for response in responses] == [503, 503, 503]
+    assert all(
+        response.json()["detail"]["code"]
+        == "authentication_idempotency_encryption_unavailable"
+        for response in responses
+    )
+    assert api_world.sms_provider.verify_calls == []
+    assert wechat_provider.login_calls == []
+    assert wechat_provider.phone_calls == []
+    with api_world.session_factory() as db:
+        for model in (
+            AuthLoginRateLimitBucket,
+            AuthIdempotencyOperation,
+            LoginChallenge,
+            AuthSession,
+            AuditEvent,
+            StateTransitionEvent,
+        ):
+            assert db.scalar(select(func.count()).select_from(model)) == 0
+
+
+def test_login_preflight_cipher_is_reused_by_idempotency_begin(
+    api_world: ApiWorld,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with api_world.session_factory() as db:
+        _seed_mobile_subject(db)
+    requested = _request_sms(
+        api_world,
+        request_id="auth-api-cipher-reuse-request-0001",
+        idempotency_key="formal-cipher-reuse-request-key-0001",
+    )
+    assert requested.status_code == 200, requested.text
+
+    factory_calls = 0
+
+    def _new_cipher():
+        nonlocal factory_calls
+        factory_calls += 1
+        return create_authentication_response_cipher(
+            environment="test",
+            key_provider=StaticAuthenticationKeyProvider(
+                key=AUTH_IDEMPOTENCY_TEST_KEY,
+                version=1,
+            ),
+        )
+
+    monkeypatch.setattr(
+        auth,
+        "_configured_authentication_response_cipher",
+        _new_cipher,
+    )
+    logged_in = _login_sms_web(
+        api_world,
+        request_id="auth-api-cipher-reuse-login-0001",
+        idempotency_key="formal-cipher-reuse-login-key-0001",
+    )
+
+    assert logged_in.status_code == 200, logged_in.text
+    assert factory_calls == 1
 
 
 def test_missing_authentication_chain_head_fails_before_sms_provider_send(
@@ -1366,16 +1512,119 @@ def test_wechat_login_same_key_replays_exact_tokens_without_provider_reuse(
             )
             == 1
         )
-        assert db.scalar(select(func.count()).select_from(AuthSession)) == 1
-        assert db.scalar(select(func.count()).select_from(AuthRefreshToken)) == 1
-        assert (
-            db.scalar(
-                select(func.count())
-                .select_from(AuditEvent)
-                .where(AuditEvent.action == "authentication.session.created")
-            )
-            == 1
+
+
+def test_wechat_provider_runs_only_after_committed_pending_owner(
+    api_world: ApiWorld,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openid = "formal-openid-owner-before-provider-0001"
+    observed_statuses: list[list[str]] = []
+
+    class OwnershipCheckingProvider(FakeWechatProvider):
+        def exchange_login_code(self, code: str) -> WechatLoginIdentity:
+            with api_world.session_factory() as db:
+                observed_statuses.append(
+                    list(
+                        db.scalars(
+                            select(AuthIdempotencyOperation.status).where(
+                                AuthIdempotencyOperation.operation_type
+                                == "wechat_login"
+                            )
+                        )
+                    )
+                )
+            return super().exchange_login_code(code)
+
+    provider = OwnershipCheckingProvider(openid=openid)
+    monkeypatch.setattr(auth, "get_wechat_provider", lambda: provider)
+    with api_world.session_factory() as db:
+        subject = _seed_subject(db)
+        _add_identity(
+            db,
+            subject,
+            identity_type="wechat_openid",
+            provider_key=WECHAT_APP_ID,
+            identifier=openid,
         )
+        db.commit()
+
+    response = api_world.client.post(
+        "/api/auth/miniprogram/wechat-login",
+        json={
+            "login_code": "formal-wechat-owner-before-provider-code",
+            "device_id": "formal-wechat-owner-device-0001",
+        },
+        headers=_formal_mutation_headers(
+            request_id="auth-api-wechat-owner-before-provider-0001",
+            idempotency_key="formal-wechat-owner-before-provider-key-0001",
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    assert observed_statuses == [["pending"]]
+    assert provider.login_calls == ["formal-wechat-owner-before-provider-code"]
+
+
+def test_wechat_provider_failure_is_one_replayable_terminal_operation_and_audit(
+    api_world: ApiWorld,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingProvider(FakeWechatProvider):
+        def exchange_login_code(self, code: str) -> WechatLoginIdentity:
+            self.login_calls.append(code)
+            raise WechatProviderError("sensitive provider diagnostic")
+
+    provider = FailingProvider(openid="unused-provider-failure-openid")
+    monkeypatch.setattr(auth, "get_wechat_provider", lambda: provider)
+    payload = {
+        "login_code": "formal-wechat-provider-failure-code",
+        "device_id": "formal-wechat-provider-failure-device-0001",
+    }
+    headers = _formal_mutation_headers(
+        request_id="auth-api-wechat-provider-failure-first-0001",
+        idempotency_key="formal-wechat-provider-failure-key-0001",
+    )
+
+    first = api_world.client.post(
+        "/api/auth/miniprogram/wechat-login",
+        json=payload,
+        headers=headers,
+    )
+    replay = api_world.client.post(
+        "/api/auth/miniprogram/wechat-login",
+        json=payload,
+        headers=_formal_mutation_headers(
+            request_id="auth-api-wechat-provider-failure-replay-0002",
+            idempotency_key="formal-wechat-provider-failure-key-0001",
+        ),
+    )
+
+    assert first.status_code == replay.status_code == 502
+    assert first.json() == replay.json() == {"detail": "微信接口暂时不可用"}
+    assert first.headers["Idempotency-Replayed"] == "false"
+    assert replay.headers["Idempotency-Replayed"] == "true"
+    assert provider.login_calls == ["formal-wechat-provider-failure-code"]
+    assert "sensitive provider diagnostic" not in first.text
+    with api_world.session_factory() as db:
+        operation = db.scalar(
+            select(AuthIdempotencyOperation).where(
+                AuthIdempotencyOperation.operation_type == "wechat_login"
+            )
+        )
+        assert operation is not None
+        assert operation.status == "failed"
+        assert operation.http_status == 502
+        events = list(
+            db.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.action == "authentication.wechat.login_failed"
+                )
+            )
+        )
+        assert len(events) == 1
+        assert events[0].after_jsonb["reason_code"] == "provider_unavailable"
+        assert db.scalar(select(func.count()).select_from(AuthSession)) == 0
 
 
 def test_wechat_never_falls_back_to_unionid_legacy_binding_or_phone_code(
@@ -1955,7 +2204,10 @@ def test_kms_unavailable_fails_before_code_verification_or_session_mutation(
     )
 
     assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "authentication_kms_required"
+    assert (
+        response.json()["detail"]["code"]
+        == "authentication_idempotency_encryption_unavailable"
+    )
     assert api_world.sms_provider.verify_calls == []
     with api_world.session_factory() as db:
         challenge = db.scalar(select(LoginChallenge))

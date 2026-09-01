@@ -6,9 +6,10 @@ It does not duplicate demand policy and it never advances allocation,
 reservation, outbound, shipment, signature, OAM receipt, personal inbound,
 notification or reconciliation state.
 
-No KMS implementation lives here.  A deployment must inject one request-
-scoped :class:`MaterialRequestContactCipher`.  The default dependency returns
-``None`` so every formal write fails closed while read routes remain usable.
+The production composition root supplies one request-scoped
+:class:`MaterialRequestContactCipher` from a ciphertext-only KMS data-key
+registry.  Missing or unavailable KMS material still fails closed while read
+routes remain usable.
 """
 
 from __future__ import annotations
@@ -63,6 +64,7 @@ from ..material_request_read_schemas import (
     MaterialRequestMutationOut,
     MaterialRequestPageOut,
 )
+from ..production_adapters import create_production_material_request_contact_cipher
 
 
 router = APIRouter(
@@ -168,10 +170,17 @@ class _MaterialRequestAdapterError(RuntimeError):
         }
 
 
-def get_material_request_contact_cipher() -> MaterialRequestContactCipher | None:
-    """Deployment injection point; no environment/plaintext key fallback."""
+def get_material_request_contact_cipher(
+    runtime_settings: Settings = Depends(get_settings),
+) -> MaterialRequestContactCipher | None:
+    """Return one request-scoped KMS cipher with no plaintext-key fallback."""
 
-    return None
+    try:
+        return create_production_material_request_contact_cipher(runtime_settings)
+    except Exception:
+        # The formal write adapter maps absence/unavailability to its stable,
+        # non-sensitive 503 response before any business mutation.
+        return None
 
 
 async def formal_material_request_validation_exception_handler(

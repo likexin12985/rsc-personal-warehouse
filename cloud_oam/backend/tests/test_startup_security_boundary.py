@@ -76,6 +76,10 @@ def test_security_sensitive_defaults_are_fail_closed_and_identity_neutral():
     assert fields["auth_idempotency_hmac_secret"].default == ""
     assert fields["auth_idempotency_encryption_provider"].default == "disabled"
     assert fields["auth_idempotency_kms_key_id"].default == ""
+    assert fields["kms_readiness_success_ttl_seconds"].default == 60
+    assert fields["kms_readiness_failure_ttl_seconds"].default == 10
+    assert fields["kms_readiness_wait_budget_seconds"].default == 4
+    assert fields["kms_readiness_probe_budget_seconds"].default == 4
     assert fields["auth_login_rate_limit_hmac_secret"].default == ""
     assert fields["auth_login_rate_limit_hash_version"].default == 1
     assert fields["admin_mobile"].default == ""
@@ -175,6 +179,22 @@ def test_production_api_requires_kms_encrypted_authentication_idempotency():
     settings = production_settings(auth_idempotency_ttl_seconds=120)
     settings.validate_api_startup()
     assert settings.authentication_idempotency_kms_configuration_ready() is True
+
+
+def test_production_api_rejects_sdk_wire_debug_and_oversized_readiness_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEBUG", "sdk")
+    with pytest.raises(ValueError, match="forbids Alibaba Cloud SDK wire debug"):
+        production_settings().validate_api_startup()
+    monkeypatch.delenv("DEBUG")
+
+    for field in (
+        "kms_readiness_wait_budget_seconds",
+        "kms_readiness_probe_budget_seconds",
+    ):
+        with pytest.raises(ValidationError, match=field):
+            production_settings(**{field: 5})
 
 
 def test_production_api_requires_dedicated_login_rate_limit_hmac_secret():

@@ -37,6 +37,61 @@ services:
         condition: service_healthy
     networks: [backend]
 
+  kms-pin-plan:
+    image: star-oam-api:0.9.0
+    build: ./backend
+    profiles: [ops]
+    restart: "no"
+    command: ["python", "-m", "app.kms_pin_gate", "--plan"]
+    environment:
+      OAM_ENVIRONMENT: production
+      # Settings require a syntactically valid runtime-role URL, but --plan
+      # never opens it.  This fixed non-secret coordinate plus network:none
+      # keeps the planning container outside the database trust boundary.
+      OAM_DATABASE_URL: postgresql+psycopg://star_oam_api@127.0.0.1/unused_kms_pin_plan
+      OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api
+      OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
+      OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER: ${OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER:-aliyun_kms}
+      OAM_AUTH_IDEMPOTENCY_KMS_KEY_ID: ${OAM_AUTH_IDEMPOTENCY_KMS_KEY_ID}
+      OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION: ${OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION:-1}
+      OAM_KMS_ENDPOINT: ${OAM_KMS_ENDPOINT}
+      OAM_KMS_REGION: ${OAM_KMS_REGION}
+      OAM_KMS_ENCRYPTED_DATA_KEY_REGISTRY_PATH: /run/secrets/rsc-kms-data-keys.json
+      OAM_MATERIAL_REQUEST_WRITES_ENABLED: ${OAM_MATERIAL_REQUEST_WRITES_ENABLED:-false}
+      OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_PROVIDER: ${OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_PROVIDER:-disabled}
+      OAM_MATERIAL_REQUEST_CONTACT_KMS_KEY_ID: ${OAM_MATERIAL_REQUEST_CONTACT_KMS_KEY_ID:-}
+      OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_KEY_VERSION: ${OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_KEY_VERSION:-1}
+    volumes:
+      - ${OAM_KMS_ENCRYPTED_DATA_KEY_REGISTRY_FILE}:/run/secrets/rsc-kms-data-keys.json:ro
+    network_mode: none
+
+  kms-pin-gate:
+    image: star-oam-api:0.9.0
+    build: ./backend
+    restart: "no"
+    command: ["python", "-m", "app.kms_pin_gate"]
+    environment:
+      OAM_ENVIRONMENT: production
+      OAM_DATABASE_URL: postgresql+psycopg://star_oam_api:${OAM_DB_API_PASSWORD}@db:5432/${POSTGRES_DB}
+      OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api
+      OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
+      OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER: ${OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER:-aliyun_kms}
+      OAM_AUTH_IDEMPOTENCY_KMS_KEY_ID: ${OAM_AUTH_IDEMPOTENCY_KMS_KEY_ID}
+      OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION: ${OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION:-1}
+      OAM_KMS_ENDPOINT: ${OAM_KMS_ENDPOINT}
+      OAM_KMS_REGION: ${OAM_KMS_REGION}
+      OAM_KMS_ENCRYPTED_DATA_KEY_REGISTRY_PATH: /run/secrets/rsc-kms-data-keys.json
+      OAM_MATERIAL_REQUEST_WRITES_ENABLED: ${OAM_MATERIAL_REQUEST_WRITES_ENABLED:-false}
+      OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_PROVIDER: ${OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_PROVIDER:-disabled}
+      OAM_MATERIAL_REQUEST_CONTACT_KMS_KEY_ID: ${OAM_MATERIAL_REQUEST_CONTACT_KMS_KEY_ID:-}
+      OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_KEY_VERSION: ${OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_KEY_VERSION:-1}
+    volumes:
+      - ${OAM_KMS_ENCRYPTED_DATA_KEY_REGISTRY_FILE}:/run/secrets/rsc-kms-data-keys.json:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [backend]
+
   api:
     image: star-oam-api:0.9.0
     build: ./backend
@@ -56,6 +111,13 @@ services:
       OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER: ${OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER:-aliyun_kms}
       OAM_AUTH_IDEMPOTENCY_KMS_KEY_ID: ${OAM_AUTH_IDEMPOTENCY_KMS_KEY_ID}
       OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION: ${OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION:-1}
+      OAM_KMS_ENDPOINT: ${OAM_KMS_ENDPOINT}
+      OAM_KMS_REGION: ${OAM_KMS_REGION}
+      OAM_KMS_ENCRYPTED_DATA_KEY_REGISTRY_PATH: /run/secrets/rsc-kms-data-keys.json
+      OAM_KMS_READINESS_SUCCESS_TTL_SECONDS: ${OAM_KMS_READINESS_SUCCESS_TTL_SECONDS:-60}
+      OAM_KMS_READINESS_FAILURE_TTL_SECONDS: ${OAM_KMS_READINESS_FAILURE_TTL_SECONDS:-10}
+      OAM_KMS_READINESS_WAIT_BUDGET_SECONDS: ${OAM_KMS_READINESS_WAIT_BUDGET_SECONDS:-4}
+      OAM_KMS_READINESS_PROBE_BUDGET_SECONDS: ${OAM_KMS_READINESS_PROBE_BUDGET_SECONDS:-4}
       OAM_AUTH_LOGIN_RATE_LIMIT_HMAC_SECRET: ${OAM_AUTH_LOGIN_RATE_LIMIT_HMAC_SECRET}
       OAM_AUTH_LOGIN_RATE_LIMIT_HASH_VERSION: ${OAM_AUTH_LOGIN_RATE_LIMIT_HASH_VERSION:-1}
       OAM_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${OAM_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-60}
@@ -68,6 +130,7 @@ services:
       OAM_MATERIAL_REQUEST_CONTACT_MOBILE_HASH_VERSION: ${OAM_MATERIAL_REQUEST_CONTACT_MOBILE_HASH_VERSION:-1}
       OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_PROVIDER: ${OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_PROVIDER:-disabled}
       OAM_MATERIAL_REQUEST_CONTACT_KMS_KEY_ID: ${OAM_MATERIAL_REQUEST_CONTACT_KMS_KEY_ID:-}
+      OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_KEY_VERSION: ${OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_KEY_VERSION:-1}
       OAM_STOCKTAKE_WRITES_ENABLED: ${OAM_STOCKTAKE_WRITES_ENABLED:-false}
       OAM_STOCKTAKE_IDEMPOTENCY_HMAC_SECRET: ${OAM_STOCKTAKE_IDEMPOTENCY_HMAC_SECRET:-}
       OAM_FILE_STORAGE_ENABLED: ${OAM_FILE_STORAGE_ENABLED:-false}
@@ -111,14 +174,16 @@ services:
       OAM_EDGE_SYNC_LEGACY_PERSONNEL_PROJECTION_ENABLED: "false"
     volumes:
       - uploads_data:/data/uploads
+      - ${OAM_KMS_ENCRYPTED_DATA_KEY_REGISTRY_FILE}:/run/secrets/rsc-kms-data-keys.json:ro
     depends_on:
-      migrate:
+      kms-pin-gate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready')"]
       interval: 15s
-      timeout: 5s
+      timeout: 8s
       retries: 10
+      start_period: 20s
     networks: [backend]
 
   web:

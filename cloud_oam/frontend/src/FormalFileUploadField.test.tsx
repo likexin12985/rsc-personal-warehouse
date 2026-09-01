@@ -61,8 +61,10 @@ describe("formal file upload field", () => {
     expect(await screen.findByText("状态：available（已完成严格确认）")).toBeTruthy();
     expect(execute).toHaveBeenCalledTimes(2);
     expect(execute.mock.calls[1][0]).toBe(execute.mock.calls[0][0]);
-    expect(onAvailableChange).toHaveBeenLastCalledWith([expect.objectContaining({ file_id: FILE_ID, purpose: "stocktake_evidence", status: "available" })]);
-    expect(onBlockingChange).toHaveBeenLastCalledWith(false);
+    await waitFor(() => {
+      expect(onAvailableChange).toHaveBeenLastCalledWith([expect.objectContaining({ file_id: FILE_ID, purpose: "stocktake_evidence", status: "available" })]);
+      expect(onBlockingChange).toHaveBeenLastCalledWith(false);
+    });
 
     rerender(<FormalFileUploadField purpose="stocktake_evidence" bindingKey="person-2:v2:task-2:scope-2" label="选择盘点证据" client={client} onAvailableChange={onAvailableChange} onBlockingChange={onBlockingChange} />);
     await waitFor(() => expect(screen.queryByText("盘点照片.jpg")).toBeNull());

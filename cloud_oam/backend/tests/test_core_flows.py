@@ -91,7 +91,15 @@ def test_inventory_transfer_and_stocktake_flow():
     with TestClient(app) as client:
         health = client.get("/api/health")
         assert health.status_code == 200
-        assert "cache-control" not in health.headers
+        assert health.json()["status"] == "ready"
+        assert health.headers["cache-control"] == "no-store, max-age=0"
+        live = client.get("/api/health/live")
+        assert live.status_code == 200
+        assert live.json()["status"] == "live"
+        assert live.headers["cache-control"] == "no-store, max-age=0"
+        ready = client.get("/api/health/ready")
+        assert ready.status_code == 200
+        assert ready.json()["status"] == "ready"
         for identity_path in ("/api/auth/me", "/api/access/context"):
             anonymous_identity = client.get(identity_path)
             assert anonymous_identity.status_code == 401

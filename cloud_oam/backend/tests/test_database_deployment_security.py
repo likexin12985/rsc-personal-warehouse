@@ -16,16 +16,65 @@ BACKUP = ROOT / "scripts" / "backup.sh"
 
 def test_compose_never_injects_bootstrap_or_migrator_secret_into_api() -> None:
     compose = COMPOSE.read_text(encoding="utf-8")
-    migrate = compose.split("  migrate:\n", 1)[1].split("  api:\n", 1)[0]
+    migrate = compose.split("  migrate:\n", 1)[1].split(
+        "  kms-pin-plan:\n", 1
+    )[0]
+    kms_pin_gate = compose.split("  kms-pin-gate:\n", 1)[1].split(
+        "  api:\n", 1
+    )[0]
     api = compose.split("  api:\n", 1)[1].split("  web:\n", 1)[0]
     assert "star_oam_migrator:${OAM_DB_MIGRATOR_PASSWORD}" in migrate
+    assert "star_oam_api:${OAM_DB_API_PASSWORD}" in kms_pin_gate
     assert "star_oam_api:${OAM_DB_API_PASSWORD}" in api
     assert "POSTGRES_PASSWORD" not in migrate
+    assert "POSTGRES_PASSWORD" not in kms_pin_gate
     assert "POSTGRES_PASSWORD" not in api
+    assert "OAM_DB_MIGRATOR_PASSWORD" not in kms_pin_gate
     assert "OAM_DB_MIGRATOR_PASSWORD" not in api
+    assert "OAM_DB_BACKUP_PASSWORD" not in kms_pin_gate
     assert "OAM_DB_BACKUP_PASSWORD" not in api
+    assert "OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api" in kms_pin_gate
     assert "OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api" in api
     assert "OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator" in migrate
+
+
+def test_compose_blocks_api_on_read_only_kms_pin_gate() -> None:
+    compose = COMPOSE.read_text(encoding="utf-8")
+    kms_pin_gate = compose.split("  kms-pin-gate:\n", 1)[1].split(
+        "  api:\n", 1
+    )[0]
+    api = compose.split("  api:\n", 1)[1].split("  web:\n", 1)[0]
+
+    assert 'command: ["python", "-m", "app.kms_pin_gate"]' in kms_pin_gate
+    assert "migrate:\n        condition: service_completed_successfully" in kms_pin_gate
+    assert "kms-pin-gate:\n        condition: service_completed_successfully" in api
+    assert (
+        "${OAM_KMS_ENCRYPTED_DATA_KEY_REGISTRY_FILE}:"
+        "/run/secrets/rsc-kms-data-keys.json:ro"
+    ) in kms_pin_gate
+
+
+def test_compose_kms_pin_plan_has_no_database_secret_or_network() -> None:
+    compose = COMPOSE.read_text(encoding="utf-8")
+    plan = compose.split("  kms-pin-plan:\n", 1)[1].split(
+        "  kms-pin-gate:\n", 1
+    )[0]
+
+    assert 'profiles: [ops]' in plan
+    assert (
+        'command: ["python", "-m", "app.kms_pin_gate", "--plan"]'
+        in plan
+    )
+    assert "network_mode: none" in plan
+    assert "networks:" not in plan
+    assert "depends_on:" not in plan
+    assert "OAM_DB_API_PASSWORD" not in plan
+    assert "OAM_DB_MIGRATOR_PASSWORD" not in plan
+    assert "OAM_DB_BACKUP_PASSWORD" not in plan
+    assert (
+        "postgresql+psycopg://star_oam_api@127.0.0.1/"
+        "unused_kms_pin_plan"
+    ) in plan
 
 
 def test_fresh_database_initializer_creates_distinct_non_superuser_roles() -> None:

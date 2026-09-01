@@ -162,6 +162,48 @@ def test_contact_reveal_reproves_request_person_and_integrity_bindings() -> None
             reveal_material_request_contact(**arguments)
 
 
+def test_contact_reveal_uses_exact_historical_kms_key_ring_binding() -> None:
+    envelope, source_cipher = _protected()
+
+    class _HistoricalKeyRing(_Cipher):
+        def __init__(self) -> None:
+            super().__init__()
+            self.plaintext = source_cipher.plaintext
+            self.aad = source_cipher.aad
+            self.key_ids: list[str] = []
+
+        def decrypt_for_kms_key_id(
+            self,
+            kms_key_id: str,
+            ciphertext: bytes,
+            *,
+            nonce: bytes,
+            aad: bytes,
+            key_version: int,
+        ) -> bytes:
+            self.key_ids.append(kms_key_id)
+            return self.decrypt(
+                ciphertext,
+                nonce=nonce,
+                aad=aad,
+                key_version=key_version,
+            )
+
+    ring = _HistoricalKeyRing()
+    revealed = reveal_material_request_contact(
+        cipher=ring,
+        kms_key_id="kms-rsc-demand-contact-rotated",
+        mobile_hmac_secret=HMAC_SECRET,
+        mobile_hash_version=3,
+        request_id=REQUEST_ID,
+        requester_person_id=PERSON_ID,
+        envelope=envelope,
+    )
+
+    assert revealed == {"name": "工程师甲", "mobile": "+8613860013800"}
+    assert ring.key_ids == ["kms-rsc-demand-contact"]
+
+
 def test_envelope_validation_rejects_plaintext_or_noncanonical_shapes() -> None:
     envelope, _cipher = _protected()
     with_plaintext = dict(envelope, mobile="+8613860013800")

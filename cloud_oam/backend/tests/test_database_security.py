@@ -14,6 +14,11 @@ from app.database_security import (
     DatabaseSecurityBoundaryError,
     EXPECTED_FORMAL_FILE_INDEXES,
     EXPECTED_FORMAL_FILE_TRIGGERS,
+    EXPECTED_KMS_DATA_KEY_PIN_COLUMNS,
+    EXPECTED_KMS_DATA_KEY_PIN_CONSTRAINTS,
+    EXPECTED_KMS_DATA_KEY_PIN_INDEXES,
+    EXPECTED_KMS_DATA_KEY_PIN_TRIGGERS,
+    EXPECTED_MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX,
     EXPECTED_NONOPENING_STOCKTAKE_CLOSE_CONSTRAINTS,
     EXPECTED_NONOPENING_STOCKTAKE_CLOSE_INDEXES,
     EXPECTED_NONOPENING_STOCKTAKE_CLOSE_TRIGGERS,
@@ -45,6 +50,7 @@ from app.database_security import (
     RUNTIME_UPDATE_TABLES,
     RUNTIME_UPDATE_COLUMNS,
     _NONOPENING_STOCKTAKE_CLOSE_TRIGGER_SQL,
+    _MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX_SQL,
     _OPENING_TERMINAL_TRIGGER_SQL,
     _OPENING_TERMINAL_INDEX_SQL,
     _RECONCILIATION_CONSTRAINT_SQL,
@@ -59,6 +65,8 @@ from app.database_security import (
     _assert_complete_audit_graph,
     _assert_fixed_audit_heads,
     _assert_formal_file_guards,
+    _assert_kms_data_key_pin_guards,
+    _assert_material_request_command_recovery_index,
     _assert_nonopening_stocktake_close_guards,
     _assert_runtime_function_acl,
     _assert_runtime_column_acl,
@@ -297,7 +305,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0038(
     }
     assert RUNTIME_READ_TABLES - set(values["API_READ_TABLES"]) == (
         safe_posting_tables
-        | {"document_attachments"}
+        | {"document_attachments", "kms_data_key_pins"}
         | material_request_read_tables
         | stocktake_close_read_tables
     )
@@ -751,6 +759,344 @@ def test_0038_nonopening_close_catalog_guard_is_exact_and_rejects_drift(
             indexes=indexes,
             constraints=constraints,
         )
+
+
+def test_0039_material_request_command_recovery_index_is_exact_and_rejects_drift(
+) -> None:
+    expected = EXPECTED_MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX
+    row: dict[str, object] = {
+        "index_name": expected["name"],
+        "table_name": expected["table"],
+        "access_method": "btree",
+        "is_unique": True,
+        "is_valid": True,
+        "is_ready": True,
+        "is_live": True,
+        "key_columns": list(expected["columns"]),
+        "predicate": (
+            "stream_key = 'material_request'::character varying AND "
+            "action = ANY (ARRAY['material_request.withdraw'::character varying, "
+            "'material_request.cancel'::character varying])"
+        ),
+    }
+    _assert_material_request_command_recovery_index([row])
+    assert str(expected["name"]) in str(
+        _MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX_SQL
+    )
+
+    for field, value in (
+        ("is_unique", False),
+        ("is_valid", False),
+        ("key_columns", ["stream_key", "request_id"]),
+        (
+            "predicate",
+            "stream_key = 'material_request' AND "
+            "action IN ('material_request.withdraw', "
+            "'material_request.cancel', 'material_request.submit')",
+        ),
+        (
+            "predicate",
+            "stream_key = 'material_request' AND "
+            "(action IN ('material_request.withdraw', "
+            "'material_request.cancel') OR request_id IS NOT NULL)",
+        ),
+        (
+            "predicate",
+            "stream_key = 'material_request' AND "
+            "action IN ('material_request.withdraw', "
+            "'material_request.cancel') AND length(request_id) > 0",
+        ),
+        (
+            "predicate",
+            "stream_key = 'material_request.withdraw' AND "
+            "action IN ('material_request', 'material_request.cancel')",
+        ),
+        (
+            "predicate",
+            "stream_key = 'material_request' AND action = ANY "
+            "((ARRAY['material_request.withdraw', "
+            "'material_request.cancel'])[1:1])",
+        ),
+        (
+            "predicate",
+            "stream_key = 'material_request::text'::text AND "
+            "action IN ('material_request.withdraw'::text, "
+            "'material_request.cancel'::text)",
+        ),
+        (
+            "predicate",
+            "stream_key = 'material_request'::text AND "
+            "action IN ('material_request.withdraw::varchar'::text, "
+            "'material_request.cancel'::text)",
+        ),
+        (
+            "predicate",
+            "stream_key = 'material\"_request' AND "
+            "action IN ('material_request.withdraw', "
+            "'material_request.cancel')",
+        ),
+        (
+            "predicate",
+            "stream_key = 'MATERIAL_REQUEST' AND "
+            "action IN ('material_request.withdraw', "
+            "'material_request.cancel')",
+        ),
+        (
+            "predicate",
+            "stream_key = 'material_request' AND "
+            "action IN ('MATERIAL_REQUEST.WITHDRAW', "
+            "'MATERIAL_REQUEST.CANCEL')",
+        ),
+    ):
+        drifted = dict(row)
+        drifted[field] = value
+        with pytest.raises(
+            DatabaseSecurityBoundaryError,
+            match="command recovery index",
+        ):
+            _assert_material_request_command_recovery_index([drifted])
+
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match="command recovery index",
+    ):
+        _assert_material_request_command_recovery_index([])
+
+
+def _valid_kms_data_key_pin_catalog():
+    columns = [
+        {
+            "relation_kind": "r",
+            "persistence": "p",
+            "row_security": False,
+            "force_row_security": False,
+            "ordinal_position": ordinal,
+            "column_name": name,
+            "data_type": data_type,
+            "is_not_null": True,
+            "identity_kind": "",
+            "generated_kind": "",
+            "default_expression": None,
+        }
+        for ordinal, (name, data_type) in enumerate(
+            EXPECTED_KMS_DATA_KEY_PIN_COLUMNS,
+            start=1,
+        )
+    ]
+    definitions = {
+        "ck_kms_data_key_pins_purpose_0040": (
+            "CHECK (purpose IN ('authentication_idempotency', "
+            "'material_request_contact'))"
+        ),
+        "ck_kms_data_key_pins_version_0040": (
+            "CHECK (application_key_version BETWEEN 1 AND 2147483647)"
+        ),
+        "ck_kms_data_key_pins_coordinates_0040": (
+            "CHECK (kms_key_id = trim(kms_key_id) AND "
+            "kms_key_version_id = trim(kms_key_version_id) AND "
+            "length(kms_key_id) BETWEEN 3 AND 256 AND "
+            "length(kms_key_version_id) BETWEEN 8 AND 128)"
+        ),
+    }
+    hash_expression = "ciphertext_sha256"
+    for character in "0123456789abcdef":
+        hash_expression = f"replace({hash_expression}, '{character}', '')"
+    definitions["ck_kms_data_key_pins_sha256_0040"] = (
+        "CHECK (length(ciphertext_sha256) = 64 AND "
+        f"length({hash_expression}) = 0)"
+    )
+    constraints = [
+        {
+            "constraint_name": name,
+            "constraint_type": expected["type"],
+            "is_validated": True,
+            "is_deferrable": False,
+            "is_initially_deferred": False,
+            "is_no_inherit": False,
+            "is_local": True,
+            "inheritance_count": 0,
+            "parent_constraint_id": 0,
+            "definition": definitions.get(name, "PRIMARY OR UNIQUE"),
+            "constrained_columns": list(expected["columns"]),
+            "backing_index_name": expected["backing_index"],
+        }
+        for name, expected in sorted(
+            EXPECTED_KMS_DATA_KEY_PIN_CONSTRAINTS.items()
+        )
+    ]
+    indexes = [
+        {
+            "index_name": name,
+            "owner_name": "star_oam_migrator",
+            "constraint_name": expected["constraint"],
+            "access_method": "btree",
+            "is_unique": True,
+            "is_primary": expected["primary"],
+            "is_exclusion": False,
+            "is_immediate": True,
+            "is_valid": True,
+            "is_ready": True,
+            "is_live": True,
+            "nulls_not_distinct": False,
+            "key_attribute_count": len(expected["columns"]),
+            "total_attribute_count": len(expected["columns"]),
+            "has_expressions": False,
+            "key_columns": list(expected["columns"]),
+            "predicate": None,
+        }
+        for name, expected in sorted(EXPECTED_KMS_DATA_KEY_PIN_INDEXES.items())
+    ]
+    triggers = [
+        {
+            "trigger_name": name,
+            "table_name": expected[0],
+            "function_name": expected[1],
+            "function_schema": "public",
+            "enabled": expected[2],
+            "trigger_type": expected[3],
+            "is_constraint_trigger": False,
+            "is_deferrable": False,
+            "is_initially_deferred": False,
+            "has_when_clause": False,
+            "has_column_filter": False,
+        }
+        for name, expected in sorted(EXPECTED_KMS_DATA_KEY_PIN_TRIGGERS.items())
+    ]
+    acl_common = {
+        "owner_name": "star_oam_migrator",
+        "backup_role_exists": True,
+        "edge_role_exists": True,
+        "is_grantable": False,
+    }
+    table_acl = [
+        {
+            **acl_common,
+            "grantee_name": "star_oam_api",
+            "privilege_type": "SELECT",
+        },
+        {
+            **acl_common,
+            "grantee_name": "star_oam_backup",
+            "privilege_type": "SELECT",
+        },
+    ]
+    function_acl = [
+        {
+            **acl_common,
+            "grantee_name": None,
+            "privilege_type": None,
+            "is_grantable": None,
+        }
+    ]
+    return triggers, columns, constraints, indexes, table_acl, function_acl
+
+
+def test_0040_kms_data_key_pin_catalog_guard_is_exact_and_rejects_drift() -> None:
+    (
+        triggers,
+        columns,
+        constraints,
+        indexes,
+        table_acl,
+        function_acl,
+    ) = _valid_kms_data_key_pin_catalog()
+    _assert_kms_data_key_pin_guards(
+        triggers=triggers,
+        columns=columns,
+        constraints=constraints,
+        indexes=indexes,
+        table_acl=table_acl,
+        function_acl=function_acl,
+        expected_runtime_role="star_oam_api",
+        expected_migration_role="star_oam_migrator",
+    )
+
+    sha_constraint_index = next(
+        index
+        for index, row in enumerate(constraints)
+        if row["constraint_name"] == "ck_kms_data_key_pins_sha256_0040"
+    )
+    sha_literal_drift = str(
+        constraints[sha_constraint_index]["definition"]
+    ).replace("'0'", "'0::text'::text", 1)
+    mutations = (
+        ("triggers", 0, "enabled", "O"),
+        ("columns", 0, "row_security", True),
+        ("columns", 5, "default_expression", "now()"),
+        (
+            "constraints",
+            next(
+                index
+                for index, row in enumerate(constraints)
+                if row["constraint_name"]
+                == "ck_kms_data_key_pins_purpose_0040"
+            ),
+            "definition",
+            "CHECK (purpose IN ('authentication_idempotency', "
+            "'material_request_contact') OR TRUE)",
+        ),
+        (
+            "constraints",
+            next(
+                index
+                for index, row in enumerate(constraints)
+                if row["constraint_name"]
+                == "ck_kms_data_key_pins_purpose_0040"
+            ),
+            "definition",
+            "CHECK (purpose IN ('authentication_idempotency::text'::text, "
+            "'material_request_contact'::text))",
+        ),
+        (
+            "constraints",
+            sha_constraint_index,
+            "definition",
+            sha_literal_drift,
+        ),
+        (
+            "constraints",
+            next(
+                index
+                for index, row in enumerate(constraints)
+                if row["constraint_name"]
+                == "ck_kms_data_key_pins_purpose_0040"
+            ),
+            "definition",
+            "CHECK (purpose IN ('authentication_(idempotency)'::text, "
+            "'material_request_contact'::text))",
+        ),
+        ("indexes", 0, "owner_name", "star_oam_api"),
+        ("indexes", 0, "total_attribute_count", 4),
+        ("table_acl", 0, "privilege_type", "INSERT"),
+        ("function_acl", 0, "grantee_name", "star_oam_edge"),
+    )
+    for collection_name, row_index, field, value in mutations:
+        current = _valid_kms_data_key_pin_catalog()
+        collections = dict(
+            zip(
+                (
+                    "triggers",
+                    "columns",
+                    "constraints",
+                    "indexes",
+                    "table_acl",
+                    "function_acl",
+                ),
+                current,
+            )
+        )
+        collections[collection_name][row_index][field] = value
+        with pytest.raises(DatabaseSecurityBoundaryError, match="KMS data-key pin"):
+            _assert_kms_data_key_pin_guards(
+                triggers=collections["triggers"],
+                columns=collections["columns"],
+                constraints=collections["constraints"],
+                indexes=collections["indexes"],
+                table_acl=collections["table_acl"],
+                function_acl=collections["function_acl"],
+                expected_runtime_role="star_oam_api",
+                expected_migration_role="star_oam_migrator",
+            )
 
 
 def test_formal_file_catalog_guard_is_exact_and_rejects_drift() -> None:

@@ -9,8 +9,14 @@ from sqlalchemy import text
 
 from .config import get_settings
 from .auth_sessions import validate_active_production_session_ip_evidence
-from .database import Base, SessionLocal, engine
+from .database import Base, SessionLocal, engine, health_engine
 from .database_security import validate_production_database_security
+from .kms_readiness import KmsReadinessGate
+from .production_adapters import (
+    get_configured_kms_loader,
+    validate_persisted_kms_key_references,
+    validate_production_adapter_installation,
+)
 from .routers import (
     access,
     audit,
@@ -134,9 +140,17 @@ def _seed_bootstrap_data() -> None:
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(application: FastAPI):
     settings.validate_api_startup()
+    runtime_app = application or app
+    runtime_app.state.kms_readiness_gate = None
+    runtime_app.state.required_kms_coordinates = frozenset()
     if settings.environment == "production":
+        # Structural, network-free proof: the ciphertext-only key registry and
+        # every enabled logical key coordinate must exist before the process can
+        # advertise health.  Online KMS availability is re-proved before each
+        # paid SMS or protected write.
+        validate_production_adapter_installation(settings)
         validate_production_database_security(
             engine,
             expected_runtime_role=settings.database_expected_runtime_role,
@@ -146,17 +160,34 @@ async def lifespan(_: FastAPI):
         # but no active session with plaintext or a stale HMAC version may be
         # accepted by the formal API.
         with SessionLocal() as db:
+            required_kms_coordinates = validate_persisted_kms_key_references(
+                db,
+                settings,
+            )
             validate_active_production_session_ip_evidence(
                 db,
                 hash_version=settings.identity_hash_version,
             )
+        runtime_app.state.required_kms_coordinates = required_kms_coordinates
+        runtime_app.state.kms_readiness_gate = KmsReadinessGate(
+            loader=get_configured_kms_loader(settings).probe,
+            success_ttl_seconds=settings.kms_readiness_success_ttl_seconds,
+            failure_ttl_seconds=settings.kms_readiness_failure_ttl_seconds,
+            wait_budget_seconds=settings.kms_readiness_wait_budget_seconds,
+            probe_budget_seconds=settings.kms_readiness_probe_budget_seconds,
+        )
     Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
     _run_startup_database_boundary(
         schema_mode=settings.database_schema_mode,
         create_schema=_create_bootstrap_schema,
         seed_data=_seed_bootstrap_data,
     )
-    yield
+    try:
+        yield
+    finally:
+        readiness_gate = getattr(runtime_app.state, "kms_readiness_gate", None)
+        if isinstance(readiness_gate, KmsReadinessGate):
+            readiness_gate.close()
 
 
 app = FastAPI(
@@ -271,8 +302,47 @@ if settings.environment != "production":
     app.include_router(audit.router, prefix="/api")
 
 
+def _health_response(*, ready: bool, status: str) -> JSONResponse:
+    response = JSONResponse(
+        status_code=200 if ready else 503,
+        content={
+            "ok": ready,
+            "status": status,
+            "service": "star-oam-cloud",
+            "version": APP_VERSION,
+        },
+    )
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+
+def _readiness_response() -> JSONResponse:
+    try:
+        with health_engine.connect() as connection:
+            connection.execute(text("select 1"))
+    except Exception:
+        return _health_response(ready=False, status="not_ready")
+
+    if settings.environment == "production":
+        gate = getattr(app.state, "kms_readiness_gate", None)
+        coordinates = getattr(app.state, "required_kms_coordinates", ())
+        if not isinstance(gate, KmsReadinessGate) or not gate.is_ready(coordinates):
+            return _health_response(ready=False, status="not_ready")
+    return _health_response(ready=True, status="ready")
+
+
+@app.get("/api/health/live")
+def health_live():
+    return _health_response(ready=True, status="live")
+
+
+@app.get("/api/health/ready")
+def health_ready():
+    return _readiness_response()
+
+
 @app.get("/api/health")
 def health():
-    with engine.connect() as connection:
-        connection.execute(text("select 1"))
-    return {"ok": True, "service": "star-oam-cloud", "version": APP_VERSION}
+    """Backward-compatible readiness alias for existing deployment monitors."""
+
+    return _readiness_response()

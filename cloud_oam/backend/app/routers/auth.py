@@ -44,7 +44,6 @@ from ..formal_services.authentication_idempotency import (
     begin_authentication_operation,
     complete_authentication_failure,
     complete_authentication_success,
-    create_configured_authentication_response_cipher,
     probe_existing_authentication_operation,
 )
 from ..formal_services.authentication_rate_limit import (
@@ -110,6 +109,7 @@ from ..schemas import (
 from ..security import hash_password, hash_refresh_token, verify_password
 from ..services import audit
 from ..sms import SmsProviderError, get_sms_provider
+from ..production_adapters import create_production_authentication_cipher
 from ..wechat import WechatLoginIdentity, WechatProviderError, get_wechat_provider
 
 
@@ -291,19 +291,22 @@ def _consume_formal_login_rate_limits(
 
 def _configured_authentication_response_cipher(
 ) -> Aes256GcmAuthenticationResponseCipher:
-    """Return the reviewed runtime cipher or fail closed.
+    """Return one request-scoped, ciphertext-registry-backed KMS cipher."""
 
-    A deployment-owned Aliyun KMS/envelope-key adapter is intentionally not
-    emulated by a plaintext environment secret.  Until that adapter is wired at
-    the composition boundary, formal authentication mutations return 503
-    before a challenge, provider call, session or refresh token is mutated.
-    Tests replace this function with an explicit static test-key cipher.
-    """
+    return create_production_authentication_cipher(settings)
 
-    return create_configured_authentication_response_cipher(
-        settings=settings,
-        kms_key_loader=None,
-    )
+
+def _preflight_formal_authentication_encryption(
+    db: Session,
+) -> Aes256GcmAuthenticationResponseCipher:
+    """Resolve and return one cipher before any provider or write side effect."""
+
+    try:
+        cipher = _configured_authentication_response_cipher()
+        cipher.active_key_version()
+    except (AuthenticationIdempotencyError, AuthenticationEncryptionKeyUnavailable) as exc:
+        _raise_authentication_encryption_unavailable(db, exc)
+    return cipher
 
 
 def _raise_authentication_idempotency_error(
@@ -342,11 +345,12 @@ def _begin_formal_authentication_write(
     request_document: dict[str, object],
     auth_session_id: str | None = None,
     input_refresh_token_id: uuid.UUID | None = None,
+    preflight_cipher: Aes256GcmAuthenticationResponseCipher | None = None,
 ) -> _FormalAuthenticationWrite:
     idempotency_key = _formal_idempotency_key(request)
     now = datetime.now(timezone.utc)
     try:
-        cipher = _configured_authentication_response_cipher()
+        cipher = preflight_cipher or _configured_authentication_response_cipher()
         # A fresh begin does not encrypt yet.  Resolve the active version before
         # any challenge/provider/session mutation so KMS loss fails closed.
         cipher.active_key_version()
@@ -1118,6 +1122,10 @@ def _request_formal_sms_code(
     request_id = _formal_request_id(request)
     idempotency_key = _formal_idempotency_key(request)
     mobile = _formal_mobile(payload.mobile)
+    # Provider-managed verification can spend a paid SMS before login.  Prove
+    # that terminal authentication responses can be sealed first; no challenge,
+    # audit or provider mutation is allowed when KMS is unavailable.
+    _preflight_formal_authentication_encryption(db)
     mobile_hash = _formal_mobile_hash(mobile)
     ip_hash = _formal_ip_hash(client_ip(request))
     identity = _formal_mobile_identity(db, mobile, required=False)
@@ -1664,7 +1672,7 @@ def _exchange_formal_wechat_identity(
     request: Request,
     db: Session,
 ) -> WechatLoginIdentity:
-    """Exchange one provider code after pre-provider rate admission."""
+    """Exchange one provider code owned by a committed idempotency operation."""
 
     if not settings.wechat_configuration_ready():
         raise HTTPException(status_code=503, detail="微信快捷登录尚未启用")
@@ -1672,7 +1680,10 @@ def _exchange_formal_wechat_identity(
     try:
         wechat_user = get_wechat_provider().exchange_login_code(payload.login_code)
     except WechatProviderError as exc:
-        _record_failed_authentication_attempt(
+        # The caller has already committed the sole pending idempotency owner.
+        # Keep failure audit and encrypted terminal failure in its new
+        # transaction so no provider outcome can exist as a detached audit.
+        _append_owned_failed_authentication_attempt(
             db,
             request_id=request_id,
             client_type="miniprogram",
@@ -1682,7 +1693,7 @@ def _exchange_formal_wechat_identity(
         )
         raise HTTPException(status_code=502, detail="微信接口暂时不可用") from exc
     if wechat_user.app_id != settings.wechat_app_id:
-        _record_failed_authentication_attempt(
+        _append_owned_failed_authentication_attempt(
             db,
             request_id=request_id,
             client_type="miniprogram",
@@ -1792,6 +1803,7 @@ def login_with_sms_code(
             scope=scope,
             request_document=request_document,
         )
+        cipher = _preflight_formal_authentication_encryption(db)
         if not existing_operation:
             _consume_formal_login_rate_limits(
                 db,
@@ -1807,6 +1819,7 @@ def login_with_sms_code(
             client_type="web",
             scope=scope,
             request_document=request_document,
+            preflight_cipher=cipher,
         )
         if write.begin.replayed:
             restored = _restore_cached_formal_session(db, write)
@@ -1877,6 +1890,7 @@ def miniprogram_sms_login(
             scope=scope,
             request_document=request_document,
         )
+        cipher = _preflight_formal_authentication_encryption(db)
         if not existing_operation:
             _consume_formal_login_rate_limits(
                 db,
@@ -1892,6 +1906,7 @@ def miniprogram_sms_login(
             client_type="miniprogram",
             scope=scope,
             request_document=request_document,
+            preflight_cipher=cipher,
         )
         if write.begin.replayed:
             restored = _restore_cached_formal_session(db, write)
@@ -1970,7 +1985,7 @@ def miniprogram_wechat_login(
             scope=scope,
             request_document=request_document,
         )
-        wechat_user: WechatLoginIdentity | None = None
+        cipher = _preflight_formal_authentication_encryption(db)
         if not existing_operation:
             _consume_formal_login_rate_limits(
                 db,
@@ -1978,6 +1993,30 @@ def miniprogram_wechat_login(
                 operation_type="wechat_login",
                 include_global_and_ip=True,
             )
+        write = _begin_formal_authentication_write(
+            db,
+            request,
+            operation_type="wechat_login",
+            client_type="miniprogram",
+            scope=scope,
+            request_document=request_document,
+            preflight_cipher=cipher,
+        )
+        if write.begin.replayed:
+            restored = _restore_cached_formal_session(db, write)
+            response.headers.update(_idempotency_response_headers(replayed=True))
+            db.commit()
+            return restored.token_body()
+        try:
+            # Persist the sole provider-call owner before crossing the network.
+            # A concurrent matching key now observes ``pending`` and fails
+            # closed without consuming the one-time WeChat code.  Never hold a
+            # database row lock or transaction across the provider call.
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(status_code=503, detail="认证幂等协调不可用") from exc
+        try:
             wechat_user = _exchange_formal_wechat_identity(payload, request, db)
             _consume_formal_login_rate_limits(
                 db,
@@ -1988,23 +2027,6 @@ def miniprogram_wechat_login(
                     f"{wechat_user.app_id}\x00{wechat_user.openid}"
                 ),
             )
-        write = _begin_formal_authentication_write(
-            db,
-            request,
-            operation_type="wechat_login",
-            client_type="miniprogram",
-            scope=scope,
-            request_document=request_document,
-        )
-        if write.begin.replayed:
-            restored = _restore_cached_formal_session(db, write)
-            response.headers.update(_idempotency_response_headers(replayed=True))
-            db.commit()
-            return restored.token_body()
-        if wechat_user is None:
-            db.rollback()
-            raise HTTPException(status_code=503, detail="认证幂等协调不可用")
-        try:
             user, tokens, principal = _login_formal_wechat(
                 payload,
                 request,

@@ -124,7 +124,10 @@
   新增的纯只读 command-status 必须以新鲜本人权限将审计、命令、动作、状态转换、
   审批锚点和十个独立状态轴完整重证后才返回 `confirmed`。取消命令继续保留
   `0037` 的原始明细顺序幂等摘要；仅新命令在不可变审计中封存非敏感的明细 UUID 顺序，
-  旧审计缺少该证据时失败关闭，不猜测或改写旧事实。
+  旧审计缺少该证据时失败关闭，不猜测或改写旧事实。`0040` 新增不可变
+  `kms_data_key_pins` 账本，只保存用途、KMS Key ID、应用版本、KMS KeyVersionId 和
+  `CiphertextBlob` SHA-256；API/备份身份只读，迁移身份仅可在双人复核后执行普通 `INSERT`，
+  数据库触发器拒绝 update/delete/truncate，存在 pin 或加密引用时拒绝降级。
 - 数据库只初始化固定正式角色及由各迁移显式声明的权限与角色授权映射。`0026` 新增
   `reconciliation/read`、`create_opening`、`explain_opening`、`approve_opening` 四个权限：总部管理员可读取、
   创建和批准，省负责人只可读取并解释本区域全量差异。不初始化用户、
@@ -181,7 +184,9 @@
   账号状态、权限版本和正式多角色，不返回内部用户 ID、手机号、旧角色或旧省份。
 - Web 使用 HttpOnly `auth_device_id` 维持同一浏览器设备身份；生产会话中的 IP 仅保存域隔离
   HMAC。缺少或无效刷新令牌、短信/微信身份拒绝、provider 故障和确认的 refresh replay
-  均追加脱敏认证证据，公开响应不泄露内部失败细节。
+  均追加脱敏认证证据，公开响应不泄露内部失败细节。微信登录会在兑换一次性 code 前短事务
+  提交唯一 `pending` 幂等 owner；同键并发只能在 provider 前失败关闭。provider 失败审计与
+  同一加密失败终态在后续事务原子提交，不再生成脱离幂等操作的独立失败证据。
 - 总部全国管理员且具有 `auth_session/manage` 权限时，可读取正式脱敏设备会话并以请求 ID
   和幂等键强制下线整个刷新令牌族；撤销事实时点、状态事件和认证审计在同一事务提交，
   同键同请求返回原证据并标记 `Idempotency-Replayed`。
@@ -192,12 +197,18 @@
   吊销整个家族。每个请求只解析一次当前 KMS 数据密钥，预检与终态密文使用同一版本，避免
   第二次 KMS 抖动回滚已确认的令牌家族吊销。密文过期、篡改、权限已变化或密钥不可用均
   失败关闭，不生成第二套凭据。
-- 正式登录的新幂等键在 KMS、provider、审计和幂等写入前，用独立短事务按
-  `hash-version guard -> global -> IP -> identity` 消费数据库桶；微信先消费 global/IP，
-  provider 返回可信 appid/openid 后再消费 identity。限流证据不保存原 IP、手机号、code、
+- 正式登录的新幂等键先完成 KMS 预检，并用独立短事务按
+  `hash-version guard -> global -> IP` 消费数据库桶；微信随后短事务提交唯一幂等 owner，
+  再由 owner 调用 provider，返回可信 appid/openid 后独立消费 identity 桶。限流证据不保存原 IP、手机号、code、
   openid 或 unionid。终态同键同请求先只读核对并继续返回原幂等结果，不会在桶满后变成
   `429`；随机新键受统一 `429 + Retry-After` 约束。同键异请求仍返回 `409`。hash version、
   HMAC secret 或窗口长度变更在旧窗口仍活跃时失败关闭，避免静默获得第二份额度。
+- 当前验证码 provider 使用号码认证服务 `dypnsapi` 的 PNVS 接口，不是标准
+  `dysmsapi`。用户已购买的 1000 条标准短信套餐不当然兼容；套餐所属产品、适用 API、签名、
+  模板、有效期及计费口径未以非敏感证据确认前，生产短信保持关闭。现有短信挑战尚未实现
+  `sending -> accepted/uncertain` 的原子 dispatch ownership/租约；PNVS 是否按同一 `out_id`
+  严格去重也未以真实沙箱证据确认，因此并发发送和“provider 已接受但本地未标记”崩溃窗口仍是
+  P1 投产阻断。
 - 正式短信登录在挑战/provider 阶段不锁全局认证审计链头；会话、刷新令牌和挑战状态完成后
   才按事实顺序追加挑战与会话审计，锁序与 refresh/logout 统一为业务行在前、审计链在后。
   Web refresh 的新鲜或缓存 `401` 会用两个独立 `Set-Cookie` 同时清除 access/refresh；Web
@@ -310,10 +321,12 @@
   `allowed_actions` 不再包含从未由查询服务合法返回的 `start`；PC 受控启动未开放，正式方案必须由
   服务端生成并封存完整启动计划，PC 最终只确认 `plan_id + plan_sha256`，不允许浏览器手填或
   删减组织、库位、人员、同步运行及控制行内部 UUID。
-- 首管理员稳定 ID 双签开通清单、正式身份激活工具、身份哈希密钥轮换流程、生产 KMS
-  envelope-key 加载适配器、外部审批字段白名单、PostgreSQL 16 真实并发集成验证、微信 code
-  兑换崩溃恢复/提供方幂等契约，以及过期认证密文的保留与不可复用 tombstone 策略仍未完成，
-  因此当前阶段仍不得启用正式账号或部署生产。
+- 生产 KMS envelope-key 加载、密文注册表校验、`0040` 不可变 pin 账本/只读 gate、请求前置
+  解密和 live/ready 单飞 TTL 健康门已在本地源码实现；这不等于生产 KMS 已可用。首管理员稳定
+  ID 双签开通清单、正式身份激活工具、身份哈希密钥轮换流程、真实 KMS 数据密钥与 ECS RAM
+  最小权限、`0040` pin 双人受控落库、外部审批字段白名单、PostgreSQL 16 真实迁移/并发、
+  WAF/ALB 前置限流、微信 code 兑换后的不确定结果恢复、短信 dispatch ownership/提供方幂等契约、真实附件/身份 UAT，以及过期认证
+  密文的保留与不可复用 tombstone 策略仍未完成，因此当前阶段仍不得启用正式账号或部署生产。
 - `0027` 已在本地源码中以迁移所有者精确图锁收口既有期初启动、实盘、观察处置、复核、复盘和过账
   服务对仅授 `SELECT/INSERT` 的不可变事实或主数据发起非法 `FOR UPDATE` 的问题；调用侧改为先锁固定图、
   再由普通 API 角色只读，并有静态锁序、迁移、ACL 和离线 SQL 回归覆盖。`0028` 已在本地加入真正的
@@ -395,6 +408,23 @@ PYTHONPATH=backend .venv/bin/python scripts/cleanup_auth_login_rate_limits.py \
 环境、RDS PostgreSQL 16、Redis/Celery、私有 OSS、KMS/密钥托管、HTTPS/WAF、监控
 告警、备份恢复演练以及真实微信/短信配置。
 
+`0040` 后的正式 KMS 顺序固定为：`migrate -> 隔离 kms-pin-plan 服务 -> API 身份只读
+查询既有 pins -> 双人复核 manifest_sha256 与新增差集 -> star_oam_migrator 普通 INSERT ->
+star_oam_api 只读 pin gate -> API`。首次空 pin 表才全量插入，轮换只插入既有 pins 中不存在、
+但 plan 新增的 purpose+version；匹配旧行不重插，任何旧坐标/KMS version/hash 不一致立即停止。禁止
+upsert、update、delete、truncate 或跳过 gate；注册表变更必须滚动重启。认证 Key ID 切换前必须
+证明全部幂等重放窗口清零并使用该用途从未用过的新应用版本，或先完成迁移重加密；同一用途禁止
+跨 Key ID 复用应用版本。需求联系人当前记录和全部历史 revision 引用的
+旧 registry entry 与 pin 必须保留到独立审计迁移完成，不能按时间直接清理。具体步骤见
+[KMS envelope-key 部署清单](docs/ALIYUN_KMS_ENVELOPE_KEY_RUNBOOK.md)。
+
+主 API 的 `/api/health/live` 仅检查进程，`/api/health/ready` 检查数据库及 TTL/单飞 KMS
+Decrypt 探针，旧 `/api/health` 是 readiness 兼容别名。Compose/ALB 使用 ready，容器 liveness
+使用 live；数据库检查最长 2.5 秒，KMS 等待和探针预算均强制不超过 4 秒，以落在 8 秒 ready
+超时内。生产启动拒绝 `DEBUG=sdk`，并强制禁用凭据与 Tea SDK 自带的流式日志，防止签名头或
+临时令牌绕过脱敏边界。健康失败只返回脱敏 `503` 且不推进任何业务状态。正式 WAF/ALB 还必须在 KMS 之前
+完成认证写接口的外层限流，并限制 readiness 只对可信监控开放；仓库内应用限流不能替代该外部门禁。
+
 全新 PostgreSQL 数据卷会通过 `deployment/postgres-init/10-create-application-roles.sh`
 一次性创建上述四类隔离身份和后续对象默认 ACL；`migrate`、`api` 和备份脚本分别只接收自己的
 密码。运行账号不获得未来表、序列或函数的默认权限；每个新正式写入口都必须随版本迁移显式
@@ -417,15 +447,17 @@ PYTHONPATH=backend .venv/bin/python scripts/cleanup_auth_login_rate_limits.py \
 
 ## 后续开发顺序
 
-1. 完成首管理员稳定 ID 双签开通清单、正式身份激活与 hash 密钥轮换、生产 KMS 加载适配、
-   文件存储生产凭据、字段级授权和 PostgreSQL 认证并发测试；随后完成 OAM 只读投影任务和
+1. 完成首管理员稳定 ID 双签开通清单、正式身份激活与 hash 密钥轮换、真实 KMS/RAM、
+   `0040` pin 双签落库、WAF/ALB 前置限流、文件存储生产凭据、字段级授权和 PostgreSQL
+   认证并发测试；随后完成 OAM 只读投影任务和
    同步健康/对账，但不得扩大为 OAM 写入。
 2. 对已经完成本地正式路由的一期需求提报/三级审批/安全取消，以及期初和非期初盘点的实盘、
    差异、复核、复盘、过账、独立对账和关闭，补 PostgreSQL 16 双会话并发、延迟外键/触发器提交、
    降级阻断、备份恢复和迁移演练；补齐 PC 受控任务启动、大数据量列表/对账读取性能和
    全局锁序审查，完成追踪策略防重叠约束及
    真实身份、附件上传、需求处理和盘点 UAT 后才可申请预生产发布。启用撤回/取消恢复哨兵时，
-   必须先完成全部后端实例的 `0039` 迁移与新版代码切换，再发布 PC/小程序客户端；
+   必须先完成全部后端实例的 `0040`（包含 `0039`）迁移、KMS pin gate 与新版代码切换，
+   再发布 PC/小程序客户端；
    禁止在滚动窗口先放出客户端，以免新取消事实缺少可恢复的审计顺序证据。
 3. 在已批准需求之后建立缺货处置、审批代理及安全补偿机制，再建立多来源分配与占用/释放；
    不得用需求审批状态替代分配或库存占用事实。

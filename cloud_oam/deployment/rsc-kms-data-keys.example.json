@@ -1,0 +1,31 @@
+{
+  "schema": "rsc.kms.encrypted-data-key-registry.v1",
+  "entries": [
+    {
+      "purpose": "authentication_idempotency",
+      "kms_key_id": "replace-with-reviewed-authentication-kms-key-id",
+      "application_key_version": 1,
+      "kms_key_version_id": "replace-with-returned-kms-key-version-id",
+      "ciphertext_blob": "replace-with-returned-ciphertext-blob",
+      "encryption_context": {
+        "application": "cloud_oam",
+        "purpose": "authentication_idempotency",
+        "kms_key_id": "replace-with-reviewed-authentication-kms-key-id",
+        "application_key_version": "1"
+      }
+    },
+    {
+      "purpose": "material_request_contact",
+      "kms_key_id": "replace-with-reviewed-contact-kms-key-id",
+      "application_key_version": 1,
+      "kms_key_version_id": "replace-with-returned-kms-key-version-id",
+      "ciphertext_blob": "replace-with-returned-ciphertext-blob",
+      "encryption_context": {
+        "application": "cloud_oam",
+        "purpose": "material_request_contact",
+        "kms_key_id": "replace-with-reviewed-contact-kms-key-id",
+        "application_key_version": "1"
+      }
+    }
+  ]
+}

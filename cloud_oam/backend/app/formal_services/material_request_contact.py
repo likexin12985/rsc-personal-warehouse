@@ -185,10 +185,13 @@ def reveal_material_request_contact(
     )
     checked_request_id = _uuid("request_id", request_id)
     checked_person_id = _uuid("requester_person_id", requester_person_id)
+    historical_decrypt = None
     if checked_envelope["kms_key_id"] != checked_key_id:
-        raise MaterialRequestContactProtectionError(
-            "material request contact KMS binding is invalid"
-        )
+        historical_decrypt = getattr(cipher, "decrypt_for_kms_key_id", None)
+        if not callable(historical_decrypt):
+            raise MaterialRequestContactProtectionError(
+                "material request contact KMS binding is invalid"
+            )
     mobile_match = _HASH_EVIDENCE.fullmatch(checked_envelope["mobile_hmac"])
     contact_match = _HASH_EVIDENCE.fullmatch(checked_envelope["contact_hmac"])
     if (
@@ -213,12 +216,21 @@ def reveal_material_request_contact(
     )
     nonce = _strict_base64("nonce_b64", checked_envelope["nonce_b64"])
     try:
-        plaintext = cipher.decrypt(
-            ciphertext,
-            nonce=nonce,
-            aad=aad,
-            key_version=checked_envelope["key_version"],
-        )
+        if historical_decrypt is None:
+            plaintext = cipher.decrypt(
+                ciphertext,
+                nonce=nonce,
+                aad=aad,
+                key_version=checked_envelope["key_version"],
+            )
+        else:
+            plaintext = historical_decrypt(
+                checked_envelope["kms_key_id"],
+                ciphertext,
+                nonce=nonce,
+                aad=aad,
+                key_version=checked_envelope["key_version"],
+            )
     except MaterialRequestContactProtectionError:
         raise
     except Exception as exc:

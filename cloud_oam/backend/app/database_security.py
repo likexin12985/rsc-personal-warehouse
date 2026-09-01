@@ -59,6 +59,7 @@ RUNTIME_READ_TABLES = frozenset(
         "inventory_opening_establishments",
         "inventory_serials",
         "inventory_transactions",
+        "kms_data_key_pins",
         "login_challenges",
         "material_request_cancellation_line_facts",
         "material_request_commands",
@@ -1488,6 +1489,94 @@ EXPECTED_MATERIAL_REQUEST_CANCELLATION_INDEXES = {
         "unique": False,
     },
 }
+EXPECTED_MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX = {
+    "name": "uq_audit_events_material_request_request_id_0039",
+    "table": "audit_events",
+    "columns": ("request_id",),
+    "literals": frozenset(
+        {
+            "material_request",
+            "material_request.withdraw",
+            "material_request.cancel",
+        }
+    ),
+}
+EXPECTED_KMS_DATA_KEY_PIN_TRIGGERS = {
+    "trg_kms_data_key_pins_immutable_0040": (
+        "kms_data_key_pins",
+        "rsc_reject_kms_data_key_pin_mutation_0040",
+        "A",
+        27,
+    ),
+    "trg_kms_data_key_pins_no_truncate_0040": (
+        "kms_data_key_pins",
+        "rsc_reject_kms_data_key_pin_mutation_0040",
+        "A",
+        34,
+    ),
+}
+EXPECTED_KMS_DATA_KEY_PIN_COLUMNS = (
+    ("purpose", "character varying(64)"),
+    ("kms_key_id", "character varying(256)"),
+    ("application_key_version", "integer"),
+    ("kms_key_version_id", "character varying(128)"),
+    ("ciphertext_sha256", "character varying(64)"),
+    ("created_at", "timestamp with time zone"),
+)
+EXPECTED_KMS_DATA_KEY_PIN_CONSTRAINTS = {
+    "ck_kms_data_key_pins_coordinates_0040": {
+        "type": "c",
+        "columns": ("kms_key_id", "kms_key_version_id"),
+        "backing_index": None,
+    },
+    "ck_kms_data_key_pins_purpose_0040": {
+        "type": "c",
+        "columns": ("purpose",),
+        "backing_index": None,
+    },
+    "ck_kms_data_key_pins_sha256_0040": {
+        "type": "c",
+        "columns": ("ciphertext_sha256",),
+        "backing_index": None,
+    },
+    "ck_kms_data_key_pins_version_0040": {
+        "type": "c",
+        "columns": ("application_key_version",),
+        "backing_index": None,
+    },
+    "pk_kms_data_key_pins_coordinate_0040": {
+        "type": "p",
+        "columns": ("purpose", "kms_key_id", "application_key_version"),
+        "backing_index": "pk_kms_data_key_pins_coordinate_0040",
+    },
+    "uq_kms_data_key_pins_ciphertext_0040": {
+        "type": "u",
+        "columns": ("ciphertext_sha256",),
+        "backing_index": "uq_kms_data_key_pins_ciphertext_0040",
+    },
+    "uq_kms_data_key_pins_purpose_version_0040": {
+        "type": "u",
+        "columns": ("purpose", "application_key_version"),
+        "backing_index": "uq_kms_data_key_pins_purpose_version_0040",
+    },
+}
+EXPECTED_KMS_DATA_KEY_PIN_INDEXES = {
+    "pk_kms_data_key_pins_coordinate_0040": {
+        "constraint": "pk_kms_data_key_pins_coordinate_0040",
+        "columns": ("purpose", "kms_key_id", "application_key_version"),
+        "primary": True,
+    },
+    "uq_kms_data_key_pins_ciphertext_0040": {
+        "constraint": "uq_kms_data_key_pins_ciphertext_0040",
+        "columns": ("ciphertext_sha256",),
+        "primary": False,
+    },
+    "uq_kms_data_key_pins_purpose_version_0040": {
+        "constraint": "uq_kms_data_key_pins_purpose_version_0040",
+        "columns": ("purpose", "application_key_version"),
+        "primary": False,
+    },
+}
 _STOCKTAKE_CLOSE_FACT_TABLES = (
     "stocktake_close_transition_acks",
     "stocktake_close_reconciliation_completions",
@@ -1863,6 +1952,12 @@ FORMAL_FILE_INTERNAL_FUNCTIONS = {
         "plpgsql",
         ("search_path=pg_catalog, public",),
     ),
+    ("rsc_reject_kms_data_key_pin_mutation_0040", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
 }
 FORMAL_FILE_INTERNAL_FUNCTION_SHAPES = {
     coordinate: (
@@ -1899,6 +1994,8 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
         "2e344060231cf933822dcb02677257b78584f8940cbc88f11264cd61b9a52782",
     ("rsc_guard_nonopening_stocktake_close_event_0038", ""):
         "acf4f3fe8a070ebf860b73de031d23a5f09a644a7a483af12316e69217bd9982",
+    ("rsc_reject_kms_data_key_pin_mutation_0040", ""):
+        "17588eaffe3b5225272a5b9c342088ff0d934c7492625db18748217cf15feabf",
 }
 
 
@@ -2875,6 +2972,233 @@ ORDER BY index_row.relname
 """
 )
 
+_MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX_SQL = text(
+    f"""
+SELECT
+    index_row.relname AS index_name,
+    table_row.relname AS table_name,
+    access_method.amname AS access_method,
+    index_metadata.indisunique AS is_unique,
+    index_metadata.indisvalid AS is_valid,
+    index_metadata.indisready AS is_ready,
+    index_metadata.indislive AS is_live,
+    ARRAY(
+        SELECT pg_get_indexdef(index_metadata.indexrelid, key_position, TRUE)
+          FROM generate_series(1, index_metadata.indnkeyatts) AS key_position
+         ORDER BY key_position
+    ) AS key_columns,
+    pg_get_expr(index_metadata.indpred, index_metadata.indrelid, TRUE)
+        AS predicate
+FROM pg_index AS index_metadata
+JOIN pg_class AS index_row ON index_row.oid = index_metadata.indexrelid
+JOIN pg_class AS table_row ON table_row.oid = index_metadata.indrelid
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+JOIN pg_am AS access_method ON access_method.oid = index_row.relam
+WHERE schema_row.nspname = 'public'
+  AND index_row.relname = '{EXPECTED_MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX["name"]}'
+ORDER BY index_row.relname
+"""
+)
+
+_KMS_DATA_KEY_PIN_TRIGGER_SQL = text(
+    """
+SELECT
+    trigger_row.tgname AS trigger_name,
+    table_row.relname AS table_name,
+    function_row.proname AS function_name,
+    function_schema.nspname AS function_schema,
+    trigger_row.tgenabled AS enabled,
+    trigger_row.tgtype AS trigger_type,
+    trigger_row.tgconstraint <> 0 AS is_constraint_trigger,
+    trigger_row.tgdeferrable AS is_deferrable,
+    trigger_row.tginitdeferred AS is_initially_deferred,
+    trigger_row.tgqual IS NOT NULL AS has_when_clause,
+    trigger_row.tgattr::text <> '' AS has_column_filter
+FROM pg_trigger AS trigger_row
+JOIN pg_class AS table_row ON table_row.oid = trigger_row.tgrelid
+JOIN pg_namespace AS table_schema ON table_schema.oid = table_row.relnamespace
+JOIN pg_proc AS function_row ON function_row.oid = trigger_row.tgfoid
+JOIN pg_namespace AS function_schema
+  ON function_schema.oid = function_row.pronamespace
+WHERE table_schema.nspname = 'public'
+  AND (
+      table_row.relname = 'kms_data_key_pins'
+      OR trigger_row.tgname LIKE '%0040'
+  )
+  AND NOT trigger_row.tgisinternal
+ORDER BY trigger_row.tgname
+"""
+)
+
+_KMS_DATA_KEY_PIN_COLUMN_SQL = text(
+    """
+SELECT
+    table_row.relkind AS relation_kind,
+    table_row.relpersistence AS persistence,
+    table_row.relrowsecurity AS row_security,
+    table_row.relforcerowsecurity AS force_row_security,
+    attribute_row.attnum AS ordinal_position,
+    attribute_row.attname AS column_name,
+    format_type(attribute_row.atttypid, attribute_row.atttypmod) AS data_type,
+    attribute_row.attnotnull AS is_not_null,
+    attribute_row.attidentity AS identity_kind,
+    attribute_row.attgenerated AS generated_kind,
+    pg_get_expr(default_row.adbin, default_row.adrelid, TRUE)
+        AS default_expression
+FROM pg_class AS table_row
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+JOIN pg_attribute AS attribute_row ON attribute_row.attrelid = table_row.oid
+LEFT JOIN pg_attrdef AS default_row
+  ON default_row.adrelid = table_row.oid
+ AND default_row.adnum = attribute_row.attnum
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname = 'kms_data_key_pins'
+  AND attribute_row.attnum > 0
+  AND NOT attribute_row.attisdropped
+ORDER BY attribute_row.attnum
+"""
+)
+
+_KMS_DATA_KEY_PIN_CONSTRAINT_SQL = text(
+    """
+SELECT
+    constraint_row.conname AS constraint_name,
+    constraint_row.contype AS constraint_type,
+    constraint_row.convalidated AS is_validated,
+    constraint_row.condeferrable AS is_deferrable,
+    constraint_row.condeferred AS is_initially_deferred,
+    constraint_row.connoinherit AS is_no_inherit,
+    constraint_row.conislocal AS is_local,
+    constraint_row.coninhcount AS inheritance_count,
+    constraint_row.conparentid AS parent_constraint_id,
+    pg_get_constraintdef(constraint_row.oid, TRUE) AS definition,
+    COALESCE((
+        SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+          FROM unnest(constraint_row.conkey) WITH ORDINALITY
+               AS key_row(attnum, ordinality)
+          JOIN pg_attribute AS attribute_row
+            ON attribute_row.attrelid = constraint_row.conrelid
+           AND attribute_row.attnum = key_row.attnum
+    ), ARRAY[]::name[]) AS constrained_columns,
+    index_row.relname AS backing_index_name
+FROM pg_constraint AS constraint_row
+JOIN pg_class AS table_row ON table_row.oid = constraint_row.conrelid
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+LEFT JOIN pg_class AS index_row ON index_row.oid = constraint_row.conindid
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname = 'kms_data_key_pins'
+ORDER BY constraint_row.conname
+"""
+)
+
+_KMS_DATA_KEY_PIN_INDEX_SQL = text(
+    """
+SELECT
+    index_row.relname AS index_name,
+    pg_get_userbyid(index_row.relowner) AS owner_name,
+    constraint_row.conname AS constraint_name,
+    access_method.amname AS access_method,
+    index_metadata.indisunique AS is_unique,
+    index_metadata.indisprimary AS is_primary,
+    index_metadata.indisexclusion AS is_exclusion,
+    index_metadata.indimmediate AS is_immediate,
+    index_metadata.indisvalid AS is_valid,
+    index_metadata.indisready AS is_ready,
+    index_metadata.indislive AS is_live,
+    index_metadata.indnullsnotdistinct AS nulls_not_distinct,
+    index_metadata.indnkeyatts AS key_attribute_count,
+    index_metadata.indnatts AS total_attribute_count,
+    index_metadata.indexprs IS NOT NULL AS has_expressions,
+    ARRAY(
+        SELECT pg_get_indexdef(index_metadata.indexrelid, key_position, TRUE)
+          FROM generate_series(1, index_metadata.indnkeyatts) AS key_position
+         ORDER BY key_position
+    ) AS key_columns,
+    pg_get_expr(index_metadata.indpred, index_metadata.indrelid, TRUE)
+        AS predicate
+FROM pg_index AS index_metadata
+JOIN pg_class AS index_row ON index_row.oid = index_metadata.indexrelid
+JOIN pg_class AS table_row ON table_row.oid = index_metadata.indrelid
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+JOIN pg_am AS access_method ON access_method.oid = index_row.relam
+LEFT JOIN pg_constraint AS constraint_row
+  ON constraint_row.conindid = index_row.oid
+ AND constraint_row.conrelid = table_row.oid
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname = 'kms_data_key_pins'
+ORDER BY index_row.relname
+"""
+)
+
+_KMS_DATA_KEY_PIN_TABLE_ACL_SQL = text(
+    """
+WITH target AS (
+    SELECT
+        table_row.oid,
+        table_row.relowner,
+        table_row.relacl,
+        pg_get_userbyid(table_row.relowner) AS owner_name
+      FROM pg_class AS table_row
+      JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+     WHERE schema_row.nspname = 'public'
+       AND table_row.relname = 'kms_data_key_pins'
+)
+SELECT
+    target.owner_name,
+    EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'star_oam_backup')
+        AS backup_role_exists,
+    EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'star_oam_edge')
+        AS edge_role_exists,
+    CASE
+        WHEN acl.grantee = 0 THEN 'PUBLIC'
+        ELSE grantee_role.rolname
+    END AS grantee_name,
+    acl.privilege_type,
+    acl.is_grantable
+FROM target
+LEFT JOIN LATERAL aclexplode(
+    COALESCE(target.relacl, acldefault('r', target.relowner))
+) AS acl ON acl.grantee <> target.relowner
+LEFT JOIN pg_roles AS grantee_role ON grantee_role.oid = acl.grantee
+ORDER BY grantee_name, acl.privilege_type
+"""
+)
+
+_KMS_DATA_KEY_PIN_FUNCTION_ACL_SQL = text(
+    """
+WITH target AS (
+    SELECT
+        function_row.proowner,
+        function_row.proacl,
+        pg_get_userbyid(function_row.proowner) AS owner_name
+      FROM pg_proc AS function_row
+      JOIN pg_namespace AS schema_row
+        ON schema_row.oid = function_row.pronamespace
+     WHERE schema_row.nspname = 'public'
+       AND function_row.proname = 'rsc_reject_kms_data_key_pin_mutation_0040'
+       AND function_row.pronargs = 0
+)
+SELECT
+    target.owner_name,
+    EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'star_oam_backup')
+        AS backup_role_exists,
+    EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'star_oam_edge')
+        AS edge_role_exists,
+    CASE
+        WHEN acl.grantee = 0 THEN 'PUBLIC'
+        ELSE grantee_role.rolname
+    END AS grantee_name,
+    acl.privilege_type,
+    acl.is_grantable
+FROM target
+LEFT JOIN LATERAL aclexplode(
+    COALESCE(target.proacl, acldefault('f', target.proowner))
+) AS acl ON acl.grantee <> target.proowner
+LEFT JOIN pg_roles AS grantee_role ON grantee_role.oid = acl.grantee
+ORDER BY grantee_name, acl.privilege_type
+"""
+)
+
 _NONOPENING_STOCKTAKE_CLOSE_FACT_TABLE_LITERALS = ",\n      ".join(
     f"'{name}'" for name in sorted(_STOCKTAKE_CLOSE_FACT_TABLES)
 )
@@ -3106,6 +3430,27 @@ def validate_production_database_security(
             material_request_cancellation_indexes = connection.execute(
                 _MATERIAL_REQUEST_CANCELLATION_INDEX_SQL
             ).mappings().all()
+            material_request_command_recovery_indexes = connection.execute(
+                _MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX_SQL
+            ).mappings().all()
+            kms_data_key_pin_triggers = connection.execute(
+                _KMS_DATA_KEY_PIN_TRIGGER_SQL
+            ).mappings().all()
+            kms_data_key_pin_columns = connection.execute(
+                _KMS_DATA_KEY_PIN_COLUMN_SQL
+            ).mappings().all()
+            kms_data_key_pin_constraints = connection.execute(
+                _KMS_DATA_KEY_PIN_CONSTRAINT_SQL
+            ).mappings().all()
+            kms_data_key_pin_indexes = connection.execute(
+                _KMS_DATA_KEY_PIN_INDEX_SQL
+            ).mappings().all()
+            kms_data_key_pin_table_acl = connection.execute(
+                _KMS_DATA_KEY_PIN_TABLE_ACL_SQL
+            ).mappings().all()
+            kms_data_key_pin_function_acl = connection.execute(
+                _KMS_DATA_KEY_PIN_FUNCTION_ACL_SQL
+            ).mappings().all()
             nonopening_stocktake_close_triggers = connection.execute(
                 _NONOPENING_STOCKTAKE_CLOSE_TRIGGER_SQL
             ).mappings().all()
@@ -3175,6 +3520,19 @@ def validate_production_database_security(
     _assert_material_request_cancellation_guards(
         triggers=material_request_cancellation_triggers,
         indexes=material_request_cancellation_indexes,
+    )
+    _assert_material_request_command_recovery_index(
+        material_request_command_recovery_indexes
+    )
+    _assert_kms_data_key_pin_guards(
+        triggers=kms_data_key_pin_triggers,
+        columns=kms_data_key_pin_columns,
+        constraints=kms_data_key_pin_constraints,
+        indexes=kms_data_key_pin_indexes,
+        table_acl=kms_data_key_pin_table_acl,
+        function_acl=kms_data_key_pin_function_acl,
+        expected_runtime_role=expected_runtime_role,
+        expected_migration_role=expected_migration_role,
     )
     _assert_nonopening_stocktake_close_guards(
         triggers=nonopening_stocktake_close_triggers,
@@ -4328,6 +4686,389 @@ def _assert_material_request_cancellation_guards(
             "production database material request cancellation guard failed: "
             + ", ".join(sorted(set(failures)))
         )
+
+
+def _assert_material_request_command_recovery_index(
+    rows: list[Mapping[str, Any]],
+) -> None:
+    """Prove the exact 0039 X-Request-ID lifecycle recovery sentinel."""
+
+    expected = EXPECTED_MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX
+    failures: list[str] = []
+    if len(rows) != 1:
+        failures.append("index_set")
+    row = rows[0] if len(rows) == 1 else None
+    if row is not None:
+        if row.get("index_name") != expected["name"]:
+            failures.append("index_name")
+        if row.get("table_name") != expected["table"]:
+            failures.append("table")
+        if row.get("access_method") != "btree":
+            failures.append("method")
+        if row.get("is_unique") is not True:
+            failures.append("unique")
+        if any(
+            row.get(field) is not True
+            for field in ("is_valid", "is_ready", "is_live")
+        ):
+            failures.append("state")
+        if tuple(
+            str(value).lower() for value in (row.get("key_columns") or ())
+        ) != expected["columns"]:
+            failures.append("columns")
+        raw_predicate = str(row.get("predicate") or "")
+        literal_sequence = tuple(
+            _SQL_STRING_LITERAL_PATTERN.findall(raw_predicate)
+        )
+        predicate = " ".join(
+            _lower_sql_outside_string_literals(raw_predicate).split()
+        )
+        predicate_without_text_casts = re.sub(
+            r"::\s*(?:character\s+varying|varchar|text)(?:\s*\[\s*\])?",
+            "",
+            predicate,
+        )
+        # ``pg_get_expr`` may add redundant parentheses and varchar/text casts,
+        # but every other character is semantically relevant.  Compare the
+        # complete remaining stream so a hidden function, operator, array
+        # slice or extra narrowing condition can never pass by being skipped by
+        # a permissive tokenizer.
+        compact_predicate = re.sub(
+            r"\s+",
+            "",
+            predicate_without_text_casts.replace("(", "").replace(")", ""),
+        )
+        exact_in_predicate = (
+            "stream_key='material_request'andactionin"
+            "'material_request.withdraw','material_request.cancel'"
+        )
+        exact_any_predicate = (
+            "stream_key='material_request'andaction=anyarray["
+            "'material_request.withdraw','material_request.cancel']"
+        )
+        if (
+            literal_sequence
+            != (
+                "material_request",
+                "material_request.withdraw",
+                "material_request.cancel",
+            )
+            or compact_predicate
+            not in (exact_in_predicate, exact_any_predicate)
+        ):
+            failures.append("predicate")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database material request command recovery index failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _lower_sql_outside_string_literals(value: str) -> str:
+    """Normalize SQL syntax without changing case-sensitive string values."""
+
+    output: list[str] = []
+    index = 0
+    in_literal = False
+    while index < len(value):
+        character = value[index]
+        if character == "'":
+            output.append(character)
+            if in_literal and index + 1 < len(value) and value[index + 1] == "'":
+                output.append("'")
+                index += 2
+                continue
+            in_literal = not in_literal
+        else:
+            output.append(character if in_literal else character.lower())
+        index += 1
+    return "".join(output)
+
+
+def _assert_kms_data_key_pin_guards(
+    *,
+    triggers: list[Mapping[str, Any]],
+    columns: list[Mapping[str, Any]],
+    constraints: list[Mapping[str, Any]],
+    indexes: list[Mapping[str, Any]],
+    table_acl: list[Mapping[str, Any]],
+    function_acl: list[Mapping[str, Any]],
+    expected_runtime_role: str,
+    expected_migration_role: str,
+) -> None:
+    """Prove the exact migration-owned immutable KMS fingerprint ledger."""
+
+    failures: list[str] = []
+    actual: dict[str, Mapping[str, Any]] = {}
+    for row in triggers:
+        name = row.get("trigger_name")
+        if not isinstance(name, str) or name in actual:
+            failures.append("trigger_identity")
+            continue
+        actual[name] = row
+    if set(actual) != set(EXPECTED_KMS_DATA_KEY_PIN_TRIGGERS):
+        failures.append("trigger_set")
+    for name, expected in EXPECTED_KMS_DATA_KEY_PIN_TRIGGERS.items():
+        row = actual.get(name)
+        if row is None:
+            continue
+        table_name, function_name, enabled, trigger_type = expected
+        if row.get("table_name") != table_name:
+            failures.append(f"{name}.table")
+        if (
+            row.get("function_schema") != "public"
+            or row.get("function_name") != function_name
+        ):
+            failures.append(f"{name}.function")
+        if row.get("enabled") != enabled:
+            failures.append(f"{name}.enabled")
+        if row.get("trigger_type") != trigger_type:
+            failures.append(f"{name}.type")
+        for field in (
+            "is_constraint_trigger",
+            "is_deferrable",
+            "is_initially_deferred",
+            "has_when_clause",
+            "has_column_filter",
+        ):
+            if row.get(field) is not False:
+                failures.append(f"{name}.{field}")
+
+    if len(columns) != len(EXPECTED_KMS_DATA_KEY_PIN_COLUMNS):
+        failures.append("column_set")
+    for ordinal, expected in enumerate(
+        EXPECTED_KMS_DATA_KEY_PIN_COLUMNS,
+        start=1,
+    ):
+        row = columns[ordinal - 1] if len(columns) >= ordinal else None
+        if row is None:
+            continue
+        if (
+            row.get("relation_kind") != "r"
+            or row.get("persistence") != "p"
+            or row.get("row_security") is not False
+            or row.get("force_row_security") is not False
+        ):
+            failures.append("table_shape")
+        if (
+            row.get("ordinal_position") != ordinal
+            or row.get("column_name") != expected[0]
+            or row.get("data_type") != expected[1]
+            or row.get("is_not_null") is not True
+            or row.get("identity_kind") != ""
+            or row.get("generated_kind") != ""
+            or row.get("default_expression") not in (None, "")
+        ):
+            failures.append(f"column_{ordinal}")
+
+    actual_constraints: dict[str, Mapping[str, Any]] = {}
+    for row in constraints:
+        name = row.get("constraint_name")
+        if not isinstance(name, str) or name in actual_constraints:
+            failures.append("constraint_identity")
+            continue
+        actual_constraints[name] = row
+    if set(actual_constraints) != set(EXPECTED_KMS_DATA_KEY_PIN_CONSTRAINTS):
+        failures.append("constraint_set")
+    for name, expected in EXPECTED_KMS_DATA_KEY_PIN_CONSTRAINTS.items():
+        row = actual_constraints.get(name)
+        if row is None:
+            continue
+        if (
+            row.get("constraint_type") != expected["type"]
+            or row.get("is_validated") is not True
+            or row.get("is_deferrable") is not False
+            or row.get("is_initially_deferred") is not False
+            or row.get("is_no_inherit") is not False
+            or row.get("is_local") is not True
+            or row.get("inheritance_count") != 0
+            or row.get("parent_constraint_id") != 0
+            or tuple(row.get("constrained_columns") or ())
+            != expected["columns"]
+            or row.get("backing_index_name") != expected["backing_index"]
+        ):
+            failures.append(f"{name}.shape")
+        if expected["type"] == "c" and not _kms_pin_check_definition_matches(
+            name,
+            row.get("definition"),
+        ):
+            failures.append(f"{name}.definition")
+
+    actual_indexes: dict[str, Mapping[str, Any]] = {}
+    for row in indexes:
+        name = row.get("index_name")
+        if not isinstance(name, str) or name in actual_indexes:
+            failures.append("index_identity")
+            continue
+        actual_indexes[name] = row
+    if set(actual_indexes) != set(EXPECTED_KMS_DATA_KEY_PIN_INDEXES):
+        failures.append("index_set")
+    for name, expected in EXPECTED_KMS_DATA_KEY_PIN_INDEXES.items():
+        row = actual_indexes.get(name)
+        if row is None:
+            continue
+        expected_columns = expected["columns"]
+        if (
+            row.get("owner_name") != expected_migration_role
+            or row.get("constraint_name") != expected["constraint"]
+            or row.get("access_method") != "btree"
+            or row.get("is_unique") is not True
+            or row.get("is_primary") is not expected["primary"]
+            or row.get("is_exclusion") is not False
+            or row.get("is_immediate") is not True
+            or row.get("is_valid") is not True
+            or row.get("is_ready") is not True
+            or row.get("is_live") is not True
+            or row.get("nulls_not_distinct") is not False
+            or row.get("key_attribute_count") != len(expected_columns)
+            or row.get("total_attribute_count") != len(expected_columns)
+            or row.get("has_expressions") is not False
+            or tuple(row.get("key_columns") or ()) != expected_columns
+            or row.get("predicate") not in (None, "")
+        ):
+            failures.append(f"{name}.shape")
+
+    _assert_kms_pin_acl_rows(
+        rows=table_acl,
+        expected_runtime_role=expected_runtime_role,
+        expected_migration_role=expected_migration_role,
+        table=True,
+        failures=failures,
+    )
+    _assert_kms_pin_acl_rows(
+        rows=function_acl,
+        expected_runtime_role=expected_runtime_role,
+        expected_migration_role=expected_migration_role,
+        table=False,
+        failures=failures,
+    )
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database KMS data-key pin guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_kms_pin_acl_rows(
+    *,
+    rows: list[Mapping[str, Any]],
+    expected_runtime_role: str,
+    expected_migration_role: str,
+    table: bool,
+    failures: list[str],
+) -> None:
+    label = "table_acl" if table else "function_acl"
+    if not rows:
+        failures.append(f"{label}.missing")
+        return
+    backup_exists = rows[0].get("backup_role_exists")
+    edge_exists = rows[0].get("edge_role_exists")
+    if not isinstance(backup_exists, bool) or not isinstance(edge_exists, bool):
+        failures.append(f"{label}.role_evidence")
+    grants: list[tuple[object, object, object]] = []
+    for row in rows:
+        if (
+            row.get("owner_name") != expected_migration_role
+            or row.get("backup_role_exists") is not backup_exists
+            or row.get("edge_role_exists") is not edge_exists
+        ):
+            failures.append(f"{label}.owner_or_roles")
+        if row.get("grantee_name") is not None:
+            grants.append(
+                (
+                    row.get("grantee_name"),
+                    row.get("privilege_type"),
+                    row.get("is_grantable"),
+                )
+            )
+    expected_grants: set[tuple[object, object, object]] = set()
+    if table:
+        expected_grants.add((expected_runtime_role, "SELECT", False))
+        if backup_exists is True:
+            expected_grants.add(("star_oam_backup", "SELECT", False))
+    if len(grants) != len(set(grants)) or set(grants) != expected_grants:
+        failures.append(f"{label}.grant_set")
+
+
+def _kms_pin_check_definition_matches(name: str, value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    literal_sequence = tuple(_SQL_STRING_LITERAL_PATTERN.findall(value))
+    expected_literals = {
+        "ck_kms_data_key_pins_purpose_0040": (
+            "authentication_idempotency",
+            "material_request_contact",
+        ),
+        "ck_kms_data_key_pins_version_0040": (),
+        "ck_kms_data_key_pins_coordinates_0040": (),
+        "ck_kms_data_key_pins_sha256_0040": tuple(
+            item
+            for character in "0123456789abcdef"
+            for item in (character, "")
+        ),
+    }
+    if literal_sequence != expected_literals.get(name):
+        return False
+    compact = _compact_kms_pin_check_definition(value)
+    if compact is None:
+        return False
+    purpose_forms = {
+        "checkpurposein'authentication_idempotency',"
+        "'material_request_contact'",
+        "checkpurpose=anyarray['authentication_idempotency',"
+        "'material_request_contact']",
+    }
+    version_forms = {
+        "checkapplication_key_versionbetween1and2147483647",
+        "checkapplication_key_version>=1and"
+        "application_key_version<=2147483647",
+    }
+    coordinates_between = (
+        "checkkms_key_id=trimkms_key_idand"
+        "kms_key_version_id=trimkms_key_version_idand"
+        "lengthkms_key_idbetween3and256and"
+        "lengthkms_key_version_idbetween8and128"
+    )
+    coordinates_compared = (
+        "checkkms_key_id=trimkms_key_idand"
+        "kms_key_version_id=trimkms_key_version_idand"
+        "lengthkms_key_id>=3andlengthkms_key_id<=256and"
+        "lengthkms_key_version_id>=8andlengthkms_key_version_id<=128"
+    )
+    sha_expression = "ciphertext_sha256"
+    for character in "0123456789abcdef":
+        sha_expression = f"replace({sha_expression}, '{character}', '')"
+    sha_form = _compact_kms_pin_check_definition(
+        "CHECK (length(ciphertext_sha256) = 64 AND "
+        f"length({sha_expression}) = 0)"
+    )
+    expected_forms = {
+        "ck_kms_data_key_pins_purpose_0040": purpose_forms,
+        "ck_kms_data_key_pins_version_0040": version_forms,
+        "ck_kms_data_key_pins_coordinates_0040": {
+            coordinates_between,
+            coordinates_compared,
+        },
+        "ck_kms_data_key_pins_sha256_0040": {sha_form},
+    }
+    return compact in expected_forms.get(name, set())
+
+
+def _compact_kms_pin_check_definition(value: object) -> str | None:
+    if not isinstance(value, str) or not value or '"' in value:
+        return None
+    normalized = _lower_sql_outside_string_literals(value)
+    normalized = re.sub(
+        r"::\s*(?:character\s+varying|varchar|text)(?:\s*\[\s*\])?",
+        "",
+        normalized,
+    )
+    normalized = re.sub(r"\bbtrim\b", "trim", normalized)
+    return re.sub(
+        r"\s+",
+        "",
+        normalized.replace("(", "").replace(")", ""),
+    )
 
 
 def _assert_nonopening_stocktake_close_guards(

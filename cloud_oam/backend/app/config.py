@@ -1,5 +1,6 @@
 from functools import lru_cache
 from ipaddress import ip_address
+import os
 import re
 from typing import Literal
 
@@ -66,6 +67,18 @@ class Settings(BaseSettings):
     auth_idempotency_encryption_key_version: int = Field(
         default=1, ge=1, le=2_147_483_647
     )
+    # KMS unwraps versioned AES-256 data keys from a ciphertext-only registry.
+    # Credentials come from Alibaba Cloud's default provider chain; plaintext
+    # application keys are never accepted as settings.
+    kms_endpoint: str = ""
+    kms_region: str = ""
+    kms_encrypted_data_key_registry_path: str = ""
+    kms_readiness_success_ttl_seconds: int = Field(default=60, ge=30, le=300)
+    kms_readiness_failure_ttl_seconds: int = Field(default=10, ge=1, le=30)
+    # Health first spends at most 2.5s on its isolated PostgreSQL probe.  Keep
+    # either KMS path within the remaining Docker/ALB 8s readiness budget.
+    kms_readiness_wait_budget_seconds: int = Field(default=4, ge=1, le=4)
+    kms_readiness_probe_budget_seconds: int = Field(default=4, ge=1, le=4)
     # Formal login admission uses its own domain-separated HMAC key and short
     # PostgreSQL counter windows.  It must not reuse identity or idempotency
     # secrets because all three have different rotation and exposure scopes.
@@ -98,6 +111,9 @@ class Settings(BaseSettings):
         "disabled", "aliyun_kms"
     ] = "disabled"
     material_request_contact_kms_key_id: str = ""
+    material_request_contact_encryption_key_version: int = Field(
+        default=1, ge=1, le=2_147_483_647
+    )
     # Non-opening stocktake commands are mounted behind their own explicit
     # production gate.  Their replay coordinates must not share an HMAC key
     # with authentication or material-request commands.
@@ -255,6 +271,10 @@ class Settings(BaseSettings):
         if self.environment != "production":
             return
         errors: list[str] = []
+        if os.getenv("DEBUG", "").strip().lower() == "sdk":
+            errors.append(
+                "production API forbids Alibaba Cloud SDK wire debug logging"
+            )
         try:
             database_username = make_url(self.database_url).username
         except Exception:
@@ -444,6 +464,24 @@ class Settings(BaseSettings):
             and _is_configured_secret(
                 self.material_request_contact_kms_key_id,
                 min_length=3,
+            )
+        )
+
+    def kms_envelope_configuration_ready(self) -> bool:
+        """Return whether ciphertext-only KMS runtime coordinates are present."""
+
+        endpoint = self.kms_endpoint.strip().lower()
+        region = self.kms_region.strip().lower()
+        registry_path = self.kms_encrypted_data_key_registry_path.strip()
+        return bool(
+            endpoint.endswith(".aliyuncs.com")
+            and "://" not in endpoint
+            and "/" not in endpoint
+            and region
+            and registry_path.startswith("/")
+            and not any(
+                marker in f"{endpoint}\0{region}\0{registry_path}".lower()
+                for marker in SECRET_PLACEHOLDER_MARKERS
             )
         )
 

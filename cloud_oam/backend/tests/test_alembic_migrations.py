@@ -295,7 +295,14 @@ MATERIAL_REQUEST_COMMAND_STATUS_LOOKUP_REVISION = (
     / "versions"
     / "20260901_0039_material_request_command_status_lookup.py"
 )
-HEAD_REVISION = "20260901_0039"
+KMS_DATA_KEY_PINS_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260901_0040_kms_data_key_pins.py"
+)
+HEAD_REVISION = "20260901_0040"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -304,6 +311,8 @@ FORMAL_FILE_RUNTIME_BOUNDARY_REVISION_ID = "20260901_0036"
 MATERIAL_REQUEST_CANCELLATION_BOUNDARY_REVISION_ID = "20260901_0037"
 NONOPENING_STOCKTAKE_CLOSE_RECONCILIATION_REVISION_ID = "20260901_0038"
 MATERIAL_REQUEST_COMMAND_STATUS_LOOKUP_REVISION_ID = "20260901_0039"
+KMS_DATA_KEY_PINS_REVISION_ID = "20260901_0040"
+PRE_KMS_DATA_KEY_PINS_HEAD_REVISION = "20260901_0039"
 PRE_MATERIAL_REQUEST_COMMAND_STATUS_LOOKUP_HEAD_REVISION = "20260901_0038"
 PRE_NONOPENING_STOCKTAKE_CLOSE_RECONCILIATION_HEAD_REVISION = "20260901_0037"
 PRE_MATERIAL_REQUEST_CANCELLATION_BOUNDARY_HEAD_REVISION = "20260901_0036"
@@ -381,6 +390,7 @@ ACTIVATION_TABLES = {
 }
 AUTHENTICATION_IDEMPOTENCY_TABLES = {"auth_idempotency_operations"}
 AUTHENTICATION_LOGIN_RATE_LIMIT_TABLES = {"auth_login_rate_limit_buckets"}
+KMS_DATA_KEY_PIN_TABLES = {"kms_data_key_pins"}
 V09_TABLE_RENAMES_AT_HEAD = {
     "materials": "legacy_v09_materials",
     "stocktake_tasks": "legacy_v09_stocktake_tasks",
@@ -486,6 +496,7 @@ EXPECTED_TABLES = (
     | ACTIVATION_TABLES
     | AUTHENTICATION_IDEMPOTENCY_TABLES
     | AUTHENTICATION_LOGIN_RATE_LIMIT_TABLES
+    | KMS_DATA_KEY_PIN_TABLES
     | INVENTORY_LEDGER_TABLES
     | OPENING_STOCKTAKE_TABLES
     | OPENING_COUNT_OBSERVATION_TABLES
@@ -1097,16 +1108,145 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert head is not None
     assert (
         head.down_revision
-        == PRE_MATERIAL_REQUEST_COMMAND_STATUS_LOOKUP_HEAD_REVISION
+        == PRE_KMS_DATA_KEY_PINS_HEAD_REVISION
     )
     previous_head = script.get_revision(
-        PRE_MATERIAL_REQUEST_COMMAND_STATUS_LOOKUP_HEAD_REVISION
+        PRE_KMS_DATA_KEY_PINS_HEAD_REVISION
     )
     assert previous_head is not None
     assert (
         previous_head.down_revision
-        == PRE_NONOPENING_STOCKTAKE_CLOSE_RECONCILIATION_HEAD_REVISION
+        == PRE_MATERIAL_REQUEST_COMMAND_STATUS_LOOKUP_HEAD_REVISION
     )
+
+
+def test_0040_kms_pin_table_is_constrained_immutable_and_blocks_downgrade(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'kms-pins.db'}"
+    config = _config(database_url)
+    command.upgrade(config, HEAD_REVISION)
+    engine = sa.create_engine(database_url)
+    inspector = sa.inspect(engine)
+
+    assert [column["name"] for column in inspector.get_columns("kms_data_key_pins")] == [
+        "purpose",
+        "kms_key_id",
+        "application_key_version",
+        "kms_key_version_id",
+        "ciphertext_sha256",
+        "created_at",
+    ]
+    assert inspector.get_pk_constraint("kms_data_key_pins")["name"] == (
+        "pk_kms_data_key_pins_coordinate_0040"
+    )
+    assert {item["name"] for item in inspector.get_unique_constraints(
+        "kms_data_key_pins"
+    )} == {
+        "uq_kms_data_key_pins_ciphertext_0040",
+        "uq_kms_data_key_pins_purpose_version_0040",
+    }
+    assert {item["name"] for item in inspector.get_check_constraints(
+        "kms_data_key_pins"
+    )} == {
+        "ck_kms_data_key_pins_coordinates_0040",
+        "ck_kms_data_key_pins_purpose_0040",
+        "ck_kms_data_key_pins_sha256_0040",
+        "ck_kms_data_key_pins_version_0040",
+    }
+
+    values = (
+        "authentication_idempotency",
+        "kms-reviewed-auth-key",
+        1,
+        "12345678-reviewed-kms-version",
+        "a" * 64,
+        "2026-09-01 00:00:00+00:00",
+    )
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "INSERT INTO kms_data_key_pins "
+            "(purpose, kms_key_id, application_key_version, "
+            "kms_key_version_id, ciphertext_sha256, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            values,
+        )
+    with pytest.raises(sa.exc.IntegrityError):
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "INSERT INTO kms_data_key_pins "
+                "(purpose, kms_key_id, application_key_version, "
+                "kms_key_version_id, ciphertext_sha256, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "authentication_idempotency",
+                    "kms-different-auth-key",
+                    1,
+                    "12345678-different-kms-version",
+                    "b" * 64,
+                    "2026-09-01 00:00:01+00:00",
+                ),
+            )
+    for mutation in (
+        "UPDATE kms_data_key_pins SET kms_key_version_id = "
+        "'12345678-different-version'",
+        "DELETE FROM kms_data_key_pins",
+    ):
+        with pytest.raises(sa.exc.DBAPIError, match="immutable"):
+            with engine.begin() as connection:
+                connection.exec_driver_sql(mutation)
+
+    with pytest.raises(RuntimeError, match="encrypted references"):
+        command.downgrade(config, PRE_KMS_DATA_KEY_PINS_HEAD_REVISION)
+
+
+def test_0040_empty_downgrade_succeeds_but_encrypted_auth_reference_blocks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    empty_url = f"sqlite+pysqlite:///{tmp_path / 'kms-empty.db'}"
+    empty_config = _config(empty_url)
+    command.upgrade(empty_config, HEAD_REVISION)
+    command.downgrade(empty_config, PRE_KMS_DATA_KEY_PINS_HEAD_REVISION)
+    assert "kms_data_key_pins" not in sa.inspect(
+        sa.create_engine(empty_url)
+    ).get_table_names()
+
+    encrypted_url = f"sqlite+pysqlite:///{tmp_path / 'kms-auth-ref.db'}"
+    encrypted_config = _config(encrypted_url)
+    command.upgrade(encrypted_config, HEAD_REVISION)
+    encrypted_engine = sa.create_engine(encrypted_url)
+    _insert_auth_idempotency_operation(
+        encrypted_engine,
+        "10000000-0000-4000-8000-000000004000",
+        status="completed",
+        response_ciphertext=b"sealed-response",
+        response_nonce=b"0123456789ab",
+        response_sha256="c" * 64,
+        encryption_key_version=1,
+        http_status=200,
+        completed_at="2026-08-30 00:00:01+00:00",
+    )
+
+    with pytest.raises(RuntimeError, match="encrypted references"):
+        command.downgrade(
+            encrypted_config,
+            PRE_KMS_DATA_KEY_PINS_HEAD_REVISION,
+        )
+
+
+def test_0040_downgrade_sql_locks_every_reference_source() -> None:
+    source = KMS_DATA_KEY_PINS_REVISION.read_text(encoding="utf-8")
+
+    assert "LOCK TABLE public.auth_idempotency_operations" in source
+    assert "public.kms_data_key_pins" in source
+    assert "public.material_request_revisions" in source
+    assert "public.material_requests IN ACCESS EXCLUSIVE MODE" in source
+    assert "response_sha256 IS NOT NULL" in source
+    assert "UPDATE {TABLE_NAME} SET purpose = purpose WHERE 0" in source
 
 
 def test_missing_database_url_fails_closed(monkeypatch) -> None:

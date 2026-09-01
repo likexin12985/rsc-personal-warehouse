@@ -20,6 +20,9 @@ id_ed25519*
 .aws/
 .ssh/
 .secrets/
+# Integrity-sensitive KMS ciphertext registry.  Only the fail-closed example is
+# source controlled; the deployment-owned registry is mounted read-only.
+/deployment/rsc-kms-data-keys.json
 *.pem
 *.key
 *.p12

@@ -675,6 +675,62 @@ class AuthIdempotencyOperation(TimestampMixin, Base):
     )
 
 
+class KmsDataKeyPin(CreatedAtMixin, Base):
+    """Migration-owned immutable identity for one encrypted application key.
+
+    The row stores only a SHA-256 fingerprint of KMS ``CiphertextBlob`` and
+    its non-secret coordinates.  The API receives SELECT only; provisioning is
+    an explicit migration-role action and an existing application version can
+    never be silently rebound to different AES key material.
+    """
+
+    __tablename__ = "kms_data_key_pins"
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "purpose",
+            "kms_key_id",
+            "application_key_version",
+            name="pk_kms_data_key_pins_coordinate_0040",
+        ),
+        UniqueConstraint(
+            "ciphertext_sha256",
+            name="uq_kms_data_key_pins_ciphertext_0040",
+        ),
+        UniqueConstraint(
+            "purpose",
+            "application_key_version",
+            name="uq_kms_data_key_pins_purpose_version_0040",
+        ),
+        CheckConstraint(
+            "purpose IN ('authentication_idempotency', "
+            "'material_request_contact')",
+            name="ck_kms_data_key_pins_purpose_0040",
+        ),
+        CheckConstraint(
+            "application_key_version BETWEEN 1 AND 2147483647",
+            name="ck_kms_data_key_pins_version_0040",
+        ),
+        CheckConstraint(
+            "kms_key_id = trim(kms_key_id) AND "
+            "kms_key_version_id = trim(kms_key_version_id) AND "
+            "length(kms_key_id) BETWEEN 3 AND 256 AND "
+            "length(kms_key_version_id) BETWEEN 8 AND 128",
+            name="ck_kms_data_key_pins_coordinates_0040",
+        ),
+        CheckConstraint(
+            "length(ciphertext_sha256) = 64 AND "
+            f"length({_lower_hex_remainder('ciphertext_sha256')}) = 0",
+            name="ck_kms_data_key_pins_sha256_0040",
+        ),
+    )
+
+    purpose: Mapped[str] = mapped_column(String(64))
+    kms_key_id: Mapped[str] = mapped_column(String(256))
+    application_key_version: Mapped[int] = mapped_column(Integer)
+    kms_key_version_id: Mapped[str] = mapped_column(String(128))
+    ciphertext_sha256: Mapped[str] = mapped_column(String(64))
+
+
 class AuthLoginRateLimitBucket(TimestampMixin, Base):
     """Short-lived, pseudonymous counters for formal login admission.
 
