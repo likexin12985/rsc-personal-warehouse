@@ -87,6 +87,7 @@ RUNTIME_READ_TABLES = frozenset(
         "role_permissions",
         "roles",
         "serial_current_positions",
+        "sms_challenge_dispatches",
         "source_systems",
         "state_transition_events",
         "stock_accounts",
@@ -167,6 +168,7 @@ RUNTIME_INSERT_TABLES = frozenset(
         "reconciliation_runs",
         "role_assignments",
         "serial_current_positions",
+        "sms_challenge_dispatches",
         "state_transition_events",
         "stock_accounts",
         "stock_balances",
@@ -206,7 +208,6 @@ RUNTIME_UPDATE_TABLES = frozenset(
         "auth_login_rate_limit_buckets",
         "auth_refresh_tokens",
         "auth_sessions",
-        "login_challenges",
         "role_assignments",
         "users",
     }
@@ -219,6 +220,27 @@ RUNTIME_DELETE_TABLES = frozenset(
     }
 )
 RUNTIME_UPDATE_COLUMNS = {
+    "login_challenges": frozenset(
+        {
+            "attempts",
+            "status",
+            "provider_reference",
+            "verified_at",
+            "consumed_at",
+        }
+    ),
+    "sms_challenge_dispatches": frozenset(
+        {
+            "status",
+            "owner_token_hash",
+            "provider_reference",
+            "claimed_at",
+            "lease_expires_at",
+            "accepted_at",
+            "uncertain_at",
+            "expired_at",
+        }
+    ),
     "audit_chain_heads": frozenset(
         {"last_event_id", "last_hash", "version", "updated_at"}
     ),
@@ -1577,6 +1599,93 @@ EXPECTED_KMS_DATA_KEY_PIN_INDEXES = {
         "primary": False,
     },
 }
+EXPECTED_SMS_DISPATCH_TRIGGERS = {
+    "trg_sms_challenge_dispatches_guard_0041": (
+        "sms_challenge_dispatches",
+        "rsc_guard_sms_challenge_dispatch_0041",
+        "A",
+        31,
+    ),
+    "trg_sms_challenge_dispatches_no_truncate_0041": (
+        "sms_challenge_dispatches",
+        "rsc_guard_sms_challenge_dispatch_0041",
+        "A",
+        34,
+    ),
+}
+EXPECTED_SMS_DISPATCH_COLUMNS = (
+    ("challenge_id", "uuid", True),
+    ("provider", "character varying(40)", True),
+    ("mobile_hash", "character varying(64)", True),
+    ("status", "character varying(24)", True),
+    ("request_sha256", "character varying(64)", True),
+    ("owner_token_hash", "character varying(64)", False),
+    ("provider_reference", "character varying(160)", False),
+    ("claimed_at", "timestamp with time zone", False),
+    ("lease_expires_at", "timestamp with time zone", False),
+    ("accepted_at", "timestamp with time zone", False),
+    ("uncertain_at", "timestamp with time zone", False),
+    ("expired_at", "timestamp with time zone", False),
+    ("created_at", "timestamp with time zone", True),
+)
+EXPECTED_SMS_DISPATCH_CONSTRAINTS = {
+    "ck_sms_challenge_dispatches_status": "c",
+    "ck_sms_challenge_dispatches_request_sha256": "c",
+    "ck_sms_challenge_dispatches_mobile_hash": "c",
+    "ck_sms_challenge_dispatches_owner_hash": "c",
+    "ck_sms_challenge_dispatches_state_evidence": "c",
+    "ck_sms_challenge_dispatches_lease_order": "c",
+    "ck_sms_challenge_dispatches_accepted_order": "c",
+    "ck_sms_challenge_dispatches_uncertain_order": "c",
+    "ck_sms_challenge_dispatches_expired_order": "c",
+    "pk_sms_challenge_dispatches_0041": "p",
+    "fk_sms_challenge_dispatches_challenge_0041": "f",
+}
+EXPECTED_SMS_DISPATCH_INDEXES = {
+    "pk_sms_challenge_dispatches_0041": {
+        "columns": ("challenge_id",),
+        "unique": True,
+        "primary": True,
+        "predicate": None,
+    },
+    "ix_sms_challenge_dispatches_status": {
+        "columns": ("status",),
+        "unique": False,
+        "primary": False,
+        "predicate": None,
+    },
+    "ix_sms_challenge_dispatches_unresolved_lease": {
+        "columns": ("status", "lease_expires_at"),
+        "unique": False,
+        "primary": False,
+        "predicate": None,
+    },
+    "uq_sms_challenge_dispatches_provider_reference": {
+        "columns": ("provider", "provider_reference"),
+        "unique": True,
+        "primary": False,
+        "predicate": "provider_reference is not null",
+    },
+    "uq_sms_challenge_dispatches_unresolved_mobile": {
+        "columns": ("provider", "mobile_hash"),
+        "unique": True,
+        "primary": False,
+        "predicate_literals": ("sending", "uncertain"),
+    },
+}
+EXPECTED_SMS_DISPATCH_TABLE_PRIVILEGES = frozenset({"SELECT", "INSERT"})
+EXPECTED_SMS_DISPATCH_UPDATE_COLUMNS = frozenset(
+    {
+        "status",
+        "owner_token_hash",
+        "provider_reference",
+        "claimed_at",
+        "lease_expires_at",
+        "accepted_at",
+        "uncertain_at",
+        "expired_at",
+    }
+)
 _STOCKTAKE_CLOSE_FACT_TABLES = (
     "stocktake_close_transition_acks",
     "stocktake_close_reconciliation_completions",
@@ -1958,6 +2067,12 @@ FORMAL_FILE_INTERNAL_FUNCTIONS = {
         "plpgsql",
         ("search_path=pg_catalog, public",),
     ),
+    ("rsc_guard_sms_challenge_dispatch_0041", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
 }
 FORMAL_FILE_INTERNAL_FUNCTION_SHAPES = {
     coordinate: (
@@ -1996,6 +2111,8 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
         "acf4f3fe8a070ebf860b73de031d23a5f09a644a7a483af12316e69217bd9982",
     ("rsc_reject_kms_data_key_pin_mutation_0040", ""):
         "17588eaffe3b5225272a5b9c342088ff0d934c7492625db18748217cf15feabf",
+    ("rsc_guard_sms_challenge_dispatch_0041", ""):
+        "42201b13bb8998ea8522b190bfed67bbc7faab4c7bc355b4a7f5c2c13cd59993",
 }
 
 
@@ -3130,6 +3247,222 @@ ORDER BY index_row.relname
 """
 )
 
+_SMS_DISPATCH_TRIGGER_SQL = text(
+    """
+SELECT
+    trigger_row.tgname AS trigger_name,
+    table_row.relname AS table_name,
+    function_row.proname AS function_name,
+    function_schema.nspname AS function_schema,
+    trigger_row.tgenabled AS enabled,
+    trigger_row.tgtype AS trigger_type,
+    trigger_row.tgconstraint <> 0 AS is_constraint_trigger,
+    trigger_row.tgdeferrable AS is_deferrable,
+    trigger_row.tginitdeferred AS is_initially_deferred,
+    trigger_row.tgqual IS NOT NULL AS has_when_clause,
+    trigger_row.tgattr::text <> '' AS has_column_filter
+FROM pg_trigger AS trigger_row
+JOIN pg_class AS table_row ON table_row.oid = trigger_row.tgrelid
+JOIN pg_namespace AS table_schema ON table_schema.oid = table_row.relnamespace
+JOIN pg_proc AS function_row ON function_row.oid = trigger_row.tgfoid
+JOIN pg_namespace AS function_schema
+  ON function_schema.oid = function_row.pronamespace
+WHERE table_schema.nspname = 'public'
+  AND (
+      table_row.relname = 'sms_challenge_dispatches'
+      OR trigger_row.tgname LIKE '%0041'
+  )
+  AND NOT trigger_row.tgisinternal
+ORDER BY trigger_row.tgname
+"""
+)
+
+_SMS_DISPATCH_COLUMN_SQL = text(
+    """
+SELECT
+    table_row.relkind AS relation_kind,
+    table_row.relpersistence AS persistence,
+    table_row.relrowsecurity AS row_security,
+    table_row.relforcerowsecurity AS force_row_security,
+    attribute_row.attnum AS ordinal_position,
+    attribute_row.attname AS column_name,
+    format_type(attribute_row.atttypid, attribute_row.atttypmod) AS data_type,
+    attribute_row.attnotnull AS is_not_null,
+    attribute_row.attidentity AS identity_kind,
+    attribute_row.attgenerated AS generated_kind,
+    pg_get_expr(default_row.adbin, default_row.adrelid, TRUE)
+        AS default_expression
+FROM pg_class AS table_row
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+JOIN pg_attribute AS attribute_row ON attribute_row.attrelid = table_row.oid
+LEFT JOIN pg_attrdef AS default_row
+  ON default_row.adrelid = table_row.oid
+ AND default_row.adnum = attribute_row.attnum
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname = 'sms_challenge_dispatches'
+  AND attribute_row.attnum > 0
+  AND NOT attribute_row.attisdropped
+ORDER BY attribute_row.attnum
+"""
+)
+
+_SMS_DISPATCH_CONSTRAINT_SQL = text(
+    """
+SELECT
+    constraint_row.conname AS constraint_name,
+    constraint_row.contype AS constraint_type,
+    constraint_row.convalidated AS is_validated,
+    constraint_row.condeferrable AS is_deferrable,
+    constraint_row.condeferred AS is_initially_deferred,
+    constraint_row.connoinherit AS is_no_inherit,
+    constraint_row.conislocal AS is_local,
+    constraint_row.coninhcount AS inheritance_count,
+    constraint_row.conparentid AS parent_constraint_id,
+    pg_get_constraintdef(constraint_row.oid, TRUE) AS definition,
+    COALESCE((
+        SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+          FROM unnest(constraint_row.conkey) WITH ORDINALITY
+               AS key_row(attnum, ordinality)
+          JOIN pg_attribute AS attribute_row
+            ON attribute_row.attrelid = constraint_row.conrelid
+           AND attribute_row.attnum = key_row.attnum
+    ), ARRAY[]::name[]) AS constrained_columns,
+    referenced_table.relname AS referenced_table,
+    COALESCE((
+        SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+          FROM unnest(constraint_row.confkey) WITH ORDINALITY
+               AS key_row(attnum, ordinality)
+          JOIN pg_attribute AS attribute_row
+            ON attribute_row.attrelid = constraint_row.confrelid
+           AND attribute_row.attnum = key_row.attnum
+    ), ARRAY[]::name[]) AS referenced_columns,
+    constraint_row.confdeltype AS delete_action
+FROM pg_constraint AS constraint_row
+JOIN pg_class AS table_row ON table_row.oid = constraint_row.conrelid
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+LEFT JOIN pg_class AS referenced_table
+  ON referenced_table.oid = constraint_row.confrelid
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname = 'sms_challenge_dispatches'
+ORDER BY constraint_row.conname
+"""
+)
+
+_SMS_DISPATCH_INDEX_SQL = text(
+    """
+SELECT
+    index_row.relname AS index_name,
+    pg_get_userbyid(index_row.relowner) AS owner_name,
+    access_method.amname AS access_method,
+    index_metadata.indisunique AS is_unique,
+    index_metadata.indisprimary AS is_primary,
+    index_metadata.indisexclusion AS is_exclusion,
+    index_metadata.indimmediate AS is_immediate,
+    index_metadata.indisvalid AS is_valid,
+    index_metadata.indisready AS is_ready,
+    index_metadata.indislive AS is_live,
+    index_metadata.indnullsnotdistinct AS nulls_not_distinct,
+    index_metadata.indnkeyatts AS key_attribute_count,
+    index_metadata.indnatts AS total_attribute_count,
+    index_metadata.indexprs IS NOT NULL AS has_expressions,
+    ARRAY(
+        SELECT pg_get_indexdef(index_metadata.indexrelid, key_position, TRUE)
+          FROM generate_series(1, index_metadata.indnkeyatts) AS key_position
+         ORDER BY key_position
+    ) AS key_columns,
+    pg_get_expr(index_metadata.indpred, index_metadata.indrelid, TRUE)
+        AS predicate
+FROM pg_index AS index_metadata
+JOIN pg_class AS index_row ON index_row.oid = index_metadata.indexrelid
+JOIN pg_class AS table_row ON table_row.oid = index_metadata.indrelid
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+JOIN pg_am AS access_method ON access_method.oid = index_row.relam
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname = 'sms_challenge_dispatches'
+ORDER BY index_row.relname
+"""
+)
+
+_SMS_DISPATCH_TABLE_ACL_SQL = text(
+    """
+WITH target AS (
+    SELECT
+        table_row.oid,
+        table_row.relowner,
+        table_row.relacl,
+        pg_get_userbyid(table_row.relowner) AS owner_name
+      FROM pg_class AS table_row
+      JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+     WHERE schema_row.nspname = 'public'
+       AND table_row.relname = 'sms_challenge_dispatches'
+)
+SELECT
+    target.owner_name,
+    EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'star_oam_backup')
+        AS backup_role_exists,
+    EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'star_oam_edge')
+        AS edge_role_exists,
+    CASE
+        WHEN acl.grantee = 0 THEN 'PUBLIC'
+        ELSE grantee_role.rolname
+    END AS grantee_name,
+    acl.privilege_type,
+    acl.is_grantable
+FROM target
+LEFT JOIN LATERAL aclexplode(
+    COALESCE(target.relacl, acldefault('r', target.relowner))
+) AS acl ON acl.grantee <> target.relowner
+LEFT JOIN pg_roles AS grantee_role ON grantee_role.oid = acl.grantee
+ORDER BY grantee_name, acl.privilege_type
+"""
+)
+
+_SMS_DISPATCH_COLUMN_ACL_SQL = text(
+    """
+WITH target AS (
+    SELECT
+        table_row.oid,
+        table_row.relowner,
+        pg_get_userbyid(table_row.relowner) AS owner_name
+      FROM pg_class AS table_row
+      JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+     WHERE schema_row.nspname = 'public'
+       AND table_row.relname = 'sms_challenge_dispatches'
+), column_grants AS (
+    SELECT
+        attribute_row.attname AS column_name,
+        CASE
+            WHEN acl.grantee = 0 THEN 'PUBLIC'
+            ELSE grantee_role.rolname
+        END AS grantee_name,
+        acl.privilege_type,
+        acl.is_grantable
+      FROM target
+      JOIN pg_attribute AS attribute_row
+        ON attribute_row.attrelid = target.oid
+      CROSS JOIN LATERAL aclexplode(attribute_row.attacl) AS acl
+      LEFT JOIN pg_roles AS grantee_role ON grantee_role.oid = acl.grantee
+     WHERE attribute_row.attnum > 0
+       AND NOT attribute_row.attisdropped
+       AND acl.grantee <> target.relowner
+)
+SELECT
+    target.owner_name,
+    EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'star_oam_backup')
+        AS backup_role_exists,
+    EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'star_oam_edge')
+        AS edge_role_exists,
+    column_grants.column_name,
+    column_grants.grantee_name,
+    column_grants.privilege_type,
+    column_grants.is_grantable
+FROM target
+LEFT JOIN column_grants ON TRUE
+ORDER BY column_grants.column_name, column_grants.grantee_name,
+         column_grants.privilege_type
+"""
+)
+
 _KMS_DATA_KEY_PIN_TABLE_ACL_SQL = text(
     """
 WITH target AS (
@@ -3445,6 +3778,24 @@ def validate_production_database_security(
             kms_data_key_pin_indexes = connection.execute(
                 _KMS_DATA_KEY_PIN_INDEX_SQL
             ).mappings().all()
+            sms_dispatch_triggers = connection.execute(
+                _SMS_DISPATCH_TRIGGER_SQL
+            ).mappings().all()
+            sms_dispatch_columns = connection.execute(
+                _SMS_DISPATCH_COLUMN_SQL
+            ).mappings().all()
+            sms_dispatch_constraints = connection.execute(
+                _SMS_DISPATCH_CONSTRAINT_SQL
+            ).mappings().all()
+            sms_dispatch_indexes = connection.execute(
+                _SMS_DISPATCH_INDEX_SQL
+            ).mappings().all()
+            sms_dispatch_table_acl = connection.execute(
+                _SMS_DISPATCH_TABLE_ACL_SQL
+            ).mappings().all()
+            sms_dispatch_column_acl = connection.execute(
+                _SMS_DISPATCH_COLUMN_ACL_SQL
+            ).mappings().all()
             kms_data_key_pin_table_acl = connection.execute(
                 _KMS_DATA_KEY_PIN_TABLE_ACL_SQL
             ).mappings().all()
@@ -3531,6 +3882,16 @@ def validate_production_database_security(
         indexes=kms_data_key_pin_indexes,
         table_acl=kms_data_key_pin_table_acl,
         function_acl=kms_data_key_pin_function_acl,
+        expected_runtime_role=expected_runtime_role,
+        expected_migration_role=expected_migration_role,
+    )
+    _assert_sms_dispatch_guards(
+        triggers=sms_dispatch_triggers,
+        columns=sms_dispatch_columns,
+        constraints=sms_dispatch_constraints,
+        indexes=sms_dispatch_indexes,
+        table_acl=sms_dispatch_table_acl,
+        column_acl=sms_dispatch_column_acl,
         expected_runtime_role=expected_runtime_role,
         expected_migration_role=expected_migration_role,
     )
@@ -4947,6 +5308,331 @@ def _assert_kms_data_key_pin_guards(
             "production database KMS data-key pin guard failed: "
             + ", ".join(sorted(set(failures)))
         )
+
+
+def _assert_sms_dispatch_guards(
+    *,
+    triggers: list[Mapping[str, Any]],
+    columns: list[Mapping[str, Any]],
+    constraints: list[Mapping[str, Any]],
+    indexes: list[Mapping[str, Any]],
+    table_acl: list[Mapping[str, Any]],
+    column_acl: list[Mapping[str, Any]],
+    expected_runtime_role: str,
+    expected_migration_role: str,
+) -> None:
+    """Prove the exact single-owner SMS provider side-effect ledger."""
+
+    failures: list[str] = []
+    actual_triggers = {
+        row.get("trigger_name"): row
+        for row in triggers
+        if isinstance(row.get("trigger_name"), str)
+    }
+    if (
+        len(actual_triggers) != len(triggers)
+        or set(actual_triggers) != set(EXPECTED_SMS_DISPATCH_TRIGGERS)
+    ):
+        failures.append("trigger_set")
+    for name, expected in EXPECTED_SMS_DISPATCH_TRIGGERS.items():
+        row = actual_triggers.get(name)
+        if row is None:
+            continue
+        table_name, function_name, enabled, trigger_type = expected
+        if (
+            row.get("table_name") != table_name
+            or row.get("function_schema") != "public"
+            or row.get("function_name") != function_name
+            or row.get("enabled") != enabled
+            or row.get("trigger_type") != trigger_type
+            or any(
+                row.get(field) is not False
+                for field in (
+                    "is_constraint_trigger",
+                    "is_deferrable",
+                    "is_initially_deferred",
+                    "has_when_clause",
+                    "has_column_filter",
+                )
+            )
+        ):
+            failures.append(f"{name}.shape")
+
+    if len(columns) != len(EXPECTED_SMS_DISPATCH_COLUMNS):
+        failures.append("column_set")
+    for ordinal, expected in enumerate(EXPECTED_SMS_DISPATCH_COLUMNS, start=1):
+        row = columns[ordinal - 1] if len(columns) >= ordinal else None
+        if row is None:
+            continue
+        column_name, data_type, is_not_null = expected
+        if (
+            row.get("ordinal_position") != ordinal
+            or row.get("column_name") != column_name
+            or row.get("data_type") != data_type
+            or row.get("is_not_null") is not is_not_null
+            or row.get("identity_kind") not in (None, "")
+            or row.get("generated_kind") not in (None, "")
+            or row.get("default_expression") is not None
+            or row.get("relation_kind") != "r"
+            or row.get("persistence") != "p"
+            or row.get("row_security") is not False
+            or row.get("force_row_security") is not False
+        ):
+            failures.append(f"{column_name}.shape")
+
+    actual_constraints = {
+        row.get("constraint_name"): row
+        for row in constraints
+        if isinstance(row.get("constraint_name"), str)
+    }
+    if (
+        len(actual_constraints) != len(constraints)
+        or set(actual_constraints) != set(EXPECTED_SMS_DISPATCH_CONSTRAINTS)
+    ):
+        failures.append("constraint_set")
+    definition_tokens = {
+        "ck_sms_challenge_dispatches_status": (
+            "prepared", "sending", "accepted", "uncertain", "expired",
+        ),
+        "ck_sms_challenge_dispatches_request_sha256": ("request_sha256", "64"),
+        "ck_sms_challenge_dispatches_mobile_hash": ("mobile_hash", "64"),
+        "ck_sms_challenge_dispatches_owner_hash": ("owner_token_hash", "64"),
+        "ck_sms_challenge_dispatches_state_evidence": (
+            "owner_token_hash",
+            "provider_reference",
+            "claimed_at",
+            "lease_expires_at",
+            "accepted_at",
+            "uncertain_at",
+            "expired_at",
+        ),
+        "ck_sms_challenge_dispatches_lease_order": (
+            "lease_expires_at", "claimed_at",
+        ),
+        "ck_sms_challenge_dispatches_accepted_order": (
+            "accepted_at", "claimed_at",
+        ),
+        "ck_sms_challenge_dispatches_uncertain_order": (
+            "uncertain_at", "claimed_at",
+        ),
+        "ck_sms_challenge_dispatches_expired_order": (
+            "expired_at", "claimed_at",
+        ),
+    }
+    for name, expected_type in EXPECTED_SMS_DISPATCH_CONSTRAINTS.items():
+        row = actual_constraints.get(name)
+        if row is None:
+            continue
+        definition = str(row.get("definition") or "").lower()
+        if (
+            row.get("constraint_type") != expected_type
+            or row.get("is_validated") is not True
+            or row.get("is_deferrable") is not False
+            or row.get("is_initially_deferred") is not False
+            or row.get("is_no_inherit") is not False
+            or row.get("is_local") is not True
+            or row.get("inheritance_count") != 0
+            or row.get("parent_constraint_id") != 0
+            or any(
+                token not in definition
+                for token in definition_tokens.get(name, ())
+            )
+        ):
+            failures.append(f"{name}.shape")
+    primary = actual_constraints.get("pk_sms_challenge_dispatches_0041")
+    if primary is not None and tuple(primary.get("constrained_columns") or ()) != (
+        "challenge_id",
+    ):
+        failures.append("primary.columns")
+    foreign = actual_constraints.get("fk_sms_challenge_dispatches_challenge_0041")
+    if foreign is not None and (
+        tuple(foreign.get("constrained_columns") or ()) != ("challenge_id",)
+        or foreign.get("referenced_table") != "login_challenges"
+        or tuple(foreign.get("referenced_columns") or ()) != ("id",)
+        or foreign.get("delete_action") != "r"
+    ):
+        failures.append("foreign.shape")
+
+    actual_indexes = {
+        row.get("index_name"): row
+        for row in indexes
+        if isinstance(row.get("index_name"), str)
+    }
+    if (
+        len(actual_indexes) != len(indexes)
+        or set(actual_indexes) != set(EXPECTED_SMS_DISPATCH_INDEXES)
+    ):
+        failures.append("index_set")
+    for name, expected in EXPECTED_SMS_DISPATCH_INDEXES.items():
+        row = actual_indexes.get(name)
+        if row is None:
+            continue
+        key_columns = tuple(
+            str(value).replace('"', "")
+            for value in (row.get("key_columns") or ())
+        )
+        if (
+            row.get("owner_name") != expected_migration_role
+            or row.get("access_method") != "btree"
+            or row.get("is_unique") is not expected["unique"]
+            or row.get("is_primary") is not expected["primary"]
+            or row.get("is_exclusion") is not False
+            or row.get("is_immediate") is not True
+            or row.get("is_valid") is not True
+            or row.get("is_ready") is not True
+            or row.get("is_live") is not True
+            or row.get("nulls_not_distinct") is not False
+            or row.get("has_expressions") is not False
+            or row.get("key_attribute_count") != len(expected["columns"])
+            or row.get("total_attribute_count") != len(expected["columns"])
+            or key_columns != expected["columns"]
+            or not _sms_dispatch_predicate_matches(expected, row.get("predicate"))
+        ):
+            failures.append(f"{name}.shape")
+
+    table_role_evidence = _assert_sms_dispatch_acl_rows(
+        rows=table_acl,
+        label="table_acl",
+        expected_migration_role=expected_migration_role,
+        failures=failures,
+    )
+    column_role_evidence = _assert_sms_dispatch_acl_rows(
+        rows=column_acl,
+        label="column_acl",
+        expected_migration_role=expected_migration_role,
+        failures=failures,
+    )
+    if (
+        table_role_evidence is not None
+        and column_role_evidence is not None
+        and table_role_evidence != column_role_evidence
+    ):
+        failures.append("acl.role_evidence")
+
+    table_grants = [
+        (
+            row.get("grantee_name"),
+            row.get("privilege_type"),
+            row.get("is_grantable"),
+        )
+        for row in table_acl
+        if any(
+            row.get(field) is not None
+            for field in ("grantee_name", "privilege_type", "is_grantable")
+        )
+    ]
+    expected_table_grants = {
+        (expected_runtime_role, privilege, False)
+        for privilege in EXPECTED_SMS_DISPATCH_TABLE_PRIVILEGES
+    }
+    if (
+        table_role_evidence is not None
+        and table_role_evidence[0] is True
+    ):
+        expected_table_grants.add(("star_oam_backup", "SELECT", False))
+    if (
+        len(table_grants) != len(set(table_grants))
+        or set(table_grants) != expected_table_grants
+    ):
+        failures.append("table_acl.grant_set")
+
+    column_grants = [
+        (
+            row.get("column_name"),
+            row.get("grantee_name"),
+            row.get("privilege_type"),
+            row.get("is_grantable"),
+        )
+        for row in column_acl
+        if any(
+            row.get(field) is not None
+            for field in (
+                "column_name",
+                "grantee_name",
+                "privilege_type",
+                "is_grantable",
+            )
+        )
+    ]
+    expected_column_grants = {
+        (column_name, expected_runtime_role, "UPDATE", False)
+        for column_name in EXPECTED_SMS_DISPATCH_UPDATE_COLUMNS
+    }
+    if (
+        len(column_grants) != len(set(column_grants))
+        or set(column_grants) != expected_column_grants
+    ):
+        failures.append("column_acl.grant_set")
+
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database SMS dispatch guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _sms_dispatch_predicate_matches(
+    expected: Mapping[str, Any],
+    value: object,
+) -> bool:
+    raw = "" if value is None else str(value)
+    normalized = " ".join(
+        _lower_sql_outside_string_literals(raw)
+        .replace("(", " ")
+        .replace(")", " ")
+        .split()
+    )
+    normalized = re.sub(
+        r"::\s*(?:character\s+varying|varchar|text)",
+        "",
+        normalized,
+    )
+    if expected.get("predicate") is not None:
+        return normalized == expected["predicate"]
+    literals = expected.get("predicate_literals")
+    if literals is not None:
+        predicate_without_text_casts = re.sub(
+            r"::\s*(?:character\s+varying|varchar|text)(?:\s*\[\s*\])?",
+            "",
+            _lower_sql_outside_string_literals(raw),
+        )
+        compact_predicate = re.sub(
+            r"\s+",
+            "",
+            predicate_without_text_casts.replace("(", "").replace(")", ""),
+        )
+        return tuple(_SQL_STRING_LITERAL_PATTERN.findall(raw)) == literals and (
+            compact_predicate
+            in (
+                "statusin'sending','uncertain'",
+                "status=anyarray['sending','uncertain']",
+            )
+        )
+    return normalized == ""
+
+
+def _assert_sms_dispatch_acl_rows(
+    *,
+    rows: list[Mapping[str, Any]],
+    label: str,
+    expected_migration_role: str,
+    failures: list[str],
+) -> tuple[object, object] | None:
+    if not rows:
+        failures.append(f"{label}.missing")
+        return None
+    backup_exists = rows[0].get("backup_role_exists")
+    edge_exists = rows[0].get("edge_role_exists")
+    if type(backup_exists) is not bool or type(edge_exists) is not bool:
+        failures.append(f"{label}.role_evidence")
+    for row in rows:
+        if (
+            row.get("owner_name") != expected_migration_role
+            or row.get("backup_role_exists") is not backup_exists
+            or row.get("edge_role_exists") is not edge_exists
+        ):
+            failures.append(f"{label}.owner_or_roles")
+    return backup_exists, edge_exists
 
 
 def _assert_kms_pin_acl_rows(

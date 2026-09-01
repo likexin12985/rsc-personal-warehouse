@@ -20,7 +20,12 @@ from .audit_chain import append_audit_event
 
 AUTHENTICATION_AUDIT_STREAM_KEY = "authentication"
 AUTHENTICATION_AGGREGATE_TYPES = frozenset(
-    {"authentication_attempt", "login_challenge", "auth_session"}
+    {
+        "authentication_attempt",
+        "login_challenge",
+        "sms_dispatch",
+        "auth_session",
+    }
 )
 AUTHENTICATION_CLIENT_TYPES = frozenset({"web", "miniprogram"})
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_.-]{0,79}$")

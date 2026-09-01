@@ -2,9 +2,19 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import re
+import threading
 import uuid
 
-from fastapi import APIRouter, Cookie, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Cookie,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+)
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
@@ -12,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from ..authorization import FORMAL_ROLE_CODES
 from ..config import get_settings
-from ..database import get_db
+from ..database import SmsDispatchSessionLocal, get_db
 from ..dependencies import client_ip, get_current_user, require_roles
 from ..auth_sessions import (
     RefreshTokenReplayError,
@@ -108,7 +118,12 @@ from ..schemas import (
 )
 from ..security import hash_password, hash_refresh_token, verify_password
 from ..services import audit
-from ..sms import SmsProviderError, get_sms_provider
+from ..sms import (
+    SMS_PROVIDER_CALL_GUARD_SECONDS,
+    SmsProviderError,
+    get_sms_provider,
+    sms_dispatch_request_profile_sha256,
+)
 from ..production_adapters import create_production_authentication_cipher
 from ..wechat import WechatLoginIdentity, WechatProviderError, get_wechat_provider
 
@@ -118,6 +133,9 @@ settings = get_settings()
 ALLOWED_ROLES = set(FORMAL_ROLE_CODES)
 
 SMS_REQUEST_MESSAGE = "如账号已开通，验证码将发送至该手机号"
+_SMS_PROVIDER_CAPACITY = threading.BoundedSemaphore(
+    value=settings.sms_provider_max_concurrency
+)
 _SAFE_REQUEST_ID = re.compile(r"^[A-Za-z][A-Za-z0-9._:-]{7,159}$", re.ASCII)
 _SAFE_IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{16,128}$", re.ASCII)
 _SAFE_DEVICE_ID = re.compile(r"^[A-Za-z0-9_-]{16,128}$", re.ASCII)
@@ -1115,6 +1133,7 @@ def _request_formal_sms_code(
     payload: SmsCodeRequestIn,
     request: Request,
     db: Session,
+    background_tasks: BackgroundTasks,
     *,
     client_type: str,
 ) -> SmsCodeRequestOut:
@@ -1127,6 +1146,9 @@ def _request_formal_sms_code(
     # audit or provider mutation is allowed when KMS is unavailable.
     _preflight_formal_authentication_encryption(db)
     mobile_hash = _formal_mobile_hash(mobile)
+    dispatch_request_profile_sha256 = sms_dispatch_request_profile_sha256(
+        mobile_hash=mobile_hash
+    )
     ip_hash = _formal_ip_hash(client_ip(request))
     identity = _formal_mobile_identity(db, mobile, required=False)
     user = db.get(User, identity.user_id) if identity is not None else None
@@ -1141,6 +1163,7 @@ def _request_formal_sms_code(
             client_type=client_type,
             idempotency_key=idempotency_key,
             request_id=request_id,
+            dispatch_request_profile_sha256=dispatch_request_profile_sha256,
             mobile_hour_limit=settings.sms_max_per_mobile_hour,
             ip_hour_limit=settings.sms_max_per_ip_hour,
             send_interval_seconds=settings.sms_interval_seconds,
@@ -1150,11 +1173,8 @@ def _request_formal_sms_code(
     except AuthenticationChallengeError as exc:
         _raise_challenge_error(db, exc)
 
-    # Persist the prepared challenge and its append-only evidence before the
-    # provider boundary.  A retry with the same key reuses the challenge id,
-    # which is also the provider out_id.
-    db.commit()
     if not prepared.dispatch_required:
+        db.commit()
         return SmsCodeRequestOut(
             ok=True,
             message=prepared.public_message,
@@ -1163,50 +1183,125 @@ def _request_formal_sms_code(
         )
 
     try:
-        sent = get_sms_provider().send(mobile, str(prepared.challenge_id))
-    except SmsProviderError as exc:
-        try:
-            authentication_challenge.mark_send_failed(
-                db,
-                challenge_id=prepared.challenge_id,
-                request_id=request_id,
-            )
-            db.commit()
-        except AuthenticationChallengeError as evidence_error:
-            _raise_challenge_error(db, evidence_error)
-        raise HTTPException(status_code=502, detail="短信服务暂时不可用") from exc
-
-    if not sent.biz_id:
-        try:
-            authentication_challenge.mark_send_failed(
-                db,
-                challenge_id=prepared.challenge_id,
-                request_id=request_id,
-            )
-            db.commit()
-        except AuthenticationChallengeError as evidence_error:
-            _raise_challenge_error(db, evidence_error)
-        raise HTTPException(status_code=502, detail="短信服务暂时不可用")
-
-    provider_reference = "biz-" + hashlib.sha256(
-        sent.biz_id.encode("utf-8")
-    ).hexdigest()
-    try:
-        authentication_challenge.mark_sent(
+        dispatch_claim = authentication_challenge.claim_dispatch(
             db,
             challenge_id=prepared.challenge_id,
-            provider_reference=provider_reference,
             request_id=request_id,
+            lease_seconds=settings.sms_dispatch_lease_seconds,
         )
     except AuthenticationChallengeError as exc:
         _raise_challenge_error(db, exc)
+    # Preparation and single-owner claim commit together while the preparation
+    # transaction still owns its mobile/key advisory locks.  There is no
+    # durable prepared-only window in which another request can create a second
+    # challenge before this exact provider owner exists.
     db.commit()
+    if not dispatch_claim.acquired or dispatch_claim.owner_token is None:
+        return SmsCodeRequestOut(
+            ok=True,
+            message=prepared.public_message,
+            retry_after=prepared.retry_after,
+            expires_in=prepared.expires_in,
+        )
+
+    # The paid network call runs only after the HTTP response is sent.  The
+    # request path persists the one-shot owner first and therefore exposes no
+    # provider-latency difference between known and unknown mobiles.  A crash
+    # leaves ``sending`` to become ``uncertain``; it never authorizes a resend.
+    background_tasks.add_task(
+        _complete_formal_sms_dispatch,
+        mobile=mobile,
+        challenge_id=prepared.challenge_id,
+        owner_token=dispatch_claim.owner_token,
+        request_id=request_id,
+    )
     return SmsCodeRequestOut(
         ok=True,
         message=prepared.public_message,
         retry_after=prepared.retry_after,
         expires_in=prepared.expires_in,
     )
+
+
+def _complete_formal_sms_dispatch(
+    *,
+    mobile: str,
+    challenge_id: uuid.UUID,
+    owner_token: str,
+    request_id: str,
+) -> None:
+    """Complete exactly one claimed provider call outside the HTTP response."""
+
+    # Fail closed before constructing a Session.  This protects both the
+    # dedicated dispatch pool and Starlette's shared worker capacity during a
+    # burst; an unstarted owner remains ``sending`` and can only age into
+    # ``uncertain``, never be resent.
+    if not _SMS_PROVIDER_CAPACITY.acquire(blocking=False):
+        return
+    try:
+        with SmsDispatchSessionLocal() as dispatch_db:
+            try:
+                authorized = authentication_challenge.authorize_dispatch_provider_call(
+                    dispatch_db,
+                    challenge_id=challenge_id,
+                    owner_token=owner_token,
+                    request_id=request_id,
+                    minimum_remaining_seconds=SMS_PROVIDER_CALL_GUARD_SECONDS,
+                )
+                if not authorized:
+                    dispatch_db.commit()
+                    return
+
+                # The challenge and dispatch rows remain locked in this outer
+                # transaction until the provider outcome is persisted.  Expiry and
+                # replacement cannot overtake a delayed in-flight owner.
+                sent = None
+                provider_failed = False
+                try:
+                    sent = get_sms_provider().send(mobile, str(challenge_id))
+                except Exception:
+                    provider_failed = True
+
+                if provider_failed or sent is None:
+                    authentication_challenge.mark_send_uncertain(
+                        dispatch_db,
+                        challenge_id=challenge_id,
+                        owner_token=owner_token,
+                        request_id=request_id,
+                    )
+                else:
+                    expected_out_id = str(challenge_id)
+                    if not sent.biz_id or sent.out_id != expected_out_id:
+                        authentication_challenge.mark_send_uncertain(
+                            dispatch_db,
+                            challenge_id=challenge_id,
+                            owner_token=owner_token,
+                            request_id=request_id,
+                            reason_code=(
+                                "provider_out_id_mismatch"
+                                if sent.out_id != expected_out_id
+                                else "provider_response_invalid"
+                            ),
+                        )
+                    else:
+                        provider_reference = "biz-" + hashlib.sha256(
+                            sent.biz_id.encode("utf-8")
+                        ).hexdigest()
+                        authentication_challenge.mark_sent(
+                            dispatch_db,
+                            challenge_id=challenge_id,
+                            owner_token=owner_token,
+                            provider_reference=provider_reference,
+                            request_id=request_id,
+                        )
+                dispatch_db.commit()
+            except Exception:
+                # A database/audit failure must leave the previously committed
+                # owner in ``sending``.  Stale-lease recovery freezes it as
+                # uncertain and cannot trigger another paid call.
+                dispatch_db.rollback()
+    finally:
+        _SMS_PROVIDER_CAPACITY.release()
 
 
 @router.get("/login-options", response_model=LoginOptionsOut)
@@ -1270,6 +1365,7 @@ def miniprogram_password_login(
 def request_sms_code(
     payload: SmsCodeRequestIn,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     if _production():
@@ -1280,6 +1376,7 @@ def request_sms_code(
             payload,
             request,
             db,
+            background_tasks,
             client_type=client_type,
         )
     _require_sms_configuration()
@@ -1486,6 +1583,47 @@ def _consume_formal_sms_code(
     request_id = _formal_request_id(request)
     mobile = _formal_mobile(payload.mobile)
     mobile_hash = _formal_mobile_hash(mobile)
+    # Acquire before identity lookup so capacity pressure cannot turn response
+    # status into a deterministic account-existence oracle.  One outer finally
+    # covers unknown identities, challenge failures and provider outcomes.
+    if not _SMS_PROVIDER_CAPACITY.acquire(blocking=False):
+        _append_owned_failed_authentication_attempt(
+            db,
+            request_id=request_id,
+            client_type=client_type,
+            action="authentication.sms.login_failed",
+            reason_code="provider_capacity_exhausted",
+            outcome="failed",
+        )
+        raise HTTPException(status_code=503, detail="短信服务暂时不可用")
+    try:
+        return _consume_formal_sms_code_with_provider_capacity(
+            payload,
+            request,
+            db,
+            client_type=client_type,
+            device_id=device_id,
+            device_name=device_name,
+            request_id=request_id,
+            mobile=mobile,
+            mobile_hash=mobile_hash,
+        )
+    finally:
+        _SMS_PROVIDER_CAPACITY.release()
+
+
+def _consume_formal_sms_code_with_provider_capacity(
+    payload: SmsCodeLoginIn,
+    request: Request,
+    db: Session,
+    *,
+    client_type: str,
+    device_id: str,
+    device_name: str,
+    request_id: str,
+    mobile: str,
+    mobile_hash: str,
+) -> tuple[User, SessionTokens, FormalPrincipal]:
     try:
         identity = _formal_mobile_identity(db, mobile, required=True)
     except HTTPException as exc:
@@ -1529,6 +1667,9 @@ def _consume_formal_sms_code(
                 detail=exc.as_detail(),
             ) from exc
 
+    # The caller owns the bounded provider permit before identity lookup.
+    # Starting an attempt here therefore cannot pin an unbounded number of
+    # primary API connections across the external verification call.
     verification_savepoint = db.begin_nested()
     try:
         attempt = authentication_challenge.begin_verify(

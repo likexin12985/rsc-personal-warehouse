@@ -82,6 +82,8 @@ def test_security_sensitive_defaults_are_fail_closed_and_identity_neutral():
     assert fields["kms_readiness_probe_budget_seconds"].default == 4
     assert fields["auth_login_rate_limit_hmac_secret"].default == ""
     assert fields["auth_login_rate_limit_hash_version"].default == 1
+    assert fields["sms_dispatch_lease_seconds"].default == 30
+    assert fields["sms_provider_max_concurrency"].default == 2
     assert fields["admin_mobile"].default == ""
     assert fields["admin_name"].default == ""
     assert fields["admin_initial_password"].default is None
@@ -109,6 +111,19 @@ def test_production_requires_a_complete_passwordless_login_channel():
     )
     settings.validate_api_startup()
     assert settings.wechat_configuration_ready() is True
+
+
+def test_sms_dispatch_lease_preserves_provider_call_safety_window() -> None:
+    with pytest.raises(ValidationError, match="sms_dispatch_lease_seconds"):
+        production_settings(sms_dispatch_lease_seconds=29)
+
+    assert production_settings(sms_dispatch_lease_seconds=30).sms_dispatch_lease_seconds == 30
+
+
+@pytest.mark.parametrize("value", [0, 6])
+def test_sms_provider_concurrency_is_strictly_bounded(value: int) -> None:
+    with pytest.raises(ValidationError, match="sms_provider_max_concurrency"):
+        production_settings(sms_provider_max_concurrency=value)
 
 
 def test_production_api_database_url_and_roles_are_separated() -> None:

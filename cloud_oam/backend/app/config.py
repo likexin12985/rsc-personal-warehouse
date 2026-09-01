@@ -156,6 +156,8 @@ class Settings(BaseSettings):
     sms_code_length: int = Field(default=6, ge=4, le=8)
     sms_valid_seconds: int = Field(default=300, ge=60, le=1800)
     sms_interval_seconds: int = Field(default=60, ge=30, le=600)
+    sms_dispatch_lease_seconds: int = Field(default=30, ge=30, le=120)
+    sms_provider_max_concurrency: int = Field(default=2, ge=1, le=5)
     sms_max_per_mobile_hour: int = Field(default=5, ge=1, le=30)
     sms_max_per_ip_hour: int = Field(default=20, ge=1, le=200)
     sms_max_verify_attempts: int = Field(default=5, ge=1, le=10)

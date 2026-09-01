@@ -26,6 +26,20 @@ if settings.database_url.startswith("postgresql+psycopg://"):
 engine = create_engine(settings.database_url, **_engine_options)
 
 if settings.database_url.startswith("postgresql+psycopg://"):
+    # Paid SMS calls deliberately hold their challenge/dispatch locks across
+    # the provider request.  Keep those long transactions on a small,
+    # non-overflowing pool so public login traffic cannot exhaust the primary
+    # API pool.  A process-local capacity gate in the auth router is acquired
+    # before this pool is touched.
+    sms_dispatch_engine = create_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        future=True,
+        pool_size=settings.sms_provider_max_concurrency,
+        max_overflow=0,
+        pool_timeout=1,
+        connect_args={"connect_timeout": 5},
+    )
     # Health uses an independent one-shot connection so API pool saturation and
     # long business-query timeouts cannot consume the orchestrator's 8s budget.
     health_engine = create_engine(
@@ -42,6 +56,9 @@ if settings.database_url.startswith("postgresql+psycopg://"):
         },
     )
 else:
+    # Tests and non-production SQLite must share the same database identity.
+    # The production isolation guarantee applies to the PostgreSQL branch.
+    sms_dispatch_engine = engine
     health_engine = engine
 
 
@@ -56,6 +73,11 @@ if engine.dialect.name == "sqlite":
 
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+SmsDispatchSessionLocal = sessionmaker(
+    bind=sms_dispatch_engine,
+    autoflush=False,
+    expire_on_commit=False,
+)
 
 
 def get_db() -> Generator[Session, None, None]:

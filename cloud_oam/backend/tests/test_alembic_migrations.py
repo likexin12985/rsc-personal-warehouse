@@ -302,7 +302,14 @@ KMS_DATA_KEY_PINS_REVISION = (
     / "versions"
     / "20260901_0040_kms_data_key_pins.py"
 )
-HEAD_REVISION = "20260901_0040"
+SMS_DISPATCH_OWNERSHIP_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260902_0041_sms_dispatch_ownership.py"
+)
+HEAD_REVISION = "20260902_0041"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -312,6 +319,8 @@ MATERIAL_REQUEST_CANCELLATION_BOUNDARY_REVISION_ID = "20260901_0037"
 NONOPENING_STOCKTAKE_CLOSE_RECONCILIATION_REVISION_ID = "20260901_0038"
 MATERIAL_REQUEST_COMMAND_STATUS_LOOKUP_REVISION_ID = "20260901_0039"
 KMS_DATA_KEY_PINS_REVISION_ID = "20260901_0040"
+SMS_DISPATCH_OWNERSHIP_REVISION_ID = "20260902_0041"
+PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION = "20260901_0040"
 PRE_KMS_DATA_KEY_PINS_HEAD_REVISION = "20260901_0039"
 PRE_MATERIAL_REQUEST_COMMAND_STATUS_LOOKUP_HEAD_REVISION = "20260901_0038"
 PRE_NONOPENING_STOCKTAKE_CLOSE_RECONCILIATION_HEAD_REVISION = "20260901_0037"
@@ -391,6 +400,7 @@ ACTIVATION_TABLES = {
 AUTHENTICATION_IDEMPOTENCY_TABLES = {"auth_idempotency_operations"}
 AUTHENTICATION_LOGIN_RATE_LIMIT_TABLES = {"auth_login_rate_limit_buckets"}
 KMS_DATA_KEY_PIN_TABLES = {"kms_data_key_pins"}
+SMS_DISPATCH_OWNERSHIP_TABLES = {"sms_challenge_dispatches"}
 V09_TABLE_RENAMES_AT_HEAD = {
     "materials": "legacy_v09_materials",
     "stocktake_tasks": "legacy_v09_stocktake_tasks",
@@ -497,6 +507,7 @@ EXPECTED_TABLES = (
     | AUTHENTICATION_IDEMPOTENCY_TABLES
     | AUTHENTICATION_LOGIN_RATE_LIMIT_TABLES
     | KMS_DATA_KEY_PIN_TABLES
+    | SMS_DISPATCH_OWNERSHIP_TABLES
     | INVENTORY_LEDGER_TABLES
     | OPENING_STOCKTAKE_TABLES
     | OPENING_COUNT_OBSERVATION_TABLES
@@ -763,6 +774,199 @@ def _insert_valid_audit_chain_event(
         (event_id, event_hash, head_version + 1, stream_key),
     )
     return event_hash
+
+
+def _insert_0041_login_challenge(
+    connection: sa.Connection,
+    *,
+    challenge_id: str,
+    mobile_hash: str,
+    provider_reference: str | None = None,
+    expires_at: str = "2020-01-01 00:05:00+00:00",
+    status: str = "pending",
+    created_at: str = "2020-01-01 00:00:00+00:00",
+    client_type: str = "web",
+) -> None:
+    connection.exec_driver_sql(
+        "INSERT INTO login_challenges "
+        "(id, mobile_hash, code_hash, verification_mode, provider, "
+        "provider_reference, client_type, purpose, attempts, max_attempts, "
+        "expires_at, status, idempotency_key, requested_ip_hash, verified_at, "
+        "consumed_at, created_at) "
+        "VALUES (?, ?, NULL, 'provider_managed', 'aliyun_pnvs', ?, ?, "
+        "'login', 0, 5, ?, ?, ?, ?, NULL, NULL, ?)",
+        (
+            challenge_id,
+            mobile_hash,
+            provider_reference,
+            client_type,
+            expires_at,
+            status,
+            f"sms-0041-{challenge_id}",
+            "9" * 64,
+            created_at,
+        ),
+    )
+
+
+def _insert_0041_acceptance_audit(
+    connection: sa.Connection,
+    *,
+    challenge_id: str,
+    event_id: str,
+    occurred_at: str,
+    client_type: str = "web",
+    outcome: str = "accepted",
+    reason_code: str = "provider_accepted",
+    status: str = "pending",
+) -> str:
+    stream_key = "authentication"
+    action = "authentication.sms.challenge_sent"
+    aggregate_type = "login_challenge"
+    aggregate_id = str(uuid.UUID(challenge_id))
+    request_id = f"authreq-{hashlib.sha256(event_id.encode()).hexdigest()}"
+    after_jsonb = {
+        "client_type": client_type,
+        "outcome": outcome,
+        "reason_code": reason_code,
+        "status": status,
+    }
+    head_version, previous_hash = connection.exec_driver_sql(
+        "SELECT version, last_hash FROM audit_chain_heads WHERE stream_key = ?",
+        (stream_key,),
+    ).one()
+    event_hash = _canonical_audit_hash(
+        stream_key=stream_key,
+        event_id=event_id,
+        action=action,
+        aggregate_type=aggregate_type,
+        aggregate_id=aggregate_id,
+        after_jsonb=after_jsonb,
+        request_id=request_id,
+        occurred_at=occurred_at,
+        previous_hash=previous_hash,
+    )
+    connection.exec_driver_sql(
+        "INSERT INTO audit_events "
+        "(id, stream_key, stream_version, actor_user_id, action, "
+        "aggregate_type, aggregate_id, before_jsonb, after_jsonb, request_id, "
+        "previous_hash, event_hash, occurred_at, created_at) "
+        "VALUES (?, ?, ?, NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)",
+        (
+            event_id,
+            stream_key,
+            head_version + 1,
+            action,
+            aggregate_type,
+            aggregate_id,
+            json.dumps(after_jsonb, ensure_ascii=False),
+            request_id,
+            previous_hash,
+            event_hash,
+            occurred_at,
+            occurred_at,
+        ),
+    )
+    connection.exec_driver_sql(
+        "UPDATE audit_chain_heads SET last_event_id = ?, last_hash = ?, "
+        "version = ? WHERE stream_key = ?",
+        (event_id, event_hash, head_version + 1, stream_key),
+    )
+    return event_hash
+
+
+def _insert_0041_no_dispatch_transition(
+    connection: sa.Connection,
+    *,
+    challenge_id: str,
+    event_id: str,
+    reason: str,
+) -> None:
+    occurred_at = "2020-01-01 00:00:01+00:00"
+    connection.exec_driver_sql(
+        "INSERT INTO state_transition_events "
+        "(id, aggregate_type, aggregate_id, from_status, to_status, reason, "
+        "actor_id, idempotency_key, occurred_at, metadata_jsonb, created_at) "
+        "VALUES (?, 'login_challenge', ?, NULL, 'cancelled', ?, NULL, ?, ?, "
+        "'{}', ?)",
+        (
+            event_id,
+            str(uuid.UUID(challenge_id)),
+            reason,
+            f"sms-0041-transition-{event_id}",
+            occurred_at,
+            occurred_at,
+        ),
+    )
+
+
+def _insert_0041_prepared_dispatch(
+    connection: sa.Connection,
+    *,
+    challenge_id: str,
+    mobile_hash: str,
+    request_sha256: str = "a" * 64,
+    created_at: str = "2026-09-02 00:00:00+00:00",
+) -> None:
+    connection.exec_driver_sql(
+        "INSERT INTO sms_challenge_dispatches "
+        "(challenge_id, provider, mobile_hash, status, request_sha256, "
+        "owner_token_hash, provider_reference, claimed_at, lease_expires_at, "
+        "accepted_at, uncertain_at, expired_at, created_at) "
+        "VALUES (?, 'aliyun_pnvs', ?, 'prepared', ?, NULL, NULL, NULL, NULL, "
+        "NULL, NULL, NULL, ?)",
+        (challenge_id, mobile_hash, request_sha256, created_at),
+    )
+
+
+def _advance_0041_dispatch(
+    connection: sa.Connection,
+    *,
+    challenge_id: str,
+    target_status: str,
+) -> None:
+    if target_status == "prepared":
+        return
+    claimed_at = "2026-09-02 00:01:00+00:00"
+    lease_expires_at = "2026-09-02 00:06:00+00:00"
+    connection.exec_driver_sql(
+        "UPDATE sms_challenge_dispatches SET status = 'sending', "
+        "owner_token_hash = ?, claimed_at = ?, lease_expires_at = ? "
+        "WHERE challenge_id = ?",
+        ("b" * 64, claimed_at, lease_expires_at, challenge_id),
+    )
+    if target_status == "sending":
+        return
+    if target_status == "accepted":
+        connection.exec_driver_sql(
+            "UPDATE sms_challenge_dispatches SET status = 'accepted', "
+            "provider_reference = ?, accepted_at = ? WHERE challenge_id = ?",
+            (
+                f"biz-{challenge_id[-12:]}",
+                "2026-09-02 00:02:00+00:00",
+                challenge_id,
+            ),
+        )
+        return
+    if target_status == "uncertain":
+        connection.exec_driver_sql(
+            "UPDATE sms_challenge_dispatches SET status = 'uncertain', "
+            "uncertain_at = ? WHERE challenge_id = ?",
+            ("2026-09-02 00:02:00+00:00", challenge_id),
+        )
+        return
+    if target_status == "expired":
+        connection.exec_driver_sql(
+            "UPDATE sms_challenge_dispatches SET status = 'expired', "
+            "uncertain_at = ?, expired_at = ? WHERE challenge_id = ?",
+            (
+                "2026-09-02 00:02:00+00:00",
+                "2026-09-02 00:03:00+00:00",
+                challenge_id,
+            ),
+        )
+        return
+    raise AssertionError(f"unsupported 0041 dispatch target: {target_status}")
 
 
 def _normalized_sql(value: str | None) -> str:
@@ -1108,16 +1312,792 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert head is not None
     assert (
         head.down_revision
-        == PRE_KMS_DATA_KEY_PINS_HEAD_REVISION
+        == PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION
     )
     previous_head = script.get_revision(
-        PRE_KMS_DATA_KEY_PINS_HEAD_REVISION
+        PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION
     )
     assert previous_head is not None
     assert (
         previous_head.down_revision
+        == PRE_KMS_DATA_KEY_PINS_HEAD_REVISION
+    )
+    previous_kms_head = script.get_revision(
+        PRE_KMS_DATA_KEY_PINS_HEAD_REVISION
+    )
+    assert previous_kms_head is not None
+    assert (
+        previous_kms_head.down_revision
         == PRE_MATERIAL_REQUEST_COMMAND_STATUS_LOOKUP_HEAD_REVISION
     )
+
+
+def _load_0041_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "sms_dispatch_ownership_migration_0041",
+        SMS_DISPATCH_OWNERSHIP_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_0041_sqlite_schema_indexes_and_evidence_triggers(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'sms-dispatch-schema.db'}"
+    command.upgrade(_config(database_url), HEAD_REVISION)
+    engine = sa.create_engine(database_url)
+    try:
+        inspector = inspect(engine)
+        assert [
+            column["name"]
+            for column in inspector.get_columns("sms_challenge_dispatches")
+        ] == [
+            "challenge_id",
+            "provider",
+            "mobile_hash",
+            "status",
+            "request_sha256",
+            "owner_token_hash",
+            "provider_reference",
+            "claimed_at",
+            "lease_expires_at",
+            "accepted_at",
+            "uncertain_at",
+            "expired_at",
+            "created_at",
+        ]
+        assert inspector.get_pk_constraint("sms_challenge_dispatches") == {
+            "constrained_columns": ["challenge_id"],
+            "name": "pk_sms_challenge_dispatches_0041",
+        }
+        foreign_keys = inspector.get_foreign_keys("sms_challenge_dispatches")
+        assert len(foreign_keys) == 1
+        assert foreign_keys[0]["name"] == (
+            "fk_sms_challenge_dispatches_challenge_0041"
+        )
+        assert foreign_keys[0]["constrained_columns"] == ["challenge_id"]
+        assert foreign_keys[0]["referred_table"] == "login_challenges"
+        assert foreign_keys[0]["referred_columns"] == ["id"]
+        assert foreign_keys[0].get("options", {}).get("ondelete") == "RESTRICT"
+        assert {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints(
+                "sms_challenge_dispatches"
+            )
+        } == {
+            "ck_sms_challenge_dispatches_accepted_order",
+            "ck_sms_challenge_dispatches_expired_order",
+            "ck_sms_challenge_dispatches_lease_order",
+            "ck_sms_challenge_dispatches_mobile_hash",
+            "ck_sms_challenge_dispatches_owner_hash",
+            "ck_sms_challenge_dispatches_request_sha256",
+            "ck_sms_challenge_dispatches_state_evidence",
+            "ck_sms_challenge_dispatches_status",
+            "ck_sms_challenge_dispatches_uncertain_order",
+        }
+
+        indexes = {
+            index["name"]: index
+            for index in inspector.get_indexes("sms_challenge_dispatches")
+        }
+        assert set(indexes) == {
+            "ix_sms_challenge_dispatches_status",
+            "ix_sms_challenge_dispatches_unresolved_lease",
+            "uq_sms_challenge_dispatches_provider_reference",
+            "uq_sms_challenge_dispatches_unresolved_mobile",
+        }
+        assert indexes["ix_sms_challenge_dispatches_status"]["column_names"] == [
+            "status"
+        ]
+        assert indexes["ix_sms_challenge_dispatches_unresolved_lease"][
+            "column_names"
+        ] == ["status", "lease_expires_at"]
+        assert indexes["uq_sms_challenge_dispatches_provider_reference"][
+            "unique"
+        ] == 1
+        assert indexes["uq_sms_challenge_dispatches_provider_reference"][
+            "column_names"
+        ] == ["provider", "provider_reference"]
+        assert _index_predicate(
+            indexes["uq_sms_challenge_dispatches_provider_reference"]
+        ) == "provider_reference is not null"
+        assert indexes["uq_sms_challenge_dispatches_unresolved_mobile"][
+            "unique"
+        ] == 1
+        assert indexes["uq_sms_challenge_dispatches_unresolved_mobile"][
+            "column_names"
+        ] == ["provider", "mobile_hash"]
+        assert _index_predicate(
+            indexes["uq_sms_challenge_dispatches_unresolved_mobile"]
+        ) == "status in 'sending', 'uncertain'"
+
+        with engine.connect() as connection:
+            trigger_rows = connection.exec_driver_sql(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' "
+                "AND tbl_name = 'sms_challenge_dispatches' ORDER BY name"
+            ).all()
+        triggers = {name: _normalized_sql(sql) for name, sql in trigger_rows}
+        assert set(triggers) == {
+            "trg_sms_challenge_dispatches_delete_0041",
+            "trg_sms_challenge_dispatches_insert_0041",
+            "trg_sms_challenge_dispatches_update_0041",
+        }
+        assert "invalid prepared sms dispatch parent" in triggers[
+            "trg_sms_challenge_dispatches_insert_0041"
+        ]
+        assert "invalid sms challenge dispatch mutation" in triggers[
+            "trg_sms_challenge_dispatches_update_0041"
+        ]
+        assert "sms challenge dispatch evidence cannot be deleted" in triggers[
+            "trg_sms_challenge_dispatches_delete_0041"
+        ]
+    finally:
+        engine.dispose()
+
+
+def test_0041_postgresql_offline_sql_covers_preflight_truncate_acl_and_pg_guards(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION}:{HEAD_REVISION}",
+        sql=True,
+    )
+    sql = output.getvalue()
+
+    assert (
+        "-- Running upgrade 20260901_0040 -> 20260902_0041" in sql
+    )
+    assert (
+        "LOCK TABLE public.login_challenges, public.audit_events, "
+        "public.state_transition_events IN SHARE ROW EXCLUSIVE MODE"
+    ) in sql
+    for message in (
+        "an unexpired provider-managed challenge without an accepted provider reference",
+        "a verified or consumed provider-managed challenge has no accepted provider reference",
+        "duplicate provider references exist",
+        "every accepted legacy challenge must have exactly one well-ordered",
+    ):
+        assert message in sql
+    assert "CREATE FUNCTION public.rsc_guard_sms_challenge_dispatch_0041()" in sql
+    assert "SECURITY DEFINER" in sql
+    assert "SET search_path = pg_catalog, public" in sql
+    assert "BEFORE INSERT OR UPDATE OR DELETE" in sql
+    assert "BEFORE TRUNCATE" in sql
+    assert "SMS challenge dispatch evidence cannot be truncated" in sql
+    assert "SMS challenge dispatch evidence cannot be deleted" in sql
+    assert "ENABLE ALWAYS TRIGGER trg_sms_challenge_dispatches_guard_0041" in sql
+    assert (
+        "ENABLE ALWAYS TRIGGER trg_sms_challenge_dispatches_no_truncate_0041"
+        in sql
+    )
+    assert "NEW.mobile_hash !~ '^[0-9a-f]{64}$'" in sql
+    assert "NEW.request_sha256 !~ '^[0-9a-f]{64}$'" in sql
+    assert "NEW.claimed_at < NEW.created_at" in sql
+    assert "NEW.expired_at < NEW.uncertain_at" in sql
+    assert "NEW.accepted_at < NEW.expired_at" in sql
+    assert (
+        "GRANT UPDATE (status, owner_token_hash, provider_reference, claimed_at, "
+        "lease_expires_at, accepted_at, uncertain_at, expired_at)"
+    ) in sql
+    assert "REVOKE UPDATE ON TABLE public.login_challenges" in sql
+    assert (
+        "GRANT UPDATE (provider_reference, attempts, status, verified_at, "
+        "consumed_at) ON TABLE public.login_challenges"
+    ) in sql
+    assert "GRANT SELECT ON TABLE public.sms_challenge_dispatches" in sql
+    assert "REVOKE EXECUTE ON FUNCTION" in sql
+
+
+def test_0041_offline_downgrade_requires_online_evidence_check(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=io.StringIO(),
+    )
+    with pytest.raises(RuntimeError, match="online evidence check"):
+        command.downgrade(
+            config,
+            f"{HEAD_REVISION}:{PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION}",
+            sql=True,
+        )
+
+
+def test_0041_sqlite_enforces_parent_state_machine_immutability_and_no_delete(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'sms-dispatch-guards.db'}"
+    command.upgrade(_config(database_url), HEAD_REVISION)
+    engine = sa.create_engine(database_url)
+
+    @sa.event.listens_for(engine, "connect")
+    def _enable_foreign_keys(connection, _record):
+        connection.execute("PRAGMA foreign_keys=ON")
+
+    challenge_id = "81000000000040008000000000000001"
+    recovery_id = "81000000000040008000000000000002"
+    invalid_parent_id = "81000000000040008000000000000003"
+    mobile_hash = "1" * 64
+    try:
+        with engine.begin() as connection:
+            _insert_0041_login_challenge(
+                connection,
+                challenge_id=challenge_id,
+                mobile_hash=mobile_hash,
+                expires_at="2999-01-01 00:05:00+00:00",
+                created_at="2026-09-02 00:00:00+00:00",
+            )
+            _insert_0041_login_challenge(
+                connection,
+                challenge_id=recovery_id,
+                mobile_hash="2" * 64,
+                expires_at="2999-01-01 00:05:00+00:00",
+                created_at="2026-09-02 00:00:00+00:00",
+            )
+            _insert_0041_login_challenge(
+                connection,
+                challenge_id=invalid_parent_id,
+                mobile_hash="3" * 64,
+                expires_at="2999-01-01 00:05:00+00:00",
+                created_at="2026-09-02 00:00:00+00:00",
+            )
+            _insert_0041_prepared_dispatch(
+                connection,
+                challenge_id=challenge_id,
+                mobile_hash=mobile_hash,
+            )
+            _insert_0041_prepared_dispatch(
+                connection,
+                challenge_id=recovery_id,
+                mobile_hash="2" * 64,
+            )
+
+        with pytest.raises(sa.exc.IntegrityError, match="invalid prepared"):
+            with engine.begin() as connection:
+                _insert_0041_prepared_dispatch(
+                    connection,
+                    challenge_id=invalid_parent_id,
+                    mobile_hash="4" * 64,
+                )
+        with pytest.raises(sa.exc.IntegrityError):
+            with engine.begin() as connection:
+                _insert_0041_prepared_dispatch(
+                    connection,
+                    challenge_id=invalid_parent_id,
+                    mobile_hash="3" * 64,
+                    request_sha256="A" * 64,
+                )
+        with pytest.raises(sa.exc.IntegrityError, match="invalid SMS"):
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "UPDATE sms_challenge_dispatches SET status = 'accepted', "
+                    "owner_token_hash = ?, claimed_at = ?, lease_expires_at = ?, "
+                    "accepted_at = ?, provider_reference = 'biz-illegal-direct' "
+                    "WHERE challenge_id = ?",
+                    (
+                        "b" * 64,
+                        "2026-09-02 00:01:00+00:00",
+                        "2026-09-02 00:06:00+00:00",
+                        "2026-09-02 00:02:00+00:00",
+                        challenge_id,
+                    ),
+                )
+        with pytest.raises(sa.exc.IntegrityError):
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "UPDATE sms_challenge_dispatches SET status = 'sending', "
+                    "owner_token_hash = ?, claimed_at = ?, lease_expires_at = ? "
+                    "WHERE challenge_id = ?",
+                    (
+                        "b" * 64,
+                        "2026-09-02 00:03:00+00:00",
+                        "2026-09-02 00:02:00+00:00",
+                        challenge_id,
+                    ),
+                )
+
+        with engine.begin() as connection:
+            _advance_0041_dispatch(
+                connection,
+                challenge_id=challenge_id,
+                target_status="sending",
+            )
+        for statement, parameters in (
+            (
+                "UPDATE sms_challenge_dispatches SET owner_token_hash = ? "
+                "WHERE challenge_id = ?",
+                ("c" * 64, challenge_id),
+            ),
+            (
+                "UPDATE sms_challenge_dispatches SET request_sha256 = ? "
+                "WHERE challenge_id = ?",
+                ("d" * 64, challenge_id),
+            ),
+            (
+                "UPDATE sms_challenge_dispatches SET status = 'prepared', "
+                "owner_token_hash = NULL, claimed_at = NULL, "
+                "lease_expires_at = NULL WHERE challenge_id = ?",
+                (challenge_id,),
+            ),
+        ):
+            with pytest.raises(sa.exc.IntegrityError, match="invalid SMS"):
+                with engine.begin() as connection:
+                    connection.exec_driver_sql(statement, parameters)
+
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "UPDATE sms_challenge_dispatches SET status = 'accepted', "
+                "provider_reference = 'biz-primary', accepted_at = ? "
+                "WHERE challenge_id = ?",
+                ("2026-09-02 00:02:00+00:00", challenge_id),
+            )
+        with pytest.raises(sa.exc.IntegrityError, match="invalid SMS"):
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "UPDATE sms_challenge_dispatches SET status = 'accepted' "
+                    "WHERE challenge_id = ?",
+                    (challenge_id,),
+                )
+        with pytest.raises(sa.exc.IntegrityError, match="cannot be deleted"):
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "DELETE FROM sms_challenge_dispatches WHERE challenge_id = ?",
+                    (challenge_id,),
+                )
+        with pytest.raises(sa.exc.IntegrityError):
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "DELETE FROM login_challenges WHERE id = ?",
+                    (challenge_id,),
+                )
+
+        with engine.begin() as connection:
+            _advance_0041_dispatch(
+                connection,
+                challenge_id=recovery_id,
+                target_status="uncertain",
+            )
+            connection.exec_driver_sql(
+                "UPDATE sms_challenge_dispatches SET status = 'expired', "
+                "expired_at = ? WHERE challenge_id = ?",
+                ("2026-09-02 00:03:00+00:00", recovery_id),
+            )
+            connection.exec_driver_sql(
+                "UPDATE sms_challenge_dispatches SET status = 'accepted', "
+                "provider_reference = 'biz-recovered', accepted_at = ? "
+                "WHERE challenge_id = ?",
+                ("2026-09-02 00:04:00+00:00", recovery_id),
+            )
+        with engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT status, provider_reference, uncertain_at, expired_at, "
+                "accepted_at FROM sms_challenge_dispatches "
+                "WHERE challenge_id = ?",
+                (recovery_id,),
+            ).one() == (
+                "accepted",
+                "biz-recovered",
+                "2026-09-02 00:02:00+00:00",
+                "2026-09-02 00:03:00+00:00",
+                "2026-09-02 00:04:00+00:00",
+            )
+    finally:
+        engine.dispose()
+
+
+def test_0041_sqlite_partial_unique_indexes_block_duplicate_live_send_and_biz_id(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'sms-dispatch-unique.db'}"
+    command.upgrade(_config(database_url), HEAD_REVISION)
+    engine = sa.create_engine(database_url)
+    challenge_ids = (
+        "82000000000040008000000000000001",
+        "82000000000040008000000000000002",
+        "82000000000040008000000000000003",
+        "82000000000040008000000000000004",
+    )
+    try:
+        with engine.begin() as connection:
+            for index, challenge_id in enumerate(challenge_ids):
+                mobile_hash = "5" * 64 if index < 2 else f"{index + 5:x}" * 64
+                _insert_0041_login_challenge(
+                    connection,
+                    challenge_id=challenge_id,
+                    mobile_hash=mobile_hash,
+                    expires_at="2999-01-01 00:05:00+00:00",
+                    created_at="2026-09-02 00:00:00+00:00",
+                )
+                _insert_0041_prepared_dispatch(
+                    connection,
+                    challenge_id=challenge_id,
+                    mobile_hash=mobile_hash,
+                )
+            _advance_0041_dispatch(
+                connection,
+                challenge_id=challenge_ids[0],
+                target_status="sending",
+            )
+        with pytest.raises(sa.exc.IntegrityError, match="UNIQUE constraint"):
+            with engine.begin() as connection:
+                _advance_0041_dispatch(
+                    connection,
+                    challenge_id=challenge_ids[1],
+                    target_status="sending",
+                )
+
+        with engine.begin() as connection:
+            _advance_0041_dispatch(
+                connection,
+                challenge_id=challenge_ids[2],
+                target_status="sending",
+            )
+            connection.exec_driver_sql(
+                "UPDATE sms_challenge_dispatches SET status = 'accepted', "
+                "provider_reference = 'biz-duplicate-sentinel', accepted_at = ? "
+                "WHERE challenge_id = ?",
+                ("2026-09-02 00:02:00+00:00", challenge_ids[2]),
+            )
+            _advance_0041_dispatch(
+                connection,
+                challenge_id=challenge_ids[3],
+                target_status="sending",
+            )
+        with pytest.raises(sa.exc.IntegrityError, match="UNIQUE constraint"):
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "UPDATE sms_challenge_dispatches SET status = 'accepted', "
+                    "provider_reference = 'biz-duplicate-sentinel', "
+                    "accepted_at = ? WHERE challenge_id = ?",
+                    ("2026-09-02 00:02:00+00:00", challenge_ids[3]),
+                )
+        with engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT status FROM sms_challenge_dispatches "
+                "WHERE challenge_id = ?",
+                (challenge_ids[1],),
+            ).scalar_one() == "prepared"
+            assert connection.exec_driver_sql(
+                "SELECT status, provider_reference FROM sms_challenge_dispatches "
+                "WHERE challenge_id = ?",
+                (challenge_ids[3],),
+            ).one() == ("sending", None)
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("case", "error_match"),
+    [
+        (
+            "unexpired_without_reference",
+            "unexpired provider-managed challenge",
+        ),
+        (
+            "verified_without_reference",
+            "verified or consumed provider-managed challenge",
+        ),
+        (
+            "consumed_without_reference",
+            "verified or consumed provider-managed challenge",
+        ),
+        ("duplicate_provider_reference", "duplicate provider references"),
+        ("accepted_without_audit", "exactly one well-ordered"),
+        ("accepted_audit_before_challenge", "exactly one well-ordered"),
+        ("accepted_with_duplicate_audits", "exactly one well-ordered"),
+        ("accepted_with_malformed_audit", "exactly one well-ordered"),
+    ],
+)
+def test_0041_sqlite_upgrade_preflight_rejects_ambiguous_legacy_evidence(
+    tmp_path: Path,
+    monkeypatch,
+    case: str,
+    error_match: str,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    database_url = f"sqlite+pysqlite:///{tmp_path / f'sms-preflight-{case}.db'}"
+    config = _config(database_url)
+    command.upgrade(config, PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION)
+    engine = sa.create_engine(database_url)
+    challenge_id = "83000000000040008000000000000001"
+    try:
+        with engine.begin() as connection:
+            if case == "unexpired_without_reference":
+                _insert_0041_login_challenge(
+                    connection,
+                    challenge_id=challenge_id,
+                    mobile_hash="a" * 64,
+                    expires_at="2999-01-01 00:00:00+00:00",
+                    created_at="2026-09-02 00:00:00+00:00",
+                )
+            elif case in {
+                "verified_without_reference",
+                "consumed_without_reference",
+            }:
+                _insert_0041_login_challenge(
+                    connection,
+                    challenge_id=challenge_id,
+                    mobile_hash="a" * 64,
+                    status=case.split("_", 1)[0],
+                )
+            elif case == "duplicate_provider_reference":
+                for suffix, mobile_character in (("01", "a"), ("02", "b")):
+                    _insert_0041_login_challenge(
+                        connection,
+                        challenge_id=f"830000000000400080000000000000{suffix}",
+                        mobile_hash=mobile_character * 64,
+                        provider_reference="biz-legacy-duplicate",
+                    )
+            else:
+                _insert_0041_login_challenge(
+                    connection,
+                    challenge_id=challenge_id,
+                    mobile_hash="a" * 64,
+                    provider_reference="biz-legacy-accepted",
+                    created_at="2026-09-02 00:00:00+00:00",
+                )
+                if case == "accepted_audit_before_challenge":
+                    _insert_0041_acceptance_audit(
+                        connection,
+                        challenge_id=challenge_id,
+                        event_id="93000000000040008000000000000001",
+                        occurred_at="2026-09-01 23:59:59+00:00",
+                    )
+                elif case == "accepted_with_duplicate_audits":
+                    _insert_0041_acceptance_audit(
+                        connection,
+                        challenge_id=challenge_id,
+                        event_id="93000000000040008000000000000001",
+                        occurred_at="2026-09-02 00:00:01+00:00",
+                    )
+                    _insert_0041_acceptance_audit(
+                        connection,
+                        challenge_id=challenge_id,
+                        event_id="93000000000040008000000000000002",
+                        occurred_at="2026-09-02 00:00:02+00:00",
+                    )
+                elif case == "accepted_with_malformed_audit":
+                    _insert_0041_acceptance_audit(
+                        connection,
+                        challenge_id=challenge_id,
+                        event_id="93000000000040008000000000000001",
+                        occurred_at="2026-09-02 00:00:01+00:00",
+                        outcome="unknown",
+                    )
+    finally:
+        engine.dispose()
+
+    with pytest.raises(RuntimeError, match=error_match):
+        command.upgrade(config, HEAD_REVISION)
+    verification = sa.create_engine(database_url)
+    try:
+        assert "sms_challenge_dispatches" not in inspect(
+            verification
+        ).get_table_names()
+        with verification.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION
+    finally:
+        verification.dispose()
+
+
+def test_0041_sqlite_backfills_only_proven_legacy_facts_and_downgrades_safely(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'sms-legacy-backfill.db'}"
+    config = _config(database_url)
+    command.upgrade(config, PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION)
+    engine = sa.create_engine(database_url)
+    accepted_id = "84000000000040008000000000000001"
+    uncertain_id = "84000000000040008000000000000002"
+    no_dispatch_id = "84000000000040008000000000000003"
+    audit_id = "94000000000040008000000000000001"
+    try:
+        with engine.begin() as connection:
+            _insert_0041_login_challenge(
+                connection,
+                challenge_id=accepted_id,
+                mobile_hash="a" * 64,
+                provider_reference="biz-proven-legacy",
+                expires_at="2020-01-01 00:05:00+00:00",
+                created_at="2020-01-01 00:00:00+00:00",
+            )
+            _insert_0041_acceptance_audit(
+                connection,
+                challenge_id=accepted_id,
+                event_id=audit_id,
+                occurred_at="2020-01-01 00:00:03+00:00",
+            )
+            _insert_0041_login_challenge(
+                connection,
+                challenge_id=uncertain_id,
+                mobile_hash="b" * 64,
+                expires_at="2020-01-01 00:05:00+00:00",
+                created_at="2020-01-01 00:00:00+00:00",
+            )
+            _insert_0041_login_challenge(
+                connection,
+                challenge_id=no_dispatch_id,
+                mobile_hash="c" * 64,
+                expires_at="2020-01-01 00:05:00+00:00",
+                status="cancelled",
+                created_at="2020-01-01 00:00:00+00:00",
+            )
+            _insert_0041_no_dispatch_transition(
+                connection,
+                challenge_id=no_dispatch_id,
+                event_id="95000000000040008000000000000001",
+                reason="mobile_hour_limit",
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, HEAD_REVISION)
+    module = _load_0041_migration_module()
+    migrated = sa.create_engine(database_url)
+    try:
+        with migrated.connect() as connection:
+            rows = connection.exec_driver_sql(
+                "SELECT challenge_id, status, request_sha256, owner_token_hash, "
+                "provider_reference, claimed_at, lease_expires_at, accepted_at, "
+                "uncertain_at, expired_at, created_at "
+                "FROM sms_challenge_dispatches ORDER BY challenge_id"
+            ).all()
+            assert rows == [
+                (
+                    accepted_id,
+                    "accepted",
+                    module.LEGACY_ACCEPTED_REQUEST_SHA256,
+                    module.LEGACY_ACCEPTED_OWNER_SHA256,
+                    "biz-proven-legacy",
+                    "2020-01-01 00:00:00+00:00",
+                    "2020-01-01 00:00:03+00:00",
+                    "2020-01-01 00:00:03+00:00",
+                    None,
+                    None,
+                    "2020-01-01 00:00:00+00:00",
+                ),
+                (
+                    uncertain_id,
+                    "expired",
+                    module.LEGACY_UNCERTAIN_REQUEST_SHA256,
+                    module.LEGACY_UNCERTAIN_OWNER_SHA256,
+                    None,
+                    "2020-01-01 00:00:00+00:00",
+                    "2020-01-01 00:05:00+00:00",
+                    None,
+                    "2020-01-01 00:05:00+00:00",
+                    "2020-01-01 00:05:00+00:00",
+                    "2020-01-01 00:00:00+00:00",
+                ),
+            ]
+            assert connection.exec_driver_sql(
+                "SELECT count(*) FROM sms_challenge_dispatches "
+                "WHERE challenge_id = ?",
+                (no_dispatch_id,),
+            ).scalar_one() == 0
+    finally:
+        migrated.dispose()
+
+    command.downgrade(config, PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION)
+    downgraded = sa.create_engine(database_url)
+    try:
+        assert "sms_challenge_dispatches" not in inspect(
+            downgraded
+        ).get_table_names()
+        with downgraded.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION
+            assert connection.exec_driver_sql(
+                "SELECT count(*) FROM login_challenges"
+            ).scalar_one() == 3
+            assert connection.exec_driver_sql(
+                "SELECT count(*) FROM audit_events WHERE id = ?",
+                (audit_id,),
+            ).scalar_one() == 1
+    finally:
+        downgraded.dispose()
+
+
+@pytest.mark.parametrize(
+    "dispatch_status",
+    ["prepared", "sending", "accepted", "uncertain", "expired"],
+)
+def test_0041_sqlite_downgrade_blocks_every_nonlegacy_dispatch_state(
+    tmp_path: Path,
+    monkeypatch,
+    dispatch_status: str,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    database_url = (
+        f"sqlite+pysqlite:///{tmp_path / f'sms-downgrade-{dispatch_status}.db'}"
+    )
+    config = _config(database_url)
+    command.upgrade(config, HEAD_REVISION)
+    engine = sa.create_engine(database_url)
+    challenge_id = "85000000000040008000000000000001"
+    try:
+        with engine.begin() as connection:
+            _insert_0041_login_challenge(
+                connection,
+                challenge_id=challenge_id,
+                mobile_hash="d" * 64,
+                expires_at="2999-01-01 00:05:00+00:00",
+                created_at="2026-09-02 00:00:00+00:00",
+            )
+            _insert_0041_prepared_dispatch(
+                connection,
+                challenge_id=challenge_id,
+                mobile_hash="d" * 64,
+            )
+            _advance_0041_dispatch(
+                connection,
+                challenge_id=challenge_id,
+                target_status=dispatch_status,
+            )
+    finally:
+        engine.dispose()
+
+    with pytest.raises(RuntimeError, match="non-legacy SMS dispatch facts"):
+        command.downgrade(config, PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION)
+    verification = sa.create_engine(database_url)
+    try:
+        with verification.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == HEAD_REVISION
+            assert connection.exec_driver_sql(
+                "SELECT status FROM sms_challenge_dispatches "
+                "WHERE challenge_id = ?",
+                (challenge_id,),
+            ).scalar_one() == dispatch_status
+            assert connection.exec_driver_sql(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' "
+                "AND tbl_name = 'sms_challenge_dispatches'"
+            ).scalar_one() == 3
+    finally:
+        verification.dispose()
 
 
 def test_0040_kms_pin_table_is_constrained_immutable_and_blocks_downgrade(

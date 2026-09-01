@@ -39,12 +39,13 @@ from app.foundation_models import (
     Role,
     RoleAssignment,
     RolePermission,
+    SmsChallengeDispatch,
     StateTransitionEvent,
 )
 from app.models import AuthSession, User, WechatIdentity
 from app.routers import auth
 from app.security import hash_refresh_token
-from app.sms import SmsSendResult
+from app.sms import SmsProviderError, SmsSendResult
 from app.wechat import WechatLoginIdentity, WechatProviderError
 
 
@@ -89,7 +90,10 @@ class FakeSmsProvider:
 
     def send(self, mobile: str, out_id: str) -> SmsSendResult:
         self.send_calls.append((mobile, out_id))
-        return SmsSendResult(biz_id=f"formal-provider-biz-{len(self.send_calls):04d}")
+        return SmsSendResult(
+            biz_id=f"formal-provider-biz-{len(self.send_calls):04d}",
+            out_id=out_id,
+        )
 
     def verify(self, mobile: str, code: str, out_id: str) -> bool:
         self.verify_calls.append((mobile, code, out_id))
@@ -202,6 +206,12 @@ def api_world(monkeypatch: pytest.MonkeyPatch):
 
     sms_provider = FakeSmsProvider()
     monkeypatch.setattr(auth, "get_sms_provider", lambda: sms_provider)
+    monkeypatch.setattr(auth, "SmsDispatchSessionLocal", session_factory)
+    monkeypatch.setattr(
+        auth,
+        "_SMS_PROVIDER_CAPACITY",
+        auth.threading.BoundedSemaphore(value=2),
+    )
     authentication_response_cipher = create_authentication_response_cipher(
         environment="test",
         key_provider=StaticAuthenticationKeyProvider(
@@ -601,6 +611,7 @@ def _assert_hmac_session_ip(value: str) -> None:
 
 def _evidence_document(db: Session) -> str:
     challenges = list(db.scalars(select(LoginChallenge)))
+    dispatches = list(db.scalars(select(SmsChallengeDispatch)))
     sessions = list(db.scalars(select(AuthSession)))
     refresh_tokens = list(db.scalars(select(AuthRefreshToken)))
     audits = list(db.scalars(select(AuditEvent)))
@@ -618,6 +629,23 @@ def _evidence_document(db: Session) -> str:
                     "status": row.status,
                 }
                 for row in challenges
+            ],
+            "dispatches": [
+                {
+                    "challenge_id": row.challenge_id,
+                    "provider": row.provider,
+                    "mobile_hash": row.mobile_hash,
+                    "status": row.status,
+                    "request_sha256": row.request_sha256,
+                    "owner_token_hash": row.owner_token_hash,
+                    "provider_reference": row.provider_reference,
+                    "claimed_at": row.claimed_at,
+                    "lease_expires_at": row.lease_expires_at,
+                    "accepted_at": row.accepted_at,
+                    "uncertain_at": row.uncertain_at,
+                    "expired_at": row.expired_at,
+                }
+                for row in dispatches
             ],
             "sessions": [
                 {
@@ -788,6 +816,138 @@ def test_formal_mobile_sms_login_is_minimal_consumed_and_fully_evidenced(
         evidence = _evidence_document(db)
         for plaintext in (MOBILE, SMS_CODE, CLIENT_IP):
             assert plaintext not in evidence
+
+
+def test_sms_provider_verification_error_is_replayable_and_does_not_consume_attempt(
+    api_world: ApiWorld,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with api_world.session_factory() as db:
+        _seed_mobile_subject(db)
+
+    requested = _request_sms(
+        api_world,
+        request_id="auth-api-sms-provider-error-request-0001",
+        idempotency_key="formal-sms-provider-error-request-key-0001",
+    )
+    assert requested.status_code == 200, requested.text
+
+    def provider_error(mobile: str, code: str, out_id: str) -> bool:
+        api_world.sms_provider.verify_calls.append((mobile, code, out_id))
+        raise SmsProviderError("sensitive provider verification diagnostic")
+
+    monkeypatch.setattr(api_world.sms_provider, "verify", provider_error)
+    first = _login_sms_web(
+        api_world,
+        request_id="auth-api-sms-provider-error-first-0001",
+        idempotency_key="formal-sms-provider-error-login-key-0001",
+    )
+    replay = _login_sms_web(
+        api_world,
+        request_id="auth-api-sms-provider-error-replay-0002",
+        idempotency_key="formal-sms-provider-error-login-key-0001",
+    )
+
+    assert first.status_code == replay.status_code == 502
+    assert first.json() == replay.json() == {"detail": "短信服务暂时不可用"}
+    assert first.headers["Idempotency-Replayed"] == "false"
+    assert replay.headers["Idempotency-Replayed"] == "true"
+    assert len(api_world.sms_provider.verify_calls) == 1
+    assert "sensitive provider verification diagnostic" not in first.text
+
+    with api_world.session_factory() as db:
+        challenge = db.scalar(select(LoginChallenge))
+        assert challenge is not None
+        assert challenge.status == "pending"
+        assert challenge.attempts == 0
+        operation = db.scalar(
+            select(AuthIdempotencyOperation).where(
+                AuthIdempotencyOperation.operation_type == "sms_login"
+            )
+        )
+        assert operation is not None
+        assert operation.status == "failed"
+        assert operation.http_status == 502
+        events = list(
+            db.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.action == "authentication.sms.login_failed"
+                )
+            )
+        )
+        assert len(events) == 1
+        assert events[0].after_jsonb["reason_code"] == "provider_unavailable"
+        assert db.scalar(select(func.count()).select_from(AuthSession)) == 0
+        assert db.scalar(select(func.count()).select_from(AuthRefreshToken)) == 0
+
+
+def test_sms_provider_capacity_rejects_before_verification_attempt(
+    api_world: ApiWorld,
+) -> None:
+    with api_world.session_factory() as db:
+        _seed_mobile_subject(db)
+
+    requested = _request_sms(
+        api_world,
+        request_id="auth-api-sms-capacity-request-0001",
+        idempotency_key="formal-sms-capacity-request-key-0001",
+    )
+    assert requested.status_code == 200, requested.text
+
+    assert auth._SMS_PROVIDER_CAPACITY.acquire(blocking=False)
+    assert auth._SMS_PROVIDER_CAPACITY.acquire(blocking=False)
+    try:
+        rejected_known = _login_sms_web(
+            api_world,
+            request_id="auth-api-sms-capacity-login-0001",
+            idempotency_key="formal-sms-capacity-login-key-0001",
+        )
+        rejected_unknown = _login_sms_web(
+            api_world,
+            mobile=OTHER_MOBILE,
+            request_id="auth-api-sms-capacity-unknown-login-0002",
+            idempotency_key="formal-sms-capacity-unknown-login-key-0002",
+        )
+    finally:
+        auth._SMS_PROVIDER_CAPACITY.release()
+        auth._SMS_PROVIDER_CAPACITY.release()
+
+    assert rejected_known.status_code == rejected_unknown.status_code == 503
+    assert rejected_known.json() == rejected_unknown.json() == {
+        "detail": "短信服务暂时不可用"
+    }
+    assert api_world.sms_provider.verify_calls == []
+
+    # An unknown identity that obtains a permit must release it through the
+    # same outer finally even though it exits before challenge verification.
+    unknown = _login_sms_web(
+        api_world,
+        mobile=OTHER_MOBILE,
+        request_id="auth-api-sms-capacity-unknown-normal-0003",
+        idempotency_key="formal-sms-capacity-unknown-normal-key-0003",
+    )
+    assert unknown.status_code == 401
+    assert auth._SMS_PROVIDER_CAPACITY.acquire(blocking=False)
+    assert auth._SMS_PROVIDER_CAPACITY.acquire(blocking=False)
+    auth._SMS_PROVIDER_CAPACITY.release()
+    auth._SMS_PROVIDER_CAPACITY.release()
+
+    with api_world.session_factory() as db:
+        challenge = db.scalar(select(LoginChallenge))
+        assert challenge is not None
+        assert challenge.status == "pending"
+        assert challenge.attempts == 0
+        capacity_events = list(
+            db.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.action == "authentication.sms.login_failed",
+                    AuditEvent.after_jsonb["reason_code"].as_string()
+                    == "provider_capacity_exhausted",
+                )
+            )
+        )
+        assert len(capacity_events) == 2
+        assert db.scalar(select(func.count()).select_from(AuthSession)) == 0
 
 
 def test_sms_login_rate_rejection_precedes_idempotency_provider_and_audit(
@@ -1170,6 +1330,89 @@ def test_sms_request_idempotency_replay_does_not_send_or_append_twice(
         challenge = db.scalar(select(LoginChallenge))
         assert challenge is not None
         assert idempotency_key not in challenge.idempotency_key
+
+
+def test_sms_provider_timeout_is_uncertain_generic_and_never_resent(
+    api_world: ApiWorld,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with api_world.session_factory() as db:
+        _seed_mobile_subject(db)
+
+    def accepted_then_timed_out(mobile: str, out_id: str) -> SmsSendResult:
+        api_world.sms_provider.send_calls.append((mobile, out_id))
+        raise SmsProviderError("provider outcome is unknown")
+
+    monkeypatch.setattr(api_world.sms_provider, "send", accepted_then_timed_out)
+    key = "formal-sms-timeout-request-key-0001"
+    known = _request_sms(
+        api_world,
+        request_id="auth-api-sms-timeout-known-0001",
+        idempotency_key=key,
+    )
+    replay = _request_sms(
+        api_world,
+        request_id="auth-api-sms-timeout-replay-0002",
+        idempotency_key=key,
+    )
+    unknown = _request_sms(
+        api_world,
+        mobile=OTHER_MOBILE,
+        request_id="auth-api-sms-timeout-unknown-0003",
+        idempotency_key="formal-sms-timeout-unknown-key-0002",
+    )
+
+    assert known.status_code == replay.status_code == unknown.status_code == 200
+    assert known.json() == replay.json() == unknown.json()
+    assert len(api_world.sms_provider.send_calls) == 1
+
+    with api_world.session_factory() as db:
+        known_challenge = db.scalar(
+            select(LoginChallenge)
+            .where(LoginChallenge.mobile_hash == auth._formal_mobile_hash(MOBILE))
+            .order_by(LoginChallenge.created_at)
+        )
+        assert known_challenge is not None
+        dispatch = db.get(SmsChallengeDispatch, known_challenge.id)
+        assert dispatch is not None and dispatch.status == "uncertain"
+        assert dispatch.provider_reference is None
+        assert known_challenge.status == "pending"
+        assert known_challenge.provider_reference is None
+        assert {
+            "authentication.sms.dispatch_claimed",
+            "authentication.sms.dispatch_uncertain",
+        }.issubset({row.action for row in db.scalars(select(AuditEvent))})
+
+
+def test_sms_background_owner_never_calls_provider_after_start_window(
+    api_world: ApiWorld,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with api_world.session_factory() as db:
+        _seed_mobile_subject(db)
+    # Larger than the fresh lease: deterministic model of a background owner
+    # starting too late to finish an external call within its safety window.
+    monkeypatch.setattr(auth, "SMS_PROVIDER_CALL_GUARD_SECONDS", 60)
+
+    response = _request_sms(
+        api_world,
+        request_id="auth-api-sms-late-background-0001",
+        idempotency_key="formal-sms-late-background-key-0001",
+    )
+
+    assert response.status_code == 200
+    assert api_world.sms_provider.send_calls == []
+    with api_world.session_factory() as db:
+        dispatch = db.scalar(select(SmsChallengeDispatch))
+        assert dispatch is not None and dispatch.status == "uncertain"
+        transition = db.scalar(
+            select(StateTransitionEvent).where(
+                StateTransitionEvent.aggregate_type == "sms_dispatch",
+                StateTransitionEvent.aggregate_id == str(dispatch.challenge_id),
+                StateTransitionEvent.reason == "dispatch_start_window_elapsed",
+            )
+        )
+        assert transition is not None
 
 
 def test_kms_preflight_failure_precedes_sms_and_all_persistent_side_effects(

@@ -518,6 +518,126 @@ class LoginChallenge(CreatedAtMixin, Base):
     )
 
 
+class SmsChallengeDispatch(CreatedAtMixin, Base):
+    """Single-owner provider dispatch evidence for one SMS challenge.
+
+    ``challenge_id`` is also the exact provider ``out_id``.  A challenge can
+    therefore have at most one provider call, while its verification lifecycle
+    remains independent in ``login_challenges.status``.
+    """
+
+    __tablename__ = "sms_challenge_dispatches"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('prepared', 'sending', 'accepted', 'uncertain', 'expired')",
+            name="ck_sms_challenge_dispatches_status",
+        ),
+        CheckConstraint(
+            "length(request_sha256) = 64 AND "
+            f"length({_lower_hex_remainder('request_sha256')}) = 0",
+            name="ck_sms_challenge_dispatches_request_sha256",
+        ),
+        CheckConstraint(
+            "length(mobile_hash) = 64 AND "
+            f"length({_lower_hex_remainder('mobile_hash')}) = 0",
+            name="ck_sms_challenge_dispatches_mobile_hash",
+        ),
+        CheckConstraint(
+            "owner_token_hash IS NULL OR (length(owner_token_hash) = 64 AND "
+            f"length({_lower_hex_remainder('owner_token_hash')}) = 0)",
+            name="ck_sms_challenge_dispatches_owner_hash",
+        ),
+        CheckConstraint(
+            "(status = 'prepared' AND owner_token_hash IS NULL "
+            "AND claimed_at IS NULL AND lease_expires_at IS NULL "
+            "AND accepted_at IS NULL AND uncertain_at IS NULL AND expired_at IS NULL "
+            "AND provider_reference IS NULL) OR "
+            "(status = 'sending' AND owner_token_hash IS NOT NULL "
+            "AND claimed_at IS NOT NULL AND lease_expires_at IS NOT NULL "
+            "AND accepted_at IS NULL AND uncertain_at IS NULL AND expired_at IS NULL "
+            "AND provider_reference IS NULL) OR "
+            "(status = 'uncertain' AND owner_token_hash IS NOT NULL "
+            "AND claimed_at IS NOT NULL AND lease_expires_at IS NOT NULL "
+            "AND accepted_at IS NULL AND uncertain_at IS NOT NULL AND expired_at IS NULL "
+            "AND provider_reference IS NULL) OR "
+            "(status = 'accepted' AND owner_token_hash IS NOT NULL "
+            "AND claimed_at IS NOT NULL AND lease_expires_at IS NOT NULL "
+            "AND accepted_at IS NOT NULL AND provider_reference IS NOT NULL) OR "
+            "(status = 'expired' AND owner_token_hash IS NOT NULL "
+            "AND claimed_at IS NOT NULL AND lease_expires_at IS NOT NULL "
+            "AND accepted_at IS NULL AND uncertain_at IS NOT NULL "
+            "AND expired_at IS NOT NULL AND provider_reference IS NULL)",
+            name="ck_sms_challenge_dispatches_state_evidence",
+        ),
+        CheckConstraint(
+            "lease_expires_at IS NULL OR lease_expires_at >= claimed_at",
+            name="ck_sms_challenge_dispatches_lease_order",
+        ),
+        CheckConstraint(
+            "accepted_at IS NULL OR accepted_at >= claimed_at",
+            name="ck_sms_challenge_dispatches_accepted_order",
+        ),
+        CheckConstraint(
+            "uncertain_at IS NULL OR uncertain_at >= claimed_at",
+            name="ck_sms_challenge_dispatches_uncertain_order",
+        ),
+        CheckConstraint(
+            "expired_at IS NULL OR expired_at >= claimed_at",
+            name="ck_sms_challenge_dispatches_expired_order",
+        ),
+        Index(
+            "uq_sms_challenge_dispatches_provider_reference",
+            "provider",
+            "provider_reference",
+            unique=True,
+            postgresql_where=text("provider_reference IS NOT NULL"),
+            sqlite_where=text("provider_reference IS NOT NULL"),
+        ),
+        Index(
+            "uq_sms_challenge_dispatches_unresolved_mobile",
+            "provider",
+            "mobile_hash",
+            unique=True,
+            postgresql_where=text("status IN ('sending', 'uncertain')"),
+            sqlite_where=text("status IN ('sending', 'uncertain')"),
+        ),
+        Index(
+            "ix_sms_challenge_dispatches_unresolved_lease",
+            "status",
+            "lease_expires_at",
+        ),
+    )
+
+    challenge_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("login_challenges.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    provider: Mapped[str] = mapped_column(String(40))
+    mobile_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(24), index=True)
+    request_sha256: Mapped[str] = mapped_column(String(64))
+    owner_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider_reference: Mapped[str | None] = mapped_column(
+        String(160), nullable=True
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    uncertain_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class AuthRefreshToken(CreatedAtMixin, Base):
     __tablename__ = "auth_refresh_tokens"
     __table_args__ = (

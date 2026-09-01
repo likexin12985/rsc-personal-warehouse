@@ -52,8 +52,10 @@ OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION=1
 
 正式环境必须严格执行以下顺序，任何一步失败都停止，不得跳过 gate 直接启动 API：
 
-1. 先以 `star_oam_migrator` 执行 Alembic `upgrade head`，确认唯一 head 为
-   `20260901_0040`，只创建空的不可变 pin 账本及最小 ACL。
+1. 先关闭全部旧版短信写入口并等待未过期挑战自然到期，再以 `star_oam_migrator` 执行
+   Alembic `upgrade head`，确认唯一 head 为 `20260902_0041`。`0040` 创建空的不可变 pin
+   账本及最小 ACL；随后 `0041` 对旧短信证据执行失败关闭预检并创建单 owner dispatch 账本。
+   未过期歧义、已验证但无发送引用、重复引用或旧接受审计不完整时必须停止，禁止猜测回填。
 2. 使用准备挂载的同一份密文注册表，通过隔离的 `kms-pin-plan` 运维服务生成计划。该服务不接入
    容器网络、不接收数据库 secret，只输出非敏感坐标、密文 SHA-256、确定性
    `manifest_sha256`，不得输出密文本身。

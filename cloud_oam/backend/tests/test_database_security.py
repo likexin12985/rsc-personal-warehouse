@@ -29,6 +29,10 @@ from app.database_security import (
     EXPECTED_RECONCILIATION_CONSTRAINTS,
     EXPECTED_RECONCILIATION_PARTIAL_INDEXES,
     EXPECTED_RECONCILIATION_TRIGGERS,
+    EXPECTED_SMS_DISPATCH_COLUMNS,
+    EXPECTED_SMS_DISPATCH_CONSTRAINTS,
+    EXPECTED_SMS_DISPATCH_INDEXES,
+    EXPECTED_SMS_DISPATCH_TRIGGERS,
     EXPECTED_STOCKTAKE_RECOUNT_COLUMNS,
     EXPECTED_STOCKTAKE_RECOUNT_CONSTRAINTS,
     EXPECTED_STOCKTAKE_RECOUNT_INDEXES,
@@ -76,6 +80,7 @@ from app.database_security import (
     _assert_opening_terminal_index,
     _assert_reconciliation_schema,
     _assert_reconciliation_triggers,
+    _assert_sms_dispatch_guards,
     _assert_stocktake_recount_schema,
     _assert_stocktake_scope_triggers,
 )
@@ -124,6 +129,13 @@ NONOPENING_STOCKTAKE_CLOSE_MIGRATION_0038 = (
     / "alembic"
     / "versions"
     / "20260901_0038_nonopening_stocktake_close_reconciliation.py"
+)
+SMS_DISPATCH_MIGRATION_0041 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260902_0041_sms_dispatch_ownership.py"
 )
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
@@ -305,19 +317,25 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0038(
     }
     assert RUNTIME_READ_TABLES - set(values["API_READ_TABLES"]) == (
         safe_posting_tables
-        | {"document_attachments", "kms_data_key_pins"}
+        | {
+            "document_attachments",
+            "kms_data_key_pins",
+            "sms_challenge_dispatches",
+        }
         | material_request_read_tables
         | stocktake_close_read_tables
     )
     assert RUNTIME_INSERT_TABLES - set(values["API_INSERT_TABLES"]) == (
         safe_posting_tables
-        | {"document_attachments", "files"}
+        | {"document_attachments", "files", "sms_challenge_dispatches"}
         | material_request_insert_tables
         | stocktake_close_insert_tables
     )
     assert set(values["API_READ_TABLES"]) <= RUNTIME_READ_TABLES
     assert set(values["API_INSERT_TABLES"]) <= RUNTIME_INSERT_TABLES
-    assert set(values["API_UPDATE_TABLES"]) == RUNTIME_UPDATE_TABLES
+    assert set(values["API_UPDATE_TABLES"]) - {"login_challenges"} == (
+        RUNTIME_UPDATE_TABLES
+    )
     assert RUNTIME_DELETE_TABLES - set(values["API_DELETE_TABLES"]) == {
         "material_request_files",
         "material_request_lines",
@@ -338,6 +356,23 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0038(
         for table_name, column_names in RUNTIME_UPDATE_COLUMNS.items()
         if table_name not in base_update_columns
     } == {
+        "login_challenges": {
+            "attempts",
+            "status",
+            "provider_reference",
+            "verified_at",
+            "consumed_at",
+        },
+        "sms_challenge_dispatches": {
+            "status",
+            "owner_token_hash",
+            "provider_reference",
+            "claimed_at",
+            "lease_expires_at",
+            "accepted_at",
+            "uncertain_at",
+            "expired_at",
+        },
         "files": {"status", "metadata_jsonb"},
         "approval_external_registrations": {
             "status",
@@ -1097,6 +1132,500 @@ def test_0040_kms_data_key_pin_catalog_guard_is_exact_and_rejects_drift() -> Non
                 expected_runtime_role="star_oam_api",
                 expected_migration_role="star_oam_migrator",
             )
+
+
+def _load_sms_dispatch_migration_0041() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0041_sms_dispatch_security_manifest",
+        SMS_DISPATCH_MIGRATION_0041,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _valid_sms_dispatch_catalog() -> tuple[
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+]:
+    triggers = [
+        {
+            "trigger_name": name,
+            "table_name": expected[0],
+            "function_name": expected[1],
+            "function_schema": "public",
+            "enabled": expected[2],
+            "trigger_type": expected[3],
+            "is_constraint_trigger": False,
+            "is_deferrable": False,
+            "is_initially_deferred": False,
+            "has_when_clause": False,
+            "has_column_filter": False,
+        }
+        for name, expected in sorted(EXPECTED_SMS_DISPATCH_TRIGGERS.items())
+    ]
+    columns = [
+        {
+            "relation_kind": "r",
+            "persistence": "p",
+            "row_security": False,
+            "force_row_security": False,
+            "ordinal_position": ordinal,
+            "column_name": name,
+            "data_type": data_type,
+            "is_not_null": is_not_null,
+            "identity_kind": "",
+            "generated_kind": "",
+            "default_expression": None,
+        }
+        for ordinal, (name, data_type, is_not_null) in enumerate(
+            EXPECTED_SMS_DISPATCH_COLUMNS,
+            start=1,
+        )
+    ]
+    definitions = {
+        "ck_sms_challenge_dispatches_status": (
+            "CHECK (status IN ('prepared', 'sending', 'accepted', "
+            "'uncertain', 'expired'))"
+        ),
+        "ck_sms_challenge_dispatches_request_sha256": (
+            "CHECK (length(request_sha256) = 64)"
+        ),
+        "ck_sms_challenge_dispatches_mobile_hash": (
+            "CHECK (length(mobile_hash) = 64)"
+        ),
+        "ck_sms_challenge_dispatches_owner_hash": (
+            "CHECK (owner_token_hash IS NULL OR length(owner_token_hash) = 64)"
+        ),
+        "ck_sms_challenge_dispatches_state_evidence": (
+            "CHECK ((status = 'prepared' AND owner_token_hash IS NULL "
+            "AND claimed_at IS NULL AND lease_expires_at IS NULL "
+            "AND accepted_at IS NULL AND uncertain_at IS NULL "
+            "AND expired_at IS NULL AND provider_reference IS NULL) OR "
+            "(status = 'sending' AND owner_token_hash IS NOT NULL "
+            "AND claimed_at IS NOT NULL AND lease_expires_at IS NOT NULL "
+            "AND accepted_at IS NULL AND uncertain_at IS NULL "
+            "AND expired_at IS NULL AND provider_reference IS NULL) OR "
+            "(status = 'uncertain' AND owner_token_hash IS NOT NULL "
+            "AND claimed_at IS NOT NULL AND lease_expires_at IS NOT NULL "
+            "AND accepted_at IS NULL AND uncertain_at IS NOT NULL "
+            "AND expired_at IS NULL AND provider_reference IS NULL) OR "
+            "(status = 'accepted' AND owner_token_hash IS NOT NULL "
+            "AND claimed_at IS NOT NULL AND lease_expires_at IS NOT NULL "
+            "AND accepted_at IS NOT NULL "
+            "AND provider_reference IS NOT NULL) OR "
+            "(status = 'expired' AND owner_token_hash IS NOT NULL "
+            "AND claimed_at IS NOT NULL AND lease_expires_at IS NOT NULL "
+            "AND accepted_at IS NULL AND uncertain_at IS NOT NULL "
+            "AND expired_at IS NOT NULL AND provider_reference IS NULL))"
+        ),
+        "ck_sms_challenge_dispatches_lease_order": (
+            "CHECK (lease_expires_at IS NULL OR lease_expires_at >= claimed_at)"
+        ),
+        "ck_sms_challenge_dispatches_accepted_order": (
+            "CHECK (accepted_at IS NULL OR accepted_at >= claimed_at)"
+        ),
+        "ck_sms_challenge_dispatches_uncertain_order": (
+            "CHECK (uncertain_at IS NULL OR uncertain_at >= claimed_at)"
+        ),
+        "ck_sms_challenge_dispatches_expired_order": (
+            "CHECK (expired_at IS NULL OR expired_at >= claimed_at)"
+        ),
+        "pk_sms_challenge_dispatches_0041": (
+            "PRIMARY KEY (challenge_id)"
+        ),
+        "fk_sms_challenge_dispatches_challenge_0041": (
+            "FOREIGN KEY (challenge_id) REFERENCES login_challenges(id) "
+            "ON DELETE RESTRICT"
+        ),
+    }
+    constraints = [
+        {
+            "constraint_name": name,
+            "constraint_type": constraint_type,
+            "is_validated": True,
+            "is_deferrable": False,
+            "is_initially_deferred": False,
+            "is_no_inherit": False,
+            "is_local": True,
+            "inheritance_count": 0,
+            "parent_constraint_id": 0,
+            "definition": definitions[name],
+            "constrained_columns": (
+                ["challenge_id"] if constraint_type in {"p", "f"} else []
+            ),
+            "referenced_table": (
+                "login_challenges" if constraint_type == "f" else None
+            ),
+            "referenced_columns": (
+                ["id"] if constraint_type == "f" else []
+            ),
+            "delete_action": "r" if constraint_type == "f" else " ",
+        }
+        for name, constraint_type in sorted(
+            EXPECTED_SMS_DISPATCH_CONSTRAINTS.items()
+        )
+    ]
+    indexes = [
+        {
+            "index_name": name,
+            "owner_name": "star_oam_migrator",
+            "access_method": "btree",
+            "is_unique": expected["unique"],
+            "is_primary": expected["primary"],
+            "is_exclusion": False,
+            "is_immediate": True,
+            "is_valid": True,
+            "is_ready": True,
+            "is_live": True,
+            "nulls_not_distinct": False,
+            "key_attribute_count": len(expected["columns"]),
+            "total_attribute_count": len(expected["columns"]),
+            "has_expressions": False,
+            "key_columns": list(expected["columns"]),
+            "predicate": (
+                "status IN ('sending', 'uncertain')"
+                if expected.get("predicate_literals") is not None
+                else expected.get("predicate")
+            ),
+        }
+        for name, expected in sorted(EXPECTED_SMS_DISPATCH_INDEXES.items())
+    ]
+    acl_common = {
+        "owner_name": "star_oam_migrator",
+        "backup_role_exists": True,
+        "edge_role_exists": True,
+        "is_grantable": False,
+    }
+    table_acl = [
+        {
+            **acl_common,
+            "grantee_name": "star_oam_api",
+            "privilege_type": "INSERT",
+        },
+        {
+            **acl_common,
+            "grantee_name": "star_oam_api",
+            "privilege_type": "SELECT",
+        },
+        {
+            **acl_common,
+            "grantee_name": "star_oam_backup",
+            "privilege_type": "SELECT",
+        },
+    ]
+    column_acl = [
+        {
+            **acl_common,
+            "column_name": column_name,
+            "grantee_name": "star_oam_api",
+            "privilege_type": "UPDATE",
+        }
+        for column_name in sorted(
+            RUNTIME_UPDATE_COLUMNS["sms_challenge_dispatches"]
+        )
+    ]
+    return triggers, columns, constraints, indexes, table_acl, column_acl
+
+
+def test_0041_sms_dispatch_manifest_guard_body_and_acl_are_exact() -> None:
+    migration = _load_sms_dispatch_migration_0041()
+    assert migration.down_revision == "20260901_0040"
+    coordinate = (migration.PG_GUARD_FUNCTION, "")
+    function_sql = migration._postgresql_guard_function_sql()
+    function_body = function_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    expected_hash = "42201b13bb8998ea8522b190bfed67bbc7faab4c7bc355b4a7f5c2c13cd59993"
+    assert hashlib.sha256(function_body.encode("utf-8")).hexdigest() == (
+        expected_hash
+    )
+    assert FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate] == expected_hash
+    assert FORMAL_FILE_INTERNAL_FUNCTIONS[coordinate] == (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    )
+    assert FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[coordinate] == (
+        "f",
+        "trigger",
+        False,
+    )
+    assert coordinate not in RUNTIME_EXECUTE_FUNCTIONS
+
+    assert migration.TABLE_NAME in RUNTIME_READ_TABLES
+    assert migration.TABLE_NAME in RUNTIME_INSERT_TABLES
+    assert migration.TABLE_NAME not in RUNTIME_UPDATE_TABLES
+    assert migration.TABLE_NAME not in RUNTIME_DELETE_TABLES
+    assert RUNTIME_UPDATE_COLUMNS[migration.TABLE_NAME] == {
+        "status",
+        "owner_token_hash",
+        "provider_reference",
+        "claimed_at",
+        "lease_expires_at",
+        "accepted_at",
+        "uncertain_at",
+        "expired_at",
+    }
+    source = SMS_DISPATCH_MIGRATION_0041.read_text(encoding="utf-8")
+    assert source.count("REVOKE EXECUTE ON FUNCTION") == 4
+    assert "GRANT EXECUTE ON FUNCTION" not in source
+    assert (
+        "GRANT SELECT, INSERT ON TABLE public.{TABLE_NAME} "
+        "TO {PRODUCTION_API_ROLE}"
+    ) in source
+    assert (
+        "GRANT UPDATE ({dispatch_update_columns}) ON TABLE "
+        "public.{TABLE_NAME} TO {PRODUCTION_API_ROLE}"
+    ) in source
+
+
+def test_0041_sms_dispatch_catalog_guard_rejects_each_drift() -> None:
+    (
+        triggers,
+        columns,
+        constraints,
+        indexes,
+        table_acl,
+        column_acl,
+    ) = _valid_sms_dispatch_catalog()
+    _assert_sms_dispatch_guards(
+        triggers=triggers,
+        columns=columns,
+        constraints=constraints,
+        indexes=indexes,
+        table_acl=table_acl,
+        column_acl=column_acl,
+        expected_runtime_role="star_oam_api",
+        expected_migration_role="star_oam_migrator",
+    )
+
+    mutations = (
+        ("triggers", 0, "enabled", "O"),
+        ("triggers", 1, "function_schema", "attacker"),
+        ("columns", 0, "ordinal_position", 2),
+        ("columns", 4, "data_type", "text"),
+        ("columns", 5, "is_not_null", True),
+        (
+            "constraints",
+            next(
+                index
+                for index, row in enumerate(constraints)
+                if row["constraint_name"]
+                == "ck_sms_challenge_dispatches_status"
+            ),
+            "definition",
+            "CHECK (status = 'prepared')",
+        ),
+        (
+            "constraints",
+            next(
+                index
+                for index, row in enumerate(constraints)
+                if row["constraint_name"]
+                == "fk_sms_challenge_dispatches_challenge_0041"
+            ),
+            "delete_action",
+            "c",
+        ),
+        ("indexes", 0, "owner_name", "star_oam_api"),
+        (
+            "indexes",
+            next(
+                index
+                for index, row in enumerate(indexes)
+                if row["index_name"]
+                == "uq_sms_challenge_dispatches_provider_reference"
+            ),
+            "predicate",
+            "provider_reference IS NULL",
+        ),
+        (
+            "indexes",
+            next(
+                index
+                for index, row in enumerate(indexes)
+                if row["index_name"]
+                == "uq_sms_challenge_dispatches_unresolved_mobile"
+            ),
+            "predicate",
+            "status IN ('sending', 'uncertain', 'prepared')",
+        ),
+        ("table_acl", 0, "owner_name", "star_oam_api"),
+        ("table_acl", 0, "grantee_name", "star_oam_edge"),
+        ("table_acl", 0, "is_grantable", True),
+        ("column_acl", 0, "column_name", "request_sha256"),
+        ("column_acl", 0, "grantee_name", "PUBLIC"),
+        ("column_acl", 0, "privilege_type", "SELECT"),
+        ("column_acl", 0, "is_grantable", True),
+    )
+    collection_names = (
+        "triggers",
+        "columns",
+        "constraints",
+        "indexes",
+        "table_acl",
+        "column_acl",
+    )
+    for collection_name, row_index, field, value in mutations:
+        current = _valid_sms_dispatch_catalog()
+        collections = dict(zip(collection_names, current))
+        collections[collection_name][row_index][field] = value
+        with pytest.raises(DatabaseSecurityBoundaryError, match="SMS dispatch"):
+            _assert_sms_dispatch_guards(
+                triggers=collections["triggers"],
+                columns=collections["columns"],
+                constraints=collections["constraints"],
+                indexes=collections["indexes"],
+                table_acl=collections["table_acl"],
+                column_acl=collections["column_acl"],
+                expected_runtime_role="star_oam_api",
+                expected_migration_role="star_oam_migrator",
+            )
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        "status NOT IN ('sending', 'uncertain')",
+        "status IN ('sending', 'uncertain') OR TRUE",
+        "status IN ('uncertain', 'sending')",
+        "ANY (ARRAY['sending', 'uncertain']) = status",
+        "'sending' = status OR status = 'uncertain'",
+        "status IN ('sending', 'uncertain', 'prepared')",
+        (
+            "status IN ('sending', 'uncertain') "
+            "AND lease_expires_at > now()"
+        ),
+    ],
+)
+def test_0041_sms_dispatch_unresolved_predicate_rejects_semantic_drift(
+    predicate: str,
+) -> None:
+    catalog = _valid_sms_dispatch_catalog()
+    unresolved = next(
+        row
+        for row in catalog[3]
+        if row["index_name"]
+        == "uq_sms_challenge_dispatches_unresolved_mobile"
+    )
+    unresolved["predicate"] = predicate
+    with pytest.raises(DatabaseSecurityBoundaryError, match="SMS dispatch"):
+        _assert_sms_dispatch_guards(
+            triggers=catalog[0],
+            columns=catalog[1],
+            constraints=catalog[2],
+            indexes=catalog[3],
+            table_acl=catalog[4],
+            column_acl=catalog[5],
+            expected_runtime_role="star_oam_api",
+            expected_migration_role="star_oam_migrator",
+        )
+
+
+def test_0041_sms_dispatch_unresolved_predicate_accepts_postgresql_any_form(
+) -> None:
+    catalog = _valid_sms_dispatch_catalog()
+    unresolved = next(
+        row
+        for row in catalog[3]
+        if row["index_name"]
+        == "uq_sms_challenge_dispatches_unresolved_mobile"
+    )
+    unresolved["predicate"] = (
+        "(status)::text = ANY ((ARRAY['sending'::character varying, "
+        "'uncertain'::character varying])::text[])"
+    )
+    _assert_sms_dispatch_guards(
+        triggers=catalog[0],
+        columns=catalog[1],
+        constraints=catalog[2],
+        indexes=catalog[3],
+        table_acl=catalog[4],
+        column_acl=catalog[5],
+        expected_runtime_role="star_oam_api",
+        expected_migration_role="star_oam_migrator",
+    )
+
+
+def test_0041_sms_dispatch_acl_rejects_missing_and_excess_grants() -> None:
+    for collection_index in (4, 5):
+        catalog = _valid_sms_dispatch_catalog()
+        catalog[collection_index].pop()
+        with pytest.raises(DatabaseSecurityBoundaryError, match="SMS dispatch"):
+            _assert_sms_dispatch_guards(
+                triggers=catalog[0],
+                columns=catalog[1],
+                constraints=catalog[2],
+                indexes=catalog[3],
+                table_acl=catalog[4],
+                column_acl=catalog[5],
+                expected_runtime_role="star_oam_api",
+                expected_migration_role="star_oam_migrator",
+            )
+
+    catalog = _valid_sms_dispatch_catalog()
+    catalog[4].append(
+        {
+            **catalog[4][0],
+            "grantee_name": "star_oam_edge",
+            "privilege_type": "SELECT",
+        }
+    )
+    with pytest.raises(DatabaseSecurityBoundaryError, match="SMS dispatch"):
+        _assert_sms_dispatch_guards(
+            triggers=catalog[0],
+            columns=catalog[1],
+            constraints=catalog[2],
+            indexes=catalog[3],
+            table_acl=catalog[4],
+            column_acl=catalog[5],
+            expected_runtime_role="star_oam_api",
+            expected_migration_role="star_oam_migrator",
+        )
+
+    catalog = _valid_sms_dispatch_catalog()
+    catalog[5].append(
+        {
+            **catalog[5][0],
+            "grantee_name": "star_oam_backup",
+        }
+    )
+    with pytest.raises(DatabaseSecurityBoundaryError, match="SMS dispatch"):
+        _assert_sms_dispatch_guards(
+            triggers=catalog[0],
+            columns=catalog[1],
+            constraints=catalog[2],
+            indexes=catalog[3],
+            table_acl=catalog[4],
+            column_acl=catalog[5],
+            expected_runtime_role="star_oam_api",
+            expected_migration_role="star_oam_migrator",
+        )
+
+
+def test_0041_sms_dispatch_acl_allows_absent_optional_roles() -> None:
+    catalog = _valid_sms_dispatch_catalog()
+    catalog[4][:] = [
+        row for row in catalog[4] if row["grantee_name"] != "star_oam_backup"
+    ]
+    for row in [*catalog[4], *catalog[5]]:
+        row["backup_role_exists"] = False
+        row["edge_role_exists"] = False
+    _assert_sms_dispatch_guards(
+        triggers=catalog[0],
+        columns=catalog[1],
+        constraints=catalog[2],
+        indexes=catalog[3],
+        table_acl=catalog[4],
+        column_acl=catalog[5],
+        expected_runtime_role="star_oam_api",
+        expected_migration_role="star_oam_migrator",
+    )
 
 
 def test_formal_file_catalog_guard_is_exact_and_rejects_drift() -> None:

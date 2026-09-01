@@ -127,7 +127,12 @@
   旧审计缺少该证据时失败关闭，不猜测或改写旧事实。`0040` 新增不可变
   `kms_data_key_pins` 账本，只保存用途、KMS Key ID、应用版本、KMS KeyVersionId 和
   `CiphertextBlob` SHA-256；API/备份身份只读，迁移身份仅可在双人复核后执行普通 `INSERT`，
-  数据库触发器拒绝 update/delete/truncate，存在 pin 或加密引用时拒绝降级。
+  数据库触发器拒绝 update/delete/truncate，存在 pin 或加密引用时拒绝降级。`0041` 为每个正式
+  短信挑战新增独立 `sms_challenge_dispatches` 单 owner 事实，将 `prepared`、`sending`、
+  `accepted`、`uncertain`、`expired` 与挑战验证状态分离；升级只回填具有精确旧审计证据的已接受发送及已过期
+  不确定事实，未过期歧义、重复 provider reference 或不可证明历史一律阻断。PostgreSQL 使用
+  `ENABLE ALWAYS` 行/清空触发器、部分唯一索引和最小列级更新 ACL，运行时启动再核验完整目录与
+  guard 函数体指纹；存在任何新格式 dispatch 事实时拒绝降级。
 - 数据库只初始化固定正式角色及由各迁移显式声明的权限与角色授权映射。`0026` 新增
   `reconciliation/read`、`create_opening`、`explain_opening`、`approve_opening` 四个权限：总部管理员可读取、
   创建和批准，省负责人只可读取并解释本区域全量差异。不初始化用户、
@@ -205,10 +210,18 @@
   HMAC secret 或窗口长度变更在旧窗口仍活跃时失败关闭，避免静默获得第二份额度。
 - 当前验证码 provider 使用号码认证服务 `dypnsapi` 的 PNVS 接口，不是标准
   `dysmsapi`。用户已购买的 1000 条标准短信套餐不当然兼容；套餐所属产品、适用 API、签名、
-  模板、有效期及计费口径未以非敏感证据确认前，生产短信保持关闭。现有短信挑战尚未实现
-  `sending -> accepted/uncertain` 的原子 dispatch ownership/租约；PNVS 是否按同一 `out_id`
-  严格去重也未以真实沙箱证据确认，因此并发发送和“provider 已接受但本地未标记”崩溃窗口仍是
-  P1 投产阻断。
+  模板、有效期及计费口径未以非敏感证据确认前，生产短信保持关闭。本地源码现已实现 `0041`
+  单 owner dispatch、租约/迟到调用门禁、跨 Web/小程序的同手机号未决阻断，以及
+  `accepted/uncertain` 独立审计；发送与校验均禁用 SDK 自动重试，并要求 `Success=true`、
+  `Code=OK`、`OutId` 精确回显，发送还必须取得非空 `BizId`。网络调用在 HTTP 响应发送后执行，
+  校验结果只接受 SDK 的 `PASS`（通过）与 `UNKNOWN`（错码），其他响应均不消耗尝试次数。发送调用前
+  以 challenge+dispatch 双行锁重证 owner、租约和有效期，直到结果提交前禁止过期替换超车；发送使用
+  独立无 overflow 数据库池，发送和校验共用每进程默认 `2` 个 provider permit，校验在身份判断前获取，
+  超载时已知/未知手机号返回同一脱敏结果。未决发送复用原挑战且零新增写，频控窗口只保存首条拒绝证据，
+  后续新幂等键不会放大挑战、状态或审计行。
+  `OutId` 只是关联字段，不作为 provider 幂等证明；provider 已接受但数据库提交失败时保持
+  `uncertain` 且禁止自动重发。正式启用仍须完成真实 PostgreSQL 16 并发/进程中断测试、PNVS
+  隔离号码联调、回执对账恢复、backup/edge 间接角色继承的有效权限门禁，以及套餐/API/签名/模板/计费兼容确认。
 - 正式短信登录在挑战/provider 阶段不锁全局认证审计链头；会话、刷新令牌和挑战状态完成后
   才按事实顺序追加挑战与会话审计，锁序与 refresh/logout 统一为业务行在前、审计链在后。
   Web refresh 的新鲜或缓存 `401` 会用两个独立 `Set-Cookie` 同时清除 access/refresh；Web
@@ -325,7 +338,7 @@
   解密和 live/ready 单飞 TTL 健康门已在本地源码实现；这不等于生产 KMS 已可用。首管理员稳定
   ID 双签开通清单、正式身份激活工具、身份哈希密钥轮换流程、真实 KMS 数据密钥与 ECS RAM
   最小权限、`0040` pin 双人受控落库、外部审批字段白名单、PostgreSQL 16 真实迁移/并发、
-  WAF/ALB 前置限流、微信 code 兑换后的不确定结果恢复、短信 dispatch ownership/提供方幂等契约、真实附件/身份 UAT，以及过期认证
+  WAF/ALB 前置限流、微信 code 兑换后的不确定结果恢复、短信 provider 回执恢复/外部幂等证据、真实附件/身份 UAT，以及过期认证
   密文的保留与不可复用 tombstone 策略仍未完成，因此当前阶段仍不得启用正式账号或部署生产。
 - `0027` 已在本地源码中以迁移所有者精确图锁收口既有期初启动、实盘、观察处置、复核、复盘和过账
   服务对仅授 `SELECT/INSERT` 的不可变事实或主数据发起非法 `FOR UPDATE` 的问题；调用侧改为先锁固定图、
@@ -448,7 +461,7 @@ Decrypt 探针，旧 `/api/health` 是 readiness 兼容别名。Compose/ALB 使�
 ## 后续开发顺序
 
 1. 完成首管理员稳定 ID 双签开通清单、正式身份激活与 hash 密钥轮换、真实 KMS/RAM、
-   `0040` pin 双签落库、WAF/ALB 前置限流、文件存储生产凭据、字段级授权和 PostgreSQL
+   `0040` pin 双签落库、`0041` 短信迁移与中断矩阵、WAF/ALB 前置限流、文件存储生产凭据、字段级授权和 PostgreSQL
    认证并发测试；随后完成 OAM 只读投影任务和
    同步健康/对账，但不得扩大为 OAM 写入。
 2. 对已经完成本地正式路由的一期需求提报/三级审批/安全取消，以及期初和非期初盘点的实盘、
@@ -456,7 +469,7 @@ Decrypt 探针，旧 `/api/health` 是 readiness 兼容别名。Compose/ALB 使�
    降级阻断、备份恢复和迁移演练；补齐 PC 受控任务启动、大数据量列表/对账读取性能和
    全局锁序审查，完成追踪策略防重叠约束及
    真实身份、附件上传、需求处理和盘点 UAT 后才可申请预生产发布。启用撤回/取消恢复哨兵时，
-   必须先完成全部后端实例的 `0040`（包含 `0039`）迁移、KMS pin gate 与新版代码切换，
+   必须先完成全部后端实例的 `0041`（包含 `0039`、`0040`）迁移、KMS pin gate 与新版代码切换，
    再发布 PC/小程序客户端；
    禁止在滚动窗口先放出客户端，以免新取消事实缺少可恢复的审计顺序证据。
 3. 在已批准需求之后建立缺货处置、审批代理及安全补偿机制，再建立多来源分配与占用/释放；
