@@ -60,6 +60,7 @@ from app.database_security import (
     _RECONCILIATION_CONSTRAINT_SQL,
     _RECONCILIATION_PARTIAL_INDEX_SQL,
     _RECONCILIATION_TRIGGER_SQL,
+    _SMS_DISPATCH_ROLE_ACCESS_SQL,
     _STOCKTAKE_RECOUNT_TRIGGER_SQL,
     _STOCKTAKE_SCOPE_TRIGGER_SQL,
     _STOCKTAKE_SENSITIVE_TRIGGER_SQL,
@@ -1152,6 +1153,7 @@ def _valid_sms_dispatch_catalog() -> tuple[
     list[dict[str, object]],
     list[dict[str, object]],
     list[dict[str, object]],
+    list[dict[str, object]],
 ]:
     triggers = [
         {
@@ -1330,7 +1332,61 @@ def _valid_sms_dispatch_catalog() -> tuple[
             RUNTIME_UPDATE_COLUMNS["sms_challenge_dispatches"]
         )
     ]
-    return triggers, columns, constraints, indexes, table_acl, column_acl
+    role_access_common = {
+        "role_inherits": True,
+        "can_select": False,
+        "can_write": False,
+        "is_member_of_any_role": False,
+        "has_any_nonsuper_member": False,
+        "can_set_select_role": False,
+        "can_set_write_role": False,
+        "can_admin_select_role": False,
+        "can_admin_write_role": False,
+        "inherited_by_other_role": False,
+        "settable_by_other_role": False,
+        "administered_by_other_role": False,
+        "capability_role_has_admin_member": False,
+    }
+    role_access = [
+        {
+            **role_access_common,
+            "role_label": "backup",
+            "role_name": "star_oam_backup",
+            "role_exists": True,
+            "can_select": True,
+        },
+        {
+            **role_access_common,
+            "role_label": "edge",
+            "role_name": "star_oam_edge",
+            "role_exists": True,
+        },
+        {
+            **role_access_common,
+            "role_label": "migration",
+            "role_name": "star_oam_migrator",
+            "role_exists": True,
+            "can_select": True,
+            "can_write": True,
+        },
+        {
+            **role_access_common,
+            "role_label": "runtime",
+            "role_name": "star_oam_api",
+            "role_exists": True,
+            "can_select": True,
+            "can_write": True,
+        },
+    ]
+    return (
+        triggers,
+        columns,
+        constraints,
+        indexes,
+        table_acl,
+        column_acl,
+        role_access,
+    )
 
 
 def test_0041_sms_dispatch_manifest_guard_body_and_acl_are_exact() -> None:
@@ -1392,6 +1448,7 @@ def test_0041_sms_dispatch_catalog_guard_rejects_each_drift() -> None:
         indexes,
         table_acl,
         column_acl,
+        role_access,
     ) = _valid_sms_dispatch_catalog()
     _assert_sms_dispatch_guards(
         triggers=triggers,
@@ -1400,6 +1457,7 @@ def test_0041_sms_dispatch_catalog_guard_rejects_each_drift() -> None:
         indexes=indexes,
         table_acl=table_acl,
         column_acl=column_acl,
+        role_access=role_access,
         expected_runtime_role="star_oam_api",
         expected_migration_role="star_oam_migrator",
     )
@@ -1462,6 +1520,8 @@ def test_0041_sms_dispatch_catalog_guard_rejects_each_drift() -> None:
         ("column_acl", 0, "grantee_name", "PUBLIC"),
         ("column_acl", 0, "privilege_type", "SELECT"),
         ("column_acl", 0, "is_grantable", True),
+        ("role_access", 0, "role_name", "attacker"),
+        ("role_access", 0, "can_write", True),
     )
     collection_names = (
         "triggers",
@@ -1470,6 +1530,7 @@ def test_0041_sms_dispatch_catalog_guard_rejects_each_drift() -> None:
         "indexes",
         "table_acl",
         "column_acl",
+        "role_access",
     )
     for collection_name, row_index, field, value in mutations:
         current = _valid_sms_dispatch_catalog()
@@ -1483,6 +1544,7 @@ def test_0041_sms_dispatch_catalog_guard_rejects_each_drift() -> None:
                 indexes=collections["indexes"],
                 table_acl=collections["table_acl"],
                 column_acl=collections["column_acl"],
+                role_access=collections["role_access"],
                 expected_runtime_role="star_oam_api",
                 expected_migration_role="star_oam_migrator",
             )
@@ -1522,6 +1584,7 @@ def test_0041_sms_dispatch_unresolved_predicate_rejects_semantic_drift(
             indexes=catalog[3],
             table_acl=catalog[4],
             column_acl=catalog[5],
+            role_access=catalog[6],
             expected_runtime_role="star_oam_api",
             expected_migration_role="star_oam_migrator",
         )
@@ -1547,6 +1610,7 @@ def test_0041_sms_dispatch_unresolved_predicate_accepts_postgresql_any_form(
         indexes=catalog[3],
         table_acl=catalog[4],
         column_acl=catalog[5],
+        role_access=catalog[6],
         expected_runtime_role="star_oam_api",
         expected_migration_role="star_oam_migrator",
     )
@@ -1564,6 +1628,7 @@ def test_0041_sms_dispatch_acl_rejects_missing_and_excess_grants() -> None:
                 indexes=catalog[3],
                 table_acl=catalog[4],
                 column_acl=catalog[5],
+                role_access=catalog[6],
                 expected_runtime_role="star_oam_api",
                 expected_migration_role="star_oam_migrator",
             )
@@ -1584,6 +1649,7 @@ def test_0041_sms_dispatch_acl_rejects_missing_and_excess_grants() -> None:
             indexes=catalog[3],
             table_acl=catalog[4],
             column_acl=catalog[5],
+            role_access=catalog[6],
             expected_runtime_role="star_oam_api",
             expected_migration_role="star_oam_migrator",
         )
@@ -1603,6 +1669,7 @@ def test_0041_sms_dispatch_acl_rejects_missing_and_excess_grants() -> None:
             indexes=catalog[3],
             table_acl=catalog[4],
             column_acl=catalog[5],
+            role_access=catalog[6],
             expected_runtime_role="star_oam_api",
             expected_migration_role="star_oam_migrator",
         )
@@ -1616,6 +1683,11 @@ def test_0041_sms_dispatch_acl_allows_absent_optional_roles() -> None:
     for row in [*catalog[4], *catalog[5]]:
         row["backup_role_exists"] = False
         row["edge_role_exists"] = False
+    for row in catalog[6]:
+        if row["role_label"] in {"backup", "edge"}:
+            row["role_exists"] = False
+            row["role_inherits"] = False
+            row["can_select"] = False
     _assert_sms_dispatch_guards(
         triggers=catalog[0],
         columns=catalog[1],
@@ -1623,9 +1695,184 @@ def test_0041_sms_dispatch_acl_allows_absent_optional_roles() -> None:
         indexes=catalog[3],
         table_acl=catalog[4],
         column_acl=catalog[5],
+        role_access=catalog[6],
         expected_runtime_role="star_oam_api",
         expected_migration_role="star_oam_migrator",
     )
+
+
+@pytest.mark.parametrize(
+    ("role_label", "field"),
+    [
+        ("backup", "can_write"),
+        ("backup", "is_member_of_any_role"),
+        ("backup", "has_any_nonsuper_member"),
+        ("backup", "can_set_select_role"),
+        ("backup", "can_set_write_role"),
+        ("backup", "can_admin_select_role"),
+        ("backup", "can_admin_write_role"),
+        ("backup", "inherited_by_other_role"),
+        ("backup", "settable_by_other_role"),
+        ("backup", "administered_by_other_role"),
+        ("edge", "can_select"),
+        ("edge", "can_write"),
+        ("edge", "is_member_of_any_role"),
+        ("edge", "can_set_select_role"),
+        ("edge", "can_set_write_role"),
+        ("edge", "can_admin_select_role"),
+        ("edge", "can_admin_write_role"),
+        ("runtime", "inherited_by_other_role"),
+        ("runtime", "is_member_of_any_role"),
+        ("runtime", "has_any_nonsuper_member"),
+        ("runtime", "settable_by_other_role"),
+        ("runtime", "can_set_select_role"),
+        ("runtime", "can_set_write_role"),
+        ("runtime", "can_admin_select_role"),
+        ("runtime", "can_admin_write_role"),
+        ("runtime", "administered_by_other_role"),
+        ("migration", "inherited_by_other_role"),
+        ("migration", "is_member_of_any_role"),
+        ("migration", "has_any_nonsuper_member"),
+        ("migration", "settable_by_other_role"),
+        ("migration", "can_set_select_role"),
+        ("migration", "can_set_write_role"),
+        ("migration", "can_admin_select_role"),
+        ("migration", "can_admin_write_role"),
+        ("migration", "administered_by_other_role"),
+        ("edge", "capability_role_has_admin_member"),
+    ],
+)
+def test_0041_sms_dispatch_effective_role_access_rejects_closure_drift(
+    role_label: str,
+    field: str,
+) -> None:
+    catalog = _valid_sms_dispatch_catalog()
+    role_row = next(
+        row for row in catalog[6] if row["role_label"] == role_label
+    )
+    role_row[field] = True
+    with pytest.raises(DatabaseSecurityBoundaryError, match="SMS dispatch"):
+        _assert_sms_dispatch_guards(
+            triggers=catalog[0],
+            columns=catalog[1],
+            constraints=catalog[2],
+            indexes=catalog[3],
+            table_acl=catalog[4],
+            column_acl=catalog[5],
+            role_access=catalog[6],
+            expected_runtime_role="star_oam_api",
+            expected_migration_role="star_oam_migrator",
+        )
+
+
+def test_0041_sms_dispatch_effective_role_access_allows_safe_noinherit(
+) -> None:
+    catalog = _valid_sms_dispatch_catalog()
+    for row in catalog[6]:
+        if row["role_label"] in {"backup", "edge"}:
+            row["role_inherits"] = False
+    _assert_sms_dispatch_guards(
+        triggers=catalog[0],
+        columns=catalog[1],
+        constraints=catalog[2],
+        indexes=catalog[3],
+        table_acl=catalog[4],
+        column_acl=catalog[5],
+        role_access=catalog[6],
+        expected_runtime_role="star_oam_api",
+        expected_migration_role="star_oam_migrator",
+    )
+
+
+def test_0041_sms_dispatch_effective_role_access_rejects_admin_only_path(
+) -> None:
+    catalog = _valid_sms_dispatch_catalog()
+    edge = next(
+        row for row in catalog[6] if row["role_label"] == "edge"
+    )
+    backup = next(
+        row for row in catalog[6] if row["role_label"] == "backup"
+    )
+    edge["role_inherits"] = False
+    edge["can_set_select_role"] = False
+    edge["can_set_write_role"] = False
+    edge["is_member_of_any_role"] = True
+    edge["can_admin_select_role"] = True
+    backup["has_any_nonsuper_member"] = True
+    with pytest.raises(DatabaseSecurityBoundaryError, match="SMS dispatch"):
+        _assert_sms_dispatch_guards(
+            triggers=catalog[0],
+            columns=catalog[1],
+            constraints=catalog[2],
+            indexes=catalog[3],
+            table_acl=catalog[4],
+            column_acl=catalog[5],
+            role_access=catalog[6],
+            expected_runtime_role="star_oam_api",
+            expected_migration_role="star_oam_migrator",
+    )
+
+
+def test_0041_sms_dispatch_effective_role_access_rejects_mixed_member_path(
+) -> None:
+    catalog = _valid_sms_dispatch_catalog()
+    edge = next(
+        row for row in catalog[6] if row["role_label"] == "edge"
+    )
+    backup = next(
+        row for row in catalog[6] if row["role_label"] == "backup"
+    )
+    edge["role_inherits"] = False
+    edge["is_member_of_any_role"] = True
+    backup["has_any_nonsuper_member"] = True
+    with pytest.raises(DatabaseSecurityBoundaryError, match="SMS dispatch"):
+        _assert_sms_dispatch_guards(
+            triggers=catalog[0],
+            columns=catalog[1],
+            constraints=catalog[2],
+            indexes=catalog[3],
+            table_acl=catalog[4],
+            column_acl=catalog[5],
+            role_access=catalog[6],
+            expected_runtime_role="star_oam_api",
+            expected_migration_role="star_oam_migrator",
+        )
+
+
+def test_0041_sms_dispatch_effective_role_access_allows_edge_members(
+) -> None:
+    catalog = _valid_sms_dispatch_catalog()
+    edge = next(
+        row for row in catalog[6] if row["role_label"] == "edge"
+    )
+    edge["has_any_nonsuper_member"] = True
+    edge["administered_by_other_role"] = True
+    _assert_sms_dispatch_guards(
+        triggers=catalog[0],
+        columns=catalog[1],
+        constraints=catalog[2],
+        indexes=catalog[3],
+        table_acl=catalog[4],
+        column_acl=catalog[5],
+        role_access=catalog[6],
+        expected_runtime_role="star_oam_api",
+        expected_migration_role="star_oam_migrator",
+    )
+
+
+def test_0041_sms_dispatch_effective_role_query_uses_cycle_safe_closure(
+) -> None:
+    query = str(_SMS_DISPATCH_ROLE_ACCESS_SQL)
+    assert "pg_has_role" in query
+    assert "'USAGE'" in query
+    assert "'SET'" in query
+    assert query.count("'MEMBER'") == 2
+    assert query.count("'MEMBER WITH ADMIN OPTION'") == 4
+    assert "FROM pg_roles AS candidate_role" in query
+    assert "FROM role_capabilities AS capability_role" in query
+    assert "NOT candidate_role.rolsuper" in query
+    assert "pg_auth_members" not in query
+    assert "WITH RECURSIVE" not in query
 
 
 def test_formal_file_catalog_guard_is_exact_and_rejects_drift() -> None:

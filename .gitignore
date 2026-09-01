@@ -10,6 +10,11 @@
 !/AGENTS.md
 !/docs/
 !/cloud_oam/
+!/.github/
+/.github/*
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/postgresql16-release-gate.yml
 
 # Only the frozen product baseline is allowed from the workspace docs folder.
 /docs/*

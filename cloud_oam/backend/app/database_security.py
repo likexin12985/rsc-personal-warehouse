@@ -3463,6 +3463,170 @@ ORDER BY column_grants.column_name, column_grants.grantee_name,
 """
 )
 
+_SMS_DISPATCH_ROLE_ACCESS_SQL = text(
+    """
+WITH target_table AS (
+    SELECT table_row.oid
+      FROM pg_class AS table_row
+      JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+     WHERE schema_row.nspname = 'public'
+       AND table_row.relname = 'sms_challenge_dispatches'
+), protected_roles(role_label, requested_name) AS (
+    VALUES
+        ('backup', CAST('star_oam_backup' AS name)),
+        ('edge', CAST('star_oam_edge' AS name)),
+        ('runtime', CAST(:runtime_role AS name)),
+        ('migration', CAST(:migration_role AS name))
+), role_capabilities AS (
+    SELECT
+        role_row.oid AS role_oid,
+        target_table.oid AS table_oid,
+        has_table_privilege(role_row.oid, target_table.oid, 'SELECT')
+            OR has_any_column_privilege(
+                role_row.oid, target_table.oid, 'SELECT'
+            ) AS can_select,
+        has_table_privilege(role_row.oid, target_table.oid, 'INSERT')
+            OR has_table_privilege(role_row.oid, target_table.oid, 'UPDATE')
+            OR has_table_privilege(role_row.oid, target_table.oid, 'DELETE')
+            OR has_table_privilege(role_row.oid, target_table.oid, 'TRUNCATE')
+            OR has_table_privilege(
+                role_row.oid, target_table.oid, 'REFERENCES'
+            )
+            OR has_table_privilege(role_row.oid, target_table.oid, 'TRIGGER')
+            OR has_any_column_privilege(
+                role_row.oid, target_table.oid, 'INSERT'
+            )
+            OR has_any_column_privilege(
+                role_row.oid, target_table.oid, 'UPDATE'
+            )
+            OR has_any_column_privilege(
+                role_row.oid, target_table.oid, 'REFERENCES'
+            ) AS can_write
+      FROM pg_roles AS role_row
+      CROSS JOIN target_table
+), role_evidence AS (
+    SELECT
+        protected.role_label,
+        CAST(protected.requested_name AS text) AS role_name,
+        role_row.oid AS role_oid,
+        role_row.oid IS NOT NULL AS role_exists,
+        COALESCE(role_row.rolinherit, FALSE) AS role_inherits,
+        COALESCE(capabilities.can_select, FALSE) AS can_select,
+        COALESCE(capabilities.can_write, FALSE) AS can_write
+      FROM protected_roles AS protected
+      LEFT JOIN pg_roles AS role_row
+        ON role_row.rolname = protected.requested_name
+      LEFT JOIN role_capabilities AS capabilities
+        ON capabilities.role_oid = role_row.oid
+)
+SELECT
+    source.role_label,
+    source.role_name,
+    source.role_exists,
+    source.role_inherits,
+    source.can_select,
+    source.can_write,
+    EXISTS (
+        SELECT 1
+          FROM pg_roles AS target_role
+         WHERE source.role_oid IS NOT NULL
+           AND target_role.oid <> source.role_oid
+           AND pg_has_role(source.role_oid, target_role.oid, 'MEMBER')
+    ) AS is_member_of_any_role,
+    EXISTS (
+        SELECT 1
+          FROM pg_roles AS candidate_role
+         WHERE source.role_oid IS NOT NULL
+           AND NOT candidate_role.rolsuper
+           AND candidate_role.oid <> source.role_oid
+           AND pg_has_role(candidate_role.oid, source.role_oid, 'MEMBER')
+    ) AS has_any_nonsuper_member,
+    EXISTS (
+        SELECT 1
+          FROM role_capabilities AS target_role
+         WHERE source.role_oid IS NOT NULL
+           AND target_role.role_oid <> source.role_oid
+           AND pg_has_role(source.role_oid, target_role.role_oid, 'SET')
+           AND target_role.can_select
+    ) AS can_set_select_role,
+    EXISTS (
+        SELECT 1
+          FROM role_capabilities AS target_role
+         WHERE source.role_oid IS NOT NULL
+           AND target_role.role_oid <> source.role_oid
+           AND pg_has_role(source.role_oid, target_role.role_oid, 'SET')
+           AND target_role.can_write
+    ) AS can_set_write_role,
+    EXISTS (
+        SELECT 1
+          FROM role_capabilities AS target_role
+         WHERE source.role_oid IS NOT NULL
+           AND target_role.role_oid <> source.role_oid
+           AND pg_has_role(
+               source.role_oid,
+               target_role.role_oid,
+               'MEMBER WITH ADMIN OPTION'
+           )
+           AND target_role.can_select
+    ) AS can_admin_select_role,
+    EXISTS (
+        SELECT 1
+          FROM role_capabilities AS target_role
+         WHERE source.role_oid IS NOT NULL
+           AND target_role.role_oid <> source.role_oid
+           AND pg_has_role(
+               source.role_oid,
+               target_role.role_oid,
+               'MEMBER WITH ADMIN OPTION'
+           )
+           AND target_role.can_write
+    ) AS can_admin_write_role,
+    EXISTS (
+        SELECT 1
+          FROM pg_roles AS candidate_role
+         WHERE source.role_oid IS NOT NULL
+           AND NOT candidate_role.rolsuper
+           AND candidate_role.oid <> source.role_oid
+           AND pg_has_role(candidate_role.oid, source.role_oid, 'USAGE')
+    ) AS inherited_by_other_role,
+    EXISTS (
+        SELECT 1
+          FROM pg_roles AS candidate_role
+         WHERE source.role_oid IS NOT NULL
+           AND NOT candidate_role.rolsuper
+           AND candidate_role.oid <> source.role_oid
+           AND pg_has_role(candidate_role.oid, source.role_oid, 'SET')
+    ) AS settable_by_other_role,
+    EXISTS (
+        SELECT 1
+          FROM pg_roles AS candidate_role
+         WHERE source.role_oid IS NOT NULL
+           AND NOT candidate_role.rolsuper
+           AND candidate_role.oid <> source.role_oid
+           AND pg_has_role(
+               candidate_role.oid,
+               source.role_oid,
+               'MEMBER WITH ADMIN OPTION'
+           )
+    ) AS administered_by_other_role,
+    EXISTS (
+        SELECT 1
+          FROM role_capabilities AS capability_role
+          JOIN pg_roles AS candidate_role
+            ON candidate_role.oid <> capability_role.role_oid
+           AND NOT candidate_role.rolsuper
+         WHERE (capability_role.can_select OR capability_role.can_write)
+           AND pg_has_role(
+               candidate_role.oid,
+               capability_role.role_oid,
+               'MEMBER WITH ADMIN OPTION'
+           )
+    ) AS capability_role_has_admin_member
+FROM role_evidence AS source
+ORDER BY source.role_label
+"""
+)
+
 _KMS_DATA_KEY_PIN_TABLE_ACL_SQL = text(
     """
 WITH target AS (
@@ -3796,6 +3960,13 @@ def validate_production_database_security(
             sms_dispatch_column_acl = connection.execute(
                 _SMS_DISPATCH_COLUMN_ACL_SQL
             ).mappings().all()
+            sms_dispatch_role_access = connection.execute(
+                _SMS_DISPATCH_ROLE_ACCESS_SQL,
+                {
+                    "runtime_role": expected_runtime_role,
+                    "migration_role": expected_migration_role,
+                },
+            ).mappings().all()
             kms_data_key_pin_table_acl = connection.execute(
                 _KMS_DATA_KEY_PIN_TABLE_ACL_SQL
             ).mappings().all()
@@ -3892,6 +4063,7 @@ def validate_production_database_security(
         indexes=sms_dispatch_indexes,
         table_acl=sms_dispatch_table_acl,
         column_acl=sms_dispatch_column_acl,
+        role_access=sms_dispatch_role_access,
         expected_runtime_role=expected_runtime_role,
         expected_migration_role=expected_migration_role,
     )
@@ -5318,6 +5490,7 @@ def _assert_sms_dispatch_guards(
     indexes: list[Mapping[str, Any]],
     table_acl: list[Mapping[str, Any]],
     column_acl: list[Mapping[str, Any]],
+    role_access: list[Mapping[str, Any]],
     expected_runtime_role: str,
     expected_migration_role: str,
 ) -> None:
@@ -5508,6 +5681,18 @@ def _assert_sms_dispatch_guards(
         and table_role_evidence != column_role_evidence
     ):
         failures.append("acl.role_evidence")
+    effective_role_evidence = _assert_sms_dispatch_role_access(
+        rows=role_access,
+        expected_runtime_role=expected_runtime_role,
+        expected_migration_role=expected_migration_role,
+        failures=failures,
+    )
+    if (
+        table_role_evidence is not None
+        and effective_role_evidence is not None
+        and table_role_evidence != effective_role_evidence
+    ):
+        failures.append("acl.effective_role_evidence")
 
     table_grants = [
         (
@@ -5633,6 +5818,128 @@ def _assert_sms_dispatch_acl_rows(
         ):
             failures.append(f"{label}.owner_or_roles")
     return backup_exists, edge_exists
+
+
+def _assert_sms_dispatch_role_access(
+    *,
+    rows: list[Mapping[str, Any]],
+    expected_runtime_role: str,
+    expected_migration_role: str,
+    failures: list[str],
+) -> tuple[object, object] | None:
+    """Reject effective SMS access gained through any reachable role."""
+
+    expected_names = {
+        "backup": "star_oam_backup",
+        "edge": "star_oam_edge",
+        "runtime": expected_runtime_role,
+        "migration": expected_migration_role,
+    }
+    actual_rows = {
+        row.get("role_label"): row
+        for row in rows
+        if isinstance(row.get("role_label"), str)
+    }
+    if (
+        len(actual_rows) != len(rows)
+        or set(actual_rows) != set(expected_names)
+    ):
+        failures.append("role_access.role_set")
+
+    boolean_fields = (
+        "role_exists",
+        "role_inherits",
+        "can_select",
+        "can_write",
+        "is_member_of_any_role",
+        "has_any_nonsuper_member",
+        "can_set_select_role",
+        "can_set_write_role",
+        "can_admin_select_role",
+        "can_admin_write_role",
+        "inherited_by_other_role",
+        "settable_by_other_role",
+        "administered_by_other_role",
+        "capability_role_has_admin_member",
+    )
+    for label, expected_name in expected_names.items():
+        row = actual_rows.get(label)
+        if row is None:
+            continue
+        if row.get("role_name") != expected_name or any(
+            type(row.get(field)) is not bool for field in boolean_fields
+        ):
+            failures.append(f"role_access.{label}.evidence")
+
+    backup = actual_rows.get("backup")
+    edge = actual_rows.get("edge")
+    runtime = actual_rows.get("runtime")
+    migration = actual_rows.get("migration")
+
+    for label, row in (("runtime", runtime), ("migration", migration)):
+        if row is not None and (
+            row.get("role_exists") is not True
+            or row.get("is_member_of_any_role") is not False
+            or row.get("has_any_nonsuper_member") is not False
+            or row.get("can_set_select_role") is not False
+            or row.get("can_set_write_role") is not False
+            or row.get("inherited_by_other_role") is not False
+            or row.get("settable_by_other_role") is not False
+            or row.get("administered_by_other_role") is not False
+            or row.get("can_admin_select_role") is not False
+            or row.get("can_admin_write_role") is not False
+            or row.get("capability_role_has_admin_member") is not False
+        ):
+            failures.append(f"role_access.{label}.closure")
+
+    if backup is not None:
+        backup_exists = backup.get("role_exists")
+        if backup_exists is True:
+            if (
+                backup.get("can_select") is not True
+                or backup.get("can_write") is not False
+                or backup.get("is_member_of_any_role") is not False
+                or backup.get("has_any_nonsuper_member") is not False
+                or backup.get("can_set_select_role") is not False
+                or backup.get("can_set_write_role") is not False
+                or backup.get("can_admin_select_role") is not False
+                or backup.get("can_admin_write_role") is not False
+                or backup.get("inherited_by_other_role") is not False
+                or backup.get("settable_by_other_role") is not False
+                or backup.get("administered_by_other_role") is not False
+                or backup.get("capability_role_has_admin_member") is not False
+            ):
+                failures.append("role_access.backup.read_only")
+        elif any(
+            backup.get(field) is not False
+            for field in boolean_fields[1:]
+        ):
+            failures.append("role_access.backup.absent")
+
+    if edge is not None:
+        edge_exists = edge.get("role_exists")
+        if edge.get("is_member_of_any_role") is not False or any(
+            edge.get(field) is not False
+            for field in (
+                "can_select",
+                "can_write",
+                "can_set_select_role",
+                "can_set_write_role",
+                "can_admin_select_role",
+                "can_admin_write_role",
+                "capability_role_has_admin_member",
+            )
+        ):
+            failures.append("role_access.edge.denied")
+        if edge_exists is not True and any(
+            edge.get(field) is not False
+            for field in boolean_fields[1:]
+        ):
+            failures.append("role_access.edge.absent")
+
+    if backup is None or edge is None:
+        return None
+    return backup.get("role_exists"), edge.get("role_exists")
 
 
 def _assert_kms_pin_acl_rows(

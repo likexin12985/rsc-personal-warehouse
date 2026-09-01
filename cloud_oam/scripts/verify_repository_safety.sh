@@ -57,7 +57,8 @@ while IFS= read -r -d '' path; do
   candidate_count=$((candidate_count + 1))
 
   case "$path" in
-    .gitignore|README.md|AGENTS.md|"$baseline_path"|cloud_oam/*)
+    .gitignore|README.md|AGENTS.md|"$baseline_path"|cloud_oam/*|\
+    .github/workflows/postgresql16-release-gate.yml)
       ;;
     *)
       report_failure "path escapes the explicit repository allowlist: $path"
