@@ -2214,6 +2214,7 @@ _ROLE_EVIDENCE_SQL = text(
     """
 SELECT
     current_user AS role_name,
+    session_user AS session_role_name,
     role_row.rolsuper AS is_superuser,
     role_row.rolcreatedb AS can_create_database,
     role_row.rolcreaterole AS can_create_role,
@@ -2433,14 +2434,14 @@ SELECT
     END AS grantee_name,
     upper(column_acl.privilege_type) AS privilege_type,
     column_acl.is_grantable AS is_grantable
-FROM pg_class AS class_row
-JOIN pg_namespace AS namespace_row
+FROM pg_catalog.pg_class AS class_row
+JOIN pg_catalog.pg_namespace AS namespace_row
   ON namespace_row.oid = class_row.relnamespace
-JOIN pg_attribute AS attribute_row
+JOIN pg_catalog.pg_attribute AS attribute_row
   ON attribute_row.attrelid = class_row.oid
-JOIN pg_roles AS role_row
+JOIN pg_catalog.pg_roles AS role_row
   ON role_row.rolname = current_user
-CROSS JOIN LATERAL aclexplode(attribute_row.attacl) AS column_acl
+CROSS JOIN LATERAL pg_catalog.aclexplode(attribute_row.attacl) AS column_acl
 WHERE namespace_row.nspname = 'public'
   AND class_row.relkind IN ('r', 'p', 'v', 'm', 'f')
   AND attribute_row.attnum > 0
@@ -4198,6 +4199,7 @@ def _assert_production_database_evidence(
 ) -> None:
     expected_values: dict[str, Any] = {
         "role_name": expected_runtime_role,
+        "session_role_name": expected_runtime_role,
         "is_superuser": False,
         "can_create_database": False,
         "can_create_role": False,

@@ -220,6 +220,7 @@ OPENING_TERMINAL_RUNTIME_MIGRATION_0022 = (
 def _valid_evidence() -> dict[str, object]:
     return {
         "role_name": "star_oam_api",
+        "session_role_name": "star_oam_api",
         "is_superuser": False,
         "can_create_database": False,
         "can_create_role": False,
@@ -2350,6 +2351,7 @@ def test_opening_observation_account_acl_is_insert_only_master_creation() -> Non
     ("field", "value"),
     [
         ("role_name", "star_oam_migrator"),
+        ("session_role_name", "star_oam_bootstrap"),
         ("is_superuser", True),
         ("can_create_database", True),
         ("can_create_role", True),

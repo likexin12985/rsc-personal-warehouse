@@ -275,6 +275,10 @@ def test_runtime_security_sql_uses_explicit_catalog_and_closes_cluster_objects()
 def test_main_api_column_acl_query_excludes_other_isolated_principals():
     sql = " ".join(str(api_security._COLUMN_ACL_SQL).split())
 
-    assert "JOIN pg_roles AS role_row" in sql
+    assert "FROM pg_catalog.pg_class AS class_row" in sql
+    assert "JOIN pg_catalog.pg_namespace AS namespace_row" in sql
+    assert "JOIN pg_catalog.pg_attribute AS attribute_row" in sql
+    assert "JOIN pg_catalog.pg_roles AS role_row" in sql
+    assert "pg_catalog.aclexplode(attribute_row.attacl)" in sql
     assert "role_row.rolname = current_user" in sql
     assert "column_acl.grantee IN (0, role_row.oid)" in sql
