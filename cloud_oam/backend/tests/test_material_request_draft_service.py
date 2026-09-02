@@ -198,6 +198,32 @@ def make_world(db: Session, *, manager_count: int = 1, admin_count: int = 2) -> 
         "formal-files/v1/request_attachment/"
         f"{attachment_id.hex[:2]}/{attachment_id.hex}"
     )
+    attachment_metadata = {
+        "authorization_version": actor_user.authorization_version,
+        "file_id": str(attachment_id),
+        "idempotency_key_hash": "b" * 64,
+        "provider": "aliyun_oss_v2",
+        "purpose": "request_attachment",
+        "request_sha256": formal_files._upload_request_hash(
+            formal_files._PreparedUpload(
+                purpose="request_attachment",
+                original_filename="proof.png",
+                size_bytes=128,
+                mime_type="image/png",
+                sha256="a" * 64,
+            )
+        ),
+        "schema": "cloud_oam.formal_file_upload_intent.v1",
+        "storage_key": attachment_storage_key,
+        "uploader_person_id": str(actor_person.id),
+        "uploader_user_id": actor_user.id,
+    }
+    completion_metadata = {
+        "etag_sha256": "d" * 64,
+        "head_manifest_sha256": "e" * 64,
+        "verified_at": NOW.isoformat(),
+    }
+    is_postgresql = db.get_bind().dialect.name == "postgresql"
     attachment = FileObject(
         id=attachment_id,
         storage_key=attachment_storage_key,
@@ -206,34 +232,22 @@ def make_world(db: Session, *, manager_count: int = 1, admin_count: int = 2) -> 
         mime_type="image/png",
         original_filename="proof.png",
         uploaded_by=actor_user.id,
-        status="available",
-        metadata_jsonb={
-            "authorization_version": actor_user.authorization_version,
-            "file_id": str(attachment_id),
-            "idempotency_key_hash": "b" * 64,
-            "provider": "test_formal_storage",
-            "purpose": "request_attachment",
-            "request_sha256": formal_files._upload_request_hash(
-                formal_files._PreparedUpload(
-                    purpose="request_attachment",
-                    original_filename="proof.png",
-                    size_bytes=128,
-                    mime_type="image/png",
-                    sha256="a" * 64,
-                )
-            ),
-            "schema": "cloud_oam.formal_file_upload_intent.v1",
-            "storage_key": attachment_storage_key,
-            "uploader_person_id": str(actor_person.id),
-            "uploader_user_id": actor_user.id,
-            "completion": {
-                "etag_sha256": "d" * 64,
-                "head_manifest_sha256": "e" * 64,
-                "verified_at": NOW.isoformat(),
-            },
-        },
+        status="pending" if is_postgresql else "available",
+        metadata_jsonb=(
+            attachment_metadata
+            if is_postgresql
+            else {**attachment_metadata, "completion": completion_metadata}
+        ),
     )
     db.add(attachment)
+    if is_postgresql:
+        db.flush()
+        attachment.status = "available"
+        attachment.metadata_jsonb = {
+            **attachment_metadata,
+            "completion": completion_metadata,
+        }
+        db.flush()
     db.add(
         AuditChainHead(
             id=AUDIT_HEAD_ID,
