@@ -1713,6 +1713,12 @@ EXPECTED_SMS_DISPATCH_CONSTRAINTS = {
     "pk_sms_challenge_dispatches_0041": "p",
     "fk_sms_challenge_dispatches_challenge_0041": "f",
 }
+EXPECTED_SMS_DISPATCH_NONINHERIT_CONSTRAINTS = frozenset(
+    {
+        "pk_sms_challenge_dispatches_0041",
+        "fk_sms_challenge_dispatches_challenge_0041",
+    }
+)
 EXPECTED_SMS_DISPATCH_INDEXES = {
     "pk_sms_challenge_dispatches_0041": {
         "columns": ("challenge_id",),
@@ -3558,6 +3564,10 @@ WITH target_table AS (
       JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
      WHERE schema_row.nspname = 'public'
        AND table_row.relname = 'sms_challenge_dispatches'
+), current_database_owner AS (
+    SELECT database_row.datdba AS role_oid
+      FROM pg_database AS database_row
+     WHERE database_row.datname = current_database()
 ), protected_roles(role_label, requested_name) AS (
     VALUES
         ('backup', CAST('star_oam_backup' AS name)),
@@ -3619,6 +3629,12 @@ SELECT
          WHERE source.role_oid IS NOT NULL
            AND target_role.oid <> source.role_oid
            AND pg_has_role(source.role_oid, target_role.oid, 'MEMBER')
+           AND NOT (
+               target_role.rolname = 'pg_database_owner'
+               AND source.role_oid = (
+                   SELECT owner.role_oid FROM current_database_owner AS owner
+               )
+           )
     ) AS is_member_of_any_role,
     EXISTS (
         SELECT 1
@@ -5700,21 +5716,31 @@ def _assert_sms_dispatch_guards(
         if row is None:
             continue
         definition = str(row.get("definition") or "").lower()
-        if (
-            row.get("constraint_type") != expected_type
-            or row.get("is_validated") is not True
-            or row.get("is_deferrable") is not False
-            or row.get("is_initially_deferred") is not False
-            or row.get("is_no_inherit") is not False
-            or row.get("is_local") is not True
-            or row.get("inheritance_count") != 0
-            or row.get("parent_constraint_id") != 0
-            or any(
-                token not in definition
-                for token in definition_tokens.get(name, ())
-            )
+        equality_fields = {
+            "constraint_type": expected_type,
+            "inheritance_count": 0,
+            "parent_constraint_id": 0,
+        }
+        for field, expected_value in equality_fields.items():
+            if row.get(field) != expected_value:
+                failures.append(f"{name}.{field}")
+        identity_fields = {
+            "is_validated": True,
+            "is_deferrable": False,
+            "is_initially_deferred": False,
+            "is_no_inherit": (
+                name in EXPECTED_SMS_DISPATCH_NONINHERIT_CONSTRAINTS
+            ),
+            "is_local": True,
+        }
+        for field, expected_value in identity_fields.items():
+            if row.get(field) is not expected_value:
+                failures.append(f"{name}.{field}")
+        if any(
+            token not in definition
+            for token in definition_tokens.get(name, ())
         ):
-            failures.append(f"{name}.shape")
+            failures.append(f"{name}.definition")
     primary = actual_constraints.get("pk_sms_challenge_dispatches_0041")
     if primary is not None and tuple(primary.get("constrained_columns") or ()) != (
         "challenge_id",

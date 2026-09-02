@@ -33,6 +33,7 @@ from app.database_security import (
     EXPECTED_RECONCILIATION_TRIGGERS,
     EXPECTED_SMS_DISPATCH_COLUMNS,
     EXPECTED_SMS_DISPATCH_CONSTRAINTS,
+    EXPECTED_SMS_DISPATCH_NONINHERIT_CONSTRAINTS,
     EXPECTED_SMS_DISPATCH_INDEXES,
     EXPECTED_SMS_DISPATCH_TRIGGERS,
     EXPECTED_STOCKTAKE_RECOUNT_COLUMNS,
@@ -1412,7 +1413,9 @@ def _valid_sms_dispatch_catalog() -> tuple[
             "is_validated": True,
             "is_deferrable": False,
             "is_initially_deferred": False,
-            "is_no_inherit": False,
+            "is_no_inherit": (
+                name in EXPECTED_SMS_DISPATCH_NONINHERIT_CONSTRAINTS
+            ),
             "is_local": True,
             "inheritance_count": 0,
             "parent_constraint_id": 0,
@@ -1597,6 +1600,10 @@ def test_0041_sms_dispatch_manifest_guard_body_and_acl_are_exact() -> None:
         "GRANT UPDATE ({dispatch_update_columns}) ON TABLE "
         "public.{TABLE_NAME} TO {PRODUCTION_API_ROLE}"
     ) in source
+    assert EXPECTED_SMS_DISPATCH_NONINHERIT_CONSTRAINTS == {
+        "pk_sms_challenge_dispatches_0041",
+        "fk_sms_challenge_dispatches_challenge_0041",
+    }
 
 
 def test_0041_sms_dispatch_catalog_guard_rejects_each_drift() -> None:
@@ -1707,6 +1714,43 @@ def test_0041_sms_dispatch_catalog_guard_rejects_each_drift() -> None:
                 expected_runtime_role="star_oam_api",
                 expected_migration_role="star_oam_migrator",
             )
+
+
+@pytest.mark.parametrize(
+    ("constraint_name", "drifted_no_inherit"),
+    [
+        ("pk_sms_challenge_dispatches_0041", False),
+        ("fk_sms_challenge_dispatches_challenge_0041", False),
+        ("ck_sms_challenge_dispatches_status", True),
+    ],
+)
+def test_0041_sms_dispatch_constraint_inheritance_drift_is_rejected(
+    constraint_name: str,
+    drifted_no_inherit: bool,
+) -> None:
+    catalog = _valid_sms_dispatch_catalog()
+    constraint = next(
+        row
+        for row in catalog[2]
+        if row["constraint_name"] == constraint_name
+    )
+    constraint["is_no_inherit"] = drifted_no_inherit
+
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match=rf"{constraint_name}\.is_no_inherit",
+    ):
+        _assert_sms_dispatch_guards(
+            triggers=catalog[0],
+            columns=catalog[1],
+            constraints=catalog[2],
+            indexes=catalog[3],
+            table_acl=catalog[4],
+            column_acl=catalog[5],
+            role_access=catalog[6],
+            expected_runtime_role="star_oam_api",
+            expected_migration_role="star_oam_migrator",
+        )
 
 
 @pytest.mark.parametrize(
@@ -2030,6 +2074,9 @@ def test_0041_sms_dispatch_effective_role_query_uses_cycle_safe_closure(
     assert "FROM pg_roles AS candidate_role" in query
     assert "FROM role_capabilities AS capability_role" in query
     assert "NOT candidate_role.rolsuper" in query
+    assert "current_database_owner AS" in query
+    assert "target_role.rolname = 'pg_database_owner'" in query
+    assert "database_row.datname = current_database()" in query
     assert "pg_auth_members" not in query
     assert "WITH RECURSIVE" not in query
 

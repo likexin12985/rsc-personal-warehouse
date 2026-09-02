@@ -451,6 +451,62 @@ def _assert_membership_drift_is_rejected(api_engine) -> None:
     _validate_runtime_security(api_engine)
 
 
+def _assert_database_owner_membership_boundary(api_engine) -> None:
+    from app.database_security import DatabaseSecurityBoundaryError
+
+    with psycopg.connect(**_admin_parameters(), autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT "
+                "pg_has_role('star_oam_migrator', 'pg_database_owner', "
+                "'MEMBER'), "
+                "pg_has_role('star_oam_api', 'pg_database_owner', 'MEMBER')"
+            )
+            implicit_owner_member, runtime_member = cursor.fetchone()
+    assert implicit_owner_member is True
+    assert runtime_member is False
+
+    baseline = _sms_role_access_evidence(api_engine)
+    assert baseline["migration"]["is_member_of_any_role"] is False
+
+    bridge_role = "rsc_pg16_gate_migrator_bridge"
+    with psycopg.connect(**_admin_parameters(), autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                sql.SQL(
+                    "CREATE ROLE {} NOLOGIN NOINHERIT NOSUPERUSER "
+                    "NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+                ).format(sql.Identifier(bridge_role))
+            )
+            cursor.execute(
+                sql.SQL(
+                    "GRANT {} TO star_oam_migrator "
+                    "WITH INHERIT FALSE, SET FALSE, ADMIN FALSE"
+                ).format(sql.Identifier(bridge_role))
+            )
+    try:
+        drifted = _sms_role_access_evidence(api_engine)
+        assert drifted["migration"]["is_member_of_any_role"] is True
+        with pytest.raises(DatabaseSecurityBoundaryError):
+            _validate_runtime_security(api_engine)
+    finally:
+        with psycopg.connect(
+            **_admin_parameters(), autocommit=True
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    sql.SQL("REVOKE {} FROM star_oam_migrator").format(
+                        sql.Identifier(bridge_role)
+                    )
+                )
+                cursor.execute(
+                    sql.SQL("DROP ROLE {}").format(
+                        sql.Identifier(bridge_role)
+                    )
+                )
+    _validate_runtime_security(api_engine)
+
+
 def _assert_sms_acl(api_engine) -> None:
     with api_engine.connect() as connection:
         evidence = connection.execute(
@@ -743,6 +799,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     try:
         _validate_runtime_security(api_engine)
         _assert_sms_acl(api_engine)
+        _assert_database_owner_membership_boundary(api_engine)
         _assert_membership_drift_is_rejected(api_engine)
         _assert_single_owner_and_process_kill(api_engine)
 
