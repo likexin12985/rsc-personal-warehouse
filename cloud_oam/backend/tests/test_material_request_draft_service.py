@@ -238,6 +238,7 @@ def make_world(db: Session, *, manager_count: int = 1, admin_count: int = 2) -> 
             if is_postgresql
             else {**attachment_metadata, "completion": completion_metadata}
         ),
+        created_at=NOW,
     )
     db.add(attachment)
     if is_postgresql:
