@@ -110,6 +110,13 @@ LOCK_GRAPH_MIGRATION_0028 = (
     / "versions"
     / "20260831_0028_opening_terminal_reference_union_lock.py"
 )
+NONOPENING_STOCKTAKE_REVIEW_MIGRATION_0032 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260901_0032_nonopening_stocktake_review_recount.py"
+)
 SAFE_POSTING_MIGRATION_0035 = (
     ROOT
     / "backend"
@@ -445,6 +452,29 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0038(
             "updated_at",
         },
     }
+
+
+def test_0032_review_lock_runtime_manifest_and_function_body_are_exact() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0032_security_manifest",
+        NONOPENING_STOCKTAKE_REVIEW_MIGRATION_0032,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    coordinate = (migration.PG_LOCK_FUNCTION, "uuid, uuid")
+    assert RUNTIME_EXECUTE_FUNCTIONS[coordinate] == (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    )
+    assert RUNTIME_FUNCTION_SHAPES[coordinate] == ("f", "void", False)
+    function_sql = migration._postgresql_lock_function_sql()
+    function_body = function_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    assert hashlib.sha256(function_body.encode("utf-8")).hexdigest() == (
+        RUNTIME_FUNCTION_BODY_SHA256[coordinate]
+    )
 
 
 def test_0035_safe_posting_runtime_manifest_is_append_only_and_exact() -> None:

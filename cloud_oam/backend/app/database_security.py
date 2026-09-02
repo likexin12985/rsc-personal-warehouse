@@ -1925,6 +1925,12 @@ RUNTIME_EXECUTE_FUNCTIONS = {
         "plpgsql",
         ("search_path=pg_catalog, public",),
     ),
+    ("rsc_lock_nonopening_stocktake_review_graph_0032", "uuid, uuid"): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
     ("rsc_lock_nonopening_stocktake_posting_graph_0035", "uuid"): (
         "v",
         True,
@@ -1983,6 +1989,8 @@ RUNTIME_FUNCTION_BODY_SHA256 = {
         "rsc_lock_opening_terminal_reference_union_0028",
         "uuid[], uuid[], uuid[], uuid[], uuid[]",
     ): "a5445f4651364a179223695d28ba7ce9434f0f20307098a9291067b64b07d066",
+    ("rsc_lock_nonopening_stocktake_review_graph_0032", "uuid, uuid"):
+        "ce7dda6f207c9a17bfde049749aa6e689e3f84d9e2c3892c66f17ac15c411ee3",
     ("rsc_lock_nonopening_stocktake_posting_graph_0035", "uuid"):
         "ebf8f6e2a7eecfcc6dca09a8df90f732977382d0ed9d973204ab14b14e4e9dd2",
     ("rsc_lock_nonopening_stocktake_close_graph_0038", "uuid"):
