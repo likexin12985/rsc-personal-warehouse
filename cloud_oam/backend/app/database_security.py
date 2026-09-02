@@ -1615,36 +1615,43 @@ EXPECTED_KMS_DATA_KEY_PIN_CONSTRAINTS = {
         "type": "c",
         "columns": ("kms_key_id", "kms_key_version_id"),
         "backing_index": None,
+        "no_inherit": False,
     },
     "ck_kms_data_key_pins_purpose_0040": {
         "type": "c",
         "columns": ("purpose",),
         "backing_index": None,
+        "no_inherit": False,
     },
     "ck_kms_data_key_pins_sha256_0040": {
         "type": "c",
         "columns": ("ciphertext_sha256",),
         "backing_index": None,
+        "no_inherit": False,
     },
     "ck_kms_data_key_pins_version_0040": {
         "type": "c",
         "columns": ("application_key_version",),
         "backing_index": None,
+        "no_inherit": False,
     },
     "pk_kms_data_key_pins_coordinate_0040": {
         "type": "p",
         "columns": ("purpose", "kms_key_id", "application_key_version"),
         "backing_index": "pk_kms_data_key_pins_coordinate_0040",
+        "no_inherit": True,
     },
     "uq_kms_data_key_pins_ciphertext_0040": {
         "type": "u",
         "columns": ("ciphertext_sha256",),
         "backing_index": "uq_kms_data_key_pins_ciphertext_0040",
+        "no_inherit": True,
     },
     "uq_kms_data_key_pins_purpose_version_0040": {
         "type": "u",
         "columns": ("purpose", "application_key_version"),
         "backing_index": "uq_kms_data_key_pins_purpose_version_0040",
+        "no_inherit": True,
     },
 }
 EXPECTED_KMS_DATA_KEY_PIN_INDEXES = {
@@ -5500,7 +5507,7 @@ def _assert_kms_data_key_pin_guards(
             "is_validated": True,
             "is_deferrable": False,
             "is_initially_deferred": False,
-            "is_no_inherit": False,
+            "is_no_inherit": expected["no_inherit"],
             "is_local": True,
         }
         for field, expected_value in identity_fields.items():

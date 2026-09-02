@@ -1005,7 +1005,7 @@ def _valid_kms_data_key_pin_catalog():
             "is_validated": True,
             "is_deferrable": False,
             "is_initially_deferred": False,
-            "is_no_inherit": False,
+            "is_no_inherit": expected["no_inherit"],
             "is_local": True,
             "inheritance_count": 0,
             "parent_constraint_id": 0,
@@ -1276,7 +1276,7 @@ def test_0040_kms_guard_reports_exact_constraint_field() -> None:
         if row["constraint_name"]
         == "pk_kms_data_key_pins_coordinate_0040"
     )
-    primary["is_no_inherit"] = True
+    primary["is_no_inherit"] = False
 
     with pytest.raises(
         DatabaseSecurityBoundaryError,
