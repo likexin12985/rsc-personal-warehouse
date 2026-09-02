@@ -18,6 +18,7 @@ from app.database_security import (
     EXPECTED_KMS_DATA_KEY_PIN_CONSTRAINTS,
     EXPECTED_KMS_DATA_KEY_PIN_INDEXES,
     EXPECTED_KMS_DATA_KEY_PIN_TRIGGERS,
+    EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS,
     EXPECTED_MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX,
     EXPECTED_NONOPENING_STOCKTAKE_CLOSE_CONSTRAINTS,
     EXPECTED_NONOPENING_STOCKTAKE_CLOSE_INDEXES,
@@ -53,6 +54,7 @@ from app.database_security import (
     RUNTIME_READ_TABLES,
     RUNTIME_UPDATE_TABLES,
     RUNTIME_UPDATE_COLUMNS,
+    _AUDIT_TRIGGER_SQL,
     _NONOPENING_STOCKTAKE_CLOSE_TRIGGER_SQL,
     _MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX_SQL,
     _OPENING_TERMINAL_TRIGGER_SQL,
@@ -2866,6 +2868,100 @@ def test_audit_trigger_guard_requires_exact_enabled_bindings() -> None:
             _assert_audit_trigger_guards(rows)
     with pytest.raises(DatabaseSecurityBoundaryError, match="trigger_set"):
         _assert_audit_trigger_guards(_valid_audit_trigger_rows()[1:])
+
+    unexpected = _valid_audit_trigger_rows()[0].copy()
+    unexpected["trigger_name"] = "trg_unapproved_audit_probe"
+    with pytest.raises(DatabaseSecurityBoundaryError, match="trigger_set"):
+        _assert_audit_trigger_guards(
+            [*_valid_audit_trigger_rows(), unexpected]
+        )
+
+
+def test_audit_trigger_inventory_covers_cross_domain_manifests() -> None:
+    cross_domain: dict[str, tuple[object, ...]] = {}
+
+    opening_name = "trg_audit_events_opening_commit_0022"
+    table_name, function_name, enabled, trigger_type = (
+        EXPECTED_OPENING_TERMINAL_TRIGGERS[opening_name]
+    )
+    assert enabled == "A"
+    cross_domain[opening_name] = (
+        table_name,
+        function_name,
+        trigger_type,
+        True,
+        True,
+        True,
+    )
+
+    for name, (table_name, function_name, enabled, trigger_type) in (
+        EXPECTED_RECONCILIATION_TRIGGERS.items()
+    ):
+        if table_name != "audit_events":
+            continue
+        assert enabled == "A"
+        cross_domain[name] = (
+            table_name,
+            function_name,
+            trigger_type,
+            False,
+            False,
+            False,
+        )
+
+    cancellation_name = "trg_audit_events_cancellation_graph_0037"
+    table_name, function_name, enabled, trigger_type = (
+        EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS[cancellation_name]
+    )
+    assert enabled == "A"
+    cross_domain[cancellation_name] = (
+        table_name,
+        function_name,
+        trigger_type,
+        True,
+        True,
+        True,
+    )
+
+    nonopening_name = (
+        "trg_audit_events_nonopening_stocktake_close_guard_0038"
+    )
+    (
+        table_name,
+        function_name,
+        enabled,
+        trigger_type,
+        is_constraint_trigger,
+        is_deferrable,
+        is_initially_deferred,
+        has_when_clause,
+    ) = EXPECTED_NONOPENING_STOCKTAKE_CLOSE_TRIGGERS[nonopening_name]
+    assert enabled == "A"
+    assert has_when_clause is False
+    cross_domain[nonopening_name] = (
+        table_name,
+        function_name,
+        trigger_type,
+        is_constraint_trigger,
+        is_deferrable,
+        is_initially_deferred,
+    )
+
+    assert set(cross_domain) == {
+        "trg_audit_events_opening_commit_0022",
+        "trg_reconciliation_audit_effect_guard_0026",
+        "trg_reconciliation_audit_effect_no_truncate_0026",
+        "trg_audit_events_cancellation_graph_0037",
+        "trg_audit_events_nonopening_stocktake_close_guard_0038",
+    }
+    for name, expected in cross_domain.items():
+        assert EXPECTED_AUDIT_TRIGGERS[name] == expected
+
+    query = str(_AUDIT_TRIGGER_SQL)
+    assert (
+        "table_row.relname IN ('audit_events', 'audit_chain_heads')" in query
+    )
+    assert "trigger_row.tgname IN" not in query
 
 
 def _valid_audit_stream_columns() -> list[dict[str, object]]:
