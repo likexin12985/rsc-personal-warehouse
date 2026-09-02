@@ -1,21 +1,31 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import importlib.util
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import uuid
 
 from alembic import command
 from alembic.config import Config
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import psycopg
 
 
 ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_INI = ROOT / "alembic.ini"
 HEAD = "20260901_0036"
 PREVIOUS_HEAD = "20260901_0035"
+MIGRATION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260901_0036_formal_file_runtime_boundary.py"
+)
 
 
 def _config(database_url: str) -> Config:
@@ -28,6 +38,16 @@ def _offline_config(database_url: str, output: io.StringIO) -> Config:
     config = Config(str(ALEMBIC_INI), output_buffer=output)
     config.set_main_option("sqlalchemy.url", database_url)
     return config
+
+
+def _load_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0036", MIGRATION
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _seed_identity(
@@ -360,5 +380,37 @@ def test_0036_postgresql_offline_sql_has_exact_lock_acl_and_guard_shape(
     assert (
         "BEFORE TRUNCATE ON public.material_request_files" not in sql
     )
-    assert "REVOKE EXECUTE ON FUNCTION public.rsc_guard_formal_file_object_0036()" in sql
-    assert "REVOKE EXECUTE ON FUNCTION public.rsc_guard_formal_file_binding_0036()" in sql
+    assert (
+        "REVOKE EXECUTE ON FUNCTION "
+        "public.rsc_guard_formal_file_object_0036()" in sql
+    )
+    assert (
+        "REVOKE EXECUTE ON FUNCTION "
+        "public.rsc_guard_formal_file_binding_0036()" in sql
+    )
+
+
+def test_0036_postgresql_online_evidence_checks_compile_percent_literals(
+) -> None:
+    migration = _load_migration_module()
+    statements: list[sa.sql.elements.TextClause] = []
+
+    class _Connection:
+        def execute(self, statement):
+            statements.append(statement)
+            return SimpleNamespace(first=lambda: None)
+
+        def exec_driver_sql(self, _statement):
+            raise AssertionError(
+                "percent-bearing SQL must use SQLAlchemy compilation"
+            )
+
+    migration.op = SimpleNamespace(get_bind=lambda: _Connection())
+    migration._online_preflight("postgresql")
+    migration._require_safe_downgrade("postgresql")
+
+    assert len(statements) == 2
+    for statement in statements:
+        assert isinstance(statement, sa.sql.elements.TextClause)
+        compiled = str(statement.compile(dialect=psycopg.dialect()))
+        assert "LIKE 'formal-files/v1/%%'" in compiled

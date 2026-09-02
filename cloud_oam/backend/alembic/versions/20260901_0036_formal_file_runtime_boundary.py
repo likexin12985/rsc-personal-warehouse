@@ -206,7 +206,7 @@ $$
 def _online_preflight(dialect: str) -> None:
     prefix = "public." if dialect == "postgresql" else ""
     sql = f"SELECT 1 WHERE {_upgrade_blocker_sql(dialect, prefix)}"
-    if op.get_bind().exec_driver_sql(sql).first() is not None:
+    if op.get_bind().execute(sa.text(sql)).first() is not None:
         raise RuntimeError(UPGRADE_BLOCKER)
 
 
@@ -232,7 +232,9 @@ OR EXISTS (
         OR attachment_type = 'stocktake_evidence'
 )
 """
-    if op.get_bind().exec_driver_sql(f"SELECT 1 WHERE {predicates}").first():
+    if op.get_bind().execute(
+        sa.text(f"SELECT 1 WHERE {predicates}")
+    ).first():
         raise RuntimeError(DOWNGRADE_BLOCKER)
 
 
