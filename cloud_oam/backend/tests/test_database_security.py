@@ -119,6 +119,20 @@ NONOPENING_STOCKTAKE_REVIEW_MIGRATION_0032 = (
     / "versions"
     / "20260901_0032_nonopening_stocktake_review_recount.py"
 )
+STOCKTAKE_COUNT_LEDGER_MIGRATION_0033 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260901_0033_stocktake_count_ledger_boundary.py"
+)
+STOCKTAKE_RECOUNT_SCOPE_MIGRATION_0034 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260901_0034_stocktake_recount_selected_scope_submission.py"
+)
 SAFE_POSTING_MIGRATION_0035 = (
     ROOT
     / "backend"
@@ -3458,11 +3472,86 @@ def test_postgresql_stocktake_guard_names_match_identifier_limit() -> None:
         "COUNT_LINE_TRIGGER",
         "OBSERVATION_TRIGGER",
         "COMPLETION_TRIGGER",
-        "CASE_TRIGGER",
     ):
         trigger_name = migration_0021[constant_name]
         assert len(trigger_name.encode("utf-8")) <= 63
         assert trigger_name in EXPECTED_STOCKTAKE_RECOUNT_TRIGGERS
+    assert (
+        migration_0021["CASE_TRIGGER"]
+        not in EXPECTED_STOCKTAKE_RECOUNT_TRIGGERS
+    )
+
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0032_recount_trigger_catalog",
+        NONOPENING_STOCKTAKE_REVIEW_MIGRATION_0032,
+    )
+    assert spec is not None and spec.loader is not None
+    migration_0032 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration_0032)
+    current_0032_triggers = {
+        migration_0032.CASE_TRIGGER,
+        migration_0032.TASK_TRIGGER,
+        migration_0032.ROUND_TRIGGER,
+        *migration_0032.RECOUNT_GRAPH_TRIGGERS.values(),
+    }
+    retired_0032_triggers = {
+        migration_0032.OLD_CASE_TRIGGER,
+        migration_0032.OLD_TASK_TRIGGER,
+        migration_0032.OLD_ROUND_TRIGGER,
+        *migration_0032.OLD_GRAPH_TRIGGERS.values(),
+    }
+    assert current_0032_triggers <= set(
+        EXPECTED_STOCKTAKE_RECOUNT_TRIGGERS
+    )
+    assert retired_0032_triggers.isdisjoint(
+        EXPECTED_STOCKTAKE_RECOUNT_TRIGGERS
+    )
+    expected_0032_shapes = {
+        migration_0032.CASE_TRIGGER: (
+            "stocktake_recount_cases",
+            migration_0032.PG_CASE_FUNCTION,
+            "A", 7, False, False, False,
+        ),
+        migration_0032.TASK_TRIGGER: (
+            "stocktake_tasks",
+            migration_0032.PG_TASK_FUNCTION,
+            "A", 19, False, False, False,
+        ),
+        migration_0032.ROUND_TRIGGER: (
+            "stocktake_rounds",
+            migration_0032.PG_ROUND_FUNCTION,
+            "A", 23, False, False, False,
+        ),
+        **{
+            trigger_name: (
+                table_name,
+                migration_0032.PG_RECOUNT_GRAPH_FUNCTION,
+                "A", 29, True, True, True,
+            )
+            for table_name, trigger_name in (
+                migration_0032.RECOUNT_GRAPH_TRIGGERS.items()
+            )
+        },
+    }
+    for trigger_name, expected in expected_0032_shapes.items():
+        assert EXPECTED_STOCKTAKE_RECOUNT_TRIGGERS[trigger_name] == expected
+
+    migration_0033 = constants(STOCKTAKE_COUNT_LEDGER_MIGRATION_0033)
+    assert EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS[
+        migration_0033["PG_TRIGGER"]
+    ] == (
+        migration_0033["TABLE"],
+        migration_0033["PG_FUNCTION"],
+        "A", 7, False, False, False,
+    )
+    migration_0034 = constants(STOCKTAKE_RECOUNT_SCOPE_MIGRATION_0034)
+    assert EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS[
+        migration_0034["PG_COMPLETION_TRIGGER"]
+    ] == (
+        "stocktake_scope_count_completions",
+        migration_0034["PG_COMPLETION_FUNCTION"],
+        "A", 7, False, False, False,
+    )
 
     migration_0025 = constants(STOCKTAKE_SCOPE_REGION_OWNER_MIGRATION_0025)
     scope_trigger_name = migration_0025["SCOPE_TRIGGER"]
@@ -3559,7 +3648,9 @@ def test_sensitive_stocktake_trigger_allowlist_matches_migration_catalog(
         "trg_stocktake_recount_scope_assignments_validate_0018",
         "trg_stocktake_recount_scope_assignments_immutable_0018",
         "trg_stocktake_recount_scope_assignments_immutable_truncate_0018",
-        "trg_stocktake_recount_graph_assignment_0018",
+        "trg_stocktake_recount_graph_assignment_0032",
+        "trg_stocktake_scope_count_ledger_boundary_0033",
+        "trg_stocktake_recount_completion_scope_0034",
         POSTGRESQL_RECOUNT_PERSONAL_TRIGGER_0019,
     }
     assert {
@@ -3578,7 +3669,9 @@ def test_sensitive_stocktake_trigger_allowlist_matches_migration_catalog(
         "trg_stocktake_recount_scope_assignments_validate_0018": "A",
         "trg_stocktake_recount_scope_assignments_immutable_0018": "A",
         "trg_stocktake_recount_scope_assignments_immutable_truncate_0018": "A",
-        "trg_stocktake_recount_graph_assignment_0018": "A",
+        "trg_stocktake_recount_graph_assignment_0032": "A",
+        "trg_stocktake_scope_count_ledger_boundary_0033": "A",
+        "trg_stocktake_recount_completion_scope_0034": "A",
         POSTGRESQL_RECOUNT_PERSONAL_TRIGGER_0019: "A",
     }
 

@@ -762,6 +762,24 @@ EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS = {
         False,
         False,
     ),
+    "trg_stocktake_scope_count_ledger_boundary_0033": (
+        "stocktake_scope_count_completions",
+        "rsc_validate_stocktake_count_ledger_boundary_0033",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_recount_completion_scope_0034": (
+        "stocktake_scope_count_completions",
+        "rsc_validate_recount_completion_scope_0034",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
     POSTGRESQL_COMPLETION_PERSONAL_TRIGGER_0019: (
         "stocktake_scope_count_completions",
         "rsc_validate_stocktake_technician_personal_location_0019",
@@ -807,9 +825,9 @@ EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS = {
         False,
         False,
     ),
-    "trg_stocktake_recount_graph_assignment_0018": (
+    "trg_stocktake_recount_graph_assignment_0032": (
         "stocktake_recount_scope_assignments",
-        "rsc_require_stocktake_recount_graph_0018",
+        "rsc_require_stocktake_recount_graph_0032",
         "A",
         29,
         True,
@@ -863,9 +881,9 @@ EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS = {
     ),
 }
 EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS = {
-    "trg_stocktake_recount_cases_review_path_0021": (
+    "trg_stocktake_recount_cases_review_path_0032": (
         "stocktake_recount_cases",
-        "rsc_validate_stocktake_recount_case_0021",
+        "rsc_validate_stocktake_recount_case_0032",
         "A",
         7,
         False,
@@ -890,45 +908,45 @@ EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS = {
         False,
         False,
     ),
-    "trg_stocktake_tasks_recount_causality_0018": (
+    "trg_stocktake_tasks_recount_causality_0032": (
         "stocktake_tasks",
-        "rsc_validate_stocktake_recount_task_advance_0018",
+        "rsc_validate_stocktake_recount_task_advance_0032",
         "A",
         19,
         False,
         False,
         False,
     ),
-    "trg_stocktake_rounds_recount_causality_0018": (
+    "trg_stocktake_rounds_recount_causality_0032": (
         "stocktake_rounds",
-        "rsc_validate_stocktake_recount_round_0018",
+        "rsc_validate_stocktake_recount_round_0032",
         "A",
         23,
         False,
         False,
         False,
     ),
-    "trg_stocktake_recount_graph_task_0018": (
+    "trg_stocktake_recount_graph_task_0032": (
         "stocktake_tasks",
-        "rsc_require_stocktake_recount_graph_0018",
+        "rsc_require_stocktake_recount_graph_0032",
         "A",
         29,
         True,
         True,
         True,
     ),
-    "trg_stocktake_recount_graph_round_0018": (
+    "trg_stocktake_recount_graph_round_0032": (
         "stocktake_rounds",
-        "rsc_require_stocktake_recount_graph_0018",
+        "rsc_require_stocktake_recount_graph_0032",
         "A",
         29,
         True,
         True,
         True,
     ),
-    "trg_stocktake_recount_graph_case_0018": (
+    "trg_stocktake_recount_graph_case_0032": (
         "stocktake_recount_cases",
-        "rsc_require_stocktake_recount_graph_0018",
+        "rsc_require_stocktake_recount_graph_0032",
         "A",
         29,
         True,
