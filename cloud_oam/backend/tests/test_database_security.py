@@ -1192,6 +1192,75 @@ def test_0040_kms_data_key_pin_catalog_guard_is_exact_and_rejects_drift() -> Non
             )
 
 
+def test_0040_kms_guard_accepts_postgresql16_trim_deparse() -> None:
+    (
+        triggers,
+        columns,
+        constraints,
+        indexes,
+        table_acl,
+        function_acl,
+    ) = _valid_kms_data_key_pin_catalog()
+    coordinate = next(
+        row
+        for row in constraints
+        if row["constraint_name"]
+        == "ck_kms_data_key_pins_coordinates_0040"
+    )
+    coordinate["definition"] = (
+        "CHECK (((kms_key_id)::text = TRIM(BOTH FROM "
+        "(kms_key_id)::text)) AND ((kms_key_version_id)::text = "
+        "TRIM(BOTH FROM (kms_key_version_id)::text)) AND "
+        "(length((kms_key_id)::text) >= 3) AND "
+        "(length((kms_key_id)::text) <= 256) AND "
+        "(length((kms_key_version_id)::text) >= 8) AND "
+        "(length((kms_key_version_id)::text) <= 128))"
+    )
+
+    _assert_kms_data_key_pin_guards(
+        triggers=triggers,
+        columns=columns,
+        constraints=constraints,
+        indexes=indexes,
+        table_acl=table_acl,
+        function_acl=function_acl,
+        expected_runtime_role="star_oam_api",
+        expected_migration_role="star_oam_migrator",
+    )
+
+
+def test_0040_kms_guard_reports_exact_index_field() -> None:
+    (
+        triggers,
+        columns,
+        constraints,
+        indexes,
+        table_acl,
+        function_acl,
+    ) = _valid_kms_data_key_pin_catalog()
+    primary = next(
+        row
+        for row in indexes
+        if row["index_name"] == "pk_kms_data_key_pins_coordinate_0040"
+    )
+    primary["is_immediate"] = False
+
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match="pk_kms_data_key_pins_coordinate_0040\\.is_immediate",
+    ):
+        _assert_kms_data_key_pin_guards(
+            triggers=triggers,
+            columns=columns,
+            constraints=constraints,
+            indexes=indexes,
+            table_acl=table_acl,
+            function_acl=function_acl,
+            expected_runtime_role="star_oam_api",
+            expected_migration_role="star_oam_migrator",
+        )
+
+
 def _load_sms_dispatch_migration_0041() -> object:
     spec = importlib.util.spec_from_file_location(
         "rsc_migration_0041_sms_dispatch_security_manifest",

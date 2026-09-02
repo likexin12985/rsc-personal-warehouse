@@ -5521,25 +5521,34 @@ def _assert_kms_data_key_pin_guards(
         if row is None:
             continue
         expected_columns = expected["columns"]
-        if (
-            row.get("owner_name") != expected_migration_role
-            or row.get("constraint_name") != expected["constraint"]
-            or row.get("access_method") != "btree"
-            or row.get("is_unique") is not True
-            or row.get("is_primary") is not expected["primary"]
-            or row.get("is_exclusion") is not False
-            or row.get("is_immediate") is not True
-            or row.get("is_valid") is not True
-            or row.get("is_ready") is not True
-            or row.get("is_live") is not True
-            or row.get("nulls_not_distinct") is not False
-            or row.get("key_attribute_count") != len(expected_columns)
-            or row.get("total_attribute_count") != len(expected_columns)
-            or row.get("has_expressions") is not False
-            or tuple(row.get("key_columns") or ()) != expected_columns
-            or row.get("predicate") not in (None, "")
-        ):
-            failures.append(f"{name}.shape")
+        equality_fields = {
+            "owner_name": expected_migration_role,
+            "constraint_name": expected["constraint"],
+            "access_method": "btree",
+            "key_attribute_count": len(expected_columns),
+            "total_attribute_count": len(expected_columns),
+        }
+        for field, expected_value in equality_fields.items():
+            if row.get(field) != expected_value:
+                failures.append(f"{name}.{field}")
+        identity_fields = {
+            "is_unique": True,
+            "is_primary": expected["primary"],
+            "is_exclusion": False,
+            "is_immediate": True,
+            "is_valid": True,
+            "is_ready": True,
+            "is_live": True,
+            "nulls_not_distinct": False,
+            "has_expressions": False,
+        }
+        for field, expected_value in identity_fields.items():
+            if row.get(field) is not expected_value:
+                failures.append(f"{name}.{field}")
+        if tuple(row.get("key_columns") or ()) != expected_columns:
+            failures.append(f"{name}.key_columns")
+        if row.get("predicate") not in (None, ""):
+            failures.append(f"{name}.predicate")
 
     _assert_kms_pin_acl_rows(
         rows=table_acl,
@@ -6134,6 +6143,11 @@ def _compact_kms_pin_check_definition(value: object) -> str | None:
     normalized = re.sub(
         r"::\s*(?:character\s+varying|varchar|text)(?:\s*\[\s*\])?",
         "",
+        normalized,
+    )
+    normalized = re.sub(
+        r"\btrim\s*\(\s*both\s+from\s+",
+        "trim(",
         normalized,
     )
     normalized = re.sub(r"\bbtrim\b", "trim", normalized)
