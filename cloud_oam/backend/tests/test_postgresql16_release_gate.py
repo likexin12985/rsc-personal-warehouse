@@ -3977,6 +3977,11 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         )
         _assert_single_owner_and_process_kill(api_engine)
 
+        # The preceding 0042 work-order lock proof intentionally creates a
+        # migrator-owned formal fixture.  Remove only the disposable CI sync
+        # graph after that proof so the multi-revision downgrade can reach and
+        # independently exercise 0041's nonempty SMS challenge blocker.
+        _clear_disposable_oam_sync_graph()
         blocked_downgrade = _run_alembic(
             "downgrade", "20260901_0040", expect_success=False
         )
