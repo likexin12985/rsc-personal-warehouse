@@ -14,6 +14,7 @@ readonly PROJECT_ROOT="${CLOUD_OAM_DIR:h}"
 readonly USER_HOME="${HOME:A}"
 readonly CONFIG_DIR="${USER_HOME}/.config/rsc-edge-sync"
 readonly CONFIG_FILE="${CONFIG_DIR}/env"
+readonly LAST_FULL_DATE_FILE="${CONFIG_DIR}/last-completed-full-sync-date"
 readonly PYTHON="${RSC_EDGE_PYTHON:-/usr/bin/python3}"
 readonly SYNC_SCRIPT="${SCRIPT_DIR}/oam_edge_sync.py"
 readonly LOG_DIR="${USER_HOME}/Library/Logs/RSC"
@@ -46,9 +47,16 @@ fi
         printf 'python interpreter is unavailable: %s\n' "${PYTHON}"
         exit 2
     fi
+    full_sync_date="$(date '+%Y-%m-%d')"
+    force_full_args=()
+    if [[ ! -r "${LAST_FULL_DATE_FILE}" ]] || \
+       [[ "$(<"${LAST_FULL_DATE_FILE}")" != "${full_sync_date}" ]]; then
+        force_full_args=(--force-full)
+    fi
     "${PYTHON}" "${SYNC_SCRIPT}" \
         --entity all \
         --batch-size 300 \
+        "${force_full_args[@]}" \
         --scheduled
     base_exit_code=$?
     if (( base_exit_code != 0 )); then
@@ -58,10 +66,16 @@ fi
     "${PYTHON}" "${SYNC_SCRIPT}" \
         --entity work-orders \
         --work-order-days 30 \
-        --work-order-detail-limit 100 \
         --batch-size 300 \
+        "${force_full_args[@]}" \
         --scheduled
     exit_code=$?
+    if (( exit_code == 0 && ${#force_full_args[@]} > 0 )); then
+        full_marker_tmp="${LAST_FULL_DATE_FILE}.tmp.$$"
+        printf '%s\n' "${full_sync_date}" >"${full_marker_tmp}"
+        chmod 600 "${full_marker_tmp}"
+        mv "${full_marker_tmp}" "${LAST_FULL_DATE_FILE}"
+    fi
     printf '[%s] scheduled sync exit=%s\n' "$(date '+%Y-%m-%d %H:%M:%S %z')" "${exit_code}"
     exit "${exit_code}"
 } >>"${LOG_FILE}" 2>&1

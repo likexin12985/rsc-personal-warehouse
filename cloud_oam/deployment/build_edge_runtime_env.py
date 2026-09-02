@@ -8,9 +8,20 @@ import re
 import sys
 import uuid
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 
 SOURCE_PATTERN = re.compile(r"^[A-Za-z0-9._:-]+$")
+DATABASE_ROLE_PATTERN = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+RESERVED_DATABASE_ROLES = frozenset(
+    {
+        "star_oam_migrator",
+        "star_oam_api",
+        "star_oam_backup",
+        "star_oam_projector",
+        "star_oam_edge",
+    }
+)
 PLACEHOLDER_MARKERS = (
     "replace-with",
     "replace_me",
@@ -45,12 +56,24 @@ def required(values: dict[str, str], key: str, source: Path) -> str:
 
 def build_runtime_values(edge_env: dict[str, str], edge_path: Path) -> dict[str, str]:
     database_url = required(edge_env, "RSC_EDGE_DATABASE_URL", edge_path)
+    database_role = required(edge_env, "RSC_EDGE_DATABASE_ROLE", edge_path)
     edge_secret = required(edge_env, "RSC_EDGE_SYNC_SECRET", edge_path)
     allowed_sources = required(edge_env, "RSC_EDGE_ALLOWED_SOURCES", edge_path)
     if not database_url.startswith("postgresql+psycopg://"):
         raise RuntimeError("RSC_EDGE_DATABASE_URL必须使用postgresql+psycopg专用暂存账号")
     if contains_placeholder(database_url):
         raise RuntimeError("RSC_EDGE_DATABASE_URL仍包含示例占位值")
+    if (
+        DATABASE_ROLE_PATTERN.fullmatch(database_role) is None
+        or database_role in RESERVED_DATABASE_ROLES
+    ):
+        raise RuntimeError("RSC_EDGE_DATABASE_ROLE必须是独立的专用暂存登录身份")
+    try:
+        database_username = unquote(urlsplit(database_url).username or "")
+    except ValueError as exc:
+        raise RuntimeError("RSC_EDGE_DATABASE_URL格式无效") from exc
+    if database_username != database_role:
+        raise RuntimeError("RSC_EDGE_DATABASE_URL用户名与专用暂存身份不一致")
     if len(edge_secret) < 32 or contains_placeholder(edge_secret):
         raise RuntimeError("边缘同步密钥长度不足32位")
     sources = [item.strip() for item in allowed_sources.split(",") if item.strip()]
@@ -59,6 +82,7 @@ def build_runtime_values(edge_env: dict[str, str], edge_path: Path) -> dict[str,
 
     values = {
         "OAM_DATABASE_URL": database_url,
+        "OAM_DATABASE_EXPECTED_EDGE_ROLE": database_role,
         "OAM_EDGE_SYNC_SECRET": edge_secret,
         "OAM_EDGE_SYNC_ALLOWED_SOURCES": ",".join(dict.fromkeys(sources)),
     }

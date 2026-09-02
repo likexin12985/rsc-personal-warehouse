@@ -300,3 +300,147 @@ def test_batch_id_cannot_be_reused_across_snapshots():
         assert "其他快照" in error.value.detail
         db.rollback()
         assert len(list(db.scalars(select(ExternalSyncSnapshot)))) == 1
+
+
+def test_cloud_scope_namespace_cannot_be_relabeled_to_another_org():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    snapshot_at = datetime(2026, 8, 30, 6, tzinfo=timezone.utc)
+
+    def payload(snapshot_id: str, company_id: str, org_code: str):
+        return EdgeSyncSnapshotBatchIn(
+            snapshot_id=snapshot_id,
+            scope_key="work-orders:recent-30d",
+            sync_mode="full",
+            company_id=company_id,
+            org_code=org_code,
+            entity_type="work_order",
+            snapshot_at=snapshot_at,
+            sequence=1,
+            total_sequences=1,
+            records=[
+                {
+                    "business_key": f"work-order:{snapshot_id}",
+                    "source_updated_at": snapshot_at,
+                    "operation": "upsert",
+                    "data": {
+                        "id": snapshot_id,
+                        "code": snapshot_id,
+                        "statusCode": "processing",
+                        "executorId": "executor-1",
+                        "authCompanyId": company_id,
+                        "province": "浙江省",
+                        "updateTime": "2026-08-30 14:00:00",
+                    },
+                }
+            ],
+        )
+
+    with Session(engine) as db:
+        receive_snapshot_batch(
+            payload("snapshot-bound-scope-one", "company-nio", "org-nio"),
+            request(),
+            verified("edge-scope-owner", "bound-scope-first", b"first"),
+            db,
+        )
+        with pytest.raises(HTTPException) as error:
+            receive_snapshot_batch(
+                payload(
+                    "snapshot-bound-scope-two",
+                    "company-other",
+                    "org-other",
+                ),
+                request(),
+                verified("edge-scope-owner", "bound-scope-second", b"second"),
+                db,
+            )
+
+        assert error.value.status_code == 409
+        assert "已绑定其他企业或组织" in error.value.detail
+        db.rollback()
+        snapshots = tuple(db.scalars(select(ExternalSyncSnapshot)).all())
+        assert len(snapshots) == 1
+        assert snapshots[0].company_id == "company-nio"
+        assert snapshots[0].org_code == "org-nio"
+
+
+def test_receiver_rejects_retired_plaintext_work_order_details_before_staging():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    payload = EdgeSyncSnapshotBatchIn(
+        snapshot_id="snapshot-retired-work-order-detail",
+        scope_key="work-orders:recent-30d",
+        sync_mode="full",
+        company_id="company-nio",
+        org_code="org-nio",
+        entity_type="work_order_detail",
+        snapshot_at=datetime(2026, 8, 30, 7, tzinfo=timezone.utc),
+        sequence=1,
+        total_sequences=1,
+        records=[
+            {
+                "business_key": "work-order-detail:one",
+                "source_updated_at": None,
+                "operation": "upsert",
+                "data": {"customerMobile": "13800000000"},
+            }
+        ],
+    )
+
+    with Session(engine) as db:
+        with pytest.raises(HTTPException) as error:
+            receive_snapshot_batch(
+                payload,
+                request(),
+                verified("edge-retired-detail", "retired-detail-batch"),
+                db,
+            )
+        assert error.value.status_code == 410
+        assert db.scalar(select(ExternalSyncSnapshot)) is None
+
+
+def test_receiver_rejects_work_order_fields_outside_minimal_whitelist():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    payload = EdgeSyncSnapshotBatchIn(
+        snapshot_id="snapshot-work-order-extra-field",
+        scope_key="work-orders:recent-30d",
+        sync_mode="full",
+        company_id="company-nio",
+        org_code="org-nio",
+        entity_type="work_order",
+        snapshot_at=datetime(2026, 8, 30, 8, tzinfo=timezone.utc),
+        sequence=1,
+        total_sequences=1,
+        records=[
+            {
+                "business_key": "work-order:WT-EXTRA",
+                "source_updated_at": datetime(
+                    2026, 8, 30, 8, tzinfo=timezone.utc
+                ),
+                "operation": "upsert",
+                "data": {
+                    "id": "work-order-extra",
+                    "code": "WT-EXTRA",
+                    "statusCode": "processing",
+                    "executorId": "executor-1",
+                    "authCompanyId": "company-nio",
+                    "province": "浙江省",
+                    "updateTime": "2026-08-30 16:00:00",
+                    "customerMobile": "13800000000",
+                },
+            }
+        ],
+    )
+
+    with Session(engine) as db:
+        with pytest.raises(HTTPException) as error:
+            receive_snapshot_batch(
+                payload,
+                request(),
+                verified("edge-extra-field", "extra-field-batch"),
+                db,
+            )
+        assert error.value.status_code == 409
+        assert "七字段白名单" in error.value.detail
+        assert db.scalar(select(ExternalSyncSnapshot)) is None

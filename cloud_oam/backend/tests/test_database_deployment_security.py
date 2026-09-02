@@ -12,6 +12,9 @@ ROLE_INIT = (
 )
 ENV_EXAMPLE = ROOT / ".env.example"
 BACKUP = ROOT / "scripts" / "backup.sh"
+PG16_WORKFLOW = ROOT.parent / ".github" / "workflows" / (
+    "postgresql16-release-gate.yml"
+)
 
 
 def test_compose_never_injects_bootstrap_or_migrator_secret_into_api() -> None:
@@ -81,18 +84,40 @@ def test_fresh_database_initializer_creates_distinct_non_superuser_roles() -> No
     subprocess.run(["sh", "-n", str(ROLE_INIT)], check=True)
     script = ROLE_INIT.read_text(encoding="utf-8")
     normalized = " ".join(script.split())
-    for role in ("star_oam_migrator", "star_oam_api", "star_oam_backup"):
+    for role in (
+        "star_oam_migrator",
+        "star_oam_api",
+        "star_oam_backup",
+        "star_oam_projector",
+    ):
         assert f"CREATE ROLE {role} LOGIN" in normalized
         assert f"ALTER ROLE {role} WITH LOGIN" in normalized
     assert normalized.count(
         "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
-    ) == 3
+    ) == 4
     assert "ALTER SCHEMA public OWNER TO star_oam_migrator" in normalized
-    assert "GRANT USAGE ON SCHEMA public TO star_oam_api, star_oam_backup" in normalized
+    assert (
+        "GRANT USAGE ON SCHEMA public TO star_oam_api, star_oam_backup, "
+        "star_oam_projector"
+    ) in normalized
     assert "ON TABLES TO star_oam_api" not in normalized
     assert "ON SEQUENCES TO star_oam_api" not in normalized
     assert "GRANT SELECT ON TABLES TO star_oam_backup" in normalized
     assert "GRANT star_oam_migrator TO star_oam_api" not in normalized
+    assert (
+        "REVOKE CONNECT, TEMPORARY ON DATABASE %I FROM PUBLIC"
+        in normalized
+    )
+    assert "database_row.datname <> pg_catalog.current_database()" in normalized
+
+
+def test_postgresql16_gate_covers_main_prs_and_edge_role_provisioning() -> None:
+    workflow = PG16_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "  pull_request:\n" in workflow
+    assert "  push:\n" in workflow
+    assert workflow.count("      - main\n") >= 2
+    assert "cloud_oam/deployment/provision_edge_receiver_role.sql" in workflow
 
 
 def test_environment_and_backup_use_dedicated_database_credentials() -> None:
@@ -102,6 +127,7 @@ def test_environment_and_backup_use_dedicated_database_credentials() -> None:
         "OAM_DB_MIGRATOR_PASSWORD",
         "OAM_DB_API_PASSWORD",
         "OAM_DB_BACKUP_PASSWORD",
+        "OAM_DB_PROJECTOR_PASSWORD",
     ):
         assert key in example
     backup = BACKUP.read_text(encoding="utf-8")

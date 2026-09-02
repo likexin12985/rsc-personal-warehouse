@@ -1,3 +1,5 @@
+import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -318,13 +320,12 @@ def test_load_work_orders_requires_complete_exact_company_scope():
         "get_work_orders_paged",
         return_value=(2, rows, True),
     ):
-        normalized, source_by_code = oam_edge_sync.load_work_orders(
+        normalized = oam_edge_sync.load_work_orders(
             days=30,
             target_company_id=COMPANY_ID,
         )
 
     assert [row["code"] for row in normalized] == ["WT-NIO-001"]
-    assert list(source_by_code) == ["WT-NIO-001"]
 
     with patch.object(
         oam_edge_sync,
@@ -335,151 +336,327 @@ def test_load_work_orders_requires_complete_exact_company_scope():
             oam_edge_sync.load_work_orders(days=30, target_company_id=COMPANY_ID)
 
 
-def test_refresh_work_order_details_keeps_verified_cache_and_refreshes_changes():
+def test_work_order_records_emit_minimal_timezone_aware_projection():
     rows = [
         {
+            "id": "1001",
             "code": "WT-NIO-001",
+            "status": "处理中",
             "statusCode": "processing",
+            "executor": "工程师姓名不得出边缘最小投影",
+            "executorId": "employee-external-001",
+            "executorPhone": "13800000000",
+            "authCompanyId": COMPANY_ID,
+            "province": "浙江省",
             "updateTime": "2026-08-30 10:00:00",
-            "createTime": "2026-08-29 10:00:00",
-        },
-        {
-            "code": "WT-NIO-002",
-            "statusCode": "end",
-            "updateTime": "2026-08-29 11:00:00",
-            "createTime": "2026-08-28 10:00:00",
-        },
-    ]
-    cached_detail = {
-        "summary": {"code": "WT-NIO-002"},
-        "errors": [],
-    }
-    cache = {
-        "version": 1,
-        "cursor": 0,
-        "records": {
-            "WT-NIO-002": {
-                "sourceUpdateTime": "2026-08-29 11:00:00",
-                "detail": cached_detail,
-            }
-        },
-    }
-    source_by_code = {
-        "WT-NIO-001": {"id": "1001", "workOrderCode": "WT-NIO-001"},
-        "WT-NIO-002": {"id": "1002", "workOrderCode": "WT-NIO-002"},
-    }
-    live_detail = {"summary": {"code": "WT-NIO-001"}, "errors": []}
-    with patch.object(oam_edge_sync, "detail_order", return_value=live_detail) as read:
-        details, next_cache, summary = oam_edge_sync.refresh_work_order_details(
-            rows=rows,
-            source_by_code=source_by_code,
-            cache=cache,
-            detail_limit=1,
-        )
-
-    read.assert_called_once_with("1001", "WT-NIO-001")
-    assert details == {
-        "WT-NIO-001": live_detail,
-        "WT-NIO-002": cached_detail,
-    }
-    assert next_cache["records"]["WT-NIO-001"]["sourceUpdateTime"] == (
-        "2026-08-30 10:00:00"
-    )
-    assert summary == {
-        "listed": 2,
-        "cachedDetails": 2,
-        "changedDetails": 1,
-        "refreshedDetails": 1,
-    }
-
-
-def test_refresh_work_order_details_allows_only_wait_receive_process_warning():
-    rows = [
-        {
-            "code": "WT-NIO-001",
-            "statusCode": "wait_receive",
-            "updateTime": "2026-08-30 10:00:00",
-            "createTime": "2026-08-30 09:00:00",
+            "deviceCodes": ["sensitive-device"],
         }
     ]
-    source_by_code = {
-        "WT-NIO-001": {"id": "1001", "workOrderCode": "WT-NIO-001"}
+
+    records = oam_edge_sync.work_order_records(
+        rows,
+        expected_company_id=COMPANY_ID,
+    )
+
+    assert records == [
+        {
+            "business_key": "work-order:WT-NIO-001",
+            "source_updated_at": "2026-08-30T02:00:00+00:00",
+            "data": {
+                "id": "1001",
+                "code": "WT-NIO-001",
+                "statusCode": "processing",
+                "executorId": "employee-external-001",
+                "authCompanyId": COMPANY_ID,
+                "province": "浙江省",
+                "updateTime": "2026-08-30 10:00:00",
+            },
+        }
+    ]
+    assert "executorPhone" not in records[0]["data"]
+    assert "executor" not in records[0]["data"]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"id": ""}, "稳定来源ID"),
+        ({"statusCode": "future_unknown_state"}, "状态未纳入正式映射"),
+        ({"executorId": ""}, "缺少执行人来源ID"),
+        ({"authCompanyId": "other-company"}, "企业范围不一致"),
+        ({"updateTime": ""}, "缺少来源更新时间"),
+        ({"updateTime": "not-a-time"}, "来源更新时间格式无效"),
+        ({"updateTime": "2026-08-30"}, "来源更新时间格式无效"),
+    ],
+)
+def test_work_order_records_fail_closed_on_incomplete_source_evidence(
+    overrides,
+    message,
+):
+    row = {
+        "id": "1001",
+        "code": "WT-NIO-001",
+        "statusCode": "processing",
+        "executorId": "employee-external-001",
+        "authCompanyId": COMPANY_ID,
+        "province": "浙江省",
+        "updateTime": "2026-08-30T10:00:00+08:00",
+        **overrides,
     }
-    source_error = {
-        "section": "流程节点",
-        "endpoint": "/work_order/process_node_data",
-        "message": "E00001 未知错误",
-    }
-    detail = {
-        "summary": {"code": "WT-NIO-001", "statusCode": "wait_receive"},
-        "counts": {"errors": 1},
-        "errors": [source_error],
-    }
-    with patch.object(oam_edge_sync, "detail_order", return_value=detail):
-        details, _, _ = oam_edge_sync.refresh_work_order_details(
-            rows=rows,
-            source_by_code=source_by_code,
-            cache={"version": 1, "cursor": 0, "records": {}},
-            detail_limit=1,
+    with pytest.raises(oam_edge_sync.EdgeSyncError, match=message):
+        oam_edge_sync.work_order_records(
+            [row],
+            expected_company_id=COMPANY_ID,
         )
 
-    normalized = details["WT-NIO-001"]
-    assert normalized["errors"] == []
-    assert normalized["counts"] == {"errors": 0, "warnings": 1}
-    assert normalized["warnings"][0]["reason"] == "待接单阶段尚无流程节点"
 
-    blocking = {
-        **detail,
-        "summary": {"code": "WT-NIO-001", "statusCode": "processing"},
-    }
-    with patch.object(oam_edge_sync, "detail_order", return_value=blocking):
-        with pytest.raises(oam_edge_sync.EdgeSyncError, match="流程节点"):
-            oam_edge_sync.refresh_work_order_details(
-                rows=rows,
-                source_by_code=source_by_code,
-                cache={"version": 1, "cursor": 0, "records": {}},
-                detail_limit=1,
-            )
-
-
-def test_work_order_detail_records_rejects_code_mismatch_and_oversize():
-    with pytest.raises(oam_edge_sync.EdgeSyncError, match="编号不一致"):
-        oam_edge_sync.work_order_detail_records(
-            {"WT-NIO-001": {"summary": {"code": "WT-NIO-002"}}}
-        )
-    with pytest.raises(oam_edge_sync.EdgeSyncError, match="64KB"):
-        oam_edge_sync.work_order_detail_records(
-            {
-                "WT-NIO-001": {
-                    "summary": {"code": "WT-NIO-001"},
-                    "payload": "x" * (65 * 1024),
+def work_order_snapshot():
+    return {
+        "work_order": oam_edge_sync.work_order_records(
+            [
+                {
+                    "id": "1001",
+                    "code": "WT-NIO-001",
+                    "statusCode": "processing",
+                    "executorId": "employee-external-001",
+                    "authCompanyId": COMPANY_ID,
+                    "province": "浙江省",
+                    "updateTime": "2026-08-30 10:00:00",
                 }
+            ],
+            expected_company_id=COMPANY_ID,
+        )
+    }
+
+
+def build_work_order_outbox(*, state, force_full=False, **overrides):
+    values = {
+        "source_instance": "admin-mac",
+        "scope_key": "work-orders:recent-30d",
+        "warehouse_filter": None,
+        "company_id": COMPANY_ID,
+        "org_code": ORG_CODE,
+        "snapshot_at": "2026-08-30T02:01:00+00:00",
+        "snapshots": work_order_snapshot(),
+        "state": state,
+        "force_full": force_full,
+        "batch_size": 100,
+    }
+    values.update(overrides)
+    return oam_edge_sync.build_outbox(**values)
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"source_instance": "second-mac"}, "来源实例"),
+        ({"company_id": "other-company"}, "companyId"),
+        ({"org_code": "other-org"}, "orgCode"),
+    ],
+)
+def test_work_order_state_coordinate_drift_requires_explicit_full(
+    override,
+    message,
+    tmp_path,
+):
+    state = {"version": 2, "sourceInstance": "admin-mac", "scopes": {}}
+    completed = build_work_order_outbox(state=state, force_full=True)
+    oam_edge_sync.persist_completed_state(tmp_path / "state.json", state, completed)
+
+    with pytest.raises(oam_edge_sync.EdgeSyncError, match=message):
+        build_work_order_outbox(state=state, **override)
+
+    reset = build_work_order_outbox(state=state, force_full=True, **override)
+    assert reset["syncMode"] == "full"
+    assert reset["entities"]["work_order"]["deltaRecordCount"] == 1
+
+
+def test_legacy_scope_with_entities_cannot_be_reused_without_coordinates():
+    record = work_order_snapshot()["work_order"][0]
+    state = {
+        "version": 2,
+        "sourceInstance": "admin-mac",
+        "scopes": {
+            "work-orders:recent-30d": {
+                "companyId": COMPANY_ID,
+                "orgCode": ORG_CODE,
+                "entities": {
+                    "work_order": {
+                        "index": {
+                            record["business_key"]: oam_edge_sync.record_sha256(
+                                record
+                            )
+                        }
+                    }
+                },
             }
+        },
+    }
+
+    with pytest.raises(oam_edge_sync.EdgeSyncError, match="scope.sourceInstance"):
+        build_work_order_outbox(state=state)
+    assert build_work_order_outbox(state=state, force_full=True)["syncMode"] == "full"
+
+
+def test_malformed_previous_index_requires_explicit_full():
+    state = {
+        "version": 2,
+        "sourceInstance": "admin-mac",
+        "scopes": {
+            "work-orders:recent-30d": {
+                "sourceInstance": "admin-mac",
+                "scopeKey": "work-orders:recent-30d",
+                "companyId": COMPANY_ID,
+                "orgCode": ORG_CODE,
+                "entities": {"work_order": {"index": []}},
+            }
+        },
+    }
+
+    with pytest.raises(oam_edge_sync.EdgeSyncError, match="index格式无效"):
+        build_work_order_outbox(state=state)
+    assert build_work_order_outbox(state=state, force_full=True)["syncMode"] == "full"
+
+
+def test_completed_state_binds_source_company_org_and_scope(tmp_path):
+    state = {"version": 2, "sourceInstance": "admin-mac", "scopes": {}}
+    full = build_work_order_outbox(state=state, force_full=True)
+    state_file = tmp_path / "state.json"
+    oam_edge_sync.persist_completed_state(state_file, state, full)
+
+    scope_state = state["scopes"]["work-orders:recent-30d"]
+    assert {
+        key: scope_state[key]
+        for key in ("sourceInstance", "scopeKey", "companyId", "orgCode")
+    } == {
+        "sourceInstance": "admin-mac",
+        "scopeKey": "work-orders:recent-30d",
+        "companyId": COMPANY_ID,
+        "orgCode": ORG_CODE,
+    }
+    assert build_work_order_outbox(state=state)["syncMode"] == "incremental"
+
+
+def test_formal_work_order_feed_rejects_detail_or_relation_entities():
+    snapshots = {
+        **work_order_snapshot(),
+        "work_order_detail": [],
+        "work_order_relation": [],
+    }
+    with pytest.raises(oam_edge_sync.EdgeSyncError, match="只能包含work_order"):
+        build_work_order_outbox(
+            state={"version": 2, "sourceInstance": "admin-mac", "scopes": {}},
+            force_full=True,
+            snapshots=snapshots,
         )
 
 
-def test_work_order_detail_records_split_large_related_orders_losslessly():
-    related_orders = [
-        {"code": f"WT-RELATED-{index:04d}", "description": "x" * 900}
-        for index in range(100)
+def test_formal_work_order_upload_manifest_contains_only_work_order(tmp_path):
+    state = {"version": 2, "sourceInstance": "admin-mac", "scopes": {}}
+    outbox = build_work_order_outbox(state=state, force_full=True)
+    requests = []
+
+    def accept(**kwargs):
+        requests.append(kwargs)
+        accepted_records = len(kwargs["payload"].get("records", []))
+        return {"ok": True, "accepted_records": accepted_records}
+
+    with patch.object(oam_edge_sync, "send_signed_json", side_effect=accept):
+        oam_edge_sync.upload_outbox(
+            outbox=outbox,
+            api_base="http://127.0.0.1:18001/api",
+            secret="s" * 32,
+            state_file=tmp_path / "state.json",
+            state=state,
+        )
+
+    batches = [item for item in requests if item["endpoint"].endswith("/batches")]
+    completion = next(
+        item for item in requests if item["endpoint"].endswith("/complete")
+    )
+    assert {item["payload"]["entity_type"] for item in batches} == {
+        "work_order"
+    }
+    assert [entity["entity_type"] for entity in completion["payload"]["entities"]] == [
+        "work_order"
     ]
-    details, relation_chunks = oam_edge_sync.work_order_detail_records(
-        {
-            "WT-NIO-001": {
-                "summary": {"code": "WT-NIO-001"},
-                "relatedOrders": related_orders,
-            }
-        }
+
+
+def test_daily_scheduler_forces_one_complete_cycle_without_detail_refresh():
+    scheduler = (Path(__file__).with_name("run_scheduled_sync.sh")).read_text(
+        encoding="utf-8"
     )
 
-    assert details[0]["data"]["relatedOrders"] == []
-    assert len(relation_chunks) > 1
-    assert all(
-        len(oam_edge_sync.canonical_json(record["data"])) <= 64 * 1024
-        for record in relation_chunks
+    assert "LAST_FULL_DATE_FILE" in scheduler
+    assert scheduler.count('"${force_full_args[@]}"') == 2
+    assert "exit_code == 0" in scheduler
+    assert "work-order-detail-limit" not in scheduler
+    assert "work-order-cache" not in scheduler
+
+
+def run_fake_scheduled_sync(tmp_path, *, work_order_exit="0"):
+    config_dir = tmp_path / ".config" / "rsc-edge-sync"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "env").write_text("", encoding="utf-8")
+    calls_file = tmp_path / "calls.txt"
+    fake_python = tmp_path / "fake-python"
+    fake_python.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >>"${RSC_TEST_CALLS}"\n'
+        'case " $* " in\n'
+        '  *" --entity work-orders "*) exit "${RSC_TEST_WORK_ORDER_EXIT:-0}" ;;\n'
+        "esac\n"
+        "exit 0\n",
+        encoding="utf-8",
     )
-    assert [
-        item
-        for record in relation_chunks
-        for item in record["data"]["items"]
-    ] == related_orders
+    fake_python.chmod(0o700)
+    scheduler = Path(__file__).with_name("run_scheduled_sync.sh")
+    environment = {
+        "HOME": str(tmp_path),
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "RSC_EDGE_PYTHON": str(fake_python),
+        "RSC_TEST_CALLS": str(calls_file),
+        "RSC_TEST_WORK_ORDER_EXIT": work_order_exit,
+    }
+    completed = subprocess.run(
+        ["/bin/zsh", str(scheduler)],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    calls = calls_file.read_text(encoding="utf-8").splitlines()
+    return completed, calls, config_dir / "last-completed-full-sync-date"
+
+
+def test_daily_scheduler_marks_full_only_after_both_scopes_complete(tmp_path):
+    first, first_calls, marker = run_fake_scheduled_sync(tmp_path)
+
+    assert first.returncode == 0
+    assert len(first_calls) == 2
+    assert all("--force-full" in call for call in first_calls)
+    assert marker.is_file()
+
+    second, all_calls, _ = run_fake_scheduled_sync(tmp_path)
+    assert second.returncode == 0
+    assert len(all_calls) == 4
+    assert all("--force-full" not in call for call in all_calls[-2:])
+
+
+def test_daily_scheduler_does_not_mark_partial_full_cycle(tmp_path):
+    failed, first_calls, marker = run_fake_scheduled_sync(
+        tmp_path,
+        work_order_exit="7",
+    )
+
+    assert failed.returncode == 7
+    assert len(first_calls) == 2
+    assert all("--force-full" in call for call in first_calls)
+    assert not marker.exists()
+
+    retried, all_calls, marker = run_fake_scheduled_sync(tmp_path)
+    assert retried.returncode == 0
+    assert len(all_calls) == 4
+    assert all("--force-full" in call for call in all_calls[-2:])
+    assert marker.is_file()

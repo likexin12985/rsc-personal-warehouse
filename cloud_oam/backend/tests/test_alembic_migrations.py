@@ -316,7 +316,14 @@ MATERIAL_REQUEST_WORK_ORDER_LOCK_REVISION = (
     / "versions"
     / "20260902_0042_material_request_work_order_lock.py"
 )
-HEAD_REVISION = "20260902_0042"
+OAM_WORK_ORDER_PROJECTOR_BOUNDARY_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260902_0043_oam_work_order_projector_boundary.py"
+)
+HEAD_REVISION = "20260902_0043"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -328,6 +335,8 @@ MATERIAL_REQUEST_COMMAND_STATUS_LOOKUP_REVISION_ID = "20260901_0039"
 KMS_DATA_KEY_PINS_REVISION_ID = "20260901_0040"
 SMS_DISPATCH_OWNERSHIP_REVISION_ID = "20260902_0041"
 MATERIAL_REQUEST_WORK_ORDER_LOCK_REVISION_ID = "20260902_0042"
+OAM_WORK_ORDER_PROJECTOR_BOUNDARY_REVISION_ID = "20260902_0043"
+PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION = "20260902_0042"
 PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION = "20260902_0041"
 PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION = "20260901_0040"
 PRE_KMS_DATA_KEY_PINS_HEAD_REVISION = "20260901_0039"
@@ -1321,23 +1330,23 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert head is not None
     assert (
         head.down_revision
-        == PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION
+        == PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION
     )
     previous_head = script.get_revision(
-        PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION
+        PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION
     )
     assert previous_head is not None
     assert (
         previous_head.down_revision
-        == PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION
+        == PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION
     )
-    previous_kms_head = script.get_revision(
-        PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION
+    previous_sms_head = script.get_revision(
+        PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION
     )
-    assert previous_kms_head is not None
+    assert previous_sms_head is not None
     assert (
-        previous_kms_head.down_revision
-        == PRE_KMS_DATA_KEY_PINS_HEAD_REVISION
+        previous_sms_head.down_revision
+        == PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION
     )
 
 
@@ -1363,7 +1372,8 @@ def test_0042_postgresql_offline_sql_is_function_only_and_exact(
     )
     command.upgrade(
         config,
-        f"{PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION}:{HEAD_REVISION}",
+        f"{PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION}:"
+        f"{MATERIAL_REQUEST_WORK_ORDER_LOCK_REVISION_ID}",
         sql=True,
     )
     sql = upgrade_output.getvalue()
@@ -1396,7 +1406,8 @@ def test_0042_postgresql_offline_sql_is_function_only_and_exact(
     )
     command.downgrade(
         downgrade_config,
-        f"{HEAD_REVISION}:{PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION}",
+        f"{MATERIAL_REQUEST_WORK_ORDER_LOCK_REVISION_ID}:"
+        f"{PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION}",
         sql=True,
     )
     downgrade_sql = downgrade_output.getvalue()
@@ -1423,14 +1434,14 @@ def test_0042_sqlite_is_schema_noop_and_only_moves_revision(
     finally:
         before_engine.dispose()
 
-    command.upgrade(config, HEAD_REVISION)
+    command.upgrade(config, MATERIAL_REQUEST_WORK_ORDER_LOCK_REVISION_ID)
     after_engine = sa.create_engine(database_url)
     try:
         assert set(inspect(after_engine).get_table_names()) == before_tables
         with after_engine.connect() as connection:
             assert connection.exec_driver_sql(
                 "SELECT version_num FROM alembic_version"
-            ).scalar_one() == HEAD_REVISION
+            ).scalar_one() == MATERIAL_REQUEST_WORK_ORDER_LOCK_REVISION_ID
     finally:
         after_engine.dispose()
 
@@ -1442,6 +1453,221 @@ def test_0042_sqlite_is_schema_noop_and_only_moves_revision(
             assert connection.exec_driver_sql(
                 "SELECT version_num FROM alembic_version"
             ).scalar_one() == PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION
+    finally:
+        downgraded_engine.dispose()
+
+
+def test_0043_postgresql_offline_sql_is_exact_projector_acl_only(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    upgrade_output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=upgrade_output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION}:"
+        f"{OAM_WORK_ORDER_PROJECTOR_BOUNDARY_REVISION_ID}",
+        sql=True,
+    )
+    sql = upgrade_output.getvalue()
+    read_tables = (
+        "external_sync_snapshots",
+        "external_sync_snapshot_batches",
+        "external_sync_snapshot_records",
+        "external_sync_current_records",
+        "source_systems",
+        "sync_runs",
+        "sync_batches",
+        "sync_inbox_events",
+        "external_objects",
+        "external_object_versions",
+        "external_object_mappings",
+        "sync_conflicts",
+        "organizations",
+        "people",
+        "oam_work_orders",
+    )
+    qualified_read_tables = ", ".join(
+        f"public.{table_name}" for table_name in read_tables
+    )
+
+    assert "-- Running upgrade 20260902_0042 -> 20260902_0043" in sql
+    assert "rolname = 'star_oam_migrator'" in sql
+    assert "rolname = 'star_oam_projector'" in sql
+    assert "0043 projector boundary missing tables" in sql
+    assert "REVOKE ALL ON SCHEMA public FROM star_oam_projector" in sql
+    assert "REVOKE ALL ON SCHEMA public FROM PUBLIC" in sql
+    assert "GRANT USAGE ON SCHEMA public TO star_oam_projector" in sql
+    assert (
+        "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public "
+        "FROM star_oam_projector"
+    ) in sql
+    assert (
+        f"GRANT SELECT ON TABLE {qualified_read_tables} TO star_oam_projector"
+    ) in sql
+    for table_name, columns in {
+        "sync_runs": (
+            "id, source_system_id, run_key, scope_key, mode, watermark_from, "
+            "watermark_to, status, manifest_sha256, started_at, completed_at, "
+            "failure_code, failure_detail, created_at, updated_at"
+        ),
+        "sync_batches": (
+            "id, run_id, entity_type, sequence, record_count, body_sha256, "
+            "status, received_at, validated_at, created_at"
+        ),
+        "sync_inbox_events": (
+            "id, batch_id, source_system_id, external_event_id, entity_type, "
+            "external_id, source_version, source_updated_at, payload_jsonb, "
+            "payload_sha256, status, error_code, error_detail, processed_at, "
+            "created_at"
+        ),
+        "external_objects": (
+            "id, source_system_id, entity_type, external_id, "
+            "current_version_id, deleted_at, created_at, updated_at"
+        ),
+        "external_object_versions": (
+            "id, external_object_id, source_version, source_updated_at, "
+            "valid_from, valid_to, payload_jsonb, payload_sha256, is_current, "
+            "created_at"
+        ),
+        "sync_conflicts": (
+            "id, run_id, inbox_event_id, external_object_id, dedup_key, "
+            "conflict_type, external_value_jsonb, local_value_jsonb, status, "
+            "resolution_jsonb, resolved_by, resolved_at, created_at, updated_at"
+        ),
+        "oam_work_orders": (
+            "id, external_object_id, work_order_no, organization_id, "
+            "engineer_person_id, status, source_updated_at, created_at, updated_at"
+        ),
+    }.items():
+        assert (
+            f"GRANT INSERT ({columns}) ON TABLE public.{table_name} "
+            "TO star_oam_projector"
+        ) in sql
+    assert "GRANT INSERT ON TABLE" not in sql
+    for table_name, columns in {
+        "sync_runs": (
+            "status, manifest_sha256, completed_at, failure_code, "
+            "failure_detail, updated_at"
+        ),
+        "sync_batches": "status, validated_at",
+        "sync_inbox_events": "status, error_code, error_detail, processed_at",
+        "external_objects": "current_version_id, updated_at",
+        "external_object_versions": "is_current, valid_to",
+        "sync_conflicts": (
+            "status, resolution_jsonb, resolved_by, resolved_at, updated_at"
+        ),
+        "oam_work_orders": (
+            "work_order_no, organization_id, engineer_person_id, status, "
+            "source_updated_at, updated_at"
+        ),
+    }.items():
+        assert (
+            f"GRANT UPDATE ({columns}) ON TABLE public.{table_name} "
+            "TO star_oam_projector"
+        ) in sql
+    assert (
+        "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public "
+        "FROM star_oam_projector"
+    ) in sql
+    assert (
+        "REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public "
+        "FROM star_oam_projector"
+    ) in sql
+    assert "pg_catalog.aclexplode(attribute_row.attacl)" in sql
+    assert "pg_catalog.pg_largeobject_metadata" in sql
+    assert "pg_catalog.pg_parameter_acl" in sql
+    assert "REVOKE ALL PRIVILEGES ON LARGE OBJECT" in sql
+    assert "REVOKE ALL PRIVILEGES ON PARAMETER" in sql
+    assert "0043 PUBLIC ACL boundary is not closed" in sql
+    assert "0043 large-object or parameter ACL boundary is not closed" in sql
+    assert "REVOKE ALL ON DATABASE %I FROM star_oam_projector" in sql
+    assert "REVOKE ALL ON DATABASE %I FROM PUBLIC" in sql
+    assert "GRANT CONNECT ON DATABASE %I TO star_oam_projector" in sql
+    assert "0043 projector cross-schema boundary is not closed" in sql
+    assert "0043 projector cross-database CONNECT boundary is not closed" in sql
+    assert "pg_catalog.pg_auth_members" in sql
+    assert "GRANT DELETE" not in sql
+    assert "GRANT TRUNCATE" not in sql
+    assert "GRANT REFERENCES" not in sql
+    assert "GRANT TRIGGER" not in sql
+    assert "GRANT EXECUTE" not in sql
+    assert "GRANT CREATE" not in sql
+    assert "CREATE TABLE" not in sql
+    assert "CREATE FUNCTION" not in sql
+
+    downgrade_output = io.StringIO()
+    downgrade_config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=downgrade_output,
+    )
+    command.downgrade(
+        downgrade_config,
+        f"{OAM_WORK_ORDER_PROJECTOR_BOUNDARY_REVISION_ID}:"
+        f"{PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION}",
+        sql=True,
+    )
+    downgrade_sql = downgrade_output.getvalue()
+    assert "-- Running downgrade 20260902_0043 -> 20260902_0042" in downgrade_sql
+    assert (
+        "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public "
+        "FROM star_oam_projector"
+    ) in downgrade_sql
+    assert (
+        "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public "
+        "FROM star_oam_projector"
+    ) in downgrade_sql
+    assert (
+        "REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public "
+        "FROM star_oam_projector"
+    ) in downgrade_sql
+    assert "REVOKE ALL ON SCHEMA public FROM star_oam_projector" in downgrade_sql
+    assert "REVOKE ALL PRIVILEGES ON LARGE OBJECT" in downgrade_sql
+    assert "REVOKE ALL PRIVILEGES ON PARAMETER" in downgrade_sql
+    assert "DROP TABLE" not in downgrade_sql
+    assert "DROP FUNCTION" not in downgrade_sql
+
+
+def test_0043_sqlite_is_schema_noop_and_only_moves_revision(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'projector-boundary-noop.db'}"
+    config = _config(database_url)
+    command.upgrade(config, PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION)
+    before_engine = sa.create_engine(database_url)
+    try:
+        before_tables = set(inspect(before_engine).get_table_names())
+        with before_engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION
+    finally:
+        before_engine.dispose()
+
+    command.upgrade(config, OAM_WORK_ORDER_PROJECTOR_BOUNDARY_REVISION_ID)
+    after_engine = sa.create_engine(database_url)
+    try:
+        assert set(inspect(after_engine).get_table_names()) == before_tables
+        with after_engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == OAM_WORK_ORDER_PROJECTOR_BOUNDARY_REVISION_ID
+    finally:
+        after_engine.dispose()
+
+    command.downgrade(config, PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION)
+    downgraded_engine = sa.create_engine(database_url)
+    try:
+        assert set(inspect(downgraded_engine).get_table_names()) == before_tables
+        with downgraded_engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION
     finally:
         downgraded_engine.dispose()
 

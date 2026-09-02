@@ -8,12 +8,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..database import get_db
 from ..dependencies import client_ip, require_roles
+from ..external_sync_scope_lock import lock_external_sync_scope
+from ..foundation_models import SourceSystem, SyncConflict, SyncRun
 from ..models import (
     ExternalSyncBatch,
     ExternalSyncCurrentRecord,
@@ -36,6 +38,26 @@ ingress_router = APIRouter(prefix="/integrations/oam/edge", tags=["integrations"
 management_router = APIRouter(prefix="/integrations/oam/edge", tags=["integrations"])
 settings = get_settings()
 HEADER_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9._:-]+$")
+OAM_SOURCE_SYSTEM_CODE = "starcharge_oam"
+OAM_WORK_ORDER_RUN_PREFIX = "oam-work-order:%"
+OAM_WORK_ORDER_SCOPE_PREFIX = "oam-work-order-scope:%"
+SYNC_FRESHNESS_SECONDS = 45 * 60
+WORK_ORDER_SCOPE_PREFIX = "work-orders:recent-"
+WORK_ORDER_ENTITY = "work_order"
+RETIRED_PLAINTEXT_WORK_ORDER_ENTITIES = frozenset(
+    {"work_order_detail", "work_order_relation"}
+)
+WORK_ORDER_STAGING_FIELDS = frozenset(
+    {
+        "id",
+        "code",
+        "statusCode",
+        "executorId",
+        "authCompanyId",
+        "province",
+        "updateTime",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +85,32 @@ def _utc_iso(value: datetime | None) -> str | None:
     return value.astimezone(timezone.utc).isoformat()
 
 
+def _aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _database_utc_now(db: Session) -> datetime:
+    value = db.scalar(select(func.current_timestamp()))
+    if not isinstance(value, datetime):
+        raise RuntimeError("数据库未返回有效UTC当前时间")
+    return _aware_utc(value)
+
+
+def _age_seconds(now: datetime, value: datetime | None) -> float | None:
+    if value is None:
+        return None
+    return round((_aware_utc(now) - _aware_utc(value)).total_seconds(), 3)
+
+
+def _fresh_age(age_seconds: float | None) -> bool:
+    return (
+        age_seconds is not None
+        and 0 <= age_seconds <= SYNC_FRESHNESS_SECONDS
+    )
+
+
 def _snapshot_metadata_matches(
     snapshot: ExternalSyncSnapshot,
     payload: EdgeSyncSnapshotBatchIn | EdgeSyncSnapshotCompleteIn,
@@ -82,6 +130,66 @@ def _snapshot_metadata_matches(
     )
 
 
+def _validate_snapshot_entity_boundary(
+    payload: EdgeSyncSnapshotBatchIn,
+) -> None:
+    """Reject retired plaintext details and enforce the seven-field feed."""
+
+    if payload.entity_type in RETIRED_PLAINTEXT_WORK_ORDER_ENTITIES:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="明文工单详情暂存协议已停用",
+        )
+    is_work_order_scope = payload.scope_key.startswith(WORK_ORDER_SCOPE_PREFIX)
+    if is_work_order_scope != (payload.entity_type == WORK_ORDER_ENTITY):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="工单实体与专用同步范围不一致",
+        )
+    if not is_work_order_scope:
+        return
+    for record in payload.records:
+        if record.operation == "delete":
+            if record.data != {} or record.source_updated_at is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="工单删除增量不得携带业务载荷",
+                )
+            continue
+        if set(record.data) != WORK_ORDER_STAGING_FIELDS:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="工单暂存载荷超出七字段白名单",
+            )
+        if record.data.get("authCompanyId") != payload.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="工单企业范围与快照头不一致",
+            )
+
+
+def _validate_snapshot_manifest_boundary(
+    payload: EdgeSyncSnapshotCompleteIn,
+) -> None:
+    entity_types = {entity.entity_type for entity in payload.entities}
+    if entity_types & RETIRED_PLAINTEXT_WORK_ORDER_ENTITIES:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="明文工单详情暂存协议已停用",
+        )
+    is_work_order_scope = payload.scope_key.startswith(WORK_ORDER_SCOPE_PREFIX)
+    if is_work_order_scope and entity_types != {WORK_ORDER_ENTITY}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="正式工单完成清单只能包含七字段工单实体",
+        )
+    if not is_work_order_scope and WORK_ORDER_ENTITY in entity_types:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="工单实体与专用同步范围不一致",
+        )
+
+
 def _get_or_create_snapshot(
     db: Session,
     payload: EdgeSyncSnapshotBatchIn | EdgeSyncSnapshotCompleteIn,
@@ -89,14 +197,37 @@ def _get_or_create_snapshot(
     *,
     for_update: bool = False,
 ) -> ExternalSyncSnapshot:
-    if for_update and db.get_bind().dialect.name == "postgresql":
-        # A row lock cannot protect the first insert because the row does not
-        # exist yet. Serialize only this source/snapshot business object so
-        # concurrent first batches stay idempotent without a global lock.
-        db.execute(
-            text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
-            {"lock_key": f"edge-snapshot:{source_instance}:{payload.snapshot_id}"},
+    if for_update:
+        # The current mirror namespace is source+scope.  Serialize the whole
+        # coordinate before the first snapshot insert, and permanently bind it
+        # to one source system, company and organization.  A reinstalled edge
+        # state must never relabel an existing cloud namespace and replace its
+        # current rows under a different tenant header.
+        lock_external_sync_scope(
+            db,
+            source_instance=source_instance,
+            scope_key=payload.scope_key,
         )
+        scope_binding = db.scalar(
+            select(ExternalSyncSnapshot)
+            .where(
+                ExternalSyncSnapshot.source_instance == source_instance,
+                ExternalSyncSnapshot.scope_key == payload.scope_key,
+            )
+            .order_by(ExternalSyncSnapshot.received_at, ExternalSyncSnapshot.id)
+            .limit(1)
+        )
+        if scope_binding is not None and any(
+            (
+                scope_binding.source_system != payload.source_system,
+                scope_binding.company_id != payload.company_id,
+                scope_binding.org_code != payload.org_code,
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="同步范围已绑定其他企业或组织坐标",
+            )
     query = select(ExternalSyncSnapshot).where(
         ExternalSyncSnapshot.source_instance == source_instance,
         ExternalSyncSnapshot.snapshot_id == payload.snapshot_id,
@@ -349,6 +480,7 @@ def receive_snapshot_batch(
 ):
     if len(payload.records) > settings.edge_sync_max_records_per_batch:
         raise HTTPException(status_code=413, detail="同步记录数超过批次限制")
+    _validate_snapshot_entity_boundary(payload)
 
     snapshot = _get_or_create_snapshot(
         db,
@@ -465,6 +597,7 @@ def complete_snapshot(
     verified: VerifiedEdgeRequest = Depends(verify_edge_request),
     db: Session = Depends(get_db),
 ):
+    _validate_snapshot_manifest_boundary(payload)
     snapshot = _get_or_create_snapshot(
         db,
         payload,
@@ -483,6 +616,15 @@ def complete_snapshot(
         }
     if snapshot.status != "receiving":
         raise HTTPException(status_code=409, detail="快照状态不允许完成")
+
+    # Completing a snapshot replaces the isolated current mirror.  Use the
+    # same exact source/scope lock as the formal projector so a newly completed
+    # snapshot cannot race an older snapshot into the formal projection.
+    lock_external_sync_scope(
+        db,
+        source_instance=verified.source_instance,
+        scope_key=payload.scope_key,
+    )
 
     newer_snapshot = db.scalar(
         select(ExternalSyncSnapshot)
@@ -704,24 +846,214 @@ def complete_snapshot(
     }
 
 
+def _completed_scope_health(
+    db: Session,
+    *,
+    now: datetime,
+) -> tuple[list[dict[str, Any]], ExternalSyncSnapshot | None]:
+    latest_order = (
+        ExternalSyncSnapshot.snapshot_at.desc(),
+        ExternalSyncSnapshot.completed_at.desc().nulls_last(),
+        ExternalSyncSnapshot.received_at.desc(),
+        ExternalSyncSnapshot.id.desc(),
+    )
+    ranked = (
+        select(
+            ExternalSyncSnapshot.id.label("snapshot_ref_id"),
+            func.row_number()
+            .over(
+                partition_by=(
+                    ExternalSyncSnapshot.source_instance,
+                    ExternalSyncSnapshot.scope_key,
+                ),
+                order_by=latest_order,
+            )
+            .label("scope_rank"),
+        )
+        .where(
+            ExternalSyncSnapshot.source_system == OAM_SOURCE_SYSTEM_CODE,
+            ExternalSyncSnapshot.status == "complete",
+        )
+        .subquery()
+    )
+    completed_snapshots = tuple(
+        db.scalars(
+            select(ExternalSyncSnapshot)
+            .join(
+                ranked,
+                ranked.c.snapshot_ref_id == ExternalSyncSnapshot.id,
+            )
+            .where(ranked.c.scope_rank == 1)
+            .order_by(*latest_order)
+        ).all()
+    )
+
+    scopes: list[dict[str, Any]] = []
+    for snapshot in sorted(
+        completed_snapshots,
+        key=lambda item: (item.source_instance, item.scope_key),
+    ):
+        snapshot_age = _age_seconds(now, snapshot.snapshot_at)
+        completed_age = _age_seconds(now, snapshot.completed_at)
+        ordered_times = (
+            snapshot.completed_at is not None
+            and _aware_utc(snapshot.snapshot_at)
+            <= _aware_utc(snapshot.completed_at)
+        )
+        fresh = (
+            ordered_times
+            and _fresh_age(snapshot_age)
+            and _fresh_age(completed_age)
+        )
+        scopes.append(
+            {
+                "source_system": snapshot.source_system,
+                "source_instance": snapshot.source_instance,
+                "scope_key": snapshot.scope_key,
+                "company_id": snapshot.company_id,
+                "org_code": snapshot.org_code,
+                "snapshot_id": snapshot.snapshot_id,
+                "sync_mode": snapshot.sync_mode,
+                "snapshot_at": _aware_utc(snapshot.snapshot_at),
+                "completed_at": (
+                    _aware_utc(snapshot.completed_at)
+                    if snapshot.completed_at is not None
+                    else None
+                ),
+                "age_seconds": snapshot_age,
+                "completed_age_seconds": completed_age,
+                "fresh": fresh,
+                "freshness_status": "fresh" if fresh else "stale",
+                "healthy": fresh,
+            }
+        )
+    return scopes, completed_snapshots[0] if completed_snapshots else None
+
+
+def _work_order_projection_health(
+    db: Session,
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    runs = tuple(
+        db.scalars(
+            select(SyncRun)
+            .join(SourceSystem, SourceSystem.id == SyncRun.source_system_id)
+            .where(
+                SourceSystem.code == OAM_SOURCE_SYSTEM_CODE,
+                SyncRun.run_key.like(OAM_WORK_ORDER_RUN_PREFIX),
+                SyncRun.scope_key.like(OAM_WORK_ORDER_SCOPE_PREFIX),
+            )
+        ).all()
+    )
+    ordered_runs = sorted(
+        runs,
+        key=lambda run: (
+            _aware_utc(run.completed_at or run.started_at or run.created_at),
+            _aware_utc(run.created_at),
+            str(run.id),
+        ),
+        reverse=True,
+    )
+    latest = ordered_runs[0] if ordered_runs else None
+    failed_run_count = sum(run.status == "failed" for run in runs)
+    conflict_run_count = sum(run.status == "conflict" for run in runs)
+    open_conflict_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(SyncConflict)
+            .join(SyncRun, SyncRun.id == SyncConflict.run_id)
+            .join(SourceSystem, SourceSystem.id == SyncRun.source_system_id)
+            .where(
+                SourceSystem.code == OAM_SOURCE_SYSTEM_CODE,
+                SyncRun.run_key.like(OAM_WORK_ORDER_RUN_PREFIX),
+                SyncRun.scope_key.like(OAM_WORK_ORDER_SCOPE_PREFIX),
+                SyncConflict.status == "open",
+            )
+        )
+        or 0
+    )
+    latest_at = (
+        latest.completed_at or latest.started_at or latest.created_at
+        if latest is not None
+        else None
+    )
+    latest_age = _age_seconds(now, latest_at)
+    fresh = _fresh_age(latest_age)
+    healthy = (
+        latest is not None
+        and latest.status == "completed"
+        and latest.completed_at is not None
+        and fresh
+        and failed_run_count == 0
+        and conflict_run_count == 0
+        and open_conflict_count == 0
+    )
+    return {
+        "healthy": healthy,
+        "fresh": fresh,
+        "freshness_status": "fresh" if fresh else "stale",
+        "run_count": len(runs),
+        "failed_run_count": failed_run_count,
+        "conflict_run_count": conflict_run_count,
+        "open_conflict_count": open_conflict_count,
+        "latest_run": None
+        if latest is None
+        else {
+            "run_id": str(latest.id),
+            "run_key": latest.run_key,
+            "scope_key": latest.scope_key,
+            "sync_mode": latest.mode,
+            "status": latest.status,
+            "started_at": (
+                _aware_utc(latest.started_at)
+                if latest.started_at is not None
+                else None
+            ),
+            "completed_at": (
+                _aware_utc(latest.completed_at)
+                if latest.completed_at is not None
+                else None
+            ),
+            "updated_at": _aware_utc(latest.updated_at),
+            "run_at": _aware_utc(latest_at),
+            "age_seconds": latest_age,
+            "failure_code": latest.failure_code,
+        },
+    }
+
+
 @management_router.get("/status")
 def edge_sync_status(
     _: User = Depends(require_roles("admin")),
     db: Session = Depends(get_db),
 ):
+    database_now = _database_utc_now(db)
     last_batch = db.scalar(
         select(ExternalSyncBatch).order_by(ExternalSyncBatch.received_at.desc()).limit(1)
     )
-    last_completed_snapshot = db.scalar(
-        select(ExternalSyncSnapshot)
-        .where(ExternalSyncSnapshot.status == "complete")
-        .order_by(
-            ExternalSyncSnapshot.snapshot_at.desc(),
-            ExternalSyncSnapshot.completed_at.desc(),
-        )
-        .limit(1)
+    scopes, last_completed_snapshot = _completed_scope_health(
+        db,
+        now=database_now,
+    )
+    work_order_projection = _work_order_projection_health(
+        db,
+        now=database_now,
+    )
+    healthy = (
+        bool(scopes)
+        and all(scope["fresh"] for scope in scopes)
+        and work_order_projection["healthy"]
     )
     return {
+        "healthy": healthy,
+        "database_now": database_now,
+        "freshness_threshold_seconds": SYNC_FRESHNESS_SECONDS,
+        "scopes": scopes,
+        "work_order_projection": work_order_projection,
+        # Preserve the existing management contract below.  The global latest
+        # snapshot remains informational only and never substitutes for the
+        # independent source+scope freshness decisions above.
         # Production receiver secrets intentionally do not exist in the main
         # API process, so its management view must not infer receiver health
         # from local credentials. Persisted batch evidence is authoritative.

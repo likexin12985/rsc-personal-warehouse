@@ -69,6 +69,7 @@ def test_security_sensitive_defaults_are_fail_closed_and_identity_neutral():
         fields["database_expected_migration_role"].default
         == "star_oam_migrator"
     )
+    assert fields["database_expected_edge_role"].default == "edge_inbox"
     assert fields["password_login_enabled"].default is False
     assert fields["identity_hash_secret"].default == ""
     assert fields["identity_hash_version"].default == 1
@@ -148,17 +149,47 @@ def test_production_api_requires_jwt_but_edge_settings_do_not():
 
     edge_settings = production_settings(
         jwt_secret="",
+        database_url=(
+            "postgresql+psycopg://edge_inbox:test@db:5432/test"
+        ),
         edge_sync_enabled=True,
         edge_sync_secret="edge-sync-secret-with-at-least-32-characters",
         edge_sync_allowed_sources="edge-production-01",
     )
     assert edge_settings.edge_sync_configuration_ready() is True
+    edge_settings.validate_edge_receiver_startup()
 
     placeholder = production_settings(
         jwt_secret="replace-with-at-least-32-random-characters"
     )
     with pytest.raises(ValueError, match="JWT secret of at least 32 characters"):
         placeholder.validate_api_startup()
+
+
+def test_production_edge_receiver_requires_exact_dedicated_database_role():
+    common = {
+        "edge_sync_enabled": True,
+        "edge_sync_secret": "edge-sync-secret-with-at-least-32-characters",
+        "edge_sync_allowed_sources": "edge-production-01",
+    }
+    settings = production_settings(
+        **common,
+        database_url=(
+            "postgresql+psycopg://edge_inbox:test@db:5432/test"
+        ),
+    )
+    settings.validate_edge_receiver_startup()
+
+    with pytest.raises(ValueError, match="expected edge role"):
+        production_settings(**common).validate_edge_receiver_startup()
+    with pytest.raises(ValueError, match="not dedicated"):
+        production_settings(
+            **common,
+            database_url=(
+                "postgresql+psycopg://star_oam_api:test@db:5432/test"
+            ),
+            database_expected_edge_role="star_oam_api",
+        ).validate_edge_receiver_startup()
 
 
 def test_production_api_requires_a_separate_versioned_identity_hash_secret():
@@ -490,7 +521,10 @@ def test_production_edge_receiver_needs_no_user_login_and_performs_no_ddl(tmp_pa
         {
             "PYTHONPATH": str(BACKEND),
             "OAM_ENVIRONMENT": "production",
-            "OAM_DATABASE_URL": "postgresql+psycopg://test:test@db:5432/test",
+            "OAM_DATABASE_URL": (
+                "postgresql+psycopg://edge_inbox:test@db:5432/test"
+            ),
+            "OAM_DATABASE_EXPECTED_EDGE_ROLE": "edge_inbox",
             "OAM_DATABASE_SCHEMA_MODE": "alembic",
             "OAM_LEGACY_PROTOTYPE_WRITES_ENABLED": "false",
             "OAM_ADMIN_MOBILE": "",
@@ -514,6 +548,11 @@ import asyncio
 
 from app import edge_main
 
+boundary_checks = []
+edge_main.verify_edge_database_boundary = lambda *args, **kwargs: (
+    boundary_checks.append((args, kwargs))
+)
+
 
 async def run():
     async with edge_main.lifespan(None):
@@ -522,6 +561,8 @@ async def run():
 
 asyncio.run(run())
 assert edge_main.settings.edge_sync_configuration_ready()
+assert len(boundary_checks) == 1
+assert boundary_checks[0][1]["expected_role"] == "edge_inbox"
 assert not hasattr(edge_main, "Base")
 assert not hasattr(edge_main, "run_compatibility_migrations")
 """

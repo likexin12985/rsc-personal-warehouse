@@ -18,6 +18,9 @@ OAM 只读采集和同步证据，不负责审批、分配、出库、收货、�
   下次必须重新运行健康检查并重新读取 OAM，禁止盲目重放旧包。
 - 人员快照完成不会直接创建、启用、停用用户或撤销会话；人员投影须由后续云端受控
   任务重新校验后执行。镜像库存也绝不直接变成 RSC/个人仓库存。
+- 工单列表上传前强制具备稳定来源 ID、已知原始状态、执行人来源 ID、精确目标企业和可解析的
+  来源更新时间；正式工单发布只复制七字段最小白名单。30 天窗口中未再次出现只表示“本次未观察到”，
+  绝不自动删除、停用或关闭正式工单。
 
 ## 本地配置
 
@@ -50,17 +53,21 @@ export RSC_EDGE_SYNC_SECRET='at-least-32-random-characters'
 ```
 
 核对来源范围、记录数、delta 数量和 SHA-256 后，才可在另一次明确授权的运行中去掉
-`--dry-run`。全国人员、申请或工单同步不能与 `--warehouse-code` 同时使用。工单详情
-任一子接口不完整会使整次同步失败；“待接单且 OAM 尚无流程节点”仅记录为来源警告。
+`--dry-run`。全国人员、申请或工单同步不能与 `--warehouse-code` 同时使用。工单同步只读取并
+上传列表中的七字段最小白名单；详情、关系、流程节点、地址和联系人既不读取也不上传，云端接收器
+也会在创建快照前拒绝 `work_order_detail`、`work_order_relation` 或任何额外工单字段。
 
 计划任务入口为 `edge_sync/run_scheduled_sync.sh`。它会先运行精确组件健康检查；只有
-实时结果明确可用时才继续。不要因为 DNS、超时、隧道或页面错误而判断登录失效，也
-不要在失败后手工调用 `--resume-only`。
+实时结果明确可用时才继续。每 30 分钟执行增量，并在当天首个完整成功周期执行一次全量快照；
+基础范围与工单范围必须都成功后才记录当日全量完成，任一失败会在下一周期重新查询来源。
+不要因为 DNS、超时、隧道或页面错误而判断登录失效，也不要在失败后手工调用 `--resume-only`。
 
 生产 Mac mini 使用 `launchd` 直接调度 `edge_sync/run_launchd_sync.sh`，每 1800 秒
 执行一次，不依赖 Codex 心跳。任务定义保存在 `edge_sync/cn.rsc.oam-edge-sync.plist`，
 安装位置为 `~/Library/LaunchAgents/cn.rsc.oam-edge-sync.plist`。包装器只记录调度状态
 并调用上述受控入口，不改变健康检查、会话、校验、outbox 或云端暂存规则。
+`StartInterval` 只提供尽力调度，不等于独立 watchdog；进程未启动或主机离线仍必须由部署侧
+监控。当前仓库中的同步状态查询可用于非生产管理员诊断，但生产主 API 尚未挂载该管理路由。
 
 安装命令：
 
@@ -81,9 +88,22 @@ export RSC_EDGE_SYNC_SECRET='at-least-32-random-characters'
 
 ## 云端核对
 
-生产主 API 只暴露管理员只读的 `/api/integrations/oam/edge/status`，用于查看已持久化
-批次、记录数和最近有效快照；它不持有接收器密钥，因此不会声称接收器凭据是否已
-配置。生产边缘服务只暴露签名批次/完成接口和健康检查，不暴露用户、业务或管理 API。
+非生产管理路由提供管理员只读的 `/api/integrations/oam/edge/status`，按
+`source_instance + scope_key` 分别展示最近完成快照、45 分钟新鲜度、正式工单投影 run 与未解决
+冲突；任何范围缺失/过期、当前失败/冲突或未解决冲突都会失败关闭。该管理路由目前刻意不挂载到
+生产主 API，待 V1.0 正式管理权限与监控出口单独评审后再开放。生产边缘服务只暴露签名批次/完成
+接口和数据库边界健康检查，不暴露用户、业务或管理 API。
 
 同步完成只代表“镜像已暂存并校验”，不代表 OAM 收货、RSC/个人仓入库、通知送达或
-对账完成。所有这些状态必须由各自事实和证据单独推进。
+对账完成。云端正式工单投影器使用独立数据库角色，只在完成清单、最终数量/hash、来源时间、
+企业范围及唯一 OAM employee → Person 映射全部成立时追加正式来源版本并刷新工单镜像；缺映射
+进入冲突且保留旧投影。启用前还必须由迁移角色按人工复核坐标执行
+`deployment/provision_oam_work_order_source.sql`，Compose 的 `sync` profile 默认关闭。
+边缘接收登录身份须先由 bootstrap 管理员运行 `deployment/provision_edge_receiver_role.sql` 独立
+建立，再由迁移角色运行 `deployment/create_oam_edge_staging.sql` 授予暂存最小 ACL；两步都不能由
+应用启动代替。历史环境若曾暂存工单详情/关系，只能先审核
+`deployment/redact_legacy_oam_work_order_details.sql` 的 dry-run 数量与哈希，再在书面批准的维护窗口
+用精确确认坐标执行；v2 审计会绑定替代快照实际七字段、最终/增量哈希和批次正文。仓库中没有执行
+过该不可逆清理，正式维护前仍需在 disposable PostgreSQL 16 完成 dry-run/执行/回滚演练。
+审批、分配、占用、出库、发货、物流签收、OAM 收货、RSC/个人仓入库、通知送达和对账同步
+仍是独立状态，工单镜像发布不会推进其中任何一项。

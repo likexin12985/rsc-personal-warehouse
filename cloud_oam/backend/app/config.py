@@ -17,6 +17,15 @@ SECRET_PLACEHOLDER_MARKERS = (
     "changeme",
 )
 DATABASE_ROLE_PATTERN = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+EDGE_RESERVED_DATABASE_ROLES = frozenset(
+    {
+        "star_oam_migrator",
+        "star_oam_api",
+        "star_oam_backup",
+        "star_oam_projector",
+        "star_oam_edge",
+    }
+)
 OSS_REGION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
 OSS_BUCKET_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")
 
@@ -39,6 +48,9 @@ class Settings(BaseSettings):
     database_url: str = ""
     database_expected_runtime_role: str = "star_oam_api"
     database_expected_migration_role: str = "star_oam_migrator"
+    # The receiver login is an independently revocable principal.  It must not
+    # reuse the API, migrator, backup, projector, or legacy aggregate identity.
+    database_expected_edge_role: str = "edge_inbox"
     database_schema_mode: Literal["alembic", "bootstrap", "bootstrap_with_seed"] = (
         "alembic"
     )
@@ -417,6 +429,38 @@ class Settings(BaseSettings):
                 "production requires at least one fully configured passwordless "
                 "login channel (SMS or WeChat)"
             )
+        if errors:
+            raise ValueError("; ".join(errors))
+
+    def validate_edge_receiver_startup(self) -> None:
+        """Fail closed unless production uses the reviewed edge-only login."""
+
+        if self.environment != "production":
+            return
+        errors: list[str] = []
+        expected_role = self.database_expected_edge_role.strip()
+        if (
+            DATABASE_ROLE_PATTERN.fullmatch(expected_role) is None
+            or expected_role in EDGE_RESERVED_DATABASE_ROLES
+            or expected_role
+            in {
+                self.database_expected_runtime_role,
+                self.database_expected_migration_role,
+            }
+        ):
+            errors.append("production edge receiver database role is not dedicated")
+        try:
+            database_username = make_url(self.database_url).username
+        except Exception:
+            database_username = None
+        if database_username != expected_role:
+            errors.append(
+                "production edge receiver database URL must use the expected edge role"
+            )
+        if not self.edge_sync_configuration_ready():
+            errors.append("production edge receiver configuration is incomplete")
+        if self.database_schema_mode != "alembic":
+            errors.append("production edge receiver schema mode must be alembic")
         if errors:
             raise ValueError("; ".join(errors))
 

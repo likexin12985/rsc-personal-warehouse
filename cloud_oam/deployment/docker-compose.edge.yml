@@ -19,13 +19,16 @@ services:
     security_opt:
       - no-new-privileges:true
     tmpfs:
-      - /tmp:size=32m,mode=1777
+      - /tmp:size=32m,mode=1777,noexec,nosuid,nodev
     mem_limit: 512m
     cpus: 0.50
+    pids_limit: 64
+    stop_grace_period: 20s
     env_file:
       - /opt/star-oam/edge-receiver/runtime.env
     environment:
       OAM_ENVIRONMENT: production
+      OAM_DATABASE_SCHEMA_MODE: alembic
       OAM_EDGE_SYNC_ENABLED: "true"
       OAM_EDGE_SYNC_LEGACY_BATCHES_ENABLED: "false"
       OAM_EDGE_SYNC_LEGACY_PERSONNEL_PROJECTION_ENABLED: "false"
@@ -43,9 +46,10 @@ services:
       interval: 15s
       timeout: 5s
       retries: 10
-    networks: [backend]
+      start_period: 20s
+    networks: [edge_db]
 
 networks:
-  backend:
+  edge_db:
     external: true
-    name: star-oam_backend
+    name: star-oam_edge_db

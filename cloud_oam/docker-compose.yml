@@ -9,6 +9,7 @@ services:
       OAM_DB_MIGRATOR_PASSWORD: ${OAM_DB_MIGRATOR_PASSWORD}
       OAM_DB_API_PASSWORD: ${OAM_DB_API_PASSWORD}
       OAM_DB_BACKUP_PASSWORD: ${OAM_DB_BACKUP_PASSWORD}
+      OAM_DB_PROJECTOR_PASSWORD: ${OAM_DB_PROJECTOR_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./deployment/postgres-init:/docker-entrypoint-initdb.d:ro
@@ -17,7 +18,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    networks: [backend]
+    networks:
+      - backend
+      - projector_db
+      - edge_db
 
   migrate:
     image: star-oam-api:0.9.0
@@ -188,6 +192,49 @@ services:
       start_period: 20s
     networks: [backend]
 
+  oam-work-order-projector:
+    image: star-oam-api:0.9.0
+    build: ./backend
+    profiles: [sync]
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - app.oam_work_order_projector
+      - --poll-seconds
+      - "30"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=32m,mode=1777,noexec,nosuid,nodev
+    mem_limit: 512m
+    cpus: 0.50
+    pids_limit: 64
+    stop_grace_period: 35s
+    environment:
+      OAM_ENVIRONMENT: production
+      OAM_DATABASE_URL: postgresql+psycopg://star_oam_projector:${OAM_DB_PROJECTOR_PASSWORD}@db:5432/${POSTGRES_DB}
+      OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_projector
+      OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
+      OAM_DATABASE_SCHEMA_MODE: alembic
+      OAM_LEGACY_PROTOTYPE_WRITES_ENABLED: "false"
+      OAM_EDGE_SYNC_ENABLED: "false"
+      OAM_EDGE_SYNC_LEGACY_BATCHES_ENABLED: "false"
+      OAM_EDGE_SYNC_LEGACY_PERSONNEL_PROJECTION_ENABLED: "false"
+    healthcheck:
+      test: ["CMD", "python", "-c", "from app.database import engine; from app.oam_projection_security import verify_oam_projection_database_boundary; verify_oam_projection_database_boundary(engine)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [projector_db]
+
   web:
     image: star-oam-web:0.9.0
     build: ./frontend
@@ -208,6 +255,11 @@ services:
 
 networks:
   backend:
+  projector_db:
+    internal: true
+  edge_db:
+    internal: true
+    name: star-oam_edge_db
 
 volumes:
   postgres_data:

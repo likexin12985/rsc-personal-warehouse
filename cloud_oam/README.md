@@ -362,8 +362,19 @@
   与需求写入之间的 TOCTOU。旧草稿引用若当前不可选，只能通过明确清除或重新选择后保存；401/403、
   网络错误、响应漂移和写后工单/修订回读不一致都继续保留原请求坐标并失败关闭。搜索、分页和编辑
   恢复无 v0.9 回退；选择接口不直连 OAM，也不返回工单业务载荷、地址、人员或履约事实。正式 OAM
-  工单投影写入/发布链尚未完成，因此在该
-  投影为空时选择器会安全显示为空，不能改用旧工单数据补齐。需求提报支持草稿、编辑、提交、退回后修订、
+  工单发布器已在本地源码形成 `edge staging → sync run/batch/inbox → external object/version →
+  oam_work_orders` 原子链；边缘工单行只向该正式链提供来源 ID、编号、原始状态、执行人来源 ID、
+  企业、省份和来源更新时间七个字段。`0043` 为独立 `star_oam_projector` 角色仅授所需只读/追加更新
+  权限，主 API 仍不能写工单投影，边缘接收角色仍不能写任何正式表；发布器先在默认隔离级别获取
+  精确 source/scope 的 PostgreSQL session advisory lock，结束短事务后才开启 Repeatable Read，
+  并在发布事务内继续持有同坐标 transaction advisory lock；完成接收同样使用该事务锁。旧快照、
+  未知状态、时间回退、hash/数量不一致和人员映射冲突均不覆盖既有投影。
+  30 天滚动窗口的缺席不作为删除证据；内容未变化的再次观察仍刷新同步新鲜度，来源时间变化则追加
+  版本。该实现尚未在生产启用：`sync` Compose profile 默认不启动，必须先由迁移角色运行
+  `deployment/provision_oam_work_order_source.sql` 固化人工复核的企业/组织/scope，并具备唯一当前
+  OAM employee → Person 显式映射。人员来源版本必须与快照企业/组织精确一致，映射后的在职人员
+  所属有效组织祖先链也必须到达已配置 org；条件不成立时发布器失败关闭，选择器安全为空，不能改用旧工单
+  数据补齐。需求提报支持草稿、编辑、提交、退回后修订、
   撤回、安全取消、区域/总部审批以及外部审批证据双人登记核验；非期初盘点支持列表/详情、创建、
   启动、逐范围初盘、独立差异生成、指定范围复盘、区域/总部复核、差异过账、独立内部对账和关闭。
   两端均按最新权限快照与服务端 `allowed_actions` 双重判定，写请求使用固定幂等键和请求 ID，并在
@@ -372,7 +383,9 @@
 - 客户端 IP 只接受显式可信代理提供的 `X-Forwarded-For`，默认可信 peer 仅为本机回环。
 - 边缘同步只允许完整快照协议、HMAC 来源白名单和专用数据库角色；历史待发包不会
   自动重放，旧时间快照不会覆盖当前投影。生产主 API 不暴露边缘同步写入口，边缘
-  接收器也不暴露用户或管理接口。
+  接收器也不暴露用户或管理接口。云端会把每个 `source_instance + scope_key` 永久绑定到首次确认的
+  source system、company 和 org，并在落库前将工单范围限制为精确七字段 `work_order`；详情、关系、
+  额外字段或范围重标均拒绝。
 - 审批、分配、占用、出库、发运、物流签收、OAM 收货、RSC/个人仓入库、通知送达、
   同步/对账仍是十条独立状态轴。低层正式库存流水、期初盘点及其
   `control_unassigned` 独立解释/批准/关闭门禁、一期需求三级审批以及非期初盘点至独立对账/关闭
@@ -450,12 +463,34 @@ Decrypt 探针，旧 `/api/health` 是 readiness 兼容别名。Compose/ALB 使�
 完成认证写接口的外层限流，并限制 readiness 只对可信监控开放；仓库内应用限流不能替代该外部门禁。
 
 全新 PostgreSQL 数据卷会通过 `deployment/postgres-init/10-create-application-roles.sh`
-一次性创建上述四类隔离身份和后续对象默认 ACL；`migrate`、`api` 和备份脚本分别只接收自己的
-密码。运行账号不获得未来表、序列或函数的默认权限；每个新正式写入口都必须随版本迁移显式
+一次性创建迁移、API、备份和 OAM 投影四类隔离身份及后续对象默认 ACL；`migrate`、`api`、
+`oam-work-order-projector` 和备份脚本分别只接收自己的密码。运行账号不获得未来表、序列或函数的
+默认权限；每个新正式写入口都必须随版本迁移显式
 授权。该初始化目录只对空数据卷生效。任何既有 `postgres_data` 或 RDS 实例必须先停写、备份、
 盘点现有 owner/ACL，再由数据库管理员在预生产逐对象转移所有权和重放授权；仅重启 Compose
 不会补角色，迁移会因 `star_oam_migrator` 不存在而失败关闭。当前未执行这项既有库改造，也未
 连接任何 PostgreSQL 实例。
+
+`sync` profile 中的 `oam-work-order-projector` 只加入与 `db` 共享的内部
+`projector_db` 网络，不加入 API/Web 使用的 `backend` 网络，也不发布端口或挂载业务文件。
+容器以固定非 root UID/GID、只读根文件系统、移除全部 capability、禁止提权和受限 `/tmp`
+运行，并设置 CPU、内存、PID、优雅停机及数据库边界健康检查。健康检查只读 PostgreSQL ACL，
+不会访问 OAM、RSC、Workflow、飞书或推进同步状态。沿用当前 Compose 可落地的环境变量机制时，
+`OAM_DB_PROJECTOR_PASSWORD` 必须是独立随机数据库密码；它只注入 PostgreSQL 初始化和投影器，
+投影器不得接收 JWT、KMS、短信、微信、边缘 HMAC、API、迁移或备份凭据。`.env` 文件和 Docker
+控制面访问仍须由部署主机权限保护，不能提交仓库或复制到采集端。
+
+边缘接收器的 `edge_inbox` 不属于上述四类主 Compose 身份，必须由 bootstrap 管理员用
+`deployment/provision_edge_receiver_role.sql` 从进程环境读取独立密码后幂等建立/轮换，再由迁移角色
+运行 `deployment/create_oam_edge_staging.sql` 授予精确暂存 ACL。生产启动与健康检查会复核角色、
+成员关系、跨库/跨 schema、PUBLIC、表/列、函数、序列、Large Object 和参数 ACL；应用不会自动
+建角色或扩权。
+
+`0043` 当前仍以表/列 ACL 给投影器开放必要写列，因此一旦该数据库凭据或进程被攻陷，数据库本身
+还不能按 source/entity/scope 阻止其改写同表的其他行。这是正式启用投影器前的发布阻断项。下一阶段
+`0044` 将采用迁移所有者独占的精确 principal/source/scope/entity 绑定表和 PostgreSQL 强制 RLS，
+同时覆盖 edge 暂存子表与正式投影子图；零绑定默认全拒绝，运行角色不能读写绑定表。PG16 门禁还须
+使用原始 SQL 注入跨来源/跨范围/跨实体攻击；不能用登录角色可自行 `SET` 的 custom GUC 代替边界。
 
 备份脚本在导出前以 `star_oam_backup` 自检双向角色成员关系、会话复制模式、数据库/schema/
 表/序列授权选项、列级残留写权限以及所有 `public` 表、序列和函数的只读权限；数据库与上传
@@ -469,12 +504,26 @@ Decrypt 探针，旧 `/api/health` 是 readiness 兼容别名。Compose/ALB 使�
 `deployment/create_oam_edge_staging.sql` 只授予快照镜像最小权限，不执行 DDL，也不
 授予 `users` 或 `inventory_balances` 权限。
 
+历史部署若曾存入 `work_order_detail/work_order_relation` 明文，只能使用
+`deployment/redact_legacy_oam_work_order_details.sql` 先执行默认 `ROLLBACK` 的 dry-run，核对严格更新、
+完整且只含 `work_order` 的替代快照、候选数量和审计 SHA-256；不可逆执行还需要精确替代快照 ID、
+审计哈希及硬确认词。v2 审计会逐条重构七字段载荷、source time、最终/增量 SHA 和原始批次 canonical
+body，并把实际替代快照行与批次证据纳入哈希。该脚本保留 snapshot/manifest 和正式 run/batch/inbox
+证据，只清理历史详情/关系载荷并将旧快照标记为 `redacted_legacy`。本阶段只提交工件与静态测试，
+尚未执行任何数据库清理；进入维护窗口前仍须在 disposable PostgreSQL 16 上完成 dry-run/执行/回滚演练。
+
+GitHub 的 `PostgreSQL 16 release gate` 已覆盖 main push、面向 main 的 PR 及当前受控分支，使用固定
+PostgreSQL 16 容器执行迁移、角色/ACL 漂移、跨库连接、双会话锁，以及真实 projector 登录的发布、
+重复、冲突和失败隔离测试；本地没有受控 PostgreSQL 16，因此每次发布仍以对应 GitHub run 的实际
+成功结果为准，不能用本地 skip 替代。
+
 ## 后续开发顺序
 
 1. 完成首管理员稳定 ID 双签开通清单、正式身份激活与 hash 密钥轮换、真实 KMS/RAM、
-   `0040` pin 双签落库、`0041` 短信迁移与中断矩阵、`0042` 工单锁真实并发、WAF/ALB 前置限流、
-   文件存储生产凭据、字段级授权和 PostgreSQL 认证并发测试；随后完成 OAM 只读投影任务和
-   同步健康/对账，但不得扩大为 OAM 写入。
+   `0040` pin 双签落库、`0041` 短信迁移与中断矩阵、`0042` 工单锁及 `0043` 投影角色的
+   PostgreSQL 16 真实迁移/并发门禁、WAF/ALB 前置限流、文件存储生产凭据和字段级授权；随后补齐
+   组织/人员正式只读发布器、同步健康/冲突处理和日终对账，人工确认 OAM 企业/组织/scope 后才可
+   受控启用工单投影器，且不得扩大为 OAM 写入。
 2. 对已经完成本地正式路由的一期需求提报/三级审批/安全取消，以及期初和非期初盘点的实盘、
    差异、复核、复盘、过账、独立对账和关闭，补 PostgreSQL 16 双会话并发、延迟外键/触发器提交、
    降级阻断、备份恢复和迁移演练；补齐 PC 受控任务启动、大数据量列表/对账读取性能和

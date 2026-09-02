@@ -15,7 +15,6 @@ import subprocess
 import sys
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,7 +32,6 @@ if str(PORTAL) not in sys.path:
 
 from inventory_query_portal.oam_read_client import get_paged  # noqa: E402
 from query_oam_work_orders import (  # noqa: E402
-    detail_order,
     epoch_ms,
     get_paged_parallel as get_work_orders_paged,
     normalized_list_row,
@@ -42,8 +40,6 @@ from query_oam_work_orders import (  # noqa: E402
 
 DEFAULT_API_BASE = ""
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "rsc-edge-sync"
-MAX_SYNC_RECORD_BYTES = 64 * 1024
-WORK_ORDER_RELATION_CHUNK_BYTES = 48 * 1024
 SOURCE_PATTERN = re.compile(r"[^A-Za-z0-9._:-]+")
 WAREHOUSE_FIELDS = (
     "companyId",
@@ -151,15 +147,44 @@ APPLICATION_LINE_FIELDS = (
     "isSnEnable",
 )
 TERMINAL_APPLICATION_STATUSES = {"finished", "invalided", "refused"}
-TERMINAL_WORK_ORDER_STATUSES = {
-    "end",
-    "stopped",
-    "closed",
-    "rejected",
+WORK_ORDER_STATUS_CODES = {
+    "to_be_create",
+    "create",
+    "wait_receive",
+    "wait_connect",
+    "wait_process",
+    "processing",
+    "process_finish",
+    "transferring",
+    "wait_client_accept",
     "client_accept_pass",
+    "wait_platform_accept",
     "platform_accept_pass",
+    "wait_source_accept",
     "source_accept_pass",
+    "end",
+    "stopping",
+    "stopped",
+    "rejected",
+    "closed",
+    "hang",
+    "wait_install_command",
+    "transfer_reject",
 }
+WORK_ORDER_PROJECTION_FIELDS = (
+    "id",
+    "code",
+    "statusCode",
+    "executorId",
+    "authCompanyId",
+    "province",
+    "updateTime",
+)
+OAM_SOURCE_TIMEZONE = timezone(timedelta(hours=8))
+OAM_SOURCE_DATETIME_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?"
+    r"(?:[Zz]|[+-]\d{2}:\d{2})?$"
+)
 MOBILE_PATTERN = re.compile(r"^1[3-9]\d{9}$")
 SECRET_PLACEHOLDER_MARKERS = (
     "replace-with",
@@ -458,110 +483,98 @@ def material_application_line_records(
     return sorted(records, key=lambda record: record["business_key"])
 
 
-def work_order_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def parse_oam_source_datetime(value: Any) -> datetime:
+    """Parse one OAM timestamp without guessing the source timezone.
+
+    OAM list timestamps are normally emitted as ``YYYY-MM-DD HH:MM:SS`` in
+    China Standard Time.  Explicit offsets remain authoritative; naive values
+    receive the documented source offset and are normalized to UTC before they
+    cross the edge boundary.
+    """
+
+    raw = str(value or "").strip()
+    if not raw:
+        raise EdgeSyncError("OAM工单缺少来源更新时间")
+    if OAM_SOURCE_DATETIME_PATTERN.fullmatch(raw) is None:
+        raise EdgeSyncError(f"OAM工单来源更新时间格式无效：{raw}")
+    normalized = f"{raw[:-1]}+00:00" if raw.endswith(("Z", "z")) else raw
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise EdgeSyncError(f"OAM工单来源更新时间格式无效：{raw}") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=OAM_SOURCE_TIMEZONE)
+    return parsed.astimezone(timezone.utc)
+
+
+def work_order_records(
+    rows: list[dict[str, Any]],
+    *,
+    expected_company_id: str,
+) -> list[dict[str, Any]]:
     records = []
     seen: set[str] = set()
+    source_ids: set[str] = set()
+    checked_company_id = expected_company_id.strip()
+    if not checked_company_id:
+        raise EdgeSyncError("OAM工单缺少已确认的目标企业范围")
     for row in rows:
+        source_id = str(row.get("id") or "").strip()
         code = str(row.get("code") or "").strip()
+        status_code = str(row.get("statusCode") or "").strip()
+        executor_id = str(row.get("executorId") or "").strip()
+        company_id = str(row.get("authCompanyId") or "").strip()
+        province = str(row.get("province") or "").strip()
+        update_time = str(row.get("updateTime") or "").strip()
+        source_updated_at = parse_oam_source_datetime(update_time).isoformat()
+        if not source_id:
+            raise EdgeSyncError(f"OAM工单缺少稳定来源ID：{code or '<unknown>'}")
         if not code:
             raise EdgeSyncError("OAM工单存在缺少工单编号的记录")
+        if status_code not in WORK_ORDER_STATUS_CODES:
+            raise EdgeSyncError(f"OAM工单状态未纳入正式映射：{code}/{status_code}")
+        if not executor_id:
+            raise EdgeSyncError(f"OAM工单缺少执行人来源ID：{code}")
+        if company_id != checked_company_id:
+            raise EdgeSyncError(f"OAM工单企业范围不一致：{code}")
+        if source_id in source_ids:
+            raise EdgeSyncError(f"OAM工单来源ID重复：{source_id}")
         if code in seen:
             raise EdgeSyncError(f"OAM工单编号重复：{code}")
+        source_ids.add(source_id)
         seen.add(code)
         records.append(
             {
                 "business_key": f"work-order:{code}",
-                "source_updated_at": None,
-                "data": row,
+                "source_updated_at": source_updated_at,
+                "data": dict(
+                    zip(
+                        WORK_ORDER_PROJECTION_FIELDS,
+                        (
+                            source_id,
+                            code,
+                            status_code,
+                            executor_id,
+                            company_id,
+                            province,
+                            update_time,
+                        ),
+                        strict=True,
+                    )
+                ),
             }
         )
     return sorted(records, key=lambda record: record["business_key"])
-
-
-def work_order_detail_records(
-    details_by_code: dict[str, dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    records: list[dict[str, Any]] = []
-    relation_records: list[dict[str, Any]] = []
-    for code, detail in sorted(details_by_code.items()):
-        if str((detail.get("summary") or {}).get("code") or "").strip() != code:
-            raise EdgeSyncError(f"OAM工单详情与列表编号不一致：{code}")
-        stored_detail = detail
-        if len(canonical_json(detail)) > MAX_SYNC_RECORD_BYTES:
-            related_orders = detail.get("relatedOrders")
-            if not isinstance(related_orders, list) or not related_orders:
-                raise EdgeSyncError(
-                    f"OAM工单基础详情超过单记录64KB上限：{code}"
-                )
-            stored_detail = {**detail, "relatedOrders": []}
-            if len(canonical_json(stored_detail)) > MAX_SYNC_RECORD_BYTES:
-                raise EdgeSyncError(
-                    f"OAM工单移除关联工单后仍超过64KB：{code}"
-                )
-
-            chunks: list[list[Any]] = []
-            current: list[Any] = []
-            for item in related_orders:
-                candidate = [*current, item]
-                probe = {
-                    "workOrderCode": code,
-                    "section": "relatedOrders",
-                    "chunkIndex": 9999,
-                    "chunkCount": 9999,
-                    "items": candidate,
-                }
-                if (
-                    current
-                    and len(canonical_json(probe)) > WORK_ORDER_RELATION_CHUNK_BYTES
-                ):
-                    chunks.append(current)
-                    current = [item]
-                else:
-                    current = candidate
-                single_probe = {**probe, "items": current}
-                if len(canonical_json(single_probe)) > MAX_SYNC_RECORD_BYTES:
-                    raise EdgeSyncError(
-                        f"OAM工单单条关联记录超过64KB：{code}"
-                    )
-            if current:
-                chunks.append(current)
-
-            for index, items in enumerate(chunks):
-                payload = {
-                    "workOrderCode": code,
-                    "section": "relatedOrders",
-                    "chunkIndex": index,
-                    "chunkCount": len(chunks),
-                    "items": items,
-                }
-                if len(canonical_json(payload)) > MAX_SYNC_RECORD_BYTES:
-                    raise EdgeSyncError(
-                        f"OAM工单关联分块超过64KB：{code}/{index}"
-                    )
-                relation_records.append(
-                    {
-                        "business_key": (
-                            f"work-order-relation:{code}:{index:04d}"
-                        ),
-                        "source_updated_at": None,
-                        "data": payload,
-                    }
-                )
-        records.append(
-            {
-                "business_key": f"work-order-detail:{code}",
-                "source_updated_at": None,
-                "data": stored_detail,
-            }
-        )
-    return records, relation_records
 
 
 def load_work_orders(
     *,
     days: int,
     target_company_id: str,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+) -> list[dict[str, Any]]:
+    checked_company_id = target_company_id.strip()
+    if not checked_company_id:
+        raise EdgeSyncError("OAM工单缺少已确认的目标企业范围")
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days)
     total, source_rows, complete = get_work_orders_paged(
@@ -581,146 +594,15 @@ def load_work_orders(
     scoped_rows = [
         row
         for row in source_rows
-        if str(row.get("authCompanyId") or "").strip() == target_company_id
+        if str(row.get("authCompanyId") or "").strip() == checked_company_id
     ]
     if not scoped_rows:
         raise EdgeSyncError("配置的蔚来企业范围内没有可读取工单")
     normalized = [normalized_list_row(row) for row in scoped_rows]
-    source_by_code = {
-        str(row.get("workOrderCode") or "").strip(): row for row in scoped_rows
-    }
-    if len(source_by_code) != len(scoped_rows):
+    codes = [str(row.get("code") or "").strip() for row in normalized]
+    if any(not code for code in codes) or len(set(codes)) != len(codes):
         raise EdgeSyncError("OAM工单列表存在空编号或重复编号")
-    return normalized, source_by_code
-
-
-def refresh_work_order_details(
-    *,
-    rows: list[dict[str, Any]],
-    source_by_code: dict[str, dict[str, Any]],
-    cache: dict[str, Any],
-    detail_limit: int,
-) -> tuple[dict[str, dict[str, Any]], dict[str, Any], dict[str, int]]:
-    cached_records = cache.get("records")
-    if not isinstance(cached_records, dict):
-        cached_records = {}
-    current_codes = {str(row.get("code") or "").strip() for row in rows}
-    current_codes.discard("")
-    retained = {
-        code: value
-        for code, value in cached_records.items()
-        if code in current_codes and isinstance(value, dict)
-    }
-    row_by_code = {str(row.get("code") or "").strip(): row for row in rows}
-    changed = []
-    for code, row in row_by_code.items():
-        cached = retained.get(code) or {}
-        if cached.get("sourceUpdateTime") != row.get("updateTime"):
-            changed.append(row)
-    changed.sort(
-        key=lambda row: (
-            str(row.get("statusCode") or "") not in TERMINAL_WORK_ORDER_STATUSES,
-            str(row.get("updateTime") or ""),
-            str(row.get("createTime") or ""),
-        ),
-        reverse=True,
-    )
-    selected = changed[:detail_limit]
-    refreshed: dict[str, dict[str, Any]] = {}
-
-    def normalize_optional_sections(detail: dict[str, Any]) -> dict[str, Any]:
-        summary = detail.get("summary")
-        status_code = (
-            str(summary.get("statusCode") or "").strip()
-            if isinstance(summary, dict)
-            else ""
-        )
-        warnings = [
-            item for item in detail.get("warnings", []) if isinstance(item, dict)
-        ]
-        errors = []
-        downgraded = False
-        for item in detail.get("errors", []):
-            if not isinstance(item, dict):
-                errors.append(item)
-                continue
-            message = str(item.get("message") or "")
-            is_unavailable_pre_receive_process = (
-                status_code == "wait_receive"
-                and item.get("section") == "流程节点"
-                and item.get("endpoint") == "/work_order/process_node_data"
-                and "E00001" in message
-            )
-            if is_unavailable_pre_receive_process:
-                downgraded = True
-                warnings.append(
-                    {
-                        **item,
-                        "reason": "待接单阶段尚无流程节点",
-                    }
-                )
-            else:
-                errors.append(item)
-        if not downgraded:
-            return detail
-        counts = detail.get("counts")
-        normalized_counts = (
-            {**counts, "errors": len(errors), "warnings": len(warnings)}
-            if isinstance(counts, dict)
-            else counts
-        )
-        return {
-            **detail,
-            "counts": normalized_counts,
-            "errors": errors,
-            "warnings": warnings,
-        }
-
-    def fetch(row: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-        code = str(row.get("code") or "").strip()
-        source = source_by_code.get(code) or {}
-        identifier = str(source.get("id") or source.get("workOrderId") or "").strip()
-        if not identifier:
-            raise EdgeSyncError(f"OAM工单缺少详情ID：{code}")
-        detail = normalize_optional_sections(detail_order(identifier, code))
-        if detail.get("errors"):
-            sections = ",".join(
-                str(item.get("section") or "未知")
-                for item in detail["errors"]
-                if isinstance(item, dict)
-            )
-            raise EdgeSyncError(f"OAM工单详情读取不完整：{code}（{sections}）")
-        return code, detail
-
-    with ThreadPoolExecutor(max_workers=min(4, max(1, len(selected)))) as pool:
-        futures = {pool.submit(fetch, row): row for row in selected}
-        for future in as_completed(futures):
-            code, detail = future.result()
-            refreshed[code] = detail
-
-    for row in selected:
-        code = str(row.get("code") or "").strip()
-        retained[code] = {
-            "sourceUpdateTime": row.get("updateTime"),
-            "detail": refreshed[code],
-        }
-    next_cache = {
-        "version": 1,
-        "cursor": 0,
-        "updatedAt": datetime.now(timezone.utc).isoformat(),
-        "records": retained,
-    }
-    details = {
-        code: value["detail"]
-        for code, value in retained.items()
-        if isinstance(value.get("detail"), dict)
-    }
-    return details, next_cache, {
-        "listed": len(rows),
-        "cachedDetails": len(details),
-        "changedDetails": len(changed),
-        "refreshedDetails": len(refreshed),
-    }
+    return normalized
 
 
 def run_oam_health(*, scheduled: bool) -> dict[str, Any]:
@@ -1099,9 +981,74 @@ def build_outbox(
     force_full: bool,
     batch_size: int,
 ) -> dict[str, Any]:
-    scope_state = (state.get("scopes") or {}).get(scope_key) or {}
+    source_instance = source_instance.strip()
+    scope_key = scope_key.strip()
+    company_id = company_id.strip()
+    org_code = org_code.strip()
+    expected_coordinates = {
+        "sourceInstance": source_instance,
+        "scopeKey": scope_key,
+        "companyId": company_id,
+        "orgCode": org_code,
+    }
+    if any(not value for value in expected_coordinates.values()):
+        raise EdgeSyncError("同步状态命名空间缺少来源、企业、组织或范围坐标")
+
+    raw_scopes = state.get("scopes", {})
+    coordinate_errors: list[str] = []
+    if not isinstance(raw_scopes, dict):
+        coordinate_errors.append("scopes格式无效")
+        raw_scopes = {}
+    elif raw_scopes:
+        if state.get("version") != 2:
+            coordinate_errors.append("state版本不匹配")
+        if str(state.get("sourceInstance") or "").strip() != source_instance:
+            coordinate_errors.append("state来源实例不匹配")
+
+    raw_scope_state = raw_scopes.get(scope_key)
+    if raw_scope_state is None:
+        scope_state: dict[str, Any] = {}
+    elif not isinstance(raw_scope_state, dict):
+        coordinate_errors.append("scope状态格式无效")
+        scope_state = {}
+    else:
+        scope_state = raw_scope_state
+
+    if scope_state:
+        for field, expected in expected_coordinates.items():
+            actual = str(scope_state.get(field) or "").strip()
+            if actual != expected:
+                coordinate_errors.append(f"scope.{field}不匹配")
+        entities = scope_state.get("entities")
+        if not isinstance(entities, dict):
+            coordinate_errors.append("scope.entities格式无效")
+        else:
+            for entity_type, entity_state in entities.items():
+                if not isinstance(entity_type, str) or not isinstance(
+                    entity_state, dict
+                ):
+                    coordinate_errors.append("scope.entities条目格式无效")
+                    continue
+                previous_index = entity_state.get("index")
+                if not isinstance(previous_index, dict) or any(
+                    not isinstance(key, str) or not isinstance(value, str)
+                    for key, value in previous_index.items()
+                ):
+                    coordinate_errors.append("scope.entities.index格式无效")
+
+    if coordinate_errors and not force_full:
+        details = "、".join(sorted(set(coordinate_errors)))
+        raise EdgeSyncError(
+            f"本地同步状态坐标不一致（{details}）；必须使用--force-full重新建立完整快照"
+        )
+    if force_full or coordinate_errors:
+        scope_state = {}
+
     previous_entities = scope_state.get("entities") or {}
     sync_mode = "full" if force_full or not scope_state else "incremental"
+
+    if scope_key.startswith("work-orders:") and set(snapshots) != {"work_order"}:
+        raise EdgeSyncError("正式工单快照只能包含work_order七字段投影")
     snapshot_id = (
         f"s-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-"
         f"{uuid.uuid4().hex[:16]}"
@@ -1139,10 +1086,15 @@ def persist_completed_state(
     state: dict[str, Any],
     outbox: dict[str, Any],
 ) -> None:
-    scopes = state.setdefault("scopes", {})
+    scopes = state.get("scopes")
+    if not isinstance(scopes, dict):
+        scopes = {}
+        state["scopes"] = scopes
     scopes[outbox["scopeKey"]] = {
         "snapshotId": outbox["snapshotId"],
         "snapshotAt": outbox["snapshotAt"],
+        "sourceInstance": outbox["sourceInstance"],
+        "scopeKey": outbox["scopeKey"],
         "companyId": outbox["companyId"],
         "orgCode": outbox["orgCode"],
         "entities": {
@@ -1339,7 +1291,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--target-org-code",
         default=os.getenv("RSC_EDGE_TARGET_ORG_CODE", ""),
-        help="人员所属的蔚来OAM组织编码",
+        help="人员及工单所属的蔚来OAM组织编码",
     )
     parser.add_argument(
         "--employee-company-internal-id",
@@ -1352,22 +1304,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=30,
         help="工单镜像覆盖的最近天数",
-    )
-    parser.add_argument(
-        "--work-order-detail-limit",
-        type=int,
-        default=12,
-        help="本次最多刷新多少张已变化工单详情",
-    )
-    parser.add_argument(
-        "--work-order-cache-file",
-        type=Path,
-        default=Path(
-            os.getenv(
-                "RSC_EDGE_WORK_ORDER_CACHE_FILE",
-                DEFAULT_CONFIG_DIR / "work_order_details.json",
-            )
-        ).expanduser(),
     )
     parser.add_argument(
         "--force-full",
@@ -1418,8 +1354,6 @@ def main() -> int:
         raise EdgeSyncError("批次大小必须在1到500之间")
     if not 1 <= args.work_order_days <= 365:
         raise EdgeSyncError("工单同步天数必须在1到365之间")
-    if not 1 <= args.work_order_detail_limit <= 200:
-        raise EdgeSyncError("单次工单详情刷新数必须在1到200之间")
     source_instance = normalize_source_id(args.source_id)
     expected_company_id = args.company_id.strip()
     expected_org_code = args.org_code.strip()
@@ -1444,6 +1378,8 @@ def main() -> int:
         not target_org_code or not employee_company_internal_id
     ):
         raise EdgeSyncError("必须配置蔚来OAM组织编码和企业内部ID后才能同步人员")
+    if needs_work_orders and not target_org_code:
+        raise EdgeSyncError("必须配置蔚来OAM组织编码后才能同步工单")
     secret = os.getenv("RSC_EDGE_SYNC_SECRET", "")
     api_base = args.api_base.strip()
     if not args.dry_run:
@@ -1465,7 +1401,6 @@ def main() -> int:
 
         run_oam_health(scheduled=args.scheduled)
         snapshots: dict[str, list[dict[str, Any]]] = {}
-        next_work_order_cache: dict[str, Any] | None = None
         work_order_summary: dict[str, int] | None = None
         needs_warehouses = args.entity in {"warehouses", "inventory", "all"}
         warehouses: list[dict[str, Any]] = []
@@ -1502,28 +1437,15 @@ def main() -> int:
                 )
             )
         if needs_work_orders:
-            work_orders, source_by_code = load_work_orders(
+            work_orders = load_work_orders(
                 days=args.work_order_days,
                 target_company_id=target_company_id,
             )
-            work_order_cache = load_json_file(
-                args.work_order_cache_file,
-                {"version": 1, "cursor": 0, "records": {}},
+            snapshots["work_order"] = work_order_records(
+                work_orders,
+                expected_company_id=target_company_id,
             )
-            if work_order_cache.get("version") != 1:
-                raise EdgeSyncError("本地工单详情缓存版本无效")
-            details, next_work_order_cache, work_order_summary = (
-                refresh_work_order_details(
-                    rows=work_orders,
-                    source_by_code=source_by_code,
-                    cache=work_order_cache,
-                    detail_limit=args.work_order_detail_limit,
-                )
-            )
-            snapshots["work_order"] = work_order_records(work_orders)
-            detail_records, relation_records = work_order_detail_records(details)
-            snapshots["work_order_detail"] = detail_records
-            snapshots["work_order_relation"] = relation_records
+            work_order_summary = {"listed": len(work_orders)}
 
         snapshot_at = datetime.now(timezone.utc).isoformat()
         scope_key = (
@@ -1531,12 +1453,16 @@ def main() -> int:
             if needs_work_orders
             else scope_key_for(args.warehouse_code)
         )
+        snapshot_company_id = (
+            target_company_id if needs_work_orders else expected_company_id
+        )
+        snapshot_org_code = target_org_code if needs_work_orders else expected_org_code
         outbox = build_outbox(
             source_instance=source_instance,
             scope_key=scope_key,
             warehouse_filter=args.warehouse_code,
-            company_id=expected_company_id,
-            org_code=expected_org_code,
+            company_id=snapshot_company_id,
+            org_code=snapshot_org_code,
             snapshot_at=snapshot_at,
             snapshots=snapshots,
             state=state,
@@ -1551,14 +1477,16 @@ def main() -> int:
             "scopeKey": outbox["scopeKey"],
             "syncMode": outbox["syncMode"],
             "companyScope": {
-                "companyId": expected_company_id,
-                "orgCode": expected_org_code,
+                "companyId": snapshot_company_id,
+                "orgCode": snapshot_org_code,
             },
             "targetCompanyScope": None
             if not (needs_people or needs_material_orders or needs_work_orders)
             else {
                 "companyId": target_company_id,
-                "orgCode": target_org_code if needs_people else None,
+                "orgCode": target_org_code
+                if (needs_people or needs_work_orders)
+                else None,
                 "employeeCompanyInternalId": employee_company_internal_id
                 if needs_people
                 else None,
@@ -1588,8 +1516,6 @@ def main() -> int:
                 state_file=args.state_file,
                 state=state,
             )
-            if next_work_order_cache is not None:
-                write_private_json(args.work_order_cache_file, next_work_order_cache)
             outbox_path.unlink()
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
