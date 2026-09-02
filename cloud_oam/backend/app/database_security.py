@@ -21,6 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from .formal_services.audit_chain import calculate_audit_event_hash
+from .oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST
 
 
 class DatabaseSecurityBoundaryError(RuntimeError):
@@ -1921,6 +1922,41 @@ OPENING_COMMIT_TRIGGER_NAMES = frozenset(
 )
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _SQL_STRING_LITERAL_PATTERN = re.compile(r"'((?:''|[^'])*)'")
+OAM_SYNC_RUNTIME_FUNCTIONS = {
+    ("rsc_oam_rls_check_0044", "text, text, jsonb"),
+    ("rsc_oam_runtime_binding_ready_0044", ""),
+}
+OAM_SYNC_RUNTIME_FUNCTION_DEFINITIONS = {
+    coordinate: (
+        OAM_SYNC_FUNCTION_MANIFEST[
+            f"{coordinate[0]}({coordinate[1].replace(', ', ',')})"
+        ][1],
+        True,
+        OAM_SYNC_FUNCTION_MANIFEST[
+            f"{coordinate[0]}({coordinate[1].replace(', ', ',')})"
+        ][2],
+        ("search_path=pg_catalog",),
+    )
+    for coordinate in OAM_SYNC_RUNTIME_FUNCTIONS
+}
+OAM_SYNC_RUNTIME_FUNCTION_SHAPES = {
+    coordinate: (
+        "f",
+        OAM_SYNC_FUNCTION_MANIFEST[
+            f"{coordinate[0]}({coordinate[1].replace(', ', ',')})"
+        ][3],
+        OAM_SYNC_FUNCTION_MANIFEST[
+            f"{coordinate[0]}({coordinate[1].replace(', ', ',')})"
+        ][4],
+    )
+    for coordinate in OAM_SYNC_RUNTIME_FUNCTIONS
+}
+OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256 = {
+    coordinate: OAM_SYNC_FUNCTION_MANIFEST[
+        f"{coordinate[0]}({coordinate[1].replace(', ', ',')})"
+    ][6]
+    for coordinate in OAM_SYNC_RUNTIME_FUNCTIONS
+}
 RUNTIME_EXECUTE_FUNCTIONS = {
     ("rsc_canonical_reconciliation_json_0026", "jsonb"): (
         "i",
@@ -2482,6 +2518,8 @@ SELECT
     function_row.proisstrict AS is_strict,
     function_row.prosrc AS source_body,
     function_row.provolatile AS volatility,
+    function_row.proparallel AS parallel_safety,
+    function_row.proleakproof AS is_leakproof,
     function_row.prosecdef AS is_security_definer,
     language_row.lanname AS language_name,
     function_row.proconfig AS configuration,
@@ -2519,6 +2557,29 @@ SELECT
                  WHERE runtime_role.oid = function_acl.grantee
                    AND runtime_role.rolname = current_user
            )
+           AND NOT (
+                (
+                    (
+                        function_row.proname = 'rsc_oam_rls_check_0044'
+                        AND oidvectortypes(function_row.proargtypes)
+                            = 'text, text, jsonb'
+                    )
+                    OR (
+                        function_row.proname =
+                            'rsc_oam_runtime_binding_ready_0044'
+                        AND oidvectortypes(function_row.proargtypes) = ''
+                    )
+                )
+                AND function_acl.is_grantable IS FALSE
+                AND EXISTS (
+                    SELECT 1
+                      FROM pg_roles AS oam_runtime_role
+                     WHERE oam_runtime_role.oid = function_acl.grantee
+                       AND oam_runtime_role.rolname IN (
+                           'edge_inbox', 'star_oam_projector'
+                       )
+                )
+           )
     ) AS unexpected_execute_grantee_count,
     EXISTS (
         SELECT 1
@@ -2544,7 +2605,21 @@ SELECT
                )
           FROM pg_roles AS role_row
          WHERE role_row.rolname = 'star_oam_backup'
-    ), false) AS backup_can_execute
+    ), false) AS backup_can_execute,
+    coalesce((
+        SELECT has_function_privilege(
+                   role_row.oid, function_row.oid, 'EXECUTE'
+               )
+          FROM pg_roles AS role_row
+         WHERE role_row.rolname = 'edge_inbox'
+    ), false) AS edge_receiver_can_execute,
+    coalesce((
+        SELECT has_function_privilege(
+                   role_row.oid, function_row.oid, 'EXECUTE'
+               )
+          FROM pg_roles AS role_row
+         WHERE role_row.rolname = 'star_oam_projector'
+    ), false) AS projector_can_execute
 FROM pg_proc AS function_row
 JOIN pg_namespace AS namespace_row
   ON namespace_row.oid = function_row.pronamespace
@@ -4399,6 +4474,7 @@ def _assert_runtime_function_acl(
     function_ids: set[Any] = set()
     allowed_seen: set[tuple[str, str]] = set()
     internal_seen: set[tuple[str, str]] = set()
+    oam_sync_seen: set[tuple[str, str]] = set()
     for row in rows:
         function_id = row.get("function_id")
         function_name = row.get("function_name")
@@ -4417,9 +4493,22 @@ def _assert_runtime_function_acl(
         coordinate = (label, argument_types)
         expected_helper = RUNTIME_EXECUTE_FUNCTIONS.get(coordinate)
         expected_internal = FORMAL_FILE_INTERNAL_FUNCTIONS.get(coordinate)
-        if expected_helper is None and expected_internal is None:
+        expected_oam_sync = OAM_SYNC_RUNTIME_FUNCTION_DEFINITIONS.get(
+            coordinate
+        )
+        if (
+            expected_helper is None
+            and expected_internal is None
+            and expected_oam_sync is None
+        ):
             if row.get("can_execute") is not False:
                 failures.append(f"{label}.execute")
+            for audience in (
+                "edge_receiver_can_execute",
+                "projector_can_execute",
+            ):
+                if row.get(audience) is not False:
+                    failures.append(f"{label}.{audience}")
             continue
         if expected_helper is not None:
             allowed_seen.add(coordinate)
@@ -4427,7 +4516,7 @@ def _assert_runtime_function_acl(
             expected_body_hash = RUNTIME_FUNCTION_BODY_SHA256.get(coordinate)
             expected_execute = True
             expected_definition = expected_helper
-        else:
+        elif expected_internal is not None:
             internal_seen.add(coordinate)
             expected_shape = FORMAL_FILE_INTERNAL_FUNCTION_SHAPES.get(coordinate)
             expected_body_hash = FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256.get(
@@ -4435,6 +4524,14 @@ def _assert_runtime_function_acl(
             )
             expected_execute = False
             expected_definition = expected_internal
+        else:
+            oam_sync_seen.add(coordinate)
+            expected_shape = OAM_SYNC_RUNTIME_FUNCTION_SHAPES.get(coordinate)
+            expected_body_hash = OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256.get(
+                coordinate
+            )
+            expected_execute = False
+            expected_definition = expected_oam_sync
         if expected_shape is None:
             failures.append(f"{label}.shape_manifest")
             continue
@@ -4472,13 +4569,29 @@ def _assert_runtime_function_acl(
             failures.append(f"{label}.body")
         if tuple(row.get("configuration") or ()) != configuration:
             failures.append(f"{label}.configuration")
-        for audience in (
+        denied_audiences = (
             "public_can_execute",
             "edge_can_execute",
             "backup_can_execute",
-        ):
+        )
+        for audience in denied_audiences:
             if row.get(audience) is not False:
                 failures.append(f"{label}.{audience}")
+        for audience in (
+            "edge_receiver_can_execute",
+            "projector_can_execute",
+        ):
+            expected_audience = expected_oam_sync is not None
+            if row.get(audience) is not expected_audience:
+                failures.append(f"{label}.{audience}")
+        if expected_oam_sync is not None:
+            expected_parallel = OAM_SYNC_FUNCTION_MANIFEST[
+                f"{coordinate[0]}({coordinate[1].replace(', ', ',')})"
+            ][5]
+            if row.get("parallel_safety") != expected_parallel:
+                failures.append(f"{label}.parallel_safety")
+            if row.get("is_leakproof") is not False:
+                failures.append(f"{label}.leakproof")
     if (
         allowed_seen != set(RUNTIME_EXECUTE_FUNCTIONS)
         or set(RUNTIME_FUNCTION_SHAPES) != set(RUNTIME_EXECUTE_FUNCTIONS)
@@ -4488,6 +4601,13 @@ def _assert_runtime_function_acl(
         != set(FORMAL_FILE_INTERNAL_FUNCTIONS)
         or set(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256)
         != set(FORMAL_FILE_INTERNAL_FUNCTIONS)
+        or oam_sync_seen != OAM_SYNC_RUNTIME_FUNCTIONS
+        or set(OAM_SYNC_RUNTIME_FUNCTION_DEFINITIONS)
+        != OAM_SYNC_RUNTIME_FUNCTIONS
+        or set(OAM_SYNC_RUNTIME_FUNCTION_SHAPES)
+        != OAM_SYNC_RUNTIME_FUNCTIONS
+        or set(OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256)
+        != OAM_SYNC_RUNTIME_FUNCTIONS
     ):
         failures.append("runtime_helper_set")
     if failures:

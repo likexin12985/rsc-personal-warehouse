@@ -5,6 +5,11 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from .oam_sync_scope_security import (
+    oam_sync_scope_boundary_passed,
+    read_oam_sync_scope_boundary,
+)
+
 
 EDGE_ROLE = "edge_inbox"
 MIGRATION_ROLE = "star_oam_migrator"
@@ -242,6 +247,10 @@ function_sequence_ok AS (
             WHERE schema_row.nspname = 'public'
               AND pg_catalog.has_function_privilege(
                   current_user, function_row.oid, 'EXECUTE'
+              )
+              AND function_row.oid NOT IN (
+                  'public.rsc_oam_rls_check_0044(text,text,jsonb)'::regprocedure,
+                  'public.rsc_oam_runtime_binding_ready_0044()'::regprocedure
               )
         )
         AND NOT EXISTS (
@@ -591,6 +600,11 @@ def verify_edge_database_boundary(
                 "migration_role": expected_migration_role,
             },
         ).mappings().one_or_none()
+        rls_boundary = read_oam_sync_scope_boundary(
+            connection,
+            expected_role=expected_role,
+            expected_migration_role=expected_migration_role,
+        )
     if (
         result is None
         or result.get("boundary_ok") is not True
@@ -603,6 +617,10 @@ def verify_edge_database_boundary(
         )
         raise EdgeDatabaseBoundaryError(
             f"edge receiver database boundary failed: {failures}"
+        )
+    if not oam_sync_scope_boundary_passed(rls_boundary):
+        raise EdgeDatabaseBoundaryError(
+            "edge receiver database boundary failed: rls.force_scope"
         )
 
 

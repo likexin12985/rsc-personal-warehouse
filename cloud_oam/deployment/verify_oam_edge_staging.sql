@@ -42,6 +42,16 @@ role_names(role_kind, role_name) AS (
         ('edge'::text, :'edge_role'::text),
         ('projector'::text, :'projector_role'::text)
 ),
+runtime_functions(function_signature) AS (
+    VALUES
+        ('public.rsc_oam_rls_check_0044(text,text,jsonb)'::text),
+        ('public.rsc_oam_runtime_binding_ready_0044()'::text)
+),
+expected_function_acl(role_kind, function_signature) AS (
+    SELECT role_name.role_kind, runtime_function.function_signature
+    FROM role_names AS role_name
+    CROSS JOIN runtime_functions AS runtime_function
+),
 edge_table_acl(
     table_name,
     can_select,
@@ -469,17 +479,71 @@ column_acl_ok AS (
 ),
 function_sequence_ok AS (
     SELECT
+        -- Both runtime entrypoints are migration-owned SECURITY DEFINER
+        -- functions with a fixed catalog-only search path.  Private 0044
+        -- helpers are deliberately absent from this allowlist.
         NOT EXISTS (
+            SELECT 1
+            FROM runtime_functions AS runtime_function
+            LEFT JOIN pg_catalog.pg_proc AS function_row
+              ON function_row.oid = pg_catalog.to_regprocedure(
+                  runtime_function.function_signature
+              )
+            WHERE function_row.oid IS NULL
+               OR pg_catalog.pg_get_userbyid(function_row.proowner)
+                    <> 'star_oam_migrator'
+               OR NOT function_row.prosecdef
+               OR function_row.provolatile <> 's'
+               OR function_row.proleakproof
+               OR function_row.proconfig IS DISTINCT FROM
+                    ARRAY['search_path=pg_catalog']::text[]
+        )
+        AND NOT EXISTS (
             SELECT 1
             FROM role_names AS expected_role
             CROSS JOIN pg_catalog.pg_proc AS function_row
             JOIN pg_catalog.pg_namespace AS schema_row
               ON schema_row.oid = function_row.pronamespace
+            LEFT JOIN expected_function_acl AS expected_acl
+              ON expected_acl.role_kind = expected_role.role_kind
+             AND function_row.oid = pg_catalog.to_regprocedure(
+                 expected_acl.function_signature
+             )
             WHERE schema_row.nspname = 'public'
               AND pg_catalog.has_function_privilege(
-                  expected_role.role_name,
-                  function_row.oid,
-                  'EXECUTE'
+                      expected_role.role_name,
+                      function_row.oid,
+                      'EXECUTE'
+                  ) IS DISTINCT FROM
+                  (expected_acl.function_signature IS NOT NULL)
+        )
+        -- The two public entrypoints may be executable only by their owner and
+        -- the exact edge/projector roles.  This rejects a grant to PUBLIC,
+        -- API, backup, a stale role, or an unexpected deployment principal.
+        AND NOT EXISTS (
+            SELECT 1
+            FROM runtime_functions AS runtime_function
+            JOIN pg_catalog.pg_proc AS function_row
+              ON function_row.oid = pg_catalog.to_regprocedure(
+                  runtime_function.function_signature
+              )
+            CROSS JOIN LATERAL pg_catalog.aclexplode(
+                COALESCE(
+                    function_row.proacl,
+                    pg_catalog.acldefault('f', function_row.proowner)
+                )
+            ) AS acl
+            LEFT JOIN pg_catalog.pg_roles AS acl_grantee
+              ON acl_grantee.oid = acl.grantee
+            WHERE acl.privilege_type = 'EXECUTE'
+              AND acl.grantee <> function_row.proowner
+              AND (
+                  acl.grantee = 0
+                  OR acl_grantee.rolname IS NULL
+                  OR acl_grantee.rolname NOT IN (
+                      :'edge_role',
+                      :'projector_role'
+                  )
               )
         )
         AND NOT EXISTS (

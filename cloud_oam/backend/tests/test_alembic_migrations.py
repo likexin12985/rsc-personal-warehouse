@@ -323,7 +323,14 @@ OAM_WORK_ORDER_PROJECTOR_BOUNDARY_REVISION = (
     / "versions"
     / "20260902_0043_oam_work_order_projector_boundary.py"
 )
-HEAD_REVISION = "20260902_0043"
+OAM_SYNC_SCOPE_FORCE_RLS_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260902_0044_oam_sync_scope_force_rls.py"
+)
+HEAD_REVISION = "20260902_0044"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -336,6 +343,8 @@ KMS_DATA_KEY_PINS_REVISION_ID = "20260901_0040"
 SMS_DISPATCH_OWNERSHIP_REVISION_ID = "20260902_0041"
 MATERIAL_REQUEST_WORK_ORDER_LOCK_REVISION_ID = "20260902_0042"
 OAM_WORK_ORDER_PROJECTOR_BOUNDARY_REVISION_ID = "20260902_0043"
+OAM_SYNC_SCOPE_FORCE_RLS_REVISION_ID = "20260902_0044"
+PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION = "20260902_0043"
 PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION = "20260902_0042"
 PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION = "20260902_0041"
 PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION = "20260901_0040"
@@ -1330,23 +1339,23 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert head is not None
     assert (
         head.down_revision
-        == PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION
+        == PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION
     )
     previous_head = script.get_revision(
-        PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION
+        PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION
     )
     assert previous_head is not None
     assert (
         previous_head.down_revision
-        == PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION
+        == PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION
     )
     previous_sms_head = script.get_revision(
-        PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION
+        PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION
     )
     assert previous_sms_head is not None
     assert (
         previous_sms_head.down_revision
-        == PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION
+        == PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION
     )
 
 
@@ -1668,6 +1677,361 @@ def test_0043_sqlite_is_schema_noop_and_only_moves_revision(
             assert connection.exec_driver_sql(
                 "SELECT version_num FROM alembic_version"
             ).scalar_one() == PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION
+    finally:
+        downgraded_engine.dispose()
+
+
+def test_0044_postgresql_offline_sql_forces_exact_scope_rls(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    revision_spec = importlib.util.spec_from_file_location(
+        "migration_0044_policy_roster",
+        OAM_SYNC_SCOPE_FORCE_RLS_REVISION,
+    )
+    assert revision_spec is not None and revision_spec.loader is not None
+    revision_module = importlib.util.module_from_spec(revision_spec)
+    revision_spec.loader.exec_module(revision_module)
+    assert len(revision_module.EXPECTED_POLICY_ROSTER) == 84
+    assert len(
+        {
+            (policy[0], policy[1])
+            for policy in revision_module.EXPECTED_POLICY_ROSTER
+        }
+    ) == 84
+    upgrade_output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=upgrade_output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION}:"
+        f"{OAM_SYNC_SCOPE_FORCE_RLS_REVISION_ID}",
+        sql=True,
+    )
+    sql = upgrade_output.getvalue()
+
+    assert "-- Running upgrade 20260902_0043 -> 20260902_0044" in sql
+    assert sql.count("CREATE POLICY ") == 84
+    assert "CREATE TABLE public.oam_sync_scope_bindings" in sql
+    assert (
+        "LOCK TABLE public.external_sync_snapshots, "
+        "public.external_sync_snapshot_batches, "
+        "public.external_sync_snapshot_records, "
+        "public.external_sync_current_records, public.sync_runs, "
+        "public.sync_batches, public.sync_inbox_events, public.external_objects, "
+        "public.external_object_versions, public.external_object_mappings, "
+        "public.sync_conflicts, public.oam_work_orders IN SHARE ROW "
+        "EXCLUSIVE MODE"
+    ) in sql
+    assert (
+        "0044 requires an empty OAM sync graph; resynchronize from source "
+        "after upgrade: %"
+        in sql
+    )
+    assert sql.index("LOCK TABLE public.external_sync_snapshots") < sql.index(
+        "CREATE TABLE public.oam_sync_scope_bindings"
+    )
+    for sync_graph_table in (
+        "external_sync_snapshots",
+        "external_sync_snapshot_batches",
+        "external_sync_snapshot_records",
+        "external_sync_current_records",
+        "sync_runs",
+        "sync_batches",
+        "sync_inbox_events",
+        "external_objects",
+        "external_object_versions",
+        "external_object_mappings",
+        "sync_conflicts",
+        "oam_work_orders",
+    ):
+        assert (
+            f"SELECT 1 FROM public.{sync_graph_table}"
+            in sql
+        )
+    assert "source_instance ||" not in sql
+    assert "pg_catalog.decode('00', 'hex')" in sql
+    assert "pg_catalog.sha256" in sql
+    assert "formal_scope_key text GENERATED ALWAYS AS" in sql
+    assert "session_user::text" in sql
+    assert "current_setting" not in sql
+    assert "set_config" not in sql
+    normalized_sql = " ".join(sql.split())
+    assert (
+        "entity_type = 'work_order' OR ( principal_name = "
+        "'star_oam_projector' AND capability = 'projector_read' AND "
+        "entity_type = 'employee' ) ) AND scope_key ~ "
+        "'^work-orders:recent-"
+        in normalized_sql
+    )
+    external_helper = normalized_sql[
+        normalized_sql.index(
+            "CREATE FUNCTION public.rsc_oam_external_object_allowed_0044"
+        ) : normalized_sql.index(
+            "CREATE FUNCTION public.rsc_oam_version_allowed_0044"
+        )
+    ]
+    version_helper = normalized_sql[
+        normalized_sql.index(
+            "CREATE FUNCTION public.rsc_oam_version_allowed_0044"
+        ) : normalized_sql.index(
+            "CREATE FUNCTION public.rsc_oam_person_allowed_0044"
+        )
+    ]
+    work_order_helper = normalized_sql[
+        normalized_sql.index(
+            "CREATE FUNCTION public.rsc_oam_work_order_allowed_0044"
+        ) : normalized_sql.index(
+            "CREATE FUNCTION public.rsc_oam_snapshot_transition_guard_0044"
+        )
+    ]
+    assert "p_operation_name IN ('select', 'update_old')" in external_helper
+    assert "WHEN 'update_old' THEN p_is_current" in version_helper
+    assert "WHEN 'update_new' THEN NOT p_is_current" in version_helper
+    assert "p_operation_name IN ('select', 'update_old')" in work_order_helper
+    assert (
+        "p_operation_name IN ('insert', 'update_new') AND version.id = "
+        "external.current_version_id"
+        in work_order_helper
+    )
+    assert (
+        "CREATE FUNCTION public.rsc_oam_snapshot_transition_guard_0044()"
+        in normalized_sql
+    )
+    assert (
+        "CREATE FUNCTION public.rsc_oam_projection_chain_guard_0044()"
+        in normalized_sql
+    )
+    assert "0044 RLS helper ACL closure is invalid" in normalized_sql
+    assert "0044 RLS policy closure is invalid" in normalized_sql
+    assert "FULL JOIN actual_policy AS actual" in normalized_sql
+    assert (
+        "actual.using_expression IS DISTINCT FROM "
+        "expected.using_expression"
+        in normalized_sql
+    )
+    assert (
+        "CREATE POLICY external_object_versions_projector_update_0044 "
+        "ON public.external_object_versions AS PERMISSIVE FOR UPDATE TO "
+        "star_oam_projector USING "
+        "(public.rsc_oam_rls_check_0044('external_object_versions', "
+        "'update_old'"
+        in normalized_sql
+    )
+    assert (
+        "WITH CHECK "
+        "(public.rsc_oam_rls_check_0044('external_object_versions', "
+        "'update_new'"
+        in normalized_sql
+    )
+    assert (
+        "CREATE TRIGGER trg_external_sync_snapshot_transition_0044 "
+        "BEFORE UPDATE ON public.external_sync_snapshots FOR EACH ROW "
+        "EXECUTE FUNCTION public.rsc_oam_snapshot_transition_guard_0044()"
+        in normalized_sql
+    )
+    for table_name, trigger_name in (
+        ("external_objects", "trg_external_objects_chain_0044"),
+        (
+            "external_object_versions",
+            "trg_external_object_versions_chain_0044",
+        ),
+    ):
+        assert (
+            f"CREATE CONSTRAINT TRIGGER {trigger_name} "
+            f"AFTER INSERT OR UPDATE ON public.{table_name} "
+            "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW "
+            "EXECUTE FUNCTION public.rsc_oam_projection_chain_guard_0044()"
+            in normalized_sql
+        )
+    for snapshot_seal_condition in (
+        "IF OLD.status <> 'receiving'",
+        "IF NEW.status = 'complete'",
+        "NEW.manifest_sha256 !~ '^[0-9a-f]{64}$'",
+        "NEW.manifest_sha256 <> pg_catalog.encode(",
+        "NEW.completed_at < NEW.received_at",
+        "NEW.completed_at < NEW.snapshot_at",
+        "NEW.completed_at > pg_catalog.statement_timestamp()",
+        "ELSIF NEW.status = 'rejected_stale'",
+        "NEW.manifest_json IS DISTINCT FROM OLD.manifest_json",
+    ):
+        assert snapshot_seal_condition in sql
+    for projection_chain_condition in (
+        "checked_deleted_at IS NOT NULL OR checked_pointer_id IS NULL",
+        "current_version_count <> 1",
+        "current_version_id IS DISTINCT FROM checked_pointer_id",
+        "version.payload_jsonb = pg_catalog.jsonb_build_object(",
+        "version.id = checked_pointer_id",
+        "version.external_object_id = checked_object_id",
+        "version.is_current",
+        "version.valid_to IS NULL",
+        "version.valid_from = version.created_at",
+        "version.valid_from <= work_order.updated_at",
+        "successor.valid_from = version.valid_to",
+        "successor.source_updated_at < version.source_updated_at",
+        "predecessor.valid_to = version.valid_from",
+        "count(DISTINCT version.valid_from)",
+        "0044 work-order version history is invalid",
+    ):
+        assert projection_chain_condition in normalized_sql
+    for trigger_closure_condition in (
+        "FROM pg_catalog.pg_trigger AS trigger_row",
+        "trigger_row.tgtype = 19",
+        "trigger_row.tgconstraint = 0",
+        "NOT trigger_row.tgdeferrable",
+        "NOT trigger_row.tginitdeferred",
+        "trigger_row.tgtype = 21",
+        "trigger_row.tgconstraint <> 0",
+        "trigger_row.tgdeferrable",
+        "trigger_row.tginitdeferred",
+        "0044 projection lifecycle triggers are invalid",
+    ):
+        assert trigger_closure_condition in sql
+    rls_body = sql[
+        sql.index("CREATE FUNCTION public.rsc_oam_rls_check_0044") :
+        sql.index("CREATE FUNCTION public.rsc_oam_runtime_binding_ready_0044")
+    ]
+    assert "EXECUTE" not in rls_body
+    assert "SECURITY DEFINER" in sql
+    assert "SET search_path = pg_catalog" in sql
+    assert "REVOKE ALL ON TABLE public.oam_sync_scope_bindings" in sql
+    assert (
+        "GRANT EXECUTE ON FUNCTION "
+        "public.rsc_oam_rls_check_0044(text,text,jsonb) "
+        "TO star_oam_projector, edge_inbox"
+    ) in sql
+    assert (
+        "GRANT EXECUTE ON FUNCTION "
+        "public.rsc_oam_runtime_binding_ready_0044() "
+        "TO star_oam_projector, edge_inbox"
+    ) in sql
+    for table_name in (
+        "oam_sync_scope_bindings",
+        "external_sync_snapshots",
+        "external_sync_snapshot_batches",
+        "external_sync_snapshot_records",
+        "external_sync_current_records",
+        "audit_logs",
+        "source_systems",
+        "sync_runs",
+        "sync_batches",
+        "sync_inbox_events",
+        "external_objects",
+        "external_object_versions",
+        "external_object_mappings",
+        "sync_conflicts",
+        "organizations",
+        "people",
+        "oam_work_orders",
+    ):
+        assert (
+            f"ALTER TABLE public.{table_name} ENABLE ROW LEVEL SECURITY"
+        ) in sql
+        assert (
+            f"ALTER TABLE public.{table_name} FORCE ROW LEVEL SECURITY"
+        ) in sql
+        assert f"{table_name}_migrator_0044" in sql
+        assert f"{table_name}_backup_select_0044" in sql
+    assert "external_sync_snapshots_edge_insert_0044" in sql
+    assert "external_sync_current_records_edge_delete_0044" in sql
+    assert "audit_logs_edge_insert_0044" in sql
+    assert "organizations_projector_select_0044" in sql
+    assert "people_projector_select_0044" in sql
+    assert "oam_work_orders_projector_update_0044" in sql
+    assert "oam_sync_scope_bindings_projector_select_0044" not in sql
+    assert "oam_sync_scope_bindings_edge_select_0044" not in sql
+
+    downgrade_output = io.StringIO()
+    downgrade_config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=downgrade_output,
+    )
+    command.downgrade(
+        downgrade_config,
+        f"{OAM_SYNC_SCOPE_FORCE_RLS_REVISION_ID}:"
+        f"{PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION}",
+        sql=True,
+    )
+    downgrade_sql = downgrade_output.getvalue()
+    downgrade_lock_offset = downgrade_sql.index(
+        "LOCK TABLE public.external_sync_snapshots"
+    )
+    revoke_offset = downgrade_sql.index(
+        "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public"
+    )
+    disable_offset = downgrade_sql.index(
+        "ALTER TABLE public.oam_sync_scope_bindings NO FORCE ROW LEVEL SECURITY"
+    )
+    drop_offset = downgrade_sql.index(
+        "DROP TABLE public.oam_sync_scope_bindings"
+    )
+    trigger_drop_offsets = (
+        downgrade_sql.index(
+            "DROP TRIGGER IF EXISTS trg_external_sync_snapshot_transition_0044"
+        ),
+        downgrade_sql.index(
+            "DROP TRIGGER IF EXISTS trg_external_objects_chain_0044"
+        ),
+        downgrade_sql.index(
+            "DROP TRIGGER IF EXISTS trg_external_object_versions_chain_0044"
+        ),
+    )
+    first_policy_drop_offset = downgrade_sql.index(
+        "DROP POLICY IF EXISTS oam_sync_scope_bindings_migrator_0044"
+    )
+    guard_function_drop_offsets = (
+        downgrade_sql.index(
+            "DROP FUNCTION IF EXISTS "
+            "public.rsc_oam_snapshot_transition_guard_0044()"
+        ),
+        downgrade_sql.index(
+            "DROP FUNCTION IF EXISTS "
+            "public.rsc_oam_projection_chain_guard_0044()"
+        ),
+    )
+    assert downgrade_lock_offset < revoke_offset < disable_offset < drop_offset
+    assert revoke_offset < min(trigger_drop_offsets)
+    assert max(trigger_drop_offsets) < first_policy_drop_offset
+    assert max(trigger_drop_offsets) < min(guard_function_drop_offsets)
+    assert "DROP FUNCTION IF EXISTS public.rsc_oam_rls_check_0044" in downgrade_sql
+    assert "DROP POLICY IF EXISTS oam_work_orders_projector_update_0044" in downgrade_sql
+
+
+def test_0044_sqlite_is_schema_noop_and_only_moves_revision(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'oam-force-rls-noop.db'}"
+    config = _config(database_url)
+    command.upgrade(config, PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION)
+    before_engine = sa.create_engine(database_url)
+    try:
+        before_tables = set(inspect(before_engine).get_table_names())
+    finally:
+        before_engine.dispose()
+
+    command.upgrade(config, OAM_SYNC_SCOPE_FORCE_RLS_REVISION_ID)
+    after_engine = sa.create_engine(database_url)
+    try:
+        assert set(inspect(after_engine).get_table_names()) == before_tables
+        with after_engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == OAM_SYNC_SCOPE_FORCE_RLS_REVISION_ID
+    finally:
+        after_engine.dispose()
+
+    command.downgrade(config, PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION)
+    downgraded_engine = sa.create_engine(database_url)
+    try:
+        assert set(inspect(downgraded_engine).get_table_names()) == before_tables
+        with downgraded_engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION
     finally:
         downgraded_engine.dispose()
 

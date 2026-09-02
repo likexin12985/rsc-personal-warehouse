@@ -28,8 +28,8 @@ class _Result:
 
 
 class _Connection:
-    def __init__(self, row, calls):
-        self.row = row
+    def __init__(self, rows, calls):
+        self.rows = rows
         self.calls = calls
 
     def __enter__(self):
@@ -39,18 +39,19 @@ class _Connection:
         return None
 
     def execute(self, statement, parameters):
+        call_index = len(self.calls)
         self.calls.append((statement, parameters))
-        return _Result(self.row)
+        return _Result(self.rows[min(call_index, len(self.rows) - 1)])
 
 
 class _Engine:
-    def __init__(self, row, *, dialect="postgresql"):
-        self.row = row
+    def __init__(self, row, *, rls_row=None, dialect="postgresql"):
+        self.rows = [row, row if rls_row is None else rls_row]
         self.dialect = SimpleNamespace(name=dialect)
         self.calls = []
 
     def connect(self):
-        return _Connection(self.row, self.calls)
+        return _Connection(self.rows, self.calls)
 
 
 def test_edge_database_boundary_accepts_only_complete_positive_evidence():
@@ -62,9 +63,13 @@ def test_edge_database_boundary_accepts_only_complete_positive_evidence():
         expected_migration_role="star_oam_migrator",
     )
 
-    assert len(engine.calls) == 1
+    assert len(engine.calls) == 2
     assert engine.calls[0][1] == {
         "edge_role": "edge_inbox",
+        "migration_role": "star_oam_migrator",
+    }
+    assert engine.calls[1][1] == {
+        "runtime_role": "edge_inbox",
         "migration_role": "star_oam_migrator",
     }
 
@@ -89,6 +94,19 @@ def test_edge_database_boundary_is_postgresql_only():
     verify_edge_database_boundary(engine)
 
     assert engine.calls == []
+
+
+def test_edge_database_boundary_rejects_force_rls_or_binding_drift():
+    engine = _Engine(
+        {"boundary_ok": True, "boundary_failures": ""},
+        rls_row={
+            "boundary_ok": False,
+            "boundary_failures": "session_binding",
+        },
+    )
+
+    with pytest.raises(EdgeDatabaseBoundaryError, match="rls.force_scope"):
+        verify_edge_database_boundary(engine)
 
 
 def test_edge_database_boundary_sql_covers_full_effective_acl_closure():

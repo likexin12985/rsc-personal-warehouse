@@ -7,6 +7,11 @@ from collections.abc import Mapping
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from .oam_sync_scope_security import (
+    oam_sync_scope_boundary_passed,
+    read_oam_sync_scope_boundary,
+)
+
 
 PROJECTOR_ROLE = "star_oam_projector"
 MIGRATION_ROLE = "star_oam_migrator"
@@ -456,6 +461,10 @@ SELECT
            AND pg_catalog.has_function_privilege(
                current_user, function_row.oid, 'EXECUTE'
            )
+           AND function_row.oid NOT IN (
+               'public.rsc_oam_rls_check_0044(text,text,jsonb)'::regprocedure,
+               'public.rsc_oam_runtime_binding_ready_0044()'::regprocedure
+           )
     ) AS executable_function_count,
     (
         SELECT pg_catalog.count(*)
@@ -593,6 +602,11 @@ def verify_oam_projection_database_boundary(
         tables = connection.execute(_TABLE_SQL).mappings().all()
         columns = connection.execute(_COLUMN_ACL_SQL).mappings().all()
         closure = connection.execute(_OBJECT_CLOSURE_SQL).mappings().one()
+        rls_boundary = read_oam_sync_scope_boundary(
+            connection,
+            expected_role=expected_role,
+            expected_migration_role=expected_migration_role,
+        )
     failures: list[str] = []
     _assert_role(
         role,
@@ -618,6 +632,8 @@ def verify_oam_projection_database_boundary(
         failures.append("large_objects.access")
     if closure.get("accessible_parameter_acl_count") != 0:
         failures.append("parameters.access")
+    if not oam_sync_scope_boundary_passed(rls_boundary):
+        failures.append("rls.force_scope")
     if failures:
         raise OamProjectionDatabaseBoundaryError(
             "OAM projector database boundary failed: "

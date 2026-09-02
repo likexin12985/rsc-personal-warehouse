@@ -31,7 +31,8 @@ BEGIN
         'external_sync_snapshot_batches',
         'external_sync_snapshot_records',
         'external_sync_current_records',
-        'audit_logs'
+        'audit_logs',
+        'oam_sync_scope_bindings'
     ]) AS required(required_table)
     WHERE pg_catalog.to_regclass(
         pg_catalog.format('public.%I', required_table)
@@ -40,6 +41,15 @@ BEGIN
     IF missing_tables IS NOT NULL THEN
         RAISE EXCEPTION
             'Alembic schema is incomplete; missing tables: %', missing_tables;
+    END IF;
+
+    IF pg_catalog.to_regprocedure(
+        'public.rsc_oam_rls_check_0044(text,text,jsonb)'
+    ) IS NULL OR pg_catalog.to_regprocedure(
+        'public.rsc_oam_runtime_binding_ready_0044()'
+    ) IS NULL THEN
+        RAISE EXCEPTION
+            'Alembic 0044 runtime RLS helpers are missing';
     END IF;
 END
 $$;
@@ -148,6 +158,10 @@ SELECT pg_catalog.format(
 \gexec
 
 GRANT USAGE ON SCHEMA public TO :"edge_role";
+GRANT EXECUTE ON FUNCTION
+    public.rsc_oam_rls_check_0044(text,text,jsonb),
+    public.rsc_oam_runtime_binding_ready_0044()
+TO :"edge_role";
 
 -- Header rows are immutable except for the reviewed receive/finalize state.
 GRANT SELECT, INSERT

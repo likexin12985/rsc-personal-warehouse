@@ -46,6 +46,10 @@ from app.database_security import (
     POSTGRESQL_MATERIAL_REQUEST_CANCELLATION_FACT_GRAPH_TRIGGER_0037,
     POSTGRESQL_RECOUNT_PERSONAL_TRIGGER_0019,
     OPENING_COMMIT_TRIGGER_NAMES,
+    OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256,
+    OAM_SYNC_RUNTIME_FUNCTION_DEFINITIONS,
+    OAM_SYNC_RUNTIME_FUNCTION_SHAPES,
+    OAM_SYNC_RUNTIME_FUNCTIONS,
     RUNTIME_DELETE_TABLES,
     RUNTIME_EXECUTE_FUNCTIONS,
     RUNTIME_FUNCTION_BODY_SHA256,
@@ -58,6 +62,7 @@ from app.database_security import (
     RUNTIME_UPDATE_TABLES,
     RUNTIME_UPDATE_COLUMNS,
     _AUDIT_TRIGGER_SQL,
+    _FUNCTION_ACL_SQL,
     _NONOPENING_STOCKTAKE_CLOSE_TRIGGER_SQL,
     _MATERIAL_REQUEST_CANCELLATION_TRIGGER_SQL,
     _MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX_SQL,
@@ -2585,13 +2590,21 @@ def test_runtime_function_acl_rejects_execute_or_wrong_owner(
             coordinate,
             fixture_source_hash,
         )
+    for coordinate in OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256:
+        monkeypatch.setitem(
+            OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256,
+            coordinate,
+            fixture_source_hash,
+        )
     function_definitions = {
         **RUNTIME_EXECUTE_FUNCTIONS,
         **FORMAL_FILE_INTERNAL_FUNCTIONS,
+        **OAM_SYNC_RUNTIME_FUNCTION_DEFINITIONS,
     }
     function_shapes = {
         **RUNTIME_FUNCTION_SHAPES,
         **FORMAL_FILE_INTERNAL_FUNCTION_SHAPES,
+        **OAM_SYNC_RUNTIME_FUNCTION_SHAPES,
     }
     allowed_rows = [
         {
@@ -2605,6 +2618,8 @@ def test_runtime_function_acl_rejects_execute_or_wrong_owner(
             "is_strict": function_shapes[(function_name, argument_types)][2],
             "source_body": fixture_source_body,
             "volatility": volatility,
+            "parallel_safety": "u",
+            "is_leakproof": False,
             "is_security_definer": is_security_definer,
             "language_name": language_name,
             "configuration": list(configuration),
@@ -2617,6 +2632,14 @@ def test_runtime_function_acl_rejects_execute_or_wrong_owner(
             "public_can_execute": False,
             "edge_can_execute": False,
             "backup_can_execute": False,
+            "edge_receiver_can_execute": (
+                (function_name, argument_types)
+                in OAM_SYNC_RUNTIME_FUNCTIONS
+            ),
+            "projector_can_execute": (
+                (function_name, argument_types)
+                in OAM_SYNC_RUNTIME_FUNCTIONS
+            ),
         }
         for index, (
             (function_name, argument_types),
@@ -2670,6 +2693,8 @@ def test_runtime_function_acl_rejects_execute_or_wrong_owner(
         ("public_can_execute", True),
         ("edge_can_execute", True),
         ("backup_can_execute", True),
+        ("edge_receiver_can_execute", True),
+        ("projector_can_execute", True),
     ):
         drifted = [row.copy() for row in allowed_rows]
         drifted[0][field] = value
@@ -2678,6 +2703,44 @@ def test_runtime_function_acl_rejects_execute_or_wrong_owner(
                 drifted,
                 expected_migration_role="star_oam_migrator",
             )
+
+    sync_index = next(
+        index
+        for index, row in enumerate(allowed_rows)
+        if (row["function_name"], row["argument_types"])
+        in OAM_SYNC_RUNTIME_FUNCTIONS
+    )
+    for field, value in (
+        ("can_execute", True),
+        ("edge_receiver_can_execute", False),
+        ("projector_can_execute", False),
+        ("unexpected_execute_grantee_count", 1),
+        ("parallel_safety", "s"),
+        ("is_leakproof", True),
+    ):
+        drifted = [row.copy() for row in allowed_rows]
+        drifted[sync_index][field] = value
+        with pytest.raises(DatabaseSecurityBoundaryError, match="function"):
+            _assert_runtime_function_acl(
+                drifted,
+                expected_migration_role="star_oam_migrator",
+            )
+
+
+def test_0044_api_function_acl_exception_is_exact_and_non_grantable() -> None:
+    sql = " ".join(str(_FUNCTION_ACL_SQL).split())
+
+    for required in (
+        "rsc_oam_rls_check_0044",
+        "rsc_oam_runtime_binding_ready_0044",
+        "edge_inbox",
+        "star_oam_projector",
+        "function_acl.is_grantable IS FALSE",
+        "edge_receiver_can_execute",
+        "projector_can_execute",
+    ):
+        assert required in sql
+    assert "star_oam_api" not in sql
 
 
 def test_0027_runtime_function_manifest_is_exact_and_does_not_expand_updates(

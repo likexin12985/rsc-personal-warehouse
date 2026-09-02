@@ -561,6 +561,10 @@ def receive_snapshot_batch(
             )
         )
 
+    # The 0044 audit RLS predicate rereads the receiving snapshot and staged
+    # facts.  Make those facts visible inside this transaction before the
+    # append-only transport audit is emitted.
+    db.flush()
     audit(
         db,
         actor=None,
@@ -644,6 +648,7 @@ def complete_snapshot(
     )
     if newer_snapshot is not None:
         snapshot.status = "rejected_stale"
+        db.flush()
         audit(
             db,
             actor=None,
@@ -794,6 +799,10 @@ def complete_snapshot(
             current.payload_sha256 = state["payload_sha256"]
             current.last_snapshot_id = snapshot.id
 
+    # Current-record policies prove the replacement against a receiving
+    # snapshot.  Flush the complete mirror while the parent is still in that
+    # state, then seal the parent in a separate statement below.
+    db.flush()
     personnel_result: dict[str, Any] | None = None
     if (
         "employee" in prepared_states
@@ -817,6 +826,9 @@ def complete_snapshot(
     snapshot.manifest_json = _canonical_json(payload.model_dump(mode="json"))
     snapshot.manifest_sha256 = verified.body_sha256
     snapshot.completed_at = datetime.now(timezone.utc)
+    # Persist current-mirror replacement and the terminal one-way seal before
+    # the audit predicate proves that this is a completed snapshot.
+    db.flush()
     audit(
         db,
         actor=None,

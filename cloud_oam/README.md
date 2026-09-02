@@ -364,8 +364,9 @@
   恢复无 v0.9 回退；选择接口不直连 OAM，也不返回工单业务载荷、地址、人员或履约事实。正式 OAM
   工单发布器已在本地源码形成 `edge staging → sync run/batch/inbox → external object/version →
   oam_work_orders` 原子链；边缘工单行只向该正式链提供来源 ID、编号、原始状态、执行人来源 ID、
-  企业、省份和来源更新时间七个字段。`0043` 为独立 `star_oam_projector` 角色仅授所需只读/追加更新
-  权限，主 API 仍不能写工单投影，边缘接收角色仍不能写任何正式表；发布器先在默认隔离级别获取
+  企业、省份和来源更新时间七个字段。`0043` 先为独立 `star_oam_projector` 角色收口所需只读/追加
+  更新列，`0044` 再以精确来源坐标绑定和 PostgreSQL 强制 RLS 将这些表/列权限限制到获准行；主 API
+  仍不能写工单投影，边缘接收角色仍不能写任何正式表；发布器先在默认隔离级别获取
   精确 source/scope 的 PostgreSQL session advisory lock，结束短事务后才开启 Repeatable Read，
   并在发布事务内继续持有同坐标 transaction advisory lock；完成接收同样使用该事务锁。旧快照、
   未知状态、时间回退、hash/数量不一致和人员映射冲突均不覆盖既有投影。
@@ -486,11 +487,25 @@ Decrypt 探针，旧 `/api/health` 是 readiness 兼容别名。Compose/ALB 使�
 成员关系、跨库/跨 schema、PUBLIC、表/列、函数、序列、Large Object 和参数 ACL；应用不会自动
 建角色或扩权。
 
-`0043` 当前仍以表/列 ACL 给投影器开放必要写列，因此一旦该数据库凭据或进程被攻陷，数据库本身
-还不能按 source/entity/scope 阻止其改写同表的其他行。这是正式启用投影器前的发布阻断项。下一阶段
-`0044` 将采用迁移所有者独占的精确 principal/source/scope/entity 绑定表和 PostgreSQL 强制 RLS，
-同时覆盖 edge 暂存子表与正式投影子图；零绑定默认全拒绝，运行角色不能读写绑定表。PG16 门禁还须
-使用原始 SQL 注入跨来源/跨范围/跨实体攻击；不能用登录角色可自行 `SET` 的 custom GUC 代替边界。
+`0044` 已在本地源码中实现迁移所有者独占的精确
+`principal + capability + source_system + source_instance + scope + company + org + entity` 绑定表，并对
+edge 暂存子表、来源/批次/收件箱、外部对象版本、组织、人员和 OAM 工单正式投影子图启用
+PostgreSQL `ENABLE/FORCE ROW LEVEL SECURITY`。授权从真实 `session_user` 和迁移所有者持有的固定
+`SECURITY DEFINER` 函数求值，不依赖登录角色可自行 `SET` 的 custom GUC；零绑定默认全拒绝，
+edge/projector 不能读写绑定表或执行私有 helper，只能执行 RLS 判定与绑定就绪两个固定运行入口。
+`deployment/provision_oam_work_order_source.sql` 只建立人工复核后相互一致的工单接收/读取/写入组合；
+`deployment/provision_oam_edge_scope.sql` 每次只幂等增加一条获准的 edge 接收范围，严格限制实体与 scope
+组合，既有 company/org/enabled 或确定性身份漂移时不覆盖并在事务内复读失败关闭。
+由于 `0043` 的宽行权限从未获准承载正式同步，`0044` 首次升级会先锁定完整 edge/formal sync 子图
+并硬性要求 12 张同步表全部为空；不得把 `0043` 中即使结构和自报 hash 一致的暂存或正式行直接提升为
+可信数据。升级并配置精确绑定后，必须重新只读观察来源并发布。相同规则也会阻止在同步图非空时降回
+`0043`，避免重新暴露宽行边界；任何清理、去投影或迁移必须另行双签、备份和审计，迁移本身不会
+自动删改业务数据。
+
+以上仅表示源码、迁移和本地静态门禁已经形成，不表示当前提交的 PostgreSQL 16 CI、预生产或生产
+验收已经通过。正式启用前仍须让对应 GitHub run 实际成功，并以原始 SQL 完成零绑定、跨来源、跨范围、
+跨企业/组织、跨实体、父子引用篡改、`row_security=off`、函数/PUBLIC ACL、降级后权限清空及重升级的
+攻击矩阵；所有绑定参数必须由用户和部署负责人逐项复核，不能由应用推断或自动扩权。
 
 备份脚本在导出前以 `star_oam_backup` 自检双向角色成员关系、会话复制模式、数据库/schema/
 表/序列授权选项、列级残留写权限以及所有 `public` 表、序列和函数的只读权限；数据库与上传
@@ -520,8 +535,8 @@ PostgreSQL 16 容器执行迁移、角色/ACL 漂移、跨库连接、双会话�
 ## 后续开发顺序
 
 1. 完成首管理员稳定 ID 双签开通清单、正式身份激活与 hash 密钥轮换、真实 KMS/RAM、
-   `0040` pin 双签落库、`0041` 短信迁移与中断矩阵、`0042` 工单锁及 `0043` 投影角色的
-   PostgreSQL 16 真实迁移/并发门禁、WAF/ALB 前置限流、文件存储生产凭据和字段级授权；随后补齐
+   `0040` pin 双签落库、`0041` 短信迁移与中断矩阵、`0042` 工单锁及 `0044` 精确范围强制 RLS 的
+   PostgreSQL 16 真实迁移/攻击/并发门禁、WAF/ALB 前置限流、文件存储生产凭据和字段级授权；随后补齐
    组织/人员正式只读发布器、同步健康/冲突处理和日终对账，人工确认 OAM 企业/组织/scope 后才可
    受控启用工单投影器，且不得扩大为 OAM 写入。
 2. 对已经完成本地正式路由的一期需求提报/三级审批/安全取消，以及期初和非期初盘点的实盘、

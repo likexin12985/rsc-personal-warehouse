@@ -16,6 +16,7 @@ PG16_WORKFLOW = ROOT.parent / ".github" / "workflows" / (
     "postgresql16-release-gate.yml"
 )
 DEPLOYMENT = ROOT / "deployment"
+EDGE_SCOPE_PROVISION = DEPLOYMENT / "provision_oam_edge_scope.sql"
 
 
 def test_compose_never_injects_bootstrap_or_migrator_secret_into_api() -> None:
@@ -119,6 +120,36 @@ def test_postgresql16_gate_covers_main_prs_and_edge_role_provisioning() -> None:
     assert "  push:\n" in workflow
     assert workflow.count("      - main\n") >= 2
     assert "cloud_oam/deployment/provision_edge_receiver_role.sql" in workflow
+    assert workflow.count(
+        '      - "cloud_oam/deployment/provision_oam_edge_scope.sql"\n'
+    ) == 2
+
+
+def test_deployment_verifier_allows_only_0044_runtime_entrypoints() -> None:
+    source = (DEPLOYMENT / "verify_oam_edge_staging.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "runtime_functions(function_signature) AS" in source
+    assert "expected_function_acl(role_kind, function_signature) AS" in source
+    for signature in (
+        "public.rsc_oam_rls_check_0044(text,text,jsonb)",
+        "public.rsc_oam_runtime_binding_ready_0044()",
+    ):
+        assert signature in source
+    for security_attribute in (
+        "pg_catalog.pg_get_userbyid(function_row.proowner)",
+        "NOT function_row.prosecdef",
+        "function_row.provolatile <> 's'",
+        "function_row.proleakproof",
+        "ARRAY['search_path=pg_catalog']::text[]",
+    ):
+        assert security_attribute in source
+    assert "expected_acl.function_signature IS NOT NULL" in source
+    assert "acl.grantee <> function_row.proowner" in source
+    assert "acl_grantee.rolname NOT IN (" in source
+    assert ":'edge_role'" in source
+    assert ":'projector_role'" in source
 
 
 def test_postgresql16_psql_scripts_use_real_fail_closed_exit_paths() -> None:
@@ -130,6 +161,86 @@ def test_postgresql16_psql_scripts_use_real_fail_closed_exit_paths() -> None:
         ), f"{script.name} uses a numeric \\quit argument that PostgreSQL 16 ignores"
         if "intentional_psql_fail_closed" in source:
             assert "\\set ON_ERROR_STOP on" in source
+
+
+def test_edge_scope_provision_is_migrator_only_single_row_and_fail_closed() -> None:
+    source = EDGE_SCOPE_PROVISION.read_text(encoding="utf-8")
+    normalized = " ".join(source.split())
+
+    for parameter in (
+        "source_instance",
+        "company_id",
+        "org_code",
+        "scope_key",
+        "entity_type",
+    ):
+        assert f"\\if :{{?{parameter}}}" in source
+        assert f":'{parameter}'::text" in source
+
+    assert "\\set ON_ERROR_STOP on" in source
+    assert "current_user <> 'star_oam_migrator'" in source
+    assert "session_user <> 'star_oam_migrator'" in source
+    assert source.count("INSERT INTO public.oam_sync_scope_bindings") == 1
+    assert "'edge_inbox'" in source
+    assert "'edge_ingress'" in source
+    assert "'starcharge_oam'" in source
+    assert "ON CONFLICT (" in source
+    assert ") DO NOTHING;" in source
+    assert "DO UPDATE" not in source
+    assert "UPDATE public.oam_sync_scope_bindings" not in source
+    assert "DELETE FROM public.oam_sync_scope_bindings" not in source
+    assert (
+        "existing OAM edge scope binding differs; "
+        "no automatic overwrite performed"
+    ) in normalized
+
+    insert_at = source.index("INSERT INTO public.oam_sync_scope_bindings")
+    reread_at = source.index(
+        "FROM public.oam_sync_scope_bindings AS binding", insert_at
+    )
+    assert (
+        source.index("BEGIN;")
+        < insert_at
+        < reread_at
+        < source.rindex("COMMIT;")
+    )
+    for exact_coordinate in (
+        "binding.source_instance = scope_input.source_instance",
+        "binding.scope_key = scope_input.scope_key",
+        "binding.company_id = scope_input.company_id",
+        "binding.org_code = scope_input.org_code",
+        "binding.entity_type = scope_input.entity_type",
+        "binding.enabled",
+        "binding.formal_scope_key =",
+    ):
+        assert exact_coordinate in source
+
+
+def test_edge_scope_provision_accepts_only_reviewed_entity_scope_pairs() -> None:
+    source = EDGE_SCOPE_PROVISION.read_text(encoding="utf-8")
+
+    assert (
+        "^work-orders:recent-([1-9]|[1-9][0-9]|[12][0-9][0-9]|"
+        "3[0-5][0-9]|36[0-5])d$"
+    ) in source
+    for entity_type in (
+        "employee",
+        "material_application",
+        "material_application_line",
+        "warehouse",
+        "inventory",
+        "work_order",
+    ):
+        assert f"'{entity_type}'" in source
+    assert "scope_input.scope_key = 'all'" in source
+    assert "^warehouse:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" in source
+    assert "~ '[[:cntrl:]]'" in source
+    assert "~ '[*%?]'" in source
+    assert "LIKE" not in source.upper()
+    assert (
+        "enabled read-only starcharge_oam source registration is required"
+        in source
+    )
 
 
 def test_environment_and_backup_use_dedicated_database_credentials() -> None:

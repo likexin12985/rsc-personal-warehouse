@@ -31,6 +31,9 @@ from sqlalchemy.orm import Session
 CLOUD_ROOT = Path(__file__).resolve().parents[2]
 ACKNOWLEDGEMENT = "I_UNDERSTAND_THIS_DATABASE_IS_EPHEMERAL"
 DATABASE_NAME = "rsc_pg16_release_gate"
+RLS_REVISION = "20260902_0044"
+RLS_BINDING_TABLE = "oam_sync_scope_bindings"
+RLS_READY_FUNCTION = "public.rsc_oam_runtime_binding_ready_0044()"
 EDGE_RECEIVER_ROLE = "edge_inbox"
 ROLE_NAMES = (
     "star_oam_migrator",
@@ -853,6 +856,287 @@ def _assert_projector_exact_column_acl() -> None:
             assert cursor.fetchone() == (False, False, True, False, False, False)
 
 
+def _assert_0044_rejects_stray_permissive_policy() -> None:
+    assert _current_revision() == "20260902_0043"
+    policy_name = "pg16_stray_source_systems_public_select"
+    with psycopg.connect(
+        **_connection_parameters(
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+        ),
+        autocommit=True,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "ALTER TABLE public.source_systems ENABLE ROW LEVEL SECURITY"
+            )
+            cursor.execute(
+                sql.SQL(
+                    "CREATE POLICY {} ON public.source_systems "
+                    "AS PERMISSIVE FOR SELECT TO PUBLIC USING (true)"
+                ).format(sql.Identifier(policy_name))
+            )
+    try:
+        blocked = _run_alembic("upgrade", "head", expect_success=False)
+        assert "0044 RLS policy closure is invalid" in (
+            blocked.stdout + blocked.stderr
+        )
+        assert _current_revision() == "20260902_0043"
+        assert _table_exists(RLS_BINDING_TABLE) is False
+    finally:
+        with psycopg.connect(
+            **_connection_parameters(
+                role="star_oam_migrator",
+                password=_role_password("star_oam_migrator"),
+            ),
+            autocommit=True,
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    sql.SQL(
+                        "DROP POLICY IF EXISTS {} ON public.source_systems"
+                    ).format(sql.Identifier(policy_name))
+                )
+
+
+def _assert_0044_rejects_untrusted_0043_projection_graph() -> None:
+    assert _current_revision() == "20260902_0043"
+    source_id = uuid.uuid4()
+    external_object_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    organization_id = uuid.uuid4()
+    work_order_id = uuid.uuid4()
+    source_code = f"pg16-preflight-broken-{source_id.hex}"
+    now = datetime.now(timezone.utc)
+    forged_payload = {
+        "work_order_no": "PG16-FORGED-0043",
+        "organization_id": str(organization_id),
+        "engineer_person_id": None,
+        "status": "active",
+    }
+    parameters = _connection_parameters(
+        role="star_oam_migrator",
+        password=_role_password("star_oam_migrator"),
+    )
+    with psycopg.connect(**parameters, autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO source_systems (
+                    id, code, name, mode, enabled, configuration_jsonb,
+                    created_at, updated_at
+                ) VALUES (%s, %s, %s, 'read_only', true, '{}'::jsonb, %s, %s)
+                """,
+                (source_id, source_code, "PG16 broken preflight sentinel", now, now),
+            )
+            cursor.execute(
+                """
+                INSERT INTO organizations (
+                    id, external_object_id, code, name, parent_id, org_type,
+                    province_code, status, created_at, updated_at
+                ) VALUES (
+                    %s, NULL, %s, %s, NULL, 'region_company', 'CN330000',
+                    'active', %s, %s
+                )
+                """,
+                (
+                    organization_id,
+                    f"PG16-FORGED-{organization_id.hex}",
+                    "PG16 forged 0043 organization sentinel",
+                    now,
+                    now,
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO external_objects (
+                    id, source_system_id, entity_type, external_id,
+                    current_version_id, deleted_at, created_at, updated_at
+                ) VALUES (%s, %s, 'work_order', %s, %s, NULL, %s, %s)
+                """,
+                (
+                    external_object_id,
+                    source_id,
+                    f"pg16-broken-{external_object_id.hex}",
+                    version_id,
+                    now,
+                    now,
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO external_object_versions (
+                    id, external_object_id, source_version, source_updated_at,
+                    valid_from, valid_to, payload_jsonb, payload_sha256,
+                    is_current, created_at
+                ) VALUES (
+                    %s, %s, 'forged-without-inbox-provenance', %s, %s, NULL,
+                    %s::jsonb, %s, true, %s
+                )
+                """,
+                (
+                    version_id,
+                    external_object_id,
+                    now,
+                    now,
+                    json.dumps(forged_payload),
+                    "f" * 64,
+                    now,
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO oam_work_orders (
+                    id, external_object_id, work_order_no, organization_id,
+                    engineer_person_id, status, source_updated_at,
+                    created_at, updated_at
+                ) VALUES (
+                    %s, %s, 'PG16-FORGED-0043', %s, NULL, 'active', %s, %s, %s
+                )
+                """,
+                (
+                    work_order_id,
+                    external_object_id,
+                    organization_id,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+    try:
+        blocked = _run_alembic("upgrade", "head", expect_success=False)
+        assert "0044 requires an empty OAM sync graph" in (
+            blocked.stdout + blocked.stderr
+        )
+        assert _current_revision() == "20260902_0043"
+        assert _table_exists(RLS_BINDING_TABLE) is False
+    finally:
+        with psycopg.connect(**parameters, autocommit=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM oam_work_orders WHERE id = %s",
+                    (work_order_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM external_objects WHERE id = %s",
+                    (external_object_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM organizations WHERE id = %s",
+                    (organization_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM source_systems WHERE id = %s",
+                    (source_id,),
+                )
+
+
+def _assert_0044_preflight_serializes_projector_writer() -> None:
+    assert _current_revision() == "20260902_0043"
+    source_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    migrator_parameters = _connection_parameters(
+        role="star_oam_migrator",
+        password=_role_password("star_oam_migrator"),
+    )
+    with psycopg.connect(
+        **migrator_parameters, autocommit=True
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO source_systems (
+                    id, code, name, mode, enabled, configuration_jsonb,
+                    created_at, updated_at
+                ) VALUES (%s, %s, %s, 'read_only', true, '{}'::jsonb, %s, %s)
+                """,
+                (
+                    source_id,
+                    f"pg16-preflight-race-{source_id.hex}",
+                    "PG16 preflight serialization sentinel",
+                    now,
+                    now,
+                ),
+            )
+
+    writer = psycopg.connect(
+        **_connection_parameters(
+            role="star_oam_projector",
+            password=_role_password("star_oam_projector"),
+        )
+    )
+    try:
+        with writer.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO sync_runs (
+                    id, source_system_id, run_key, scope_key, mode, status,
+                    started_at, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, 'full', 'pending', %s, %s, %s)
+                """,
+                (
+                    run_id,
+                    source_id,
+                    f"pg16-preflight-race-{run_id.hex}",
+                    "oam-work-order-scope:" + "a" * 64,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                _run_alembic,
+                "upgrade",
+                "head",
+                expect_success=False,
+            )
+            deadline = time.monotonic() + 15
+            migration_waiting = False
+            while time.monotonic() < deadline and not future.done():
+                with psycopg.connect(**_admin_parameters()) as inspection:
+                    with inspection.cursor() as cursor:
+                        cursor.execute(
+                            """
+                            SELECT EXISTS (
+                                SELECT 1
+                                  FROM pg_catalog.pg_stat_activity
+                                 WHERE datname = current_database()
+                                   AND usename = 'star_oam_migrator'
+                                   AND wait_event_type = 'Lock'
+                                   AND query LIKE
+                                       'LOCK TABLE public.external_sync_snapshots,%'
+                            )
+                            """
+                        )
+                        migration_waiting = cursor.fetchone()[0]
+                if not migration_waiting:
+                    time.sleep(0.05)
+            writer.commit()
+            blocked = future.result(timeout=30)
+            assert migration_waiting is True
+
+        assert "0044 requires an empty OAM sync graph" in (
+            blocked.stdout + blocked.stderr
+        )
+        assert _current_revision() == "20260902_0043"
+        assert _table_exists(RLS_BINDING_TABLE) is False
+    finally:
+        writer.rollback()
+        writer.close()
+        with psycopg.connect(
+            **migrator_parameters, autocommit=True
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("DELETE FROM sync_runs WHERE id = %s", (run_id,))
+                cursor.execute(
+                    "DELETE FROM source_systems WHERE id = %s",
+                    (source_id,),
+                )
+
+
 def _provision_and_verify_deployment_acl() -> None:
     _run_deployment_sql(
         "create_oam_edge_staging.sql",
@@ -914,6 +1198,360 @@ def _provision_and_verify_oam_work_order_source() -> None:
             )
 
 
+def _assert_raw_sql_denied(
+    role_name: str,
+    statement: str,
+    parameters: tuple[object, ...],
+    *,
+    require_rls: bool = True,
+) -> None:
+    with psycopg.connect(
+        **_connection_parameters(
+            role=role_name,
+            password=_role_password(role_name),
+        )
+    ) as connection:
+        with connection.cursor() as cursor:
+            with pytest.raises(psycopg.Error) as error:
+                cursor.execute(statement, parameters)
+            assert error.value.sqlstate == "42501"
+            if require_rls:
+                assert "row-level security" in str(error.value).lower()
+        connection.rollback()
+
+
+def _seed_0044_unbound_source() -> uuid.UUID:
+    source_id = uuid.uuid4()
+    now = PROJECTOR_GATE_SOURCE_TIME - timedelta(hours=1)
+    with psycopg.connect(
+        **_connection_parameters(
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+        )
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO public.source_systems "
+                "(id, code, name, mode, enabled, configuration_jsonb, "
+                "created_at, updated_at) "
+                "VALUES (%s, %s, %s, 'read_only', true, %s, %s, %s)",
+                (
+                    source_id,
+                    "pg16-unbound-source",
+                    "PG16 unbound attack source",
+                    {},
+                    now,
+                    now,
+                ),
+            )
+        connection.commit()
+    return source_id
+
+
+def _edge_snapshot_insert_sql() -> str:
+    return (
+        "INSERT INTO public.external_sync_snapshots "
+        "(id, source_system, source_instance, snapshot_id, scope_key, "
+        "sync_mode, company_id, org_code, snapshot_at, status, "
+        "manifest_json, manifest_sha256, received_at, completed_at) "
+        "VALUES (%s, %s, %s, %s, %s, 'full', %s, %s, %s, "
+        "'receiving', '', '', %s, NULL)"
+    )
+
+
+def _edge_snapshot_parameters(
+    *,
+    source_system: str = "starcharge_oam",
+    source_instance: str | None = None,
+    scope_key: str | None = None,
+    company_id: str | None = None,
+    org_code: str | None = None,
+) -> tuple[object, ...]:
+    snapshot_at = PROJECTOR_GATE_SOURCE_TIME - timedelta(minutes=30)
+    return (
+        str(uuid.uuid4()),
+        source_system,
+        source_instance or TEST_OAM_SOURCE_COORDINATES["edge_source_instance"],
+        f"pg16-rls-{uuid.uuid4().hex}",
+        scope_key or TEST_OAM_SOURCE_COORDINATES["scope_key"],
+        company_id or TEST_OAM_SOURCE_COORDINATES["company_id"],
+        org_code or TEST_OAM_SOURCE_COORDINATES["org_code"],
+        snapshot_at,
+        snapshot_at,
+    )
+
+
+def _assert_0044_zero_binding_default_denies(unbound_source_id: uuid.UUID) -> None:
+    for role_name in (EDGE_RECEIVER_ROLE, "star_oam_projector"):
+        with psycopg.connect(
+            **_connection_parameters(
+                role=role_name,
+                password=_role_password(role_name),
+            )
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT {RLS_READY_FUNCTION}")
+                assert cursor.fetchone()[0] is False
+
+    with psycopg.connect(
+        **_connection_parameters(
+            role="star_oam_projector",
+            password=_role_password("star_oam_projector"),
+        )
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM public.source_systems")
+            assert cursor.fetchone()[0] == 0
+
+    _assert_raw_sql_denied(
+        EDGE_RECEIVER_ROLE,
+        _edge_snapshot_insert_sql(),
+        _edge_snapshot_parameters(),
+    )
+    now = PROJECTOR_GATE_SOURCE_TIME - timedelta(minutes=20)
+    _assert_raw_sql_denied(
+        "star_oam_projector",
+        "INSERT INTO public.sync_runs "
+        "(id, source_system_id, run_key, scope_key, mode, status, "
+        "started_at, created_at, updated_at) "
+        "VALUES (%s, %s, %s, %s, 'full', 'pending', %s, %s, %s)",
+        (
+            uuid.uuid4(),
+            unbound_source_id,
+            f"pg16-zero-binding-{uuid.uuid4().hex}",
+            "oam-work-order-scope:" + "0" * 64,
+            now,
+            now,
+            now,
+        ),
+    )
+
+
+def _formal_scope_key() -> str:
+    coordinates = TEST_OAM_SOURCE_COORDINATES
+    digest = hashlib.sha256(
+        (
+            coordinates["edge_source_instance"]
+            + "\0"
+            + coordinates["scope_key"]
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"oam-work-order-scope:{digest}"
+
+
+def _assert_0044_bound_scope_attack_matrix(
+    unbound_source_id: uuid.UUID,
+) -> None:
+    coordinates = TEST_OAM_SOURCE_COORDINATES
+    expected_bindings = {
+        (EDGE_RECEIVER_ROLE, "edge_ingress", "work_order"),
+        ("star_oam_projector", "projector_read", "employee"),
+        ("star_oam_projector", "projector_read", "work_order"),
+        ("star_oam_projector", "projector_write", "work_order"),
+    }
+    with psycopg.connect(
+        **_connection_parameters(
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+        )
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT principal_name, capability, entity_type, "
+                "source_system, source_instance, scope_key, company_id, "
+                "org_code, formal_scope_key, enabled "
+                f"FROM public.{RLS_BINDING_TABLE}"
+            )
+            rows = cursor.fetchall()
+            assert {
+                (row[0], row[1], row[2]) for row in rows
+            } == expected_bindings
+            assert len(rows) == 4
+            assert all(
+                row[3:8]
+                == (
+                    "starcharge_oam",
+                    coordinates["edge_source_instance"],
+                    coordinates["scope_key"],
+                    coordinates["company_id"],
+                    coordinates["org_code"],
+                )
+                for row in rows
+            )
+            assert all(row[8] == _formal_scope_key() for row in rows)
+            assert all(row[9] is True for row in rows)
+            cursor.execute(
+                "SELECT id FROM public.source_systems "
+                "WHERE code = 'starcharge_oam'"
+            )
+            source_id = cursor.fetchone()[0]
+
+    for role_name in (EDGE_RECEIVER_ROLE, "star_oam_projector"):
+        with psycopg.connect(
+            **_connection_parameters(
+                role=role_name,
+                password=_role_password(role_name),
+            )
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT {RLS_READY_FUNCTION}")
+                assert cursor.fetchone()[0] is True
+
+    legal_parameters = _edge_snapshot_parameters()
+    legal_snapshot_id = str(legal_parameters[0])
+    with psycopg.connect(
+        **_connection_parameters(
+            role=EDGE_RECEIVER_ROLE,
+            password=_role_password(EDGE_RECEIVER_ROLE),
+        )
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(_edge_snapshot_insert_sql(), legal_parameters)
+        connection.commit()
+
+    for mutation in (
+        {"source_system": "not-starcharge-oam"},
+        {"source_instance": "pg16-wrong-edge"},
+        {"scope_key": "work-orders:recent-31d"},
+        {"company_id": "pg16-wrong-company"},
+        {"org_code": "pg16-wrong-org"},
+    ):
+        _assert_raw_sql_denied(
+            EDGE_RECEIVER_ROLE,
+            _edge_snapshot_insert_sql(),
+            _edge_snapshot_parameters(**mutation),
+        )
+
+    _assert_raw_sql_denied(
+        EDGE_RECEIVER_ROLE,
+        "INSERT INTO public.external_sync_snapshot_batches "
+        "(id, snapshot_ref_id, source_instance, batch_id, entity_type, "
+        "sequence, total_sequences, record_count, body_sha256, received_at) "
+        "VALUES (%s, %s, %s, %s, 'employee', 1, 1, 0, %s, %s)",
+        (
+            str(uuid.uuid4()),
+            legal_snapshot_id,
+            coordinates["edge_source_instance"],
+            f"pg16-wrong-entity-{uuid.uuid4().hex}",
+            "0" * 64,
+            PROJECTOR_GATE_SOURCE_TIME,
+        ),
+    )
+
+    now = PROJECTOR_GATE_SOURCE_TIME
+    for source_or_scope in (
+        (unbound_source_id, _formal_scope_key()),
+        (source_id, "oam-work-order-scope:" + "f" * 64),
+    ):
+        _assert_raw_sql_denied(
+            "star_oam_projector",
+            "INSERT INTO public.sync_runs "
+            "(id, source_system_id, run_key, scope_key, mode, status, "
+            "started_at, created_at, updated_at) "
+            "VALUES (%s, %s, %s, %s, 'full', 'pending', %s, %s, %s)",
+            (
+                uuid.uuid4(),
+                source_or_scope[0],
+                f"pg16-cross-boundary-{uuid.uuid4().hex}",
+                source_or_scope[1],
+                now,
+                now,
+                now,
+            ),
+        )
+
+    for role_name in (EDGE_RECEIVER_ROLE, "star_oam_projector"):
+        with psycopg.connect(
+            **_connection_parameters(
+                role=role_name,
+                password=_role_password(role_name),
+            )
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SET row_security = off")
+                with pytest.raises(psycopg.Error) as error:
+                    cursor.execute(
+                        "SELECT count(*) FROM public.external_sync_snapshots"
+                    )
+                assert error.value.sqlstate == "42501"
+                assert "row-level security" in str(error.value).lower()
+            connection.rollback()
+
+
+def _assert_0044_downgrade_revokes_runtime_writes() -> None:
+    assert _current_revision() == "20260902_0043"
+    _assert_raw_sql_denied(
+        EDGE_RECEIVER_ROLE,
+        _edge_snapshot_insert_sql(),
+        _edge_snapshot_parameters(),
+        require_rls=False,
+    )
+    now = PROJECTOR_GATE_SOURCE_TIME
+    _assert_raw_sql_denied(
+        "star_oam_projector",
+        "INSERT INTO public.sync_runs "
+        "(id, source_system_id, run_key, scope_key, mode, status, "
+        "started_at, created_at, updated_at) "
+        "VALUES (%s, %s, %s, %s, 'full', 'pending', %s, %s, %s)",
+        (
+            uuid.uuid4(),
+            uuid.uuid4(),
+            f"pg16-downgrade-{uuid.uuid4().hex}",
+            _formal_scope_key(),
+            now,
+            now,
+            now,
+        ),
+        require_rls=False,
+    )
+
+
+def _assert_0044_rejects_nonempty_sync_downgrade() -> None:
+    assert _current_revision() == RLS_REVISION
+    blocked = _run_alembic(
+        "downgrade", "20260902_0043", expect_success=False
+    )
+    assert "0044 requires an empty OAM sync graph" in (
+        blocked.stdout + blocked.stderr
+    )
+    assert _current_revision() == RLS_REVISION
+    assert _table_exists(RLS_BINDING_TABLE) is True
+
+
+def _clear_disposable_oam_sync_graph() -> None:
+    """Reset only the CI service database so downgrade closure can be tested."""
+
+    assert _gate_enabled()
+    statements = (
+        "DELETE FROM public.sync_conflicts",
+        "DELETE FROM public.oam_work_orders",
+        "DELETE FROM public.external_object_mappings",
+        "UPDATE public.people SET external_object_id = NULL "
+        "WHERE external_object_id IS NOT NULL",
+        "UPDATE public.organizations SET external_object_id = NULL "
+        "WHERE external_object_id IS NOT NULL",
+        "DELETE FROM public.external_object_versions",
+        "DELETE FROM public.external_objects",
+        "DELETE FROM public.sync_inbox_events",
+        "DELETE FROM public.sync_batches",
+        "DELETE FROM public.sync_runs",
+        "DELETE FROM public.external_sync_current_records",
+        "DELETE FROM public.external_sync_snapshot_records",
+        "DELETE FROM public.external_sync_snapshot_batches",
+        "DELETE FROM public.external_sync_snapshots",
+    )
+    with psycopg.connect(
+        **_connection_parameters(
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+        )
+    ) as connection:
+        with connection.cursor() as cursor:
+            for statement in statements:
+                cursor.execute(statement)
+        connection.commit()
+
+
 def _projector_gate_canonical(value: object) -> str:
     return json.dumps(
         value,
@@ -927,6 +1565,273 @@ def _projector_gate_sha256(value: object) -> str:
     return hashlib.sha256(
         _projector_gate_canonical(value).encode("utf-8")
     ).hexdigest()
+
+
+def _assert_projector_raw_evidence_attack_matrix(
+    *,
+    run_id: uuid.UUID,
+    batch_id: uuid.UUID,
+    source_id: uuid.UUID,
+    inbox_external_event_id: str,
+    inbox_external_id: str,
+    inbox_source_version: str,
+    inbox_source_updated_at: datetime,
+    inbox_payload: dict[str, object],
+    inbox_payload_sha256: str,
+    external_object_id: uuid.UUID,
+    external_version_source_version: str,
+    external_version_source_updated_at: datetime,
+    external_version_payload: dict[str, object],
+    external_version_payload_sha256: str,
+    work_order_id: uuid.UUID,
+    organization_id: uuid.UUID,
+) -> None:
+    """Prove raw projector SQL cannot detach formal rows from edge evidence."""
+
+    projector_role = "star_oam_projector"
+    created_at = PROJECTOR_GATE_SOURCE_TIME + timedelta(minutes=8)
+
+    _assert_raw_sql_denied(
+        projector_role,
+        "INSERT INTO public.sync_batches "
+        "(id, run_id, entity_type, sequence, record_count, body_sha256, "
+        "status, created_at) "
+        "VALUES (%s, %s, 'employee', 2, 0, %s, 'receiving', %s)",
+        (uuid.uuid4(), run_id, "0" * 64, created_at),
+    )
+
+    def event_parameters(
+        *,
+        external_event_id: str = inbox_external_event_id,
+        entity_type: str = "work_order",
+        external_id: str = inbox_external_id,
+        source_version: str = inbox_source_version,
+        source_updated_at: datetime = inbox_source_updated_at,
+        payload: dict[str, object] = inbox_payload,
+        payload_sha256: str = inbox_payload_sha256,
+    ) -> tuple[object, ...]:
+        return (
+            uuid.uuid4(),
+            batch_id,
+            source_id,
+            external_event_id,
+            entity_type,
+            external_id,
+            source_version,
+            source_updated_at,
+            _projector_gate_canonical(payload),
+            payload_sha256,
+            created_at,
+        )
+
+    event_insert = (
+        "INSERT INTO public.sync_inbox_events "
+        "(id, batch_id, source_system_id, external_event_id, entity_type, "
+        "external_id, source_version, source_updated_at, payload_jsonb, "
+        "payload_sha256, status, error_code, error_detail, processed_at, "
+        "created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, "
+        "%s::jsonb, %s, 'validated', NULL, NULL, NULL, %s)"
+    )
+
+    alternate_payload = {**inbox_payload, "statusCode": "closed"}
+    alternate_payload_hash = _projector_gate_sha256(alternate_payload)
+    wrong_company_payload = {
+        **inbox_payload,
+        "authCompanyId": "pg16-forged-company",
+    }
+    wrong_company_hash = _projector_gate_sha256(wrong_company_payload)
+    wrong_id_payload = {**inbox_payload, "id": "pg16-forged-work-order"}
+    wrong_id_hash = _projector_gate_sha256(wrong_id_payload)
+    wrong_time = inbox_source_updated_at + timedelta(minutes=1)
+    wrong_time_payload = {
+        **inbox_payload,
+        "updateTime": wrong_time.astimezone(
+            timezone(timedelta(hours=8))
+        ).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    wrong_time_hash = _projector_gate_sha256(wrong_time_payload)
+    inbox_attacks = {
+        "event_id": event_parameters(
+            external_event_id=f"{inbox_external_event_id}:forged"
+        ),
+        "payload": event_parameters(
+            payload=alternate_payload,
+            payload_sha256=alternate_payload_hash,
+            source_version=(
+                f"wo-v1:{inbox_source_updated_at.isoformat()}:"
+                f"{alternate_payload_hash}"
+            ),
+        ),
+        "company": event_parameters(
+            payload=wrong_company_payload,
+            payload_sha256=wrong_company_hash,
+            source_version=(
+                f"wo-v1:{inbox_source_updated_at.isoformat()}:"
+                f"{wrong_company_hash}"
+            ),
+        ),
+        "external_id": event_parameters(
+            external_id="pg16-forged-work-order",
+            payload=wrong_id_payload,
+            payload_sha256=wrong_id_hash,
+            source_version=(
+                f"wo-v1:{inbox_source_updated_at.isoformat()}:"
+                f"{wrong_id_hash}"
+            ),
+        ),
+        "payload_hash": event_parameters(payload_sha256="f" * 64),
+        "source_time": event_parameters(
+            source_updated_at=wrong_time,
+            payload=wrong_time_payload,
+            payload_sha256=wrong_time_hash,
+            source_version=f"wo-v1:{wrong_time.isoformat()}:{wrong_time_hash}",
+        ),
+        "entity_type": event_parameters(
+            external_event_id=f"{inbox_external_event_id}:employee",
+            entity_type="employee",
+        ),
+    }
+    for attack_name, parameters in inbox_attacks.items():
+        try:
+            _assert_raw_sql_denied(projector_role, event_insert, parameters)
+        except AssertionError as exc:
+            raise AssertionError(
+                "projector accepted forged sync_inbox_events evidence: "
+                f"{attack_name}"
+            ) from exc
+
+    version_insert = (
+        "INSERT INTO public.external_object_versions "
+        "(id, external_object_id, source_version, source_updated_at, "
+        "valid_from, valid_to, payload_jsonb, payload_sha256, is_current, "
+        "created_at) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, "
+        "false, %s)"
+    )
+    valid_from = created_at + timedelta(seconds=1)
+    valid_to = valid_from + timedelta(seconds=1)
+
+    def version_parameters(
+        *,
+        source_version: str = external_version_source_version,
+        source_updated_at: datetime = external_version_source_updated_at,
+        payload: dict[str, object] = external_version_payload,
+        payload_sha256: str = external_version_payload_sha256,
+    ) -> tuple[object, ...]:
+        return (
+            uuid.uuid4(),
+            external_object_id,
+            source_version,
+            source_updated_at,
+            valid_from,
+            valid_to,
+            _projector_gate_canonical(payload),
+            payload_sha256,
+            created_at,
+        )
+
+    forged_projection_payload = {
+        **external_version_payload,
+        "status": "closed",
+    }
+    forged_projection_hash = _projector_gate_sha256(
+        forged_projection_payload
+    )
+    version_attacks = {
+        "payload": version_parameters(
+            payload=forged_projection_payload,
+            payload_sha256=forged_projection_hash,
+        ),
+        "payload_hash": version_parameters(payload_sha256="e" * 64),
+        "source_time": version_parameters(
+            source_version=f"{external_version_source_version}:time",
+            source_updated_at=(
+                external_version_source_updated_at + timedelta(minutes=1)
+            ),
+        ),
+        "source_version": version_parameters(
+            source_version="wo-v2:" + "d" * 64 + ":" + "c" * 64
+        ),
+    }
+    for attack_name, parameters in version_attacks.items():
+        try:
+            _assert_raw_sql_denied(projector_role, version_insert, parameters)
+        except AssertionError as exc:
+            raise AssertionError(
+                "projector accepted forged external_object_versions evidence: "
+                f"{attack_name}"
+            ) from exc
+
+    decoy_person_id = uuid.uuid4()
+    with psycopg.connect(
+        **_connection_parameters(
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+        )
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO public.people "
+                "(id, external_object_id, organization_id, employee_no, "
+                "name, mobile_encrypted, mobile_hash, employment_status, "
+                "source_updated_at, created_at, updated_at) "
+                "VALUES (%s, NULL, %s, %s, %s, NULL, NULL, 'active', "
+                "%s, %s, %s)",
+                (
+                    decoy_person_id,
+                    organization_id,
+                    f"PG16-DECOY-{decoy_person_id.hex[:12]}",
+                    "PG16未映射伪造执行人",
+                    created_at,
+                    created_at,
+                    created_at,
+                ),
+            )
+        connection.commit()
+
+    try:
+        work_order_attacks = {
+            "status": (
+                "UPDATE public.oam_work_orders SET status = 'closed' "
+                "WHERE id = %s",
+                (work_order_id,),
+            ),
+            "source_updated_at": (
+                "UPDATE public.oam_work_orders "
+                "SET source_updated_at = source_updated_at + interval '1 minute' "
+                "WHERE id = %s",
+                (work_order_id,),
+            ),
+            "person_mapping": (
+                "UPDATE public.oam_work_orders SET engineer_person_id = %s "
+                "WHERE id = %s",
+                (decoy_person_id, work_order_id),
+            ),
+        }
+        for attack_name, (statement, parameters) in work_order_attacks.items():
+            try:
+                _assert_raw_sql_denied(
+                    projector_role,
+                    statement,
+                    parameters,
+                )
+            except AssertionError as exc:
+                raise AssertionError(
+                    "projector accepted forged oam_work_orders evidence: "
+                    f"{attack_name}"
+                ) from exc
+    finally:
+        with psycopg.connect(
+            **_connection_parameters(
+                role="star_oam_migrator",
+                password=_role_password("star_oam_migrator"),
+            )
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM public.people WHERE id = %s",
+                    (decoy_person_id,),
+                )
+            connection.commit()
 
 
 def _seed_pg16_projector_identity(migrator_engine) -> tuple[uuid.UUID, ...]:
@@ -1069,7 +1974,11 @@ def _seed_pg16_projector_identity(migrator_engine) -> tuple[uuid.UUID, ...]:
         return root.id, child.id, person.id, source.id
 
 
-def _projector_gate_payload(*, status: str) -> dict[str, object]:
+def _projector_gate_payload(
+    *,
+    status: str,
+    source_updated_at: datetime = PROJECTOR_GATE_SOURCE_TIME,
+) -> dict[str, object]:
     return {
         "id": PROJECTOR_GATE_WORK_ORDER_ID,
         "code": PROJECTOR_GATE_WORK_ORDER_NO,
@@ -1077,7 +1986,7 @@ def _projector_gate_payload(*, status: str) -> dict[str, object]:
         "executorId": PROJECTOR_GATE_EXECUTOR_ID,
         "authCompanyId": TEST_OAM_SOURCE_COORDINATES["company_id"],
         "province": "浙江省",
-        "updateTime": PROJECTOR_GATE_SOURCE_TIME.astimezone(
+        "updateTime": source_updated_at.astimezone(
             timezone(timedelta(hours=8))
         ).strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -1089,6 +1998,7 @@ def _stage_pg16_projector_snapshot(
     external_snapshot_id: str,
     status: str,
     snapshot_at: datetime,
+    source_updated_at: datetime = PROJECTOR_GATE_SOURCE_TIME,
     poison_manifest: bool = False,
 ) -> str:
     from app.models import (
@@ -1099,14 +2009,17 @@ def _stage_pg16_projector_snapshot(
     )
     from app.schemas import EdgeSyncSnapshotCompleteIn
 
-    payload = _projector_gate_payload(status=status)
+    payload = _projector_gate_payload(
+        status=status,
+        source_updated_at=source_updated_at,
+    )
     payload_json = _projector_gate_canonical(payload)
     payload_sha256 = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
     business_key = f"work-order:{PROJECTOR_GATE_WORK_ORDER_NO}"
     final_wire = [
         {
             "business_key": business_key,
-            "source_updated_at": PROJECTOR_GATE_SOURCE_TIME.isoformat(),
+            "source_updated_at": source_updated_at.isoformat(),
             "data": payload,
         }
     ]
@@ -1154,7 +2067,7 @@ def _stage_pg16_projector_snapshot(
                 entity_type="work_order",
                 business_key=business_key,
                 operation="upsert",
-                source_updated_at=PROJECTOR_GATE_SOURCE_TIME,
+                source_updated_at=source_updated_at,
                 payload_json=payload_json,
                 payload_sha256=payload_sha256,
             )
@@ -1175,7 +2088,7 @@ def _stage_pg16_projector_snapshot(
                 scope_key=snapshot.scope_key,
                 entity_type="work_order",
                 business_key=business_key,
-                source_updated_at=PROJECTOR_GATE_SOURCE_TIME,
+                source_updated_at=source_updated_at,
                 payload_json=payload_json,
                 payload_sha256=payload_sha256,
                 last_snapshot_id=snapshot.id,
@@ -1184,7 +2097,7 @@ def _stage_pg16_projector_snapshot(
             )
             session.add(current)
         else:
-            current.source_updated_at = PROJECTOR_GATE_SOURCE_TIME
+            current.source_updated_at = source_updated_at
             current.payload_json = payload_json
             current.payload_sha256 = payload_sha256
             current.last_snapshot_id = snapshot.id
@@ -1221,6 +2134,167 @@ def _stage_pg16_projector_snapshot(
         internal_snapshot_id = snapshot.id
         session.commit()
         return internal_snapshot_id
+
+
+def _remap_pg16_projector_identity(
+    migrator_engine,
+    *,
+    organization_id: uuid.UUID,
+    remapped_at: datetime,
+) -> uuid.UUID:
+    from app.formal_services import oam_work_order_projection as service
+    from app.foundation_models import (
+        ExternalObject,
+        ExternalObjectMapping,
+        Person,
+    )
+    from app.models import User
+
+    with Session(migrator_engine, expire_on_commit=False) as session:
+        employee = session.scalar(
+            select(ExternalObject).where(
+                ExternalObject.entity_type == service.EMPLOYEE_ENTITY,
+                ExternalObject.external_id == PROJECTOR_GATE_EXECUTOR_ID,
+            )
+        )
+        assert employee is not None
+        mapping = session.scalar(
+            select(ExternalObjectMapping).where(
+                ExternalObjectMapping.external_object_id == employee.id,
+                ExternalObjectMapping.local_object_type == "person",
+                ExternalObjectMapping.status == "approved",
+            )
+        )
+        assert mapping is not None
+        mapping.status = "superseded"
+        mapping.updated_at = remapped_at
+
+        replacement = Person(
+            external_object_id=None,
+            organization_id=organization_id,
+            employee_no="PG16-PROJECTOR-EMP-REMAPPED",
+            name="PG16重新审批映射工程师",
+            mobile_encrypted=None,
+            mobile_hash=None,
+            employment_status="active",
+            source_updated_at=remapped_at,
+            created_at=remapped_at,
+            updated_at=remapped_at,
+        )
+        approver = User(
+            id=str(uuid.uuid4()),
+            person_id=None,
+            account_status="active",
+            last_login_at=None,
+            authorization_version=1,
+            mobile="13900001602",
+            name="PG16重新映射审批管理员",
+            password_hash="not-used-in-pg16-release-gate",
+            role="admin",
+            province=None,
+            is_active=True,
+            require_password_change=False,
+            created_at=remapped_at,
+            updated_at=remapped_at,
+        )
+        session.add_all((replacement, approver))
+        session.flush()
+        session.add(
+            ExternalObjectMapping(
+                external_object_id=employee.id,
+                local_object_type="person",
+                local_object_id=str(replacement.id),
+                status="approved",
+                approved_by=approver.id,
+                approved_at=remapped_at,
+                reason="PG16发布门映射单独变更",
+                created_at=remapped_at,
+                updated_at=remapped_at,
+            )
+        )
+        session.commit()
+        return replacement.id
+
+
+def _assert_pg16_projection_chain_rejects_partial_updates(
+    *,
+    external_object_id: uuid.UUID,
+    closed_version_id: uuid.UUID,
+    closed_at: datetime,
+    current_version_id: uuid.UUID,
+    close_at: datetime,
+) -> None:
+    projector_parameters = _connection_parameters(
+        role="star_oam_projector",
+        password=_role_password("star_oam_projector"),
+    )
+
+    # A closed history row is immutable.  UPDATE USING intentionally hides it
+    # from the version-transition policy, so neither rewriting its close time
+    # nor reactivating it may affect a row.
+    with psycopg.connect(**projector_parameters) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE public.external_object_versions "
+                "SET valid_to = valid_to + interval '1 minute' "
+                "WHERE id = %s RETURNING id",
+                (closed_version_id,),
+            )
+            assert cursor.fetchone() is None
+            cursor.execute(
+                "UPDATE public.external_object_versions "
+                "SET is_current = true, valid_to = NULL "
+                "WHERE id = %s RETURNING id",
+                (closed_version_id,),
+            )
+            assert cursor.fetchone() is None
+            cursor.execute(
+                "SELECT valid_to, is_current "
+                "FROM public.external_object_versions WHERE id = %s",
+                (closed_version_id,),
+            )
+            assert cursor.fetchone() == (closed_at, False)
+        connection.commit()
+
+    # The pointer-null form is rejected even before the deferred trigger by the
+    # new-row RLS predicate.  It must never become an observable intermediate
+    # state or reach commit.
+    with psycopg.connect(**projector_parameters) as connection:
+        with connection.cursor() as cursor:
+            with pytest.raises(psycopg.Error) as pointer_error:
+                cursor.execute(
+                    "UPDATE public.external_objects "
+                    "SET current_version_id = NULL, updated_at = %s "
+                    "WHERE id = %s",
+                    (close_at, external_object_id),
+                )
+            assert pointer_error.value.sqlstate == "42501"
+            assert "row-level security" in str(pointer_error.value).lower()
+        connection.rollback()
+
+    # Closing the pointed-to version is individually valid to the row policy,
+    # so the statement succeeds while constraints remain deferred.  Forcing the
+    # constraint proves the cross-row pointer/version chain blocks the partial
+    # lifecycle before commit.
+    with psycopg.connect(**projector_parameters) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE public.external_object_versions "
+                "SET is_current = false, valid_to = %s WHERE id = %s "
+                "RETURNING id",
+                (close_at, current_version_id),
+            )
+            assert cursor.fetchone() == (current_version_id,)
+            with pytest.raises(psycopg.Error) as version_error:
+                cursor.execute(
+                    "SET CONSTRAINTS "
+                    "trg_external_object_versions_chain_0044 IMMEDIATE"
+                )
+            assert version_error.value.sqlstate == "42501"
+            assert "0044 work-order current-version pointer is invalid" in str(
+                version_error.value
+            )
+        connection.rollback()
 
 
 def _assert_projector_real_publish_paths(projector_engine) -> None:
@@ -1348,9 +2422,23 @@ def _assert_projector_real_publish_paths(projector_engine) -> None:
             assert version.payload_sha256 == _projector_gate_sha256(
                 expected_projection_payload
             )
+            assert event.source_version is not None
+            assert event.source_updated_at is not None
+            assert version.source_updated_at is not None
+            stable_batch_id = batch.id
+            stable_event_external_event_id = event.external_event_id
+            stable_event_external_id = event.external_id
+            stable_event_source_version = event.source_version
+            stable_event_source_updated_at = event.source_updated_at
+            stable_event_payload = dict(event.payload_jsonb)
+            stable_event_payload_sha256 = event.payload_sha256
             stable_row_id = row.id
             stable_external_id = external.id
             stable_version_id = version.id
+            stable_version_source_version = version.source_version
+            stable_version_source_updated_at = version.source_updated_at
+            stable_version_payload = dict(version.payload_jsonb)
+            stable_version_payload_sha256 = version.payload_sha256
             stable_updated_at = row.updated_at
 
         with Session(projector_engine, expire_on_commit=False) as session:
@@ -1382,6 +2470,30 @@ def _assert_projector_real_publish_paths(projector_engine) -> None:
                 .select_from(SyncRun)
                 .where(SyncRun.source_system_id == source_id)
             ) == 1
+
+        # Exercise hostile raw SQL only after the normal idempotent replay has
+        # proved the real publisher path.  Every attack rolls back, and the
+        # temporary unmapped person is removed before later mapping scenarios.
+        _assert_projector_raw_evidence_attack_matrix(
+            run_id=first.sync_run_id,
+            batch_id=stable_batch_id,
+            source_id=source_id,
+            inbox_external_event_id=stable_event_external_event_id,
+            inbox_external_id=stable_event_external_id,
+            inbox_source_version=stable_event_source_version,
+            inbox_source_updated_at=stable_event_source_updated_at,
+            inbox_payload=stable_event_payload,
+            inbox_payload_sha256=stable_event_payload_sha256,
+            external_object_id=stable_external_id,
+            external_version_source_version=stable_version_source_version,
+            external_version_source_updated_at=(
+                stable_version_source_updated_at
+            ),
+            external_version_payload=stable_version_payload,
+            external_version_payload_sha256=stable_version_payload_sha256,
+            work_order_id=stable_row_id,
+            organization_id=child_id,
+        )
 
         conflict_snapshot_id = _stage_pg16_projector_snapshot(
             migrator_engine,
@@ -1537,6 +2649,213 @@ def _assert_projector_real_publish_paths(projector_engine) -> None:
                 ).all()
             ) == ["completed", "conflict", "failed"]
             assert service.next_unpublished_work_order_snapshot_id(session) is None
+
+        # A strictly newer OAM source observation must follow the real changed
+        # path: close the old version, point to the new version, and update the
+        # formal work-order row atomically under the deferred chain guard.
+        status_source_time = PROJECTOR_GATE_SOURCE_TIME + timedelta(minutes=40)
+        status_payload = _projector_gate_payload(
+            status="end",
+            source_updated_at=status_source_time,
+        )
+        status_snapshot_id = _stage_pg16_projector_snapshot(
+            migrator_engine,
+            external_snapshot_id="pg16-projector-snapshot-status-update",
+            status="end",
+            source_updated_at=status_source_time,
+            snapshot_at=PROJECTOR_GATE_SOURCE_TIME + timedelta(minutes=45),
+        )
+        status_publish_at = PROJECTOR_GATE_SOURCE_TIME + timedelta(minutes=47)
+        with Session(projector_engine, expire_on_commit=False) as session:
+            status_result = service.publish_completed_work_order_snapshot(
+                session,
+                snapshot_id=status_snapshot_id,
+                now=status_publish_at,
+            )
+            assert status_result.status == "completed"
+            assert status_result.projected_records == 1
+            assert status_result.created_records == 0
+            # ``updated_records`` is the public result of plan.changed=True.
+            assert status_result.updated_records == 1
+            assert status_result.unchanged_records == 0
+            assert status_result.conflict_records == 0
+            assert status_result.duplicate is False
+            session.commit()
+
+        with Session(projector_engine) as session:
+            status_row = session.get(OamWorkOrder, stable_row_id)
+            status_external = session.get(ExternalObject, stable_external_id)
+            first_version = session.get(
+                ExternalObjectVersion, stable_version_id
+            )
+            assert status_row is not None
+            assert status_external is not None
+            assert first_version is not None
+            assert status_row.status == "completed"
+            assert status_row.organization_id == child_id
+            assert status_row.engineer_person_id == person_id
+            assert service._aware(status_row.source_updated_at) == (
+                status_source_time
+            )
+            assert service._aware(status_row.updated_at) == status_publish_at
+            assert first_version.is_current is False
+            assert service._aware(first_version.valid_to) == status_publish_at
+            status_version = session.get(
+                ExternalObjectVersion,
+                status_external.current_version_id,
+            )
+            assert status_version is not None
+            assert status_version.id != stable_version_id
+            assert status_version.is_current is True
+            assert status_version.valid_to is None
+            assert service._aware(status_version.source_updated_at) == (
+                status_source_time
+            )
+            assert service._aware(status_version.valid_from) == status_publish_at
+            assert status_version.payload_jsonb == {
+                "work_order_no": PROJECTOR_GATE_WORK_ORDER_NO,
+                "organization_id": str(child_id),
+                "engineer_person_id": str(person_id),
+                "status": "completed",
+            }
+            assert status_version.payload_sha256 == _projector_gate_sha256(
+                status_version.payload_jsonb
+            )
+            assert status_version.source_version.split(":")[1] == (
+                _projector_gate_sha256(status_payload)
+            )
+            assert session.scalar(
+                select(func.count())
+                .select_from(ExternalObjectVersion)
+                .where(
+                    ExternalObjectVersion.external_object_id
+                    == stable_external_id
+                )
+            ) == 2
+            status_version_id = status_version.id
+            status_projection_source_version = status_version.source_version
+
+        # The raw OAM work-order is deliberately unchanged here.  Only the
+        # separately approved employee-to-person mapping changes, which must
+        # still rotate projection evidence and the formal person pointer.
+        remapped_at = PROJECTOR_GATE_SOURCE_TIME + timedelta(minutes=50)
+        replacement_person_id = _remap_pg16_projector_identity(
+            migrator_engine,
+            organization_id=child_id,
+            remapped_at=remapped_at,
+        )
+        mapping_snapshot_id = _stage_pg16_projector_snapshot(
+            migrator_engine,
+            external_snapshot_id="pg16-projector-snapshot-mapping-update",
+            status="end",
+            source_updated_at=status_source_time,
+            snapshot_at=PROJECTOR_GATE_SOURCE_TIME + timedelta(minutes=55),
+        )
+        mapping_publish_at = PROJECTOR_GATE_SOURCE_TIME + timedelta(minutes=57)
+        with Session(projector_engine, expire_on_commit=False) as session:
+            mapping_result = service.publish_completed_work_order_snapshot(
+                session,
+                snapshot_id=mapping_snapshot_id,
+                now=mapping_publish_at,
+            )
+            assert mapping_result.status == "completed"
+            assert mapping_result.projected_records == 1
+            assert mapping_result.created_records == 0
+            assert mapping_result.updated_records == 1
+            assert mapping_result.unchanged_records == 0
+            assert mapping_result.conflict_records == 0
+            assert mapping_result.duplicate is False
+            session.commit()
+
+        with Session(projector_engine) as session:
+            mapping_row = session.get(OamWorkOrder, stable_row_id)
+            mapping_external = session.get(ExternalObject, stable_external_id)
+            previous_status_version = session.get(
+                ExternalObjectVersion, status_version_id
+            )
+            assert mapping_row is not None
+            assert mapping_external is not None
+            assert previous_status_version is not None
+            assert mapping_row.status == "completed"
+            assert mapping_row.organization_id == child_id
+            assert mapping_row.engineer_person_id == replacement_person_id
+            assert service._aware(mapping_row.source_updated_at) == (
+                status_source_time
+            )
+            assert service._aware(mapping_row.updated_at) == mapping_publish_at
+            assert previous_status_version.is_current is False
+            assert service._aware(previous_status_version.valid_to) == (
+                mapping_publish_at
+            )
+            mapping_version = session.get(
+                ExternalObjectVersion,
+                mapping_external.current_version_id,
+            )
+            assert mapping_version is not None
+            assert mapping_version.id != status_version_id
+            assert mapping_version.is_current is True
+            assert mapping_version.valid_to is None
+            assert service._aware(mapping_version.source_updated_at) == (
+                status_source_time
+            )
+            assert mapping_version.payload_jsonb == {
+                "work_order_no": PROJECTOR_GATE_WORK_ORDER_NO,
+                "organization_id": str(child_id),
+                "engineer_person_id": str(replacement_person_id),
+                "status": "completed",
+            }
+            assert mapping_version.payload_sha256 == _projector_gate_sha256(
+                mapping_version.payload_jsonb
+            )
+            status_source_coordinates = status_projection_source_version.split(
+                ":"
+            )
+            mapping_source_coordinates = mapping_version.source_version.split(
+                ":"
+            )
+            assert len(status_source_coordinates) == 3
+            assert len(mapping_source_coordinates) == 3
+            assert mapping_source_coordinates[1] == status_source_coordinates[1]
+            assert mapping_source_coordinates[2] != status_source_coordinates[2]
+            assert session.scalar(
+                select(func.count())
+                .select_from(ExternalObjectVersion)
+                .where(
+                    ExternalObjectVersion.external_object_id
+                    == stable_external_id
+                )
+            ) == 3
+            mapping_version_id = mapping_version.id
+
+        _assert_pg16_projection_chain_rejects_partial_updates(
+            external_object_id=stable_external_id,
+            closed_version_id=stable_version_id,
+            closed_at=status_publish_at,
+            current_version_id=mapping_version_id,
+            close_at=PROJECTOR_GATE_SOURCE_TIME + timedelta(minutes=58),
+        )
+        with Session(projector_engine) as session:
+            final_external = session.get(ExternalObject, stable_external_id)
+            final_version = session.get(
+                ExternalObjectVersion, mapping_version_id
+            )
+            final_row = session.get(OamWorkOrder, stable_row_id)
+            assert final_external is not None
+            assert final_version is not None
+            assert final_row is not None
+            assert final_external.current_version_id == mapping_version_id
+            assert final_version.is_current is True
+            assert final_version.valid_to is None
+            assert final_row.engineer_person_id == replacement_person_id
+            assert session.scalar(
+                select(func.count())
+                .select_from(ExternalObjectVersion)
+                .where(
+                    ExternalObjectVersion.external_object_id
+                    == stable_external_id,
+                    ExternalObjectVersion.is_current.is_(True),
+                )
+            ) == 1
     finally:
         migrator_engine.dispose()
 
@@ -2521,14 +3840,22 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _assert_0043_rejects_projector_cross_schema_drift()
     _assert_0043_rejects_unrevocable_parameter_acl()
     pre_0043_large_object_oid = _inject_pre_0043_projector_acl_drift()
-    _run_alembic("upgrade", "head")
-    _run_alembic("upgrade", "head")
+    _run_alembic("upgrade", "20260902_0043")
     assert _current_revision() == "20260902_0043"
+    _assert_0044_rejects_stray_permissive_policy()
+    _assert_0044_rejects_untrusted_0043_projection_graph()
+    _assert_0044_preflight_serializes_projector_writer()
+    _run_alembic("upgrade", "head")
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == RLS_REVISION
     assert _work_order_lock_function_exists() is True
     _assert_pre_0043_acl_drift_was_cleaned(pre_0043_large_object_oid)
     _assert_projector_exact_column_acl()
+    unbound_source_id = _seed_0044_unbound_source()
     _provision_and_verify_deployment_acl()
+    _assert_0044_zero_binding_default_denies(unbound_source_id)
     _provision_and_verify_oam_work_order_source()
+    _assert_0044_bound_scope_attack_matrix(unbound_source_id)
 
     projector_engine = create_engine(
         _sqlalchemy_url(
@@ -2557,19 +3884,30 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         edge_engine.dispose()
         projector_engine.dispose()
 
+    _assert_0044_rejects_nonempty_sync_downgrade()
+    _clear_disposable_oam_sync_graph()
+    _run_alembic("downgrade", "20260902_0043")
+    _assert_0044_downgrade_revokes_runtime_writes()
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == RLS_REVISION
+    _provision_and_verify_deployment_acl()
+    _provision_and_verify_oam_work_order_source()
+    _assert_0044_bound_scope_attack_matrix(unbound_source_id)
+
+    _clear_disposable_oam_sync_graph()
     _run_alembic("downgrade", "20260902_0042")
     assert _current_revision() == "20260902_0042"
     assert _work_order_lock_function_exists() is True
     _assert_projector_acl_revoked()
     _run_alembic("upgrade", "head")
-    assert _current_revision() == "20260902_0043"
+    assert _current_revision() == RLS_REVISION
     assert _work_order_lock_function_exists() is True
 
     _run_alembic("downgrade", "20260902_0041")
     assert _current_revision() == "20260902_0041"
     assert _work_order_lock_function_exists() is False
     _run_alembic("upgrade", "head")
-    assert _current_revision() == "20260902_0043"
+    assert _current_revision() == RLS_REVISION
     assert _work_order_lock_function_exists() is True
 
     _run_alembic("downgrade", "20260901_0040")
@@ -2586,6 +3924,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
 
     _run_alembic("upgrade", "head")
     _provision_and_verify_deployment_acl()
+    _provision_and_verify_oam_work_order_source()
     api_engine = create_engine(
         _sqlalchemy_url(
             role="star_oam_api",
@@ -2644,7 +3983,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         assert "cannot downgrade 0041" in (
             blocked_downgrade.stdout + blocked_downgrade.stderr
         )
-        assert _current_revision() == "20260902_0043"
+        assert _current_revision() == RLS_REVISION
     finally:
         edge_engine.dispose()
         projector_engine.dispose()

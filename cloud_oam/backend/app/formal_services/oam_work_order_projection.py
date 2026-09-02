@@ -337,6 +337,13 @@ def publish_completed_work_order_snapshot(
         )
 
     run.status = "projecting"
+    # The 0044 external-object/version RLS predicates prove every write
+    # against a run that is already in ``projecting`` state.  ``SyncRun`` and
+    # a newly inserted ``ExternalObject`` have no ORM dependency edge, so a
+    # later broad flush may emit the object INSERT before the run UPDATE.
+    # Persist this authorization state explicitly before entering the plan
+    # loop; the enclosing transaction still keeps the publication atomic.
+    db.flush()
     created = 0
     updated = 0
     unchanged = 0
@@ -1286,6 +1293,11 @@ def _apply_plan(
         db.flush()
         external.current_version_id = version.id
         external.updated_at = published_at
+        # The work-order RLS predicate proves the formal row against the
+        # external object's current-version pointer.  Persist that pointer
+        # before the dependent INSERT/UPDATE instead of relying on implicit
+        # unit-of-work ordering at commit time.
+        db.flush()
     elif current_version is None:
         raise AssertionError("unchanged work-order plan requires a current version")
 

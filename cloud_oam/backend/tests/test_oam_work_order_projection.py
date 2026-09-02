@@ -397,6 +397,53 @@ def test_publisher_creates_complete_formal_provenance_chain(db: Session):
     assert evidence.freshness_status == "fresh"
 
 
+def test_publisher_flushes_rls_evidence_before_plan_dml(
+    db: Session,
+    monkeypatch,
+):
+    source = _source(db)
+    _person_mapping(db, source)
+    snapshot = _stage_snapshot(
+        db,
+        payloads=(_work_order_payload(),),
+        snapshot_id="snapshot-work-order-rls-flush",
+    )
+    original_apply_plan = service._apply_plan
+    observed_states: list[tuple[str, str, str]] = []
+
+    def assert_persisted_authorization_state(
+        session: Session,
+        *,
+        plan,
+        published_at: datetime,
+    ) -> str:
+        # Use the connection directly so this proof cannot trigger an ORM
+        # autoflush that would hide a missing pre-plan persistence boundary.
+        state = session.connection().exec_driver_sql(
+            "SELECT run.status, batch.status, inbox.status "
+            "FROM sync_runs AS run "
+            "JOIN sync_batches AS batch ON batch.run_id = run.id "
+            "JOIN sync_inbox_events AS inbox ON inbox.batch_id = batch.id"
+        ).one()
+        observed_states.append(tuple(state))
+        return original_apply_plan(
+            session,
+            plan=plan,
+            published_at=published_at,
+        )
+
+    monkeypatch.setattr(service, "_apply_plan", assert_persisted_authorization_state)
+
+    result = service.publish_completed_work_order_snapshot(
+        db,
+        snapshot_id=snapshot.id,
+        now=PUBLISHED_TIME,
+    )
+
+    assert result.status == "completed"
+    assert observed_states == [("projecting", "validated", "validated")]
+
+
 def test_duplicate_publish_is_idempotent_and_does_not_refresh_time(db: Session):
     source = _source(db)
     _person_mapping(db, source)

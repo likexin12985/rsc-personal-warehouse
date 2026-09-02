@@ -135,6 +135,9 @@ def test_older_snapshot_is_quarantined_without_replacing_current_projection():
         )
         assert stale is not None
         assert stale.status == "rejected_stale"
+        assert stale.manifest_json == ""
+        assert stale.manifest_sha256 == ""
+        assert stale.completed_at is None
         assert db.get(ExternalSyncSnapshot, newer.id).status == "complete"
 
 
@@ -207,6 +210,124 @@ def test_employee_snapshot_cannot_project_into_user_directory_by_default(monkeyp
         )
         assert result["personnel"]["status"] == "deferred"
         assert db.scalar(select(OamPersonnelBinding)) is None
+
+
+def test_snapshot_flushes_preserve_receive_complete_and_duplicate_semantics():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    snapshot_at = datetime(2026, 8, 30, 3, 30, tzinfo=timezone.utc)
+    delta_record = {
+        "business_key": "inventory:flush-lifecycle",
+        "source_updated_at": None,
+        "operation": "upsert",
+        "data": {"quantity": 1},
+    }
+    final_record = {
+        key: value for key, value in delta_record.items() if key != "operation"
+    }
+    batch_payload = EdgeSyncSnapshotBatchIn(
+        snapshot_id="snapshot-flush-lifecycle",
+        scope_key="warehouse:WH-1",
+        sync_mode="full",
+        company_id="company-nio",
+        org_code="org-nio",
+        entity_type="inventory",
+        snapshot_at=snapshot_at,
+        sequence=1,
+        total_sequences=1,
+        records=[delta_record],
+    )
+    complete_payload = EdgeSyncSnapshotCompleteIn(
+        snapshot_id="snapshot-flush-lifecycle",
+        scope_key="warehouse:WH-1",
+        sync_mode="full",
+        company_id="company-nio",
+        org_code="org-nio",
+        snapshot_at=snapshot_at,
+        entities=[
+            {
+                "entity_type": "inventory",
+                "final_record_count": 1,
+                "final_sha256": integrations._records_sha256([final_record]),
+                "delta_record_count": 1,
+                "delta_sha256": integrations._records_sha256([delta_record]),
+                "batch_count": 1,
+            }
+        ],
+    )
+    complete_body = integrations._canonical_json(
+        complete_payload.model_dump(mode="json")
+    ).encode("utf-8")
+
+    with Session(engine) as db:
+        received = receive_snapshot_batch(
+            batch_payload,
+            request(),
+            verified("edge-flush", "flush-batch", b"canonical-batch"),
+            db,
+        )
+        assert received["ok"] is True
+        assert received["duplicate"] is False
+        assert received["accepted_records"] == 1
+
+        duplicate_receive = receive_snapshot_batch(
+            batch_payload,
+            request(),
+            verified("edge-flush", "flush-batch", b"canonical-batch"),
+            db,
+        )
+        assert duplicate_receive["ok"] is True
+        assert duplicate_receive["duplicate"] is True
+        assert duplicate_receive["accepted_records"] == 1
+
+        completed = complete_snapshot(
+            complete_payload,
+            request(),
+            verified("edge-flush", "flush-complete", complete_body),
+            db,
+        )
+        assert completed["ok"] is True
+        assert completed["duplicate"] is False
+        assert completed["status"] == "complete"
+
+        duplicate_after_completion = receive_snapshot_batch(
+            batch_payload,
+            request(),
+            verified("edge-flush", "flush-batch", b"canonical-batch"),
+            db,
+        )
+        assert duplicate_after_completion["ok"] is True
+        assert duplicate_after_completion["duplicate"] is True
+
+        duplicate_complete = complete_snapshot(
+            complete_payload,
+            request(),
+            verified("edge-flush", "flush-complete-retry", complete_body),
+            db,
+        )
+        assert duplicate_complete["ok"] is True
+        assert duplicate_complete["duplicate"] is True
+        assert duplicate_complete["status"] == "complete"
+
+        with pytest.raises(HTTPException) as error:
+            receive_snapshot_batch(
+                batch_payload,
+                request(),
+                verified("edge-flush", "flush-new-batch", b"new-batch"),
+                db,
+            )
+        assert error.value.status_code == 409
+        assert "不得追加批次" in error.value.detail
+
+        snapshot = db.scalar(
+            select(ExternalSyncSnapshot).where(
+                ExternalSyncSnapshot.snapshot_id == "snapshot-flush-lifecycle"
+            )
+        )
+        assert snapshot is not None
+        assert snapshot.status == "complete"
+        assert snapshot.manifest_json == complete_body.decode("utf-8")
+        assert snapshot.manifest_sha256 == hashlib.sha256(complete_body).hexdigest()
 
 
 def test_snapshot_sequence_cannot_be_reused_by_a_different_batch():

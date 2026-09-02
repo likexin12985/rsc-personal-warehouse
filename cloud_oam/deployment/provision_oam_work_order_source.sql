@@ -33,9 +33,10 @@ BEGIN;
 
 DO $$
 BEGIN
-    IF current_user <> 'star_oam_migrator' THEN
+    IF current_user <> 'star_oam_migrator'
+       OR session_user <> 'star_oam_migrator' THEN
         RAISE EXCEPTION
-            'OAM source provisioning requires star_oam_migrator';
+            'OAM source provisioning requires a direct star_oam_migrator session';
     END IF;
 END
 $$;
@@ -95,7 +96,11 @@ WHERE coordinates.edge_source_instance = btrim(coordinates.edge_source_instance)
   AND coordinates.edge_source_instance !~ '[[:cntrl:]]'
   AND coordinates.company_id !~ '[[:cntrl:]]'
   AND coordinates.org_code !~ '[[:cntrl:]]'
-  AND coordinates.scope_key !~ '[[:cntrl:]]';
+  AND coordinates.scope_key !~ '[[:cntrl:]]'
+  AND coordinates.edge_source_instance !~ '[*%?]'
+  AND coordinates.company_id !~ '[*%?]'
+  AND coordinates.org_code !~ '[*%?]'
+  AND coordinates.scope_key !~ '[*%?]';
 
 DO $$
 BEGIN
@@ -147,6 +152,106 @@ BEGIN
     IF source_count <> 1 THEN
         RAISE EXCEPTION
             'existing starcharge_oam source differs; no automatic overwrite performed';
+    END IF;
+END
+$$;
+
+-- 0044 keeps authorization coordinates in a migrator-owned table.  Runtime
+-- roles can neither read nor mutate these rows; provisioning inserts only the
+-- four reviewed capability/entity combinations and never overwrites drift.
+INSERT INTO public.oam_sync_scope_bindings (
+    id,
+    principal_name,
+    capability,
+    source_system,
+    source_instance,
+    scope_key,
+    company_id,
+    org_code,
+    entity_type,
+    enabled,
+    created_at,
+    updated_at
+)
+SELECT
+    pg_catalog.md5(
+        'rsc:oam-sync-scope-binding:'
+        || binding.principal_name || ':'
+        || binding.capability || ':'
+        || binding.entity_type || ':'
+        || source_input.edge_source_instance || ':'
+        || source_input.scope_key
+    )::uuid,
+    binding.principal_name,
+    binding.capability,
+    'starcharge_oam',
+    source_input.edge_source_instance,
+    source_input.scope_key,
+    source_input.company_id,
+    source_input.org_code,
+    binding.entity_type,
+    TRUE,
+    pg_catalog.clock_timestamp(),
+    pg_catalog.clock_timestamp()
+FROM pg_temp.oam_work_order_source_input AS source_input
+CROSS JOIN (
+    VALUES
+        ('edge_inbox'::text, 'edge_ingress'::text, 'work_order'::text),
+        ('star_oam_projector', 'projector_read', 'employee'),
+        ('star_oam_projector', 'projector_read', 'work_order'),
+        ('star_oam_projector', 'projector_write', 'work_order')
+) AS binding(principal_name, capability, entity_type)
+ON CONFLICT (
+    principal_name,
+    capability,
+    source_system,
+    source_instance,
+    scope_key,
+    entity_type
+) DO NOTHING;
+
+DO $$
+DECLARE
+    source_input pg_temp.oam_work_order_source_input%ROWTYPE;
+    exact_binding_count bigint;
+    projector_binding_count bigint;
+BEGIN
+    SELECT *
+      INTO STRICT source_input
+      FROM pg_temp.oam_work_order_source_input;
+
+    SELECT pg_catalog.count(*)
+      INTO exact_binding_count
+      FROM public.oam_sync_scope_bindings AS binding
+     WHERE binding.enabled
+       AND binding.source_system = 'starcharge_oam'
+       AND binding.source_instance = source_input.edge_source_instance
+       AND binding.scope_key = source_input.scope_key
+       AND binding.company_id = source_input.company_id
+       AND binding.org_code = source_input.org_code
+       AND (
+           (binding.principal_name = 'edge_inbox'
+            AND binding.capability = 'edge_ingress'
+            AND binding.entity_type = 'work_order')
+           OR
+           (binding.principal_name = 'star_oam_projector'
+            AND binding.capability = 'projector_read'
+            AND binding.entity_type IN ('employee', 'work_order'))
+           OR
+           (binding.principal_name = 'star_oam_projector'
+            AND binding.capability = 'projector_write'
+            AND binding.entity_type = 'work_order')
+       );
+
+    SELECT pg_catalog.count(*)
+      INTO projector_binding_count
+      FROM public.oam_sync_scope_bindings AS binding
+     WHERE binding.enabled
+       AND binding.principal_name = 'star_oam_projector';
+
+    IF exact_binding_count <> 4 OR projector_binding_count <> 3 THEN
+        RAISE EXCEPTION
+            'existing OAM sync scope bindings differ; no automatic overwrite performed';
     END IF;
 END
 $$;
