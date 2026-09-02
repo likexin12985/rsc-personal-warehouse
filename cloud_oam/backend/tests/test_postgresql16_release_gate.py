@@ -426,7 +426,7 @@ def _assert_edge_receiver_provision_rolls_back_on_cross_database_connect() -> No
             cursor.execute("GRANT CONNECT ON DATABASE postgres TO PUBLIC")
     try:
         completed = _run_edge_receiver_role_provision()
-        assert completed.returncode == 4
+        assert completed.returncode == 3
         with psycopg.connect(**_admin_parameters()) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(

@@ -11,22 +11,22 @@
 \if :{?edge_source_instance}
 \else
 \echo 'edge_source_instance is required; refusing to guess'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 \if :{?company_id}
 \else
 \echo 'company_id is required; refusing to guess'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 \if :{?org_code}
 \else
 \echo 'org_code is required; refusing to guess'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 \if :{?scope_key}
 \else
 \echo 'scope_key is required; refusing to guess'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 BEGIN;

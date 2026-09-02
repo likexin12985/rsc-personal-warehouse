@@ -15,6 +15,7 @@ BACKUP = ROOT / "scripts" / "backup.sh"
 PG16_WORKFLOW = ROOT.parent / ".github" / "workflows" / (
     "postgresql16-release-gate.yml"
 )
+DEPLOYMENT = ROOT / "deployment"
 
 
 def test_compose_never_injects_bootstrap_or_migrator_secret_into_api() -> None:
@@ -118,6 +119,17 @@ def test_postgresql16_gate_covers_main_prs_and_edge_role_provisioning() -> None:
     assert "  push:\n" in workflow
     assert workflow.count("      - main\n") >= 2
     assert "cloud_oam/deployment/provision_edge_receiver_role.sql" in workflow
+
+
+def test_postgresql16_psql_scripts_use_real_fail_closed_exit_paths() -> None:
+    for script in DEPLOYMENT.glob("*.sql"):
+        source = script.read_text(encoding="utf-8")
+        assert not any(
+            line.startswith("\\quit ") and line.removeprefix("\\quit ").isdigit()
+            for line in (row.strip() for row in source.splitlines())
+        ), f"{script.name} uses a numeric \\quit argument that PostgreSQL 16 ignores"
+        if "intentional_psql_fail_closed" in source:
+            assert "\\set ON_ERROR_STOP on" in source
 
 
 def test_environment_and_backup_use_dedicated_database_credentials() -> None:

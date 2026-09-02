@@ -8,7 +8,7 @@
 \if :{?edge_role}
 \else
 \echo 'edge_role is required; refusing to guess a database principal'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 BEGIN;
@@ -82,7 +82,7 @@ SELECT COALESCE(
 \if :edge_role_safe
 \else
 \echo 'edge_role is missing, privileged, inherited, or shared; refusing ACL provisioning'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 -- Start from a closed direct ACL.  Table-level REVOKE does not remove a

@@ -28,12 +28,12 @@
 \if :{?edge_source_instance}
 \else
 \echo 'edge_source_instance is required; refusing to guess the source scope'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 \if :{?scope_key}
 \else
 \echo 'scope_key is required; refusing to guess the source scope'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 \if :{?replacement_snapshot_id}
 \else
@@ -201,7 +201,7 @@ FROM pg_temp.legacy_oam_detail_cleanup_input AS cleanup_input
 \else
 ROLLBACK;
 \echo 'the exact source/scope is busy; no data was changed'
-\quit 4
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 -- Materialize every snapshot that still owns either retired entity.  The
@@ -281,7 +281,7 @@ FROM pg_temp.legacy_oam_detail_cleanup_candidates
 \else
 ROLLBACK;
 \echo 'DRY_RUN no retired work-order detail/relation payloads exist in this scope'
-\quit 0
+\quit
 \endif
 
 -- Lock the old snapshot rows.  Batch ingestion also locks these rows, so no
@@ -1587,31 +1587,31 @@ CROSS JOIN pg_temp.legacy_oam_detail_cleanup_summary AS summary
 \else
 ROLLBACK;
 \echo 'confirm_cleanup was supplied but is not the exact approval token'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 \else
 ROLLBACK;
 \echo 'DRY_RUN complete; no data was changed'
-\quit 0
+\quit
 \endif
 
 \if :cleanup_execution_coordinates_present
 \else
 ROLLBACK;
 \echo 'execution requires replacement_snapshot_id and expected_audit_sha256'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 \if :cleanup_replacement_exact
 \else
 ROLLBACK;
 \echo 'replacement snapshot changed or does not match the reviewed dry run'
-\quit 4
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 \if :cleanup_audit_hash_exact
 \else
 ROLLBACK;
 \echo 'cleanup evidence changed; rerun and review a new dry-run summary'
-\quit 4
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 CREATE TEMPORARY TABLE legacy_oam_detail_cleanup_actual (

@@ -9,14 +9,14 @@
 \if :{?edge_role}
 \else
 \echo 'edge_role is required; refusing to guess a database principal'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 \getenv edge_password OAM_DB_EDGE_RECEIVER_PASSWORD
 \if :{?edge_password}
 \else
 \echo 'OAM_DB_EDGE_RECEIVER_PASSWORD is required in the process environment'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 SELECT :'edge_role' = 'edge_inbox' AS edge_role_is_exact
@@ -24,7 +24,7 @@ SELECT :'edge_role' = 'edge_inbox' AS edge_role_is_exact
 \if :edge_role_is_exact
 \else
 \echo 'edge_role must be the independently revocable edge_inbox principal'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 SELECT
@@ -40,7 +40,7 @@ SELECT
 \if :edge_password_safe
 \else
 \echo 'edge receiver password must be at least 32 non-control characters and not a placeholder'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 SELECT COALESCE(
@@ -55,7 +55,7 @@ SELECT COALESCE(
 \if :bootstrap_is_superuser
 \else
 \echo 'edge receiver role provisioning requires a bootstrap superuser'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 BEGIN;
@@ -98,7 +98,7 @@ SELECT COALESCE(
 \else
 ROLLBACK;
 \echo 'existing edge_inbox role is privileged or participates in membership; no password was changed'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 SELECT pg_catalog.format(
@@ -148,7 +148,7 @@ SELECT NOT EXISTS (
 ROLLBACK;
 \unset edge_password
 \echo 'PUBLIC or inherited CONNECT still exposes another database; use a dedicated cluster or close pg_hba/database ACLs'
-\quit 4
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 COMMIT;

@@ -212,8 +212,9 @@ def test_edge_receiver_role_cross_database_failure_rolls_back_role_changes():
     failure = normalized.split(
         "\\IF :EDGE_CROSS_DATABASE_BOUNDARY_CLOSED", 1
     )[1].split("\\ENDIF", 1)[0]
-    assert failure.index("ROLLBACK;") < failure.index("\\QUIT 4")
-    assert failure.index("\\UNSET EDGE_PASSWORD") < failure.index("\\QUIT 4")
+    abort = failure.index("INTENTIONAL_PSQL_FAIL_CLOSED")
+    assert failure.index("ROLLBACK;") < abort
+    assert failure.index("\\UNSET EDGE_PASSWORD") < abort
 
 
 def test_edge_database_setup_limits_updates_to_reviewed_mutable_columns():
@@ -303,7 +304,7 @@ def test_deployment_acl_verifier_covers_edge_and_projector_full_closure():
         "deployment_acl_failures",
     ):
         assert boundary in sql
-    assert "\\quit 4" in sql
+    assert "intentional_psql_fail_closed" in sql
 
 
 def test_main_api_compose_has_no_edge_receiver_secret():

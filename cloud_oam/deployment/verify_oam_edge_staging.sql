@@ -10,12 +10,12 @@
 \if :{?edge_role}
 \else
 \echo 'edge_role is required; refusing to guess a database principal'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 \if :{?projector_role}
 \else
 \echo 'projector_role is required; refusing to guess a database principal'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 SELECT
@@ -30,7 +30,7 @@ WHERE role_row.rolname IN (:'edge_role', :'projector_role')
 \if :deployment_roles_present
 \else
 \echo 'edge_role and projector_role must name two existing, distinct principals'
-\quit 3
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 -- Verify effective privileges over every public relation/column, rather than
@@ -837,7 +837,7 @@ FROM check_results
 \echo 'edge/projector deployment ACL verified'
 \else
 \echo 'edge/projector deployment ACL verification failed:' :deployment_acl_failures
-\quit 4
+SELECT 1 / 0 AS intentional_psql_fail_closed;
 \endif
 
 SELECT
