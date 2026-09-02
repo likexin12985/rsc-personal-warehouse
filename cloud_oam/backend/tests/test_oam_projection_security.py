@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app import database_security as api_security
 from app import oam_projection_security as security
 
 
@@ -269,3 +270,11 @@ def test_runtime_security_sql_uses_explicit_catalog_and_closes_cluster_objects()
         "accessible_parameter_acl_count",
     ):
         assert required in sql
+
+
+def test_main_api_column_acl_query_excludes_other_isolated_principals():
+    sql = " ".join(str(api_security._COLUMN_ACL_SQL).split())
+
+    assert "JOIN pg_roles AS role_row" in sql
+    assert "role_row.rolname = current_user" in sql
+    assert "column_acl.grantee IN (0, role_row.oid)" in sql

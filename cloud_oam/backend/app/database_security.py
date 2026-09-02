@@ -2438,11 +2438,14 @@ JOIN pg_namespace AS namespace_row
   ON namespace_row.oid = class_row.relnamespace
 JOIN pg_attribute AS attribute_row
   ON attribute_row.attrelid = class_row.oid
+JOIN pg_roles AS role_row
+  ON role_row.rolname = current_user
 CROSS JOIN LATERAL aclexplode(attribute_row.attacl) AS column_acl
 WHERE namespace_row.nspname = 'public'
   AND class_row.relkind IN ('r', 'p', 'v', 'm', 'f')
   AND attribute_row.attnum > 0
   AND NOT attribute_row.attisdropped
+  AND column_acl.grantee IN (0, role_row.oid)
 ORDER BY class_row.relname, attribute_row.attnum, column_acl.grantee,
          column_acl.privilege_type
 """
