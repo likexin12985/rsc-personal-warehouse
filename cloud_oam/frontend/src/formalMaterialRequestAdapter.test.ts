@@ -14,6 +14,7 @@ const PERSON_ID = "10000000-0000-4000-8000-000000000001";
 const REQUEST_ID = "20000000-0000-4000-8000-000000000001";
 const STEP_ID = "30000000-0000-4000-8000-000000000001";
 const REGISTRATION_ID = "40000000-0000-4000-8000-000000000001";
+const WORK_ORDER_ID = "45000000-0000-4000-8000-000000000001";
 const MATERIAL_ID = "50000000-0000-4000-8000-000000000001";
 
 function accessContext() {
@@ -205,6 +206,9 @@ describe("formal material-request PC transport", () => {
     await adapter.list(REQUEST_ID.toUpperCase());
     await adapter.detail(REQUEST_ID.toUpperCase());
     await adapter.loadDraftForEdit(REQUEST_ID.toUpperCase());
+    await adapter.listWorkOrderOptions("WO A", null);
+    await adapter.listWorkOrderOptions("WO A", WORK_ORDER_ID.toUpperCase());
+    await adapter.workOrderOptionDetail(WORK_ORDER_ID.toUpperCase());
     await adapter.listMaterials("SKU A", null);
     await adapter.listMaterials("SKU A", MATERIAL_ID.toUpperCase());
 
@@ -226,12 +230,43 @@ describe("formal material-request PC transport", () => {
       headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
     });
     expect(requester.mock.calls[4]).toEqual([
+      "/v1/material-request-options/work-orders?limit=50&query=WO%20A",
+      noStore,
+    ]);
+    expect(requester.mock.calls[5]).toEqual([
+      `/v1/material-request-options/work-orders?limit=50&query=WO%20A&after_id=${WORK_ORDER_ID}`,
+      noStore,
+    ]);
+    expect(requester.mock.calls[6]).toEqual([
+      `/v1/material-request-options/work-orders/${WORK_ORDER_ID}`,
+      noStore,
+    ]);
+    expect(requester.mock.calls[7]).toEqual([
       "/v1/materials?limit=50&query=SKU%20A",
       { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } },
     ]);
-    expect(requester.mock.calls[5][0]).toBe(
+    expect(requester.mock.calls[8][0]).toBe(
       `/v1/materials?limit=50&query=SKU%20A&after_id=${MATERIAL_ID}`,
     );
+  });
+
+  it("rejects invalid formal work-order queries and identifiers before transport", async () => {
+    const requester = makeRequester(async () => ({ ok: true }));
+    const adapter = createFormalMaterialRequestAdapter({
+      person_id: PERSON_ID,
+      authorization_version: 7,
+    }, requester);
+
+    expect(() => adapter.listWorkOrderOptions(" WO-A", null)).toThrow(/检索词无效/);
+    expect(() => adapter.listWorkOrderOptions("WO-A\n", null)).toThrow(/检索词无效/);
+    expect(() => adapter.listWorkOrderOptions(
+      "WO-A",
+      "00000000-0000-0000-0000-000000000000",
+    )).toThrow(/after_id/);
+    expect(() => adapter.workOrderOptionDetail(
+      "00000000-0000-0000-0000-000000000000",
+    )).toThrow(/work_order_id/);
+    expect(requester).not.toHaveBeenCalled();
   });
 
   it("passes create and update intent paths, bodies and coordinates through unchanged", async () => {

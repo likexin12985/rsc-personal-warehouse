@@ -45,6 +45,9 @@ _PG_LOCK_NONOPENING_STOCKTAKE_POSTING_GRAPH = (
 _PG_LOCK_NONOPENING_STOCKTAKE_CLOSE_GRAPH = (
     "public.rsc_lock_nonopening_stocktake_close_graph_0038"
 )
+_PG_LOCK_MATERIAL_REQUEST_WORK_ORDER = (
+    "public.rsc_lock_material_request_work_order_reference_0042"
+)
 
 
 def lock_opening_control_import(
@@ -241,6 +244,23 @@ def lock_nonopening_stocktake_close_graph(
     )
 
 
+def lock_material_request_work_order(
+    db: Session,
+    work_order_id: uuid.UUID,
+) -> None:
+    """Lock one SELECT-only OAM work-order projection through its owner."""
+
+    if not _is_postgresql(db):
+        return
+    db.execute(
+        text(
+            f"SELECT {_PG_LOCK_MATERIAL_REQUEST_WORK_ORDER}("
+            "CAST(:work_order_id AS uuid))"
+        ),
+        {"work_order_id": str(work_order_id)},
+    )
+
+
 def _ordered_uuid_strings(values: Sequence[uuid.UUID]) -> list[str]:
     return [str(value) for value in sorted(set(values), key=str)]
 
@@ -268,6 +288,7 @@ def _is_postgresql(db: Session) -> bool:
 __all__ = [
     "lock_inventory_reference_graph",
     "lock_inventory_serial_graph",
+    "lock_material_request_work_order",
     "lock_opening_control_import",
     "lock_opening_stocktake_start_reference",
     "lock_opening_stocktake_task_evidence",

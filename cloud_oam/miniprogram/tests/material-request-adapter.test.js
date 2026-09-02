@@ -9,6 +9,7 @@ const REQUEST_ID = '20000000-0000-4000-8000-000000000001'
 const STEP_ID = '30000000-0000-4000-8000-000000000001'
 const REGISTRATION_ID = '40000000-0000-4000-8000-000000000001'
 const MATERIAL_ID = '50000000-0000-4000-8000-000000000001'
+const WORK_ORDER_ID = '60000000-0000-4000-8000-000000000001'
 
 function accessContext() {
   return {
@@ -291,6 +292,9 @@ test('formal reads use canonical endpoints and plaintext edit requests are expli
   await client.loadDraftForEdit(REQUEST_ID.toUpperCase())
   await client.listMaterials('SKU A', null)
   await client.listMaterials('SKU A', MATERIAL_ID.toUpperCase())
+  await client.listWorkOrders('WO A', null)
+  await client.listWorkOrders('WO A', WORK_ORDER_ID.toUpperCase())
+  await client.detailWorkOrder(WORK_ORDER_ID.toUpperCase())
 
   assert.deepEqual(transport.calls.map((call) => call.path), [
     '/v1/material-requests?limit=50',
@@ -298,7 +302,10 @@ test('formal reads use canonical endpoints and plaintext edit requests are expli
     `/v1/material-requests/${REQUEST_ID}`,
     `/v1/material-requests/${REQUEST_ID}/editable-draft`,
     '/v1/materials?limit=50&query=SKU%20A',
-    `/v1/materials?limit=50&query=SKU%20A&after_id=${MATERIAL_ID}`
+    `/v1/materials?limit=50&query=SKU%20A&after_id=${MATERIAL_ID}`,
+    '/v1/material-request-options/work-orders?limit=50&query=WO%20A',
+    `/v1/material-request-options/work-orders?limit=50&query=WO%20A&after_id=${WORK_ORDER_ID}`,
+    `/v1/material-request-options/work-orders/${WORK_ORDER_ID}`
   ])
   assert.deepEqual(transport.calls[3].options, {
     method: 'GET',
@@ -308,12 +315,23 @@ test('formal reads use canonical endpoints and plaintext edit requests are expli
     method: 'GET',
     header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
   })
-  for (const index of [0, 1, 2]) {
+  for (const index of [0, 1, 2, 5, 6, 7, 8]) {
     assert.deepEqual(transport.calls[index].options, {
       method: 'GET',
       header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
     })
   }
+})
+
+test('formal work-order option reads reject ambiguous inputs before transport', () => {
+  const transport = fakeTransport()
+  const client = adapter(transport)
+  assert.throws(() => client.listWorkOrders(' WO-1', null), /检索词无效/)
+  assert.throws(
+    () => client.detailWorkOrder('00000000-0000-0000-0000-000000000000'),
+    /work_order_id无效/
+  )
+  assert.deepEqual(transport.calls, [])
 })
 
 test('create and update pass exact intent path, body and coordinates to api.js', async () => {

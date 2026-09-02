@@ -2,6 +2,7 @@ const session = require('../../utils/session')
 const adapterModule = require('../../utils/material-request-adapter')
 const contract = require('../../utils/material-request-contract')
 const materialCatalog = require('../../utils/material-catalog-contract')
+const materialRequestOptions = require('../../utils/material-request-option-contract')
 const formalFileUpload = require('../../utils/formal-file-upload')
 const lifecycleRecovery = require('../../utils/material-request-lifecycle-recovery')
 
@@ -67,7 +68,8 @@ function emptyLine(page) {
 
 function emptyForm(page) {
   return {
-    workOrderId: '',
+    workOrder: null,
+    workOrderUnavailable: false,
     purpose: '',
     urgency: 'normal',
     expectedDate: '',
@@ -84,9 +86,10 @@ function emptyForm(page) {
   }
 }
 
-function draftToForm(page, draft, materials) {
+function draftToForm(page, draft, materials, workOrderResolution) {
   return {
-    workOrderId: draft.work_order_id || '',
+    workOrder: workOrderResolution.workOrder,
+    workOrderUnavailable: workOrderResolution.workOrderUnavailable,
     purpose: draft.purpose,
     urgency: draft.urgency,
     expectedDate: draft.expected_date || '',
@@ -113,11 +116,16 @@ function draftToForm(page, draft, materials) {
 }
 
 function formToDraft(form, uploadedFiles = []) {
+  if (form.workOrderUnavailable) {
+    throw new Error('原关联 OAM 工单当前不可用，请先明确清除或重新选择')
+  }
   const attachmentFileIds = Array.from(new Set(form.attachmentFileIds.concat(
     uploadedFiles.map((file) => file.file_id)
   )))
   return contract.validateMaterialRequestDraftInput({
-    work_order_id: form.workOrderId || null,
+    work_order_id: form.workOrder
+      ? materialRequestOptions.validateItem(form.workOrder).work_order_id
+      : null,
     purpose: form.purpose,
     urgency: form.urgency,
     expected_date: form.expectedDate || null,
@@ -420,6 +428,13 @@ function presentDetail(detail, access, lifecycleBlocked = false) {
 function axesMatch(result, detail) {
   return result.request_version === detail.request_version &&
     AXES.every(([key]) => result.states[key] === detail.states[key])
+}
+
+function draftWriteMatches(result, detail, draft) {
+  return axesMatch(result, detail) &&
+    result.revision_id === detail.current_revision_id &&
+    result.revision_no === detail.current_revision_no &&
+    detail.work_order_id === draft.work_order_id
 }
 
 function approvalMutationMatches(result, detail) {
@@ -812,6 +827,22 @@ function accessUploadIdentity(access) {
   return `${access.person_id}:${access.authorization_version}`
 }
 
+function editContextIsCurrent(page, generation, identity, detail) {
+  const access = page._access
+  const currentDetail = page.data.detail
+  return Boolean(
+    !page._unloaded &&
+    page._editGeneration === generation &&
+    identity &&
+    page._uploadIdentity === identity &&
+    access &&
+    accessUploadIdentity(access) === identity &&
+    currentDetail &&
+    currentDetail.request_id === detail.request_id &&
+    currentDetail.request_version === detail.request_version
+  )
+}
+
 Page({
   data: {
     loading: true,
@@ -828,6 +859,7 @@ Page({
     requestUploadFiles: [],
     requestUploadBlocking: false,
     requestUploadCanChoose: true,
+    workOrderPicker: null,
     materialPicker: null,
     processing: null,
     externalUploadFiles: [],
@@ -870,6 +902,10 @@ Page({
   onUnload() {
     this._loadGeneration = (this._loadGeneration || 0) + 1
     this._lifecycleGeneration = (this._lifecycleGeneration || 0) + 1
+    this._editGeneration = (this._editGeneration || 0) + 1
+    this._editBusyGeneration = 0
+    this._workOrderPickerGeneration = (this._workOrderPickerGeneration || 0) + 1
+    this._pickerGeneration = (this._pickerGeneration || 0) + 1
     this._unloaded = true
     this._createRegistry = null
     this._mutationRegistry = null
@@ -882,6 +918,7 @@ Page({
     this._externalEvidenceUploads = null
     Object.assign(this.data, {
       form: null,
+      workOrderPicker: null,
       materialPicker: null,
       processing: null,
       detail: null,
@@ -894,6 +931,12 @@ Page({
     this._unloaded = false
     const generation = (this._loadGeneration || 0) + 1
     this._loadGeneration = generation
+    this._editGeneration = (this._editGeneration || 0) + 1
+    if (this._editBusyGeneration) {
+      this._editBusyGeneration = 0
+      this.setData({ busy: false })
+    }
+    this._workOrderPickerGeneration = (this._workOrderPickerGeneration || 0) + 1
     ensureRegistries(this)
     this._access = null
     this.setData({
@@ -903,6 +946,7 @@ Page({
       accessMessage: '正在校验正式需求权限',
       requests: [],
       detail: null,
+      workOrderPicker: null,
       lifecycleConfirm: null,
       lifecycleRecoveryMessage: '',
       notice: ''
@@ -1063,8 +1107,15 @@ Page({
       toast(null, '写入结果尚未确认，必须保留当前详情与请求坐标')
       return
     }
+    this._editGeneration = (this._editGeneration || 0) + 1
+    this._editBusyGeneration = 0
     if (this._externalEvidenceUploads) this._externalEvidenceUploads.clear()
-    this.setData({ detail: null, submitConfirm: false, lifecycleConfirm: null })
+    this.setData({
+      busy: false,
+      detail: null,
+      submitConfirm: false,
+      lifecycleConfirm: null
+    })
   },
 
   startCreate() {
@@ -1078,6 +1129,10 @@ Page({
     }
     ensureRegistries(this)
     ensureFileUploadControllers(this)
+    this._editGeneration = (this._editGeneration || 0) + 1
+    this._editBusyGeneration = 0
+    this._workOrderPickerGeneration = (this._workOrderPickerGeneration || 0) + 1
+    this._pickerGeneration = (this._pickerGeneration || 0) + 1
     this._requestAttachmentUploads.bind(`${this._uploadIdentity}:request:create:new`)
     this.setData({
       detail: null,
@@ -1085,11 +1140,199 @@ Page({
       formRequestId: '',
       formRequestVersion: 0,
       form: emptyForm(this),
+      workOrderPicker: null,
       materialPicker: null,
       writePending: false,
       pendingWriteMessage: '',
       notice: ''
     })
+  },
+
+  async resolveDraftWorkOrder(draft) {
+    if (!draft.work_order_id) {
+      return { workOrder: null, workOrderUnavailable: false }
+    }
+    if (!this._access) throw new Error('当前授权上下文不可用，已停止编辑')
+    try {
+      const response = materialRequestOptions.validateDetail(
+        await transport.detailWorkOrder(draft.work_order_id),
+        this._access,
+        draft.work_order_id
+      )
+      return { workOrder: response.item, workOrderUnavailable: false }
+    } catch (error) {
+      if (error && error.status === 404 && error.responseReceived === true) {
+        return { workOrder: null, workOrderUnavailable: true }
+      }
+      throw error
+    }
+  },
+
+  async openWorkOrderPicker() {
+    if (
+      !this.data.form ||
+      !this.data.formMode ||
+      this.data.busy ||
+      this.data.writePending ||
+      !this._access ||
+      (this.data.formMode === 'create' && !this._access.can_create)
+    ) {
+      toast(null, '正式工单选项不可用，禁止手填 UUID 或回退旧接口')
+      return
+    }
+    this._workOrderPickerGeneration = (this._workOrderPickerGeneration || 0) + 1
+    this._pickerGeneration = (this._pickerGeneration || 0) + 1
+    this.setData({
+      materialPicker: null,
+      workOrderPicker: {
+        query: '',
+        items: [],
+        nextAfterId: null,
+        cursorHistory: [],
+        loading: true,
+        error: ''
+      }
+    })
+    await this.readWorkOrderPickerPage('', null, false)
+  },
+
+  workOrderPickerQueryInput(event) {
+    if (!this.data.workOrderPicker || this.data.workOrderPicker.loading) return
+    this._workOrderPickerGeneration = (this._workOrderPickerGeneration || 0) + 1
+    this.setData({
+      workOrderPicker: Object.assign({}, this.data.workOrderPicker, {
+        query: event.detail.value,
+        items: [],
+        nextAfterId: null,
+        cursorHistory: [],
+        error: ''
+      })
+    })
+  },
+
+  async searchWorkOrderPicker() {
+    if (!this.data.workOrderPicker) return
+    await this.readWorkOrderPickerPage(
+      this.data.workOrderPicker.query,
+      null,
+      false
+    )
+  },
+
+  async loadMoreWorkOrders() {
+    const picker = this.data.workOrderPicker
+    if (!picker || !picker.nextAfterId || picker.loading) return
+    await this.readWorkOrderPickerPage(
+      picker.query,
+      picker.nextAfterId,
+      true
+    )
+  },
+
+  async readWorkOrderPickerPage(query, afterId, append) {
+    const picker = this.data.workOrderPicker
+    if (
+      !picker ||
+      !this._access ||
+      (this.data.formMode === 'create' && !this._access.can_create)
+    ) return
+    const generation = (this._workOrderPickerGeneration || 0) + 1
+    this._workOrderPickerGeneration = generation
+    this.setData({
+      workOrderPicker: Object.assign({}, picker, { loading: true, error: '' })
+    })
+    try {
+      if (append && picker.cursorHistory.includes(afterId)) {
+        throw new Error('正式工单选项游标重复，已失败关闭')
+      }
+      const response = materialRequestOptions.validatePage(
+        await transport.listWorkOrders(query, afterId),
+        this._access
+      )
+      if (
+        generation !== this._workOrderPickerGeneration ||
+        !this.data.workOrderPicker
+      ) return
+      const current = this.data.workOrderPicker
+      const items = (append ? current.items : []).concat(response.items)
+      if (
+        new Set(items.map((item) => item.work_order_id)).size !== items.length ||
+        new Set(items.map((item) => item.work_order_no)).size !== items.length
+      ) throw new Error('正式工单选项跨页返回重复工单，已失败关闭')
+      const cursorHistory = append
+        ? current.cursorHistory.concat(afterId)
+        : []
+      if (
+        response.next_after_id &&
+        cursorHistory.includes(response.next_after_id)
+      ) throw new Error('正式工单选项游标循环，已失败关闭')
+      this.setData({
+        workOrderPicker: Object.assign({}, current, {
+          items,
+          nextAfterId: response.next_after_id,
+          cursorHistory,
+          loading: false,
+          error: ''
+        })
+      })
+    } catch (error) {
+      if (
+        generation !== this._workOrderPickerGeneration ||
+        !this.data.workOrderPicker
+      ) return
+      this.setData({
+        workOrderPicker: Object.assign({}, this.data.workOrderPicker, {
+          items: [],
+          nextAfterId: null,
+          cursorHistory: [],
+          loading: false,
+          error: error.message || '正式工单选项读取失败'
+        })
+      })
+    }
+  },
+
+  chooseWorkOrder(event) {
+    const picker = this.data.workOrderPicker
+    if (
+      !picker ||
+      !this.data.form ||
+      this.data.busy ||
+      this.data.writePending ||
+      picker.loading ||
+      picker.error
+    ) return
+    const workOrderId = String(event.currentTarget.dataset.id || '').toLowerCase()
+    const selected = picker.items.find((item) => item.work_order_id === workOrderId)
+    if (!selected) {
+      toast(null, '正式工单选择锚点已失效')
+      return
+    }
+    this._workOrderPickerGeneration = (this._workOrderPickerGeneration || 0) + 1
+    this.setData({
+      form: Object.assign({}, this.data.form, {
+        workOrder: selected,
+        workOrderUnavailable: false
+      }),
+      workOrderPicker: null
+    })
+  },
+
+  clearWorkOrder() {
+    if (!this.data.form || this.data.busy || this.data.writePending) return
+    this._workOrderPickerGeneration = (this._workOrderPickerGeneration || 0) + 1
+    this.setData({
+      form: Object.assign({}, this.data.form, {
+        workOrder: null,
+        workOrderUnavailable: false
+      }),
+      workOrderPicker: null
+    })
+  },
+
+  closeWorkOrderPicker() {
+    this._workOrderPickerGeneration = (this._workOrderPickerGeneration || 0) + 1
+    this.setData({ workOrderPicker: null })
   },
 
   async resolveDraftMaterials(draft) {
@@ -1136,7 +1379,9 @@ Page({
       return
     }
     this._pickerGeneration = (this._pickerGeneration || 0) + 1
+    this._workOrderPickerGeneration = (this._workOrderPickerGeneration || 0) + 1
     this.setData({
+      workOrderPicker: null,
       materialPicker: {
         lineKey: key,
         target,
@@ -1250,15 +1495,31 @@ Page({
       !detail.canEdit ||
       !['draft', 'returned'].includes(detail.states.request_status)
     ) return
+    const identity = this._access ? accessUploadIdentity(this._access) : ''
+    if (!identity || identity !== this._uploadIdentity) {
+      toast(null, '当前身份或授权上下文已变化，已停止读取明文草稿')
+      return
+    }
+    const editGeneration = (this._editGeneration || 0) + 1
+    this._editGeneration = editGeneration
+    this._editBusyGeneration = editGeneration
     ensureRegistries(this)
     this.setData({ busy: true, notice: '' })
     try {
+      const editable = await transport.loadDraftForEdit(detail.request_id)
+      if (!editContextIsCurrent(this, editGeneration, identity, detail)) return
       const snapshot = adapterModule.validateEditableDraft(
-        await transport.loadDraftForEdit(detail.request_id),
+        editable,
         detail.request_id,
         detail.request_version
       )
-      const materials = await this.resolveDraftMaterials(snapshot.draft)
+      const [materials, workOrder] = await Promise.all([
+        this.resolveDraftMaterials(snapshot.draft),
+        this.resolveDraftWorkOrder(snapshot.draft)
+      ])
+      if (!editContextIsCurrent(this, editGeneration, identity, detail)) return
+      this._workOrderPickerGeneration = (this._workOrderPickerGeneration || 0) + 1
+      this._pickerGeneration = (this._pickerGeneration || 0) + 1
       ensureFileUploadControllers(this)
       this._requestAttachmentUploads.bind(
         `${this._uploadIdentity}:request:edit:${snapshot.request_id}:${snapshot.request_version}`
@@ -1268,14 +1529,21 @@ Page({
         formMode: 'edit',
         formRequestId: snapshot.request_id,
         formRequestVersion: snapshot.request_version,
-        form: draftToForm(this, snapshot.draft, materials),
+        form: draftToForm(this, snapshot.draft, materials, workOrder),
+        workOrderPicker: null,
+        materialPicker: null,
         writePending: false,
         pendingWriteMessage: ''
       })
     } catch (error) {
-      toast(error, '可编辑草稿读取失败')
+      if (editContextIsCurrent(this, editGeneration, identity, detail)) {
+        toast(error, '可编辑草稿读取失败')
+      }
     } finally {
-      this.setData({ busy: false })
+      if (!this._unloaded && this._editBusyGeneration === editGeneration) {
+        this._editBusyGeneration = 0
+        this.setData({ busy: false })
+      }
     }
   },
 
@@ -1290,11 +1558,14 @@ Page({
       return
     }
     if (this._requestAttachmentUploads) this._requestAttachmentUploads.clear()
+    this._workOrderPickerGeneration = (this._workOrderPickerGeneration || 0) + 1
+    this._pickerGeneration = (this._pickerGeneration || 0) + 1
     this.setData({
       formMode: '',
       formRequestId: '',
       formRequestVersion: 0,
       form: null,
+      workOrderPicker: null,
       materialPicker: null,
       writePending: false,
       pendingWriteMessage: ''
@@ -1393,7 +1664,9 @@ Page({
           await transport.detail(result.request_id),
           result.request_id
         )
-        if (!axesMatch(result, reread)) throw new Error('创建响应与详情回读不一致，仍待人工核验')
+        if (!draftWriteMatches(result, reread, draft)) {
+          throw new Error('创建响应、修订或工单绑定与详情回读不一致，仍待人工核验')
+        }
         this._createRegistry.confirm(intent.client_draft_key, intent.signature)
         this._requestAttachmentUploads.clear()
         this.setData({
@@ -1428,7 +1701,9 @@ Page({
           await transport.detail(requestId),
           requestId
         )
-        if (!axesMatch(result, reread)) throw new Error('修改响应与详情回读不一致，仍待人工核验')
+        if (!draftWriteMatches(result, reread, draft)) {
+          throw new Error('修改响应、修订或工单绑定与详情回读不一致，仍待人工核验')
+        }
         this._mutationRegistry.confirm(intent.request_id, intent.signature)
         this._requestAttachmentUploads.clear()
         this.setData({

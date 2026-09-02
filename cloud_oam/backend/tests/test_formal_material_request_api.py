@@ -39,6 +39,7 @@ LINE_ID = uuid.UUID("a1000000-0000-4000-8000-000000000008")
 MATERIAL_ID = uuid.UUID("a1000000-0000-4000-8000-000000000009")
 PERSON_ID = uuid.UUID("a1000000-0000-4000-8000-00000000000a")
 FILE_ID = uuid.UUID("a1000000-0000-4000-8000-00000000000b")
+WORK_ORDER_ID = uuid.UUID("a1000000-0000-4000-8000-00000000000c")
 
 IDEMPOTENCY_SECRET = "demand-idempotency-secret-that-is-at-least-32-chars"
 MOBILE_SECRET = "demand-mobile-hash-secret-that-is-at-least-32-chars"
@@ -447,9 +448,11 @@ def test_create_protects_plaintext_before_domain_service_and_never_returns_pii(
         return _create_result()
 
     monkeypatch.setattr(draft_service, "create_material_request_draft", fake_create)
+    body = _draft_body()
+    body["work_order_id"] = str(WORK_ORDER_ID)
     response = client.post(
         "/api/v1/material-requests",
-        json=_draft_body(),
+        json=body,
         headers=_headers(),
     )
 
@@ -461,6 +464,7 @@ def test_create_protects_plaintext_before_domain_service_and_never_returns_pii(
     assert "江东中路" not in response_text
     draft = captured["draft"]
     assert isinstance(draft, draft_service.MaterialRequestDraftInput)
+    assert draft.work_order_id == WORK_ORDER_ID
     assert draft.contact_masked == {
         "name_masked": "王**",
         "mobile_masked": "*******1234",

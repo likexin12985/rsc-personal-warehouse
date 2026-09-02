@@ -2021,6 +2021,12 @@ RUNTIME_EXECUTE_FUNCTIONS = {
         "plpgsql",
         ("search_path=pg_catalog, public",),
     ),
+    ("rsc_lock_material_request_work_order_reference_0042", "uuid"): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
 }
 RUNTIME_FUNCTION_SHAPES = {
     coordinate: (
@@ -2073,6 +2079,8 @@ RUNTIME_FUNCTION_BODY_SHA256 = {
         "ebf8f6e2a7eecfcc6dca09a8df90f732977382d0ed9d973204ab14b14e4e9dd2",
     ("rsc_lock_nonopening_stocktake_close_graph_0038", "uuid"):
         "45c71e5a7129800399e1c20480bf7e2a000c478743635cff99db024c0b62118e",
+    ("rsc_lock_material_request_work_order_reference_0042", "uuid"):
+        "d889b397912e98e1b9c2ec1de03ada750f42df01803c87239b9d04a624221982",
 }
 FORMAL_FILE_INTERNAL_FUNCTIONS = {
     ("rsc_guard_formal_file_object_0036", ""): (

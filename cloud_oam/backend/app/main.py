@@ -24,6 +24,7 @@ from .routers import (
     dashboard,
     formal_files,
     formal_material_catalog,
+    formal_material_request_options,
     formal_material_requests,
     formal_opening_stocktake,
     formal_opening_stocktake_read,
@@ -84,6 +85,7 @@ PRIVATE_IDENTITY_READ_PATHS = frozenset(
 PRIVATE_COMMAND_RECOVERY_PATHS = frozenset(
     {"/api/v1/material-request-lifecycle-command-status"}
 )
+PRIVATE_MATERIAL_REQUEST_OPTION_PREFIX = "/api/v1/material-request-options"
 
 
 def is_production_auth_path(method: str, path: str) -> bool:
@@ -247,6 +249,14 @@ async def block_legacy_prototype_writes(request, call_next):
         response.headers["Pragma"] = "no-cache"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Content-Type-Options"] = "nosniff"
+    if request.url.path.startswith(PRIVATE_MATERIAL_REQUEST_OPTION_PREFIX):
+        # Picker rows are live authorization decisions. Apply this to
+        # framework and service failures too so a cached 404/403 cannot hide a
+        # later source refresh or permission change.
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
     return response
 
 app.include_router(auth.router, prefix="/api")
@@ -257,6 +267,9 @@ app.include_router(formal_inventory.router, prefix="/api")
 # The active formal material catalog is a local, read-only picker. It never
 # refreshes OAM data and omits materials without a current inventory policy.
 app.include_router(formal_material_catalog.router, prefix="/api")
+# Request creation reads requester-scoped work-order labels from the validated
+# local OAM projection. It never refreshes OAM or accepts a client-typed UUID.
+app.include_router(formal_material_request_options.router, prefix="/api")
 # Formal demand reads are mounted in every environment.  Commands remain
 # independently fail-closed behind their explicit feature/configuration gate
 # and request-scoped KMS cipher dependency.

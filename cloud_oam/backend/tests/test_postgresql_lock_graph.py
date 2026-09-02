@@ -14,6 +14,7 @@ import app.formal_services.opening_stocktake_review as review_service
 from app.formal_services.postgresql_lock_graph import (
     lock_inventory_reference_graph,
     lock_inventory_serial_graph,
+    lock_material_request_work_order,
     lock_opening_control_import,
     lock_opening_stocktake_start_reference,
     lock_opening_stocktake_task_evidence,
@@ -58,6 +59,7 @@ def test_sqlite_lock_graph_entrypoints_are_explicit_noops() -> None:
         (first,),
         (second,),
     )
+    lock_material_request_work_order(db, first)
 
     assert db.executed == []
 
@@ -94,8 +96,9 @@ def test_postgresql_lock_graph_uses_only_fixed_migration_entrypoints() -> None:
         (material, second, material),
         (second, first, second),
     )
+    lock_material_request_work_order(db, first)
 
-    assert len(db.executed) == 6
+    assert len(db.executed) == 7
     sql = "\n".join(statement for statement, _ in db.executed)
     assert "public.rsc_lock_opening_control_import_0027" in sql
     assert "public.rsc_lock_opening_stocktake_task_evidence_0027" in sql
@@ -103,12 +106,14 @@ def test_postgresql_lock_graph_uses_only_fixed_migration_entrypoints() -> None:
     assert "public.rsc_lock_inventory_reference_graph_0027" in sql
     assert "public.rsc_lock_inventory_serial_graph_0027" in sql
     assert "public.rsc_lock_opening_terminal_reference_union_0028" in sql
+    assert "public.rsc_lock_material_request_work_order_reference_0042" in sql
     assert "pg_advisory" not in sql
 
     start_parameters = db.executed[2][1]
     reference_parameters = db.executed[3][1]
     serial_parameters = db.executed[4][1]
     terminal_union_parameters = db.executed[5][1]
+    work_order_parameters = db.executed[6][1]
     assert start_parameters["region_org_id"] == str(first)
     assert start_parameters["owner_org_ids"] == [
         str(second),
@@ -144,6 +149,8 @@ def test_postgresql_lock_graph_uses_only_fixed_migration_entrypoints() -> None:
         "CAST(:location_ids AS uuid[]), CAST(:material_ids AS uuid[]), "
         "CAST(:account_ids AS uuid[])"
     ) in db.executed[5][0]
+    assert work_order_parameters == {"work_order_id": str(first)}
+    assert "CAST(:work_order_id AS uuid)" in db.executed[6][0]
 
 
 def test_postgresql_start_reference_rejects_unpaired_scope_coordinates() -> None:

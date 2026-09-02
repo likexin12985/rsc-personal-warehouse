@@ -173,6 +173,13 @@ SMS_DISPATCH_MIGRATION_0041 = (
     / "versions"
     / "20260902_0041_sms_dispatch_ownership.py"
 )
+MATERIAL_REQUEST_WORK_ORDER_LOCK_MIGRATION_0042 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260902_0042_material_request_work_order_lock.py"
+)
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
     / "backend"
@@ -2746,6 +2753,52 @@ def test_0028_terminal_union_helper_is_in_exact_runtime_manifest() -> None:
     assert hashlib.sha256(function_body.encode("utf-8")).hexdigest() == (
         RUNTIME_FUNCTION_BODY_SHA256[coordinate]
     )
+    assert "GRANT UPDATE" not in source
+    assert "GRANT INSERT" not in source
+    assert "GRANT DELETE" not in source
+    assert "GRANT EXECUTE ON FUNCTION" in source
+
+
+def test_0042_work_order_lock_is_in_exact_runtime_manifest() -> None:
+    source = MATERIAL_REQUEST_WORK_ORDER_LOCK_MIGRATION_0042.read_text(
+        encoding="utf-8"
+    )
+    coordinate = (
+        "rsc_lock_material_request_work_order_reference_0042",
+        "uuid",
+    )
+    assert RUNTIME_EXECUTE_FUNCTIONS[coordinate] == (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    )
+    assert RUNTIME_FUNCTION_SHAPES[coordinate] == ("f", "void", False)
+    assert RUNTIME_FUNCTION_BODY_SHA256[coordinate] == (
+        "d889b397912e98e1b9c2ec1de03ada750f42df01803c87239b9d04a624221982"
+    )
+    assert set(RUNTIME_FUNCTION_SHAPES) == set(RUNTIME_EXECUTE_FUNCTIONS)
+    assert set(RUNTIME_FUNCTION_BODY_SHA256) == set(RUNTIME_EXECUTE_FUNCTIONS)
+
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0042_security_manifest",
+        MATERIAL_REQUEST_WORK_ORDER_LOCK_MIGRATION_0042,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    rendered: list[str] = []
+    migration.op = SimpleNamespace(execute=rendered.append)
+    migration._create_postgresql_function()
+    function_sql = rendered[0]
+    function_body = function_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    assert hashlib.sha256(function_body.encode("utf-8")).hexdigest() == (
+        RUNTIME_FUNCTION_BODY_SHA256[coordinate]
+    )
+    assert "FOR SHARE OF work_order" in function_sql
+    assert "GET DIAGNOSTICS locked_count = ROW_COUNT" in function_sql
+    assert "public.oam_work_orders" in function_sql
+    assert "EXECUTE format" not in function_sql
     assert "GRANT UPDATE" not in source
     assert "GRANT INSERT" not in source
     assert "GRANT DELETE" not in source

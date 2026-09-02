@@ -1,6 +1,7 @@
 const api = require('./api')
 const contract = require('./material-request-contract')
 const materialCatalog = require('./material-catalog-contract')
+const materialRequestOptions = require('./material-request-option-contract')
 const session = require('./session')
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -690,6 +691,32 @@ function createFormalMaterialRequestAdapter(options = {}) {
         method: 'GET',
         header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
       })
+    },
+    listWorkOrders(query, afterId) {
+      const checkedQuery = materialRequestOptions.validateQuery(query)
+      const queryPart = checkedQuery ? `&query=${encodeURIComponent(checkedQuery)}` : ''
+      const cursorPart = afterId === null
+        ? ''
+        : `&after_id=${encodeURIComponent(
+          materialRequestOptions.validateWorkOrderId(afterId)
+        )}`
+      return transport.request(
+        `/v1/material-request-options/work-orders?limit=50${queryPart}${cursorPart}`,
+        {
+          method: 'GET',
+          header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
+        }
+      )
+    },
+    detailWorkOrder(workOrderId) {
+      const checkedId = materialRequestOptions.validateWorkOrderId(workOrderId)
+      return transport.request(
+        `/v1/material-request-options/work-orders/${checkedId}`,
+        {
+          method: 'GET',
+          header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
+        }
+      )
     },
     createDraft(intent) {
       const object = exactObject(intent, [

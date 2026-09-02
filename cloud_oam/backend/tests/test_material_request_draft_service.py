@@ -27,6 +27,7 @@ from app.demand_models import (
     MaterialRequestFile,
     MaterialRequestLine,
     MaterialRequestRevision,
+    OamWorkOrder,
 )
 from app.formal_access import FormalPrincipal, load_formal_principal
 from app.formal_services import formal_files
@@ -47,6 +48,7 @@ from app.foundation_models import (
     AuditEvent,
     AuthIdentity,
     ExternalObject,
+    ExternalObjectVersion,
     FileObject,
     Organization,
     OutboxEvent,
@@ -467,6 +469,87 @@ def _draft(world: World, request_id: uuid.UUID, *, material_index: int = 0):
     )
 
 
+def _oam_work_order(
+    db: Session,
+    world: World,
+    *,
+    identifier: uuid.UUID | None = None,
+    work_order_no: str | None = None,
+    organization: Organization | None = None,
+    engineer: Person | None = None,
+    status: str = "active",
+    observed_at: datetime | None = None,
+) -> OamWorkOrder:
+    projection_time = observed_at or draft_service.material_request_database_now(db)
+    source = db.scalar(
+        select(SourceSystem).where(
+            SourceSystem.code
+            == draft_service.MATERIAL_REQUEST_WORK_ORDER_SOURCE_SYSTEM
+        )
+    )
+    if source is None:
+        source = SourceSystem(
+            code=draft_service.MATERIAL_REQUEST_WORK_ORDER_SOURCE_SYSTEM,
+            name="StarCharge OAM",
+            mode="read_only",
+            enabled=True,
+            configuration_jsonb={},
+            created_at=projection_time,
+            updated_at=projection_time,
+        )
+        db.add(source)
+        db.flush()
+    row_id = identifier or uuid.uuid4()
+    external_id = f"WO-{uuid.uuid4()}"
+    version_id = uuid.uuid4()
+    external = ExternalObject(
+        source_system_id=source.id,
+        entity_type="work_order",
+        external_id=external_id,
+        current_version_id=version_id,
+        deleted_at=None,
+        created_at=projection_time,
+        updated_at=projection_time,
+    )
+    db.add(external)
+    db.flush()
+    row = OamWorkOrder(
+        id=row_id,
+        external_object_id=external.id,
+        work_order_no=work_order_no or f"WO-{uuid.uuid4().hex[:12].upper()}",
+        organization_id=(organization or world.department).id,
+        engineer_person_id=(engineer or world.actor_person).id,
+        status=status,
+        source_updated_at=projection_time,
+        created_at=projection_time,
+        updated_at=projection_time,
+    )
+    payload = draft_service.material_request_work_order_projection_payload(row)
+    version = ExternalObjectVersion(
+        id=version_id,
+        external_object_id=external.id,
+        source_version=f"v-{row_id.hex}",
+        source_updated_at=projection_time,
+        valid_from=projection_time - timedelta(minutes=1),
+        valid_to=None,
+        payload_jsonb=payload,
+        payload_sha256=hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        is_current=True,
+        created_at=projection_time,
+    )
+    db.add(version)
+    db.add(row)
+    db.flush()
+    return row
+
+
 def _create(db: Session, world: World, request_id: uuid.UUID, *, key: str = "create-1"):
     return create_material_request_draft(
         db,
@@ -490,6 +573,263 @@ def _create_id(world: World, key: str = "create-1") -> uuid.UUID:
 def _assert_error(exc: pytest.ExceptionInfo[MaterialRequestDraftError], code: str, status: int):
     assert exc.value.code == code
     assert exc.value.http_status_code == status
+
+
+def test_nonempty_work_order_is_persisted_and_revalidated_before_submit(
+    db: Session,
+) -> None:
+    world = make_world(db)
+    work_order = _oam_work_order(db, world)
+    request_id = _create_id(world, "work-order-revalidation")
+    created = create_material_request_draft(
+        db,
+        actor=world.actor,
+        material_request_id=request_id,
+        draft=replace(
+            _draft(world, request_id),
+            work_order_id=work_order.id,
+        ),
+        idempotency_key="work-order-revalidation",
+        idempotency_hmac_secret=SECRET,
+        trace_request_id="trace-work-order-revalidation-create",
+    )
+
+    request = db.get(MaterialRequest, request_id)
+    revision = db.get(MaterialRequestRevision, created.revision_id)
+    assert request is not None and request.work_order_id == work_order.id
+    assert revision is not None and revision.work_order_id == work_order.id
+
+    # The picker is advisory. A source-state change after selection must be
+    # caught again by the write command before any request fact is advanced.
+    work_order.status = "completed"
+    db.flush()
+    with pytest.raises(MaterialRequestDraftError) as captured:
+        submit_material_request(
+            db,
+            actor=world.actor,
+            material_request_id=request_id,
+            expected_version=created.request_version,
+            idempotency_key="work-order-revalidation-submit",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-work-order-revalidation-submit",
+        )
+    _assert_error(captured, "material_request_work_order_inactive", 412)
+    db.refresh(request)
+    db.refresh(revision)
+    assert request.status == "draft"
+    assert revision.status == "draft"
+
+
+def test_nonempty_work_order_create_amend_submit_lock_and_replay_contract(
+    db: Session,
+) -> None:
+    world = make_world(db)
+    work_order = _oam_work_order(db, world)
+    request_id = _create_id(world, "work-order-lock-contract")
+    draft = replace(
+        _draft(world, request_id),
+        work_order_id=work_order.id,
+    )
+    with patch.object(
+        draft_service,
+        "lock_material_request_work_order",
+    ) as lock_work_order:
+        created = create_material_request_draft(
+            db,
+            actor=world.actor,
+            material_request_id=request_id,
+            draft=draft,
+            idempotency_key="work-order-lock-contract",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-work-order-lock-create",
+        )
+        assert lock_work_order.call_args_list[0].args == (db, work_order.id)
+        assert lock_work_order.call_count == 1
+
+        replayed_create = create_material_request_draft(
+            db,
+            actor=world.actor,
+            material_request_id=request_id,
+            draft=draft,
+            idempotency_key="work-order-lock-contract",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-work-order-lock-create-replay",
+        )
+        assert replayed_create.idempotency_replayed is True
+        assert lock_work_order.call_count == 1
+
+        amended = amend_material_request_draft(
+            db,
+            actor=world.actor,
+            material_request_id=request_id,
+            expected_version=created.request_version,
+            draft=replace(draft, note="锁后重读"),
+            idempotency_key="work-order-lock-amend",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-work-order-lock-amend",
+        )
+        assert lock_work_order.call_args_list[-1].args == (db, work_order.id)
+        assert lock_work_order.call_count == 2
+
+        replayed_amend = amend_material_request_draft(
+            db,
+            actor=world.actor,
+            material_request_id=request_id,
+            expected_version=created.request_version,
+            draft=replace(draft, note="锁后重读"),
+            idempotency_key="work-order-lock-amend",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-work-order-lock-amend-replay",
+        )
+        assert replayed_amend.replayed is True
+        assert lock_work_order.call_count == 2
+
+        submitted = submit_material_request(
+            db,
+            actor=world.actor,
+            material_request_id=request_id,
+            expected_version=amended.version,
+            idempotency_key="work-order-lock-submit",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-work-order-lock-submit",
+        )
+        assert submitted.status == "approval_in_progress"
+        assert lock_work_order.call_args_list[-1].args == (db, work_order.id)
+        assert lock_work_order.call_count == 3
+
+        replayed_submit = submit_material_request(
+            db,
+            actor=world.actor,
+            material_request_id=request_id,
+            expected_version=amended.version,
+            idempotency_key="work-order-lock-submit",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-work-order-lock-submit-replay",
+        )
+        assert replayed_submit.replayed is True
+        assert lock_work_order.call_count == 3
+
+
+def test_nonempty_work_order_command_rejects_change_observed_after_pre_read(
+    db: Session,
+) -> None:
+    world = make_world(db)
+    work_order = _oam_work_order(db, world)
+    request_id = _create_id(world, "work-order-lock-reread")
+
+    def source_commits_change(_db: Session, _work_order_id: uuid.UUID) -> None:
+        assert _work_order_id == work_order.id
+        work_order.status = "completed"
+        db.flush()
+
+    with patch.object(
+        draft_service,
+        "lock_material_request_work_order",
+        side_effect=source_commits_change,
+    ):
+        with pytest.raises(MaterialRequestDraftError) as captured:
+            create_material_request_draft(
+                db,
+                actor=world.actor,
+                material_request_id=request_id,
+                draft=replace(
+                    _draft(world, request_id),
+                    work_order_id=work_order.id,
+                ),
+                idempotency_key="work-order-lock-reread",
+                idempotency_hmac_secret=SECRET,
+                trace_request_id="trace-work-order-lock-reread",
+            )
+    _assert_error(captured, "material_request_work_order_inactive", 412)
+    assert db.get(MaterialRequest, request_id) is None
+
+
+def test_nonempty_work_order_write_fails_closed_on_invalid_projection_evidence(
+    db: Session,
+) -> None:
+    world = make_world(db)
+    work_order = _oam_work_order(db, world)
+    version = db.scalar(
+        select(ExternalObjectVersion).where(
+            ExternalObjectVersion.external_object_id
+            == work_order.external_object_id,
+            ExternalObjectVersion.is_current.is_(True),
+        )
+    )
+    assert version is not None
+    version.payload_sha256 = "f" * 64
+    db.flush()
+    request_id = _create_id(world, "work-order-invalid-evidence")
+    with pytest.raises(MaterialRequestDraftError) as captured:
+        create_material_request_draft(
+            db,
+            actor=world.actor,
+            material_request_id=request_id,
+            draft=replace(
+                _draft(world, request_id),
+                work_order_id=work_order.id,
+            ),
+            idempotency_key="work-order-invalid-evidence",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-work-order-invalid-evidence",
+        )
+    _assert_error(
+        captured,
+        "material_request_work_order_projection_invalid",
+        503,
+    )
+    assert db.get(MaterialRequest, request_id) is None
+
+
+def test_nonempty_work_order_write_rejects_other_engineer_and_region(
+    db: Session,
+) -> None:
+    world = make_world(db)
+    other_person = _person(db, world.department, "其他工程师")
+    other_engineer_order = _oam_work_order(
+        db,
+        world,
+        engineer=other_person,
+    )
+    other_region = _organization(
+        db,
+        "OTHER-REGION",
+        "region_company",
+        parent=world.headquarters,
+    )
+    other_department = _organization(
+        db,
+        "OTHER-DEPT",
+        "department",
+        parent=other_region,
+    )
+    cross_region_order = _oam_work_order(
+        db,
+        world,
+        organization=other_department,
+    )
+
+    cases = (
+        (other_engineer_order.id, "other-engineer", "material_request_work_order_forbidden", 403),
+        (cross_region_order.id, "cross-region", "material_request_work_order_scope_mismatch", 403),
+    )
+    for work_order_id, key, expected_code, expected_status in cases:
+        request_id = _create_id(world, key)
+        with pytest.raises(MaterialRequestDraftError) as captured:
+            create_material_request_draft(
+                db,
+                actor=world.actor,
+                material_request_id=request_id,
+                draft=replace(
+                    _draft(world, request_id),
+                    work_order_id=work_order_id,
+                ),
+                idempotency_key=key,
+                idempotency_hmac_secret=SECRET,
+                trace_request_id=f"trace-{key}",
+            )
+        _assert_error(captured, expected_code, expected_status)
+        assert db.get(MaterialRequest, request_id) is None
 
 
 def test_create_derives_owner_protects_contact_and_replays_exactly(db: Session) -> None:

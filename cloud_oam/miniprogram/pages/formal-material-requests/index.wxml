@@ -17,6 +17,23 @@
         <text class="section-title">{{formMode === 'create' ? '新建需求草稿' : '编辑需求草稿'}}</text>
       </view>
       <view wx:if="{{writePending}}" class="notice warning">{{pendingWriteMessage}}</view>
+      <view wx:if="{{workOrderPicker}}" class="card picker-card">
+        <view class="row between"><text class="section-title">选择本人当前有效 OAM 工单</text><button class="remove" bindtap="closeWorkOrderPicker">关闭</button></view>
+        <view class="field"><text class="field-label">工单号</text><input class="input" value="{{workOrderPicker.query}}" disabled="{{workOrderPicker.loading}}" bindinput="workOrderPickerQueryInput" /></view>
+        <button class="button button-primary" disabled="{{workOrderPicker.loading}}" bindtap="searchWorkOrderPicker">搜索正式工单</button>
+        <view wx:if="{{workOrderPicker.error}}" class="notice warning">{{workOrderPicker.error}}；不会回退旧接口或接受手填 UUID。</view>
+        <view wx:if="{{workOrderPicker.loading}}" class="loading">正在读取本人当前有效 OAM 工单</view>
+        <view wx:for="{{workOrderPicker.items}}" wx:key="work_order_id" class="list-card">
+          <view class="row between"><text>{{item.work_order_no}}</text><button class="button button-secondary button-small" data-id="{{item.work_order_id}}" disabled="{{busy || writePending}}" bindtap="chooseWorkOrder">选择</button></view>
+          <view class="fact"><text class="muted">当前状态</text><text>{{item.status === 'active' ? '处理中' : '待处理'}}</text></view>
+          <view class="fact"><text class="muted">来源系统 / 来源 ID</text><text>{{item.source_system_code}} / {{item.source_external_id}}</text></view>
+          <view class="fact"><text class="muted">来源版本</text><text>{{item.source_version}}</text></view>
+          <view class="fact"><text class="muted">来源更新 / 本次同步</text><text>{{item.source_updated_at}} / {{item.synced_at}}</text></view>
+          <view class="fact"><text class="muted">数据新鲜度</text><text>{{item.freshness_status === 'fresh' ? '新鲜' : '不可用'}}</text></view>
+        </view>
+        <view wx:if="{{!workOrderPicker.loading && !workOrderPicker.error && !workOrderPicker.items.length}}" class="empty"><text class="empty-title">没有匹配的当前有效工单</text></view>
+        <button wx:if="{{workOrderPicker.nextAfterId}}" class="button button-secondary" disabled="{{workOrderPicker.loading}}" bindtap="loadMoreWorkOrders">加载更多正式工单</button>
+      </view>
       <view wx:if="{{materialPicker}}" class="card picker-card">
         <view class="row between"><text class="section-title">{{materialPicker.target === 'material' ? '选择正式物料' : '选择建议替代物料'}}</text><button class="remove" bindtap="closeMaterialPicker">关闭</button></view>
         <view class="field"><text class="field-label">SKU / 名称 / 规格</text><input class="input" value="{{materialPicker.query}}" disabled="{{materialPicker.loading}}" bindinput="materialPickerQueryInput" /></view>
@@ -33,7 +50,7 @@
         <button wx:if="{{materialPicker.nextAfterId}}" class="button button-secondary" disabled="{{materialPicker.loading}}" bindtap="loadMoreMaterials">加载更多正式物料</button>
       </view>
       <view class="card form-card">
-        <view class="field"><text class="field-label">关联工单 UUID（可空）</text><input class="input" value="{{form.workOrderId}}" data-field="workOrderId" bindinput="formInput" /></view>
+        <view class="field"><text class="field-label">关联 OAM 工单（可空）</text><button class="material-select" disabled="{{busy || writePending}}" bindtap="openWorkOrderPicker">{{form.workOrder ? form.workOrder.work_order_no : (form.workOrderUnavailable ? '原关联工单当前不可用，请重新选择' : '从本人当前有效工单中选择')}}</button><view wx:if="{{form.workOrder}}" class="small muted">{{form.workOrder.status === 'active' ? '处理中' : '待处理'}} · {{form.workOrder.source_system_code}} / {{form.workOrder.source_external_id}} · 版本 {{form.workOrder.source_version}} · 源更新 {{form.workOrder.source_updated_at}} · 同步 {{form.workOrder.synced_at}} · 数据新鲜</view><view wx:if="{{form.workOrderUnavailable}}" class="notice warning">原关联工单已失效、转移或不再属于当前范围；保存前必须明确清除或重新选择。</view><button wx:if="{{form.workOrder || form.workOrderUnavailable}}" class="remove" disabled="{{busy || writePending}}" bindtap="clearWorkOrder">明确清除关联工单</button></view>
         <view class="field"><text class="field-label">用途</text><input class="input" value="{{form.purpose}}" data-field="purpose" bindinput="formInput" /></view>
         <view class="field"><text class="field-label">紧急程度（normal / urgent / emergency）</text><input class="input" value="{{form.urgency}}" data-field="urgency" bindinput="formInput" /></view>
         <view class="field"><text class="field-label">期望日期（YYYY-MM-DD，可空）</text><input class="input" value="{{form.expectedDate}}" data-field="expectedDate" bindinput="formInput" /></view>
@@ -71,7 +88,7 @@
         </view>
 
         <view class="notice info">详细地址和联系电话只保留在当前页面内存中，不写入 storage、日志或列表/详情。</view>
-        <view class="action-grid"><button class="button button-secondary" disabled="{{busy}}" bindtap="cancelForm">取消</button><button class="button button-primary" loading="{{busy}}" disabled="{{busy || requestUploadBlocking}}" bindtap="saveDraft">{{formMode === 'create' ? '保存草稿' : '保存修改'}}</button></view>
+        <view class="action-grid"><button class="button button-secondary" disabled="{{busy}}" bindtap="cancelForm">取消</button><button class="button button-primary" loading="{{busy}}" disabled="{{busy || requestUploadBlocking || form.workOrderUnavailable}}" bindtap="saveDraft">{{formMode === 'create' ? '保存草稿' : '保存修改'}}</button></view>
       </view>
     </block>
 

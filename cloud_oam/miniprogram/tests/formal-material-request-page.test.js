@@ -60,6 +60,8 @@ const ATTACHMENT_ID = '90000000-0000-4000-8000-000000000001'
 const ATTACHMENT_2_ID = '90000000-0000-4000-8000-000000000002'
 const EVIDENCE_ID = '90000000-0000-4000-8000-000000000003'
 const REVISION_ID = 'a0000000-0000-4000-8000-000000000001'
+const WORK_ORDER_ID = 'b0000000-0000-4000-8000-000000000001'
+const WORK_ORDER_2_ID = 'b0000000-0000-4000-8000-000000000002'
 const FILE_SHA = 'ab'.repeat(32)
 const RAW_MOBILE = '138 0000 0000'
 const RAW_ADDRESS = '江东中路 100 号'
@@ -80,6 +82,39 @@ function material() {
 
 function catalogPage() {
   return { schema_version: '1.0', items: [material()], next_after_id: null }
+}
+
+function workOrder(overrides = {}) {
+  return Object.assign({
+    work_order_id: WORK_ORDER_ID,
+    work_order_no: 'WO-20260901-001',
+    status: 'active',
+    source_system_code: 'starcharge_oam',
+    source_external_id: 'OAM-WO-20260901-001',
+    source_version: 'v-20260901-070000',
+    source_updated_at: '2026-09-01T07:00:00+08:00',
+    synced_at: '2026-09-01T07:10:00+08:00',
+    freshness_status: 'fresh'
+  }, overrides)
+}
+
+function workOrderPage(items = [workOrder()], nextAfterId = null) {
+  return {
+    schema_version: '1.0',
+    person_id: PERSON_ID,
+    authorization_version: 1,
+    items,
+    next_after_id: nextAfterId
+  }
+}
+
+function workOrderDetail(item = workOrder()) {
+  return {
+    schema_version: '1.0',
+    person_id: PERSON_ID,
+    authorization_version: 1,
+    item
+  }
 }
 
 function material2() {
@@ -450,7 +485,7 @@ function draft() {
 
 function form(attachmentFileIds = [ATTACHMENT_ID]) {
   return {
-    workOrderId: '',
+    workOrder: null,
     purpose: '现场故障处理',
     urgency: 'urgent',
     expectedDate: '2026-09-05',
@@ -549,6 +584,8 @@ function fakeTransport(overrides = {}) {
       return { schema_version: '1.0', request_id: REQUEST_ID, request_version: 0, draft: draft() }
     },
     async listMaterials() { return catalogPage() },
+    async listWorkOrders() { return workOrderPage() },
+    async detailWorkOrder() { return workOrderDetail() },
     async createDraft() { throw new Error('not configured') },
     async mutate() { throw new Error('not configured') }
   }, overrides)
@@ -731,6 +768,40 @@ test('create binds a completed request_attachment upload and clears raw form onl
   assert.equal(JSON.stringify(instance.data.detail).includes(RAW_MOBILE), false)
 })
 
+test('create keeps its exact intent when reread loses the selected work-order binding', async (context) => {
+  const { toasts } = globals()
+  const intents = []
+  const loaded = loadWith(fakeTransport({
+    async createDraft(intent) {
+      intents.push(intent)
+      return {
+        schema_version: '1.0', request_id: REQUEST_ID, action: 'create',
+        request_version: 0, revision_id: REVISION_ID, revision_no: 1,
+        states: axes(), idempotency_replayed: intents.length > 1
+      }
+    },
+    async detail() { return detail() }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  instance.startCreate()
+  instance.setData({
+    form: Object.assign(form([]), { workOrder: workOrder() })
+  })
+  await instance.saveDraft()
+
+  assert.equal(instance.data.form.workOrder.work_order_id, WORK_ORDER_ID)
+  assert.equal(instance.data.writePending, true)
+  assert.match(toasts.at(-1).title, /工单绑定与详情回读不一致/)
+  await instance.saveDraft()
+  assert.equal(intents.length, 2)
+  assert.equal(intents[0], intents[1])
+})
+
 test('material picker searches and paginates only the formal catalog', async (context) => {
   globals()
   const calls = []
@@ -771,6 +842,396 @@ test('material picker searches and paginates only the formal catalog', async (co
     ['', MATERIAL_2_ID],
     ['直流接触器', null]
   ])
+})
+
+test('work-order picker searches, paginates, selects and explicitly clears only formal options', async (context) => {
+  globals()
+  const calls = []
+  const loaded = loadWith(fakeTransport({
+    async listWorkOrders(query, afterId) {
+      calls.push([query, afterId])
+      if (query) {
+        return workOrderPage([workOrder({
+          work_order_id: WORK_ORDER_2_ID,
+          work_order_no: 'WO-20260901-002',
+          status: 'pending'
+        })])
+      }
+      if (afterId) {
+        return workOrderPage([workOrder({
+          work_order_id: WORK_ORDER_2_ID,
+          work_order_no: 'WO-20260901-002',
+          status: 'pending'
+        })])
+      }
+      return workOrderPage([workOrder()], WORK_ORDER_2_ID)
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  instance.startCreate()
+  await instance.openWorkOrderPicker()
+  assert.deepEqual(
+    instance.data.workOrderPicker.items.map((item) => item.work_order_no),
+    ['WO-20260901-001']
+  )
+  await instance.loadMoreWorkOrders()
+  assert.deepEqual(
+    instance.data.workOrderPicker.items.map((item) => item.work_order_no),
+    ['WO-20260901-001', 'WO-20260901-002']
+  )
+  instance.workOrderPickerQueryInput({ detail: { value: 'WO-20260901-002' } })
+  assert.deepEqual(instance.data.workOrderPicker.items, [])
+  assert.equal(instance.data.workOrderPicker.nextAfterId, null)
+  assert.deepEqual(instance.data.workOrderPicker.cursorHistory, [])
+  await instance.loadMoreWorkOrders()
+  assert.equal(calls.length, 2)
+  await instance.searchWorkOrderPicker()
+  instance.setData({ busy: true })
+  instance.chooseWorkOrder({ currentTarget: { dataset: { id: WORK_ORDER_2_ID } } })
+  assert.equal(instance.data.form.workOrder, null)
+  assert.notEqual(instance.data.workOrderPicker, null)
+  instance.setData({ busy: false, writePending: true })
+  instance.chooseWorkOrder({ currentTarget: { dataset: { id: WORK_ORDER_2_ID } } })
+  assert.equal(instance.data.form.workOrder, null)
+  assert.notEqual(instance.data.workOrderPicker, null)
+  instance.setData({ writePending: false })
+  instance.chooseWorkOrder({ currentTarget: { dataset: { id: WORK_ORDER_2_ID } } })
+  assert.equal(instance.data.form.workOrder.work_order_no, 'WO-20260901-002')
+  assert.equal(instance.data.workOrderPicker, null)
+  instance.clearWorkOrder()
+  assert.equal(instance.data.form.workOrder, null)
+  assert.deepEqual(calls, [
+    ['', null],
+    ['', WORK_ORDER_2_ID],
+    ['WO-20260901-002', null]
+  ])
+
+  const wxml = fs.readFileSync(
+    path.join(__dirname, '../pages/formal-material-requests/index.wxml'),
+    'utf8'
+  )
+  assert.doesNotMatch(wxml, /data-field="workOrderId"|value="\{\{form\.workOrderId\}\}"/)
+  assert.match(wxml, /明确清除关联工单/)
+  assert.match(wxml, /不会回退旧接口或接受手填 UUID/)
+  assert.match(
+    wxml,
+    /data-id="\{\{item\.work_order_id\}\}" disabled="\{\{busy \|\| writePending\}\}" bindtap="chooseWorkOrder"/
+  )
+})
+
+test('selected work order is derived from the strict option object, never a text field', async (context) => {
+  globals()
+  const intents = []
+  const loaded = loadWith(fakeTransport({
+    async createDraft(intent) {
+      intents.push(intent)
+      const error = new Error('明确拒绝测试')
+      error.status = 422
+      error.responseReceived = true
+      throw error
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  instance.startCreate()
+  instance.setData({ form: Object.assign(form([]), { workOrder: workOrder() }) })
+  await instance.saveDraft()
+  assert.equal(intents.length, 1)
+  assert.equal(intents[0].body.work_order_id, WORK_ORDER_ID)
+})
+
+test('edit restores the exact linked work order through formal detail and fails closed on drift', async (context) => {
+  const { toasts } = globals()
+  const linkedDetail = detail()
+  linkedDetail.work_order_id = WORK_ORDER_ID
+  const linkedDraft = draft()
+  linkedDraft.work_order_id = WORK_ORDER_ID
+  const detailCalls = []
+  let rejectOption = false
+  const loaded = loadWith(fakeTransport({
+    async list() { return page(linkedDetail) },
+    async detail() { return linkedDetail },
+    async loadDraftForEdit() {
+      return {
+        schema_version: '1.0',
+        request_id: REQUEST_ID,
+        request_version: 0,
+        draft: linkedDraft
+      }
+    },
+    async detailWorkOrder(workOrderId) {
+      detailCalls.push(workOrderId)
+      if (rejectOption) {
+        return Object.assign(workOrderDetail(), { authorization_version: 2 })
+      }
+      return workOrderDetail()
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  await instance.startEdit()
+  assert.equal(instance.data.form.workOrder.work_order_id, WORK_ORDER_ID)
+  assert.equal(instance.data.form.workOrder.work_order_no, 'WO-20260901-001')
+  assert.deepEqual(detailCalls, [WORK_ORDER_ID])
+
+  instance.cancelForm()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  rejectOption = true
+  await instance.startEdit()
+  assert.equal(instance.data.form, null)
+  assert.equal(instance.data.formMode, '')
+  assert.equal(instance.data.detail.request_id, REQUEST_ID)
+  assert.match(toasts.at(-1).title, /人员或授权版本已变化/)
+  assert.deepEqual(detailCalls, [WORK_ORDER_ID, WORK_ORDER_ID])
+})
+
+test('an unavailable linked work order can be explicitly cleared or replaced by an update-only editor', async (context) => {
+  const { toasts } = globals()
+  const linkedDetail = detail()
+  linkedDetail.work_order_id = WORK_ORDER_ID
+  const linkedDraft = draft()
+  linkedDraft.work_order_id = WORK_ORDER_ID
+  let mutations = 0
+  const replacement = workOrder({
+    work_order_id: WORK_ORDER_2_ID,
+    work_order_no: 'WO-20260901-002'
+  })
+  const loaded = loadWith(fakeTransport({
+    async loadAccess() {
+      return Object.assign({}, access(), { can_create: false })
+    },
+    async list() { return page(linkedDetail) },
+    async detail() { return linkedDetail },
+    async loadDraftForEdit() {
+      return {
+        schema_version: '1.0',
+        request_id: REQUEST_ID,
+        request_version: 0,
+        draft: linkedDraft
+      }
+    },
+    async detailWorkOrder() {
+      const error = new Error('current work order is no longer selectable')
+      error.status = 404
+      error.responseReceived = true
+      throw error
+    },
+    async listWorkOrders() { return workOrderPage([replacement]) },
+    async mutate() { mutations += 1; throw new Error('must not write in this test') }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  await instance.startEdit()
+
+  assert.equal(instance.data.formMode, 'edit')
+  assert.equal(instance.data.form.workOrder, null)
+  assert.equal(instance.data.form.workOrderUnavailable, true)
+  await instance.saveDraft()
+  assert.equal(mutations, 0)
+  assert.match(toasts.at(-1).title, /请先明确清除或重新选择/)
+
+  instance.clearWorkOrder()
+  assert.equal(instance.data.form.workOrderUnavailable, false)
+  await instance.openWorkOrderPicker()
+  assert.equal(instance.data.workOrderPicker.items[0].work_order_id, WORK_ORDER_2_ID)
+  instance.chooseWorkOrder({ currentTarget: { dataset: { id: WORK_ORDER_2_ID } } })
+  assert.equal(instance.data.form.workOrder.work_order_id, WORK_ORDER_2_ID)
+  assert.equal(instance.data.form.workOrderUnavailable, false)
+
+  const wxml = fs.readFileSync(
+    path.join(__dirname, '../pages/formal-material-requests/index.wxml'),
+    'utf8'
+  )
+  assert.match(wxml, /原关联工单已失效、转移或不再属于当前范围/)
+  assert.match(wxml, /form\.workOrderUnavailable/)
+})
+
+test('work-order recovery never treats authorization or transport failures as an unavailable reference', async (context) => {
+  const { toasts } = globals()
+  const linkedDetail = detail()
+  linkedDetail.work_order_id = WORK_ORDER_ID
+  const linkedDraft = draft()
+  linkedDraft.work_order_id = WORK_ORDER_ID
+  let failureStatus = 403
+  const loaded = loadWith(fakeTransport({
+    async list() { return page(linkedDetail) },
+    async detail() { return linkedDetail },
+    async loadDraftForEdit() {
+      return {
+        schema_version: '1.0',
+        request_id: REQUEST_ID,
+        request_version: 0,
+        draft: linkedDraft
+      }
+    },
+    async detailWorkOrder() {
+      const error = new Error(failureStatus === 403 ? 'authorization changed' : 'network timeout')
+      error.status = failureStatus
+      error.responseReceived = failureStatus !== 0
+      throw error
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  await instance.startEdit()
+  assert.equal(instance.data.form, null)
+  assert.equal(instance.data.detail.request_id, REQUEST_ID)
+  assert.match(toasts.at(-1).title, /authorization changed/)
+
+  failureStatus = 0
+  await instance.startEdit()
+  assert.equal(instance.data.form, null)
+  assert.equal(instance.data.detail.request_id, REQUEST_ID)
+  assert.match(toasts.at(-1).title, /network timeout/)
+})
+
+test('identity refresh during edit material resolution cannot restore the old plaintext form', async (context) => {
+  globals()
+  let personId = PERSON_ID
+  let authorizationVersion = 1
+  let resolveMaterials
+  let markMaterialsStarted
+  const materialsStarted = new Promise((resolve) => { markMaterialsStarted = resolve })
+  const materialResponse = new Promise((resolve) => { resolveMaterials = resolve })
+  const loaded = loadWith(fakeTransport({
+    async loadAccess() {
+      return Object.assign({}, access(), {
+        person_id: personId,
+        authorization_version: authorizationVersion
+      })
+    },
+    async listMaterials() {
+      markMaterialsStarted()
+      return materialResponse
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  const edit = instance.startEdit()
+  await materialsStarted
+
+  personId = PERSON_2_ID
+  authorizationVersion = 2
+  await instance.load()
+  resolveMaterials(catalogPage())
+  await edit
+
+  assert.equal(instance.data.form, null)
+  assert.equal(instance.data.formMode, '')
+  assert.equal(instance.data.busy, false)
+  assert.equal(JSON.stringify(instance.data).includes(RAW_MOBILE), false)
+  assert.equal(instance._uploadIdentity, `${PERSON_2_ID}:2`)
+})
+
+test('page unload drops a late editable-draft response without any setData or plaintext retention', async (context) => {
+  globals()
+  let resolveEditable
+  const editableResponse = new Promise((resolve) => { resolveEditable = resolve })
+  const loaded = loadWith(fakeTransport({
+    async loadDraftForEdit() { return editableResponse }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  let unloaded = false
+  const originalSetData = instance.setData
+  instance.setData = function setData(update) {
+    if (unloaded) throw new Error('unloaded edit page must not call setData')
+    originalSetData.call(this, update)
+  }
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  const edit = instance.startEdit()
+  unloaded = true
+  instance.onUnload()
+  resolveEditable({
+    schema_version: '1.0',
+    request_id: REQUEST_ID,
+    request_version: 0,
+    draft: draft()
+  })
+  await edit
+
+  assert.equal(instance.data.form, null)
+  assert.equal(instance.data.detail, null)
+  assert.equal(JSON.stringify(instance.data).includes(RAW_MOBILE), false)
+})
+
+test('a superseded editable-draft response cannot overwrite the newer edit form', async (context) => {
+  globals()
+  let resolveFirstEditable
+  const firstEditable = new Promise((resolve) => { resolveFirstEditable = resolve })
+  let editableReads = 0
+  const freshDraft = draft()
+  freshDraft.contact = { name: '新工程师', mobile: '139 1111 2222' }
+  const loaded = loadWith(fakeTransport({
+    async loadDraftForEdit() {
+      editableReads += 1
+      return editableReads === 1
+        ? firstEditable
+        : {
+            schema_version: '1.0',
+            request_id: REQUEST_ID,
+            request_version: 0,
+            draft: freshDraft
+          }
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  const firstEdit = instance.startEdit()
+  const secondEdit = instance.startEdit()
+  await secondEdit
+  assert.equal(instance.data.form.contactMobile, '139 1111 2222')
+
+  resolveFirstEditable({
+    schema_version: '1.0',
+    request_id: REQUEST_ID,
+    request_version: 0,
+    draft: draft()
+  })
+  await firstEdit
+
+  assert.equal(instance.data.form.contactName, '新工程师')
+  assert.equal(instance.data.form.contactMobile, '139 1111 2222')
+  assert.equal(instance.data.busy, false)
+  assert.equal(editableReads, 2)
 })
 
 test('uncertain create retry preserves raw form and reuses exact coordinates', async (context) => {
@@ -856,6 +1317,53 @@ test('edit loads raw values only after explicit action and writes through update
   assert.equal(intents[0].body.contact.mobile, RAW_MOBILE)
   assert.deepEqual(intents[0].body.attachment_file_ids, [ATTACHMENT_ID, ATTACHMENT_2_ID])
   assert.equal(instance.data.form, null)
+})
+
+test('update keeps its exact intent when reread changes the selected work-order binding', async (context) => {
+  const { toasts } = globals()
+  const linkedDetail = detail()
+  linkedDetail.work_order_id = WORK_ORDER_ID
+  const linkedDraft = Object.assign(draft(), { work_order_id: WORK_ORDER_ID })
+  const intents = []
+  let detailReads = 0
+  const loaded = loadWith(fakeTransport({
+    async list() { return page(linkedDetail) },
+    async detail() {
+      detailReads += 1
+      return detailReads === 1 ? linkedDetail : detail(1)
+    },
+    async loadDraftForEdit() {
+      return {
+        schema_version: '1.0', request_id: REQUEST_ID,
+        request_version: 0, draft: linkedDraft
+      }
+    },
+    async mutate(intent) {
+      intents.push(intent)
+      return {
+        schema_version: '1.0', request_id: REQUEST_ID, action: 'update',
+        request_version: 1, revision_id: REVISION_ID, revision_no: 1,
+        approval_instance_id: null, approval_attempt_no: null, current_step_id: null,
+        states: axes(), idempotency_replayed: intents.length > 1
+      }
+    }
+  }))
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+  })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  await instance.startEdit()
+  await instance.saveDraft()
+
+  assert.equal(instance.data.form.workOrder.work_order_id, WORK_ORDER_ID)
+  assert.equal(instance.data.writePending, true)
+  assert.match(toasts.at(-1).title, /工单绑定与详情回读不一致/)
+  await instance.saveDraft()
+  assert.equal(intents.length, 2)
+  assert.equal(intents[0], intents[1])
 })
 
 test('edit keeps server-bound attachments and deduplicates an available upload with the same file id', async (context) => {

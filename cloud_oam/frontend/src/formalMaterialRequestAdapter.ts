@@ -1,5 +1,6 @@
 import { api, ApiError, jsonBody } from "./api";
 import { formalMaterialCatalogQuery } from "./formalMaterialCatalog";
+import { validateMaterialRequestWorkOrderOptionQuery } from "./formalMaterialRequestOptions";
 import {
   MATERIAL_REQUEST_SCHEMA_VERSION,
   MATERIAL_REQUEST_MUTATION_ACTIONS,
@@ -62,6 +63,8 @@ export interface FormalMaterialRequestAdapter {
   list(afterId: string | null): Promise<unknown>;
   detail(requestId: string): Promise<unknown>;
   loadDraftForEdit(requestId: string): Promise<unknown>;
+  listWorkOrderOptions(query: string, afterId: string | null): Promise<unknown>;
+  workOrderOptionDetail(workOrderId: string): Promise<unknown>;
   listMaterials(query: string, afterId: string | null): Promise<unknown>;
   createDraft(intent: MaterialRequestCreateIntent): Promise<unknown>;
   mutate(intent: MaterialRequestMutationIntent): Promise<unknown>;
@@ -609,6 +612,23 @@ export function createFormalMaterialRequestAdapter(
     loadDraftForEdit(requestId: string) {
       return requester(
         `/v1/material-requests/${requiredUuid(requestId, "request_id")}/editable-draft`,
+        { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } },
+      );
+    },
+    listWorkOrderOptions(query: string, afterId: string | null) {
+      const checkedQuery = validateMaterialRequestWorkOrderOptionQuery(query);
+      const queryPart = checkedQuery ? `&query=${encodeURIComponent(checkedQuery)}` : "";
+      const cursorPart = afterId === null
+        ? ""
+        : `&after_id=${encodeURIComponent(requiredUuid(afterId, "after_id"))}`;
+      return requester(
+        `/v1/material-request-options/work-orders?limit=50${queryPart}${cursorPart}`,
+        { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } },
+      );
+    },
+    workOrderOptionDetail(workOrderId: string) {
+      return requester(
+        `/v1/material-request-options/work-orders/${requiredUuid(workOrderId, "work_order_id")}`,
         { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } },
       );
     },

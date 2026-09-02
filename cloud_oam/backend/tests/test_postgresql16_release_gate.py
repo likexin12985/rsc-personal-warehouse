@@ -35,6 +35,9 @@ ROLE_NAMES = (
     "star_oam_backup",
     "star_oam_edge",
 )
+WORK_ORDER_LOCK_FUNCTION = (
+    "public.rsc_lock_material_request_work_order_reference_0042(uuid)"
+)
 
 
 def _gate_enabled() -> bool:
@@ -286,6 +289,13 @@ def _table_exists(table_name: str) -> bool:
     with psycopg.connect(**_admin_parameters()) as connection:
         with connection.cursor() as cursor:
             cursor.execute("SELECT to_regclass(%s)", (f"public.{table_name}",))
+            return cursor.fetchone()[0] is not None
+
+
+def _work_order_lock_function_exists() -> bool:
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT to_regprocedure(%s)", (WORK_ORDER_LOCK_FUNCTION,))
             return cursor.fetchone()[0] is not None
 
 
@@ -544,6 +554,224 @@ def _assert_sms_acl(api_engine) -> None:
     }
 
 
+def _insert_work_order_lock_fixture() -> uuid.UUID:
+    source_id = uuid.uuid4()
+    organization_id = uuid.uuid4()
+    person_id = uuid.uuid4()
+    external_object_id = uuid.uuid4()
+    work_order_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    with psycopg.connect(
+        **_connection_parameters(
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+        )
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO source_systems (
+                    id, code, name, mode, enabled, configuration_jsonb,
+                    updated_at, created_at
+                ) VALUES (%s, %s, 'PG16 work-order lock source', 'read_only',
+                          true, '{}'::jsonb, %s, %s)
+                """,
+                (source_id, f"pg16-lock-{source_id.hex}", now, now),
+            )
+            cursor.execute(
+                """
+                INSERT INTO organizations (
+                    id, external_object_id, code, name, parent_id, org_type,
+                    province_code, status, updated_at, created_at
+                ) VALUES (%s, NULL, %s, 'PG16 lock organization', NULL,
+                          'region_company', '320000', 'active', %s, %s)
+                """,
+                (organization_id, f"PG16-{organization_id.hex}", now, now),
+            )
+            cursor.execute(
+                """
+                INSERT INTO people (
+                    id, external_object_id, organization_id, employee_no,
+                    name, mobile_encrypted, mobile_hash, employment_status,
+                    source_updated_at, updated_at, created_at
+                ) VALUES (%s, NULL, %s, %s, 'PG16 lock engineer', NULL,
+                          NULL, 'active', %s, %s, %s)
+                """,
+                (
+                    person_id,
+                    organization_id,
+                    f"PG16-{person_id.hex}",
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO external_objects (
+                    id, source_system_id, entity_type, external_id,
+                    current_version_id, deleted_at, updated_at, created_at
+                ) VALUES (%s, %s, 'work_order', %s, NULL, NULL, %s, %s)
+                """,
+                (
+                    external_object_id,
+                    source_id,
+                    f"PG16-WO-{work_order_id.hex}",
+                    now,
+                    now,
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO oam_work_orders (
+                    id, external_object_id, work_order_no, organization_id,
+                    engineer_person_id, status, source_updated_at, updated_at,
+                    created_at
+                ) VALUES (%s, %s, %s, %s, %s, 'active', %s, %s, %s)
+                """,
+                (
+                    work_order_id,
+                    external_object_id,
+                    f"PG16-WO-{work_order_id.hex}",
+                    organization_id,
+                    person_id,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+    return work_order_id
+
+
+def _assert_work_order_lock_acl_and_concurrency() -> None:
+    work_order_id = _insert_work_order_lock_fixture()
+    function_name = "rsc_lock_material_request_work_order_reference_0042"
+    api_parameters = _connection_parameters(
+        role="star_oam_api",
+        password=_role_password("star_oam_api"),
+    )
+    migrator_parameters = _connection_parameters(
+        role="star_oam_migrator",
+        password=_role_password("star_oam_migrator"),
+    )
+
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT owner.rolname,
+                       has_function_privilege(
+                           'star_oam_api', %s, 'EXECUTE'
+                       ),
+                       EXISTS (
+                           SELECT 1
+                             FROM aclexplode(
+                                 coalesce(
+                                     function_row.proacl,
+                                     acldefault('f', function_row.proowner)
+                                 )
+                             ) AS function_acl
+                            WHERE function_acl.grantee = 0
+                              AND function_acl.privilege_type = 'EXECUTE'
+                       ),
+                       has_function_privilege(
+                           'star_oam_backup', %s, 'EXECUTE'
+                       ),
+                       has_function_privilege('star_oam_edge', %s, 'EXECUTE')
+                  FROM pg_proc AS function_row
+                  JOIN pg_namespace AS schema_row
+                    ON schema_row.oid = function_row.pronamespace
+                  JOIN pg_roles AS owner
+                    ON owner.oid = function_row.proowner
+                 WHERE schema_row.nspname = 'public'
+                   AND function_row.proname = %s
+                """,
+                (
+                    WORK_ORDER_LOCK_FUNCTION,
+                    WORK_ORDER_LOCK_FUNCTION,
+                    WORK_ORDER_LOCK_FUNCTION,
+                    function_name,
+                ),
+            )
+            assert cursor.fetchone() == (
+                "star_oam_migrator",
+                True,
+                False,
+                False,
+                False,
+            )
+
+    with psycopg.connect(**api_parameters) as connection:
+        with connection.cursor() as cursor:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                cursor.execute(
+                    "UPDATE oam_work_orders SET status = 'pending' WHERE id = %s",
+                    (work_order_id,),
+                )
+        connection.rollback()
+
+    first_api = psycopg.connect(**api_parameters)
+    second_api = psycopg.connect(**api_parameters)
+    updater_started = threading.Event()
+    updater_pid: list[int] = []
+    try:
+        with first_api.cursor() as cursor:
+            cursor.execute(
+                f"SELECT public.{function_name}(%s)",
+                (work_order_id,),
+            )
+        # A second API transaction must acquire the same SHARE lock without
+        # waiting; otherwise the helper over-serializes independent commands.
+        with second_api.cursor() as cursor:
+            cursor.execute("SET LOCAL statement_timeout = '2s'")
+            cursor.execute(
+                f"SELECT public.{function_name}(%s)",
+                (work_order_id,),
+            )
+
+        def update_nonkey_status() -> None:
+            with psycopg.connect(**migrator_parameters) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT pg_backend_pid()")
+                    updater_pid.append(cursor.fetchone()[0])
+                    updater_started.set()
+                    cursor.execute("SET LOCAL statement_timeout = '20s'")
+                    cursor.execute(
+                        "UPDATE oam_work_orders SET status = 'pending' "
+                        "WHERE id = %s",
+                        (work_order_id,),
+                    )
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            update_future = executor.submit(update_nonkey_status)
+            assert updater_started.wait(timeout=10)
+            assert updater_pid
+            _wait_for_backend_lock(updater_pid[0])
+            first_api.commit()
+            # The second SHARE holder must continue to block the non-key UPDATE.
+            _wait_for_backend_lock(updater_pid[0])
+            second_api.commit()
+            update_future.result(timeout=15)
+        finally:
+            # Always release both holders before joining the updater; otherwise
+            # an assertion failure in the wait proof could strand CI.
+            first_api.rollback()
+            second_api.rollback()
+            executor.shutdown(wait=True, cancel_futures=True)
+    finally:
+        first_api.close()
+        second_api.close()
+
+    with psycopg.connect(**migrator_parameters) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT status FROM oam_work_orders WHERE id = %s",
+                (work_order_id,),
+            )
+            assert cursor.fetchone()[0] == "pending"
+
+
 def _wait_for_backend_lock(backend_pid: int) -> None:
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
@@ -557,7 +785,7 @@ def _wait_for_backend_lock(backend_pid: int) -> None:
         if row is not None and row[0] == "Lock":
             return
         time.sleep(0.05)
-    pytest.fail("second SMS dispatch owner did not reach a PostgreSQL lock wait")
+    pytest.fail("expected PostgreSQL backend did not reach a lock wait")
 
 
 def _insert_concurrency_fixture(challenge_id: uuid.UUID) -> datetime:
@@ -772,7 +1000,15 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
 
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
+    assert _current_revision() == "20260902_0042"
+    assert _work_order_lock_function_exists() is True
+
+    _run_alembic("downgrade", "20260902_0041")
     assert _current_revision() == "20260902_0041"
+    assert _work_order_lock_function_exists() is False
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == "20260902_0042"
+    assert _work_order_lock_function_exists() is True
 
     _run_alembic("downgrade", "20260901_0040")
     assert _current_revision() == "20260901_0040"
@@ -799,6 +1035,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     try:
         _validate_runtime_security(api_engine)
         _assert_sms_acl(api_engine)
+        _assert_work_order_lock_acl_and_concurrency()
         _assert_database_owner_membership_boundary(api_engine)
         _assert_membership_drift_is_rejected(api_engine)
         _assert_single_owner_and_process_kill(api_engine)
@@ -809,6 +1046,6 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         assert "cannot downgrade 0041" in (
             blocked_downgrade.stdout + blocked_downgrade.stderr
         )
-        assert _current_revision() == "20260902_0041"
+        assert _current_revision() == "20260902_0042"
     finally:
         api_engine.dispose()

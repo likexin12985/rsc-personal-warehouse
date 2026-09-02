@@ -309,7 +309,14 @@ SMS_DISPATCH_OWNERSHIP_REVISION = (
     / "versions"
     / "20260902_0041_sms_dispatch_ownership.py"
 )
-HEAD_REVISION = "20260902_0041"
+MATERIAL_REQUEST_WORK_ORDER_LOCK_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260902_0042_material_request_work_order_lock.py"
+)
+HEAD_REVISION = "20260902_0042"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -320,6 +327,8 @@ NONOPENING_STOCKTAKE_CLOSE_RECONCILIATION_REVISION_ID = "20260901_0038"
 MATERIAL_REQUEST_COMMAND_STATUS_LOOKUP_REVISION_ID = "20260901_0039"
 KMS_DATA_KEY_PINS_REVISION_ID = "20260901_0040"
 SMS_DISPATCH_OWNERSHIP_REVISION_ID = "20260902_0041"
+MATERIAL_REQUEST_WORK_ORDER_LOCK_REVISION_ID = "20260902_0042"
+PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION = "20260902_0041"
 PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION = "20260901_0040"
 PRE_KMS_DATA_KEY_PINS_HEAD_REVISION = "20260901_0039"
 PRE_MATERIAL_REQUEST_COMMAND_STATUS_LOOKUP_HEAD_REVISION = "20260901_0038"
@@ -1312,23 +1321,23 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert head is not None
     assert (
         head.down_revision
-        == PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION
+        == PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION
     )
     previous_head = script.get_revision(
-        PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION
+        PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION
     )
     assert previous_head is not None
     assert (
         previous_head.down_revision
-        == PRE_KMS_DATA_KEY_PINS_HEAD_REVISION
+        == PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION
     )
     previous_kms_head = script.get_revision(
-        PRE_KMS_DATA_KEY_PINS_HEAD_REVISION
+        PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION
     )
     assert previous_kms_head is not None
     assert (
         previous_kms_head.down_revision
-        == PRE_MATERIAL_REQUEST_COMMAND_STATUS_LOOKUP_HEAD_REVISION
+        == PRE_KMS_DATA_KEY_PINS_HEAD_REVISION
     )
 
 
@@ -1341,6 +1350,100 @@ def _load_0041_migration_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_0042_postgresql_offline_sql_is_function_only_and_exact(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    upgrade_output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=upgrade_output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION}:{HEAD_REVISION}",
+        sql=True,
+    )
+    sql = upgrade_output.getvalue()
+    function = "rsc_lock_material_request_work_order_reference_0042"
+    assert "-- Running upgrade 20260902_0041 -> 20260902_0042" in sql
+    assert f"CREATE FUNCTION public.{function}(requested_work_order_id uuid)" in sql
+    assert "RETURNS void" in sql
+    assert "VOLATILE" in sql
+    assert "SECURITY DEFINER" in sql
+    assert "SET search_path = pg_catalog, public" in sql
+    assert "FROM public.oam_work_orders AS work_order" in sql
+    assert "WHERE work_order.id = requested_work_order_id" in sql
+    assert "FOR SHARE OF work_order" in sql
+    assert "GET DIAGNOSTICS locked_count = ROW_COUNT" in sql
+    assert f"ALTER FUNCTION public.{function}(uuid) OWNER TO star_oam_migrator" in sql
+    assert (
+        f"REVOKE ALL ON FUNCTION public.{function}(uuid) FROM "
+        "PUBLIC, star_oam_api"
+    ) in sql
+    assert f"GRANT EXECUTE ON FUNCTION public.{function}(uuid) TO star_oam_api" in sql
+    assert "GRANT UPDATE" not in sql
+    assert "GRANT INSERT" not in sql
+    assert "GRANT DELETE" not in sql
+    assert "ALTER TABLE public.oam_work_orders" not in sql
+
+    downgrade_output = io.StringIO()
+    downgrade_config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=downgrade_output,
+    )
+    command.downgrade(
+        downgrade_config,
+        f"{HEAD_REVISION}:{PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION}",
+        sql=True,
+    )
+    downgrade_sql = downgrade_output.getvalue()
+    assert f"DROP FUNCTION public.{function}(uuid)" in downgrade_sql
+    assert "DROP TABLE" not in downgrade_sql
+    assert "ALTER TABLE" not in downgrade_sql
+
+
+def test_0042_sqlite_is_schema_noop_and_only_moves_revision(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'work-order-lock-noop.db'}"
+    config = _config(database_url)
+    command.upgrade(config, PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION)
+    before_engine = sa.create_engine(database_url)
+    try:
+        before_tables = set(inspect(before_engine).get_table_names())
+        with before_engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION
+    finally:
+        before_engine.dispose()
+
+    command.upgrade(config, HEAD_REVISION)
+    after_engine = sa.create_engine(database_url)
+    try:
+        assert set(inspect(after_engine).get_table_names()) == before_tables
+        with after_engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == HEAD_REVISION
+    finally:
+        after_engine.dispose()
+
+    command.downgrade(config, PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION)
+    downgraded_engine = sa.create_engine(database_url)
+    try:
+        assert set(inspect(downgraded_engine).get_table_names()) == before_tables
+        with downgraded_engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION
+    finally:
+        downgraded_engine.dispose()
 
 
 def test_0041_sqlite_schema_indexes_and_evidence_triggers(
@@ -2086,7 +2189,7 @@ def test_0041_sqlite_downgrade_blocks_every_nonlegacy_dispatch_state(
         with verification.connect() as connection:
             assert connection.exec_driver_sql(
                 "SELECT version_num FROM alembic_version"
-            ).scalar_one() == HEAD_REVISION
+            ).scalar_one() == PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION
             assert connection.exec_driver_sql(
                 "SELECT status FROM sms_challenge_dispatches "
                 "WHERE challenge_id = ?",

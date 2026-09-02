@@ -9,6 +9,7 @@ import {
 import {
   MaterialRequestCreateIntentRegistry,
   MaterialRequestIntentRegistry,
+  type MaterialRequestCreateResult,
   type MaterialRequestDetail,
   type MaterialRequestDraftInput,
   type MaterialRequestDraftLine,
@@ -28,6 +29,11 @@ import {
   validateFormalMaterialRequestAccess,
   validateFormalMaterialRequestEditableDraft,
 } from "../formalMaterialRequestAdapter";
+import {
+  type MaterialRequestWorkOrderOption,
+  validateMaterialRequestWorkOrderOptionDetail,
+  validateMaterialRequestWorkOrderOptionPage,
+} from "../formalMaterialRequestOptions";
 import {
   createMaterialRequestLifecycleRecoveryStore,
   lifecycleSentinelBlockingMessage,
@@ -103,6 +109,20 @@ type MaterialPickerState = {
   error: string;
 };
 
+type WorkOrderPickerState = {
+  query: string;
+  items: MaterialRequestWorkOrderOption[];
+  nextAfterId: string | null;
+  cursorHistory: string[];
+  loading: boolean;
+  error: string;
+};
+
+type DraftWorkOrderResolution = Readonly<{
+  item: MaterialRequestWorkOrderOption | null;
+  unavailable: boolean;
+}>;
+
 type ApprovalLineState = {
   requestLineId: string;
   inputQty: string;
@@ -157,7 +177,8 @@ function recoveryView(read: MaterialRequestLifecycleSentinelRead): LifecycleReco
 }
 
 type DraftFormState = {
-  workOrderId: string;
+  workOrder: MaterialRequestWorkOrderOption | null;
+  workOrderUnavailable: boolean;
   purpose: string;
   urgency: "normal" | "urgent" | "emergency";
   expectedDate: string;
@@ -192,7 +213,8 @@ function emptyLine(key: number): DraftLineState {
 
 function emptyForm(key: number): DraftFormState {
   return {
-    workOrderId: "",
+    workOrder: null,
+    workOrderUnavailable: false,
     purpose: "",
     urgency: "normal",
     expectedDate: "",
@@ -213,9 +235,11 @@ function formFromDraft(
   draft: MaterialRequestDraftInput,
   nextKey: () => number,
   materials: ReadonlyMap<string, FormalMaterialCatalogItem>,
+  workOrder: DraftWorkOrderResolution,
 ): DraftFormState {
   return {
-    workOrderId: draft.work_order_id || "",
+    workOrder: workOrder.item,
+    workOrderUnavailable: workOrder.unavailable,
     purpose: draft.purpose,
     urgency: draft.urgency,
     expectedDate: draft.expected_date || "",
@@ -245,8 +269,11 @@ function draftFromForm(
   form: DraftFormState,
   uploadedFiles: readonly AvailableFormalFile[],
 ): MaterialRequestDraftInput {
+  if (form.workOrderUnavailable) {
+    throw new ApiError(409, "原关联工单当前不可选，必须明确清除或从正式列表重新选择");
+  }
   return validateMaterialRequestDraftInput({
-    work_order_id: form.workOrderId || null,
+    work_order_id: form.workOrder?.work_order_id || null,
     purpose: form.purpose,
     urgency: form.urgency,
     expected_date: form.expectedDate || null,
@@ -284,6 +311,18 @@ function trackingLabel(mode: FormalMaterialCatalogItem["tracking_mode"]): string
 
 function materialLabel(item: FormalMaterialCatalogItem): string {
   return `${item.sku_code}｜${item.name}｜${item.specification || "无规格"}｜${item.base_unit}｜${trackingLabel(item.tracking_mode)}`;
+}
+
+function workOrderSourceTime(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(parsed);
 }
 
 function currentApprovalStep(detail: MaterialRequestDetail) {
@@ -361,6 +400,17 @@ function axesMatch(
 ): boolean {
   return result.request_version === detail.request_version
     && AXIS_LABELS.every(([key]) => result.states[key] === detail.states[key]);
+}
+
+function draftWriteMatches(
+  result: MaterialRequestCreateResult | MaterialRequestMutationResult,
+  detail: MaterialRequestDetail,
+  draft: MaterialRequestDraftInput,
+): boolean {
+  return axesMatch(result, detail)
+    && result.revision_id === detail.current_revision_id
+    && result.revision_no === detail.current_revision_no
+    && detail.work_order_id === draft.work_order_id;
 }
 
 function approvalMutationMatches(result: MaterialRequestMutationResult, detail: MaterialRequestDetail): boolean {
@@ -611,12 +661,15 @@ function DraftForm({
   form,
   mode,
   busy,
+  writePending,
   error,
   pendingMessage,
   onChange,
   onLineChange,
   onAddLine,
   onRemoveLine,
+  onChooseWorkOrder,
+  onClearWorkOrder,
   onChooseMaterial,
   onClearSubstitute,
   uploadClient,
@@ -630,12 +683,15 @@ function DraftForm({
   form: DraftFormState;
   mode: FormMode;
   busy: boolean;
+  writePending: boolean;
   error: string;
   pendingMessage: string;
   onChange: <K extends keyof DraftFormState>(key: K, value: DraftFormState[K]) => void;
   onLineChange: (key: number, field: "requestedQty" | "requiredDate" | "note", value: string) => void;
   onAddLine: () => void;
   onRemoveLine: (key: number) => void;
+  onChooseWorkOrder: () => void;
+  onClearWorkOrder: () => void;
   onChooseMaterial: (key: number, target: MaterialPickerState["target"]) => void;
   onClearSubstitute: (key: number) => void;
   uploadClient: FormalFileUploadClient;
@@ -650,7 +706,34 @@ function DraftForm({
     {error && <div className="form-error">{error}</div>}
     {pendingMessage && <div className="alert alert-warning">{pendingMessage}</div>}
     <div className="form-grid three">
-      <Field label="关联工单 UUID（可空）"><input aria-label="关联工单 UUID（可空）" value={form.workOrderId} onChange={(e) => onChange("workOrderId", e.target.value)} /></Field>
+      <Field label="关联 OAM 工单（可空）">
+        <div className="form-actions">
+          <button
+            className="table-action"
+            type="button"
+            aria-label="选择关联 OAM 工单"
+            disabled={busy || writePending}
+            onClick={onChooseWorkOrder}
+          >{form.workOrder
+              ? `${form.workOrder.work_order_no} · ${form.workOrder.status === "active" ? "进行中" : "待处理"}`
+              : form.workOrderUnavailable
+                ? "原关联工单当前不可选，请重新选择"
+                : "从本人当前有效工单中选择"}</button>
+          {(form.workOrder || form.workOrderUnavailable) && <button
+            className="table-action"
+            type="button"
+            aria-label="清除关联 OAM 工单"
+            disabled={busy || writePending}
+            onClick={onClearWorkOrder}
+          >明确清除</button>}
+        </div>
+        {form.workOrderUnavailable && <div className="alert alert-warning" role="alert">
+          本人草稿原有关联工单当前不可选；不会显示或查询通用工单详情。保存前必须明确清除，或从正式列表重新选择。
+        </div>}
+        {form.workOrder && <div className="alert alert-info" aria-label="已选工单最小来源证据">
+          来源 {form.workOrder.source_system_code} · 外部锚点 {form.workOrder.source_external_id} · 版本 {form.workOrder.source_version} · 源更新时间 {workOrderSourceTime(form.workOrder.source_updated_at)} · 同步时间 {workOrderSourceTime(form.workOrder.synced_at)} · fresh
+        </div>}
+      </Field>
       <Field label="用途"><input aria-label="用途" value={form.purpose} onChange={(e) => onChange("purpose", e.target.value)} /></Field>
       <Field label="紧急程度"><select aria-label="紧急程度" value={form.urgency} onChange={(e) => onChange("urgency", e.target.value as DraftFormState["urgency"])}>
         <option value="normal">普通</option><option value="urgent">紧急</option><option value="emergency">应急</option>
@@ -701,9 +784,54 @@ function DraftForm({
     <div className="alert alert-info">详细地址和联系电话仅保留在当前页面内存中；不会写入 localStorage、日志或列表/详情投影。</div>
     <div className="form-actions">
       <Button tone="secondary" disabled={busy} onClick={onCancel}>取消</Button>
-      <Button disabled={busy || uploadBlocking} onClick={onSave}>{busy ? "正在确认结果" : uploadBlocking ? "附件尚未确认 available" : mode.kind === "create" ? "保存草稿" : "保存修改"}</Button>
+      <Button disabled={busy || uploadBlocking || form.workOrderUnavailable} onClick={onSave}>{busy ? "正在确认结果" : form.workOrderUnavailable ? "请先处理不可选工单" : uploadBlocking ? "附件尚未确认 available" : mode.kind === "create" ? "保存草稿" : "保存修改"}</Button>
     </div>
   </div>;
+}
+
+function WorkOrderPicker({
+  picker,
+  onQuery,
+  onSearch,
+  onLoadMore,
+  onSelect,
+  onClose,
+}: {
+  picker: WorkOrderPickerState;
+  onQuery: (value: string) => void;
+  onSearch: () => void;
+  onLoadMore: () => void;
+  onSelect: (item: MaterialRequestWorkOrderOption) => void;
+  onClose: () => void;
+}) {
+  return <Modal title="选择本人当前有效 OAM 工单" wide onClose={onClose}>
+    <div className="form-stack">
+      <div className="form-actions">
+        <input
+          aria-label="OAM 工单检索词"
+          placeholder="输入工单编号"
+          value={picker.query}
+          onChange={(event) => onQuery(event.target.value)}
+        />
+        <Button disabled={picker.loading} onClick={onSearch}>搜索正式工单投影</Button>
+      </div>
+      {picker.error && <div className="alert alert-error">{picker.error}；不会回退旧 `/work-orders`、接受手填 UUID 或猜测工单。</div>}
+      {picker.loading && <Loading label="正在读取本人当前有效 OAM 工单投影" />}
+      {!picker.loading && !picker.error && !picker.items.length && <Empty title="没有可选 OAM 工单" detail="仅展示本人 pending/active 且属于当前区域的正式投影" />}
+      {!!picker.items.length && <div className="table-wrap"><table>
+        <thead><tr><th>工单编号</th><th>状态</th><th>最小来源证据</th><th>源更新时间</th><th>同步时间</th><th>选择</th></tr></thead>
+        <tbody>{picker.items.map((item) => <tr key={item.work_order_id}>
+          <td><strong className="mono">{item.work_order_no}</strong></td>
+          <td>{item.status === "active" ? "进行中" : "待处理"}</td>
+          <td><strong>{item.source_system_code}</strong><span className="cell-subtitle mono">{item.source_external_id}</span><span className="cell-subtitle">版本 {item.source_version} · fresh</span></td>
+          <td>{workOrderSourceTime(item.source_updated_at)}</td>
+          <td>{workOrderSourceTime(item.synced_at)}</td>
+          <td><button className="table-action" type="button" aria-label={`选择工单 ${item.work_order_no}`} disabled={picker.loading || Boolean(picker.error)} onClick={() => onSelect(item)}>选择</button></td>
+        </tr>)}</tbody>
+      </table></div>}
+      {picker.nextAfterId && <div className="form-actions"><Button tone="secondary" disabled={picker.loading} onClick={onLoadMore}>加载更多正式工单</Button></div>}
+    </div>
+  </Modal>;
 }
 
 function MaterialPicker({
@@ -920,6 +1048,7 @@ export default function FormalMaterialRequestsPage({
   const [formError, setFormError] = useState("");
   const [pendingMessage, setPendingMessage] = useState("");
   const [submitConfirm, setSubmitConfirm] = useState(false);
+  const [workOrderPicker, setWorkOrderPicker] = useState<WorkOrderPickerState | null>(null);
   const [materialPicker, setMaterialPicker] = useState<MaterialPickerState | null>(null);
   const [approvalProcess, setApprovalProcess] = useState<ApprovalProcessState | null>(null);
   const [lifecycleProcess, setLifecycleProcess] = useState<LifecycleProcessState | null>(null);
@@ -929,7 +1058,11 @@ export default function FormalMaterialRequestsPage({
   const [draftUploadFiles, setDraftUploadFiles] = useState<readonly AvailableFormalFile[]>([]);
   const [draftUploadBlocking, setDraftUploadBlocking] = useState(false);
   const [externalUploadBlocking, setExternalUploadBlocking] = useState(false);
+  const accessRef = useRef<FormalMaterialRequestAccess | null>(access);
+  accessRef.current = access;
   const generation = useRef(0);
+  const editRecoveryGeneration = useRef(0);
+  const workOrderPickerGeneration = useRef(0);
   const pickerGeneration = useRef(0);
   const createRegistry = useRef(new MaterialRequestCreateIntentRegistry());
   const mutationRegistry = useRef(new MaterialRequestIntentRegistry());
@@ -940,6 +1073,13 @@ export default function FormalMaterialRequestsPage({
 
   const lifecycleWritesBlocked = lifecycleRecovery.phase === "checking"
     || lifecycleRecovery.phase === "blocked";
+  const draftWritePending = Boolean(
+    formMode?.kind === "create"
+      ? createRegistry.current.get()
+      : formMode?.kind === "edit"
+        ? mutationRegistry.current.get(formMode.requestId)
+        : undefined,
+  );
 
   const nextLineKey = useCallback(() => {
     lineKey.current += 1;
@@ -947,10 +1087,13 @@ export default function FormalMaterialRequestsPage({
   }, []);
 
   const clearRawForm = useCallback(() => {
+    editRecoveryGeneration.current += 1;
     setForm(emptyForm(nextLineKey()));
     setFormMode(null);
     setFormError("");
     setPendingMessage("");
+    workOrderPickerGeneration.current += 1;
+    setWorkOrderPicker(null);
     setMaterialPicker(null);
     setDraftUploadFiles([]);
     setDraftUploadBlocking(false);
@@ -1034,12 +1177,15 @@ export default function FormalMaterialRequestsPage({
 
   useEffect(() => {
     generation.current += 1;
+    editRecoveryGeneration.current += 1;
     const currentGeneration = generation.current;
     setApprovalProcess(null);
     setLifecycleProcess(null);
     setExternalUploadBlocking(false);
     setDraftUploadFiles([]);
     setDraftUploadBlocking(false);
+    setBusy(false);
+    setWorkOrderPicker(null);
     setFormMode(null);
     setForm(emptyForm(nextLineKey()));
     setLoading(true);
@@ -1078,6 +1224,8 @@ export default function FormalMaterialRequestsPage({
     })();
     return () => {
       generation.current += 1;
+      editRecoveryGeneration.current += 1;
+      workOrderPickerGeneration.current += 1;
       setForm(emptyForm(nextLineKey()));
     };
   }, [adapter, loadList, nextLineKey, recoverStoredLifecycle]);
@@ -1098,6 +1246,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   const openDetail = useCallback(async (requestId: string) => {
+    editRecoveryGeneration.current += 1;
     setBusy(true);
     setError("");
     setNotice("");
@@ -1114,7 +1263,23 @@ export default function FormalMaterialRequestsPage({
     }
   }, [adapter]);
 
+  function hasPendingDraftWrite(): boolean {
+    if (formMode?.kind === "create") return Boolean(createRegistry.current.get());
+    if (formMode?.kind === "edit") {
+      return Boolean(mutationRegistry.current.get(formMode.requestId));
+    }
+    return false;
+  }
+
+  function canUseWorkOrderOptions(): boolean {
+    return Boolean(access && (access.can_create || formMode?.kind === "edit"));
+  }
+
   function startCreate(): void {
+    if (busy) {
+      setError("当前读取或写入尚未结束，不能开始新的需求草稿");
+      return;
+    }
     if (!access?.can_create) {
       setError("当前主体没有正式需求创建权限，页面已失败关闭");
       return;
@@ -1123,6 +1288,7 @@ export default function FormalMaterialRequestsPage({
       setError("当前主体没有正式物料目录读取权限，禁止新建需求或回退旧目录");
       return;
     }
+    editRecoveryGeneration.current += 1;
     setDetail(null);
     setForm(emptyForm(nextLineKey()));
     setFormMode({ kind: "create" });
@@ -1130,6 +1296,192 @@ export default function FormalMaterialRequestsPage({
     setPendingMessage("");
     setDraftUploadFiles([]);
     setDraftUploadBlocking(false);
+  }
+
+  async function readWorkOrderPickerPage(
+    query: string,
+    afterId: string | null,
+    append: boolean,
+  ): Promise<void> {
+    if (!access || !canUseWorkOrderOptions()) {
+      setWorkOrderPicker((current) => current ? {
+        ...current,
+        items: [],
+        nextAfterId: null,
+        cursorHistory: [],
+        loading: false,
+        error: "当前授权不能读取正式需求工单选项",
+      } : current);
+      return;
+    }
+    const currentGeneration = ++workOrderPickerGeneration.current;
+    const currentPicker = workOrderPicker;
+    if (
+      append
+      && (!afterId || !currentPicker || currentPicker.cursorHistory.includes(afterId))
+    ) {
+      setWorkOrderPicker((current) => current ? {
+        ...current,
+        items: [],
+        nextAfterId: null,
+        cursorHistory: [],
+        loading: false,
+        error: "正式工单选项游标重复或缺失，已失败关闭",
+      } : current);
+      return;
+    }
+    setWorkOrderPicker((current) => current ? {
+      ...current,
+      items: append ? current.items : [],
+      nextAfterId: append ? current.nextAfterId : null,
+      cursorHistory: append ? current.cursorHistory : [],
+      loading: true,
+      error: "",
+    } : current);
+    try {
+      const page = validateMaterialRequestWorkOrderOptionPage(
+        await adapter.listWorkOrderOptions(query, afterId),
+        access,
+      );
+      if (currentGeneration !== workOrderPickerGeneration.current) return;
+      setWorkOrderPicker((current) => {
+        if (!current) return null;
+        const items = append ? [...current.items, ...page.items] : [...page.items];
+        const cursorHistory = append && afterId
+          ? [...current.cursorHistory, afterId]
+          : [];
+        const invalidPage = new Set(items.map((item) => item.work_order_id)).size !== items.length
+          || new Set(items.map((item) => item.work_order_no)).size !== items.length
+          || (page.next_after_id !== null && cursorHistory.includes(page.next_after_id));
+        if (invalidPage) {
+          return {
+            ...current,
+            items: [],
+            nextAfterId: null,
+            cursorHistory: [],
+            loading: false,
+            error: "正式工单选项跨页重复或游标循环，已失败关闭",
+          };
+        }
+        return {
+          ...current,
+          items,
+          nextAfterId: page.next_after_id,
+          cursorHistory,
+          loading: false,
+          error: "",
+        };
+      });
+    } catch (error) {
+      if (currentGeneration !== workOrderPickerGeneration.current) return;
+      setWorkOrderPicker((current) => current ? {
+        ...current,
+        items: [],
+        nextAfterId: null,
+        cursorHistory: [],
+        loading: false,
+        error: showError(error),
+      } : current);
+    }
+  }
+
+  function openWorkOrderPicker(): void {
+    if (
+      !formMode
+      || busy
+      || hasPendingDraftWrite()
+      || !canUseWorkOrderOptions()
+    ) {
+      setFormError("正式工单选项当前不可用；未确认写入期间禁止改动工单，也不会接受手填 UUID 或回退旧接口");
+      return;
+    }
+    workOrderPickerGeneration.current += 1;
+    setWorkOrderPicker({
+      query: "",
+      items: [],
+      nextAfterId: null,
+      cursorHistory: [],
+      loading: false,
+      error: "",
+    });
+    queueMicrotask(() => void readWorkOrderPickerPage("", null, false));
+  }
+
+  function updateWorkOrderPickerQuery(query: string): void {
+    if (!workOrderPicker || query === workOrderPicker.query) return;
+    workOrderPickerGeneration.current += 1;
+    setWorkOrderPicker((current) => current ? {
+      ...current,
+      query,
+      items: [],
+      nextAfterId: null,
+      cursorHistory: [],
+      loading: false,
+      error: "",
+    } : current);
+  }
+
+  function chooseWorkOrder(item: MaterialRequestWorkOrderOption): void {
+    if (hasPendingDraftWrite()) {
+      workOrderPickerGeneration.current += 1;
+      setWorkOrderPicker(null);
+      setFormError("写入结果尚未确认，禁止改动关联工单");
+      return;
+    }
+    if (!workOrderPicker || workOrderPicker.loading || workOrderPicker.error) return;
+    const selected = workOrderPicker.items.find(
+      (candidate) => candidate.work_order_id === item.work_order_id,
+    );
+    if (!selected) {
+      setFormError("工单选择项已失效，请重新打开正式选择器");
+      return;
+    }
+    setForm((current) => ({
+      ...current,
+      workOrder: selected,
+      workOrderUnavailable: false,
+    }));
+    workOrderPickerGeneration.current += 1;
+    setWorkOrderPicker(null);
+    setFormError("");
+  }
+
+  function clearWorkOrder(): void {
+    if (!formMode || busy || hasPendingDraftWrite()) {
+      setFormError("写入结果尚未确认，禁止清除关联工单");
+      return;
+    }
+    workOrderPickerGeneration.current += 1;
+    setWorkOrderPicker(null);
+    setForm((current) => ({
+      ...current,
+      workOrder: null,
+      workOrderUnavailable: false,
+    }));
+    setFormError("");
+  }
+
+  async function resolveDraftWorkOrder(
+    draft: MaterialRequestDraftInput,
+  ): Promise<DraftWorkOrderResolution> {
+    if (!draft.work_order_id) return Object.freeze({ item: null, unavailable: false });
+    if (!access) throw new Error("当前身份或授权锚点不可用，已停止编辑");
+    try {
+      const resolved = validateMaterialRequestWorkOrderOptionDetail(
+        await adapter.workOrderOptionDetail(draft.work_order_id),
+        {
+          person_id: access.person_id,
+          authorization_version: access.authorization_version,
+          work_order_id: draft.work_order_id,
+        },
+      );
+      return Object.freeze({ item: resolved.item, unavailable: false });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404 && error.responseReceived) {
+        return Object.freeze({ item: null, unavailable: true });
+      }
+      throw error;
+    }
   }
 
   async function readMaterialPickerPage(
@@ -1237,6 +1589,17 @@ export default function FormalMaterialRequestsPage({
   async function startEdit(): Promise<void> {
     if (!detail || !["draft", "returned"].includes(detail.states.request_status)
         || !detail.allowed_actions.includes("update")) return;
+    const currentEditGeneration = ++editRecoveryGeneration.current;
+    const currentPageGeneration = generation.current;
+    const expectedAccess = access;
+    const editIsCurrent = (): boolean => {
+      const currentAccess = accessRef.current;
+      return currentEditGeneration === editRecoveryGeneration.current
+        && currentPageGeneration === generation.current
+        && Boolean(expectedAccess)
+        && currentAccess?.person_id === expectedAccess?.person_id
+        && currentAccess?.authorization_version === expectedAccess?.authorization_version;
+    };
     setBusy(true);
     setError("");
     try {
@@ -1245,8 +1608,13 @@ export default function FormalMaterialRequestsPage({
         detail.request_id,
         detail.request_version,
       );
-      const materials = await resolveDraftMaterials(snapshot.draft);
-      setForm(formFromDraft(snapshot.draft, nextLineKey, materials));
+      if (!editIsCurrent()) return;
+      const [materials, workOrder] = await Promise.all([
+        resolveDraftMaterials(snapshot.draft),
+        resolveDraftWorkOrder(snapshot.draft),
+      ]);
+      if (!editIsCurrent()) return;
+      setForm(formFromDraft(snapshot.draft, nextLineKey, materials, workOrder));
       setFormMode({
         kind: "edit",
         requestId: snapshot.request_id,
@@ -1258,9 +1626,9 @@ export default function FormalMaterialRequestsPage({
       setFormError("");
       setPendingMessage("");
     } catch (err) {
-      setError(showError(err));
+      if (editIsCurrent()) setError(showError(err));
     } finally {
-      setBusy(false);
+      if (editIsCurrent()) setBusy(false);
     }
   }
 
@@ -1281,6 +1649,10 @@ export default function FormalMaterialRequestsPage({
 
   async function saveDraft(): Promise<void> {
     if (!formMode) return;
+    if (form.workOrderUnavailable) {
+      setFormError("原关联工单当前不可选；必须明确清除或从正式列表重新选择后才能保存");
+      return;
+    }
     if (draftUploadBlocking) {
       setFormError("附件尚未完成 available 严格确认，已停止需求写入");
       return;
@@ -1300,7 +1672,9 @@ export default function FormalMaterialRequestsPage({
           await adapter.detail(result.request_id),
           result.request_id,
         );
-        if (!axesMatch(result, reread)) throw new Error("创建响应与详情回读不一致，写入仍待人工核验");
+        if (!draftWriteMatches(result, reread, draft)) {
+          throw new Error("创建响应、修订或工单绑定与详情回读不一致，写入仍待人工核验");
+        }
         createRegistry.current.confirm(intent.client_draft_key, intent.signature);
         clearRawForm();
         setDetail(reread);
@@ -1325,7 +1699,9 @@ export default function FormalMaterialRequestsPage({
           await adapter.detail(formMode.requestId),
           formMode.requestId,
         );
-        if (!axesMatch(result, reread)) throw new Error("修改响应与详情回读不一致，写入仍待人工核验");
+        if (!draftWriteMatches(result, reread, draft)) {
+          throw new Error("修改响应、修订或工单绑定与详情回读不一致，写入仍待人工核验");
+        }
         mutationRegistry.current.confirm(intent.request_id, intent.signature);
         clearRawForm();
         setDetail(reread);
@@ -1884,7 +2260,11 @@ export default function FormalMaterialRequestsPage({
     </section>
 
     {detail && access && <Modal title="正式需求详情" wide onClose={() => {
-      if (!approvalProcess && !lifecycleProcess) setDetail(null);
+      if (!approvalProcess && !lifecycleProcess) {
+        editRecoveryGeneration.current += 1;
+        setBusy(false);
+        setDetail(null);
+      }
     }}>
       <DetailPanel detail={detail} access={access} busy={busy} lifecycleBlocked={lifecycleWritesBlocked} onEdit={() => void startEdit()} onSubmit={() => setSubmitConfirm(true)} onProcess={startApprovalProcess} onLifecycle={startLifecycleProcess} />
     </Modal>}
@@ -1894,12 +2274,15 @@ export default function FormalMaterialRequestsPage({
         form={form}
         mode={formMode}
         busy={busy}
+        writePending={draftWritePending}
         error={formError}
         pendingMessage={pendingMessage}
         onChange={updateForm}
         onLineChange={updateLine}
         onAddLine={() => setForm((current) => ({ ...current, lines: [...current.lines, emptyLine(nextLineKey())] }))}
         onRemoveLine={(key) => setForm((current) => ({ ...current, lines: current.lines.filter((line) => line.key !== key) }))}
+        onChooseWorkOrder={openWorkOrderPicker}
+        onClearWorkOrder={clearWorkOrder}
         onChooseMaterial={openMaterialPicker}
         onClearSubstitute={(key) => setForm((current) => ({ ...current, lines: current.lines.map((line) => line.key === key ? { ...line, substituteMaterial: null } : line) }))}
         uploadClient={fileUploadClient}
@@ -1911,6 +2294,22 @@ export default function FormalMaterialRequestsPage({
         onSave={() => void saveDraft()}
       />
     </Modal>}
+
+    {workOrderPicker && <WorkOrderPicker
+      picker={workOrderPicker}
+      onQuery={updateWorkOrderPickerQuery}
+      onSearch={() => void readWorkOrderPickerPage(workOrderPicker.query, null, false)}
+      onLoadMore={() => void readWorkOrderPickerPage(
+        workOrderPicker.query,
+        workOrderPicker.nextAfterId,
+        true,
+      )}
+      onSelect={chooseWorkOrder}
+      onClose={() => {
+        workOrderPickerGeneration.current += 1;
+        setWorkOrderPicker(null);
+      }}
+    />}
 
     {submitConfirm && detail && <Modal title="提交前确认" onClose={() => setSubmitConfirm(false)}>
       <div className="form-stack" aria-label="需求提交确认摘要">

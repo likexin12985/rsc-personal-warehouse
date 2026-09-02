@@ -15,7 +15,7 @@ coordinate and is not accepted from the public HTTP body.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 import hmac
@@ -50,11 +50,14 @@ from ..formal_access import (
     load_formal_principal,
 )
 from ..foundation_models import (
+    ExternalObject,
+    ExternalObjectVersion,
     FileObject,
     Organization,
     Person,
     Role,
     RoleAssignment,
+    SourceSystem,
     StateTransitionEvent,
 )
 from ..inventory_models import FormalMaterial
@@ -72,6 +75,7 @@ from .material_request_policy import (
     require_request_status_transition,
     require_unique_regional_approver,
 )
+from .postgresql_lock_graph import lock_material_request_work_order
 
 
 MATERIAL_REQUEST_AUDIT_STREAM: Final[str] = "material_request"
@@ -99,6 +103,9 @@ _QUANTUM: Final[Decimal] = Decimal("0.001")
 _SAFE_TRACE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,159}$", re.ASCII)
 _PRINTABLE = re.compile(r"^[\x21-\x7e]{1,200}$", re.ASCII)
 _PLACEHOLDERS = ("replace-with", "replace_me", "replace-me", "change-me", "changeme")
+MATERIAL_REQUEST_WORK_ORDER_SOURCE_SYSTEM: Final[str] = "starcharge_oam"
+MATERIAL_REQUEST_WORK_ORDER_ENTITY_TYPE: Final[str] = "work_order"
+MATERIAL_REQUEST_WORK_ORDER_MAX_SYNC_AGE: Final[timedelta] = timedelta(minutes=45)
 
 _HTTP_STATUS_BY_CATEGORY = {
     "invalid_request": 422,
@@ -213,11 +220,23 @@ class MaterialRequestSubmitResult:
 
 
 @dataclass(frozen=True, slots=True)
-class _RequesterContext:
+class MaterialRequestRequesterContext:
     principal: FormalPrincipal
     person: Person
     region: Organization
     technician_grant: ScopeGrant
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialRequestWorkOrderEvidence:
+    """Verified provenance returned without exposing the mirrored payload."""
+
+    source_system_code: str
+    source_external_id: str
+    source_version: str
+    source_updated_at: datetime
+    synced_at: datetime
+    freshness_status: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -443,8 +462,8 @@ def _create_material_request_draft_impl(
     _take_advisory_locks(db, key_hash, request_id)
 
     lock_formal_principal_graph(db, (supplied.user_id,))
-    now = _database_now(db)
-    requester = _require_requester_context(db, supplied, "create", now)
+    now = material_request_database_now(db)
+    requester = require_material_request_requester_context(db, supplied, "create", now)
     prepared = _validate_draft(
         db,
         draft,
@@ -590,8 +609,10 @@ def _amend_material_request_draft_impl(
 
     request = _lock_request(db, request_id)
     lock_formal_principal_graph(db, (supplied.user_id,))
-    now = _database_now(db)
-    requester = _require_requester_context(db, supplied, "update_draft", now)
+    now = material_request_database_now(db)
+    requester = require_material_request_requester_context(
+        db, supplied, "update_draft", now
+    )
     _require_owned_request(request, requester)
     prepared = _validate_draft(
         db,
@@ -732,7 +753,7 @@ def _submit_material_request_impl(
     _take_advisory_locks(db, key_hash, request_id)
 
     request = _lock_request(db, request_id)
-    preflight_at = _database_now(db)
+    preflight_at = material_request_database_now(db)
     preflight_region_org_id = request.requester_org_id
     candidate_user_ids = _discover_candidate_user_ids(
         db,
@@ -753,8 +774,8 @@ def _submit_material_request_impl(
             "conflict",
             "审批候选人在提交锁定期间发生变化，请重新读取后提交",
         )
-    now = _database_now(db)
-    requester = _require_requester_context(db, supplied, "submit", now)
+    now = material_request_database_now(db)
+    requester = require_material_request_requester_context(db, supplied, "submit", now)
     _require_owned_request(request, requester)
     revision = _lock_current_revision(db, request)
     payload_hash = _canonical_hash(
@@ -1012,12 +1033,22 @@ def _validate_supplied_actor(actor: FormalPrincipal) -> FormalPrincipal:
     return actor
 
 
-def _require_requester_context(
+def require_material_request_requester_context(
     db: Session,
     supplied: FormalPrincipal,
-    action: str,
+    action: str | Sequence[str],
     now: datetime,
-) -> _RequesterContext:
+) -> MaterialRequestRequesterContext:
+    actions = (action,) if isinstance(action, str) else tuple(action)
+    if not actions or any(
+        not isinstance(candidate, str) or not candidate or candidate != candidate.strip()
+        for candidate in actions
+    ):
+        _fail(
+            "material_request_permission_action_invalid",
+            "service_unavailable",
+            "需求权限动作配置无效",
+        )
     try:
         current = load_formal_principal(db, supplied.user_id, now=now)
     except FormalAccessError:
@@ -1059,14 +1090,17 @@ def _require_requester_context(
     eligible = tuple(
         grant
         for grant in grants
-        if _selected_grant_allows(
-            db,
-            current,
-            grant,
-            "material_request",
-            action,
-            target_scope_type="person",
-            target_scope_id=str(person.id),
+        if any(
+            _selected_grant_allows(
+                db,
+                current,
+                grant,
+                "material_request",
+                candidate,
+                target_scope_type="person",
+                target_scope_id=str(person.id),
+            )
+            for candidate in actions
         )
     )
     if len(eligible) != 1:
@@ -1075,7 +1109,7 @@ def _require_requester_context(
             "forbidden",
             "当前人员没有唯一且覆盖本人的工程师需求权限",
         )
-    return _RequesterContext(current, person, region, eligible[0])
+    return MaterialRequestRequesterContext(current, person, region, eligible[0])
 
 
 def _derive_active_region(db: Session, organization_id: uuid.UUID) -> Organization:
@@ -1159,7 +1193,7 @@ def _validate_draft(
     value: MaterialRequestDraftInput,
     *,
     request_id: uuid.UUID,
-    requester: _RequesterContext,
+    requester: MaterialRequestRequesterContext,
 ) -> _PreparedDraft:
     if not isinstance(value, MaterialRequestDraftInput):
         _fail("material_request_draft_invalid", "invalid_request", "需求草稿格式无效")
@@ -1242,7 +1276,7 @@ def _validate_draft(
 def _validate_draft_references(
     db: Session,
     draft: _PreparedDraft,
-    requester: _RequesterContext,
+    requester: MaterialRequestRequesterContext,
 ) -> None:
     """Validate mutable references only after an idempotent replay misses."""
 
@@ -1257,7 +1291,12 @@ def _validate_draft_references(
     }
     _require_active_materials(db, material_ids)
     if draft.work_order_id is not None:
-        _require_work_order(db, draft.work_order_id, requester)
+        require_material_request_work_order(
+            db,
+            draft.work_order_id,
+            requester,
+            lock_for_command=True,
+        )
 
 
 def _revalidate_persisted_draft(
@@ -1266,7 +1305,7 @@ def _revalidate_persisted_draft(
     revision: MaterialRequestRevision,
     lines: Sequence[MaterialRequestLine],
     files: Sequence[MaterialRequestFile],
-    requester: _RequesterContext,
+    requester: MaterialRequestRequesterContext,
 ) -> tuple[FileObject, ...]:
     if not lines:
         _fail("material_request_lines_required", "precondition_failed", "需求单没有有效明细")
@@ -1322,7 +1361,12 @@ def _revalidate_persisted_draft(
         db, tuple(row.file_id for row in files), requester.principal.user_id
     )
     if revision.work_order_id is not None:
-        _require_work_order(db, revision.work_order_id, requester)
+        require_material_request_work_order(
+            db,
+            revision.work_order_id,
+            requester,
+            lock_for_command=True,
+        )
     for line in lines:
         _require_quantity(line.requested_qty)
         if line.status != "draft" or line.final_approved_qty != Decimal("0.000") or line.cancelled_qty != Decimal("0.000"):
@@ -1402,12 +1446,44 @@ def _validate_contact_masked(value: Mapping[str, Any]) -> dict[str, str]:
     return result
 
 
-def _require_work_order(
+def require_material_request_work_order(
     db: Session,
     value: uuid.UUID,
-    requester: _RequesterContext,
-) -> uuid.UUID:
+    requester: MaterialRequestRequesterContext,
+    *,
+    now: datetime | None = None,
+    lock_for_command: bool = False,
+) -> OamWorkOrder:
+    row, _ = resolve_material_request_work_order(
+        db,
+        value,
+        requester,
+        now=now,
+        lock_for_command=lock_for_command,
+    )
+    return row
+
+
+def resolve_material_request_work_order(
+    db: Session,
+    value: uuid.UUID,
+    requester: MaterialRequestRequesterContext,
+    *,
+    now: datetime | None = None,
+    lock_for_command: bool = False,
+) -> tuple[OamWorkOrder, MaterialRequestWorkOrderEvidence]:
     work_order_id = _require_uuid("work_order_id", value)
+    if lock_for_command:
+        existing = db.scalar(
+            select(OamWorkOrder.id).where(OamWorkOrder.id == work_order_id)
+        )
+        if existing is None:
+            _fail(
+                "material_request_work_order_not_found",
+                "not_found",
+                "OAM 工单引用不存在",
+            )
+        lock_material_request_work_order(db, work_order_id)
     row = db.scalar(
         select(OamWorkOrder)
         .where(OamWorkOrder.id == work_order_id)
@@ -1419,9 +1495,138 @@ def _require_work_order(
         _fail("material_request_work_order_inactive", "precondition_failed", "OAM 工单当前不可用于新需求")
     if row.engineer_person_id != requester.person.id:
         _fail("material_request_work_order_forbidden", "forbidden", "只能引用本人当前有效工单")
-    if not _organization_descends_from(db, row.organization_id, requester.region.id):
+    if not material_request_organization_descends_from(
+        db, row.organization_id, requester.region.id
+    ):
         _fail("material_request_work_order_scope_mismatch", "forbidden", "工单组织不属于申请人区域")
-    return row.id
+    evidence = require_material_request_work_order_evidence(
+        db,
+        row,
+        now=now or material_request_database_now(db),
+    )
+    return row, evidence
+
+
+def material_request_work_order_projection_payload(
+    row: OamWorkOrder,
+) -> dict[str, str | None]:
+    """Canonical formal projection fields sealed by the source payload hash."""
+
+    return {
+        "work_order_no": row.work_order_no,
+        "organization_id": str(row.organization_id),
+        "engineer_person_id": (
+            str(row.engineer_person_id)
+            if row.engineer_person_id is not None
+            else None
+        ),
+        "status": row.status,
+    }
+
+
+def require_material_request_work_order_evidence(
+    db: Session,
+    row: OamWorkOrder,
+    *,
+    now: datetime,
+) -> MaterialRequestWorkOrderEvidence:
+    """Fail closed unless one fresh OAM source/version chain proves ``row``."""
+
+    effective_now = _as_utc_datetime(now)
+    external = db.scalar(
+        select(ExternalObject)
+        .where(ExternalObject.id == row.external_object_id)
+        .execution_options(populate_existing=True)
+    )
+    if external is None:
+        _fail_work_order_projection_invalid()
+    source = db.scalar(
+        select(SourceSystem)
+        .where(SourceSystem.id == external.source_system_id)
+        .execution_options(populate_existing=True)
+    )
+    current_versions = tuple(
+        db.scalars(
+            select(ExternalObjectVersion)
+            .where(
+                ExternalObjectVersion.external_object_id == external.id,
+                ExternalObjectVersion.is_current.is_(True),
+            )
+            .execution_options(populate_existing=True)
+        ).all()
+    )
+    if len(current_versions) != 1:
+        _fail_work_order_projection_invalid()
+    version = current_versions[0]
+    source_updated_at = _as_utc_datetime(row.source_updated_at)
+    version_source_updated_at = (
+        _as_utc_datetime(version.source_updated_at)
+        if version.source_updated_at is not None
+        else None
+    )
+    synced_at = _as_utc_datetime(row.updated_at)
+    version_created_at = _as_utc_datetime(version.created_at)
+    source_version = version.source_version
+    payload = version.payload_jsonb
+    projection = material_request_work_order_projection_payload(row)
+    valid_external_id = (
+        isinstance(external.external_id, str)
+        and external.external_id == external.external_id.strip()
+        and 1 <= len(external.external_id) <= 250
+        and all(
+            ord(character) >= 32 and ord(character) != 127
+            for character in external.external_id
+        )
+    )
+    valid_source_version = (
+        isinstance(source_version, str)
+        and source_version == source_version.strip()
+        and 1 <= len(source_version) <= 160
+        and all(ord(character) >= 32 and ord(character) != 127 for character in source_version)
+    )
+    if (
+        source is None
+        or source.code != MATERIAL_REQUEST_WORK_ORDER_SOURCE_SYSTEM
+        or source.mode != "read_only"
+        or source.enabled is not True
+        or external.entity_type != MATERIAL_REQUEST_WORK_ORDER_ENTITY_TYPE
+        or not valid_external_id
+        or external.deleted_at is not None
+        or external.current_version_id != version.id
+        or version.valid_to is not None
+        or version_source_updated_at != source_updated_at
+        or source_updated_at > synced_at
+        or not valid_source_version
+        or not isinstance(payload, dict)
+        or payload != projection
+        or version.payload_sha256 != _canonical_hash(payload)
+        or _as_utc_datetime(version.valid_from) > synced_at
+        or version_created_at > synced_at
+        or synced_at > effective_now
+    ):
+        _fail_work_order_projection_invalid()
+    if effective_now - synced_at > MATERIAL_REQUEST_WORK_ORDER_MAX_SYNC_AGE:
+        _fail(
+            "material_request_work_order_projection_stale",
+            "service_unavailable",
+            "OAM 工单投影已超过 45 分钟新鲜度门限",
+        )
+    return MaterialRequestWorkOrderEvidence(
+        source_system_code=source.code,
+        source_external_id=external.external_id,
+        source_version=source_version,
+        source_updated_at=source_updated_at,
+        synced_at=synced_at,
+        freshness_status="fresh",
+    )
+
+
+def _fail_work_order_projection_invalid() -> None:
+    _fail(
+        "material_request_work_order_projection_invalid",
+        "service_unavailable",
+        "OAM 工单投影证据不完整或不一致",
+    )
 
 
 def _require_active_materials(db: Session, material_ids: set[uuid.UUID]) -> None:
@@ -1535,7 +1740,7 @@ def _discover_candidate_user_ids(
 def _resolve_locked_candidates(
     db: Session,
     *,
-    requester: _RequesterContext,
+    requester: MaterialRequestRequesterContext,
     region_org_id: uuid.UUID,
     request_id: uuid.UUID,
     now: datetime,
@@ -2015,7 +2220,7 @@ def _lock_revision_files(
 
 
 def _require_owned_request(
-    request: MaterialRequest, requester: _RequesterContext
+    request: MaterialRequest, requester: MaterialRequestRequesterContext
 ) -> None:
     if (
         request.requester_user_id != requester.principal.user_id
@@ -2300,7 +2505,7 @@ def _command_fact(
     result: MaterialRequestCreateResult
     | MaterialRequestDraftResult
     | MaterialRequestSubmitResult,
-    actor: _RequesterContext,
+    actor: MaterialRequestRequesterContext,
     occurred_at: datetime,
 ) -> MaterialRequestCommand:
     result_json = _result_document(result)
@@ -2660,7 +2865,7 @@ def _exact_axes(value: Any) -> dict[str, str]:
 def _draft_request_hash(
     operation: str,
     request_id: uuid.UUID,
-    requester: _RequesterContext,
+    requester: MaterialRequestRequesterContext,
     draft: _PreparedDraft,
     *,
     expected_version: int | None,
@@ -2804,11 +3009,19 @@ def _canonical_hash(value: Any) -> str:
     ).hexdigest()
 
 
-def _database_now(db: Session) -> datetime:
+def material_request_database_now(db: Session) -> datetime:
     value = db.scalar(select(func.current_timestamp()))
     if not isinstance(value, datetime):
         _fail("material_request_database_clock_invalid", "service_unavailable", "数据库时间不可用")
     if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _as_utc_datetime(value: datetime) -> datetime:
+    if not isinstance(value, datetime):
+        _fail_work_order_projection_invalid()
+    if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
 
@@ -2833,7 +3046,7 @@ def _signed_lock_coordinate(namespace: str, value: str) -> int:
     return int.from_bytes(raw, "big", signed=True)
 
 
-def _organization_descends_from(
+def material_request_organization_descends_from(
     db: Session, organization_id: uuid.UUID, ancestor_id: uuid.UUID
 ) -> bool:
     current_id: uuid.UUID | None = organization_id
@@ -2868,15 +3081,26 @@ def _fail(code: str, category: str, message: str) -> None:
 
 __all__ = [
     "MATERIAL_REQUEST_AUDIT_STREAM",
+    "MATERIAL_REQUEST_WORK_ORDER_MAX_SYNC_AGE",
+    "MATERIAL_REQUEST_WORK_ORDER_SOURCE_SYSTEM",
     "MaterialRequestCreateResult",
     "MaterialRequestDraftError",
     "MaterialRequestDraftInput",
     "MaterialRequestDraftLineInput",
     "MaterialRequestDraftResult",
+    "MaterialRequestRequesterContext",
+    "MaterialRequestWorkOrderEvidence",
     "MaterialRequestSubmitResult",
     "amend_material_request_draft",
     "create_material_request_draft",
     "derive_material_request_create_id",
     "mask_material_request_contact",
+    "material_request_database_now",
+    "material_request_organization_descends_from",
+    "material_request_work_order_projection_payload",
+    "require_material_request_requester_context",
+    "require_material_request_work_order",
+    "require_material_request_work_order_evidence",
+    "resolve_material_request_work_order",
     "submit_material_request",
 ]

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,6 +19,9 @@ const LINE_ID = "20000000-0000-4000-8000-000000000001";
 const PERSON_ID = "30000000-0000-4000-8000-000000000001";
 const OTHER_PERSON_ID = "30000000-0000-4000-8000-000000000002";
 const ORG_ID = "40000000-0000-4000-8000-000000000001";
+const WORK_ORDER_ID = "45000000-0000-4000-8000-000000000001";
+const WORK_ORDER_2_ID = "45000000-0000-4000-8000-000000000002";
+const WORK_ORDER_3_ID = "45000000-0000-4000-8000-000000000003";
 const MATERIAL_ID = "50000000-0000-4000-8000-000000000001";
 const MATERIAL_2_ID = "50000000-0000-4000-8000-000000000002";
 const ATTACHMENT_ID = "90000000-0000-4000-8000-000000000001";
@@ -33,6 +36,16 @@ const REGISTRATION_ID = "80000000-0000-4000-8000-000000000001";
 const RAW_MOBILE = "138 0000 0000";
 const RAW_ADDRESS = "江东中路 100 号";
 const TRACE_ID = "web-12345678";
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 function axes(requestStatus = "draft") {
   return {
@@ -475,6 +488,45 @@ function catalogItem2() {
   };
 }
 
+function workOrderOption(
+  workOrderId = WORK_ORDER_ID,
+  workOrderNo = "WO-20260901-0001",
+) {
+  return {
+    work_order_id: workOrderId,
+    work_order_no: workOrderNo,
+    status: "active",
+    source_system_code: "starcharge_oam",
+    source_external_id: `external-${workOrderNo}`,
+    source_version: "v17",
+    source_updated_at: "2026-09-01T07:30:00+08:00",
+    synced_at: "2026-09-01T07:31:00+08:00",
+    freshness_status: "fresh",
+  };
+}
+
+function workOrderPage(
+  items = [workOrderOption()],
+  nextAfterId: string | null = null,
+) {
+  return {
+    schema_version: "1.0",
+    person_id: PERSON_ID,
+    authorization_version: 1,
+    items,
+    next_after_id: nextAfterId,
+  };
+}
+
+function workOrderDetail(item = workOrderOption()) {
+  return {
+    schema_version: "1.0",
+    person_id: PERSON_ID,
+    authorization_version: 1,
+    item,
+  };
+}
+
 function adapter(overrides: Partial<FormalMaterialRequestAdapter> = {}): FormalMaterialRequestAdapter {
   return {
     loadIdentity: vi.fn().mockResolvedValue({
@@ -496,6 +548,8 @@ function adapter(overrides: Partial<FormalMaterialRequestAdapter> = {}): FormalM
       request_version: 0,
       draft: draft(),
     }),
+    listWorkOrderOptions: vi.fn().mockResolvedValue(workOrderPage()),
+    workOrderOptionDetail: vi.fn().mockResolvedValue(workOrderDetail()),
     listMaterials: vi.fn().mockResolvedValue(catalogPage()),
     createDraft: vi.fn(),
     mutate: vi.fn(),
@@ -640,6 +694,276 @@ describe("formal material request PC vertical slice", () => {
     expect(panel.textContent).not.toContain(RAW_ADDRESS);
   });
 
+  it("keeps the create intent pending when the exact reread loses the selected work-order binding", async () => {
+    const createDraft = vi.fn().mockResolvedValue({
+      schema_version: "1.0",
+      request_id: REQUEST_ID,
+      action: "create",
+      request_version: 0,
+      revision_id: REVISION_ID,
+      revision_no: 1,
+      states: axes(),
+      idempotency_replayed: false,
+    });
+    const client = adapter({ createDraft, detail: vi.fn().mockResolvedValue(detail()) });
+    await renderReady(client);
+    fireEvent.click(screen.getByRole("button", { name: "新建需求" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择关联 OAM 工单" }));
+    const picker = await screen.findByRole("dialog", { name: "选择本人当前有效 OAM 工单" });
+    fireEvent.click(await within(picker).findByRole("button", {
+      name: "选择工单 WO-20260901-0001",
+    }));
+    await fillCreateForm();
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+
+    expect(await screen.findByText(/工单绑定与详情回读不一致/)).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "新建需求草稿" })).toBeTruthy();
+    expect(createDraft).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(createDraft).toHaveBeenCalledTimes(2));
+    expect(createDraft.mock.calls[1][0]).toBe(createDraft.mock.calls[0][0]);
+  });
+
+  it("searches, paginates, selects and explicitly clears only formal work-order options", async () => {
+    const second = workOrderOption(WORK_ORDER_2_ID, "WO-20260901-0002");
+    const listWorkOrderOptions = vi.fn()
+      .mockResolvedValueOnce(workOrderPage([workOrderOption()], WORK_ORDER_2_ID))
+      .mockResolvedValueOnce(workOrderPage([second]))
+      .mockResolvedValueOnce(workOrderPage([second]));
+    await renderReady(adapter({ listWorkOrderOptions }));
+    fireEvent.click(screen.getByRole("button", { name: "新建需求" }));
+
+    expect(screen.queryByLabelText("关联工单 UUID（可空）")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "选择关联 OAM 工单" }));
+    const picker = await screen.findByRole("dialog", { name: "选择本人当前有效 OAM 工单" });
+    expect(await within(picker).findByText("WO-20260901-0001")).toBeTruthy();
+    fireEvent.click(within(picker).getByRole("button", { name: "加载更多正式工单" }));
+    expect(await within(picker).findByText("WO-20260901-0002")).toBeTruthy();
+
+    fireEvent.change(within(picker).getByLabelText("OAM 工单检索词"), {
+      target: { value: "WO-20260901-0002" },
+    });
+    fireEvent.click(within(picker).getByRole("button", { name: "搜索正式工单投影" }));
+    await waitFor(() => expect(listWorkOrderOptions).toHaveBeenCalledTimes(3));
+    expect(listWorkOrderOptions.mock.calls).toEqual([
+      ["", null],
+      ["", WORK_ORDER_2_ID],
+      ["WO-20260901-0002", null],
+    ]);
+    expect(within(picker).queryByText("WO-20260901-0001")).toBeNull();
+    fireEvent.click(within(picker).getByRole("button", { name: "选择工单 WO-20260901-0002" }));
+
+    const selected = screen.getByRole("button", { name: "选择关联 OAM 工单" });
+    expect(selected.textContent).toContain("WO-20260901-0002");
+    expect(document.body.textContent).not.toContain(WORK_ORDER_2_ID);
+    fireEvent.click(screen.getByRole("button", { name: "清除关联 OAM 工单" }));
+    expect(selected.textContent).toBe("从本人当前有效工单中选择");
+  });
+
+  it("never selects a stale row while a newer work-order search is loading", async () => {
+    const pendingSearch = deferred<unknown>();
+    const second = workOrderOption(WORK_ORDER_2_ID, "WO-20260901-0002");
+    const listWorkOrderOptions = vi.fn()
+      .mockResolvedValueOnce(workOrderPage())
+      .mockImplementationOnce(() => pendingSearch.promise);
+    await renderReady(adapter({ listWorkOrderOptions }));
+    fireEvent.click(screen.getByRole("button", { name: "新建需求" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择关联 OAM 工单" }));
+    const picker = await screen.findByRole("dialog", { name: "选择本人当前有效 OAM 工单" });
+    const oldChoice = await within(picker).findByRole("button", {
+      name: "选择工单 WO-20260901-0001",
+    });
+    fireEvent.change(within(picker).getByLabelText("OAM 工单检索词"), {
+      target: { value: "WO-20260901-0002" },
+    });
+    fireEvent.click(within(picker).getByRole("button", { name: "搜索正式工单投影" }));
+
+    await waitFor(() => expect(within(picker).queryByRole("button", {
+      name: "选择工单 WO-20260901-0001",
+    })).toBeNull());
+    fireEvent.click(oldChoice);
+    expect(screen.getByRole("button", { name: "选择关联 OAM 工单" }).textContent)
+      .toBe("从本人当前有效工单中选择");
+    await act(async () => pendingSearch.resolve(workOrderPage([second])));
+    const newChoice = await within(picker).findByRole("button", {
+      name: "选择工单 WO-20260901-0002",
+    });
+    fireEvent.click(newChoice);
+    expect(screen.getByRole("button", { name: "选择关联 OAM 工单" }).textContent)
+      .toContain("WO-20260901-0002");
+  });
+
+  it("invalidates results and every cursor as soon as the work-order query changes", async () => {
+    const staleSearch = deferred<unknown>();
+    const listWorkOrderOptions = vi.fn()
+      .mockResolvedValueOnce(workOrderPage([workOrderOption()], WORK_ORDER_2_ID))
+      .mockImplementationOnce(() => staleSearch.promise)
+      .mockResolvedValueOnce(workOrderPage([
+        workOrderOption(WORK_ORDER_3_ID, "WO-20260901-0003"),
+      ]));
+    await renderReady(adapter({ listWorkOrderOptions }));
+    fireEvent.click(screen.getByRole("button", { name: "新建需求" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择关联 OAM 工单" }));
+    const picker = await screen.findByRole("dialog", { name: "选择本人当前有效 OAM 工单" });
+    expect(await within(picker).findByText("WO-20260901-0001")).toBeTruthy();
+    const staleLoadMore = within(picker).getByRole("button", { name: "加载更多正式工单" });
+
+    fireEvent.change(within(picker).getByLabelText("OAM 工单检索词"), {
+      target: { value: "WO-NEW" },
+    });
+    expect(within(picker).queryByText("WO-20260901-0001")).toBeNull();
+    expect(within(picker).queryByRole("button", { name: "加载更多正式工单" })).toBeNull();
+    fireEvent.click(staleLoadMore);
+    expect(listWorkOrderOptions).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(within(picker).getByRole("button", { name: "搜索正式工单投影" }));
+    await waitFor(() => expect(listWorkOrderOptions).toHaveBeenCalledTimes(2));
+    fireEvent.change(within(picker).getByLabelText("OAM 工单检索词"), {
+      target: { value: "WO-LATEST" },
+    });
+    await act(async () => staleSearch.resolve(workOrderPage([
+      workOrderOption(WORK_ORDER_2_ID, "WO-20260901-0002"),
+    ], WORK_ORDER_3_ID)));
+    expect(within(picker).queryByText("WO-20260901-0002")).toBeNull();
+    expect(within(picker).queryByRole("button", { name: "加载更多正式工单" })).toBeNull();
+
+    fireEvent.click(within(picker).getByRole("button", { name: "搜索正式工单投影" }));
+    expect(await within(picker).findByText("WO-20260901-0003")).toBeTruthy();
+    expect(listWorkOrderOptions.mock.calls).toEqual([
+      ["", null],
+      ["WO-NEW", null],
+      ["WO-LATEST", null],
+    ]);
+  });
+
+  it("ignores reverse-order work-order responses after close and reopen", async () => {
+    const oldRead = deferred<unknown>();
+    const newRead = deferred<unknown>();
+    const listWorkOrderOptions = vi.fn()
+      .mockImplementationOnce(() => oldRead.promise)
+      .mockImplementationOnce(() => newRead.promise);
+    await renderReady(adapter({ listWorkOrderOptions }));
+    fireEvent.click(screen.getByRole("button", { name: "新建需求" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择关联 OAM 工单" }));
+    const oldPicker = await screen.findByRole("dialog", { name: "选择本人当前有效 OAM 工单" });
+    await waitFor(() => expect(listWorkOrderOptions).toHaveBeenCalledTimes(1));
+    fireEvent.click(within(oldPicker).getByRole("button", { name: "关闭" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择关联 OAM 工单" }));
+    const currentPicker = await screen.findByRole("dialog", { name: "选择本人当前有效 OAM 工单" });
+    await waitFor(() => expect(listWorkOrderOptions).toHaveBeenCalledTimes(2));
+
+    const second = workOrderOption(WORK_ORDER_2_ID, "WO-20260901-0002");
+    await act(async () => newRead.resolve(workOrderPage([second])));
+    expect(await within(currentPicker).findByText("WO-20260901-0002")).toBeTruthy();
+    await act(async () => oldRead.resolve(workOrderPage()));
+    expect(within(currentPicker).queryByText("WO-20260901-0001")).toBeNull();
+    expect(within(currentPicker).getByText("WO-20260901-0002")).toBeTruthy();
+  });
+
+  it("explicit clear closes the picker and invalidates its in-flight response", async () => {
+    const pendingRead = deferred<unknown>();
+    const listWorkOrderOptions = vi.fn()
+      .mockResolvedValueOnce(workOrderPage())
+      .mockImplementationOnce(() => pendingRead.promise);
+    await renderReady(adapter({ listWorkOrderOptions }));
+    fireEvent.click(screen.getByRole("button", { name: "新建需求" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择关联 OAM 工单" }));
+    let picker = await screen.findByRole("dialog", { name: "选择本人当前有效 OAM 工单" });
+    fireEvent.click(await within(picker).findByRole("button", {
+      name: "选择工单 WO-20260901-0001",
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "选择关联 OAM 工单" }));
+    picker = await screen.findByRole("dialog", { name: "选择本人当前有效 OAM 工单" });
+    await waitFor(() => expect(listWorkOrderOptions).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "清除关联 OAM 工单" }));
+    expect(screen.queryByRole("dialog", { name: "选择本人当前有效 OAM 工单" })).toBeNull();
+    expect(screen.getByRole("button", { name: "选择关联 OAM 工单" }).textContent)
+      .toBe("从本人当前有效工单中选择");
+    await act(async () => pendingRead.resolve(workOrderPage([
+      workOrderOption(WORK_ORDER_2_ID, "WO-20260901-0002"),
+    ])));
+    expect(screen.queryByRole("dialog", { name: "选择本人当前有效 OAM 工单" })).toBeNull();
+    expect(document.body.textContent).not.toContain("WO-20260901-0002");
+  });
+
+  it("fails closed immediately when a work-order cursor returns to its history", async () => {
+    const listWorkOrderOptions = vi.fn()
+      .mockResolvedValueOnce(workOrderPage([workOrderOption()], WORK_ORDER_2_ID))
+      .mockResolvedValueOnce(workOrderPage([], WORK_ORDER_3_ID))
+      .mockResolvedValueOnce(workOrderPage([], WORK_ORDER_2_ID));
+    await renderReady(adapter({ listWorkOrderOptions }));
+    fireEvent.click(screen.getByRole("button", { name: "新建需求" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择关联 OAM 工单" }));
+    const picker = await screen.findByRole("dialog", { name: "选择本人当前有效 OAM 工单" });
+    await within(picker).findByText("WO-20260901-0001");
+    fireEvent.click(within(picker).getByRole("button", { name: "加载更多正式工单" }));
+    await waitFor(() => expect(listWorkOrderOptions).toHaveBeenCalledTimes(2));
+    fireEvent.click(within(picker).getByRole("button", { name: "加载更多正式工单" }));
+
+    expect(await within(picker).findByText(/游标循环，已失败关闭/)).toBeTruthy();
+    expect(within(picker).queryByRole("button", { name: "加载更多正式工单" })).toBeNull();
+    expect(listWorkOrderOptions).toHaveBeenCalledTimes(3);
+  });
+
+  it("maps a selected formal work order to the exact draft write contract", async () => {
+    const linked = detail();
+    linked.work_order_id = WORK_ORDER_ID;
+    const createDraft = vi.fn().mockResolvedValue({
+      schema_version: "1.0",
+      request_id: REQUEST_ID,
+      action: "create",
+      request_version: 0,
+      revision_id: REVISION_ID,
+      revision_no: 1,
+      states: axes(),
+      idempotency_replayed: false,
+    });
+    const uploads = uploadClient("request_attachment");
+    await renderReady(adapter({
+      createDraft,
+      detail: vi.fn().mockResolvedValue(linked),
+    }), uploads);
+    fireEvent.click(screen.getByRole("button", { name: "新建需求" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择关联 OAM 工单" }));
+    const picker = await screen.findByRole("dialog", { name: "选择本人当前有效 OAM 工单" });
+    fireEvent.click(await within(picker).findByRole("button", { name: "选择工单 WO-20260901-0001" }));
+    await fillCreateForm(true);
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+
+    await waitFor(() => expect(createDraft).toHaveBeenCalledTimes(1));
+    expect(createDraft.mock.calls[0][0].body).toEqual({
+      ...draft(),
+      work_order_id: WORK_ORDER_ID,
+    });
+  });
+
+  it("locks work-order selection and clear while a draft write remains unconfirmed", async () => {
+    const createDraft = vi.fn().mockRejectedValue(new TypeError("network uncertain"));
+    const listWorkOrderOptions = vi.fn().mockResolvedValue(workOrderPage());
+    const uploads = uploadClient("request_attachment");
+    await renderReady(adapter({ createDraft, listWorkOrderOptions }), uploads);
+    fireEvent.click(screen.getByRole("button", { name: "新建需求" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择关联 OAM 工单" }));
+    const picker = await screen.findByRole("dialog", { name: "选择本人当前有效 OAM 工单" });
+    fireEvent.click(await within(picker).findByRole("button", {
+      name: "选择工单 WO-20260901-0001",
+    }));
+    await fillCreateForm(true);
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    expect(await screen.findByText(/创建结果仍未确认/)).toBeTruthy();
+
+    const choose = screen.getByRole("button", { name: "选择关联 OAM 工单" }) as HTMLButtonElement;
+    const clear = screen.getByRole("button", { name: "清除关联 OAM 工单" }) as HTMLButtonElement;
+    expect(choose.disabled).toBe(true);
+    expect(clear.disabled).toBe(true);
+    fireEvent.click(clear);
+    fireEvent.click(choose);
+    expect(choose.textContent).toContain("WO-20260901-0001");
+    expect(screen.queryByRole("dialog", { name: "选择本人当前有效 OAM 工单" })).toBeNull();
+    expect(listWorkOrderOptions).toHaveBeenCalledTimes(1);
+  });
+
   it("searches and paginates only the formal material catalog", async () => {
     const listMaterials = vi.fn()
       .mockResolvedValueOnce({ ...catalogPage(), next_after_id: MATERIAL_2_ID })
@@ -704,6 +1028,311 @@ describe("formal material request PC vertical slice", () => {
     expect(intent.body.expected_version).toBe(0);
     expect(intent.body.contact.mobile).toBe(RAW_MOBILE);
     expect((await screen.findByRole("dialog", { name: "正式需求详情" })).textContent).not.toContain(RAW_MOBILE);
+  });
+
+  it("keeps the update intent pending when reread changes the selected work-order binding", async () => {
+    const linkedDraft = { ...draft(), work_order_id: WORK_ORDER_ID };
+    const linkedDetail = detail();
+    linkedDetail.work_order_id = WORK_ORDER_ID;
+    const wrongReread = detail(1);
+    const mutate = vi.fn().mockResolvedValue({
+      schema_version: "1.0",
+      request_id: REQUEST_ID,
+      action: "update",
+      request_version: 1,
+      revision_id: REVISION_ID,
+      revision_no: 1,
+      approval_instance_id: null,
+      approval_attempt_no: null,
+      current_step_id: null,
+      states: axes(),
+      idempotency_replayed: false,
+    });
+    const client = adapter({
+      list: vi.fn().mockResolvedValue(page(linkedDetail)),
+      detail: vi.fn()
+        .mockResolvedValueOnce(linkedDetail)
+        .mockResolvedValue(wrongReread),
+      loadDraftForEdit: vi.fn().mockResolvedValue({
+        schema_version: "1.0",
+        request_id: REQUEST_ID,
+        request_version: 0,
+        draft: linkedDraft,
+      }),
+      mutate,
+    });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "编辑草稿" }));
+    const editor = await screen.findByRole("dialog", { name: "编辑需求草稿" });
+    fireEvent.click(within(editor).getByRole("button", { name: "保存修改" }));
+
+    expect(await screen.findByText(/工单绑定与详情回读不一致/)).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "编辑需求草稿" })).toBeTruthy();
+    expect(mutate).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(editor).getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(2));
+    expect(mutate.mock.calls[1][0]).toBe(mutate.mock.calls[0][0]);
+  });
+
+  it("restores a linked work order only through its exact formal detail projection", async () => {
+    const linkedDraft = { ...draft(), work_order_id: WORK_ORDER_ID };
+    const linkedDetail = detail();
+    linkedDetail.work_order_id = WORK_ORDER_ID;
+    const workOrderOptionDetail = vi.fn().mockResolvedValue(workOrderDetail());
+    const client = adapter({
+      loadAccess: vi.fn().mockResolvedValue(access(false)),
+      list: vi.fn().mockResolvedValue(page(linkedDetail)),
+      detail: vi.fn().mockResolvedValue(linkedDetail),
+      loadDraftForEdit: vi.fn().mockResolvedValue({
+        schema_version: "1.0",
+        request_id: REQUEST_ID,
+        request_version: 0,
+        draft: linkedDraft,
+      }),
+      workOrderOptionDetail,
+    });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "编辑草稿" }));
+
+    const editor = await screen.findByRole("dialog", { name: "编辑需求草稿" });
+    expect(workOrderOptionDetail).toHaveBeenCalledWith(WORK_ORDER_ID);
+    expect(within(editor).getByRole("button", { name: "选择关联 OAM 工单" }).textContent)
+      .toContain("WO-20260901-0001");
+    expect(within(editor).getByLabelText("已选工单最小来源证据").textContent)
+      .toContain("starcharge_oam · 外部锚点 external-WO-20260901-0001 · 版本 v17");
+    expect(within(editor).getByLabelText("已选工单最小来源证据").textContent)
+      .toContain("fresh");
+    expect(within(editor).queryByLabelText("关联工单 UUID（可空）")).toBeNull();
+  });
+
+  it("opens a server-404 work-order reference as unavailable and blocks save until explicit clear", async () => {
+    const linkedDraft = { ...draft(), work_order_id: WORK_ORDER_ID };
+    const linkedDetail = detail();
+    linkedDetail.work_order_id = WORK_ORDER_ID;
+    const after = detail(1);
+    const mutate = vi.fn().mockResolvedValue({
+      schema_version: "1.0",
+      request_id: REQUEST_ID,
+      action: "update",
+      request_version: 1,
+      revision_id: REVISION_ID,
+      revision_no: 1,
+      approval_instance_id: null,
+      approval_attempt_no: null,
+      current_step_id: null,
+      states: axes(),
+      idempotency_replayed: false,
+    });
+    const client = adapter({
+      list: vi.fn().mockResolvedValue(page(linkedDetail)),
+      detail: vi.fn().mockResolvedValueOnce(linkedDetail).mockResolvedValueOnce(after),
+      loadDraftForEdit: vi.fn().mockResolvedValue({
+        schema_version: "1.0",
+        request_id: REQUEST_ID,
+        request_version: 0,
+        draft: linkedDraft,
+      }),
+      workOrderOptionDetail: vi.fn().mockRejectedValue(
+        new ApiError(404, "当前可选 OAM 工单不存在", {}),
+      ),
+      mutate,
+    });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "编辑草稿" }));
+    const editor = await screen.findByRole("dialog", { name: "编辑需求草稿" });
+    expect(within(editor).getByRole("alert").textContent).toContain("本人草稿原有关联工单当前不可选");
+    expect(editor.textContent).not.toContain(WORK_ORDER_ID);
+    expect(editor.textContent).not.toContain("WO-20260901-0001");
+
+    const blockedSave = within(editor).getByRole("button", {
+      name: "请先处理不可选工单",
+    }) as HTMLButtonElement;
+    expect(blockedSave.disabled).toBe(true);
+    fireEvent.click(blockedSave);
+    expect(mutate).not.toHaveBeenCalled();
+
+    fireEvent.click(within(editor).getByRole("button", { name: "清除关联 OAM 工单" }));
+    expect(within(editor).queryByRole("alert")).toBeNull();
+    expect(within(editor).getByRole("button", { name: "选择关联 OAM 工单" }).textContent)
+      .toBe("从本人当前有效工单中选择");
+    fireEvent.click(within(editor).getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    expect(mutate.mock.calls[0][0].body.work_order_id).toBeNull();
+  });
+
+  it("replaces an unavailable draft reference only from the formal option list", async () => {
+    const linkedDraft = { ...draft(), work_order_id: WORK_ORDER_ID };
+    const linkedDetail = detail();
+    linkedDetail.work_order_id = WORK_ORDER_ID;
+    const replacement = workOrderOption(WORK_ORDER_2_ID, "WO-20260901-0002");
+    const mutate = vi.fn().mockRejectedValue(new ApiError(422, "明确拒绝测试", {}));
+    const listWorkOrderOptions = vi.fn().mockResolvedValue(workOrderPage([replacement]));
+    const client = adapter({
+      loadAccess: vi.fn().mockResolvedValue(access(false)),
+      list: vi.fn().mockResolvedValue(page(linkedDetail)),
+      detail: vi.fn().mockResolvedValue(linkedDetail),
+      loadDraftForEdit: vi.fn().mockResolvedValue({
+        schema_version: "1.0",
+        request_id: REQUEST_ID,
+        request_version: 0,
+        draft: linkedDraft,
+      }),
+      workOrderOptionDetail: vi.fn().mockRejectedValue(
+        new ApiError(404, "当前可选 OAM 工单不存在", {}),
+      ),
+      listWorkOrderOptions,
+      mutate,
+    });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "编辑草稿" }));
+    const editor = await screen.findByRole("dialog", { name: "编辑需求草稿" });
+    fireEvent.click(within(editor).getByRole("button", { name: "选择关联 OAM 工单" }));
+    const picker = await screen.findByRole("dialog", { name: "选择本人当前有效 OAM 工单" });
+    fireEvent.click(await within(picker).findByRole("button", {
+      name: "选择工单 WO-20260901-0002",
+    }));
+    expect(within(editor).queryByRole("alert")).toBeNull();
+    fireEvent.click(within(editor).getByRole("button", { name: "保存修改" }));
+
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    expect(mutate.mock.calls[0][0].body.work_order_id).toBe(WORK_ORDER_2_ID);
+    expect(listWorkOrderOptions).toHaveBeenCalledWith("", null);
+  });
+
+  it("fails edit closed when a 404 was not received from the server", async () => {
+    const linkedDraft = { ...draft(), work_order_id: WORK_ORDER_ID };
+    const linkedDetail = detail();
+    linkedDetail.work_order_id = WORK_ORDER_ID;
+    const listWorkOrderOptions = vi.fn();
+    const workOrderOptionDetail = vi.fn().mockRejectedValue(new ApiError(404, "关联工单已不可用"));
+    const client = adapter({
+      list: vi.fn().mockResolvedValue(page(linkedDetail)),
+      detail: vi.fn().mockResolvedValue(linkedDetail),
+      loadDraftForEdit: vi.fn().mockResolvedValue({
+        schema_version: "1.0",
+        request_id: REQUEST_ID,
+        request_version: 0,
+        draft: linkedDraft,
+      }),
+      listWorkOrderOptions,
+      workOrderOptionDetail,
+    });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "编辑草稿" }));
+
+    expect(await screen.findByText("关联工单已不可用")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "编辑需求草稿" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "正式需求详情" })).toBeTruthy();
+    expect(workOrderOptionDetail).toHaveBeenCalledWith(WORK_ORDER_ID);
+    expect(listWorkOrderOptions).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["401", new ApiError(401, "登录身份已失效", {})],
+    ["403", new ApiError(403, "没有 update_draft 权限", {})],
+    ["409", new ApiError(409, "授权版本已变化", {})],
+    ["5xx", new ApiError(503, "正式工单投影暂不可用", {})],
+    ["transport", new TypeError("network unavailable")],
+  ])("does not convert a %s exact-detail failure into unavailable", async (_kind, failure) => {
+    const linkedDraft = { ...draft(), work_order_id: WORK_ORDER_ID };
+    const linkedDetail = detail();
+    linkedDetail.work_order_id = WORK_ORDER_ID;
+    const client = adapter({
+      list: vi.fn().mockResolvedValue(page(linkedDetail)),
+      detail: vi.fn().mockResolvedValue(linkedDetail),
+      loadDraftForEdit: vi.fn().mockResolvedValue({
+        schema_version: "1.0",
+        request_id: REQUEST_ID,
+        request_version: 0,
+        draft: linkedDraft,
+      }),
+      workOrderOptionDetail: vi.fn().mockRejectedValue(failure),
+    });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "编辑草稿" }));
+
+    expect(await screen.findByText(failure.message)).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "编辑需求草稿" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "正式需求详情" })).toBeTruthy();
+  });
+
+  it("does not convert an exact-detail contract error into unavailable", async () => {
+    const linkedDraft = { ...draft(), work_order_id: WORK_ORDER_ID };
+    const linkedDetail = detail();
+    linkedDetail.work_order_id = WORK_ORDER_ID;
+    const client = adapter({
+      list: vi.fn().mockResolvedValue(page(linkedDetail)),
+      detail: vi.fn().mockResolvedValue(linkedDetail),
+      loadDraftForEdit: vi.fn().mockResolvedValue({
+        schema_version: "1.0",
+        request_id: REQUEST_ID,
+        request_version: 0,
+        draft: linkedDraft,
+      }),
+      workOrderOptionDetail: vi.fn().mockResolvedValue({
+        ...workOrderDetail(),
+        authorization_version: 2,
+      }),
+    });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "编辑草稿" }));
+
+    expect(await screen.findByText(/工单选项身份或授权版本与当前页面不一致/)).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "编辑需求草稿" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "正式需求详情" })).toBeTruthy();
+  });
+
+  it("discards an edit recovery response after the user closes its detail", async () => {
+    const pendingDraft = deferred<unknown>();
+    const loadDraftForEdit = vi.fn().mockImplementation(() => pendingDraft.promise);
+    await renderReady(adapter({ loadDraftForEdit }));
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "编辑草稿" }));
+    await waitFor(() => expect(loadDraftForEdit).toHaveBeenCalledTimes(1));
+    fireEvent.click(within(panel).getByRole("button", { name: "关闭" }));
+    expect(screen.queryByRole("dialog", { name: "正式需求详情" })).toBeNull();
+
+    await act(async () => pendingDraft.resolve({
+      schema_version: "1.0",
+      request_id: REQUEST_ID,
+      request_version: 0,
+      draft: draft(),
+    }));
+    expect(screen.queryByRole("dialog", { name: "编辑需求草稿" })).toBeNull();
+    expect(document.body.textContent).not.toContain(RAW_MOBILE);
+    expect(document.body.textContent).not.toContain(RAW_ADDRESS);
+  });
+
+  it("discards an edit recovery response after the adapter and access generation refresh", async () => {
+    const pendingDraft = deferred<unknown>();
+    const oldClient = adapter({
+      loadDraftForEdit: vi.fn().mockImplementation(() => pendingDraft.promise),
+    });
+    const currentClient = adapter();
+    const view = render(<FormalMaterialRequestsPage adapter={oldClient} />);
+    expect((await screen.findAllByText("MR-20260901-0001")).length).toBeGreaterThan(0);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "编辑草稿" }));
+    await waitFor(() => expect(oldClient.loadDraftForEdit).toHaveBeenCalledTimes(1));
+    view.rerender(<FormalMaterialRequestsPage adapter={currentClient} />);
+    await waitFor(() => expect(currentClient.loadAccess).toHaveBeenCalled());
+
+    await act(async () => pendingDraft.resolve({
+      schema_version: "1.0",
+      request_id: REQUEST_ID,
+      request_version: 0,
+      draft: draft(),
+    }));
+    expect(screen.queryByRole("dialog", { name: "编辑需求草稿" })).toBeNull();
+    expect(document.body.textContent).not.toContain(RAW_MOBILE);
+    expect(document.body.textContent).not.toContain(RAW_ADDRESS);
   });
 
   it("requires an explicit submit confirmation and preserves independent status wording", async () => {
