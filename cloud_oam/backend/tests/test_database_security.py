@@ -3262,12 +3262,33 @@ def test_audit_trigger_inventory_covers_cross_domain_manifests() -> None:
         is_initially_deferred,
     )
 
+    approval_name = "trg_audit_events_approval_projection_0045"
+    (
+        table_name,
+        function_name,
+        enabled,
+        trigger_type,
+        is_constraint_trigger,
+        is_deferrable,
+        is_initially_deferred,
+    ) = EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[approval_name]
+    assert enabled == "A"
+    cross_domain[approval_name] = (
+        table_name,
+        function_name,
+        trigger_type,
+        is_constraint_trigger,
+        is_deferrable,
+        is_initially_deferred,
+    )
+
     assert set(cross_domain) == {
         "trg_audit_events_opening_commit_0022",
         "trg_reconciliation_audit_effect_guard_0026",
         "trg_reconciliation_audit_effect_no_truncate_0026",
         "trg_audit_events_cancellation_graph_0037",
         "trg_audit_events_nonopening_stocktake_close_guard_0038",
+        "trg_audit_events_approval_projection_0045",
     }
     for name, expected in cross_domain.items():
         assert EXPECTED_AUDIT_TRIGGERS[name] == expected

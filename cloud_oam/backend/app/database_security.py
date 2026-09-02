@@ -500,6 +500,14 @@ EXPECTED_AUDIT_TRIGGERS = {
         False,
         False,
     ),
+    "trg_audit_events_approval_projection_0045": (
+        "audit_events",
+        "rsc_dispatch_material_request_approval_projection_0045",
+        29,
+        True,
+        True,
+        True,
+    ),
 }
 EXPECTED_AUDIT_STREAM_CONSTRAINTS = {
     "ck_audit_events_stream_key_0017": "check_stream_key",
