@@ -98,8 +98,9 @@ jobs:
       - name: Install PostgreSQL 16 client
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends postgresql-client-16
+          sudo apt-get install --yes --no-install-recommends postgresql-client-16 zsh
           psql --version | grep -E ' 16[.]'
+          zsh --version
 
       - name: Run projector and edge static safety gates
         working-directory: cloud_oam
