@@ -1234,12 +1234,12 @@ def _seed_0044_unbound_source() -> uuid.UUID:
                 "INSERT INTO public.source_systems "
                 "(id, code, name, mode, enabled, configuration_jsonb, "
                 "created_at, updated_at) "
-                "VALUES (%s, %s, %s, 'read_only', true, %s, %s, %s)",
+                "VALUES (%s, %s, %s, 'read_only', true, %s::jsonb, %s, %s)",
                 (
                     source_id,
                     "pg16-unbound-source",
                     "PG16 unbound attack source",
-                    {},
+                    "{}",
                     now,
                     now,
                 ),
