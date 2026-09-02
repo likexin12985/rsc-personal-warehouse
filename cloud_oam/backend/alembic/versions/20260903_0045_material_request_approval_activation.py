@@ -47,6 +47,7 @@ PG_APPROVAL_VALIDATE_FUNCTION_0030 = (
     "rsc_validate_approval_instance_causality_0030"
 )
 PG_APPROVAL_DISPATCH_FUNCTION_0030 = "rsc_dispatch_approval_causality_0030"
+PG_REQUEST_FILE_FUNCTION_0029 = "rsc_guard_material_request_file_0029"
 PG_STATUS_GUARD_FUNCTION = "rsc_guard_material_request_status_transition_0045"
 PG_LINE_GUARD_FUNCTION = "rsc_guard_material_request_line_projection_0045"
 PG_COMMAND_PARENT_LOCK_FUNCTION = (
@@ -220,6 +221,7 @@ def upgrade() -> None:
         raise RuntimeError("0045 supports only PostgreSQL and SQLite test databases")
     _lock_trigger_tables()
     _emit_empty_graph_guard(UPGRADE_BLOCKER)
+    _repair_0029_request_file_guard_execution_context()
     _repair_0030_dispatcher_execution_context()
     _create_projection_guards()
     _replace_oam_runtime_ready_function(revision)
@@ -254,6 +256,10 @@ def downgrade() -> None:
         op.execute(f"DROP FUNCTION public.{function_name}({argument_types})")
     op.execute(
         f"ALTER FUNCTION public.{PG_APPROVAL_DISPATCH_FUNCTION_0030}() "
+        "SECURITY INVOKER"
+    )
+    op.execute(
+        f"ALTER FUNCTION public.{PG_REQUEST_FILE_FUNCTION_0029}() "
         "SECURITY INVOKER"
     )
     _replace_oam_runtime_ready_function(PREVIOUS_SCHEMA_REVISION)
@@ -299,6 +305,21 @@ def _repair_0030_dispatcher_execution_context() -> None:
     )
     op.execute(
         f"REVOKE ALL ON FUNCTION public.{PG_APPROVAL_DISPATCH_FUNCTION_0030}() "
+        f"FROM PUBLIC, {PRODUCTION_API_ROLE}"
+    )
+
+
+def _repair_0029_request_file_guard_execution_context() -> None:
+    op.execute(
+        f"ALTER FUNCTION public.{PG_REQUEST_FILE_FUNCTION_0029}() "
+        "SECURITY DEFINER"
+    )
+    op.execute(
+        f"ALTER FUNCTION public.{PG_REQUEST_FILE_FUNCTION_0029}() "
+        f"OWNER TO {MIGRATION_ROLE}"
+    )
+    op.execute(
+        f"REVOKE ALL ON FUNCTION public.{PG_REQUEST_FILE_FUNCTION_0029}() "
         f"FROM PUBLIC, {PRODUCTION_API_ROLE}"
     )
 

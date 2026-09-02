@@ -1851,6 +1851,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ("rsc_guard_material_request_file_0029", ""),
         ("rsc_dispatch_approval_causality_0030", ""),
         (
             "rsc_validate_material_request_terminal_causality_0045",

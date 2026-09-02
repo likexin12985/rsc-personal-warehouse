@@ -61,6 +61,9 @@ WORK_ORDER_LOCK_FUNCTION = (
 MATERIAL_REQUEST_STATUS_TRIGGER_0045 = (
     "trg_material_requests_status_transition_0045"
 )
+MATERIAL_REQUEST_FILE_GUARD_FUNCTION_0029 = (
+    "rsc_guard_material_request_file_0029"
+)
 MATERIAL_REQUEST_NEUTRAL_AXES = {
     "allocation_status": "not_allocated",
     "reservation_status": "not_reserved",
@@ -552,6 +555,59 @@ def _validate_runtime_security(api_engine) -> None:
         expected_runtime_role="star_oam_api",
         expected_migration_role="star_oam_migrator",
     )
+
+
+def _assert_request_file_guard_execution_boundary(
+    *,
+    security_definer: bool,
+) -> None:
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT function_row.prosecdef,
+                       owner.rolname,
+                       function_row.proconfig,
+                       has_function_privilege(
+                           'star_oam_api', function_row.oid, 'EXECUTE'
+                       ),
+                       EXISTS (
+                           SELECT 1
+                             FROM aclexplode(
+                                 coalesce(
+                                     function_row.proacl,
+                                     acldefault(
+                                         'f', function_row.proowner
+                                     )
+                                 )
+                             ) AS function_acl
+                            WHERE function_acl.grantee = 0
+                              AND function_acl.privilege_type = 'EXECUTE'
+                       ),
+                       has_table_privilege(
+                           'star_oam_api',
+                           'public.approval_delegations',
+                           'SELECT'
+                       )
+                  FROM pg_catalog.pg_proc AS function_row
+                  JOIN pg_catalog.pg_namespace AS schema_row
+                    ON schema_row.oid = function_row.pronamespace
+                  JOIN pg_catalog.pg_roles AS owner
+                    ON owner.oid = function_row.proowner
+                 WHERE schema_row.nspname = 'public'
+                   AND function_row.proname = %s
+                   AND function_row.pronargs = 0
+                """,
+                (MATERIAL_REQUEST_FILE_GUARD_FUNCTION_0029,),
+            )
+            assert cursor.fetchone() == (
+                security_definer,
+                "star_oam_migrator",
+                ["search_path=pg_catalog, public"],
+                False,
+                False,
+                False,
+            )
 
 
 def _validate_projector_security(projector_engine) -> None:
@@ -5399,6 +5455,7 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
         ApprovalStep,
         ApprovalStepLineDecision,
         MaterialRequest,
+        MaterialRequestFile,
         MaterialRequestLine,
     )
     from app.formal_services.material_request_draft import (
@@ -5439,6 +5496,19 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
             )
         )
         session.commit()
+    with Session(api_engine) as session:
+        bindings = tuple(
+            session.scalars(
+                select(MaterialRequestFile)
+                .where(MaterialRequestFile.request_id == request_id)
+                .order_by(MaterialRequestFile.id)
+            ).all()
+        )
+        assert len(bindings) == 1
+        assert bindings[0].revision_id == created.revision_id
+        assert bindings[0].revision_no == created.revision_no
+        assert bindings[0].file_id == draft.attachment_file_ids[0]
+        assert bindings[0].purpose == "request_attachment"
     _assert_material_request_snapshot(
         api_engine,
         request_id=request_id,
@@ -6038,6 +6108,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _assert_projector_exact_column_acl()
     unbound_source_id = _seed_0044_unbound_source()
     _provision_and_verify_deployment_acl()
+    _assert_request_file_guard_execution_boundary(security_definer=True)
     _assert_0044_zero_binding_default_denies(unbound_source_id)
     _provision_and_verify_oam_work_order_source()
     _assert_0044_bound_scope_attack_matrix(unbound_source_id)
@@ -6071,6 +6142,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
 
     _run_alembic("downgrade", RLS_REVISION)
     assert _current_revision() == RLS_REVISION
+    _assert_request_file_guard_execution_boundary(security_definer=False)
     _assert_0044_rejects_nonempty_sync_downgrade()
     _clear_disposable_oam_sync_graph()
     _run_alembic("downgrade", "20260902_0043")
@@ -6078,6 +6150,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
     _provision_and_verify_deployment_acl()
+    _assert_request_file_guard_execution_boundary(security_definer=True)
     _provision_and_verify_oam_work_order_source()
     _assert_0044_bound_scope_attack_matrix(unbound_source_id)
 

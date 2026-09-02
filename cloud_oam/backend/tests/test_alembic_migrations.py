@@ -2133,12 +2133,38 @@ def test_0045_postgresql_offline_sql_closes_exact_approval_boundary(
     assert "pg_catalog.min(version_num) = '20260903_0045'" in sql
     lock_offset = sql.index("LOCK TABLE public.approval_step_candidates")
     preflight_offset = sql.index(module.UPGRADE_BLOCKER)
-    repair_offset = sql.index(
+    request_file_security_sql = (
+        "ALTER FUNCTION public.rsc_guard_material_request_file_0029() "
+        "SECURITY DEFINER"
+    )
+    request_file_repair_offset = sql.index(request_file_security_sql)
+    dispatcher_repair_offset = sql.index(
         "ALTER FUNCTION public.rsc_dispatch_approval_causality_0030() "
         "SECURITY DEFINER"
     )
     first_enable_offset = sql.index(" ENABLE ALWAYS TRIGGER ")
-    assert lock_offset < preflight_offset < repair_offset < first_enable_offset
+    assert (
+        lock_offset
+        < preflight_offset
+        < request_file_repair_offset
+        < dispatcher_repair_offset
+        < first_enable_offset
+    )
+    assert sql.count(request_file_security_sql) == 1
+    assert sql.count(
+        "ALTER FUNCTION public.rsc_guard_material_request_file_0029() "
+        "OWNER TO star_oam_migrator"
+    ) == 1
+    assert sql.count(
+        "REVOKE ALL ON FUNCTION "
+        "public.rsc_guard_material_request_file_0029() "
+        "FROM PUBLIC, star_oam_api"
+    ) == 1
+    assert not any(
+        statement.lstrip().upper().startswith("GRANT ")
+        and "approval_delegations" in statement
+        for statement in sql.split(";")
+    )
     for table_name in module.APPROVAL_FACT_TABLES:
         assert f"EXISTS (SELECT 1 FROM public.{table_name})" in sql
     for table_name, trigger_name in module.TRIGGER_BINDINGS:

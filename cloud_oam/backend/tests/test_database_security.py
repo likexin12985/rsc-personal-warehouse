@@ -4597,6 +4597,32 @@ def test_0045_material_request_approval_privileged_validator_drift_is_rejected(
         )
 
 
+def test_0045_request_file_guard_must_remain_security_definer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    functions = _valid_material_request_approval_function_rows(monkeypatch)
+    target = next(
+        row
+        for row in functions
+        if (
+            row["function_name"],
+            row["argument_types"],
+        )
+        == ("rsc_guard_material_request_file_0029", "")
+    )
+    target["is_security_definer"] = False
+
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match="rsc_guard_material_request_file_0029",
+    ):
+        _assert_material_request_approval_guards(
+            triggers=_valid_material_request_approval_trigger_rows(),
+            functions=functions,
+            expected_migration_role="star_oam_migrator",
+        )
+
+
 def test_0045_material_request_approval_trigger_query_captures_complete_scope(
 ) -> None:
     query = " ".join(str(_MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL).split())
@@ -4723,6 +4749,7 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
             MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate]
         )
     assert MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS == {
+        (migration.PG_REQUEST_FILE_FUNCTION_0029, ""),
         (migration.PG_APPROVAL_DISPATCH_FUNCTION_0030, ""),
         (
             migration.PG_TERMINAL_VALIDATE_FUNCTION,
