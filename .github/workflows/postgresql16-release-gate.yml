@@ -115,7 +115,8 @@ jobs:
             backend/tests/test_database_deployment_security.py \
             backend/tests/test_alembic_migrations.py \
             backend/tests/test_legacy_oam_work_order_redaction_artifact.py \
-            edge_sync/test_oam_edge_sync.py
+            edge_sync/test_oam_edge_sync.py \
+            edge_sync/test_oam_read_client_security.py
 
       - name: Run isolated PostgreSQL 16 migration and concurrency gate
         working-directory: cloud_oam/backend

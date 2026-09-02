@@ -18,11 +18,20 @@ if str(ROOT) not in sys.path:
 # stubs only when those local files are absent (or when explicitly requested by
 # this test process).  Every test patches the transport before use.
 LOCAL_PORTAL = ROOT / "work" / "inventory_query_portal"
-if (
+USE_OFFLINE_IMPORT_STUBS = (
     os.getenv("RSC_EDGE_TEST_FORCE_IMPORT_STUBS") == "1"
     or not (LOCAL_PORTAL / "oam_read_client.py").is_file()
     or not (LOCAL_PORTAL / "query_oam_work_orders.py").is_file()
-):
+)
+STUB_MODULE_NAMES = (
+    "inventory_query_portal",
+    "inventory_query_portal.oam_read_client",
+    "query_oam_work_orders",
+)
+previous_import_modules = {
+    name: sys.modules.get(name) for name in STUB_MODULE_NAMES
+}
+if USE_OFFLINE_IMPORT_STUBS:
     portal_package = ModuleType("inventory_query_portal")
     portal_package.__path__ = []  # type: ignore[attr-defined]
     read_client = ModuleType("inventory_query_portal.oam_read_client")
@@ -65,7 +74,15 @@ if (
     work_order_client.normalized_list_row = _normalized_list_row  # type: ignore[attr-defined]
     sys.modules["query_oam_work_orders"] = work_order_client
 
-from cloud_oam.edge_sync import oam_edge_sync
+try:
+    from cloud_oam.edge_sync import oam_edge_sync
+finally:
+    if USE_OFFLINE_IMPORT_STUBS:
+        for module_name, previous_module in previous_import_modules.items():
+            if previous_module is None:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = previous_module
 
 
 COMPANY_ID = "company-nio"

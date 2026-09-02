@@ -1,3 +1,4 @@
+import os
 import stat
 import sys
 from pathlib import Path
@@ -8,9 +9,15 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PORTAL = ROOT / "work" / "inventory_query_portal"
-if str(PORTAL) not in sys.path:
-    sys.path.insert(0, str(PORTAL))
+WORK = ROOT / "work"
+READ_CLIENT = WORK / "inventory_query_portal" / "oam_read_client.py"
+if os.getenv("RSC_EDGE_TEST_FORCE_IMPORT_STUBS") == "1" or not READ_CLIENT.is_file():
+    pytest.skip(
+        "local OAM read client is intentionally absent from the hosted repository",
+        allow_module_level=True,
+    )
+if str(WORK) not in sys.path:
+    sys.path.insert(0, str(WORK))
 
 from inventory_query_portal import oam_read_client
 
