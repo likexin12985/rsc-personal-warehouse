@@ -27,6 +27,7 @@ import psycopg
 from psycopg import sql
 import pytest
 from sqlalchemy import URL, create_engine, func, select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 
@@ -5377,6 +5378,18 @@ def _assert_0045_verify_pair_without_verified_registration_is_rejected(
             assert session.get(ApprovalAction, action_id) is None
 
 
+def _reveal_pg16_service_database_error(operation):
+    """Expose only synthetic release-gate DB errors hidden by public services."""
+
+    try:
+        return operation()
+    except Exception as exc:
+        database_error = exc.__context__
+        if isinstance(database_error, DBAPIError):
+            raise database_error
+        raise
+
+
 def _assert_0045_raw_projection_bypass_and_formal_approval(
     api_engine,
 ) -> tuple[uuid.UUID, int]:
@@ -5414,14 +5427,16 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
 
     # Draft creation is one committed formal action.
     with Session(api_engine) as session:
-        created = create_material_request_draft(
-            session,
-            actor=_principal(session, requester_user_id),
-            material_request_id=request_id,
-            draft=draft,
-            idempotency_key="pg16-approval-projection-create",
-            idempotency_hmac_secret=SECRET,
-            trace_request_id="trace-pg16-approval-projection-create",
+        created = _reveal_pg16_service_database_error(
+            lambda: create_material_request_draft(
+                session,
+                actor=_principal(session, requester_user_id),
+                material_request_id=request_id,
+                draft=draft,
+                idempotency_key="pg16-approval-projection-create",
+                idempotency_hmac_secret=SECRET,
+                trace_request_id="trace-pg16-approval-projection-create",
+            )
         )
         session.commit()
     _assert_material_request_snapshot(
@@ -5485,14 +5500,16 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
     # Submission is independently committed and creates the sealed revision,
     # active instance, frozen candidates and three approval steps atomically.
     with Session(api_engine) as session:
-        submitted = submit_material_request(
-            session,
-            actor=_principal(session, requester_user_id),
-            material_request_id=request_id,
-            expected_version=created.request_version,
-            idempotency_key="pg16-approval-projection-submit",
-            idempotency_hmac_secret=SECRET,
-            trace_request_id="trace-pg16-approval-projection-submit",
+        submitted = _reveal_pg16_service_database_error(
+            lambda: submit_material_request(
+                session,
+                actor=_principal(session, requester_user_id),
+                material_request_id=request_id,
+                expected_version=created.request_version,
+                idempotency_key="pg16-approval-projection-submit",
+                idempotency_hmac_secret=SECRET,
+                trace_request_id="trace-pg16-approval-projection-submit",
+            )
         )
         session.commit()
     _assert_material_request_snapshot(
