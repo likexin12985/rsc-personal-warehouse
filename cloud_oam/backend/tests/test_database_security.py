@@ -2786,6 +2786,16 @@ def test_reconciliation_schema_guard_requires_exact_deferred_closure() -> None:
     index_query = str(_RECONCILIATION_PARTIAL_INDEX_SQL)
     for name in EXPECTED_RECONCILIATION_CONSTRAINTS:
         assert f"'{name}'" in constraint_query
+    migration_source = ACL_MIGRATION.read_text(encoding="utf-8")
+    file_snapshot_constraint = (
+        "ck_opening_control_reconciliation_items_file_snapshot"
+    )
+    assert f'name="{file_snapshot_constraint}"' in migration_source
+    assert file_snapshot_constraint in EXPECTED_RECONCILIATION_CONSTRAINTS
+    assert (
+        "ck_opening_control_reconciliation_items_evidence_snapshot"
+        not in EXPECTED_RECONCILIATION_CONSTRAINTS
+    )
     assert "indpred IS NOT NULL" in index_query
 
     for field, value in (

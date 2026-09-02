@@ -1247,7 +1247,7 @@ EXPECTED_RECONCILIATION_CONSTRAINTS = {
             "replace",
         ),
     },
-    "ck_opening_control_reconciliation_items_evidence_snapshot": {
+    "ck_opening_control_reconciliation_items_file_snapshot": {
         "table": "opening_control_reconciliation_items",
         "type": "c",
         "tokens": (
@@ -2927,7 +2927,7 @@ WHERE schema_row.nspname = 'public'
       'ck_reconciliation_commands_request_reference',
       'ck_reconciliation_commands_hashes',
       'ck_opening_control_reconciliation_runs_manifest',
-      'ck_opening_control_reconciliation_items_evidence_snapshot'
+      'ck_opening_control_reconciliation_items_file_snapshot'
   )
 ORDER BY constraint_row.conname
 """
