@@ -4483,6 +4483,13 @@ def test_0045_material_request_approval_trigger_catalog_rejects_shape_drift(
         )
 
 
+def test_0045_material_request_approval_trigger_names_fit_postgresql() -> None:
+    assert all(
+        len(name.encode("utf-8")) <= 63
+        for name in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS
+    )
+
+
 def test_0045_material_request_approval_function_catalog_rejects_set_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

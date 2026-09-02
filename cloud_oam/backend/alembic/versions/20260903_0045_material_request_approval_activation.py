@@ -86,6 +86,17 @@ PROJECTION_TRIGGER_TABLES = (
     "state_transition_events",
     "audit_events",
 )
+PROJECTION_TRIGGER_BINDINGS = tuple(
+    (
+        table_name,
+        (
+            "trg_approval_external_registration_lines_projection_0045"
+            if table_name == "approval_external_registration_lines"
+            else f"trg_{table_name}_approval_projection_0045"
+        ),
+    )
+    for table_name in PROJECTION_TRIGGER_TABLES
+)
 
 FACT_TABLES_0029 = (
     "approval_step_candidates",
@@ -176,10 +187,7 @@ NEW_TRIGGER_BINDINGS: tuple[tuple[str, str], ...] = (
     ("material_requests", STATUS_TRIGGER),
     ("material_request_lines", LINE_TRIGGER),
     ("material_request_commands", COMMAND_PARENT_TRIGGER),
-    *tuple(
-        (table_name, f"trg_{table_name}_approval_projection_0045")
-        for table_name in PROJECTION_TRIGGER_TABLES
-    ),
+    *PROJECTION_TRIGGER_BINDINGS,
 )
 
 TRIGGER_BINDINGS = LEGACY_TRIGGER_BINDINGS + NEW_TRIGGER_BINDINGS
@@ -341,14 +349,14 @@ def _create_projection_guards() -> None:
         "ON public.material_request_commands FOR EACH ROW EXECUTE FUNCTION "
         f"public.{PG_COMMAND_PARENT_LOCK_FUNCTION}()"
     )
-    for table_name in PROJECTION_TRIGGER_TABLES:
+    for table_name, trigger_name in PROJECTION_TRIGGER_BINDINGS:
         operations = (
             "INSERT OR UPDATE"
             if table_name == "material_requests"
             else "INSERT OR UPDATE OR DELETE"
         )
         op.execute(
-            f"CREATE CONSTRAINT TRIGGER trg_{table_name}_approval_projection_0045 "
+            f"CREATE CONSTRAINT TRIGGER {trigger_name} "
             f"AFTER {operations} ON public.{table_name} "
             "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "
             f"public.{PG_PROJECTION_DISPATCH_FUNCTION}()"

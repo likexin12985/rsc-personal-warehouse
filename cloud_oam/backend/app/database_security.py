@@ -1759,7 +1759,11 @@ EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
         False,
     ),
     **{
-        f"trg_{table_name}_approval_projection_0045": (
+        (
+            "trg_approval_external_registration_lines_projection_0045"
+            if table_name == "approval_external_registration_lines"
+            else f"trg_{table_name}_approval_projection_0045"
+        ): (
             table_name,
             "rsc_dispatch_material_request_approval_projection_0045",
             "A",

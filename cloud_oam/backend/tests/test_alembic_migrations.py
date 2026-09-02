@@ -2108,6 +2108,10 @@ def test_0045_postgresql_offline_sql_closes_exact_approval_boundary(
     assert len(module.TRIGGER_BINDINGS) == 61
     assert len(set(module.TRIGGER_BINDINGS)) == 61
     assert len(module.PROJECTION_TRIGGER_TABLES) == 13
+    assert all(
+        len(trigger_name.encode("utf-8")) <= 63
+        for _, trigger_name in module.TRIGGER_BINDINGS
+    )
 
     output = io.StringIO()
     config = _config(
@@ -2156,9 +2160,9 @@ def test_0045_postgresql_offline_sql_closes_exact_approval_boundary(
         "CREATE TRIGGER trg_material_request_commands_parent_lock_0045 "
         "BEFORE INSERT"
     ) in sql
-    for table_name in module.PROJECTION_TRIGGER_TABLES:
+    for table_name, trigger_name in module.PROJECTION_TRIGGER_BINDINGS:
         assert sql.count(
-            f"CREATE CONSTRAINT TRIGGER trg_{table_name}_approval_projection_0045"
+            f"CREATE CONSTRAINT TRIGGER {trigger_name}"
         ) == 1
 
     parent_lock_sql = module._command_parent_lock_sql()
