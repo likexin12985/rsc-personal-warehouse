@@ -5487,20 +5487,27 @@ def _assert_kms_data_key_pin_guards(
         row = actual_constraints.get(name)
         if row is None:
             continue
-        if (
-            row.get("constraint_type") != expected["type"]
-            or row.get("is_validated") is not True
-            or row.get("is_deferrable") is not False
-            or row.get("is_initially_deferred") is not False
-            or row.get("is_no_inherit") is not False
-            or row.get("is_local") is not True
-            or row.get("inheritance_count") != 0
-            or row.get("parent_constraint_id") != 0
-            or tuple(row.get("constrained_columns") or ())
-            != expected["columns"]
-            or row.get("backing_index_name") != expected["backing_index"]
-        ):
-            failures.append(f"{name}.shape")
+        equality_fields = {
+            "constraint_type": expected["type"],
+            "inheritance_count": 0,
+            "parent_constraint_id": 0,
+            "backing_index_name": expected["backing_index"],
+        }
+        for field, expected_value in equality_fields.items():
+            if row.get(field) != expected_value:
+                failures.append(f"{name}.{field}")
+        identity_fields = {
+            "is_validated": True,
+            "is_deferrable": False,
+            "is_initially_deferred": False,
+            "is_no_inherit": False,
+            "is_local": True,
+        }
+        for field, expected_value in identity_fields.items():
+            if row.get(field) is not expected_value:
+                failures.append(f"{name}.{field}")
+        if tuple(row.get("constrained_columns") or ()) != expected["columns"]:
+            failures.append(f"{name}.constrained_columns")
         if expected["type"] == "c" and not _kms_pin_check_definition_matches(
             name,
             row.get("definition"),

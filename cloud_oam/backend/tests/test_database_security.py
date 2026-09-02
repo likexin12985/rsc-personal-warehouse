@@ -1261,6 +1261,39 @@ def test_0040_kms_guard_reports_exact_index_field() -> None:
         )
 
 
+def test_0040_kms_guard_reports_exact_constraint_field() -> None:
+    (
+        triggers,
+        columns,
+        constraints,
+        indexes,
+        table_acl,
+        function_acl,
+    ) = _valid_kms_data_key_pin_catalog()
+    primary = next(
+        row
+        for row in constraints
+        if row["constraint_name"]
+        == "pk_kms_data_key_pins_coordinate_0040"
+    )
+    primary["is_no_inherit"] = True
+
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match="pk_kms_data_key_pins_coordinate_0040\\.is_no_inherit",
+    ):
+        _assert_kms_data_key_pin_guards(
+            triggers=triggers,
+            columns=columns,
+            constraints=constraints,
+            indexes=indexes,
+            table_acl=table_acl,
+            function_acl=function_acl,
+            expected_runtime_role="star_oam_api",
+            expected_migration_role="star_oam_migrator",
+        )
+
+
 def _load_sms_dispatch_migration_0041() -> object:
     spec = importlib.util.spec_from_file_location(
         "rsc_migration_0041_sms_dispatch_security_manifest",
