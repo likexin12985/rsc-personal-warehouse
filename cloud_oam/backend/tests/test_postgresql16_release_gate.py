@@ -10,7 +10,9 @@ service container.  No local, production, or shared database is acceptable.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import hashlib
 import json
 import os
@@ -32,6 +34,7 @@ CLOUD_ROOT = Path(__file__).resolve().parents[2]
 ACKNOWLEDGEMENT = "I_UNDERSTAND_THIS_DATABASE_IS_EPHEMERAL"
 DATABASE_NAME = "rsc_pg16_release_gate"
 RLS_REVISION = "20260902_0044"
+HEAD_REVISION = "20260903_0045"
 RLS_BINDING_TABLE = "oam_sync_scope_bindings"
 RLS_READY_FUNCTION = "public.rsc_oam_runtime_binding_ready_0044()"
 EDGE_RECEIVER_ROLE = "edge_inbox"
@@ -54,6 +57,20 @@ BOOTSTRAP_ROLE_NAMES = tuple(
 WORK_ORDER_LOCK_FUNCTION = (
     "public.rsc_lock_material_request_work_order_reference_0042(uuid)"
 )
+MATERIAL_REQUEST_STATUS_TRIGGER_0045 = (
+    "trg_material_requests_status_transition_0045"
+)
+MATERIAL_REQUEST_NEUTRAL_AXES = {
+    "allocation_status": "not_allocated",
+    "reservation_status": "not_reserved",
+    "outbound_status": "not_started",
+    "shipment_status": "not_started",
+    "logistics_signature_status": "not_signed",
+    "oam_receipt_status": "not_occurred",
+    "personal_inbound_status": "not_started",
+    "notification_status": "not_started",
+    "reconciliation_status": "not_started",
+}
 PROJECTOR_SHADOW_SCHEMA = "projector_shadow_gate"
 TEST_OAM_SOURCE_COORDINATES = {
     "edge_source_instance": "pg16-reviewed-edge",
@@ -3606,6 +3623,2157 @@ def _assert_work_order_lock_acl_and_concurrency() -> None:
             assert cursor.fetchone()[0] == "pending"
 
 
+def _assert_0045_approval_catalog_drift_is_rejected(api_engine) -> None:
+    from app.database_security import DatabaseSecurityBoundaryError
+
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT "
+                "(SELECT count(*) FROM public.material_requests), "
+                "(SELECT count(*) FROM public.approval_instances)"
+            )
+            assert cursor.fetchone() == (0, 0)
+
+    parameters = _connection_parameters(
+        role="star_oam_migrator",
+        password=_role_password("star_oam_migrator"),
+    )
+    with psycopg.connect(**parameters, autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "ALTER TABLE public.material_requests ENABLE TRIGGER "
+                f"{MATERIAL_REQUEST_STATUS_TRIGGER_0045}"
+            )
+    try:
+        with psycopg.connect(**_admin_parameters()) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT trigger_row.tgenabled "
+                    "FROM pg_catalog.pg_trigger AS trigger_row "
+                    "JOIN pg_catalog.pg_class AS relation "
+                    "ON relation.oid = trigger_row.tgrelid "
+                    "JOIN pg_catalog.pg_namespace AS schema_row "
+                    "ON schema_row.oid = relation.relnamespace "
+                    "WHERE schema_row.nspname = 'public' "
+                    "AND relation.relname = 'material_requests' "
+                    "AND trigger_row.tgname = %s",
+                    (MATERIAL_REQUEST_STATUS_TRIGGER_0045,),
+                )
+                assert cursor.fetchone() == ("O",)
+        with pytest.raises(DatabaseSecurityBoundaryError):
+            _validate_runtime_security(api_engine)
+    finally:
+        with psycopg.connect(**parameters, autocommit=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "ALTER TABLE public.material_requests ENABLE ALWAYS TRIGGER "
+                    f"{MATERIAL_REQUEST_STATUS_TRIGGER_0045}"
+                )
+    _validate_runtime_security(api_engine)
+
+
+def _seed_material_request_approval_world():
+    from unittest.mock import patch
+
+    from app.demand_models import ApprovalRouteStepDef, ApprovalRouteVersion
+    from app.foundation_models import (
+        AuditChainHead,
+        FileObject,
+        Organization,
+        Permission,
+        Person,
+        Role,
+        RoleAssignment,
+        RolePermission,
+    )
+    from app.inventory_models import FormalMaterial
+    from app.models import User
+    import test_material_request_draft_service as draft_fixtures
+
+    expected_role_codes = {
+        "admin",
+        "provincial_manager",
+        "technician",
+        "star_headquarters_approver",
+    }
+    expected_permission_keys = {
+        ("material_request", "create", ""),
+        ("material_request", "update_draft", ""),
+        ("material_request", "submit", ""),
+        ("material_request", "approve_region", "approval_decision"),
+        (
+            "material_request",
+            "approve_headquarters",
+            "approval_decision",
+        ),
+        ("material_request", "register_external", "approval_evidence"),
+        ("material_request", "verify_external", "approval_evidence"),
+    }
+    expected_role_permission_keys = {
+        "technician": {
+            ("material_request", "create", ""),
+            ("material_request", "update_draft", ""),
+            ("material_request", "submit", ""),
+        },
+        "provincial_manager": {
+            ("material_request", "approve_region", "approval_decision"),
+        },
+        "admin": {
+            (
+                "material_request",
+                "approve_headquarters",
+                "approval_decision",
+            ),
+            ("material_request", "register_external", "approval_evidence"),
+            ("material_request", "verify_external", "approval_evidence"),
+        },
+    }
+    expected_steps = {
+        1: ("provincial_manager", "internal", "organization"),
+        2: ("admin", "internal", "national"),
+        3: (
+            "star_headquarters_approver",
+            "external_registration",
+            "document",
+        ),
+    }
+
+    migrator_engine = create_engine(
+        _sqlalchemy_url(
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+        ),
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=5,
+    )
+    try:
+        with Session(migrator_engine, expire_on_commit=False) as session:
+            roles = tuple(
+                session.scalars(
+                    select(Role)
+                    .where(Role.code.in_(expected_role_codes))
+                    .order_by(Role.code)
+                ).all()
+            )
+            roles_by_code = {row.code: row for row in roles}
+            assert set(roles_by_code) == expected_role_codes
+            assert all(row.status == "active" for row in roles)
+            assert {
+                row.code for row in roles if row.is_external
+            } == {"star_headquarters_approver"}
+
+            permissions = tuple(
+                session.scalars(
+                    select(Permission).where(
+                        Permission.resource == "material_request"
+                    )
+                ).all()
+            )
+            permissions_by_key = {
+                (row.resource, row.action, row.field_code): row
+                for row in permissions
+            }
+            assert len(permissions_by_key) == len(permissions)
+            assert expected_permission_keys <= set(permissions_by_key)
+
+            role_permissions = tuple(
+                session.scalars(
+                    select(RolePermission).where(
+                        RolePermission.role_id.in_(
+                            tuple(row.id for row in roles)
+                        ),
+                        RolePermission.permission_id.in_(
+                            tuple(
+                                permissions_by_key[key].id
+                                for key in expected_permission_keys
+                            )
+                        ),
+                    )
+                ).all()
+            )
+            role_permissions_by_pair = {
+                (row.role_id, row.permission_id): row
+                for row in role_permissions
+            }
+            assert len(role_permissions_by_pair) == len(role_permissions)
+            for role_code, permission_keys in expected_role_permission_keys.items():
+                for permission_key in permission_keys:
+                    row = role_permissions_by_pair.get(
+                        (
+                            roles_by_code[role_code].id,
+                            permissions_by_key[permission_key].id,
+                        )
+                    )
+                    assert row is not None and row.effect == "allow"
+
+            route = session.scalar(
+                select(ApprovalRouteVersion).where(
+                    ApprovalRouteVersion.route_code
+                    == "material_request_three_stage",
+                    ApprovalRouteVersion.version == 1,
+                )
+            )
+            assert route is not None
+            assert route.approval_mode == "external_registration"
+            assert route.status == "active"
+            assert route.effective_to is None
+            route_steps = tuple(
+                session.scalars(
+                    select(ApprovalRouteStepDef)
+                    .where(ApprovalRouteStepDef.route_version_id == route.id)
+                    .order_by(ApprovalRouteStepDef.step_no)
+                ).all()
+            )
+            assert {
+                row.step_no: (
+                    row.role_code,
+                    row.source_mode,
+                    row.scope_type,
+                )
+                for row in route_steps
+            } == expected_steps
+
+            audit_head = session.get(
+                AuditChainHead,
+                draft_fixtures.AUDIT_HEAD_ID,
+            )
+            assert audit_head is not None
+            assert audit_head.stream_key == "material_request"
+            assert audit_head.last_event_id is None
+            assert audit_head.last_hash is None
+            assert audit_head.version == 0
+
+            catalog_models = (
+                Role,
+                Permission,
+                RolePermission,
+                ApprovalRouteVersion,
+                ApprovalRouteStepDef,
+                AuditChainHead,
+            )
+            catalog_counts = {
+                model: session.scalar(select(func.count()).select_from(model))
+                for model in catalog_models
+            }
+            fixture_increments = {
+                Organization: 3,
+                Person: 4,
+                User: 4,
+                RoleAssignment: 4,
+                FormalMaterial: 2,
+                FileObject: 1,
+            }
+            fixture_counts = {
+                model: session.scalar(select(func.count()).select_from(model))
+                for model in fixture_increments
+            }
+
+            def existing_role(*args, **kwargs):
+                assert not args
+                row = roles_by_code[str(kwargs["code"])]
+                assert kwargs["status"] == row.status == "active"
+                assert bool(kwargs["is_external"]) is bool(row.is_external)
+                return row
+
+            def existing_permission(*args, **kwargs):
+                assert not args
+                key = (
+                    str(kwargs["resource"]),
+                    str(kwargs["action"]),
+                    str(kwargs["field_code"]),
+                )
+                assert key in expected_permission_keys
+                return permissions_by_key[key]
+
+            def existing_role_permission(*args, **kwargs):
+                assert not args
+                assert kwargs["effect"] == "allow"
+                row = role_permissions_by_pair.get(
+                    (kwargs["role_id"], kwargs["permission_id"])
+                )
+                assert row is not None and row.effect == "allow"
+                return row
+
+            def existing_route(*args, **kwargs):
+                assert not args
+                assert kwargs["route_code"] == route.route_code
+                assert kwargs["version"] == route.version == 1
+                assert kwargs["approval_mode"] == route.approval_mode
+                assert kwargs["effective_to"] is route.effective_to is None
+                assert kwargs["status"] == route.status == "active"
+                return route
+
+            route_steps_by_number = {row.step_no: row for row in route_steps}
+
+            def existing_route_step(*args, **kwargs):
+                assert not args
+                row = route_steps_by_number[int(kwargs["step_no"])]
+                assert kwargs["route_version_id"] == row.route_version_id
+                assert (
+                    kwargs["role_code"],
+                    kwargs["source_mode"],
+                    kwargs["scope_type"],
+                ) == expected_steps[row.step_no]
+                return row
+
+            def existing_audit_head(*args, **kwargs):
+                assert not args
+                assert kwargs == {
+                    "id": draft_fixtures.AUDIT_HEAD_ID,
+                    "stream_key": "material_request",
+                    "last_event_id": None,
+                    "last_hash": None,
+                    "version": 0,
+                }
+                return audit_head
+
+            with (
+                patch.object(
+                    draft_fixtures,
+                    "Role",
+                    side_effect=existing_role,
+                ),
+                patch.object(
+                    draft_fixtures,
+                    "Permission",
+                    side_effect=existing_permission,
+                ),
+                patch.object(
+                    draft_fixtures,
+                    "RolePermission",
+                    side_effect=existing_role_permission,
+                ),
+                patch.object(
+                    draft_fixtures,
+                    "ApprovalRouteVersion",
+                    side_effect=existing_route,
+                ),
+                patch.object(
+                    draft_fixtures,
+                    "ApprovalRouteStepDef",
+                    side_effect=existing_route_step,
+                ),
+                patch.object(
+                    draft_fixtures,
+                    "AuditChainHead",
+                    side_effect=existing_audit_head,
+                ),
+            ):
+                world = draft_fixtures.make_world(session, admin_count=2)
+
+            assert {
+                model: session.scalar(select(func.count()).select_from(model))
+                for model in catalog_models
+            } == catalog_counts
+            assert {
+                model: session.scalar(select(func.count()).select_from(model))
+                - fixture_counts[model]
+                for model in fixture_increments
+            } == fixture_increments
+            request_id = draft_fixtures._create_id(
+                world,
+                "pg16-approval-projection-create",
+            )
+            return (
+                request_id,
+                draft_fixtures._draft(world, request_id),
+                world.actor_user.id,
+                world.manager_users[0].id,
+                world.admin_users[0].id,
+                world.admin_users[1].id,
+            )
+    finally:
+        migrator_engine.dispose()
+
+
+def _assert_material_request_snapshot(
+    api_engine,
+    *,
+    request_id: uuid.UUID,
+    expected_status: str,
+    expected_version: int,
+    expected_decided_at: bool,
+) -> None:
+    from app.demand_models import ApprovalInstance, MaterialRequest, MaterialRequestLine
+
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        assert request is not None
+        assert request.status == expected_status
+        assert request.version == expected_version
+        assert (request.decided_at is not None) is expected_decided_at
+        assert {
+            field: getattr(request, field)
+            for field in MATERIAL_REQUEST_NEUTRAL_AXES
+        } == MATERIAL_REQUEST_NEUTRAL_AXES
+
+        lines = tuple(
+            session.scalars(
+                select(MaterialRequestLine)
+                .where(MaterialRequestLine.request_id == request_id)
+                .order_by(MaterialRequestLine.line_no)
+            ).all()
+        )
+        assert len(lines) == 1
+        if expected_status == "draft":
+            assert lines[0].status == "draft"
+        elif expected_status == "approval_in_progress":
+            assert lines[0].status == "approval_pending"
+            assert lines[0].final_approved_qty == 0
+            assert lines[0].cancelled_qty == 0
+            instances = tuple(
+                session.scalars(
+                    select(ApprovalInstance).where(
+                        ApprovalInstance.request_id == request_id
+                    )
+                ).all()
+            )
+            assert len(instances) == 1
+            assert instances[0].status == "active"
+            assert instances[0].current_step_no == 1
+            assert instances[0].completed_at is None
+        elif expected_status == "returned":
+            assert lines[0].status == "approval_pending"
+            assert lines[0].final_approved_qty == Decimal("0.000")
+            assert lines[0].cancelled_qty == Decimal("0.000")
+            instances = tuple(
+                session.scalars(
+                    select(ApprovalInstance).where(
+                        ApprovalInstance.request_id == request_id
+                    )
+                ).all()
+            )
+            assert len(instances) == 1
+            assert instances[0].status == "returned"
+            assert instances[0].current_step_no is None
+            assert instances[0].current_step_id is None
+            assert instances[0].completed_at is not None
+        elif expected_status == "cancelled":
+            assert request.cancelled_at is not None
+            assert lines[0].status == "cancelled"
+            assert lines[0].cancelled_qty == lines[0].final_approved_qty
+            instances = tuple(
+                session.scalars(
+                    select(ApprovalInstance).where(
+                        ApprovalInstance.request_id == request_id
+                    )
+                ).all()
+            )
+            assert len(instances) == 1
+            assert instances[0].status == (
+                "completed" if expected_decided_at else "returned"
+            )
+            assert instances[0].current_step_no is None
+            assert instances[0].current_step_id is None
+            assert instances[0].completed_at is not None
+
+
+def _assert_0045_formal_withdrawal(
+    api_engine,
+    *,
+    template_draft,
+    requester_user_id: str,
+) -> uuid.UUID:
+    from app.demand_models import (
+        ApprovalAction,
+        ApprovalInstance,
+        ApprovalStep,
+        MaterialRequest,
+        MaterialRequestCommand,
+        MaterialRequestLine,
+    )
+    from app.formal_services.material_request_draft import (
+        create_material_request_draft,
+        derive_material_request_create_id,
+        submit_material_request,
+    )
+    from app.formal_services.material_request_lifecycle import (
+        withdraw_material_request,
+    )
+    from app.foundation_models import AuditEvent, StateTransitionEvent
+    from test_material_request_approval_service import _principal
+    from test_material_request_draft_service import SECRET, _contact_envelope
+
+    create_key = "pg16-approval-formal-withdraw-create"
+    with Session(api_engine) as session:
+        requester = _principal(session, requester_user_id)
+        request_id = derive_material_request_create_id(
+            actor=requester,
+            idempotency_key=create_key,
+            idempotency_hmac_secret=SECRET,
+        )
+        created = create_material_request_draft(
+            session,
+            actor=requester,
+            material_request_id=request_id,
+            draft=replace(
+                template_draft,
+                contact_envelope=_contact_envelope(
+                    request_id,
+                    requester.person_id,
+                ),
+            ),
+            idempotency_key=create_key,
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-pg16-approval-formal-withdraw-create",
+        )
+        session.commit()
+
+    with Session(api_engine) as session:
+        submitted = submit_material_request(
+            session,
+            actor=_principal(session, requester_user_id),
+            material_request_id=request_id,
+            expected_version=created.request_version,
+            idempotency_key="pg16-approval-formal-withdraw-submit",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-pg16-approval-formal-withdraw-submit",
+        )
+        session.commit()
+
+    with Session(api_engine) as session:
+        withdrawn = withdraw_material_request(
+            session,
+            actor=_principal(session, requester_user_id),
+            material_request_id=request_id,
+            expected_version=submitted.version,
+            reason="申请人撤回临时 PG16 验证需求",
+            idempotency_key="pg16-approval-formal-withdraw-command",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-pg16-approval-formal-withdraw-command",
+        )
+        session.commit()
+
+    assert withdrawn.request_status == "withdrawn"
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        instance = session.scalar(
+            select(ApprovalInstance).where(
+                ApprovalInstance.request_id == request_id
+            )
+        )
+        assert request is not None and instance is not None
+        assert request.status == "withdrawn"
+        assert request.version == withdrawn.request_version
+        assert request.withdrawn_at == instance.completed_at
+        assert request.updated_at == request.withdrawn_at
+        assert instance.status == "withdrawn"
+        assert instance.current_step_no is None
+        assert instance.current_step_id is None
+        step_statuses = tuple(
+            session.scalars(
+                select(ApprovalStep.status)
+                .where(ApprovalStep.instance_id == instance.id)
+                .order_by(ApprovalStep.step_no)
+            )
+        )
+        assert step_statuses == ("cancelled", "cancelled", "cancelled")
+        line_statuses = tuple(
+            session.scalars(
+                select(MaterialRequestLine.status).where(
+                    MaterialRequestLine.request_id == request_id
+                )
+            )
+        )
+        assert line_statuses == ("approval_pending",)
+        command = session.scalar(
+            select(MaterialRequestCommand).where(
+                MaterialRequestCommand.request_id == request_id,
+                MaterialRequestCommand.operation == "withdraw",
+            )
+        )
+        assert command is not None
+        assert command.target_version == request.version
+        assert command.occurred_at == request.withdrawn_at
+        action = session.scalar(
+            select(ApprovalAction).where(
+                ApprovalAction.command_id == command.id,
+                ApprovalAction.action == "withdraw",
+            )
+        )
+        assert action is not None
+        assert action.instance_id == instance.id
+        assert action.step_id is None
+        assert action.actor_user_id == requester_user_id
+        assert session.scalar(
+            select(func.count()).select_from(StateTransitionEvent).where(
+                StateTransitionEvent.aggregate_type == "material_request",
+                StateTransitionEvent.aggregate_id == str(request_id),
+                StateTransitionEvent.to_status == "withdrawn",
+            )
+        ) == 1
+        assert session.scalar(
+            select(func.count()).select_from(AuditEvent).where(
+                AuditEvent.aggregate_type == "material_request",
+                AuditEvent.aggregate_id == str(request_id),
+                AuditEvent.action == "material_request.withdraw",
+            )
+        ) == 1
+    return request_id
+
+
+def _assert_0045_region_return_then_cancel(
+    api_engine,
+    *,
+    template_draft,
+    requester_user_id: str,
+    manager_user_id: str,
+) -> tuple[uuid.UUID, int]:
+    from app.demand_models import (
+        ApprovalAction,
+        ApprovalInstance,
+        ApprovalReturnLineFact,
+        ApprovalStep,
+        MaterialRequest,
+        MaterialRequestCancellationLineFact,
+        MaterialRequestCommand,
+        MaterialRequestLine,
+    )
+    from app.formal_services.material_request_approval import (
+        MaterialRequestApprovalInput,
+        decide_material_request_approval,
+    )
+    from app.formal_services.material_request_draft import (
+        create_material_request_draft,
+        derive_material_request_create_id,
+        submit_material_request,
+    )
+    from app.formal_services.material_request_lifecycle import (
+        MaterialRequestCancelInput,
+        cancel_material_request,
+    )
+    from app.formal_services.material_request_policy import (
+        ApprovalReturnInstruction,
+    )
+    from app.foundation_models import AuditEvent, StateTransitionEvent
+    from test_material_request_approval_service import _principal
+    from test_material_request_draft_service import SECRET, _contact_envelope
+
+    create_key = "pg16-approval-region-return-create"
+    with Session(api_engine) as session:
+        requester = _principal(session, requester_user_id)
+        request_id = derive_material_request_create_id(
+            actor=requester,
+            idempotency_key=create_key,
+            idempotency_hmac_secret=SECRET,
+        )
+        created = create_material_request_draft(
+            session,
+            actor=requester,
+            material_request_id=request_id,
+            draft=replace(
+                template_draft,
+                contact_envelope=_contact_envelope(
+                    request_id,
+                    requester.person_id,
+                ),
+            ),
+            idempotency_key=create_key,
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-pg16-approval-region-return-create",
+        )
+        session.commit()
+
+    with Session(api_engine) as session:
+        submitted = submit_material_request(
+            session,
+            actor=_principal(session, requester_user_id),
+            material_request_id=request_id,
+            expected_version=created.request_version,
+            idempotency_key="pg16-approval-region-return-submit",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-pg16-approval-region-return-submit",
+        )
+        session.commit()
+
+    with Session(api_engine) as session:
+        instance = session.scalar(
+            select(ApprovalInstance).where(
+                ApprovalInstance.request_id == request_id,
+                ApprovalInstance.status == "active",
+            )
+        )
+        line = session.scalar(
+            select(MaterialRequestLine).where(
+                MaterialRequestLine.request_id == request_id,
+                MaterialRequestLine.revision_no == submitted.revision_no,
+            )
+        )
+        assert instance is not None and instance.current_step_id is not None
+        assert line is not None
+        step = session.get(ApprovalStep, instance.current_step_id)
+        assert step is not None and step.step_no == 1 and step.status == "open"
+        returned = decide_material_request_approval(
+            session,
+            actor=_principal(session, manager_user_id),
+            material_request_id=request_id,
+            approval_step_id=step.id,
+            expected_request_version=submitted.version,
+            expected_step_version=step.version,
+            decision=MaterialRequestApprovalInput(
+                action="return",
+                return_lines=(
+                    ApprovalReturnInstruction(
+                        line.id,
+                        line.requested_qty,
+                        "请补充需求依据",
+                    ),
+                ),
+                comment="区域审批退回申请人补充",
+            ),
+            idempotency_key="pg16-approval-region-return-command",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-pg16-approval-region-return-command",
+        )
+        returned_step_id = step.id
+        # Force every deferred graph validator before the independent commit;
+        # the following durable reread proves 0045 accepted the formal graph.
+        session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        session.commit()
+
+    assert returned.request_status == "returned"
+    assert returned.instance_status == "returned"
+    assert returned.current_step_id is None
+    assert dict(returned.state_axes) == MATERIAL_REQUEST_NEUTRAL_AXES
+    _assert_material_request_snapshot(
+        api_engine,
+        request_id=request_id,
+        expected_status="returned",
+        expected_version=returned.request_version,
+        expected_decided_at=False,
+    )
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        instance = session.scalar(
+            select(ApprovalInstance).where(
+                ApprovalInstance.request_id == request_id
+            )
+        )
+        returned_step = session.get(ApprovalStep, returned_step_id)
+        return_fact = session.scalar(
+            select(ApprovalReturnLineFact).where(
+                ApprovalReturnLineFact.returned_from_step_id
+                == returned_step_id
+            )
+        )
+        line = session.scalar(
+            select(MaterialRequestLine).where(
+                MaterialRequestLine.request_id == request_id
+            )
+        )
+        assert request is not None and instance is not None
+        assert returned_step is not None and return_fact is not None
+        assert line is not None
+        assert request.submitted_at is not None
+        assert request.decided_at is None and request.cancelled_at is None
+        assert instance.status == "returned"
+        assert instance.completed_at == returned_step.decided_at
+        assert tuple(
+            session.scalars(
+                select(ApprovalStep.status)
+                .where(ApprovalStep.instance_id == instance.id)
+                .order_by(ApprovalStep.step_no)
+            )
+        ) == ("returned", "pending", "pending")
+        assert return_fact.target_kind == "requester_revision"
+        assert return_fact.target_step_id is None
+        assert return_fact.required_review_qty == line.requested_qty
+        return_action = session.get(
+            ApprovalAction,
+            return_fact.return_action_id,
+        )
+        assert return_action is not None
+        assert return_action.action == "return"
+        assert return_action.actor_user_id == manager_user_id
+        assert return_action.step_id == returned_step_id
+        assert session.scalar(
+            select(func.count()).select_from(StateTransitionEvent).where(
+                StateTransitionEvent.aggregate_type == "material_request",
+                StateTransitionEvent.aggregate_id == str(request_id),
+                StateTransitionEvent.from_status == "approval_in_progress",
+                StateTransitionEvent.to_status == "returned",
+            )
+        ) == 1
+        assert session.scalar(
+            select(func.count()).select_from(AuditEvent).where(
+                AuditEvent.aggregate_type == "material_request",
+                AuditEvent.aggregate_id == str(request_id),
+                AuditEvent.action == "material_request.approval.return",
+            )
+        ) == 1
+
+    with Session(api_engine) as session:
+        cancelled = cancel_material_request(
+            session,
+            actor=_principal(session, requester_user_id),
+            material_request_id=request_id,
+            expected_version=returned.request_version,
+            cancellation=MaterialRequestCancelInput(
+                reason="退回后确认无需继续申请",
+                lines=(),
+            ),
+            idempotency_key="pg16-approval-returned-cancel-command",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-pg16-approval-returned-cancel-command",
+        )
+        session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        session.commit()
+
+    assert cancelled.request_status == "cancelled"
+    assert dict(cancelled.state_axes) == MATERIAL_REQUEST_NEUTRAL_AXES
+    _assert_material_request_snapshot(
+        api_engine,
+        request_id=request_id,
+        expected_status="cancelled",
+        expected_version=cancelled.request_version,
+        expected_decided_at=False,
+    )
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        instance = session.get(ApprovalInstance, cancelled.approval_instance_id)
+        line = session.scalar(
+            select(MaterialRequestLine).where(
+                MaterialRequestLine.request_id == request_id
+            )
+        )
+        assert request is not None and instance is not None and line is not None
+        assert request.cancelled_at is not None
+        assert request.cancelled_at == request.updated_at
+        assert request.decided_at is None
+        assert instance.status == "returned"
+        assert line.status == "cancelled"
+        assert line.final_approved_qty == Decimal("0.000")
+        assert line.cancelled_qty == Decimal("0.000")
+        assert session.scalar(
+            select(func.count())
+            .select_from(MaterialRequestCancellationLineFact)
+            .where(
+                MaterialRequestCancellationLineFact.request_id == request_id
+            )
+        ) == 0
+        cancel_command = session.scalar(
+            select(MaterialRequestCommand).where(
+                MaterialRequestCommand.request_id == request_id,
+                MaterialRequestCommand.operation == "cancel",
+            )
+        )
+        assert cancel_command is not None
+        assert cancel_command.target_version == request.version
+        assert cancel_command.occurred_at == request.cancelled_at
+        cancel_action = session.scalar(
+            select(ApprovalAction).where(
+                ApprovalAction.command_id == cancel_command.id,
+                ApprovalAction.action == "cancel",
+            )
+        )
+        assert cancel_action is not None
+        assert cancel_action.instance_id == instance.id
+        assert cancel_action.step_id is None
+        assert cancel_action.actor_user_id == requester_user_id
+        assert session.scalar(
+            select(func.count()).select_from(StateTransitionEvent).where(
+                StateTransitionEvent.aggregate_type == "material_request",
+                StateTransitionEvent.aggregate_id == str(request_id),
+                StateTransitionEvent.from_status == "returned",
+                StateTransitionEvent.to_status == "cancelled",
+            )
+        ) == 1
+        assert session.scalar(
+            select(func.count()).select_from(AuditEvent).where(
+                AuditEvent.aggregate_type == "material_request",
+                AuditEvent.aggregate_id == str(request_id),
+                AuditEvent.action == "material_request.cancel",
+            )
+        ) == 1
+    return request_id, cancelled.request_version
+
+
+def _assert_0045_formal_approved_cancel(
+    api_engine,
+    *,
+    request_id: uuid.UUID,
+    request_version: int,
+    request_line_id: uuid.UUID,
+    approved_qty: Decimal,
+    requester_user_id: str,
+) -> int:
+    from app.demand_models import (
+        ApprovalAction,
+        ApprovalInstance,
+        MaterialRequest,
+        MaterialRequestCancellationLineFact,
+        MaterialRequestCommand,
+        MaterialRequestLine,
+    )
+    from app.formal_services.material_request_lifecycle import (
+        MaterialRequestCancellationLineInput,
+        MaterialRequestCancelInput,
+        cancel_material_request,
+    )
+    from app.foundation_models import AuditEvent, StateTransitionEvent
+    from test_material_request_approval_service import _principal
+    from test_material_request_draft_service import SECRET
+
+    line_reason = "审批完成且未进入履约，申请人确认整行取消"
+    with Session(api_engine) as session:
+        cancelled = cancel_material_request(
+            session,
+            actor=_principal(session, requester_user_id),
+            material_request_id=request_id,
+            expected_version=request_version,
+            cancellation=MaterialRequestCancelInput(
+                reason="已批准需求尚未履约，申请人确认取消",
+                lines=(
+                    MaterialRequestCancellationLineInput(
+                        request_line_id,
+                        approved_qty,
+                        line_reason,
+                    ),
+                ),
+            ),
+            idempotency_key="pg16-approval-approved-cancel-command",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-pg16-approval-approved-cancel-command",
+        )
+        session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        session.commit()
+
+    assert cancelled.request_status == "cancelled"
+    assert dict(cancelled.state_axes) == MATERIAL_REQUEST_NEUTRAL_AXES
+    _assert_material_request_snapshot(
+        api_engine,
+        request_id=request_id,
+        expected_status="cancelled",
+        expected_version=cancelled.request_version,
+        expected_decided_at=True,
+    )
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        line = session.get(MaterialRequestLine, request_line_id)
+        instance = session.get(ApprovalInstance, cancelled.approval_instance_id)
+        fact = session.scalar(
+            select(MaterialRequestCancellationLineFact).where(
+                MaterialRequestCancellationLineFact.request_id == request_id,
+                MaterialRequestCancellationLineFact.request_line_id
+                == request_line_id,
+            )
+        )
+        assert request is not None and line is not None and instance is not None
+        assert fact is not None
+        assert request.cancelled_at is not None
+        assert request.cancelled_at == request.updated_at
+        assert request.decided_at == instance.completed_at
+        assert instance.status == "completed"
+        assert line.status == "cancelled"
+        assert line.final_approved_qty == approved_qty
+        assert line.cancelled_qty == approved_qty
+        assert fact.final_approved_qty_before == approved_qty
+        assert fact.cancelled_qty == approved_qty
+        assert fact.reason == line_reason
+        assert fact.actor_user_id == requester_user_id
+        cancel_command = session.get(
+            MaterialRequestCommand,
+            fact.cancel_command_id,
+        )
+        cancel_action = session.get(ApprovalAction, fact.cancel_action_id)
+        assert cancel_command is not None and cancel_action is not None
+        assert cancel_command.operation == "cancel"
+        assert cancel_command.target_version == request.version
+        assert cancel_command.occurred_at == request.cancelled_at
+        assert cancel_action.command_id == cancel_command.id
+        assert cancel_action.instance_id == instance.id
+        assert cancel_action.step_id is None
+        assert cancel_action.action == "cancel"
+        assert cancel_action.actor_user_id == requester_user_id
+        assert session.scalar(
+            select(func.count()).select_from(StateTransitionEvent).where(
+                StateTransitionEvent.aggregate_type == "material_request",
+                StateTransitionEvent.aggregate_id == str(request_id),
+                StateTransitionEvent.from_status == "approved",
+                StateTransitionEvent.to_status == "cancelled",
+            )
+        ) == 1
+        assert session.scalar(
+            select(func.count()).select_from(AuditEvent).where(
+                AuditEvent.aggregate_type == "material_request",
+                AuditEvent.aggregate_id == str(request_id),
+                AuditEvent.action == "material_request.cancel",
+            )
+        ) == 1
+    return cancelled.request_version
+
+
+def _assert_0045_version_only_projection_drift_is_rejected(
+    api_engine,
+    *,
+    request_id: uuid.UUID,
+    expected_request_version: int,
+) -> None:
+    from app.demand_models import (
+        ApprovalInstance,
+        ApprovalStep,
+        MaterialRequest,
+        MaterialRequestLine,
+    )
+
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        instance = session.scalar(
+            select(ApprovalInstance).where(
+                ApprovalInstance.request_id == request_id,
+                ApprovalInstance.status == "active",
+            )
+        )
+        assert request is not None and instance is not None
+        assert request.status == "approval_in_progress"
+        assert request.version == expected_request_version
+        assert instance.current_step_id is not None
+        step = session.get(ApprovalStep, instance.current_step_id)
+        line = session.scalar(
+            select(MaterialRequestLine).where(
+                MaterialRequestLine.request_id == request_id,
+                MaterialRequestLine.revision_no == request.revision_no,
+            )
+        )
+        assert step is not None and step.status == "open"
+        assert line is not None and line.status == "approval_pending"
+        targets = (
+            (
+                "current approval_step",
+                "approval_steps",
+                step.id,
+                step.version,
+                step.updated_at,
+            ),
+            (
+                "approval_instance",
+                "approval_instances",
+                instance.id,
+                instance.version,
+                instance.updated_at,
+            ),
+            (
+                "material_request_line",
+                "material_request_lines",
+                line.id,
+                line.version,
+                line.updated_at,
+            ),
+        )
+
+    api_parameters = _connection_parameters(
+        role="star_oam_api",
+        password=_role_password("star_oam_api"),
+    )
+    for label, table_name, row_id, original_version, original_updated_at in targets:
+        for enforcement in ("force_deferred", "natural_commit"):
+            drift_time = original_updated_at + timedelta(
+                seconds=1 if enforcement == "force_deferred" else 2
+            )
+            with psycopg.connect(**api_parameters) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        sql.SQL(
+                            "UPDATE public.{} "
+                            "SET version = version + 1, updated_at = %s "
+                            "WHERE id = %s"
+                        ).format(sql.Identifier(table_name)),
+                        (drift_time, row_id),
+                    )
+                    assert cursor.rowcount == 1, label
+                    cursor.execute(
+                        sql.SQL(
+                            "SELECT version, updated_at FROM public.{} "
+                            "WHERE id = %s"
+                        ).format(sql.Identifier(table_name)),
+                        (row_id,),
+                    )
+                    assert cursor.fetchone() == (
+                        original_version + 1,
+                        drift_time,
+                    )
+                    if enforcement == "force_deferred":
+                        with pytest.raises(psycopg.Error) as drift_failure:
+                            cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+                    else:
+                        with pytest.raises(psycopg.Error) as drift_failure:
+                            connection.commit()
+                    assert (
+                        "formal material request approval projection is invalid"
+                        in str(drift_failure.value)
+                    ), label
+                connection.rollback()
+
+            with psycopg.connect(**api_parameters) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        sql.SQL(
+                            "SELECT version, updated_at FROM public.{} "
+                            "WHERE id = %s"
+                        ).format(sql.Identifier(table_name)),
+                        (row_id,),
+                    )
+                    assert cursor.fetchone() == (
+                        original_version,
+                        original_updated_at,
+                    ), label
+
+    _assert_material_request_snapshot(
+        api_engine,
+        request_id=request_id,
+        expected_status="approval_in_progress",
+        expected_version=expected_request_version,
+        expected_decided_at=False,
+    )
+
+
+def _assert_0045_external_pending_without_registration_is_rejected(
+    api_engine,
+    *,
+    request_id: uuid.UUID,
+    expected_request_version: int,
+) -> None:
+    from app.demand_models import (
+        ApprovalExternalRegistration,
+        ApprovalInstance,
+        ApprovalStep,
+        MaterialRequest,
+    )
+
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        instance = session.scalar(
+            select(ApprovalInstance).where(
+                ApprovalInstance.request_id == request_id,
+                ApprovalInstance.status == "active",
+            )
+        )
+        assert request is not None and instance is not None
+        assert request.status == "approval_in_progress"
+        assert request.version == expected_request_version
+        assert instance.current_step_no == 3
+        assert instance.current_step_id is not None
+        step = session.get(ApprovalStep, instance.current_step_id)
+        assert step is not None
+        assert step.source_mode == "external_registration"
+        assert step.status == "awaiting_external_evidence"
+        assert session.scalar(
+            select(func.count())
+            .select_from(ApprovalExternalRegistration)
+            .where(ApprovalExternalRegistration.step_id == step.id)
+        ) == 0
+        step_id = step.id
+        original_step = (step.status, step.version, step.updated_at)
+
+    api_parameters = _connection_parameters(
+        role="star_oam_api",
+        password=_role_password("star_oam_api"),
+    )
+    for enforcement in ("force_deferred", "natural_commit"):
+        drift_time = original_step[2] + timedelta(
+            seconds=1 if enforcement == "force_deferred" else 2
+        )
+        with psycopg.connect(**api_parameters) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE public.approval_steps "
+                    "SET status = 'evidence_pending_verification', "
+                    "version = version + 1, updated_at = %s "
+                    "WHERE id = %s "
+                    "AND status = 'awaiting_external_evidence'",
+                    (drift_time, step_id),
+                )
+                assert cursor.rowcount == 1
+                cursor.execute(
+                    "SELECT count(*) "
+                    "FROM public.approval_external_registrations "
+                    "WHERE step_id = %s",
+                    (step_id,),
+                )
+                assert cursor.fetchone() == (0,)
+                if enforcement == "force_deferred":
+                    with pytest.raises(psycopg.Error) as pending_failure:
+                        cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+                else:
+                    with pytest.raises(psycopg.Error) as pending_failure:
+                        connection.commit()
+                assert (
+                    "formal material request approval projection is invalid"
+                    in str(pending_failure.value)
+                )
+            connection.rollback()
+
+        with psycopg.connect(**api_parameters) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT status, version, updated_at "
+                    "FROM public.approval_steps WHERE id = %s",
+                    (step_id,),
+                )
+                assert cursor.fetchone() == original_step
+                cursor.execute(
+                    "SELECT count(*) "
+                    "FROM public.approval_external_registrations "
+                    "WHERE step_id = %s",
+                    (step_id,),
+                )
+                assert cursor.fetchone() == (0,)
+
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        instance = session.scalar(
+            select(ApprovalInstance).where(
+                ApprovalInstance.request_id == request_id,
+                ApprovalInstance.status == "active",
+            )
+        )
+        step = (
+            session.get(ApprovalStep, instance.current_step_id)
+            if instance is not None and instance.current_step_id is not None
+            else None
+        )
+        assert request is not None and instance is not None and step is not None
+        assert request.status == "approval_in_progress"
+        assert request.version == expected_request_version
+        assert instance.current_step_no == 3
+        assert step.status == "awaiting_external_evidence"
+        assert {
+            field: getattr(request, field)
+            for field in MATERIAL_REQUEST_NEUTRAL_AXES
+        } == MATERIAL_REQUEST_NEUTRAL_AXES
+
+
+def _add_0045_external_command_action_pair(
+    session: Session,
+    *,
+    marker: str,
+    operation: str,
+    action: str,
+    request_id: uuid.UUID,
+    request_reference: str,
+    revision_id: uuid.UUID,
+    revision_no: int,
+    instance_id: uuid.UUID,
+    step_id: uuid.UUID,
+    target_version: int,
+    actor_user_id: str,
+    actor_person_id: uuid.UUID,
+    actor_role_assignment_id: uuid.UUID,
+    authorization_version: int,
+    request_document: dict[str, object],
+    result_document: dict[str, object],
+) -> tuple[uuid.UUID, uuid.UUID]:
+    from app.demand_models import ApprovalAction, MaterialRequestCommand
+
+    def canonical_hash(document: dict[str, object]) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                document,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
+    occurred_at = session.scalar(select(func.current_timestamp()))
+    assert isinstance(occurred_at, datetime)
+    payload_document = {
+        "operation": operation,
+        "request_id": str(request_id),
+        "instance_id": str(instance_id),
+        "step_id": str(step_id),
+        "target_version": target_version,
+        "negative_gate_marker": marker,
+    }
+    request_hash = canonical_hash(payload_document)
+    command = MaterialRequestCommand(
+        id=uuid.uuid4(),
+        operation=operation,
+        request_id=request_id,
+        target_version=target_version,
+        idempotency_key_hash=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
+        request_reference=request_reference,
+        request_hash=request_hash,
+        result_hash=canonical_hash(result_document),
+        request_jsonb={
+            "schema": "rsc.material_request_approval_command.v1",
+            "operation": operation,
+            "request_id": str(request_id),
+            "revision_id": str(revision_id),
+            "revision_no": revision_no,
+            "instance_id": str(instance_id),
+            "target_version": target_version,
+            "payload_sha256": request_hash,
+            **request_document,
+        },
+        result_jsonb=result_document,
+        actor_user_id=actor_user_id,
+        actor_person_id=actor_person_id,
+        actor_role_assignment_id=actor_role_assignment_id,
+        authorization_version=authorization_version,
+        occurred_at=occurred_at,
+        created_at=occurred_at,
+    )
+    session.add(command)
+    session.flush()
+    action_row = ApprovalAction(
+        id=uuid.uuid4(),
+        instance_id=instance_id,
+        step_id=step_id,
+        command_id=command.id,
+        action=action,
+        actor_user_id=actor_user_id,
+        actor_person_id=actor_person_id,
+        actor_role_assignment_id=actor_role_assignment_id,
+        authorization_version=authorization_version,
+        source_mode="external_registration",
+        comment="0045 PostgreSQL 负向门禁",
+        occurred_at=occurred_at,
+        created_at=occurred_at,
+    )
+    session.add(action_row)
+    session.flush()
+    return command.id, action_row.id
+
+
+def _assert_0045_register_pair_without_registration_is_rejected(
+    api_engine,
+    *,
+    request_id: uuid.UUID,
+    expected_request_version: int,
+    registering_admin_user_id: str,
+) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    from app.demand_models import (
+        ApprovalAction,
+        ApprovalExternalRegistration,
+        ApprovalInstance,
+        ApprovalStep,
+        ApprovalStepCandidate,
+        MaterialRequest,
+        MaterialRequestCommand,
+    )
+
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        instance = session.scalar(
+            select(ApprovalInstance).where(
+                ApprovalInstance.request_id == request_id,
+                ApprovalInstance.status == "active",
+            )
+        )
+        assert request is not None and instance is not None
+        assert request.status == "approval_in_progress"
+        assert request.version == expected_request_version
+        assert instance.current_step_no == 3
+        assert instance.current_step_id is not None
+        step = session.get(ApprovalStep, instance.current_step_id)
+        assert step is not None
+        assert step.status == "awaiting_external_evidence"
+        assert step.source_mode == "external_registration"
+        actor = session.scalar(
+            select(ApprovalStepCandidate).where(
+                ApprovalStepCandidate.step_id == step.id,
+                ApprovalStepCandidate.user_id == registering_admin_user_id,
+                ApprovalStepCandidate.candidate_kind == "registrar",
+            )
+        )
+        assert actor is not None
+        assert session.scalar(
+            select(func.count())
+            .select_from(ApprovalExternalRegistration)
+            .where(ApprovalExternalRegistration.step_id == step.id)
+        ) == 0
+        request_snapshot = (
+            request.status,
+            request.version,
+            request.updated_at,
+        )
+        instance_snapshot = (
+            instance.status,
+            instance.version,
+            instance.updated_at,
+        )
+        step_snapshot = (step.status, step.version, step.updated_at)
+        request_no = request.request_no
+        revision_id = instance.request_revision_id
+        revision_no = instance.revision_no
+        instance_id = instance.id
+        instance_version = instance.version
+        step_id = step.id
+        step_attempt_no = step.attempt_no
+        step_version = step.version
+        actor_snapshot = (
+            actor.user_id,
+            actor.person_id,
+            actor.role_assignment_id,
+            actor.authorization_version,
+        )
+
+    for enforcement in ("force_deferred", "natural_commit"):
+        fake_registration_id = uuid.uuid4()
+        fake_registration_no = (
+            f"PG16-ORPHAN-REGISTER-{fake_registration_id.hex[:16].upper()}"
+        )
+        manifest_sha256 = hashlib.sha256(
+            f"{request_id}:{step_id}:{enforcement}".encode("utf-8")
+        ).hexdigest()
+        target_version = expected_request_version + 1
+        marker = f"pg16-orphan-register-{enforcement}-{uuid.uuid4()}"
+        result_document: dict[str, object] = {
+            "kind": "external_registration",
+            "request_id": str(request_id),
+            "request_no": request_no,
+            "request_status": "approval_in_progress",
+            "request_version": target_version,
+            "revision_id": str(revision_id),
+            "revision_no": revision_no,
+            "instance_id": str(instance_id),
+            "instance_version": instance_version + 1,
+            "step_id": str(step_id),
+            "step_attempt_no": step_attempt_no,
+            "step_status": "evidence_pending_verification",
+            "step_version": step_version + 1,
+            "registration_id": str(fake_registration_id),
+            "registration_no": fake_registration_no,
+            "registration_status": "pending_verification",
+            "external_action": "approve",
+            "decision_manifest_sha256": manifest_sha256,
+            "state_axes": dict(MATERIAL_REQUEST_NEUTRAL_AXES),
+        }
+        with Session(api_engine) as session:
+            command_id, action_id = _add_0045_external_command_action_pair(
+                session,
+                marker=marker,
+                operation="register_external",
+                action="register_external_evidence",
+                request_id=request_id,
+                request_reference=(
+                    f"/api/v1/material-requests/{request_id}/approval-steps/"
+                    f"{step_id}/external-evidence"
+                ),
+                revision_id=revision_id,
+                revision_no=revision_no,
+                instance_id=instance_id,
+                step_id=step_id,
+                target_version=target_version,
+                actor_user_id=actor_snapshot[0],
+                actor_person_id=actor_snapshot[1],
+                actor_role_assignment_id=actor_snapshot[2],
+                authorization_version=actor_snapshot[3],
+                request_document={
+                    "external_action": "approve",
+                    "registration_id": str(fake_registration_id),
+                    "return_lines": [],
+                    "registration_comment": "",
+                    "decision_manifest_sha256": manifest_sha256,
+                    "sensitive_fields": "excluded",
+                },
+                result_document=result_document,
+            )
+            command = session.get(MaterialRequestCommand, command_id)
+            action = session.get(ApprovalAction, action_id)
+            request = session.get(MaterialRequest, request_id)
+            instance = session.get(ApprovalInstance, instance_id)
+            step = session.get(ApprovalStep, step_id)
+            assert command is not None and action is not None
+            assert request is not None and instance is not None
+            assert step is not None
+
+            # Make the forged command/action the exact latest request operation.
+            # Keep the external step awaiting evidence: before 0045's reverse
+            # command binding, a graph with no registration rows had no other
+            # validator path that could prove this pair was orphaned.
+            request.version += 1
+            request.updated_at = command.occurred_at
+            instance.version += 1
+            instance.updated_at = command.occurred_at
+            step.version += 1
+            step.updated_at = command.occurred_at
+            session.flush()
+
+            assert (
+                request.status,
+                request.version,
+                request.updated_at,
+            ) == (
+                "approval_in_progress",
+                target_version,
+                command.occurred_at,
+            )
+            assert (
+                instance.status,
+                instance.version,
+                instance.updated_at,
+            ) == (
+                "active",
+                instance_version + 1,
+                command.occurred_at,
+            )
+            assert (
+                step.status,
+                step.version,
+                step.updated_at,
+            ) == (
+                "awaiting_external_evidence",
+                step_version + 1,
+                command.occurred_at,
+            )
+            assert session.get(
+                ApprovalExternalRegistration,
+                fake_registration_id,
+            ) is None
+            if enforcement == "force_deferred":
+                with pytest.raises(DBAPIError) as orphan_failure:
+                    session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+            else:
+                with pytest.raises(DBAPIError) as orphan_failure:
+                    session.commit()
+            assert (
+                "formal material request approval projection is invalid"
+                in str(orphan_failure.value)
+            )
+            session.rollback()
+
+        with Session(api_engine) as session:
+            request = session.get(MaterialRequest, request_id)
+            instance = session.get(ApprovalInstance, instance_id)
+            step = session.get(ApprovalStep, step_id)
+            assert request is not None and instance is not None and step is not None
+            assert (request.status, request.version, request.updated_at) == (
+                request_snapshot
+            )
+            assert (instance.status, instance.version, instance.updated_at) == (
+                instance_snapshot
+            )
+            assert (step.status, step.version, step.updated_at) == step_snapshot
+            assert session.get(MaterialRequestCommand, command_id) is None
+            assert session.get(ApprovalAction, action_id) is None
+            assert session.get(
+                ApprovalExternalRegistration,
+                fake_registration_id,
+            ) is None
+
+
+def _assert_0045_verify_pair_without_verified_registration_is_rejected(
+    api_engine,
+    *,
+    request_id: uuid.UUID,
+    expected_request_version: int,
+    verifying_admin_user_id: str,
+) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    from app.demand_models import (
+        ApprovalAction,
+        ApprovalExternalRegistration,
+        ApprovalInstance,
+        ApprovalStep,
+        ApprovalStepCandidate,
+        MaterialRequest,
+        MaterialRequestCommand,
+    )
+
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        instance = session.scalar(
+            select(ApprovalInstance).where(
+                ApprovalInstance.request_id == request_id,
+                ApprovalInstance.status == "active",
+            )
+        )
+        assert request is not None and instance is not None
+        assert request.status == "approval_in_progress"
+        assert request.version == expected_request_version
+        assert instance.current_step_no == 3
+        assert instance.current_step_id is not None
+        step = session.get(ApprovalStep, instance.current_step_id)
+        assert step is not None
+        assert step.status == "awaiting_external_evidence"
+        assert session.scalar(
+            select(func.count())
+            .select_from(ApprovalExternalRegistration)
+            .where(ApprovalExternalRegistration.step_id == step.id)
+        ) == 0
+        actor = session.scalar(
+            select(ApprovalStepCandidate).where(
+                ApprovalStepCandidate.step_id == step.id,
+                ApprovalStepCandidate.user_id == verifying_admin_user_id,
+                ApprovalStepCandidate.candidate_kind == "verifier",
+            )
+        )
+        assert actor is not None
+        request_snapshot = (
+            request.status,
+            request.version,
+            request.updated_at,
+        )
+        instance_snapshot = (
+            instance.status,
+            instance.version,
+            instance.updated_at,
+        )
+        step_snapshot = (step.status, step.version, step.updated_at)
+        request_no = request.request_no
+        revision_id = instance.request_revision_id
+        revision_no = instance.revision_no
+        instance_id = instance.id
+        instance_version = instance.version
+        step_id = step.id
+        step_attempt_no = step.attempt_no
+        step_version = step.version
+        actor_snapshot = (
+            actor.user_id,
+            actor.person_id,
+            actor.role_assignment_id,
+            actor.authorization_version,
+        )
+
+    for enforcement in ("force_deferred", "natural_commit"):
+        fake_registration_id = uuid.uuid4()
+        manifest_sha256 = hashlib.sha256(
+            f"{request_id}:{step_id}:{fake_registration_id}".encode("utf-8")
+        ).hexdigest()
+        target_version = expected_request_version + 1
+        marker = f"pg16-orphan-verify-{enforcement}-{uuid.uuid4()}"
+        result_document: dict[str, object] = {
+            "kind": "external_verification",
+            "request_id": str(request_id),
+            "request_no": request_no,
+            "request_status": "approval_in_progress",
+            "request_version": target_version,
+            "revision_id": str(revision_id),
+            "revision_no": revision_no,
+            "instance_id": str(instance_id),
+            "instance_status": "active",
+            "instance_version": instance_version + 1,
+            "step_id": str(step_id),
+            "step_attempt_no": step_attempt_no,
+            "step_status": "awaiting_external_evidence",
+            "step_version": step_version + 1,
+            "registration_id": str(fake_registration_id),
+            "registration_status": "rejected",
+            "verification_decision": "reject",
+            "current_step_id": str(step_id),
+            "current_step_no": 3,
+            "opened_step_id": None,
+            "opened_step_attempt_no": None,
+            "state_axes": dict(MATERIAL_REQUEST_NEUTRAL_AXES),
+        }
+        with Session(api_engine) as session:
+            command_id, action_id = _add_0045_external_command_action_pair(
+                session,
+                marker=marker,
+                operation="verify_external",
+                action="verify_external_reject",
+                request_id=request_id,
+                request_reference=(
+                    f"/mr/{request_id}/steps/{step_id}/external/"
+                    f"{fake_registration_id}/verify"
+                ),
+                revision_id=revision_id,
+                revision_no=revision_no,
+                instance_id=instance_id,
+                step_id=step_id,
+                target_version=target_version,
+                actor_user_id=actor_snapshot[0],
+                actor_person_id=actor_snapshot[1],
+                actor_role_assignment_id=actor_snapshot[2],
+                authorization_version=actor_snapshot[3],
+                request_document={
+                    "registration_id": str(fake_registration_id),
+                    "verification_decision": "reject",
+                    "registration_manifest_sha256": manifest_sha256,
+                    "sensitive_fields": "excluded",
+                },
+                result_document=result_document,
+            )
+            command = session.get(MaterialRequestCommand, command_id)
+            action = session.get(ApprovalAction, action_id)
+            request = session.get(MaterialRequest, request_id)
+            instance = session.get(ApprovalInstance, instance_id)
+            step = session.get(ApprovalStep, step_id)
+            assert command is not None and action is not None
+            assert request is not None and instance is not None
+            assert step is not None
+
+            # Keep the request and current external step non-terminal, as they
+            # would be after a legitimate verification rejection.  With no
+            # registration row, the validator without 0045's reverse binding
+            # had no row to iterate and therefore no way to reject this
+            # otherwise coherent command/action pair.
+            request.version += 1
+            request.updated_at = command.occurred_at
+            instance.version += 1
+            instance.updated_at = command.occurred_at
+            step.version += 1
+            step.updated_at = command.occurred_at
+            session.flush()
+
+            assert (
+                request.status,
+                request.version,
+                request.updated_at,
+            ) == (
+                "approval_in_progress",
+                target_version,
+                command.occurred_at,
+            )
+            assert (
+                instance.status,
+                instance.version,
+                instance.updated_at,
+            ) == (
+                "active",
+                instance_version + 1,
+                command.occurred_at,
+            )
+            assert (
+                step.status,
+                step.version,
+                step.updated_at,
+            ) == (
+                "awaiting_external_evidence",
+                step_version + 1,
+                command.occurred_at,
+            )
+            assert session.get(
+                ApprovalExternalRegistration,
+                fake_registration_id,
+            ) is None
+            if enforcement == "force_deferred":
+                with pytest.raises(DBAPIError) as orphan_failure:
+                    session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+            else:
+                with pytest.raises(DBAPIError) as orphan_failure:
+                    session.commit()
+            assert (
+                "formal material request approval projection is invalid"
+                in str(orphan_failure.value)
+            )
+            session.rollback()
+
+        with Session(api_engine) as session:
+            request = session.get(MaterialRequest, request_id)
+            instance = session.get(ApprovalInstance, instance_id)
+            step = session.get(ApprovalStep, step_id)
+            assert request is not None and instance is not None
+            assert step is not None
+            assert (request.status, request.version, request.updated_at) == (
+                request_snapshot
+            )
+            assert (instance.status, instance.version, instance.updated_at) == (
+                instance_snapshot
+            )
+            assert (step.status, step.version, step.updated_at) == step_snapshot
+            assert session.get(
+                ApprovalExternalRegistration,
+                fake_registration_id,
+            ) is None
+            assert session.get(MaterialRequestCommand, command_id) is None
+            assert session.get(ApprovalAction, action_id) is None
+
+
+def _assert_0045_raw_projection_bypass_and_formal_approval(
+    api_engine,
+) -> tuple[uuid.UUID, int]:
+    from app.demand_models import (
+        ApprovalExternalRegistration,
+        ApprovalInstance,
+        ApprovalStep,
+        ApprovalStepLineDecision,
+        MaterialRequest,
+        MaterialRequestLine,
+    )
+    from app.formal_services.material_request_draft import (
+        create_material_request_draft,
+        submit_material_request,
+    )
+    from app.formal_services.material_request_policy import ApprovalLineDecision
+    from test_material_request_approval_service import (
+        _approve,
+        _evidence,
+        _principal,
+        _register_external,
+        _verify_external,
+    )
+    from test_material_request_draft_service import SECRET
+
+    (
+        request_id,
+        draft,
+        requester_user_id,
+        manager_user_id,
+        registering_admin_user_id,
+        verifying_admin_user_id,
+    ) = _seed_material_request_approval_world()
+    assert registering_admin_user_id != verifying_admin_user_id
+
+    # Draft creation is one committed formal action.
+    with Session(api_engine) as session:
+        created = create_material_request_draft(
+            session,
+            actor=_principal(session, requester_user_id),
+            material_request_id=request_id,
+            draft=draft,
+            idempotency_key="pg16-approval-projection-create",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-pg16-approval-projection-create",
+        )
+        session.commit()
+    _assert_material_request_snapshot(
+        api_engine,
+        request_id=request_id,
+        expected_status="draft",
+        expected_version=created.request_version,
+        expected_decided_at=False,
+    )
+
+    api_parameters = _connection_parameters(
+        role="star_oam_api",
+        password=_role_password("star_oam_api"),
+    )
+    bypass_time = datetime.now(timezone.utc)
+    with psycopg.connect(**api_parameters) as connection:
+        with connection.cursor() as cursor:
+            with pytest.raises(psycopg.Error) as direct_failure:
+                cursor.execute(
+                    "UPDATE public.material_requests "
+                    "SET status = 'approved', submitted_at = %s, "
+                    "decided_at = %s, version = version + 1, updated_at = %s "
+                    "WHERE id = %s",
+                    (bypass_time, bypass_time, bypass_time, request_id),
+                )
+            assert "formal material request approval projection is invalid" in str(
+                direct_failure.value
+            )
+        connection.rollback()
+    _assert_material_request_snapshot(
+        api_engine,
+        request_id=request_id,
+        expected_status="draft",
+        expected_version=created.request_version,
+        expected_decided_at=False,
+    )
+
+    with psycopg.connect(**api_parameters) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE public.material_requests "
+                "SET version = version + 1, updated_at = %s "
+                "WHERE id = %s AND status = 'draft'",
+                (datetime.now(timezone.utc), request_id),
+            )
+            assert cursor.rowcount == 1
+            with pytest.raises(psycopg.Error) as version_failure:
+                cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+            assert "formal material request approval projection is invalid" in str(
+                version_failure.value
+            )
+        connection.rollback()
+    _assert_material_request_snapshot(
+        api_engine,
+        request_id=request_id,
+        expected_status="draft",
+        expected_version=created.request_version,
+        expected_decided_at=False,
+    )
+
+    # Submission is independently committed and creates the sealed revision,
+    # active instance, frozen candidates and three approval steps atomically.
+    with Session(api_engine) as session:
+        submitted = submit_material_request(
+            session,
+            actor=_principal(session, requester_user_id),
+            material_request_id=request_id,
+            expected_version=created.request_version,
+            idempotency_key="pg16-approval-projection-submit",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-pg16-approval-projection-submit",
+        )
+        session.commit()
+    _assert_material_request_snapshot(
+        api_engine,
+        request_id=request_id,
+        expected_status="approval_in_progress",
+        expected_version=submitted.version,
+        expected_decided_at=False,
+    )
+    _assert_0045_version_only_projection_drift_is_rejected(
+        api_engine,
+        request_id=request_id,
+        expected_request_version=submitted.version,
+    )
+
+    # A withdrawn instance plus cancelled open step is still only a mutable
+    # projection.  Without the requester's immutable command/action and the
+    # matching state/audit evidence, the complete forged graph must roll back.
+    bypass_time = datetime.now(timezone.utc)
+    with psycopg.connect(**api_parameters) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE public.approval_steps AS step "
+                "SET status = 'cancelled', version = step.version + 1, "
+                "updated_at = %s "
+                "FROM public.approval_instances AS instance "
+                "WHERE instance.request_id = %s "
+                "AND instance.current_step_id = step.id",
+                (bypass_time, request_id),
+            )
+            assert cursor.rowcount == 1
+            cursor.execute(
+                "UPDATE public.approval_instances "
+                "SET status = 'withdrawn', current_step_no = NULL, "
+                "current_step_id = NULL, completed_at = %s, "
+                "version = version + 1, updated_at = %s "
+                "WHERE request_id = %s AND status = 'active'",
+                (bypass_time, bypass_time, request_id),
+            )
+            assert cursor.rowcount == 1
+            cursor.execute(
+                "UPDATE public.material_requests "
+                "SET status = 'withdrawn', withdrawn_at = %s, "
+                "version = version + 1, updated_at = %s "
+                "WHERE id = %s AND status = 'approval_in_progress'",
+                (bypass_time, bypass_time, request_id),
+            )
+            assert cursor.rowcount == 1
+            with pytest.raises(psycopg.Error) as withdrawal_failure:
+                cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+            assert "formal material request approval projection is invalid" in str(
+                withdrawal_failure.value
+            )
+        connection.rollback()
+    _assert_material_request_snapshot(
+        api_engine,
+        request_id=request_id,
+        expected_status="approval_in_progress",
+        expected_version=submitted.version,
+        expected_decided_at=False,
+    )
+    _assert_0045_formal_withdrawal(
+        api_engine,
+        template_draft=draft,
+        requester_user_id=requester_user_id,
+    )
+    _assert_0045_region_return_then_cancel(
+        api_engine,
+        template_draft=draft,
+        requester_user_id=requester_user_id,
+        manager_user_id=manager_user_id,
+    )
+
+    # approval_in_progress -> approved is a legal header transition, so the
+    # statement itself succeeds.  The deferred 0045 graph validator must still
+    # reject the forged projection when constraints are forced (and at commit).
+    bypass_time = datetime.now(timezone.utc)
+    with psycopg.connect(**api_parameters) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE public.material_requests "
+                "SET status = 'approved', decided_at = %s, "
+                "version = version + 1, updated_at = %s "
+                "WHERE id = %s AND status = 'approval_in_progress'",
+                (bypass_time, bypass_time, request_id),
+            )
+            assert cursor.rowcount == 1
+            cursor.execute(
+                "SELECT status FROM public.material_requests WHERE id = %s",
+                (request_id,),
+            )
+            assert cursor.fetchone() == ("approved",)
+            with pytest.raises(psycopg.Error) as deferred_failure:
+                cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+            assert "formal material request approval projection is invalid" in str(
+                deferred_failure.value
+            )
+        connection.rollback()
+    _assert_material_request_snapshot(
+        api_engine,
+        request_id=request_id,
+        expected_status="approval_in_progress",
+        expected_version=submitted.version,
+        expected_decided_at=False,
+    )
+
+    # Every formal approval command below owns a separate database transaction.
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        line = session.scalar(
+            select(MaterialRequestLine).where(
+                MaterialRequestLine.request_id == request_id,
+                MaterialRequestLine.revision_no == submitted.revision_no,
+            )
+        )
+        assert request is not None and line is not None
+        _, regional = _approve(
+            session,
+            actor=_principal(session, manager_user_id),
+            request=request,
+            request_version=submitted.version,
+            quantities={line.id: line.requested_qty},
+            key="pg16-approval-projection-region",
+        )
+        line_id = line.id
+        approved_qty = line.requested_qty
+        session.commit()
+
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        assert request is not None
+        _, headquarters = _approve(
+            session,
+            actor=_principal(session, registering_admin_user_id),
+            request=request,
+            request_version=regional.request_version,
+            quantities={line_id: approved_qty},
+            key="pg16-approval-projection-headquarters",
+        )
+        session.commit()
+
+    _assert_0045_external_pending_without_registration_is_rejected(
+        api_engine,
+        request_id=request_id,
+        expected_request_version=headquarters.request_version,
+    )
+    _assert_0045_register_pair_without_registration_is_rejected(
+        api_engine,
+        request_id=request_id,
+        expected_request_version=headquarters.request_version,
+        registering_admin_user_id=registering_admin_user_id,
+    )
+    _assert_0045_verify_pair_without_verified_registration_is_rejected(
+        api_engine,
+        request_id=request_id,
+        expected_request_version=headquarters.request_version,
+        verifying_admin_user_id=verifying_admin_user_id,
+    )
+
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        assert request is not None
+        evidence = _evidence(
+            session,
+            uploaded_by=registering_admin_user_id,
+            marker="pg16-approval-projection-evidence",
+        )
+        step3, registration = _register_external(
+            session,
+            actor=_principal(session, registering_admin_user_id),
+            request=request,
+            request_version=headquarters.request_version,
+            evidence=evidence,
+            key="pg16-approval-projection-register",
+            action="approve",
+            lines=(ApprovalLineDecision(line_id, approved_qty, "同意"),),
+        )
+        step3_id = step3.id
+        session.commit()
+
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        step3 = session.get(ApprovalStep, step3_id)
+        assert request is not None and step3 is not None
+        verified = _verify_external(
+            session,
+            actor=_principal(session, verifying_admin_user_id),
+            request=request,
+            step=step3,
+            registration_id=registration.registration_id,
+            request_version=registration.request_version,
+            step_version=registration.step_version,
+            key="pg16-approval-projection-verify",
+        )
+        session.commit()
+
+    assert verified.request_status == "approved"
+    assert verified.instance_status == "completed"
+    assert dict(verified.state_axes) == MATERIAL_REQUEST_NEUTRAL_AXES
+    with Session(api_engine) as session:
+        request = session.get(MaterialRequest, request_id)
+        line = session.get(MaterialRequestLine, line_id)
+        registration_row = session.get(
+            ApprovalExternalRegistration,
+            registration.registration_id,
+        )
+        instance = session.scalar(
+            select(ApprovalInstance).where(
+                ApprovalInstance.request_id == request_id
+            )
+        )
+        assert request is not None and line is not None
+        assert registration_row is not None and instance is not None
+        assert request.status == "approved"
+        assert {
+            field: getattr(request, field)
+            for field in MATERIAL_REQUEST_NEUTRAL_AXES
+        } == MATERIAL_REQUEST_NEUTRAL_AXES
+        assert line.status == "approved"
+        assert line.final_approved_qty == approved_qty
+        assert line.cancelled_qty == 0
+        assert instance.status == "completed"
+        assert instance.current_step_no is None
+        assert instance.current_step_id is None
+        assert registration_row.status == "accepted"
+        assert registration_row.registered_by_user_id == registering_admin_user_id
+        assert registration_row.verified_by_user_id == verifying_admin_user_id
+        assert session.scalar(
+            select(func.count()).select_from(ApprovalStepLineDecision).where(
+                ApprovalStepLineDecision.step_id.in_(
+                    select(ApprovalStep.id).where(
+                        ApprovalStep.instance_id == instance.id
+                    )
+                )
+            )
+        ) == 3
+
+    with psycopg.connect(**api_parameters) as connection:
+        with connection.cursor() as cursor:
+            with pytest.raises(psycopg.Error) as pending_failure:
+                cursor.execute(
+                    "UPDATE public.material_requests "
+                    "SET status = 'cancellation_pending', "
+                    "version = version + 1, updated_at = %s "
+                    "WHERE id = %s AND status = 'approved'",
+                    (datetime.now(timezone.utc), request_id),
+                )
+            assert "formal material request approval projection is invalid" in str(
+                pending_failure.value
+            )
+        connection.rollback()
+    cancelled_version = _assert_0045_formal_approved_cancel(
+        api_engine,
+        request_id=request_id,
+        request_version=verified.request_version,
+        request_line_id=line_id,
+        approved_qty=approved_qty,
+        requester_user_id=requester_user_id,
+    )
+    return request_id, cancelled_version
+
+
+def _assert_0045_rejects_nonempty_approval_downgrade(
+    api_engine,
+    *,
+    request_id: uuid.UUID,
+    expected_version: int,
+) -> None:
+    assert _current_revision() == HEAD_REVISION
+    blocked = _run_alembic("downgrade", RLS_REVISION, expect_success=False)
+    assert "cannot downgrade 0045" in (blocked.stdout + blocked.stderr)
+    assert _current_revision() == HEAD_REVISION
+    _assert_material_request_snapshot(
+        api_engine,
+        request_id=request_id,
+        expected_status="cancelled",
+        expected_version=expected_version,
+        expected_decided_at=True,
+    )
+
+
 def _wait_for_backend_lock(backend_pid: int) -> None:
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
@@ -3847,7 +6015,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _assert_0044_preflight_serializes_projector_writer()
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
-    assert _current_revision() == RLS_REVISION
+    assert _current_revision() == HEAD_REVISION
     assert _work_order_lock_function_exists() is True
     _assert_pre_0043_acl_drift_was_cleaned(pre_0043_large_object_oid)
     _assert_projector_exact_column_acl()
@@ -3884,12 +6052,14 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         edge_engine.dispose()
         projector_engine.dispose()
 
+    _run_alembic("downgrade", RLS_REVISION)
+    assert _current_revision() == RLS_REVISION
     _assert_0044_rejects_nonempty_sync_downgrade()
     _clear_disposable_oam_sync_graph()
     _run_alembic("downgrade", "20260902_0043")
     _assert_0044_downgrade_revokes_runtime_writes()
     _run_alembic("upgrade", "head")
-    assert _current_revision() == RLS_REVISION
+    assert _current_revision() == HEAD_REVISION
     _provision_and_verify_deployment_acl()
     _provision_and_verify_oam_work_order_source()
     _assert_0044_bound_scope_attack_matrix(unbound_source_id)
@@ -3900,14 +6070,14 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     assert _work_order_lock_function_exists() is True
     _assert_projector_acl_revoked()
     _run_alembic("upgrade", "head")
-    assert _current_revision() == RLS_REVISION
+    assert _current_revision() == HEAD_REVISION
     assert _work_order_lock_function_exists() is True
 
     _run_alembic("downgrade", "20260902_0041")
     assert _current_revision() == "20260902_0041"
     assert _work_order_lock_function_exists() is False
     _run_alembic("upgrade", "head")
-    assert _current_revision() == RLS_REVISION
+    assert _current_revision() == HEAD_REVISION
     assert _work_order_lock_function_exists() is True
 
     _run_alembic("downgrade", "20260901_0040")
@@ -3923,6 +6093,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _delete_challenge(blocked_challenge)
 
     _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
     _provision_and_verify_deployment_acl()
     _provision_and_verify_oam_work_order_source()
     api_engine = create_engine(
@@ -3954,6 +6125,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     )
     try:
         _validate_runtime_security(api_engine)
+        _assert_0045_approval_catalog_drift_is_rejected(api_engine)
         _validate_projector_security(projector_engine)
         _validate_edge_security(edge_engine)
         _assert_cross_database_connections_denied()
@@ -3988,7 +6160,16 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         assert "cannot downgrade 0041" in (
             blocked_downgrade.stdout + blocked_downgrade.stderr
         )
-        assert _current_revision() == RLS_REVISION
+        assert _current_revision() == HEAD_REVISION
+
+        request_id, final_request_version = (
+            _assert_0045_raw_projection_bypass_and_formal_approval(api_engine)
+        )
+        _assert_0045_rejects_nonempty_approval_downgrade(
+            api_engine,
+            request_id=request_id,
+            expected_version=final_request_version,
+        )
     finally:
         edge_engine.dispose()
         projector_engine.dispose()

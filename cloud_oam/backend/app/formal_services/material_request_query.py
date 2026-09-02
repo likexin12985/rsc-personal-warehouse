@@ -1259,6 +1259,12 @@ def _withdraw_graph_is_safe(graph: _RequestGraph) -> bool:
     ):
         return False
     steps = graph.steps_by_instance.get(latest.id, ())
+    if any(
+        registration.status == "pending_verification"
+        for step in steps
+        for registration in graph.registrations_by_step.get(step.id, ())
+    ):
+        return False
     current = tuple(
         row
         for row in steps

@@ -18,6 +18,7 @@ from app.database_security import (
     EXPECTED_KMS_DATA_KEY_PIN_CONSTRAINTS,
     EXPECTED_KMS_DATA_KEY_PIN_INDEXES,
     EXPECTED_KMS_DATA_KEY_PIN_TRIGGERS,
+    EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS,
     EXPECTED_MATERIAL_REQUEST_CANCELLATION_INDEXES,
     EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS,
     EXPECTED_MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX,
@@ -50,6 +51,9 @@ from app.database_security import (
     OAM_SYNC_RUNTIME_FUNCTION_DEFINITIONS,
     OAM_SYNC_RUNTIME_FUNCTION_SHAPES,
     OAM_SYNC_RUNTIME_FUNCTIONS,
+    MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256,
+    MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS,
+    MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS,
     RUNTIME_DELETE_TABLES,
     RUNTIME_EXECUTE_FUNCTIONS,
     RUNTIME_FUNCTION_BODY_SHA256,
@@ -65,6 +69,7 @@ from app.database_security import (
     _FUNCTION_ACL_SQL,
     _NONOPENING_STOCKTAKE_CLOSE_TRIGGER_SQL,
     _MATERIAL_REQUEST_CANCELLATION_TRIGGER_SQL,
+    _MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL,
     _MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX_SQL,
     _OPENING_TERMINAL_TRIGGER_SQL,
     _OPENING_TERMINAL_INDEX_SQL,
@@ -82,6 +87,7 @@ from app.database_security import (
     _assert_fixed_audit_heads,
     _assert_formal_file_guards,
     _assert_kms_data_key_pin_guards,
+    _assert_material_request_approval_guards,
     _assert_material_request_cancellation_guards,
     _assert_material_request_command_recovery_index,
     _assert_nonopening_stocktake_close_guards,
@@ -184,6 +190,13 @@ MATERIAL_REQUEST_WORK_ORDER_LOCK_MIGRATION_0042 = (
     / "alembic"
     / "versions"
     / "20260902_0042_material_request_work_order_lock.py"
+)
+MATERIAL_REQUEST_APPROVAL_ACTIVATION_MIGRATION_0045 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0045_material_request_approval_activation.py"
 )
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
@@ -4256,3 +4269,449 @@ def test_complete_audit_graph_rejects_persisted_coordinate_mismatch(
     events[0][field] = value
     with pytest.raises(DatabaseSecurityBoundaryError, match="audit graph"):
         _assert_complete_audit_graph(heads=heads, events=events)
+
+
+def _load_material_request_approval_activation_migration_0045() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0045_material_request_approval_security_manifest",
+        MATERIAL_REQUEST_APPROVAL_ACTIVATION_MIGRATION_0045,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _valid_material_request_approval_trigger_rows(
+) -> list[dict[str, object]]:
+    return [
+        {
+            "trigger_name": name,
+            "table_name": table_name,
+            "function_name": function_name,
+            "function_schema": "public",
+            "enabled": enabled,
+            "trigger_type": trigger_type,
+            "is_constraint_trigger": is_constraint,
+            "is_deferrable": is_deferrable,
+            "is_initially_deferred": is_initially_deferred,
+            "has_when_clause": False,
+            "has_column_filter": False,
+        }
+        for name, (
+            table_name,
+            function_name,
+            enabled,
+            trigger_type,
+            is_constraint,
+            is_deferrable,
+            is_initially_deferred,
+        ) in sorted(EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items())
+    ]
+
+
+def _valid_material_request_approval_function_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for function_id, coordinate in enumerate(
+        sorted(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256),
+        start=1,
+    ):
+        function_name, argument_types = coordinate
+        source_body = f"catalog fixture for {function_name}({argument_types})"
+        monkeypatch.setitem(
+            MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256,
+            coordinate,
+            hashlib.sha256(source_body.encode("utf-8")).hexdigest(),
+        )
+        rows.append(
+            {
+                "function_id": function_id,
+                "function_name": function_name,
+                "argument_types": argument_types,
+                "function_kind": "f",
+                "result_type": (
+                    "void"
+                    if coordinate in MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS
+                    else "trigger"
+                ),
+                "argument_modes": None,
+                "argument_default_count": 0,
+                "is_strict": False,
+                "source_body": source_body,
+                "volatility": "v",
+                "parallel_safety": "u",
+                "is_leakproof": False,
+                "is_security_definer": (
+                    coordinate
+                    in MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
+                ),
+                "language_name": "plpgsql",
+                "configuration": ["search_path=pg_catalog, public"],
+                "owner_name": "star_oam_migrator",
+                "can_execute": False,
+                "api_execute_is_grantable": False,
+                "unexpected_execute_grantee_count": 0,
+                "public_can_execute": False,
+                "edge_can_execute": False,
+                "backup_can_execute": False,
+                "edge_receiver_can_execute": False,
+                "projector_can_execute": False,
+            }
+        )
+    return rows
+
+
+def _assert_valid_material_request_approval_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    triggers: list[dict[str, object]] | None = None,
+    functions: list[dict[str, object]] | None = None,
+) -> None:
+    _assert_material_request_approval_guards(
+        triggers=(
+            _valid_material_request_approval_trigger_rows()
+            if triggers is None
+            else triggers
+        ),
+        functions=(
+            _valid_material_request_approval_function_rows(monkeypatch)
+            if functions is None
+            else functions
+        ),
+        expected_migration_role="star_oam_migrator",
+    )
+
+
+def test_0045_material_request_approval_catalog_accepts_exact_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    triggers = _valid_material_request_approval_trigger_rows()
+    functions = _valid_material_request_approval_function_rows(monkeypatch)
+
+    assert len(triggers) == 61
+    assert len(functions) == 28
+    _assert_material_request_approval_guards(
+        triggers=triggers,
+        functions=functions,
+        expected_migration_role="star_oam_migrator",
+    )
+
+
+def test_0045_material_request_approval_trigger_catalog_rejects_set_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    triggers = _valid_material_request_approval_trigger_rows()
+    for drifted in (
+        triggers[1:],
+        [
+            *triggers,
+            {
+                **triggers[0],
+                "trigger_name": "trg_unapproved_material_request_probe_0045",
+            },
+        ],
+    ):
+        with pytest.raises(
+            DatabaseSecurityBoundaryError,
+            match="material-request approval guard",
+        ):
+            _assert_valid_material_request_approval_catalog(
+                monkeypatch,
+                triggers=drifted,
+            )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("table_name", "approval_actions"),
+        ("function_name", "rsc_unapproved_approval_rewrite_0045"),
+        ("function_schema", "attacker"),
+        ("enabled", "O"),
+        ("trigger_type", 31),
+        ("is_constraint_trigger", False),
+        ("is_deferrable", False),
+        ("is_initially_deferred", False),
+        ("has_when_clause", True),
+        ("has_column_filter", True),
+    ],
+)
+def test_0045_material_request_approval_trigger_catalog_rejects_shape_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    triggers = _valid_material_request_approval_trigger_rows()
+    target = next(
+        row
+        for row in triggers
+        if row["trigger_name"]
+        == "trg_material_requests_approval_projection_0045"
+    )
+    target[field] = value
+
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match=rf"trg_material_requests_approval_projection_0045\.{field}",
+    ):
+        _assert_valid_material_request_approval_catalog(
+            monkeypatch,
+            triggers=triggers,
+        )
+
+
+def test_0045_material_request_approval_function_catalog_rejects_set_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    functions = _valid_material_request_approval_function_rows(monkeypatch)
+    for drifted in (
+        functions[1:],
+        [
+            *functions,
+            {
+                **functions[0],
+                "function_id": len(functions) + 1,
+                "function_name": "rsc_unapproved_approval_helper_0045",
+            },
+        ],
+    ):
+        with pytest.raises(
+            DatabaseSecurityBoundaryError,
+            match="material-request approval guard",
+        ):
+            _assert_material_request_approval_guards(
+                triggers=_valid_material_request_approval_trigger_rows(),
+                functions=drifted,
+                expected_migration_role="star_oam_migrator",
+            )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source_body", "tampered approval helper body"),
+        ("owner_name", "star_oam_api"),
+        ("can_execute", True),
+        ("api_execute_is_grantable", True),
+        ("unexpected_execute_grantee_count", 1),
+        ("public_can_execute", True),
+        ("edge_can_execute", True),
+        ("backup_can_execute", True),
+        ("edge_receiver_can_execute", True),
+        ("projector_can_execute", True),
+        ("is_security_definer", True),
+        ("result_type", "record"),
+        ("configuration", ["search_path=public"]),
+    ],
+)
+def test_0045_material_request_approval_function_catalog_rejects_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    functions = _valid_material_request_approval_function_rows(monkeypatch)
+    target = next(
+        row
+        for row in functions
+        if row["function_name"]
+        == "rsc_guard_material_request_status_transition_0045"
+    )
+    target[field] = value
+
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match="rsc_guard_material_request_status_transition_0045",
+    ):
+        _assert_material_request_approval_guards(
+            triggers=_valid_material_request_approval_trigger_rows(),
+            functions=functions,
+            expected_migration_role="star_oam_migrator",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("is_security_definer", False),
+        ("result_type", "trigger"),
+    ],
+)
+def test_0045_material_request_approval_privileged_validator_drift_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    functions = _valid_material_request_approval_function_rows(monkeypatch)
+    target = next(
+        row
+        for row in functions
+        if (
+            row["function_name"],
+            row["argument_types"],
+        )
+        == (
+            "rsc_validate_material_request_approval_projection_0045",
+            "uuid",
+        )
+    )
+    target[field] = value
+
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match="rsc_validate_material_request_approval_projection_0045",
+    ):
+        _assert_material_request_approval_guards(
+            triggers=_valid_material_request_approval_trigger_rows(),
+            functions=functions,
+            expected_migration_role="star_oam_migrator",
+        )
+
+
+def test_0045_material_request_approval_trigger_query_captures_complete_scope(
+) -> None:
+    query = " ".join(str(_MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL).split())
+
+    assert "trigger_row.tgname ~ '_(0029|0030|0045)$'" in query
+    assert "function_row.proname IN" in query
+    assert "AND NOT trigger_row.tgisinternal" in query
+    assert "trigger_row.tgname IN" not in query
+    for required_field in (
+        "trigger_row.tgenabled",
+        "trigger_row.tgtype",
+        "trigger_row.tgconstraint",
+        "trigger_row.tgdeferrable",
+        "trigger_row.tginitdeferred",
+        "trigger_row.tgqual",
+        "trigger_row.tgattr",
+    ):
+        assert required_field in query
+    for function_name in {
+        expected[1]
+        for expected in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.values()
+    }:
+        assert f"'{function_name}'" in query
+    assert {
+        coordinate[0].rsplit("_", 1)[-1]
+        for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
+    } == {"0029", "0030", "0045"}
+
+
+def test_0045_material_request_approval_migration_bindings_match_manifest(
+) -> None:
+    migration = _load_material_request_approval_activation_migration_0045()
+    manifest_bindings = {
+        name: expected[0]
+        for name, expected in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items()
+    }
+    migration_bindings = {
+        trigger_name: table_name
+        for table_name, trigger_name in migration.TRIGGER_BINDINGS
+    }
+
+    assert migration.down_revision == "20260902_0044"
+    assert len(migration.LEGACY_TRIGGER_BINDINGS) == 45
+    assert len(migration.NEW_TRIGGER_BINDINGS) == 16
+    assert len(migration.TRIGGER_BINDINGS) == 61
+    assert len(migration_bindings) == len(migration.TRIGGER_BINDINGS)
+    assert migration_bindings == manifest_bindings
+    assert migration.PROJECTION_TRIGGER_TABLES == (
+        "material_requests",
+        "material_request_revisions",
+        "material_request_lines",
+        "material_request_commands",
+        "approval_instances",
+        "approval_steps",
+        "approval_actions",
+        "approval_external_registrations",
+        "approval_external_registration_lines",
+        "approval_step_line_decisions",
+        "approval_return_line_facts",
+        "state_transition_events",
+        "audit_events",
+    )
+    assert {
+        trigger_name
+        for _, trigger_name in migration.LEGACY_TRIGGER_BINDINGS
+    } == {
+        name
+        for name in manifest_bindings
+        if name.endswith(("_0029", "_0030"))
+    }
+    assert {
+        trigger_name
+        for _, trigger_name in migration.NEW_TRIGGER_BINDINGS
+    } == {
+        name for name in manifest_bindings if name.endswith("_0045")
+    }
+    assert all(
+        expected[2] == "A"
+        for expected in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.values()
+    )
+
+
+def test_0045_material_request_approval_function_bodies_match_manifest(
+) -> None:
+    migration = _load_material_request_approval_activation_migration_0045()
+    function_sql = {
+        (migration.PG_STATUS_GUARD_FUNCTION, ""): migration._status_guard_sql(),
+        (migration.PG_LINE_GUARD_FUNCTION, ""): migration._line_guard_sql(),
+        (
+            migration.PG_COMMAND_PARENT_LOCK_FUNCTION,
+            "",
+        ): migration._command_parent_lock_sql(),
+        (
+            migration.PG_TERMINAL_VALIDATE_FUNCTION,
+            "uuid, uuid, uuid, bigint",
+        ): migration._terminal_validator_sql(),
+        (
+            migration.PG_RETURN_VALIDATE_FUNCTION,
+            "uuid, uuid",
+        ): migration._return_validator_sql(),
+        (
+            migration.PG_EXTERNAL_VALIDATE_FUNCTION,
+            "uuid",
+        ): migration._external_validator_sql(),
+        (
+            migration.PG_PROJECTION_VALIDATE_FUNCTION,
+            "uuid",
+        ): migration._projection_validator_sql(),
+        (
+            migration.PG_PROJECTION_DISPATCH_FUNCTION,
+            "",
+        ): migration._projection_dispatcher_sql(),
+    }
+
+    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 28
+    assert set(function_sql) == {
+        coordinate
+        for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
+        if coordinate[0].endswith("_0045")
+    }
+    for coordinate, sql in function_sql.items():
+        body = sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+        assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (
+            MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate]
+        )
+    assert MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS == {
+        (migration.PG_APPROVAL_DISPATCH_FUNCTION_0030, ""),
+        (
+            migration.PG_TERMINAL_VALIDATE_FUNCTION,
+            "uuid, uuid, uuid, bigint",
+        ),
+        (migration.PG_RETURN_VALIDATE_FUNCTION, "uuid, uuid"),
+        (migration.PG_EXTERNAL_VALIDATE_FUNCTION, "uuid"),
+        (migration.PG_PROJECTION_VALIDATE_FUNCTION, "uuid"),
+        (migration.PG_PROJECTION_DISPATCH_FUNCTION, ""),
+    }
+    assert MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS == {
+        (migration.PG_APPROVAL_VALIDATE_FUNCTION_0030, "uuid"),
+        (
+            migration.PG_TERMINAL_VALIDATE_FUNCTION,
+            "uuid, uuid, uuid, bigint",
+        ),
+        (migration.PG_RETURN_VALIDATE_FUNCTION, "uuid, uuid"),
+        (migration.PG_EXTERNAL_VALIDATE_FUNCTION, "uuid"),
+        (migration.PG_PROJECTION_VALIDATE_FUNCTION, "uuid"),
+    }

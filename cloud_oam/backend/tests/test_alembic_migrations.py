@@ -330,7 +330,14 @@ OAM_SYNC_SCOPE_FORCE_RLS_REVISION = (
     / "versions"
     / "20260902_0044_oam_sync_scope_force_rls.py"
 )
-HEAD_REVISION = "20260902_0044"
+MATERIAL_REQUEST_APPROVAL_ACTIVATION_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0045_material_request_approval_activation.py"
+)
+HEAD_REVISION = "20260903_0045"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -344,6 +351,8 @@ SMS_DISPATCH_OWNERSHIP_REVISION_ID = "20260902_0041"
 MATERIAL_REQUEST_WORK_ORDER_LOCK_REVISION_ID = "20260902_0042"
 OAM_WORK_ORDER_PROJECTOR_BOUNDARY_REVISION_ID = "20260902_0043"
 OAM_SYNC_SCOPE_FORCE_RLS_REVISION_ID = "20260902_0044"
+MATERIAL_REQUEST_APPROVAL_ACTIVATION_REVISION_ID = "20260903_0045"
+PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION = "20260902_0044"
 PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION = "20260902_0043"
 PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION = "20260902_0042"
 PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION = "20260902_0041"
@@ -1339,23 +1348,23 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert head is not None
     assert (
         head.down_revision
-        == PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION
+        == PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION
     )
     previous_head = script.get_revision(
-        PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION
+        PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION
     )
     assert previous_head is not None
     assert (
         previous_head.down_revision
-        == PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION
+        == PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION
     )
     previous_sms_head = script.get_revision(
-        PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION
+        PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION
     )
     assert previous_sms_head is not None
     assert (
         previous_sms_head.down_revision
-        == PRE_MATERIAL_REQUEST_WORK_ORDER_LOCK_HEAD_REVISION
+        == PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION
     )
 
 
@@ -2036,6 +2045,235 @@ def test_0044_sqlite_is_schema_noop_and_only_moves_revision(
         downgraded_engine.dispose()
 
 
+def _load_0045_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "material_request_approval_activation_migration_0045",
+        MATERIAL_REQUEST_APPROVAL_ACTIVATION_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_0045_postgresql_functions_parse_as_sql_and_plpgsql() -> None:
+    parser = pytest.importorskip("pglast.parser")
+    module = _load_0045_migration_module()
+    function_sql = (
+        module._status_guard_sql(),
+        module._line_guard_sql(),
+        module._command_parent_lock_sql(),
+        module._terminal_validator_sql(),
+        module._return_validator_sql(),
+        module._external_validator_sql(),
+        module._projection_validator_sql(),
+        module._projection_dispatcher_sql(),
+    )
+
+    for statement in function_sql:
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+
+
+def test_0045_postgresql_offline_sql_closes_exact_approval_boundary(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0045_migration_module()
+    assert len(module.LEGACY_TRIGGER_BINDINGS) == 45
+    assert len(module.NEW_TRIGGER_BINDINGS) == 16
+    assert len(module.TRIGGER_BINDINGS) == 61
+    assert len(set(module.TRIGGER_BINDINGS)) == 61
+    assert len(module.PROJECTION_TRIGGER_TABLES) == 13
+
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION}:"
+        f"{MATERIAL_REQUEST_APPROVAL_ACTIVATION_REVISION_ID}",
+        sql=True,
+    )
+    sql = output.getvalue()
+
+    assert "-- Running upgrade 20260902_0044 -> 20260903_0045" in sql
+    lock_offset = sql.index("LOCK TABLE public.approval_step_candidates")
+    preflight_offset = sql.index(module.UPGRADE_BLOCKER)
+    repair_offset = sql.index(
+        "ALTER FUNCTION public.rsc_dispatch_approval_causality_0030() "
+        "SECURITY DEFINER"
+    )
+    first_enable_offset = sql.index(" ENABLE ALWAYS TRIGGER ")
+    assert lock_offset < preflight_offset < repair_offset < first_enable_offset
+    for table_name in module.APPROVAL_FACT_TABLES:
+        assert f"EXISTS (SELECT 1 FROM public.{table_name})" in sql
+    for table_name, trigger_name in module.TRIGGER_BINDINGS:
+        statement = (
+            f"ALTER TABLE public.{table_name} ENABLE ALWAYS TRIGGER "
+            f"{trigger_name}"
+        )
+        assert sql.count(statement) == 1
+    assert sql.count("CREATE CONSTRAINT TRIGGER ") == 13
+    assert (
+        "CREATE TRIGGER trg_material_requests_status_transition_0045 "
+        "BEFORE INSERT OR UPDATE"
+    ) in sql
+    assert (
+        "CREATE TRIGGER trg_material_request_lines_projection_write_0045 "
+        "BEFORE UPDATE"
+    ) in sql
+    assert (
+        "CREATE TRIGGER trg_material_request_commands_parent_lock_0045 "
+        "BEFORE INSERT"
+    ) in sql
+    for table_name in module.PROJECTION_TRIGGER_TABLES:
+        assert sql.count(
+            f"CREATE CONSTRAINT TRIGGER trg_{table_name}_approval_projection_0045"
+        ) == 1
+
+    parent_lock_sql = module._command_parent_lock_sql()
+    terminal_sql = module._terminal_validator_sql()
+    return_sql = module._return_validator_sql()
+    external_sql = module._external_validator_sql()
+    projection_sql = module._projection_validator_sql()
+    dispatcher_sql = module._projection_dispatcher_sql()
+    status_sql = module._status_guard_sql()
+    assert "WHERE id = NEW.request_id" in parent_lock_sql
+    assert "FOR UPDATE" in parent_lock_sql
+    assert "NEW.operation <> 'cancel'" not in parent_lock_sql
+    assert "SECURITY DEFINER" in terminal_sql
+    assert "SECURITY DEFINER" in return_sql
+    assert "SECURITY DEFINER" in external_sql
+    assert "SECURITY DEFINER" in projection_sql
+    assert "SECURITY DEFINER" in dispatcher_sql
+    assert (
+        "PERFORM public.rsc_validate_approval_instance_causality_0030"
+        in projection_sql
+    )
+    assert "command.operation = 'region_decide'" in terminal_sql
+    assert "command.operation = 'headquarters_decide'" in terminal_sql
+    assert "command.operation = 'verify_external'" in terminal_sql
+    assert "action.action = 'verify_external_accept'" in terminal_sql
+    assert "event.reason = CASE" in terminal_sql
+    assert "material_request.external_evidence.verify_accept" in terminal_sql
+    assert "material_request.approval.reject" in terminal_sql
+    assert "step.step_no = 1" in return_sql
+    assert "command.operation = 'region_decide'" in return_sql
+    assert "command.operation <> 'update_draft'" in return_sql
+    assert "command.operation = 'cancel'" in return_sql
+    assert "regional_approval_returned_to_requester" in return_sql
+    assert "material_request.approval.return" in return_sql
+    assert "command.operation = 'register_external'" in external_sql
+    assert "command.operation = 'verify_external'" in external_sql
+    assert "action.action <> 'register_external_evidence'" in external_sql
+    assert "'verify_external_accept', 'verify_external_reject'" in external_sql
+    assert (
+        "registration.id::text =\n"
+        "                              command.request_jsonb->>'registration_id'"
+        in external_sql
+    )
+    assert (
+        "registration.id::text =\n"
+        "                              command.result_jsonb->>'registration_id'"
+        in external_sql
+    )
+    assert "registration_manifest_sha256" in external_sql
+    assert "approval_external_registration_lines" in dispatcher_sql
+    for table_name in module.PROJECTION_TRIGGER_TABLES:
+        assert f"'{table_name}'" in dispatcher_sql
+    assert "checked_aggregate_type = 'material_request'" in dispatcher_sql
+    assert "checked_aggregate_type = 'approval_step'" in dispatcher_sql
+    assert "FROM public.approval_instances AS instance" in dispatcher_sql
+    assert "FROM public.approval_steps AS step" in dispatcher_sql
+    assert "command.operation = 'withdraw'" in projection_sql
+    assert "command_count <> request_row.version + 1" in projection_sql
+    assert "minimum_target_version <> 0" in projection_sql
+    assert "maximum_target_version <> request_row.version" in projection_sql
+    assert "command.target_version = request_row.version" in projection_sql
+    assert "action.action = 'withdraw'" in projection_sql
+    assert "event.action = 'material_request.withdraw'" in projection_sql
+    assert "event.to_status = 'withdrawn'" in projection_sql
+    assert (
+        "request_row.withdrawn_at IS DISTINCT FROM "
+        "latest_instance.completed_at"
+    ) in projection_sql
+    assert (
+        "request_row.decided_at IS DISTINCT FROM "
+        "latest_instance.completed_at"
+    ) in projection_sql
+    assert "NEW.status = 'cancellation_pending'" not in status_sql
+    assert "request_row.status IN ('approved', 'partially_approved', 'rejected')" in (
+        projection_sql
+    )
+    assert (
+        "PERFORM public.rsc_validate_material_request_terminal_causality_0045"
+        in projection_sql
+    )
+    assert (
+        "PERFORM public.rsc_validate_material_request_return_causality_0045"
+        in projection_sql
+    )
+    assert "FROM PUBLIC, star_oam_api" in sql
+
+
+def test_0045_postgresql_offline_downgrade_requires_online_empty_graph_check(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    with pytest.raises(RuntimeError, match="requires an online connection"):
+        command.downgrade(
+            config,
+            f"{MATERIAL_REQUEST_APPROVAL_ACTIVATION_REVISION_ID}:"
+            f"{PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION}",
+            sql=True,
+        )
+
+
+def test_0045_sqlite_is_schema_noop_and_only_moves_revision(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'approval-activation-noop.db'}"
+    config = _config(database_url)
+    command.upgrade(config, PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION)
+    before_engine = sa.create_engine(database_url)
+    try:
+        before_tables = set(inspect(before_engine).get_table_names())
+    finally:
+        before_engine.dispose()
+
+    command.upgrade(config, MATERIAL_REQUEST_APPROVAL_ACTIVATION_REVISION_ID)
+    after_engine = sa.create_engine(database_url)
+    try:
+        assert set(inspect(after_engine).get_table_names()) == before_tables
+        with after_engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == MATERIAL_REQUEST_APPROVAL_ACTIVATION_REVISION_ID
+    finally:
+        after_engine.dispose()
+
+    command.downgrade(config, PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION)
+    downgraded_engine = sa.create_engine(database_url)
+    try:
+        assert set(inspect(downgraded_engine).get_table_names()) == before_tables
+        with downgraded_engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION
+    finally:
+        downgraded_engine.dispose()
+
+
 def test_0041_sqlite_schema_indexes_and_evidence_triggers(
     tmp_path: Path,
     monkeypatch,
@@ -2224,7 +2462,8 @@ def test_0041_offline_downgrade_requires_online_evidence_check(
     with pytest.raises(RuntimeError, match="online evidence check"):
         command.downgrade(
             config,
-            f"{HEAD_REVISION}:{PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION}",
+            f"{SMS_DISPATCH_OWNERSHIP_REVISION_ID}:"
+            f"{PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION}",
             sql=True,
         )
 

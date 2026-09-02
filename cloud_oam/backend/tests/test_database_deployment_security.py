@@ -123,6 +123,15 @@ def test_postgresql16_gate_covers_main_prs_and_edge_role_provisioning() -> None:
     assert workflow.count(
         '      - "cloud_oam/deployment/provision_oam_edge_scope.sql"\n'
     ) == 2
+    for approval_gate in (
+        "backend/tests/test_database_security.py",
+        "backend/tests/test_material_request_draft_service.py",
+        "backend/tests/test_material_request_approval_service.py",
+        "backend/tests/test_material_request_lifecycle_service.py",
+        "backend/tests/test_material_request_query_service.py",
+    ):
+        assert approval_gate in workflow
+    assert "pytest==9.1.1 pglast==7.18" in workflow
 
 
 def test_deployment_verifier_allows_only_0044_runtime_entrypoints() -> None:

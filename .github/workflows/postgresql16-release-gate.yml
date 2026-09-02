@@ -95,7 +95,8 @@ jobs:
       - name: Install pinned backend dependencies
         run: |
           python -m pip install --disable-pip-version-check \
-            -r cloud_oam/backend/requirements.txt pytest==9.1.1
+            -r cloud_oam/backend/requirements.txt \
+            pytest==9.1.1 pglast==7.18
 
       - name: Install PostgreSQL 16 client
         run: |
@@ -116,7 +117,12 @@ jobs:
             backend/tests/test_edge_runtime_env.py \
             backend/tests/test_startup_security_boundary.py \
             backend/tests/test_database_deployment_security.py \
+            backend/tests/test_database_security.py \
             backend/tests/test_alembic_migrations.py \
+            backend/tests/test_material_request_draft_service.py \
+            backend/tests/test_material_request_approval_service.py \
+            backend/tests/test_material_request_lifecycle_service.py \
+            backend/tests/test_material_request_query_service.py \
             backend/tests/test_legacy_oam_work_order_redaction_artifact.py \
             edge_sync/test_oam_edge_sync.py \
             edge_sync/test_oam_read_client_security.py

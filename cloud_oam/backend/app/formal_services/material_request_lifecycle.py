@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from ..demand_models import (
     ApprovalAction,
+    ApprovalExternalRegistration,
     ApprovalInstance,
     ApprovalStep,
     MaterialRequest,
@@ -356,6 +357,7 @@ def _withdraw_material_request_impl(
     _require_neutral_axes(graph.request)
     instance = _require_active_instance(graph)
     steps = graph.steps_by_instance.get(instance.id, ())
+    _require_no_pending_external_registration(db, steps)
     before = _safe_snapshot(graph)
     source_status = graph.request.status
 
@@ -1083,6 +1085,43 @@ def _require_active_instance(graph: _LockedGraph) -> ApprovalInstance:
             "需求单当前审批步骤无法唯一核验",
         )
     return instance
+
+
+def _require_no_pending_external_registration(
+    db: Session,
+    steps: Sequence[ApprovalStep],
+) -> None:
+    """Keep a pending two-person evidence review from being orphaned.
+
+    The request advisory lock serializes this check with external-evidence
+    registration and verification.  The matching registration rows are also
+    locked before any lifecycle command or projection is written.
+    """
+
+    step_ids = tuple(step.id for step in steps)
+    pending_registration_id = (
+        db.scalar(
+            select(ApprovalExternalRegistration.id)
+            .where(
+                ApprovalExternalRegistration.step_id.in_(step_ids),
+                ApprovalExternalRegistration.status == "pending_verification",
+            )
+            .order_by(
+                ApprovalExternalRegistration.registered_at,
+                ApprovalExternalRegistration.id,
+            )
+            .limit(1)
+            .with_for_update()
+        )
+        if step_ids
+        else None
+    )
+    if pending_registration_id is not None:
+        _fail(
+            "material_request_external_evidence_pending_verification",
+            "precondition_failed",
+            "外部审批证据待复核时不能撤回，请先完成复核",
+        )
 
 
 def _require_terminal_approval_instance(graph: _LockedGraph) -> ApprovalInstance:

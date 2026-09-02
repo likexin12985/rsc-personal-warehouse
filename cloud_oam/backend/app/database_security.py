@@ -1478,6 +1478,390 @@ EXPECTED_FORMAL_FILE_INDEXES = {
         "predicate": "stocktake_evidence",
     },
 }
+_MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
+    "approval_step_candidates",
+    "material_request_commands",
+    "approval_external_registration_lines",
+    "approval_step_line_decisions",
+    "approval_actions",
+)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
+    **{
+        f"trg_{table_name}_immutable_0029": (
+            table_name,
+            "rsc_guard_material_request_fact_immutable_0029",
+            "A",
+            27,
+            False,
+            False,
+            False,
+        )
+        for table_name in _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029
+    },
+    **{
+        f"trg_{table_name}_no_truncate_0029": (
+            table_name,
+            "rsc_guard_material_request_fact_immutable_0029",
+            "A",
+            34,
+            False,
+            False,
+            False,
+        )
+        for table_name in _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029
+    },
+    "trg_material_requests_guard_0029": (
+        "material_requests",
+        "rsc_guard_material_request_identity_0029",
+        "A",
+        31,
+        False,
+        False,
+        False,
+    ),
+    "trg_material_request_revisions_guard_0029": (
+        "material_request_revisions",
+        "rsc_guard_material_request_revision_0029",
+        "A",
+        31,
+        False,
+        False,
+        False,
+    ),
+    "trg_material_request_lines_guard_0029": (
+        "material_request_lines",
+        "rsc_guard_material_request_original_line_0029",
+        "A",
+        31,
+        False,
+        False,
+        False,
+    ),
+    "trg_approval_instances_guard_0029": (
+        "approval_instances",
+        "rsc_guard_material_request_approval_instance_0029",
+        "A",
+        31,
+        False,
+        False,
+        False,
+    ),
+    "trg_material_request_files_guard_0029": (
+        "material_request_files",
+        "rsc_guard_material_request_file_0029",
+        "A",
+        31,
+        False,
+        False,
+        False,
+    ),
+    "trg_approval_delegations_guard_0029": (
+        "approval_delegations",
+        "rsc_guard_approval_delegation_0029",
+        "A",
+        31,
+        False,
+        False,
+        False,
+    ),
+    "trg_approval_external_registrations_guard_0029": (
+        "approval_external_registrations",
+        "rsc_guard_external_registration_core_0029",
+        "A",
+        31,
+        False,
+        False,
+        False,
+    ),
+    "trg_approval_external_registration_lines_quantity_0029": (
+        "approval_external_registration_lines",
+        "rsc_guard_external_registration_quantity_0029",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_approval_step_line_decisions_quantity_0029": (
+        "approval_step_line_decisions",
+        "rsc_guard_material_request_decision_quantity_0029",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_substitution_decisions_guard_0029": (
+        "substitution_decisions",
+        "rsc_guard_substitution_decision_0029",
+        "A",
+        31,
+        False,
+        False,
+        False,
+    ),
+    "trg_supply_tasks_guard_0029": (
+        "supply_tasks",
+        "rsc_guard_supply_task_quantity_0029",
+        "A",
+        31,
+        False,
+        False,
+        False,
+    ),
+    **{
+        f"trg_{table_name}_no_truncate_0029": (
+            table_name,
+            "rsc_guard_material_request_fact_immutable_0029",
+            "A",
+            34,
+            False,
+            False,
+            False,
+        )
+        for table_name in (
+            "material_requests",
+            "material_request_revisions",
+            "material_request_lines",
+            "material_request_files",
+            "approval_instances",
+            "approval_steps",
+            "approval_external_registrations",
+            "substitution_decisions",
+            "supply_tasks",
+            "approval_delegations",
+        )
+    },
+    "trg_approval_steps_no_delete_0029": (
+        "approval_steps",
+        "rsc_guard_material_request_fact_immutable_0029",
+        "A",
+        11,
+        False,
+        False,
+        False,
+    ),
+    "trg_approval_steps_write_guard_0030": (
+        "approval_steps",
+        "rsc_guard_approval_step_write_0030",
+        "A",
+        31,
+        False,
+        False,
+        False,
+    ),
+    "trg_approval_step_candidates_write_guard_0030": (
+        "approval_step_candidates",
+        "rsc_guard_approval_candidate_write_0030",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_approval_actions_write_guard_0030": (
+        "approval_actions",
+        "rsc_guard_approval_action_write_0030",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_approval_step_line_decisions_current_guard_0030": (
+        "approval_step_line_decisions",
+        "rsc_guard_approval_decision_write_0030",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_approval_return_line_facts_write_guard_0030": (
+        "approval_return_line_facts",
+        "rsc_guard_approval_return_fact_0030",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_approval_return_line_facts_immutable_0030": (
+        "approval_return_line_facts",
+        "rsc_guard_approval_return_fact_immutable_0030",
+        "A",
+        27,
+        False,
+        False,
+        False,
+    ),
+    "trg_approval_return_line_facts_no_truncate_0030": (
+        "approval_return_line_facts",
+        "rsc_guard_approval_return_fact_immutable_0030",
+        "A",
+        34,
+        False,
+        False,
+        False,
+    ),
+    **{
+        f"trg_{table_name}_causality_0030": (
+            table_name,
+            "rsc_dispatch_approval_causality_0030",
+            "A",
+            21,
+            True,
+            True,
+            True,
+        )
+        for table_name in (
+            "approval_instances",
+            "approval_steps",
+            "approval_step_candidates",
+            "approval_actions",
+            "approval_step_line_decisions",
+            "approval_return_line_facts",
+        )
+    },
+    "trg_material_requests_status_transition_0045": (
+        "material_requests",
+        "rsc_guard_material_request_status_transition_0045",
+        "A",
+        23,
+        False,
+        False,
+        False,
+    ),
+    "trg_material_request_lines_projection_write_0045": (
+        "material_request_lines",
+        "rsc_guard_material_request_line_projection_0045",
+        "A",
+        19,
+        False,
+        False,
+        False,
+    ),
+    "trg_material_request_commands_parent_lock_0045": (
+        "material_request_commands",
+        "rsc_lock_material_request_command_parent_0045",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    **{
+        f"trg_{table_name}_approval_projection_0045": (
+            table_name,
+            "rsc_dispatch_material_request_approval_projection_0045",
+            "A",
+            21 if table_name == "material_requests" else 29,
+            True,
+            True,
+            True,
+        )
+        for table_name in (
+            "material_requests",
+            "material_request_revisions",
+            "material_request_lines",
+            "material_request_commands",
+            "approval_instances",
+            "approval_steps",
+            "approval_actions",
+            "approval_external_registrations",
+            "approval_external_registration_lines",
+            "approval_step_line_decisions",
+            "approval_return_line_facts",
+            "state_transition_events",
+            "audit_events",
+        )
+    },
+}
+MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
+    ("rsc_guard_material_request_fact_immutable_0029", ""):
+        "af27608187df58d0652ba6d425e06ef27b74fe8c9683a48a8033fc4695f1502b",
+    ("rsc_guard_material_request_original_line_0029", ""):
+        "d00a8775d26e1b48e2a72798595354eedff873e2b83a7508c9c2961eb7d5d672",
+    ("rsc_guard_material_request_identity_0029", ""):
+        "ee818b78ed22f77eb272676d0b6d31d22bda0d250718c714bb3d1fc06ef353de",
+    ("rsc_guard_material_request_revision_0029", ""):
+        "ea718216fbf47320670b171a4aca22019fdbf4540533742aac6ac7573b31ab83",
+    ("rsc_guard_material_request_approval_instance_0029", ""):
+        "03c6b5dd42810dafccd5fa300eb0e82798afd8a4133cb67c1e81e82b303450c2",
+    ("rsc_guard_material_request_decision_quantity_0029", ""):
+        "8d0243560106753cd08bb31946693ea526dee2a3489842a745c23d6cb71cbdcc",
+    ("rsc_guard_external_registration_quantity_0029", ""):
+        "047ff0975b18a789db9d82d2dcc4ed03eb5c409354b736d4158733390800940b",
+    ("rsc_guard_external_registration_core_0029", ""):
+        "0c8cfd10287b64840f97d7eaae69bd511888e27379486d29ec6c836303d3691d",
+    ("rsc_guard_material_request_file_0029", ""):
+        "185b12b8c78ed077683e7cbf13fffbfa1c7e2d85b77971508231a12238eb1e83",
+    ("rsc_guard_approval_delegation_0029", ""):
+        "3f5242fdf4933e5933ba404abf2aaca3f1d55326bc4f2f26219c25f6739c5bdc",
+    ("rsc_guard_substitution_decision_0029", ""):
+        "9ad0afc923c0e0debd2188f622896ff7c2c3f9e31859749b76258780355129eb",
+    ("rsc_guard_supply_task_quantity_0029", ""):
+        "af13776d92e55285cb7b6a45f3075886c1019eb7ae3f6a8fd15ea6693d57295a",
+    ("rsc_validate_approval_instance_causality_0030", "uuid"):
+        "aab04ccebcebc56b55eef4eab021e4f41a5e5c7cdb6b29f660cb462ca57f3b44",
+    ("rsc_dispatch_approval_causality_0030", ""):
+        "c799bdc350c7397a1acc7599058b5416e990db8a8f0147af9c386c791b4e8758",
+    ("rsc_guard_approval_step_write_0030", ""):
+        "aff44deeff0f7f324c7c67fa259f18907e69d9f0588f692976ffc4b58f868d66",
+    ("rsc_guard_approval_candidate_write_0030", ""):
+        "568e525fa0f797f389f52b9ee65032fa70ec0e035f61b0461da886e11ed6fa62",
+    ("rsc_guard_approval_action_write_0030", ""):
+        "75761b0a5eb0c2af643baf953758f26b935d4bc3e5770fba2208854c6a3b46b4",
+    ("rsc_guard_approval_decision_write_0030", ""):
+        "7b305ed5a54fa819a2d5b098203ba20d165981516e03cdcf85f921a9be25e463",
+    ("rsc_guard_approval_return_fact_0030", ""):
+        "ecb59a37bcc6981d3b7852c22e4f0e3a844575b531608bbc011034e5e079467e",
+    ("rsc_guard_approval_return_fact_immutable_0030", ""):
+        "b5bf3a7eee382e02928d4ca9d413b9c7fcec942cb9213f736720cb9a9bcd6654",
+    ("rsc_guard_material_request_status_transition_0045", ""):
+        "b699a13ff58137a3a679745b5f5c2757f882615ec9763b4805f0e8d33d9a8625",
+    ("rsc_guard_material_request_line_projection_0045", ""):
+        "e464574227a024c1c7696bff4c9989de87298bf45f034d26d10163e734fb90b3",
+    ("rsc_lock_material_request_command_parent_0045", ""):
+        "d7993645f27d679c2427fe2146d8a2f5f51ad5aecc11de774aeafbf65c77c79b",
+    (
+        "rsc_validate_material_request_terminal_causality_0045",
+        "uuid, uuid, uuid, bigint",
+    ): "99bdaf7ca5a41987aa41b6c0b8394e7dc11ff7e15967a9f28a2b819e4e24349d",
+    ("rsc_validate_material_request_return_causality_0045", "uuid, uuid"):
+        "7917520ca1f5bfb4fce13b28fc07a3ee10e88cb13184b34494079059069bd9a8",
+    ("rsc_validate_material_request_external_causality_0045", "uuid"):
+        "51e94b63bb46ef5429bc0941d95607ff6e51bcb2c5b3a0f06ed13106f541132b",
+    ("rsc_validate_material_request_approval_projection_0045", "uuid"):
+        "cb731c81928a07bfa31cfd9d6c83383217bf828f1a991eac26e3fd0f808642ed",
+    ("rsc_dispatch_material_request_approval_projection_0045", ""):
+        "244d188e126e66fd4b020da01c076a3018f2c8841230bd255da45b7913776d54",
+}
+MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
+    {
+        ("rsc_dispatch_approval_causality_0030", ""),
+        (
+            "rsc_validate_material_request_terminal_causality_0045",
+            "uuid, uuid, uuid, bigint",
+        ),
+        ("rsc_validate_material_request_return_causality_0045", "uuid, uuid"),
+        ("rsc_validate_material_request_external_causality_0045", "uuid"),
+        ("rsc_validate_material_request_approval_projection_0045", "uuid"),
+        ("rsc_dispatch_material_request_approval_projection_0045", ""),
+    }
+)
+MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS = frozenset(
+    {
+        ("rsc_validate_approval_instance_causality_0030", "uuid"),
+        (
+            "rsc_validate_material_request_terminal_causality_0045",
+            "uuid, uuid, uuid, bigint",
+        ),
+        ("rsc_validate_material_request_return_causality_0045", "uuid, uuid"),
+        ("rsc_validate_material_request_external_causality_0045", "uuid"),
+        ("rsc_validate_material_request_approval_projection_0045", "uuid"),
+    }
+)
 POSTGRESQL_MATERIAL_REQUEST_CANCELLATION_FACT_GRAPH_TRIGGER_0037 = (
     "trg_material_request_cancellation_line_facts_cancellation_graph"
 )
@@ -3195,6 +3579,47 @@ ORDER BY index_row.relname
 """
 )
 
+_MATERIAL_REQUEST_APPROVAL_TRIGGER_FUNCTION_LITERALS = ",\n      ".join(
+    f"'{function_name}'"
+    for function_name in sorted(
+        {
+            expected[1]
+            for expected in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.values()
+        }
+    )
+)
+_MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL = text(
+    f"""
+SELECT
+    trigger_row.tgname AS trigger_name,
+    table_row.relname AS table_name,
+    function_row.proname AS function_name,
+    function_schema.nspname AS function_schema,
+    trigger_row.tgenabled AS enabled,
+    trigger_row.tgtype AS trigger_type,
+    trigger_row.tgconstraint <> 0 AS is_constraint_trigger,
+    trigger_row.tgdeferrable AS is_deferrable,
+    trigger_row.tginitdeferred AS is_initially_deferred,
+    trigger_row.tgqual IS NOT NULL AS has_when_clause,
+    trigger_row.tgattr::text <> '' AS has_column_filter
+FROM pg_trigger AS trigger_row
+JOIN pg_class AS table_row ON table_row.oid = trigger_row.tgrelid
+JOIN pg_namespace AS table_schema ON table_schema.oid = table_row.relnamespace
+JOIN pg_proc AS function_row ON function_row.oid = trigger_row.tgfoid
+JOIN pg_namespace AS function_schema
+  ON function_schema.oid = function_row.pronamespace
+WHERE table_schema.nspname = 'public'
+  AND (
+      trigger_row.tgname ~ '_(0029|0030|0045)$'
+      OR function_row.proname IN (
+          {_MATERIAL_REQUEST_APPROVAL_TRIGGER_FUNCTION_LITERALS}
+      )
+  )
+  AND NOT trigger_row.tgisinternal
+ORDER BY trigger_row.tgname
+"""
+)
+
 _MATERIAL_REQUEST_CANCELLATION_TRIGGER_FUNCTION_LITERALS = ",\n      ".join(
     f"'{function_name}'"
     for function_name in sorted(
@@ -4065,6 +4490,14 @@ def validate_production_database_security(
             column_acl = connection.execute(_COLUMN_ACL_SQL).mappings().all()
             sequence_acl = connection.execute(_SEQUENCE_ACL_SQL).mappings().all()
             function_acl = connection.execute(_FUNCTION_ACL_SQL).mappings().all()
+            material_request_approval_functions = [
+                row
+                for row in function_acl
+                if isinstance(row.get("function_name"), str)
+                and row["function_name"].endswith(
+                    ("_0029", "_0030", "_0045")
+                )
+            ]
             audit_triggers = connection.execute(_AUDIT_TRIGGER_SQL).mappings().all()
             audit_stream_columns = connection.execute(
                 _AUDIT_STREAM_COLUMN_SQL
@@ -4110,6 +4543,9 @@ def validate_production_database_security(
             ).mappings().all()
             formal_file_indexes = connection.execute(
                 _FORMAL_FILE_INDEX_SQL
+            ).mappings().all()
+            material_request_approval_triggers = connection.execute(
+                _MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL
             ).mappings().all()
             material_request_cancellation_triggers = connection.execute(
                 _MATERIAL_REQUEST_CANCELLATION_TRIGGER_SQL
@@ -4228,6 +4664,11 @@ def validate_production_database_security(
     _assert_formal_file_guards(
         triggers=formal_file_triggers,
         indexes=formal_file_indexes,
+    )
+    _assert_material_request_approval_guards(
+        triggers=material_request_approval_triggers,
+        functions=material_request_approval_functions,
+        expected_migration_role=expected_migration_role,
     )
     _assert_material_request_cancellation_guards(
         triggers=material_request_cancellation_triggers,
@@ -5367,6 +5808,120 @@ def _assert_formal_file_guards(
     if failures:
         raise DatabaseSecurityBoundaryError(
             "production database formal file guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
+
+
+def _assert_material_request_approval_guards(
+    *,
+    triggers: list[Mapping[str, Any]],
+    functions: list[Mapping[str, Any]],
+    expected_migration_role: str,
+) -> None:
+    """Prove the complete 0029/0030/0045 approval guard catalog."""
+
+    failures: list[str] = []
+    actual_triggers: dict[str, Mapping[str, Any]] = {}
+    for row in triggers:
+        name = row.get("trigger_name")
+        if not isinstance(name, str) or name in actual_triggers:
+            failures.append("trigger_identity")
+            continue
+        actual_triggers[name] = row
+    if set(actual_triggers) != set(EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS):
+        failures.append("trigger_set")
+    for name, expected in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items():
+        row = actual_triggers.get(name)
+        if row is None:
+            continue
+        (
+            table_name,
+            function_name,
+            enabled,
+            trigger_type,
+            is_constraint,
+            is_deferrable,
+            is_initially_deferred,
+        ) = expected
+        expected_values = {
+            "table_name": table_name,
+            "function_name": function_name,
+            "function_schema": "public",
+            "enabled": enabled,
+            "trigger_type": trigger_type,
+            "is_constraint_trigger": is_constraint,
+            "is_deferrable": is_deferrable,
+            "is_initially_deferred": is_initially_deferred,
+            "has_when_clause": False,
+            "has_column_filter": False,
+        }
+        for field, value in expected_values.items():
+            if row.get(field) != value:
+                failures.append(f"{name}.{field}")
+
+    actual_functions: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for row in functions:
+        name = row.get("function_name")
+        argument_types = str(row.get("argument_types") or "")
+        coordinate = (name, argument_types)
+        if (
+            not isinstance(name, str)
+            or coordinate in actual_functions
+        ):
+            failures.append("function_identity")
+            continue
+        actual_functions[coordinate] = row
+    if set(actual_functions) != set(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256):
+        failures.append("function_set")
+    for coordinate, expected_body_hash in (
+        MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256.items()
+    ):
+        row = actual_functions.get(coordinate)
+        if row is None:
+            continue
+        label = coordinate[0]
+        expected_values = {
+            "function_kind": "f",
+            "result_type": (
+                "void"
+                if coordinate in MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS
+                else "trigger"
+            ),
+            "argument_modes": None,
+            "argument_default_count": 0,
+            "is_strict": False,
+            "volatility": "v",
+            "parallel_safety": "u",
+            "is_leakproof": False,
+            "is_security_definer": (
+                coordinate in MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
+            ),
+            "language_name": "plpgsql",
+            "configuration": ("search_path=pg_catalog, public",),
+            "owner_name": expected_migration_role,
+            "can_execute": False,
+            "api_execute_is_grantable": False,
+            "unexpected_execute_grantee_count": 0,
+            "public_can_execute": False,
+            "edge_can_execute": False,
+            "backup_can_execute": False,
+            "edge_receiver_can_execute": False,
+            "projector_can_execute": False,
+        }
+        for field, value in expected_values.items():
+            actual = tuple(row.get(field) or ()) if field == "configuration" else row.get(field)
+            if actual != value:
+                failures.append(f"{label}.{field}")
+        source_body = row.get("source_body")
+        if (
+            not isinstance(source_body, str)
+            or hashlib.sha256(source_body.encode("utf-8")).hexdigest()
+            != expected_body_hash
+        ):
+            failures.append(f"{label}.body")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database material-request approval guard failed: "
             + ", ".join(sorted(set(failures)))
         )
 

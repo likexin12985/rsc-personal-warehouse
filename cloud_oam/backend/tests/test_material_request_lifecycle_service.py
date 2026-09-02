@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.demand_models import (
     ApprovalAction,
+    ApprovalExternalRegistration,
     ApprovalInstance,
     ApprovalStep,
     MaterialRequest,
@@ -325,6 +326,163 @@ def test_withdraw_rejects_stale_version_wrong_owner_and_key_conflict(
             trace_request_id="trace-withdraw-conflict-2",
         )
     _assert_lifecycle_error(conflict, "material_request_idempotency_conflict", 409)
+
+
+def test_withdraw_blocks_pending_external_evidence_without_writes_then_allows_after_review_reject(
+    approval_db: Session,
+) -> None:
+    db = approval_db
+    world, request, lines, version = _submitted(
+        db, key="lifecycle-withdraw-pending-evidence"
+    )
+    _grant_requester_lifecycle_permissions(db, world)
+    line = lines[0]
+    manager = _principal(db, world.manager_users[0].id)
+    registrar = _principal(db, world.admin_users[0].id)
+    verifier = _principal(db, world.admin_users[1].id)
+    requester = _current_actor(db, world)
+    _, regional = _approve(
+        db,
+        actor=manager,
+        request=request,
+        request_version=version,
+        quantities={line.id: line.requested_qty},
+        key="lifecycle-withdraw-pending-evidence-region",
+    )
+    _, headquarters = _approve(
+        db,
+        actor=registrar,
+        request=request,
+        request_version=regional.request_version,
+        quantities={line.id: line.requested_qty},
+        key="lifecycle-withdraw-pending-evidence-headquarters",
+    )
+    evidence = _evidence(
+        db,
+        uploaded_by=registrar.user_id,
+        marker="lifecycle-withdraw-pending-evidence-file",
+    )
+    step3, registered = _register_external(
+        db,
+        actor=registrar,
+        request=request,
+        request_version=headquarters.request_version,
+        evidence=evidence,
+        key="lifecycle-withdraw-pending-evidence-register",
+        action="approve",
+        lines=(ApprovalLineDecision(line.id, line.requested_qty, "同意"),),
+    )
+    instance = db.get(ApprovalInstance, registered.instance_id)
+    registration = db.get(
+        ApprovalExternalRegistration,
+        registered.registration_id,
+    )
+    assert instance is not None and instance.status == "active"
+    assert registration is not None and registration.status == "pending_verification"
+    assert step3.status == "evidence_pending_verification"
+
+    before_counts = {
+        model: db.scalar(select(func.count()).select_from(model))
+        for model in (
+            MaterialRequestCommand,
+            ApprovalAction,
+            StateTransitionEvent,
+            AuditEvent,
+        )
+    }
+    projection_before = (
+        request.status,
+        request.version,
+        request.withdrawn_at,
+        instance.status,
+        instance.version,
+        instance.current_step_id,
+        step3.status,
+        step3.version,
+        registration.status,
+        registration.version,
+    )
+    with pytest.raises(MaterialRequestLifecycleError) as blocked:
+        withdraw_material_request(
+            db,
+            actor=requester,
+            material_request_id=request.id,
+            expected_version=registered.request_version,
+            reason="待复核期间尝试撤回",
+            idempotency_key="lifecycle-withdraw-pending-blocked-0001",
+            idempotency_hmac_secret=SECRET,
+            trace_request_id="trace-lifecycle-withdraw-pending-blocked",
+        )
+    _assert_lifecycle_error(
+        blocked,
+        "material_request_external_evidence_pending_verification",
+        412,
+    )
+    assert blocked.value.message == "外部审批证据待复核时不能撤回，请先完成复核"
+
+    db.refresh(request)
+    db.refresh(instance)
+    db.refresh(step3)
+    db.refresh(registration)
+    assert {
+        model: db.scalar(select(func.count()).select_from(model))
+        for model in before_counts
+    } == before_counts
+    assert (
+        request.status,
+        request.version,
+        request.withdrawn_at,
+        instance.status,
+        instance.version,
+        instance.current_step_id,
+        step3.status,
+        step3.version,
+        registration.status,
+        registration.version,
+    ) == projection_before
+    pending_detail = material_request_detail(
+        db,
+        actor=requester,
+        request_id=request.id,
+        now=NOW,
+    )
+    assert "withdraw" not in pending_detail.allowed_actions
+
+    review_rejected = _verify_external(
+        db,
+        actor=verifier,
+        request=request,
+        step=step3,
+        registration_id=registration.id,
+        request_version=registered.request_version,
+        step_version=registered.step_version,
+        key="lifecycle-withdraw-pending-evidence-review-reject",
+        decision="reject",
+    )
+    db.refresh(registration)
+    db.refresh(step3)
+    assert registration.status == "rejected"
+    assert step3.status == "awaiting_external_evidence"
+    available_detail = material_request_detail(
+        db,
+        actor=requester,
+        request_id=request.id,
+        now=NOW,
+    )
+    assert available_detail.allowed_actions == ("withdraw",)
+
+    withdrawn = withdraw_material_request(
+        db,
+        actor=requester,
+        material_request_id=request.id,
+        expected_version=review_rejected.request_version,
+        reason="证据复核驳回后撤回需求",
+        idempotency_key="lifecycle-withdraw-after-review-reject-0001",
+        idempotency_hmac_secret=SECRET,
+        trace_request_id="trace-lifecycle-withdraw-after-review-reject",
+    )
+    assert withdrawn.request_status == "withdrawn"
+    assert withdrawn.request_version == review_rejected.request_version + 1
 
 
 def test_safe_cancel_approved_request_preserves_approval_history_and_replays(

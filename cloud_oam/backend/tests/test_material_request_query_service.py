@@ -397,6 +397,8 @@ def test_detail_keeps_complete_revision_and_approval_attempt_history(db: Session
 
 def test_external_evidence_is_permission_gated_masked_and_two_person_action(db: Session) -> None:
     world = _read_world(db, star_payload=True)
+    _grant(db, world, action="withdraw", roles=("technician",))
+    requester = load_formal_principal(db, world.actor_user.id, now=NOW)
     request_id, _created, submitted = _submit_one(db, world, "query-external")
     line = db.scalar(
         select(MaterialRequestLine).where(
@@ -439,6 +441,13 @@ def test_external_evidence_is_permission_gated_masked_and_two_person_action(db: 
     )
     step_3 = db.get(ApprovalStep, headquarters_result.current_step_id)
     assert step_3 is not None
+    before_registration = material_request_detail(
+        db,
+        actor=requester,
+        request_id=request_id,
+        now=NOW,
+    )
+    assert before_registration.allowed_actions == ("withdraw",)
     with patch.object(
         query_service,
         "_permission_allowed",
@@ -535,8 +544,15 @@ def test_external_evidence_is_permission_gated_masked_and_two_person_action(db: 
     registrar = material_request_detail(
         db, actor=admin_1, request_id=request_id, now=NOW
     )
+    requester_pending_review = material_request_detail(
+        db,
+        actor=requester,
+        request_id=request_id,
+        now=NOW,
+    )
     assert verifier.allowed_actions == ("verify_external_approval",)
     assert registrar.allowed_actions == ()
+    assert "withdraw" not in requester_pending_review.allowed_actions
     assert verifier.approval_instance is not None
     evidence = verifier.approval_instance.external_evidence_summaries
     assert evidence is not None and len(evidence) == 1
