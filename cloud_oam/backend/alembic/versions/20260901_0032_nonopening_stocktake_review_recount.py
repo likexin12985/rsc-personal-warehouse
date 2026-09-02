@@ -1104,7 +1104,7 @@ BEGIN
                  AND region_review.reviewer_role_assignment_id <>
                      source_review.reviewer_role_assignment_id
                  AND {prior_region_actor}))))
-    ) THEN
+    THEN
         RAISE EXCEPTION 'stocktake recount case causality is invalid';
     END IF;
     RETURN NEW;

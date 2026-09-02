@@ -5003,6 +5003,16 @@ def test_0032_postgresql_review_recount_guards_have_fixed_namespace_and_acl(
     assert "rsc_lock_nonopening_stocktake_review_graph_0032" in sql
     assert "rsc_require_nonopening_stocktake_review_graph_0032" in sql
     assert "rsc_validate_stocktake_recount_case_0032" in sql
+    assert (
+        "\n    THEN\n"
+        "        RAISE EXCEPTION 'stocktake recount case causality is invalid';"
+        in sql
+    )
+    assert (
+        "\n    ) THEN\n"
+        "        RAISE EXCEPTION 'stocktake recount case causality is invalid';"
+        not in sql
+    )
     assert "rsc_stocktake_recount_scope_graph_valid_0032" in sql
     assert "rsc_validate_stocktake_recount_task_advance_0032" in sql
     assert "rsc_validate_stocktake_recount_round_0032" in sql
