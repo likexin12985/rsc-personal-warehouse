@@ -1827,13 +1827,13 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     (
         "rsc_validate_material_request_terminal_causality_0045",
         "uuid, uuid, uuid, bigint",
-    ): "99bdaf7ca5a41987aa41b6c0b8394e7dc11ff7e15967a9f28a2b819e4e24349d",
+    ): "5934dcd4d93d6b5a0e127f8cd019b102303c1b85dbd9b50c171000f4ca42bcbe",
     ("rsc_validate_material_request_return_causality_0045", "uuid, uuid"):
-        "7917520ca1f5bfb4fce13b28fc07a3ee10e88cb13184b34494079059069bd9a8",
+        "e610f8b38ec4c38cc3eb271d99737ae9df7e91c123080ad400b642c8447cb4b2",
     ("rsc_validate_material_request_external_causality_0045", "uuid"):
-        "51e94b63bb46ef5429bc0941d95607ff6e51bcb2c5b3a0f06ed13106f541132b",
+        "0f5bd6658edcb46dac6282109b71a109c14003862c89b3f5700d89f1ac13fa26",
     ("rsc_validate_material_request_approval_projection_0045", "uuid"):
-        "cb731c81928a07bfa31cfd9d6c83383217bf828f1a991eac26e3fd0f808642ed",
+        "1b08d93ca30dda0446528533543243cb94a91dad153bb56893bf89223af05b63",
     ("rsc_dispatch_material_request_approval_projection_0045", ""):
         "244d188e126e66fd4b020da01c076a3018f2c8841230bd255da45b7913776d54",
 }

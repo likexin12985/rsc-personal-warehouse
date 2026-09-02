@@ -2071,6 +2071,7 @@ def test_0045_postgresql_functions_parse_as_sql_and_plpgsql() -> None:
     )
 
     for statement in function_sql:
+        assert not sa.text(statement)._bindparams
         parser.parse_sql(statement)
         parser.parse_plpgsql_json(statement)
 

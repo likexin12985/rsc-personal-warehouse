@@ -674,7 +674,7 @@ BEGIN
            AND event.occurred_at = instance_row.completed_at
            AND event.created_at = event.occurred_at
            AND event.idempotency_key =
-               'mr:' || terminal_key_hash || ':request-' ||
+               'mr:' || terminal_key_hash || ':' || 'request-' ||
                derived_request_status
            AND event.metadata_jsonb->>'request_id' = request_row.id::text
            AND event.metadata_jsonb->>'revision_id' =
@@ -903,7 +903,7 @@ BEGIN
            AND event.occurred_at = instance_row.completed_at
            AND event.created_at = event.occurred_at
            AND event.idempotency_key =
-               'mr:' || return_key_hash || ':request-returned'
+               'mr:' || return_key_hash || ':' || 'request-returned'
            AND event.metadata_jsonb->>'request_id' = request_row.id::text
            AND event.metadata_jsonb->>'revision_id' = revision_row.id::text
            AND event.metadata_jsonb->>'instance_id' = instance_row.id::text
@@ -1299,8 +1299,8 @@ BEGIN
                AND event.occurred_at = registration_row.registered_at
                AND event.created_at = event.occurred_at
                AND event.idempotency_key =
-                   'mr:' || register_key_hash ||
-                   ':evidence-pending-verification'
+                   'mr:' || register_key_hash || ':' ||
+                   'evidence-pending-verification'
                AND event.metadata_jsonb->>'request_id' =
                    instance_row.request_id::text
                AND event.metadata_jsonb->>'revision_id' =
@@ -1565,7 +1565,8 @@ BEGIN
                AND event.occurred_at = registration_row.verified_at
                AND event.created_at = event.occurred_at
                AND event.idempotency_key =
-                   'mr:' || verify_key_hash || ':external-verification-' ||
+                   'mr:' || verify_key_hash || ':' ||
+                   'external-verification-' ||
                    expected_verification_decision
                AND event.metadata_jsonb->>'request_id' =
                    instance_row.request_id::text
@@ -2128,8 +2129,8 @@ BEGIN
                          AND event.metadata_jsonb->>'idempotency_key_hash' =
                              command.idempotency_key_hash
                          AND event.idempotency_key =
-                             'mr:' || command.idempotency_key_hash ||
-                             ':withdrawn'
+                             'mr:' || command.idempotency_key_hash || ':' ||
+                             'withdrawn'
                   )) <> 1
            OR (SELECT count(*)
                  FROM public.audit_events AS event
