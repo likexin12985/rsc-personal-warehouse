@@ -4688,6 +4688,9 @@ def test_postgresql_offline_sql_preserves_type_boundary(monkeypatch) -> None:
     assert "stocktake posting items are sealed by establishment" in sql
     assert "rsc_validate_opening_round_insert_0010" in sql
     assert "opening first round requires complete sealed start facts" in sql
+    assert "LEFT JOIN inventory_freezes AS freeze_row" in sql
+    assert sql.count("inventory_freezes AS freeze_row") >= 5
+    assert " AS freeze\n" not in sql
     assert "rsc_validate_opening_task_mutation_0010" in sql
     assert "opening task cannot post before every scope is established" in sql
     assert "rsc_validate_inventory_freeze_mutation_0010" in sql

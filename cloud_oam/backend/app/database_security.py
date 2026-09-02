@@ -1972,7 +1972,7 @@ RUNTIME_FUNCTION_BODY_SHA256 = {
         "uuid, uuid[], uuid[], uuid[], timestamp with time zone",
     ): "dbd0d5a71b839a4c31a8defc7089177c2d4c37409cd323710b302f6b1ba1a2e9",
     ("rsc_lock_opening_stocktake_task_evidence_0027", "uuid, uuid"):
-        "063707033407390c65b77a254a50b26e37b23b824009b14aeac67795c5988ff4",
+        "cd166490b4e7124cd5b852368902bacbce883678a380637218cda3a2c77ba866",
     (
         "rsc_lock_inventory_reference_graph_0027",
         "uuid[], timestamp with time zone",
@@ -1984,7 +1984,7 @@ RUNTIME_FUNCTION_BODY_SHA256 = {
         "uuid[], uuid[], uuid[], uuid[], uuid[]",
     ): "a5445f4651364a179223695d28ba7ce9434f0f20307098a9291067b64b07d066",
     ("rsc_lock_nonopening_stocktake_posting_graph_0035", "uuid"):
-        "28f4e867f8a89cf1d40275f0bd02af92a28f010f6656b5daa3f3f55705aa63de",
+        "ebf8f6e2a7eecfcc6dca09a8df90f732977382d0ed9d973204ab14b14e4e9dd2",
     ("rsc_lock_nonopening_stocktake_close_graph_0038", "uuid"):
         "45c71e5a7129800399e1c20480bf7e2a000c478743635cff99db024c0b62118e",
 }

@@ -518,9 +518,10 @@ BEGIN
     PERFORM scope.id FROM public.stocktake_scopes AS scope
      WHERE scope.task_id = requested_task_id
      ORDER BY scope.scope_no, scope.id FOR UPDATE OF scope;
-    PERFORM freeze.id FROM public.inventory_freezes AS freeze
-     WHERE freeze.task_id = requested_task_id
-     ORDER BY freeze.stocktake_scope_id, freeze.id FOR UPDATE OF freeze;
+    PERFORM freeze_row.id FROM public.inventory_freezes AS freeze_row
+     WHERE freeze_row.task_id = requested_task_id
+     ORDER BY freeze_row.stocktake_scope_id, freeze_row.id
+     FOR UPDATE OF freeze_row;
     PERFORM snapshot.id FROM public.stocktake_snapshot_lines AS snapshot
      WHERE snapshot.task_id = requested_task_id
      ORDER BY snapshot.scope_id, snapshot.stock_account_id, snapshot.id

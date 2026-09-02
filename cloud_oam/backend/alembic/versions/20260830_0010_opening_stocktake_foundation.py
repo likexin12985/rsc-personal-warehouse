@@ -1869,15 +1869,15 @@ BEGIN
            OR EXISTS (
                SELECT 1
                  FROM stocktake_scopes AS scope
-                 LEFT JOIN inventory_freezes AS freeze
-                   ON freeze.task_id = scope.task_id
-                  AND freeze.stocktake_scope_id = scope.id
-                  AND freeze.scope_key = scope.scope_key
-                  AND freeze.status = 'active'
-                  AND freeze.valid_from = parent_task.cutoff_at
-                  AND freeze.valid_to IS NULL
+                 LEFT JOIN inventory_freezes AS freeze_row
+                   ON freeze_row.task_id = scope.task_id
+                  AND freeze_row.stocktake_scope_id = scope.id
+                  AND freeze_row.scope_key = scope.scope_key
+                  AND freeze_row.status = 'active'
+                  AND freeze_row.valid_from = parent_task.cutoff_at
+                  AND freeze_row.valid_to IS NULL
                 WHERE scope.task_id = NEW.task_id
-                  AND freeze.id IS NULL
+                  AND freeze_row.id IS NULL
            ) THEN
             RAISE EXCEPTION 'opening first round requires complete sealed start facts';
         END IF;
@@ -2387,15 +2387,15 @@ WHEN EXISTS (
                OR EXISTS (
                    SELECT 1
                      FROM stocktake_scopes AS scope
-                     LEFT JOIN inventory_freezes AS freeze
-                       ON freeze.task_id = scope.task_id
-                      AND freeze.stocktake_scope_id = scope.id
-                      AND freeze.scope_key = scope.scope_key
-                      AND freeze.status = 'active'
-                      AND freeze.valid_from = task.cutoff_at
-                      AND freeze.valid_to IS NULL
+                     LEFT JOIN inventory_freezes AS freeze_row
+                       ON freeze_row.task_id = scope.task_id
+                      AND freeze_row.stocktake_scope_id = scope.id
+                      AND freeze_row.scope_key = scope.scope_key
+                      AND freeze_row.status = 'active'
+                      AND freeze_row.valid_from = task.cutoff_at
+                      AND freeze_row.valid_to IS NULL
                     WHERE scope.task_id = NEW.task_id
-                      AND freeze.id IS NULL
+                      AND freeze_row.id IS NULL
                )
            )
     )

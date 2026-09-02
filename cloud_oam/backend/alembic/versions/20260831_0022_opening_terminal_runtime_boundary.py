@@ -758,17 +758,17 @@ AS $$
                  WHERE scope.task_id = task.id
                    AND NOT EXISTS (
                         SELECT 1
-                          FROM public.inventory_freezes AS freeze
-                         WHERE freeze.task_id = task.id
-                           AND freeze.stocktake_scope_id = scope.id
-                           AND freeze.scope_key = scope.scope_key
-                           AND freeze.status = 'released'
-                           AND freeze.valid_to = posting.posted_at
-                           AND freeze.released_by_user_id =
+                          FROM public.inventory_freezes AS freeze_row
+                         WHERE freeze_row.task_id = task.id
+                           AND freeze_row.stocktake_scope_id = scope.id
+                           AND freeze_row.scope_key = scope.scope_key
+                           AND freeze_row.status = 'released'
+                           AND freeze_row.valid_to = posting.posted_at
+                           AND freeze_row.released_by_user_id =
                                posting.posted_by_user_id
-                           AND freeze.release_reason =
+                           AND freeze_row.release_reason =
                                '期初实盘及两级复核已完成并原子入账'
-                           AND freeze.updated_at = freeze.valid_to
+                           AND freeze_row.updated_at = freeze_row.valid_to
                    )
            )
            AND (

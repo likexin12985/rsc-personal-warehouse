@@ -918,15 +918,15 @@ WHEN NEW.task_type IN {NONOPENING_SQL}
              AND (posting.id IS NULL OR posting_item.difference_id IS NULL OR movement.id IS NULL))
        AND NOT EXISTS (
            SELECT 1 FROM stocktake_scopes AS scope
-            LEFT JOIN inventory_freezes AS freeze
-              ON freeze.task_id = NEW.id
-             AND freeze.stocktake_scope_id = scope.id
-             AND freeze.scope_key = scope.scope_key
-             AND freeze.status = 'released'
-             AND freeze.valid_to = completion.posted_at
-             AND freeze.released_by_user_id = completion.posted_by_user_id
-             AND freeze.release_reason = '{FREEZE_RELEASE_REASON}'
-           WHERE scope.task_id = NEW.id AND freeze.id IS NULL)
+            LEFT JOIN inventory_freezes AS freeze_row
+              ON freeze_row.task_id = NEW.id
+             AND freeze_row.stocktake_scope_id = scope.id
+             AND freeze_row.scope_key = scope.scope_key
+             AND freeze_row.status = 'released'
+             AND freeze_row.valid_to = completion.posted_at
+             AND freeze_row.released_by_user_id = completion.posted_by_user_id
+             AND freeze_row.release_reason = '{FREEZE_RELEASE_REASON}'
+           WHERE scope.task_id = NEW.id AND freeze_row.id IS NULL)
        AND EXISTS (
            SELECT 1 FROM state_transition_events AS event
             WHERE event.aggregate_type = 'stocktake_task'
@@ -1059,8 +1059,10 @@ BEGIN
     END IF;
     PERFORM scope.id FROM public.stocktake_scopes AS scope
      WHERE scope.task_id = requested_task_id ORDER BY scope.scope_no, scope.id FOR UPDATE OF scope;
-    PERFORM freeze.id FROM public.inventory_freezes AS freeze
-     WHERE freeze.task_id = requested_task_id ORDER BY freeze.stocktake_scope_id, freeze.id FOR UPDATE OF freeze;
+    PERFORM freeze_row.id FROM public.inventory_freezes AS freeze_row
+     WHERE freeze_row.task_id = requested_task_id
+     ORDER BY freeze_row.stocktake_scope_id, freeze_row.id
+     FOR UPDATE OF freeze_row;
     PERFORM snapshot.id FROM public.stocktake_snapshot_lines AS snapshot
      WHERE snapshot.task_id = requested_task_id ORDER BY snapshot.scope_id, snapshot.stock_account_id, snapshot.id FOR UPDATE OF snapshot;
     PERFORM round_row.id FROM public.stocktake_rounds AS round_row
