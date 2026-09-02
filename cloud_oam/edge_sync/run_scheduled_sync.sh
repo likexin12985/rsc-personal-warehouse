@@ -21,14 +21,34 @@ readonly LOG_DIR="${USER_HOME}/Library/Logs/RSC"
 readonly LOG_FILE="${LOG_DIR}/oam-edge-sync.log"
 readonly MAX_LOG_BYTES=5242880
 
+log_file_size() {
+    local file_path="$1"
+    local size=""
+    if size="$(stat -f %z "${file_path}" 2>/dev/null)" && [[ "${size}" == <-> ]]; then
+        printf '%s\n' "${size}"
+        return 0
+    fi
+    if size="$(stat -c %s "${file_path}" 2>/dev/null)" && [[ "${size}" == <-> ]]; then
+        printf '%s\n' "${size}"
+        return 0
+    fi
+    return 1
+}
+
 mkdir -p "${LOG_DIR}"
 chmod 700 "${LOG_DIR}"
 
-if [[ -f "${LOG_FILE}" ]] && (( $(stat -f %z "${LOG_FILE}") >= MAX_LOG_BYTES )); then
-    rm -f "${LOG_FILE}.3"
-    [[ -f "${LOG_FILE}.2" ]] && mv "${LOG_FILE}.2" "${LOG_FILE}.3"
-    [[ -f "${LOG_FILE}.1" ]] && mv "${LOG_FILE}.1" "${LOG_FILE}.2"
-    mv "${LOG_FILE}" "${LOG_FILE}.1"
+if [[ -f "${LOG_FILE}" ]]; then
+    log_bytes="$(log_file_size "${LOG_FILE}")" || {
+        printf 'unable to determine log file size: %s\n' "${LOG_FILE}" >&2
+        exit 2
+    }
+    if (( log_bytes >= MAX_LOG_BYTES )); then
+        rm -f "${LOG_FILE}.3"
+        [[ -f "${LOG_FILE}.2" ]] && mv "${LOG_FILE}.2" "${LOG_FILE}.3"
+        [[ -f "${LOG_FILE}.1" ]] && mv "${LOG_FILE}.1" "${LOG_FILE}.2"
+        mv "${LOG_FILE}" "${LOG_FILE}.1"
+    fi
 fi
 
 {
