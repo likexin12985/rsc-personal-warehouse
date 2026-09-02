@@ -1,7 +1,9 @@
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import patch
 
 import pytest
@@ -9,6 +11,59 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+# The production read clients intentionally remain outside the hosted source
+# repository because they consume the local shared OAM session.  Keep this
+# contract suite runnable in isolated CI by installing non-networking import
+# stubs only when those local files are absent (or when explicitly requested by
+# this test process).  Every test patches the transport before use.
+LOCAL_PORTAL = ROOT / "work" / "inventory_query_portal"
+if (
+    os.getenv("RSC_EDGE_TEST_FORCE_IMPORT_STUBS") == "1"
+    or not (LOCAL_PORTAL / "oam_read_client.py").is_file()
+    or not (LOCAL_PORTAL / "query_oam_work_orders.py").is_file()
+):
+    portal_package = ModuleType("inventory_query_portal")
+    portal_package.__path__ = []  # type: ignore[attr-defined]
+    read_client = ModuleType("inventory_query_portal.oam_read_client")
+
+    def _offline_get_paged(*_args, **_kwargs):
+        raise AssertionError("isolated tests must patch the OAM read transport")
+
+    read_client.get_paged = _offline_get_paged  # type: ignore[attr-defined]
+    portal_package.oam_read_client = read_client  # type: ignore[attr-defined]
+    sys.modules["inventory_query_portal"] = portal_package
+    sys.modules["inventory_query_portal.oam_read_client"] = read_client
+
+    work_order_client = ModuleType("query_oam_work_orders")
+
+    def _offline_work_order_page(*_args, **_kwargs):
+        raise AssertionError("isolated tests must patch the OAM work-order transport")
+
+    def _epoch_ms(value: datetime) -> int:
+        return int(value.timestamp() * 1000)
+
+    def _normalized_list_row(row):
+        area_parts = [part.strip() for part in str(row.get("areaName") or "").split("-")]
+        return {
+            "id": str(row.get("id") or row.get("workOrderId") or "").strip(),
+            "code": str(row.get("workOrderCode") or "").strip(),
+            "statusCode": str(row.get("workOrderStatus") or "").strip(),
+            "executorId": str(
+                row.get("stepExecutorId")
+                or row.get("assigneeId")
+                or row.get("transfereeId")
+                or ""
+            ).strip(),
+            "authCompanyId": str(row.get("authCompanyId") or "").strip(),
+            "province": area_parts[0] if area_parts and area_parts[0] else "",
+            "updateTime": str(row.get("updateTime") or "").strip(),
+        }
+
+    work_order_client.epoch_ms = _epoch_ms  # type: ignore[attr-defined]
+    work_order_client.get_paged_parallel = _offline_work_order_page  # type: ignore[attr-defined]
+    work_order_client.normalized_list_row = _normalized_list_row  # type: ignore[attr-defined]
+    sys.modules["query_oam_work_orders"] = work_order_client
 
 from cloud_oam.edge_sync import oam_edge_sync
 
