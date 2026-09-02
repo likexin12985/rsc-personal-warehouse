@@ -149,6 +149,29 @@ def _current_step(db: Session, request_id: uuid.UUID) -> ApprovalStep:
     return row
 
 
+def _assert_command_projection_times(
+    db: Session,
+    *,
+    request: MaterialRequest,
+    result,
+    operation: str,
+    rows: tuple[object, ...],
+) -> MaterialRequestCommand:
+    command = db.scalar(
+        select(MaterialRequestCommand).where(
+            MaterialRequestCommand.request_id == request.id,
+            MaterialRequestCommand.operation == operation,
+            MaterialRequestCommand.target_version == result.request_version,
+        )
+    )
+    instance = db.get(ApprovalInstance, result.instance_id)
+    assert command is not None and instance is not None
+    command_time = approval_service._as_utc(command.occurred_at)
+    for row in (request, instance, *rows):
+        assert approval_service._as_utc(row.updated_at) == command_time
+    return command
+
+
 def _approve(
     db: Session,
     *,
@@ -454,6 +477,14 @@ def test_forward_chain_external_accept_replays_and_keeps_fulfillment_axes_neutra
         quantities={line.id: line.requested_qty},
         key="approval-forward-region",
     )
+    activated_step2 = _current_step(db, request.id)
+    _assert_command_projection_times(
+        db,
+        request=request,
+        result=regional,
+        operation="region_decide",
+        rows=(step1, activated_step2),
+    )
     replay = decide_material_request_approval(
         db,
         actor=manager,
@@ -473,13 +504,21 @@ def test_forward_chain_external_accept_replays_and_keeps_fulfillment_axes_neutra
     assert replay.replayed is True
     assert replace(replay, replayed=False) == regional
 
-    _, headquarters = _approve(
+    step2, headquarters = _approve(
         db,
         actor=admin0,
         request=request,
         request_version=regional.request_version,
         quantities={line.id: line.requested_qty},
         key="approval-forward-hq",
+    )
+    activated_step3 = _current_step(db, request.id)
+    _assert_command_projection_times(
+        db,
+        request=request,
+        result=headquarters,
+        operation="headquarters_decide",
+        rows=(step2, activated_step3),
     )
     evidence = _evidence(db, uploaded_by=admin0.user_id, marker="evidence-a")
     step3, registration = _register_external(
@@ -492,6 +531,18 @@ def test_forward_chain_external_accept_replays_and_keeps_fulfillment_axes_neutra
         action="approve",
         lines=(ApprovalLineDecision(line.id, line.requested_qty, ""),),
     )
+    registration_row = db.get(
+        ApprovalExternalRegistration,
+        registration.registration_id,
+    )
+    assert registration_row is not None
+    _assert_command_projection_times(
+        db,
+        request=request,
+        result=registration,
+        operation="register_external",
+        rows=(step3, registration_row),
+    )
     verified = _verify_external(
         db,
         actor=admin1,
@@ -501,6 +552,13 @@ def test_forward_chain_external_accept_replays_and_keeps_fulfillment_axes_neutra
         request_version=registration.request_version,
         step_version=registration.step_version,
         key="approval-forward-verify",
+    )
+    _assert_command_projection_times(
+        db,
+        request=request,
+        result=verified,
+        operation="verify_external",
+        rows=(step3, registration_row, *lines),
     )
     verify_replay = _verify_external(
         db,
@@ -586,6 +644,13 @@ def test_internal_whole_reject_has_complete_zero_approved_line_fact(
         idempotency_hmac_secret=SECRET,
         trace_request_id="trace-approval-reject-region",
     )
+    _assert_command_projection_times(
+        db,
+        request=request,
+        result=rejected,
+        operation="region_decide",
+        rows=(step, *lines),
+    )
     fact = db.scalar(
         select(ApprovalStepLineDecision).where(
             ApprovalStepLineDecision.step_id == step.id
@@ -625,6 +690,13 @@ def test_step1_return_targets_requester_revision_without_opening_an_approval_ste
         trace_request_id="trace-approval-return-requester-command",
     )
     instance = db.get(ApprovalInstance, result.instance_id)
+    _assert_command_projection_times(
+        db,
+        request=request,
+        result=result,
+        operation="region_decide",
+        rows=(step1,),
+    )
     fact = db.scalar(
         select(ApprovalReturnLineFact).where(
             ApprovalReturnLineFact.returned_from_step_id == step1.id
@@ -656,6 +728,14 @@ def test_step2_return_reopens_step1_and_continues_with_new_step2_and_step3(
         key="approval-return-step2-region",
     )
     step2 = _current_step(db, request.id)
+    original_pending_step3 = db.scalar(
+        select(ApprovalStep).where(
+            ApprovalStep.instance_id == first.instance_id,
+            ApprovalStep.step_no == 3,
+            ApprovalStep.attempt_no == 1,
+        )
+    )
+    assert original_pending_step3 is not None
     returned = decide_material_request_approval(
         db,
         actor=admin,
@@ -675,6 +755,13 @@ def test_step2_return_reopens_step1_and_continues_with_new_step2_and_step3(
         trace_request_id="trace-approval-return-step2-command",
     )
     reopened_step1 = _current_step(db, request.id)
+    _assert_command_projection_times(
+        db,
+        request=request,
+        result=returned,
+        operation="headquarters_decide",
+        rows=(step2, reopened_step1),
+    )
     assert (reopened_step1.step_no, reopened_step1.attempt_no) == (1, 2)
     with pytest.raises(MaterialRequestApprovalError) as over_limit:
         _approve(
@@ -706,6 +793,13 @@ def test_step2_return_reopens_step1_and_continues_with_new_step2_and_step3(
         key="approval-return-step2-hq-reapproval",
     )
     reopened_step3 = _current_step(db, request.id)
+    _assert_command_projection_times(
+        db,
+        request=request,
+        result=headquarters_reapproval,
+        operation="headquarters_decide",
+        rows=(reopened_step2, original_pending_step3, reopened_step3),
+    )
     assert (reopened_step3.step_no, reopened_step3.attempt_no) == (3, 2)
     assert headquarters_reapproval.current_step_id == reopened_step3.id
     assert db.scalar(select(func.count()).select_from(ApprovalReturnLineFact)) == 1
@@ -749,6 +843,11 @@ def test_step3_external_return_reopens_step2_and_continues_with_new_step3(
             ApprovalReturnInstruction(line.id, Decimal("1.000"), "总部重审一件"),
         ),
     )
+    registration_row = db.get(
+        ApprovalExternalRegistration,
+        registration.registration_id,
+    )
+    assert registration_row is not None
     returned = _verify_external(
         db,
         actor=admin1,
@@ -760,6 +859,13 @@ def test_step3_external_return_reopens_step2_and_continues_with_new_step3(
         key="approval-return-step3-verify",
     )
     reopened_step2 = _current_step(db, request.id)
+    _assert_command_projection_times(
+        db,
+        request=request,
+        result=returned,
+        operation="verify_external",
+        rows=(step3, registration_row, reopened_step2),
+    )
     assert (reopened_step2.step_no, reopened_step2.attempt_no) == (2, 2)
     _, headquarters_reapproval = _approve(
         db,
@@ -847,6 +953,11 @@ def test_external_reviewer_separation_rejection_retry_and_whole_reject_facts(
         action="approve",
         lines=(ApprovalLineDecision(line.id, line.requested_qty, ""),),
     )
+    first_registration_row = db.get(
+        ApprovalExternalRegistration,
+        first_registration.registration_id,
+    )
+    assert first_registration_row is not None
     with pytest.raises(MaterialRequestApprovalError) as self_review:
         _verify_external(
             db,
@@ -871,6 +982,13 @@ def test_external_reviewer_separation_rejection_retry_and_whole_reject_facts(
         key="approval-external-review-reject",
         decision="reject",
     )
+    _assert_command_projection_times(
+        db,
+        request=request,
+        result=rejected_evidence,
+        operation="verify_external",
+        rows=(step3, first_registration_row),
+    )
     with pytest.raises(MaterialRequestApprovalError) as old_registration:
         _verify_external(
             db,
@@ -894,6 +1012,11 @@ def test_external_reviewer_separation_rejection_retry_and_whole_reject_facts(
         key="approval-external-second-register",
         action="reject",
     )
+    second_registration_row = db.get(
+        ApprovalExternalRegistration,
+        second_registration.registration_id,
+    )
+    assert second_registration_row is not None
     final = _verify_external(
         db,
         actor=admin1,
@@ -903,6 +1026,13 @@ def test_external_reviewer_separation_rejection_retry_and_whole_reject_facts(
         request_version=second_registration.request_version,
         step_version=second_registration.step_version,
         key="approval-external-second-verify",
+    )
+    _assert_command_projection_times(
+        db,
+        request=request,
+        result=final,
+        operation="verify_external",
+        rows=(step3, second_registration_row, *lines),
     )
     official = db.scalar(
         select(ApprovalStepLineDecision).where(

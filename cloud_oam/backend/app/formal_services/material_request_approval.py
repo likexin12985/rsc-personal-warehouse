@@ -25,6 +25,7 @@ import uuid
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from ..demand_models import (
     ApprovalAction,
@@ -719,6 +720,12 @@ def _register_external_approval_evidence_impl(
     locked.step.updated_at = now
     locked.instance.version += 1
     locked.instance.updated_at = now
+    _pin_projection_updated_at(
+        now,
+        locked.request,
+        locked.step,
+        locked.instance,
+    )
     result = ExternalApprovalRegistrationResult(
         request_id=locked.request.id,
         request_no=locked.request.request_no,
@@ -989,6 +996,7 @@ def _verify_external_approval_evidence_impl(
     registration.verified_at = now
     registration.version += 1
     registration.updated_at = now
+    _pin_projection_updated_at(now, registration)
     db.flush()
 
     locked.request.version += 1
@@ -997,6 +1005,12 @@ def _verify_external_approval_evidence_impl(
     locked.step.updated_at = now
     locked.instance.version += 1
     locked.instance.updated_at = now
+    _pin_projection_updated_at(
+        now,
+        locked.request,
+        locked.step,
+        locked.instance,
+    )
     opened_step: ApprovalStep | None = None
     return_facts: Sequence[Any] = ()
     outcomes: tuple[ApprovalLineOutcome, ...] = ()
@@ -1148,6 +1162,7 @@ def _verify_external_approval_evidence_impl(
     db.flush()
     if decision == "reject":
         locked.step.status = "awaiting_external_evidence"
+        _pin_projection_updated_at(now, locked.step)
         db.flush()
     elif registration.external_action == "return":
         assert opened_step is not None
@@ -1164,8 +1179,10 @@ def _verify_external_approval_evidence_impl(
         locked.step.status = "returned"
         locked.step.decided_at = now
         locked.step.decision_manifest_sha256 = None
+        _pin_projection_updated_at(now, locked.step)
         db.flush()
         _activate_return_target(locked=locked, target=opened_step, now=now)
+        _pin_projection_updated_at(now, locked.instance, opened_step)
         db.flush()
     else:
         assert terminal_action is not None
@@ -1178,6 +1195,7 @@ def _verify_external_approval_evidence_impl(
         locked.step.status = terminal_step_status
         locked.step.decision_manifest_sha256 = decision_manifest
         locked.step.decided_at = now
+        _pin_projection_updated_at(now, locked.step)
         db.flush()
     db.add(
         _state_event(
@@ -1289,6 +1307,12 @@ def _complete_internal_step(
     locked.step.updated_at = now
     locked.instance.version += 1
     locked.instance.updated_at = now
+    _pin_projection_updated_at(
+        now,
+        locked.request,
+        locked.step,
+        locked.instance,
+    )
     decision_manifest = _decision_manifest(
         locked=locked,
         actor=actor,
@@ -1367,9 +1391,11 @@ def _complete_internal_step(
     locked.step.decided_at = now
     if terminal_action == "reject":
         _finish_request_rejected(locked, now=now)
+    _pin_projection_updated_at(now, locked.step)
     db.flush()
     if opened_step is not None:
         _activate_forward_step(locked=locked, target=opened_step, now=now)
+        _pin_projection_updated_at(now, locked.instance, opened_step)
         db.flush()
     db.add(
         _state_event(
@@ -1463,6 +1489,12 @@ def _return_internal_step(
     locked.step.updated_at = now
     locked.instance.version += 1
     locked.instance.updated_at = now
+    _pin_projection_updated_at(
+        now,
+        locked.request,
+        locked.step,
+        locked.instance,
+    )
     result_request_status = "returned" if target is None else locked.request.status
     result_instance_status = "returned" if target is None else locked.instance.status
     result = ApprovalCommandResult(
@@ -1541,8 +1573,10 @@ def _return_internal_step(
     locked.step.decided_at = now
     locked.step.decision_manifest_sha256 = None
     if target is not None:
+        _pin_projection_updated_at(now, locked.step)
         db.flush()
         _activate_return_target(locked=locked, target=target, now=now)
+        _pin_projection_updated_at(now, locked.instance, target)
     else:
         require_request_status_transition(locked.request.status, "returned")
         locked.request.status = "returned"
@@ -1551,6 +1585,12 @@ def _return_internal_step(
         locked.instance.current_step_id = None
         locked.instance.current_step_no = None
         locked.instance.completed_at = now
+        _pin_projection_updated_at(
+            now,
+            locked.request,
+            locked.instance,
+            locked.step,
+        )
     db.add(
         _state_event(
             aggregate_type="approval_step",
@@ -1764,6 +1804,7 @@ def _prepare_forward_step(
         if latest.status == "pending":
             latest.status = "superseded"
             latest.updated_at = now
+            _pin_projection_updated_at(now, latest)
         target = ApprovalStep(
             id=uuid.uuid4(),
             instance_id=locked.instance.id,
@@ -1816,6 +1857,12 @@ def _finish_request_rejected(locked: _LockedApproval, *, now: datetime) -> None:
         line.status = "rejected"
         line.version += 1
         line.updated_at = now
+    _pin_projection_updated_at(
+        now,
+        locked.request,
+        locked.instance,
+        *locked.lines,
+    )
 
 
 def _finish_final_approval(
@@ -1854,6 +1901,12 @@ def _finish_final_approval(
     locked.instance.current_step_no = None
     locked.instance.current_step_id = None
     locked.instance.completed_at = now
+    _pin_projection_updated_at(
+        now,
+        locked.request,
+        locked.instance,
+        *locked.lines,
+    )
 
 
 def _causal_step_outcome_chain(
@@ -3081,6 +3134,14 @@ def _database_now(db: Session) -> datetime:
     if not isinstance(value, datetime):
         _fail("material_request_database_clock_invalid", "service_unavailable", "数据库时间不可用")
     return _as_utc(value)
+
+
+def _pin_projection_updated_at(now: datetime, *rows: Any) -> None:
+    """Keep a multi-flush projection tied to its immutable command time."""
+
+    for row in rows:
+        row.updated_at = now
+        flag_modified(row, "updated_at")
 
 
 def _as_utc(value: datetime) -> datetime:
