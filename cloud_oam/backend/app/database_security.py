@@ -1477,6 +1477,9 @@ EXPECTED_FORMAL_FILE_INDEXES = {
         "predicate": "stocktake_evidence",
     },
 }
+POSTGRESQL_MATERIAL_REQUEST_CANCELLATION_FACT_GRAPH_TRIGGER_0037 = (
+    "trg_material_request_cancellation_line_facts_cancellation_graph"
+)
 EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS = {
     "trg_material_request_cancellation_facts_guard_0037": (
         "material_request_cancellation_line_facts",
@@ -1524,7 +1527,11 @@ EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS = {
         "outbox_events", "rsc_lock_material_request_parent_write_0037", "A", 7
     ),
     **{
-        f"trg_{table_name}_cancellation_graph_0037": (
+        (
+            POSTGRESQL_MATERIAL_REQUEST_CANCELLATION_FACT_GRAPH_TRIGGER_0037
+            if table_name == "material_request_cancellation_line_facts"
+            else f"trg_{table_name}_cancellation_graph_0037"
+        ): (
             table_name,
             "rsc_require_material_request_cancellation_graph_0037",
             "A",
@@ -3088,9 +3095,16 @@ ORDER BY index_row.relname
 """
 )
 
-_MATERIAL_REQUEST_CANCELLATION_TRIGGER_NAME_LITERALS = ",\n      ".join(
-    f"'{name}'"
-    for name in sorted(EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS)
+_MATERIAL_REQUEST_CANCELLATION_TRIGGER_FUNCTION_LITERALS = ",\n      ".join(
+    f"'{function_name}'"
+    for function_name in sorted(
+        {
+            function_name
+            for _, function_name, _, _ in (
+                EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS.values()
+            )
+        }
+    )
 )
 _MATERIAL_REQUEST_CANCELLATION_TRIGGER_SQL = text(
     f"""
@@ -3113,8 +3127,8 @@ JOIN pg_proc AS function_row ON function_row.oid = trigger_row.tgfoid
 JOIN pg_namespace AS function_schema
   ON function_schema.oid = function_row.pronamespace
 WHERE table_schema.nspname = 'public'
-  AND trigger_row.tgname IN (
-      {_MATERIAL_REQUEST_CANCELLATION_TRIGGER_NAME_LITERALS}
+  AND function_row.proname IN (
+      {_MATERIAL_REQUEST_CANCELLATION_TRIGGER_FUNCTION_LITERALS}
   )
   AND NOT trigger_row.tgisinternal
 ORDER BY trigger_row.tgname

@@ -34,6 +34,9 @@ PG_DISPATCH_FUNCTION = "rsc_require_material_request_cancellation_graph_0037"
 PG_FACT_GUARD_FUNCTION = "rsc_guard_material_request_cancellation_fact_0037"
 PG_ACTION_GUARD_FUNCTION = "rsc_guard_material_request_cancel_action_0037"
 PG_PARENT_LOCK_FUNCTION = "rsc_lock_material_request_parent_write_0037"
+PG_FACT_GRAPH_TRIGGER = (
+    "trg_material_request_cancellation_line_facts_cancellation_graph"
+)
 GUARD_ERROR = "material request cancellation graph is invalid"
 UPGRADE_BLOCKER = (
     "0037 preflight failed: legacy cancellation state requires quarantine"
@@ -1098,8 +1101,13 @@ def _create_postgresql_triggers() -> None:
         "outbox_events": "INSERT",
     }
     for table_name, operations in trigger_operations.items():
+        trigger_name = (
+            PG_FACT_GRAPH_TRIGGER
+            if table_name == FACT_TABLE
+            else f"trg_{table_name}_cancellation_graph_0037"
+        )
         op.execute(
-            f"CREATE CONSTRAINT TRIGGER trg_{table_name}_cancellation_graph_0037 "
+            f"CREATE CONSTRAINT TRIGGER {trigger_name} "
             f"AFTER {operations} ON public.{table_name} DEFERRABLE INITIALLY DEFERRED "
             f"FOR EACH ROW EXECUTE FUNCTION public.{PG_DISPATCH_FUNCTION}()"
         )
@@ -1143,7 +1151,12 @@ def _postgresql_triggers() -> dict[str, str]:
         "notification_events",
         "outbox_events",
     ):
-        rows[f"trg_{table_name}_cancellation_graph_0037"] = table_name
+        trigger_name = (
+            PG_FACT_GRAPH_TRIGGER
+            if table_name == FACT_TABLE
+            else f"trg_{table_name}_cancellation_graph_0037"
+        )
+        rows[trigger_name] = table_name
     return rows
 
 

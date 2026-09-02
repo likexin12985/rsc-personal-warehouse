@@ -18,6 +18,7 @@ from app.database_security import (
     EXPECTED_KMS_DATA_KEY_PIN_CONSTRAINTS,
     EXPECTED_KMS_DATA_KEY_PIN_INDEXES,
     EXPECTED_KMS_DATA_KEY_PIN_TRIGGERS,
+    EXPECTED_MATERIAL_REQUEST_CANCELLATION_INDEXES,
     EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS,
     EXPECTED_MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX,
     EXPECTED_NONOPENING_STOCKTAKE_CLOSE_CONSTRAINTS,
@@ -41,6 +42,7 @@ from app.database_security import (
     EXPECTED_STOCKTAKE_SCOPE_TRIGGERS,
     EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS,
     POSTGRESQL_COMPLETION_PERSONAL_TRIGGER_0019,
+    POSTGRESQL_MATERIAL_REQUEST_CANCELLATION_FACT_GRAPH_TRIGGER_0037,
     POSTGRESQL_RECOUNT_PERSONAL_TRIGGER_0019,
     OPENING_COMMIT_TRIGGER_NAMES,
     RUNTIME_DELETE_TABLES,
@@ -56,6 +58,7 @@ from app.database_security import (
     RUNTIME_UPDATE_COLUMNS,
     _AUDIT_TRIGGER_SQL,
     _NONOPENING_STOCKTAKE_CLOSE_TRIGGER_SQL,
+    _MATERIAL_REQUEST_CANCELLATION_TRIGGER_SQL,
     _MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX_SQL,
     _OPENING_TERMINAL_TRIGGER_SQL,
     _OPENING_TERMINAL_INDEX_SQL,
@@ -73,6 +76,7 @@ from app.database_security import (
     _assert_fixed_audit_heads,
     _assert_formal_file_guards,
     _assert_kms_data_key_pin_guards,
+    _assert_material_request_cancellation_guards,
     _assert_material_request_command_recovery_index,
     _assert_nonopening_stocktake_close_guards,
     _assert_runtime_function_acl,
@@ -146,6 +150,13 @@ FORMAL_FILE_MIGRATION_0036 = (
     / "alembic"
     / "versions"
     / "20260901_0036_formal_file_runtime_boundary.py"
+)
+MATERIAL_REQUEST_CANCELLATION_MIGRATION_0037 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260901_0037_material_request_cancellation_boundary.py"
 )
 NONOPENING_STOCKTAKE_CLOSE_MIGRATION_0038 = (
     ROOT
@@ -2986,6 +2997,108 @@ def test_audit_trigger_inventory_covers_cross_domain_manifests() -> None:
         "table_row.relname IN ('audit_events', 'audit_chain_heads')" in query
     )
     assert "trigger_row.tgname IN" not in query
+
+
+def test_material_request_cancellation_catalog_uses_postgresql_identifier(
+) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0037_cancellation_trigger_catalog",
+        MATERIAL_REQUEST_CANCELLATION_MIGRATION_0037,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    source_name = f"trg_{migration.FACT_TABLE}_cancellation_graph_0037"
+    assert len(source_name.encode("utf-8")) > 63
+    assert (
+        source_name.encode("utf-8")[:63].decode("utf-8")
+        == POSTGRESQL_MATERIAL_REQUEST_CANCELLATION_FACT_GRAPH_TRIGGER_0037
+    )
+    assert (
+        migration.PG_FACT_GRAPH_TRIGGER
+        == POSTGRESQL_MATERIAL_REQUEST_CANCELLATION_FACT_GRAPH_TRIGGER_0037
+    )
+    assert all(
+        len(name.encode("utf-8")) <= 63
+        for name in migration._postgresql_triggers()
+    )
+    assert source_name not in EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS
+    assert (
+        POSTGRESQL_MATERIAL_REQUEST_CANCELLATION_FACT_GRAPH_TRIGGER_0037
+        in EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS
+    )
+
+    triggers = []
+    for name, (table_name, function_name, enabled, trigger_type) in (
+        EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS.items()
+    ):
+        is_deferred = function_name == migration.PG_DISPATCH_FUNCTION
+        triggers.append(
+            {
+                "trigger_name": name,
+                "table_name": table_name,
+                "function_name": function_name,
+                "function_schema": "public",
+                "enabled": enabled,
+                "trigger_type": trigger_type,
+                "is_constraint_trigger": is_deferred,
+                "is_deferrable": is_deferred,
+                "is_initially_deferred": is_deferred,
+                "has_when_clause": False,
+                "has_column_filter": False,
+            }
+        )
+    indexes = [
+        {
+            "index_name": name,
+            "table_name": expected["table"],
+            "access_method": "btree",
+            "is_unique": expected["unique"],
+            "is_valid": True,
+            "is_ready": True,
+            "is_live": True,
+            "key_columns": list(expected["columns"]),
+            "predicate": None,
+        }
+        for name, expected in (
+            EXPECTED_MATERIAL_REQUEST_CANCELLATION_INDEXES.items()
+        )
+    ]
+    _assert_material_request_cancellation_guards(
+        triggers=triggers,
+        indexes=indexes,
+    )
+
+    query = str(_MATERIAL_REQUEST_CANCELLATION_TRIGGER_SQL)
+    assert "trigger_row.tgname IN" not in query
+    assert "function_row.proname IN" in query
+    for function_name in {
+        expected[1]
+        for expected in (
+            EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS.values()
+        )
+    }:
+        assert f"'{function_name}'" in query
+    assert f"'{source_name}'" not in query
+
+    for drifted in (
+        triggers[1:],
+        [
+            *triggers,
+            {
+                **triggers[0],
+                "trigger_name": "trg_unapproved_cancellation_probe",
+            },
+        ],
+    ):
+        with pytest.raises(
+            DatabaseSecurityBoundaryError,
+            match="cancellation guard",
+        ):
+            _assert_material_request_cancellation_guards(
+                triggers=drifted,
+                indexes=indexes,
+            )
 
 
 def _valid_audit_stream_columns() -> list[dict[str, object]]:
