@@ -125,6 +125,7 @@ def test_postgresql16_gate_covers_main_prs_and_edge_role_provisioning() -> None:
     ) == 2
     for approval_gate in (
         "backend/tests/test_database_security.py",
+        "backend/tests/test_oam_projection_security.py",
         "backend/tests/test_material_request_draft_service.py",
         "backend/tests/test_material_request_approval_service.py",
         "backend/tests/test_material_request_lifecycle_service.py",

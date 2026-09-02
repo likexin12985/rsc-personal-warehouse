@@ -468,8 +468,26 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
         assert "SECURITY DEFINER" in attributes
         assert "SET search_path = pg_catalog" in attributes
 
+    assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_0044) == 14
+    assert actual_manifest == scope_security.OAM_SYNC_FUNCTION_MANIFEST_0044
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST) == 14
-    assert actual_manifest == scope_security.OAM_SYNC_FUNCTION_MANIFEST
+    assert {
+        signature: definition
+        for signature, definition in scope_security.OAM_SYNC_FUNCTION_MANIFEST.items()
+        if signature != "rsc_oam_runtime_binding_ready_0044()"
+    } == {
+        signature: definition
+        for signature, definition in actual_manifest.items()
+        if signature != "rsc_oam_runtime_binding_ready_0044()"
+    }
+    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST[
+        "rsc_oam_runtime_binding_ready_0044()"
+    ][:6] == actual_manifest["rsc_oam_runtime_binding_ready_0044()"][
+        :6
+    ]
+    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST[
+        "rsc_oam_runtime_binding_ready_0044()"
+    ][6] != actual_manifest["rsc_oam_runtime_binding_ready_0044()"][6]
     ready_body = actual_sources["rsc_oam_runtime_binding_ready_0044"]
     assert "FROM public.alembic_version" in ready_body
     assert "pg_catalog.count(*) = 1" in ready_body

@@ -33,6 +33,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 PRODUCTION_API_ROLE = "star_oam_api"
 MIGRATION_ROLE = "star_oam_migrator"
+OAM_RUNTIME_READY_FUNCTION = "rsc_oam_runtime_binding_ready_0044"
+PREVIOUS_SCHEMA_REVISION = "20260902_0044"
 GUARD_ERROR = "formal material request approval projection is invalid"
 UPGRADE_BLOCKER = (
     "0045 approval activation requires an empty formal material-request graph"
@@ -212,6 +214,7 @@ def upgrade() -> None:
     _emit_empty_graph_guard(UPGRADE_BLOCKER)
     _repair_0030_dispatcher_execution_context()
     _create_projection_guards()
+    _replace_oam_runtime_ready_function(revision)
     for table_name, trigger_name in TRIGGER_BINDINGS:
         op.execute(
             f"ALTER TABLE public.{table_name} ENABLE ALWAYS TRIGGER {trigger_name}"
@@ -245,6 +248,7 @@ def downgrade() -> None:
         f"ALTER FUNCTION public.{PG_APPROVAL_DISPATCH_FUNCTION_0030}() "
         "SECURITY INVOKER"
     )
+    _replace_oam_runtime_ready_function(PREVIOUS_SCHEMA_REVISION)
     for table_name, trigger_name in LEGACY_TRIGGER_BINDINGS:
         op.execute(f"ALTER TABLE public.{table_name} ENABLE TRIGGER {trigger_name}")
 
@@ -289,6 +293,10 @@ def _repair_0030_dispatcher_execution_context() -> None:
         f"REVOKE ALL ON FUNCTION public.{PG_APPROVAL_DISPATCH_FUNCTION_0030}() "
         f"FROM PUBLIC, {PRODUCTION_API_ROLE}"
     )
+
+
+def _replace_oam_runtime_ready_function(expected_revision: str) -> None:
+    op.execute(_oam_runtime_ready_function_sql(expected_revision))
 
 
 def _create_projection_guards() -> None:
@@ -345,6 +353,102 @@ def _create_projection_guards() -> None:
             "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "
             f"public.{PG_PROJECTION_DISPATCH_FUNCTION}()"
         )
+
+
+def _oam_runtime_ready_function_sql(expected_revision: str) -> str:
+    if expected_revision not in {PREVIOUS_SCHEMA_REVISION, revision}:
+        raise ValueError("unsupported OAM runtime readiness revision")
+    return f"""
+CREATE OR REPLACE FUNCTION public.{OAM_RUNTIME_READY_FUNCTION}()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+    SELECT (
+        SELECT pg_catalog.count(*) = 1
+           AND pg_catalog.min(version_num) = '{expected_revision}'
+          FROM public.alembic_version
+    ) AND CASE session_user::text
+        WHEN 'edge_inbox' THEN EXISTS (
+            SELECT 1
+              FROM public.oam_sync_scope_bindings AS ingress
+             WHERE ingress.enabled
+               AND ingress.principal_name = session_user::text
+               AND ingress.capability = 'edge_ingress'
+               AND (
+                   ingress.entity_type <> 'work_order'
+                   OR EXISTS (
+                       SELECT 1
+                         FROM public.source_systems AS source
+                        WHERE source.code = ingress.source_system
+                          AND source.mode = 'read_only'
+                          AND source.enabled
+                          AND source.configuration_jsonb =
+                              pg_catalog.jsonb_build_object(
+                                  'projection_schema',
+                                  'rsc.oam_work_order_projection.v1',
+                                  'edge_source_instance',
+                                  ingress.source_instance,
+                                  'work_order_company_id',
+                                  ingress.company_id,
+                                  'work_order_org_code',
+                                  ingress.org_code,
+                                  'work_order_scope_key',
+                                  ingress.scope_key
+                              )
+                   )
+               )
+        )
+        WHEN 'star_oam_projector' THEN EXISTS (
+            SELECT 1
+              FROM public.oam_sync_scope_bindings AS write_work_order
+              JOIN public.oam_sync_scope_bindings AS read_work_order
+                ON read_work_order.source_system = write_work_order.source_system
+               AND read_work_order.source_instance = write_work_order.source_instance
+               AND read_work_order.scope_key = write_work_order.scope_key
+               AND read_work_order.company_id = write_work_order.company_id
+               AND read_work_order.org_code = write_work_order.org_code
+               AND read_work_order.enabled
+               AND read_work_order.principal_name = write_work_order.principal_name
+               AND read_work_order.capability = 'projector_read'
+               AND read_work_order.entity_type = 'work_order'
+              JOIN public.oam_sync_scope_bindings AS read_employee
+                ON read_employee.source_system = write_work_order.source_system
+               AND read_employee.source_instance = write_work_order.source_instance
+               AND read_employee.scope_key = write_work_order.scope_key
+               AND read_employee.company_id = write_work_order.company_id
+               AND read_employee.org_code = write_work_order.org_code
+               AND read_employee.enabled
+               AND read_employee.principal_name = write_work_order.principal_name
+               AND read_employee.capability = 'projector_read'
+               AND read_employee.entity_type = 'employee'
+              JOIN public.source_systems AS source
+                ON source.code = write_work_order.source_system
+               AND source.mode = 'read_only'
+               AND source.enabled
+               AND source.configuration_jsonb = pg_catalog.jsonb_build_object(
+                   'projection_schema', 'rsc.oam_work_order_projection.v1',
+                   'edge_source_instance', write_work_order.source_instance,
+                   'work_order_company_id', write_work_order.company_id,
+                   'work_order_org_code', write_work_order.org_code,
+                   'work_order_scope_key', write_work_order.scope_key
+               )
+             WHERE write_work_order.enabled
+               AND write_work_order.principal_name = session_user::text
+               AND write_work_order.capability = 'projector_write'
+               AND write_work_order.entity_type = 'work_order'
+        ) AND (
+            SELECT pg_catalog.count(*) = 3
+              FROM public.oam_sync_scope_bindings AS binding
+             WHERE binding.enabled
+               AND binding.principal_name = session_user::text
+        )
+        ELSE false
+    END
+$$
+"""
 
 
 def _status_guard_sql() -> str:

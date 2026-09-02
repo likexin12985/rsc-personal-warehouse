@@ -118,6 +118,7 @@ jobs:
             backend/tests/test_startup_security_boundary.py \
             backend/tests/test_database_deployment_security.py \
             backend/tests/test_database_security.py \
+            backend/tests/test_oam_projection_security.py \
             backend/tests/test_alembic_migrations.py \
             backend/tests/test_material_request_draft_service.py \
             backend/tests/test_material_request_approval_service.py \

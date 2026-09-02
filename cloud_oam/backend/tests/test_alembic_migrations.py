@@ -2060,6 +2060,7 @@ def test_0045_postgresql_functions_parse_as_sql_and_plpgsql() -> None:
     parser = pytest.importorskip("pglast.parser")
     module = _load_0045_migration_module()
     function_sql = (
+        module._oam_runtime_ready_function_sql(module.revision),
         module._status_guard_sql(),
         module._line_guard_sql(),
         module._command_parent_lock_sql(),
@@ -2074,6 +2075,27 @@ def test_0045_postgresql_functions_parse_as_sql_and_plpgsql() -> None:
         assert not sa.text(statement)._bindparams
         parser.parse_sql(statement)
         parser.parse_plpgsql_json(statement)
+
+    from app.oam_sync_scope_security import (
+        OAM_SYNC_FUNCTION_MANIFEST,
+        OAM_SYNC_FUNCTION_MANIFEST_0044,
+    )
+
+    ready_signature = "rsc_oam_runtime_binding_ready_0044()"
+    current_ready_sql = module._oam_runtime_ready_function_sql(module.revision)
+    current_ready_body = current_ready_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    previous_ready_sql = module._oam_runtime_ready_function_sql(
+        module.PREVIOUS_SCHEMA_REVISION
+    )
+    previous_ready_body = previous_ready_sql.split("AS $$", 1)[1].rsplit(
+        "$$", 1
+    )[0]
+    assert hashlib.sha256(current_ready_body.encode("utf-8")).hexdigest() == (
+        OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6]
+    )
+    assert hashlib.sha256(previous_ready_body.encode("utf-8")).hexdigest() == (
+        OAM_SYNC_FUNCTION_MANIFEST_0044[ready_signature][6]
+    )
 
 
 def test_0045_postgresql_offline_sql_closes_exact_approval_boundary(
@@ -2101,6 +2123,10 @@ def test_0045_postgresql_offline_sql_closes_exact_approval_boundary(
     sql = output.getvalue()
 
     assert "-- Running upgrade 20260902_0044 -> 20260903_0045" in sql
+    assert sql.count(
+        "CREATE OR REPLACE FUNCTION public.rsc_oam_runtime_binding_ready_0044()"
+    ) == 1
+    assert "pg_catalog.min(version_num) = '20260903_0045'" in sql
     lock_offset = sql.index("LOCK TABLE public.approval_step_candidates")
     preflight_offset = sql.index(module.UPGRADE_BLOCKER)
     repair_offset = sql.index(

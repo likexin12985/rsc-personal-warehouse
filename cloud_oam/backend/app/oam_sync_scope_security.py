@@ -275,7 +275,7 @@ _TABLE_VALUES = ",\n        ".join(
     f"({_sql_literal(table_name)})" for table_name in RLS_TABLES
 )
 
-OAM_SYNC_FUNCTION_MANIFEST = {
+OAM_SYNC_FUNCTION_MANIFEST_0044 = {
     "rsc_oam_formal_scope_key_0044(text,text)": (
         True, "i", "sql", "text", True, "s",
         "520cc03d146ea720b367b3e074df9e2a846c00021bb5f25eab2b7cafba1ae60b",
@@ -345,6 +345,16 @@ OAM_SYNC_FUNCTION_MANIFEST = {
     "rsc_oam_runtime_binding_ready_0044()": (
         False, "s", "sql", "boolean", False, "u",
         "bb4b5e75c5ae91b8750d7086ebd03bbdbd2495763acffa5a0db5660324dc3364",
+    ),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST = {
+    **OAM_SYNC_FUNCTION_MANIFEST_0044,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_0044[
+            "rsc_oam_runtime_binding_ready_0044()"
+        ][:6],
+        "f443316e40a66352f057bcc4fcc973facf58c86de7fcac79b3f4591a20b911b5",
     ),
 }
 
@@ -787,6 +797,7 @@ __all__ = [
     "EXPECTED_TRIGGERS",
     "MIGRATION_ROLE",
     "OAM_SYNC_FUNCTION_MANIFEST",
+    "OAM_SYNC_FUNCTION_MANIFEST_0044",
     "RLS_REVISION",
     "RLS_TABLES",
     "_RLS_BOUNDARY_SQL",
