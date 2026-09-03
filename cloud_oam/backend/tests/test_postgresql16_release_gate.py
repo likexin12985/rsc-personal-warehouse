@@ -7303,12 +7303,16 @@ def _seed_0047_stocktake_inventory(
         RoleAssignment,
         SourceSystem,
         SyncBatch,
+        SyncInboxEvent,
         SyncRun,
     )
     from app.formal_services.opening_stocktake import (
         OPENING_CONTROL_ENTITY_TYPE,
+        OpeningControlLineInput,
+        canonical_opening_manifest_sha256,
         opening_control_batch_body_sha256,
         opening_control_manifest_sha256,
+        opening_control_projection_payload,
     )
     from app.inventory_models import (
         CustodyAssignment,
@@ -7520,17 +7524,54 @@ def _seed_0047_stocktake_inventory(
             control_scope_key = (
                 f"oam_inventory_control:region:{region_org_id}"
             )
+            control_started_at = now - timedelta(hours=4)
+            control_received_at = now - timedelta(hours=3)
+            control_validated_at = now - timedelta(hours=2, minutes=30)
+            control_completed_at = now - timedelta(hours=2)
+            control_source_updated_at = now - timedelta(
+                hours=3,
+                minutes=30,
+            )
+            control_external_business_key = (
+                f"PG16-STOCKTAKE-CONTROL-{location_id.hex}"
+            )
+            control_external_event_id = (
+                f"event-{control_external_business_key}"
+            )
+            control_source_version = "pg16-stocktake-control-v1"
+            control_event_id = uuid.uuid4()
+            control_external_version_id = uuid.uuid4()
+            control_payload = opening_control_projection_payload(
+                external_business_key=control_external_business_key,
+                region_org_id=region_org_id,
+                material_id=material.id,
+                condition_code="new",
+                control_qty=Decimal("0.000"),
+                mapping_status="resolved",
+                mapping_note="",
+            )
+            control_payload_sha256 = canonical_opening_manifest_sha256(
+                control_payload
+            )
+            control_line = OpeningControlLineInput(
+                sync_inbox_event_id=control_event_id,
+                external_object_version_id=control_external_version_id,
+                external_business_key=control_external_business_key,
+                material_id=material.id,
+                condition_code="new",
+                control_qty=Decimal("0.000"),
+                mapping_status="resolved",
+                source_updated_at=control_source_updated_at,
+                payload_sha256=control_payload_sha256,
+                mapping_note="",
+            )
             control_manifest_sha256 = opening_control_manifest_sha256(
                 source_system_id=oam_source.id,
                 sync_run_id=control_sync_run_id,
                 sync_scope_key=control_scope_key,
                 region_org_id=region_org_id,
-                lines=(),
+                lines=(control_line,),
             )
-            control_started_at = now - timedelta(hours=4)
-            control_received_at = now - timedelta(hours=3)
-            control_validated_at = now - timedelta(hours=2, minutes=30)
-            control_completed_at = now - timedelta(hours=2)
             control_sync_run = SyncRun(
                 id=control_sync_run_id,
                 source_system_id=oam_source.id,
@@ -7550,16 +7591,30 @@ def _seed_0047_stocktake_inventory(
             )
             session.add(control_sync_run)
             session.flush()
+            control_batch_id = uuid.uuid4()
             session.add(
                 SyncBatch(
-                    id=uuid.uuid4(),
+                    id=control_batch_id,
                     run_id=control_sync_run.id,
                     entity_type=OPENING_CONTROL_ENTITY_TYPE,
                     sequence=1,
-                    record_count=0,
+                    record_count=1,
                     body_sha256=opening_control_batch_body_sha256(
                         sequence=1,
-                        events=(),
+                        events=(
+                            {
+                                "event_sort_key": str(control_event_id),
+                                "external_event_id": control_external_event_id,
+                                "external_id": control_external_business_key,
+                                "payload_sha256": control_payload_sha256,
+                                "source_updated_at": control_source_updated_at.astimezone(
+                                    timezone.utc
+                                )
+                                .isoformat(timespec="microseconds")
+                                .replace("+00:00", "Z"),
+                                "source_version": control_source_version,
+                            },
+                        ),
                     ),
                     status="applied",
                     received_at=control_received_at,
@@ -7567,10 +7622,57 @@ def _seed_0047_stocktake_inventory(
                     created_at=control_received_at,
                 )
             )
+            session.flush()
+            control_external_object = ExternalObject(
+                id=uuid.uuid4(),
+                source_system_id=oam_source.id,
+                entity_type=OPENING_CONTROL_ENTITY_TYPE,
+                external_id=control_external_business_key,
+                current_version_id=control_external_version_id,
+                deleted_at=None,
+                created_at=control_source_updated_at,
+                updated_at=control_source_updated_at,
+            )
+            session.add(control_external_object)
+            session.flush()
+            session.add_all(
+                (
+                    ExternalObjectVersion(
+                        id=control_external_version_id,
+                        external_object_id=control_external_object.id,
+                        source_version=control_source_version,
+                        source_updated_at=control_source_updated_at,
+                        valid_from=control_source_updated_at,
+                        valid_to=None,
+                        payload_jsonb=control_payload,
+                        payload_sha256=control_payload_sha256,
+                        is_current=True,
+                        created_at=control_source_updated_at,
+                    ),
+                    SyncInboxEvent(
+                        id=control_event_id,
+                        batch_id=control_batch_id,
+                        source_system_id=oam_source.id,
+                        external_event_id=control_external_event_id,
+                        entity_type=OPENING_CONTROL_ENTITY_TYPE,
+                        external_id=control_external_business_key,
+                        source_version=control_source_version,
+                        source_updated_at=control_source_updated_at,
+                        payload_jsonb=control_payload,
+                        payload_sha256=control_payload_sha256,
+                        status="applied",
+                        error_code=None,
+                        error_detail=None,
+                        processed_at=control_validated_at,
+                        created_at=control_received_at,
+                    ),
+                )
+            )
             session.commit()
             fixture: dict[str, object] = {
                 "account_id": account.id,
                 "assignee_person_id": manager_person.id,
+                "control_lines": (control_line,),
                 "control_scope_key": control_scope_key,
                 "control_source_system_id": oam_source.id,
                 "control_sync_run_id": control_sync_run.id,
@@ -7647,7 +7749,7 @@ def _seed_0047_stocktake_inventory(
                             freeze_mode="hard",
                         ),
                     ),
-                    control_lines=(),
+                    control_lines=fixture["control_lines"],
                     blind_count=True,
                     deadline=fixture["deadline"],
                     note="PG16 隔离门禁零期初建账",
@@ -7659,7 +7761,7 @@ def _seed_0047_stocktake_inventory(
         assert started.status == "counting"
         assert started.scope_count == 1
         assert started.snapshot_line_count == 1
-        assert started.control_line_count == 0
+        assert started.control_line_count == 1
         session.commit()
 
     with Session(api_engine, expire_on_commit=False) as session:
