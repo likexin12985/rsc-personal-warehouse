@@ -6591,7 +6591,6 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
     # create a fourth command or replace the database-owned digest.
     amended_draft = replace(draft, note="0046 committed draft update")
     with Session(api_engine) as session:
-        session.execute(text("SET LOCAL DateStyle = 'SQL, DMY'"))
         amended = _reveal_pg16_service_database_error(
             lambda: amend_material_request_draft(
                 session,
@@ -6604,6 +6603,11 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
                 trace_request_id="trace-pg16-approval-projection-update",
             )
         )
+        # Keep psycopg's ORM reads on its required ISO DateStyle, then switch
+        # only for commit so the deferred 0046 validator recomputes the digest
+        # under SQL, DMY and proves that it matches the ISO-created manifest.
+        session.execute(text("SET LOCAL DateStyle = 'SQL, DMY'"))
+        assert session.execute(text("SHOW DateStyle")).scalar_one() == "SQL, DMY"
         session.commit()
     amended_commands = _assert_0046_content_command_chain(
         api_engine,
@@ -6668,7 +6672,6 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
     # Submission is independently committed and creates the sealed revision,
     # active instance, frozen candidates and three approval steps atomically.
     with Session(api_engine) as session:
-        session.execute(text("SET LOCAL DateStyle = 'SQL, DMY'"))
         submitted = _reveal_pg16_service_database_error(
             lambda: submit_material_request(
                 session,
@@ -6680,6 +6683,10 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
                 trace_request_id="trace-pg16-approval-projection-submit",
             )
         )
+        # As above, exercise the deferred database validator under SQL, DMY
+        # without asking psycopg to decode non-ISO timestamptz ORM results.
+        session.execute(text("SET LOCAL DateStyle = 'SQL, DMY'"))
+        assert session.execute(text("SHOW DateStyle")).scalar_one() == "SQL, DMY"
         session.commit()
     _assert_material_request_snapshot(
         api_engine,
