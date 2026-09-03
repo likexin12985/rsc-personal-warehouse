@@ -7292,9 +7292,18 @@ def _seed_0047_stocktake_inventory(
     actor_user_id: str,
     assignee_user_id: str,
 ) -> dict[str, object]:
-    """Seed references as migrator, then stock through the real posting service."""
+    """Establish the scope, then seed stock through the real posting service."""
 
-    from app.foundation_models import Organization, Person, Role, RoleAssignment
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from app.foundation_models import (
+        Organization,
+        Person,
+        Role,
+        RoleAssignment,
+        SourceSystem,
+    )
     from app.inventory_models import (
         FormalMaterial,
         MaterialInventoryPolicy,
@@ -7303,6 +7312,7 @@ def _seed_0047_stocktake_inventory(
         CustodyAssignment,
     )
     from app.models import User
+    import test_inventory_posting as inventory_posting_fixtures
 
     migrator_engine = create_engine(
         _sqlalchemy_url(
@@ -7340,6 +7350,51 @@ def _seed_0047_stocktake_inventory(
             assert region is not None
             assert (region.org_type, region.status) == ("region_company", "active")
 
+            administrator = session.get(User, actor_user_id)
+            assert (
+                administrator is not None
+                and administrator.person_id is not None
+            )
+            administrator_person = session.get(Person, administrator.person_id)
+            assert administrator_person is not None
+            headquarters_assignment_row = session.execute(
+                select(RoleAssignment, Role)
+                .join(Role, Role.id == RoleAssignment.role_id)
+                .where(
+                    RoleAssignment.user_id == actor_user_id,
+                    RoleAssignment.status == "active",
+                    RoleAssignment.scope_type == "national",
+                    RoleAssignment.scope_id == "*",
+                    Role.code == "admin",
+                    Role.status == "active",
+                )
+                .order_by(RoleAssignment.id)
+            ).one()
+            headquarters_assignment, headquarters_role = (
+                headquarters_assignment_row
+            )
+            assert headquarters_role.is_external is False
+
+            oam_source = session.scalar(
+                select(SourceSystem)
+                .where(func.lower(SourceSystem.code) == "oam")
+                .order_by(SourceSystem.id)
+                .limit(1)
+            )
+            if oam_source is None:
+                oam_source = SourceSystem(
+                    id=uuid.uuid4(),
+                    code="OAM",
+                    name="PostgreSQL 16 隔离期初控制源",
+                    mode="read_only",
+                    enabled=True,
+                    configuration_jsonb={},
+                    created_at=now - timedelta(days=2),
+                    updated_at=now - timedelta(days=2),
+                )
+                session.add(oam_source)
+                session.flush()
+
             material = session.scalar(
                 select(FormalMaterial)
                 .where(
@@ -7360,6 +7415,8 @@ def _seed_0047_stocktake_inventory(
                 allow_fraction=True,
                 effective_from=now - timedelta(days=1),
                 effective_to=None,
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
             )
             location_id = uuid.uuid4()
             location = StockLocation(
@@ -7371,6 +7428,8 @@ def _seed_0047_stocktake_inventory(
                 parent_id=None,
                 custodian_person_id=manager_person.id,
                 status="active",
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
             )
             session.add_all((policy, location))
             session.flush()
@@ -7382,6 +7441,8 @@ def _seed_0047_stocktake_inventory(
                     valid_from=now - timedelta(days=1),
                     valid_to=None,
                     handover_case_id=None,
+                    created_at=now - timedelta(days=1),
+                    updated_at=now - timedelta(days=1),
                 )
             )
             account = StockAccount(
@@ -7393,9 +7454,37 @@ def _seed_0047_stocktake_inventory(
                 condition_code="new",
                 availability_bucket="available",
                 lot_id=None,
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
             )
             session.add(account)
             session.flush()
+
+            # A normal inbound is legal only after the owner/location scope
+            # has completed the formal opening stocktake and two-level review.
+            # Reuse the test-only zero-opening builder so this 0047 fixture is
+            # a valid production precondition rather than a privileged bypass.
+            opening_world = SimpleNamespace(
+                source=oam_source,
+                user=manager,
+                person=manager_person,
+                regional_assignment=assignment,
+                regional_role=role,
+                headquarters_reviewer_user=administrator,
+                headquarters_reviewer_person=administrator_person,
+                headquarters_assignment=headquarters_assignment,
+            )
+            with patch.object(inventory_posting_fixtures, "NOW", now):
+                opening_facts = (
+                    inventory_posting_fixtures.establish_account_for_posting(
+                        session,
+                        opening_world,
+                        account,
+                    )
+                )
+            assert opening_facts.establishment.owner_org_id == region_org_id
+            assert opening_facts.establishment.location_id == location.id
+            assert opening_facts.task.status == "closed"
             session.commit()
             fixture: dict[str, object] = {
                 "account_id": account.id,
