@@ -217,6 +217,34 @@ def _evidence(db: Session, *, uploaded_by: str, marker: str) -> FileObject:
         "formal-files/v1/external_approval_evidence/"
         f"{file_id.hex[:2]}/{file_id.hex}"
     )
+    base_metadata = {
+        "authorization_version": uploader.authorization_version,
+        "file_id": str(file_id),
+        "idempotency_key_hash": hashlib.sha256(
+            f"idempotency:{marker}".encode("utf-8")
+        ).hexdigest(),
+        "provider": "aliyun_oss_v2",
+        "purpose": "external_approval_evidence",
+        "request_sha256": formal_files._upload_request_hash(
+            formal_files._PreparedUpload(
+                purpose="external_approval_evidence",
+                original_filename=f"{marker}.png",
+                size_bytes=256,
+                mime_type="image/png",
+                sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
+            )
+        ),
+        "schema": "cloud_oam.formal_file_upload_intent.v1",
+        "storage_key": storage_key,
+        "uploader_person_id": str(uploader.person_id),
+        "uploader_user_id": uploaded_by,
+    }
+    completion_metadata = {
+        "etag_sha256": "d" * 64,
+        "head_manifest_sha256": "e" * 64,
+        "verified_at": NOW.isoformat(),
+    }
+    is_postgresql = db.get_bind().dialect.name == "postgresql"
     row = FileObject(
         id=file_id,
         storage_key=storage_key,
@@ -225,36 +253,22 @@ def _evidence(db: Session, *, uploaded_by: str, marker: str) -> FileObject:
         mime_type="image/png",
         original_filename=f"{marker}.png",
         uploaded_by=uploaded_by,
-        status="available",
-        metadata_jsonb={
-            "authorization_version": uploader.authorization_version,
-            "file_id": str(file_id),
-            "idempotency_key_hash": hashlib.sha256(
-                f"idempotency:{marker}".encode("utf-8")
-            ).hexdigest(),
-            "provider": "test_formal_storage",
-            "purpose": "external_approval_evidence",
-            "request_sha256": formal_files._upload_request_hash(
-                formal_files._PreparedUpload(
-                    purpose="external_approval_evidence",
-                    original_filename=f"{marker}.png",
-                    size_bytes=256,
-                    mime_type="image/png",
-                    sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
-                )
-            ),
-            "schema": "cloud_oam.formal_file_upload_intent.v1",
-            "storage_key": storage_key,
-            "uploader_person_id": str(uploader.person_id),
-            "uploader_user_id": uploaded_by,
-            "completion": {
-                "etag_sha256": "d" * 64,
-                "head_manifest_sha256": "e" * 64,
-                "verified_at": NOW.isoformat(),
-            },
-        },
+        status="pending" if is_postgresql else "available",
+        metadata_jsonb=(
+            base_metadata
+            if is_postgresql
+            else {**base_metadata, "completion": completion_metadata}
+        ),
+        created_at=NOW,
     )
     db.add(row)
+    if is_postgresql:
+        db.flush()
+        row.status = "available"
+        row.metadata_jsonb = {
+            **base_metadata,
+            "completion": completion_metadata,
+        }
     db.flush()
     return row
 
