@@ -4034,6 +4034,7 @@ def _assert_0047_start_catalog(*, installed: bool) -> None:
                 "ON schema_row.oid = relation.relnamespace "
                 "WHERE schema_row.nspname = 'public' "
                 "AND relation.relname = %s "
+                "AND constraint_row.contype IN ('c', 'f', 'p', 'u') "
                 "ORDER BY constraint_row.conname",
                 (STOCKTAKE_START_COMPLETION_TABLE_0047,),
             )

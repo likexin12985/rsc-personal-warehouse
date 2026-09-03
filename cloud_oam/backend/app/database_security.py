@@ -4721,6 +4721,7 @@ LEFT JOIN pg_class AS referenced_table
   ON referenced_table.oid = constraint_row.confrelid
 WHERE schema_row.nspname = 'public'
   AND table_row.relname = 'stocktake_start_completions'
+  AND constraint_row.contype IN ('c', 'f', 'p', 'u')
 ORDER BY constraint_row.conname
 """
 )

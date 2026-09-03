@@ -86,6 +86,7 @@ from app.database_security import (
     _RECONCILIATION_PARTIAL_INDEX_SQL,
     _RECONCILIATION_TRIGGER_SQL,
     _SMS_DISPATCH_ROLE_ACCESS_SQL,
+    _STOCKTAKE_START_COMPLETION_CONSTRAINT_SQL,
     _STOCKTAKE_RECOUNT_TRIGGER_SQL,
     _STOCKTAKE_SCOPE_TRIGGER_SQL,
     _STOCKTAKE_SENSITIVE_TRIGGER_SQL,
@@ -941,6 +942,11 @@ def test_0047_nonopening_start_catalog_guard_is_exact_and_rejects_drift(
     triggers = guard_kwargs["triggers"]
     assert isinstance(triggers, list)
     _assert_nonopening_stocktake_start_guards(**guard_kwargs)
+
+    constraint_query = " ".join(
+        str(_STOCKTAKE_START_COMPLETION_CONSTRAINT_SQL).split()
+    )
+    assert "constraint_row.contype IN ('c', 'f', 'p', 'u')" in constraint_query
 
     immediate_name = "trg_stocktake_start_completions_guard_0047"
     assert EXPECTED_NONOPENING_STOCKTAKE_START_TRIGGERS[immediate_name][3:] == (
