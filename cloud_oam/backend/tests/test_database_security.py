@@ -19,6 +19,8 @@ from app.database_security import (
     EXPECTED_KMS_DATA_KEY_PIN_INDEXES,
     EXPECTED_KMS_DATA_KEY_PIN_TRIGGERS,
     EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS,
+    EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK,
+    EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_COLUMN,
     EXPECTED_MATERIAL_REQUEST_CANCELLATION_INDEXES,
     EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS,
     EXPECTED_MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX,
@@ -70,6 +72,8 @@ from app.database_security import (
     _NONOPENING_STOCKTAKE_CLOSE_TRIGGER_SQL,
     _MATERIAL_REQUEST_CANCELLATION_TRIGGER_SQL,
     _MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL,
+    _MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK_SQL,
+    _MATERIAL_REQUEST_CONTENT_MANIFEST_COLUMN_SQL,
     _MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX_SQL,
     _OPENING_TERMINAL_TRIGGER_SQL,
     _OPENING_TERMINAL_INDEX_SQL,
@@ -102,6 +106,7 @@ from app.database_security import (
     _assert_sms_dispatch_guards,
     _assert_stocktake_recount_schema,
     _assert_stocktake_scope_triggers,
+    _material_request_content_check_definition_matches,
 )
 from app.formal_services.audit_chain import calculate_audit_event_hash
 
@@ -197,6 +202,13 @@ MATERIAL_REQUEST_APPROVAL_ACTIVATION_MIGRATION_0045 = (
     / "alembic"
     / "versions"
     / "20260903_0045_material_request_approval_activation.py"
+)
+MATERIAL_REQUEST_DRAFT_CONTENT_MIGRATION_0046 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0046_material_request_draft_content_causality.py"
 )
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
@@ -4303,6 +4315,17 @@ def _load_material_request_approval_activation_migration_0045() -> object:
     return migration
 
 
+def _load_material_request_draft_content_migration_0046() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0046_material_request_content_security_manifest",
+        MATERIAL_REQUEST_DRAFT_CONTENT_MIGRATION_0046,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
 def _valid_material_request_approval_trigger_rows(
 ) -> list[dict[str, object]]:
     return [
@@ -4384,11 +4407,42 @@ def _valid_material_request_approval_function_rows(
     return rows
 
 
+def _valid_material_request_content_manifest_columns(
+) -> list[dict[str, object]]:
+    return [dict(EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_COLUMN)]
+
+
+def _valid_material_request_content_manifest_checks(
+) -> list[dict[str, object]]:
+    return [
+        {
+            **EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK,
+            "is_validated": True,
+            "is_deferrable": False,
+            "is_initially_deferred": False,
+            "is_no_inherit": False,
+            "is_local": True,
+            "inheritance_count": 0,
+            "parent_constraint_id": 0,
+            "definition": (
+                "CHECK ((operation IN ('create', 'update_draft', 'submit') "
+                "AND projection_manifest_sha256 IS NOT NULL AND "
+                "projection_manifest_sha256 ~ '^[0-9a-f]{64}$') OR "
+                "(operation NOT IN ('create', 'update_draft', 'submit') "
+                "AND projection_manifest_sha256 IS NULL))"
+            ),
+            "backing_index_name": None,
+        }
+    ]
+
+
 def _assert_valid_material_request_approval_catalog(
     monkeypatch: pytest.MonkeyPatch,
     *,
     triggers: list[dict[str, object]] | None = None,
     functions: list[dict[str, object]] | None = None,
+    manifest_columns: list[dict[str, object]] | None = None,
+    manifest_checks: list[dict[str, object]] | None = None,
 ) -> None:
     _assert_material_request_approval_guards(
         triggers=(
@@ -4401,21 +4455,33 @@ def _assert_valid_material_request_approval_catalog(
             if functions is None
             else functions
         ),
+        manifest_columns=(
+            _valid_material_request_content_manifest_columns()
+            if manifest_columns is None
+            else manifest_columns
+        ),
+        manifest_checks=(
+            _valid_material_request_content_manifest_checks()
+            if manifest_checks is None
+            else manifest_checks
+        ),
         expected_migration_role="star_oam_migrator",
     )
 
 
-def test_0045_material_request_approval_catalog_accepts_exact_manifest(
+def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 61
-    assert len(functions) == 28
+    assert len(triggers) == 69
+    assert len(functions) == 31
     _assert_material_request_approval_guards(
         triggers=triggers,
         functions=functions,
+        manifest_columns=_valid_material_request_content_manifest_columns(),
+        manifest_checks=_valid_material_request_content_manifest_checks(),
         expected_migration_role="star_oam_migrator",
     )
 
@@ -4512,6 +4578,10 @@ def test_0045_material_request_approval_function_catalog_rejects_set_drift(
             _assert_material_request_approval_guards(
                 triggers=_valid_material_request_approval_trigger_rows(),
                 functions=drifted,
+                manifest_columns=(
+                    _valid_material_request_content_manifest_columns()
+                ),
+                manifest_checks=_valid_material_request_content_manifest_checks(),
                 expected_migration_role="star_oam_migrator",
             )
 
@@ -4555,6 +4625,8 @@ def test_0045_material_request_approval_function_catalog_rejects_drift(
         _assert_material_request_approval_guards(
             triggers=_valid_material_request_approval_trigger_rows(),
             functions=functions,
+            manifest_columns=_valid_material_request_content_manifest_columns(),
+            manifest_checks=_valid_material_request_content_manifest_checks(),
             expected_migration_role="star_oam_migrator",
         )
 
@@ -4593,6 +4665,8 @@ def test_0045_material_request_approval_privileged_validator_drift_is_rejected(
         _assert_material_request_approval_guards(
             triggers=_valid_material_request_approval_trigger_rows(),
             functions=functions,
+            manifest_columns=_valid_material_request_content_manifest_columns(),
+            manifest_checks=_valid_material_request_content_manifest_checks(),
             expected_migration_role="star_oam_migrator",
         )
 
@@ -4619,15 +4693,17 @@ def test_0045_request_file_guard_must_remain_security_definer(
         _assert_material_request_approval_guards(
             triggers=_valid_material_request_approval_trigger_rows(),
             functions=functions,
+            manifest_columns=_valid_material_request_content_manifest_columns(),
+            manifest_checks=_valid_material_request_content_manifest_checks(),
             expected_migration_role="star_oam_migrator",
         )
 
 
-def test_0045_material_request_approval_trigger_query_captures_complete_scope(
+def test_0046_material_request_guard_trigger_query_captures_complete_scope(
 ) -> None:
     query = " ".join(str(_MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL).split())
 
-    assert "trigger_row.tgname ~ '_(0029|0030|0045)$'" in query
+    assert "trigger_row.tgname ~ '_(0029|0030|0045|0046)$'" in query
     assert "function_row.proname IN" in query
     assert "AND NOT trigger_row.tgisinternal" in query
     assert "trigger_row.tgname IN" not in query
@@ -4649,7 +4725,7 @@ def test_0045_material_request_approval_trigger_query_captures_complete_scope(
     assert {
         coordinate[0].rsplit("_", 1)[-1]
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
-    } == {"0029", "0030", "0045"}
+    } == {"0029", "0030", "0045", "0046"}
 
 
 def test_0045_material_request_approval_migration_bindings_match_manifest(
@@ -4658,6 +4734,7 @@ def test_0045_material_request_approval_migration_bindings_match_manifest(
     manifest_bindings = {
         name: expected[0]
         for name, expected in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items()
+        if name.endswith(("_0029", "_0030", "_0045"))
     }
     migration_bindings = {
         trigger_name: table_name
@@ -4741,7 +4818,7 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         ): migration._projection_dispatcher_sql(),
     }
 
-    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 28
+    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 31
     assert set(function_sql) == {
         coordinate
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
@@ -4752,7 +4829,11 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (
             MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate]
         )
-    assert MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS == {
+    assert {
+        coordinate
+        for coordinate in MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
+        if not coordinate[0].endswith("_0046")
+    } == {
         (migration.PG_REQUEST_FILE_FUNCTION_0029, ""),
         (migration.PG_APPROVAL_DISPATCH_FUNCTION_0030, ""),
         (
@@ -4764,7 +4845,11 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         (migration.PG_PROJECTION_VALIDATE_FUNCTION, "uuid"),
         (migration.PG_PROJECTION_DISPATCH_FUNCTION, ""),
     }
-    assert MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS == {
+    assert {
+        coordinate
+        for coordinate in MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS
+        if not coordinate[0].endswith("_0046")
+    } == {
         (migration.PG_APPROVAL_VALIDATE_FUNCTION_0030, "uuid"),
         (
             migration.PG_TERMINAL_VALIDATE_FUNCTION,
@@ -4774,3 +4859,370 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         (migration.PG_EXTERNAL_VALIDATE_FUNCTION, "uuid"),
         (migration.PG_PROJECTION_VALIDATE_FUNCTION, "uuid"),
     }
+
+
+def test_0046_material_request_content_bindings_match_manifest() -> None:
+    migration = _load_material_request_draft_content_migration_0046()
+    manifest_bindings = {
+        name: expected[0]
+        for name, expected in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items()
+        if name.endswith("_0046")
+    }
+    migration_bindings = {
+        trigger_name: table_name
+        for table_name, trigger_name in migration.TRIGGER_BINDINGS
+    }
+
+    assert migration.down_revision == "20260903_0045"
+    assert len(migration.IMMEDIATE_TRIGGER_BINDINGS) == 4
+    assert len(migration.DEFERRED_TRIGGER_BINDINGS) == 4
+    assert len(migration.TRIGGER_BINDINGS) == 8
+    assert migration_bindings == manifest_bindings
+    for table_name, trigger_name in migration.IMMEDIATE_TRIGGER_BINDINGS:
+        expected = EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[trigger_name]
+        assert expected == (
+            table_name,
+            migration.PG_CONTENT_GUARD_FUNCTION,
+            "A",
+            7 if table_name == "material_request_commands" else 31,
+            False,
+            False,
+            False,
+        )
+    for table_name, trigger_name in migration.DEFERRED_TRIGGER_BINDINGS:
+        assert EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[trigger_name] == (
+            table_name,
+            migration.PG_CONTENT_DISPATCH_FUNCTION,
+            "A",
+            29,
+            True,
+            True,
+            True,
+        )
+
+
+def test_0046_material_request_content_function_bodies_match_manifest() -> None:
+    migration = _load_material_request_draft_content_migration_0046()
+    function_sql = {
+        (migration.PG_CONTENT_GUARD_FUNCTION, ""): migration._content_guard_sql(),
+        (
+            migration.PG_CONTENT_VALIDATE_FUNCTION,
+            "uuid",
+        ): migration._content_validator_sql(),
+        (
+            migration.PG_CONTENT_DISPATCH_FUNCTION,
+            "",
+        ): migration._content_dispatcher_sql(),
+    }
+
+    assert set(function_sql) == {
+        coordinate
+        for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
+        if coordinate[0].endswith("_0046")
+    }
+    for coordinate, sql in function_sql.items():
+        body = sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+        assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (
+            MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate]
+        )
+        assert "SECURITY DEFINER" in sql
+        assert "SET search_path = pg_catalog, public" in sql
+    assert set(function_sql) <= MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
+    assert MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS & set(function_sql) == {
+        (migration.PG_CONTENT_VALIDATE_FUNCTION, "uuid")
+    }
+
+
+def test_0046_content_guard_seals_approval_attempt_coordinate() -> None:
+    migration = _load_material_request_draft_content_migration_0046()
+    guard_sql = " ".join(migration._content_guard_sql().split())
+    manifest_sql = migration._projection_manifest_expression("guard_revision.id")
+
+    assert (
+        "NEW.operation IN ('create', 'update_draft') AND "
+        "NEW.request_jsonb->'approval_attempt_no' IS DISTINCT FROM "
+        "'null'::jsonb"
+    ) in guard_sql
+    for document in ("request", "result"):
+        assert (
+            f"jsonb_typeof(NEW.{document}_jsonb->'approval_attempt_no') "
+            "IS DISTINCT FROM 'number'"
+        ) in guard_sql
+        assert (
+            f"NEW.{document}_jsonb->>'approval_attempt_no' "
+            "!~ '^[1-9][0-9]*$'"
+        ) in guard_sql
+    assert (
+        "NEW.request_jsonb->>'approval_attempt_no' IS DISTINCT FROM "
+        "NEW.result_jsonb->>'approval_attempt_no'"
+    ) in guard_sql
+    assert (
+        "IF NEW.operation = 'submit' AND NOT EXISTS ( SELECT 1 FROM "
+        "public.approval_instances AS approval_instance WHERE "
+        "approval_instance.id::text = "
+        "NEW.result_jsonb->>'approval_instance_id' AND "
+        "approval_instance.request_id = guard_request.id AND "
+        "approval_instance.request_revision_id = guard_revision.id AND "
+        "approval_instance.revision_no = guard_revision.revision_no AND "
+        "approval_instance.attempt_no::text = "
+        "NEW.request_jsonb->>'approval_attempt_no' AND "
+        "approval_instance.created_at = NEW.occurred_at ) THEN"
+    ) in guard_sql
+    for approval_coordinate in (
+        "approval_attempt_no",
+        "approval_instance_id",
+        "approval_instances",
+        "attempt_no",
+        "current_step_no",
+    ):
+        assert approval_coordinate not in manifest_sql
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("owner_name", "star_oam_api"),
+        ("can_execute", True),
+        ("api_execute_is_grantable", True),
+        ("unexpected_execute_grantee_count", 1),
+        ("public_can_execute", True),
+        ("is_security_definer", False),
+        ("result_type", "trigger"),
+        ("configuration", ["search_path=public"]),
+    ],
+)
+def test_0046_content_validator_privilege_drift_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    functions = _valid_material_request_approval_function_rows(monkeypatch)
+    target = next(
+        row
+        for row in functions
+        if (row["function_name"], row["argument_types"])
+        == ("rsc_validate_material_request_content_causality_0046", "uuid")
+    )
+    target[field] = value
+
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match="rsc_validate_material_request_content_causality_0046",
+    ):
+        _assert_valid_material_request_approval_catalog(
+            monkeypatch,
+            functions=functions,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("table_name", "material_request_lines"),
+        ("column_name", "projection_manifest"),
+        ("data_type", "text"),
+        ("is_not_null", True),
+        ("identity_kind", "a"),
+        ("generated_kind", "s"),
+        ("default_expression", "repeat('0', 64)"),
+        ("comment", "untrusted manifest"),
+    ],
+)
+def test_0046_projection_manifest_column_drift_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    columns = _valid_material_request_content_manifest_columns()
+    columns[0][field] = value
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match=rf"projection_manifest_sha256\.{field}",
+    ):
+        _assert_valid_material_request_approval_catalog(
+            monkeypatch,
+            manifest_columns=columns,
+        )
+
+
+@pytest.mark.parametrize("drift", ["missing", "extra"])
+def test_0046_projection_manifest_column_set_drift_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    columns = _valid_material_request_content_manifest_columns()
+    if drift == "missing":
+        columns.clear()
+    else:
+        columns.append({**columns[0], "column_name": "attacker_manifest"})
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match="projection_manifest_sha256.column_set",
+    ):
+        _assert_valid_material_request_approval_catalog(
+            monkeypatch,
+            manifest_columns=columns,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("constraint_name", "ck_attacker_projection_manifest"),
+        ("table_name", "material_request_lines"),
+        ("constraint_type", "u"),
+        ("constrained_columns", ["projection_manifest_sha256"]),
+        ("is_validated", False),
+        ("is_deferrable", True),
+        ("is_initially_deferred", True),
+        ("is_no_inherit", True),
+        ("is_local", False),
+        ("inheritance_count", 1),
+        ("parent_constraint_id", 42),
+        ("backing_index_name", "attacker_index"),
+    ],
+)
+def test_0046_projection_manifest_check_shape_drift_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    checks = _valid_material_request_content_manifest_checks()
+    checks[0][field] = value
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match=rf"projection_manifest_0046\.{field}",
+    ):
+        _assert_valid_material_request_approval_catalog(
+            monkeypatch,
+            manifest_checks=checks,
+        )
+
+
+@pytest.mark.parametrize("drift", ["missing", "extra"])
+def test_0046_projection_manifest_check_set_drift_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    checks = _valid_material_request_content_manifest_checks()
+    if drift == "missing":
+        checks.clear()
+    else:
+        checks.append(
+            {**checks[0], "constraint_name": "ck_attacker_projection_manifest"}
+        )
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match="projection_manifest_0046.constraint_set",
+    ):
+        _assert_valid_material_request_approval_catalog(
+            monkeypatch,
+            manifest_checks=checks,
+        )
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        "CHECK (TRUE)",
+        (
+            "CHECK ((operation IN ('create', 'update_draft', 'submit') AND "
+            "projection_manifest_sha256 ~ '^[0-9a-f]{64}$') OR TRUE)"
+        ),
+        (
+            "CHECK ((operation IN ('create', 'update_draft', 'submit') AND "
+            "projection_manifest_sha256 ~ '^[0-9a-f]{64}$') OR "
+            "(operation NOT IN ('create', 'update_draft', 'submit') AND "
+            "projection_manifest_sha256 IS NULL))"
+        ),
+        (
+            "CHECK ((operation IN ('create', 'update_draft', 'submit') AND "
+            "projection_manifest_sha256 IS NOT NULL AND "
+            "projection_manifest_sha256 ~ '^[0-9A-Fa-f]{64}$') OR "
+            "(operation NOT IN ('create', 'update_draft', 'submit') AND "
+            "projection_manifest_sha256 IS NULL))"
+        ),
+        (
+            "CHECK ((operation IN ('create', 'update_draft') AND "
+            "projection_manifest_sha256 IS NOT NULL AND "
+            "projection_manifest_sha256 ~ '^[0-9a-f]{64}$') OR "
+            "(operation NOT IN ('create', 'update_draft') AND "
+            "projection_manifest_sha256 IS NULL))"
+        ),
+    ],
+)
+def test_0046_projection_manifest_check_semantic_drift_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    definition: str,
+) -> None:
+    checks = _valid_material_request_content_manifest_checks()
+    checks[0]["definition"] = definition
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match="projection_manifest_0046.definition",
+    ):
+        _assert_valid_material_request_approval_catalog(
+            monkeypatch,
+            manifest_checks=checks,
+        )
+
+
+def test_0046_projection_manifest_check_accepts_postgresql_any_all_form(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    definition = (
+        "CHECK ((((operation)::text = ANY ((ARRAY['create'::character varying, "
+        "'update_draft'::character varying, 'submit'::character varying])::text[])) "
+        "AND (projection_manifest_sha256 IS NOT NULL) AND "
+        "((projection_manifest_sha256)::text ~ '^[0-9a-f]{64}$'::text)) OR "
+        "(((operation)::text <> ALL ((ARRAY['create'::character varying, "
+        "'update_draft'::character varying, 'submit'::character varying])::text[])) "
+        "AND (projection_manifest_sha256 IS NULL))))"
+    )
+    assert _material_request_content_check_definition_matches(definition)
+    checks = _valid_material_request_content_manifest_checks()
+    checks[0]["definition"] = definition
+    _assert_valid_material_request_approval_catalog(
+        monkeypatch,
+        manifest_checks=checks,
+    )
+
+
+def test_0046_projection_manifest_catalog_queries_are_exact() -> None:
+    column_query = " ".join(
+        str(_MATERIAL_REQUEST_CONTENT_MANIFEST_COLUMN_SQL).split()
+    )
+    check_query = " ".join(
+        str(_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK_SQL).split()
+    )
+
+    assert "table_row.relname = 'material_request_commands'" in column_query
+    assert "attribute_row.attname = 'projection_manifest_sha256'" in column_query
+    assert "attribute_row.attisdropped" in column_query
+    for required in (
+        "format_type",
+        "attnotnull",
+        "attidentity",
+        "attgenerated",
+        "pg_get_expr",
+        "col_description",
+    ):
+        assert required in column_query
+    assert "table_row.relname = 'material_request_commands'" in check_query
+    assert (
+        "'ck_material_request_commands_projection_manifest_0046'"
+        in check_query
+    )
+    for required in (
+        "convalidated",
+        "condeferrable",
+        "condeferred",
+        "connoinherit",
+        "conislocal",
+        "coninhcount",
+        "conparentid",
+        "pg_get_constraintdef",
+        "constraint_row.conkey",
+        "constraint_row.conindid",
+    ):
+        assert required in check_query

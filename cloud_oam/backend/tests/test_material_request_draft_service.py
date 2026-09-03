@@ -11,7 +11,7 @@ from unittest.mock import patch
 import uuid
 
 import pytest
-from sqlalchemy import create_engine, event, select
+from sqlalchemy import FetchedValue, create_engine, event, select
 from sqlalchemy.orm import Session
 
 from app.database import Base
@@ -68,6 +68,14 @@ NOW = datetime(2026, 8, 31, 16, 0, tzinfo=timezone.utc)
 SECRET = b"material-request-idempotency-test-secret-v1"
 AUDIT_HEAD_ID = uuid.UUID("30000000-0000-4000-8000-000000000004")
 _MOBILES = itertools.count(13810000000)
+
+
+def test_command_projection_manifest_is_nullable_trigger_generated_metadata() -> None:
+    column = MaterialRequestCommand.__table__.c.projection_manifest_sha256
+
+    assert column.nullable is True
+    assert column.type.length == 64
+    assert isinstance(column.server_default, FetchedValue)
 
 
 @pytest.fixture
@@ -938,6 +946,9 @@ def test_create_derives_owner_protects_contact_and_replays_exactly(db: Session) 
     assert len(commands) == len(audits) == len(transitions) == 1
     assert commands[0].idempotency_key_hash != "same-create"
     assert len(commands[0].idempotency_key_hash) == 64
+    # SQLite has no PostgreSQL content-manifest trigger.  The application must
+    # omit this server-owned value while retaining unchanged replay semantics.
+    assert commands[0].projection_manifest_sha256 is None
     persisted_evidence = json.dumps(
         {
             "command_request": commands[0].request_jsonb,
@@ -1081,7 +1092,18 @@ def test_amend_replaces_only_current_mutable_revision_and_replays_random_ciphert
     assert revisions[0].status == "draft"
     assert len(lines) == 1
     assert lines[0].material_id == world.materials[1].id
-    assert len(tuple(db.scalars(select(MaterialRequestCommand)).all())) == 2
+    commands = tuple(
+        db.scalars(
+            select(MaterialRequestCommand).order_by(
+                MaterialRequestCommand.target_version
+            )
+        ).all()
+    )
+    assert tuple(command.operation for command in commands) == (
+        "create",
+        "update_draft",
+    )
+    assert all(command.projection_manifest_sha256 is None for command in commands)
     assert len(tuple(db.scalars(select(AuditEvent)).all())) == 2
     assert len(tuple(db.scalars(select(StateTransitionEvent)).all())) == 1
 
@@ -1265,7 +1287,15 @@ def test_submit_freezes_exact_three_stage_candidates_and_never_advances_other_ax
     assert len(candidates) == 1 + 2 + 4
     assert all(row.user_id != world.actor_user.id for row in candidates)
     assert len(tuple(db.scalars(select(ApprovalAction)).all())) == 1
-    assert len(tuple(db.scalars(select(MaterialRequestCommand)).all())) == 2
+    commands = tuple(
+        db.scalars(
+            select(MaterialRequestCommand).order_by(
+                MaterialRequestCommand.target_version
+            )
+        ).all()
+    )
+    assert tuple(command.operation for command in commands) == ("create", "submit")
+    assert all(command.projection_manifest_sha256 is None for command in commands)
     assert len(tuple(db.scalars(select(AuditEvent)).all())) == 2
     transitions = tuple(
         db.scalars(

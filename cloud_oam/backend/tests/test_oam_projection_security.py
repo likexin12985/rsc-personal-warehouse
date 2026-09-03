@@ -470,24 +470,55 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
 
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_0044) == 14
     assert actual_manifest == scope_security.OAM_SYNC_FUNCTION_MANIFEST_0044
+    assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0045) == 14
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST) == 14
-    assert {
-        signature: definition
-        for signature, definition in scope_security.OAM_SYNC_FUNCTION_MANIFEST.items()
-        if signature != "rsc_oam_runtime_binding_ready_0044()"
-    } == {
-        signature: definition
-        for signature, definition in actual_manifest.items()
-        if signature != "rsc_oam_runtime_binding_ready_0044()"
-    }
-    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST[
-        "rsc_oam_runtime_binding_ready_0044()"
-    ][:6] == actual_manifest["rsc_oam_runtime_binding_ready_0044()"][
-        :6
-    ]
-    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST[
-        "rsc_oam_runtime_binding_ready_0044()"
-    ][6] != actual_manifest["rsc_oam_runtime_binding_ready_0044()"][6]
+    ready_signature = "rsc_oam_runtime_binding_ready_0044()"
+    for manifest in (
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0045,
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST,
+    ):
+        assert {
+            signature: definition
+            for signature, definition in manifest.items()
+            if signature != ready_signature
+        } == {
+            signature: definition
+            for signature, definition in actual_manifest.items()
+            if signature != ready_signature
+        }
+        assert manifest[ready_signature][:6] == actual_manifest[ready_signature][:6]
+
+    migration_root = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+    migration_0045 = runpy.run_path(
+        str(migration_root / "20260903_0045_material_request_approval_activation.py")
+    )
+    migration_0046 = runpy.run_path(
+        str(
+            migration_root
+            / "20260903_0046_material_request_draft_content_causality.py"
+        )
+    )
+    ready_body_0045 = migration_0045["_oam_runtime_ready_function_sql"](
+        migration_0045["revision"]
+    ).split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    ready_body_0046 = migration_0046["_oam_runtime_ready_function_sql"](
+        migration_0046["revision"]
+    ).split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    assert hashlib.sha256(ready_body_0045.encode("utf-8")).hexdigest() == (
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0045[ready_signature][6]
+    )
+    assert hashlib.sha256(ready_body_0046.encode("utf-8")).hexdigest() == (
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6]
+    )
+    assert len(
+        {
+            actual_manifest[ready_signature][6],
+            scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0045[
+                ready_signature
+            ][6],
+            scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6],
+        }
+    ) == 3
     ready_body = actual_sources["rsc_oam_runtime_binding_ready_0044"]
     assert "FROM public.alembic_version" in ready_body
     assert "pg_catalog.count(*) = 1" in ready_body

@@ -18,6 +18,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    FetchedValue,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -1020,6 +1021,12 @@ class MaterialRequestCommand(CreatedAtMixin, Base):
     request_reference: Mapped[str] = mapped_column(String(160))
     request_hash: Mapped[str] = mapped_column(String(64))
     result_hash: Mapped[str] = mapped_column(String(64))
+    projection_manifest_sha256: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        server_default=FetchedValue(),
+        comment="PostgreSQL trigger-owned material-request content projection digest",
+    )
     request_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
     result_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
     actor_user_id: Mapped[str] = mapped_column(

@@ -90,6 +90,26 @@ def _prepare_approved_request(
 
     engine = _engine(database_url)
     with engine.begin() as connection:
+        # This historical integration fixture deliberately keeps Alembic at
+        # 0037 while seeding through the current service/ORM.  Add only the
+        # later nullable SQLite column needed for current command reads and
+        # INSERT RETURNING; 0046 PostgreSQL ownership/check/trigger behavior is
+        # covered by its isolated PG16 release gate, not emulated here.
+        assert connection.exec_driver_sql(
+            "SELECT version_num FROM alembic_version"
+        ).scalar_one() == HEAD
+        command_columns = {
+            row[1]
+            for row in connection.exec_driver_sql(
+                "PRAGMA table_info('material_request_commands')"
+            ).all()
+        }
+        assert "projection_manifest_sha256" not in command_columns
+        connection.exec_driver_sql(
+            "ALTER TABLE material_request_commands ADD COLUMN "
+            "projection_manifest_sha256 VARCHAR(64) NULL"
+        )
+
         audit_head_triggers = connection.exec_driver_sql(
             "SELECT name, sql FROM sqlite_master WHERE type='trigger' "
             "AND tbl_name='audit_chain_heads' ORDER BY name"
@@ -126,6 +146,13 @@ def _prepare_approved_request(
         request_id = request.id
         line_id = line.id
         session.commit()
+        command_manifests = session.execute(
+            sa.text(
+                "SELECT projection_manifest_sha256 "
+                "FROM material_request_commands ORDER BY target_version"
+            )
+        ).scalars().all()
+        assert command_manifests and set(command_manifests) == {None}
 
     with engine.begin() as connection:
         for _name, sql in formal_file_triggers:

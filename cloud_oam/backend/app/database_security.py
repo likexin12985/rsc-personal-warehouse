@@ -1788,6 +1788,56 @@ EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
             "audit_events",
         )
     },
+    **{
+        f"trg_{table_name}_content_write_0046": (
+            table_name,
+            "rsc_guard_material_request_content_write_0046",
+            "A",
+            7 if table_name == "material_request_commands" else 31,
+            False,
+            False,
+            False,
+        )
+        for table_name in (
+            "material_request_revisions",
+            "material_request_lines",
+            "material_request_files",
+            "material_request_commands",
+        )
+    },
+    **{
+        f"trg_{table_name}_content_causality_0046": (
+            table_name,
+            "rsc_dispatch_material_request_content_causality_0046",
+            "A",
+            29,
+            True,
+            True,
+            True,
+        )
+        for table_name in (
+            "material_request_revisions",
+            "material_request_lines",
+            "material_request_files",
+            "material_request_commands",
+        )
+    },
+}
+EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_COLUMN = {
+    "table_name": "material_request_commands",
+    "column_name": "projection_manifest_sha256",
+    "data_type": "character varying(64)",
+    "is_not_null": False,
+    "identity_kind": "",
+    "generated_kind": "",
+    "default_expression": None,
+    "comment": "PostgreSQL trigger-owned material-request content projection digest",
+}
+EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
+    "constraint_name": "ck_material_request_commands_projection_manifest_0046",
+    "table_name": "material_request_commands",
+    "constraint_type": "c",
+    "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_guard_material_request_fact_immutable_0029", ""):
@@ -1848,6 +1898,12 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
         "1b08d93ca30dda0446528533543243cb94a91dad153bb56893bf89223af05b63",
     ("rsc_dispatch_material_request_approval_projection_0045", ""):
         "244d188e126e66fd4b020da01c076a3018f2c8841230bd255da45b7913776d54",
+    ("rsc_guard_material_request_content_write_0046", ""):
+        "062e6b97de7d9008773e8f812497408ef9936fb039c930e02d4bb16495f7c8a9",
+    ("rsc_validate_material_request_content_causality_0046", "uuid"):
+        "71ea4682980062120ff1076f85af7b048b55512d7ffa0d31c70c6c95eae0c501",
+    ("rsc_dispatch_material_request_content_causality_0046", ""):
+        "d9e51c26520897b17b597cdaa3ea754039a92b06f6e0beee321f3a500dfe2da9",
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
@@ -1861,6 +1917,9 @@ MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
         ("rsc_validate_material_request_external_causality_0045", "uuid"),
         ("rsc_validate_material_request_approval_projection_0045", "uuid"),
         ("rsc_dispatch_material_request_approval_projection_0045", ""),
+        ("rsc_guard_material_request_content_write_0046", ""),
+        ("rsc_validate_material_request_content_causality_0046", "uuid"),
+        ("rsc_dispatch_material_request_content_causality_0046", ""),
     }
 )
 MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS = frozenset(
@@ -1873,6 +1932,7 @@ MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS = frozenset(
         ("rsc_validate_material_request_return_causality_0045", "uuid, uuid"),
         ("rsc_validate_material_request_external_causality_0045", "uuid"),
         ("rsc_validate_material_request_approval_projection_0045", "uuid"),
+        ("rsc_validate_material_request_content_causality_0046", "uuid"),
     }
 )
 POSTGRESQL_MATERIAL_REQUEST_CANCELLATION_FACT_GRAPH_TRIGGER_0037 = (
@@ -3623,13 +3683,75 @@ JOIN pg_namespace AS function_schema
   ON function_schema.oid = function_row.pronamespace
 WHERE table_schema.nspname = 'public'
   AND (
-      trigger_row.tgname ~ '_(0029|0030|0045)$'
+      trigger_row.tgname ~ '_(0029|0030|0045|0046)$'
       OR function_row.proname IN (
           {_MATERIAL_REQUEST_APPROVAL_TRIGGER_FUNCTION_LITERALS}
       )
   )
   AND NOT trigger_row.tgisinternal
 ORDER BY trigger_row.tgname
+"""
+)
+
+_MATERIAL_REQUEST_CONTENT_MANIFEST_COLUMN_SQL = text(
+    """
+SELECT
+    table_row.relname AS table_name,
+    attribute_row.attname AS column_name,
+    format_type(attribute_row.atttypid, attribute_row.atttypmod) AS data_type,
+    attribute_row.attnotnull AS is_not_null,
+    attribute_row.attidentity AS identity_kind,
+    attribute_row.attgenerated AS generated_kind,
+    pg_get_expr(default_row.adbin, default_row.adrelid, TRUE)
+        AS default_expression,
+    col_description(table_row.oid, attribute_row.attnum) AS comment
+FROM pg_class AS table_row
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+JOIN pg_attribute AS attribute_row ON attribute_row.attrelid = table_row.oid
+LEFT JOIN pg_attrdef AS default_row
+  ON default_row.adrelid = table_row.oid
+ AND default_row.adnum = attribute_row.attnum
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname = 'material_request_commands'
+  AND attribute_row.attname = 'projection_manifest_sha256'
+  AND attribute_row.attnum > 0
+  AND NOT attribute_row.attisdropped
+ORDER BY attribute_row.attnum
+"""
+)
+
+_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK_SQL = text(
+    """
+SELECT
+    constraint_row.conname AS constraint_name,
+    table_row.relname AS table_name,
+    constraint_row.contype AS constraint_type,
+    constraint_row.convalidated AS is_validated,
+    constraint_row.condeferrable AS is_deferrable,
+    constraint_row.condeferred AS is_initially_deferred,
+    constraint_row.connoinherit AS is_no_inherit,
+    constraint_row.conislocal AS is_local,
+    constraint_row.coninhcount AS inheritance_count,
+    constraint_row.conparentid AS parent_constraint_id,
+    pg_get_constraintdef(constraint_row.oid, TRUE) AS definition,
+    COALESCE((
+        SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+          FROM unnest(constraint_row.conkey) WITH ORDINALITY
+               AS key_row(attnum, ordinality)
+          JOIN pg_attribute AS attribute_row
+            ON attribute_row.attrelid = constraint_row.conrelid
+           AND attribute_row.attnum = key_row.attnum
+    ), ARRAY[]::name[]) AS constrained_columns,
+    index_row.relname AS backing_index_name
+FROM pg_constraint AS constraint_row
+JOIN pg_class AS table_row ON table_row.oid = constraint_row.conrelid
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+LEFT JOIN pg_class AS index_row ON index_row.oid = constraint_row.conindid
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname = 'material_request_commands'
+  AND constraint_row.conname =
+      'ck_material_request_commands_projection_manifest_0046'
+ORDER BY constraint_row.conname
 """
 )
 
@@ -4508,7 +4630,7 @@ def validate_production_database_security(
                 for row in function_acl
                 if isinstance(row.get("function_name"), str)
                 and row["function_name"].endswith(
-                    ("_0029", "_0030", "_0045")
+                    ("_0029", "_0030", "_0045", "_0046")
                 )
             ]
             audit_triggers = connection.execute(_AUDIT_TRIGGER_SQL).mappings().all()
@@ -4559,6 +4681,12 @@ def validate_production_database_security(
             ).mappings().all()
             material_request_approval_triggers = connection.execute(
                 _MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL
+            ).mappings().all()
+            material_request_content_manifest_columns = connection.execute(
+                _MATERIAL_REQUEST_CONTENT_MANIFEST_COLUMN_SQL
+            ).mappings().all()
+            material_request_content_manifest_checks = connection.execute(
+                _MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK_SQL
             ).mappings().all()
             material_request_cancellation_triggers = connection.execute(
                 _MATERIAL_REQUEST_CANCELLATION_TRIGGER_SQL
@@ -4681,6 +4809,8 @@ def validate_production_database_security(
     _assert_material_request_approval_guards(
         triggers=material_request_approval_triggers,
         functions=material_request_approval_functions,
+        manifest_columns=material_request_content_manifest_columns,
+        manifest_checks=material_request_content_manifest_checks,
         expected_migration_role=expected_migration_role,
     )
     _assert_material_request_cancellation_guards(
@@ -5829,9 +5959,11 @@ def _assert_material_request_approval_guards(
     *,
     triggers: list[Mapping[str, Any]],
     functions: list[Mapping[str, Any]],
+    manifest_columns: list[Mapping[str, Any]],
+    manifest_checks: list[Mapping[str, Any]],
     expected_migration_role: str,
 ) -> None:
-    """Prove the complete 0029/0030/0045 approval guard catalog."""
+    """Prove the complete 0029/0030/0045/0046 request guard catalog."""
 
     failures: list[str] = []
     actual_triggers: dict[str, Mapping[str, Any]] = {}
@@ -5932,11 +6064,108 @@ def _assert_material_request_approval_guards(
             != expected_body_hash
         ):
             failures.append(f"{label}.body")
+
+    if len(manifest_columns) != 1:
+        failures.append("projection_manifest_sha256.column_set")
+    manifest_column = manifest_columns[0] if len(manifest_columns) == 1 else None
+    if manifest_column is not None:
+        for field, expected_value in (
+            EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_COLUMN.items()
+        ):
+            actual_value = manifest_column.get(field)
+            if field == "default_expression" and actual_value == "":
+                actual_value = None
+            if (
+                actual_value is not expected_value
+                if field == "is_not_null"
+                else actual_value != expected_value
+            ):
+                failures.append(f"projection_manifest_sha256.{field}")
+
+    if len(manifest_checks) != 1:
+        failures.append("projection_manifest_0046.constraint_set")
+    manifest_check = manifest_checks[0] if len(manifest_checks) == 1 else None
+    if manifest_check is not None:
+        for field, expected_value in (
+            EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK.items()
+        ):
+            actual_value = manifest_check.get(field)
+            if field == "constrained_columns":
+                actual_value = tuple(actual_value or ())
+            if actual_value != expected_value:
+                failures.append(f"projection_manifest_0046.{field}")
+        for field, expected_value in {
+            "inheritance_count": 0,
+            "parent_constraint_id": 0,
+            "backing_index_name": None,
+        }.items():
+            actual_value = manifest_check.get(field)
+            if field == "backing_index_name" and actual_value == "":
+                actual_value = None
+            if actual_value != expected_value:
+                failures.append(f"projection_manifest_0046.{field}")
+        for field, expected_value in {
+            "is_validated": True,
+            "is_deferrable": False,
+            "is_initially_deferred": False,
+            "is_no_inherit": False,
+            "is_local": True,
+        }.items():
+            if manifest_check.get(field) is not expected_value:
+                failures.append(f"projection_manifest_0046.{field}")
+        if not _material_request_content_check_definition_matches(
+            manifest_check.get("definition")
+        ):
+            failures.append("projection_manifest_0046.definition")
     if failures:
         raise DatabaseSecurityBoundaryError(
             "production database material-request approval guard failed: "
             + ", ".join(sorted(set(failures)))
         )
+
+
+def _material_request_content_check_definition_matches(value: object) -> bool:
+    """Accept only PostgreSQL's exact IN/ANY renderings of the 0046 CHECK."""
+
+    if not isinstance(value, str) or not value or '"' in value:
+        return False
+    if tuple(_SQL_STRING_LITERAL_PATTERN.findall(value)) != (
+        "create",
+        "update_draft",
+        "submit",
+        "^[0-9a-f]{64}$",
+        "create",
+        "update_draft",
+        "submit",
+    ):
+        return False
+    normalized = _lower_sql_outside_string_literals(value)
+    normalized = re.sub(
+        r"::\s*(?:character\s+varying|varchar|text)"
+        r"(?:\s*\(\s*\d+\s*\))?(?:\s*\[\s*\])?",
+        "",
+        normalized,
+    )
+    compact = re.sub(
+        r"\s+",
+        "",
+        normalized.replace("(", "").replace(")", ""),
+    )
+    positive_in = "operationin'create','update_draft','submit'"
+    positive_any = "operation=anyarray['create','update_draft','submit']"
+    negative_in = "operationnotin'create','update_draft','submit'"
+    negative_not_any = "notoperation=anyarray['create','update_draft','submit']"
+    negative_all = "operation<>allarray['create','update_draft','submit']"
+    suffix = (
+        "andprojection_manifest_sha256isnotnull"
+        "andprojection_manifest_sha256~'^[0-9a-f]{64}$'or"
+    )
+    null_suffix = "andprojection_manifest_sha256isnull"
+    return compact in {
+        f"check{positive}{suffix}{negative}{null_suffix}"
+        for positive in (positive_in, positive_any)
+        for negative in (negative_in, negative_not_any, negative_all)
+    }
 
 
 def _assert_material_request_cancellation_guards(

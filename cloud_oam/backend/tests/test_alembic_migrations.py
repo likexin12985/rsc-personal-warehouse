@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import uuid
@@ -337,7 +338,14 @@ MATERIAL_REQUEST_APPROVAL_ACTIVATION_REVISION = (
     / "versions"
     / "20260903_0045_material_request_approval_activation.py"
 )
-HEAD_REVISION = "20260903_0045"
+MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0046_material_request_draft_content_causality.py"
+)
+HEAD_REVISION = "20260903_0046"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -352,6 +360,8 @@ MATERIAL_REQUEST_WORK_ORDER_LOCK_REVISION_ID = "20260902_0042"
 OAM_WORK_ORDER_PROJECTOR_BOUNDARY_REVISION_ID = "20260902_0043"
 OAM_SYNC_SCOPE_FORCE_RLS_REVISION_ID = "20260902_0044"
 MATERIAL_REQUEST_APPROVAL_ACTIVATION_REVISION_ID = "20260903_0045"
+MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_REVISION_ID = "20260903_0046"
+PRE_MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_HEAD_REVISION = "20260903_0045"
 PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION = "20260902_0044"
 PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION = "20260902_0043"
 PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION = "20260902_0042"
@@ -1348,22 +1358,30 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert head is not None
     assert (
         head.down_revision
-        == PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION
+        == PRE_MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_HEAD_REVISION
     )
     previous_head = script.get_revision(
-        PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION
+        PRE_MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_HEAD_REVISION
     )
     assert previous_head is not None
     assert (
         previous_head.down_revision
+        == PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION
+    )
+    previous_approval_head = script.get_revision(
+        PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION
+    )
+    assert previous_approval_head is not None
+    assert (
+        previous_approval_head.down_revision
         == PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION
     )
-    previous_sms_head = script.get_revision(
+    previous_sync_head = script.get_revision(
         PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION
     )
-    assert previous_sms_head is not None
+    assert previous_sync_head is not None
     assert (
-        previous_sms_head.down_revision
+        previous_sync_head.down_revision
         == PRE_OAM_WORK_ORDER_PROJECTOR_BOUNDARY_HEAD_REVISION
     )
 
@@ -2086,8 +2104,8 @@ def test_0045_postgresql_functions_parse_as_sql_and_plpgsql() -> None:
     )
 
     from app.oam_sync_scope_security import (
-        OAM_SYNC_FUNCTION_MANIFEST,
         OAM_SYNC_FUNCTION_MANIFEST_0044,
+        OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0045,
     )
 
     ready_signature = "rsc_oam_runtime_binding_ready_0044()"
@@ -2100,7 +2118,7 @@ def test_0045_postgresql_functions_parse_as_sql_and_plpgsql() -> None:
         "$$", 1
     )[0]
     assert hashlib.sha256(current_ready_body.encode("utf-8")).hexdigest() == (
-        OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6]
+        OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0045[ready_signature][6]
     )
     assert hashlib.sha256(previous_ready_body.encode("utf-8")).hexdigest() == (
         OAM_SYNC_FUNCTION_MANIFEST_0044[ready_signature][6]
@@ -2359,6 +2377,356 @@ def test_0045_sqlite_is_schema_noop_and_only_moves_revision(
             assert connection.exec_driver_sql(
                 "SELECT version_num FROM alembic_version"
             ).scalar_one() == PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION
+    finally:
+        downgraded_engine.dispose()
+
+
+def _load_0046_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "material_request_draft_content_causality_migration_0046",
+        MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_0046_postgresql_functions_parse_as_sql_and_plpgsql() -> None:
+    parser = pytest.importorskip("pglast.parser")
+    module = _load_0046_migration_module()
+    function_sql = (
+        module._content_guard_sql(),
+        module._content_validator_sql(),
+        module._content_dispatcher_sql(),
+        module._oam_runtime_ready_function_sql(module.revision),
+        module._oam_runtime_ready_function_sql(module.PREVIOUS_SCHEMA_REVISION),
+    )
+
+    for statement in function_sql:
+        assert not sa.text(statement)._bindparams
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+
+    manifest_sql = module._projection_manifest_expression("guard_revision.id")
+    assert manifest_sql in function_sql[0]
+    assert manifest_sql in function_sql[1]
+    assert manifest_sql.count("pg_catalog.timezone('UTC'") == 3
+    assert manifest_sql.count("'YYYY-MM-DD'") == 2
+    assert re.search(
+        r"pg_catalog\.to_char\(\s*manifest_revision\.expected_date,\s*"
+        r"'YYYY-MM-DD'\s*\)",
+        manifest_sql,
+    )
+    assert re.search(
+        r"pg_catalog\.to_char\(\s*manifest_line\.required_date,\s*"
+        r"'YYYY-MM-DD'\s*\)",
+        manifest_sql,
+    )
+    assert "manifest_revision.expected_date::text" not in manifest_sql
+    assert "manifest_line.required_date::text" not in manifest_sql
+    assert "ORDER BY manifest_line.line_no, manifest_line.id" in manifest_sql
+    assert "ORDER BY manifest_binding.id" in manifest_sql
+    assert manifest_sql.count("'[]'::jsonb") == 2
+    assert "manifest_line.status" not in manifest_sql
+    assert "manifest_line.updated_at" not in manifest_sql
+    assert "manifest_revision.updated_at" not in manifest_sql
+    assert "manifest_revision.content_manifest_sha256" not in manifest_sql
+    for approval_coordinate in (
+        "approval_attempt_no",
+        "approval_instance_id",
+        "approval_instances",
+        "attempt_no",
+        "current_step_no",
+    ):
+        assert approval_coordinate not in manifest_sql
+
+
+def test_0046_postgresql_offline_sql_seals_exact_draft_content_boundary(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0046_migration_module()
+    assert module.revision == MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_REVISION_ID
+    assert module.down_revision == (
+        PRE_MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_HEAD_REVISION
+    )
+    assert len(module.IMMEDIATE_TRIGGER_BINDINGS) == 4
+    assert len(module.DEFERRED_TRIGGER_BINDINGS) == 4
+    assert len(module.TRIGGER_BINDINGS) == 8
+    assert len(set(module.TRIGGER_BINDINGS)) == 8
+    assert all(
+        len(trigger_name.encode("utf-8")) <= 63
+        for _, trigger_name in module.TRIGGER_BINDINGS
+    )
+
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_HEAD_REVISION}:"
+        f"{MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_REVISION_ID}",
+        sql=True,
+    )
+    sql = output.getvalue()
+
+    assert "-- Running upgrade 20260903_0045 -> 20260903_0046" in sql
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(
+            f"public.{table_name}" for table_name in module.CONTENT_TABLES
+        )
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    assert sql.count(lock_sql) == 1
+    for table_name in module.CONTENT_TABLES:
+        assert f"EXISTS (SELECT 1 FROM public.{table_name})" in sql
+
+    add_column_sql = (
+        "ALTER TABLE public.material_request_commands ADD COLUMN "
+        "projection_manifest_sha256 VARCHAR(64)"
+    )
+    assert sql.count(add_column_sql) == 1
+    assert sql.count(module.MANIFEST_CONSTRAINT) == 1
+    assert "operation IN ('create', 'update_draft', 'submit')" in sql
+    assert (
+        "operation IN ('create', 'update_draft', 'submit') AND "
+        "projection_manifest_sha256 IS NOT NULL AND "
+        "projection_manifest_sha256 ~ '^[0-9a-f]{64}$'"
+    ) in sql
+    assert (
+        "operation NOT IN ('create', 'update_draft', 'submit') AND "
+        "projection_manifest_sha256 IS NULL"
+    ) in sql
+
+    function_coordinates = (
+        (module.PG_CONTENT_GUARD_FUNCTION, ""),
+        (module.PG_CONTENT_VALIDATE_FUNCTION, "uuid"),
+        (module.PG_CONTENT_DISPATCH_FUNCTION, ""),
+    )
+    for function_name, argument_types in function_coordinates:
+        signature = f"public.{function_name}({argument_types})"
+        assert sql.count(f"CREATE FUNCTION public.{function_name}") == 1
+        assert sql.count(
+            f"ALTER FUNCTION {signature} OWNER TO star_oam_migrator"
+        ) == 1
+        assert sql.count(
+            f"REVOKE ALL ON FUNCTION {signature} "
+            "FROM PUBLIC, star_oam_api"
+        ) == 1
+
+    for table_name, trigger_name in module.IMMEDIATE_TRIGGER_BINDINGS:
+        operations = (
+            "INSERT"
+            if table_name == "material_request_commands"
+            else "INSERT OR UPDATE OR DELETE"
+        )
+        assert sql.count(
+            f"CREATE TRIGGER {trigger_name} BEFORE {operations} "
+            f"ON public.{table_name}"
+        ) == 1
+    for table_name, trigger_name in module.DEFERRED_TRIGGER_BINDINGS:
+        assert sql.count(
+            f"CREATE CONSTRAINT TRIGGER {trigger_name} "
+            f"AFTER INSERT OR UPDATE OR DELETE ON public.{table_name} "
+            "DEFERRABLE INITIALLY DEFERRED"
+        ) == 1
+    assert sql.count("CREATE CONSTRAINT TRIGGER ") == 4
+    for table_name, trigger_name in module.TRIGGER_BINDINGS:
+        assert sql.count(
+            f"ALTER TABLE public.{table_name} ENABLE ALWAYS TRIGGER "
+            f"{trigger_name}"
+        ) == 1
+    assert sql.count(" ENABLE ALWAYS TRIGGER ") == 8
+
+    ready_sql = (
+        "CREATE OR REPLACE FUNCTION public."
+        "rsc_oam_runtime_binding_ready_0044()"
+    )
+    assert sql.count(ready_sql) == 1
+    assert "pg_catalog.min(version_num) = '20260903_0046'" in sql
+    lock_offset = sql.index(lock_sql)
+    preflight_offset = sql.index(module.UPGRADE_BLOCKER)
+    column_offset = sql.index(add_column_sql)
+    constraint_offset = sql.index(module.MANIFEST_CONSTRAINT)
+    guard_offset = sql.index(
+        f"CREATE FUNCTION public.{module.PG_CONTENT_GUARD_FUNCTION}()"
+    )
+    trigger_offset = sql.index(
+        f"CREATE TRIGGER {module.IMMEDIATE_TRIGGER_BINDINGS[0][1]}"
+    )
+    enable_offset = sql.index(" ENABLE ALWAYS TRIGGER ")
+    ready_offset = sql.index(ready_sql)
+    assert (
+        lock_offset
+        < preflight_offset
+        < column_offset
+        < constraint_offset
+        < guard_offset
+        < trigger_offset
+        < enable_offset
+        < ready_offset
+    )
+
+    guard_sql = module._content_guard_sql()
+    validator_sql = module._content_validator_sql()
+    dispatcher_sql = module._content_dispatcher_sql()
+    assert "NEW.projection_manifest_sha256 IS NOT NULL" in guard_sql
+    assert "NEW.actor_user_id <> guard_request.requester_user_id" in guard_sql
+    assert "NEW.actor_person_id <> guard_request.requester_person_id" in guard_sql
+    assert "guard_origin_manifest IS DISTINCT FROM guard_computed_manifest" in (
+        guard_sql
+    )
+    for json_value, expected_value in (
+        ("NEW.request_jsonb->>'schema'", "'rsc.material_request_command.v1'"),
+        ("NEW.request_jsonb->>'operation'", "NEW.operation"),
+        ("NEW.request_jsonb->>'request_id'", "guard_request.id::text"),
+        ("NEW.request_jsonb->>'target_version'", "NEW.target_version::text"),
+        ("NEW.request_jsonb->>'payload_sha256'", "NEW.request_hash"),
+        ("NEW.request_jsonb->>'sensitive_fields'", "'excluded'"),
+        ("NEW.result_jsonb->>'request_id'", "guard_request.id::text"),
+        ("NEW.result_jsonb->>'revision_id'", "guard_revision.id::text"),
+        (
+            "NEW.result_jsonb->>'revision_no'",
+            "guard_revision.revision_no::text",
+        ),
+        ("NEW.result_jsonb->>'kind'", "guard_result_kind"),
+    ):
+        assert re.search(
+            rf"{re.escape(json_value)}\s+IS DISTINCT FROM\s+"
+            rf"{re.escape(expected_value)}",
+            guard_sql,
+        )
+    compact_guard_sql = " ".join(guard_sql.split())
+    assert (
+        "NEW.operation IN ('create', 'update_draft') AND "
+        "NEW.request_jsonb->'approval_attempt_no' IS DISTINCT FROM "
+        "'null'::jsonb"
+    ) in compact_guard_sql
+    assert (
+        "jsonb_typeof(NEW.request_jsonb->'approval_attempt_no') "
+        "IS DISTINCT FROM 'number'"
+    ) in compact_guard_sql
+    assert (
+        "NEW.request_jsonb->>'approval_attempt_no' !~ '^[1-9][0-9]*$'"
+    ) in compact_guard_sql
+    assert (
+        "jsonb_typeof(NEW.result_jsonb->'approval_attempt_no') "
+        "IS DISTINCT FROM 'number'"
+    ) in compact_guard_sql
+    assert (
+        "NEW.result_jsonb->>'approval_attempt_no' !~ '^[1-9][0-9]*$'"
+    ) in compact_guard_sql
+    assert (
+        "NEW.request_jsonb->>'approval_attempt_no' IS DISTINCT FROM "
+        "NEW.result_jsonb->>'approval_attempt_no'"
+    ) in compact_guard_sql
+    assert (
+        "IF NEW.operation = 'submit' AND NOT EXISTS ( SELECT 1 FROM "
+        "public.approval_instances AS approval_instance WHERE "
+        "approval_instance.id::text = "
+        "NEW.result_jsonb->>'approval_instance_id' AND "
+        "approval_instance.request_id = guard_request.id AND "
+        "approval_instance.request_revision_id = guard_revision.id AND "
+        "approval_instance.revision_no = guard_revision.revision_no AND "
+        "approval_instance.attempt_no::text = "
+        "NEW.request_jsonb->>'approval_attempt_no' AND "
+        "approval_instance.created_at = NEW.occurred_at ) THEN"
+    ) in compact_guard_sql
+    assert "FOR guard_revision IN" in validator_sql
+    assert "guard_submit.target_version <>" in validator_sql
+    assert "guard_origin.target_version + 1" in validator_sql
+    assert "WHEN 'cancelled' THEN guard_request.version - 1" in validator_sql
+    assert "guard_origin.result_jsonb->'line_ids'" in validator_sql
+    assert "guard_old_request_id" in dispatcher_sql
+    assert "guard_new_request_id" in dispatcher_sql
+    assert "FROM PUBLIC, star_oam_api" in sql
+    assert not any(
+        statement.lstrip().upper().startswith("GRANT ")
+        for statement in sql.split(";")
+    )
+
+
+def test_0046_postgresql_offline_downgrade_requires_online_empty_graph_check(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    with pytest.raises(RuntimeError, match="requires an online connection"):
+        command.downgrade(
+            config,
+            f"{MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_REVISION_ID}:"
+            f"{PRE_MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_HEAD_REVISION}",
+            sql=True,
+        )
+
+
+def test_0046_sqlite_adds_and_drops_nullable_projection_manifest_column(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'draft-content-causality.db'}"
+    config = _config(database_url)
+    command.upgrade(
+        config, PRE_MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_HEAD_REVISION
+    )
+    before_engine = sa.create_engine(database_url)
+    try:
+        before_columns = {
+            column["name"]
+            for column in inspect(before_engine).get_columns(
+                "material_request_commands"
+            )
+        }
+        assert "projection_manifest_sha256" not in before_columns
+    finally:
+        before_engine.dispose()
+
+    command.upgrade(config, MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_REVISION_ID)
+    upgraded_engine = sa.create_engine(database_url)
+    try:
+        columns = {
+            column["name"]: column
+            for column in inspect(upgraded_engine).get_columns(
+                "material_request_commands"
+            )
+        }
+        manifest_column = columns["projection_manifest_sha256"]
+        assert manifest_column["nullable"] is True
+        assert isinstance(manifest_column["type"], sa.String)
+        assert manifest_column["type"].length == 64
+        assert manifest_column["default"] is None
+        with upgraded_engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_REVISION_ID
+    finally:
+        upgraded_engine.dispose()
+
+    command.downgrade(
+        config, PRE_MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_HEAD_REVISION
+    )
+    downgraded_engine = sa.create_engine(database_url)
+    try:
+        downgraded_columns = {
+            column["name"]
+            for column in inspect(downgraded_engine).get_columns(
+                "material_request_commands"
+            )
+        }
+        assert "projection_manifest_sha256" not in downgraded_columns
+        with downgraded_engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == PRE_MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_HEAD_REVISION
     finally:
         downgraded_engine.dispose()
 

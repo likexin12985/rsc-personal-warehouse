@@ -35,7 +35,8 @@ CLOUD_ROOT = Path(__file__).resolve().parents[2]
 ACKNOWLEDGEMENT = "I_UNDERSTAND_THIS_DATABASE_IS_EPHEMERAL"
 DATABASE_NAME = "rsc_pg16_release_gate"
 RLS_REVISION = "20260902_0044"
-HEAD_REVISION = "20260903_0045"
+APPROVAL_REVISION = "20260903_0045"
+HEAD_REVISION = "20260903_0046"
 RLS_BINDING_TABLE = "oam_sync_scope_bindings"
 RLS_READY_FUNCTION = "public.rsc_oam_runtime_binding_ready_0044()"
 EDGE_RECEIVER_ROLE = "edge_inbox"
@@ -66,6 +67,23 @@ MATERIAL_REQUEST_FILE_GUARD_FUNCTION_0029 = (
 )
 MATERIAL_REQUEST_DECISION_GUARD_FUNCTION_0029 = (
     "rsc_guard_material_request_decision_quantity_0029"
+)
+MATERIAL_REQUEST_CONTENT_MANIFEST_COLUMN_0046 = (
+    "projection_manifest_sha256"
+)
+MATERIAL_REQUEST_CONTENT_MANIFEST_CONSTRAINT_0046 = (
+    "ck_material_request_commands_projection_manifest_0046"
+)
+MATERIAL_REQUEST_CONTENT_FUNCTIONS_0046 = {
+    "rsc_guard_material_request_content_write_0046": ("", "trigger"),
+    "rsc_validate_material_request_content_causality_0046": ("uuid", "void"),
+    "rsc_dispatch_material_request_content_causality_0046": ("", "trigger"),
+}
+MATERIAL_REQUEST_CONTENT_TRIGGER_TABLES_0046 = (
+    "material_request_revisions",
+    "material_request_lines",
+    "material_request_files",
+    "material_request_commands",
 )
 MATERIAL_REQUEST_NEUTRAL_AXES = {
     "allocation_status": "not_allocated",
@@ -3791,6 +3809,170 @@ def _assert_0045_approval_catalog_drift_is_rejected(api_engine) -> None:
     _validate_runtime_security(api_engine)
 
 
+def _assert_0046_content_catalog(*, installed: bool) -> None:
+    expected_immediate = {
+        (table_name, f"trg_{table_name}_content_write_0046")
+        for table_name in MATERIAL_REQUEST_CONTENT_TRIGGER_TABLES_0046
+    }
+    expected_deferred = {
+        (table_name, f"trg_{table_name}_content_causality_0046")
+        for table_name in MATERIAL_REQUEST_CONTENT_TRIGGER_TABLES_0046
+    }
+    expected_triggers = expected_immediate | expected_deferred
+
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT data_type, character_maximum_length, is_nullable, "
+                "column_default "
+                "FROM information_schema.columns "
+                "WHERE table_schema = 'public' "
+                "AND table_name = 'material_request_commands' "
+                "AND column_name = %s",
+                (MATERIAL_REQUEST_CONTENT_MANIFEST_COLUMN_0046,),
+            )
+            column = cursor.fetchone()
+            cursor.execute(
+                "SELECT constraint_row.convalidated, "
+                "pg_catalog.pg_get_constraintdef(constraint_row.oid, true) "
+                "FROM pg_catalog.pg_constraint AS constraint_row "
+                "JOIN pg_catalog.pg_class AS relation "
+                "ON relation.oid = constraint_row.conrelid "
+                "JOIN pg_catalog.pg_namespace AS schema_row "
+                "ON schema_row.oid = relation.relnamespace "
+                "WHERE schema_row.nspname = 'public' "
+                "AND relation.relname = 'material_request_commands' "
+                "AND constraint_row.conname = %s",
+                (MATERIAL_REQUEST_CONTENT_MANIFEST_CONSTRAINT_0046,),
+            )
+            constraint = cursor.fetchone()
+            cursor.execute(
+                "SELECT function_row.proname, "
+                "pg_catalog.oidvectortypes(function_row.proargtypes), "
+                "pg_catalog.pg_get_function_result(function_row.oid), "
+                "function_row.provolatile, function_row.prosecdef, "
+                "owner.rolname, function_row.proconfig, "
+                "pg_catalog.has_function_privilege("
+                "'star_oam_api', function_row.oid, 'EXECUTE'), "
+                "EXISTS ("
+                "SELECT 1 FROM pg_catalog.aclexplode("
+                "pg_catalog.coalesce("
+                "function_row.proacl, "
+                "pg_catalog.acldefault('f', function_row.proowner)"
+                ")) AS function_acl "
+                "WHERE function_acl.grantee = 0 "
+                "AND function_acl.privilege_type = 'EXECUTE'"
+                ") "
+                "FROM pg_catalog.pg_proc AS function_row "
+                "JOIN pg_catalog.pg_namespace AS schema_row "
+                "ON schema_row.oid = function_row.pronamespace "
+                "JOIN pg_catalog.pg_roles AS owner "
+                "ON owner.oid = function_row.proowner "
+                "WHERE schema_row.nspname = 'public' "
+                "AND function_row.proname = ANY(%s) "
+                "ORDER BY function_row.proname",
+                (list(MATERIAL_REQUEST_CONTENT_FUNCTIONS_0046),),
+            )
+            functions = cursor.fetchall()
+            cursor.execute(
+                "SELECT relation.relname, trigger_row.tgname, "
+                "function_row.proname, trigger_row.tgenabled, "
+                "trigger_row.tgconstraint <> 0, "
+                "trigger_row.tgdeferrable, trigger_row.tginitdeferred, "
+                "pg_catalog.pg_get_triggerdef(trigger_row.oid, true) "
+                "FROM pg_catalog.pg_trigger AS trigger_row "
+                "JOIN pg_catalog.pg_class AS relation "
+                "ON relation.oid = trigger_row.tgrelid "
+                "JOIN pg_catalog.pg_namespace AS schema_row "
+                "ON schema_row.oid = relation.relnamespace "
+                "JOIN pg_catalog.pg_proc AS function_row "
+                "ON function_row.oid = trigger_row.tgfoid "
+                "WHERE schema_row.nspname = 'public' "
+                "AND trigger_row.tgname = ANY(%s) "
+                "ORDER BY relation.relname, trigger_row.tgname",
+                ([trigger_name for _, trigger_name in expected_triggers],),
+            )
+            triggers = cursor.fetchall()
+
+    if not installed:
+        assert column is None
+        assert constraint is None
+        assert functions == []
+        assert triggers == []
+        return
+
+    assert column == ("character varying", 64, "YES", None)
+    assert constraint is not None and constraint[0] is True
+    constraint_definition = constraint[1]
+    for required_fragment in (
+        MATERIAL_REQUEST_CONTENT_MANIFEST_COLUMN_0046,
+        "create",
+        "update_draft",
+        "submit",
+        "[0-9a-f]{64}",
+        "IS NOT NULL",
+        "IS NULL",
+    ):
+        assert required_fragment in constraint_definition
+
+    assert len(functions) == len(MATERIAL_REQUEST_CONTENT_FUNCTIONS_0046)
+    for row in functions:
+        function_name = row[0]
+        assert (row[1], row[2]) == MATERIAL_REQUEST_CONTENT_FUNCTIONS_0046[
+            function_name
+        ]
+        assert row[3:6] == ("v", True, "star_oam_migrator")
+        assert tuple(row[6] or ()) == ("search_path=pg_catalog, public",)
+        assert row[7:] == (False, False)
+
+    assert {(row[0], row[1]) for row in triggers} == expected_triggers
+    for row in triggers:
+        table_name, trigger_name, function_name = row[:3]
+        assert row[3] == "A"
+        definition = row[7]
+        if (table_name, trigger_name) in expected_immediate:
+            assert row[4:7] == (False, False, False)
+            assert function_name == "rsc_guard_material_request_content_write_0046"
+            assert " BEFORE INSERT " in definition
+            if table_name == "material_request_commands":
+                assert " DELETE " not in definition
+                assert " UPDATE " not in definition
+            else:
+                assert " DELETE " in definition
+                assert " UPDATE " in definition
+        else:
+            assert row[4:7] == (True, True, True)
+            assert (
+                function_name
+                == "rsc_dispatch_material_request_content_causality_0046"
+            )
+            assert " AFTER INSERT " in definition
+            assert " DELETE " in definition
+            assert " UPDATE " in definition
+            assert "DEFERRABLE INITIALLY DEFERRED" in definition
+
+
+def _assert_0046_empty_graph_downgrade_and_reupgrade() -> None:
+    assert _current_revision() == HEAD_REVISION
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT (SELECT count(*) FROM public.material_requests), "
+                "(SELECT count(*) FROM public.material_request_revisions), "
+                "(SELECT count(*) FROM public.material_request_lines), "
+                "(SELECT count(*) FROM public.material_request_files), "
+                "(SELECT count(*) FROM public.material_request_commands)"
+            )
+            assert cursor.fetchone() == (0, 0, 0, 0, 0)
+    _assert_0046_content_catalog(installed=True)
+    _run_alembic("downgrade", APPROVAL_REVISION)
+    assert _current_revision() == APPROVAL_REVISION
+    _assert_0046_content_catalog(installed=False)
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    _assert_0046_content_catalog(installed=True)
+
+
 def _seed_material_request_approval_world():
     from unittest.mock import patch
 
@@ -5592,6 +5774,590 @@ def _reveal_pg16_service_database_error(operation):
         raise
 
 
+_MATERIAL_REQUEST_LINE_COLUMNS_0046 = (
+    "id",
+    "request_id",
+    "revision_id",
+    "revision_no",
+    "line_no",
+    "client_line_key",
+    "material_id",
+    "suggested_substitute_material_id",
+    "requested_qty",
+    "required_date",
+    "note",
+    "status",
+    "final_approved_qty",
+    "cancelled_qty",
+    "version",
+    "updated_at",
+    "created_at",
+)
+
+
+def _assert_0046_sha256(value: object) -> None:
+    assert isinstance(value, str)
+    assert len(value) == 64
+    assert value == value.lower()
+    assert set(value) <= set("0123456789abcdef")
+
+
+def _assert_0046_content_command_chain(
+    api_engine,
+    *,
+    request_id: uuid.UUID,
+    expected_content_operations: tuple[str, ...],
+) -> tuple[tuple[str, int, str], ...]:
+    from app.demand_models import MaterialRequestCommand
+
+    with Session(api_engine) as session:
+        commands = tuple(
+            session.execute(
+                select(
+                    MaterialRequestCommand.operation,
+                    MaterialRequestCommand.target_version,
+                    MaterialRequestCommand.projection_manifest_sha256,
+                )
+                .where(MaterialRequestCommand.request_id == request_id)
+                .order_by(MaterialRequestCommand.target_version)
+            ).all()
+        )
+    content_commands = tuple(
+        (operation, target_version, manifest)
+        for operation, target_version, manifest in commands
+        if operation in {"create", "update_draft", "submit"}
+    )
+    assert tuple(row[0] for row in content_commands) == expected_content_operations
+    for _, _, manifest in content_commands:
+        _assert_0046_sha256(manifest)
+    for operation, _, manifest in commands:
+        if operation not in {"create", "update_draft", "submit"}:
+            assert manifest is None
+
+    migrator_parameters = _connection_parameters(
+        role="star_oam_migrator",
+        password=_role_password("star_oam_migrator"),
+    )
+    with psycopg.connect(**migrator_parameters) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT public."
+                "rsc_validate_material_request_content_causality_0046(%s)",
+                (request_id,),
+            )
+            assert cursor.fetchone() == (None,)
+    return content_commands
+
+
+def _assert_0046_datestyle_validator_stability(
+    *,
+    request_id: uuid.UUID,
+) -> None:
+    migrator_parameters = _connection_parameters(
+        role="star_oam_migrator",
+        password=_role_password("star_oam_migrator"),
+    )
+    with psycopg.connect(**migrator_parameters) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SET LOCAL DateStyle = 'SQL, DMY'")
+            cursor.execute("SHOW DateStyle")
+            assert cursor.fetchone() == ("SQL, DMY",)
+            cursor.execute(
+                "SELECT public."
+                "rsc_validate_material_request_content_causality_0046(%s)",
+                (request_id,),
+            )
+            assert cursor.fetchone() == (None,)
+
+
+def _replace_0046_line_note_without_command(
+    session: Session,
+    *,
+    request_id: uuid.UUID,
+    replacement_note: str,
+) -> tuple[uuid.UUID, str]:
+    column_list = ", ".join(_MATERIAL_REQUEST_LINE_COLUMNS_0046)
+    returned = session.execute(
+        text(
+            f"DELETE FROM public.material_request_lines "
+            f"WHERE id = ("
+            f"SELECT id FROM public.material_request_lines "
+            f"WHERE request_id = :request_id ORDER BY line_no LIMIT 1"
+            f") RETURNING {column_list}"
+        ),
+        {"request_id": request_id},
+    ).mappings().one()
+    original_note = str(returned["note"])
+    replacement = dict(returned)
+    replacement["note"] = replacement_note
+    bind_list = ", ".join(f":{column}" for column in _MATERIAL_REQUEST_LINE_COLUMNS_0046)
+    session.execute(
+        text(
+            f"INSERT INTO public.material_request_lines ({column_list}) "
+            f"VALUES ({bind_list})"
+        ),
+        replacement,
+    )
+    return returned["id"], original_note
+
+
+def _assert_0046_line_drift_is_rejected(
+    api_engine,
+    *,
+    request_id: uuid.UUID,
+    replica_mode: bool,
+) -> None:
+    test_engine = api_engine
+    owned_engine = None
+    if replica_mode:
+        owned_engine = create_engine(
+            _sqlalchemy_url(
+                role="star_oam_migrator",
+                password=_role_password("star_oam_migrator"),
+            ),
+            pool_size=1,
+            max_overflow=0,
+            pool_timeout=5,
+        )
+        test_engine = owned_engine
+    try:
+        with Session(test_engine) as session:
+            if replica_mode:
+                session.execute(
+                    text("SET LOCAL session_replication_role = 'replica'")
+                )
+            line_id, original_note = _replace_0046_line_note_without_command(
+                session,
+                request_id=request_id,
+                replacement_note=(
+                    "0046 replica projection drift"
+                    if replica_mode
+                    else "0046 commandless projection drift"
+                ),
+            )
+            with pytest.raises(DBAPIError) as failure:
+                session.commit()
+            assert "formal material request content projection is invalid" in str(
+                failure.value
+            )
+            session.rollback()
+    finally:
+        if owned_engine is not None:
+            owned_engine.dispose()
+
+    with Session(api_engine) as session:
+        durable_line = session.execute(
+            text(
+                "SELECT note FROM public.material_request_lines "
+                "WHERE id = :line_id"
+            ),
+            {"line_id": line_id},
+        ).one()
+        assert durable_line == (original_note,)
+
+
+def _create_0046_available_request_file(
+    api_engine,
+    *,
+    uploader_user_id: str,
+    marker: str,
+) -> uuid.UUID:
+    from app.formal_services import formal_files
+    from app.foundation_models import FileObject
+    from app.models import User
+
+    file_id = uuid.uuid4()
+    filename = f"{marker}.png"
+    storage_key = (
+        "formal-files/v1/request_attachment/"
+        f"{file_id.hex[:2]}/{file_id.hex}"
+    )
+    file_sha256 = hashlib.sha256(f"0046-file:{marker}".encode()).hexdigest()
+    prepared = formal_files._PreparedUpload(
+        purpose="request_attachment",
+        original_filename=filename,
+        size_bytes=128,
+        mime_type="image/png",
+        sha256=file_sha256,
+    )
+    with Session(api_engine) as session:
+        uploader = session.get(User, uploader_user_id)
+        assert uploader is not None and uploader.person_id is not None
+        created_at = session.scalar(select(func.transaction_timestamp()))
+        assert created_at is not None
+        metadata = {
+            "authorization_version": uploader.authorization_version,
+            "file_id": str(file_id),
+            "idempotency_key_hash": hashlib.sha256(
+                f"0046-file-key:{marker}".encode()
+            ).hexdigest(),
+            "provider": "aliyun_oss_v2",
+            "purpose": "request_attachment",
+            "request_sha256": formal_files._upload_request_hash(prepared),
+            "schema": "cloud_oam.formal_file_upload_intent.v1",
+            "storage_key": storage_key,
+            "uploader_person_id": str(uploader.person_id),
+            "uploader_user_id": uploader.id,
+        }
+        row = FileObject(
+            id=file_id,
+            storage_key=storage_key,
+            sha256=file_sha256,
+            size_bytes=prepared.size_bytes,
+            mime_type=prepared.mime_type,
+            original_filename=prepared.original_filename,
+            uploaded_by=uploader.id,
+            status="pending",
+            metadata_jsonb=metadata,
+            created_at=created_at,
+        )
+        session.add(row)
+        session.flush()
+        row.status = "available"
+        row.metadata_jsonb = {
+            **metadata,
+            "completion": {
+                "etag_sha256": hashlib.sha256(
+                    f"0046-etag:{marker}".encode()
+                ).hexdigest(),
+                "head_manifest_sha256": hashlib.sha256(
+                    f"0046-head:{marker}".encode()
+                ).hexdigest(),
+                "verified_at": created_at.isoformat(),
+            },
+        }
+        session.flush()
+        session.commit()
+    return file_id
+
+
+def _assert_0046_attachment_drift_is_rejected(
+    api_engine,
+    *,
+    request_id: uuid.UUID,
+    requester_user_id: str,
+    requester_file_id: uuid.UUID,
+    other_file_id: uuid.UUID,
+) -> None:
+    from app.demand_models import MaterialRequestFile
+
+    with Session(api_engine) as session:
+        origin = session.execute(
+            text(
+                "SELECT request_jsonb->>'revision_id', "
+                "(request_jsonb->>'revision_no')::integer, occurred_at "
+                "FROM public.material_request_commands "
+                "WHERE request_id = :request_id "
+                "AND operation IN ('create', 'update_draft') "
+                "ORDER BY target_version DESC LIMIT 1"
+            ),
+            {"request_id": request_id},
+        ).one()
+        binding_id = session.scalar(
+            select(MaterialRequestFile.id).where(
+                MaterialRequestFile.request_id == request_id
+            )
+        )
+        assert binding_id is not None
+    revision_id = uuid.UUID(origin[0])
+    revision_no = origin[1]
+    origin_time = origin[2]
+
+    inserted_binding_id = uuid.uuid4()
+    with Session(api_engine) as session:
+        with pytest.raises(DBAPIError) as add_failure:
+            session.execute(
+                text(
+                    "INSERT INTO public.material_request_files ("
+                    "id, request_id, revision_id, revision_no, request_line_id, "
+                    "file_id, purpose, created_by_user_id, created_at"
+                    ") VALUES ("
+                    ":id, :request_id, :revision_id, :revision_no, NULL, "
+                    ":file_id, 'request_attachment', :created_by, :created_at"
+                    ")"
+                ),
+                {
+                    "id": inserted_binding_id,
+                    "request_id": request_id,
+                    "revision_id": revision_id,
+                    "revision_no": revision_no,
+                    "file_id": requester_file_id,
+                    "created_by": requester_user_id,
+                    "created_at": origin_time,
+                },
+            )
+            session.commit()
+        assert "formal material request content projection is invalid" in str(
+            add_failure.value
+        )
+        session.rollback()
+
+    with Session(api_engine) as session:
+        with pytest.raises(DBAPIError) as delete_failure:
+            deleted = session.execute(
+                text(
+                    "DELETE FROM public.material_request_files "
+                    "WHERE id = :binding_id"
+                ),
+                {"binding_id": binding_id},
+            )
+            assert deleted.rowcount == 1
+            session.commit()
+        assert "formal material request content projection is invalid" in str(
+            delete_failure.value
+        )
+        session.rollback()
+
+    cross_binding_id = uuid.uuid4()
+    with Session(api_engine) as session:
+        with pytest.raises(DBAPIError) as cross_failure:
+            session.execute(
+                text(
+                    "INSERT INTO public.material_request_files ("
+                    "id, request_id, revision_id, revision_no, request_line_id, "
+                    "file_id, purpose, created_by_user_id, created_at"
+                    ") VALUES ("
+                    ":id, :request_id, :revision_id, :revision_no, NULL, "
+                    ":file_id, 'request_attachment', :created_by, :created_at"
+                    ")"
+                ),
+                {
+                    "id": cross_binding_id,
+                    "request_id": request_id,
+                    "revision_id": revision_id,
+                    "revision_no": revision_no,
+                    "file_id": other_file_id,
+                    "created_by": requester_user_id,
+                    "created_at": origin_time,
+                },
+            )
+            session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        assert "formal material request content projection is invalid" in str(
+            cross_failure.value
+        )
+        session.rollback()
+
+    with Session(api_engine) as session:
+        assert session.get(MaterialRequestFile, binding_id) is not None
+        assert session.get(MaterialRequestFile, inserted_binding_id) is None
+        assert session.get(MaterialRequestFile, cross_binding_id) is None
+
+
+def _assert_0046_prefilled_manifest_is_rejected(
+    api_engine,
+    *,
+    request_id: uuid.UUID,
+) -> None:
+    forged_command_id = uuid.uuid4()
+    with Session(api_engine) as session:
+        with pytest.raises(DBAPIError) as prefilled_failure:
+            session.execute(
+                text(
+                    "INSERT INTO public.material_request_commands ("
+                    "id, operation, request_id, target_version, "
+                    "idempotency_key_hash, request_reference, request_hash, "
+                    "result_hash, projection_manifest_sha256, request_jsonb, "
+                    "result_jsonb, actor_user_id, actor_person_id, "
+                    "actor_role_assignment_id, authorization_version, "
+                    "occurred_at, created_at"
+                    ") SELECT :forged_id, 'update_draft', request_id, "
+                    "target_version, :key_hash, request_reference, request_hash, "
+                    "result_hash, :manifest, request_jsonb, result_jsonb, "
+                    "actor_user_id, actor_person_id, actor_role_assignment_id, "
+                    "authorization_version, occurred_at, created_at "
+                    "FROM public.material_request_commands "
+                    "WHERE request_id = :request_id AND operation = 'create'"
+                ),
+                {
+                    "forged_id": forged_command_id,
+                    "key_hash": hashlib.sha256(
+                        f"0046-prefill:{request_id}".encode()
+                    ).hexdigest(),
+                    "manifest": "a" * 64,
+                    "request_id": request_id,
+                },
+            )
+            session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        assert "formal material request content projection is invalid" in str(
+            prefilled_failure.value
+        )
+        session.rollback()
+    with Session(api_engine) as session:
+        assert session.execute(
+            text(
+                "SELECT count(*) FROM public.material_request_commands "
+                "WHERE id = :command_id"
+            ),
+            {"command_id": forged_command_id},
+        ).scalar_one() == 0
+
+
+def _assert_0046_json_null_command_fields_are_rejected(
+    api_engine,
+    *,
+    request_id: uuid.UUID,
+) -> None:
+    mutations = {
+        "request-schema": (
+            "jsonb_set(request_jsonb, '{schema}', 'null'::jsonb, false)",
+            "result_jsonb",
+        ),
+        "request-payload-sha256": (
+            "jsonb_set(request_jsonb, '{payload_sha256}', "
+            "'null'::jsonb, false)",
+            "result_jsonb",
+        ),
+        "result-kind": (
+            "request_jsonb",
+            "jsonb_set(result_jsonb, '{kind}', 'null'::jsonb, false)",
+        ),
+    }
+    rejected_ids: list[uuid.UUID] = []
+    for marker, (request_document, result_document) in mutations.items():
+        forged_command_id = uuid.uuid4()
+        rejected_ids.append(forged_command_id)
+        with Session(api_engine) as session:
+            with pytest.raises(DBAPIError) as null_failure:
+                session.execute(
+                    text(
+                        "INSERT INTO public.material_request_commands ("
+                        "id, operation, request_id, target_version, "
+                        "idempotency_key_hash, request_reference, request_hash, "
+                        "result_hash, request_jsonb, result_jsonb, "
+                        "actor_user_id, actor_person_id, "
+                        "actor_role_assignment_id, authorization_version, "
+                        "occurred_at, created_at"
+                        ") SELECT :forged_id, operation, request_id, "
+                        "target_version, :key_hash, request_reference, "
+                        f"request_hash, result_hash, {request_document}, "
+                        f"{result_document}, actor_user_id, actor_person_id, "
+                        "actor_role_assignment_id, authorization_version, "
+                        "occurred_at, created_at "
+                        "FROM public.material_request_commands "
+                        "WHERE request_id = :request_id "
+                        "AND operation = 'create'"
+                    ),
+                    {
+                        "forged_id": forged_command_id,
+                        "key_hash": hashlib.sha256(
+                            f"0046-json-null:{marker}:{request_id}".encode()
+                        ).hexdigest(),
+                        "request_id": request_id,
+                    },
+                )
+            assert "formal material request content projection is invalid" in str(
+                null_failure.value
+            )
+            session.rollback()
+    with Session(api_engine) as session:
+        assert session.execute(
+            text(
+                "SELECT count(*) FROM public.material_request_commands "
+                "WHERE id = ANY(CAST(:command_ids AS uuid[]))"
+            ),
+            {"command_ids": rejected_ids},
+        ).scalar_one() == 0
+
+
+def _assert_0046_approval_attempt_mutations_are_rejected(
+    api_engine,
+    *,
+    request_id: uuid.UUID,
+    source_operation: str,
+) -> None:
+    if source_operation in {"create", "update_draft"}:
+        mutations = {
+            "draft-non-null": (
+                "jsonb_set(request_jsonb, '{approval_attempt_no}', "
+                "'1'::jsonb, false)",
+                "result_jsonb",
+            ),
+        }
+    else:
+        assert source_operation == "submit"
+        mutations = {
+            "submit-null": (
+                "jsonb_set(request_jsonb, '{approval_attempt_no}', "
+                "'null'::jsonb, false)",
+                "jsonb_set(result_jsonb, '{approval_attempt_no}', "
+                "'null'::jsonb, false)",
+            ),
+            "submit-non-positive": (
+                "jsonb_set(request_jsonb, '{approval_attempt_no}', "
+                "'0'::jsonb, false)",
+                "jsonb_set(result_jsonb, '{approval_attempt_no}', "
+                "'0'::jsonb, false)",
+            ),
+            "submit-mismatch": (
+                "jsonb_set(request_jsonb, '{approval_attempt_no}', "
+                "'1'::jsonb, false)",
+                "jsonb_set(result_jsonb, '{approval_attempt_no}', "
+                "'2'::jsonb, false)",
+            ),
+            "submit-consistent-but-not-real": (
+                "jsonb_set(request_jsonb, '{approval_attempt_no}', "
+                "'2'::jsonb, false)",
+                "jsonb_set(result_jsonb, '{approval_attempt_no}', "
+                "'2'::jsonb, false)",
+            ),
+            "submit-random-instance": (
+                "request_jsonb",
+                "jsonb_set(result_jsonb, '{approval_instance_id}', "
+                "to_jsonb(CAST(:forged_instance_id AS text)), false)",
+            ),
+        }
+
+    rejected_ids: list[uuid.UUID] = []
+    for marker, (request_document, result_document) in mutations.items():
+        forged_command_id = uuid.uuid4()
+        rejected_ids.append(forged_command_id)
+        statement_parameters = {
+            "forged_id": forged_command_id,
+            "key_hash": hashlib.sha256(
+                f"0046-attempt:{marker}:{request_id}".encode()
+            ).hexdigest(),
+            "request_id": request_id,
+            "source_operation": source_operation,
+        }
+        if marker == "submit-random-instance":
+            statement_parameters["forged_instance_id"] = uuid.uuid4()
+        with Session(api_engine) as session:
+            with pytest.raises(DBAPIError) as attempt_failure:
+                session.execute(
+                    text(
+                        "INSERT INTO public.material_request_commands ("
+                        "id, operation, request_id, target_version, "
+                        "idempotency_key_hash, request_reference, request_hash, "
+                        "result_hash, request_jsonb, result_jsonb, "
+                        "actor_user_id, actor_person_id, "
+                        "actor_role_assignment_id, authorization_version, "
+                        "occurred_at, created_at"
+                        ") SELECT :forged_id, operation, request_id, "
+                        "target_version, :key_hash, request_reference, "
+                        f"request_hash, result_hash, {request_document}, "
+                        f"{result_document}, actor_user_id, actor_person_id, "
+                        "actor_role_assignment_id, authorization_version, "
+                        "occurred_at, created_at "
+                        "FROM public.material_request_commands "
+                        "WHERE request_id = :request_id "
+                        "AND operation = :source_operation"
+                    ),
+                    statement_parameters,
+                )
+            assert "formal material request content projection is invalid" in str(
+                attempt_failure.value
+            )
+            session.rollback()
+    with Session(api_engine) as session:
+        assert session.execute(
+            text(
+                "SELECT count(*) FROM public.material_request_commands "
+                "WHERE id = ANY(CAST(:command_ids AS uuid[]))"
+            ),
+            {"command_ids": rejected_ids},
+        ).scalar_one() == 0
+
+
 def _assert_0045_raw_projection_bypass_and_formal_approval(
     api_engine,
 ) -> tuple[uuid.UUID, int]:
@@ -5605,6 +6371,7 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
         MaterialRequestLine,
     )
     from app.formal_services.material_request_draft import (
+        amend_material_request_draft,
         create_material_request_draft,
         submit_material_request,
     )
@@ -5627,6 +6394,14 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
         verifying_admin_user_id,
     ) = _seed_material_request_approval_world()
     assert registering_admin_user_id != verifying_admin_user_id
+    manifest_date = datetime(2026, 9, 15, tzinfo=timezone.utc).date()
+    draft = replace(
+        draft,
+        expected_date=manifest_date,
+        lines=tuple(
+            replace(line, required_date=manifest_date) for line in draft.lines
+        ),
+    )
 
     # Draft creation is one committed formal action.
     with Session(api_engine) as session:
@@ -5661,6 +6436,59 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
         expected_status="draft",
         expected_version=created.request_version,
         expected_decided_at=False,
+    )
+    created_commands = _assert_0046_content_command_chain(
+        api_engine,
+        request_id=request_id,
+        expected_content_operations=("create",),
+    )
+    _assert_0046_datestyle_validator_stability(request_id=request_id)
+    with Session(api_engine) as session:
+        replayed_create = _reveal_pg16_service_database_error(
+            lambda: create_material_request_draft(
+                session,
+                actor=_principal(session, requester_user_id),
+                material_request_id=request_id,
+                draft=draft,
+                idempotency_key="pg16-approval-projection-create",
+                idempotency_hmac_secret=SECRET,
+                trace_request_id="trace-pg16-approval-projection-create-replay",
+            )
+        )
+        assert replayed_create.idempotency_replayed is True
+        assert replayed_create.request_version == created.request_version
+        session.commit()
+    assert _assert_0046_content_command_chain(
+        api_engine,
+        request_id=request_id,
+        expected_content_operations=("create",),
+    ) == created_commands
+    _assert_0046_prefilled_manifest_is_rejected(
+        api_engine,
+        request_id=request_id,
+    )
+    _assert_0046_json_null_command_fields_are_rejected(
+        api_engine,
+        request_id=request_id,
+    )
+    _assert_0046_approval_attempt_mutations_are_rejected(
+        api_engine,
+        request_id=request_id,
+        source_operation="create",
+    )
+
+    # Prepare two valid files before the update anchor.  The first can reach
+    # the 0046 deferred digest check; the second proves the immediate guard
+    # rejects a formally valid file owned by a different applicant.
+    requester_spare_file_id = _create_0046_available_request_file(
+        api_engine,
+        uploader_user_id=requester_user_id,
+        marker=f"requester-{request_id.hex[:12]}",
+    )
+    other_spare_file_id = _create_0046_available_request_file(
+        api_engine,
+        uploader_user_id=manager_user_id,
+        marker=f"other-{request_id.hex[:12]}",
     )
 
     api_parameters = _connection_parameters(
@@ -5713,15 +6541,137 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
         expected_decided_at=False,
     )
 
+    # Even a legitimate command cannot authorize content written afterwards
+    # in the same transaction.  The deferred validator must reject the final
+    # post-image and roll back the command, aggregate and replacement line.
+    doomed_draft = replace(draft, note="0046 doomed update before line drift")
+    with Session(api_engine) as session:
+        doomed = _reveal_pg16_service_database_error(
+            lambda: amend_material_request_draft(
+                session,
+                actor=_principal(session, requester_user_id),
+                material_request_id=request_id,
+                expected_version=created.request_version,
+                draft=doomed_draft,
+                idempotency_key="pg16-approval-projection-doomed-update",
+                idempotency_hmac_secret=SECRET,
+                trace_request_id="trace-pg16-approval-projection-doomed-update",
+            )
+        )
+        assert doomed.version == created.request_version + 1
+        _replace_0046_line_note_without_command(
+            session,
+            request_id=request_id,
+            replacement_note="0046 drift after valid update command",
+        )
+        with pytest.raises(DBAPIError) as post_command_drift_failure:
+            session.commit()
+        assert "formal material request content projection is invalid" in str(
+            post_command_drift_failure.value
+        )
+        session.rollback()
+    _assert_material_request_snapshot(
+        api_engine,
+        request_id=request_id,
+        expected_status="draft",
+        expected_version=created.request_version,
+        expected_decided_at=False,
+    )
+    assert _assert_0046_content_command_chain(
+        api_engine,
+        request_id=request_id,
+        expected_content_operations=("create",),
+    ) == created_commands
+
+    # Commit one real draft update so create, update and submit have separate
+    # immutable anchors.  A replay may return the original result but must not
+    # create a fourth command or replace the database-owned digest.
+    amended_draft = replace(draft, note="0046 committed draft update")
+    with Session(api_engine) as session:
+        session.execute(text("SET LOCAL DateStyle = 'SQL, DMY'"))
+        amended = _reveal_pg16_service_database_error(
+            lambda: amend_material_request_draft(
+                session,
+                actor=_principal(session, requester_user_id),
+                material_request_id=request_id,
+                expected_version=created.request_version,
+                draft=amended_draft,
+                idempotency_key="pg16-approval-projection-update",
+                idempotency_hmac_secret=SECRET,
+                trace_request_id="trace-pg16-approval-projection-update",
+            )
+        )
+        session.commit()
+    amended_commands = _assert_0046_content_command_chain(
+        api_engine,
+        request_id=request_id,
+        expected_content_operations=("create", "update_draft"),
+    )
+    assert [row[1] for row in amended_commands] == [0, 1]
+    assert amended_commands[0][2] != amended_commands[1][2]
+    _assert_0046_datestyle_validator_stability(request_id=request_id)
+    _assert_0046_approval_attempt_mutations_are_rejected(
+        api_engine,
+        request_id=request_id,
+        source_operation="update_draft",
+    )
+    with Session(api_engine) as session:
+        replayed_amend = _reveal_pg16_service_database_error(
+            lambda: amend_material_request_draft(
+                session,
+                actor=_principal(session, requester_user_id),
+                material_request_id=request_id,
+                expected_version=created.request_version,
+                draft=amended_draft,
+                idempotency_key="pg16-approval-projection-update",
+                idempotency_hmac_secret=SECRET,
+                trace_request_id="trace-pg16-approval-projection-update-replay",
+            )
+        )
+        assert replayed_amend.replayed is True
+        assert replayed_amend.version == amended.version
+        session.commit()
+    assert _assert_0046_content_command_chain(
+        api_engine,
+        request_id=request_id,
+        expected_content_operations=("create", "update_draft"),
+    ) == amended_commands
+
+    _assert_0046_line_drift_is_rejected(
+        api_engine,
+        request_id=request_id,
+        replica_mode=False,
+    )
+    _assert_0046_attachment_drift_is_rejected(
+        api_engine,
+        request_id=request_id,
+        requester_user_id=requester_user_id,
+        requester_file_id=requester_spare_file_id,
+        other_file_id=other_spare_file_id,
+    )
+    _assert_0046_line_drift_is_rejected(
+        api_engine,
+        request_id=request_id,
+        replica_mode=True,
+    )
+    _assert_material_request_snapshot(
+        api_engine,
+        request_id=request_id,
+        expected_status="draft",
+        expected_version=amended.version,
+        expected_decided_at=False,
+    )
+
     # Submission is independently committed and creates the sealed revision,
     # active instance, frozen candidates and three approval steps atomically.
     with Session(api_engine) as session:
+        session.execute(text("SET LOCAL DateStyle = 'SQL, DMY'"))
         submitted = _reveal_pg16_service_database_error(
             lambda: submit_material_request(
                 session,
                 actor=_principal(session, requester_user_id),
                 material_request_id=request_id,
-                expected_version=created.request_version,
+                expected_version=amended.version,
                 idempotency_key="pg16-approval-projection-submit",
                 idempotency_hmac_secret=SECRET,
                 trace_request_id="trace-pg16-approval-projection-submit",
@@ -5734,6 +6684,38 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
         expected_status="approval_in_progress",
         expected_version=submitted.version,
         expected_decided_at=False,
+    )
+    submitted_commands = _assert_0046_content_command_chain(
+        api_engine,
+        request_id=request_id,
+        expected_content_operations=("create", "update_draft", "submit"),
+    )
+    assert [row[1] for row in submitted_commands] == [0, 1, 2]
+    assert submitted_commands[1][2] == submitted_commands[2][2]
+    with Session(api_engine) as session:
+        replayed_submit = _reveal_pg16_service_database_error(
+            lambda: submit_material_request(
+                session,
+                actor=_principal(session, requester_user_id),
+                material_request_id=request_id,
+                expected_version=amended.version,
+                idempotency_key="pg16-approval-projection-submit",
+                idempotency_hmac_secret=SECRET,
+                trace_request_id="trace-pg16-approval-projection-submit-replay",
+            )
+        )
+        assert replayed_submit.replayed is True
+        assert replayed_submit.version == submitted.version
+        session.commit()
+    assert _assert_0046_content_command_chain(
+        api_engine,
+        request_id=request_id,
+        expected_content_operations=("create", "update_draft", "submit"),
+    ) == submitted_commands
+    _assert_0046_approval_attempt_mutations_are_rejected(
+        api_engine,
+        request_id=request_id,
+        source_operation="submit",
     )
     _assert_0045_version_only_projection_drift_is_rejected(
         api_engine,
@@ -5991,10 +6973,15 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
         approved_qty=approved_qty,
         requester_user_id=requester_user_id,
     )
+    assert _assert_0046_content_command_chain(
+        api_engine,
+        request_id=request_id,
+        expected_content_operations=("create", "update_draft", "submit"),
+    ) == submitted_commands
     return request_id, cancelled_version
 
 
-def _assert_0045_rejects_nonempty_approval_downgrade(
+def _assert_0046_rejects_nonempty_content_downgrade(
     api_engine,
     *,
     request_id: uuid.UUID,
@@ -6002,7 +6989,7 @@ def _assert_0045_rejects_nonempty_approval_downgrade(
 ) -> None:
     assert _current_revision() == HEAD_REVISION
     blocked = _run_alembic("downgrade", RLS_REVISION, expect_success=False)
-    assert "cannot downgrade 0045" in (blocked.stdout + blocked.stderr)
+    assert "cannot downgrade 0046" in (blocked.stdout + blocked.stderr)
     assert _current_revision() == HEAD_REVISION
     _assert_material_request_snapshot(
         api_engine,
@@ -6255,6 +7242,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
+    _assert_0046_empty_graph_downgrade_and_reupgrade()
     assert _work_order_lock_function_exists() is True
     _assert_pre_0043_acl_drift_was_cleaned(pre_0043_large_object_oid)
     _assert_projector_exact_column_acl()
@@ -6410,7 +7398,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         request_id, final_request_version = (
             _assert_0045_raw_projection_bypass_and_formal_approval(api_engine)
         )
-        _assert_0045_rejects_nonempty_approval_downgrade(
+        _assert_0046_rejects_nonempty_content_downgrade(
             api_engine,
             request_id=request_id,
             expected_version=final_request_version,
