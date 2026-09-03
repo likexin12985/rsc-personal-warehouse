@@ -5696,13 +5696,15 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
             )
         )
         assert request is not None and line is not None
-        _, regional = _approve(
-            session,
-            actor=_principal(session, manager_user_id),
-            request=request,
-            request_version=submitted.version,
-            quantities={line.id: line.requested_qty},
-            key="pg16-approval-projection-region",
+        _, regional = _reveal_pg16_service_database_error(
+            lambda: _approve(
+                session,
+                actor=_principal(session, manager_user_id),
+                request=request,
+                request_version=submitted.version,
+                quantities={line.id: line.requested_qty},
+                key="pg16-approval-projection-region",
+            )
         )
         line_id = line.id
         approved_qty = line.requested_qty
