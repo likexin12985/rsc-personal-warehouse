@@ -1020,6 +1020,24 @@ EXPECTED_STOCKTAKE_SCOPE_TRIGGERS = {
         False,
         False,
     ),
+    "trg_stocktake_scopes_stocktake_start_sealed_0047": (
+        "stocktake_scopes",
+        "rsc_guard_stocktake_start_completion_0047",
+        "A",
+        31,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_scopes_stocktake_start_causality_0047": (
+        "stocktake_scopes",
+        "rsc_dispatch_nonopening_stocktake_start_causality_0047",
+        "A",
+        29,
+        True,
+        True,
+        True,
+    ),
 }
 EXPECTED_RECONCILIATION_TRIGGERS = {
     "trg_opening_reconciliation_consumptions_guard_0026": (

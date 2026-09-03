@@ -4200,6 +4200,8 @@ def test_stocktake_scope_trigger_guard_is_complete_exact_startup_proof() -> None
         "trg_stocktake_scopes_immutable_0010",
         "trg_stocktake_scopes_sealed_insert_0010",
         "trg_stocktake_scopes_region_owner_0025",
+        "trg_stocktake_scopes_stocktake_start_sealed_0047",
+        "trg_stocktake_scopes_stocktake_start_causality_0047",
     }
     assert EXPECTED_STOCKTAKE_SCOPE_TRIGGERS[
         "trg_stocktake_scopes_region_owner_0025"
@@ -4211,6 +4213,28 @@ def test_stocktake_scope_trigger_guard_is_complete_exact_startup_proof() -> None
         False,
         False,
         False,
+    )
+    assert EXPECTED_STOCKTAKE_SCOPE_TRIGGERS[
+        "trg_stocktake_scopes_stocktake_start_sealed_0047"
+    ] == (
+        "stocktake_scopes",
+        "rsc_guard_stocktake_start_completion_0047",
+        "A",
+        31,
+        False,
+        False,
+        False,
+    )
+    assert EXPECTED_STOCKTAKE_SCOPE_TRIGGERS[
+        "trg_stocktake_scopes_stocktake_start_causality_0047"
+    ] == (
+        "stocktake_scopes",
+        "rsc_dispatch_nonopening_stocktake_start_causality_0047",
+        "A",
+        29,
+        True,
+        True,
+        True,
     )
 
 
