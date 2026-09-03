@@ -14,6 +14,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -38,7 +39,8 @@ RLS_REVISION = "20260902_0044"
 APPROVAL_REVISION = "20260903_0045"
 CONTENT_CAUSALITY_REVISION = "20260903_0046"
 STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION = "20260903_0048"
-HEAD_REVISION = STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION
+STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION = "20260903_0049"
+HEAD_REVISION = STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION
 RLS_BINDING_TABLE = "oam_sync_scope_bindings"
 RLS_READY_FUNCTION = "public.rsc_oam_runtime_binding_ready_0044()"
 EDGE_RECEIVER_ROLE = "edge_inbox"
@@ -122,6 +124,16 @@ STOCKTAKE_SCOPE_GUARD_TRIGGER_0048 = (
 )
 STOCKTAKE_SCOPE_GUARD_BODY_SHA256_0048 = (
     "904a443c2c5930356af0f15f444f29ec6b6ce61f32294e4b2e3b40dd3a0e4e8e"
+)
+STOCKTAKE_RECOUNT_GUARD_SECURITY_MIGRATION_0049 = (
+    CLOUD_ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0049_stocktake_recount_guard_security.py"
+)
+STOCKTAKE_RECOUNT_ALIAS_TRIGGER_0049 = (
+    "trg_pg16_unapproved_recount_guard_alias_0049"
 )
 MATERIAL_REQUEST_NEUTRAL_AXES = {
     "allocation_status": "not_allocated",
@@ -4188,6 +4200,373 @@ def _assert_0047_start_catalog(*, installed: bool) -> None:
     assert table_acl == (True, True, False, False, False)
 
 
+def _load_stocktake_recount_guard_security_migration_0049() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_pg16_gate_migration_0049_recount_guard_security_manifest",
+        STOCKTAKE_RECOUNT_GUARD_SECURITY_MIGRATION_0049,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _0049_function_coordinate(signature: str) -> tuple[str, str, int]:
+    assert signature.startswith("public.") and signature.endswith(")")
+    function_name, argument_types = signature[len("public.") : -1].split(
+        "(", 1
+    )
+    database_argument_types = argument_types.replace(
+        "timestamptz", "timestamp with time zone"
+    )
+    argument_count = 0 if not argument_types else argument_types.count(",") + 1
+    return function_name, database_argument_types, argument_count
+
+
+def _assert_0049_recount_guard_catalog(
+    *,
+    callers_security_definer: bool,
+    expected_revision: str,
+) -> None:
+    migration = _load_stocktake_recount_guard_security_migration_0049()
+    assert migration.revision == STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION
+    assert migration.down_revision == STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION
+    assert migration.PREVIOUS_SCHEMA_REVISION == migration.down_revision
+    assert len(migration.CALLER_SIGNATURES) == 9
+    assert len(migration.INVOKER_SIGNATURES) == 4
+    assert len(migration.ALL_FUNCTION_SIGNATURES) == 13
+    assert set(migration.CALLER_SIGNATURES).isdisjoint(
+        migration.INVOKER_SIGNATURES
+    )
+    assert set(migration.ALL_FUNCTION_SIGNATURES) == (
+        set(migration.CALLER_SIGNATURES)
+        | set(migration.INVOKER_SIGNATURES)
+    )
+    assert {
+        row[0] for row in migration.FUNCTION_CATALOG
+    } == set(migration.ALL_FUNCTION_SIGNATURES) == set(
+        migration.EXPECTED_FUNCTION_BODY_SHA256
+    )
+    assert len(migration.TRIGGER_CATALOG) == 15
+    assert {
+        row[2] for row in migration.TRIGGER_CATALOG
+    } == set(migration.TRIGGER_FUNCTION_SIGNATURES)
+
+    function_names = [row[1] for row in migration.FUNCTION_CATALOG]
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT schema_row.nspname, function_row.proname, "
+                "pg_catalog.oidvectortypes(function_row.proargtypes), "
+                "pg_catalog.pg_get_function_result(function_row.oid), "
+                "function_row.prokind, function_row.pronargs, "
+                "function_row.proretset, function_row.proargmodes, "
+                "function_row.pronargdefaults, "
+                "function_row.proargdefaults IS NULL, "
+                "function_row.provariadic, function_row.provolatile, "
+                "function_row.proisstrict, function_row.proleakproof, "
+                "function_row.proparallel, function_row.prosecdef, "
+                "language_row.lanname, owner.rolname, "
+                "function_row.proconfig, "
+                "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+                "function_row.prosrc, 'UTF8')), 'hex'), "
+                "pg_catalog.has_function_privilege("
+                "'star_oam_api', function_row.oid, 'EXECUTE'), "
+                "pg_catalog.has_function_privilege("
+                "'star_oam_backup', function_row.oid, 'EXECUTE'), "
+                "pg_catalog.has_function_privilege("
+                "'star_oam_projector', function_row.oid, 'EXECUTE'), "
+                "pg_catalog.has_function_privilege("
+                "'star_oam_edge', function_row.oid, 'EXECUTE'), "
+                "pg_catalog.has_function_privilege("
+                "%s, function_row.oid, 'EXECUTE'), "
+                "EXISTS (SELECT 1 FROM pg_catalog.aclexplode(COALESCE("
+                "function_row.proacl, pg_catalog.acldefault("
+                "'f', function_row.proowner))) AS function_acl "
+                "WHERE function_acl.grantee = 0 "
+                "AND function_acl.privilege_type = 'EXECUTE'), "
+                "(SELECT pg_catalog.count(*) FROM pg_catalog.aclexplode("
+                "COALESCE(function_row.proacl, pg_catalog.acldefault("
+                "'f', function_row.proowner)))), "
+                "(SELECT pg_catalog.count(*) FROM pg_catalog.aclexplode("
+                "COALESCE(function_row.proacl, pg_catalog.acldefault("
+                "'f', function_row.proowner))) AS function_acl "
+                "WHERE function_acl.grantee = function_row.proowner "
+                "AND function_acl.grantor = function_row.proowner "
+                "AND function_acl.privilege_type = 'EXECUTE' "
+                "AND NOT function_acl.is_grantable), "
+                "(SELECT pg_catalog.count(*) FROM pg_catalog.aclexplode("
+                "COALESCE(function_row.proacl, pg_catalog.acldefault("
+                "'f', function_row.proowner))) AS function_acl "
+                "WHERE function_acl.grantee <> function_row.proowner "
+                "OR function_acl.grantor <> function_row.proowner "
+                "OR function_acl.privilege_type <> 'EXECUTE' "
+                "OR function_acl.is_grantable) "
+                "FROM pg_catalog.pg_proc AS function_row "
+                "JOIN pg_catalog.pg_namespace AS schema_row "
+                "ON schema_row.oid = function_row.pronamespace "
+                "JOIN pg_catalog.pg_language AS language_row "
+                "ON language_row.oid = function_row.prolang "
+                "JOIN pg_catalog.pg_roles AS owner "
+                "ON owner.oid = function_row.proowner "
+                "WHERE schema_row.nspname = 'public' "
+                "AND function_row.proname = ANY(%s) "
+                "ORDER BY function_row.proname, "
+                "pg_catalog.oidvectortypes(function_row.proargtypes)",
+                (EDGE_RECEIVER_ROLE, function_names),
+            )
+            function_rows = cursor.fetchall()
+            cursor.execute(
+                "SELECT relation_schema.nspname, relation.relname, "
+                "trigger_row.tgname, function_schema.nspname, "
+                "function_row.proname, "
+                "pg_catalog.oidvectortypes(function_row.proargtypes), "
+                "trigger_row.tgenabled, trigger_row.tgtype, "
+                "trigger_row.tgconstraint <> 0, "
+                "trigger_row.tgdeferrable, trigger_row.tginitdeferred, "
+                "trigger_row.tgqual IS NULL, trigger_row.tgnargs, "
+                "trigger_row.tgattr::text, "
+                "pg_catalog.pg_get_triggerdef(trigger_row.oid, true) "
+                "FROM pg_catalog.pg_trigger AS trigger_row "
+                "JOIN pg_catalog.pg_class AS relation "
+                "ON relation.oid = trigger_row.tgrelid "
+                "JOIN pg_catalog.pg_namespace AS relation_schema "
+                "ON relation_schema.oid = relation.relnamespace "
+                "JOIN pg_catalog.pg_proc AS function_row "
+                "ON function_row.oid = trigger_row.tgfoid "
+                "JOIN pg_catalog.pg_namespace AS function_schema "
+                "ON function_schema.oid = function_row.pronamespace "
+                "WHERE NOT trigger_row.tgisinternal "
+                "AND relation_schema.nspname = 'public' "
+                "AND function_schema.nspname = 'public' "
+                "AND function_row.proname = ANY(%s) "
+                "ORDER BY relation.relname, trigger_row.tgname",
+                (function_names,),
+            )
+            trigger_rows = cursor.fetchall()
+            cursor.execute(
+                "SELECT function_row.prosrc "
+                "FROM pg_catalog.pg_proc AS function_row "
+                "WHERE function_row.oid = pg_catalog.to_regprocedure(%s)",
+                (RLS_READY_FUNCTION,),
+            )
+            readiness_row = cursor.fetchone()
+
+    expected_function_rows = []
+    for (
+        signature,
+        function_name,
+        return_type,
+        language,
+        volatility,
+        legacy_search_path,
+    ) in migration.FUNCTION_CATALOG:
+        coordinate_name, argument_types, argument_count = (
+            _0049_function_coordinate(signature)
+        )
+        assert coordinate_name == function_name
+        expected_search_path = legacy_search_path
+        if callers_security_definer and signature in migration.CALLER_SIGNATURES:
+            expected_search_path = migration.FIXED_SEARCH_PATH
+        expected_function_rows.append(
+            (
+                "public",
+                function_name,
+                argument_types,
+                return_type,
+                "f",
+                argument_count,
+                False,
+                None,
+                0,
+                True,
+                0,
+                volatility,
+                False,
+                False,
+                "u",
+                callers_security_definer
+                and signature in migration.CALLER_SIGNATURES,
+                language,
+                "star_oam_migrator",
+                (
+                    None
+                    if expected_search_path is None
+                    else [expected_search_path]
+                ),
+                migration.EXPECTED_FUNCTION_BODY_SHA256[signature],
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                1,
+                1,
+                0,
+            )
+        )
+    assert function_rows == sorted(
+        expected_function_rows,
+        key=lambda row: (row[1], row[2]),
+    )
+
+    function_coordinates = {
+        signature: _0049_function_coordinate(signature)[:2]
+        for signature in migration.ALL_FUNCTION_SIGNATURES
+    }
+    expected_trigger_rows = []
+    for (
+        table_name,
+        trigger_name,
+        function_signature,
+        trigger_type,
+        is_constraint,
+        is_deferrable,
+        is_initially_deferred,
+    ) in migration.TRIGGER_CATALOG:
+        function_name, function_arguments = function_coordinates[
+            function_signature
+        ]
+        expected_trigger_rows.append(
+            (
+                "public",
+                table_name,
+                trigger_name,
+                "public",
+                function_name,
+                function_arguments,
+                "A",
+                trigger_type,
+                is_constraint,
+                is_deferrable,
+                is_initially_deferred,
+                True,
+                0,
+                "",
+            )
+        )
+    expected_trigger_rows.sort(key=lambda row: (row[1], row[2]))
+    assert [row[:14] for row in trigger_rows] == expected_trigger_rows
+    for row in trigger_rows:
+        trigger_definition = " ".join(row[14].split())
+        trigger_type = row[7]
+        assert f" TRIGGER {row[2]} " in trigger_definition
+        assert (
+            f" ON {row[1]} " in trigger_definition
+            or f" ON public.{row[1]} " in trigger_definition
+        )
+        assert trigger_definition.endswith(f"{row[4]}()")
+        assert " WHEN " not in trigger_definition
+        if trigger_type == 7:
+            assert " BEFORE INSERT ON " in trigger_definition
+        elif trigger_type == 19:
+            assert " BEFORE UPDATE ON " in trigger_definition
+        elif trigger_type == 23:
+            assert " BEFORE INSERT OR UPDATE ON " in trigger_definition
+        else:
+            assert trigger_type == 29
+            assert trigger_definition.startswith("CREATE CONSTRAINT TRIGGER ")
+            assert " AFTER INSERT OR DELETE OR UPDATE ON " in trigger_definition
+            assert " DEFERRABLE INITIALLY DEFERRED " in trigger_definition
+
+    assert readiness_row is not None
+    assert (
+        f"pg_catalog.min(version_num) = '{expected_revision}'"
+        in readiness_row[0]
+    )
+
+
+def _assert_0049_api_direct_execute_denied() -> None:
+    migration = _load_stocktake_recount_guard_security_migration_0049()
+    with psycopg.connect(
+        **_connection_parameters(
+            role="star_oam_api",
+            password=_role_password("star_oam_api"),
+        ),
+        autocommit=True,
+    ) as connection:
+        with connection.cursor() as cursor:
+            for signature in migration.ALL_FUNCTION_SIGNATURES:
+                function_name, argument_types, _ = _0049_function_coordinate(
+                    signature
+                )
+                arguments = ", ".join(
+                    f"NULL::{argument_type.strip()}"
+                    for argument_type in argument_types.split(",")
+                    if argument_type.strip()
+                )
+                with pytest.raises(psycopg.Error) as error:
+                    cursor.execute(
+                        f"SELECT public.{function_name}({arguments})"
+                    )
+                assert error.value.sqlstate == "42501"
+
+
+def _set_0049_extra_trigger_alias(*, present: bool) -> None:
+    parameters = _connection_parameters(
+        role="star_oam_migrator",
+        password=_role_password("star_oam_migrator"),
+    )
+    with psycopg.connect(**parameters, autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            if present:
+                cursor.execute(
+                    f"CREATE CONSTRAINT TRIGGER "
+                    f"{STOCKTAKE_RECOUNT_ALIAS_TRIGGER_0049} "
+                    "AFTER INSERT OR UPDATE OR DELETE ON "
+                    "public.stocktake_review_items "
+                    "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW "
+                    "EXECUTE FUNCTION public."
+                    "rsc_validate_stocktake_count_line_insert_0021()"
+                )
+                cursor.execute(
+                    "ALTER TABLE public.stocktake_review_items "
+                    "ENABLE ALWAYS TRIGGER "
+                    f"{STOCKTAKE_RECOUNT_ALIAS_TRIGGER_0049}"
+                )
+            else:
+                cursor.execute(
+                    "DROP TRIGGER IF EXISTS "
+                    f"{STOCKTAKE_RECOUNT_ALIAS_TRIGGER_0049} ON "
+                    "public.stocktake_review_items"
+                )
+
+
+def _0049_extra_trigger_alias_exists() -> bool:
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT trigger_row.tgenabled "
+                "FROM pg_catalog.pg_trigger AS trigger_row "
+                "JOIN pg_catalog.pg_class AS relation "
+                "ON relation.oid = trigger_row.tgrelid "
+                "JOIN pg_catalog.pg_namespace AS schema_row "
+                "ON schema_row.oid = relation.relnamespace "
+                "WHERE schema_row.nspname = 'public' "
+                "AND relation.relname = 'stocktake_review_items' "
+                "AND trigger_row.tgname = %s",
+                (STOCKTAKE_RECOUNT_ALIAS_TRIGGER_0049,),
+            )
+            rows = cursor.fetchall()
+    assert rows in ([], [("A",)])
+    return rows == [("A",)]
+
+
+def _assert_0049_startup_rejects_extra_trigger_alias(api_engine) -> None:
+    from app.database_security import DatabaseSecurityBoundaryError
+
+    _set_0049_extra_trigger_alias(present=True)
+    assert _0049_extra_trigger_alias_exists() is True
+    try:
+        with pytest.raises(DatabaseSecurityBoundaryError):
+            _validate_runtime_security(api_engine)
+    finally:
+        _set_0049_extra_trigger_alias(present=False)
+    assert _0049_extra_trigger_alias_exists() is False
+    _validate_runtime_security(api_engine)
+
+
 def _assert_0048_scope_guard_catalog(
     *,
     security_definer: bool,
@@ -4402,6 +4781,68 @@ def _assert_0048_scope_guard_master_data_stays_read_only() -> None:
         )
 
 
+def _assert_0049_empty_graph_downgrade_and_reupgrade() -> None:
+    assert _current_revision() == HEAD_REVISION
+    migration = _load_stocktake_recount_guard_security_migration_0049()
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT "
+                + ", ".join(
+                    "(SELECT pg_catalog.count(*) FROM public."
+                    f"{table_name})"
+                    for table_name in migration.TRIGGER_TABLES
+                )
+            )
+            assert cursor.fetchone() == (0,) * len(migration.TRIGGER_TABLES)
+
+    _assert_0049_recount_guard_catalog(
+        callers_security_definer=True,
+        expected_revision=HEAD_REVISION,
+    )
+    _assert_0048_scope_guard_catalog(
+        security_definer=True,
+        expected_revision=HEAD_REVISION,
+    )
+    _assert_0049_api_direct_execute_denied()
+
+    _run_alembic("downgrade", STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION)
+    assert _current_revision() == STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION
+    _assert_0049_recount_guard_catalog(
+        callers_security_definer=False,
+        expected_revision=STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION,
+    )
+    _assert_0048_scope_guard_catalog(
+        security_definer=True,
+        expected_revision=STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION,
+    )
+    _assert_0049_api_direct_execute_denied()
+
+    _set_0049_extra_trigger_alias(present=True)
+    try:
+        blocked = _run_alembic("upgrade", "head", expect_success=False)
+        output = blocked.stdout + blocked.stderr
+        assert "0049 stocktake recount caller catalog verification failed" in output
+        assert "trigger binding mismatch" in output
+        assert _current_revision() == STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION
+        assert _0049_extra_trigger_alias_exists() is True
+    finally:
+        _set_0049_extra_trigger_alias(present=False)
+    assert _0049_extra_trigger_alias_exists() is False
+
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    _assert_0049_recount_guard_catalog(
+        callers_security_definer=True,
+        expected_revision=HEAD_REVISION,
+    )
+    _assert_0048_scope_guard_catalog(
+        security_definer=True,
+        expected_revision=HEAD_REVISION,
+    )
+    _assert_0049_api_direct_execute_denied()
+
+
 def _assert_0048_empty_graph_downgrade_and_reupgrade() -> None:
     assert _current_revision() == HEAD_REVISION
     with psycopg.connect(**_admin_parameters()) as connection:
@@ -4427,6 +4868,10 @@ def _assert_0048_empty_graph_downgrade_and_reupgrade() -> None:
     assert _current_revision() == HEAD_REVISION
     _assert_0048_scope_guard_catalog(
         security_definer=True,
+        expected_revision=HEAD_REVISION,
+    )
+    _assert_0049_recount_guard_catalog(
+        callers_security_definer=True,
         expected_revision=HEAD_REVISION,
     )
 
@@ -7952,8 +8397,13 @@ def _seed_0047_stocktake_inventory(
         _start_opening_stocktake_impl,
     )
     from app.formal_services.opening_stocktake_count import (
+        OpeningPhysicalObservationInput,
         SubmitOpeningStocktakeScopeCountCommand,
         submit_opening_stocktake_scope_count,
+    )
+    from app.formal_services.opening_observation_disposition import (
+        RecordOpeningObservationDispositionCommand,
+        record_opening_observation_disposition,
     )
     from app.formal_services.opening_stocktake_finalize import (
         CloseOpeningStocktakeCommand,
@@ -7961,7 +8411,13 @@ def _seed_0047_stocktake_inventory(
         close_posted_opening_stocktake,
         post_approved_opening_stocktake,
     )
+    from app.formal_services.opening_stocktake_recount import (
+        OpenOpeningStocktakeRecountCommand,
+        OpeningStocktakeRecountScopeAssignmentInput,
+        open_opening_stocktake_recount,
+    )
     from app.formal_services.opening_stocktake_review import (
+        OpeningStocktakeReviewItemInput,
         SubmitOpeningStocktakeReviewCommand,
         submit_opening_headquarters_review,
         submit_opening_region_review,
@@ -7970,6 +8426,14 @@ def _seed_0047_stocktake_inventory(
         FormalStocktakeScope,
         FormalStocktakeTask,
         InventoryOpeningEstablishment,
+        StocktakeCountLine,
+        StocktakeCountObservation,
+        StocktakeDifference,
+        StocktakeObservationDisposition,
+        StocktakeRecountCase,
+        StocktakeRecountScopeAssignment,
+        StocktakeRound,
+        StocktakeScopeCountCompletion,
     )
 
     def current_principal(session: Session, user_id: str):
@@ -7981,6 +8445,9 @@ def _seed_0047_stocktake_inventory(
         return load_formal_principal(session, user_id, now=principal_at)
 
     opening_token = str(fixture["opening_token"])
+    pending_identifier = (
+        f"PG16-OPENING-PENDING-{opening_token[:16].upper()}"
+    )
     with Session(api_engine, expire_on_commit=False) as session:
         started = _start_opening_stocktake_impl(
             session,
@@ -8030,7 +8497,17 @@ def _seed_0047_stocktake_inventory(
                     task_id=started.task_id,
                     round_id=started.initial_round_id,
                     scope_id=scope.id,
-                    physical_observations=(),
+                    physical_observations=(
+                        OpeningPhysicalObservationInput(
+                            material_identifier_raw=pending_identifier,
+                            material_identifier_type="unknown",
+                            condition_code="new",
+                            availability_bucket="available",
+                            counted_qty=Decimal("1.000"),
+                            count_method="manual",
+                            remark="PG16 0049 待核实现场实物",
+                        ),
+                    ),
                     zero_confirmed=False,
                 ),
                 idempotency_key=f"pg16-opening-count-{opening_token}",
@@ -8040,48 +8517,310 @@ def _seed_0047_stocktake_inventory(
         assert counted.task_status == "submitted"
         assert counted.round_status == "submitted"
         assert counted.round_sealed is True
-        assert counted.has_pending_verification is False
+        assert counted.has_pending_verification is True
+        opening_scope_id = scope.id
         session.commit()
 
-    with Session(api_engine) as session:
-        regional_review = _reveal_pg16_service_database_error(
+    with Session(api_engine, expire_on_commit=False) as session:
+        observation = session.scalar(
+            select(StocktakeCountObservation).where(
+                StocktakeCountObservation.task_id == started.task_id,
+                StocktakeCountObservation.round_id
+                == started.initial_round_id,
+                StocktakeCountObservation.material_identifier_raw
+                == pending_identifier,
+            )
+        )
+        assert observation is not None
+        assert observation.verification_status == "pending_verification"
+        disposed = _reveal_pg16_service_database_error(
+            lambda: record_opening_observation_disposition(
+                session,
+                actor=current_principal(session, assignee_user_id),
+                command=RecordOpeningObservationDispositionCommand(
+                    task_id=started.task_id,
+                    round_id=started.initial_round_id,
+                    observation_id=observation.id,
+                    disposition="requires_recount",
+                    reason_code="pg16_0049_recount_required",
+                    comment="待核实现场实物必须由同一受控范围重新实盘",
+                ),
+                idempotency_key=(
+                    f"pg16-opening-disposition-{opening_token}"
+                ),
+                request_id=(
+                    f"trace-pg16-opening-disposition-{opening_token}"
+                ),
+            )
+        )
+        assert disposed.observation_id == observation.id
+        assert disposed.disposition == "requires_recount"
+        session.commit()
+
+    with Session(api_engine, expire_on_commit=False) as session:
+        initial_differences = tuple(
+            session.scalars(
+                select(StocktakeDifference)
+                .where(
+                    StocktakeDifference.task_id == started.task_id,
+                    StocktakeDifference.round_id
+                    == started.initial_round_id,
+                )
+                .order_by(StocktakeDifference.difference_no)
+            ).all()
+        )
+        assert len(initial_differences) == 1
+        assert (
+            initial_differences[0].observed_line_id,
+            initial_differences[0].difference_type,
+            initial_differences[0].reason_code,
+        ) == (
+            observation.id,
+            "excess",
+            "opening_pending_verification",
+        )
+        regional_recount = _reveal_pg16_service_database_error(
             lambda: submit_opening_region_review(
                 session,
                 actor=current_principal(session, assignee_user_id),
                 command=SubmitOpeningStocktakeReviewCommand(
                     task_id=started.task_id,
                     round_id=started.initial_round_id,
-                    decision="approve",
-                    items=(),
-                    comment="PG16 隔离门禁区域复核通过",
+                    decision="recount",
+                    items=tuple(
+                        OpeningStocktakeReviewItemInput(
+                            difference_id=row.id,
+                            decision="recount",
+                            comment="待核实观察已处置，进入同范围复盘",
+                        )
+                        for row in initial_differences
+                    ),
+                    comment="PG16 0049 隔离门禁区域要求复盘",
                 ),
-                idempotency_key=f"pg16-opening-region-{opening_token}",
-                request_id=f"trace-pg16-opening-region-{opening_token}",
+                idempotency_key=(
+                    f"pg16-opening-region-recount-{opening_token}"
+                ),
+                request_id=(
+                    f"trace-pg16-opening-region-recount-{opening_token}"
+                ),
+            )
+        )
+        assert regional_recount.resulting_task_status == "recount_required"
+        assert regional_recount.item_count == 1
+        assert regional_recount.pending_control_count == 0
+        session.commit()
+
+    with Session(api_engine, expire_on_commit=False) as session:
+        opened_recount = _reveal_pg16_service_database_error(
+            lambda: open_opening_stocktake_recount(
+                session,
+                actor=current_principal(session, assignee_user_id),
+                command=OpenOpeningStocktakeRecountCommand(
+                    task_id=started.task_id,
+                    source_round_id=started.initial_round_id,
+                    assignments=(
+                        OpeningStocktakeRecountScopeAssignmentInput(
+                            scope_id=opening_scope_id,
+                            assignee_user_id=assignee_user_id,
+                        ),
+                    ),
+                    reason="PG16 0049 隔离门禁按区域复核结论复盘",
+                ),
+                idempotency_key=f"pg16-opening-recount-{opening_token}",
+                request_id=f"trace-pg16-opening-recount-{opening_token}",
+            )
+        )
+        assert opened_recount.resulting_task_status == "counting"
+        assert opened_recount.next_round_no == 2
+        assert opened_recount.scope_count == 1
+        session.commit()
+
+    with Session(api_engine, expire_on_commit=False) as session:
+        recount_counted = _reveal_pg16_service_database_error(
+            lambda: submit_opening_stocktake_scope_count(
+                session,
+                actor=current_principal(session, assignee_user_id),
+                command=SubmitOpeningStocktakeScopeCountCommand(
+                    task_id=started.task_id,
+                    round_id=opened_recount.next_round_id,
+                    scope_id=opening_scope_id,
+                    physical_observations=(),
+                    zero_confirmed=False,
+                ),
+                idempotency_key=(
+                    f"pg16-opening-recount-count-{opening_token}"
+                ),
+                request_id=(
+                    f"trace-pg16-opening-recount-count-{opening_token}"
+                ),
+            )
+        )
+        assert recount_counted.task_status == "submitted"
+        assert recount_counted.round_status == "submitted"
+        assert recount_counted.round_sealed is True
+        assert recount_counted.has_pending_verification is False
+        session.commit()
+
+    # Every row below was written by a formal service through star_oam_api and
+    # survived its own COMMIT.  Together they execute all nine trigger callers
+    # hardened by 0049: the 0016 disposition caller; the 0018 assignment
+    # caller; the three 0021 count callers; and the 0032 case, task, round and
+    # deferred recount-graph callers.
+    with Session(api_engine, expire_on_commit=False) as session:
+        opening_task = session.get(FormalStocktakeTask, started.task_id)
+        recount_case = session.get(
+            StocktakeRecountCase,
+            opened_recount.recount_case_id,
+        )
+        recount_assignment = session.scalar(
+            select(StocktakeRecountScopeAssignment).where(
+                StocktakeRecountScopeAssignment.recount_case_id
+                == opened_recount.recount_case_id
+            )
+        )
+        rounds = tuple(
+            session.scalars(
+                select(StocktakeRound)
+                .where(StocktakeRound.task_id == started.task_id)
+                .order_by(StocktakeRound.round_no)
+            ).all()
+        )
+        assert opening_task is not None
+        assert (
+            opening_task.status,
+            opening_task.current_round_no,
+        ) == ("submitted", 2)
+        assert recount_case is not None
+        assert (
+            recount_case.task_id,
+            recount_case.source_round_id,
+            recount_case.next_round_no,
+            recount_case.scope_count,
+        ) == (started.task_id, started.initial_round_id, 2, 1)
+        assert recount_assignment is not None
+        assert (
+            recount_assignment.task_id,
+            recount_assignment.source_round_id,
+            recount_assignment.scope_id,
+            recount_assignment.assignee_user_id,
+        ) == (
+            started.task_id,
+            started.initial_round_id,
+            opening_scope_id,
+            assignee_user_id,
+        )
+        assert tuple(
+            (row.id, row.round_no, row.round_type, row.status)
+            for row in rounds
+        ) == (
+            (started.initial_round_id, 1, "initial", "submitted"),
+            (
+                opened_recount.next_round_id,
+                2,
+                "recount",
+                "submitted",
+            ),
+        )
+        assert session.scalar(
+            select(func.count()).select_from(StocktakeCountLine).where(
+                StocktakeCountLine.task_id == started.task_id
+            )
+        ) == 2
+        assert session.scalar(
+            select(func.count())
+            .select_from(StocktakeCountObservation)
+            .where(StocktakeCountObservation.task_id == started.task_id)
+        ) == 1
+        assert session.scalar(
+            select(func.count())
+            .select_from(StocktakeObservationDisposition)
+            .where(StocktakeObservationDisposition.task_id == started.task_id)
+        ) == 1
+        assert session.scalar(
+            select(func.count())
+            .select_from(StocktakeScopeCountCompletion)
+            .where(StocktakeScopeCountCompletion.task_id == started.task_id)
+        ) == 2
+        recount_differences = tuple(
+            session.scalars(
+                select(StocktakeDifference)
+                .where(
+                    StocktakeDifference.task_id == started.task_id,
+                    StocktakeDifference.round_id
+                    == opened_recount.next_round_id,
+                )
+                .order_by(StocktakeDifference.difference_no)
+            ).all()
+        )
+        regional_review = _reveal_pg16_service_database_error(
+            lambda: submit_opening_region_review(
+                session,
+                actor=current_principal(session, assignee_user_id),
+                command=SubmitOpeningStocktakeReviewCommand(
+                    task_id=started.task_id,
+                    round_id=opened_recount.next_round_id,
+                    decision="approve",
+                    items=tuple(
+                        OpeningStocktakeReviewItemInput(
+                            difference_id=row.id,
+                            decision="accept_for_posting",
+                        )
+                        for row in recount_differences
+                    ),
+                    comment="PG16 0049 隔离门禁复盘区域复核通过",
+                ),
+                idempotency_key=(
+                    f"pg16-opening-recount-region-{opening_token}"
+                ),
+                request_id=(
+                    f"trace-pg16-opening-recount-region-{opening_token}"
+                ),
             )
         )
         assert regional_review.resulting_task_status == "hq_review"
-        assert regional_review.item_count == 0
+        assert regional_review.item_count == len(recount_differences)
         assert regional_review.pending_control_count == 0
         session.commit()
 
     with Session(api_engine) as session:
+        recount_differences = tuple(
+            session.scalars(
+                select(StocktakeDifference)
+                .where(
+                    StocktakeDifference.task_id == started.task_id,
+                    StocktakeDifference.round_id
+                    == opened_recount.next_round_id,
+                )
+                .order_by(StocktakeDifference.difference_no)
+            ).all()
+        )
         headquarters_review = _reveal_pg16_service_database_error(
             lambda: submit_opening_headquarters_review(
                 session,
                 actor=current_principal(session, actor_user_id),
                 command=SubmitOpeningStocktakeReviewCommand(
                     task_id=started.task_id,
-                    round_id=started.initial_round_id,
+                    round_id=opened_recount.next_round_id,
                     decision="approve",
-                    items=(),
-                    comment="PG16 隔离门禁总部复核通过",
+                    items=tuple(
+                        OpeningStocktakeReviewItemInput(
+                            difference_id=row.id,
+                            decision="accept_for_posting",
+                        )
+                        for row in recount_differences
+                    ),
+                    comment="PG16 0049 隔离门禁复盘总部复核通过",
                 ),
-                idempotency_key=f"pg16-opening-hq-{opening_token}",
-                request_id=f"trace-pg16-opening-hq-{opening_token}",
+                idempotency_key=(
+                    f"pg16-opening-recount-hq-{opening_token}"
+                ),
+                request_id=(
+                    f"trace-pg16-opening-recount-hq-{opening_token}"
+                ),
             )
         )
         assert headquarters_review.resulting_task_status == "approved"
-        assert headquarters_review.item_count == 0
+        assert headquarters_review.item_count == len(recount_differences)
         assert headquarters_review.pending_control_count == 0
         approved_task = session.get(FormalStocktakeTask, started.task_id)
         assert approved_task is not None and approved_task.status == "approved"
@@ -8777,6 +9516,10 @@ def _assert_0047_rejects_nonempty_start_downgrade(
         security_definer=True,
         expected_revision=HEAD_REVISION,
     )
+    _assert_0049_recount_guard_catalog(
+        callers_security_definer=True,
+        expected_revision=HEAD_REVISION,
+    )
     with Session(api_engine) as session:
         task = session.get(FormalStocktakeTask, task_id)
         assert task is not None and (task.status, task.version) == ("counting", 1)
@@ -9031,6 +9774,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
+    _assert_0049_empty_graph_downgrade_and_reupgrade()
     _assert_0048_empty_graph_downgrade_and_reupgrade()
     _assert_0047_empty_graph_downgrade_and_reupgrade()
     _assert_0046_empty_graph_downgrade_and_reupgrade()
@@ -9149,6 +9893,12 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     )
     try:
         _validate_runtime_security(api_engine)
+        _assert_0049_recount_guard_catalog(
+            callers_security_definer=True,
+            expected_revision=HEAD_REVISION,
+        )
+        _assert_0049_api_direct_execute_denied()
+        _assert_0049_startup_rejects_extra_trigger_alias(api_engine)
         _assert_0048_scope_guard_catalog(
             security_definer=True,
             expected_revision=HEAD_REVISION,
@@ -9208,11 +9958,19 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         # session.  Its scope insert is the positive 0048 regression: the
         # unchanged 0025 trigger may read-lock master data only through its
         # migration-owned execution context.
+        _assert_0049_recount_guard_catalog(
+            callers_security_definer=True,
+            expected_revision=HEAD_REVISION,
+        )
         stocktake_task_id = _assert_0047_real_api_stocktake_start(
             api_engine,
             actor_user_id=admin_user_id,
             assignee_user_id=manager_user_id,
             material_request_id=request_id,
+        )
+        _assert_0049_recount_guard_catalog(
+            callers_security_definer=True,
+            expected_revision=HEAD_REVISION,
         )
         _assert_0047_rejects_nonempty_start_downgrade(
             api_engine,

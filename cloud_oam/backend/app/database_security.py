@@ -913,6 +913,42 @@ EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS = {
     ),
 }
 EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS = {
+    "trg_stocktake_observation_dispositions_validate_0016": (
+        "stocktake_observation_dispositions",
+        "rsc_validate_stocktake_observation_disposition_0016",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_nonopening_review_graph_task_0032": (
+        "stocktake_tasks",
+        "rsc_require_nonopening_stocktake_review_graph_0032",
+        "A",
+        29,
+        True,
+        True,
+        True,
+    ),
+    "trg_nonopening_review_graph_review_0032": (
+        "stocktake_reviews",
+        "rsc_require_nonopening_stocktake_review_graph_0032",
+        "A",
+        29,
+        True,
+        True,
+        True,
+    ),
+    "trg_nonopening_review_graph_item_0032": (
+        "stocktake_review_items",
+        "rsc_require_nonopening_stocktake_review_graph_0032",
+        "A",
+        29,
+        True,
+        True,
+        True,
+    ),
     "trg_stocktake_recount_cases_review_path_0032": (
         "stocktake_recount_cases",
         "rsc_validate_stocktake_recount_case_0032",
@@ -2731,7 +2767,94 @@ RUNTIME_FUNCTION_BODY_SHA256 = {
         "d889b397912e98e1b9c2ec1de03ada750f42df01803c87239b9d04a624221982",
 }
 FORMAL_FILE_INTERNAL_FUNCTIONS = {
+    (
+        "rsc_stocktake_actor_assignment_valid_0011",
+        "text, uuid, uuid, bigint, timestamp with time zone, text, text, text",
+    ): (
+        "s",
+        False,
+        "sql",
+        (),
+    ),
+    ("rsc_validate_stocktake_observation_disposition_0016", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_validate_stocktake_recount_scope_assignment_0018", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    (
+        "rsc_stocktake_round_assignment_valid_0021",
+        (
+            "uuid, uuid, uuid, text, uuid, uuid, bigint, text, text, text, "
+            "timestamp with time zone, boolean"
+        ),
+    ): (
+        "s",
+        False,
+        "sql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_validate_stocktake_count_line_insert_0021", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_validate_stocktake_observation_insert_0021", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_validate_stocktake_scope_completion_insert_0021", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
     ("rsc_validate_stocktake_scope_region_owner_0025", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_stocktake_recount_scope_graph_valid_0032", "uuid"): (
+        "s",
+        False,
+        "sql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_require_nonopening_stocktake_review_graph_0032", ""): (
+        "v",
+        False,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_validate_stocktake_recount_case_0032", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_validate_stocktake_recount_task_advance_0032", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_validate_stocktake_recount_round_0032", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_require_stocktake_recount_graph_0032", ""): (
         "v",
         True,
         "plpgsql",
@@ -2843,7 +2966,25 @@ FORMAL_FILE_INTERNAL_FUNCTIONS = {
 FORMAL_FILE_INTERNAL_FUNCTION_SHAPES = {
     coordinate: (
         "f",
-        "void"
+        "boolean"
+        if coordinate in {
+            (
+                "rsc_stocktake_actor_assignment_valid_0011",
+                (
+                    "text, uuid, uuid, bigint, timestamp with time zone, "
+                    "text, text, text"
+                ),
+            ),
+            (
+                "rsc_stocktake_round_assignment_valid_0021",
+                (
+                    "uuid, uuid, uuid, text, uuid, uuid, bigint, text, text, "
+                    "text, timestamp with time zone, boolean"
+                ),
+            ),
+            ("rsc_stocktake_recount_scope_graph_valid_0032", "uuid"),
+        }
+        else "void"
         if coordinate in {
             ("rsc_validate_material_request_cancellation_0037", "uuid"),
             (
@@ -2857,8 +2998,41 @@ FORMAL_FILE_INTERNAL_FUNCTION_SHAPES = {
     for coordinate in FORMAL_FILE_INTERNAL_FUNCTIONS
 }
 FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
+    (
+        "rsc_stocktake_actor_assignment_valid_0011",
+        "text, uuid, uuid, bigint, timestamp with time zone, text, text, text",
+    ): "09720a289e550a66f2ea400fdb0541d1646916d661538af0d2706f9fe5c326d1",
+    ("rsc_validate_stocktake_observation_disposition_0016", ""):
+        "94cb47e8e75bd3eac0b448334992299c2cd3cd96f33798ab46e14e2dfe1f9c97",
+    ("rsc_validate_stocktake_recount_scope_assignment_0018", ""):
+        "2c4cd18b9b5dce1e4b0e0a9e2823dff1e8e16c08ddbcc77ba6f8d0c20e7c85d9",
+    (
+        "rsc_stocktake_round_assignment_valid_0021",
+        (
+            "uuid, uuid, uuid, text, uuid, uuid, bigint, text, text, text, "
+            "timestamp with time zone, boolean"
+        ),
+    ): "87618c74ed03d25dc0d98d6a0490cec54a5f3f8f836c4ccc7b5e08593852e717",
+    ("rsc_validate_stocktake_count_line_insert_0021", ""):
+        "319b1804e6fa6af3c7d3510524755d4b4d74b556a90640f6adfa6efa17f19693",
+    ("rsc_validate_stocktake_observation_insert_0021", ""):
+        "082b8afe54b38790b15d72b3f946fbf7c943b2780cd5ba3f43a9dee34db337f3",
+    ("rsc_validate_stocktake_scope_completion_insert_0021", ""):
+        "7470b118731f1fd6e53269457d511f73308eab704048109b32bd039f8df0824f",
     ("rsc_validate_stocktake_scope_region_owner_0025", ""):
         "904a443c2c5930356af0f15f444f29ec6b6ce61f32294e4b2e3b40dd3a0e4e8e",
+    ("rsc_stocktake_recount_scope_graph_valid_0032", "uuid"):
+        "a1308f871cb0c7ba6fb0584dc28520b0ea4361d956d3c3d30a758f8ffafa1619",
+    ("rsc_require_nonopening_stocktake_review_graph_0032", ""):
+        "2eaaa6b02e7a1abf4403ee3cacb12ccabb11d36f7687ca2821e5e93134a76a1a",
+    ("rsc_validate_stocktake_recount_case_0032", ""):
+        "65db070bee60e91203b32a6afe56092992ae7d1984ec92d6490faabc6930e211",
+    ("rsc_validate_stocktake_recount_task_advance_0032", ""):
+        "0d6b43d9069eb641a89197c37ae4d1f806eb401b4d9d3719d10843dbb50d4b5f",
+    ("rsc_validate_stocktake_recount_round_0032", ""):
+        "271d01c965cc4cc939d183afdcae7f52de4c22f193d9317b2938408e3c8b3904",
+    ("rsc_require_stocktake_recount_graph_0032", ""):
+        "294e748d5020b37057851154ecfed2ee66a85fde62bc9d0e4f8cae08aa7be1a2",
     ("rsc_guard_formal_file_object_0036", ""):
         "b40aec00c7dda886b556b309adfff1d660c03280295a559a5fc452bb106f4b4d",
     ("rsc_guard_formal_file_binding_0036", ""):
@@ -3163,6 +3337,8 @@ SELECT
     oidvectortypes(function_row.proargtypes) AS argument_types,
     function_row.prokind AS function_kind,
     format_type(function_row.prorettype, NULL) AS result_type,
+    function_row.proretset AS returns_set,
+    function_row.provariadic AS variadic_type,
     function_row.proargmodes AS argument_modes,
     function_row.pronargdefaults AS argument_default_count,
     function_row.proisstrict AS is_strict,
@@ -3497,6 +3673,21 @@ _STOCKTAKE_RECOUNT_TRIGGER_NAME_LITERALS = ",\n      ".join(
     f"'{name}'"
     for name in sorted(EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS)
 )
+_STOCKTAKE_RECOUNT_TRIGGER_FUNCTION_NAME_LITERALS = ",\n      ".join(
+    f"'{name}'"
+    for name in sorted(
+        {
+            definition[1]
+            for definition in EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS.values()
+        }
+        | {
+            "rsc_validate_stocktake_recount_scope_assignment_0018",
+            "rsc_validate_stocktake_count_line_insert_0021",
+            "rsc_validate_stocktake_observation_insert_0021",
+            "rsc_validate_stocktake_scope_completion_insert_0021",
+        }
+    )
+)
 _STOCKTAKE_SENSITIVE_TRIGGER_SQL = text(
     """
 SELECT
@@ -3556,13 +3747,22 @@ JOIN pg_proc AS function_row
 JOIN pg_namespace AS function_schema
   ON function_schema.oid = function_row.pronamespace
 WHERE table_schema.nspname = 'public'
-  AND table_row.relname IN (
-      'stocktake_tasks',
-      'stocktake_rounds',
-      'stocktake_recount_cases'
-  )
-  AND trigger_row.tgname IN (
-      {_STOCKTAKE_RECOUNT_TRIGGER_NAME_LITERALS}
+  AND (
+      trigger_row.tgname IN (
+          {_STOCKTAKE_RECOUNT_TRIGGER_NAME_LITERALS}
+      )
+      OR (
+          function_row.proname IN (
+              {_STOCKTAKE_RECOUNT_TRIGGER_FUNCTION_NAME_LITERALS}
+          )
+          AND table_row.relname NOT IN (
+              'stock_locations',
+              'stocktake_count_lines',
+              'stocktake_count_observations',
+              'stocktake_scope_count_completions',
+              'stocktake_recount_scope_assignments'
+          )
+      )
   )
   AND NOT trigger_row.tgisinternal
 ORDER BY trigger_row.tgname
@@ -5499,6 +5699,10 @@ def _assert_runtime_function_acl(
             failures.append(f"{label}.kind")
         if row.get("result_type") != result_type:
             failures.append(f"{label}.result_type")
+        if row.get("returns_set") is not False:
+            failures.append(f"{label}.returns_set")
+        if row.get("variadic_type") != 0:
+            failures.append(f"{label}.variadic_type")
         if row.get("argument_modes") is not None:
             failures.append(f"{label}.argument_modes")
         if row.get("argument_default_count") != 0:
@@ -5528,14 +5732,15 @@ def _assert_runtime_function_acl(
             expected_audience = expected_oam_sync is not None
             if row.get(audience) is not expected_audience:
                 failures.append(f"{label}.{audience}")
+        expected_parallel = "u"
         if expected_oam_sync is not None:
             expected_parallel = OAM_SYNC_FUNCTION_MANIFEST[
                 f"{coordinate[0]}({coordinate[1].replace(', ', ',')})"
             ][5]
-            if row.get("parallel_safety") != expected_parallel:
-                failures.append(f"{label}.parallel_safety")
-            if row.get("is_leakproof") is not False:
-                failures.append(f"{label}.leakproof")
+        if row.get("parallel_safety") != expected_parallel:
+            failures.append(f"{label}.parallel_safety")
+        if row.get("is_leakproof") is not False:
+            failures.append(f"{label}.leakproof")
     if (
         allowed_seen != set(RUNTIME_EXECUTE_FUNCTIONS)
         or set(RUNTIME_FUNCTION_SHAPES) != set(RUNTIME_EXECUTE_FUNCTIONS)

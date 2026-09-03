@@ -46,6 +46,7 @@ from app.database_security import (
     EXPECTED_STOCKTAKE_RECOUNT_COLUMNS,
     EXPECTED_STOCKTAKE_RECOUNT_CONSTRAINTS,
     EXPECTED_STOCKTAKE_RECOUNT_INDEXES,
+    EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS,
     EXPECTED_STOCKTAKE_RECOUNT_TRIGGERS,
     EXPECTED_STOCKTAKE_SCOPE_TRIGGERS,
     EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS,
@@ -140,6 +141,27 @@ LOCK_GRAPH_MIGRATION_0028 = (
     / "versions"
     / "20260831_0028_opening_terminal_reference_union_lock.py"
 )
+STOCKTAKE_COUNT_OBSERVATIONS_MIGRATION_0011 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260830_0011_opening_count_observations.py"
+)
+OPENING_OBSERVATION_DISPOSITIONS_MIGRATION_0016 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260831_0016_opening_observation_dispositions.py"
+)
+STOCKTAKE_RECOUNT_CAUSALITY_MIGRATION_0018 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260831_0018_stocktake_recount_causality.py"
+)
 NONOPENING_STOCKTAKE_REVIEW_MIGRATION_0032 = (
     ROOT
     / "backend"
@@ -230,6 +252,13 @@ STOCKTAKE_SCOPE_GUARD_SECURITY_MIGRATION_0048 = (
     / "alembic"
     / "versions"
     / "20260903_0048_stocktake_scope_guard_security.py"
+)
+STOCKTAKE_RECOUNT_GUARD_SECURITY_MIGRATION_0049 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0049_stocktake_recount_guard_security.py"
 )
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
@@ -730,6 +759,17 @@ def _load_stocktake_scope_guard_security_migration_0048() -> object:
     return migration
 
 
+def _load_stocktake_recount_guard_security_migration_0049() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0049_recount_guard_security_manifest",
+        STOCKTAKE_RECOUNT_GUARD_SECURITY_MIGRATION_0049,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
 def _load_stocktake_scope_region_owner_migration_0025() -> object:
     spec = importlib.util.spec_from_file_location(
         "rsc_migration_0025_scope_region_owner_manifest",
@@ -1077,6 +1117,442 @@ def test_0048_scope_guard_execution_boundary_is_exact(
     )
     assert executed[0] == f"ALTER FUNCTION {signature} SECURITY INVOKER"
     assert not any(statement.startswith("GRANT ") for statement in executed)
+
+
+def test_0049_recount_guard_function_bodies_and_security_manifest_are_exact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def load(path: Path, module_name: str) -> object:
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        assert spec is not None and spec.loader is not None
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        return migration
+
+    migration_0011 = load(
+        STOCKTAKE_COUNT_OBSERVATIONS_MIGRATION_0011,
+        "rsc_migration_0011_recount_guard_body",
+    )
+    migration_0016 = load(
+        OPENING_OBSERVATION_DISPOSITIONS_MIGRATION_0016,
+        "rsc_migration_0016_recount_guard_body",
+    )
+    migration_0018 = load(
+        STOCKTAKE_RECOUNT_CAUSALITY_MIGRATION_0018,
+        "rsc_migration_0018_recount_guard_body",
+    )
+    migration_0021 = load(
+        ROUND_ASSIGNMENT_GUARDS_MIGRATION_0021,
+        "rsc_migration_0021_recount_guard_body",
+    )
+    migration_0032 = load(
+        NONOPENING_STOCKTAKE_REVIEW_MIGRATION_0032,
+        "rsc_migration_0032_recount_guard_body",
+    )
+    migration_0049 = _load_stocktake_recount_guard_security_migration_0049()
+
+    executed_0011: list[str] = []
+    with monkeypatch.context() as patcher:
+        patcher.setattr(
+            migration_0011.op,
+            "execute",
+            lambda statement: executed_0011.append(str(statement)),
+        )
+        migration_0011._create_postgresql_count_contract_triggers()
+    actor_assignment_sql = next(
+        statement
+        for statement in executed_0011
+        if statement.lstrip().startswith(
+            "CREATE FUNCTION rsc_stocktake_actor_assignment_valid_0011("
+        )
+    )
+
+    function_sql = {
+        migration_0049.ACTOR_ASSIGNMENT_HELPER_0011_SIGNATURE:
+            actor_assignment_sql,
+        migration_0049.OBSERVATION_DISPOSITION_CALLER_0016_SIGNATURE:
+            migration_0016._postgresql_disposition_function_sql(),
+        migration_0049.RECOUNT_ASSIGNMENT_CALLER_0018_SIGNATURE:
+            migration_0018._postgresql_assignment_validate_sql(),
+        migration_0049.ROUND_ASSIGNMENT_HELPER_0021_SIGNATURE:
+            migration_0021._postgresql_actor_function_sql(),
+        migration_0049.COUNT_LINE_CALLER_0021_SIGNATURE:
+            migration_0021._postgresql_count_line_function_sql(),
+        migration_0049.OBSERVATION_CALLER_0021_SIGNATURE:
+            migration_0021._postgresql_observation_function_sql(
+                round_aware=True
+            ),
+        migration_0049.SCOPE_COMPLETION_CALLER_0021_SIGNATURE:
+            migration_0021._postgresql_completion_function_sql(
+                round_aware=True
+            ),
+        migration_0049.REVIEW_GRAPH_VALIDATOR_0032_SIGNATURE:
+            migration_0032._postgresql_review_graph_function_sql(),
+        migration_0049.RECOUNT_SCOPE_GRAPH_HELPER_0032_SIGNATURE:
+            migration_0032._postgresql_scope_graph_function_sql(),
+        migration_0049.RECOUNT_CASE_CALLER_0032_SIGNATURE:
+            migration_0032._postgresql_case_function_sql(),
+        migration_0049.RECOUNT_TASK_CALLER_0032_SIGNATURE:
+            migration_0032._postgresql_task_function_sql(),
+        migration_0049.RECOUNT_ROUND_CALLER_0032_SIGNATURE:
+            migration_0032._postgresql_round_function_sql(),
+        migration_0049.RECOUNT_GRAPH_CALLER_0032_SIGNATURE:
+            migration_0032._postgresql_recount_graph_function_sql(),
+    }
+    coordinates = {
+        migration_0049.ACTOR_ASSIGNMENT_HELPER_0011_SIGNATURE: (
+            migration_0049.ACTOR_ASSIGNMENT_HELPER_0011,
+            "text, uuid, uuid, bigint, timestamp with time zone, text, "
+            "text, text",
+        ),
+        migration_0049.OBSERVATION_DISPOSITION_CALLER_0016_SIGNATURE: (
+            migration_0049.OBSERVATION_DISPOSITION_CALLER_0016,
+            "",
+        ),
+        migration_0049.RECOUNT_ASSIGNMENT_CALLER_0018_SIGNATURE: (
+            migration_0049.RECOUNT_ASSIGNMENT_CALLER_0018,
+            "",
+        ),
+        migration_0049.ROUND_ASSIGNMENT_HELPER_0021_SIGNATURE: (
+            migration_0049.ROUND_ASSIGNMENT_HELPER_0021,
+            "uuid, uuid, uuid, text, uuid, uuid, bigint, text, text, text, "
+            "timestamp with time zone, boolean",
+        ),
+        migration_0049.COUNT_LINE_CALLER_0021_SIGNATURE: (
+            migration_0049.COUNT_LINE_CALLER_0021,
+            "",
+        ),
+        migration_0049.OBSERVATION_CALLER_0021_SIGNATURE: (
+            migration_0049.OBSERVATION_CALLER_0021,
+            "",
+        ),
+        migration_0049.SCOPE_COMPLETION_CALLER_0021_SIGNATURE: (
+            migration_0049.SCOPE_COMPLETION_CALLER_0021,
+            "",
+        ),
+        migration_0049.REVIEW_GRAPH_VALIDATOR_0032_SIGNATURE: (
+            migration_0049.REVIEW_GRAPH_VALIDATOR_0032,
+            "",
+        ),
+        migration_0049.RECOUNT_SCOPE_GRAPH_HELPER_0032_SIGNATURE: (
+            migration_0049.RECOUNT_SCOPE_GRAPH_HELPER_0032,
+            "uuid",
+        ),
+        migration_0049.RECOUNT_CASE_CALLER_0032_SIGNATURE: (
+            migration_0049.RECOUNT_CASE_CALLER_0032,
+            "",
+        ),
+        migration_0049.RECOUNT_TASK_CALLER_0032_SIGNATURE: (
+            migration_0049.RECOUNT_TASK_CALLER_0032,
+            "",
+        ),
+        migration_0049.RECOUNT_ROUND_CALLER_0032_SIGNATURE: (
+            migration_0049.RECOUNT_ROUND_CALLER_0032,
+            "",
+        ),
+        migration_0049.RECOUNT_GRAPH_CALLER_0032_SIGNATURE: (
+            migration_0049.RECOUNT_GRAPH_CALLER_0032,
+            "",
+        ),
+    }
+    catalog = {row[0]: row for row in migration_0049.FUNCTION_CATALOG}
+
+    assert migration_0049.revision == "20260903_0049"
+    assert migration_0049.down_revision == "20260903_0048"
+    assert migration_0049.PREVIOUS_SCHEMA_REVISION == migration_0049.down_revision
+    assert len(migration_0049.CALLER_SIGNATURES) == 9
+    assert len(migration_0049.INVOKER_SIGNATURES) == 4
+    assert set(migration_0049.CALLER_SIGNATURES).isdisjoint(
+        migration_0049.INVOKER_SIGNATURES
+    )
+    assert set(migration_0049.ALL_FUNCTION_SIGNATURES) == (
+        set(migration_0049.CALLER_SIGNATURES)
+        | set(migration_0049.INVOKER_SIGNATURES)
+    )
+    assert set(function_sql) == set(coordinates) == set(catalog) == set(
+        migration_0049.EXPECTED_FUNCTION_BODY_SHA256
+    )
+    assert migration_0049.OBSERVATION_DISPOSITION_CALLER_0016_SIGNATURE in (
+        migration_0049.CALLER_SIGNATURES
+    )
+    assert migration_0049.REVIEW_GRAPH_VALIDATOR_0032_SIGNATURE in (
+        migration_0049.INVOKER_SIGNATURES
+    )
+
+    for signature, sql in function_sql.items():
+        body = sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+        body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        coordinate = coordinates[signature]
+        (
+            _,
+            _,
+            return_type,
+            language,
+            volatility,
+            _,
+        ) = catalog[signature]
+        expected_configuration = (
+            ()
+            if signature
+            == migration_0049.ACTOR_ASSIGNMENT_HELPER_0011_SIGNATURE
+            else (migration_0049.FIXED_SEARCH_PATH,)
+        )
+        assert body_hash == migration_0049.EXPECTED_FUNCTION_BODY_SHA256[
+            signature
+        ]
+        assert body_hash == FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[
+            coordinate
+        ]
+        assert FORMAL_FILE_INTERNAL_FUNCTIONS[coordinate] == (
+            volatility,
+            signature in migration_0049.CALLER_SIGNATURES,
+            language,
+            expected_configuration,
+        )
+        assert FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[coordinate] == (
+            "f",
+            return_type,
+            False,
+        )
+        assert coordinate not in RUNTIME_EXECUTE_FUNCTIONS
+
+
+def test_0049_recount_guard_security_mutations_and_catalog_are_exact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration = _load_stocktake_recount_guard_security_migration_0049()
+    executed: list[str] = []
+    monkeypatch.setattr(
+        migration.op,
+        "execute",
+        lambda statement: executed.append(str(statement)),
+    )
+
+    migration._lock_trigger_tables()
+    assert executed == [
+        "LOCK TABLE "
+        + ", ".join(
+            f"public.{table_name}" for table_name in migration.TRIGGER_TABLES
+        )
+        + " IN ACCESS EXCLUSIVE MODE"
+    ]
+
+    executed.clear()
+    migration._set_caller_security(security_definer=True)
+    expected_hardened: list[str] = []
+    for signature in migration.CALLER_SIGNATURES:
+        expected_hardened.extend(
+            (
+                f"ALTER FUNCTION {signature} SECURITY DEFINER",
+                f"ALTER FUNCTION {signature} SET search_path = "
+                "pg_catalog, public",
+            )
+        )
+    for signature in migration.ALL_FUNCTION_SIGNATURES:
+        expected_hardened.extend(
+            (
+                f"ALTER FUNCTION {signature} OWNER TO star_oam_migrator",
+                f"REVOKE ALL ON FUNCTION {signature} "
+                "FROM PUBLIC, star_oam_api",
+            )
+        )
+    assert executed == expected_hardened
+    assert not any(
+        signature in statement and "SECURITY DEFINER" in statement
+        for signature in migration.INVOKER_SIGNATURES
+        for statement in executed
+    )
+
+    executed.clear()
+    migration._set_caller_security(security_definer=False)
+    expected_legacy: list[str] = []
+    reset_signatures = {
+        migration.OBSERVATION_DISPOSITION_CALLER_0016_SIGNATURE,
+        migration.RECOUNT_ASSIGNMENT_CALLER_0018_SIGNATURE,
+    }
+    for signature in migration.CALLER_SIGNATURES:
+        expected_legacy.append(f"ALTER FUNCTION {signature} SECURITY INVOKER")
+        if signature in reset_signatures:
+            expected_legacy.append(f"ALTER FUNCTION {signature} RESET search_path")
+        else:
+            expected_legacy.append(
+                f"ALTER FUNCTION {signature} SET search_path = "
+                "pg_catalog, public"
+            )
+    for signature in migration.ALL_FUNCTION_SIGNATURES:
+        expected_legacy.extend(
+            (
+                f"ALTER FUNCTION {signature} OWNER TO star_oam_migrator",
+                f"REVOKE ALL ON FUNCTION {signature} "
+                "FROM PUBLIC, star_oam_api",
+            )
+        )
+    assert executed == expected_legacy
+
+    executed.clear()
+    migration._verify_catalog(
+        callers_security_definer=True,
+        phase="test hardened recount guard catalog",
+    )
+    assert len(executed) == 1
+    catalog_sql = executed[0]
+    for signature, expected_hash in (
+        migration.EXPECTED_FUNCTION_BODY_SHA256.items()
+    ):
+        assert signature in catalog_sql
+        assert expected_hash in catalog_sql
+    for _, trigger_name, _, _, _, _, _ in migration.TRIGGER_CATALOG:
+        assert trigger_name in catalog_sql
+    for required in (
+        "current_user <> 'star_oam_migrator'",
+        "session_user <> 'star_oam_migrator'",
+        "function_row.proowner = migrator_oid",
+        "function_row.prokind = 'f'",
+        "NOT function_row.proisstrict",
+        "NOT function_row.proleakproof",
+        "function_row.proparallel = 'u'",
+        "function_row.prosecdef IS NOT DISTINCT FROM",
+        "function_row.proconfig IS NOT DISTINCT FROM",
+        "pg_catalog.has_function_privilege",
+        "trigger_row.tgenabled = 'A'",
+        "trigger_row.tgqual IS NULL",
+        "trigger_row.tgnargs = 0",
+        "trigger_row.tgattr = ''::pg_catalog.int2vector",
+        f") <> {len(migration.TRIGGER_CATALOG)} THEN",
+    ):
+        assert required in catalog_sql
+
+
+def test_0049_recount_guard_trigger_roster_is_exact_startup_proof() -> None:
+    migration = _load_stocktake_recount_guard_security_migration_0049()
+    function_names = {
+        signature: function_name
+        for signature, function_name, _, _, _, _ in migration.FUNCTION_CATALOG
+    }
+    expected = {
+        trigger_name: (
+            table_name,
+            function_names[function_signature],
+            "A",
+            trigger_type,
+            is_constraint,
+            is_deferrable,
+            is_initially_deferred,
+        )
+        for (
+            table_name,
+            trigger_name,
+            function_signature,
+            trigger_type,
+            is_constraint,
+            is_deferrable,
+            is_initially_deferred,
+        ) in migration.TRIGGER_CATALOG
+    }
+    trigger_function_signatures = {
+        function_signature
+        for _, _, function_signature, _, _, _, _ in migration.TRIGGER_CATALOG
+    }
+
+    assert len(migration.TRIGGER_CATALOG) == len(expected) == 15
+    assert trigger_function_signatures == set(
+        migration.TRIGGER_FUNCTION_SIGNATURES
+    )
+    assert len(migration.TRIGGER_FUNCTION_SIGNATURES) == 10
+    assert (
+        set(migration.INVOKER_SIGNATURES) - trigger_function_signatures
+    ) == {
+        migration.ACTOR_ASSIGNMENT_HELPER_0011_SIGNATURE,
+        migration.ROUND_ASSIGNMENT_HELPER_0021_SIGNATURE,
+        migration.RECOUNT_SCOPE_GRAPH_HELPER_0032_SIGNATURE,
+    }
+    for trigger_name, shape in expected.items():
+        assert EXPECTED_STOCKTAKE_RECOUNT_TRIGGERS[trigger_name] == shape
+
+    newly_guarded = {
+        "trg_stocktake_observation_dispositions_validate_0016",
+        "trg_nonopening_review_graph_task_0032",
+        "trg_nonopening_review_graph_review_0032",
+        "trg_nonopening_review_graph_item_0032",
+    }
+    assert newly_guarded <= set(expected)
+    startup_query = str(_STOCKTAKE_RECOUNT_TRIGGER_SQL)
+    for trigger_name in newly_guarded:
+        assert f"'{trigger_name}'" in startup_query
+    assert "OR (\n          function_row.proname IN (" in startup_query
+    for function_name in {
+        shape[1]
+        for shape in EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS.values()
+    } | {
+        "rsc_validate_stocktake_recount_scope_assignment_0018",
+        "rsc_validate_stocktake_count_line_insert_0021",
+        "rsc_validate_stocktake_observation_insert_0021",
+        "rsc_validate_stocktake_scope_completion_insert_0021",
+    }:
+        assert f"'{function_name}'" in startup_query
+    for sensitive_table in (
+        "stock_locations",
+        "stocktake_count_lines",
+        "stocktake_count_observations",
+        "stocktake_scope_count_completions",
+        "stocktake_recount_scope_assignments",
+    ):
+        assert f"'{sensitive_table}'" in startup_query
+
+    extra_alias = dict(_valid_stocktake_recount_triggers()[0])
+    extra_alias["trigger_name"] = "trg_unapproved_recount_guard_alias"
+    with pytest.raises(DatabaseSecurityBoundaryError, match="recount schema"):
+        _assert_stocktake_recount_schema(
+            columns=_valid_stocktake_recount_columns(),
+            constraints=_valid_stocktake_recount_constraints(),
+            indexes=_valid_stocktake_recount_indexes(),
+            triggers=[*_valid_stocktake_recount_triggers(), extra_alias],
+        )
+
+
+@pytest.mark.parametrize(
+    "trigger_name",
+    (
+        "trg_stocktake_observation_dispositions_validate_0016",
+        "trg_nonopening_review_graph_task_0032",
+        "trg_nonopening_review_graph_review_0032",
+        "trg_nonopening_review_graph_item_0032",
+    ),
+)
+def test_0049_new_startup_trigger_guards_reject_catalog_drift(
+    trigger_name: str,
+) -> None:
+    valid = _valid_stocktake_recount_triggers()
+    for rows in (
+        [row for row in valid if row["trigger_name"] != trigger_name],
+        [dict(row) for row in valid],
+    ):
+        if len(rows) == len(valid):
+            target = next(
+                row for row in rows if row["trigger_name"] == trigger_name
+            )
+            target["function_name"] = "rsc_unapproved_stocktake_guard"
+        with pytest.raises(DatabaseSecurityBoundaryError, match="recount schema"):
+            _assert_stocktake_recount_schema(
+                columns=_valid_stocktake_recount_columns(),
+                constraints=_valid_stocktake_recount_constraints(),
+                indexes=_valid_stocktake_recount_indexes(),
+                triggers=rows,
+            )
+
+    if trigger_name.startswith("trg_nonopening_review_graph_"):
+        rows = [dict(row) for row in valid]
+        target = next(
+            row for row in rows if row["trigger_name"] == trigger_name
+        )
+        target["is_deferrable"] = False
+        with pytest.raises(DatabaseSecurityBoundaryError, match="recount schema"):
+            _assert_stocktake_recount_schema(
+                columns=_valid_stocktake_recount_columns(),
+                constraints=_valid_stocktake_recount_constraints(),
+                indexes=_valid_stocktake_recount_indexes(),
+                triggers=rows,
+            )
 
 
 def test_0047_nonopening_start_catalog_guard_is_exact_and_rejects_drift(
@@ -3159,6 +3635,8 @@ def test_runtime_function_acl_rejects_execute_or_wrong_owner(
             "argument_types": argument_types,
             "function_kind": function_shapes[(function_name, argument_types)][0],
             "result_type": function_shapes[(function_name, argument_types)][1],
+            "returns_set": False,
+            "variadic_type": 0,
             "argument_modes": None,
             "argument_default_count": 0,
             "is_strict": function_shapes[(function_name, argument_types)][2],
@@ -3230,12 +3708,16 @@ def test_runtime_function_acl_rejects_execute_or_wrong_owner(
         ("argument_types", "text"),
         ("function_kind", "p"),
         ("result_type", "record"),
+        ("returns_set", True),
+        ("variadic_type", 25),
         ("argument_modes", ["i", "o"]),
         ("argument_default_count", 1),
         ("is_strict", None),
         ("source_body", "drifted helper body"),
         ("language_name", "internal"),
         ("configuration", ["search_path=public"]),
+        ("parallel_safety", "s"),
+        ("is_leakproof", True),
         ("public_can_execute", True),
         ("edge_can_execute", True),
         ("backup_can_execute", True),
