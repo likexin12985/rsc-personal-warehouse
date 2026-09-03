@@ -366,7 +366,14 @@ STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION = (
     / "versions"
     / "20260903_0049_stocktake_recount_guard_security.py"
 )
-HEAD_REVISION = "20260903_0049"
+STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0050_stocktake_observation_scope_mode.py"
+)
+HEAD_REVISION = "20260903_0050"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -385,6 +392,8 @@ MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_REVISION_ID = "20260903_0046"
 NONOPENING_STOCKTAKE_START_CAUSALITY_REVISION_ID = "20260903_0047"
 STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION_ID = "20260903_0048"
 STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION_ID = "20260903_0049"
+STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID = "20260903_0050"
+PRE_STOCKTAKE_OBSERVATION_SCOPE_MODE_HEAD_REVISION = "20260903_0049"
 PRE_STOCKTAKE_RECOUNT_GUARD_SECURITY_HEAD_REVISION = "20260903_0048"
 PRE_STOCKTAKE_SCOPE_GUARD_SECURITY_HEAD_REVISION = "20260903_0047"
 PRE_NONOPENING_STOCKTAKE_START_CAUSALITY_HEAD_REVISION = "20260903_0046"
@@ -1389,6 +1398,14 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert head is not None
     assert (
         head.down_revision
+        == PRE_STOCKTAKE_OBSERVATION_SCOPE_MODE_HEAD_REVISION
+    )
+    previous_observation_scope_mode_head = script.get_revision(
+        PRE_STOCKTAKE_OBSERVATION_SCOPE_MODE_HEAD_REVISION
+    )
+    assert previous_observation_scope_mode_head is not None
+    assert (
+        previous_observation_scope_mode_head.down_revision
         == PRE_STOCKTAKE_RECOUNT_GUARD_SECURITY_HEAD_REVISION
     )
     previous_recount_guard_security_head = script.get_revision(
@@ -2819,6 +2836,17 @@ def _load_0049_migration_module():
     return module
 
 
+def _load_0050_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "stocktake_observation_scope_mode_migration_0050",
+        STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_0047_postgresql_functions_parse_as_sql_and_plpgsql() -> None:
     parser = pytest.importorskip("pglast.parser")
     module = _load_0047_migration_module()
@@ -3305,14 +3333,18 @@ def test_0048_postgresql_offline_downgrade_restores_exact_invoker_guard(
     )
 
 
-def test_0048_sqlite_is_schema_noop_and_only_moves_revision(
+def test_0048_0049_0050_sqlite_noops_share_one_ordered_revision_chain(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
-    module = _load_0048_migration_module()
-    assert "SQLite is an explicit schema no-op" in (module.__doc__ or "")
-    database_url = f"sqlite+pysqlite:///{tmp_path / 'scope-guard-0048.db'}"
+    module_0048 = _load_0048_migration_module()
+    module_0049 = _load_0049_migration_module()
+    module_0050 = _load_0050_migration_module()
+    for module in (module_0048, module_0049, module_0050):
+        assert "SQLite is an explicit schema no-op" in (module.__doc__ or "")
+
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'security-noops.db'}"
     config = _config(database_url)
     command.upgrade(config, PRE_STOCKTAKE_SCOPE_GUARD_SECURITY_HEAD_REVISION)
 
@@ -3329,28 +3361,35 @@ def test_0048_sqlite_is_schema_noop_and_only_moves_revision(
         finally:
             engine.dispose()
 
-    before = schema_snapshot()
-    command.upgrade(config, STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION_ID)
-    assert schema_snapshot() == before
-    upgraded_engine = sa.create_engine(database_url)
-    try:
-        with upgraded_engine.connect() as connection:
-            assert connection.exec_driver_sql(
-                "SELECT version_num FROM alembic_version"
-            ).scalar_one() == STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION_ID
-    finally:
-        upgraded_engine.dispose()
+    def assert_revision(expected_revision: str) -> None:
+        engine = sa.create_engine(database_url)
+        try:
+            with engine.connect() as connection:
+                assert connection.exec_driver_sql(
+                    "SELECT version_num FROM alembic_version"
+                ).scalar_one() == expected_revision
+        finally:
+            engine.dispose()
 
-    command.downgrade(config, PRE_STOCKTAKE_SCOPE_GUARD_SECURITY_HEAD_REVISION)
-    assert schema_snapshot() == before
-    downgraded_engine = sa.create_engine(database_url)
-    try:
-        with downgraded_engine.connect() as connection:
-            assert connection.exec_driver_sql(
-                "SELECT version_num FROM alembic_version"
-            ).scalar_one() == PRE_STOCKTAKE_SCOPE_GUARD_SECURITY_HEAD_REVISION
-    finally:
-        downgraded_engine.dispose()
+    baseline_schema = schema_snapshot()
+    assert_revision(PRE_STOCKTAKE_SCOPE_GUARD_SECURITY_HEAD_REVISION)
+    for target_revision in (
+        STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION_ID,
+        STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION_ID,
+        STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID,
+    ):
+        command.upgrade(config, target_revision)
+        assert schema_snapshot() == baseline_schema
+        assert_revision(target_revision)
+
+    for target_revision in (
+        STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION_ID,
+        STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION_ID,
+        PRE_STOCKTAKE_SCOPE_GUARD_SECURITY_HEAD_REVISION,
+    ):
+        command.downgrade(config, target_revision)
+        assert schema_snapshot() == baseline_schema
+        assert_revision(target_revision)
 
 
 def test_0049_pins_exact_nested_guard_bodies_catalog_and_runtime_ready_sql(
@@ -3693,52 +3732,239 @@ def test_0049_postgresql_offline_downgrade_restores_exact_invoker_closure(
     )
 
 
-def test_0049_sqlite_is_schema_noop_and_only_moves_revision(
-    tmp_path: Path,
+def test_0050_pins_exact_observation_body_replacement_and_catalog_sql(
+    monkeypatch,
+) -> None:
+    module = _load_0050_migration_module()
+    assert module.revision == STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID
+    assert module.down_revision == (
+        PRE_STOCKTAKE_OBSERVATION_SCOPE_MODE_HEAD_REVISION
+    )
+    assert module.FUNCTION_SIGNATURE == (
+        "public.rsc_validate_stocktake_observation_insert_0021()"
+    )
+    assert module.TRIGGER_TABLE == "stocktake_count_observations"
+    assert module.TRIGGER_NAME == (
+        "trg_stocktake_count_observations_assignment_0021"
+    )
+
+    spec = importlib.util.spec_from_file_location(
+        "stocktake_round_assignment_guards_migration_0021_for_0050",
+        STOCKTAKE_ROUND_ASSIGNMENT_GUARDS_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    legacy_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(legacy_module)
+    legacy_sql = legacy_module._postgresql_observation_function_sql(
+        round_aware=True
+    )
+    body_match = re.search(
+        r"AS \$\$(?P<body>.*?)\$\$",
+        legacy_sql,
+        flags=re.DOTALL,
+    )
+    assert body_match is not None
+    legacy_body = body_match.group("body")
+    assert hashlib.sha256(legacy_body.encode("utf-8")).hexdigest() == (
+        module.LEGACY_BODY_SHA256
+    )
+    assert legacy_body.count(module.LEGACY_SOURCE_FRAGMENT) == 1
+    assert module.QUALIFIED_SOURCE_FRAGMENT not in legacy_body
+
+    qualified_body = legacy_body.replace(
+        module.LEGACY_SOURCE_FRAGMENT,
+        module.QUALIFIED_SOURCE_FRAGMENT,
+    )
+    assert hashlib.sha256(qualified_body.encode("utf-8")).hexdigest() == (
+        module.QUALIFIED_BODY_SHA256
+    )
+    assert qualified_body.count(module.QUALIFIED_SOURCE_FRAGMENT) == 1
+    assert module.LEGACY_SOURCE_FRAGMENT not in qualified_body
+    assert qualified_body.replace(
+        module.QUALIFIED_SOURCE_FRAGMENT,
+        module.LEGACY_SOURCE_FRAGMENT,
+    ) == legacy_body
+
+    parser = pytest.importorskip("pglast.parser")
+    statements: list[str] = []
+    monkeypatch.setattr(module.op, "execute", statements.append)
+    module._verify_catalog(
+        expected_body_sha256=module.LEGACY_BODY_SHA256,
+        expected_source_fragment=module.LEGACY_SOURCE_FRAGMENT,
+        forbidden_source_fragment=module.QUALIFIED_SOURCE_FRAGMENT,
+        phase="legacy parse probe",
+    )
+    module._replace_body_fragment(
+        expected_body_sha256=module.LEGACY_BODY_SHA256,
+        source_fragment=module.LEGACY_SOURCE_FRAGMENT,
+        replacement_fragment=module.QUALIFIED_SOURCE_FRAGMENT,
+        phase="upgrade parse probe",
+    )
+    module._verify_catalog(
+        expected_body_sha256=module.QUALIFIED_BODY_SHA256,
+        expected_source_fragment=module.QUALIFIED_SOURCE_FRAGMENT,
+        forbidden_source_fragment=module.LEGACY_SOURCE_FRAGMENT,
+        phase="qualified parse probe",
+    )
+    module._replace_body_fragment(
+        expected_body_sha256=module.QUALIFIED_BODY_SHA256,
+        source_fragment=module.QUALIFIED_SOURCE_FRAGMENT,
+        replacement_fragment=module.LEGACY_SOURCE_FRAGMENT,
+        phase="downgrade parse probe",
+    )
+    for statement in statements:
+        assert not sa.text(statement)._bindparams
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+
+    for expected_revision in (module.PREVIOUS_SCHEMA_REVISION, module.revision):
+        ready_sql = module._oam_runtime_ready_function_sql(expected_revision)
+        assert not sa.text(ready_sql)._bindparams
+        parser.parse_sql(ready_sql)
+        parser.parse_plpgsql_json(ready_sql)
+
+    with pytest.raises(ValueError, match="unsupported stocktake observation"):
+        module._verify_catalog(
+            expected_body_sha256="0" * 64,
+            expected_source_fragment=module.LEGACY_SOURCE_FRAGMENT,
+            forbidden_source_fragment=module.QUALIFIED_SOURCE_FRAGMENT,
+            phase="invalid",
+        )
+    with pytest.raises(ValueError, match="unsupported stocktake observation"):
+        module._replace_body_fragment(
+            expected_body_sha256=module.LEGACY_BODY_SHA256,
+            source_fragment=module.QUALIFIED_SOURCE_FRAGMENT,
+            replacement_fragment=module.LEGACY_SOURCE_FRAGMENT,
+            phase="invalid",
+        )
+    with pytest.raises(ValueError, match="unsupported OAM runtime"):
+        module._oam_runtime_ready_function_sql("20260903_9999")
+
+
+def test_0050_postgresql_offline_upgrade_qualifies_only_scope_mode_source(
     monkeypatch,
 ) -> None:
     monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
-    module = _load_0049_migration_module()
-    assert "SQLite is an explicit schema no-op" in (module.__doc__ or "")
-    database_url = f"sqlite+pysqlite:///{tmp_path / 'recount-guard-0049.db'}"
-    config = _config(database_url)
-    command.upgrade(config, PRE_STOCKTAKE_RECOUNT_GUARD_SECURITY_HEAD_REVISION)
+    module = _load_0050_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_STOCKTAKE_OBSERVATION_SCOPE_MODE_HEAD_REVISION}:"
+        f"{STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID}",
+        sql=True,
+    )
+    sql = output.getvalue()
 
-    def schema_snapshot() -> tuple[tuple[object, ...], ...]:
-        engine = sa.create_engine(database_url)
-        try:
-            with engine.connect() as connection:
-                return tuple(
-                    connection.exec_driver_sql(
-                        "SELECT type, name, tbl_name, sql FROM sqlite_master "
-                        "ORDER BY type, name"
-                    ).all()
-                )
-        finally:
-            engine.dispose()
+    lock_sql = (
+        "LOCK TABLE public.stocktake_count_observations "
+        "IN ACCESS EXCLUSIVE MODE"
+    )
+    assert "-- Running upgrade 20260903_0049 -> 20260903_0050" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count(module.CATALOG_ERROR) == 14
+    assert sql.count(module.REPLACEMENT_ERROR) == 3
+    assert "legacy upgrade preflight" in sql
+    assert "qualified upgrade postflight" in sql
+    assert sql.count(module.LEGACY_BODY_SHA256) == 2
+    assert sql.count(module.QUALIFIED_BODY_SHA256) == 1
+    assert "function_row.proowner = migrator_oid" in sql
+    assert "function_row.prokind = 'f'" in sql
+    assert "function_row.prorettype = pg_catalog.to_regtype('trigger')" in sql
+    assert "function_row.pronargs = 0" in sql
+    assert "function_row.proargtypes = ''::pg_catalog.oidvector" in sql
+    assert "function_row.proallargtypes IS NULL" in sql
+    assert "function_row.proargnames IS NULL" in sql
+    assert "function_row.proargmodes IS NULL" in sql
+    assert "function_row.provariadic = 0" in sql
+    assert "function_row.prosecdef" in sql
+    assert "function_row.proconfig = ARRAY['search_path=pg_catalog, public']" in sql
+    assert "function_acl.grantor <> migrator_oid" in sql
+    assert "function_acl.grantee = 0" in sql
+    assert "pg_catalog.has_function_privilege" in sql
+    assert "trigger_row.tgenabled = 'A'" in sql
+    assert "trigger_row.tgtype = 7" in sql
+    assert "trigger_row.tgconstraint = 0" in sql
+    assert "trigger_row.tgqual IS NULL" in sql
+    assert "trigger_row.tgnargs = 0" in sql
+    assert "trigger_row.tgattr = ''::pg_catalog.int2vector" in sql
+    assert "trigger_row.tgfoid = function_oid" in sql
+    assert "pg_catalog.pg_get_functiondef(function_oid)" in sql
+    assert "EXECUTE pg_catalog.replace" in sql
+    assert f"ALTER FUNCTION {module.FUNCTION_SIGNATURE}" not in sql
+    assert f"CREATE OR REPLACE FUNCTION {module.FUNCTION_SIGNATURE}" not in sql
+    assert "GRANT " not in sql
+    assert "INSERT INTO public." not in sql
+    assert "UPDATE public." not in sql
+    assert "DELETE FROM public." not in sql
 
-    before = schema_snapshot()
-    command.upgrade(config, STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION_ID)
-    assert schema_snapshot() == before
-    upgraded_engine = sa.create_engine(database_url)
-    try:
-        with upgraded_engine.connect() as connection:
-            assert connection.exec_driver_sql(
-                "SELECT version_num FROM alembic_version"
-            ).scalar_one() == STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION_ID
-    finally:
-        upgraded_engine.dispose()
+    ready_sql = (
+        "CREATE OR REPLACE FUNCTION public."
+        "rsc_oam_runtime_binding_ready_0044()"
+    )
+    assert sql.count(ready_sql) == 1
+    assert "pg_catalog.min(version_num) = '20260903_0050'" in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("legacy upgrade preflight")
+        < sql.index("0050 stocktake observation scope-mode replacement failed")
+        < sql.index("qualified upgrade postflight")
+        < sql.index(ready_sql)
+    )
 
-    command.downgrade(config, PRE_STOCKTAKE_RECOUNT_GUARD_SECURITY_HEAD_REVISION)
-    assert schema_snapshot() == before
-    downgraded_engine = sa.create_engine(database_url)
-    try:
-        with downgraded_engine.connect() as connection:
-            assert connection.exec_driver_sql(
-                "SELECT version_num FROM alembic_version"
-            ).scalar_one() == PRE_STOCKTAKE_RECOUNT_GUARD_SECURITY_HEAD_REVISION
-    finally:
-        downgraded_engine.dispose()
+
+def test_0050_postgresql_offline_downgrade_restores_exact_legacy_body(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0050_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.downgrade(
+        config,
+        f"{STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID}:"
+        f"{PRE_STOCKTAKE_OBSERVATION_SCOPE_MODE_HEAD_REVISION}",
+        sql=True,
+    )
+    sql = output.getvalue()
+
+    lock_sql = (
+        "LOCK TABLE public.stocktake_count_observations "
+        "IN ACCESS EXCLUSIVE MODE"
+    )
+    assert "-- Running downgrade 20260903_0050 -> 20260903_0049" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count(module.CATALOG_ERROR) == 14
+    assert sql.count(module.REPLACEMENT_ERROR) == 3
+    assert "qualified downgrade preflight" in sql
+    assert "legacy downgrade postflight" in sql
+    assert sql.count(module.QUALIFIED_BODY_SHA256) == 2
+    assert sql.count(module.LEGACY_BODY_SHA256) == 1
+    assert "pg_catalog.pg_get_functiondef(function_oid)" in sql
+    assert "EXECUTE pg_catalog.replace" in sql
+    assert f"ALTER FUNCTION {module.FUNCTION_SIGNATURE}" not in sql
+    assert f"CREATE OR REPLACE FUNCTION {module.FUNCTION_SIGNATURE}" not in sql
+    assert "GRANT " not in sql
+    assert "INSERT INTO public." not in sql
+    assert "UPDATE public." not in sql
+    assert "DELETE FROM public." not in sql
+    assert "pg_catalog.min(version_num) = '20260903_0049'" in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("qualified downgrade preflight")
+        < sql.index("0050 stocktake observation scope-mode replacement failed")
+        < sql.index("legacy downgrade postflight")
+        < sql.index(
+            "CREATE OR REPLACE FUNCTION public."
+            "rsc_oam_runtime_binding_ready_0044()"
+        )
+    )
 
 
 def test_0041_sqlite_schema_indexes_and_evidence_triggers(

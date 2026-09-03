@@ -260,6 +260,13 @@ STOCKTAKE_RECOUNT_GUARD_SECURITY_MIGRATION_0049 = (
     / "versions"
     / "20260903_0049_stocktake_recount_guard_security.py"
 )
+STOCKTAKE_OBSERVATION_SCOPE_MODE_MIGRATION_0050 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0050_stocktake_observation_scope_mode.py"
+)
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
     / "backend"
@@ -770,6 +777,17 @@ def _load_stocktake_recount_guard_security_migration_0049() -> object:
     return migration
 
 
+def _load_stocktake_observation_scope_mode_migration_0050() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0050_observation_scope_mode_manifest",
+        STOCKTAKE_OBSERVATION_SCOPE_MODE_MIGRATION_0050,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
 def _load_stocktake_scope_region_owner_migration_0025() -> object:
     spec = importlib.util.spec_from_file_location(
         "rsc_migration_0025_scope_region_owner_manifest",
@@ -1150,6 +1168,7 @@ def test_0049_recount_guard_function_bodies_and_security_manifest_are_exact(
         "rsc_migration_0032_recount_guard_body",
     )
     migration_0049 = _load_stocktake_recount_guard_security_migration_0049()
+    migration_0050 = _load_stocktake_observation_scope_mode_migration_0050()
 
     executed_0011: list[str] = []
     with monkeypatch.context() as patcher:
@@ -1300,9 +1319,15 @@ def test_0049_recount_guard_function_bodies_and_security_manifest_are_exact(
         assert body_hash == migration_0049.EXPECTED_FUNCTION_BODY_SHA256[
             signature
         ]
-        assert body_hash == FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[
-            coordinate
-        ]
+        expected_runtime_hash = (
+            migration_0050.QUALIFIED_BODY_SHA256
+            if signature == migration_0050.FUNCTION_SIGNATURE
+            else body_hash
+        )
+        assert (
+            FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
+            == expected_runtime_hash
+        )
         assert FORMAL_FILE_INTERNAL_FUNCTIONS[coordinate] == (
             volatility,
             signature in migration_0049.CALLER_SIGNATURES,
@@ -1315,6 +1340,25 @@ def test_0049_recount_guard_function_bodies_and_security_manifest_are_exact(
             False,
         )
         assert coordinate not in RUNTIME_EXECUTE_FUNCTIONS
+
+    legacy_observation_sql = function_sql[migration_0050.FUNCTION_SIGNATURE]
+    legacy_observation_body = legacy_observation_sql.split(
+        "AS $$", 1
+    )[1].rsplit("$$", 1)[0]
+    assert legacy_observation_body.count(
+        migration_0050.LEGACY_SOURCE_FRAGMENT
+    ) == 1
+    assert migration_0050.QUALIFIED_SOURCE_FRAGMENT not in legacy_observation_body
+    qualified_observation_body = legacy_observation_body.replace(
+        migration_0050.LEGACY_SOURCE_FRAGMENT,
+        migration_0050.QUALIFIED_SOURCE_FRAGMENT,
+    )
+    assert hashlib.sha256(
+        qualified_observation_body.encode("utf-8")
+    ).hexdigest() == migration_0050.QUALIFIED_BODY_SHA256
+    assert FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[
+        (migration_0050.FUNCTION_NAME, "")
+    ] == migration_0050.QUALIFIED_BODY_SHA256
 
 
 def test_0049_recount_guard_security_mutations_and_catalog_are_exact(

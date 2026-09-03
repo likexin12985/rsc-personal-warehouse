@@ -3016,7 +3016,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_validate_stocktake_count_line_insert_0021", ""):
         "319b1804e6fa6af3c7d3510524755d4b4d74b556a90640f6adfa6efa17f19693",
     ("rsc_validate_stocktake_observation_insert_0021", ""):
-        "082b8afe54b38790b15d72b3f946fbf7c943b2780cd5ba3f43a9dee34db337f3",
+        "06cf2fafa1d90f120fe4bba21cc1dc55dba70bd63f649671b4333a6159af06bb",
     ("rsc_validate_stocktake_scope_completion_insert_0021", ""):
         "7470b118731f1fd6e53269457d511f73308eab704048109b32bd039f8df0824f",
     ("rsc_validate_stocktake_scope_region_owner_0025", ""):

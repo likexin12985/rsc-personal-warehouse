@@ -40,7 +40,8 @@ APPROVAL_REVISION = "20260903_0045"
 CONTENT_CAUSALITY_REVISION = "20260903_0046"
 STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION = "20260903_0048"
 STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION = "20260903_0049"
-HEAD_REVISION = STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION
+STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION = "20260903_0050"
+HEAD_REVISION = STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION
 RLS_BINDING_TABLE = "oam_sync_scope_bindings"
 RLS_READY_FUNCTION = "public.rsc_oam_runtime_binding_ready_0044()"
 EDGE_RECEIVER_ROLE = "edge_inbox"
@@ -132,8 +133,21 @@ STOCKTAKE_RECOUNT_GUARD_SECURITY_MIGRATION_0049 = (
     / "versions"
     / "20260903_0049_stocktake_recount_guard_security.py"
 )
+STOCKTAKE_OBSERVATION_SCOPE_MODE_MIGRATION_0050 = (
+    CLOUD_ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0050_stocktake_observation_scope_mode.py"
+)
+STOCKTAKE_OBSERVATION_BODY_SHA256_0050 = (
+    "06cf2fafa1d90f120fe4bba21cc1dc55dba70bd63f649671b4333a6159af06bb"
+)
 STOCKTAKE_RECOUNT_ALIAS_TRIGGER_0049 = (
     "trg_pg16_unapproved_recount_guard_alias_0049"
+)
+STOCKTAKE_OBSERVATION_ALIAS_TRIGGER_0050 = (
+    "trg_pg16_unapproved_observation_guard_alias_0050"
 )
 MATERIAL_REQUEST_NEUTRAL_AXES = {
     "allocation_status": "not_allocated",
@@ -4211,6 +4225,17 @@ def _load_stocktake_recount_guard_security_migration_0049() -> object:
     return migration
 
 
+def _load_stocktake_observation_scope_mode_migration_0050() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_pg16_gate_migration_0050_observation_scope_mode_manifest",
+        STOCKTAKE_OBSERVATION_SCOPE_MODE_MIGRATION_0050,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
 def _0049_function_coordinate(signature: str) -> tuple[str, str, int]:
     assert signature.startswith("public.") and signature.endswith(")")
     function_name, argument_types = signature[len("public.") : -1].split(
@@ -4227,6 +4252,7 @@ def _assert_0049_recount_guard_catalog(
     *,
     callers_security_definer: bool,
     expected_revision: str,
+    observation_scope_mode_fixed: bool | None = None,
 ) -> None:
     migration = _load_stocktake_recount_guard_security_migration_0049()
     assert migration.revision == STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION
@@ -4352,6 +4378,8 @@ def _assert_0049_recount_guard_catalog(
             )
             readiness_row = cursor.fetchone()
 
+    if observation_scope_mode_fixed is None:
+        observation_scope_mode_fixed = expected_revision == HEAD_REVISION
     expected_function_rows = []
     for (
         signature,
@@ -4394,7 +4422,13 @@ def _assert_0049_recount_guard_catalog(
                     if expected_search_path is None
                     else [expected_search_path]
                 ),
-                migration.EXPECTED_FUNCTION_BODY_SHA256[signature],
+                (
+                    STOCKTAKE_OBSERVATION_BODY_SHA256_0050
+                    if observation_scope_mode_fixed
+                    and signature
+                    == migration.OBSERVATION_CALLER_0021_SIGNATURE
+                    else migration.EXPECTED_FUNCTION_BODY_SHA256[signature]
+                ),
                 False,
                 False,
                 False,
@@ -4547,6 +4581,58 @@ def _0049_extra_trigger_alias_exists() -> bool:
                 "AND relation.relname = 'stocktake_review_items' "
                 "AND trigger_row.tgname = %s",
                 (STOCKTAKE_RECOUNT_ALIAS_TRIGGER_0049,),
+            )
+            rows = cursor.fetchall()
+    assert rows in ([], [("A",)])
+    return rows == [("A",)]
+
+
+def _set_0050_extra_trigger_alias(*, present: bool) -> None:
+    migration = _load_stocktake_observation_scope_mode_migration_0050()
+    parameters = _connection_parameters(
+        role="star_oam_migrator",
+        password=_role_password("star_oam_migrator"),
+    )
+    with psycopg.connect(**parameters, autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            if present:
+                cursor.execute(
+                    f"CREATE TRIGGER {STOCKTAKE_OBSERVATION_ALIAS_TRIGGER_0050} "
+                    f"BEFORE INSERT ON public.{migration.TRIGGER_TABLE} "
+                    "FOR EACH ROW EXECUTE FUNCTION "
+                    f"{migration.FUNCTION_SIGNATURE}"
+                )
+                cursor.execute(
+                    f"ALTER TABLE public.{migration.TRIGGER_TABLE} "
+                    "ENABLE ALWAYS TRIGGER "
+                    f"{STOCKTAKE_OBSERVATION_ALIAS_TRIGGER_0050}"
+                )
+            else:
+                cursor.execute(
+                    "DROP TRIGGER IF EXISTS "
+                    f"{STOCKTAKE_OBSERVATION_ALIAS_TRIGGER_0050} ON "
+                    f"public.{migration.TRIGGER_TABLE}"
+                )
+
+
+def _0050_extra_trigger_alias_exists() -> bool:
+    migration = _load_stocktake_observation_scope_mode_migration_0050()
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT trigger_row.tgenabled "
+                "FROM pg_catalog.pg_trigger AS trigger_row "
+                "JOIN pg_catalog.pg_class AS relation "
+                "ON relation.oid = trigger_row.tgrelid "
+                "JOIN pg_catalog.pg_namespace AS schema_row "
+                "ON schema_row.oid = relation.relnamespace "
+                "WHERE schema_row.nspname = 'public' "
+                "AND relation.relname = %s "
+                "AND trigger_row.tgname = %s",
+                (
+                    migration.TRIGGER_TABLE,
+                    STOCKTAKE_OBSERVATION_ALIAS_TRIGGER_0050,
+                ),
             )
             rows = cursor.fetchall()
     assert rows in ([], [("A",)])
@@ -4779,6 +4865,65 @@ def _assert_0048_scope_guard_master_data_stays_read_only() -> None:
             (),
             require_rls=False,
         )
+
+
+def _assert_0050_empty_graph_downgrade_and_reupgrade() -> None:
+    assert _current_revision() == HEAD_REVISION
+    migration = _load_stocktake_observation_scope_mode_migration_0050()
+    assert migration.revision == STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION
+    assert migration.down_revision == STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION
+    assert migration.LEGACY_BODY_SHA256 == (
+        _load_stocktake_recount_guard_security_migration_0049()
+        .EXPECTED_FUNCTION_BODY_SHA256[migration.FUNCTION_SIGNATURE]
+    )
+    assert migration.QUALIFIED_BODY_SHA256 == (
+        STOCKTAKE_OBSERVATION_BODY_SHA256_0050
+    )
+
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT pg_catalog.count(*) FROM public.{migration.TRIGGER_TABLE}"
+            )
+            assert cursor.fetchone() == (0,)
+
+    _assert_0049_recount_guard_catalog(
+        callers_security_definer=True,
+        expected_revision=HEAD_REVISION,
+        observation_scope_mode_fixed=True,
+    )
+    _assert_0049_api_direct_execute_denied()
+
+    _run_alembic("downgrade", STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION)
+    assert _current_revision() == STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION
+    _assert_0049_recount_guard_catalog(
+        callers_security_definer=True,
+        expected_revision=STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION,
+        observation_scope_mode_fixed=False,
+    )
+    _assert_0049_api_direct_execute_denied()
+
+    _set_0050_extra_trigger_alias(present=True)
+    assert _0050_extra_trigger_alias_exists() is True
+    try:
+        blocked = _run_alembic("upgrade", "head", expect_success=False)
+        output = blocked.stdout + blocked.stderr
+        assert migration.CATALOG_ERROR in output
+        assert "trigger binding mismatch" in output
+        assert _current_revision() == STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION
+        assert _0050_extra_trigger_alias_exists() is True
+    finally:
+        _set_0050_extra_trigger_alias(present=False)
+    assert _0050_extra_trigger_alias_exists() is False
+
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    _assert_0049_recount_guard_catalog(
+        callers_security_definer=True,
+        expected_revision=HEAD_REVISION,
+        observation_scope_mode_fixed=True,
+    )
+    _assert_0049_api_direct_execute_denied()
 
 
 def _assert_0049_empty_graph_downgrade_and_reupgrade() -> None:
@@ -9774,6 +9919,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
+    _assert_0050_empty_graph_downgrade_and_reupgrade()
     _assert_0049_empty_graph_downgrade_and_reupgrade()
     _assert_0048_empty_graph_downgrade_and_reupgrade()
     _assert_0047_empty_graph_downgrade_and_reupgrade()
