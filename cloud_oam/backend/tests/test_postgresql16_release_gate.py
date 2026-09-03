@@ -209,6 +209,18 @@ def _admin_parameters() -> dict[str, object]:
     )
 
 
+def _admin_sqlalchemy_url() -> URL:
+    parameters = _admin_parameters()
+    return URL.create(
+        "postgresql+psycopg",
+        username=str(parameters["user"]),
+        password=str(parameters["password"]),
+        host=str(parameters["host"]),
+        port=int(parameters["port"]),
+        database=str(parameters["dbname"]),
+    )
+
+
 def _role_password(role_name: str) -> str:
     setting_by_role = {
         "star_oam_migrator": "RSC_PG16_GATE_MIGRATOR_PASSWORD",
@@ -5911,24 +5923,49 @@ def _assert_0046_line_drift_is_rejected(
     replica_mode: bool,
 ) -> None:
     test_engine = api_engine
-    owned_engine = None
+    replica_engine = None
     if replica_mode:
-        owned_engine = create_engine(
-            _sqlalchemy_url(
-                role="star_oam_migrator",
-                password=_role_password("star_oam_migrator"),
-            ),
+        # The runtime role itself must not be able to disable ordinary
+        # triggers or constraints through the cluster parameter.
+        with Session(api_engine) as api_session:
+            assert api_session.execute(text("SELECT current_user")).scalar_one() == (
+                "star_oam_api"
+            )
+            with pytest.raises(DBAPIError) as parameter_failure:
+                api_session.execute(
+                    text("SET LOCAL session_replication_role = 'replica'")
+                )
+            assert isinstance(
+                parameter_failure.value.orig,
+                psycopg.errors.InsufficientPrivilege,
+            )
+            api_session.rollback()
+
+        # Only the disposable cluster superuser may select replica mode.  The
+        # API and migration roles deliberately lack this parameter privilege;
+        # use the reviewed bootstrap identity only to select it, then assume
+        # the migration role before proving that 0046's ENABLE ALWAYS triggers
+        # still reject drift.
+        replica_engine = create_engine(
+            _admin_sqlalchemy_url(),
             pool_size=1,
             max_overflow=0,
             pool_timeout=5,
         )
-        test_engine = owned_engine
+        test_engine = replica_engine
     try:
         with Session(test_engine) as session:
             if replica_mode:
                 session.execute(
                     text("SET LOCAL session_replication_role = 'replica'")
                 )
+                session.execute(text("SET LOCAL ROLE star_oam_migrator"))
+                assert session.execute(
+                    text(
+                        "SELECT current_user, session_user, "
+                        "current_setting('session_replication_role')"
+                    )
+                ).one() == ("star_oam_migrator", "postgres", "replica")
             line_id, original_note = _replace_0046_line_note_without_command(
                 session,
                 request_id=request_id,
@@ -5945,8 +5982,8 @@ def _assert_0046_line_drift_is_rejected(
             )
             session.rollback()
     finally:
-        if owned_engine is not None:
-            owned_engine.dispose()
+        if replica_engine is not None:
+            replica_engine.dispose()
 
     with Session(api_engine) as session:
         durable_line = session.execute(
