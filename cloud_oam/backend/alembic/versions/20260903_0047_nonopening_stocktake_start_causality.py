@@ -298,9 +298,10 @@ def _require_empty_completion_table() -> None:
 
 
 def _require_empty_postgresql_start_graph() -> None:
-    found = op.get_bind().exec_driver_sql(
+    statement = sa.text(
         f"SELECT 1 WHERE {_legacy_start_exists_sql('public.')} LIMIT 1"
-    ).first()
+    )
+    found = op.get_bind().execute(statement).first()
     if found is not None:
         raise RuntimeError(DOWNGRADE_BLOCKER)
 

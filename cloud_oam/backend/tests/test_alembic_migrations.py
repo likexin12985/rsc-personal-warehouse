@@ -2779,6 +2779,12 @@ def test_0047_postgresql_functions_parse_as_sql_and_plpgsql() -> None:
         parser.parse_sql(statement)
         parser.parse_plpgsql_json(statement)
 
+    downgrade_probe = sa.text(
+        "SELECT 1 WHERE "
+        f"{module._legacy_start_exists_sql('public.')} LIMIT 1"
+    )
+    assert not downgrade_probe._bindparams
+
     authorization_sql = module._authorization_document_expression("completion")
     assert tuple(
         authorization_sql.index(f'"{key}"')
