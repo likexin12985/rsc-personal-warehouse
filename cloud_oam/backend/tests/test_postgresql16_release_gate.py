@@ -3856,7 +3856,7 @@ def _assert_0046_content_catalog(*, installed: bool) -> None:
                 "'star_oam_api', function_row.oid, 'EXECUTE'), "
                 "EXISTS ("
                 "SELECT 1 FROM pg_catalog.aclexplode("
-                "pg_catalog.coalesce("
+                "COALESCE("
                 "function_row.proacl, "
                 "pg_catalog.acldefault('f', function_row.proowner)"
                 ")) AS function_acl "

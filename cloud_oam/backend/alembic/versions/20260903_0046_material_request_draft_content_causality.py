@@ -259,7 +259,7 @@ def _projection_manifest_expression(revision_id_expression: str) -> str:
                         'note', manifest_revision.note,
                         'approval_mode', manifest_revision.approval_mode
                     ),
-                    'lines', pg_catalog.coalesce((
+                    'lines', COALESCE((
                         SELECT pg_catalog.jsonb_agg(
                             pg_catalog.jsonb_build_object(
                                 'id', manifest_line.id::text,
@@ -298,7 +298,7 @@ def _projection_manifest_expression(revision_id_expression: str) -> str:
                            AND manifest_line.revision_no =
                                    manifest_revision.revision_no
                     ), '[]'::jsonb),
-                    'files', pg_catalog.coalesce((
+                    'files', COALESCE((
                         SELECT pg_catalog.jsonb_agg(
                             pg_catalog.jsonb_build_object(
                                 'binding_id', manifest_binding.id::text,
@@ -630,7 +630,7 @@ BEGIN
             RAISE EXCEPTION '{GUARD_ERROR}';
         END IF;
 
-        SELECT pg_catalog.coalesce(
+        SELECT COALESCE(
                    pg_catalog.jsonb_agg(
                        pg_catalog.to_jsonb(line.id::text)
                        ORDER BY line.line_no, line.id

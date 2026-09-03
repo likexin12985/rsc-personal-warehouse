@@ -1899,9 +1899,9 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_dispatch_material_request_approval_projection_0045", ""):
         "244d188e126e66fd4b020da01c076a3018f2c8841230bd255da45b7913776d54",
     ("rsc_guard_material_request_content_write_0046", ""):
-        "062e6b97de7d9008773e8f812497408ef9936fb039c930e02d4bb16495f7c8a9",
+        "a1dac8272cf64272d782f02f6270aab5fe285334fb13f88c11aaafc6d1d0364c",
     ("rsc_validate_material_request_content_causality_0046", "uuid"):
-        "71ea4682980062120ff1076f85af7b048b55512d7ffa0d31c70c6c95eae0c501",
+        "bb1af385573b281207dcc149f9d3c421ae9b45dc19e549979d9e646fe2f73eae",
     ("rsc_dispatch_material_request_content_causality_0046", ""):
         "d9e51c26520897b17b597cdaa3ea754039a92b06f6e0beee321f3a500dfe2da9",
 }
