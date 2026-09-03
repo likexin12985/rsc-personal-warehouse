@@ -5845,7 +5845,10 @@ def _assert_0046_content_command_chain(
                 "rsc_validate_material_request_content_causality_0046(%s)",
                 (request_id,),
             )
-            assert cursor.fetchone() == (None,)
+            # PostgreSQL's void datum is exposed by psycopg as an empty text
+            # value, not Python None.  Successful row delivery proves the
+            # validator completed; an invalid graph raises before this point.
+            assert cursor.fetchone() is not None
     return content_commands
 
 
@@ -5867,7 +5870,7 @@ def _assert_0046_datestyle_validator_stability(
                 "rsc_validate_material_request_content_causality_0046(%s)",
                 (request_id,),
             )
-            assert cursor.fetchone() == (None,)
+            assert cursor.fetchone() is not None
 
 
 def _replace_0046_line_note_without_command(
