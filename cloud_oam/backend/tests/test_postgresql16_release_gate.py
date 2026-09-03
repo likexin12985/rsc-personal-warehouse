@@ -7696,7 +7696,7 @@ def _seed_0047_stocktake_inventory(
     from app.formal_services.opening_stocktake import (
         OpeningStocktakeScopeInput,
         StartOpeningStocktakeCommand,
-        start_opening_stocktake,
+        _start_opening_stocktake_impl,
     )
     from app.formal_services.opening_stocktake_count import (
         SubmitOpeningStocktakeScopeCountCommand,
@@ -7729,34 +7729,32 @@ def _seed_0047_stocktake_inventory(
 
     opening_token = str(fixture["opening_token"])
     with Session(api_engine, expire_on_commit=False) as session:
-        started = _reveal_pg16_service_database_error(
-            lambda: start_opening_stocktake(
-                session,
-                actor=current_principal(session, assignee_user_id),
-                command=StartOpeningStocktakeCommand(
-                    task_no=f"PG16-OPENING-{opening_token[:16].upper()}",
-                    region_org_id=fixture["region_org_id"],
-                    control_source_system_id=fixture[
-                        "control_source_system_id"
-                    ],
-                    control_sync_run_id=fixture["control_sync_run_id"],
-                    control_sync_scope_key=str(fixture["control_scope_key"]),
-                    scopes=(
-                        OpeningStocktakeScopeInput(
-                            owner_org_id=fixture["region_org_id"],
-                            location_id=fixture["location_id"],
-                            assignee_user_id=assignee_user_id,
-                            freeze_mode="hard",
-                        ),
+        started = _start_opening_stocktake_impl(
+            session,
+            actor=current_principal(session, assignee_user_id),
+            command=StartOpeningStocktakeCommand(
+                task_no=f"PG16-OPENING-{opening_token[:16].upper()}",
+                region_org_id=fixture["region_org_id"],
+                control_source_system_id=fixture[
+                    "control_source_system_id"
+                ],
+                control_sync_run_id=fixture["control_sync_run_id"],
+                control_sync_scope_key=str(fixture["control_scope_key"]),
+                scopes=(
+                    OpeningStocktakeScopeInput(
+                        owner_org_id=fixture["region_org_id"],
+                        location_id=fixture["location_id"],
+                        assignee_user_id=assignee_user_id,
+                        freeze_mode="hard",
                     ),
-                    control_lines=fixture["control_lines"],
-                    blind_count=True,
-                    deadline=fixture["deadline"],
-                    note="PG16 隔离门禁零期初建账",
                 ),
-                idempotency_key=f"pg16-opening-start-{opening_token}",
-                request_id=f"trace-pg16-opening-start-{opening_token}",
-            )
+                control_lines=fixture["control_lines"],
+                blind_count=True,
+                deadline=fixture["deadline"],
+                note="PG16 隔离门禁零期初建账",
+            ),
+            idempotency_key=f"pg16-opening-start-{opening_token}",
+            request_id=f"trace-pg16-opening-start-{opening_token}",
         )
         assert started.status == "counting"
         assert started.scope_count == 1
