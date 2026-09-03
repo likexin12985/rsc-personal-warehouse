@@ -10,6 +10,7 @@ import uuid
 
 import pytest
 
+import app.database_security as database_security
 from app.database_security import (
     DatabaseSecurityBoundaryError,
     EXPECTED_FORMAL_FILE_INDEXES,
@@ -53,6 +54,8 @@ from app.database_security import (
     POSTGRESQL_COMPLETION_PERSONAL_TRIGGER_0019,
     POSTGRESQL_MATERIAL_REQUEST_CANCELLATION_FACT_GRAPH_TRIGGER_0037,
     POSTGRESQL_RECOUNT_PERSONAL_TRIGGER_0019,
+    STOCKTAKE_DIFFERENCE_COMPLETION_FUNCTION_0031,
+    STOCKTAKE_DIFFERENCE_COMPLETION_TRIGGER_0031,
     OPENING_COMMIT_TRIGGER_NAMES,
     OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256,
     OAM_SYNC_RUNTIME_FUNCTION_DEFINITIONS,
@@ -162,6 +165,13 @@ STOCKTAKE_RECOUNT_CAUSALITY_MIGRATION_0018 = (
     / "versions"
     / "20260831_0018_stocktake_recount_causality.py"
 )
+STOCKTAKE_DIFFERENCE_EVALUATOR_MIGRATION_0031 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260901_0031_stocktake_difference_evaluator.py"
+)
 NONOPENING_STOCKTAKE_REVIEW_MIGRATION_0032 = (
     ROOT
     / "backend"
@@ -266,6 +276,13 @@ STOCKTAKE_OBSERVATION_SCOPE_MODE_MIGRATION_0050 = (
     / "alembic"
     / "versions"
     / "20260903_0050_stocktake_observation_scope_mode.py"
+)
+STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_MIGRATION_0051 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0051_stocktake_difference_authorization_hash.py"
 )
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
@@ -781,6 +798,28 @@ def _load_stocktake_observation_scope_mode_migration_0050() -> object:
     spec = importlib.util.spec_from_file_location(
         "rsc_migration_0050_observation_scope_mode_manifest",
         STOCKTAKE_OBSERVATION_SCOPE_MODE_MIGRATION_0050,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_stocktake_difference_authorization_hash_migration_0051() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0051_difference_authorization_hash_manifest",
+        STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_MIGRATION_0051,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_stocktake_difference_evaluator_migration_0031() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0031_difference_evaluator_manifest",
+        STOCKTAKE_DIFFERENCE_EVALUATOR_MIGRATION_0031,
     )
     assert spec is not None and spec.loader is not None
     migration = importlib.util.module_from_spec(spec)
@@ -1597,6 +1636,244 @@ def test_0049_new_startup_trigger_guards_reject_catalog_drift(
                 indexes=_valid_stocktake_recount_indexes(),
                 triggers=rows,
             )
+
+
+def test_0051_difference_completion_function_manifest_and_body_are_exact(
+) -> None:
+    migration_0031 = _load_stocktake_difference_evaluator_migration_0031()
+    migration_0051 = (
+        _load_stocktake_difference_authorization_hash_migration_0051()
+    )
+    coordinate = (STOCKTAKE_DIFFERENCE_COMPLETION_FUNCTION_0031, "")
+    legacy_sql = migration_0031._postgresql_0031_function_sql()
+    legacy_body = legacy_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+
+    assert migration_0051.revision == "20260903_0051"
+    assert migration_0051.down_revision == "20260903_0050"
+    assert migration_0051.PREVIOUS_SCHEMA_REVISION == (
+        migration_0051.down_revision
+    )
+    assert migration_0051.FUNCTION_NAME == coordinate[0]
+    assert migration_0051.FUNCTION_SIGNATURE == (
+        f"public.{coordinate[0]}()"
+    )
+    assert migration_0051.FIXED_SEARCH_PATH == (
+        "search_path=pg_catalog, public"
+    )
+    assert migration_0051.LEGACY_BODY_SHA256 == (
+        "6eca64aa504472b4b3ce8e164c3d314e1092e5319797bcf9ea2ad415b51c8ff0"
+    )
+    assert migration_0051.FIXED_BODY_SHA256 == (
+        "ead5a0a72c25cd326a1d036dddd384bb583b66141512f568b8929ab31b4773a9"
+    )
+    assert hashlib.sha256(legacy_body.encode("utf-8")).hexdigest() == (
+        migration_0051.LEGACY_BODY_SHA256
+    )
+    assert legacy_body.count(migration_0051.LEGACY_SOURCE_FRAGMENT) == 1
+    assert migration_0051.FIXED_SOURCE_FRAGMENT not in legacy_body
+    fixed_body = legacy_body.replace(
+        migration_0051.LEGACY_SOURCE_FRAGMENT,
+        migration_0051.FIXED_SOURCE_FRAGMENT,
+    )
+    assert hashlib.sha256(fixed_body.encode("utf-8")).hexdigest() == (
+        migration_0051.FIXED_BODY_SHA256
+    )
+
+    assert FORMAL_FILE_INTERNAL_FUNCTIONS[coordinate] == (
+        "v",
+        False,
+        "plpgsql",
+        (migration_0051.FIXED_SEARCH_PATH,),
+    )
+    assert FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[coordinate] == (
+        "f",
+        "trigger",
+        False,
+    )
+    assert FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate] == (
+        migration_0051.FIXED_BODY_SHA256
+    )
+    assert FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate] != (
+        migration_0051.LEGACY_BODY_SHA256
+    )
+    assert coordinate not in RUNTIME_EXECUTE_FUNCTIONS
+    assert set(FORMAL_FILE_INTERNAL_FUNCTION_SHAPES) == set(
+        FORMAL_FILE_INTERNAL_FUNCTIONS
+    )
+    assert set(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256) == set(
+        FORMAL_FILE_INTERNAL_FUNCTIONS
+    )
+
+
+def test_0051_difference_completion_function_guard_rejects_legacy_body_and_acl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration_0031 = _load_stocktake_difference_evaluator_migration_0031()
+    migration_0051 = (
+        _load_stocktake_difference_authorization_hash_migration_0051()
+    )
+    coordinate = (migration_0051.FUNCTION_NAME, "")
+    legacy_body = migration_0031._postgresql_0031_function_sql().split(
+        "AS $$", 1
+    )[1].rsplit("$$", 1)[0]
+    fixed_body = legacy_body.replace(
+        migration_0051.LEGACY_SOURCE_FRAGMENT,
+        migration_0051.FIXED_SOURCE_FRAGMENT,
+    )
+    row = {
+        "function_id": 1,
+        "function_name": coordinate[0],
+        "argument_types": coordinate[1],
+        "function_kind": "f",
+        "result_type": "trigger",
+        "returns_set": False,
+        "variadic_type": 0,
+        "argument_modes": None,
+        "argument_default_count": 0,
+        "is_strict": False,
+        "source_body": fixed_body,
+        "volatility": "v",
+        "parallel_safety": "u",
+        "is_leakproof": False,
+        "is_security_definer": False,
+        "language_name": "plpgsql",
+        "configuration": [migration_0051.FIXED_SEARCH_PATH],
+        "owner_name": "star_oam_migrator",
+        "can_execute": False,
+        "api_execute_is_grantable": False,
+        "unexpected_execute_grantee_count": 0,
+        "public_can_execute": False,
+        "edge_can_execute": False,
+        "backup_can_execute": False,
+        "edge_receiver_can_execute": False,
+        "projector_can_execute": False,
+    }
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(database_security, "RUNTIME_EXECUTE_FUNCTIONS", {})
+        patcher.setattr(database_security, "RUNTIME_FUNCTION_SHAPES", {})
+        patcher.setattr(database_security, "RUNTIME_FUNCTION_BODY_SHA256", {})
+        patcher.setattr(
+            database_security,
+            "FORMAL_FILE_INTERNAL_FUNCTIONS",
+            {coordinate: ("v", False, "plpgsql", (migration_0051.FIXED_SEARCH_PATH,))},
+        )
+        patcher.setattr(
+            database_security,
+            "FORMAL_FILE_INTERNAL_FUNCTION_SHAPES",
+            {coordinate: ("f", "trigger", False)},
+        )
+        patcher.setattr(
+            database_security,
+            "FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256",
+            {coordinate: migration_0051.FIXED_BODY_SHA256},
+        )
+        patcher.setattr(database_security, "OAM_SYNC_RUNTIME_FUNCTIONS", set())
+        patcher.setattr(
+            database_security, "OAM_SYNC_RUNTIME_FUNCTION_DEFINITIONS", {}
+        )
+        patcher.setattr(
+            database_security, "OAM_SYNC_RUNTIME_FUNCTION_SHAPES", {}
+        )
+        patcher.setattr(
+            database_security, "OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256", {}
+        )
+
+        _assert_runtime_function_acl(
+            [row], expected_migration_role="star_oam_migrator"
+        )
+
+        for field, value in (
+            ("source_body", legacy_body),
+            ("is_security_definer", True),
+            ("can_execute", True),
+            ("public_can_execute", True),
+            ("unexpected_execute_grantee_count", 1),
+        ):
+            drifted = dict(row)
+            drifted[field] = value
+            with pytest.raises(
+                DatabaseSecurityBoundaryError,
+                match="function ACL",
+            ):
+                _assert_runtime_function_acl(
+                    [drifted], expected_migration_role="star_oam_migrator"
+                )
+
+
+def test_0051_difference_completion_trigger_is_one_exact_always_binding(
+) -> None:
+    migration = _load_stocktake_difference_authorization_hash_migration_0051()
+    expected = (
+        migration.TRIGGER_TABLE,
+        migration.FUNCTION_NAME,
+        migration.FIXED_TRIGGER_ENABLED,
+        7,
+        False,
+        False,
+        False,
+    )
+    assert migration.TRIGGER_NAME == (
+        STOCKTAKE_DIFFERENCE_COMPLETION_TRIGGER_0031
+    )
+    assert EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS[
+        STOCKTAKE_DIFFERENCE_COMPLETION_TRIGGER_0031
+    ] == expected
+
+    startup_query = str(_STOCKTAKE_RECOUNT_TRIGGER_SQL)
+    assert f"'{migration.TRIGGER_NAME}'" in startup_query
+    assert f"'{migration.FUNCTION_NAME}'" in startup_query
+    assert "trigger_row.tgnargs AS argument_count" in startup_query
+    assert (
+        "function_row.proname =\n"
+        f"                  '{migration.FUNCTION_NAME}'"
+    ) in startup_query
+
+    _assert_valid_stocktake_recount_schema()
+    valid = _valid_stocktake_recount_triggers()
+    target = next(
+        row
+        for row in valid
+        if row["trigger_name"] == migration.TRIGGER_NAME
+    )
+    for field, value in (
+        ("table_name", "stocktake_tasks"),
+        ("function_name", "rsc_unapproved_stocktake_guard"),
+        ("function_schema", "attacker_schema"),
+        ("enabled", migration.LEGACY_TRIGGER_ENABLED),
+        ("trigger_type", 0),
+        ("is_constraint_trigger", True),
+        ("is_deferrable", True),
+        ("is_initially_deferred", True),
+        ("has_when_clause", True),
+        ("has_column_filter", True),
+        ("argument_count", 1),
+    ):
+        drifted = [dict(row) for row in valid]
+        drifted_target = next(
+            row
+            for row in drifted
+            if row["trigger_name"] == migration.TRIGGER_NAME
+        )
+        drifted_target[field] = value
+        with pytest.raises(DatabaseSecurityBoundaryError, match="recount schema"):
+            _assert_stocktake_recount_schema(
+                columns=_valid_stocktake_recount_columns(),
+                constraints=_valid_stocktake_recount_constraints(),
+                indexes=_valid_stocktake_recount_indexes(),
+                triggers=drifted,
+            )
+
+    alias = dict(target)
+    alias["trigger_name"] = "trg_stocktake_difference_completion_alias"
+    alias["table_name"] = "stocktake_count_lines"
+    with pytest.raises(DatabaseSecurityBoundaryError, match="recount schema"):
+        _assert_stocktake_recount_schema(
+            columns=_valid_stocktake_recount_columns(),
+            constraints=_valid_stocktake_recount_constraints(),
+            indexes=_valid_stocktake_recount_indexes(),
+            triggers=[*valid, alias],
+        )
 
 
 def test_0047_nonopening_start_catalog_guard_is_exact_and_rejects_drift(
@@ -4672,6 +4949,7 @@ def _valid_stocktake_recount_triggers() -> list[dict[str, object]]:
             "is_initially_deferred": is_initially_deferred,
             "has_when_clause": False,
             "has_column_filter": False,
+            "argument_count": 0,
         }
         for name, (
             table_name,

@@ -373,7 +373,14 @@ STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION = (
     / "versions"
     / "20260903_0050_stocktake_observation_scope_mode.py"
 )
-HEAD_REVISION = "20260903_0050"
+STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0051_stocktake_difference_authorization_hash.py"
+)
+HEAD_REVISION = "20260903_0051"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -393,6 +400,8 @@ NONOPENING_STOCKTAKE_START_CAUSALITY_REVISION_ID = "20260903_0047"
 STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION_ID = "20260903_0048"
 STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION_ID = "20260903_0049"
 STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID = "20260903_0050"
+STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID = "20260903_0051"
+PRE_STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_HEAD_REVISION = "20260903_0050"
 PRE_STOCKTAKE_OBSERVATION_SCOPE_MODE_HEAD_REVISION = "20260903_0049"
 PRE_STOCKTAKE_RECOUNT_GUARD_SECURITY_HEAD_REVISION = "20260903_0048"
 PRE_STOCKTAKE_SCOPE_GUARD_SECURITY_HEAD_REVISION = "20260903_0047"
@@ -1398,6 +1407,14 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert head is not None
     assert (
         head.down_revision
+        == PRE_STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_HEAD_REVISION
+    )
+    previous_difference_authorization_hash_head = script.get_revision(
+        PRE_STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_HEAD_REVISION
+    )
+    assert previous_difference_authorization_hash_head is not None
+    assert (
+        previous_difference_authorization_hash_head.down_revision
         == PRE_STOCKTAKE_OBSERVATION_SCOPE_MODE_HEAD_REVISION
     )
     previous_observation_scope_mode_head = script.get_revision(
@@ -2847,6 +2864,17 @@ def _load_0050_migration_module():
     return module
 
 
+def _load_0051_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "stocktake_difference_authorization_hash_migration_0051",
+        STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_0047_postgresql_functions_parse_as_sql_and_plpgsql() -> None:
     parser = pytest.importorskip("pglast.parser")
     module = _load_0047_migration_module()
@@ -3333,7 +3361,7 @@ def test_0048_postgresql_offline_downgrade_restores_exact_invoker_guard(
     )
 
 
-def test_0048_0049_0050_sqlite_noops_share_one_ordered_revision_chain(
+def test_0048_0049_0050_0051_sqlite_noops_share_one_ordered_revision_chain(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3341,7 +3369,8 @@ def test_0048_0049_0050_sqlite_noops_share_one_ordered_revision_chain(
     module_0048 = _load_0048_migration_module()
     module_0049 = _load_0049_migration_module()
     module_0050 = _load_0050_migration_module()
-    for module in (module_0048, module_0049, module_0050):
+    module_0051 = _load_0051_migration_module()
+    for module in (module_0048, module_0049, module_0050, module_0051):
         assert "SQLite is an explicit schema no-op" in (module.__doc__ or "")
 
     database_url = f"sqlite+pysqlite:///{tmp_path / 'security-noops.db'}"
@@ -3377,12 +3406,14 @@ def test_0048_0049_0050_sqlite_noops_share_one_ordered_revision_chain(
         STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION_ID,
         STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION_ID,
         STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID,
+        STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID,
     ):
         command.upgrade(config, target_revision)
         assert schema_snapshot() == baseline_schema
         assert_revision(target_revision)
 
     for target_revision in (
+        STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID,
         STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION_ID,
         STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION_ID,
         PRE_STOCKTAKE_SCOPE_GUARD_SECURITY_HEAD_REVISION,
@@ -3959,6 +3990,481 @@ def test_0050_postgresql_offline_downgrade_restores_exact_legacy_body(
         sql.index(lock_sql)
         < sql.index("qualified downgrade preflight")
         < sql.index("0050 stocktake observation scope-mode replacement failed")
+        < sql.index("legacy downgrade postflight")
+        < sql.index(
+            "CREATE OR REPLACE FUNCTION public."
+            "rsc_oam_runtime_binding_ready_0044()"
+        )
+    )
+
+
+def test_0051_pins_exact_authorization_hash_repair_and_catalog_sql(
+    monkeypatch,
+) -> None:
+    module = _load_0051_migration_module()
+    assert module.revision == (
+        STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID
+    )
+    assert module.down_revision == (
+        PRE_STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_HEAD_REVISION
+    )
+    assert module.FUNCTION_SIGNATURE == (
+        "public.rsc_validate_stocktake_difference_set_completion_0031()"
+    )
+    assert module.TRIGGER_TABLE == "stocktake_difference_set_completions"
+    assert module.TRIGGER_NAME == (
+        "trg_stocktake_difference_set_completions_validate_0031"
+    )
+    assert module.LEGACY_TRIGGER_ENABLED == "O"
+    assert module.FIXED_TRIGGER_ENABLED == "A"
+    assert module.NONOPENING_AUTHORIZATION_SCHEMA == (
+        "cloud_oam.stocktake.difference_authorization.v1"
+    )
+    assert module.NONOPENING_AUTHORIZATION_CANONICAL_KEYS == (
+        "assignment_id",
+        "authorization_version",
+        "completed_at",
+        "person_id",
+        "role_code",
+        "schema",
+        "scope_id",
+        "scope_type",
+        "user_id",
+    )
+    assert module.NONOPENING_AUTHORIZATION_CANONICAL_KEYS == tuple(
+        sorted(module.NONOPENING_AUTHORIZATION_CANONICAL_KEYS)
+    )
+
+    spec = importlib.util.spec_from_file_location(
+        "stocktake_difference_evaluator_migration_0031_for_0051",
+        STOCKTAKE_DIFFERENCE_EVALUATOR_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    legacy_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(legacy_module)
+    legacy_sql = legacy_module._postgresql_0031_function_sql()
+    body_match = re.search(
+        r"AS \$\$(?P<body>.*?)\$\$",
+        legacy_sql,
+        flags=re.DOTALL,
+    )
+    assert body_match is not None
+    legacy_body = body_match.group("body")
+    assert hashlib.sha256(legacy_body.encode("utf-8")).hexdigest() == (
+        module.LEGACY_BODY_SHA256
+    )
+    assert legacy_body.count(module.LEGACY_SOURCE_FRAGMENT) == 1
+    assert module.FIXED_SOURCE_FRAGMENT not in legacy_body
+
+    fixed_body = legacy_body.replace(
+        module.LEGACY_SOURCE_FRAGMENT,
+        module.FIXED_SOURCE_FRAGMENT,
+    )
+    assert hashlib.sha256(fixed_body.encode("utf-8")).hexdigest() == (
+        module.FIXED_BODY_SHA256
+    )
+    assert fixed_body.count(module.FIXED_SOURCE_FRAGMENT) == 1
+    assert module.LEGACY_SOURCE_FRAGMENT not in fixed_body
+    assert fixed_body.replace(
+        module.FIXED_SOURCE_FRAGMENT,
+        module.LEGACY_SOURCE_FRAGMENT,
+    ) == legacy_body
+
+    parser = pytest.importorskip("pglast.parser")
+    statements: list[str] = []
+    monkeypatch.setattr(module.op, "execute", statements.append)
+    module._verify_catalog(
+        expected_body_sha256=module.LEGACY_BODY_SHA256,
+        expected_source_fragment=module.LEGACY_SOURCE_FRAGMENT,
+        forbidden_source_fragment=module.FIXED_SOURCE_FRAGMENT,
+        expected_trigger_enabled=module.LEGACY_TRIGGER_ENABLED,
+        phase="legacy parse probe",
+    )
+    module._verify_existing_rows(phase="existing rows parse probe")
+    module._replace_body_fragment(
+        expected_body_sha256=module.LEGACY_BODY_SHA256,
+        source_fragment=module.LEGACY_SOURCE_FRAGMENT,
+        replacement_fragment=module.FIXED_SOURCE_FRAGMENT,
+        phase="upgrade parse probe",
+    )
+    module._verify_catalog(
+        expected_body_sha256=module.FIXED_BODY_SHA256,
+        expected_source_fragment=module.FIXED_SOURCE_FRAGMENT,
+        forbidden_source_fragment=module.LEGACY_SOURCE_FRAGMENT,
+        expected_trigger_enabled=module.FIXED_TRIGGER_ENABLED,
+        phase="fixed parse probe",
+    )
+    module._replace_body_fragment(
+        expected_body_sha256=module.FIXED_BODY_SHA256,
+        source_fragment=module.FIXED_SOURCE_FRAGMENT,
+        replacement_fragment=module.LEGACY_SOURCE_FRAGMENT,
+        phase="downgrade parse probe",
+    )
+    for statement in statements:
+        assert not sa.text(statement)._bindparams
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+
+    existing_rows_sql = next(
+        statement
+        for statement in statements
+        if module.EXISTING_ROWS_ERROR in statement
+    )
+    normalized_existing_rows_sql = " ".join(existing_rows_sql.split())
+    for stable_historical_guard in (
+        "FROM public.users AS app_user",
+        "JOIN public.people AS person ON person.id = app_user.person_id",
+        "JOIN public.role_assignments AS assignment ON assignment.id = "
+        "completion.completed_role_assignment_id AND assignment.user_id = "
+        "app_user.id",
+        "JOIN public.roles AS role ON role.id = assignment.role_id",
+        "app_user.id = completion.completed_by_user_id",
+        "person.id = completion.completed_by_person_id",
+        "role.code = completion.role_code",
+        "NOT role.is_external",
+        "assignment.scope_type = completion.scope_type",
+        "assignment.scope_id = completion.scope_id_snapshot",
+        "assignment.valid_from <= completion.completed_at",
+        "completion.completed_at < assignment.valid_to",
+        "completion.completed_at < assignment.revoked_at",
+        "role.code = 'admin' AND assignment.scope_type = 'national' "
+        "AND assignment.scope_id = '*'",
+        "role.code = 'provincial_manager' AND assignment.scope_type = "
+        "'organization' AND assignment.scope_id = task.region_org_id::text",
+        "completion.authorization_sha256 IS DISTINCT FROM",
+        "pg_catalog.sha256(",
+        "pg_catalog.convert_to(",
+        "pg_catalog.timezone('UTC', completion.completed_at)",
+        "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'",
+    ):
+        assert stable_historical_guard in normalized_existing_rows_sql
+    for forbidden_current_state_dependency in (
+        "app_user.account_status",
+        "app_user.is_active",
+        "app_user.authorization_version",
+        "person.employment_status",
+        "assignment.status",
+        "role.status",
+        "role_permissions",
+        "permissions AS permission",
+    ):
+        assert forbidden_current_state_dependency not in existing_rows_sql
+
+    for expected_revision in (module.PREVIOUS_SCHEMA_REVISION, module.revision):
+        ready_sql = module._oam_runtime_ready_function_sql(expected_revision)
+        assert not sa.text(ready_sql)._bindparams
+        parser.parse_sql(ready_sql)
+        parser.parse_plpgsql_json(ready_sql)
+
+    with pytest.raises(ValueError, match="unsupported stocktake difference"):
+        module._verify_catalog(
+            expected_body_sha256=module.LEGACY_BODY_SHA256,
+            expected_source_fragment=module.LEGACY_SOURCE_FRAGMENT,
+            forbidden_source_fragment=module.FIXED_SOURCE_FRAGMENT,
+            expected_trigger_enabled=module.FIXED_TRIGGER_ENABLED,
+            phase="invalid",
+        )
+    with pytest.raises(ValueError, match="unsupported stocktake difference"):
+        module._replace_body_fragment(
+            expected_body_sha256=module.LEGACY_BODY_SHA256,
+            source_fragment=module.FIXED_SOURCE_FRAGMENT,
+            replacement_fragment=module.LEGACY_SOURCE_FRAGMENT,
+            phase="invalid",
+        )
+    with pytest.raises(ValueError, match="unsupported OAM runtime"):
+        module._oam_runtime_ready_function_sql("20260903_9999")
+
+
+def test_0051_nonopening_authorization_sha256_sql_pins_python_canonical_json(
+) -> None:
+    module = _load_0051_migration_module()
+    service_source = (
+        ROOT
+        / "backend"
+        / "app"
+        / "formal_services"
+        / "stocktake_difference.py"
+    ).read_text(encoding="utf-8")
+    service_tree = ast.parse(service_source)
+    authorization_function = next(
+        node
+        for node in service_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "_difference_authorization_sha256"
+    )
+    return_node = next(
+        node
+        for node in ast.walk(authorization_function)
+        if isinstance(node, ast.Return)
+    )
+    assert isinstance(return_node.value, ast.Call)
+    assert isinstance(return_node.value.func, ast.Name)
+    assert return_node.value.func.id == "_sha256"
+    assert len(return_node.value.args) == 1
+    service_document = return_node.value.args[0]
+    assert isinstance(service_document, ast.Dict)
+    service_keys = tuple(
+        key.value
+        for key in service_document.keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    )
+    assert service_keys == module.NONOPENING_AUTHORIZATION_CANONICAL_KEYS
+    service_schema_index = service_keys.index("schema")
+    service_schema = service_document.values[service_schema_index]
+    assert isinstance(service_schema, ast.Constant)
+    assert service_schema.value == module.NONOPENING_AUTHORIZATION_SCHEMA
+
+    hash_sql = module._NONOPENING_AUTHORIZATION_SHA256_SQL
+    json_fragments = (
+        '{"assignment_id":',
+        ',"authorization_version":',
+        ',"completed_at":',
+        ',"person_id":',
+        ',"role_code":',
+        ',"schema":"cloud_oam.stocktake.difference_authorization.v1"',
+        ',"scope_id":',
+        ',"scope_type":',
+        ',"user_id":',
+        '}',
+    )
+    positions = tuple(hash_sql.index(fragment) for fragment in json_fragments)
+    assert positions == tuple(sorted(positions))
+    assert all(hash_sql.count(fragment) == 1 for fragment in json_fragments)
+    assert "completion.authorization_version::text" in hash_sql
+    assert hash_sql.count("pg_catalog.to_json(") == 7
+    assert (
+        "pg_catalog.timezone('UTC', completion.completed_at)" in hash_sql
+    )
+    assert "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'" in hash_sql
+    assert "pg_catalog.convert_to(" in hash_sql
+    assert "'UTF8'" in hash_sql
+    assert "pg_catalog.sha256(" in hash_sql
+    assert "pg_catalog.encode(" in hash_sql
+    assert "'hex'" in hash_sql
+    timestamp_function = next(
+        node
+        for node in service_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "_timestamp"
+    )
+    normalized_timestamp_source = " ".join(
+        ast.unparse(timestamp_function).split()
+    )
+    assert "isoformat(timespec='microseconds')" in normalized_timestamp_source
+    assert ".replace('+00:00', 'Z')" in normalized_timestamp_source
+
+    document = {
+        "assignment_id": "11111111-1111-1111-1111-111111111111",
+        "authorization_version": 7,
+        "completed_at": "2026-09-03T12:34:56.123456Z",
+        "person_id": "22222222-2222-2222-2222-222222222222",
+        "role_code": "provincial_manager",
+        "schema": module.NONOPENING_AUTHORIZATION_SCHEMA,
+        "scope_id": "33333333-3333-3333-3333-333333333333",
+        "scope_type": "organization",
+        "user_id": "user-001",
+    }
+    canonical_json = json.dumps(
+        document,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    assert canonical_json == (
+        '{"assignment_id":"11111111-1111-1111-1111-111111111111",'
+        '"authorization_version":7,'
+        '"completed_at":"2026-09-03T12:34:56.123456Z",'
+        '"person_id":"22222222-2222-2222-2222-222222222222",'
+        '"role_code":"provincial_manager",'
+        '"schema":"cloud_oam.stocktake.difference_authorization.v1",'
+        '"scope_id":"33333333-3333-3333-3333-333333333333",'
+        '"scope_type":"organization","user_id":"user-001"}'
+    )
+    assert hashlib.sha256(canonical_json.encode("utf-8")).hexdigest() == (
+        "df73a093d060d5a0dd8474a44ce23c8ba0eab54b96abbac7d8e16cb3ee79a9ec"
+    )
+
+
+def test_0051_postgresql_offline_upgrade_repairs_hash_and_enables_always(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0051_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_HEAD_REVISION}:"
+        f"{STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID}",
+        sql=True,
+    )
+    sql = output.getvalue()
+
+    lock_sql = (
+        "LOCK TABLE public.stocktake_difference_set_completions "
+        "IN ACCESS EXCLUSIVE MODE"
+    )
+    enable_sql = (
+        "ALTER TABLE public.stocktake_difference_set_completions "
+        "ENABLE ALWAYS TRIGGER "
+        "trg_stocktake_difference_set_completions_validate_0031"
+    )
+    assert "-- Running upgrade 20260903_0050 -> 20260903_0051" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count(module.CATALOG_ERROR) == 14
+    assert sql.count(module.REPLACEMENT_ERROR) == 3
+    assert sql.count(module.EXISTING_ROWS_ERROR) == 1
+    assert "legacy upgrade preflight" in sql
+    assert "upgrade preflight" in sql
+    assert "fixed upgrade postflight" in sql
+    assert sql.count(module.LEGACY_BODY_SHA256) == 2
+    assert sql.count(module.FIXED_BODY_SHA256) == 1
+    assert "function_row.proowner = migrator_oid" in sql
+    assert "function_row.prokind = 'f'" in sql
+    assert "function_row.prorettype = pg_catalog.to_regtype('trigger')" in sql
+    assert "NOT function_row.proretset" in sql
+    assert "function_row.pronargs = 0" in sql
+    assert "function_row.proargtypes = ''::pg_catalog.oidvector" in sql
+    assert "function_row.proallargtypes IS NULL" in sql
+    assert "function_row.proargnames IS NULL" in sql
+    assert "function_row.proargmodes IS NULL" in sql
+    assert "function_row.pronargdefaults = 0" in sql
+    assert "function_row.proargdefaults IS NULL" in sql
+    assert "function_row.provariadic = 0" in sql
+    assert "language_row.lanname = 'plpgsql'" in sql
+    assert "function_row.provolatile = 'v'" in sql
+    assert "NOT function_row.proisstrict" in sql
+    assert "NOT function_row.proleakproof" in sql
+    assert "function_row.proparallel = 'u'" in sql
+    assert "NOT function_row.prosecdef" in sql
+    assert "function_row.proconfig = ARRAY['search_path=pg_catalog, public']" in sql
+    assert "function_acl.grantor <> migrator_oid" in sql
+    assert "function_acl.grantee = 0" in sql
+    assert "pg_catalog.has_function_privilege" in sql
+    assert "trigger_row.tgenabled = 'O'" in sql
+    assert "trigger_row.tgenabled = 'A'" in sql
+    assert "trigger_row.tgtype = 7" in sql
+    assert "trigger_row.tgconstraint = 0" in sql
+    assert "NOT trigger_row.tgdeferrable" in sql
+    assert "NOT trigger_row.tginitdeferred" in sql
+    assert "trigger_row.tgqual IS NULL" in sql
+    assert "trigger_row.tgnargs = 0" in sql
+    assert "trigger_row.tgattr = ''::pg_catalog.int2vector" in sql
+    assert "trigger_row.tgfoid = function_oid" in sql
+    assert "completion.authorization_sha256 !~ '^[0-9a-f]{64}$'" in sql
+    assert "completion.difference_count IS DISTINCT FROM" in sql
+    assert "sealing.authorization_sha256 =" in sql
+    assert "completion.authorization_sha256" in sql
+    assert "completion.completed_at < submission.submitted_at" in sql
+    assert "FROM public.users AS app_user" in sql
+    assert "JOIN public.people AS person" in sql
+    assert "JOIN public.role_assignments AS assignment" in sql
+    assert "JOIN public.roles AS role" in sql
+    assert "NOT role.is_external" in sql
+    assert "assignment.valid_from <=" in sql
+    assert "completion.completed_at <" in sql
+    assert "assignment.valid_to" in sql
+    assert "assignment.revoked_at" in sql
+    assert module.NONOPENING_AUTHORIZATION_SCHEMA in sql
+    assert "pg_catalog.timezone('UTC', completion.completed_at)" in sql
+    assert "app_user.account_status" not in sql
+    assert "app_user.is_active" not in sql
+    assert "app_user.authorization_version" not in sql
+    assert "person.employment_status" not in sql
+    assert "assignment.status" not in sql
+    assert "role.status" not in sql
+    assert "role_permissions" not in sql
+    assert sql.count(enable_sql) == 1
+    assert "pg_catalog.pg_get_functiondef(function_oid)" in sql
+    assert "EXECUTE pg_catalog.replace" in sql
+    assert f"ALTER FUNCTION {module.FUNCTION_SIGNATURE}" not in sql
+    assert f"CREATE OR REPLACE FUNCTION {module.FUNCTION_SIGNATURE}" not in sql
+    assert "GRANT " not in sql
+    assert "INSERT INTO public." not in sql
+    assert "UPDATE public." not in sql
+    assert "DELETE FROM public." not in sql
+
+    ready_sql = (
+        "CREATE OR REPLACE FUNCTION public."
+        "rsc_oam_runtime_binding_ready_0044()"
+    )
+    assert sql.count(ready_sql) == 1
+    assert "pg_catalog.min(version_num) = '20260903_0051'" in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("legacy upgrade preflight")
+        < sql.index(module.EXISTING_ROWS_ERROR)
+        < sql.index(module.REPLACEMENT_ERROR)
+        < sql.index(enable_sql)
+        < sql.index("fixed upgrade postflight")
+        < sql.index(ready_sql)
+    )
+
+
+def test_0051_postgresql_offline_downgrade_restores_legacy_hash_and_origin(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0051_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.downgrade(
+        config,
+        f"{STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID}:"
+        f"{PRE_STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_HEAD_REVISION}",
+        sql=True,
+    )
+    sql = output.getvalue()
+
+    lock_sql = (
+        "LOCK TABLE public.stocktake_difference_set_completions "
+        "IN ACCESS EXCLUSIVE MODE"
+    )
+    enable_sql = (
+        "ALTER TABLE public.stocktake_difference_set_completions ENABLE "
+        "TRIGGER trg_stocktake_difference_set_completions_validate_0031"
+    )
+    assert "-- Running downgrade 20260903_0051 -> 20260903_0050" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count(module.CATALOG_ERROR) == 14
+    assert sql.count(module.REPLACEMENT_ERROR) == 3
+    assert sql.count(module.EXISTING_ROWS_ERROR) == 1
+    assert "fixed downgrade preflight" in sql
+    assert "downgrade preflight" in sql
+    assert "legacy downgrade postflight" in sql
+    assert sql.count(module.FIXED_BODY_SHA256) == 2
+    assert sql.count(module.LEGACY_BODY_SHA256) == 1
+    assert "trigger_row.tgenabled = 'A'" in sql
+    assert "trigger_row.tgenabled = 'O'" in sql
+    assert "FROM public.users AS app_user" in sql
+    assert module.NONOPENING_AUTHORIZATION_SCHEMA in sql
+    assert "pg_catalog.timezone('UTC', completion.completed_at)" in sql
+    assert "app_user.account_status" not in sql
+    assert "app_user.authorization_version" not in sql
+    assert "role_permissions" not in sql
+    assert sql.count(enable_sql) == 1
+    assert "pg_catalog.pg_get_functiondef(function_oid)" in sql
+    assert "EXECUTE pg_catalog.replace" in sql
+    assert f"ALTER FUNCTION {module.FUNCTION_SIGNATURE}" not in sql
+    assert f"CREATE OR REPLACE FUNCTION {module.FUNCTION_SIGNATURE}" not in sql
+    assert "GRANT " not in sql
+    assert "INSERT INTO public." not in sql
+    assert "UPDATE public." not in sql
+    assert "DELETE FROM public." not in sql
+    assert "pg_catalog.min(version_num) = '20260903_0050'" in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("fixed downgrade preflight")
+        < sql.index(module.EXISTING_ROWS_ERROR)
+        < sql.index(module.REPLACEMENT_ERROR)
+        < sql.index(enable_sql)
         < sql.index("legacy downgrade postflight")
         < sql.index(
             "CREATE OR REPLACE FUNCTION public."

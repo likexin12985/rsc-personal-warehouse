@@ -475,6 +475,7 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0047) == 14
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0048) == 14
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0049) == 14
+    assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0050) == 14
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST) == 14
     ready_signature = "rsc_oam_runtime_binding_ready_0044()"
     for manifest in (
@@ -483,6 +484,7 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0047,
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0048,
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0049,
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0050,
         scope_security.OAM_SYNC_FUNCTION_MANIFEST,
     ):
         assert {
@@ -530,6 +532,12 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
             / "20260903_0050_stocktake_observation_scope_mode.py"
         )
     )
+    migration_0051 = runpy.run_path(
+        str(
+            migration_root
+            / "20260903_0051_stocktake_difference_authorization_hash.py"
+        )
+    )
     ready_body_0045 = migration_0045["_oam_runtime_ready_function_sql"](
         migration_0045["revision"]
     ).split("AS $$", 1)[1].rsplit("$$", 1)[0]
@@ -548,6 +556,9 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
     ready_body_0050 = migration_0050["_oam_runtime_ready_function_sql"](
         migration_0050["revision"]
     ).split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    ready_body_0051 = migration_0051["_oam_runtime_ready_function_sql"](
+        migration_0051["revision"]
+    ).split("AS $$", 1)[1].rsplit("$$", 1)[0]
     ready_body_0048_downgrade = migration_0048[
         "_oam_runtime_ready_function_sql"
     ](migration_0048["PREVIOUS_SCHEMA_REVISION"]).split(
@@ -565,6 +576,13 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
     ready_body_0050_downgrade = migration_0050[
         "_oam_runtime_ready_function_sql"
     ](migration_0050["PREVIOUS_SCHEMA_REVISION"]).split(
+        "AS $$", 1
+    )[1].rsplit(
+        "$$", 1
+    )[0]
+    ready_body_0051_downgrade = migration_0051[
+        "_oam_runtime_ready_function_sql"
+    ](migration_0051["PREVIOUS_SCHEMA_REVISION"]).split(
         "AS $$", 1
     )[1].rsplit(
         "$$", 1
@@ -589,6 +607,11 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
         ][6]
     )
     assert hashlib.sha256(ready_body_0050.encode("utf-8")).hexdigest() == (
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0050[
+            ready_signature
+        ][6]
+    )
+    assert hashlib.sha256(ready_body_0051.encode("utf-8")).hexdigest() == (
         scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6]
     )
     assert ready_body_0048_downgrade == ready_body_0047
@@ -615,12 +638,21 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
             ready_signature
         ][6]
     )
+    assert ready_body_0051_downgrade == ready_body_0050
+    assert hashlib.sha256(
+        ready_body_0051_downgrade.encode("utf-8")
+    ).hexdigest() == (
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0050[
+            ready_signature
+        ][6]
+    )
     assert migration_0045["revision"] == "20260903_0045"
     assert migration_0046["revision"] == "20260903_0046"
     assert migration_0047["revision"] == "20260903_0047"
     assert migration_0048["revision"] == "20260903_0048"
     assert migration_0049["revision"] == "20260903_0049"
     assert migration_0050["revision"] == "20260903_0050"
+    assert migration_0051["revision"] == "20260903_0051"
     assert migration_0048["down_revision"] == migration_0047["revision"]
     assert migration_0048["PREVIOUS_SCHEMA_REVISION"] == migration_0047[
         "revision"
@@ -633,6 +665,10 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
     assert migration_0050["PREVIOUS_SCHEMA_REVISION"] == migration_0049[
         "revision"
     ]
+    assert migration_0051["down_revision"] == migration_0050["revision"]
+    assert migration_0051["PREVIOUS_SCHEMA_REVISION"] == migration_0050[
+        "revision"
+    ]
     for ready_body, expected_revision in (
         (ready_body_0045, migration_0045["revision"]),
         (ready_body_0046, migration_0046["revision"]),
@@ -640,6 +676,7 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
         (ready_body_0048, migration_0048["revision"]),
         (ready_body_0049, migration_0049["revision"]),
         (ready_body_0050, migration_0050["revision"]),
+        (ready_body_0051, migration_0051["revision"]),
     ):
         assert (
             f"pg_catalog.min(version_num) = '{expected_revision}'"
@@ -663,9 +700,12 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
             scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0049[
                 ready_signature
             ][6],
+            scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0050[
+                ready_signature
+            ][6],
             scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6],
         }
-    ) == 7
+    ) == 8
     ready_body = actual_sources["rsc_oam_runtime_binding_ready_0044"]
     assert "FROM public.alembic_version" in ready_body
     assert "pg_catalog.count(*) = 1" in ready_body

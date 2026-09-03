@@ -766,6 +766,12 @@ POSTGRESQL_COMPLETION_PERSONAL_TRIGGER_0019 = (
 POSTGRESQL_RECOUNT_PERSONAL_TRIGGER_0019 = (
     "trg_stocktake_recount_scope_assignments_technician_personal_loc"
 )
+STOCKTAKE_DIFFERENCE_COMPLETION_FUNCTION_0031 = (
+    "rsc_validate_stocktake_difference_set_completion_0031"
+)
+STOCKTAKE_DIFFERENCE_COMPLETION_TRIGGER_0031 = (
+    "trg_stocktake_difference_set_completions_validate_0031"
+)
 EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS = {
     "trg_stock_locations_stocktake_personal_continuity_0020": (
         "stock_locations",
@@ -913,6 +919,15 @@ EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS = {
     ),
 }
 EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS = {
+    STOCKTAKE_DIFFERENCE_COMPLETION_TRIGGER_0031: (
+        "stocktake_difference_set_completions",
+        STOCKTAKE_DIFFERENCE_COMPLETION_FUNCTION_0031,
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
     "trg_stocktake_observation_dispositions_validate_0016": (
         "stocktake_observation_dispositions",
         "rsc_validate_stocktake_observation_disposition_0016",
@@ -2824,6 +2839,12 @@ FORMAL_FILE_INTERNAL_FUNCTIONS = {
         "plpgsql",
         ("search_path=pg_catalog, public",),
     ),
+    (STOCKTAKE_DIFFERENCE_COMPLETION_FUNCTION_0031, ""): (
+        "v",
+        False,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
     ("rsc_stocktake_recount_scope_graph_valid_0032", "uuid"): (
         "s",
         False,
@@ -3021,6 +3042,8 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
         "7470b118731f1fd6e53269457d511f73308eab704048109b32bd039f8df0824f",
     ("rsc_validate_stocktake_scope_region_owner_0025", ""):
         "904a443c2c5930356af0f15f444f29ec6b6ce61f32294e4b2e3b40dd3a0e4e8e",
+    (STOCKTAKE_DIFFERENCE_COMPLETION_FUNCTION_0031, ""):
+        "ead5a0a72c25cd326a1d036dddd384bb583b66141512f568b8929ab31b4773a9",
     ("rsc_stocktake_recount_scope_graph_valid_0032", "uuid"):
         "a1308f871cb0c7ba6fb0584dc28520b0ea4361d956d3c3d30a758f8ffafa1619",
     ("rsc_require_nonopening_stocktake_review_graph_0032", ""):
@@ -3736,7 +3759,8 @@ SELECT
     trigger_row.tgdeferrable AS is_deferrable,
     trigger_row.tginitdeferred AS is_initially_deferred,
     trigger_row.tgqual IS NOT NULL AS has_when_clause,
-    trigger_row.tgattr::text <> '' AS has_column_filter
+    trigger_row.tgattr::text <> '' AS has_column_filter,
+    trigger_row.tgnargs AS argument_count
 FROM pg_trigger AS trigger_row
 JOIN pg_class AS table_row
   ON table_row.oid = trigger_row.tgrelid
@@ -3755,12 +3779,16 @@ WHERE table_schema.nspname = 'public'
           function_row.proname IN (
               {_STOCKTAKE_RECOUNT_TRIGGER_FUNCTION_NAME_LITERALS}
           )
-          AND table_row.relname NOT IN (
-              'stock_locations',
-              'stocktake_count_lines',
-              'stocktake_count_observations',
-              'stocktake_scope_count_completions',
-              'stocktake_recount_scope_assignments'
+          AND (
+              function_row.proname =
+                  '{STOCKTAKE_DIFFERENCE_COMPLETION_FUNCTION_0031}'
+              OR table_row.relname NOT IN (
+                  'stock_locations',
+                  'stocktake_count_lines',
+                  'stocktake_count_observations',
+                  'stocktake_scope_count_completions',
+                  'stocktake_recount_scope_assignments'
+              )
           )
       )
   )
@@ -6134,6 +6162,11 @@ def _collect_stocktake_recount_trigger_failures(
             failures.append(f"{name}.when")
         if row.get("has_column_filter") is not False:
             failures.append(f"{name}.columns")
+        if (
+            name == STOCKTAKE_DIFFERENCE_COMPLETION_TRIGGER_0031
+            and row.get("argument_count") != 0
+        ):
+            failures.append(f"{name}.arguments")
 
 
 def _assert_stocktake_scope_triggers(
