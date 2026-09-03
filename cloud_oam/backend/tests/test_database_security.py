@@ -224,6 +224,13 @@ NONOPENING_STOCKTAKE_START_MIGRATION_0047 = (
     / "versions"
     / "20260903_0047_nonopening_stocktake_start_causality.py"
 )
+STOCKTAKE_SCOPE_GUARD_SECURITY_MIGRATION_0048 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0048_stocktake_scope_guard_security.py"
+)
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
     / "backend"
@@ -712,6 +719,28 @@ def _load_nonopening_stocktake_start_migration_0047() -> object:
     return migration
 
 
+def _load_stocktake_scope_guard_security_migration_0048() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0048_scope_guard_security_manifest",
+        STOCKTAKE_SCOPE_GUARD_SECURITY_MIGRATION_0048,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_stocktake_scope_region_owner_migration_0025() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0025_scope_region_owner_manifest",
+        STOCKTAKE_SCOPE_REGION_OWNER_MIGRATION_0025,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
 def _valid_nonopening_stocktake_start_trigger_rows() -> list[dict[str, object]]:
     return [
         {
@@ -934,6 +963,120 @@ def test_0047_nonopening_start_runtime_manifest_and_function_bodies_are_exact(
         "GRANT UPDATE ({columns}) ON TABLE public.stocktake_tasks"
     ) in source
     assert "GRANT UPDATE ON TABLE public.stocktake_tasks" not in source
+
+
+def test_0048_scope_guard_execution_boundary_is_exact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration_0025 = _load_stocktake_scope_region_owner_migration_0025()
+    migration_0048 = _load_stocktake_scope_guard_security_migration_0048()
+    executed: list[str] = []
+    monkeypatch.setattr(
+        migration_0025.op,
+        "execute",
+        lambda statement: executed.append(str(statement)),
+    )
+
+    migration_0025._create_postgresql_guard()
+    function_sql = next(
+        statement
+        for statement in executed
+        if statement.lstrip().startswith(
+            "CREATE FUNCTION public."
+            "rsc_validate_stocktake_scope_region_owner_0025()"
+        )
+    )
+    function_body = function_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    coordinate = (migration_0048.SCOPE_GUARD_FUNCTION, "")
+    actual_hash = hashlib.sha256(function_body.encode("utf-8")).hexdigest()
+
+    assert migration_0048.revision == "20260903_0048"
+    assert migration_0048.down_revision == "20260903_0047"
+    assert migration_0048.PREVIOUS_SCHEMA_REVISION == migration_0048.down_revision
+    assert migration_0048.SCOPE_GUARD_FUNCTION == migration_0025.PG_FUNCTION
+    assert migration_0048.SCOPE_GUARD_TRIGGER == migration_0025.SCOPE_TRIGGER
+    assert actual_hash == migration_0048.EXPECTED_FUNCTION_BODY_SHA256
+    assert actual_hash == FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
+    assert FORMAL_FILE_INTERNAL_FUNCTIONS[coordinate] == (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    )
+    assert FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[coordinate] == (
+        "f",
+        "trigger",
+        False,
+    )
+    assert coordinate not in RUNTIME_EXECUTE_FUNCTIONS
+    assert migration_0048.LEGACY_SEARCH_PATH == "search_path=pg_catalog, public"
+    assert migration_0048.HARDENED_SEARCH_PATH == (
+        "search_path=pg_catalog, public"
+    )
+
+    executed.clear()
+    migration_0048._lock_scope_graph()
+    assert executed == [
+        "LOCK TABLE public.organizations, public.stock_locations, "
+        "public.stocktake_tasks, public.stocktake_scopes "
+        "IN ACCESS EXCLUSIVE MODE"
+    ]
+
+    executed.clear()
+    migration_0048._verify_scope_guard_catalog(
+        security_definer=True,
+        expected_search_path=migration_0048.HARDENED_SEARCH_PATH,
+        phase="test hardened catalog",
+    )
+    assert len(executed) == 1
+    catalog_sql = executed[0]
+    for required in (
+        "current_user <> 'star_oam_migrator'",
+        "session_user <> 'star_oam_migrator'",
+        "function_row.prokind = 'f'",
+        "function_row.pronargs = 0",
+        "function_row.prorettype = 'trigger'::pg_catalog.regtype",
+        "language_row.lanname = 'plpgsql'",
+        "function_row.provolatile = 'v'",
+        "NOT function_row.proisstrict",
+        "NOT function_row.proleakproof",
+        "function_row.proparallel = 'u'",
+        "function_row.prosecdef IS TRUE",
+        "function_row.proowner = migrator_oid",
+        "function_row.proconfig IS NOT DISTINCT FROM",
+        migration_0048.EXPECTED_FUNCTION_BODY_SHA256,
+        "trigger_row.tgenabled = 'A'",
+        "trigger_row.tgtype = 7",
+        "trigger_row.tgconstraint = 0",
+        "NOT trigger_row.tgdeferrable",
+        "NOT trigger_row.tginitdeferred",
+        "trigger_row.tgqual IS NULL",
+        "trigger_row.tgnargs = 0",
+        "function_acl.grantee = 0",
+        "pg_catalog.has_function_privilege",
+    ):
+        assert required in catalog_sql
+
+    executed.clear()
+    migration_0048._set_scope_guard_security(
+        security_definer=True,
+        search_path="pg_catalog, public",
+    )
+    signature = "public.rsc_validate_stocktake_scope_region_owner_0025()"
+    assert executed == [
+        f"ALTER FUNCTION {signature} SECURITY DEFINER",
+        f"ALTER FUNCTION {signature} SET search_path = pg_catalog, public",
+        f"ALTER FUNCTION {signature} OWNER TO star_oam_migrator",
+        f"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC, star_oam_api",
+    ]
+
+    executed.clear()
+    migration_0048._set_scope_guard_security(
+        security_definer=False,
+        search_path="pg_catalog, public",
+    )
+    assert executed[0] == f"ALTER FUNCTION {signature} SECURITY INVOKER"
+    assert not any(statement.startswith("GRANT ") for statement in executed)
 
 
 def test_0047_nonopening_start_catalog_guard_is_exact_and_rejects_drift(

@@ -37,7 +37,8 @@ DATABASE_NAME = "rsc_pg16_release_gate"
 RLS_REVISION = "20260902_0044"
 APPROVAL_REVISION = "20260903_0045"
 CONTENT_CAUSALITY_REVISION = "20260903_0046"
-HEAD_REVISION = "20260903_0047"
+STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION = "20260903_0048"
+HEAD_REVISION = STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION
 RLS_BINDING_TABLE = "oam_sync_scope_bindings"
 RLS_READY_FUNCTION = "public.rsc_oam_runtime_binding_ready_0044()"
 EDGE_RECEIVER_ROLE = "edge_inbox"
@@ -112,6 +113,15 @@ STOCKTAKE_START_SEALED_TABLES_0047 = tuple(
     table_name
     for table_name in STOCKTAKE_START_TRIGGER_TABLES_0047
     if table_name != STOCKTAKE_START_COMPLETION_TABLE_0047
+)
+STOCKTAKE_SCOPE_GUARD_FUNCTION_0048 = (
+    "rsc_validate_stocktake_scope_region_owner_0025"
+)
+STOCKTAKE_SCOPE_GUARD_TRIGGER_0048 = (
+    "trg_stocktake_scopes_region_owner_0025"
+)
+STOCKTAKE_SCOPE_GUARD_BODY_SHA256_0048 = (
+    "904a443c2c5930356af0f15f444f29ec6b6ce61f32294e4b2e3b40dd3a0e4e8e"
 )
 MATERIAL_REQUEST_NEUTRAL_AXES = {
     "allocation_status": "not_allocated",
@@ -4176,6 +4186,249 @@ def _assert_0047_start_catalog(*, installed: bool) -> None:
             assert " AFTER INSERT OR DELETE OR UPDATE " in definition
             assert "DEFERRABLE INITIALLY DEFERRED" in definition
     assert table_acl == (True, True, False, False, False)
+
+
+def _assert_0048_scope_guard_catalog(
+    *,
+    security_definer: bool,
+    expected_revision: str,
+) -> None:
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT schema_row.nspname, function_row.proname, "
+                "pg_catalog.oidvectortypes(function_row.proargtypes), "
+                "pg_catalog.pg_get_function_result(function_row.oid), "
+                "function_row.prokind, function_row.pronargs, "
+                "function_row.provolatile, function_row.proisstrict, "
+                "function_row.proleakproof, function_row.proparallel, "
+                "function_row.prosecdef, language_row.lanname, "
+                "owner.rolname, function_row.proconfig, "
+                "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+                "function_row.prosrc, 'UTF8')), 'hex'), "
+                "pg_catalog.has_function_privilege("
+                "'star_oam_api', function_row.oid, 'EXECUTE'), "
+                "pg_catalog.has_function_privilege("
+                "'star_oam_backup', function_row.oid, 'EXECUTE'), "
+                "pg_catalog.has_function_privilege("
+                "'star_oam_projector', function_row.oid, 'EXECUTE'), "
+                "pg_catalog.has_function_privilege("
+                "'star_oam_edge', function_row.oid, 'EXECUTE'), "
+                "pg_catalog.has_function_privilege("
+                "%s, function_row.oid, 'EXECUTE'), "
+                "EXISTS (SELECT 1 FROM pg_catalog.aclexplode(COALESCE("
+                "function_row.proacl, pg_catalog.acldefault("
+                "'f', function_row.proowner))) AS function_acl "
+                "WHERE function_acl.grantee = 0 "
+                "AND function_acl.privilege_type = 'EXECUTE'), "
+                "(SELECT pg_catalog.count(*) FROM pg_catalog.aclexplode("
+                "COALESCE(function_row.proacl, pg_catalog.acldefault("
+                "'f', function_row.proowner)))), "
+                "(SELECT pg_catalog.count(*) FROM pg_catalog.aclexplode("
+                "COALESCE(function_row.proacl, pg_catalog.acldefault("
+                "'f', function_row.proowner))) AS function_acl "
+                "WHERE function_acl.grantee = function_row.proowner "
+                "AND function_acl.privilege_type = 'EXECUTE'), "
+                "(SELECT pg_catalog.count(*) FROM pg_catalog.aclexplode("
+                "COALESCE(function_row.proacl, pg_catalog.acldefault("
+                "'f', function_row.proowner))) AS function_acl "
+                "WHERE function_acl.grantee <> function_row.proowner "
+                "OR function_acl.privilege_type <> 'EXECUTE') "
+                "FROM pg_catalog.pg_proc AS function_row "
+                "JOIN pg_catalog.pg_namespace AS schema_row "
+                "ON schema_row.oid = function_row.pronamespace "
+                "JOIN pg_catalog.pg_language AS language_row "
+                "ON language_row.oid = function_row.prolang "
+                "JOIN pg_catalog.pg_roles AS owner "
+                "ON owner.oid = function_row.proowner "
+                "WHERE schema_row.nspname = 'public' "
+                "AND function_row.proname = %s "
+                "ORDER BY function_row.oid",
+                (
+                    EDGE_RECEIVER_ROLE,
+                    STOCKTAKE_SCOPE_GUARD_FUNCTION_0048,
+                ),
+            )
+            function_rows = cursor.fetchall()
+            cursor.execute(
+                "SELECT schema_row.nspname, relation.relname, "
+                "trigger_row.tgname, function_row.proname, "
+                "trigger_row.tgenabled, trigger_row.tgtype, "
+                "trigger_row.tgconstraint = 0, "
+                "trigger_row.tgdeferrable, trigger_row.tginitdeferred, "
+                "trigger_row.tgqual IS NULL, trigger_row.tgnargs, "
+                "trigger_row.tgattr::text, "
+                "pg_catalog.pg_get_triggerdef(trigger_row.oid, true) "
+                "FROM pg_catalog.pg_trigger AS trigger_row "
+                "JOIN pg_catalog.pg_class AS relation "
+                "ON relation.oid = trigger_row.tgrelid "
+                "JOIN pg_catalog.pg_namespace AS schema_row "
+                "ON schema_row.oid = relation.relnamespace "
+                "JOIN pg_catalog.pg_proc AS function_row "
+                "ON function_row.oid = trigger_row.tgfoid "
+                "WHERE NOT trigger_row.tgisinternal "
+                "AND trigger_row.tgname = %s "
+                "ORDER BY trigger_row.oid",
+                (STOCKTAKE_SCOPE_GUARD_TRIGGER_0048,),
+            )
+            trigger_rows = cursor.fetchall()
+            cursor.execute(
+                "SELECT function_row.prosrc "
+                "FROM pg_catalog.pg_proc AS function_row "
+                "WHERE function_row.oid = pg_catalog.to_regprocedure(%s)",
+                ("public.rsc_oam_runtime_binding_ready_0044()",),
+            )
+            readiness_row = cursor.fetchone()
+
+    assert function_rows == [
+        (
+            "public",
+            STOCKTAKE_SCOPE_GUARD_FUNCTION_0048,
+            "",
+            "trigger",
+            "f",
+            0,
+            "v",
+            False,
+            False,
+            "u",
+            security_definer,
+            "plpgsql",
+            "star_oam_migrator",
+            ["search_path=pg_catalog, public"],
+            STOCKTAKE_SCOPE_GUARD_BODY_SHA256_0048,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            1,
+            1,
+            0,
+        )
+    ]
+    assert len(trigger_rows) == 1
+    trigger = trigger_rows[0]
+    assert trigger[:12] == (
+        "public",
+        "stocktake_scopes",
+        STOCKTAKE_SCOPE_GUARD_TRIGGER_0048,
+        STOCKTAKE_SCOPE_GUARD_FUNCTION_0048,
+        "A",
+        7,
+        True,
+        False,
+        False,
+        True,
+        0,
+        "",
+    )
+    trigger_definition = " ".join(trigger[12].split())
+    assert " BEFORE INSERT ON " in trigger_definition
+    assert "stocktake_scopes FOR EACH ROW" in trigger_definition
+    assert " FOR EACH ROW EXECUTE FUNCTION " in trigger_definition
+    assert trigger_definition.endswith(
+        f"{STOCKTAKE_SCOPE_GUARD_FUNCTION_0048}()"
+    )
+    assert " UPDATE " not in trigger_definition
+    assert " DELETE " not in trigger_definition
+    assert " WHEN " not in trigger_definition
+    assert readiness_row is not None
+    assert (
+        f"pg_catalog.min(version_num) = '{expected_revision}'"
+        in readiness_row[0]
+    )
+
+
+def _assert_0048_scope_guard_master_data_stays_read_only() -> None:
+    master_tables = ("organizations", "stock_locations")
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT relation.relname, "
+                "pg_catalog.has_table_privilege("
+                "'star_oam_api', relation.oid, 'SELECT'), "
+                "pg_catalog.has_table_privilege("
+                "'star_oam_api', relation.oid, 'INSERT'), "
+                "pg_catalog.has_table_privilege("
+                "'star_oam_api', relation.oid, 'UPDATE'), "
+                "pg_catalog.has_any_column_privilege("
+                "'star_oam_api', relation.oid, 'UPDATE'), "
+                "pg_catalog.has_table_privilege("
+                "'star_oam_api', relation.oid, 'DELETE'), "
+                "pg_catalog.has_table_privilege("
+                "'star_oam_api', relation.oid, 'TRIGGER') "
+                "FROM pg_catalog.pg_class AS relation "
+                "JOIN pg_catalog.pg_namespace AS schema_row "
+                "ON schema_row.oid = relation.relnamespace "
+                "WHERE schema_row.nspname = 'public' "
+                "AND relation.relname = ANY(%s) "
+                "ORDER BY relation.relname",
+                (list(master_tables),),
+            )
+            assert cursor.fetchall() == [
+                ("organizations", True, False, False, False, False, False),
+                ("stock_locations", True, False, False, False, False, False),
+            ]
+
+    api_parameters = _connection_parameters(
+        role="star_oam_api",
+        password=_role_password("star_oam_api"),
+    )
+    with psycopg.connect(**api_parameters) as connection:
+        with connection.cursor() as cursor:
+            for table_name in master_tables:
+                cursor.execute(f"SELECT id FROM public.{table_name} LIMIT 0")
+
+    _assert_raw_sql_denied(
+        "star_oam_api",
+        f"SELECT public.{STOCKTAKE_SCOPE_GUARD_FUNCTION_0048}()",
+        (),
+        require_rls=False,
+    )
+    for table_name in master_tables:
+        _assert_raw_sql_denied(
+            "star_oam_api",
+            f"SELECT id FROM public.{table_name} LIMIT 1 FOR SHARE",
+            (),
+            require_rls=False,
+        )
+        _assert_raw_sql_denied(
+            "star_oam_api",
+            f"UPDATE public.{table_name} SET status = status WHERE FALSE",
+            (),
+            require_rls=False,
+        )
+
+
+def _assert_0048_empty_graph_downgrade_and_reupgrade() -> None:
+    assert _current_revision() == HEAD_REVISION
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT (SELECT pg_catalog.count(*) "
+                "FROM public.stocktake_tasks), "
+                "(SELECT pg_catalog.count(*) FROM public.stocktake_scopes)"
+            )
+            assert cursor.fetchone() == (0, 0)
+
+    _assert_0048_scope_guard_catalog(
+        security_definer=True,
+        expected_revision=HEAD_REVISION,
+    )
+    _run_alembic("downgrade", "20260903_0047")
+    assert _current_revision() == "20260903_0047"
+    _assert_0048_scope_guard_catalog(
+        security_definer=False,
+        expected_revision="20260903_0047",
+    )
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    _assert_0048_scope_guard_catalog(
+        security_definer=True,
+        expected_revision=HEAD_REVISION,
+    )
 
 
 def _assert_0047_empty_graph_downgrade_and_reupgrade() -> None:
@@ -8520,6 +8773,10 @@ def _assert_0047_rejects_nonempty_start_downgrade(
     )
     assert "cannot downgrade 0047" in (blocked.stdout + blocked.stderr)
     assert _current_revision() == HEAD_REVISION
+    _assert_0048_scope_guard_catalog(
+        security_definer=True,
+        expected_revision=HEAD_REVISION,
+    )
     with Session(api_engine) as session:
         task = session.get(FormalStocktakeTask, task_id)
         assert task is not None and (task.status, task.version) == ("counting", 1)
@@ -8774,6 +9031,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
+    _assert_0048_empty_graph_downgrade_and_reupgrade()
     _assert_0047_empty_graph_downgrade_and_reupgrade()
     _assert_0046_empty_graph_downgrade_and_reupgrade()
     assert _work_order_lock_function_exists() is True
@@ -8891,6 +9149,11 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     )
     try:
         _validate_runtime_security(api_engine)
+        _assert_0048_scope_guard_catalog(
+            security_definer=True,
+            expected_revision=HEAD_REVISION,
+        )
+        _assert_0048_scope_guard_master_data_stays_read_only()
         _assert_0045_approval_catalog_drift_is_rejected(api_engine)
         _validate_projector_security(projector_engine)
         _validate_edge_security(edge_engine)
@@ -8941,6 +9204,10 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             request_id=request_id,
             expected_version=final_request_version,
         )
+        # This first builds and closes an opening stocktake through the API
+        # session.  Its scope insert is the positive 0048 regression: the
+        # unchanged 0025 trigger may read-lock master data only through its
+        # migration-owned execution context.
         stocktake_task_id = _assert_0047_real_api_stocktake_start(
             api_engine,
             actor_user_id=admin_user_id,

@@ -2731,6 +2731,12 @@ RUNTIME_FUNCTION_BODY_SHA256 = {
         "d889b397912e98e1b9c2ec1de03ada750f42df01803c87239b9d04a624221982",
 }
 FORMAL_FILE_INTERNAL_FUNCTIONS = {
+    ("rsc_validate_stocktake_scope_region_owner_0025", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
     ("rsc_guard_formal_file_object_0036", ""): (
         "v",
         True,
@@ -2851,6 +2857,8 @@ FORMAL_FILE_INTERNAL_FUNCTION_SHAPES = {
     for coordinate in FORMAL_FILE_INTERNAL_FUNCTIONS
 }
 FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
+    ("rsc_validate_stocktake_scope_region_owner_0025", ""):
+        "904a443c2c5930356af0f15f444f29ec6b6ce61f32294e4b2e3b40dd3a0e4e8e",
     ("rsc_guard_formal_file_object_0036", ""):
         "b40aec00c7dda886b556b309adfff1d660c03280295a559a5fc452bb106f4b4d",
     ("rsc_guard_formal_file_binding_0036", ""):
