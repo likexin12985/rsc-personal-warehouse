@@ -64,6 +64,9 @@ MATERIAL_REQUEST_STATUS_TRIGGER_0045 = (
 MATERIAL_REQUEST_FILE_GUARD_FUNCTION_0029 = (
     "rsc_guard_material_request_file_0029"
 )
+MATERIAL_REQUEST_DECISION_GUARD_FUNCTION_0029 = (
+    "rsc_guard_material_request_decision_quantity_0029"
+)
 MATERIAL_REQUEST_NEUTRAL_AXES = {
     "allocation_status": "not_allocated",
     "reservation_status": "not_reserved",
@@ -608,6 +611,64 @@ def _assert_request_file_guard_execution_boundary(
                 False,
                 False,
             )
+
+
+def _assert_decision_guard_variable_boundary(*, repaired: bool) -> None:
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT function_row.prosrc,
+                       function_row.prosecdef,
+                       owner.rolname,
+                       function_row.proconfig,
+                       has_function_privilege(
+                           'star_oam_api', function_row.oid, 'EXECUTE'
+                       ),
+                       EXISTS (
+                           SELECT 1
+                             FROM aclexplode(
+                                 coalesce(
+                                     function_row.proacl,
+                                     acldefault(
+                                         'f', function_row.proowner
+                                     )
+                                 )
+                             ) AS function_acl
+                            WHERE function_acl.grantee = 0
+                              AND function_acl.privilege_type = 'EXECUTE'
+                       )
+                  FROM pg_catalog.pg_proc AS function_row
+                  JOIN pg_catalog.pg_namespace AS schema_row
+                    ON schema_row.oid = function_row.pronamespace
+                  JOIN pg_catalog.pg_roles AS owner
+                    ON owner.oid = function_row.proowner
+                 WHERE schema_row.nspname = 'public'
+                   AND function_row.proname = %s
+                   AND function_row.pronargs = 0
+                """,
+                (MATERIAL_REQUEST_DECISION_GUARD_FUNCTION_0029,),
+            )
+            row = cursor.fetchone()
+    assert row is not None
+    body, security_definer, owner, configuration, api_execute, public_execute = row
+    assert (
+        security_definer,
+        owner,
+        configuration,
+        api_execute,
+        public_execute,
+    ) == (
+        False,
+        "star_oam_migrator",
+        ["search_path=pg_catalog, public"],
+        False,
+        False,
+    )
+    assert ("#variable_conflict error" in body) is repaired
+    assert ("line.request_id = guard_request_id" in body) is repaired
+    assert ("line.revision_id = guard_request_revision_id" in body) is repaired
+    assert ("line.request_id = request_id" in body) is (not repaired)
 
 
 def _validate_projector_security(projector_engine) -> None:
@@ -4786,6 +4847,91 @@ def _assert_0045_version_only_projection_drift_is_rejected(
     )
 
 
+def _assert_0029_decision_guard_rejects_cross_request_line(
+    api_engine,
+    *,
+    request_id: uuid.UUID,
+) -> None:
+    now = datetime.now(timezone.utc)
+    with api_engine.connect() as connection:
+        current = connection.execute(
+            text(
+                """
+                SELECT step.id AS step_id,
+                       step.source_mode,
+                       candidate.user_id,
+                       candidate.person_id,
+                       candidate.role_assignment_id,
+                       candidate.authorization_version
+                  FROM approval_instances AS instance
+                  JOIN approval_steps AS step
+                    ON step.id = instance.current_step_id
+                  JOIN approval_step_candidates AS candidate
+                    ON candidate.step_id = step.id
+                   AND candidate.candidate_kind = 'assignee'
+                 WHERE instance.request_id = :request_id
+                   AND instance.status = 'active'
+                 ORDER BY candidate.user_id
+                 LIMIT 1
+                """
+            ),
+            {"request_id": request_id},
+        ).mappings().one()
+        foreign_line = connection.execute(
+            text(
+                """
+                SELECT line.id, line.requested_qty
+                  FROM material_request_lines AS line
+                 WHERE line.request_id <> :request_id
+                 ORDER BY line.created_at, line.id
+                 LIMIT 1
+                """
+            ),
+            {"request_id": request_id},
+        ).mappings().one()
+        with pytest.raises(DBAPIError) as failure:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO approval_step_line_decisions (
+                        id, step_id, request_line_id, input_qty,
+                        approved_qty, rejected_qty, reason, decision_source,
+                        external_registration_id, decided_by_user_id,
+                        decided_by_person_id, decided_role_assignment_id,
+                        authorization_version, decided_at, created_at
+                    ) VALUES (
+                        :id, :step_id, :request_line_id, :input_qty,
+                        :approved_qty, 0, 'cross-request guard probe',
+                        :decision_source, NULL, :decided_by_user_id,
+                        :decided_by_person_id, :decided_role_assignment_id,
+                        :authorization_version, :decided_at, :created_at
+                    )
+                    """
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "step_id": current["step_id"],
+                    "request_line_id": foreign_line["id"],
+                    "input_qty": foreign_line["requested_qty"],
+                    "approved_qty": foreign_line["requested_qty"],
+                    "decision_source": current["source_mode"],
+                    "decided_by_user_id": current["user_id"],
+                    "decided_by_person_id": current["person_id"],
+                    "decided_role_assignment_id": current[
+                        "role_assignment_id"
+                    ],
+                    "authorization_version": current[
+                        "authorization_version"
+                    ],
+                    "decided_at": now,
+                    "created_at": now,
+                },
+            )
+        assert "formal material-request invariant violated" in str(failure.value)
+        assert "ambiguous" not in str(failure.value).lower()
+        connection.rollback()
+
+
 def _assert_0045_external_pending_without_registration_is_rejected(
     api_engine,
     *,
@@ -5652,6 +5798,10 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
         requester_user_id=requester_user_id,
         manager_user_id=manager_user_id,
     )
+    _assert_0029_decision_guard_rejects_cross_request_line(
+        api_engine,
+        request_id=request_id,
+    )
 
     # approval_in_progress -> approved is a legal header transition, so the
     # statement itself succeeds.  The deferred 0045 graph validator must still
@@ -6111,6 +6261,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     unbound_source_id = _seed_0044_unbound_source()
     _provision_and_verify_deployment_acl()
     _assert_request_file_guard_execution_boundary(security_definer=True)
+    _assert_decision_guard_variable_boundary(repaired=True)
     _assert_0044_zero_binding_default_denies(unbound_source_id)
     _provision_and_verify_oam_work_order_source()
     _assert_0044_bound_scope_attack_matrix(unbound_source_id)
@@ -6145,6 +6296,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("downgrade", RLS_REVISION)
     assert _current_revision() == RLS_REVISION
     _assert_request_file_guard_execution_boundary(security_definer=False)
+    _assert_decision_guard_variable_boundary(repaired=False)
     _assert_0044_rejects_nonempty_sync_downgrade()
     _clear_disposable_oam_sync_graph()
     _run_alembic("downgrade", "20260902_0043")
@@ -6153,6 +6305,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     assert _current_revision() == HEAD_REVISION
     _provision_and_verify_deployment_acl()
     _assert_request_file_guard_execution_boundary(security_definer=True)
+    _assert_decision_guard_variable_boundary(repaired=True)
     _provision_and_verify_oam_work_order_source()
     _assert_0044_bound_scope_attack_matrix(unbound_source_id)
 

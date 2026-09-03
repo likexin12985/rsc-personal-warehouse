@@ -4709,6 +4709,10 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
 ) -> None:
     migration = _load_material_request_approval_activation_migration_0045()
     function_sql = {
+        (
+            migration.PG_DECISION_FUNCTION_0029,
+            "",
+        ): migration._decision_guard_sql(repaired=True),
         (migration.PG_STATUS_GUARD_FUNCTION, ""): migration._status_guard_sql(),
         (migration.PG_LINE_GUARD_FUNCTION, ""): migration._line_guard_sql(),
         (
@@ -4742,7 +4746,7 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         coordinate
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
         if coordinate[0].endswith("_0045")
-    }
+    } | {(migration.PG_DECISION_FUNCTION_0029, "")}
     for coordinate, sql in function_sql.items():
         body = sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
         assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (

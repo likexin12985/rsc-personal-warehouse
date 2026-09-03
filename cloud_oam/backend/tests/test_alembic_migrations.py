@@ -2061,6 +2061,8 @@ def test_0045_postgresql_functions_parse_as_sql_and_plpgsql() -> None:
     module = _load_0045_migration_module()
     function_sql = (
         module._oam_runtime_ready_function_sql(module.revision),
+        module._decision_guard_sql(repaired=True),
+        module._decision_guard_sql(repaired=False),
         module._status_guard_sql(),
         module._line_guard_sql(),
         module._command_parent_lock_sql(),
@@ -2075,6 +2077,13 @@ def test_0045_postgresql_functions_parse_as_sql_and_plpgsql() -> None:
         assert not sa.text(statement)._bindparams
         parser.parse_sql(statement)
         parser.parse_plpgsql_json(statement)
+
+    previous_decision_body = module._decision_guard_sql(
+        repaired=False
+    ).split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    assert hashlib.sha256(previous_decision_body.encode("utf-8")).hexdigest() == (
+        module.PREVIOUS_DECISION_GUARD_BODY_SHA256
+    )
 
     from app.oam_sync_scope_security import (
         OAM_SYNC_FUNCTION_MANIFEST,
@@ -2138,6 +2147,11 @@ def test_0045_postgresql_offline_sql_closes_exact_approval_boundary(
         "SECURITY DEFINER"
     )
     request_file_repair_offset = sql.index(request_file_security_sql)
+    decision_guard_repair_sql = (
+        "CREATE OR REPLACE FUNCTION public."
+        "rsc_guard_material_request_decision_quantity_0029()"
+    )
+    decision_guard_repair_offset = sql.index(decision_guard_repair_sql)
     dispatcher_repair_offset = sql.index(
         "ALTER FUNCTION public.rsc_dispatch_approval_causality_0030() "
         "SECURITY DEFINER"
@@ -2147,6 +2161,7 @@ def test_0045_postgresql_offline_sql_closes_exact_approval_boundary(
         lock_offset
         < preflight_offset
         < request_file_repair_offset
+        < decision_guard_repair_offset
         < dispatcher_repair_offset
         < first_enable_offset
     )
@@ -2158,6 +2173,23 @@ def test_0045_postgresql_offline_sql_closes_exact_approval_boundary(
     assert sql.count(
         "REVOKE ALL ON FUNCTION "
         "public.rsc_guard_material_request_file_0029() "
+        "FROM PUBLIC, star_oam_api"
+    ) == 1
+    assert sql.count(decision_guard_repair_sql) == 1
+    assert "#variable_conflict error" in sql
+    assert "line.request_id = guard_request_id" in sql
+    assert "line.revision_id = guard_request_revision_id" in sql
+    assert "line.request_id = request_id" not in (
+        module._decision_guard_sql(repaired=True)
+    )
+    assert sql.count(
+        "ALTER FUNCTION public."
+        "rsc_guard_material_request_decision_quantity_0029() "
+        "OWNER TO star_oam_migrator"
+    ) == 1
+    assert sql.count(
+        "REVOKE ALL ON FUNCTION public."
+        "rsc_guard_material_request_decision_quantity_0029() "
         "FROM PUBLIC, star_oam_api"
     ) == 1
     assert not any(

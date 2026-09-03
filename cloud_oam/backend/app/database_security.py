@@ -1801,7 +1801,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_guard_material_request_approval_instance_0029", ""):
         "03c6b5dd42810dafccd5fa300eb0e82798afd8a4133cb67c1e81e82b303450c2",
     ("rsc_guard_material_request_decision_quantity_0029", ""):
-        "8d0243560106753cd08bb31946693ea526dee2a3489842a745c23d6cb71cbdcc",
+        "ae517d9d4639cadd1da79aa3743e28a6e8ada5206ad4d64aca64195c0ad0c2c6",
     ("rsc_guard_external_registration_quantity_0029", ""):
         "047ff0975b18a789db9d82d2dcc4ed03eb5c409354b736d4158733390800940b",
     ("rsc_guard_external_registration_core_0029", ""):

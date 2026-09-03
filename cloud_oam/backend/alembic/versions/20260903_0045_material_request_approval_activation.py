@@ -10,6 +10,7 @@ causally tied back to that graph.  This revision therefore:
 
 * refuses to adopt pre-existing prototype facts without a separate migration;
 * makes every 0029/0030 approval trigger fire in every session mode;
+* repairs the 0029 decision guard's PostgreSQL variable/column ambiguity;
 * serializes every command insert on its exact parent request;
 * constrains request and line state transitions immediately; and
 * validates request/line projections, commands, decisions, returns, terminal
@@ -36,6 +37,7 @@ MIGRATION_ROLE = "star_oam_migrator"
 OAM_RUNTIME_READY_FUNCTION = "rsc_oam_runtime_binding_ready_0044"
 PREVIOUS_SCHEMA_REVISION = "20260902_0044"
 GUARD_ERROR = "formal material request approval projection is invalid"
+LEGACY_GUARD_ERROR_0029 = "formal material-request invariant violated"
 UPGRADE_BLOCKER = (
     "0045 approval activation requires an empty formal material-request graph"
 )
@@ -48,6 +50,10 @@ PG_APPROVAL_VALIDATE_FUNCTION_0030 = (
 )
 PG_APPROVAL_DISPATCH_FUNCTION_0030 = "rsc_dispatch_approval_causality_0030"
 PG_REQUEST_FILE_FUNCTION_0029 = "rsc_guard_material_request_file_0029"
+PG_DECISION_FUNCTION_0029 = "rsc_guard_material_request_decision_quantity_0029"
+PREVIOUS_DECISION_GUARD_BODY_SHA256 = (
+    "8d0243560106753cd08bb31946693ea526dee2a3489842a745c23d6cb71cbdcc"
+)
 PG_STATUS_GUARD_FUNCTION = "rsc_guard_material_request_status_transition_0045"
 PG_LINE_GUARD_FUNCTION = "rsc_guard_material_request_line_projection_0045"
 PG_COMMAND_PARENT_LOCK_FUNCTION = (
@@ -222,6 +228,7 @@ def upgrade() -> None:
     _lock_trigger_tables()
     _emit_empty_graph_guard(UPGRADE_BLOCKER)
     _repair_0029_request_file_guard_execution_context()
+    _replace_0029_decision_guard(repaired=True)
     _repair_0030_dispatcher_execution_context()
     _create_projection_guards()
     _replace_oam_runtime_ready_function(revision)
@@ -254,6 +261,9 @@ def downgrade() -> None:
         (PG_STATUS_GUARD_FUNCTION, ""),
     ):
         op.execute(f"DROP FUNCTION public.{function_name}({argument_types})")
+    # The empty-graph downgrade guard makes it safe to restore 0044 exactly;
+    # this keeps an application rollback's pinned catalog hash compatible.
+    _replace_0029_decision_guard(repaired=False)
     op.execute(
         f"ALTER FUNCTION public.{PG_APPROVAL_DISPATCH_FUNCTION_0030}() "
         "SECURITY INVOKER"
@@ -320,6 +330,18 @@ def _repair_0029_request_file_guard_execution_context() -> None:
     )
     op.execute(
         f"REVOKE ALL ON FUNCTION public.{PG_REQUEST_FILE_FUNCTION_0029}() "
+        f"FROM PUBLIC, {PRODUCTION_API_ROLE}"
+    )
+
+
+def _replace_0029_decision_guard(*, repaired: bool) -> None:
+    op.execute(_decision_guard_sql(repaired=repaired))
+    op.execute(
+        f"ALTER FUNCTION public.{PG_DECISION_FUNCTION_0029}() "
+        f"OWNER TO {MIGRATION_ROLE}"
+    )
+    op.execute(
+        f"REVOKE ALL ON FUNCTION public.{PG_DECISION_FUNCTION_0029}() "
         f"FROM PUBLIC, {PRODUCTION_API_ROLE}"
     )
 
@@ -476,6 +498,121 @@ AS $$
         )
         ELSE false
     END
+$$
+"""
+
+
+def _decision_guard_sql(*, repaired: bool) -> str:
+    """Render the 0029 guard with an explicit fail-closed variable policy."""
+
+    prefix = "guard_" if repaired else ""
+    conflict_directive = "#variable_conflict error\n" if repaired else ""
+    step_number = f"{prefix}step_number"
+    predecessor_id = f"{prefix}predecessor_id"
+    step_source = f"{prefix}step_source"
+    request_id = f"{prefix}request_id"
+    request_revision_id = f"{prefix}request_revision_id"
+    requester_user = f"{prefix}requester_user"
+    requester_person = f"{prefix}requester_person"
+    expected_input = f"{prefix}expected_input"
+    predecessor_status = f"{prefix}predecessor_status"
+    return f"""
+CREATE OR REPLACE FUNCTION public.{PG_DECISION_FUNCTION_0029}()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+{conflict_directive}DECLARE
+    {step_number} integer;
+    {predecessor_id} uuid;
+    {step_source} text;
+    {request_id} uuid;
+    {request_revision_id} uuid;
+    {requester_user} text;
+    {requester_person} uuid;
+    {expected_input} numeric(18,3);
+    {predecessor_status} text;
+BEGIN
+    SELECT step.step_no, step.predecessor_step_id, step.source_mode,
+           instance.request_id, instance.request_revision_id,
+           request.requester_user_id,
+           request.requester_person_id
+      INTO {step_number}, {predecessor_id}, {step_source}, {request_id},
+           {request_revision_id},
+           {requester_user}, {requester_person}
+      FROM public.approval_steps AS step
+      JOIN public.approval_instances AS instance ON instance.id = step.instance_id
+      JOIN public.material_requests AS request ON request.id = instance.request_id
+     WHERE step.id = NEW.step_id;
+    IF NOT FOUND OR NOT EXISTS (
+        SELECT 1 FROM public.material_request_lines AS line
+         WHERE line.id = NEW.request_line_id
+           AND line.request_id = {request_id}
+           AND line.revision_id = {request_revision_id}
+    ) OR NEW.decision_source <> {step_source}
+       OR NEW.decided_by_user_id = {requester_user}
+       OR NEW.decided_by_person_id = {requester_person}
+       OR (NEW.rejected_qty > 0 AND btrim(NEW.reason) = '') THEN
+        RAISE EXCEPTION '{LEGACY_GUARD_ERROR_0029}';
+    END IF;
+    IF {step_number} = 1 THEN
+        SELECT line.requested_qty INTO {expected_input}
+          FROM public.material_request_lines AS line
+         WHERE line.id = NEW.request_line_id;
+    ELSE
+        SELECT step.status, decision.approved_qty
+          INTO {predecessor_status}, {expected_input}
+          FROM public.approval_steps AS step
+          JOIN public.approval_step_line_decisions AS decision
+            ON decision.step_id = step.id
+           AND decision.request_line_id = NEW.request_line_id
+         WHERE step.id = {predecessor_id};
+        IF NOT FOUND OR {predecessor_status} NOT IN ('approved', 'partially_approved')
+           OR {expected_input} <= 0 THEN
+            RAISE EXCEPTION '{LEGACY_GUARD_ERROR_0029}';
+        END IF;
+    END IF;
+    IF NEW.input_qty <> {expected_input} THEN
+        RAISE EXCEPTION '{LEGACY_GUARD_ERROR_0029}';
+    END IF;
+    IF NEW.decision_source = 'external_registration' THEN
+        IF NOT EXISTS (
+            SELECT 1
+              FROM public.approval_external_registrations AS registration
+              JOIN public.approval_external_registration_lines AS line
+                ON line.registration_id = registration.id
+             WHERE registration.id = NEW.external_registration_id
+               AND registration.step_id = NEW.step_id
+               AND registration.status = 'accepted'
+               AND line.request_line_id = NEW.request_line_id
+               AND line.input_qty = NEW.input_qty
+               AND line.approved_qty = NEW.approved_qty
+               AND line.rejected_qty = NEW.rejected_qty
+               AND line.reason = NEW.reason
+        ) OR NOT EXISTS (
+            SELECT 1 FROM public.approval_step_candidates AS candidate
+             WHERE candidate.step_id = NEW.step_id
+               AND candidate.user_id = NEW.decided_by_user_id
+               AND candidate.person_id = NEW.decided_by_person_id
+               AND candidate.role_assignment_id = NEW.decided_role_assignment_id
+               AND candidate.authorization_version = NEW.authorization_version
+               AND candidate.candidate_kind = 'verifier'
+        ) THEN
+            RAISE EXCEPTION '{LEGACY_GUARD_ERROR_0029}';
+        END IF;
+    ELSIF NOT EXISTS (
+        SELECT 1 FROM public.approval_step_candidates AS candidate
+         WHERE candidate.step_id = NEW.step_id
+           AND candidate.user_id = NEW.decided_by_user_id
+           AND candidate.person_id = NEW.decided_by_person_id
+           AND candidate.role_assignment_id = NEW.decided_role_assignment_id
+           AND candidate.authorization_version = NEW.authorization_version
+           AND candidate.candidate_kind = 'assignee'
+    ) THEN
+        RAISE EXCEPTION '{LEGACY_GUARD_ERROR_0029}';
+    END IF;
+    RETURN NEW;
+END
 $$
 """
 
