@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 import app.formal_services.stocktake_task as service
 from app.database import Base
-from app.formal_access import load_formal_principal
+from app.formal_access import FormalPrincipal, ScopeGrant, load_formal_principal
 from app.formal_services.inventory_posting import INVENTORY_LEDGER_HEAD_ID
 from app.formal_services.stocktake_task import (
     StocktakeTaskError,
@@ -38,6 +38,7 @@ from app.inventory_models import (
     FormalMaterial,
     InventoryLedgerHead,
     InventoryMovement,
+    InventoryMovementSerial,
     InventorySerial,
     InventoryTransaction,
     MaterialInventoryPolicy,
@@ -54,6 +55,7 @@ from app.stocktake_models import (
     InventoryFreeze,
     StocktakeRound,
     StocktakeSnapshotLine,
+    StocktakeStartCompletion,
 )
 from app.stocktake_task_schemas import (
     PersonalStocktakeCreateIn,
@@ -278,19 +280,30 @@ def world(db: Session) -> SimpleNamespace:
         status="posted",
         effective_at=NOW - timedelta(days=2),
         posted_at=NOW - timedelta(days=2),
+        created_at=NOW - timedelta(days=2),
         ledger_cursor=1,
         reversed_transaction_id=None,
         actor_user_id=admin.user.id,
     )
-    movement = InventoryMovement(
-        id=uuid.uuid4(),
-        transaction_id=transaction.id,
-        line_no=1,
-        from_account_id=None,
-        to_account_id=region_serial.id,
-        external_boundary_code="TEST_BASE",
-        quantity=Decimal("1.000"),
+    movements = tuple(
+        InventoryMovement(
+            id=uuid.uuid4(),
+            transaction_id=transaction.id,
+            line_no=line_no,
+            from_account_id=None,
+            to_account_id=account.id,
+            external_boundary_code="TEST_BASE",
+            quantity=quantity,
+            created_at=transaction.posted_at,
+        )
+        for line_no, account, quantity in (
+            (1, region_new, Decimal("5.000")),
+            (2, region_used, Decimal("2.000")),
+            (3, region_serial, Decimal("1.000")),
+            (4, personal_account, Decimal("3.000")),
+        )
     )
+    serial_movement = movements[2]
     serial = InventorySerial(
         id=uuid.uuid4(),
         material_id=material_b.id,
@@ -301,15 +314,23 @@ def world(db: Session) -> SimpleNamespace:
     )
     db.add(transaction)
     db.flush()
-    db.add_all([movement, serial])
+    db.add_all([*movements, serial])
     db.flush()
-    db.add(
-        SerialCurrentPosition(
+    db.add_all(
+        [
+            InventoryMovementSerial(
+                movement_id=serial_movement.id,
+                transaction_id=transaction.id,
+                serial_id=serial.id,
+                created_at=transaction.posted_at,
+            ),
+            SerialCurrentPosition(
             serial_id=serial.id,
             stock_account_id=region_serial.id,
-            last_movement_id=movement.id,
+            last_movement_id=serial_movement.id,
             updated_at=NOW - timedelta(days=2),
-        )
+            ),
+        ]
     )
     db.add_all(
         [
@@ -344,6 +365,7 @@ def world(db: Session) -> SimpleNamespace:
         region_y=region_y,
         manager_x=manager_x,
         manager_y=manager_y,
+        admin=admin,
         technician=technician,
         principals=principals,
         material_a=material_a,
@@ -355,6 +377,8 @@ def world(db: Session) -> SimpleNamespace:
         region_serial=region_serial,
         personal_account=personal_account,
         serial=serial,
+        serial_movement=serial_movement,
+        transaction=transaction,
     )
 
 
@@ -613,6 +637,9 @@ def test_managed_create_is_exactly_replayable_and_mismatch_fails(world):
     assert world.db.scalar(select(func.count()).select_from(InventoryFreeze)) == 0
     assert world.db.scalar(select(func.count()).select_from(StocktakeSnapshotLine)) == 0
     assert world.db.scalar(select(func.count()).select_from(StocktakeRound)) == 0
+    assert world.db.scalar(
+        select(func.count()).select_from(StocktakeStartCompletion)
+    ) == 0
 
     changed = _managed_draft(world, material_id=world.material_a.id)
     with pytest.raises(StocktakeTaskError) as exc:
@@ -646,6 +673,33 @@ def test_manager_scope_and_latest_authorization_version_fail_closed(world):
             trace_request_id="trace-stale",
         )
     assert exc.value.code == "stocktake_actor_principal_stale"
+
+
+def test_start_authorization_hash_has_a_stable_cross_runtime_vector():
+    actor = FormalPrincipal(
+        user_id="44444444-4444-4444-8444-444444444444",
+        person_id=uuid.UUID("11111111-1111-4111-8111-111111111111"),
+        account_status="active",
+        employment_status="active",
+        authorization_version=7,
+        access_mode="active",
+        assignments=(),
+        entitlements=(),
+    )
+    grant = ScopeGrant(
+        assignment_id=uuid.UUID("22222222-2222-4222-8222-222222222222"),
+        role_code="provincial_manager",
+        scope_type="organization",
+        scope_id="33333333-3333-4333-8333-333333333333",
+        valid_from=NOW - timedelta(days=1),
+        valid_to=None,
+    )
+
+    assert service._start_authorization_sha256(
+        actor,
+        grant,
+        started_at=NOW,
+    ) == "ba267620931bab325a8612a075411a0ed204ed95aadc19178d8c67048b023ee8"
 
 
 def test_personal_draft_derives_identity_region_location_and_custody(world):
@@ -740,6 +794,19 @@ def test_atomic_start_records_three_states_snapshot_freeze_round_and_no_posting(
     )
     tx_before = world.db.scalar(select(func.count()).select_from(InventoryTransaction))
     movement_before = world.db.scalar(select(func.count()).select_from(InventoryMovement))
+    ledger_cursor_before = world.db.get(
+        InventoryLedgerHead, INVENTORY_LEDGER_HEAD_ID
+    ).next_cursor
+    balances_before = tuple(
+        world.db.execute(
+            select(
+                StockBalance.stock_account_id,
+                StockBalance.quantity,
+                StockBalance.ledger_cursor,
+                StockBalance.version,
+            ).order_by(StockBalance.stock_account_id)
+        ).all()
+    )
 
     started = _start(world, created.task_id, key="atomic-start")
     task = world.db.get(FormalStocktakeTask, created.task_id)
@@ -756,6 +823,11 @@ def test_atomic_start_records_three_states_snapshot_freeze_round_and_no_posting(
                 StocktakeSnapshotLine.task_id == created.task_id
             )
         ).all()
+    )
+    completion = world.db.scalar(
+        select(StocktakeStartCompletion).where(
+            StocktakeStartCompletion.task_id == created.task_id
+        )
     )
 
     assert task is not None
@@ -778,23 +850,123 @@ def test_atomic_start_records_three_states_snapshot_freeze_round_and_no_posting(
     assert world.db.scalar(select(func.count()).select_from(StocktakeRound)) == 1
     assert world.db.scalar(select(func.count()).select_from(InventoryTransaction)) == tx_before
     assert world.db.scalar(select(func.count()).select_from(InventoryMovement)) == movement_before
+    assert (
+        world.db.get(InventoryLedgerHead, INVENTORY_LEDGER_HEAD_ID).next_cursor
+        == ledger_cursor_before
+    )
+    assert tuple(
+        world.db.execute(
+            select(
+                StockBalance.stock_account_id,
+                StockBalance.quantity,
+                StockBalance.ledger_cursor,
+                StockBalance.version,
+            ).order_by(StockBalance.stock_account_id)
+        ).all()
+    ) == balances_before
     assert world.db.scalar(
         select(func.count()).select_from(AuditEvent).where(
             AuditEvent.stream_key == "inventory",
             AuditEvent.aggregate_id == str(created.task_id),
         )
     ) == 2
+    assert completion is not None
+    manager_grant = next(
+        row
+        for row in world.principals["manager_x"].assignments
+        if row.role_code == "provincial_manager"
+    )
+    assert completion.initial_round_id == started.initial_round_id
+    assert completion.expected_task_version == 0
+    assert completion.started_task_version == 1
+    assert completion.cutoff_ledger_cursor == started.cutoff_ledger_cursor == 1
+    assert completion.cutoff_at.replace(tzinfo=timezone.utc) == NOW
+    assert completion.scope_count == started.scope_count == 1
+    assert completion.snapshot_line_count == started.snapshot_line_count == 1
+    assert completion.active_freeze_count == started.active_freeze_count == 1
+    assert completion.scope_manifest_sha256 == task.scope_manifest_sha256
+    assert completion.snapshot_manifest_sha256 == task.snapshot_manifest_sha256
+    assert len(completion.request_sha256) == 64
+    assert len(completion.idempotency_key_hash) == 64
+    assert completion.started_by_user_id == world.manager_x.user.id
+    assert completion.started_by_person_id == world.manager_x.person.id
+    assert completion.started_role_assignment_id == manager_grant.assignment_id
+    assert (
+        completion.authorization_version
+        == world.principals["manager_x"].authorization_version
+    )
+    assert completion.role_code == manager_grant.role_code
+    assert completion.scope_type == manager_grant.scope_type
+    assert completion.scope_id_snapshot == manager_grant.scope_id
+    assert completion.authorization_sha256 == service._start_authorization_sha256(
+        world.principals["manager_x"],
+        manager_grant,
+        started_at=NOW,
+    )
+    assert completion.graph_manifest_sha256 is None
+    assert completion.started_at.replace(tzinfo=timezone.utc) == NOW
+    assert completion.created_at.replace(tzinfo=timezone.utc) == NOW
 
 
 def test_start_replay_is_exact_and_same_key_different_payload_conflicts(world):
     created = _create_managed(world, key="start-replay-create")
     started = _start(world, created.task_id, key="start-replay")
+    completion_count = world.db.scalar(
+        select(func.count()).select_from(StocktakeStartCompletion)
+    )
     replay = _start(world, created.task_id, key="start-replay")
     assert replay == replace(started, replayed=True)
+    assert completion_count == 1
+    assert world.db.scalar(
+        select(func.count()).select_from(StocktakeStartCompletion)
+    ) == completion_count
 
     with pytest.raises(StocktakeTaskError) as exc:
         _start(world, created.task_id, key="start-replay", expected=1)
     assert exc.value.code == "stocktake_idempotency_conflict"
+
+
+def test_start_locks_actor_and_distinct_assignee_graph_once(
+    world,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    base = _managed_draft(world)
+    draft = base.model_copy(
+        update={
+            "scopes": (
+                base.scopes[0].model_copy(
+                    update={"assignee_person_id": world.admin.person.id}
+                ),
+            )
+        }
+    )
+    created = _create_managed(world, key="combined-principal-lock-create", draft=draft)
+    calls: list[tuple[str, ...]] = []
+    assignment_locks: list[uuid.UUID] = []
+    original = service.lock_formal_principal_graph
+    original_assignment_lock = service._lock_current_start_assignment
+
+    def record_lock(db: Session, user_ids) -> None:
+        calls.append(tuple(user_ids))
+        original(db, user_ids)
+
+    def record_assignment_lock(db, actor, grant, now):
+        assignment_locks.append(grant.assignment_id)
+        return original_assignment_lock(db, actor, grant, now)
+
+    monkeypatch.setattr(service, "lock_formal_principal_graph", record_lock)
+    monkeypatch.setattr(
+        service,
+        "_lock_current_start_assignment",
+        record_assignment_lock,
+    )
+    _start(world, created.task_id, key="combined-principal-lock-start")
+
+    assert len(calls) == 1
+    assert set(calls[0]) == {world.manager_x.user.id, world.admin.user.id}
+    # Both locked checks happen after the one union graph lock; the earlier
+    # replay probe deliberately performs only a plain authorization read.
+    assert len(assignment_locks) == 2
 
 
 def test_overlapping_filtered_active_freeze_blocks_second_task(world):
@@ -839,6 +1011,72 @@ def test_filtered_serial_snapshot_pins_only_matching_account_and_sn(world):
     assert rows[0].serial_snapshot_jsonb[0]["ledger_cursor"] == 1
 
 
+def test_start_rebuilds_balance_projection_and_rejects_drift(world):
+    created = _create_managed(
+        world,
+        key="balance-drift-create",
+        draft=_managed_draft(
+            world,
+            material_id=world.material_a.id,
+            condition_code="new",
+        ),
+    )
+    balance = world.db.get(StockBalance, world.region_new.id)
+    assert balance is not None
+    balance.quantity = Decimal("6.000")
+    world.db.flush()
+
+    with pytest.raises(StocktakeTaskError) as exc:
+        _start(world, created.task_id, key="balance-drift-start")
+    assert exc.value.code == "stocktake_balance_projection_drift"
+
+
+def test_start_rejects_ledger_head_that_is_not_last_posted_cursor_plus_one(world):
+    created = _create_managed(world, key="ledger-head-drift-create")
+    head = world.db.get(InventoryLedgerHead, INVENTORY_LEDGER_HEAD_ID)
+    assert head is not None
+    head.next_cursor = 3
+    world.db.flush()
+
+    with pytest.raises(StocktakeTaskError) as exc:
+        _start(world, created.task_id, key="ledger-head-drift-start")
+    assert exc.value.code == "stocktake_ledger_projection_drift"
+
+
+def test_start_rejects_noncontiguous_ledger_even_when_projection_matches_head(world):
+    created = _create_managed(world, key="ledger-gap-create")
+    world.transaction.ledger_cursor = 2
+    for balance in world.db.scalars(select(StockBalance)).all():
+        balance.ledger_cursor = 2
+    head = world.db.get(InventoryLedgerHead, INVENTORY_LEDGER_HEAD_ID)
+    assert head is not None
+    head.next_cursor = 3
+    world.db.flush()
+
+    with pytest.raises(StocktakeTaskError) as exc:
+        _start(world, created.task_id, key="ledger-gap-start")
+    assert exc.value.code == "stocktake_ledger_projection_drift"
+
+
+def test_start_rebuilds_serial_projection_and_rejects_missing_ledger_link(world):
+    created = _create_managed(
+        world,
+        key="serial-drift-create",
+        draft=_managed_draft(world, material_id=world.material_b.id),
+    )
+    link = world.db.get(
+        InventoryMovementSerial,
+        (world.serial_movement.id, world.serial.id),
+    )
+    assert link is not None
+    world.db.delete(link)
+    world.db.flush()
+
+    with pytest.raises(StocktakeTaskError) as exc:
+        _start(world, created.task_id, key="serial-drift-start")
+    assert exc.value.code == "stocktake_serial_projection_drift"
+
+
 def test_personal_start_rechecks_account_custodian_and_does_not_write_ledger(world):
     created = create_personal_stocktake_draft(
         world.db,
@@ -864,3 +1102,60 @@ def test_personal_start_rechecks_account_custodian_and_does_not_write_ledger(wor
         )
     assert exc.value.code == "personal_account_custodian_mismatch"
     assert world.db.scalar(select(func.count()).select_from(InventoryTransaction)) == tx_before
+
+
+def test_personal_start_completion_pins_exact_technician_authorization(world):
+    created = create_personal_stocktake_draft(
+        world.db,
+        actor=world.principals["technician"],
+        draft=PersonalStocktakeCreateIn(),
+        idempotency_key="personal-completion-create",
+        idempotency_hmac_secret=SECRET,
+        trace_request_id="trace-personal-completion-create",
+    )
+    tx_before = world.db.scalar(
+        select(func.count()).select_from(InventoryTransaction)
+    )
+    movement_before = world.db.scalar(
+        select(func.count()).select_from(InventoryMovement)
+    )
+
+    started = start_stocktake_task(
+        world.db,
+        actor=world.principals["technician"],
+        task_id=created.task_id,
+        command=StocktakeTaskStartIn(expected_version=0),
+        idempotency_key="personal-completion-start",
+        idempotency_hmac_secret=SECRET,
+        trace_request_id="trace-personal-completion-start",
+    )
+    completion = world.db.scalar(
+        select(StocktakeStartCompletion).where(
+            StocktakeStartCompletion.task_id == created.task_id
+        )
+    )
+    technician_grant = next(
+        row
+        for row in world.principals["technician"].assignments
+        if row.role_code == "technician"
+    )
+
+    assert completion is not None
+    assert completion.initial_round_id == started.initial_round_id
+    assert completion.started_by_user_id == world.technician.user.id
+    assert completion.started_by_person_id == world.technician.person.id
+    assert completion.started_role_assignment_id == technician_grant.assignment_id
+    assert completion.role_code == "technician"
+    assert completion.scope_type == "person"
+    assert completion.scope_id_snapshot == str(world.technician.person.id)
+    assert completion.authorization_sha256 == service._start_authorization_sha256(
+        world.principals["technician"],
+        technician_grant,
+        started_at=NOW,
+    )
+    assert world.db.scalar(
+        select(func.count()).select_from(InventoryTransaction)
+    ) == tx_before
+    assert world.db.scalar(
+        select(func.count()).select_from(InventoryMovement)
+    ) == movement_before

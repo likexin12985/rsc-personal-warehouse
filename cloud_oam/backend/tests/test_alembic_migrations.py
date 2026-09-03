@@ -345,7 +345,14 @@ MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_REVISION = (
     / "versions"
     / "20260903_0046_material_request_draft_content_causality.py"
 )
-HEAD_REVISION = "20260903_0046"
+NONOPENING_STOCKTAKE_START_CAUSALITY_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0047_nonopening_stocktake_start_causality.py"
+)
+HEAD_REVISION = "20260903_0047"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -361,6 +368,8 @@ OAM_WORK_ORDER_PROJECTOR_BOUNDARY_REVISION_ID = "20260902_0043"
 OAM_SYNC_SCOPE_FORCE_RLS_REVISION_ID = "20260902_0044"
 MATERIAL_REQUEST_APPROVAL_ACTIVATION_REVISION_ID = "20260903_0045"
 MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_REVISION_ID = "20260903_0046"
+NONOPENING_STOCKTAKE_START_CAUSALITY_REVISION_ID = "20260903_0047"
+PRE_NONOPENING_STOCKTAKE_START_CAUSALITY_HEAD_REVISION = "20260903_0046"
 PRE_MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_HEAD_REVISION = "20260903_0045"
 PRE_MATERIAL_REQUEST_APPROVAL_ACTIVATION_HEAD_REVISION = "20260902_0044"
 PRE_OAM_SYNC_SCOPE_FORCE_RLS_HEAD_REVISION = "20260902_0043"
@@ -518,6 +527,9 @@ NONOPENING_STOCKTAKE_CLOSE_RECONCILIATION_TABLES = {
     "stocktake_close_reconciliation_serials",
     "stocktake_close_completions",
 }
+NONOPENING_STOCKTAKE_START_CAUSALITY_TABLES = {
+    "stocktake_start_completions",
+}
 OPENING_CONTROL_RECONCILIATION_TABLES = {
     "opening_control_reconciliation_command_consumptions",
     "opening_control_reconciliation_items",
@@ -558,6 +570,7 @@ EXPECTED_TABLES = (
     | OPENING_STOCKTAKE_TABLES
     | OPENING_COUNT_OBSERVATION_TABLES
     | STOCKTAKE_RECOUNT_TABLES
+    | NONOPENING_STOCKTAKE_START_CAUSALITY_TABLES
     | NONOPENING_STOCKTAKE_SAFE_POSTING_TABLES
     | NONOPENING_STOCKTAKE_CLOSE_RECONCILIATION_TABLES
     | OPENING_CONTROL_RECONCILIATION_TABLES
@@ -1358,6 +1371,14 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert head is not None
     assert (
         head.down_revision
+        == PRE_NONOPENING_STOCKTAKE_START_CAUSALITY_HEAD_REVISION
+    )
+    previous_stocktake_start_head = script.get_revision(
+        PRE_NONOPENING_STOCKTAKE_START_CAUSALITY_HEAD_REVISION
+    )
+    assert previous_stocktake_start_head is not None
+    assert (
+        previous_stocktake_start_head.down_revision
         == PRE_MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_HEAD_REVISION
     )
     previous_head = script.get_revision(
@@ -2727,6 +2748,315 @@ def test_0046_sqlite_adds_and_drops_nullable_projection_manifest_column(
             assert connection.exec_driver_sql(
                 "SELECT version_num FROM alembic_version"
             ).scalar_one() == PRE_MATERIAL_REQUEST_DRAFT_CONTENT_CAUSALITY_HEAD_REVISION
+    finally:
+        downgraded_engine.dispose()
+
+
+def _load_0047_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "nonopening_stocktake_start_causality_migration_0047",
+        NONOPENING_STOCKTAKE_START_CAUSALITY_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_0047_postgresql_functions_parse_as_sql_and_plpgsql() -> None:
+    parser = pytest.importorskip("pglast.parser")
+    module = _load_0047_migration_module()
+    function_sql = (
+        module._postgresql_guard_function_sql(),
+        module._postgresql_validator_function_sql(),
+        module._postgresql_dispatch_function_sql(),
+        module._oam_runtime_ready_function_sql(module.revision),
+        module._oam_runtime_ready_function_sql(module.PREVIOUS_SCHEMA_REVISION),
+    )
+
+    for statement in function_sql:
+        assert not sa.text(statement)._bindparams
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+
+    authorization_sql = module._authorization_document_expression("completion")
+    assert tuple(
+        authorization_sql.index(f'"{key}"')
+        for key in (
+            "assignment_id",
+            "authorization_version",
+            "person_id",
+            "role_code",
+            "schema",
+            "scope_id",
+            "scope_type",
+            "started_at",
+            "user_id",
+        )
+    ) == tuple(
+        sorted(
+            authorization_sql.index(f'"{key}"')
+            for key in (
+                "assignment_id",
+                "authorization_version",
+                "person_id",
+                "role_code",
+                "schema",
+                "scope_id",
+                "scope_type",
+                "started_at",
+                "user_id",
+            )
+        )
+    )
+    assert "YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"" in authorization_sql
+    graph_sql = module._graph_manifest_expression("completion")
+    assert "pg_catalog.encode" in graph_sql
+    assert "pg_catalog.sha256" in graph_sql
+    assert "'hex'" in graph_sql
+    assert "ORDER BY scope.scope_no, scope.id" in graph_sql
+    assert "ORDER BY snapshot.scope_id, snapshot.stock_account_id" in graph_sql
+    assert "ORDER BY event.occurred_at, event.id" in graph_sql
+    assert "ORDER BY audit.sequence_no, audit.id" in graph_sql
+    for forbidden_axis in (
+        "allocation_status",
+        "reservation_status",
+        "outbound_status",
+        "shipment_status",
+        "logistics_signature_status",
+        "oam_receipt_status",
+        "personal_inbound_status",
+        "notification_status",
+        "reconciliation_status",
+    ):
+        assert forbidden_axis not in graph_sql
+
+
+def test_0047_postgresql_offline_sql_seals_start_before_granting_acl(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0047_migration_module()
+    assert module.revision == NONOPENING_STOCKTAKE_START_CAUSALITY_REVISION_ID
+    assert module.down_revision == (
+        PRE_NONOPENING_STOCKTAKE_START_CAUSALITY_HEAD_REVISION
+    )
+    assert len(module.DEFERRED_TABLES) == 8
+    assert set(module.PG_DEFERRED_TRIGGERS) == set(module.DEFERRED_TABLES)
+    assert len(set(module.PG_DEFERRED_TRIGGERS.values())) == 8
+    assert all(
+        len(trigger_name.encode("utf-8")) <= 63
+        for trigger_name in module.PG_DEFERRED_TRIGGERS.values()
+    )
+
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_NONOPENING_STOCKTAKE_START_CAUSALITY_HEAD_REVISION}:"
+        f"{NONOPENING_STOCKTAKE_START_CAUSALITY_REVISION_ID}",
+        sql=True,
+    )
+    sql = output.getvalue()
+
+    assert "-- Running upgrade 20260903_0046 -> 20260903_0047" in sql
+    locked_tables = tuple(
+        table_name
+        for table_name in module.DEFERRED_TABLES
+        if table_name != module.COMPLETION_TABLE
+    )
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(f"public.{table_name}" for table_name in locked_tables)
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    assert sql.count(lock_sql) == 1
+    assert module.UPGRADE_BLOCKER in sql
+    create_table_sql = f"CREATE TABLE public.{module.COMPLETION_TABLE}"
+    assert sql.count(create_table_sql) == 1
+    assert "graph_manifest_sha256 VARCHAR(64) NOT NULL" in sql
+
+    function_coordinates = (
+        (module.PG_GUARD_FUNCTION, ""),
+        (module.PG_VALIDATE_FUNCTION, "uuid"),
+        (module.PG_DISPATCH_FUNCTION, ""),
+    )
+    for function_name, argument_types in function_coordinates:
+        signature = f"public.{function_name}({argument_types})"
+        assert sql.count(f"CREATE FUNCTION public.{function_name}") == 1
+        assert sql.count(
+            f"ALTER FUNCTION {signature} OWNER TO star_oam_migrator"
+        ) == 1
+        assert sql.count(
+            f"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC, star_oam_api"
+        ) == 1
+
+    assert sql.count(
+        f"CREATE TRIGGER {module.PG_GUARD_TRIGGER} "
+        f"BEFORE INSERT OR UPDATE OR DELETE ON public.{module.COMPLETION_TABLE}"
+    ) == 1
+    for table_name in module.DEFERRED_TABLES:
+        trigger_name = module.PG_DEFERRED_TRIGGERS[table_name]
+        assert sql.count(
+            f"CREATE CONSTRAINT TRIGGER {trigger_name} "
+            f"AFTER INSERT OR UPDATE OR DELETE ON public.{table_name} "
+            "DEFERRABLE INITIALLY DEFERRED"
+        ) == 1
+        assert sql.count(
+            f"ALTER TABLE public.{table_name} ENABLE ALWAYS TRIGGER "
+            f"{trigger_name}"
+        ) == 1
+    assert sql.count("CREATE CONSTRAINT TRIGGER ") == 8
+    assert (
+        f"GRANT SELECT, INSERT ON TABLE public.{module.COMPLETION_TABLE} "
+        "TO star_oam_api"
+    ) in sql
+    assert (
+        "GRANT UPDATE (cutoff_ledger_cursor, cutoff_at, "
+        "snapshot_manifest_sha256, issued_at, frozen_at) "
+        "ON TABLE public.stocktake_tasks TO star_oam_api"
+    ) in sql
+    assert "GRANT UPDATE ON TABLE" not in sql
+    assert "GRANT DELETE" not in sql
+    assert "GRANT TRIGGER" not in sql
+
+    ready_sql = (
+        "CREATE OR REPLACE FUNCTION public."
+        "rsc_oam_runtime_binding_ready_0044()"
+    )
+    assert sql.count(ready_sql) == 1
+    assert "pg_catalog.min(version_num) = '20260903_0047'" in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index(module.UPGRADE_BLOCKER)
+        < sql.index(create_table_sql)
+        < sql.index(f"CREATE FUNCTION public.{module.PG_GUARD_FUNCTION}()")
+        < sql.index(f"CREATE TRIGGER {module.PG_GUARD_TRIGGER}")
+        < sql.index("GRANT SELECT, INSERT ON TABLE")
+        < sql.index(ready_sql)
+    )
+
+
+def test_0047_postgresql_offline_downgrade_requires_online_empty_graph_check(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    with pytest.raises(RuntimeError, match="requires an online evidence check"):
+        command.downgrade(
+            config,
+            f"{NONOPENING_STOCKTAKE_START_CAUSALITY_REVISION_ID}:"
+            f"{PRE_NONOPENING_STOCKTAKE_START_CAUSALITY_HEAD_REVISION}",
+            sql=True,
+        )
+
+
+def test_0047_sqlite_schema_and_triggers_round_trip(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0047_migration_module()
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'stocktake-start-0047.db'}"
+    config = _config(database_url)
+    command.upgrade(
+        config, PRE_NONOPENING_STOCKTAKE_START_CAUSALITY_HEAD_REVISION
+    )
+    before_engine = sa.create_engine(database_url)
+    try:
+        assert module.COMPLETION_TABLE not in inspect(before_engine).get_table_names()
+    finally:
+        before_engine.dispose()
+
+    command.upgrade(config, NONOPENING_STOCKTAKE_START_CAUSALITY_REVISION_ID)
+    upgraded_engine = sa.create_engine(database_url)
+    try:
+        inspector = inspect(upgraded_engine)
+        columns = {
+            column["name"]: column
+            for column in inspector.get_columns(module.COMPLETION_TABLE)
+        }
+        assert tuple(columns) == (
+            "id",
+            "task_id",
+            "initial_round_id",
+            "expected_task_version",
+            "started_task_version",
+            "cutoff_ledger_cursor",
+            "cutoff_at",
+            "scope_count",
+            "snapshot_line_count",
+            "active_freeze_count",
+            "scope_manifest_sha256",
+            "snapshot_manifest_sha256",
+            "request_sha256",
+            "idempotency_key_hash",
+            "started_by_user_id",
+            "started_by_person_id",
+            "started_role_assignment_id",
+            "authorization_version",
+            "role_code",
+            "scope_type",
+            "scope_id_snapshot",
+            "authorization_sha256",
+            "graph_manifest_sha256",
+            "started_at",
+            "created_at",
+        )
+        assert columns["graph_manifest_sha256"]["nullable"] is True
+        assert columns["graph_manifest_sha256"]["default"] is None
+        assert {row["name"] for row in inspector.get_indexes(module.COMPLETION_TABLE)} == {
+            "ix_stocktake_start_completions_actor_0047"
+        }
+        with upgraded_engine.connect() as connection:
+            triggers = {
+                row[0]
+                for row in connection.exec_driver_sql(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type = 'trigger' AND sql LIKE '%0047%'"
+                )
+            }
+            assert triggers == {
+                module.SQLITE_VALIDATE_TRIGGER,
+                module.SQLITE_SEAL_TRIGGER,
+                module.SQLITE_GUARD_UPDATE_TRIGGER,
+                module.SQLITE_GUARD_DELETE_TRIGGER,
+                module.SQLITE_TASK_SEAL_TRIGGER,
+                module.SQLITE_SNAPSHOT_UPDATE_TRIGGER,
+                module.SQLITE_SNAPSHOT_DELETE_TRIGGER,
+                module.SQLITE_ROUND_SEAL_TRIGGER,
+                *module.SQLITE_ADDITIONAL_SEAL_TRIGGERS,
+            }
+            validation_trigger_sql = connection.exec_driver_sql(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' AND name = ?",
+                (module.SQLITE_VALIDATE_TRIGGER,),
+            ).scalar_one()
+            assert "scope.created_at IS NULL" in validation_trigger_sql
+            assert "scope.created_at > NEW.cutoff_at" in validation_trigger_sql
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == NONOPENING_STOCKTAKE_START_CAUSALITY_REVISION_ID
+    finally:
+        upgraded_engine.dispose()
+
+    command.downgrade(
+        config, PRE_NONOPENING_STOCKTAKE_START_CAUSALITY_HEAD_REVISION
+    )
+    downgraded_engine = sa.create_engine(database_url)
+    try:
+        assert module.COMPLETION_TABLE not in inspect(downgraded_engine).get_table_names()
+        with downgraded_engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == PRE_NONOPENING_STOCKTAKE_START_CAUSALITY_HEAD_REVISION
     finally:
         downgraded_engine.dispose()
 

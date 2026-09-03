@@ -24,6 +24,10 @@ from app.database_security import (
     EXPECTED_MATERIAL_REQUEST_CANCELLATION_INDEXES,
     EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS,
     EXPECTED_MATERIAL_REQUEST_COMMAND_RECOVERY_INDEX,
+    EXPECTED_NONOPENING_STOCKTAKE_START_TRIGGERS,
+    EXPECTED_STOCKTAKE_START_COMPLETION_COLUMNS,
+    EXPECTED_STOCKTAKE_START_COMPLETION_CONSTRAINTS,
+    EXPECTED_STOCKTAKE_START_COMPLETION_INDEXES,
     EXPECTED_NONOPENING_STOCKTAKE_CLOSE_CONSTRAINTS,
     EXPECTED_NONOPENING_STOCKTAKE_CLOSE_INDEXES,
     EXPECTED_NONOPENING_STOCKTAKE_CLOSE_TRIGGERS,
@@ -69,6 +73,7 @@ from app.database_security import (
     RUNTIME_UPDATE_COLUMNS,
     _AUDIT_TRIGGER_SQL,
     _FUNCTION_ACL_SQL,
+    _NONOPENING_STOCKTAKE_START_TRIGGER_SQL,
     _NONOPENING_STOCKTAKE_CLOSE_TRIGGER_SQL,
     _MATERIAL_REQUEST_CANCELLATION_TRIGGER_SQL,
     _MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL,
@@ -94,6 +99,7 @@ from app.database_security import (
     _assert_material_request_approval_guards,
     _assert_material_request_cancellation_guards,
     _assert_material_request_command_recovery_index,
+    _assert_nonopening_stocktake_start_guards,
     _assert_nonopening_stocktake_close_guards,
     _assert_runtime_function_acl,
     _assert_runtime_column_acl,
@@ -210,6 +216,13 @@ MATERIAL_REQUEST_DRAFT_CONTENT_MIGRATION_0046 = (
     / "versions"
     / "20260903_0046_material_request_draft_content_causality.py"
 )
+NONOPENING_STOCKTAKE_START_MIGRATION_0047 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0047_nonopening_stocktake_start_causality.py"
+)
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
     / "backend"
@@ -309,7 +322,7 @@ def test_production_database_role_accepts_only_required_audit_privileges() -> No
     )
 
 
-def test_runtime_acl_verifier_matches_base_manifest_through_0038(
+def test_runtime_acl_verifier_matches_base_manifest_through_0047(
 ) -> None:
     tree = ast.parse(ACL_MIGRATION.read_text(encoding="utf-8"))
     values: dict[str, tuple[str, ...]] = {}
@@ -389,6 +402,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0038(
     stocktake_close_insert_tables = stocktake_close_read_tables - {
         "stocktake_close_transition_acks"
     }
+    stocktake_start_tables = {"stocktake_start_completions"}
     assert RUNTIME_READ_TABLES - set(values["API_READ_TABLES"]) == (
         safe_posting_tables
         | {
@@ -398,12 +412,14 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0038(
         }
         | material_request_read_tables
         | stocktake_close_read_tables
+        | stocktake_start_tables
     )
     assert RUNTIME_INSERT_TABLES - set(values["API_INSERT_TABLES"]) == (
         safe_posting_tables
         | {"document_attachments", "files", "sms_challenge_dispatches"}
         | material_request_insert_tables
         | stocktake_close_insert_tables
+        | stocktake_start_tables
     )
     assert set(values["API_READ_TABLES"]) <= RUNTIME_READ_TABLES
     assert set(values["API_INSERT_TABLES"]) <= RUNTIME_INSERT_TABLES
@@ -420,6 +436,15 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0038(
         table_name: set(column_names)
         for table_name, column_names in update_columns.items()
     }
+    base_update_columns["stocktake_tasks"].update(
+        {
+            "cutoff_ledger_cursor",
+            "cutoff_at",
+            "snapshot_manifest_sha256",
+            "issued_at",
+            "frozen_at",
+        }
+    )
     assert {
         table_name: set(column_names)
         for table_name, column_names in RUNTIME_UPDATE_COLUMNS.items()
@@ -673,6 +698,346 @@ def _load_nonopening_stocktake_close_migration_0038() -> object:
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
     return migration
+
+
+def _load_nonopening_stocktake_start_migration_0047() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0047_security_manifest",
+        NONOPENING_STOCKTAKE_START_MIGRATION_0047,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _valid_nonopening_stocktake_start_trigger_rows() -> list[dict[str, object]]:
+    return [
+        {
+            "trigger_name": name,
+            "table_name": table_name,
+            "function_name": function_name,
+            "function_schema": "public",
+            "enabled": enabled,
+            "trigger_type": trigger_type,
+            "is_constraint_trigger": is_constraint,
+            "is_deferrable": is_deferrable,
+            "is_initially_deferred": is_initially_deferred,
+            "has_when_clause": False,
+            "has_column_filter": False,
+        }
+        for name, (
+            table_name,
+            function_name,
+            enabled,
+            trigger_type,
+            is_constraint,
+            is_deferrable,
+            is_initially_deferred,
+        ) in sorted(EXPECTED_NONOPENING_STOCKTAKE_START_TRIGGERS.items())
+    ]
+
+
+def _valid_stocktake_start_completion_column_rows() -> list[dict[str, object]]:
+    return [
+        {
+            "relation_kind": "r",
+            "persistence": "p",
+            "row_security": False,
+            "force_row_security": False,
+            "ordinal_position": ordinal,
+            "column_name": name,
+            "data_type": data_type,
+            "is_not_null": is_not_null,
+            "identity_kind": "",
+            "generated_kind": "",
+            "default_expression": None,
+        }
+        for ordinal, (name, data_type, is_not_null) in enumerate(
+            EXPECTED_STOCKTAKE_START_COMPLETION_COLUMNS, start=1
+        )
+    ]
+
+
+def _valid_stocktake_start_completion_constraint_rows() -> list[dict[str, object]]:
+    check_definitions = {
+        "ck_stocktake_start_completions_versions_0047":
+            "CHECK (expected_task_version >= 0 AND started_task_version = expected_task_version + 1)",
+        "ck_stocktake_start_completions_counts_0047":
+            "CHECK (cutoff_ledger_cursor >= 0 AND scope_count > 0 AND snapshot_line_count >= 0 AND active_freeze_count = scope_count)",
+        "ck_stocktake_start_completions_authorization_0047":
+            "CHECK (authorization_version > 0 AND role_code IN ('admin', 'provincial_manager', 'technician') AND scope_type <> '' AND scope_id_snapshot <> '')",
+        "ck_stocktake_start_completions_hashes_0047":
+            "CHECK (length(scope_manifest_sha256) = 64 AND length(snapshot_manifest_sha256) = 64 AND length(request_sha256) = 64 AND length(idempotency_key_hash) = 64 AND length(authorization_sha256) = 64 AND length(graph_manifest_sha256) = 64)",
+        "ck_stocktake_start_completions_chronology_0047":
+            "CHECK (cutoff_at <= started_at AND created_at = started_at)",
+    }
+    return [
+        {
+            "constraint_name": name,
+            "constraint_type": constraint_type,
+            "is_validated": True,
+            "is_deferrable": False,
+            "is_initially_deferred": False,
+            "is_no_inherit": constraint_type != "c",
+            "is_local": True,
+            "inheritance_count": 0,
+            "parent_constraint_id": 0,
+            "definition": check_definitions.get(name, constraint_type),
+            "constrained_columns": list(columns),
+            "referenced_table": referenced_table,
+            "referenced_columns": list(referenced_columns),
+            "delete_action": "r" if constraint_type == "f" else " ",
+        }
+        for name, (
+            constraint_type,
+            columns,
+            referenced_table,
+            referenced_columns,
+        ) in sorted(EXPECTED_STOCKTAKE_START_COMPLETION_CONSTRAINTS.items())
+    ]
+
+
+def _valid_stocktake_start_completion_index_rows() -> list[dict[str, object]]:
+    return [
+        {
+            "index_name": name,
+            "owner_name": "star_oam_migrator",
+            "access_method": "btree",
+            "is_unique": is_unique,
+            "is_primary": is_primary,
+            "is_exclusion": False,
+            "is_immediate": True,
+            "is_valid": True,
+            "is_ready": True,
+            "is_live": True,
+            "nulls_not_distinct": False,
+            "key_attribute_count": len(columns),
+            "total_attribute_count": len(columns),
+            "has_expressions": False,
+            "key_columns": list(columns),
+            "predicate": None,
+        }
+        for name, (columns, is_unique, is_primary) in sorted(
+            EXPECTED_STOCKTAKE_START_COMPLETION_INDEXES.items()
+        )
+    ]
+
+
+def _valid_nonopening_stocktake_start_guard_kwargs() -> dict[str, object]:
+    return {
+        "triggers": _valid_nonopening_stocktake_start_trigger_rows(),
+        "columns": _valid_stocktake_start_completion_column_rows(),
+        "constraints": _valid_stocktake_start_completion_constraint_rows(),
+        "indexes": _valid_stocktake_start_completion_index_rows(),
+        "expected_migration_role": "star_oam_migrator",
+    }
+
+
+def test_0047_nonopening_start_runtime_manifest_and_function_bodies_are_exact(
+) -> None:
+    migration = _load_nonopening_stocktake_start_migration_0047()
+    assert migration.down_revision == "20260903_0046"
+    assert migration.COMPLETION_TABLE == "stocktake_start_completions"
+    assert tuple(migration.DEFERRED_TABLES) == (
+        "stocktake_tasks",
+        "stocktake_scopes",
+        "inventory_freezes",
+        "stocktake_snapshot_lines",
+        "stocktake_rounds",
+        "stocktake_start_completions",
+        "state_transition_events",
+        "audit_events",
+    )
+    assert tuple(migration.TASK_START_UPDATE_COLUMNS) == (
+        "cutoff_ledger_cursor",
+        "cutoff_at",
+        "snapshot_manifest_sha256",
+        "issued_at",
+        "frozen_at",
+    )
+
+    assert migration.COMPLETION_TABLE in RUNTIME_READ_TABLES
+    assert migration.COMPLETION_TABLE in RUNTIME_INSERT_TABLES
+    assert migration.COMPLETION_TABLE not in RUNTIME_UPDATE_TABLES
+    assert migration.COMPLETION_TABLE not in RUNTIME_DELETE_TABLES
+    assert migration.COMPLETION_TABLE not in RUNTIME_UPDATE_COLUMNS
+    assert set(migration.TASK_START_UPDATE_COLUMNS) <= (
+        RUNTIME_UPDATE_COLUMNS["stocktake_tasks"]
+    )
+
+    function_sql = {
+        (migration.PG_GUARD_FUNCTION, ""):
+            migration._postgresql_guard_function_sql(),
+        (migration.PG_VALIDATE_FUNCTION, "uuid"):
+            migration._postgresql_validator_function_sql(),
+        (migration.PG_DISPATCH_FUNCTION, ""):
+            migration._postgresql_dispatch_function_sql(),
+    }
+    guard_sql = function_sql[(migration.PG_GUARD_FUNCTION, "")]
+    validator_sql = function_sql[(migration.PG_VALIDATE_FUNCTION, "uuid")]
+    assert "public.auth_identities AS identity" in guard_sql
+    assert "assignment.status IN ('scheduled', 'active')" in guard_sql
+    assert "public.role_assignments AS assignment" in guard_sql
+    assert "IF scope_row.material_id IS NOT NULL" in guard_sql
+    assert "material.status = 'active'" in guard_sql
+    assert "policy.effective_from <= NEW.cutoff_at" in guard_sql
+    assert "policy.effective_to > NEW.cutoff_at" in guard_sql
+    assert "scope_row.created_at > NEW.cutoff_at" in guard_sql
+    assert "target_person.id = current_custodian_id" in guard_sql
+    assert "personal_location.custodian_person_id" in guard_sql
+    assert "NEW.started_by_person_id" in guard_sql
+    assert "deny_assignment.valid_from <= NEW.started_at" in guard_sql
+    assert "deny_assignment.revoked_at > NEW.started_at" in guard_sql
+    assert "deny_assignment.valid_from <= pg_catalog.clock_timestamp()" not in guard_sql
+    assert "existing_scope.task_id <> candidate_scope.task_id" in guard_sql
+    assert "existing_freeze.status = 'active'" in guard_sql
+    assert "FOR UPDATE OF existing_freeze" in guard_sql
+    assert "FROM public.stocktake_rounds AS round_row" in guard_sql
+    assert "round_row.task_id = NEW.task_id) <> 1" in guard_sql
+    assert "public.role_assignments" not in validator_sql
+    assert "public.auth_identities" not in validator_sql
+    assert "public.roles" not in validator_sql
+    assert "actor_user.account_status" not in validator_sql
+    assert "assignment.status" not in validator_sql
+    assert set(function_sql) <= set(FORMAL_FILE_INTERNAL_FUNCTIONS)
+    assert set(function_sql).isdisjoint(RUNTIME_EXECUTE_FUNCTIONS)
+    for coordinate, sql in function_sql.items():
+        body = sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+        assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (
+            FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
+        )
+        assert FORMAL_FILE_INTERNAL_FUNCTIONS[coordinate] == (
+            "v",
+            True,
+            "plpgsql",
+            ("search_path=pg_catalog, public",),
+        )
+        assert FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[coordinate] == (
+            "f",
+            "void" if coordinate[1] == "uuid" else "trigger",
+            False,
+        )
+
+    source = NONOPENING_STOCKTAKE_START_MIGRATION_0047.read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "REVOKE ALL ON FUNCTION {signature} FROM PUBLIC, "
+        "{PRODUCTION_API_ROLE}"
+    ) in source
+    assert (
+        "GRANT SELECT, INSERT ON TABLE public.{COMPLETION_TABLE}"
+    ) in source
+    assert (
+        "GRANT UPDATE ({columns}) ON TABLE public.stocktake_tasks"
+    ) in source
+    assert "GRANT UPDATE ON TABLE public.stocktake_tasks" not in source
+
+
+def test_0047_nonopening_start_catalog_guard_is_exact_and_rejects_drift(
+) -> None:
+    guard_kwargs = _valid_nonopening_stocktake_start_guard_kwargs()
+    triggers = guard_kwargs["triggers"]
+    assert isinstance(triggers, list)
+    _assert_nonopening_stocktake_start_guards(**guard_kwargs)
+
+    immediate_name = "trg_stocktake_start_completions_guard_0047"
+    assert EXPECTED_NONOPENING_STOCKTAKE_START_TRIGGERS[immediate_name][3:] == (
+        31,
+        False,
+        False,
+        False,
+    )
+    deferred = {
+        name: expected
+        for name, expected in EXPECTED_NONOPENING_STOCKTAKE_START_TRIGGERS.items()
+        if name.endswith("_causality_0047")
+    }
+    assert len(deferred) == 8
+    assert {expected[0] for expected in deferred.values()} == {
+        "stocktake_tasks",
+        "stocktake_scopes",
+        "inventory_freezes",
+        "stocktake_snapshot_lines",
+        "stocktake_rounds",
+        "stocktake_start_completions",
+        "state_transition_events",
+        "audit_events",
+    }
+    assert {expected[3:] for expected in deferred.values()} == {
+        (29, True, True, True)
+    }
+    sealed = {
+        name: expected
+        for name, expected in EXPECTED_NONOPENING_STOCKTAKE_START_TRIGGERS.items()
+        if name.endswith("_sealed_0047")
+    }
+    assert len(sealed) == 7
+    assert {expected[3:] for expected in sealed.values()} == {
+        (31, False, False, False)
+    }
+
+    trigger_query = " ".join(
+        str(_NONOPENING_STOCKTAKE_START_TRIGGER_SQL).split()
+    )
+    for required in (
+        "stocktake_start_completions",
+        "rsc_guard_stocktake_start_completion_0047",
+        "rsc_validate_nonopening_stocktake_start_causality_0047",
+        "rsc_dispatch_nonopening_stocktake_start_causality_0047",
+        "trigger_row.tgname LIKE '%0047'",
+        "NOT trigger_row.tgisinternal",
+    ):
+        assert required in trigger_query
+
+    for field, value in (
+        ("function_schema", "attacker"),
+        ("enabled", "D"),
+        ("trigger_type", 0),
+        ("is_constraint_trigger", False),
+        ("is_deferrable", False),
+        ("is_initially_deferred", False),
+        ("has_when_clause", True),
+        ("has_column_filter", True),
+    ):
+        drifted = [dict(row) for row in triggers]
+        target = next(
+            row
+            for row in drifted
+            if row["trigger_name"] != immediate_name
+        )
+        target[field] = value
+        with pytest.raises(DatabaseSecurityBoundaryError, match="stocktake start"):
+            _assert_nonopening_stocktake_start_guards(
+                **{**guard_kwargs, "triggers": drifted}
+            )
+
+    with pytest.raises(DatabaseSecurityBoundaryError, match="stocktake start"):
+        _assert_nonopening_stocktake_start_guards(
+            **{**guard_kwargs, "triggers": triggers[:-1]}
+        )
+    extra = dict(triggers[0])
+    extra["trigger_name"] = "trg_unapproved_stocktake_start_0047"
+    with pytest.raises(DatabaseSecurityBoundaryError, match="stocktake start"):
+        _assert_nonopening_stocktake_start_guards(
+            **{**guard_kwargs, "triggers": [*triggers, extra]}
+        )
+
+    for collection_name, field, value in (
+        ("columns", "default_expression", "'forged'::text"),
+        ("columns", "is_not_null", False),
+        ("constraints", "constraint_type", "x"),
+        ("constraints", "definition", "CHECK (true)"),
+        ("indexes", "is_unique", True),
+        ("indexes", "owner_name", "attacker"),
+    ):
+        drifted_rows = [dict(row) for row in guard_kwargs[collection_name]]
+        drifted_rows[0][field] = value
+        with pytest.raises(DatabaseSecurityBoundaryError, match="stocktake start"):
+            _assert_nonopening_stocktake_start_guards(
+                **{**guard_kwargs, collection_name: drifted_rows}
+            )
 
 
 def _valid_nonopening_stocktake_close_trigger_rows() -> list[dict[str, object]]:
@@ -2219,6 +2584,7 @@ def test_mounted_opening_workflow_has_complete_minimum_runtime_acl() -> None:
         "stocktake_scope_count_completions",
         "stocktake_scopes",
         "stocktake_snapshot_lines",
+        "stocktake_start_completions",
         "stocktake_tasks",
         "sync_batches",
         "sync_inbox_events",
@@ -2256,10 +2622,16 @@ def test_mounted_opening_workflow_has_complete_minimum_runtime_acl() -> None:
         "stocktake_scope_count_completions",
         "stocktake_scopes",
         "stocktake_snapshot_lines",
+        "stocktake_start_completions",
         "stocktake_tasks",
     }
     assert required_inserts <= RUNTIME_INSERT_TABLES
     assert RUNTIME_UPDATE_COLUMNS["stocktake_tasks"] == {
+        "cutoff_ledger_cursor",
+        "cutoff_at",
+        "snapshot_manifest_sha256",
+        "issued_at",
+        "frozen_at",
         "status",
         "submitted_at",
         "current_round_no",
@@ -3294,6 +3666,26 @@ def test_audit_trigger_inventory_covers_cross_domain_manifests() -> None:
         is_initially_deferred,
     )
 
+    start_name = "trg_audit_events_stocktake_start_causality_0047"
+    (
+        table_name,
+        function_name,
+        enabled,
+        trigger_type,
+        is_constraint_trigger,
+        is_deferrable,
+        is_initially_deferred,
+    ) = EXPECTED_NONOPENING_STOCKTAKE_START_TRIGGERS[start_name]
+    assert enabled == "A"
+    cross_domain[start_name] = (
+        table_name,
+        function_name,
+        trigger_type,
+        is_constraint_trigger,
+        is_deferrable,
+        is_initially_deferred,
+    )
+
     assert set(cross_domain) == {
         "trg_audit_events_opening_commit_0022",
         "trg_reconciliation_audit_effect_guard_0026",
@@ -3301,6 +3693,7 @@ def test_audit_trigger_inventory_covers_cross_domain_manifests() -> None:
         "trg_audit_events_cancellation_graph_0037",
         "trg_audit_events_nonopening_stocktake_close_guard_0038",
         "trg_audit_events_approval_projection_0045",
+        "trg_audit_events_stocktake_start_causality_0047",
     }
     for name, expected in cross_domain.items():
         assert EXPECTED_AUDIT_TRIGGERS[name] == expected

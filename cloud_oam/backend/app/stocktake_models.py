@@ -20,6 +20,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    FetchedValue,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -575,6 +576,119 @@ class StocktakeRound(TimestampMixin, Base):
         ),
         nullable=True,
     )
+
+
+class StocktakeStartCompletion(CreatedAtMixin, Base):
+    """Immutable database-sealed proof of one non-opening task start.
+
+    The application appends this row only after the cutoff snapshot, freezes,
+    initial round, transition events and audit event have been staged.  On
+    PostgreSQL the 0047 guard owns ``graph_manifest_sha256`` and the deferred
+    graph validator prevents any partial or rewritten start graph from being
+    committed.  SQLite keeps the generated column nullable until its test-only
+    AFTER INSERT trigger installs a structural seal.
+    """
+
+    __tablename__ = "stocktake_start_completions"
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "id", name="pk_stocktake_start_completions_0047"
+        ),
+        UniqueConstraint(
+            "task_id", name="uq_stocktake_start_completions_task_0047"
+        ),
+        UniqueConstraint(
+            "initial_round_id",
+            name="uq_stocktake_start_completions_round_0047",
+        ),
+        UniqueConstraint(
+            "idempotency_key_hash",
+            name="uq_stocktake_start_completions_idempotency_0047",
+        ),
+        UniqueConstraint(
+            "id", "task_id", name="uq_stocktake_start_completions_id_task_0047"
+        ),
+        ForeignKeyConstraint(
+            ["initial_round_id", "task_id"],
+            ["stocktake_rounds.id", "stocktake_rounds.task_id"],
+            name="fk_stocktake_start_completions_round_0047",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "expected_task_version >= 0 AND "
+            "started_task_version = expected_task_version + 1",
+            name="ck_stocktake_start_completions_versions_0047",
+        ),
+        CheckConstraint(
+            "cutoff_ledger_cursor >= 0 AND scope_count > 0 AND "
+            "snapshot_line_count >= 0 AND active_freeze_count = scope_count",
+            name="ck_stocktake_start_completions_counts_0047",
+        ),
+        CheckConstraint(
+            "authorization_version > 0 AND "
+            "((role_code = 'admin' AND scope_type = 'national' AND "
+            "scope_id_snapshot = '*') OR "
+            "(role_code = 'provincial_manager' AND "
+            "scope_type = 'organization' AND "
+            "length(trim(scope_id_snapshot)) > 0) OR "
+            "(role_code = 'technician' AND scope_type = 'person' AND "
+            "length(trim(scope_id_snapshot)) > 0))",
+            name="ck_stocktake_start_completions_authorization_0047",
+        ),
+        CheckConstraint(
+            "length(scope_manifest_sha256) = 64 AND "
+            "length(snapshot_manifest_sha256) = 64 AND "
+            "length(request_sha256) = 64 AND "
+            "length(idempotency_key_hash) = 64 AND "
+            "length(authorization_sha256) = 64 AND "
+            "length(graph_manifest_sha256) = 64",
+            name="ck_stocktake_start_completions_hashes_0047",
+        ),
+        CheckConstraint(
+            "cutoff_at <= started_at AND created_at = started_at",
+            name="ck_stocktake_start_completions_chronology_0047",
+        ),
+        Index(
+            "ix_stocktake_start_completions_actor_0047",
+            "started_by_user_id",
+            "started_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, default=uuid4_value)
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stocktake_tasks.id", ondelete="RESTRICT")
+    )
+    initial_round_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    expected_task_version: Mapped[int] = mapped_column(BigInteger)
+    started_task_version: Mapped[int] = mapped_column(BigInteger)
+    cutoff_ledger_cursor: Mapped[int] = mapped_column(BigInteger)
+    cutoff_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    scope_count: Mapped[int] = mapped_column(Integer)
+    snapshot_line_count: Mapped[int] = mapped_column(Integer)
+    active_freeze_count: Mapped[int] = mapped_column(Integer)
+    scope_manifest_sha256: Mapped[str] = mapped_column(String(64))
+    snapshot_manifest_sha256: Mapped[str] = mapped_column(String(64))
+    request_sha256: Mapped[str] = mapped_column(String(64))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    started_by_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    started_by_person_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT")
+    )
+    started_role_assignment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("role_assignments.id", ondelete="RESTRICT")
+    )
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    role_code: Mapped[str] = mapped_column(String(40))
+    scope_type: Mapped[str] = mapped_column(String(24))
+    scope_id_snapshot: Mapped[str] = mapped_column(String(80))
+    authorization_sha256: Mapped[str] = mapped_column(String(64))
+    graph_manifest_sha256: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, server_default=FetchedValue()
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class StocktakeCountLine(TimestampMixin, Base):

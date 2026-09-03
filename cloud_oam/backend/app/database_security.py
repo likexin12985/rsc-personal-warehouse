@@ -122,6 +122,7 @@ RUNTIME_READ_TABLES = frozenset(
         "stocktake_scope_count_completions",
         "stocktake_scopes",
         "stocktake_snapshot_lines",
+        "stocktake_start_completions",
         "stocktake_tasks",
         "substitution_decisions",
         "supply_tasks",
@@ -200,6 +201,7 @@ RUNTIME_INSERT_TABLES = frozenset(
         "stocktake_scope_count_completions",
         "stocktake_scopes",
         "stocktake_snapshot_lines",
+        "stocktake_start_completions",
         "stocktake_tasks",
     }
 )
@@ -386,6 +388,11 @@ RUNTIME_UPDATE_COLUMNS = {
     ),
     "stocktake_tasks": frozenset(
         {
+            "cutoff_ledger_cursor",
+            "cutoff_at",
+            "snapshot_manifest_sha256",
+            "issued_at",
+            "frozen_at",
             "status",
             "submitted_at",
             "current_round_no",
@@ -507,6 +514,22 @@ EXPECTED_AUDIT_TRIGGERS = {
         True,
         True,
         True,
+    ),
+    "trg_audit_events_stocktake_start_causality_0047": (
+        "audit_events",
+        "rsc_dispatch_nonopening_stocktake_start_causality_0047",
+        29,
+        True,
+        True,
+        True,
+    ),
+    "trg_audit_events_stocktake_start_sealed_0047": (
+        "audit_events",
+        "rsc_guard_stocktake_start_completion_0047",
+        31,
+        False,
+        False,
+        False,
     ),
 }
 EXPECTED_AUDIT_STREAM_CONSTRAINTS = {
@@ -2222,6 +2245,120 @@ EXPECTED_SMS_DISPATCH_UPDATE_COLUMNS = frozenset(
         "expired_at",
     }
 )
+_STOCKTAKE_START_CAUSALITY_TABLES = (
+    "stocktake_tasks",
+    "stocktake_scopes",
+    "inventory_freezes",
+    "stocktake_snapshot_lines",
+    "stocktake_rounds",
+    "stocktake_start_completions",
+    "state_transition_events",
+    "audit_events",
+)
+EXPECTED_NONOPENING_STOCKTAKE_START_TRIGGERS = {
+    "trg_stocktake_start_completions_guard_0047": (
+        "stocktake_start_completions",
+        "rsc_guard_stocktake_start_completion_0047",
+        "A",
+        31,
+        False,
+        False,
+        False,
+    ),
+    **{
+        f"trg_{table_name}_stocktake_start_sealed_0047": (
+            table_name,
+            "rsc_guard_stocktake_start_completion_0047",
+            "A",
+            31,
+            False,
+            False,
+            False,
+        )
+        for table_name in _STOCKTAKE_START_CAUSALITY_TABLES
+        if table_name != "stocktake_start_completions"
+    },
+    **{
+        f"trg_{table_name}_stocktake_start_causality_0047": (
+            table_name,
+            "rsc_dispatch_nonopening_stocktake_start_causality_0047",
+            "A",
+            29,
+            True,
+            True,
+            True,
+        )
+        for table_name in _STOCKTAKE_START_CAUSALITY_TABLES
+    },
+}
+EXPECTED_STOCKTAKE_START_COMPLETION_COLUMNS = (
+    ("id", "uuid", True),
+    ("task_id", "uuid", True),
+    ("initial_round_id", "uuid", True),
+    ("expected_task_version", "bigint", True),
+    ("started_task_version", "bigint", True),
+    ("cutoff_ledger_cursor", "bigint", True),
+    ("cutoff_at", "timestamp with time zone", True),
+    ("scope_count", "integer", True),
+    ("snapshot_line_count", "integer", True),
+    ("active_freeze_count", "integer", True),
+    ("scope_manifest_sha256", "character varying(64)", True),
+    ("snapshot_manifest_sha256", "character varying(64)", True),
+    ("request_sha256", "character varying(64)", True),
+    ("idempotency_key_hash", "character varying(64)", True),
+    ("started_by_user_id", "character varying(36)", True),
+    ("started_by_person_id", "uuid", True),
+    ("started_role_assignment_id", "uuid", True),
+    ("authorization_version", "bigint", True),
+    ("role_code", "character varying(40)", True),
+    ("scope_type", "character varying(24)", True),
+    ("scope_id_snapshot", "character varying(80)", True),
+    ("authorization_sha256", "character varying(64)", True),
+    ("graph_manifest_sha256", "character varying(64)", True),
+    ("started_at", "timestamp with time zone", True),
+    ("created_at", "timestamp with time zone", True),
+)
+EXPECTED_STOCKTAKE_START_COMPLETION_CONSTRAINTS = {
+    "pk_stocktake_start_completions_0047": ("p", ("id",), None, ()),
+    "uq_stocktake_start_completions_task_0047": (
+        "u", ("task_id",), None, ()),
+    "uq_stocktake_start_completions_round_0047": (
+        "u", ("initial_round_id",), None, ()),
+    "uq_stocktake_start_completions_idempotency_0047": (
+        "u", ("idempotency_key_hash",), None, ()),
+    "uq_stocktake_start_completions_id_task_0047": (
+        "u", ("id", "task_id"), None, ()),
+    "fk_stocktake_start_completions_task_0047": (
+        "f", ("task_id",), "stocktake_tasks", ("id",)),
+    "fk_stocktake_start_completions_round_0047": (
+        "f", ("initial_round_id", "task_id"), "stocktake_rounds",
+        ("id", "task_id")),
+    "fk_stocktake_start_completions_user_0047": (
+        "f", ("started_by_user_id",), "users", ("id",)),
+    "fk_stocktake_start_completions_person_0047": (
+        "f", ("started_by_person_id",), "people", ("id",)),
+    "fk_stocktake_start_completions_assignment_0047": (
+        "f", ("started_role_assignment_id",), "role_assignments", ("id",)),
+    "ck_stocktake_start_completions_versions_0047": ("c", (), None, ()),
+    "ck_stocktake_start_completions_counts_0047": ("c", (), None, ()),
+    "ck_stocktake_start_completions_authorization_0047": (
+        "c", (), None, ()),
+    "ck_stocktake_start_completions_hashes_0047": ("c", (), None, ()),
+    "ck_stocktake_start_completions_chronology_0047": (
+        "c", (), None, ()),
+}
+EXPECTED_STOCKTAKE_START_COMPLETION_INDEXES = {
+    "pk_stocktake_start_completions_0047": (("id",), True, True),
+    "uq_stocktake_start_completions_task_0047": (("task_id",), True, False),
+    "uq_stocktake_start_completions_round_0047": (
+        ("initial_round_id",), True, False),
+    "uq_stocktake_start_completions_idempotency_0047": (
+        ("idempotency_key_hash",), True, False),
+    "uq_stocktake_start_completions_id_task_0047": (
+        ("id", "task_id"), True, False),
+    "ix_stocktake_start_completions_actor_0047": (
+        ("started_by_user_id", "started_at"), False, False),
+}
 _STOCKTAKE_CLOSE_FACT_TABLES = (
     "stocktake_close_transition_acks",
     "stocktake_close_reconciliation_completions",
@@ -2660,12 +2797,36 @@ FORMAL_FILE_INTERNAL_FUNCTIONS = {
         "plpgsql",
         ("search_path=pg_catalog, public",),
     ),
+    ("rsc_guard_stocktake_start_completion_0047", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_validate_nonopening_stocktake_start_causality_0047", "uuid"): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_dispatch_nonopening_stocktake_start_causality_0047", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
 }
 FORMAL_FILE_INTERNAL_FUNCTION_SHAPES = {
     coordinate: (
         "f",
         "void"
-        if coordinate == ("rsc_validate_material_request_cancellation_0037", "uuid")
+        if coordinate in {
+            ("rsc_validate_material_request_cancellation_0037", "uuid"),
+            (
+                "rsc_validate_nonopening_stocktake_start_causality_0047",
+                "uuid",
+            ),
+        }
         else "trigger",
         False,
     )
@@ -2700,6 +2861,12 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
         "17588eaffe3b5225272a5b9c342088ff0d934c7492625db18748217cf15feabf",
     ("rsc_guard_sms_challenge_dispatch_0041", ""):
         "42201b13bb8998ea8522b190bfed67bbc7faab4c7bc355b4a7f5c2c13cd59993",
+    ("rsc_guard_stocktake_start_completion_0047", ""):
+        "7d3729edf7f14a3f3be228b02fc25ad51a296c3ef972245271cab74ea589c2f3",
+    ("rsc_validate_nonopening_stocktake_start_causality_0047", "uuid"):
+        "fac0c8ebdb46d53b1eec62f5ffb15e69a21a5975b9a99445270968f23d27ebe9",
+    ("rsc_dispatch_nonopening_stocktake_start_causality_0047", ""):
+        "7ae3cda26d356cabf5529bae88eb33e0f85bcab538e8ab9b8bb256eebf54ac40",
 }
 
 
@@ -4446,6 +4613,153 @@ ORDER BY grantee_name, acl.privilege_type
 """
 )
 
+_NONOPENING_STOCKTAKE_START_FUNCTION_NAME_LITERALS = ",\n      ".join(
+    f"'{name}'"
+    for name in (
+        "rsc_guard_stocktake_start_completion_0047",
+        "rsc_validate_nonopening_stocktake_start_causality_0047",
+        "rsc_dispatch_nonopening_stocktake_start_causality_0047",
+    )
+)
+_NONOPENING_STOCKTAKE_START_TRIGGER_SQL = text(
+    f"""
+SELECT
+    trigger_row.tgname AS trigger_name,
+    table_row.relname AS table_name,
+    function_row.proname AS function_name,
+    function_schema.nspname AS function_schema,
+    trigger_row.tgenabled AS enabled,
+    trigger_row.tgtype AS trigger_type,
+    trigger_row.tgconstraint <> 0 AS is_constraint_trigger,
+    trigger_row.tgdeferrable AS is_deferrable,
+    trigger_row.tginitdeferred AS is_initially_deferred,
+    trigger_row.tgqual IS NOT NULL AS has_when_clause,
+    trigger_row.tgattr::text <> '' AS has_column_filter
+FROM pg_trigger AS trigger_row
+JOIN pg_class AS table_row ON table_row.oid = trigger_row.tgrelid
+JOIN pg_namespace AS table_schema ON table_schema.oid = table_row.relnamespace
+JOIN pg_proc AS function_row ON function_row.oid = trigger_row.tgfoid
+JOIN pg_namespace AS function_schema
+  ON function_schema.oid = function_row.pronamespace
+WHERE table_schema.nspname = 'public'
+  AND (
+      table_row.relname = 'stocktake_start_completions'
+      OR trigger_row.tgname LIKE '%0047'
+      OR function_row.proname IN (
+          {_NONOPENING_STOCKTAKE_START_FUNCTION_NAME_LITERALS}
+      )
+  )
+  AND NOT trigger_row.tgisinternal
+ORDER BY trigger_row.tgname
+"""
+)
+
+_STOCKTAKE_START_COMPLETION_COLUMN_SQL = text(
+    """
+SELECT
+    table_row.relkind AS relation_kind,
+    table_row.relpersistence AS persistence,
+    table_row.relrowsecurity AS row_security,
+    table_row.relforcerowsecurity AS force_row_security,
+    attribute_row.attnum AS ordinal_position,
+    attribute_row.attname AS column_name,
+    format_type(attribute_row.atttypid, attribute_row.atttypmod) AS data_type,
+    attribute_row.attnotnull AS is_not_null,
+    attribute_row.attidentity AS identity_kind,
+    attribute_row.attgenerated AS generated_kind,
+    pg_get_expr(default_row.adbin, default_row.adrelid, TRUE)
+        AS default_expression
+FROM pg_class AS table_row
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+JOIN pg_attribute AS attribute_row ON attribute_row.attrelid = table_row.oid
+LEFT JOIN pg_attrdef AS default_row
+  ON default_row.adrelid = table_row.oid
+ AND default_row.adnum = attribute_row.attnum
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname = 'stocktake_start_completions'
+  AND attribute_row.attnum > 0
+  AND NOT attribute_row.attisdropped
+ORDER BY attribute_row.attnum
+"""
+)
+
+_STOCKTAKE_START_COMPLETION_CONSTRAINT_SQL = text(
+    """
+SELECT
+    constraint_row.conname AS constraint_name,
+    constraint_row.contype AS constraint_type,
+    constraint_row.convalidated AS is_validated,
+    constraint_row.condeferrable AS is_deferrable,
+    constraint_row.condeferred AS is_initially_deferred,
+    constraint_row.connoinherit AS is_no_inherit,
+    constraint_row.conislocal AS is_local,
+    constraint_row.coninhcount AS inheritance_count,
+    constraint_row.conparentid AS parent_constraint_id,
+    pg_get_constraintdef(constraint_row.oid, TRUE) AS definition,
+    COALESCE((
+        SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+          FROM unnest(constraint_row.conkey) WITH ORDINALITY
+               AS key_row(attnum, ordinality)
+          JOIN pg_attribute AS attribute_row
+            ON attribute_row.attrelid = constraint_row.conrelid
+           AND attribute_row.attnum = key_row.attnum
+    ), ARRAY[]::name[]) AS constrained_columns,
+    referenced_table.relname AS referenced_table,
+    COALESCE((
+        SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+          FROM unnest(constraint_row.confkey) WITH ORDINALITY
+               AS key_row(attnum, ordinality)
+          JOIN pg_attribute AS attribute_row
+            ON attribute_row.attrelid = constraint_row.confrelid
+           AND attribute_row.attnum = key_row.attnum
+    ), ARRAY[]::name[]) AS referenced_columns,
+    constraint_row.confdeltype AS delete_action
+FROM pg_constraint AS constraint_row
+JOIN pg_class AS table_row ON table_row.oid = constraint_row.conrelid
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+LEFT JOIN pg_class AS referenced_table
+  ON referenced_table.oid = constraint_row.confrelid
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname = 'stocktake_start_completions'
+ORDER BY constraint_row.conname
+"""
+)
+
+_STOCKTAKE_START_COMPLETION_INDEX_SQL = text(
+    """
+SELECT
+    index_row.relname AS index_name,
+    pg_get_userbyid(index_row.relowner) AS owner_name,
+    access_method.amname AS access_method,
+    index_metadata.indisunique AS is_unique,
+    index_metadata.indisprimary AS is_primary,
+    index_metadata.indisexclusion AS is_exclusion,
+    index_metadata.indimmediate AS is_immediate,
+    index_metadata.indisvalid AS is_valid,
+    index_metadata.indisready AS is_ready,
+    index_metadata.indislive AS is_live,
+    index_metadata.indnullsnotdistinct AS nulls_not_distinct,
+    index_metadata.indnkeyatts AS key_attribute_count,
+    index_metadata.indnatts AS total_attribute_count,
+    index_metadata.indexprs IS NOT NULL AS has_expressions,
+    ARRAY(
+        SELECT pg_get_indexdef(index_metadata.indexrelid, key_position, TRUE)
+          FROM generate_series(1, index_metadata.indnkeyatts) AS key_position
+         ORDER BY key_position
+    ) AS key_columns,
+    pg_get_expr(index_metadata.indpred, index_metadata.indrelid, TRUE)
+        AS predicate
+FROM pg_index AS index_metadata
+JOIN pg_class AS index_row ON index_row.oid = index_metadata.indexrelid
+JOIN pg_class AS table_row ON table_row.oid = index_metadata.indrelid
+JOIN pg_namespace AS schema_row ON schema_row.oid = table_row.relnamespace
+JOIN pg_am AS access_method ON access_method.oid = index_row.relam
+WHERE schema_row.nspname = 'public'
+  AND table_row.relname = 'stocktake_start_completions'
+ORDER BY index_row.relname
+"""
+)
+
 _NONOPENING_STOCKTAKE_CLOSE_FACT_TABLE_LITERALS = ",\n      ".join(
     f"'{name}'" for name in sorted(_STOCKTAKE_CLOSE_FACT_TABLES)
 )
@@ -4740,6 +5054,18 @@ def validate_production_database_security(
             kms_data_key_pin_function_acl = connection.execute(
                 _KMS_DATA_KEY_PIN_FUNCTION_ACL_SQL
             ).mappings().all()
+            nonopening_stocktake_start_triggers = connection.execute(
+                _NONOPENING_STOCKTAKE_START_TRIGGER_SQL
+            ).mappings().all()
+            stocktake_start_completion_columns = connection.execute(
+                _STOCKTAKE_START_COMPLETION_COLUMN_SQL
+            ).mappings().all()
+            stocktake_start_completion_constraints = connection.execute(
+                _STOCKTAKE_START_COMPLETION_CONSTRAINT_SQL
+            ).mappings().all()
+            stocktake_start_completion_indexes = connection.execute(
+                _STOCKTAKE_START_COMPLETION_INDEX_SQL
+            ).mappings().all()
             nonopening_stocktake_close_triggers = connection.execute(
                 _NONOPENING_STOCKTAKE_CLOSE_TRIGGER_SQL
             ).mappings().all()
@@ -4839,6 +5165,13 @@ def validate_production_database_security(
         column_acl=sms_dispatch_column_acl,
         role_access=sms_dispatch_role_access,
         expected_runtime_role=expected_runtime_role,
+        expected_migration_role=expected_migration_role,
+    )
+    _assert_nonopening_stocktake_start_guards(
+        triggers=nonopening_stocktake_start_triggers,
+        columns=stocktake_start_completion_columns,
+        constraints=stocktake_start_completion_constraints,
+        indexes=stocktake_start_completion_indexes,
         expected_migration_role=expected_migration_role,
     )
     _assert_nonopening_stocktake_close_guards(
@@ -7126,6 +7459,179 @@ def _compact_kms_pin_check_definition(value: object) -> str | None:
         "",
         normalized.replace("(", "").replace(")", ""),
     )
+
+
+def _assert_nonopening_stocktake_start_guards(
+    *,
+    triggers: list[Mapping[str, Any]],
+    columns: list[Mapping[str, Any]],
+    constraints: list[Mapping[str, Any]],
+    indexes: list[Mapping[str, Any]],
+    expected_migration_role: str,
+) -> None:
+    """Prove the non-opening start completion and deferred graph boundary."""
+
+    failures: list[str] = []
+    actual_triggers: dict[str, Mapping[str, Any]] = {}
+    for row in triggers:
+        name = row.get("trigger_name")
+        if not isinstance(name, str) or name in actual_triggers:
+            failures.append("trigger_identity")
+            continue
+        actual_triggers[name] = row
+    if set(actual_triggers) != set(EXPECTED_NONOPENING_STOCKTAKE_START_TRIGGERS):
+        failures.append("trigger_set")
+    for name, expected in EXPECTED_NONOPENING_STOCKTAKE_START_TRIGGERS.items():
+        row = actual_triggers.get(name)
+        if row is None:
+            continue
+        (
+            table_name,
+            function_name,
+            enabled,
+            trigger_type,
+            is_constraint,
+            is_deferrable,
+            is_initially_deferred,
+        ) = expected
+        expected_values = {
+            "table_name": table_name,
+            "function_name": function_name,
+            "function_schema": "public",
+            "enabled": enabled,
+            "trigger_type": trigger_type,
+            "is_constraint_trigger": is_constraint,
+            "is_deferrable": is_deferrable,
+            "is_initially_deferred": is_initially_deferred,
+            "has_when_clause": False,
+            "has_column_filter": False,
+        }
+        for field, value in expected_values.items():
+            if row.get(field) != value:
+                failures.append(f"{name}.{field}")
+
+    if len(columns) != len(EXPECTED_STOCKTAKE_START_COMPLETION_COLUMNS):
+        failures.append("completion.column_set")
+    for ordinal, expected in enumerate(
+        EXPECTED_STOCKTAKE_START_COMPLETION_COLUMNS, start=1
+    ):
+        row = columns[ordinal - 1] if len(columns) >= ordinal else None
+        if row is None:
+            continue
+        column_name, data_type, is_not_null = expected
+        if (
+            row.get("ordinal_position") != ordinal
+            or row.get("column_name") != column_name
+            or row.get("data_type") != data_type
+            or row.get("is_not_null") is not is_not_null
+            or row.get("identity_kind") not in (None, "")
+            or row.get("generated_kind") not in (None, "")
+            or row.get("default_expression") is not None
+            or row.get("relation_kind") != "r"
+            or row.get("persistence") != "p"
+            or row.get("row_security") is not False
+            or row.get("force_row_security") is not False
+        ):
+            failures.append(f"completion.{column_name}.shape")
+
+    actual_constraints = {
+        row.get("constraint_name"): row
+        for row in constraints
+        if isinstance(row.get("constraint_name"), str)
+    }
+    if (
+        len(actual_constraints) != len(constraints)
+        or set(actual_constraints)
+        != set(EXPECTED_STOCKTAKE_START_COMPLETION_CONSTRAINTS)
+    ):
+        failures.append("completion.constraint_set")
+    check_tokens = {
+        "ck_stocktake_start_completions_versions_0047": (
+            "expected_task_version", "started_task_version", "+ 1"),
+        "ck_stocktake_start_completions_counts_0047": (
+            "cutoff_ledger_cursor", "scope_count", "snapshot_line_count",
+            "active_freeze_count"),
+        "ck_stocktake_start_completions_authorization_0047": (
+            "authorization_version", "admin", "provincial_manager",
+            "technician", "scope_type", "scope_id_snapshot"),
+        "ck_stocktake_start_completions_hashes_0047": (
+            "scope_manifest_sha256", "snapshot_manifest_sha256",
+            "request_sha256", "idempotency_key_hash",
+            "authorization_sha256", "graph_manifest_sha256", "64"),
+        "ck_stocktake_start_completions_chronology_0047": (
+            "cutoff_at", "started_at", "created_at"),
+    }
+    for name, expected in EXPECTED_STOCKTAKE_START_COMPLETION_CONSTRAINTS.items():
+        row = actual_constraints.get(name)
+        if row is None:
+            continue
+        constraint_type, constrained_columns, referenced_table, referenced_columns = expected
+        if (
+            row.get("constraint_type") != constraint_type
+            or (
+                constraint_type != "c"
+                and tuple(row.get("constrained_columns") or ())
+                != constrained_columns
+            )
+            or row.get("referenced_table") != referenced_table
+            or tuple(row.get("referenced_columns") or ())
+            != referenced_columns
+            or row.get("is_validated") is not True
+            or row.get("is_deferrable") is not False
+            or row.get("is_initially_deferred") is not False
+            or row.get("is_no_inherit") is not (constraint_type != "c")
+            or row.get("is_local") is not True
+            or row.get("inheritance_count") != 0
+            or row.get("parent_constraint_id") != 0
+            or (constraint_type == "f" and row.get("delete_action") != "r")
+        ):
+            failures.append(f"completion.{name}.shape")
+        definition = str(row.get("definition") or "").lower()
+        if any(token.lower() not in definition for token in check_tokens.get(name, ())):
+            failures.append(f"completion.{name}.definition")
+
+    actual_indexes = {
+        row.get("index_name"): row
+        for row in indexes
+        if isinstance(row.get("index_name"), str)
+    }
+    if (
+        len(actual_indexes) != len(indexes)
+        or set(actual_indexes) != set(EXPECTED_STOCKTAKE_START_COMPLETION_INDEXES)
+    ):
+        failures.append("completion.index_set")
+    for name, expected in EXPECTED_STOCKTAKE_START_COMPLETION_INDEXES.items():
+        row = actual_indexes.get(name)
+        if row is None:
+            continue
+        expected_columns, is_unique, is_primary = expected
+        key_columns = tuple(
+            str(value).replace('"', "")
+            for value in (row.get("key_columns") or ())
+        )
+        if (
+            row.get("owner_name") != expected_migration_role
+            or row.get("access_method") != "btree"
+            or row.get("is_unique") is not is_unique
+            or row.get("is_primary") is not is_primary
+            or row.get("is_exclusion") is not False
+            or row.get("is_immediate") is not True
+            or row.get("is_valid") is not True
+            or row.get("is_ready") is not True
+            or row.get("is_live") is not True
+            or row.get("nulls_not_distinct") is not False
+            or row.get("has_expressions") is not False
+            or row.get("key_attribute_count") != len(expected_columns)
+            or row.get("total_attribute_count") != len(expected_columns)
+            or key_columns != expected_columns
+            or row.get("predicate") is not None
+        ):
+            failures.append(f"completion.{name}.shape")
+    if failures:
+        raise DatabaseSecurityBoundaryError(
+            "production database non-opening stocktake start guard failed: "
+            + ", ".join(sorted(set(failures)))
+        )
 
 
 def _assert_nonopening_stocktake_close_guards(

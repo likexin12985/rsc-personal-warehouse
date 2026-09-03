@@ -39,6 +39,8 @@ from ..formal_access import (
 from ..foundation_models import (
     Organization,
     Person,
+    Role,
+    RoleAssignment,
     StateTransitionEvent,
 )
 from ..inventory_models import (
@@ -46,6 +48,7 @@ from ..inventory_models import (
     InventoryLedgerHead,
     InventoryLot,
     InventoryMovement,
+    InventoryMovementSerial,
     InventorySerial,
     InventoryTransaction,
     MaterialInventoryPolicy,
@@ -62,6 +65,7 @@ from ..stocktake_models import (
     InventoryFreeze,
     StocktakeRound,
     StocktakeSnapshotLine,
+    StocktakeStartCompletion,
 )
 from ..stocktake_task_schemas import (
     PersonalStocktakeCreateIn,
@@ -75,6 +79,10 @@ from .audit_chain import (
     lock_audit_chain_head,
 )
 from .inventory_posting import INVENTORY_LEDGER_HEAD_ID, INVENTORY_STREAM_KEY
+from .postgresql_lock_graph import (
+    lock_inventory_serial_graph,
+    lock_opening_stocktake_start_reference,
+)
 from .stocktake_task_policy import (
     StocktakeTaskPolicyError,
     require_atomic_start_path,
@@ -347,7 +355,20 @@ def _create_managed_draft_impl(
             _lock_coordinate("stocktake-task", str(task_id)),
         ),
     )
-    lock_formal_principal_graph(db, (supplied.user_id,))
+    assignee_person_ids = tuple(
+        sorted({row.assignee_person_id for row in checked.scopes}, key=str)
+    )
+    assignee_user_ids = tuple(
+        db.scalars(
+            select(User.id)
+            .where(User.person_id.in_(assignee_person_ids))
+            .order_by(User.id)
+        ).all()
+    )
+    lock_formal_principal_graph(
+        db,
+        (supplied.user_id, *assignee_user_ids),
+    )
     now = _database_now(db)
     current = _require_current_actor(db, supplied, now=now)
     _authorize_manager(db, current, checked.region_org_id)
@@ -360,6 +381,18 @@ def _create_managed_draft_impl(
     if replay is not None:
         return replace(replay, replayed=True)
     _require_deadline(checked.deadline, now)
+    lock_opening_stocktake_start_reference(
+        db,
+        checked.region_org_id,
+        tuple(row.owner_org_id for row in checked.scopes),
+        tuple(row.location_id for row in checked.scopes),
+        tuple(
+            row.material_id
+            for row in checked.scopes
+            if row.material_id is not None
+        ),
+        now,
+    )
     plans = _prepare_managed_scope_plans(db, current, checked, now=now)
     return _write_draft(
         db,
@@ -439,6 +472,29 @@ def _create_personal_draft_impl(
         freeze_mode=checked.freeze_mode,
         now=now,
     )
+    lock_opening_stocktake_start_reference(
+        db,
+        region_org_id,
+        (plan.owner_org_id,),
+        (plan.location_id,),
+        (),
+        now,
+    )
+    locked_plan, locked_region_org_id = _derive_personal_scope_plan(
+        db,
+        current,
+        freeze_mode=checked.freeze_mode,
+        now=now,
+    )
+    if (
+        replace(locked_plan, scope_id=plan.scope_id) != plan
+        or locked_region_org_id != region_org_id
+    ):
+        _fail(
+            "personal_stocktake_reference_changed",
+            "conflict",
+            "个人仓参考数据在创建锁定期间发生变化",
+        )
     return _write_draft(
         db,
         actor=current,
@@ -624,10 +680,18 @@ def _start_stocktake_task_impl(
     task_probe = db.get(FormalStocktakeTask, checked_task_id)
     if task_probe is None or task_probe.task_type == "opening":
         _fail("stocktake_task_not_found", "not_found", "非期初盘点任务不存在")
-    lock_formal_principal_graph(db, (supplied.user_id,))
+    # A completed replay does not join the inventory-writer lock graph.  Probe
+    # current authorization without locks, then take only the actor graph and
+    # revalidate before returning immutable completion evidence.
     preflight_at = _database_now(db)
-    current = _require_current_actor(db, supplied, now=preflight_at)
-    _authorize_task_start(db, current, task_probe)
+    preflight_actor = _require_current_actor(db, supplied, now=preflight_at)
+    _authorize_task_start(
+        db,
+        preflight_actor,
+        task_probe,
+        preflight_at,
+        lock_assignment=False,
+    )
     replay = _load_start_replay(
         db,
         idempotency_key=_start_event_key(key_hash, "counting"),
@@ -635,6 +699,10 @@ def _start_stocktake_task_impl(
         expected_task_id=checked_task_id,
     )
     if replay is not None:
+        lock_formal_principal_graph(db, (supplied.user_id,))
+        replay_at = _database_now(db)
+        current = _require_current_actor(db, supplied, now=replay_at)
+        _authorize_task_start(db, current, task_probe, replay_at)
         return replace(replay, replayed=True)
 
     scope_probe = tuple(
@@ -646,6 +714,7 @@ def _start_stocktake_task_impl(
     )
     if not scope_probe:
         _fail("stocktake_scopes_missing", "service_unavailable", "盘点草稿没有正式范围")
+    assignee_user_ids_probe = tuple(row.assignee_user_id for row in scope_probe)
     _take_advisory_locks(
         db,
         tuple(
@@ -672,7 +741,36 @@ def _start_stocktake_task_impl(
             "service_unavailable",
             "库存账本游标未正确初始化",
         )
+    (
+        posted_transaction_count,
+        minimum_posted_cursor,
+        maximum_posted_cursor,
+    ) = db.execute(
+        select(
+            func.count(InventoryTransaction.id),
+            func.min(InventoryTransaction.ledger_cursor),
+            func.max(InventoryTransaction.ledger_cursor),
+        ).where(InventoryTransaction.status == "posted")
+    ).one()
     cutoff_cursor = head.next_cursor - 1
+    if cutoff_cursor == 0:
+        ledger_is_contiguous = (
+            posted_transaction_count == 0
+            and minimum_posted_cursor is None
+            and maximum_posted_cursor is None
+        )
+    else:
+        ledger_is_contiguous = (
+            posted_transaction_count == cutoff_cursor
+            and minimum_posted_cursor == 1
+            and maximum_posted_cursor == cutoff_cursor
+        )
+    if not ledger_is_contiguous:
+        _fail(
+            "stocktake_ledger_projection_drift",
+            "service_unavailable",
+            "库存账本头与连续不可变流水不一致，禁止启动盘点",
+        )
     task = db.scalar(
         select(FormalStocktakeTask)
         .where(FormalStocktakeTask.id == checked_task_id)
@@ -683,22 +781,41 @@ def _start_stocktake_task_impl(
         _fail("stocktake_task_not_found", "not_found", "非期初盘点任务不存在")
     scopes = tuple(
         db.scalars(
-            select(FormalStocktakeScope)
-            .where(FormalStocktakeScope.task_id == checked_task_id)
-            .order_by(FormalStocktakeScope.scope_no)
-            .with_for_update()
+            _locked_reference_statement(
+                db,
+                select(FormalStocktakeScope)
+                .where(FormalStocktakeScope.task_id == checked_task_id)
+                .order_by(FormalStocktakeScope.scope_no),
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
-    assignee_user_ids = tuple(row.assignee_user_id for row in scopes)
+    if tuple(row.assignee_user_id for row in scopes) != assignee_user_ids_probe:
+        _fail(
+            "stocktake_scope_integrity_invalid",
+            "conflict",
+            "盘点范围执行人在启动锁定期间发生变化",
+        )
+    # Keep the global writer order aligned with inventory posting: ledger
+    # head -> task rows -> one sorted principal union -> reference/projection
+    # rows -> audit head.  Expanding an actor-only principal lock later can
+    # deadlock both cross-assigned starts and established-inventory posting.
     lock_formal_principal_graph(
         db,
-        (supplied.user_id, *assignee_user_ids),
+        (supplied.user_id, *assignee_user_ids_probe),
     )
     now = _database_now(db)
     cutoff_at = now
     current = _require_current_actor(db, supplied, now=now)
-    _authorize_task_start(db, current, task)
+    _authorize_task_start(db, current, task, now)
+    lock_opening_stocktake_start_reference(
+        db,
+        task.region_org_id,
+        tuple(row.owner_org_id for row in scopes),
+        tuple(row.location_id for row in scopes),
+        tuple(row.material_id for row in scopes if row.material_id is not None),
+        now,
+    )
     _require_startable_draft(db, task, scopes, checked.expected_version, now)
     plans = _load_and_validate_scope_plans(db, task, scopes, now=now)
     _require_no_active_overlapping_freeze(db, plans)
@@ -720,7 +837,7 @@ def _start_stocktake_task_impl(
     lock_audit_chain_head(db, stream_key=INVENTORY_STREAM_KEY)
     now = _database_now(db)
     current = _require_current_actor(db, supplied, now=now)
-    _authorize_task_start(db, current, task)
+    authorization_grant = _authorize_task_start(db, current, task, now)
     if task.deadline is not None and _as_utc(task.deadline) <= now:
         _fail("stocktake_deadline_elapsed", "precondition_failed", "盘点截止时间已到，禁止启动")
     require_atomic_start_path("draft", ("issued", "frozen", "counting"))
@@ -861,6 +978,44 @@ def _start_stocktake_task_impl(
         occurred_at=now,
     )
     db.flush()
+    authorization_sha256 = _start_authorization_sha256(
+        current,
+        authorization_grant,
+        started_at=now,
+    )
+    db.add(
+        StocktakeStartCompletion(
+            id=uuid.uuid4(),
+            task_id=task.id,
+            initial_round_id=round_id,
+            expected_task_version=checked.expected_version,
+            started_task_version=task.version,
+            cutoff_ledger_cursor=cutoff_cursor,
+            cutoff_at=cutoff_at,
+            scope_count=len(plans),
+            snapshot_line_count=len(snapshots),
+            active_freeze_count=len(plans),
+            scope_manifest_sha256=task.scope_manifest_sha256,
+            snapshot_manifest_sha256=snapshot_manifest,
+            request_sha256=request_hash,
+            idempotency_key_hash=key_hash,
+            started_by_user_id=current.user_id,
+            started_by_person_id=current.person_id,
+            started_role_assignment_id=authorization_grant.assignment_id,
+            authorization_version=current.authorization_version,
+            role_code=authorization_grant.role_code,
+            scope_type=authorization_grant.scope_type,
+            scope_id_snapshot=authorization_grant.scope_id,
+            authorization_sha256=authorization_sha256,
+            started_at=now,
+            created_at=now,
+        )
+    )
+    # This is deliberately the final application-owned row of the atomic
+    # start graph. PostgreSQL derives graph_manifest_sha256 in its BEFORE
+    # trigger after all scopes, freezes, snapshots, the initial round, state
+    # events and the inventory audit fact are durable in this transaction.
+    db.flush()
     return result
 
 
@@ -946,14 +1101,16 @@ def _require_complete_termination_scope(
     custodian_person_id = next(iter(custodians))
     locations = tuple(
         db.scalars(
-            select(StockLocation)
-            .where(
-                StockLocation.location_type == "personal",
-                StockLocation.custodian_person_id == custodian_person_id,
-                StockLocation.status == "active",
+            _locked_reference_statement(
+                db,
+                select(StockLocation)
+                .where(
+                    StockLocation.location_type == "personal",
+                    StockLocation.custodian_person_id == custodian_person_id,
+                    StockLocation.status == "active",
+                )
+                .order_by(StockLocation.id),
             )
-            .order_by(StockLocation.id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -988,14 +1145,16 @@ def _derive_personal_scope_plan(
     region = _find_region_ancestor(db, person.organization_id)
     locations = tuple(
         db.scalars(
-            select(StockLocation)
-            .where(
-                StockLocation.location_type == "personal",
-                StockLocation.custodian_person_id == actor.person_id,
-                StockLocation.status == "active",
+            _locked_reference_statement(
+                db,
+                select(StockLocation)
+                .where(
+                    StockLocation.location_type == "personal",
+                    StockLocation.custodian_person_id == actor.person_id,
+                    StockLocation.status == "active",
+                )
+                .order_by(StockLocation.id),
             )
-            .order_by(StockLocation.id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -1046,7 +1205,6 @@ def _load_and_validate_scope_plans(
             StateTransitionEvent.from_status.is_(None),
             StateTransitionEvent.to_status == "draft",
         )
-        .with_for_update()
         .execution_options(populate_existing=True)
     )
     metadata = create_event.metadata_jsonb if create_event is not None else None
@@ -1173,13 +1331,15 @@ def _build_snapshots(
             _fail("stocktake_location_lost", "conflict", "盘点库位在启动期间失效")
         all_accounts = tuple(
             db.scalars(
-                select(StockAccount)
-                .where(
-                    StockAccount.owner_org_id == plan.owner_org_id,
-                    StockAccount.location_id == plan.location_id,
+                _locked_reference_statement(
+                    db,
+                    select(StockAccount)
+                    .where(
+                        StockAccount.owner_org_id == plan.owner_org_id,
+                        StockAccount.location_id == plan.location_id,
+                    )
+                    .order_by(StockAccount.id),
                 )
-                .order_by(StockAccount.id)
-                .with_for_update()
                 .execution_options(populate_existing=True)
             ).all()
         )
@@ -1197,6 +1357,129 @@ def _build_snapshots(
                 selected.append((plan, account))
 
     account_ids = tuple(row.id for _, row in selected)
+    material_ids = tuple(
+        sorted(
+            {row.material_id for _, row in selected}.union(
+                plan.material_id
+                for plan in plans
+                if plan.material_id is not None
+            ),
+            key=str,
+        )
+    )
+    materials = {
+        row.id: row
+        for row in db.scalars(
+            _locked_reference_statement(
+                db,
+                select(FormalMaterial)
+                .where(FormalMaterial.id.in_(material_ids))
+                .order_by(FormalMaterial.id),
+            )
+            .execution_options(populate_existing=True)
+        ).all()
+    } if material_ids else {}
+    if len(materials) != len(material_ids) or any(
+        row.status != "active" for row in materials.values()
+    ):
+        _fail("stocktake_material_invalid", "precondition_failed", "盘点账户包含停用或缺失物料")
+    policies = {
+        material_id: _require_inventory_policy(db, material_id, cutoff_at)
+        for material_id in material_ids
+    }
+    lot_ids = tuple(
+        sorted({row.lot_id for _, row in selected if row.lot_id is not None}, key=str)
+    )
+    lots = {
+        row.id: row
+        for row in db.scalars(
+            _locked_reference_statement(
+                db,
+                select(InventoryLot)
+                .where(InventoryLot.id.in_(lot_ids))
+                .order_by(InventoryLot.id),
+            )
+            .execution_options(populate_existing=True)
+        ).all()
+    } if lot_ids else {}
+    if len(lots) != len(lot_ids):
+        _fail("stocktake_lot_invalid", "precondition_failed", "盘点账户引用的批次不存在")
+
+    positions: dict[uuid.UUID, list[SerialCurrentPosition]] = {
+        account_id: [] for account_id in account_ids
+    }
+    position_rows: tuple[SerialCurrentPosition, ...] = ()
+    if account_ids:
+        position_probe = tuple(
+            db.scalars(
+                select(SerialCurrentPosition)
+                .where(SerialCurrentPosition.stock_account_id.in_(account_ids))
+                .order_by(SerialCurrentPosition.serial_id)
+                .execution_options(populate_existing=True)
+            ).all()
+        )
+        serial_lock_ids = _stocktake_serial_lock_ids(
+            db,
+            account_ids=account_ids,
+            positions=position_probe,
+        )
+        if serial_lock_ids:
+            lock_inventory_serial_graph(db, serial_lock_ids)
+        position_rows = tuple(
+            db.scalars(
+                _locked_reference_statement(
+                    db,
+                    select(SerialCurrentPosition)
+                    .where(SerialCurrentPosition.stock_account_id.in_(account_ids))
+                    .order_by(SerialCurrentPosition.serial_id),
+                )
+                .execution_options(populate_existing=True)
+            ).all()
+        )
+        if _stocktake_serial_lock_ids(
+            db,
+            account_ids=account_ids,
+            positions=position_rows,
+        ) != serial_lock_ids:
+            _fail(
+                "stocktake_serial_graph_changed",
+                "conflict",
+                "SN 引用图在盘点锁定期间发生变化",
+            )
+        for position in position_rows:
+            if position.stock_account_id is None:
+                _fail("stocktake_serial_position_invalid", "service_unavailable", "SN 当前归属无效")
+            positions[position.stock_account_id].append(position)
+        _validate_stocktake_serial_projections(
+            db,
+            account_ids=account_ids,
+            positions=position_rows,
+            cutoff_ledger_cursor=cutoff_ledger_cursor,
+        )
+    serial_ids = tuple(
+        sorted(
+            {row.serial_id for rows in positions.values() for row in rows},
+            key=str,
+        )
+    )
+    serials = {
+        row.id: row
+        for row in db.scalars(
+            _locked_reference_statement(
+                db,
+                select(InventorySerial)
+                .where(InventorySerial.id.in_(serial_ids))
+                .order_by(InventorySerial.id),
+            )
+            .execution_options(populate_existing=True)
+        ).all()
+    } if serial_ids else {}
+    if len(serials) != len(serial_ids):
+        _fail("stocktake_serial_master_invalid", "service_unavailable", "SN 主数据不完整")
+
+    # Mutable balance projections are the last inventory rows locked by the
+    # stocktake reader, matching the formal posting order after SN masters and
+    # current positions.
     balances: dict[uuid.UUID, StockBalance] = {}
     if account_ids:
         balance_rows = tuple(
@@ -1222,86 +1505,12 @@ def _build_snapshots(
                 "service_unavailable",
                 "库存余额投影与截止游标不一致",
             )
-
-    material_ids = tuple(
-        sorted(
-            {row.material_id for _, row in selected}.union(
-                plan.material_id
-                for plan in plans
-                if plan.material_id is not None
-            ),
-            key=str,
+        _validate_stocktake_balance_projections(
+            db,
+            account_ids=account_ids,
+            balances=balances,
+            cutoff_ledger_cursor=cutoff_ledger_cursor,
         )
-    )
-    materials = {
-        row.id: row
-        for row in db.scalars(
-            select(FormalMaterial)
-            .where(FormalMaterial.id.in_(material_ids))
-            .order_by(FormalMaterial.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).all()
-    } if material_ids else {}
-    if len(materials) != len(material_ids) or any(
-        row.status != "active" for row in materials.values()
-    ):
-        _fail("stocktake_material_invalid", "precondition_failed", "盘点账户包含停用或缺失物料")
-    policies = {
-        material_id: _require_inventory_policy(db, material_id, cutoff_at)
-        for material_id in material_ids
-    }
-    lot_ids = tuple(
-        sorted({row.lot_id for _, row in selected if row.lot_id is not None}, key=str)
-    )
-    lots = {
-        row.id: row
-        for row in db.scalars(
-            select(InventoryLot)
-            .where(InventoryLot.id.in_(lot_ids))
-            .order_by(InventoryLot.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).all()
-    } if lot_ids else {}
-    if len(lots) != len(lot_ids):
-        _fail("stocktake_lot_invalid", "precondition_failed", "盘点账户引用的批次不存在")
-
-    positions: dict[uuid.UUID, list[SerialCurrentPosition]] = {
-        account_id: [] for account_id in account_ids
-    }
-    if account_ids:
-        position_rows = tuple(
-            db.scalars(
-                select(SerialCurrentPosition)
-                .where(SerialCurrentPosition.stock_account_id.in_(account_ids))
-                .order_by(SerialCurrentPosition.serial_id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            ).all()
-        )
-        for position in position_rows:
-            if position.stock_account_id is None:
-                _fail("stocktake_serial_position_invalid", "service_unavailable", "SN 当前归属无效")
-            positions[position.stock_account_id].append(position)
-    serial_ids = tuple(
-        sorted(
-            {row.serial_id for rows in positions.values() for row in rows},
-            key=str,
-        )
-    )
-    serials = {
-        row.id: row
-        for row in db.scalars(
-            select(InventorySerial)
-            .where(InventorySerial.id.in_(serial_ids))
-            .order_by(InventorySerial.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).all()
-    } if serial_ids else {}
-    if len(serials) != len(serial_ids):
-        _fail("stocktake_serial_master_invalid", "service_unavailable", "SN 主数据不完整")
     movement_ids = tuple(
         sorted(
             {row.last_movement_id for rows in positions.values() for row in rows},
@@ -1352,6 +1561,7 @@ def _build_snapshots(
             if (
                 movement is None
                 or transaction is None
+                or transaction.status != "posted"
                 or movement.to_account_id != account.id
                 or transaction.ledger_cursor > cutoff_ledger_cursor
                 or serial.lifecycle_status != "active"
@@ -1406,6 +1616,200 @@ def _build_snapshots(
         )
     prepared.sort(key=lambda row: (row.scope.scope_no, str(row.account.id)))
     return tuple(prepared)
+
+
+def _validate_stocktake_balance_projections(
+    db: Session,
+    *,
+    account_ids: tuple[uuid.UUID, ...],
+    balances: Mapping[uuid.UUID, StockBalance],
+    cutoff_ledger_cursor: int,
+) -> None:
+    """Rebuild each selected balance from the immutable posted ledger.
+
+    A stocktake snapshot is an accounting boundary, so a syntactically valid
+    balance row is insufficient.  The quantity, last cursor and projection
+    version must all agree with posted movements while the ledger head and
+    selected account/balance rows are locked by the caller.
+    """
+
+    expected_quantities = {account_id: _ZERO for account_id in account_ids}
+    expected_cursors = {account_id: 0 for account_id in account_ids}
+    touched_transactions: dict[uuid.UUID, set[uuid.UUID]] = {
+        account_id: set() for account_id in account_ids
+    }
+    rows = db.execute(
+        select(InventoryMovement, InventoryTransaction)
+        .join(
+            InventoryTransaction,
+            InventoryTransaction.id == InventoryMovement.transaction_id,
+        )
+        .where(
+            InventoryTransaction.status == "posted",
+            or_(
+                InventoryMovement.from_account_id.in_(account_ids),
+                InventoryMovement.to_account_id.in_(account_ids),
+            ),
+        )
+        .order_by(
+            InventoryTransaction.ledger_cursor,
+            InventoryMovement.line_no,
+            InventoryMovement.id,
+        )
+    ).all()
+    for movement, transaction in rows:
+        if transaction.ledger_cursor > cutoff_ledger_cursor:
+            _fail(
+                "stocktake_balance_projection_drift",
+                "service_unavailable",
+                "库存余额投影超出盘点截止游标，禁止生成快照",
+            )
+        for account_id, sign in (
+            (movement.from_account_id, -1),
+            (movement.to_account_id, 1),
+        ):
+            if account_id not in expected_quantities:
+                continue
+            expected_quantities[account_id] += sign * movement.quantity
+            expected_cursors[account_id] = max(
+                expected_cursors[account_id], transaction.ledger_cursor
+            )
+            touched_transactions[account_id].add(transaction.id)
+
+    for account_id in account_ids:
+        balance = balances.get(account_id)
+        if balance is None:
+            valid = (
+                expected_quantities[account_id] == _ZERO
+                and expected_cursors[account_id] == 0
+                and not touched_transactions[account_id]
+            )
+        else:
+            valid = bool(
+                balance.quantity == expected_quantities[account_id]
+                and balance.ledger_cursor == expected_cursors[account_id]
+                and balance.version == len(touched_transactions[account_id])
+            )
+        if not valid:
+            _fail(
+                "stocktake_balance_projection_drift",
+                "service_unavailable",
+                "库存余额投影与不可变流水不一致，禁止生成盘点快照",
+            )
+
+
+def _validate_stocktake_serial_projections(
+    db: Session,
+    *,
+    account_ids: tuple[uuid.UUID, ...],
+    positions: Sequence[SerialCurrentPosition],
+    cutoff_ledger_cursor: int,
+) -> None:
+    """Prove the complete selected-account SN set from posted movements."""
+
+    relevant_serial_ids = set(
+        _stocktake_serial_lock_ids(
+            db,
+            account_ids=account_ids,
+            positions=positions,
+        )
+    )
+    if not relevant_serial_ids:
+        return
+
+    ordered_serial_ids = tuple(sorted(relevant_serial_ids, key=str))
+    rows = db.execute(
+        select(
+            InventoryMovementSerial.serial_id,
+            InventoryMovement,
+            InventoryTransaction,
+        )
+        .join(
+            InventoryMovement,
+            InventoryMovement.id == InventoryMovementSerial.movement_id,
+        )
+        .join(
+            InventoryTransaction,
+            InventoryTransaction.id == InventoryMovement.transaction_id,
+        )
+        .where(
+            InventoryMovementSerial.serial_id.in_(ordered_serial_ids),
+            InventoryTransaction.status == "posted",
+        )
+        .order_by(
+            InventoryMovementSerial.serial_id,
+            InventoryTransaction.ledger_cursor,
+            InventoryMovement.line_no,
+            InventoryMovement.id,
+        )
+    ).all()
+    latest: dict[
+        uuid.UUID, tuple[InventoryMovement, InventoryTransaction]
+    ] = {}
+    for serial_id, movement, transaction in rows:
+        latest[serial_id] = (movement, transaction)
+
+    selected_account_ids = set(account_ids)
+    actual = {row.serial_id: row for row in positions}
+    for serial_id in ordered_serial_ids:
+        evidence = latest.get(serial_id)
+        position = actual.get(serial_id)
+        if evidence is None:
+            valid = position is None
+        else:
+            movement, transaction = evidence
+            expected_selected_account = (
+                movement.to_account_id
+                if movement.to_account_id in selected_account_ids
+                else None
+            )
+            if expected_selected_account is None:
+                valid = position is None
+            else:
+                valid = bool(
+                    transaction.ledger_cursor <= cutoff_ledger_cursor
+                    and position is not None
+                    and position.stock_account_id == expected_selected_account
+                    and position.last_movement_id == movement.id
+                )
+        if not valid:
+            _fail(
+                "stocktake_serial_projection_drift",
+                "service_unavailable",
+                "SN 当前位置投影与最后不可变流水不一致，禁止生成盘点快照",
+            )
+
+
+def _stocktake_serial_lock_ids(
+    db: Session,
+    *,
+    account_ids: tuple[uuid.UUID, ...],
+    positions: Sequence[SerialCurrentPosition],
+) -> tuple[uuid.UUID, ...]:
+    """Discover every SN whose posted history touches the selected accounts."""
+
+    relevant_serial_ids = set(
+        db.scalars(
+            select(InventoryMovementSerial.serial_id)
+            .join(
+                InventoryMovement,
+                InventoryMovement.id == InventoryMovementSerial.movement_id,
+            )
+            .join(
+                InventoryTransaction,
+                InventoryTransaction.id == InventoryMovement.transaction_id,
+            )
+            .where(
+                InventoryTransaction.status == "posted",
+                or_(
+                    InventoryMovement.from_account_id.in_(account_ids),
+                    InventoryMovement.to_account_id.in_(account_ids),
+                ),
+            )
+        ).all()
+    )
+    relevant_serial_ids.update(row.serial_id for row in positions)
+    return tuple(sorted(relevant_serial_ids, key=str))
 
 
 def _require_startable_draft(
@@ -1491,13 +1895,66 @@ def _authorize_task_start(
     db: Session,
     actor: FormalPrincipal,
     task: FormalStocktakeTask,
-) -> None:
+    now: datetime,
+    *,
+    lock_assignment: bool = True,
+) -> ScopeGrant:
     if task.task_type == "personal":
         if task.created_by_user_id != actor.user_id:
             _fail("personal_stocktake_owner_forbidden", "forbidden", "个人自盘只能由本人启动")
-        _authorize_self_count(db, actor)
-        return
-    _authorize_manager(db, actor, task.region_org_id)
+        grant = _authorize_self_count(db, actor)
+    else:
+        grant = _authorize_manager(db, actor, task.region_org_id)
+    if lock_assignment:
+        _lock_current_start_assignment(db, actor, grant, now)
+    return grant
+
+
+def _lock_current_start_assignment(
+    db: Session,
+    actor: FormalPrincipal,
+    grant: ScopeGrant,
+    now: datetime,
+) -> RoleAssignment:
+    assignment = db.scalar(
+        select(RoleAssignment)
+        .where(RoleAssignment.id == grant.assignment_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    role = db.get(Role, assignment.role_id) if assignment is not None else None
+    if (
+        assignment is None
+        or role is None
+        or assignment.user_id != actor.user_id
+        or assignment.status not in {"scheduled", "active"}
+        or assignment.revoked_at is not None
+        or _as_utc(assignment.valid_from) > now
+        or (
+            assignment.valid_to is not None
+            and now >= _as_utc(assignment.valid_to)
+        )
+        or role.status != "active"
+        or role.is_external
+        or role.code != grant.role_code
+        or assignment.scope_type != grant.scope_type
+        or assignment.scope_id != grant.scope_id
+        or _as_utc(assignment.valid_from) != grant.valid_from
+        or (
+            (
+                _as_utc(assignment.valid_to)
+                if assignment.valid_to is not None
+                else None
+            )
+            != grant.valid_to
+        )
+    ):
+        _fail(
+            "stocktake_start_assignment_not_current",
+            "precondition_failed",
+            "盘点启动授权已变化，请重新读取后再启动",
+        )
+    return assignment
 
 
 def _authorize_manager(
@@ -1752,9 +2209,10 @@ def _require_current_actor(
 
 def _require_region(db: Session, region_org_id: uuid.UUID) -> Organization:
     region = db.scalar(
-        select(Organization)
-        .where(Organization.id == region_org_id)
-        .with_for_update()
+        _locked_reference_statement(
+            db,
+            select(Organization).where(Organization.id == region_org_id),
+        )
         .execution_options(populate_existing=True)
     )
     if region is None or region.status != "active" or region.org_type != "region_company":
@@ -1768,9 +2226,10 @@ def _require_asset_owner(
     region_org_id: uuid.UUID,
 ) -> Organization:
     owner = db.scalar(
-        select(Organization)
-        .where(Organization.id == owner_org_id)
-        .with_for_update()
+        _locked_reference_statement(
+            db,
+            select(Organization).where(Organization.id == owner_org_id),
+        )
         .execution_options(populate_existing=True)
     )
     if (
@@ -1789,9 +2248,10 @@ def _require_location(
     region_org_id: uuid.UUID,
 ) -> StockLocation:
     location = db.scalar(
-        select(StockLocation)
-        .where(StockLocation.id == location_id)
-        .with_for_update()
+        _locked_reference_statement(
+            db,
+            select(StockLocation).where(StockLocation.id == location_id),
+        )
         .execution_options(populate_existing=True)
     )
     if location is None:
@@ -1820,17 +2280,19 @@ def _require_location_custody(
 ) -> uuid.UUID | None:
     rows = tuple(
         db.scalars(
-            select(CustodyAssignment)
-            .where(
-                CustodyAssignment.location_id == location.id,
-                CustodyAssignment.valid_from <= now,
-                or_(
-                    CustodyAssignment.valid_to.is_(None),
-                    CustodyAssignment.valid_to > now,
-                ),
+            _locked_reference_statement(
+                db,
+                select(CustodyAssignment)
+                .where(
+                    CustodyAssignment.location_id == location.id,
+                    CustodyAssignment.valid_from <= now,
+                    or_(
+                        CustodyAssignment.valid_to.is_(None),
+                        CustodyAssignment.valid_to > now,
+                    ),
+                )
+                .order_by(CustodyAssignment.id),
             )
-            .order_by(CustodyAssignment.id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -1857,9 +2319,10 @@ def _find_region_ancestor(db: Session, organization_id: uuid.UUID) -> Organizati
             _fail("stocktake_organization_tree_cycle", "service_unavailable", "组织树存在循环")
         seen.add(current_id)
         row = db.scalar(
-            select(Organization)
-            .where(Organization.id == current_id)
-            .with_for_update()
+            _locked_reference_statement(
+                db,
+                select(Organization).where(Organization.id == current_id),
+            )
             .execution_options(populate_existing=True)
         )
         if row is None or row.status != "active":
@@ -1896,9 +2359,10 @@ def _organization_descends_from(
 
 def _require_active_material(db: Session, material_id: uuid.UUID) -> FormalMaterial:
     row = db.scalar(
-        select(FormalMaterial)
-        .where(FormalMaterial.id == material_id)
-        .with_for_update()
+        _locked_reference_statement(
+            db,
+            select(FormalMaterial).where(FormalMaterial.id == material_id),
+        )
         .execution_options(populate_existing=True)
     )
     if row is None or row.status != "active":
@@ -1913,17 +2377,22 @@ def _require_inventory_policy(
 ) -> MaterialInventoryPolicy:
     rows = tuple(
         db.scalars(
-            select(MaterialInventoryPolicy)
-            .where(
-                MaterialInventoryPolicy.material_id == material_id,
-                MaterialInventoryPolicy.effective_from <= cutoff_at,
-                or_(
-                    MaterialInventoryPolicy.effective_to.is_(None),
-                    MaterialInventoryPolicy.effective_to > cutoff_at,
+            _locked_reference_statement(
+                db,
+                select(MaterialInventoryPolicy)
+                .where(
+                    MaterialInventoryPolicy.material_id == material_id,
+                    MaterialInventoryPolicy.effective_from <= cutoff_at,
+                    or_(
+                        MaterialInventoryPolicy.effective_to.is_(None),
+                        MaterialInventoryPolicy.effective_to > cutoff_at,
+                    ),
+                )
+                .order_by(
+                    MaterialInventoryPolicy.effective_from,
+                    MaterialInventoryPolicy.id,
                 ),
             )
-            .order_by(MaterialInventoryPolicy.effective_from, MaterialInventoryPolicy.id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -2062,6 +2531,27 @@ def _snapshot_manifest_sha256(
     )
 
 
+def _start_authorization_sha256(
+    actor: FormalPrincipal,
+    grant: ScopeGrant,
+    *,
+    started_at: datetime,
+) -> str:
+    return _canonical_sha256(
+        {
+            "assignment_id": str(grant.assignment_id),
+            "authorization_version": actor.authorization_version,
+            "person_id": str(actor.person_id),
+            "role_code": grant.role_code,
+            "schema": "cloud_oam.stocktake.start_authorization.v1",
+            "scope_id": grant.scope_id,
+            "scope_type": grant.scope_type,
+            "started_at": _canonical_timestamp(started_at),
+            "user_id": actor.user_id,
+        }
+    )
+
+
 def _account_dimension_document(account: StockAccount) -> dict[str, object]:
     return {
         "availability_bucket": account.availability_bucket,
@@ -2125,10 +2615,12 @@ def _load_create_replay(
     request_hash: str,
     expected_task_id: uuid.UUID,
 ) -> StocktakeTaskDraftResult | None:
+    # The caller already owns the command-scoped advisory lock and transition
+    # events are append-only with a unique idempotency key.  A row lock would
+    # incorrectly require UPDATE privilege on this immutable evidence table.
     event = db.scalar(
         select(StateTransitionEvent)
         .where(StateTransitionEvent.idempotency_key == idempotency_key)
-        .with_for_update()
         .execution_options(populate_existing=True)
     )
     if event is None:
@@ -2153,10 +2645,11 @@ def _load_start_replay(
     request_hash: str,
     expected_task_id: uuid.UUID,
 ) -> StocktakeTaskStartResult | None:
+    # See _load_create_replay: advisory serialization plus immutable unique
+    # evidence is the replay boundary; the runtime role remains SELECT+INSERT.
     event = db.scalar(
         select(StateTransitionEvent)
         .where(StateTransitionEvent.idempotency_key == idempotency_key)
-        .with_for_update()
         .execution_options(populate_existing=True)
     )
     if event is None:
@@ -2371,6 +2864,10 @@ def _canonical_json_bytes(document: Mapping[str, object]) -> bytes:
         _fail("stocktake_document_invalid", "invalid_request", "盘点命令无法规范化")
 
 
+def _canonical_timestamp(value: datetime) -> str:
+    return _as_utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
 def _canonical_decimal(value: Decimal) -> str:
     return format(value.quantize(Decimal("0.001")), "f")
 
@@ -2410,6 +2907,14 @@ def _take_advisory_locks(db: Session, coordinates: Sequence[int]) -> None:
             text("SELECT pg_advisory_xact_lock(:lock_key)"),
             {"lock_key": coordinate},
         )
+
+
+def _locked_reference_statement(db: Session, statement):
+    """Use direct row locks locally; PostgreSQL is locked by owner helpers."""
+
+    if db.get_bind().dialect.name != "postgresql":
+        return statement.with_for_update()
+    return statement
 
 
 def _database_now(db: Session) -> datetime:

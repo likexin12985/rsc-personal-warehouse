@@ -36,7 +36,8 @@ ACKNOWLEDGEMENT = "I_UNDERSTAND_THIS_DATABASE_IS_EPHEMERAL"
 DATABASE_NAME = "rsc_pg16_release_gate"
 RLS_REVISION = "20260902_0044"
 APPROVAL_REVISION = "20260903_0045"
-HEAD_REVISION = "20260903_0046"
+CONTENT_CAUSALITY_REVISION = "20260903_0046"
+HEAD_REVISION = "20260903_0047"
 RLS_BINDING_TABLE = "oam_sync_scope_bindings"
 RLS_READY_FUNCTION = "public.rsc_oam_runtime_binding_ready_0044()"
 EDGE_RECEIVER_ROLE = "edge_inbox"
@@ -84,6 +85,33 @@ MATERIAL_REQUEST_CONTENT_TRIGGER_TABLES_0046 = (
     "material_request_lines",
     "material_request_files",
     "material_request_commands",
+)
+STOCKTAKE_START_COMPLETION_TABLE_0047 = "stocktake_start_completions"
+STOCKTAKE_START_FUNCTIONS_0047 = {
+    "rsc_guard_stocktake_start_completion_0047": ("", "trigger"),
+    "rsc_validate_nonopening_stocktake_start_causality_0047": (
+        "uuid",
+        "void",
+    ),
+    "rsc_dispatch_nonopening_stocktake_start_causality_0047": (
+        "",
+        "trigger",
+    ),
+}
+STOCKTAKE_START_TRIGGER_TABLES_0047 = (
+    "stocktake_tasks",
+    "stocktake_scopes",
+    "inventory_freezes",
+    "stocktake_snapshot_lines",
+    "stocktake_rounds",
+    STOCKTAKE_START_COMPLETION_TABLE_0047,
+    "state_transition_events",
+    "audit_events",
+)
+STOCKTAKE_START_SEALED_TABLES_0047 = tuple(
+    table_name
+    for table_name in STOCKTAKE_START_TRIGGER_TABLES_0047
+    if table_name != STOCKTAKE_START_COMPLETION_TABLE_0047
 )
 MATERIAL_REQUEST_NEUTRAL_AXES = {
     "allocation_status": "not_allocated",
@@ -3964,6 +3992,211 @@ def _assert_0046_content_catalog(*, installed: bool) -> None:
             assert "DEFERRABLE INITIALLY DEFERRED" in definition
 
 
+def _assert_0047_start_catalog(*, installed: bool) -> None:
+    expected_guard = (
+        STOCKTAKE_START_COMPLETION_TABLE_0047,
+        "trg_stocktake_start_completions_guard_0047",
+    )
+    expected_deferred = {
+        (
+            table_name,
+            f"trg_{table_name}_stocktake_start_causality_0047",
+        )
+        for table_name in STOCKTAKE_START_TRIGGER_TABLES_0047
+    }
+    expected_sealed = {
+        (
+            table_name,
+            f"trg_{table_name}_stocktake_start_sealed_0047",
+        )
+        for table_name in STOCKTAKE_START_SEALED_TABLES_0047
+    }
+    expected_triggers = {expected_guard, *expected_sealed, *expected_deferred}
+
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT column_name, data_type, character_maximum_length, "
+                "is_nullable, column_default "
+                "FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = %s "
+                "ORDER BY ordinal_position",
+                (STOCKTAKE_START_COMPLETION_TABLE_0047,),
+            )
+            columns = cursor.fetchall()
+            cursor.execute(
+                "SELECT constraint_row.conname, constraint_row.contype, "
+                "constraint_row.convalidated "
+                "FROM pg_catalog.pg_constraint AS constraint_row "
+                "JOIN pg_catalog.pg_class AS relation "
+                "ON relation.oid = constraint_row.conrelid "
+                "JOIN pg_catalog.pg_namespace AS schema_row "
+                "ON schema_row.oid = relation.relnamespace "
+                "WHERE schema_row.nspname = 'public' "
+                "AND relation.relname = %s "
+                "ORDER BY constraint_row.conname",
+                (STOCKTAKE_START_COMPLETION_TABLE_0047,),
+            )
+            constraints = cursor.fetchall()
+            cursor.execute(
+                "SELECT function_row.proname, "
+                "pg_catalog.oidvectortypes(function_row.proargtypes), "
+                "pg_catalog.pg_get_function_result(function_row.oid), "
+                "function_row.provolatile, function_row.prosecdef, "
+                "owner.rolname, function_row.proconfig, "
+                "pg_catalog.has_function_privilege("
+                "'star_oam_api', function_row.oid, 'EXECUTE'), "
+                "EXISTS (SELECT 1 FROM pg_catalog.aclexplode(COALESCE("
+                "function_row.proacl, "
+                "pg_catalog.acldefault('f', function_row.proowner)"
+                ")) AS function_acl WHERE function_acl.grantee = 0 "
+                "AND function_acl.privilege_type = 'EXECUTE') "
+                "FROM pg_catalog.pg_proc AS function_row "
+                "JOIN pg_catalog.pg_namespace AS schema_row "
+                "ON schema_row.oid = function_row.pronamespace "
+                "JOIN pg_catalog.pg_roles AS owner "
+                "ON owner.oid = function_row.proowner "
+                "WHERE schema_row.nspname = 'public' "
+                "AND function_row.proname = ANY(%s) "
+                "ORDER BY function_row.proname",
+                (list(STOCKTAKE_START_FUNCTIONS_0047),),
+            )
+            functions = cursor.fetchall()
+            cursor.execute(
+                "SELECT relation.relname, trigger_row.tgname, "
+                "function_row.proname, trigger_row.tgenabled, "
+                "trigger_row.tgconstraint <> 0, "
+                "trigger_row.tgdeferrable, trigger_row.tginitdeferred, "
+                "pg_catalog.pg_get_triggerdef(trigger_row.oid, true) "
+                "FROM pg_catalog.pg_trigger AS trigger_row "
+                "JOIN pg_catalog.pg_class AS relation "
+                "ON relation.oid = trigger_row.tgrelid "
+                "JOIN pg_catalog.pg_namespace AS schema_row "
+                "ON schema_row.oid = relation.relnamespace "
+                "JOIN pg_catalog.pg_proc AS function_row "
+                "ON function_row.oid = trigger_row.tgfoid "
+                "WHERE schema_row.nspname = 'public' "
+                "AND trigger_row.tgname = ANY(%s) "
+                "ORDER BY relation.relname, trigger_row.tgname",
+                ([trigger_name for _, trigger_name in expected_triggers],),
+            )
+            triggers = cursor.fetchall()
+            if installed:
+                cursor.execute(
+                    "SELECT "
+                    "pg_catalog.has_table_privilege('star_oam_api', %s, 'SELECT'), "
+                    "pg_catalog.has_table_privilege('star_oam_api', %s, 'INSERT'), "
+                    "pg_catalog.has_table_privilege('star_oam_api', %s, 'UPDATE'), "
+                    "pg_catalog.has_table_privilege('star_oam_api', %s, 'DELETE'), "
+                    "pg_catalog.has_table_privilege('star_oam_api', %s, 'TRIGGER')",
+                    (
+                        f"public.{STOCKTAKE_START_COMPLETION_TABLE_0047}",
+                    )
+                    * 5,
+                )
+                table_acl = cursor.fetchone()
+            else:
+                table_acl = None
+
+    if not installed:
+        assert columns == []
+        assert constraints == []
+        assert functions == []
+        assert triggers == []
+        return
+
+    expected_column_names = (
+        "id",
+        "task_id",
+        "initial_round_id",
+        "expected_task_version",
+        "started_task_version",
+        "cutoff_ledger_cursor",
+        "cutoff_at",
+        "scope_count",
+        "snapshot_line_count",
+        "active_freeze_count",
+        "scope_manifest_sha256",
+        "snapshot_manifest_sha256",
+        "request_sha256",
+        "idempotency_key_hash",
+        "started_by_user_id",
+        "started_by_person_id",
+        "started_role_assignment_id",
+        "authorization_version",
+        "role_code",
+        "scope_type",
+        "scope_id_snapshot",
+        "authorization_sha256",
+        "graph_manifest_sha256",
+        "started_at",
+        "created_at",
+    )
+    assert tuple(row[0] for row in columns) == expected_column_names
+    graph_column = next(row for row in columns if row[0] == "graph_manifest_sha256")
+    assert graph_column == (
+        "graph_manifest_sha256",
+        "character varying",
+        64,
+        "NO",
+        None,
+    )
+    assert len(constraints) == 15
+    assert all(row[2] is True for row in constraints)
+    assert {row[1] for row in constraints} == {"c", "f", "p", "u"}
+    assert len(functions) == len(STOCKTAKE_START_FUNCTIONS_0047)
+    for row in functions:
+        function_name = row[0]
+        assert (row[1], row[2]) == STOCKTAKE_START_FUNCTIONS_0047[
+            function_name
+        ]
+        assert row[3:6] == ("v", True, "star_oam_migrator")
+        assert tuple(row[6] or ()) == ("search_path=pg_catalog, public",)
+        assert row[7:] == (False, False)
+    assert {(row[0], row[1]) for row in triggers} == expected_triggers
+    for row in triggers:
+        table_name, trigger_name, function_name = row[:3]
+        assert row[3] == "A"
+        definition = row[7]
+        if (table_name, trigger_name) == expected_guard:
+            assert row[4:7] == (False, False, False)
+            assert function_name == "rsc_guard_stocktake_start_completion_0047"
+            assert " BEFORE INSERT OR DELETE OR UPDATE " in definition
+        elif (table_name, trigger_name) in expected_sealed:
+            assert row[4:7] == (False, False, False)
+            assert function_name == "rsc_guard_stocktake_start_completion_0047"
+            assert " BEFORE INSERT OR DELETE OR UPDATE " in definition
+        else:
+            assert row[4:7] == (True, True, True)
+            assert (
+                function_name
+                == "rsc_dispatch_nonopening_stocktake_start_causality_0047"
+            )
+            assert " AFTER INSERT OR DELETE OR UPDATE " in definition
+            assert "DEFERRABLE INITIALLY DEFERRED" in definition
+    assert table_acl == (True, True, False, False, False)
+
+
+def _assert_0047_empty_graph_downgrade_and_reupgrade() -> None:
+    assert _current_revision() == HEAD_REVISION
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT "
+                "(SELECT count(*) FROM public.stocktake_start_completions), "
+                "(SELECT count(*) FROM public.stocktake_tasks WHERE task_type "
+                "IN ('full', 'sample', 'ad_hoc', 'personal', 'termination'))"
+            )
+            assert cursor.fetchone() == (0, 0)
+    _assert_0047_start_catalog(installed=True)
+    _run_alembic("downgrade", CONTENT_CAUSALITY_REVISION)
+    assert _current_revision() == CONTENT_CAUSALITY_REVISION
+    _assert_0047_start_catalog(installed=False)
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    _assert_0047_start_catalog(installed=True)
+
+
 def _assert_0046_empty_graph_downgrade_and_reupgrade() -> None:
     assert _current_revision() == HEAD_REVISION
     with psycopg.connect(**_admin_parameters()) as connection:
@@ -6400,7 +6633,7 @@ def _assert_0046_approval_attempt_mutations_are_rejected(
 
 def _assert_0045_raw_projection_bypass_and_formal_approval(
     api_engine,
-) -> tuple[uuid.UUID, int]:
+) -> tuple[uuid.UUID, int, str, str]:
     from app.demand_models import (
         ApprovalExternalRegistration,
         ApprovalInstance,
@@ -7025,7 +7258,12 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
         request_id=request_id,
         expected_content_operations=("create", "update_draft", "submit"),
     ) == submitted_commands
-    return request_id, cancelled_version
+    return (
+        request_id,
+        cancelled_version,
+        manager_user_id,
+        registering_admin_user_id,
+    )
 
 
 def _assert_0046_rejects_nonempty_content_downgrade(
@@ -7045,6 +7283,759 @@ def _assert_0046_rejects_nonempty_content_downgrade(
         expected_version=expected_version,
         expected_decided_at=True,
     )
+
+
+def _seed_0047_stocktake_inventory(
+    api_engine,
+    *,
+    actor_user_id: str,
+    assignee_user_id: str,
+) -> dict[str, object]:
+    """Seed references as migrator, then stock through the real posting service."""
+
+    from app.foundation_models import Organization, Person, Role, RoleAssignment
+    from app.inventory_models import (
+        FormalMaterial,
+        MaterialInventoryPolicy,
+        StockAccount,
+        StockLocation,
+        CustodyAssignment,
+    )
+    from app.models import User
+
+    migrator_engine = create_engine(
+        _sqlalchemy_url(
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+        ),
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=5,
+    )
+    try:
+        with Session(migrator_engine, expire_on_commit=False) as session:
+            now = session.scalar(select(func.now()))
+            assert isinstance(now, datetime) and now.tzinfo is not None
+            manager = session.get(User, assignee_user_id)
+            assert manager is not None and manager.person_id is not None
+            manager_person = session.get(Person, manager.person_id)
+            assert manager_person is not None
+            assignment_row = session.execute(
+                select(RoleAssignment, Role)
+                .join(Role, Role.id == RoleAssignment.role_id)
+                .where(
+                    RoleAssignment.user_id == assignee_user_id,
+                    RoleAssignment.status == "active",
+                    RoleAssignment.scope_type == "organization",
+                    Role.code == "provincial_manager",
+                    Role.status == "active",
+                )
+                .order_by(RoleAssignment.id)
+            ).one()
+            assignment, role = assignment_row
+            assert role.is_external is False
+            region_org_id = uuid.UUID(assignment.scope_id)
+            region = session.get(Organization, region_org_id)
+            assert region is not None
+            assert (region.org_type, region.status) == ("region_company", "active")
+
+            material = session.scalar(
+                select(FormalMaterial)
+                .where(
+                    FormalMaterial.status == "active",
+                    ~FormalMaterial.id.in_(
+                        select(MaterialInventoryPolicy.material_id)
+                    ),
+                )
+                .order_by(FormalMaterial.id)
+                .limit(1)
+            )
+            assert material is not None
+            policy = MaterialInventoryPolicy(
+                id=uuid.uuid4(),
+                material_id=material.id,
+                tracking_mode="none",
+                quantity_scale=3,
+                allow_fraction=True,
+                effective_from=now - timedelta(days=1),
+                effective_to=None,
+            )
+            location_id = uuid.uuid4()
+            location = StockLocation(
+                id=location_id,
+                code=f"PG16-STK-{location_id.hex[:16].upper()}",
+                name="PostgreSQL 16 隔离盘点仓",
+                location_type="region",
+                owner_org_id=region_org_id,
+                parent_id=None,
+                custodian_person_id=manager_person.id,
+                status="active",
+            )
+            session.add_all((policy, location))
+            session.flush()
+            session.add(
+                CustodyAssignment(
+                    id=uuid.uuid4(),
+                    location_id=location.id,
+                    custodian_person_id=manager_person.id,
+                    valid_from=now - timedelta(days=1),
+                    valid_to=None,
+                    handover_case_id=None,
+                )
+            )
+            account = StockAccount(
+                id=uuid.uuid4(),
+                owner_org_id=region_org_id,
+                custodian_person_id=None,
+                location_id=location.id,
+                material_id=material.id,
+                condition_code="new",
+                availability_bucket="available",
+                lot_id=None,
+            )
+            session.add(account)
+            session.flush()
+            session.commit()
+            fixture: dict[str, object] = {
+                "account_id": account.id,
+                "assignee_person_id": manager_person.id,
+                "deadline": now + timedelta(days=2),
+                "location_id": location.id,
+                "material_id": material.id,
+                "region_org_id": region_org_id,
+            }
+    finally:
+        migrator_engine.dispose()
+
+    from app.formal_services.inventory_posting import (
+        InventoryMovementCommand,
+        InventoryPostingCommand,
+        post_inventory_transaction,
+    )
+    from test_material_request_approval_service import _principal
+
+    with Session(api_engine, expire_on_commit=False) as session:
+        effective_at = session.scalar(select(func.now()))
+        assert isinstance(effective_at, datetime) and effective_at.tzinfo is not None
+        posting = _reveal_pg16_service_database_error(
+            lambda: post_inventory_transaction(
+                session,
+                actor=_principal(session, actor_user_id),
+                command=InventoryPostingCommand(
+                    transaction_no="PG16-STOCKTAKE-SEED-INBOUND-1",
+                    movement_type="inbound",
+                    source_document_type="pg16_stocktake_release_fixture",
+                    source_document_id=str(fixture["account_id"]),
+                    posting_key="pg16-stocktake-release-fixture-inbound-1",
+                    effective_at=effective_at,
+                    movements=(
+                        InventoryMovementCommand(
+                            from_account_id=None,
+                            to_account_id=fixture["account_id"],
+                            quantity=Decimal("5.000"),
+                            external_boundary_code="PG16_RELEASE_FIXTURE",
+                        ),
+                    ),
+                ),
+                idempotency_key="pg16-stocktake-release-fixture-inbound-1",
+                request_id="trace-pg16-stocktake-release-fixture-inbound-1",
+            )
+        )
+        session.commit()
+        fixture["cutoff_ledger_cursor"] = posting.ledger_cursor
+        fixture["seed_transaction_id"] = posting.transaction_id
+    return fixture
+
+
+def _assert_0047_real_api_stocktake_start(
+    api_engine,
+    *,
+    actor_user_id: str,
+    assignee_user_id: str,
+    material_request_id: uuid.UUID,
+) -> uuid.UUID:
+    """Prove the reviewed service path without advancing any other state axis."""
+
+    from app.demand_models import MaterialRequest
+    from app.formal_services.stocktake_task import (
+        StocktakeTaskError,
+        create_stocktake_task_draft,
+        start_stocktake_task,
+    )
+    from app.foundation_models import AuditEvent, StateTransitionEvent
+    from app.inventory_models import (
+        InventoryLedgerHead,
+        InventoryMovement,
+        InventoryTransaction,
+        StockBalance,
+    )
+    from app.stocktake_models import (
+        FormalStocktakeScope,
+        FormalStocktakeTask,
+        InventoryFreeze,
+        StocktakeRound,
+        StocktakeSnapshotLine,
+        StocktakeStartCompletion,
+    )
+    from app.stocktake_task_schemas import (
+        StocktakeScopeSelectionIn,
+        StocktakeTaskCreateIn,
+        StocktakeTaskStartIn,
+    )
+    from app.formal_services.inventory_posting import INVENTORY_LEDGER_HEAD_ID
+    from test_material_request_approval_service import _principal
+
+    secret = b"pg16-stocktake-start-gate-secret-v1"
+    fixture = _seed_0047_stocktake_inventory(
+        api_engine,
+        actor_user_id=actor_user_id,
+        assignee_user_id=assignee_user_id,
+    )
+    create_key = "pg16-stocktake-start-create"
+    start_key = "pg16-stocktake-start-command"
+    draft = StocktakeTaskCreateIn(
+        task_type="sample",
+        region_org_id=fixture["region_org_id"],
+        blind_count=True,
+        scopes=(
+            StocktakeScopeSelectionIn(
+                owner_org_id=fixture["region_org_id"],
+                location_id=fixture["location_id"],
+                assignee_person_id=fixture["assignee_person_id"],
+                scope_mode="location_all",
+                material_id=None,
+                condition_code=None,
+                availability_bucket=None,
+                freeze_mode="hard",
+            ),
+        ),
+        deadline=fixture["deadline"],
+        note="PG16 隔离门禁盘点启动",
+    )
+
+    with Session(api_engine) as session:
+        neutral_request_before = session.execute(
+            select(
+                MaterialRequest.status,
+                MaterialRequest.version,
+                *(
+                    getattr(MaterialRequest, field)
+                    for field in MATERIAL_REQUEST_NEUTRAL_AXES
+                ),
+            ).where(MaterialRequest.id == material_request_id)
+        ).one()
+        inventory_before = (
+            session.scalar(select(func.count()).select_from(InventoryTransaction)),
+            session.scalar(select(func.count()).select_from(InventoryMovement)),
+            session.get(InventoryLedgerHead, INVENTORY_LEDGER_HEAD_ID).next_cursor,
+            session.get(StockBalance, fixture["account_id"]).quantity,
+        )
+        created = _reveal_pg16_service_database_error(
+            lambda: create_stocktake_task_draft(
+                session,
+                actor=_principal(session, actor_user_id),
+                draft=draft,
+                idempotency_key=create_key,
+                idempotency_hmac_secret=secret,
+                trace_request_id="trace-pg16-stocktake-start-create",
+            )
+        )
+        assert created.status == "draft"
+        assert created.version == 0
+        assert created.scope_count == 1
+        session.commit()
+    task_id = created.task_id
+
+    # The service must independently rebuild the ledger head and selected
+    # balance projection before it writes any start fact.  These corruptions
+    # live only inside their transactions and are always rolled back.
+    with Session(api_engine) as session:
+        session.execute(
+            text(
+                "UPDATE public.stock_balances SET quantity = quantity + 1 "
+                "WHERE stock_account_id = :account_id"
+            ),
+            {"account_id": fixture["account_id"]},
+        )
+        with pytest.raises(StocktakeTaskError) as balance_drift:
+            start_stocktake_task(
+                session,
+                actor=_principal(session, actor_user_id),
+                task_id=task_id,
+                command=StocktakeTaskStartIn(expected_version=0),
+                idempotency_key="pg16-stocktake-balance-drift",
+                idempotency_hmac_secret=secret,
+                trace_request_id="trace-pg16-stocktake-balance-drift",
+            )
+        assert balance_drift.value.code == "stocktake_balance_projection_drift"
+        session.rollback()
+    with Session(api_engine) as session:
+        session.execute(
+            text(
+                "UPDATE public.inventory_ledger_heads "
+                "SET next_cursor = next_cursor + 1 "
+                "WHERE stream_key = 'inventory'"
+            )
+        )
+        with pytest.raises(StocktakeTaskError) as ledger_drift:
+            start_stocktake_task(
+                session,
+                actor=_principal(session, actor_user_id),
+                task_id=task_id,
+                command=StocktakeTaskStartIn(expected_version=0),
+                idempotency_key="pg16-stocktake-ledger-drift",
+                idempotency_hmac_secret=secret,
+                trace_request_id="trace-pg16-stocktake-ledger-drift",
+            )
+        assert ledger_drift.value.code == "stocktake_ledger_projection_drift"
+        session.rollback()
+
+    with Session(api_engine) as session:
+        started = _reveal_pg16_service_database_error(
+            lambda: start_stocktake_task(
+                session,
+                actor=_principal(session, actor_user_id),
+                task_id=task_id,
+                command=StocktakeTaskStartIn(expected_version=0),
+                idempotency_key=start_key,
+                idempotency_hmac_secret=secret,
+                trace_request_id="trace-pg16-stocktake-start-command",
+            )
+        )
+        assert started.status == "counting"
+        assert started.version == 1
+        assert started.cutoff_ledger_cursor == fixture["cutoff_ledger_cursor"]
+        assert started.scope_count == 1
+        assert started.snapshot_line_count == 1
+        assert started.active_freeze_count == 1
+        session.commit()
+
+    with Session(api_engine) as session:
+        task = session.get(FormalStocktakeTask, task_id)
+        assert task is not None
+        assert (
+            task.status,
+            task.version,
+            task.current_round_no,
+            task.cutoff_ledger_cursor,
+        ) == ("counting", 1, 1, fixture["cutoff_ledger_cursor"])
+        assert task.cutoff_at is not None
+        assert task.issued_at is not None
+        assert task.frozen_at is not None
+        assert len(task.snapshot_manifest_sha256) == 64
+        freezes = tuple(
+            session.scalars(
+                select(InventoryFreeze).where(InventoryFreeze.task_id == task_id)
+            ).all()
+        )
+        snapshots = tuple(
+            session.scalars(
+                select(StocktakeSnapshotLine).where(
+                    StocktakeSnapshotLine.task_id == task_id
+                )
+            ).all()
+        )
+        rounds = tuple(
+            session.scalars(
+                select(StocktakeRound).where(StocktakeRound.task_id == task_id)
+            ).all()
+        )
+        completions = tuple(
+            session.scalars(
+                select(StocktakeStartCompletion).where(
+                    StocktakeStartCompletion.task_id == task_id
+                )
+            ).all()
+        )
+        assert len(freezes) == len(snapshots) == len(rounds) == len(completions) == 1
+        assert (freezes[0].status, freezes[0].freeze_mode) == ("active", "hard")
+        assert snapshots[0].book_qty == Decimal("5.000")
+        assert snapshots[0].ledger_cursor == fixture["cutoff_ledger_cursor"]
+        assert rounds[0].id == started.initial_round_id
+        assert (rounds[0].round_no, rounds[0].round_type, rounds[0].status) == (
+            1,
+            "initial",
+            "counting",
+        )
+        completion = completions[0]
+        assert completion.initial_round_id == rounds[0].id
+        assert completion.expected_task_version == 0
+        assert completion.started_task_version == 1
+        assert completion.scope_count == 1
+        assert completion.snapshot_line_count == 1
+        assert completion.active_freeze_count == 1
+        assert completion.scope_manifest_sha256 == task.scope_manifest_sha256
+        assert completion.snapshot_manifest_sha256 == task.snapshot_manifest_sha256
+        assert len(completion.authorization_sha256) == 64
+        assert len(completion.graph_manifest_sha256) == 64
+        assert set(completion.graph_manifest_sha256) != {"0"}
+        transition_rows = tuple(
+            session.execute(
+                select(
+                    StateTransitionEvent.from_status,
+                    StateTransitionEvent.to_status,
+                    StateTransitionEvent.reason,
+                )
+                .where(
+                    StateTransitionEvent.aggregate_type == "stocktake_task",
+                    StateTransitionEvent.aggregate_id == str(task_id),
+                )
+                .order_by(StateTransitionEvent.occurred_at, StateTransitionEvent.id)
+            ).all()
+        )
+        assert transition_rows == (
+            (None, "draft", "stocktake_task_created"),
+            ("draft", "issued", "stocktake_task_issued"),
+            ("issued", "frozen", "stocktake_task_frozen"),
+            ("frozen", "counting", "stocktake_initial_round_started"),
+        )
+        audit_actions = tuple(
+            session.scalars(
+                select(AuditEvent.action)
+                .where(
+                    AuditEvent.aggregate_type == "stocktake_task",
+                    AuditEvent.aggregate_id == str(task_id),
+                )
+                .order_by(AuditEvent.sequence_no)
+            ).all()
+        )
+        assert audit_actions == (
+            "stocktake.task.created",
+            "stocktake.task.started",
+        )
+        assert (
+            session.scalar(select(func.count()).select_from(InventoryTransaction)),
+            session.scalar(select(func.count()).select_from(InventoryMovement)),
+            session.get(InventoryLedgerHead, INVENTORY_LEDGER_HEAD_ID).next_cursor,
+            session.get(StockBalance, fixture["account_id"]).quantity,
+        ) == inventory_before
+        assert session.execute(
+            select(
+                MaterialRequest.status,
+                MaterialRequest.version,
+                *(
+                    getattr(MaterialRequest, field)
+                    for field in MATERIAL_REQUEST_NEUTRAL_AXES
+                ),
+            ).where(MaterialRequest.id == material_request_id)
+        ).one() == neutral_request_before
+
+    with Session(api_engine) as session:
+        replay = _reveal_pg16_service_database_error(
+            lambda: start_stocktake_task(
+                session,
+                actor=_principal(session, actor_user_id),
+                task_id=task_id,
+                command=StocktakeTaskStartIn(expected_version=0),
+                idempotency_key=start_key,
+                idempotency_hmac_secret=secret,
+                trace_request_id="trace-pg16-stocktake-start-replay",
+            )
+        )
+        assert replay == replace(started, replayed=True)
+        session.commit()
+    with Session(api_engine) as session:
+        assert session.scalar(
+            select(func.count()).select_from(StocktakeStartCompletion).where(
+                StocktakeStartCompletion.task_id == task_id
+            )
+        ) == 1
+        with pytest.raises(StocktakeTaskError) as mismatch:
+            start_stocktake_task(
+                session,
+                actor=_principal(session, actor_user_id),
+                task_id=task_id,
+                command=StocktakeTaskStartIn(expected_version=1),
+                idempotency_key=start_key,
+                idempotency_hmac_secret=secret,
+                trace_request_id="trace-pg16-stocktake-start-mismatch",
+            )
+        assert mismatch.value.code == "stocktake_idempotency_conflict"
+        session.rollback()
+
+    # Bypass only the service precheck in this disposable gate to prove the
+    # database independently rejects a second task whose wildcard dimensions
+    # overlap the first task's active freeze.
+    import app.formal_services.stocktake_task as stocktake_service
+    from unittest.mock import patch
+
+    with Session(api_engine) as session:
+        overlapping = _reveal_pg16_service_database_error(
+            lambda: create_stocktake_task_draft(
+                session,
+                actor=_principal(session, actor_user_id),
+                draft=replace(draft, note="PG16 跨任务冻结重叠拒绝样本"),
+                idempotency_key="pg16-stocktake-overlap-create",
+                idempotency_hmac_secret=secret,
+                trace_request_id="trace-pg16-stocktake-overlap-create",
+            )
+        )
+        session.commit()
+    with patch.object(
+        stocktake_service,
+        "_require_no_active_overlapping_freeze",
+        return_value=None,
+    ):
+        with Session(api_engine) as session:
+            with pytest.raises(DBAPIError) as overlap_failure:
+                _reveal_pg16_service_database_error(
+                    lambda: start_stocktake_task(
+                        session,
+                        actor=_principal(session, actor_user_id),
+                        task_id=overlapping.task_id,
+                        command=StocktakeTaskStartIn(expected_version=0),
+                        idempotency_key="pg16-stocktake-overlap-start",
+                        idempotency_hmac_secret=secret,
+                        trace_request_id="trace-pg16-stocktake-overlap-start",
+                    )
+                )
+            assert "non-opening stocktake start causality is invalid" in str(
+                overlap_failure.value
+            )
+            session.rollback()
+    with Session(api_engine) as session:
+        overlapping_task = session.get(FormalStocktakeTask, overlapping.task_id)
+        assert overlapping_task is not None
+        assert (overlapping_task.status, overlapping_task.version) == ("draft", 0)
+        assert session.scalar(
+            select(func.count()).select_from(StocktakeStartCompletion).where(
+                StocktakeStartCompletion.task_id == overlapping.task_id
+            )
+        ) == 0
+
+    # A runtime writer now owns only the minimum columns needed by the real
+    # service.  Updating all of them directly still cannot forge a start,
+    # because the completion and the rest of the graph are absent.
+    with Session(api_engine) as session:
+        forged_draft = _reveal_pg16_service_database_error(
+            lambda: create_stocktake_task_draft(
+                session,
+                actor=_principal(session, actor_user_id),
+                draft=replace(draft, note="PG16 直接伪造启动拒绝样本"),
+                idempotency_key="pg16-stocktake-forged-start-draft",
+                idempotency_hmac_secret=secret,
+                trace_request_id="trace-pg16-stocktake-forged-start-draft",
+            )
+        )
+        session.commit()
+    with Session(api_engine) as session:
+        session.execute(
+            text(
+                "UPDATE public.stocktake_tasks SET "
+                "status = 'counting', "
+                "cutoff_ledger_cursor = :cutoff, cutoff_at = CURRENT_TIMESTAMP, "
+                "snapshot_manifest_sha256 = :manifest, current_round_no = 1, "
+                "issued_at = CURRENT_TIMESTAMP, frozen_at = CURRENT_TIMESTAMP, "
+                "version = 1, updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = :task_id"
+            ),
+            {
+                "cutoff": fixture["cutoff_ledger_cursor"],
+                "manifest": "0" * 64,
+                "task_id": forged_draft.task_id,
+            },
+        )
+        with pytest.raises(DBAPIError) as forged_failure:
+            session.commit()
+        assert "non-opening stocktake start causality is invalid" in str(
+            forged_failure.value
+        )
+        session.rollback()
+    with Session(api_engine) as session:
+        durable_draft = session.get(FormalStocktakeTask, forged_draft.task_id)
+        assert durable_draft is not None
+        assert (
+            durable_draft.status,
+            durable_draft.version,
+            durable_draft.current_round_no,
+            durable_draft.cutoff_ledger_cursor,
+            durable_draft.cutoff_at,
+            durable_draft.snapshot_manifest_sha256,
+            durable_draft.issued_at,
+            durable_draft.frozen_at,
+        ) == ("draft", 0, 0, None, None, None, None, None)
+        assert session.scalar(
+            select(func.count()).select_from(StocktakeStartCompletion).where(
+                StocktakeStartCompletion.task_id == forged_draft.task_id
+            )
+        ) == 0
+
+    # Once completion exists, no later scope row may extend the sealed start
+    # boundary, even if every ordinary FK/region check would otherwise pass.
+    with Session(api_engine) as session:
+        scope_count_before = session.scalar(
+            select(func.count()).select_from(FormalStocktakeScope).where(
+                FormalStocktakeScope.task_id == task_id
+            )
+        )
+        with pytest.raises(DBAPIError) as extra_scope_failure:
+            session.execute(
+                text(
+                    "INSERT INTO public.stocktake_scopes ("
+                    "id, task_id, scope_no, scope_mode, location_id, owner_org_id, "
+                    "custodian_person_id_snapshot, assignee_user_id, material_id, "
+                    "condition_code, availability_bucket, scope_key, scope_sha256, "
+                    "created_at) "
+                    "SELECT :new_id, task_id, scope_no + 1, 'filtered', location_id, "
+                    "owner_org_id, custodian_person_id_snapshot, assignee_user_id, "
+                    ":material_id, condition_code, availability_bucket, :scope_key, "
+                    ":scope_sha256, CURRENT_TIMESTAMP "
+                    "FROM public.stocktake_scopes WHERE task_id = :task_id "
+                    "ORDER BY scope_no LIMIT 1"
+                ),
+                {
+                    "material_id": fixture["material_id"],
+                    "new_id": uuid.uuid4(),
+                    "scope_key": f"sealed-extra:{uuid.uuid4()}",
+                    "scope_sha256": uuid.uuid4().hex + uuid.uuid4().hex,
+                    "task_id": task_id,
+                },
+            )
+            session.commit()
+        assert "non-opening stocktake start causality is invalid" in str(
+            extra_scope_failure.value
+        )
+        session.rollback()
+    with Session(api_engine) as session:
+        assert session.scalar(
+            select(func.count()).select_from(FormalStocktakeScope).where(
+                FormalStocktakeScope.task_id == task_id
+            )
+        ) == scope_count_before
+
+    # The same deferred validator seals an already completed start graph.
+    with Session(api_engine) as session:
+        session.execute(
+            text(
+                "UPDATE public.stocktake_tasks "
+                "SET cutoff_at = cutoff_at + INTERVAL '1 microsecond' "
+                "WHERE id = :task_id"
+            ),
+            {"task_id": task_id},
+        )
+        with pytest.raises(DBAPIError) as drift_failure:
+            session.commit()
+        assert "non-opening stocktake start causality is invalid" in str(
+            drift_failure.value
+        )
+        session.rollback()
+
+    # Completion evidence is append-only for the API role.
+    with Session(api_engine) as session:
+        with pytest.raises(DBAPIError) as completion_update_failure:
+            session.execute(
+                text(
+                    "UPDATE public.stocktake_start_completions "
+                    "SET scope_count = scope_count WHERE task_id = :task_id"
+                ),
+                {"task_id": task_id},
+            )
+        assert isinstance(
+            completion_update_failure.value.orig,
+            psycopg.errors.InsufficientPrivilege,
+        )
+        session.rollback()
+    with Session(api_engine) as session:
+        with pytest.raises(DBAPIError) as completion_delete_failure:
+            session.execute(
+                text(
+                    "DELETE FROM public.stocktake_start_completions "
+                    "WHERE task_id = :task_id"
+                ),
+                {"task_id": task_id},
+            )
+        assert isinstance(
+            completion_delete_failure.value.orig,
+            psycopg.errors.InsufficientPrivilege,
+        )
+        session.rollback()
+
+    # Normal roles cannot select replica mode.  The disposable cluster owner
+    # may select it only for this proof, then assumes the migration role; the
+    # 0047 ENABLE ALWAYS trigger must still reject snapshot drift.
+    with Session(api_engine) as session:
+        with pytest.raises(DBAPIError) as parameter_failure:
+            session.execute(
+                text("SET LOCAL session_replication_role = 'replica'")
+            )
+        assert isinstance(
+            parameter_failure.value.orig,
+            psycopg.errors.InsufficientPrivilege,
+        )
+        session.rollback()
+    with Session(api_engine) as session:
+        snapshot_before = session.execute(
+            select(StocktakeSnapshotLine.id, StocktakeSnapshotLine.book_qty).where(
+                StocktakeSnapshotLine.task_id == task_id
+            )
+        ).one()
+    replica_engine = create_engine(
+        _admin_sqlalchemy_url(),
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=5,
+    )
+    try:
+        with Session(replica_engine) as session:
+            session.execute(
+                text("SET LOCAL session_replication_role = 'replica'")
+            )
+            session.execute(text("SET LOCAL ROLE star_oam_migrator"))
+            assert session.execute(
+                text(
+                    "SELECT current_user, session_user, "
+                    "current_setting('session_replication_role')"
+                )
+            ).one() == ("star_oam_migrator", "postgres", "replica")
+            session.execute(
+                text(
+                    "UPDATE public.stocktake_snapshot_lines "
+                    "SET book_qty = book_qty + 1 WHERE id = :snapshot_id"
+                ),
+                {"snapshot_id": snapshot_before.id},
+            )
+            with pytest.raises(DBAPIError) as replica_failure:
+                session.commit()
+            assert "non-opening stocktake start causality is invalid" in str(
+                replica_failure.value
+            )
+            session.rollback()
+    finally:
+        replica_engine.dispose()
+    with Session(api_engine) as session:
+        assert session.execute(
+            select(StocktakeSnapshotLine.id, StocktakeSnapshotLine.book_qty).where(
+                StocktakeSnapshotLine.task_id == task_id
+            )
+        ).one() == snapshot_before
+    return task_id
+
+
+def _assert_0047_rejects_nonempty_start_downgrade(
+    api_engine,
+    *,
+    task_id: uuid.UUID,
+) -> None:
+    from app.stocktake_models import FormalStocktakeTask, StocktakeStartCompletion
+
+    assert _current_revision() == HEAD_REVISION
+    blocked = _run_alembic(
+        "downgrade",
+        CONTENT_CAUSALITY_REVISION,
+        expect_success=False,
+    )
+    assert "cannot downgrade 0047" in (blocked.stdout + blocked.stderr)
+    assert _current_revision() == HEAD_REVISION
+    with Session(api_engine) as session:
+        task = session.get(FormalStocktakeTask, task_id)
+        assert task is not None and (task.status, task.version) == ("counting", 1)
+        completion = session.scalar(
+            select(StocktakeStartCompletion).where(
+                StocktakeStartCompletion.task_id == task_id
+            )
+        )
+        assert completion is not None
+        assert len(completion.graph_manifest_sha256) == 64
 
 
 def _wait_for_backend_lock(backend_pid: int) -> None:
@@ -7289,6 +8280,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
+    _assert_0047_empty_graph_downgrade_and_reupgrade()
     _assert_0046_empty_graph_downgrade_and_reupgrade()
     assert _work_order_lock_function_exists() is True
     _assert_pre_0043_acl_drift_was_cleaned(pre_0043_large_object_oid)
@@ -7442,13 +8434,28 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         )
         assert _current_revision() == HEAD_REVISION
 
-        request_id, final_request_version = (
+        (
+            request_id,
+            final_request_version,
+            manager_user_id,
+            admin_user_id,
+        ) = (
             _assert_0045_raw_projection_bypass_and_formal_approval(api_engine)
         )
         _assert_0046_rejects_nonempty_content_downgrade(
             api_engine,
             request_id=request_id,
             expected_version=final_request_version,
+        )
+        stocktake_task_id = _assert_0047_real_api_stocktake_start(
+            api_engine,
+            actor_user_id=admin_user_id,
+            assignee_user_id=manager_user_id,
+            material_request_id=request_id,
+        )
+        _assert_0047_rejects_nonempty_start_downgrade(
+            api_engine,
+            task_id=stocktake_task_id,
         )
     finally:
         edge_engine.dispose()

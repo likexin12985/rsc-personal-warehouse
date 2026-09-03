@@ -76,27 +76,8 @@ SECOND_CLOSED_AT = SECOND_RECONCILED_AT + timedelta(minutes=5)
 
 @pytest.fixture
 def close_world(posting_world):
-    # The shared legacy fixture seeds the mutable regional balance but omits
-    # its immutable opening movement.  Reconciliation intentionally rejects
-    # that prototype inconsistency, so complete only this local test ledger.
-    baseline = posting_world.db.scalar(
-        select(InventoryTransaction).where(
-            InventoryTransaction.transaction_no == "TX-BASE-1"
-        )
-    )
-    assert baseline is not None
-    posting_world.db.add(
-        InventoryMovement(
-            id=uuid.uuid4(),
-            transaction_id=baseline.id,
-            line_no=2,
-            from_account_id=None,
-            to_account_id=posting_world.region_new.id,
-            external_boundary_code="TEST_BASE",
-            quantity=Decimal("5.000"),
-        )
-    )
-    posting_world.db.flush()
+    # The shared fixture now seeds every mutable balance from one immutable
+    # opening transaction, so closing exercises the same ledger graph as start.
     admin_role = posting_world.db.scalar(select(Role).where(Role.code == "admin"))
     assert admin_role is not None
     permissions = tuple(
@@ -765,15 +746,13 @@ def test_serial_reconciliation_is_positive_and_close_rejects_position_tampering(
         InventoryMovement, position.last_movement_id
     )
     assert baseline_movement is not None
-    close_world.db.add(
-        InventoryMovementSerial(
-            movement_id=baseline_movement.id,
-            transaction_id=baseline_movement.transaction_id,
-            serial_id=close_world.serial.id,
-            created_at=baseline_movement.created_at,
+    assert (
+        close_world.db.get(
+            InventoryMovementSerial,
+            (baseline_movement.id, close_world.serial.id),
         )
+        is not None
     )
-    close_world.db.flush()
     task, round_row = _prepare(
         close_world,
         key="close-serial-proof",
@@ -1171,15 +1150,13 @@ def test_sqlite_0038_graph_recomputes_serial_physical_evidence(
         InventoryMovement, position.last_movement_id
     )
     assert baseline_movement is not None
-    close_world.db.add(
-        InventoryMovementSerial(
-            movement_id=baseline_movement.id,
-            transaction_id=baseline_movement.transaction_id,
-            serial_id=close_world.serial.id,
-            created_at=baseline_movement.created_at,
+    assert (
+        close_world.db.get(
+            InventoryMovementSerial,
+            (baseline_movement.id, close_world.serial.id),
         )
+        is not None
     )
-    close_world.db.flush()
     task, round_row = _prepare(
         close_world,
         key="close-sqlite-serial-spoof",

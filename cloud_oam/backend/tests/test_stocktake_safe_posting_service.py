@@ -309,25 +309,6 @@ def test_posting_requires_exact_version_and_exact_idempotency_request(
 def test_accepted_loss_uses_one_union_batch_and_appends_immutable_ledger(
     posting_world, monkeypatch
 ):
-    baseline = posting_world.db.scalar(
-        select(InventoryTransaction).where(
-            InventoryTransaction.transaction_no == "TX-BASE-1"
-        )
-    )
-    assert baseline is not None
-    posting_world.db.add(
-        InventoryMovement(
-            id=uuid.uuid4(),
-            transaction_id=baseline.id,
-            line_no=2,
-            from_account_id=None,
-            to_account_id=posting_world.region_new.id,
-            external_boundary_code="TEST_BASE",
-            quantity=Decimal("5.000"),
-        )
-    )
-    posting_world.db.flush()
-
     calls = {"reference": 0, "serial": 0}
     original_reference = inventory_service.lock_inventory_reference_graph
     original_serial = inventory_service.lock_inventory_serial_graph
