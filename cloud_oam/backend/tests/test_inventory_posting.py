@@ -658,9 +658,11 @@ def establish_account_for_posting(
         scope_sha256="0" * 64,
         created_at=cutoff_at,
     )
+    scope.scope_sha256 = posting_service.canonical_opening_scope_line_sha256(
+        scope
+    )
     db.add(scope)
     db.flush()
-    scope.scope_sha256 = posting_service.canonical_opening_scope_line_sha256(scope)
     freeze = InventoryFreeze(
         id=uuid.uuid4(),
         task_id=task.id,
