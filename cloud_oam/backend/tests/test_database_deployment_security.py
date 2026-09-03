@@ -132,7 +132,7 @@ def test_postgresql16_gate_covers_main_prs_and_edge_role_provisioning() -> None:
         "backend/tests/test_material_request_query_service.py",
     ):
         assert approval_gate in workflow
-    assert "pytest==9.1.1 pglast==7.18" in workflow
+    assert "pytest==9.1.1 pglast==7.18 httpx==0.28.1" in workflow
 
 
 def test_deployment_verifier_allows_only_0044_runtime_entrypoints() -> None:
