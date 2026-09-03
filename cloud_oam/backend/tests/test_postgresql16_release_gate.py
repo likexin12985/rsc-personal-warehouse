@@ -7294,25 +7294,30 @@ def _seed_0047_stocktake_inventory(
 ) -> dict[str, object]:
     """Establish the scope, then seed stock through the real posting service."""
 
-    from types import SimpleNamespace
-    from unittest.mock import patch
-
     from app.foundation_models import (
+        ExternalObject,
+        ExternalObjectVersion,
         Organization,
         Person,
         Role,
         RoleAssignment,
         SourceSystem,
+        SyncBatch,
+        SyncRun,
+    )
+    from app.formal_services.opening_stocktake import (
+        OPENING_CONTROL_ENTITY_TYPE,
+        opening_control_batch_body_sha256,
+        opening_control_manifest_sha256,
     )
     from app.inventory_models import (
+        CustodyAssignment,
         FormalMaterial,
         MaterialInventoryPolicy,
         StockAccount,
         StockLocation,
-        CustodyAssignment,
     )
     from app.models import User
-    import test_inventory_posting as inventory_posting_fixtures
 
     migrator_engine = create_engine(
         _sqlalchemy_url(
@@ -7355,8 +7360,7 @@ def _seed_0047_stocktake_inventory(
                 administrator is not None
                 and administrator.person_id is not None
             )
-            administrator_person = session.get(Person, administrator.person_id)
-            assert administrator_person is not None
+            assert session.get(Person, administrator.person_id) is not None
             headquarters_assignment_row = session.execute(
                 select(RoleAssignment, Role)
                 .join(Role, Role.id == RoleAssignment.role_id)
@@ -7370,7 +7374,7 @@ def _seed_0047_stocktake_inventory(
                 )
                 .order_by(RoleAssignment.id)
             ).one()
-            headquarters_assignment, headquarters_role = (
+            _headquarters_assignment, headquarters_role = (
                 headquarters_assignment_row
             )
             assert headquarters_role.is_external is False
@@ -7394,19 +7398,71 @@ def _seed_0047_stocktake_inventory(
                 )
                 session.add(oam_source)
                 session.flush()
+            assert (
+                oam_source.code.casefold(),
+                oam_source.mode,
+                oam_source.enabled,
+            ) == ("oam", "read_only", True)
 
-            material = session.scalar(
-                select(FormalMaterial)
-                .where(
-                    FormalMaterial.status == "active",
-                    ~FormalMaterial.id.in_(
-                        select(MaterialInventoryPolicy.material_id)
-                    ),
-                )
-                .order_by(FormalMaterial.id)
-                .limit(1)
+            material_created_at = now - timedelta(days=1)
+            material_id = uuid.uuid4()
+            material_sku_code = (
+                f"PG16-STK-SKU-{material_id.hex[:16].upper()}"
             )
-            assert material is not None
+            material_external_version_id = uuid.uuid4()
+            material_payload = {
+                "baseUnit": "件",
+                "materialCode": material_sku_code,
+                "materialName": "PostgreSQL 16 隔离盘点物料",
+                "specification": "",
+                "status": "active",
+            }
+            material_external_object = ExternalObject(
+                id=uuid.uuid4(),
+                source_system_id=oam_source.id,
+                entity_type="material",
+                external_id=f"PG16-STOCKTAKE-MATERIAL-{uuid.uuid4().hex}",
+                current_version_id=material_external_version_id,
+                deleted_at=None,
+                created_at=material_created_at,
+                updated_at=material_created_at,
+            )
+            session.add(material_external_object)
+            session.flush()
+            material_external_version = ExternalObjectVersion(
+                id=material_external_version_id,
+                external_object_id=material_external_object.id,
+                source_version="pg16-stocktake-material-v1",
+                source_updated_at=material_created_at,
+                valid_from=material_created_at,
+                valid_to=None,
+                payload_jsonb=material_payload,
+                payload_sha256=_projector_gate_sha256(material_payload),
+                is_current=True,
+                created_at=material_created_at,
+            )
+            session.add(material_external_version)
+            session.flush()
+            material = FormalMaterial(
+                id=material_id,
+                external_object_id=material_external_object.id,
+                sku_code=material_sku_code,
+                name="PostgreSQL 16 隔离盘点物料",
+                specification="",
+                base_unit="件",
+                status="active",
+                source_updated_at=material_created_at,
+                created_at=material_created_at,
+                updated_at=material_created_at,
+            )
+            session.add(material)
+            session.flush()
+            assert material.external_object_id == material_external_object.id
+            assert material_external_object.source_system_id == oam_source.id
+            assert (
+                material_external_object.current_version_id
+                == material_external_version.id
+            )
             policy = MaterialInventoryPolicy(
                 id=uuid.uuid4(),
                 material_id=material.id,
@@ -7460,49 +7516,297 @@ def _seed_0047_stocktake_inventory(
             session.add(account)
             session.flush()
 
-            # A normal inbound is legal only after the owner/location scope
-            # has completed the formal opening stocktake and two-level review.
-            # Reuse the test-only zero-opening builder so this 0047 fixture is
-            # a valid production precondition rather than a privileged bypass.
-            opening_world = SimpleNamespace(
-                source=oam_source,
-                user=manager,
-                person=manager_person,
-                regional_assignment=assignment,
-                regional_role=role,
-                headquarters_reviewer_user=administrator,
-                headquarters_reviewer_person=administrator_person,
-                headquarters_assignment=headquarters_assignment,
+            control_sync_run_id = uuid.uuid4()
+            control_scope_key = (
+                f"oam_inventory_control:region:{region_org_id}"
             )
-            with patch.object(inventory_posting_fixtures, "NOW", now):
-                opening_facts = (
-                    inventory_posting_fixtures.establish_account_for_posting(
-                        session,
-                        opening_world,
-                        account,
-                    )
+            control_manifest_sha256 = opening_control_manifest_sha256(
+                source_system_id=oam_source.id,
+                sync_run_id=control_sync_run_id,
+                sync_scope_key=control_scope_key,
+                region_org_id=region_org_id,
+                lines=(),
+            )
+            control_started_at = now - timedelta(hours=4)
+            control_received_at = now - timedelta(hours=3)
+            control_validated_at = now - timedelta(hours=2, minutes=30)
+            control_completed_at = now - timedelta(hours=2)
+            control_sync_run = SyncRun(
+                id=control_sync_run_id,
+                source_system_id=oam_source.id,
+                run_key=f"pg16-opening-control-{location_id.hex}",
+                scope_key=control_scope_key,
+                mode="full",
+                watermark_from=None,
+                watermark_to=None,
+                status="completed",
+                manifest_sha256=control_manifest_sha256,
+                started_at=control_started_at,
+                completed_at=control_completed_at,
+                failure_code=None,
+                failure_detail=None,
+                created_at=control_started_at,
+                updated_at=control_completed_at,
+            )
+            session.add(control_sync_run)
+            session.flush()
+            session.add(
+                SyncBatch(
+                    id=uuid.uuid4(),
+                    run_id=control_sync_run.id,
+                    entity_type=OPENING_CONTROL_ENTITY_TYPE,
+                    sequence=1,
+                    record_count=0,
+                    body_sha256=opening_control_batch_body_sha256(
+                        sequence=1,
+                        events=(),
+                    ),
+                    status="applied",
+                    received_at=control_received_at,
+                    validated_at=control_validated_at,
+                    created_at=control_received_at,
                 )
-            assert opening_facts.establishment.owner_org_id == region_org_id
-            assert opening_facts.establishment.location_id == location.id
-            assert opening_facts.task.status == "closed"
+            )
             session.commit()
             fixture: dict[str, object] = {
                 "account_id": account.id,
                 "assignee_person_id": manager_person.id,
+                "control_scope_key": control_scope_key,
+                "control_source_system_id": oam_source.id,
+                "control_sync_run_id": control_sync_run.id,
                 "deadline": now + timedelta(days=2),
                 "location_id": location.id,
+                "material_external_object_id": material_external_object.id,
+                "material_external_version_id": material_external_version.id,
                 "material_id": material.id,
+                "opening_token": location_id.hex,
                 "region_org_id": region_org_id,
             }
     finally:
         migrator_engine.dispose()
 
+    from app.formal_access import load_formal_principal
     from app.formal_services.inventory_posting import (
         InventoryMovementCommand,
         InventoryPostingCommand,
         post_inventory_transaction,
     )
-    from test_material_request_approval_service import _principal
+    from app.formal_services.opening_stocktake import (
+        OpeningStocktakeScopeInput,
+        StartOpeningStocktakeCommand,
+        start_opening_stocktake,
+    )
+    from app.formal_services.opening_stocktake_count import (
+        SubmitOpeningStocktakeScopeCountCommand,
+        submit_opening_stocktake_scope_count,
+    )
+    from app.formal_services.opening_stocktake_finalize import (
+        CloseOpeningStocktakeCommand,
+        PostOpeningStocktakeCommand,
+        close_posted_opening_stocktake,
+        post_approved_opening_stocktake,
+    )
+    from app.formal_services.opening_stocktake_review import (
+        SubmitOpeningStocktakeReviewCommand,
+        submit_opening_headquarters_review,
+        submit_opening_region_review,
+    )
+    from app.stocktake_models import (
+        FormalStocktakeScope,
+        FormalStocktakeTask,
+        InventoryOpeningEstablishment,
+    )
+
+    def current_principal(session: Session, user_id: str):
+        principal_at = session.scalar(select(func.now()))
+        assert (
+            isinstance(principal_at, datetime)
+            and principal_at.tzinfo is not None
+        )
+        return load_formal_principal(session, user_id, now=principal_at)
+
+    opening_token = str(fixture["opening_token"])
+    with Session(api_engine, expire_on_commit=False) as session:
+        started = _reveal_pg16_service_database_error(
+            lambda: start_opening_stocktake(
+                session,
+                actor=current_principal(session, assignee_user_id),
+                command=StartOpeningStocktakeCommand(
+                    task_no=f"PG16-OPENING-{opening_token[:16].upper()}",
+                    region_org_id=fixture["region_org_id"],
+                    control_source_system_id=fixture[
+                        "control_source_system_id"
+                    ],
+                    control_sync_run_id=fixture["control_sync_run_id"],
+                    control_sync_scope_key=str(fixture["control_scope_key"]),
+                    scopes=(
+                        OpeningStocktakeScopeInput(
+                            owner_org_id=fixture["region_org_id"],
+                            location_id=fixture["location_id"],
+                            assignee_user_id=assignee_user_id,
+                            freeze_mode="hard",
+                        ),
+                    ),
+                    control_lines=(),
+                    blind_count=True,
+                    deadline=fixture["deadline"],
+                    note="PG16 隔离门禁零期初建账",
+                ),
+                idempotency_key=f"pg16-opening-start-{opening_token}",
+                request_id=f"trace-pg16-opening-start-{opening_token}",
+            )
+        )
+        assert started.status == "counting"
+        assert started.scope_count == 1
+        assert started.snapshot_line_count == 1
+        assert started.control_line_count == 0
+        session.commit()
+
+    with Session(api_engine, expire_on_commit=False) as session:
+        scope = session.scalar(
+            select(FormalStocktakeScope).where(
+                FormalStocktakeScope.task_id == started.task_id
+            )
+        )
+        assert scope is not None
+        counted = _reveal_pg16_service_database_error(
+            lambda: submit_opening_stocktake_scope_count(
+                session,
+                actor=current_principal(session, assignee_user_id),
+                command=SubmitOpeningStocktakeScopeCountCommand(
+                    task_id=started.task_id,
+                    round_id=started.initial_round_id,
+                    scope_id=scope.id,
+                    physical_observations=(),
+                    zero_confirmed=False,
+                ),
+                idempotency_key=f"pg16-opening-count-{opening_token}",
+                request_id=f"trace-pg16-opening-count-{opening_token}",
+            )
+        )
+        assert counted.task_status == "submitted"
+        assert counted.round_status == "submitted"
+        assert counted.round_sealed is True
+        assert counted.has_pending_verification is False
+        session.commit()
+
+    with Session(api_engine) as session:
+        regional_review = _reveal_pg16_service_database_error(
+            lambda: submit_opening_region_review(
+                session,
+                actor=current_principal(session, assignee_user_id),
+                command=SubmitOpeningStocktakeReviewCommand(
+                    task_id=started.task_id,
+                    round_id=started.initial_round_id,
+                    decision="approve",
+                    items=(),
+                    comment="PG16 隔离门禁区域复核通过",
+                ),
+                idempotency_key=f"pg16-opening-region-{opening_token}",
+                request_id=f"trace-pg16-opening-region-{opening_token}",
+            )
+        )
+        assert regional_review.resulting_task_status == "hq_review"
+        assert regional_review.item_count == 0
+        assert regional_review.pending_control_count == 0
+        session.commit()
+
+    with Session(api_engine) as session:
+        headquarters_review = _reveal_pg16_service_database_error(
+            lambda: submit_opening_headquarters_review(
+                session,
+                actor=current_principal(session, actor_user_id),
+                command=SubmitOpeningStocktakeReviewCommand(
+                    task_id=started.task_id,
+                    round_id=started.initial_round_id,
+                    decision="approve",
+                    items=(),
+                    comment="PG16 隔离门禁总部复核通过",
+                ),
+                idempotency_key=f"pg16-opening-hq-{opening_token}",
+                request_id=f"trace-pg16-opening-hq-{opening_token}",
+            )
+        )
+        assert headquarters_review.resulting_task_status == "approved"
+        assert headquarters_review.item_count == 0
+        assert headquarters_review.pending_control_count == 0
+        approved_task = session.get(FormalStocktakeTask, started.task_id)
+        assert approved_task is not None and approved_task.status == "approved"
+        approved_version = approved_task.version
+        session.commit()
+
+    with Session(api_engine, expire_on_commit=False) as session:
+        opening_posted = _reveal_pg16_service_database_error(
+            lambda: post_approved_opening_stocktake(
+                session,
+                actor=current_principal(session, actor_user_id),
+                command=PostOpeningStocktakeCommand(
+                    task_id=started.task_id,
+                    expected_version=approved_version,
+                ),
+                idempotency_key=f"pg16-opening-post-{opening_token}",
+                request_id=f"trace-pg16-opening-post-{opening_token}",
+            )
+        )
+        assert opening_posted.resulting_task_status == "posted"
+        assert opening_posted.total_quantity == Decimal("0.000")
+        assert opening_posted.inventory_transaction_id is None
+        assert opening_posted.established_scope_count == 1
+        assert opening_posted.pending_control_difference_count == 0
+        session.commit()
+
+    with Session(api_engine) as session:
+        opening_closed = _reveal_pg16_service_database_error(
+            lambda: close_posted_opening_stocktake(
+                session,
+                actor=current_principal(session, actor_user_id),
+                command=CloseOpeningStocktakeCommand(
+                    task_id=started.task_id,
+                    expected_version=opening_posted.task_version,
+                ),
+                idempotency_key=f"pg16-opening-close-{opening_token}",
+                request_id=f"trace-pg16-opening-close-{opening_token}",
+            )
+        )
+        assert opening_closed.resulting_task_status == "closed"
+        establishment = session.scalar(
+            select(InventoryOpeningEstablishment).where(
+                InventoryOpeningEstablishment.task_id == started.task_id,
+                InventoryOpeningEstablishment.owner_org_id
+                == fixture["region_org_id"],
+                InventoryOpeningEstablishment.location_id
+                == fixture["location_id"],
+            )
+        )
+        assert establishment is not None
+        seeded_material = session.get(FormalMaterial, fixture["material_id"])
+        material_source = session.get(
+            ExternalObject,
+            fixture["material_external_object_id"],
+        )
+        material_version = session.get(
+            ExternalObjectVersion,
+            fixture["material_external_version_id"],
+        )
+        assert (
+            seeded_material is not None
+            and material_source is not None
+            and material_version is not None
+        )
+        assert seeded_material.external_object_id == material_source.id
+        assert (
+            material_source.source_system_id,
+            material_source.entity_type,
+            material_source.deleted_at,
+        ) == (fixture["control_source_system_id"], "material", None)
+        assert material_source.current_version_id == material_version.id
+        assert material_version.external_object_id == material_source.id
+        assert material_version.is_current is True
+        assert material_version.valid_to is None
+        assert material_version.payload_sha256 == _projector_gate_sha256(
+            material_version.payload_jsonb
+        )
+        session.commit()
 
     with Session(api_engine, expire_on_commit=False) as session:
         effective_at = session.scalar(select(func.now()))
@@ -7510,7 +7814,7 @@ def _seed_0047_stocktake_inventory(
         posting = _reveal_pg16_service_database_error(
             lambda: post_inventory_transaction(
                 session,
-                actor=_principal(session, actor_user_id),
+                actor=current_principal(session, actor_user_id),
                 command=InventoryPostingCommand(
                     transaction_no="PG16-STOCKTAKE-SEED-INBOUND-1",
                     movement_type="inbound",
