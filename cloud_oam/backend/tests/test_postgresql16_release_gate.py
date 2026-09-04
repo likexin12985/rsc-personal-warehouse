@@ -7720,6 +7720,7 @@ def _assert_0052_raw_opening_task_transition_rejected(
     new_status: str,
     round_increment: int = 0,
     expected_message: str,
+    expected_sqlstates: tuple[str, ...] = ("23514", "55000"),
 ) -> None:
     with Session(api_engine) as session:
         before = session.execute(
@@ -7731,25 +7732,24 @@ def _assert_0052_raw_opening_task_transition_rejected(
             {"task_id": task_id},
         ).one()
 
-        session.execute(
-            text(
-                "UPDATE stocktake_tasks SET status = :new_status, "
-                "current_round_no = current_round_no + :round_increment, "
-                "version = version + 1, updated_at = now() "
-                "WHERE id = :task_id"
-            ),
-            {
-                "new_status": new_status,
-                "round_increment": round_increment,
-                "task_id": task_id,
-            },
-        )
         with pytest.raises(DBAPIError) as failure:
+            session.execute(
+                text(
+                    "UPDATE stocktake_tasks SET status = :new_status, "
+                    "current_round_no = current_round_no + "
+                    ":round_increment, version = version + 1, "
+                    "updated_at = now() WHERE id = :task_id"
+                ),
+                {
+                    "new_status": new_status,
+                    "round_increment": round_increment,
+                    "task_id": task_id,
+                },
+            )
             session.commit()
-        assert getattr(failure.value.orig, "sqlstate", None) in {
-            "23514",
-            "55000",
-        }
+        assert getattr(failure.value.orig, "sqlstate", None) in set(
+            expected_sqlstates
+        )
         assert expected_message in str(failure.value.orig)
         session.rollback()
 
@@ -11135,6 +11135,7 @@ def _seed_0047_stocktake_inventory(
         Role,
         RoleAssignment,
         SourceSystem,
+        StateTransitionEvent,
         SyncBatch,
         SyncInboxEvent,
         SyncRun,
@@ -11437,6 +11438,22 @@ def _seed_0047_stocktake_inventory(
                 created_at=now - timedelta(days=1),
                 updated_at=now - timedelta(days=1),
             )
+            concurrency_competing_location_id = uuid.uuid4()
+            concurrency_competing_location = StockLocation(
+                id=concurrency_competing_location_id,
+                code=(
+                    "PG16-CONCURRENT-PEER-"
+                    f"{concurrency_competing_location_id.hex[:16].upper()}"
+                ),
+                name="PostgreSQL 16 并发别名竞争空仓",
+                location_type="region",
+                owner_org_id=region_org_id,
+                parent_id=None,
+                custodian_person_id=manager_person.id,
+                status="active",
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
             session.add_all(
                 (
                     policy,
@@ -11445,6 +11462,7 @@ def _seed_0047_stocktake_inventory(
                     concurrency_policy,
                     concurrency_serial,
                     concurrency_location,
+                    concurrency_competing_location,
                 )
             )
             session.flush()
@@ -11463,6 +11481,16 @@ def _seed_0047_stocktake_inventory(
                     CustodyAssignment(
                         id=uuid.uuid4(),
                         location_id=concurrency_location.id,
+                        custodian_person_id=manager_person.id,
+                        valid_from=now - timedelta(days=1),
+                        valid_to=None,
+                        handover_case_id=None,
+                        created_at=now - timedelta(days=1),
+                        updated_at=now - timedelta(days=1),
+                    ),
+                    CustodyAssignment(
+                        id=uuid.uuid4(),
+                        location_id=concurrency_competing_location.id,
                         custodian_person_id=manager_person.id,
                         valid_from=now - timedelta(days=1),
                         valid_to=None,
@@ -11656,6 +11684,9 @@ def _seed_0047_stocktake_inventory(
                 "control_source_system_id": oam_source.id,
                 "control_sync_run_id": control_sync_run.id,
                 "concurrency_account_id": concurrency_account.id,
+                "concurrency_competing_location_id": (
+                    concurrency_competing_location.id
+                ),
                 "concurrency_location_id": concurrency_location.id,
                 "concurrency_material_id": concurrency_material.id,
                 "concurrency_material_sku_code": concurrency_material.sku_code,
@@ -12358,7 +12389,8 @@ def _seed_0047_stocktake_inventory(
         *,
         isolation_task_id: uuid.UUID,
         isolation_round_id: uuid.UUID,
-        isolation_scope_id: uuid.UUID,
+        winner_scope_id: uuid.UUID,
+        competing_scope_id: uuid.UUID,
     ) -> None:
         migration = _load_opening_terminal_guard_execution_migration_0052()
         api_parameters = _connection_parameters(
@@ -12403,7 +12435,7 @@ def _seed_0047_stocktake_inventory(
                     competing_observation_id,
                     isolation_task_id,
                     isolation_round_id,
-                    isolation_scope_id,
+                    competing_scope_id,
                     f"PG16-CONCURRENT-UNKNOWN-{opening_token[:12]}",
                     str(fixture["concurrency_serial_qr_code"]).lower(),
                     "PG16 0052 并发 pending QR 别名",
@@ -12417,7 +12449,7 @@ def _seed_0047_stocktake_inventory(
                     hashlib.sha256(
                         f"idempotency:{competing_observation_id}".encode()
                     ).hexdigest(),
-                    isolation_scope_id,
+                    competing_scope_id,
                     isolation_task_id,
                 ),
             )
@@ -12441,6 +12473,41 @@ def _seed_0047_stocktake_inventory(
                     finally:
                         connection.rollback()
 
+        # Prove that all opening count graph writes fail closed outside READ
+        # COMMITTED before either writer owns the round row.  Running this
+        # after the winner flushes would wait on that same transaction and
+        # could never reach the 0052 isolation guard in this thread.
+        repeatable_read_failure: tuple[str | None, str] | None = None
+        with psycopg.connect(
+            **api_parameters,
+            autocommit=True,
+        ) as repeatable_read_connection:
+            with repeatable_read_connection.cursor() as cursor:
+                cursor.execute(
+                    "BEGIN ISOLATION LEVEL REPEATABLE READ READ WRITE"
+                )
+                cursor.execute("SET LOCAL statement_timeout = '5s'")
+                cursor.execute(
+                    "SELECT status FROM public.stocktake_tasks "
+                    "WHERE id = %s",
+                    (isolation_task_id,),
+                )
+                assert cursor.fetchone() == ("counting",)
+                try:
+                    insert_competing_observation_row(
+                        cursor,
+                        competing_observation_id=uuid.uuid4(),
+                    )
+                except psycopg.Error as exc:
+                    repeatable_read_failure = (exc.sqlstate, str(exc))
+                finally:
+                    cursor.execute("ROLLBACK")
+        assert repeatable_read_failure is not None
+        assert repeatable_read_failure[0] == "23514"
+        assert migration.OPENING_COUNT_ISOLATION_ERROR in (
+            repeatable_read_failure[1]
+        )
+
         first = Session(api_engine, expire_on_commit=False)
         executor = ThreadPoolExecutor(max_workers=1)
         future = None
@@ -12451,7 +12518,7 @@ def _seed_0047_stocktake_inventory(
                 command=SubmitOpeningStocktakeScopeCountCommand(
                     task_id=isolation_task_id,
                     round_id=isolation_round_id,
-                    scope_id=isolation_scope_id,
+                    scope_id=winner_scope_id,
                     physical_observations=(
                         OpeningPhysicalObservationInput(
                             material_identifier_raw=str(
@@ -12478,9 +12545,9 @@ def _seed_0047_stocktake_inventory(
                     f"trace-pg16-opening-concurrent-winner-{opening_token}"
                 ),
             )
-            assert first_counted.task_status == "submitted"
-            assert first_counted.round_status == "submitted"
-            assert first_counted.round_sealed is True
+            assert first_counted.task_status == "counting"
+            assert first_counted.round_status == "counting"
+            assert first_counted.round_sealed is False
             assert first.scalar(
                 select(func.count())
                 .select_from(StocktakeCountSerial)
@@ -12496,44 +12563,6 @@ def _seed_0047_stocktake_inventory(
                     == fixture["concurrency_serial_id"],
                 )
             ) == 1
-            assert first.scalar(
-                select(func.count())
-                .select_from(StocktakeCountObservation)
-                .where(
-                    StocktakeCountObservation.task_id == isolation_task_id,
-                    StocktakeCountObservation.round_id == isolation_round_id,
-                )
-            ) == 0
-
-            repeatable_read_failure: tuple[str | None, str] | None = None
-            with psycopg.connect(
-                **api_parameters,
-                autocommit=True,
-            ) as repeatable_read_connection:
-                with repeatable_read_connection.cursor() as cursor:
-                    cursor.execute(
-                        "BEGIN ISOLATION LEVEL REPEATABLE READ READ WRITE"
-                    )
-                    cursor.execute(
-                        "SELECT status FROM public.stocktake_tasks "
-                        "WHERE id = %s",
-                        (isolation_task_id,),
-                    )
-                    assert cursor.fetchone() == ("counting",)
-                    try:
-                        insert_competing_observation_row(
-                            cursor,
-                            competing_observation_id=uuid.uuid4(),
-                        )
-                    except psycopg.Error as exc:
-                        repeatable_read_failure = (exc.sqlstate, str(exc))
-                    finally:
-                        cursor.execute("ROLLBACK")
-            assert repeatable_read_failure is not None
-            assert repeatable_read_failure[0] == "23514"
-            assert migration.OPENING_COUNT_ISOLATION_ERROR in (
-                repeatable_read_failure[1]
-            )
             assert first.scalar(
                 select(func.count())
                 .select_from(StocktakeCountObservation)
@@ -12560,6 +12589,32 @@ def _seed_0047_stocktake_inventory(
             first.rollback()
             first.close()
             executor.shutdown(wait=True, cancel_futures=True)
+
+        # The peer scope is intentionally empty.  Completing it only after the
+        # losing writer has been rejected keeps the round open during the race
+        # and then seals the disposable task through the real service graph.
+        with Session(api_engine, expire_on_commit=False) as session:
+            sealed = submit_opening_stocktake_scope_count(
+                session,
+                actor=current_principal(session, assignee_user_id),
+                command=SubmitOpeningStocktakeScopeCountCommand(
+                    task_id=isolation_task_id,
+                    round_id=isolation_round_id,
+                    scope_id=competing_scope_id,
+                    physical_observations=(),
+                    zero_confirmed=True,
+                ),
+                idempotency_key=(
+                    f"pg16-opening-concurrent-peer-{opening_token}"
+                ),
+                request_id=(
+                    f"trace-pg16-opening-concurrent-peer-{opening_token}"
+                ),
+            )
+            assert sealed.task_status == "submitted"
+            assert sealed.round_status == "submitted"
+            assert sealed.round_sealed is True
+            session.commit()
 
     set_material_tracking_mode("serial")
     try:
@@ -12911,8 +12966,76 @@ def _seed_0047_stocktake_inventory(
         task_id=started.task_id,
         new_status="counting",
         round_increment=1,
-        expected_message="opening recount task evidence is incomplete",
+        expected_message="stocktake recount task advance is invalid",
+        expected_sqlstates=("P0001",),
     )
+
+    recount_command = OpenOpeningStocktakeRecountCommand(
+        task_id=started.task_id,
+        source_round_id=started.initial_round_id,
+        assignments=(
+            OpeningStocktakeRecountScopeAssignmentInput(
+                scope_id=opening_scope_id,
+                assignee_user_id=assignee_user_id,
+            ),
+        ),
+        reason="PG16 0049 隔离门禁按区域复核结论复盘",
+    )
+    recount_idempotency_key = f"pg16-opening-recount-{opening_token}"
+
+    # The inherited 0032 trigger above proves an incomplete raw transition is
+    # rejected immediately.  Build the valid predecessor/case/round graph
+    # through the real service as a separate negative test, omit only its state
+    # event, and force the named task commit constraint to prove the stronger
+    # 0052 successor-graph requirement.
+    omitted_recount_state = False
+
+    def omit_recount_state_event(
+        tamper_session: Session,
+        _flush_context,
+        _instances,
+    ) -> None:
+        nonlocal omitted_recount_state
+        for candidate in tuple(tamper_session.new):
+            if (
+                isinstance(candidate, StateTransitionEvent)
+                and candidate.reason == "opening_recount_opened"
+            ):
+                tamper_session.expunge(candidate)
+                omitted_recount_state = True
+
+    with Session(api_engine, expire_on_commit=False) as session:
+        event.listen(session, "before_flush", omit_recount_state_event)
+        try:
+            forged_recount = _reveal_pg16_service_database_error(
+                api_engine,
+                lambda: open_opening_stocktake_recount(
+                    session,
+                    actor=current_principal(session, assignee_user_id),
+                    command=recount_command,
+                    idempotency_key=recount_idempotency_key,
+                    request_id=(
+                        "trace-pg16-opening-recount-missing-state-"
+                        f"{opening_token}"
+                    ),
+                ),
+            )
+            assert forged_recount.resulting_task_status == "counting"
+            assert omitted_recount_state is True
+            with pytest.raises(DBAPIError) as failure:
+                session.execute(
+                    text(
+                        "SET CONSTRAINTS "
+                        "trg_stocktake_tasks_opening_commit_0022 IMMEDIATE"
+                    )
+                )
+            assert getattr(failure.value.orig, "sqlstate", None) == "23514"
+            assert "opening recount task evidence is incomplete" in str(
+                failure.value.orig
+            )
+        finally:
+            event.remove(session, "before_flush", omit_recount_state_event)
+            session.rollback()
 
     with Session(api_engine, expire_on_commit=False) as session:
         opened_recount = _reveal_pg16_service_database_error(
@@ -12920,18 +13043,8 @@ def _seed_0047_stocktake_inventory(
             lambda: open_opening_stocktake_recount(
                 session,
                 actor=current_principal(session, assignee_user_id),
-                command=OpenOpeningStocktakeRecountCommand(
-                    task_id=started.task_id,
-                    source_round_id=started.initial_round_id,
-                    assignments=(
-                        OpeningStocktakeRecountScopeAssignmentInput(
-                            scope_id=opening_scope_id,
-                            assignee_user_id=assignee_user_id,
-                        ),
-                    ),
-                    reason="PG16 0049 隔离门禁按区域复核结论复盘",
-                ),
-                idempotency_key=f"pg16-opening-recount-{opening_token}",
+                command=recount_command,
+                idempotency_key=recount_idempotency_key,
                 request_id=f"trace-pg16-opening-recount-{opening_token}",
             )
         )
@@ -13368,6 +13481,14 @@ SELECT posting.total_quantity::text,
                         assignee_user_id=assignee_user_id,
                         freeze_mode="hard",
                     ),
+                    OpeningStocktakeScopeInput(
+                        owner_org_id=fixture["region_org_id"],
+                        location_id=fixture[
+                            "concurrency_competing_location_id"
+                        ],
+                        assignee_user_id=assignee_user_id,
+                        freeze_mode="hard",
+                    ),
                 ),
                 control_lines=fixture["control_lines"],
                 blind_count=True,
@@ -13382,22 +13503,37 @@ SELECT posting.total_quantity::text,
             ),
         )
         assert isolation_started.status == "counting"
-        assert isolation_started.scope_count == 1
+        assert isolation_started.scope_count == 2
         assert isolation_started.snapshot_line_count == 1
         session.commit()
 
     with Session(api_engine) as session:
-        isolation_scope_id = session.scalar(
-            select(FormalStocktakeScope.id).where(
-                FormalStocktakeScope.task_id == isolation_started.task_id
-            )
-        )
-        assert isinstance(isolation_scope_id, uuid.UUID)
+        isolation_scopes = {
+            location_id: scope_id
+            for scope_id, location_id in session.execute(
+                select(
+                    FormalStocktakeScope.id,
+                    FormalStocktakeScope.location_id,
+                ).where(
+                    FormalStocktakeScope.task_id
+                    == isolation_started.task_id
+                )
+            ).all()
+        }
+        assert set(isolation_scopes) == {
+            fixture["concurrency_location_id"],
+            fixture["concurrency_competing_location_id"],
+        }
 
     assert_cross_alias_writers_serialize(
         isolation_task_id=isolation_started.task_id,
         isolation_round_id=isolation_started.initial_round_id,
-        isolation_scope_id=isolation_scope_id,
+        winner_scope_id=isolation_scopes[
+            fixture["concurrency_location_id"]
+        ],
+        competing_scope_id=isolation_scopes[
+            fixture["concurrency_competing_location_id"]
+        ],
     )
     with Session(api_engine) as session:
         isolation_task = session.get(
@@ -13415,7 +13551,7 @@ SELECT posting.total_quantity::text,
                 StocktakeScopeCountCompletion.round_id
                 == isolation_started.initial_round_id,
             )
-        ) == 1
+        ) == 2
 
     with Session(api_engine, expire_on_commit=False) as session:
         effective_at = session.scalar(select(func.now()))
