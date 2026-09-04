@@ -535,6 +535,14 @@ EXPECTED_AUDIT_TRIGGERS = {
         True,
         True,
     ),
+    "trg_audit_events_supply_causality_0059": (
+        "audit_events",
+        "rsc_dispatch_material_request_supply_causality_0059",
+        29,
+        True,
+        True,
+        True,
+    ),
     "trg_audit_events_stocktake_start_causality_0047": (
         "audit_events",
         "rsc_dispatch_nonopening_stocktake_start_causality_0047",
@@ -6354,8 +6362,14 @@ def _assert_audit_trigger_guards(rows: list[Mapping[str, Any]]) -> None:
             failures.append("trigger_identity")
             continue
         actual[name] = row
-    if set(actual) != set(EXPECTED_AUDIT_TRIGGERS):
-        failures.append("trigger_set")
+    expected_names = set(EXPECTED_AUDIT_TRIGGERS)
+    actual_names = set(actual)
+    missing_names = sorted(expected_names - actual_names)
+    unexpected_names = sorted(actual_names - expected_names)
+    if missing_names:
+        failures.append(f"trigger_set.missing={missing_names}")
+    if unexpected_names:
+        failures.append(f"trigger_set.unexpected={unexpected_names}")
     for name, (
         table_name,
         function_name,

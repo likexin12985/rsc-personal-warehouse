@@ -197,7 +197,8 @@ def assert_supply_gate(api_engine, *, security_engine, source_request_id, manage
     from pg16_supply_security_gate import assert_supply_security_gate
 
     assert_supply_security_gate(api_engine, security_engine, request_id=request_id,
-        task_id=first.supply_task_id, command_id=first_command_id, admin_user_id=admin_user_id)
+        task_id=first.supply_task_id, command_id=first_command_id, admin_user_id=admin_user_id,
+        second_admin_user_id=verifier_id)
     with Session(api_engine) as db:
         replay = create(db, key="pg16-supply-create-one", expected=version)
         assert replay.replayed and replay.supply_task_id == first.supply_task_id

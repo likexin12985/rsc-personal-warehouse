@@ -5617,12 +5617,20 @@ def test_audit_trigger_guard_requires_exact_enabled_bindings() -> None:
         rows[0][field] = value
         with pytest.raises(DatabaseSecurityBoundaryError, match="trigger"):
             _assert_audit_trigger_guards(rows)
-    with pytest.raises(DatabaseSecurityBoundaryError, match="trigger_set"):
-        _assert_audit_trigger_guards(_valid_audit_trigger_rows()[1:])
+    missing_rows = _valid_audit_trigger_rows()
+    missing_name = missing_rows[0]["trigger_name"]
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match=rf"trigger_set\.missing=.*{missing_name}",
+    ):
+        _assert_audit_trigger_guards(missing_rows[1:])
 
     unexpected = _valid_audit_trigger_rows()[0].copy()
     unexpected["trigger_name"] = "trg_unapproved_audit_probe"
-    with pytest.raises(DatabaseSecurityBoundaryError, match="trigger_set"):
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match=r"trigger_set\.unexpected=.*trg_unapproved_audit_probe",
+    ):
         _assert_audit_trigger_guards(
             [*_valid_audit_trigger_rows(), unexpected]
         )
@@ -5742,6 +5750,26 @@ def test_audit_trigger_inventory_covers_cross_domain_manifests() -> None:
         is_initially_deferred,
     )
 
+    supply_name = "trg_audit_events_supply_causality_0059"
+    (
+        table_name,
+        function_name,
+        enabled,
+        trigger_type,
+        is_constraint_trigger,
+        is_deferrable,
+        is_initially_deferred,
+    ) = EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[supply_name]
+    assert enabled == "A"
+    cross_domain[supply_name] = (
+        table_name,
+        function_name,
+        trigger_type,
+        is_constraint_trigger,
+        is_deferrable,
+        is_initially_deferred,
+    )
+
     assert set(cross_domain) == {
         "trg_audit_events_opening_commit_0022",
         "trg_audit_events_opening_graph_0052",
@@ -5750,6 +5778,7 @@ def test_audit_trigger_inventory_covers_cross_domain_manifests() -> None:
         "trg_audit_events_cancellation_graph_0037",
         "trg_audit_events_nonopening_stocktake_close_guard_0038",
         "trg_audit_events_approval_projection_0045",
+        "trg_audit_events_supply_causality_0059",
         "trg_audit_events_stocktake_start_causality_0047",
     }
     for name, expected in cross_domain.items():
