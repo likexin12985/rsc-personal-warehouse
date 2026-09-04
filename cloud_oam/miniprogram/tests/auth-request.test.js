@@ -351,7 +351,7 @@ test('HTTP rejections are marked as received while local transport guards remain
     request(options) {
       options.success({
         statusCode: 422,
-        data: { detail: { code: 'invalid', message: '明确拒绝' } }
+        data: { detail: { code: 'supply_task_expected_qty_invalid', category: 'invalid_request', message: '明确拒绝' } }
       })
     }
   }
@@ -369,12 +369,53 @@ test('HTTP rejections are marked as received while local transport guards remain
     (error) => (
       error.status === 422 &&
       error.responseReceived === true &&
-      error.message === '明确拒绝'
+      error.message === '明确拒绝' &&
+      error.code === 'supply_task_expected_qty_invalid' &&
+      error.category === 'invalid_request'
     )
   )
   await assert.rejects(
     api.get('/inventory'),
-    (error) => error.status === 403 && error.responseReceived === false
+    (error) => error.status === 403 && error.responseReceived === false &&
+      error.code === undefined && error.category === undefined
+  )
+})
+
+test('HTTP errors discard unsafe machine metadata without retaining response details', async (context) => {
+  global.wx = {
+    getRandomValues,
+    getAccountInfoSync() {
+      return { miniProgram: { envVersion: 'develop' } }
+    },
+    getStorageSync() {
+      return ''
+    },
+    request(options) {
+      options.success({
+        statusCode: 409,
+        data: { detail: {
+          code: 'material_request_version_conflict\nprivate',
+          category: 'x'.repeat(129),
+          message: '版本冲突',
+          private_context: { token: 'must-not-be-copied' }
+        } }
+      })
+    }
+  }
+  global.getApp = () => ({ globalData: {} })
+  resetApiModules()
+  context.after(() => {
+    resetApiModules()
+    delete global.wx
+    delete global.getApp
+  })
+
+  const api = require('../utils/api')
+  await assert.rejects(
+    api.post('/v1/material-requests/request-id/submit', { expected_version: 1 }),
+    (error) => error.status === 409 && error.responseReceived === true &&
+      error.message === '版本冲突' && error.code === undefined &&
+      error.category === undefined && error.private_context === undefined
   )
 })
 

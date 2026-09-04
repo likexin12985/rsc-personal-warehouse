@@ -6,6 +6,7 @@ credentials. Its caller supplies the gate's restricted API-role engine.
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import datetime, timezone
 from decimal import Decimal
 import threading
 from types import SimpleNamespace
@@ -19,7 +20,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 
-def assert_supply_gate(api_engine, *, source_request_id, manager_user_id, admin_user_id):
+def assert_supply_gate(api_engine, *, security_engine, source_request_id, manager_user_id, admin_user_id):
     from app.config import Settings, get_settings
     from app.database import get_db
     from app.demand_models import (
@@ -28,6 +29,7 @@ def assert_supply_gate(api_engine, *, source_request_id, manager_user_id, admin_
     )
     from app.dependencies import get_formal_principal
     from app.formal_services.material_request_draft import create_material_request_draft, submit_material_request
+    from app.formal_services.audit_chain import append_audit_event
     from app.formal_services.material_request_lifecycle import (
         MaterialRequestCancelInput, MaterialRequestCancellationLineInput, cancel_material_request,
     )
@@ -101,6 +103,34 @@ def assert_supply_gate(api_engine, *, source_request_id, manager_user_id, admin_
     plan = SupplyTaskCreateInput(request_line_id=line_id, supply_type="star_replenishment",
         reference_no=None, expected_qty=Decimal("2.000"), expected_date=None)
 
+    # API-role raw inserts must not leave supply evidence without a unique
+    # owning request and command. Hash-valid audit chains alone are insufficient.
+    for aggregate_type, aggregate_id in (
+        ("material_request", str(uuid.uuid4())),
+        ("material_request", str(request_id)),
+        ("unrelated", str(request_id)),
+    ):
+        with Session(api_engine) as db:
+            with pytest.raises(DBAPIError) as orphan_audit:
+                append_audit_event(db, stream_key="material_request",
+                    actor_user_id=admin_user_id, action="material_request.supply_task.create",
+                    aggregate_type=aggregate_type, aggregate_id=aggregate_id,
+                    before_jsonb=None, after_jsonb={}, request_id=f"pg16-orphan-supply-audit-{uuid.uuid4()}",
+                    occurred_at=datetime.now(timezone.utc))
+                db.commit()
+            assert orphan_audit.value.orig.sqlstate == "23514"
+            db.rollback()
+    for aggregate_id in (str(uuid.uuid4()), "not-a-task-uuid"):
+        with Session(api_engine) as db:
+            with pytest.raises(DBAPIError) as orphan_state:
+                db.add(StateTransitionEvent(aggregate_type="supply_task", aggregate_id=aggregate_id,
+                    from_status=None, to_status="open", reason="orphan supply state must fail",
+                    actor_id=admin_user_id, idempotency_key=f"pg16-orphan-supply-state-{uuid.uuid4()}",
+                    occurred_at=datetime.now(timezone.utc), metadata_jsonb={}))
+                db.commit()
+            assert orphan_state.value.orig.sqlstate == "23514"
+            db.rollback()
+
     def api_db():
         with Session(api_engine) as db:
             yield db
@@ -161,6 +191,13 @@ def assert_supply_gate(api_engine, *, source_request_id, manager_user_id, admin_
     with Session(api_engine) as db:
         first = create(db, key="pg16-supply-create-one", expected=version)
         db.commit()
+        first_command_id = db.scalar(select(MaterialRequestCommand.id).where(
+            MaterialRequestCommand.request_id == request_id,
+            MaterialRequestCommand.target_version == first.request_version))
+    from pg16_supply_security_gate import assert_supply_security_gate
+
+    assert_supply_security_gate(api_engine, security_engine, request_id=request_id,
+        task_id=first.supply_task_id, command_id=first_command_id, admin_user_id=admin_user_id)
     with Session(api_engine) as db:
         replay = create(db, key="pg16-supply-create-one", expected=version)
         assert replay.replayed and replay.supply_task_id == first.supply_task_id
@@ -177,10 +214,15 @@ def assert_supply_gate(api_engine, *, source_request_id, manager_user_id, admin_
         db.rollback()
 
     def update(db, task, *, key, status, expected_version=None):
+        current_task = db.get(SupplyTask, task.supply_task_id)
+        assert current_task is not None
         return update_supply_task(db, actor=_principal(db, admin_user_id), material_request_id=request_id,
             supply_task_id=task.supply_task_id, expected_request_version=task.request_version if expected_version is None else expected_version,
             expected_task_version=task.task_version,
-            update=SupplyTaskUpdateInput(status=status, reference_no="PG16-SUPPLY-REF", expected_date=None, comment="供给计划处理"),
+            update=SupplyTaskUpdateInput(status=status,
+                reference_no=current_task.reference_no if status == "cancelled" else "PG16-SUPPLY-REF",
+                expected_date=current_task.expected_date if status == "cancelled" else None,
+                comment="供给计划处理"),
             idempotency_key=key, idempotency_hmac_secret=SECRET, trace_request_id=f"trace-{key}")
 
     with Session(api_engine) as db:

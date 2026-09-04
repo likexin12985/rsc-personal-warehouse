@@ -214,7 +214,7 @@ def test_postgresql16_0049_catalog_uses_head_guard_hashes_by_revision() -> None:
 
     assert (
         gate.HEAD_REVISION
-        == gate.SUPPLY_TASK_CAUSALITY_REVISION
+        == gate.SUPPLY_TASK_SECURITY_REVISION
     )
     assert migration_0058.revision == gate.NONOPENING_REVIEW_TERMINAL_STATUS_REVISION
     assert migration_0058.down_revision == migration_0057.revision

@@ -2,20 +2,36 @@ const { API_BASE_URL } = require('./config')
 const session = require('./session')
 const { blockedClientWriteReason } = require('./production-guard')
 
-function apiError(status, message, responseReceived = false) {
+const SAFE_MACHINE_ERROR_FIELD = /^[a-z][a-z0-9_]{0,127}$/
+
+function safeMachineErrorField(value) {
+  return typeof value === 'string' && SAFE_MACHINE_ERROR_FIELD.test(value)
+    ? value
+    : undefined
+}
+
+function apiError(status, message, responseReceived = false, metadata = {}) {
   const error = new Error(message || `请求失败 (${status})`)
   error.status = status
   error.responseReceived = responseReceived
+  const code = safeMachineErrorField(metadata.code)
+  const category = safeMachineErrorField(metadata.category)
+  if (code !== undefined) error.code = code
+  if (category !== undefined) error.category = category
   return error
 }
 
-function responseDetailMessage(payload) {
+function responseErrorDetails(payload) {
   const detail = payload && payload.detail
-  if (typeof detail === 'string') return detail
+  if (typeof detail === 'string') return { message: detail }
   if (detail && typeof detail === 'object' && typeof detail.message === 'string') {
-    return detail.message
+    return {
+      message: detail.message,
+      code: safeMachineErrorField(detail.code),
+      category: safeMachineErrorField(detail.category)
+    }
   }
-  return ''
+  return { message: '' }
 }
 
 const SAFE_REQUEST_ID = /^wxreq-[a-f0-9]{36}$/
@@ -280,11 +296,8 @@ function rawRequest(path, options = {}) {
             return
           }
         }
-        reject(apiError(
-          response.statusCode,
-          responseDetailMessage(response.data),
-          true
-        ))
+        const details = responseErrorDetails(response.data)
+        reject(apiError(response.statusCode, details.message, true, details))
       },
       fail(error) {
         reject(apiError(0, error.errMsg || '网络连接失败'))
@@ -458,7 +471,8 @@ function upload(path, filePath, retried = false) {
           return
         }
         if (response.statusCode === 401) handleUnauthorized()
-        reject(apiError(response.statusCode, responseDetailMessage(payload), true))
+        const details = responseErrorDetails(payload)
+        reject(apiError(response.statusCode, details.message, true, details))
       },
       fail(error) {
         reject(apiError(0, error.errMsg || '上传失败'))

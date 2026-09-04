@@ -1,19 +1,35 @@
 import { blockedClientWriteReason } from "./clientPolicy";
 
 export class ApiError extends Error {
-  status: number;
-  responseReceived: boolean;
-  credentialsCleared: boolean;
+  readonly status: number;
+  readonly responseReceived: boolean;
+  readonly credentialsCleared: boolean;
+  readonly code: string | undefined;
+  readonly category: string | undefined;
   constructor(
     status: number,
     message: string,
-    response?: Readonly<{ credentialsCleared?: boolean }>,
+    response?: Readonly<{
+      credentialsCleared?: boolean;
+      code?: unknown;
+      category?: unknown;
+    }>,
   ) {
     super(message);
     this.status = status;
     this.responseReceived = response !== undefined;
     this.credentialsCleared = response?.credentialsCleared === true;
+    this.code = safeMachineErrorField(response?.code);
+    this.category = safeMachineErrorField(response?.category);
   }
+}
+
+const SAFE_MACHINE_ERROR_FIELD = /^[a-z][a-z0-9_]{0,127}$/;
+
+function safeMachineErrorField(value: unknown): string | undefined {
+  return typeof value === "string" && SAFE_MACHINE_ERROR_FIELD.test(value)
+    ? value
+    : undefined;
 }
 
 let fallbackRequestSequence = 0;
@@ -515,17 +531,25 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (!response.ok) {
     let message = `请求失败 (${response.status})`;
+    let code: string | undefined;
+    let category: string | undefined;
     try {
       const payload = await response.json();
       if (typeof payload.detail === "string") message = payload.detail;
       else if (payload.detail && typeof payload.detail.message === "string") {
         message = payload.detail.message;
       }
+      if (payload.detail && typeof payload.detail === "object" && !Array.isArray(payload.detail)) {
+        code = safeMachineErrorField(payload.detail.code);
+        category = safeMachineErrorField(payload.detail.category);
+      }
     } catch {
       // Keep the HTTP fallback when the response is not JSON.
     }
     throw new ApiError(response.status, message, {
       credentialsCleared: response.headers.get("X-Auth-Credentials-Cleared")?.toLowerCase() === "true",
+      code,
+      category,
     });
   }
   if (response.status === 204) return undefined as T;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isDefinitiveSupplyPostRejection,
   supplyMutationMatchesDetail,
   validateSupplyCommandStatus,
   validateSupplyCreateInput,
@@ -36,6 +37,33 @@ function response(): any {
 }
 
 describe("supply command wire contracts", () => {
+  it.each([
+    [404, "not_found", "supply_task_not_found"],
+    [409, "conflict", "material_request_version_conflict"],
+    [409, "conflict", "material_request_supply_line_not_current"],
+    [409, "conflict", "material_request_supply_quantity_exceeds_approved"],
+    [409, "conflict", "supply_task_not_current_revision"],
+    [409, "conflict", "supply_task_version_conflict"],
+    [409, "conflict", "supply_task_terminal"],
+    [409, "conflict", "supply_task_status_transition_invalid"],
+    [409, "conflict", "supply_task_cancel_metadata_changed"],
+    [412, "precondition_failed", "material_request_supply_line_not_approved"],
+    [412, "precondition_failed", "material_request_supply_active_substitution_exists"],
+  ])("admits only the exact post-replay rejection tuple %s/%s/%s", (status, category, code) => {
+    expect(isDefinitiveSupplyPostRejection({ status, category, code, responseReceived: true })).toBe(true);
+  });
+  it.each([
+    { status: 403, category: "forbidden", code: "material_request_supply_manage_forbidden", responseReceived: true },
+    { status: 409, category: "conflict", code: "material_request_supply_idempotency_conflict", responseReceived: true },
+    { status: 409, category: "conflict", code: "material_request_supply_concurrent_conflict", responseReceived: true },
+    { status: 409, category: "conflict", code: "unknown_conflict", responseReceived: true },
+    { status: 409, category: "precondition_failed", code: "material_request_version_conflict", responseReceived: true },
+    { status: 409, category: "conflict", code: "material_request_version_conflict", responseReceived: false },
+    { status: 500, category: "conflict", code: "material_request_version_conflict", responseReceived: true },
+    { status: 409, category: "conflict", responseReceived: true },
+  ])("retains coordinates for every non-whitelisted rejection %#", (error) => {
+    expect(isDefinitiveSupplyPostRejection(error)).toBe(false);
+  });
   it("preserves exact quantity, references and explicit optional fields", () => {
     expect(validateSupplyCreateInput(create())).toEqual(create());
     expect(validateSupplyUpdateInput(update(), "update_supply_task")).toEqual(update());

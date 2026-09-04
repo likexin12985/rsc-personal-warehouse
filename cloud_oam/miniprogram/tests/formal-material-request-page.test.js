@@ -617,6 +617,96 @@ test('supply plan capacity subtracts active exact decimals before persisting', a
   assert.equal(storage.has('rsc_oam_material_request_supply_sentinel'), false)
 })
 
+test('an exact strong supply POST rejection clears only its matching durable coordinate', async (context) => {
+  const { storage } = globals()
+  const current = supplyApprovedDetail()
+  let writes = 0
+  const loaded = loadWith(fakeTransport({
+    async loadAccess() { return Object.assign({}, access(), { can_manage_supply: true }) },
+    async list() { return page(current) },
+    async detail() { return current },
+    async mutate() {
+      writes += 1
+      const error = new Error('需求单版本已变化，请重新读取后再操作')
+      Object.assign(error, { status: 409, responseReceived: true,
+        category: 'conflict', code: 'material_request_version_conflict' })
+      throw error
+    }
+  }))
+  context.after(() => { loaded.restore(); delete global.wx })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  instance.openSupplyForm({ currentTarget: { dataset: {} } })
+  instance.supplyFieldInput({ currentTarget: { dataset: { field: 'quantity' } }, detail: { value: '2.500' } })
+  await instance.submitSupply()
+  assert.equal(writes, 1)
+  assert.equal(storage.has('rsc_oam_material_request_supply_sentinel'), false)
+  assert.equal(instance.data.supplyBlocked, false)
+  assert.equal(instance._mutationRegistry.get(REQUEST_ID), undefined)
+  assert.match(instance.data.supplyForm.error, /坐标已安全解除/)
+})
+
+for (const [name, metadata] of [
+  ['permission 403', { status: 403, category: 'forbidden', code: 'material_request_supply_manage_forbidden' }],
+  ['unknown 409', { status: 409, category: 'conflict', code: 'unknown_conflict' }]
+]) {
+  test(`a ${name} supply POST rejection retains its original coordinate`, async (context) => {
+    const { storage } = globals()
+    const current = supplyApprovedDetail()
+    const loaded = loadWith(fakeTransport({
+      async loadAccess() { return Object.assign({}, access(), { can_manage_supply: true }) },
+      async list() { return page(current) },
+      async detail() { return current },
+      async mutate() {
+        const error = new Error('供给操作被拒绝')
+        Object.assign(error, metadata, { responseReceived: true })
+        throw error
+      }
+    }))
+    context.after(() => { loaded.restore(); delete global.wx })
+    const instance = pageInstance(loaded.definition)
+    await instance.load()
+    await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+    instance.openSupplyForm({ currentTarget: { dataset: {} } })
+    instance.supplyFieldInput({ currentTarget: { dataset: { field: 'quantity' } }, detail: { value: '2.500' } })
+    await instance.submitSupply()
+    assert.equal(storage.has('rsc_oam_material_request_supply_sentinel'), true)
+    assert.equal(instance.data.supplyBlocked, true)
+    assert.notEqual(instance._mutationRegistry.get(REQUEST_ID), null)
+  })
+}
+
+test('identity drift during strong supply rejection cleanup retains the original coordinate', async (context) => {
+  const { storage } = globals()
+  const current = supplyApprovedDetail()
+  let switched = false
+  const loaded = loadWith(fakeTransport({
+    async loadIdentity() { return Object.assign({}, freshIdentity(), switched ? { person_id: PERSON_2_ID } : {}) },
+    async loadAccess() { return Object.assign({}, access(), { can_manage_supply: true }) },
+    async list() { return page(current) },
+    async detail() { return current },
+    async mutate() {
+      switched = true
+      const error = new Error('需求单版本已变化，请重新读取后再操作')
+      Object.assign(error, { status: 409, responseReceived: true,
+        category: 'conflict', code: 'material_request_version_conflict' })
+      throw error
+    }
+  }))
+  context.after(() => { loaded.restore(); delete global.wx })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  instance.openSupplyForm({ currentTarget: { dataset: {} } })
+  instance.supplyFieldInput({ currentTarget: { dataset: { field: 'quantity' } }, detail: { value: '2.500' } })
+  await instance.submitSupply()
+  assert.equal(storage.has('rsc_oam_material_request_supply_sentinel'), true)
+  assert.equal(instance.data.supplyBlocked, true)
+  assert.notEqual(instance._mutationRegistry.get(REQUEST_ID), null)
+  assert.match(instance.data.supplyRecoveryMessage, /身份或权限已变化/)
+})
+
 test('supply recovery confirms historical create while showing a later cancelled plan', async (context) => {
   const trace = `wxreq-${'a'.repeat(36)}`
   const { storage } = globals({ rsc_oam_material_request_supply_sentinel: {

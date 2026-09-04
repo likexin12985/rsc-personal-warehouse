@@ -817,6 +817,42 @@ function isDefinitiveRejection(error) {
   )
 }
 
+const DEFINITIVE_SUPPLY_POST_REJECTIONS = Object.freeze({
+  404: Object.freeze({
+    category: 'not_found',
+    codes: new Set(['supply_task_not_found'])
+  }),
+  409: Object.freeze({
+    category: 'conflict',
+    codes: new Set([
+      'material_request_version_conflict',
+      'material_request_supply_line_not_current',
+      'material_request_supply_quantity_exceeds_approved',
+      'supply_task_not_current_revision',
+      'supply_task_version_conflict',
+      'supply_task_terminal',
+      'supply_task_status_transition_invalid',
+      'supply_task_cancel_metadata_changed'
+    ])
+  }),
+  412: Object.freeze({
+    category: 'precondition_failed',
+    codes: new Set([
+      'material_request_supply_line_not_approved',
+      'material_request_supply_active_substitution_exists'
+    ])
+  })
+})
+
+function isDefinitiveSupplyPostRejection(error) {
+  if (!error || error.responseReceived !== true || !Number.isInteger(error.status)) return false
+  const rule = DEFINITIVE_SUPPLY_POST_REJECTIONS[error.status]
+  return Boolean(
+    rule && error.category === rule.category &&
+    typeof error.code === 'string' && rule.codes.has(error.code)
+  )
+}
+
 module.exports = {
   validateSupplyBody(action, body) {
     if (!['create_supply_task', 'update_supply_task', 'cancel_supply_task'].includes(action)) {
@@ -832,5 +868,6 @@ module.exports = {
   validateEditableDraft,
   createFormalMaterialRequestAdapter,
   formalMaterialRequestAdapter,
-  isDefinitiveRejection
+  isDefinitiveRejection,
+  isDefinitiveSupplyPostRejection
 }

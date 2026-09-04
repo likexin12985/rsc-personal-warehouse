@@ -858,6 +858,42 @@ describe("API transport quarantine", () => {
     })).rejects.toMatchObject({
       status: 412,
       message: "目标账号授权版本已变化，请重新读取后再操作",
+      code: "authorization_version_mismatch",
+      category: "precondition_failed",
+    } satisfies Partial<ApiError>);
+  });
+
+  it("retains only bounded machine error metadata and keeps legacy errors compatible", async () => {
+    const legacy = new ApiError(409, "legacy failure");
+    expect(legacy).toMatchObject({
+      status: 409,
+      responseReceived: false,
+      credentialsCleared: false,
+      code: undefined,
+      category: undefined,
+    });
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: {
+        code: "material_request_version_conflict\nprivate",
+        category: "x".repeat(129),
+        message: "版本冲突",
+        private_context: { token: "must-not-be-copied" },
+      },
+    }), {
+      status: 409,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api("/v1/material-requests/test/supply-tasks", {
+      method: "POST",
+    })).rejects.toMatchObject({
+      status: 409,
+      responseReceived: true,
+      message: "版本冲突",
+      code: undefined,
+      category: undefined,
     } satisfies Partial<ApiError>);
   });
 

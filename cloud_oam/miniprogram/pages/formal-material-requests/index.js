@@ -848,6 +848,12 @@ function accessUploadIdentity(access) {
   return `${access.person_id}:${access.authorization_version}`
 }
 
+function exactScalarSnapshotMatches(left, right) {
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false
+  const snapshot = (value) => Object.keys(value).sort().map((key) => [key, value[key]])
+  return JSON.stringify(snapshot(left)) === JSON.stringify(snapshot(right))
+}
+
 function editContextIsCurrent(page, generation, identity, detail) {
   const access = page._access
   const currentDetail = page.data.detail
@@ -2592,6 +2598,7 @@ Page({
     let intent
     let sentinel
     let responseValidated = false
+    let directPostRejection
     const generation = this._loadGeneration
     this.setData({ busy: true })
     try {
@@ -2627,7 +2634,14 @@ Page({
         revision_no: before.current_revision_no, action, supply_task_id: form.taskId,
         task_version: form.taskVersion, created_at: new Date().toISOString() })
       this.setData({ supplyBlocked: true, supplyRecoveryMessage: `正在核验供给操作（${sentinel.trace_request_id}）` })
-      const result = contract.validateMaterialRequestSupplyTaskMutationResult(await transport.mutate(intent), {
+      let rawResult
+      try {
+        rawResult = await transport.mutate(intent)
+      } catch (caught) {
+        directPostRejection = caught
+        throw caught
+      }
+      const result = contract.validateMaterialRequestSupplyTaskMutationResult(rawResult, {
         requestId: before.request_id, action, previousVersion: before.request_version,
         supplyTaskId: form.taskId, previousTaskVersion: form.taskVersion
       })
@@ -2651,17 +2665,30 @@ Page({
         detail: presentDetail(fresh, freshAccess, false), notice: '供给计划已核验；库存及履约状态未改变。' })
     } catch (error) {
       if (this._unloaded || this._loadGeneration !== generation) return
-      if (!responseValidated && intent && sentinel && adapterModule.isDefinitiveRejection(error)
-        && ![401, 403, 409].includes(error.status)) {
+      let released = false
+      if (!responseValidated && intent && sentinel && error === directPostRejection
+        && adapterModule.isDefinitiveSupplyPostRejection(error)) {
         try {
-          await supplyRecovery.verifyIdentity(sentinel, transport)
+          const freshAccess = await supplyRecovery.verifyIdentity(sentinel, transport)
           if (this._unloaded || this._loadGeneration !== generation || this._access !== access) return
+          if (!exactScalarSnapshotMatches(freshAccess, access)) {
+            throw new Error('明确拒绝回收期间身份或权限已变化，原供给坐标继续保留')
+          }
+          const stored = supplyRecovery.read()
+          if (!stored || !exactScalarSnapshotMatches(stored, sentinel)) {
+            throw new Error('明确拒绝回收时供给坐标已变化，原阻断继续保留')
+          }
           supplyRecovery.clear(sentinel)
           this._mutationRegistry.clearDefinitiveRejection(intent.request_id, intent.signature)
+          this._access = freshAccess
+          released = true
           this.setData({ supplyBlocked: false, supplyRecoveryMessage: '' })
         } catch (storageError) { this.setData({ supplyBlocked: true, supplyRecoveryMessage: storageError.message }) }
       }
-      this.setData({ supplyForm: Object.assign({}, form, { error: error.message || '供给操作结果未确认' }) })
+      const message = error.message || '供给操作结果未确认'
+      this.setData({ supplyForm: Object.assign({}, form, {
+        error: released ? `${message}；服务端已明确拒绝，本地请求坐标已安全解除` : message
+      }) })
     } finally { if (!this._unloaded && this._loadGeneration === generation) this.setData({ busy: false }) }
   },
 

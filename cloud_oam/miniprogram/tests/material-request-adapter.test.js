@@ -24,6 +24,37 @@ function supplyBody(action) {
   }
 }
 
+test('supply rejection recovery accepts only exact post-replay status category and code tuples', () => {
+  const accepted = [
+    [404, 'not_found', 'supply_task_not_found'],
+    [409, 'conflict', 'material_request_version_conflict'],
+    [409, 'conflict', 'material_request_supply_line_not_current'],
+    [409, 'conflict', 'material_request_supply_quantity_exceeds_approved'],
+    [409, 'conflict', 'supply_task_not_current_revision'],
+    [409, 'conflict', 'supply_task_version_conflict'],
+    [409, 'conflict', 'supply_task_terminal'],
+    [409, 'conflict', 'supply_task_status_transition_invalid'],
+    [409, 'conflict', 'supply_task_cancel_metadata_changed'],
+    [412, 'precondition_failed', 'material_request_supply_line_not_approved'],
+    [412, 'precondition_failed', 'material_request_supply_active_substitution_exists']
+  ]
+  for (const [status, category, code] of accepted) {
+    assert.equal(adapterModule.isDefinitiveSupplyPostRejection({
+      status, category, code, responseReceived: true
+    }), true)
+  }
+  for (const error of [
+    { status: 403, category: 'forbidden', code: 'material_request_supply_manage_forbidden', responseReceived: true },
+    { status: 409, category: 'conflict', code: 'material_request_supply_idempotency_conflict', responseReceived: true },
+    { status: 409, category: 'conflict', code: 'material_request_supply_concurrent_conflict', responseReceived: true },
+    { status: 409, category: 'conflict', code: 'unknown_conflict', responseReceived: true },
+    { status: 409, category: 'precondition_failed', code: 'material_request_version_conflict', responseReceived: true },
+    { status: 409, category: 'conflict', code: 'material_request_version_conflict', responseReceived: false },
+    { status: 500, category: 'conflict', code: 'material_request_version_conflict', responseReceived: true },
+    { status: 409, category: 'conflict', responseReceived: true }
+  ]) assert.equal(adapterModule.isDefinitiveSupplyPostRejection(error), false)
+})
+
 test('supply plans use exact POST paths and preserve original intent coordinates', async () => {
   for (const action of ['create_supply_task', 'update_supply_task', 'cancel_supply_task']) {
     const transport = fakeTransport()

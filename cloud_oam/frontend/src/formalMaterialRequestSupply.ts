@@ -43,6 +43,52 @@ export type SupplyCommandStatus = Readonly<{
   command: SupplyCommand | null;
 }>;
 
+const DEFINITIVE_SUPPLY_POST_REJECTIONS = Object.freeze({
+  404: Object.freeze({
+    category: "not_found",
+    codes: new Set(["supply_task_not_found"]),
+  }),
+  409: Object.freeze({
+    category: "conflict",
+    codes: new Set([
+      "material_request_version_conflict",
+      "material_request_supply_line_not_current",
+      "material_request_supply_quantity_exceeds_approved",
+      "supply_task_not_current_revision",
+      "supply_task_version_conflict",
+      "supply_task_terminal",
+      "supply_task_status_transition_invalid",
+      "supply_task_cancel_metadata_changed",
+    ]),
+  }),
+  412: Object.freeze({
+    category: "precondition_failed",
+    codes: new Set([
+      "material_request_supply_line_not_approved",
+      "material_request_supply_active_substitution_exists",
+    ]),
+  }),
+} as const);
+
+/**
+ * Only errors reachable after the service has found no persisted replay and
+ * before it writes a command may release the current POST's durable sentinel.
+ */
+export function isDefinitiveSupplyPostRejection(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as Record<string, unknown>;
+  if (value.responseReceived !== true || !Number.isInteger(value.status)) return false;
+  const rule = DEFINITIVE_SUPPLY_POST_REJECTIONS[
+    value.status as keyof typeof DEFINITIVE_SUPPLY_POST_REJECTIONS
+  ] as Readonly<{ category: string; codes: ReadonlySet<string> }> | undefined;
+  return Boolean(
+    rule
+    && value.category === rule.category
+    && typeof value.code === "string"
+    && rule.codes.has(value.code)
+  );
+}
+
 const UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const QUANTITY = /^(?:0|[1-9]\d{0,14})\.\d{3}$/;
 const REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,159}$/;

@@ -55,7 +55,8 @@ NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION = "20260905_0056"
 NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION = "20260905_0057"
 NONOPENING_REVIEW_TERMINAL_STATUS_REVISION = "20260905_0058"
 SUPPLY_TASK_CAUSALITY_REVISION = "20260905_0059"
-HEAD_REVISION = SUPPLY_TASK_CAUSALITY_REVISION
+SUPPLY_TASK_SECURITY_REVISION = "20260905_0060"
+HEAD_REVISION = SUPPLY_TASK_SECURITY_REVISION
 OPENING_BACKFILL_DATABASE_PREFIX = f"{DATABASE_NAME}_0052_backfill_"
 RLS_BINDING_TABLE = "oam_sync_scope_bindings"
 RLS_READY_FUNCTION = "public.rsc_oam_runtime_binding_ready_0044()"
@@ -4665,6 +4666,7 @@ def _expected_0049_function_body_sha256(
             NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
             NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
             SUPPLY_TASK_CAUSALITY_REVISION,
+            SUPPLY_TASK_SECURITY_REVISION,
         }
     )
     assert expected_revision in (
@@ -4697,6 +4699,7 @@ def _expected_0049_function_body_sha256(
             NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
             NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
             SUPPLY_TASK_CAUSALITY_REVISION,
+            SUPPLY_TASK_SECURITY_REVISION,
         }
         and signature == migration.ROUND_ASSIGNMENT_HELPER_0021_SIGNATURE
     ):
@@ -4706,7 +4709,8 @@ def _expected_0049_function_body_sha256(
         assert signature == compatibility_migration.HELPER_SIGNATURE
         expected_body_sha256 = compatibility_migration.FIXED_BODY_SHA256
     if (
-        expected_revision in {NONOPENING_REVIEW_TERMINAL_STATUS_REVISION, SUPPLY_TASK_CAUSALITY_REVISION}
+        expected_revision in {NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
+                              SUPPLY_TASK_CAUSALITY_REVISION, SUPPLY_TASK_SECURITY_REVISION}
         and signature == migration.REVIEW_GRAPH_VALIDATOR_0032_SIGNATURE
     ):
         terminal_migration = (
@@ -4858,6 +4862,7 @@ def _assert_0049_recount_guard_catalog(
             NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
             NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
             SUPPLY_TASK_CAUSALITY_REVISION,
+            SUPPLY_TASK_SECURITY_REVISION,
         }
     expected_function_rows = []
     for (
@@ -5422,6 +5427,7 @@ def _assert_0052_opening_terminal_catalog(
                             NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
                             NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
                             SUPPLY_TASK_CAUSALITY_REVISION,
+                            SUPPLY_TASK_SECURITY_REVISION,
                         }
                         and row[0]
                         == dispatch_migration.GRAPH_CLOSURE_SIGNATURE
@@ -5436,6 +5442,7 @@ def _assert_0052_opening_terminal_catalog(
                             NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
                             NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
                             SUPPLY_TASK_CAUSALITY_REVISION,
+                            SUPPLY_TASK_SECURITY_REVISION,
                         }
                         and row[0]
                         == history_migration.ROUND_SUBMISSION_SIGNATURE
@@ -7095,6 +7102,16 @@ def _0058_review_terminal_catalog_state() -> dict[str, object]:
     }
 
 
+def _head_runtime_ready_hash() -> str:
+    path = CLOUD_ROOT / "backend/alembic/versions/20260905_0060_material_request_supply_security_hardening.py"
+    specification = importlib.util.spec_from_file_location("pg16_head_supply_security_0060", path)
+    assert specification is not None and specification.loader is not None
+    migration = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(migration)
+    assert migration.revision == HEAD_REVISION
+    return migration.RUNTIME_READY_BODY_SHA256_0060
+
+
 def _assert_0058_review_terminal_catalog_state(
     state: dict[str, object], *, fixed: bool
 ) -> None:
@@ -7147,11 +7164,11 @@ def _assert_0058_review_terminal_catalog_state(
         ["search_path=pg_catalog"],
     )
     assert readiness[16] == (
-        migration.RUNTIME_READY_BODY_SHA256_0058
+        _head_runtime_ready_hash()
         if fixed else migration.RUNTIME_READY_BODY_SHA256_0057
     )
     assert readiness[17].count(
-        migration.revision if fixed else migration.down_revision
+        HEAD_REVISION if fixed else migration.down_revision
     ) == 1
 
     expected_triggers = tuple(
@@ -7471,10 +7488,7 @@ def _assert_0057_empty_graph_downgrade_and_reupgrade() -> None:
     head_state = _0057_difference_replay_catalog_state()
     _assert_0057_difference_replay_catalog_state(
         head_state,
-        expected_readiness_hash=(
-            _load_nonopening_review_terminal_status_migration_0058()
-            .RUNTIME_READY_BODY_SHA256_0058
-        ),
+        expected_readiness_hash=_head_runtime_ready_hash(),
         expected_revision=HEAD_REVISION,
     )
 
@@ -7523,10 +7537,7 @@ def _assert_0057_empty_graph_downgrade_and_reupgrade() -> None:
     final_state = _0057_difference_replay_catalog_state()
     _assert_0057_difference_replay_catalog_state(
         final_state,
-        expected_readiness_hash=(
-            _load_nonopening_review_terminal_status_migration_0058()
-            .RUNTIME_READY_BODY_SHA256_0058
-        ),
+        expected_readiness_hash=_head_runtime_ready_hash(),
         expected_revision=HEAD_REVISION,
     )
     assert final_state["functions"] == reupgraded["functions"]
@@ -8184,12 +8195,11 @@ def _assert_0055_empty_graph_downgrade_and_reupgrade() -> None:
     assert _0055_start_audit_order_catalog_state() == head_state
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
-    head_migration = _load_nonopening_review_terminal_status_migration_0058()
     _assert_0056_count_guard_catalog_state(
         _0056_count_guard_catalog_state(),
         fixed=True,
-        expected_ready_hash=head_migration.RUNTIME_READY_BODY_SHA256_0058,
-        expected_ready_revision=head_migration.revision,
+        expected_ready_hash=_head_runtime_ready_hash(),
+        expected_ready_revision=HEAD_REVISION,
     )
     _assert_0052_opening_terminal_catalog(
         hardened=True,
@@ -17345,6 +17355,44 @@ def _assert_single_owner_and_process_kill(api_engine) -> None:
     assert replay.dispatch_status == "uncertain"
 
 
+def _assert_0060_empty_hardening_downgrade_and_reupgrade() -> None:
+    signatures = (
+        "public.rsc_guard_material_request_supply_write_0060()",
+        "public.rsc_validate_material_request_supply_causality_0059(uuid, bigint)",
+        "public.rsc_dispatch_material_request_supply_causality_0059()",
+        RLS_READY_FUNCTION,
+    )
+
+    def catalog():
+        rows = []
+        with psycopg.connect(**_admin_parameters()) as connection:
+            with connection.cursor() as cursor:
+                for signature in signatures:
+                    cursor.execute(
+                        "SELECT proc.oid, owner.rolname, proc.prosecdef, proc.proconfig, proc.proacl::text, proc.prosrc "
+                        "FROM pg_catalog.pg_proc AS proc JOIN pg_catalog.pg_roles AS owner ON owner.oid=proc.proowner "
+                        "WHERE proc.oid=pg_catalog.to_regprocedure(%s)", (signature,),
+                    )
+                    row = cursor.fetchone()
+                    rows.append(None if row is None else (*row[:5], hashlib.sha256(row[5].encode()).hexdigest()))
+        return rows
+
+    before = catalog()
+    assert all(row is not None and row[1] == "star_oam_migrator" and row[2] for row in before)
+    _run_alembic("downgrade", SUPPLY_TASK_CAUSALITY_REVISION)
+    assert _current_revision() == SUPPLY_TASK_CAUSALITY_REVISION
+    downgraded = catalog()
+    assert downgraded[0] is None
+    for original, legacy in zip(before[1:], downgraded[1:], strict=True):
+        assert original[:5] == legacy[:5]  # Existing identity/owner/security/ACL are unchanged.
+        assert original[5] != legacy[5]
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    after = catalog()
+    assert after[0][1:] == before[0][1:]
+    assert after[1:] == before[1:]
+
+
 def _assert_0059_empty_graph_downgrade_and_reupgrade() -> None:
     signatures = (
         "public.rsc_guard_material_request_supply_task_0059()",
@@ -17405,6 +17453,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
+    _assert_0060_empty_hardening_downgrade_and_reupgrade()
     _assert_0059_empty_graph_downgrade_and_reupgrade()
     _assert_0058_empty_terminal_downgrade_and_reupgrade()
     _assert_0057_empty_graph_downgrade_and_reupgrade()
@@ -17640,10 +17689,17 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         # so the 0059 blocker cannot mask a lower revision's independent gate.
         from pg16_supply_gate import assert_supply_gate
 
-        assert_supply_gate(api_engine, source_request_id=request_id,
-            manager_user_id=manager_user_id, admin_user_id=admin_user_id)
-        blocked_supply = _run_alembic("downgrade", NONOPENING_REVIEW_TERMINAL_STATUS_REVISION, expect_success=False)
-        assert "cannot downgrade 0059 while supply-task facts exist" in (blocked_supply.stdout + blocked_supply.stderr)
+        security_engine = create_engine(
+            _sqlalchemy_url(role=str(_admin_parameters()["user"]), password=str(_admin_parameters()["password"])),
+            pool_size=1, max_overflow=0, pool_timeout=5,
+        )
+        try:
+            assert_supply_gate(api_engine, security_engine=security_engine, source_request_id=request_id,
+                manager_user_id=manager_user_id, admin_user_id=admin_user_id)
+        finally:
+            security_engine.dispose()
+        blocked_supply = _run_alembic("downgrade", SUPPLY_TASK_CAUSALITY_REVISION, expect_success=False)
+        assert "cannot downgrade 0060 while supply-task facts exist" in (blocked_supply.stdout + blocked_supply.stderr)
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
     finally:

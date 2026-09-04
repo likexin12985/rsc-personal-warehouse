@@ -1976,6 +1976,24 @@ EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
         False,
         False,
     ),
+    "trg_material_request_commands_000_supply_owner_guard_0060": (
+        "material_request_commands",
+        "rsc_guard_material_request_supply_write_0060",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_supply_tasks_000_owner_guard_0060": (
+        "supply_tasks",
+        "rsc_guard_material_request_supply_write_0060",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
     **{
         f"trg_{table_name}_supply_causality_0059": (
             table_name,
@@ -2277,10 +2295,12 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
         "244d188e126e66fd4b020da01c076a3018f2c8841230bd255da45b7913776d54",
     ("rsc_guard_material_request_supply_task_0059", ""):
         "913d606ff9f47fd05feda92d75ef76477daf6823b71ecdb9c47cabf5355a5398",
+    ("rsc_guard_material_request_supply_write_0060", ""):
+        "0fe289826a8aa4d14e2ecd48a9900484bf8929a054dbfa52340fa27786453f26",
     ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint"):
-        "ce370ea355224013645f399b2176aceedf92e51c01f8159866a822bb33120f46",
+        "092a41ff7072397c8b8311f3bab658dcc4a69212a4bf893dc9e9271a0dd625f0",
     ("rsc_dispatch_material_request_supply_causality_0059", ""):
-        "efab0c6eee9c8fbaccb1e334b0dc28d10fc85a4fb097a508b422c30b0cb034ed",
+        "935be3c5144f0bb9d5dad8652bb8284bc7116caaefc9ccb5d177e922b41530c5",
     ("rsc_guard_material_request_content_write_0046", ""):
         "a1dac8272cf64272d782f02f6270aab5fe285334fb13f88c11aaafc6d1d0364c",
     ("rsc_validate_material_request_content_causality_0046", "uuid"):
@@ -2301,6 +2321,7 @@ MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
         ("rsc_validate_material_request_approval_projection_0045", "uuid"),
         ("rsc_dispatch_material_request_approval_projection_0045", ""),
         ("rsc_guard_material_request_supply_task_0059", ""),
+        ("rsc_guard_material_request_supply_write_0060", ""),
         ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint"),
         ("rsc_dispatch_material_request_supply_causality_0059", ""),
         ("rsc_guard_material_request_content_write_0046", ""),
@@ -4634,7 +4655,7 @@ JOIN pg_namespace AS function_schema
   ON function_schema.oid = function_row.pronamespace
 WHERE table_schema.nspname = 'public'
   AND (
-      trigger_row.tgname ~ '_(0029|0030|0045|0046|0059)$'
+      trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060)$'
       OR function_row.proname IN (
           {_MATERIAL_REQUEST_APPROVAL_TRIGGER_FUNCTION_LITERALS}
       )

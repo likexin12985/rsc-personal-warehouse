@@ -488,13 +488,23 @@ OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0058 = {
     ),
 }
 
-OAM_SYNC_FUNCTION_MANIFEST = {
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0059 = {
     **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0058,
     "rsc_oam_runtime_binding_ready_0044()": (
         *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0058[
             "rsc_oam_runtime_binding_ready_0044()"
         ][:6],
         "21859de4675a39652ffe7cda14887c2d644b05d208d32e361ecfad7f9dd4b963",
+    ),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0059,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0059[
+            "rsc_oam_runtime_binding_ready_0044()"
+        ][:6],
+        "47ede12ff8b812e78aa0bb325ce6445b3dd41f6d1fd512ee86055c7418e00bf3",
     ),
 }
 

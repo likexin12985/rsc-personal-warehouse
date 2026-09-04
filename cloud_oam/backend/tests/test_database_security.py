@@ -340,6 +340,13 @@ MATERIAL_REQUEST_SUPPLY_CAUSALITY_MIGRATION_0059 = (
     / "versions"
     / "20260905_0059_material_request_supply_task_causality.py"
 )
+MATERIAL_REQUEST_SUPPLY_SECURITY_MIGRATION_0060 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0060_material_request_supply_security_hardening.py"
+)
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
     / "backend"
@@ -970,6 +977,17 @@ def _load_material_request_supply_causality_migration_0059() -> object:
     spec = importlib.util.spec_from_file_location(
         "rsc_migration_0059_material_request_supply_causality_manifest",
         MATERIAL_REQUEST_SUPPLY_CAUSALITY_MIGRATION_0059,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_material_request_supply_security_migration_0060() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0060_material_request_supply_security_manifest",
+        MATERIAL_REQUEST_SUPPLY_SECURITY_MIGRATION_0060,
     )
     assert spec is not None and spec.loader is not None
     migration = importlib.util.module_from_spec(spec)
@@ -6951,8 +6969,8 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 75
-    assert len(functions) == 34
+    assert len(triggers) == 77
+    assert len(functions) == 35
     _assert_material_request_approval_guards(
         triggers=triggers,
         functions=functions,
@@ -7179,7 +7197,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
 ) -> None:
     query = " ".join(str(_MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL).split())
 
-    assert "trigger_row.tgname ~ '_(0029|0030|0045|0046|0059)$'" in query
+    assert "trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060)$'" in query
     assert "function_row.proname IN" in query
     assert "AND NOT trigger_row.tgisinternal" in query
     assert "trigger_row.tgname IN" not in query
@@ -7201,7 +7219,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
     assert {
         coordinate[0].rsplit("_", 1)[-1]
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
-    } == {"0029", "0030", "0045", "0046", "0059"}
+    } == {"0029", "0030", "0045", "0046", "0059", "0060"}
 
 
 def test_0045_material_request_approval_migration_bindings_match_manifest(
@@ -7295,7 +7313,7 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         ): migration._projection_dispatcher_sql(),
     }
 
-    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 34
+    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 35
     assert set(function_sql) == {
         coordinate
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
@@ -7431,10 +7449,18 @@ def test_0059_supply_guard_bodies_triggers_and_runtime_acl_match_manifest() -> N
         ): migration._supply_validator_sql(),
         (migration.SUPPLY_DISPATCH_FUNCTION, ""): migration._supply_dispatcher_sql(),
     }
+    historical_hashes = {
+        (migration.OWNER_GUARD_FUNCTION, ""):
+            "913d606ff9f47fd05feda92d75ef76477daf6823b71ecdb9c47cabf5355a5398",
+        (migration.SUPPLY_VALIDATE_FUNCTION, "uuid, bigint"):
+            "ce370ea355224013645f399b2176aceedf92e51c01f8159866a822bb33120f46",
+        (migration.SUPPLY_DISPATCH_FUNCTION, ""):
+            "efab0c6eee9c8fbaccb1e334b0dc28d10fc85a4fb097a508b422c30b0cb034ed",
+    }
     for coordinate, sql in function_sql.items():
         body = sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
         assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (
-            MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate]
+            historical_hashes[coordinate]
         )
         assert coordinate in MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
     assert (migration.SUPPLY_VALIDATE_FUNCTION, "uuid, bigint") in (
@@ -7514,6 +7540,62 @@ def test_0059_supply_guard_bodies_triggers_and_runtime_acl_match_manifest() -> N
         "version",
         "updated_at",
     }
+
+
+def test_0060_supply_security_hashes_and_triggers_match_current_manifest() -> None:
+    old = _load_material_request_supply_causality_migration_0059()
+    migration = _load_material_request_supply_security_migration_0060()
+
+    guard_body = migration._write_guard_sql().split("AS $$", 1)[1].rsplit(
+        "$$", 1
+    )[0]
+    assert hashlib.sha256(guard_body.encode()).hexdigest() == (
+        MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[
+            (migration.WRITE_GUARD_FUNCTION, "")
+        ]
+    )
+
+    validator = old._supply_validator_sql().split("AS $$", 1)[1].rsplit(
+        "$$", 1
+    )[0]
+    for legacy, fixed in (
+        (migration.VALIDATOR_DECLARATION_0059, migration.VALIDATOR_DECLARATION_0060),
+        (migration.VALIDATOR_ACTOR_0059, migration.VALIDATOR_ACTOR_0060),
+        (migration.VALIDATOR_TASK_COUNT_0059, migration.VALIDATOR_TASK_COUNT_0060),
+        (migration.VALIDATOR_TASK_IF_0059, migration.VALIDATOR_TASK_IF_0060),
+        (migration.VALIDATOR_ORDERED_0059, migration.VALIDATOR_ORDERED_0060),
+        (migration.VALIDATOR_SEQUENCE_0059, migration.VALIDATOR_SEQUENCE_0060),
+    ):
+        validator = validator.replace(legacy, fixed)
+    assert hashlib.sha256(validator.encode()).hexdigest() == (
+        MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[
+            (migration.VALIDATOR_FUNCTION, "uuid, bigint")
+        ]
+    )
+
+    dispatcher = old._supply_dispatcher_sql().split("AS $$", 1)[1].rsplit(
+        "$$", 1
+    )[0].replace(
+        migration._dispatcher_body_0059(), migration._dispatcher_body_0060()
+    )
+    assert hashlib.sha256(dispatcher.encode()).hexdigest() == (
+        MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[
+            (migration.DISPATCHER_FUNCTION, "")
+        ]
+    )
+    assert (migration.WRITE_GUARD_FUNCTION, "") in (
+        MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
+    )
+    assert EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[
+        migration.COMMAND_GUARD_TRIGGER
+    ][:4] == (
+        "material_request_commands", migration.WRITE_GUARD_FUNCTION, "A", 7
+    )
+    assert EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[
+        migration.TASK_GUARD_TRIGGER
+    ][:4] == (
+        "supply_tasks", migration.WRITE_GUARD_FUNCTION, "A", 7
+    )
 
 
 def test_0046_content_guard_seals_approval_attempt_coordinate() -> None:

@@ -2178,6 +2178,92 @@ describe("formal material request PC vertical slice", () => {
     expect(client.supplyCommandStatus).not.toHaveBeenCalled();
   });
 
+  it("clears the exact coordinate after a whitelisted supply POST rejection", async () => {
+    const before = supplyReadyDetail();
+    const rejection = new ApiError(409, "需求单版本已变化，请重新读取后再操作", {
+      code: "material_request_version_conflict",
+      category: "conflict",
+    });
+    const mutate = vi.fn().mockRejectedValue(rejection);
+    const client = adapter({
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValue(before),
+      mutate,
+    });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "新建供给计划" }));
+    const form = await screen.findByRole("dialog", { name: "新建供给计划" });
+    fireEvent.change(within(form).getByLabelText("供给计划数量"), { target: { value: "1.001" } });
+    fireEvent.click(within(form).getByRole("button", { name: "确认保存供给计划" }));
+
+    expect((await screen.findAllByText(/本地请求坐标已安全解除/)).length).toBeGreaterThan(0);
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.getItem("cloud-oam-material-request-supply-sentinel-v1")).toBeNull();
+    expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it.each([
+    ["permission 403", new ApiError(403, "没有供给权限", {
+      code: "material_request_supply_manage_forbidden", category: "forbidden",
+    })],
+    ["unknown 409", new ApiError(409, "未知冲突", {
+      code: "unknown_conflict", category: "conflict",
+    })],
+  ])("retains the coordinate after a non-whitelisted supply POST rejection: %s", async (_name, rejection) => {
+    const before = supplyReadyDetail();
+    const mutate = vi.fn().mockRejectedValue(rejection);
+    const client = adapter({
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValue(before),
+      mutate,
+    });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "新建供给计划" }));
+    const form = await screen.findByRole("dialog", { name: "新建供给计划" });
+    fireEvent.change(within(form).getByLabelText("供给计划数量"), { target: { value: "1.001" } });
+    fireEvent.click(within(form).getByRole("button", { name: "确认保存供给计划" }));
+
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    expect(sessionStorage.getItem("cloud-oam-material-request-supply-sentinel-v1")).not.toBeNull();
+    expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("retains a whitelisted rejected coordinate when identity changes before cleanup", async () => {
+    const before = supplyReadyDetail();
+    let switched = false;
+    const loadIdentity = vi.fn(async () => ({
+      schema_version: "1.0",
+      person_id: switched ? OTHER_PERSON_ID : PERSON_ID,
+      authorization_version: 1,
+    }));
+    const mutate = vi.fn(async () => {
+      switched = true;
+      throw new ApiError(409, "需求单版本已变化，请重新读取后再操作", {
+        code: "material_request_version_conflict",
+        category: "conflict",
+      });
+    });
+    const client = adapter({
+      loadIdentity,
+      list: vi.fn().mockResolvedValue(page(before)),
+      detail: vi.fn().mockResolvedValue(before),
+      mutate,
+    });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "新建供给计划" }));
+    const form = await screen.findByRole("dialog", { name: "新建供给计划" });
+    fireEvent.change(within(form).getByLabelText("供给计划数量"), { target: { value: "1.001" } });
+    fireEvent.click(within(form).getByRole("button", { name: "确认保存供给计划" }));
+
+    expect((await screen.findAllByText(/身份或权限已变化/)).length).toBeGreaterThan(0);
+    expect(loadIdentity).toHaveBeenCalledTimes(2);
+    expect(sessionStorage.getItem("cloud-oam-material-request-supply-sentinel-v1")).not.toBeNull();
+    expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("keeps an uncertain supply operation blocked across remount and confirms its historical result", async () => {
     const before = supplyReadyDetail();
     const mutate = vi.fn().mockRejectedValue(new Error("network uncertain"));

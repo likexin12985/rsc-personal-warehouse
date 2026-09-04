@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   type FormalMaterialRequestAccess, type FormalMaterialRequestAdapter,
+  validateFormalMaterialRequestAccess,
   validateFormalMaterialRequestFreshIdentity,
 } from "./formalMaterialRequestAdapter";
 import {
@@ -9,7 +10,8 @@ import {
 } from "./formalMaterialRequests";
 import {
   type SupplyAction, type SupplyCreateInput, type SupplyUpdateInput,
-  supplyMutationMatchesDetail, validateSupplyCreateInput, validateSupplyMutationResult, validateSupplyUpdateInput,
+  isDefinitiveSupplyPostRejection, supplyMutationMatchesDetail, validateSupplyCreateInput,
+  validateSupplyMutationResult, validateSupplyUpdateInput,
 } from "./formalMaterialRequestSupply";
 import { type SupplyRecoveryStore, type SupplySentinel, recoverSupplyCommand } from "./materialRequestSupplyRecovery";
 import { Button, Field, Modal, showError } from "./ui";
@@ -39,6 +41,10 @@ function quantityText(value: string): string {
   if (!/^(?:0|[1-9]\d{0,14})(?:\.\d{1,3})?$/.test(value)) throw new Error("计划数量最多保留三位小数");
   const [whole, fraction = ""] = value.split(".");
   return `${whole}.${fraction.padEnd(3, "0")}`;
+}
+function exactScalarSnapshotMatches(left: object, right: object): boolean {
+  const snapshot = (value: object) => Object.entries(value).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify(snapshot(left)) === JSON.stringify(snapshot(right));
 }
 
 export default function FormalMaterialRequestSupplyPanel({
@@ -123,6 +129,8 @@ export default function FormalMaterialRequestSupplyPanel({
     const before = form.before;
     let persisted = false;
     let preparedIntent: MaterialRequestMutationIntent | undefined;
+    let persistedSentinel: SupplySentinel | undefined;
+    let directPostRejection: unknown;
     inFlight.current = true;
     setRunning(true);
     setError("");
@@ -164,7 +172,15 @@ export default function FormalMaterialRequestSupplyPanel({
         task_version: form.task?.version ?? null };
       store.persist(sentinel);
       persisted = true;
-      const result = validateSupplyMutationResult(await adapter.mutate(intent), {
+      persistedSentinel = sentinel;
+      let rawResult: unknown;
+      try {
+        rawResult = await adapter.mutate(intent);
+      } catch (caught) {
+        directPostRejection = caught;
+        throw caught;
+      }
+      const result = validateSupplyMutationResult(rawResult, {
         requestId: before.request_id, action: form.action, previousVersion: before.request_version,
         ...(form.task ? { taskId: form.task.id, previousTaskVersion: form.task.version } : {}),
       });
@@ -183,7 +199,36 @@ export default function FormalMaterialRequestSupplyPanel({
       onBlocking(false);
     } catch (caught) {
       if (currentGeneration === generation.current) {
-        setError(`${showError(caught)}${persisted ? "。结果核验完成前，请勿再次提交。" : ""}`);
+        let released = false;
+        if (persisted && persistedSentinel && preparedIntent
+            && caught === directPostRejection && isDefinitiveSupplyPostRejection(caught)) {
+          try {
+            const freshIdentity = validateFormalMaterialRequestFreshIdentity(await adapter.loadIdentity());
+            const freshAccess = validateFormalMaterialRequestAccess(await adapter.loadAccess());
+            if (freshIdentity.person_id !== persistedSentinel.person_id
+                || freshIdentity.authorization_version !== persistedSentinel.authorization_version
+                || !exactScalarSnapshotMatches(freshAccess, access)) {
+              throw new Error("明确拒绝回收期间身份或权限已变化，原供给坐标继续保留");
+            }
+            if (currentGeneration !== generation.current) return;
+            const stored = store.read();
+            if (stored.kind !== "valid" || !exactScalarSnapshotMatches(stored.value, persistedSentinel)) {
+              throw new Error("明确拒绝回收时供给坐标已变化，原阻断继续保留");
+            }
+            store.clear(persistedSentinel.x_request_id);
+            registry.clearDefinitiveRejection(before.request_id, preparedIntent.signature);
+            onBlocking(false);
+            released = true;
+          } catch (clearError) {
+            setError(`${showError(caught)}。${showError(clearError)}。结果核验完成前，请勿再次提交。`);
+          }
+        }
+        if (released) {
+          setError(`${showError(caught)}。服务端已明确拒绝，本地请求坐标已安全解除。`);
+        } else if (!(persisted && persistedSentinel && preparedIntent
+            && caught === directPostRejection && isDefinitiveSupplyPostRejection(caught))) {
+          setError(`${showError(caught)}${persisted ? "。结果核验完成前，请勿再次提交。" : ""}`);
+        }
         if (!persisted && store.read().kind === "missing") {
           if (preparedIntent) registry.clearDefinitiveRejection(before.request_id, preparedIntent.signature);
           onBlocking(false);
