@@ -2254,6 +2254,18 @@ def test_0052_opening_trigger_catalogs_are_pinned_by_startup_guards() -> None:
     assert len(migration.INHERITED_RECONCILIATION_TRIGGER_CATALOG) == 6
     assert len(EXPECTED_OPENING_TERMINAL_TRIGGERS) == 53
     assert len(OPENING_COMMIT_TRIGGER_NAMES) == 28
+    assert all(
+        len(trigger_name.encode("utf-8")) <= 63
+        for trigger_name in EXPECTED_OPENING_TERMINAL_TRIGGERS
+    )
+    assert (
+        "trg_stocktake_difference_set_completions_immutable_truncate_001"
+        in EXPECTED_OPENING_TERMINAL_TRIGGERS
+    )
+    assert (
+        "trg_stocktake_difference_set_completions_immutable_truncate_0016"
+        not in EXPECTED_OPENING_TERMINAL_TRIGGERS
+    )
 
     for table_name, trigger_name, signature, trigger_type in (
         migration.TRIGGER_CATALOG

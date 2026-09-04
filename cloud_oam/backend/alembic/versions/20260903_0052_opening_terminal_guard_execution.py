@@ -11101,7 +11101,8 @@ REVIEW_GUARD_TRIGGER_CATALOG = (
     ),
     (
         "stocktake_difference_set_completions",
-        "trg_stocktake_difference_set_completions_immutable_truncate_0016",
+        # The 0016 DDL token is 64 bytes; PostgreSQL stores 63 bytes.
+        "trg_stocktake_difference_set_completions_immutable_truncate_001",
         REVIEW_IMMUTABLE_SIGNATURE,
         34,
     ),

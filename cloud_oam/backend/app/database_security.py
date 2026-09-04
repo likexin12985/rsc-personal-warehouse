@@ -1607,7 +1607,8 @@ EXPECTED_OPENING_TERMINAL_TRIGGERS = {
         "A",
         27,
     ),
-    "trg_stocktake_difference_set_completions_immutable_truncate_0016": (
+    # The 0016 DDL token is 64 bytes; PostgreSQL stores 63 bytes.
+    "trg_stocktake_difference_set_completions_immutable_truncate_001": (
         "stocktake_difference_set_completions",
         "rsc_block_stocktake_review_fact_mutation_0016",
         "A",

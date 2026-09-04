@@ -4994,6 +4994,21 @@ def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
 def test_0052_exports_exact_head_and_inherited_dependency_catalogs() -> None:
     module = _load_0052_migration_module()
 
+    trigger_catalogs = (
+        module.TRIGGER_CATALOG,
+        module.REVIEW_GUARD_TRIGGER_CATALOG,
+        module.INHERITED_RECONCILIATION_TRIGGER_CATALOG,
+        module.OPENING_0052_TRIGGER_CATALOG,
+    )
+    assert all(
+        len(row[1].encode("utf-8")) <= 63
+        for catalog in trigger_catalogs
+        for row in catalog
+    )
+    assert module.REVIEW_GUARD_TRIGGER_CATALOG[2][1] == (
+        "trg_stocktake_difference_set_completions_immutable_truncate_001"
+    )
+
     assert module.HEAD_ONLY_FUNCTION_CATALOG_FIELDS == (
         "signature",
         "name",
