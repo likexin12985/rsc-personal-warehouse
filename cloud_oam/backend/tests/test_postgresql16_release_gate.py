@@ -255,6 +255,7 @@ PG16_REDACTED_DATABASE_FAILURE_CODES = frozenset(
         "opening_count_concurrent_conflict",
         "opening_count_database_guard_rejected",
         "opening_count_database_unavailable",
+        "opening_count_command_status_evidence_invalid",
         "opening_finalize_database_guard_rejected",
         "opening_observation_disposition_audit_chain_unavailable",
         "opening_observation_disposition_concurrent_conflict",
@@ -13609,6 +13610,7 @@ def _seed_0047_stocktake_inventory(
         OpeningCountCommandStatusError,
         opening_count_command_status,
     )
+    from app.formal_services.opening_stocktake_query import opening_stocktake_detail
     from app.formal_services.opening_stocktake_review import (
         OpeningStocktakeReviewItemInput,
         SubmitOpeningStocktakeReviewCommand,
@@ -13843,11 +13845,13 @@ def _seed_0047_stocktake_inventory(
         # It is non-mutating, but must NOT be labelled a READ ONLY transaction.
         with Session(api_engine) as session:
             identity = current_principal(session, assignee_user_id)
-            result = opening_count_command_status(
-                session, actor=identity, task_id=task_id, round_id=round_id,
-                scope_id=scope_id, actor_person_id=identity.person_id,
-                actor_authorization_version=identity.authorization_version,
-                trace_request_id=trace_id,
+            result = _reveal_pg16_service_database_error(
+                api_engine, lambda: opening_count_command_status(
+                    session, actor=identity, task_id=task_id, round_id=round_id,
+                    scope_id=scope_id, actor_person_id=identity.person_id,
+                    actor_authorization_version=identity.authorization_version,
+                    trace_request_id=trace_id,
+                ),
             )
             assert result.lookup_status == "confirmed"
             assert result.command is not None
@@ -13864,11 +13868,13 @@ def _seed_0047_stocktake_inventory(
             }
         with Session(api_engine) as session:
             identity = current_principal(session, assignee_user_id)
-            unseen = opening_count_command_status(
-                session, actor=identity, task_id=task_id, round_id=round_id,
-                scope_id=scope_id, actor_person_id=identity.person_id,
-                actor_authorization_version=identity.authorization_version,
-                trace_request_id=f"trace-never-sent-{uuid.uuid4().hex}",
+            unseen = _reveal_pg16_service_database_error(
+                api_engine, lambda: opening_count_command_status(
+                    session, actor=identity, task_id=task_id, round_id=round_id,
+                    scope_id=scope_id, actor_person_id=identity.person_id,
+                    actor_authorization_version=identity.authorization_version,
+                    trace_request_id=f"trace-never-sent-{uuid.uuid4().hex}",
+                ),
             )
             assert unseen.lookup_status == "not_observed" and unseen.command is None
         with Session(api_engine) as session:
@@ -15147,6 +15153,23 @@ def _seed_0047_stocktake_inventory(
         task_id=started.task_id, round_id=started.initial_round_id, scope_id=opening_scope_id,
         trace_id=f"trace-pg16-opening-count-{opening_token}", round_no=1, sealed=True,
     )
+
+    # The source has a requires_recount disposition. Both the historical GET
+    # and the ordinary current detail must reprove that source review using
+    # the full prelocked task resolution graph, not the empty new-round map.
+    before_recount_read = opening_count_snapshot(api_engine)
+    with Session(api_engine) as session:
+        current_detail = _reveal_pg16_service_database_error(
+            api_engine, lambda: opening_stocktake_detail(
+                session, actor=current_principal(session, assignee_user_id),
+                task_id=started.task_id,
+            ),
+        )
+        assert current_detail.current_round.round_id == opened_recount.next_round_id
+        assert current_detail.current_round.round_no == 2
+        assert current_detail.current_round.status == "counting"
+        assert current_detail.scopes[0].completion_status == "pending"
+    assert opening_count_snapshot(api_engine) == before_recount_read
 
     with Session(api_engine, expire_on_commit=False) as session:
         recount_counted = _reveal_pg16_service_database_error(

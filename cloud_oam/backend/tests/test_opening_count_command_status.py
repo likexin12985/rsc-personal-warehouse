@@ -26,6 +26,8 @@ from app.opening_count_command_status_schemas import (
 )
 from test_formal_opening_stocktake_read import (
     NOW, _fixed_database_times, _prepare_submitted, db, review_world, world,
+    _prepare_observation, _record_observation_disposition, _review_command,
+    _open_recount_command, submit_opening_region_review,
 )
 from test_opening_stocktake_recount_count_service import (
     _open_round_two, _submit_round_two, _fixed_recount_count_time,
@@ -219,6 +221,118 @@ def test_history_remains_confirmable_after_new_recount_round(world):
     assert result.command.caused_round_submission is True
     assert prepared.task.current_round_no == 2
     assert prepared.round.status == "counting"
+
+
+def _open_round_two_with_disposed_source(world):
+    prepared = _prepare_observation(
+        world, material_identifier_raw="RECOVERY-UNKNOWN-SOURCE",
+        material_identifier_type="unknown",
+    )
+    _record_observation_disposition(world, prepared, disposition="requires_recount")
+    world.db.commit()
+    submit_opening_region_review(
+        world.db, actor=world.principals["manager_x"],
+        command=_review_command(world.db, prepared, decision="recount"),
+        idempotency_key="recovery-disposed-source-region-review",
+        request_id="recovery-disposed-source-region-trace",
+    )
+    world.db.commit()
+    opened = service.recount.open_opening_stocktake_recount(
+        world.db, actor=world.principals["manager_x"],
+        command=_open_recount_command(
+            prepared.task, prepared.round, prepared.scope, world.manager_x.user.id,
+        ),
+        idempotency_key="recovery-disposed-source-open-recount",
+        request_id="recovery-disposed-source-open-trace",
+    )
+    world.db.commit()
+    return prepared, opened
+
+
+def test_disposed_source_history_and_current_empty_recount_are_independent(world):
+    prepared, opened = _open_round_two_with_disposed_source(world)
+    old_round_id = prepared.round.id
+    task_id = prepared.task.id
+    result = _lookup(world, prepared)
+    assert result.lookup_status == "confirmed"
+    assert result.command.round_no == 1
+    assert result.command.caused_round_submission is True
+    world.db.rollback()
+    detail = service.query.opening_stocktake_detail(
+        world.db, actor=world.principals["manager_x"], task_id=task_id,
+    )
+    assert detail.current_round.round_id == opened.next_round_id
+    assert detail.current_round.round_id != old_round_id
+    assert detail.current_round.round_no == 2
+    assert detail.current_round.status == "counting"
+    assert detail.evidence_status == "counting_hidden"
+    assert all(scope.completion_status == "pending" for scope in detail.scopes)
+    assert detail.observations == [] and detail.differences == []
+    world.db.rollback()
+    unobserved = _lookup(
+        world, prepared, round_id=opened.next_round_id,
+        trace_request_id="recovery-current-recount-never-sent",
+    )
+    assert unobserved.lookup_status == "not_observed"
+
+
+@pytest.mark.parametrize("corruption", [
+    "missing_round_map", "duplicate_round_map", "missing_planned_round",
+    "duplicate_planned_round", "foreign_planned_round", "missing_observation",
+    "foreign_observation", "foreign_candidate_owner", "duplicate_observation",
+    "forged_proof",
+])
+def test_disposed_source_task_resolution_union_fails_closed(world, monkeypatch, corruption):
+    prepared, _opened = _open_round_two_with_disposed_source(world)
+    query = service.query
+    original = query._lock_opening_read_batch_graph
+
+    def corrupt_graph(db, **kwargs):
+        proof = original(db, **kwargs)
+        if corruption == "forged_proof":
+            return replace(proof, seal=object())
+        owner_id, plans = proof.round_plans[0]
+        source_id, source_plan = plans[0]
+        next_id, next_plan = plans[1]
+        maps = dict(proof.disposition_resolutions)
+        source_map = maps[source_id]
+        assert len(source_map) == 1 and not maps[next_id]
+        observation_id = next(iter(source_map))
+        if corruption == "missing_round_map":
+            return replace(proof, disposition_resolutions=((next_id, maps[next_id]),))
+        if corruption == "duplicate_round_map":
+            return replace(proof, disposition_resolutions=(*proof.disposition_resolutions, (source_id, source_map)))
+        if corruption == "missing_planned_round":
+            return replace(proof, round_plans=((owner_id, (plans[1],)),))
+        if corruption == "duplicate_planned_round":
+            return replace(proof, round_plans=((owner_id, (*plans, plans[0])),))
+        if corruption == "foreign_planned_round":
+            foreign_id = uuid.uuid4()
+            return replace(proof, round_plans=((owner_id, ((foreign_id, source_plan), plans[1])),),
+                           disposition_resolutions=((foreign_id, source_map), (next_id, maps[next_id])))
+        if corruption == "missing_observation":
+            maps[source_id] = {}
+        elif corruption == "foreign_observation":
+            maps[source_id] = {uuid.uuid4(): source_map[observation_id]}
+        elif corruption == "foreign_candidate_owner":
+            candidate = source_plan.disposition_candidates[0]
+            signature = list(candidate.observation_signature)
+            signature[1] = uuid.uuid4()
+            altered = replace(candidate, observation_signature=tuple(signature))
+            source_plan = replace(source_plan, disposition_candidates=(altered,))
+            return replace(proof, round_plans=((owner_id, ((source_id, source_plan), plans[1])),))
+        elif corruption == "duplicate_observation":
+            maps[next_id] = dict(source_map)
+            next_plan = replace(next_plan, disposition_candidates=source_plan.disposition_candidates)
+            return replace(proof, round_plans=((owner_id, (plans[0], (next_id, next_plan))),),
+                           disposition_resolutions=tuple(maps.items()))
+        return replace(proof, disposition_resolutions=tuple(maps.items()))
+
+    monkeypatch.setattr(query, "_lock_opening_read_batch_graph", corrupt_graph)
+    with pytest.raises(service.OpeningCountCommandStatusError) as caught:
+        _lookup(world, prepared)
+    assert caught.value.http_status_code == 503
+    assert caught.value.code == "opening_count_command_status_evidence_invalid"
 
 
 def test_recount_history_confirms_original_round_not_initial_assignment(world):

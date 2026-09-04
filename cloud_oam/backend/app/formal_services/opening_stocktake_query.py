@@ -837,6 +837,56 @@ def _round_disposition_resolutions(
     raise AssertionError("unreachable opening read resolution lookup")
 
 
+def _task_disposition_resolutions(
+    db: Session,
+    proof: _PrelockedOpeningReadBatchGraphProof,
+    task_id: uuid.UUID,
+) -> Mapping[uuid.UUID, object]:
+    """Join only one task's already-proved round maps, without new owners.
+
+    Recount replay traverses predecessor reviews. Those reviews require the
+    whole task's disposition evidence, even while its current round is empty.
+    The individual current-round disposition replay must retain its own map.
+    """
+
+    checked = _require_opening_read_batch_graph(db, proof)
+    task_ids = tuple(row.id for row in checked.root.tasks)
+    if task_id not in task_ids:
+        _invalid_evidence()
+    planned = {}
+    for owner_id, plans in checked.round_plans:
+        for round_id, plan in plans:
+            if round_id in planned:
+                _invalid_evidence()
+            planned[round_id] = (owner_id, plan)
+    actual = dict(db.execute(select(StocktakeRound.id, StocktakeRound.task_id).where(
+        StocktakeRound.task_id.in_(task_ids),
+    )).all())
+    if actual != {round_id: owner_id for round_id, (owner_id, _plan) in planned.items()}:
+        _invalid_evidence()
+    by_round = dict(checked.disposition_resolutions)
+    if len(by_round) != len(checked.disposition_resolutions) or set(by_round) != set(planned):
+        _invalid_evidence()
+    merged = {}
+    seen_observations = set()
+    for round_id, (owner_id, plan) in planned.items():
+        resolutions = by_round[round_id]
+        candidate_ids = tuple(row.observation_id for row in plan.disposition_candidates)
+        if (
+            not isinstance(resolutions, Mapping)
+            or len(set(candidate_ids)) != len(candidate_ids)
+            or set(resolutions) != set(candidate_ids)
+            or seen_observations.intersection(candidate_ids)
+            or any(row.observation_signature[:3] != (row.observation_id, owner_id, round_id)
+                   for row in plan.disposition_candidates)
+        ):
+            _invalid_evidence()
+        seen_observations.update(candidate_ids)
+        if owner_id == task_id:
+            merged.update(resolutions)
+    return merged
+
+
 def _load_task_graphs(
     db: Session,
     *,
@@ -1407,6 +1457,7 @@ def _plan_detail_evidence(
         )
     checked_proof = _require_opening_read_batch_graph(db, proof)
     resolutions = _round_disposition_resolutions(checked_proof, round_row.id)
+    task_resolutions = _task_disposition_resolutions(db, checked_proof, graph.task.id)
     from . import opening_stocktake_count as count_service
     from . import opening_observation_disposition as disposition_service
     from . import opening_stocktake_recount as recount_service
@@ -1430,7 +1481,7 @@ def _plan_detail_evidence(
                 round_row=round_row,
                 scopes=graph.scopes,
                 freezes=freezes,
-                disposition_resolutions=resolutions,
+                disposition_resolutions=task_resolutions,
             )
         )
         round_assignments = recount_service._opening_recount_assignments_from_plan(
@@ -1464,7 +1515,7 @@ def _plan_detail_evidence(
             review_id=review.id,
             expected_stage=review.review_stage,
             expected_decision=review.decision,
-            disposition_resolutions=resolutions,
+            disposition_resolutions=task_resolutions,
         )
         for review in graph.reviews
     )

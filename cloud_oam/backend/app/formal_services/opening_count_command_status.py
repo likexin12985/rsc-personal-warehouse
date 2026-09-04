@@ -237,7 +237,7 @@ def _plan_target(db, *, actor, graph, proof, round_id, scope_id):
         recount_plan = recount._plan_opening_recount_round_assignment_evidence_from_prelocked_reference_graph(
             db, task=graph.task, round_row=target_round, scopes=graph.scopes,
             freezes=freezes,
-            disposition_resolutions=query._round_disposition_resolutions(checked, round_id),
+            disposition_resolutions=query._task_disposition_resolutions(db, checked, graph.task.id),
         )
         assignments = recount._opening_recount_assignments_from_plan(db, plan=recount_plan)
     completions = tuple(db.scalars(select(StocktakeScopeCountCompletion).where(
