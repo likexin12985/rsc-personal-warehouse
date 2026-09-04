@@ -38,6 +38,8 @@ from ..demand_schemas import (
     MaterialRequestCreateIn,
     MaterialRequestSubmitIn,
     MaterialRequestWithdrawIn,
+    SupplyTaskCreateIn,
+    SupplyTaskUpdateIn,
 )
 from ..dependencies import get_formal_principal, require_permission
 from ..formal_access import FormalPrincipal
@@ -47,6 +49,8 @@ from ..formal_services import material_request_draft as draft_service
 from ..formal_services import material_request_edit as edit_service
 from ..formal_services import material_request_lifecycle as lifecycle_service
 from ..formal_services import material_request_query as query_service
+from ..formal_services import material_request_supply as supply_service
+from ..formal_services import material_request_supply_command_status as supply_status_service
 from ..formal_services.material_request_contact import (
     MaterialRequestContactCipher,
     MaterialRequestContactProtectionError,
@@ -63,6 +67,9 @@ from ..material_request_read_schemas import (
     MaterialRequestLifecycleCommandStatusOut,
     MaterialRequestMutationOut,
     MaterialRequestPageOut,
+    MaterialRequestSupplyTaskMutationOut,
+    MaterialRequestSupplyCommandOut,
+    MaterialRequestSupplyCommandStatusOut,
 )
 from ..production_adapters import create_production_material_request_contact_cipher
 
@@ -144,6 +151,44 @@ def formal_material_request_lifecycle_command_status(
     except DBAPIError:
         db.rollback()
         _raise_database_unavailable(read_only=True)
+    _set_read_no_store(response)
+    return output
+
+
+@command_status_router.get(
+    "/material-request-supply-command-status",
+    response_model=MaterialRequestSupplyCommandStatusOut,
+)
+def formal_supply_command_status(
+    response: Response,
+    trace_request_id: str = Query(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$"),
+    principal: FormalPrincipal = Depends(require_permission("supply_task", "manage")),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = supply_status_service.material_request_supply_command_status(
+            db, actor=principal, trace_request_id=trace_request_id,
+        )
+        command = None
+        if result.command is not None:
+            values = _supply_mutation_output(result.command).model_dump(
+                exclude={"schema_version", "idempotency_replayed"},
+            )
+            command = MaterialRequestSupplyCommandOut(
+                **values, occurred_at=result.occurred_at,
+            )
+        output = MaterialRequestSupplyCommandStatusOut(
+            lookup_status=result.lookup_status, command=command,
+        )
+    except supply_service.MaterialRequestSupplyError as exc:
+        _raise_service_error(exc)
+    except SQLAlchemyError:
+        _raise_database_unavailable(read_only=True)
+    except ValidationError:
+        raise HTTPException(status_code=503, detail={
+            "code": "material_request_supply_command_projection_invalid",
+            "category": "service_unavailable", "message": "供给历史命令投影无效，保持结果待核验",
+        }) from None
     _set_read_no_store(response)
     return output
 
@@ -772,6 +817,117 @@ def verify_formal_material_request_external_evidence(
     return output
 
 
+@router.post(
+    "/{material_request_id}/supply-tasks",
+    response_model=MaterialRequestSupplyTaskMutationOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_formal_supply_task(
+    material_request_id: UUID,
+    payload: SupplyTaskCreateIn,
+    response: Response,
+    principal: FormalPrincipal = Depends(require_permission("supply_task", "manage")),
+    db: Session = Depends(get_db),
+    runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    checked_key, checked_request_id = _required_write_headers(
+        idempotency_key=idempotency_key, request_id=request_id,
+    )
+    try:
+        secret = _require_lifecycle_write_runtime(runtime_settings)
+        result = supply_service.create_supply_task(
+            db,
+            actor=principal,
+            material_request_id=material_request_id,
+            expected_request_version=payload.expected_request_version,
+            plan=supply_service.SupplyTaskCreateInput(
+                request_line_id=payload.request_line_id,
+                supply_type=payload.supply_type,
+                reference_no=payload.reference_no,
+                expected_qty=payload.expected_qty,
+                expected_date=payload.expected_date,
+                note=payload.note,
+            ),
+            idempotency_key=checked_key,
+            idempotency_hmac_secret=secret,
+            trace_request_id=checked_request_id,
+        )
+        output = _supply_mutation_output(result)
+        db.commit()
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+    _set_read_no_store(response)
+    _set_replay_header(response, output.idempotency_replayed)
+    return output
+
+
+@router.post(
+    "/{material_request_id}/supply-tasks/{supply_task_id}",
+    response_model=MaterialRequestSupplyTaskMutationOut,
+)
+def update_formal_supply_task(
+    material_request_id: UUID,
+    supply_task_id: UUID,
+    payload: SupplyTaskUpdateIn,
+    response: Response,
+    principal: FormalPrincipal = Depends(require_permission("supply_task", "manage")),
+    db: Session = Depends(get_db),
+    runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    checked_key, checked_request_id = _required_write_headers(
+        idempotency_key=idempotency_key, request_id=request_id,
+    )
+    try:
+        secret = _require_lifecycle_write_runtime(runtime_settings)
+        result = supply_service.update_supply_task(
+            db,
+            actor=principal,
+            material_request_id=material_request_id,
+            supply_task_id=supply_task_id,
+            expected_request_version=payload.expected_request_version,
+            expected_task_version=payload.expected_task_version,
+            update=supply_service.SupplyTaskUpdateInput(
+                status=payload.status,
+                reference_no=payload.reference_no,
+                expected_date=payload.expected_date,
+                comment=payload.comment,
+            ),
+            idempotency_key=checked_key,
+            idempotency_hmac_secret=secret,
+            trace_request_id=checked_request_id,
+        )
+        output = _supply_mutation_output(result)
+        db.commit()
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+    _set_read_no_store(response)
+    _set_replay_header(response, output.idempotency_replayed)
+    return output
+
+
+def _supply_mutation_output(result) -> MaterialRequestSupplyTaskMutationOut:
+    return MaterialRequestSupplyTaskMutationOut(
+        request_id=result.request_id,
+        action=result.action,
+        request_version=result.request_version,
+        revision_id=result.revision_id,
+        revision_no=result.revision_no,
+        approval_instance_id=result.approval_instance_id,
+        approval_attempt_no=result.approval_attempt_no,
+        current_step_id=result.current_step_id,
+        states=result.state_axes,
+        supply_task_id=result.supply_task_id,
+        task_no=result.task_no,
+        task_status=result.task_status,
+        task_version=result.task_version,
+        idempotency_replayed=result.replayed,
+    )
+
+
 def _draft_input(
     payload: MaterialRequestCreateIn | MaterialRequestAmendIn,
     *,
@@ -1067,6 +1223,7 @@ def _rollback_and_raise(db: Session, exc: Exception) -> None:
             edit_service.MaterialRequestEditableDraftError,
             approval_service.MaterialRequestApprovalError,
             lifecycle_service.MaterialRequestLifecycleError,
+            supply_service.MaterialRequestSupplyError,
             _MaterialRequestAdapterError,
         ),
     ):

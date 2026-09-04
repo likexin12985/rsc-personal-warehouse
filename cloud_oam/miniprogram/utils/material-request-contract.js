@@ -918,6 +918,9 @@ function validateSupplyTask(value) {
   ], '正式需求供给任务')
   const status = enumValue(own(object, 'status'), SUPPLY_TASK_STATUSES, '供给任务状态')
   const referenceNo = nullableText(own(object, 'reference_no'), 'reference_no')
+  if (referenceNo !== null && referenceNo.length > 160) {
+    fail('material_request_contract_supply_reference_invalid', '供给参考号超过正式字段长度')
+  }
   if (status === 'reference_registered' && referenceNo === null) {
     fail('material_request_contract_supply_reference_missing', '已登记参考的供给任务必须包含参考编号')
   }
@@ -1400,6 +1403,61 @@ function validateMaterialRequestMutationResult(value, expected) {
   }
 }
 
+function validateMaterialRequestSupplyTaskMutationResult(value, expected) {
+  const object = objectValue(value, '正式供给计划写响应')
+  const base = Object.assign({}, object)
+  for (const key of ['supply_task_id', 'task_no', 'task_status', 'task_version']) delete base[key]
+  const result = validateMaterialRequestMutationResult(base, expected)
+  const taskId = uuidValue(own(object, 'supply_task_id'), 'supply_task_id')
+  const taskNo = textValue(own(object, 'task_no'), 'task_no')
+  if (taskNo.length > 100) fail('material_request_contract_supply_ack_invalid', '供给任务编号过长')
+  const taskStatus = enumValue(own(object, 'task_status'), SUPPLY_TASK_STATUSES, '供给状态')
+  const taskVersion = nonnegativeInteger(own(object, 'task_version'), 'task_version')
+  if (!['create_supply_task', 'update_supply_task', 'cancel_supply_task'].includes(result.action)
+    || !['approved', 'partially_approved'].includes(result.states.request_status)
+    || result.approval_instance_id === null || result.current_step_id !== null
+    || (result.action === 'cancel_supply_task') !== (taskStatus === 'cancelled')) {
+    fail('material_request_contract_supply_ack_invalid', '供给计划响应事实不一致')
+  }
+  if (result.action === 'create_supply_task') {
+    if (taskVersion !== 0 || !['open', 'reference_registered'].includes(taskStatus)) {
+      fail('material_request_contract_supply_ack_invalid', '新建供给计划锚点无效')
+    }
+  } else if (taskId !== uuidValue(expected.supplyTaskId, 'expected_supply_task_id')
+    || taskVersion !== nonnegativeInteger(expected.previousTaskVersion, 'previousTaskVersion') + 1) {
+    fail('material_request_contract_supply_anchor_mismatch', '供给计划响应目标或版本不一致')
+  }
+  return Object.assign({}, result, {
+    supply_task_id: taskId, task_no: taskNo, task_status: taskStatus, task_version: taskVersion
+  })
+}
+
+function validateMaterialRequestSupplyCommandStatus(value) {
+  const object = objectValue(value, '供给命令查询')
+  exactKeys(object, ['schema_version', 'lookup_status', 'command'], '供给命令查询')
+  if (object.schema_version !== MATERIAL_REQUEST_SCHEMA_VERSION
+    || !['not_observed', 'confirmed'].includes(object.lookup_status)
+    || (object.lookup_status === 'confirmed') !== (object.command !== null)) {
+    fail('material_request_contract_supply_lookup_invalid', '供给命令查询状态不一致')
+  }
+  if (object.command === null) return { schema_version: '1.0', lookup_status: 'not_observed', command: null }
+  const raw = objectValue(object.command, '供给命令历史结果')
+  const occurredAt = awareTimestamp(own(raw, 'occurred_at'), 'occurred_at')
+  const mutation = Object.assign({}, raw, { schema_version: '1.0', idempotency_replayed: false })
+  delete mutation.occurred_at
+  const result = validateMaterialRequestSupplyTaskMutationResult(mutation, {
+    requestId: raw.request_id, action: raw.action,
+    previousVersion: positiveInteger(raw.request_version, 'request_version') - 1,
+    supplyTaskId: raw.supply_task_id,
+    previousTaskVersion: raw.action === 'create_supply_task' ? null
+      : positiveInteger(raw.task_version, 'task_version') - 1
+  })
+  delete result.schema_version
+  delete result.idempotency_replayed
+  return { schema_version: '1.0', lookup_status: 'confirmed',
+    command: Object.assign(result, { occurred_at: occurredAt }) }
+}
+
 function validateMaterialRequestCreateResult(value) {
   const object = objectValue(value, '正式需求创建响应')
   exactKeys(object, [
@@ -1704,6 +1762,8 @@ module.exports = {
   validateMaterialRequestDetail,
   validateMaterialRequestPage,
   validateMaterialRequestMutationResult,
+  validateMaterialRequestSupplyTaskMutationResult,
+  validateMaterialRequestSupplyCommandStatus,
   validateMaterialRequestCreateResult,
   createMaterialRequestWriteHeaders,
   createMaterialRequestCreateIntentRegistry,

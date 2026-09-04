@@ -333,6 +333,13 @@ NONOPENING_REVIEW_TERMINAL_STATUS_MIGRATION_0058 = (
     / "versions"
     / "20260905_0058_nonopening_review_terminal_status.py"
 )
+MATERIAL_REQUEST_SUPPLY_CAUSALITY_MIGRATION_0059 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0059_material_request_supply_task_causality.py"
+)
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
     / "backend"
@@ -508,6 +515,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "material_request_lines",
         "material_request_revisions",
         "material_requests",
+        "supply_tasks",
     }
     stocktake_close_read_tables = {
         "stocktake_close_transition_acks",
@@ -655,6 +663,15 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
             "submitted_at",
             "decided_at",
             "withdrawn_at",
+            "cancelled_at",
+            "version",
+            "updated_at",
+        },
+        "supply_tasks": {
+            "reference_no",
+            "expected_date",
+            "status",
+            "cancelled_by_user_id",
             "cancelled_at",
             "version",
             "updated_at",
@@ -942,6 +959,17 @@ def _load_nonopening_review_terminal_status_migration_0058() -> object:
     spec = importlib.util.spec_from_file_location(
         "rsc_migration_0058_nonopening_review_terminal_status_manifest",
         NONOPENING_REVIEW_TERMINAL_STATUS_MIGRATION_0058,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_material_request_supply_causality_migration_0059() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0059_material_request_supply_causality_manifest",
+        MATERIAL_REQUEST_SUPPLY_CAUSALITY_MIGRATION_0059,
     )
     assert spec is not None and spec.loader is not None
     migration = importlib.util.module_from_spec(spec)
@@ -6923,8 +6951,8 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 69
-    assert len(functions) == 31
+    assert len(triggers) == 75
+    assert len(functions) == 34
     _assert_material_request_approval_guards(
         triggers=triggers,
         functions=functions,
@@ -7151,7 +7179,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
 ) -> None:
     query = " ".join(str(_MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL).split())
 
-    assert "trigger_row.tgname ~ '_(0029|0030|0045|0046)$'" in query
+    assert "trigger_row.tgname ~ '_(0029|0030|0045|0046|0059)$'" in query
     assert "function_row.proname IN" in query
     assert "AND NOT trigger_row.tgisinternal" in query
     assert "trigger_row.tgname IN" not in query
@@ -7173,7 +7201,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
     assert {
         coordinate[0].rsplit("_", 1)[-1]
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
-    } == {"0029", "0030", "0045", "0046"}
+    } == {"0029", "0030", "0045", "0046", "0059"}
 
 
 def test_0045_material_request_approval_migration_bindings_match_manifest(
@@ -7233,6 +7261,7 @@ def test_0045_material_request_approval_migration_bindings_match_manifest(
 def test_0045_material_request_approval_function_bodies_match_manifest(
 ) -> None:
     migration = _load_material_request_approval_activation_migration_0045()
+    migration_0059 = _load_material_request_supply_causality_migration_0059()
     function_sql = {
         (
             migration.PG_DECISION_FUNCTION_0029,
@@ -7266,7 +7295,7 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         ): migration._projection_dispatcher_sql(),
     }
 
-    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 31
+    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 34
     assert set(function_sql) == {
         coordinate
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
@@ -7274,13 +7303,22 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
     } | {(migration.PG_DECISION_FUNCTION_0029, "")}
     for coordinate, sql in function_sql.items():
         body = sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
-        assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (
-            MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate]
-        )
+        actual_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        if coordinate == (
+            migration.PG_TERMINAL_VALIDATE_FUNCTION,
+            "uuid, uuid, uuid, bigint",
+        ):
+            assert actual_hash == migration_0059.TERMINAL_BODY_SHA256_0045
+        elif coordinate == (migration.PG_PROJECTION_VALIDATE_FUNCTION, "uuid"):
+            assert actual_hash == migration_0059.PROJECTION_BODY_SHA256_0045
+        else:
+            assert actual_hash == (
+                MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate]
+            )
     assert {
         coordinate
         for coordinate in MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
-        if not coordinate[0].endswith("_0046")
+        if coordinate[0].endswith(("_0029", "_0030", "_0045"))
     } == {
         (migration.PG_REQUEST_FILE_FUNCTION_0029, ""),
         (migration.PG_APPROVAL_DISPATCH_FUNCTION_0030, ""),
@@ -7296,7 +7334,7 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
     assert {
         coordinate
         for coordinate in MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS
-        if not coordinate[0].endswith("_0046")
+        if coordinate[0].endswith(("_0029", "_0030", "_0045"))
     } == {
         (migration.PG_APPROVAL_VALIDATE_FUNCTION_0030, "uuid"),
         (
@@ -7378,6 +7416,103 @@ def test_0046_material_request_content_function_bodies_match_manifest() -> None:
     assert set(function_sql) <= MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
     assert MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS & set(function_sql) == {
         (migration.PG_CONTENT_VALIDATE_FUNCTION, "uuid")
+    }
+
+
+def test_0059_supply_guard_bodies_triggers_and_runtime_acl_match_manifest() -> None:
+    migration_0045 = _load_material_request_approval_activation_migration_0045()
+    migration = _load_material_request_supply_causality_migration_0059()
+
+    function_sql = {
+        (migration.OWNER_GUARD_FUNCTION, ""): migration._owner_guard_sql(),
+        (
+            migration.SUPPLY_VALIDATE_FUNCTION,
+            "uuid, bigint",
+        ): migration._supply_validator_sql(),
+        (migration.SUPPLY_DISPATCH_FUNCTION, ""): migration._supply_dispatcher_sql(),
+    }
+    for coordinate, sql in function_sql.items():
+        body = sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+        assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (
+            MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate]
+        )
+        assert coordinate in MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
+    assert (migration.SUPPLY_VALIDATE_FUNCTION, "uuid, bigint") in (
+        MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS
+    )
+
+    terminal_sql = migration_0045._terminal_validator_sql().replace(
+        migration.TERMINAL_LEGACY_FRAGMENT,
+        migration.TERMINAL_FIXED_FRAGMENT,
+    )
+    terminal_body = terminal_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    assert hashlib.sha256(terminal_body.encode("utf-8")).hexdigest() == (
+        MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[
+            (migration.TERMINAL_FUNCTION, "uuid, uuid, uuid, bigint")
+        ]
+    )
+
+    projection_sql = migration_0045._projection_validator_sql()
+    for legacy, fixed in (
+        (migration.PROJECTION_DECLARATION_LEGACY, migration.PROJECTION_DECLARATION_FIXED),
+        (
+            migration.PROJECTION_TERMINAL_CALL_LEGACY,
+            migration.PROJECTION_TERMINAL_CALL_FIXED,
+        ),
+        (
+            migration.PROJECTION_APPROVED_RETURN_LEGACY,
+            migration.PROJECTION_APPROVED_RETURN_FIXED,
+        ),
+        (
+            migration.PROJECTION_CANCEL_TERMINAL_CALL_LEGACY,
+            migration.PROJECTION_CANCEL_TERMINAL_CALL_FIXED,
+        ),
+    ):
+        projection_sql = projection_sql.replace(legacy, fixed)
+    projection_body = projection_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    assert hashlib.sha256(projection_body.encode("utf-8")).hexdigest() == (
+        MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[
+            (migration.PROJECTION_FUNCTION, "uuid")
+        ]
+    )
+
+    expected_bindings = {
+        migration.OWNER_GUARD_TRIGGER: (
+            "supply_tasks",
+            migration.OWNER_GUARD_FUNCTION,
+            "A",
+            31,
+            False,
+            False,
+            False,
+        ),
+        **{
+            trigger_name: (
+                table_name,
+                migration.SUPPLY_DISPATCH_FUNCTION,
+                "A",
+                29,
+                True,
+                True,
+                True,
+            )
+            for table_name, trigger_name in migration.SUPPLY_TRIGGER_BINDINGS
+        },
+    }
+    assert {
+        name: EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[name]
+        for name in expected_bindings
+    } == expected_bindings
+    assert "supply_tasks" in RUNTIME_INSERT_TABLES
+    assert "supply_tasks" not in RUNTIME_UPDATE_TABLES
+    assert RUNTIME_UPDATE_COLUMNS["supply_tasks"] == {
+        "reference_no",
+        "expected_date",
+        "status",
+        "cancelled_by_user_id",
+        "cancelled_at",
+        "version",
+        "updated_at",
     }
 
 

@@ -483,12 +483,14 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0055) == 14
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0056) == 14
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0057) == 14
+    assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0058) == 14
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0052" in scope_security.__all__
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0053" in scope_security.__all__
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0054" in scope_security.__all__
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0055" in scope_security.__all__
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0056" in scope_security.__all__
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0057" in scope_security.__all__
+    assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0058" in scope_security.__all__
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST) == 14
     ready_signature = "rsc_oam_runtime_binding_ready_0044()"
     for manifest in (
@@ -505,6 +507,7 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0055,
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0056,
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0057,
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0058,
         scope_security.OAM_SYNC_FUNCTION_MANIFEST,
     ):
         assert {
@@ -600,6 +603,12 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
             / "20260905_0058_nonopening_review_terminal_status.py"
         )
     )
+    migration_0059 = runpy.run_path(
+        str(
+            migration_root
+            / "20260905_0059_material_request_supply_task_causality.py"
+        )
+    )
     ready_body_0045 = migration_0045["_oam_runtime_ready_function_sql"](
         migration_0045["revision"]
     ).split("AS $$", 1)[1].rsplit("$$", 1)[0]
@@ -657,6 +666,10 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
     ready_body_0058 = ready_body_0057.replace(
         migration_0058["PREVIOUS_SCHEMA_REVISION"],
         migration_0058["revision"],
+    )
+    ready_body_0059 = ready_body_0058.replace(
+        migration_0059["PREVIOUS_SCHEMA_REVISION"],
+        migration_0059["revision"],
     )
     ready_body_0048_downgrade = migration_0048[
         "_oam_runtime_ready_function_sql"
@@ -751,6 +764,9 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
         ][6]
     )
     assert hashlib.sha256(ready_body_0058.encode("utf-8")).hexdigest() == (
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0058[ready_signature][6]
+    )
+    assert hashlib.sha256(ready_body_0059.encode("utf-8")).hexdigest() == (
         scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6]
     )
     assert ready_body_0048_downgrade == ready_body_0047
@@ -851,6 +867,10 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
     assert migration_0058["PREVIOUS_SCHEMA_REVISION"] == migration_0057[
         "revision"
     ]
+    assert migration_0059["down_revision"] == migration_0058["revision"]
+    assert migration_0059["PREVIOUS_SCHEMA_REVISION"] == migration_0058[
+        "revision"
+    ]
     for ready_body, expected_revision in (
         (ready_body_0045, migration_0045["revision"]),
         (ready_body_0046, migration_0046["revision"]),
@@ -866,6 +886,7 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
         (ready_body_0056, migration_0056["revision"]),
         (ready_body_0057, migration_0057["revision"]),
         (ready_body_0058, migration_0058["revision"]),
+        (ready_body_0059, migration_0059["revision"]),
     ):
         assert (
             f"pg_catalog.min(version_num) = '{expected_revision}'"
@@ -913,9 +934,12 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
             scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0057[
                 ready_signature
             ][6],
+            scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0058[
+                ready_signature
+            ][6],
             scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6],
         }
-    ) == 15
+    ) == 16
     ready_body = actual_sources["rsc_oam_runtime_binding_ready_0044"]
     assert "FROM public.alembic_version" in ready_body
     assert "pg_catalog.count(*) = 1" in ready_body

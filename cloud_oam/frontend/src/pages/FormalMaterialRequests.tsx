@@ -47,6 +47,8 @@ import FormalFileUploadField, {
   type FormalFileUploadClient,
   defaultFormalFileUploadClient,
 } from "../FormalFileUploadField";
+import FormalMaterialRequestSupplyPanel from "../FormalMaterialRequestSupplyPanel";
+import { createSupplyRecoveryStore, supplyRecoveryBlocked, type SupplyRecoveryStore } from "../materialRequestSupplyRecovery";
 import { Button, Empty, Field, Loading, Modal, SectionHeader, showError } from "../ui";
 
 const REQUEST_STATUS_LABELS: Record<string, string> = {
@@ -635,17 +637,6 @@ function DetailPanel({
         && <div className="alert alert-warning">当前步骤没有唯一待复核证据，已阻止复核写入。</div>}
     </section>
 
-    <section className="opening-detail-section" aria-label="供给计划只读">
-      <header><div><h3>供给计划（只读）</h3><p>供给任务只是计划/参考，不代表已分配、发运或收货</p></div></header>
-      {detail.supply_tasks.length ? <div className="table-wrap"><table>
-        <thead><tr><th>任务</th><th>明细</th><th>类型</th><th>计划数量</th><th>参考号</th><th>状态</th></tr></thead>
-        <tbody>{detail.supply_tasks.map((task) => <tr key={task.id}>
-          <td>{task.task_no}</td><td className="mono">{task.request_line_id}</td><td>{task.supply_type}</td>
-          <td>{task.expected_qty}</td><td>{task.reference_no || "-"}</td><td>{task.status}</td>
-        </tr>)}</tbody>
-      </table></div> : <Empty title="暂无供给计划" detail="不会据审批状态推断供给或履约" />}
-    </section>
-
     <div className="form-actions">
       {editableDraft && actions.has("update") && <Button tone="secondary" icon={<Edit3 size={17} />} disabled={busy} onClick={onEdit}>编辑草稿</Button>}
       {editableDraft && actions.has("submit") && <Button icon={<Send size={17} />} disabled={busy} onClick={onSubmit}>提交前确认</Button>}
@@ -1025,20 +1016,25 @@ export default function FormalMaterialRequestsPage({
   adapter,
   fileUploadClient = defaultFormalFileUploadClient,
   lifecycleRecoveryStore,
+  supplyRecoveryStore,
 }: {
   adapter: FormalMaterialRequestAdapter;
   fileUploadClient?: FormalFileUploadClient;
   lifecycleRecoveryStore?: MaterialRequestLifecycleRecoveryStore;
+  supplyRecoveryStore?: SupplyRecoveryStore;
 }) {
   const recoveryStore = useRef(
     lifecycleRecoveryStore ?? createMaterialRequestLifecycleRecoveryStore(),
   );
   const initialRecoveryRead = useRef(recoveryStore.current.read());
+  const supplyStore = useRef(supplyRecoveryStore ?? createSupplyRecoveryStore());
+  const [supplyBlocked, setSupplyBlocked] = useState(() => supplyRecoveryBlocked(supplyStore.current.read()));
   const [access, setAccess] = useState<FormalMaterialRequestAccess | null>(null);
   const [items, setItems] = useState<MaterialRequestSummary[]>([]);
   const [nextAfterId, setNextAfterId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [baseBusy, setBusy] = useState(false);
+  const busy = baseBusy || supplyBlocked;
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [detail, setDetail] = useState<MaterialRequestDetail | null>(null);
@@ -1072,7 +1068,7 @@ export default function FormalMaterialRequestsPage({
   }> | null>(null);
 
   const lifecycleWritesBlocked = lifecycleRecovery.phase === "checking"
-    || lifecycleRecovery.phase === "blocked";
+    || lifecycleRecovery.phase === "blocked" || supplyBlocked;
   const draftWritePending = Boolean(
     formMode?.kind === "create"
       ? createRegistry.current.get()
@@ -1587,6 +1583,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   async function startEdit(): Promise<void> {
+    if (supplyBlocked) return;
     if (!detail || !["draft", "returned"].includes(detail.states.request_status)
         || !detail.allowed_actions.includes("update")) return;
     const currentEditGeneration = ++editRecoveryGeneration.current;
@@ -1648,6 +1645,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   async function saveDraft(): Promise<void> {
+    if (supplyBlocked) return;
     if (!formMode) return;
     if (form.workOrderUnavailable) {
       setFormError("原关联工单当前不可选；必须明确清除或从正式列表重新选择后才能保存");
@@ -1732,6 +1730,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   async function submitRequest(): Promise<void> {
+    if (supplyBlocked) return;
     if (!detail || !["draft", "returned"].includes(detail.states.request_status)
         || !detail.allowed_actions.includes("submit")) return;
     const before = detail;
@@ -1999,6 +1998,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   function startApprovalProcess(kind: ApprovalProcessState["kind"]): void {
+    if (supplyBlocked) return;
     if (!detail || !access) return;
     const step = currentApprovalStep(detail);
     if (!step) {
@@ -2072,6 +2072,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   async function submitApprovalProcess(): Promise<void> {
+    if (supplyBlocked) return;
     if (!detail || !approvalProcess || !access) return;
     const before = detail;
     const process = approvalProcess;
@@ -2259,14 +2260,24 @@ export default function FormalMaterialRequestsPage({
       </> : <Empty title={access?.can_read ? "暂无可见需求" : "需求读取已失败关闭"} detail="不会回退非正式业务接口或猜测权限" />}
     </section>
 
+    {!detail && <FormalMaterialRequestSupplyPanel
+      adapter={adapter} access={access} detail={null} store={supplyStore.current}
+      registry={mutationRegistry.current} otherWriteBusy={baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+      onBlocking={setSupplyBlocked} onDetail={setDetail}
+    />}
     {detail && access && <Modal title="正式需求详情" wide onClose={() => {
-      if (!approvalProcess && !lifecycleProcess) {
+      if (!approvalProcess && !lifecycleProcess && !supplyBlocked) {
         editRecoveryGeneration.current += 1;
         setBusy(false);
         setDetail(null);
       }
     }}>
       <DetailPanel detail={detail} access={access} busy={busy} lifecycleBlocked={lifecycleWritesBlocked} onEdit={() => void startEdit()} onSubmit={() => setSubmitConfirm(true)} onProcess={startApprovalProcess} onLifecycle={startLifecycleProcess} />
+      <FormalMaterialRequestSupplyPanel
+        adapter={adapter} access={access} detail={detail} store={supplyStore.current}
+        registry={mutationRegistry.current} otherWriteBusy={baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        onBlocking={setSupplyBlocked} onDetail={setDetail}
+      />
     </Modal>}
 
     {formMode && <Modal title={formMode.kind === "create" ? "新建需求草稿" : "编辑需求草稿"} wide onClose={cancelRawForm}>

@@ -54,7 +54,8 @@ NONOPENING_START_AUDIT_ORDER_REVISION = "20260905_0055"
 NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION = "20260905_0056"
 NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION = "20260905_0057"
 NONOPENING_REVIEW_TERMINAL_STATUS_REVISION = "20260905_0058"
-HEAD_REVISION = NONOPENING_REVIEW_TERMINAL_STATUS_REVISION
+SUPPLY_TASK_CAUSALITY_REVISION = "20260905_0059"
+HEAD_REVISION = SUPPLY_TASK_CAUSALITY_REVISION
 OPENING_BACKFILL_DATABASE_PREFIX = f"{DATABASE_NAME}_0052_backfill_"
 RLS_BINDING_TABLE = "oam_sync_scope_bindings"
 RLS_READY_FUNCTION = "public.rsc_oam_runtime_binding_ready_0044()"
@@ -4663,6 +4664,7 @@ def _expected_0049_function_body_sha256(
             NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION,
             NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
             NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
+            SUPPLY_TASK_CAUSALITY_REVISION,
         }
     )
     assert expected_revision in (
@@ -4694,6 +4696,7 @@ def _expected_0049_function_body_sha256(
             NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION,
             NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
             NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
+            SUPPLY_TASK_CAUSALITY_REVISION,
         }
         and signature == migration.ROUND_ASSIGNMENT_HELPER_0021_SIGNATURE
     ):
@@ -4703,7 +4706,7 @@ def _expected_0049_function_body_sha256(
         assert signature == compatibility_migration.HELPER_SIGNATURE
         expected_body_sha256 = compatibility_migration.FIXED_BODY_SHA256
     if (
-        expected_revision == NONOPENING_REVIEW_TERMINAL_STATUS_REVISION
+        expected_revision in {NONOPENING_REVIEW_TERMINAL_STATUS_REVISION, SUPPLY_TASK_CAUSALITY_REVISION}
         and signature == migration.REVIEW_GRAPH_VALIDATOR_0032_SIGNATURE
     ):
         terminal_migration = (
@@ -4854,6 +4857,7 @@ def _assert_0049_recount_guard_catalog(
             NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION,
             NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
             NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
+            SUPPLY_TASK_CAUSALITY_REVISION,
         }
     expected_function_rows = []
     for (
@@ -5417,6 +5421,7 @@ def _assert_0052_opening_terminal_catalog(
                             NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION,
                             NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
                             NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
+                            SUPPLY_TASK_CAUSALITY_REVISION,
                         }
                         and row[0]
                         == dispatch_migration.GRAPH_CLOSURE_SIGNATURE
@@ -5430,6 +5435,7 @@ def _assert_0052_opening_terminal_catalog(
                             NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION,
                             NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
                             NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
+                            SUPPLY_TASK_CAUSALITY_REVISION,
                         }
                         and row[0]
                         == history_migration.ROUND_SUBMISSION_SIGNATURE
@@ -17339,6 +17345,45 @@ def _assert_single_owner_and_process_kill(api_engine) -> None:
     assert replay.dispatch_status == "uncertain"
 
 
+def _assert_0059_empty_graph_downgrade_and_reupgrade() -> None:
+    signatures = (
+        "public.rsc_guard_material_request_supply_task_0059()",
+        "public.rsc_validate_material_request_supply_causality_0059(uuid, bigint)",
+        "public.rsc_dispatch_material_request_supply_causality_0059()",
+        "public.rsc_validate_material_request_terminal_causality_0045(uuid, uuid, uuid, bigint)",
+        "public.rsc_validate_material_request_approval_projection_0045(uuid)",
+    )
+
+    def catalog():
+        result = []
+        with psycopg.connect(**_admin_parameters()) as connection:
+            with connection.cursor() as cursor:
+                for signature in signatures:
+                    cursor.execute(
+                        "SELECT owner.rolname, proc.prosecdef, proc.proconfig, proc.proacl::text, "
+                        "proc.prosrc FROM pg_catalog.pg_proc AS proc "
+                        "JOIN pg_catalog.pg_roles AS owner ON owner.oid=proc.proowner "
+                        "WHERE proc.oid=pg_catalog.to_regprocedure(%s)", (signature,),
+                    )
+                    row = cursor.fetchone()
+                    assert row is not None
+                    result.append((*row[:4], hashlib.sha256(row[4].encode()).hexdigest()))
+        return result
+
+    before = catalog()
+    assert all(row[0] == "star_oam_migrator" and row[1] for row in before)
+    _run_alembic("downgrade", NONOPENING_REVIEW_TERMINAL_STATUS_REVISION)
+    assert _current_revision() == NONOPENING_REVIEW_TERMINAL_STATUS_REVISION
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            for signature in signatures[:3]:
+                cursor.execute("SELECT pg_catalog.to_regprocedure(%s)", (signature,))
+                assert cursor.fetchone() == (None,)
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    assert catalog() == before
+
+
 def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _assert_fresh_disposable_postgresql16()
     _bootstrap_roles()
@@ -17360,6 +17405,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
+    _assert_0059_empty_graph_downgrade_and_reupgrade()
     _assert_0058_empty_terminal_downgrade_and_reupgrade()
     _assert_0057_empty_graph_downgrade_and_reupgrade()
     _assert_0056_empty_graph_downgrade_and_reupgrade()
@@ -17590,6 +17636,16 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             task_id=stocktake_task_id,
             expected_task_version=stocktake_task_version,
         )
+        # Run new supply facts after all historical nonempty downgrade probes,
+        # so the 0059 blocker cannot mask a lower revision's independent gate.
+        from pg16_supply_gate import assert_supply_gate
+
+        assert_supply_gate(api_engine, source_request_id=request_id,
+            manager_user_id=manager_user_id, admin_user_id=admin_user_id)
+        blocked_supply = _run_alembic("downgrade", NONOPENING_REVIEW_TERMINAL_STATUS_REVISION, expect_success=False)
+        assert "cannot downgrade 0059 while supply-task facts exist" in (blocked_supply.stdout + blocked_supply.stderr)
+        assert _current_revision() == HEAD_REVISION
+        _validate_runtime_security(api_engine)
     finally:
         edge_engine.dispose()
         projector_engine.dispose()

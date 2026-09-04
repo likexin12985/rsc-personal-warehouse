@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from datetime import datetime, timezone
 import inspect
 import json
 from pathlib import Path
@@ -23,6 +24,7 @@ from app.formal_services import material_request_draft as draft_service
 from app.formal_services import material_request_edit as edit_service
 from app.formal_services import material_request_lifecycle as lifecycle_service
 from app.formal_services import material_request_query as query_service
+from app.formal_services import material_request_supply as supply_service
 from app.formal_services.material_request_policy import ApprovalLineDecision
 from app.material_request_read_schemas import MaterialRequestPageOut
 from app.routers import formal_material_requests
@@ -68,6 +70,7 @@ class _Principal:
             ("material_request", "approve_headquarters", "approval_decision"),
             ("material_request", "register_external", "approval_evidence"),
             ("material_request", "verify_external", "approval_evidence"),
+            ("supply_task", "manage", ""),
         }
 
     def allows(
@@ -143,6 +146,7 @@ def api_client():
         api
     )
     api.include_router(formal_material_requests.router, prefix="/api")
+    api.include_router(formal_material_requests.command_status_router, prefix="/api")
     api.dependency_overrides[get_db] = lambda: db
     api.dependency_overrides[get_formal_principal] = (
         lambda: principal_box["value"]
@@ -1181,3 +1185,156 @@ def test_lifecycle_route_requires_its_exact_http_permission(
     assert response.status_code == 403
     service.assert_not_called()
     db.commit.assert_not_called()
+
+
+SUPPLY_TASK_ID = uuid.UUID("a1000000-0000-4000-8000-00000000000d")
+
+
+def _supply_result(action="create_supply_task", *, task_status="open", replayed=False):
+    return SimpleNamespace(
+        request_id=REQUEST_ID, request_version=8, revision_id=REVISION_ID,
+        revision_no=1, approval_instance_id=INSTANCE_ID, approval_attempt_no=1,
+        current_step_id=None, state_axes=_states("approved"), action=action,
+        supply_task_id=SUPPLY_TASK_ID, task_no="SUP-20260905-TEST",
+        task_status=task_status, task_version=0 if action == "create_supply_task" else 1,
+        replayed=replayed,
+    )
+
+
+def _supply_body(operation="create"):
+    if operation == "create":
+        return {
+            "expected_request_version": 7, "request_line_id": str(LINE_ID),
+            "supply_type": "star_replenishment", "expected_qty": "2.500",
+            "reference_no": None, "expected_date": "2026-09-20", "note": "补货计划",
+        }
+    return {
+        "expected_request_version": 7, "expected_task_version": 0,
+        "status": "cancelled" if operation == "cancel" else "reference_registered",
+        "reference_no": "SUPPLY-REF-01", "expected_date": "2026-09-21",
+        "comment": "不再需要该计划" if operation == "cancel" else "登记参考单号",
+    }
+
+
+@pytest.mark.parametrize("operation", ["create", "update", "cancel"])
+def test_supply_routes_map_exact_plan_and_commit_without_contact_kms(
+    api_client, monkeypatch, operation,
+):
+    client, db, principal_box, cipher, settings = api_client
+    settings.material_request_contact_encryption_provider = "disabled"
+    captured = {}
+    action = f"{operation}_supply_task"
+    body = _supply_body(operation)
+    task_status = "open" if operation == "create" else body["status"]
+
+    def service(service_db, **kwargs):
+        assert service_db is db
+        captured.update(kwargs)
+        return _supply_result(action, task_status=task_status, replayed=True)
+
+    service_name = "create_supply_task" if operation == "create" else "update_supply_task"
+    monkeypatch.setattr(supply_service, service_name, service)
+    path = f"/api/v1/material-requests/{REQUEST_ID}/supply-tasks"
+    if operation != "create":
+        path += f"/{SUPPLY_TASK_ID}"
+    response = client.post(path, json=body, headers=_headers(f"supply-{operation}"))
+    assert response.status_code == (201 if operation == "create" else 200)
+    result = response.json()
+    assert result["action"] == action
+    assert result["supply_task_id"] == str(SUPPLY_TASK_ID)
+    assert result["task_status"] == task_status
+    assert result["states"] == _states("approved")
+    assert response.headers["Idempotency-Replayed"] == "true"
+    assert "no-store" in response.headers["Cache-Control"]
+    assert captured["actor"] is principal_box["value"]
+    assert captured["material_request_id"] == REQUEST_ID
+    assert captured["expected_request_version"] == 7
+    assert captured["idempotency_hmac_secret"] == IDEMPOTENCY_SECRET
+    assert captured["trace_request_id"] == f"material-request-trace-supply-{operation}"
+    if operation == "create":
+        assert captured["plan"].request_line_id == LINE_ID
+        assert captured["plan"].expected_qty == Decimal("2.500")
+    else:
+        assert captured["supply_task_id"] == SUPPLY_TASK_ID
+        assert captured["expected_task_version"] == 0
+        assert captured["update"].status == task_status
+    assert cipher.version_calls == 0
+    db.commit.assert_called_once_with()
+    db.rollback.assert_not_called()
+
+
+@pytest.mark.parametrize("operation", ["create", "update"])
+@pytest.mark.parametrize("failure", ["permission", "headers", "disabled", "body", "database", "domain", "projection"])
+def test_supply_routes_fail_closed(api_client, monkeypatch, operation, failure):
+    client, db, principal_box, _cipher, settings = api_client
+    body = _supply_body(operation)
+    service = Mock(return_value=_supply_result(f"{operation}_supply_task"))
+    headers = _headers(f"supply-{operation}-{failure}")
+    if failure == "permission":
+        principal_box["value"].permissions.discard(("supply_task", "manage", ""))
+    elif failure == "headers":
+        headers.pop("Idempotency-Key")
+    elif failure == "disabled":
+        settings.material_request_writes_enabled = False
+    elif failure == "body":
+        body["personal_inbound_status"] = "posted"
+    elif failure == "database":
+        service.side_effect = OperationalError("secret sql", {}, Exception("secret connection"))
+    elif failure == "domain":
+        service.side_effect = supply_service.MaterialRequestSupplyError(
+            "supply_quantity_conflict", "conflict", "计划数量超出剩余批准数量",
+        )
+    elif failure == "projection":
+        service.return_value.task_status = "shipped"
+    monkeypatch.setattr(supply_service, f"{operation}_supply_task", service)
+    path = f"/api/v1/material-requests/{REQUEST_ID}/supply-tasks"
+    if operation == "update":
+        path += f"/{SUPPLY_TASK_ID}"
+    response = client.post(path, json=body, headers=headers)
+    expected = {"permission": 403, "headers": 400, "disabled": 503, "body": 422,
+                "database": 503, "domain": 409, "projection": 503}
+    assert response.status_code == expected[failure]
+    assert "secret" not in response.text
+    db.commit.assert_not_called()
+    if failure in {"permission", "headers", "disabled", "body"}:
+        service.assert_not_called()
+    if failure in {"disabled", "database", "domain", "projection"}:
+        db.rollback.assert_called_once_with()
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_supply_command_recovery_is_read_only_no_store_and_needs_no_write_secret(api_client, monkeypatch, confirmed):
+    client, db, principal_box, _cipher, settings = api_client
+    settings.material_request_writes_enabled = False
+    settings.material_request_idempotency_hmac_secret = ""
+    service = Mock(return_value=SimpleNamespace(
+        lookup_status="confirmed" if confirmed else "not_observed",
+        command=_supply_result() if confirmed else None,
+        occurred_at=datetime(2026, 9, 5, tzinfo=timezone.utc) if confirmed else None,
+    ))
+    monkeypatch.setattr(formal_material_requests.supply_status_service, "material_request_supply_command_status", service)
+    response = client.get("/api/v1/material-request-supply-command-status", params={"trace_request_id": "supply-trace-original-001"})
+    assert response.status_code == 200
+    assert "no-store" in response.headers["Cache-Control"]
+    assert response.json()["lookup_status"] == ("confirmed" if confirmed else "not_observed")
+    if confirmed:
+        command = response.json()["command"]
+        assert command["supply_task_id"] == str(SUPPLY_TASK_ID)
+        assert "occurred_at" in command
+        assert not {"idempotency_replayed", "schema_version", "reference_no", "note", "idempotency_key"}.intersection(command)
+    service.assert_called_once_with(db, actor=principal_box["value"], trace_request_id="supply-trace-original-001")
+    db.commit.assert_not_called()
+    db.rollback.assert_not_called()
+
+
+def test_supply_command_recovery_cannot_downgrade_broken_evidence_to_not_observed(api_client, monkeypatch):
+    client, db, _principal, _cipher, _settings = api_client
+    service = Mock(side_effect=supply_service.MaterialRequestSupplyError(
+        "material_request_supply_evidence_invalid", "service_unavailable", "供给命令证据不完整",
+    ))
+    monkeypatch.setattr(formal_material_requests.supply_status_service, "material_request_supply_command_status", service)
+    response = client.get("/api/v1/material-request-supply-command-status", params={"trace_request_id": "supply-trace-original-001"})
+    assert response.status_code == 503
+    assert "not_observed" not in response.text
+    db.commit.assert_not_called()
+    db.rollback.assert_not_called()

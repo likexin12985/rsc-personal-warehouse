@@ -1,6 +1,7 @@
 import { api, ApiError, jsonBody } from "./api";
 import { formalMaterialCatalogQuery } from "./formalMaterialCatalog";
 import { validateMaterialRequestWorkOrderOptionQuery } from "./formalMaterialRequestOptions";
+import { validateSupplyCreateInput, validateSupplyUpdateInput } from "./formalMaterialRequestSupply";
 import {
   MATERIAL_REQUEST_SCHEMA_VERSION,
   MATERIAL_REQUEST_MUTATION_ACTIONS,
@@ -60,6 +61,7 @@ export interface FormalMaterialRequestAdapter {
   loadIdentity(): Promise<unknown>;
   loadAccess(): Promise<unknown>;
   lifecycleCommandStatus(xRequestId: string): Promise<unknown>;
+  supplyCommandStatus(xRequestId: string): Promise<unknown>;
   list(afterId: string | null): Promise<unknown>;
   detail(requestId: string): Promise<unknown>;
   loadDraftForEdit(requestId: string): Promise<unknown>;
@@ -241,6 +243,14 @@ function validateSupportedMutationBody(
   action: MaterialRequestMutationAction,
   body: Record<string, unknown>,
 ): void {
+  if (action === "create_supply_task") {
+    validateSupplyCreateInput(body);
+    return;
+  }
+  if (action === "update_supply_task" || action === "cancel_supply_task") {
+    validateSupplyUpdateInput(body, action);
+    return;
+  }
   if (action === "update") {
     const object = exactObject(body, [
       "work_order_id", "purpose", "urgency", "expected_date", "address", "contact",
@@ -536,6 +546,13 @@ function mutationMethod(intent: MaterialRequestMutationIntent): "PUT" | "POST" {
     case "verify_external_approval":
       expectedPath = new RegExp(`^${step}/external-evidence/(${UUID_PATH_SOURCE})/verification$`, "i");
       break;
+    case "create_supply_task":
+      expectedPath = `${root}/supply-tasks`;
+      break;
+    case "update_supply_task":
+    case "cancel_supply_task":
+      expectedPath = new RegExp(`^${root}/supply-tasks/(${UUID_PATH_SOURCE})$`, "i");
+      break;
     default:
       return adapterError("该正式需求写动作尚无已验收后端接口");
   }
@@ -592,6 +609,16 @@ export function createFormalMaterialRequestAdapter(
           "Cache-Control": "no-store",
           Pragma: "no-cache",
         },
+      });
+    },
+    supplyCommandStatus(xRequestId: string) {
+      if (typeof xRequestId !== "string" || !SAFE_COORDINATE.test(xRequestId)) {
+        return Promise.reject(new ApiError(409, "供给命令查询坐标无效"));
+      }
+      return requester(`/v1/material-request-supply-command-status?trace_request_id=${encodeURIComponent(xRequestId)}`, {
+        method: "GET",
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
       });
     },
     list(afterId: string | null) {

@@ -149,6 +149,44 @@ function cancellationLines(value) {
 }
 
 function validateSupportedMutationBody(action, body) {
+  if (['create_supply_task', 'update_supply_task', 'cancel_supply_task'].includes(action)) {
+    const creating = action === 'create_supply_task'
+    const object = exactObject(body, creating
+      ? ['expected_request_version', 'request_line_id', 'supply_type', 'reference_no',
+        'expected_qty', 'expected_date', 'note']
+      : ['expected_request_version', 'expected_task_version', 'status', 'reference_no',
+        'expected_date', 'comment'], '正式供给计划内容')
+    if (object.reference_no !== null) {
+      const reference = boundedText(object.reference_no, 'reference_no', 160, false)
+      if (!SAFE_EXTERNAL_REFERENCE.test(reference)) throw adapterError('供给参考号无效')
+    }
+    if (object.expected_date !== null) {
+      const value = object.expected_date
+      if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)
+        || !Number.isFinite(Date.parse(value))
+        || new Date(value).toISOString().slice(0, 10) !== value) {
+        throw adapterError('供给预计日期无效')
+      }
+    }
+    if (creating) {
+      uuidValue(object.request_line_id, 'request_line_id')
+      if (!contract.SUPPLY_TYPES.includes(object.supply_type)) throw adapterError('供给类型无效')
+      decimalText(object.expected_qty, 'expected_qty', true)
+      boundedText(object.note, 'note', 4000)
+    } else {
+      nonnegativeVersion(object.expected_task_version, 'expected_task_version')
+      if (!contract.SUPPLY_TASK_STATUSES.includes(object.status)
+        || (action === 'cancel_supply_task') !== (object.status === 'cancelled')) {
+        throw adapterError('供给计划动作与状态不一致')
+      }
+      if (object.status === 'reference_registered' && object.reference_no === null) {
+        throw adapterError('登记参考状态必须提供参考号')
+      }
+      boundedText(object.comment, 'comment', 4000,
+        !['cancelled', 'closed_no_supply'].includes(object.status))
+    }
+    return
+  }
   if (action === 'update') {
     const object = exactObject(body, [
       'work_order_id', 'purpose', 'urgency', 'expected_date', 'address', 'contact',
@@ -241,7 +279,7 @@ function validateAccess(value) {
     [
       'schema_version', 'person_id', 'authorization_version', 'can_read', 'can_create',
       'can_read_material_catalog', 'can_approve_region', 'can_approve_headquarters',
-      'can_register_external', 'can_verify_external', 'can_withdraw', 'can_cancel'
+      'can_register_external', 'can_verify_external', 'can_withdraw', 'can_cancel', 'can_manage_supply'
     ],
     '正式需求访问上下文'
   )
@@ -251,12 +289,12 @@ function validateAccess(value) {
   if ([
     'can_read', 'can_create', 'can_read_material_catalog', 'can_approve_region',
     'can_approve_headquarters', 'can_register_external', 'can_verify_external',
-    'can_withdraw', 'can_cancel'
+    'can_withdraw', 'can_cancel', 'can_manage_supply'
   ].some((field) => typeof object[field] !== 'boolean')) {
     throw adapterError('正式需求访问授权无效')
   }
   if (
-    (object.can_create || object.can_withdraw || object.can_cancel) &&
+    (object.can_create || object.can_withdraw || object.can_cancel || object.can_manage_supply) &&
     !object.can_read
   ) {
     throw adapterError('正式需求写权限缺少必需的读取回验权限')
@@ -273,7 +311,8 @@ function validateAccess(value) {
     can_register_external: object.can_register_external,
     can_verify_external: object.can_verify_external,
     can_withdraw: object.can_withdraw,
-    can_cancel: object.can_cancel
+    can_cancel: object.can_cancel,
+    can_manage_supply: object.can_manage_supply
   })
 }
 
@@ -480,7 +519,8 @@ function projectAccessContext(value, expectedIdentity) {
     ),
     can_cancel: canRead && permissionKeys.includes(
       'material_request\u0000cancel\u0000'
-    )
+    ),
+    can_manage_supply: canRead && permissionKeys.includes('supply_task\u0000manage\u0000')
   })
 }
 
@@ -572,6 +612,13 @@ function mutationMethod(intent) {
     case 'cancel':
       expectedPath = `${root}/cancel`
       break
+    case 'create_supply_task':
+      expectedPath = `${root}/supply-tasks`
+      break
+    case 'update_supply_task':
+    case 'cancel_supply_task':
+      expectedPath = new RegExp(`^${root}/supply-tasks/(${UUID_PATH_SOURCE})$`, 'i')
+      break
     case 'approve':
     case 'return':
     case 'reject':
@@ -655,6 +702,15 @@ function createFormalMaterialRequestAdapter(options = {}) {
             Pragma: 'no-cache'
           }
         }
+      ))
+    },
+    async supplyCommandStatus(xRequestId) {
+      if (typeof xRequestId !== 'string' || !SAFE_REQUEST_ID.test(xRequestId)) {
+        throw adapterError('供给命令查询请求标识无效')
+      }
+      return contract.validateMaterialRequestSupplyCommandStatus(await transport.request(
+        `/v1/material-request-supply-command-status?trace_request_id=${encodeURIComponent(xRequestId)}`,
+        { method: 'GET', header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
       ))
     },
     list(afterId) {
@@ -762,6 +818,13 @@ function isDefinitiveRejection(error) {
 }
 
 module.exports = {
+  validateSupplyBody(action, body) {
+    if (!['create_supply_task', 'update_supply_task', 'cancel_supply_task'].includes(action)) {
+      throw adapterError('供给操作无效')
+    }
+    nonnegativeVersion(body.expected_request_version, 'expected_request_version')
+    validateSupportedMutationBody(action, body)
+  },
   validateAccess,
   validateFormalIdentity,
   validateLifecycleCommandStatus,

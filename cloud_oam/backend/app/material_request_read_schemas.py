@@ -571,7 +571,7 @@ class MaterialRequestSupplyTaskOut(_StrictOutputModel):
         "star_replenishment",
         "external_procurement_reference",
     ]
-    reference_no: StrictStr | None = Field(default=None, min_length=1, max_length=200)
+    reference_no: StrictStr | None = Field(default=None, min_length=1, max_length=160)
     expected_qty: PositiveQuantityOut
     original_equivalent_qty: PositiveQuantityOut
     expected_date: date | None
@@ -944,6 +944,73 @@ class MaterialRequestMutationOut(_StrictOutputModel):
             raise ValueError("terminal lifecycle mutation cannot expose a current step")
         if self.approval_instance_id is None and self.current_step_id is not None:
             raise ValueError("current approval step requires an approval instance")
+        return self
+
+
+class MaterialRequestSupplyTaskMutationOut(MaterialRequestMutationOut):
+    """A supply plan acknowledgement, never an inventory/fulfilment fact."""
+
+    action: Literal["create_supply_task", "update_supply_task", "cancel_supply_task"]
+    supply_task_id: UUID
+    task_no: StrictStr = Field(min_length=1, max_length=100)
+    task_status: Literal[
+        "open", "reference_registered", "awaiting_supply", "cancelled", "closed_no_supply"
+    ]
+    task_version: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_supply_command(self):
+        if self.approval_instance_id is None or self.current_step_id is not None:
+            raise ValueError("supply command requires a completed approval anchor")
+        if self.states.request_status not in {"approved", "partially_approved"}:
+            raise ValueError("supply command requires a finally approved request")
+        if (self.action == "cancel_supply_task") != (self.task_status == "cancelled"):
+            raise ValueError("supply cancellation action and state disagree")
+        if self.action == "create_supply_task" and self.task_status not in {
+            "open", "reference_registered"
+        }:
+            raise ValueError("new supply task must be an open plan or registered reference")
+        return self
+
+
+class MaterialRequestSupplyCommandOut(_StrictOutputModel):
+    """Historical verified plan command, without input data or replay secrets."""
+
+    action: Literal["create_supply_task", "update_supply_task", "cancel_supply_task"]
+    request_id: UUID
+    request_version: int = Field(ge=1)
+    revision_id: UUID
+    revision_no: int = Field(ge=1)
+    approval_instance_id: UUID
+    approval_attempt_no: int = Field(ge=1)
+    current_step_id: None = None
+    states: MaterialRequestStateAxesOut
+    supply_task_id: UUID
+    task_no: StrictStr = Field(min_length=1, max_length=100)
+    task_status: Literal[
+        "open", "reference_registered", "awaiting_supply", "cancelled", "closed_no_supply"
+    ]
+    task_version: int = Field(ge=0)
+    occurred_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def validate_historical_supply_command(self):
+        values = self.model_dump(exclude={"occurred_at"})
+        MaterialRequestSupplyTaskMutationOut.model_validate({
+            **values, "idempotency_replayed": False,
+        })
+        return self
+
+
+class MaterialRequestSupplyCommandStatusOut(_StrictOutputModel):
+    schema_version: Literal["1.0"] = "1.0"
+    lookup_status: Literal["not_observed", "confirmed"]
+    command: MaterialRequestSupplyCommandOut | None
+
+    @model_validator(mode="after")
+    def validate_supply_lookup(self):
+        if (self.lookup_status == "confirmed") != (self.command is not None):
+            raise ValueError("supply lookup status and command disagree")
         return self
 
 

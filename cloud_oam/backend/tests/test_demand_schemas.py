@@ -274,6 +274,40 @@ def test_supply_task_update_cannot_claim_fulfillment() -> None:
     assert closed.status == "closed_no_supply"
 
 
+@pytest.mark.parametrize("bad_version", [True, "1", 1.5, -1])
+def test_supply_task_versions_are_strict(bad_version) -> None:
+    with pytest.raises(ValidationError):
+        SupplyTaskCreateIn.model_validate({
+            "expected_request_version": bad_version,
+            "request_line_id": str(LINE_A),
+            "supply_type": "star_replenishment",
+            "expected_qty": "2.000",
+        })
+    for field in ("expected_request_version", "expected_task_version"):
+        with pytest.raises(ValidationError):
+            SupplyTaskUpdateIn.model_validate({
+                "expected_request_version": 7, "expected_task_version": 0,
+                "status": "open", field: bad_version,
+            })
+
+
+def test_supply_reference_matches_database_size_and_required_state() -> None:
+    create = {
+        "expected_request_version": 7, "request_line_id": str(LINE_A),
+        "supply_type": "star_replenishment", "expected_qty": "2.000",
+        "reference_no": "A" * 160,
+    }
+    assert len(SupplyTaskCreateIn.model_validate(create).reference_no) == 160
+    with pytest.raises(ValidationError):
+        SupplyTaskCreateIn.model_validate({**create, "reference_no": "A" * 161})
+    update = {"expected_request_version": 7, "expected_task_version": 0,
+              "status": "reference_registered", "reference_no": "A" * 160}
+    assert len(SupplyTaskUpdateIn.model_validate(update).reference_no) == 160
+    for reference in (None, "A" * 161, "", " REF "):
+        with pytest.raises(ValidationError):
+            SupplyTaskUpdateIn.model_validate({**update, "reference_no": reference})
+
+
 def test_state_axes_require_ten_independent_explicit_values() -> None:
     axes = MaterialRequestStateAxesOut.model_validate(
         {

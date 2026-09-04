@@ -429,7 +429,14 @@ NONOPENING_REVIEW_TERMINAL_STATUS_REVISION = (
     / "versions"
     / "20260905_0058_nonopening_review_terminal_status.py"
 )
-HEAD_REVISION = "20260905_0058"
+MATERIAL_REQUEST_SUPPLY_CAUSALITY_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0059_material_request_supply_task_causality.py"
+)
+HEAD_REVISION = "20260905_0059"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -457,6 +464,8 @@ NONOPENING_START_AUDIT_ORDER_REVISION_ID = "20260905_0055"
 NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION_ID = "20260905_0056"
 NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION_ID = "20260905_0057"
 NONOPENING_REVIEW_TERMINAL_STATUS_REVISION_ID = "20260905_0058"
+MATERIAL_REQUEST_SUPPLY_CAUSALITY_REVISION_ID = "20260905_0059"
+PRE_MATERIAL_REQUEST_SUPPLY_CAUSALITY_HEAD_REVISION = "20260905_0058"
 PRE_NONOPENING_REVIEW_TERMINAL_STATUS_HEAD_REVISION = "20260905_0057"
 PRE_NONOPENING_DIFFERENCE_REPLAY_LOCK_HEAD_REVISION = "20260905_0056"
 PRE_NONOPENING_COUNT_GUARD_COMPATIBILITY_HEAD_REVISION = "20260905_0055"
@@ -1470,6 +1479,14 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert head is not None
     assert (
         head.down_revision
+        == PRE_MATERIAL_REQUEST_SUPPLY_CAUSALITY_HEAD_REVISION
+    )
+    previous_supply_causality_head = script.get_revision(
+        PRE_MATERIAL_REQUEST_SUPPLY_CAUSALITY_HEAD_REVISION
+    )
+    assert previous_supply_causality_head is not None
+    assert (
+        previous_supply_causality_head.down_revision
         == PRE_NONOPENING_REVIEW_TERMINAL_STATUS_HEAD_REVISION
     )
     previous_nonopening_review_terminal_head = script.get_revision(
@@ -3075,6 +3092,17 @@ def _load_0058_migration_module():
     spec = importlib.util.spec_from_file_location(
         "nonopening_review_terminal_status_migration_0058",
         NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_0059_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "material_request_supply_causality_migration_0059",
+        MATERIAL_REQUEST_SUPPLY_CAUSALITY_REVISION,
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -8415,6 +8443,251 @@ def test_0058_postgresql_offline_downgrade_rejects_terminal_facts(
         < sql.index("review validator downgrade")
         < sql.index("downgrade postflight")
     )
+
+
+def test_0059_pins_supply_causality_guards_acl_and_readiness(monkeypatch) -> None:
+    migration_0045 = _load_0045_migration_module()
+    migration_0058 = _load_0058_migration_module()
+    module = _load_0059_migration_module()
+
+    assert module.revision == MATERIAL_REQUEST_SUPPLY_CAUSALITY_REVISION_ID
+    assert module.down_revision == PRE_MATERIAL_REQUEST_SUPPLY_CAUSALITY_HEAD_REVISION
+    assert migration_0058.revision == module.down_revision
+    assert module.LOCK_TABLES == tuple(sorted(set(module.LOCK_TABLES)))
+    assert module.OWNER_GUARD_TRIGGER < "trg_supply_tasks_guard_0029"
+    assert module.SUPPLY_TRIGGER_TABLES == tuple(
+        sorted(module.SUPPLY_TRIGGER_TABLES)
+    )
+
+    def function_body(statement: str) -> str:
+        return statement.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+
+    terminal_sql = migration_0045._terminal_validator_sql()
+    assert hashlib.sha256(function_body(terminal_sql).encode()).hexdigest() == (
+        module.TERMINAL_BODY_SHA256_0045
+    )
+    assert terminal_sql.count(module.TERMINAL_LEGACY_FRAGMENT) == 1
+    terminal_0059_sql = terminal_sql.replace(
+        module.TERMINAL_LEGACY_FRAGMENT, module.TERMINAL_FIXED_FRAGMENT
+    )
+    assert hashlib.sha256(function_body(terminal_0059_sql).encode()).hexdigest() == (
+        module.TERMINAL_BODY_SHA256_0059
+    )
+    assert "request_row.status <> 'cancelled' AND" in terminal_0059_sql
+
+    projection_sql = migration_0045._projection_validator_sql()
+    assert hashlib.sha256(function_body(projection_sql).encode()).hexdigest() == (
+        module.PROJECTION_BODY_SHA256_0045
+    )
+    projection_replacements = (
+        (module.PROJECTION_DECLARATION_LEGACY, module.PROJECTION_DECLARATION_FIXED),
+        (
+            module.PROJECTION_TERMINAL_CALL_LEGACY,
+            module.PROJECTION_TERMINAL_CALL_FIXED,
+        ),
+        (
+            module.PROJECTION_APPROVED_RETURN_LEGACY,
+            module.PROJECTION_APPROVED_RETURN_FIXED,
+        ),
+        (
+            module.PROJECTION_CANCEL_TERMINAL_CALL_LEGACY,
+            module.PROJECTION_CANCEL_TERMINAL_CALL_FIXED,
+        ),
+    )
+    for legacy, fixed in projection_replacements:
+        assert projection_sql.count(legacy) == 1
+        assert fixed not in projection_sql
+        projection_sql = projection_sql.replace(legacy, fixed)
+    assert hashlib.sha256(function_body(projection_sql).encode()).hexdigest() == (
+        module.PROJECTION_BODY_SHA256_0059
+    )
+    assert projection_sql.count(
+        "rsc_validate_material_request_supply_causality_0059"
+    ) == 2
+
+    expected_hashes = {
+        "owner": "913d606ff9f47fd05feda92d75ef76477daf6823b71ecdb9c47cabf5355a5398",
+        "validator": "ce370ea355224013645f399b2176aceedf92e51c01f8159866a822bb33120f46",
+        "dispatcher": "efab0c6eee9c8fbaccb1e334b0dc28d10fc85a4fb097a508b422c30b0cb034ed",
+    }
+    function_sql = {
+        "owner": module._owner_guard_sql(),
+        "validator": module._supply_validator_sql(),
+        "dispatcher": module._supply_dispatcher_sql(),
+    }
+    parser = pytest.importorskip("pglast.parser")
+    for name, statement in function_sql.items():
+        assert hashlib.sha256(function_body(statement).encode()).hexdigest() == (
+            expected_hashes[name]
+        )
+        assert "SECURITY DEFINER" in statement
+        assert "SET search_path = pg_catalog, public" in statement
+        assert not sa.text(statement)._bindparams
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+    assert "FOR UPDATE" in function_sql["owner"]
+    assert "task_count > 10000" in function_sql["owner"]
+    assert "supply_ceiling_version := request_row.version - 1" in (
+        function_sql["validator"]
+    )
+    assert "command.operation = 'cancel'" in function_sql["validator"]
+    assert "NEW.reference_no IS DISTINCT FROM OLD.reference_no" in (
+        function_sql["owner"]
+    )
+    assert "NEW.expected_date IS DISTINCT FROM OLD.expected_date" in (
+        function_sql["owner"]
+    )
+    assert "command_row.operation = 'cancel_supply_task'" in (
+        function_sql["validator"]
+    )
+    assert "previous_result->'reference_no'" in function_sql["validator"]
+    assert "previous_result->'expected_date'" in function_sql["validator"]
+    for neutral_value in (
+        "not_allocated",
+        "not_reserved",
+        "not_started",
+        "not_signed",
+        "not_occurred",
+    ):
+        assert neutral_value in function_sql["validator"]
+
+    statements: list[str] = []
+    monkeypatch.setattr(module.op, "execute", statements.append)
+    module._lock_execution_boundary()
+    module._require_empty_supply_graph(module.UPGRADE_BLOCKER)
+    module._replace_function_source(
+        signature=module.TERMINAL_SIGNATURE,
+        expected_hash=module.TERMINAL_BODY_SHA256_0045,
+        replacement_hash=module.TERMINAL_BODY_SHA256_0059,
+        replacements=((module.TERMINAL_LEGACY_FRAGMENT, module.TERMINAL_FIXED_FRAGMENT),),
+    )
+    module._create_postgresql_triggers()
+    module._grant_runtime_supply_dml()
+    module._replace_runtime_ready(
+        expected_hash=module.RUNTIME_READY_BODY_SHA256_0058,
+        replacement_hash=module.RUNTIME_READY_BODY_SHA256_0059,
+        old_revision=module.PREVIOUS_SCHEMA_REVISION,
+        new_revision=module.revision,
+    )
+    module._verify_postgresql_catalog()
+    for statement in statements:
+        assert not sa.text(statement)._bindparams
+        parser.parse_sql(statement)
+        if statement.lstrip().startswith(("DO ", "CREATE FUNCTION")):
+            parser.parse_plpgsql_json(statement)
+    catalog_sql = statements[-1]
+    assert "acl.grantor <> migrator_oid" in catalog_sql
+    assert "function_row.proargnames" in catalog_sql
+    assert "trigger_row.tgparentid <> 0" in catalog_sql
+    assert "trigger_row.tgdeferrable <> expected.is_constraint" in catalog_sql
+    assert "has_table_privilege" in catalog_sql
+    assert module.RUNTIME_READY_BODY_SHA256_0059 in catalog_sql
+
+    with pytest.raises(ValueError, match="unsupported 0059 supply graph"):
+        module._require_empty_supply_graph("invalid")
+
+
+def test_0059_postgresql_offline_upgrade_and_downgrade_are_fail_closed(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0059_migration_module()
+    upgrade_buffer = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=upgrade_buffer,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_MATERIAL_REQUEST_SUPPLY_CAUSALITY_HEAD_REVISION}:"
+        f"{MATERIAL_REQUEST_SUPPLY_CAUSALITY_REVISION_ID}",
+        sql=True,
+    )
+    upgrade_sql = upgrade_buffer.getvalue()
+    assert "-- Running upgrade 20260905_0058 -> 20260905_0059" in upgrade_sql
+    assert module.UPGRADE_BLOCKER in upgrade_sql
+    assert module.DOWNGRADE_BLOCKER not in upgrade_sql
+    assert f"CREATE TRIGGER {module.OWNER_GUARD_TRIGGER}" in upgrade_sql
+    assert "GRANT INSERT ON TABLE public.supply_tasks" in upgrade_sql
+    assert module.RUNTIME_READY_BODY_SHA256_0059 in upgrade_sql
+
+    downgrade_buffer = io.StringIO()
+    downgrade_config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=downgrade_buffer,
+    )
+    command.downgrade(
+        downgrade_config,
+        f"{MATERIAL_REQUEST_SUPPLY_CAUSALITY_REVISION_ID}:"
+        f"{PRE_MATERIAL_REQUEST_SUPPLY_CAUSALITY_HEAD_REVISION}",
+        sql=True,
+    )
+    downgrade_sql = downgrade_buffer.getvalue()
+    assert "-- Running downgrade 20260905_0059 -> 20260905_0058" in downgrade_sql
+    assert module.DOWNGRADE_BLOCKER in downgrade_sql
+    assert module.UPGRADE_BLOCKER not in downgrade_sql
+    assert "REVOKE INSERT ON TABLE public.supply_tasks" in downgrade_sql
+    assert f"DROP TRIGGER {module.OWNER_GUARD_TRIGGER}" in downgrade_sql
+    assert module.RUNTIME_READY_BODY_SHA256_0058 in downgrade_sql
+
+
+def test_0059_sqlite_guards_and_supply_fact_downgrade_blocker(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'supply-0059.db'}"
+    config = _config(database_url)
+    command.upgrade(config, PRE_MATERIAL_REQUEST_SUPPLY_CAUSALITY_HEAD_REVISION)
+    command.upgrade(config, MATERIAL_REQUEST_SUPPLY_CAUSALITY_REVISION_ID)
+    engine = sa.create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            triggers = {
+                row[0]
+                for row in connection.exec_driver_sql(
+                    "SELECT name FROM sqlite_master WHERE type='trigger' "
+                    "AND name LIKE '%0059'"
+                ).all()
+            }
+        assert triggers == {
+            "trg_supply_tasks_state_guard_0059",
+            "trg_supply_tasks_transition_guard_0059",
+        }
+    finally:
+        engine.dispose()
+    command.downgrade(config, PRE_MATERIAL_REQUEST_SUPPLY_CAUSALITY_HEAD_REVISION)
+    command.upgrade(config, MATERIAL_REQUEST_SUPPLY_CAUSALITY_REVISION_ID)
+
+    module = _load_0059_migration_module()
+
+    class _FakeResult:
+        def __init__(self, value: int):
+            self.value = value
+
+        def scalar_one(self) -> int:
+            return self.value
+
+    class _FakeBind:
+        def __init__(self, value: int):
+            self.value = value
+            self.statements: list[str] = []
+
+        def execute(self, statement):
+            self.statements.append(str(statement))
+            return _FakeResult(self.value)
+
+    blocked = _FakeBind(1)
+    monkeypatch.setattr(module.op, "get_bind", lambda: blocked)
+    with pytest.raises(RuntimeError, match=re.escape(module.DOWNGRADE_BLOCKER)):
+        module._require_empty_sqlite_supply_graph(module.DOWNGRADE_BLOCKER)
+    assert len(blocked.statements) == 1
+    assert "audit_events" in blocked.statements[0]
+    assert "material_request_commands" in blocked.statements[0]
+    assert "state_transition_events" in blocked.statements[0]
+    assert "supply_tasks" in blocked.statements[0]
+    with pytest.raises(ValueError, match="unsupported 0059 supply graph"):
+        module._require_empty_sqlite_supply_graph("invalid")
 
 
 def test_0041_sqlite_schema_indexes_and_evidence_triggers(

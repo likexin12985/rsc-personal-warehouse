@@ -93,6 +93,44 @@ function makeRequester(
 }
 
 describe("formal material-request PC transport", () => {
+  it("uses only the mounted supply paths and preserves uncertain-write coordinates", async () => {
+    const requester = makeRequester(async () => { throw new Error("network uncertain"); });
+    const adapter = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, requester);
+    const registry = new MaterialRequestIntentRegistry();
+    const intent = registry.begin({
+      requestId: REQUEST_ID, action: "create_supply_task", path: `/v1/material-requests/${REQUEST_ID}/supply-tasks`,
+      expectedVersion: 8, body: { expected_request_version: 8, request_line_id: STEP_ID,
+        supply_type: "star_replenishment", reference_no: null, expected_qty: "1.000", expected_date: null, note: "" },
+    });
+    await expect(adapter.mutate(intent)).rejects.toThrow("network uncertain");
+    await expect(adapter.mutate(intent)).rejects.toThrow("network uncertain");
+    expect(requester.mock.calls[0]).toEqual(requester.mock.calls[1]);
+    expect(requester.mock.calls[0][1]?.method).toBe("POST");
+    expect(registry.get(REQUEST_ID)).toBe(intent);
+    for (const status of ["awaiting_supply", "cancelled"] as const) {
+      const update = new MaterialRequestIntentRegistry().begin({
+        requestId: REQUEST_ID, action: status === "cancelled" ? "cancel_supply_task" : "update_supply_task",
+        path: `/v1/material-requests/${REQUEST_ID}/supply-tasks/${REGISTRATION_ID}`, expectedVersion: 9,
+        body: { expected_request_version: 9, expected_task_version: 0, status,
+          reference_no: null, expected_date: null, comment: "跟进供给计划" },
+      });
+      await expect(adapter.mutate(update)).rejects.toThrow("network uncertain");
+      expect(requester.mock.calls.at(-1)?.[1]?.method).toBe("POST");
+    }
+    await expect(adapter.mutate({ ...intent, path: `${intent.path}/cancel` })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("queries supply recovery without sending a key, contact or request body", async () => {
+    const requester = makeRequester(async () => ({ schema_version: "1.0", lookup_status: "not_observed", command: null }));
+    const adapter = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, requester);
+    await adapter.supplyCommandStatus("web-supply-12345678");
+    expect(requester.mock.calls).toEqual([["/v1/material-request-supply-command-status?trace_request_id=web-supply-12345678", {
+      method: "GET", cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+    }]]);
+    await expect(adapter.supplyCommandStatus("bad?trace=1")).rejects.toMatchObject({ status: 409 });
+    expect(requester.mock.calls).toHaveLength(1);
+  });
+
   it("fresh-reads the exact auth identity and command status without sending an idempotency key", async () => {
     const requester = makeRequester(async (path) => (
       path === "/auth/me"

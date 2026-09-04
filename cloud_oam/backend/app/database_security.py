@@ -203,6 +203,7 @@ RUNTIME_INSERT_TABLES = frozenset(
         "stocktake_snapshot_lines",
         "stocktake_start_completions",
         "stocktake_tasks",
+        "supply_tasks",
     }
 )
 RUNTIME_UPDATE_TABLES = frozenset(
@@ -398,6 +399,17 @@ RUNTIME_UPDATE_COLUMNS = {
             "current_round_no",
             "posted_at",
             "closed_at",
+            "version",
+            "updated_at",
+        }
+    ),
+    "supply_tasks": frozenset(
+        {
+            "reference_no",
+            "expected_date",
+            "status",
+            "cancelled_by_user_id",
+            "cancelled_at",
             "version",
             "updated_at",
         }
@@ -1955,6 +1967,33 @@ EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
         False,
         False,
     ),
+    "trg_supply_tasks_00_owner_guard_0059": (
+        "supply_tasks",
+        "rsc_guard_material_request_supply_task_0059",
+        "A",
+        31,
+        False,
+        False,
+        False,
+    ),
+    **{
+        f"trg_{table_name}_supply_causality_0059": (
+            table_name,
+            "rsc_dispatch_material_request_supply_causality_0059",
+            "A",
+            29,
+            True,
+            True,
+            True,
+        )
+        for table_name in (
+            "audit_events",
+            "material_request_commands",
+            "material_requests",
+            "state_transition_events",
+            "supply_tasks",
+        )
+    },
     **{
         f"trg_{table_name}_no_truncate_0029": (
             table_name,
@@ -2227,15 +2266,21 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     (
         "rsc_validate_material_request_terminal_causality_0045",
         "uuid, uuid, uuid, bigint",
-    ): "5934dcd4d93d6b5a0e127f8cd019b102303c1b85dbd9b50c171000f4ca42bcbe",
+    ): "4f7ce45088d9005b70d17418b6677344be11c6bdc4a2026d0c24f979083d2a47",
     ("rsc_validate_material_request_return_causality_0045", "uuid, uuid"):
         "e610f8b38ec4c38cc3eb271d99737ae9df7e91c123080ad400b642c8447cb4b2",
     ("rsc_validate_material_request_external_causality_0045", "uuid"):
         "0f5bd6658edcb46dac6282109b71a109c14003862c89b3f5700d89f1ac13fa26",
     ("rsc_validate_material_request_approval_projection_0045", "uuid"):
-        "1b08d93ca30dda0446528533543243cb94a91dad153bb56893bf89223af05b63",
+        "b51b11c63f1ec0e5659a9a1b1d1cdce03b32c5c9b604b5c1cdf669781c9b6ca4",
     ("rsc_dispatch_material_request_approval_projection_0045", ""):
         "244d188e126e66fd4b020da01c076a3018f2c8841230bd255da45b7913776d54",
+    ("rsc_guard_material_request_supply_task_0059", ""):
+        "913d606ff9f47fd05feda92d75ef76477daf6823b71ecdb9c47cabf5355a5398",
+    ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint"):
+        "ce370ea355224013645f399b2176aceedf92e51c01f8159866a822bb33120f46",
+    ("rsc_dispatch_material_request_supply_causality_0059", ""):
+        "efab0c6eee9c8fbaccb1e334b0dc28d10fc85a4fb097a508b422c30b0cb034ed",
     ("rsc_guard_material_request_content_write_0046", ""):
         "a1dac8272cf64272d782f02f6270aab5fe285334fb13f88c11aaafc6d1d0364c",
     ("rsc_validate_material_request_content_causality_0046", "uuid"):
@@ -2255,6 +2300,9 @@ MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
         ("rsc_validate_material_request_external_causality_0045", "uuid"),
         ("rsc_validate_material_request_approval_projection_0045", "uuid"),
         ("rsc_dispatch_material_request_approval_projection_0045", ""),
+        ("rsc_guard_material_request_supply_task_0059", ""),
+        ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint"),
+        ("rsc_dispatch_material_request_supply_causality_0059", ""),
         ("rsc_guard_material_request_content_write_0046", ""),
         ("rsc_validate_material_request_content_causality_0046", "uuid"),
         ("rsc_dispatch_material_request_content_causality_0046", ""),
@@ -2270,6 +2318,7 @@ MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS = frozenset(
         ("rsc_validate_material_request_return_causality_0045", "uuid, uuid"),
         ("rsc_validate_material_request_external_causality_0045", "uuid"),
         ("rsc_validate_material_request_approval_projection_0045", "uuid"),
+        ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint"),
         ("rsc_validate_material_request_content_causality_0046", "uuid"),
     }
 )
@@ -4585,7 +4634,7 @@ JOIN pg_namespace AS function_schema
   ON function_schema.oid = function_row.pronamespace
 WHERE table_schema.nspname = 'public'
   AND (
-      trigger_row.tgname ~ '_(0029|0030|0045|0046)$'
+      trigger_row.tgname ~ '_(0029|0030|0045|0046|0059)$'
       OR function_row.proname IN (
           {_MATERIAL_REQUEST_APPROVAL_TRIGGER_FUNCTION_LITERALS}
       )

@@ -5,6 +5,7 @@ const materialCatalog = require('../../utils/material-catalog-contract')
 const materialRequestOptions = require('../../utils/material-request-option-contract')
 const formalFileUpload = require('../../utils/formal-file-upload')
 const lifecycleRecovery = require('../../utils/material-request-lifecycle-recovery')
+const supplyRecovery = require('../../utils/material-request-supply-recovery')
 
 const transport = adapterModule.formalMaterialRequestAdapter
 const lifecycleRuntime = {
@@ -224,6 +225,19 @@ function compareDecimal(left, right) {
   return left.fraction < right.fraction ? -1 : 1
 }
 
+function supplyQuantityUnits(value) {
+  const parsed = decimalUnits(value)
+  if (!parsed) throw new Error('供给计划数量格式无效')
+  return BigInt(parsed.whole + parsed.fraction)
+}
+
+function supplyRemaining(detail, line) {
+  return supplyQuantityUnits(line.final_approved_qty) - supplyQuantityUnits(line.cancelled_qty)
+    - detail.supply_tasks.filter((task) => task.request_line_id === line.request_line_id
+      && !['cancelled', 'closed_no_supply'].includes(task.status))
+      .reduce((total, task) => total + supplyQuantityUnits(task.original_equivalent_qty), BigInt(0))
+}
+
 function approvalLinePayload(process) {
   if (process.action === 'reject') return { lines: [], return_lines: [] }
   return process.lines.reduce((result, line) => {
@@ -351,6 +365,9 @@ function consumeLifecycleCompletion(page, context, access) {
     detail: presentDetail(context.terminalDetail, access, false),
     lifecycleConfirm: null,
     lifecycleRecoveryMessage: '',
+    supplyForm: null,
+    supplyRecoveryMessage: '',
+    supplyBlocked: false,
     notice: lifecycleResultNotice(context.intent.action)
   })
   lifecycleRuntime.context = null
@@ -402,6 +419,10 @@ function presentDetail(detail, access, lifecycleBlocked = false) {
     canSubmit: editable && detail.allowed_actions.includes('submit'),
     canWithdraw: !lifecycleBlocked && access.can_withdraw && actions.has('withdraw'),
     canCancel: !lifecycleBlocked && access.can_cancel && actions.has('cancel'),
+    canCreateSupply: access.can_manage_supply && actions.has('create_supply_task'),
+    supplyTaskViews: detail.supply_tasks.map((task) => Object.assign({}, task, {
+      canManage: access.can_manage_supply && task.allowed_actions.length > 0
+    })),
     canProcessInternal: !!(
       step &&
       step.source_mode === 'internal' &&
@@ -938,6 +959,7 @@ Page({
     }
     this._workOrderPickerGeneration = (this._workOrderPickerGeneration || 0) + 1
     ensureRegistries(this)
+    this.supplyWriteBlocked()
     this._access = null
     this.setData({
       loading: true,
@@ -985,6 +1007,8 @@ Page({
       }
       this._uploadIdentity = nextUploadIdentity
       this._access = access
+      const supplyRecovered = this.data.supplyBlocked ? await this.recoverSupply() : null
+      if (supplyRecovered && supplyRecovered.status === 'confirmed') access = supplyRecovered.access
       const runtimeContext = lifecycleRuntime.context
       const pendingContext = pendingLifecycleContext()
       const lifecycleBefore = pendingContext ? pendingContext.before : null
@@ -998,7 +1022,9 @@ Page({
       const runtimeIdentityChanged = Boolean(
         runtimeContext && runtimeContext.identity !== nextUploadIdentity
       )
-      const recoveredDetail = recovery && recovery.status === 'confirmed'
+      const recoveredDetail = supplyRecovered && supplyRecovered.status === 'confirmed'
+        ? presentDetail(supplyRecovered.detail, access, this._lifecycleRecoveryBlocked)
+        : recovery && recovery.status === 'confirmed'
         ? presentDetail(recovery.detail, access, false)
         : null
       this._lifecycleBefore = lifecycleIdentityMatches ? lifecycleBefore : null
@@ -1025,7 +1051,9 @@ Page({
         lifecycleRecoveryMessage: recovery && recovery.status === 'pending'
           ? recovery.message
           : '',
-        notice: recoveredDetail
+        notice: supplyRecovered && supplyRecovered.status === 'confirmed'
+          ? '历史供给命令已核验；详情显示当前状态，不代表已发货或入库。'
+          : recoveredDetail
           ? lifecycleResultNotice(recovery.command.action)
           : runtimeContext && runtimeContext.status === 'rejected' && !runtimeIdentityChanged
             ? runtimeContext.errorMessage
@@ -1119,6 +1147,7 @@ Page({
   },
 
   startCreate() {
+    if (this.supplyWriteBlocked()) return
     if (!this.data.canCreate) {
       toast(null, '当前主体没有正式需求创建权限')
       return
@@ -1489,6 +1518,7 @@ Page({
   },
 
   async startEdit() {
+    if (this.supplyWriteBlocked()) return
     const detail = this.data.detail
     if (
       !detail ||
@@ -1642,6 +1672,7 @@ Page({
   },
 
   async saveDraft() {
+    if (this.supplyWriteBlocked()) return
     if (!this.data.form || !this.data.formMode) return
     ensureRegistries(this)
     this.setData({ busy: true, notice: '' })
@@ -1753,6 +1784,7 @@ Page({
   },
 
   openSubmitConfirm() {
+    if (this.supplyWriteBlocked()) return
     const detail = this.data.detail
     if (
       !detail ||
@@ -1767,6 +1799,7 @@ Page({
   },
 
   async confirmSubmit() {
+    if (this.supplyWriteBlocked()) return
     const before = this.data.detail
     if (
       !before ||
@@ -1819,6 +1852,7 @@ Page({
   },
 
   openLifecycleConfirm(event) {
+    if (this.supplyWriteBlocked()) return
     const action = String(event.currentTarget.dataset.action || '')
     const detail = this.data.detail
     const access = this._access
@@ -1921,6 +1955,7 @@ Page({
   },
 
   async confirmLifecycleAction() {
+    if (this.supplyWriteBlocked()) return
     if (this.data.busy) return
     const before = this.data.detail
     const confirmation = this.data.lifecycleConfirm
@@ -2253,6 +2288,7 @@ Page({
   },
 
   openApprovalProcess(event) {
+    if (this.supplyWriteBlocked()) return
     const kind = String(event.currentTarget.dataset.kind || '')
     const detail = this.data.detail
     if (!detail || !this._access || ![
@@ -2427,7 +2463,210 @@ Page({
     this.setData({ processing: null })
   },
 
+  supplyWriteBlocked() {
+    try {
+      const pending = supplyRecovery.read()
+      if (!pending) return Boolean(this.data.supplyBlocked)
+      this.setData({ supplyBlocked: true,
+        supplyRecoveryMessage: `供给操作结果待核验（${pending.trace_request_id}）；禁止重新提交或生成新坐标。` })
+    } catch (error) {
+      this.setData({ supplyBlocked: true, supplyRecoveryMessage: error.message })
+    }
+    return true
+  },
+
+  async recoverSupply() {
+    if (this._supplyRecovering) return
+    this._supplyRecovering = true
+    const generation = this._loadGeneration
+    const pageAccess = this._access
+    try {
+      const pending = supplyRecovery.read()
+      if (!pending) return
+      const result = await supplyRecovery.recover(pending, transport)
+      if (this._unloaded || this._loadGeneration !== generation) return
+      if (pageAccess && (pageAccess.person_id !== result.access.person_id
+        || pageAccess.authorization_version !== result.access.authorization_version)) {
+        throw new Error('页面身份与供给恢复身份不同；保留原标记，请重新进入页面核验')
+      }
+      if (result.status !== 'confirmed') {
+        this.setData({ supplyBlocked: true,
+          supplyRecoveryMessage: `服务端尚未确认供给命令（${pending.trace_request_id}）；保留标记，暂不重试写入。` })
+        return
+      }
+      supplyRecovery.clear(pending)
+      const intent = this._mutationRegistry && this._mutationRegistry.get(pending.request_id)
+      if (intent && intent.headers['X-Request-ID'] === pending.trace_request_id) {
+        this._mutationRegistry.confirm(intent.request_id, intent.signature)
+      }
+      this._access = result.access
+      this.setData({ supplyBlocked: false, supplyForm: null, supplyRecoveryMessage: '',
+        detail: presentDetail(result.detail, result.access, this._lifecycleRecoveryBlocked),
+        notice: '已核验历史供给命令；详情显示当前任务状态，不代表已发货或入库。' })
+      return result
+    } catch (error) {
+      if (!this._unloaded && this._loadGeneration === generation) {
+        this.setData({ supplyBlocked: true, supplyRecoveryMessage: error.message || '供给结果仍未确认' })
+      }
+    } finally { this._supplyRecovering = false }
+  },
+
+  openSupplyForm(event) {
+    if (this.data.busy || this.supplyWriteBlocked() || this._lifecycleRecoveryBlocked) return
+    const detail = this.data.detail
+    if (!detail || !this._access || !this._access.can_manage_supply) return
+    ensureRegistries(this)
+    if (this._mutationRegistry.get(detail.request_id) || this._createRegistry.size()
+      || this.data.processing || this.data.lifecycleConfirm || this.data.formMode) {
+      toast(null, '请先处理当前未完成操作')
+      return
+    }
+    const taskId = String(event.currentTarget.dataset.task || '')
+    const task = taskId ? detail.supply_tasks.find((row) => row.id === taskId) : null
+    if (taskId && (!task || !task.allowed_actions.length)) return
+    if (!taskId && !detail.allowed_actions.includes('create_supply_task')) return
+    const eligible = detail.lines.filter((line) => supplyRemaining(detail, line) > BigInt(0))
+    if (!task && !eligible.length) return
+    this.setData({ supplyForm: {
+      taskId: task ? task.id : null, taskVersion: task ? task.version : null,
+      requestId: detail.request_id, requestVersion: detail.request_version,
+      lineId: task ? task.request_line_id : eligible[0].request_line_id,
+      supplyType: task ? task.supply_type : 'star_replenishment',
+      quantity: task ? task.expected_qty : '', reference: task ? task.reference_no || '' : '',
+      expectedDate: task ? task.expected_date || '' : '',
+      status: task ? task.allowed_actions.includes('update_supply_task') ? task.status : 'cancelled' : 'open', comment: '', error: '',
+      cancelOnly: !!task && !task.allowed_actions.includes('update_supply_task'),
+      canChooseOpen: !task || task.status === 'open',
+      canChooseReference: !task || ['open', 'reference_registered'].includes(task.status),
+      lines: eligible.map((row) => ({ id: row.request_line_id, label: `第${row.line_no}行 / ${row.material_id}` }))
+    } })
+  },
+
+  supplyFieldInput(event) {
+    if (!this.data.supplyForm || this.data.busy || this.data.supplyBlocked) return
+    const field = String(event.currentTarget.dataset.field || '')
+    if (!['quantity', 'reference', 'expectedDate', 'comment'].includes(field)
+      || (field === 'quantity' && this.data.supplyForm.taskId)
+      || (['reference', 'expectedDate'].includes(field) && this.data.supplyForm.status === 'cancelled')) return
+    this.setData({ supplyForm: Object.assign({}, this.data.supplyForm, { [field]: event.detail.value, error: '' }) })
+  },
+
+  supplyChoice(event) {
+    const form = this.data.supplyForm
+    if (!form || this.data.busy || this.data.supplyBlocked) return
+    const field = String(event.currentTarget.dataset.field || '')
+    const value = String(event.currentTarget.dataset.value || '')
+    if ((field === 'supplyType' && !form.taskId && contract.SUPPLY_TYPES.includes(value))
+      || (field === 'status' && form.taskId && contract.SUPPLY_TASK_STATUSES.includes(value)
+        && (!form.cancelOnly || value === 'cancelled')
+        && (value !== 'open' || form.canChooseOpen)
+        && (value !== 'reference_registered' || form.canChooseReference))
+      || (field === 'lineId' && !form.taskId && form.lines.some((row) => row.id === value))) {
+      const changes = { [field]: value, error: '' }
+      if (field === 'status' && value === 'cancelled') {
+        const original = this.data.detail.supply_tasks.find((row) => row.id === form.taskId)
+        if (!original) return
+        changes.reference = original.reference_no || ''
+        changes.expectedDate = original.expected_date || ''
+      }
+      this.setData({ supplyForm: Object.assign({}, form, changes) })
+    }
+  },
+
+  closeSupplyForm() {
+    if (!this.data.busy && !this.supplyWriteBlocked()) this.setData({ supplyForm: null })
+  },
+
+  async submitSupply() {
+    if (this.data.busy || this.supplyWriteBlocked() || this._lifecycleRecoveryBlocked) return
+    const before = this.data.detail
+    const form = this.data.supplyForm
+    const access = this._access
+    if (!before || !form || !access || !access.can_manage_supply
+      || before.request_id !== form.requestId || before.request_version !== form.requestVersion) return
+    const task = form.taskId ? before.supply_tasks.find((row) => row.id === form.taskId) : null
+    const action = !form.taskId ? 'create_supply_task'
+      : form.status === 'cancelled' ? 'cancel_supply_task' : 'update_supply_task'
+    if (form.taskId ? (!task || task.version !== form.taskVersion || !task.allowed_actions.includes(action))
+      : !before.allowed_actions.includes(action)) return
+    let intent
+    let sentinel
+    let responseValidated = false
+    const generation = this._loadGeneration
+    this.setData({ busy: true })
+    try {
+      const body = !form.taskId ? {
+        expected_request_version: before.request_version, request_line_id: form.lineId,
+        supply_type: form.supplyType, expected_qty: form.quantity.trim(),
+        reference_no: form.reference.trim() || null, expected_date: form.expectedDate || null,
+        note: form.comment.trim()
+      } : {
+        expected_request_version: before.request_version, expected_task_version: form.taskVersion,
+        status: form.status, reference_no: action === 'cancel_supply_task' ? task.reference_no : form.reference.trim() || null,
+        expected_date: action === 'cancel_supply_task' ? task.expected_date : form.expectedDate || null,
+        comment: form.comment.trim()
+      }
+      // Validate locally before a durable marker; the adapter repeats this check before HTTP.
+      adapterModule.validateSupplyBody(action, body)
+      if (action === 'create_supply_task') {
+        const line = before.lines.find((row) => row.request_line_id === form.lineId)
+        if (!line || supplyQuantityUnits(body.expected_qty) > supplyRemaining(before, line)) {
+          throw new Error('计划数量超过当前明细尚未安排的批准余量')
+        }
+      }
+      await supplyRecovery.verifyIdentity(access, transport)
+      if (this._unloaded || this._loadGeneration !== generation || this._access !== access) return
+      ensureRegistries(this)
+      intent = this._mutationRegistry.begin({ requestId: before.request_id, action,
+        path: `/v1/material-requests/${before.request_id}/supply-tasks${form.taskId ? `/${form.taskId}` : ''}`,
+        body, expectedVersion: before.request_version })
+      sentinel = supplyRecovery.persist({ v: 1, kind: 'material_request_supply',
+        trace_request_id: intent.headers['X-Request-ID'], person_id: access.person_id,
+        authorization_version: access.authorization_version, request_id: before.request_id,
+        request_version: before.request_version, revision_id: before.current_revision_id,
+        revision_no: before.current_revision_no, action, supply_task_id: form.taskId,
+        task_version: form.taskVersion, created_at: new Date().toISOString() })
+      this.setData({ supplyBlocked: true, supplyRecoveryMessage: `正在核验供给操作（${sentinel.trace_request_id}）` })
+      const result = contract.validateMaterialRequestSupplyTaskMutationResult(await transport.mutate(intent), {
+        requestId: before.request_id, action, previousVersion: before.request_version,
+        supplyTaskId: form.taskId, previousTaskVersion: form.taskVersion
+      })
+      responseValidated = true
+      const fresh = contract.validateMaterialRequestDetail(await transport.detail(before.request_id))
+      const updated = fresh.supply_tasks.find((row) => row.id === result.supply_task_id)
+      if (!approvalMutationMatches(result, fresh) || !updated || updated.version !== result.task_version
+        || updated.task_no !== result.task_no || updated.status !== result.task_status
+        || updated.request_line_id !== form.lineId || updated.supply_type !== form.supplyType
+        || updated.substitution_decision_id !== null
+        || compareDecimal(decimalUnits(updated.expected_qty), decimalUnits(form.quantity.trim())) !== 0
+        || compareDecimal(decimalUnits(updated.original_equivalent_qty), decimalUnits(updated.expected_qty)) !== 0
+        || updated.reference_no !== body.reference_no || updated.expected_date !== body.expected_date
+        || AXES.some(([key]) => before.states[key] !== fresh.states[key])) throw new Error('供给计划结果回读不一致')
+      const freshAccess = await supplyRecovery.verifyIdentity(sentinel, transport)
+      if (this._unloaded || this._loadGeneration !== generation || this._access !== access) return
+      supplyRecovery.clear(sentinel)
+      this._mutationRegistry.confirm(intent.request_id, intent.signature)
+      this._access = freshAccess
+      this.setData({ supplyBlocked: false, supplyRecoveryMessage: '', supplyForm: null,
+        detail: presentDetail(fresh, freshAccess, false), notice: '供给计划已核验；库存及履约状态未改变。' })
+    } catch (error) {
+      if (this._unloaded || this._loadGeneration !== generation) return
+      if (!responseValidated && intent && sentinel && adapterModule.isDefinitiveRejection(error)
+        && ![401, 403, 409].includes(error.status)) {
+        try {
+          await supplyRecovery.verifyIdentity(sentinel, transport)
+          if (this._unloaded || this._loadGeneration !== generation || this._access !== access) return
+          supplyRecovery.clear(sentinel)
+          this._mutationRegistry.clearDefinitiveRejection(intent.request_id, intent.signature)
+          this.setData({ supplyBlocked: false, supplyRecoveryMessage: '' })
+        } catch (storageError) { this.setData({ supplyBlocked: true, supplyRecoveryMessage: storageError.message }) }
+      }
+      this.setData({ supplyForm: Object.assign({}, form, { error: error.message || '供给操作结果未确认' }) })
+    } finally { if (!this._unloaded && this._loadGeneration === generation) this.setData({ busy: false }) }
+  },
+
   async submitApprovalProcess() {
+    if (this.supplyWriteBlocked()) return
     const before = this.data.detail
     const process = this.data.processing
     if (!before || !process || !this._access) return

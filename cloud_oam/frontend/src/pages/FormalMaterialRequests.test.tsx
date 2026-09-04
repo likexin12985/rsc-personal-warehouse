@@ -9,6 +9,11 @@ import type { FormalFileUploadClient } from "../FormalFileUploadField";
 import type { FormalFilePurpose, FormalUploadFile } from "../formalFileUpload";
 import type { FormalMaterialRequestAdapter } from "../formalMaterialRequestAdapter";
 import {
+  createSupplyRecoveryStore,
+  recoverSupplyCommand,
+  type SupplySentinel,
+} from "../materialRequestSupplyRecovery";
+import {
   createMaterialRequestLifecycleRecoveryStore,
   type MaterialRequestLifecycleRecoveryStore,
 } from "../materialRequestLifecycleRecovery";
@@ -385,6 +390,57 @@ function cancelledDetail(): any {
   return value;
 }
 
+const SUPPLY_ID = "d0000000-0000-4000-8000-000000000001";
+function supplyReadyDetail(): any {
+  const value = approvedDetail();
+  value.allowed_actions = ["create_supply_task"];
+  return value;
+}
+function withSupplyPlan(before: any, status = "open", taskVersion = 0): any {
+  return {
+    ...before, request_version: before.request_version + 1,
+    supply_tasks: [{ id: SUPPLY_ID, task_no: "SUPPLY-20260905-001", request_line_id: before.lines[0].request_line_id,
+      substitution_decision_id: null, supply_type: "star_replenishment", reference_no: null,
+      expected_qty: "1.001", original_equivalent_qty: "1.001", expected_date: null,
+      status, version: taskVersion, created_at: "2026-09-05T08:00:00Z", updated_at: "2026-09-05T08:00:00Z",
+      allowed_actions: ["cancelled", "closed_no_supply"].includes(status) ? [] : ["update_supply_task", "cancel_supply_task"] }],
+  };
+}
+function supplyResponse(value: any, action = "create_supply_task"): any {
+  const task = value.supply_tasks[0];
+  return {
+    schema_version: "1.0", request_id: value.request_id, action, request_version: value.request_version,
+    revision_id: value.current_revision_id, revision_no: value.current_revision_no,
+    approval_instance_id: value.approval_instance.instance_id, approval_attempt_no: value.approval_instance.attempt_no,
+    current_step_id: null, states: value.states, idempotency_replayed: false,
+    supply_task_id: task.id, task_no: task.task_no, task_status: task.status, task_version: task.version,
+  };
+}
+
+function supplyRecoveryFixture() {
+  const before = supplyReadyDetail();
+  const after = withSupplyPlan(before);
+  const pending: SupplySentinel = {
+    v: 1, kind: "material_request_supply", x_request_id: "supply-recovery-guard-1234",
+    person_id: PERSON_ID, authorization_version: 1, request_id: REQUEST_ID,
+    action: "create_supply_task", request_version: before.request_version,
+    task_id: null, task_version: null,
+  };
+  const store = createSupplyRecoveryStore(sessionStorage);
+  store.persist(pending);
+  const { schema_version: _schema, idempotency_replayed: _replay, ...command } = supplyResponse(after);
+  const confirmed = {
+    schema_version: "1.0", lookup_status: "confirmed",
+    command: { ...command, occurred_at: "2026-09-05T08:00:00Z" },
+  };
+  const client = adapter({
+    list: vi.fn().mockResolvedValue(page(after)),
+    detail: vi.fn().mockResolvedValue(after),
+    supplyCommandStatus: vi.fn().mockResolvedValue(confirmed),
+  });
+  return { pending, store, before, after, client, confirmed };
+}
+
 function confirmedLifecycleStatus(action: "withdraw" | "cancel", value: any) {
   return {
     schema_version: "1.0",
@@ -540,6 +596,9 @@ function adapter(overrides: Partial<FormalMaterialRequestAdapter> = {}): FormalM
       lookup_status: "not_observed",
       command: null,
     }),
+    supplyCommandStatus: vi.fn().mockResolvedValue({
+      schema_version: "1.0", lookup_status: "not_observed", command: null,
+    }),
     list: vi.fn().mockResolvedValue(page()),
     detail: vi.fn().mockResolvedValue(detail()),
     loadDraftForEdit: vi.fn().mockResolvedValue({
@@ -652,7 +711,8 @@ describe("formal material request PC vertical slice", () => {
     const panel = await openDetail();
     expect(within(panel).getByText(/\*{7}0000/)).toBeTruthy();
     expect(within(panel).getByLabelText("需求十个独立状态轴").children).toHaveLength(10);
-    expect(within(panel).getByText("供给计划（只读）")).toBeTruthy();
+    expect(within(panel).getByRole("heading", { name: "供给计划" })).toBeTruthy();
+    expect(within(panel).queryByRole("button", { name: "新建供给计划" })).toBeNull();
     expect(panel.textContent).not.toContain(RAW_MOBILE);
     expect(panel.textContent).not.toContain(RAW_ADDRESS);
   });
@@ -2093,5 +2153,201 @@ describe("formal material request PC vertical slice", () => {
     expect(screen.getByText(/生产写入仍受服务端写 gate 与 runtime ACL 控制/)).toBeTruthy();
     expect(screen.getByText(/明文草稿仅驻留当前页面内存/)).toBeTruthy();
     expect(document.body.textContent).not.toContain("transport 尚未安全接入");
+  });
+
+  it("creates a supply plan with exact quantities and clears its sentinel only after task reread", async () => {
+    const before = supplyReadyDetail();
+    let current = before;
+    const after = withSupplyPlan(before);
+    const mutate = vi.fn(async (_intent: unknown) => { current = after; return supplyResponse(after); });
+    const client = adapter({ list: vi.fn().mockResolvedValue(page(before)), detail: vi.fn(async () => current), mutate });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "新建供给计划" }));
+    const form = await screen.findByRole("dialog", { name: "新建供给计划" });
+    fireEvent.change(within(form).getByLabelText("供给计划数量"), { target: { value: "1.001" } });
+    fireEvent.click(within(form).getByRole("button", { name: "确认保存供给计划" }));
+    expect(await screen.findByText(/已保存并核验/)).toBeTruthy();
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate.mock.calls[0][0]).toMatchObject({
+      action: "create_supply_task", path: `/v1/material-requests/${REQUEST_ID}/supply-tasks`,
+      body: { expected_request_version: 5, expected_qty: "1.001", reference_no: null, expected_date: null },
+    });
+    expect(sessionStorage.getItem("cloud-oam-material-request-supply-sentinel-v1")).toBeNull();
+    expect(current.states).toEqual(before.states);
+    expect(client.supplyCommandStatus).not.toHaveBeenCalled();
+  });
+
+  it("keeps an uncertain supply operation blocked across remount and confirms its historical result", async () => {
+    const before = supplyReadyDetail();
+    const mutate = vi.fn().mockRejectedValue(new Error("network uncertain"));
+    const first = adapter({ list: vi.fn().mockResolvedValue(page(before)), detail: vi.fn().mockResolvedValue(before), mutate });
+    const view = render(<FormalMaterialRequestsPage adapter={first} />);
+    await screen.findByRole("button", { name: "查看" });
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "新建供给计划" }));
+    const form = await screen.findByRole("dialog", { name: "新建供给计划" });
+    fireEvent.change(within(form).getByLabelText("供给计划数量"), { target: { value: "1.001" } });
+    fireEvent.change(within(form).getByLabelText("供给参考号"), { target: { value: "PRIVATE-REFERENCE-001" } });
+    fireEvent.change(within(form).getByLabelText("供给处理说明"), { target: { value: "private supply reason" } });
+    fireEvent.click(within(form).getByRole("button", { name: "确认保存供给计划" }));
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    await screen.findAllByText(/network uncertain/);
+    const raw = sessionStorage.getItem("cloud-oam-material-request-supply-sentinel-v1")!;
+    const sentinel = JSON.parse(raw);
+    expect(raw).not.toContain("PRIVATE-REFERENCE");
+    expect(raw).not.toContain("private supply reason");
+    expect(raw).not.toContain("Idempotency-Key");
+    expect(raw).not.toContain(mutate.mock.calls[0][0].headers["Idempotency-Key"]);
+    expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
+    view.unmount();
+
+    const original = withSupplyPlan(before, "reference_registered");
+    original.supply_tasks[0].reference_no = "PRIVATE-REFERENCE-001";
+    const later = withSupplyPlan(original, "cancelled", 1);
+    later.supply_tasks[0].reference_no = "PRIVATE-REFERENCE-001";
+    const { schema_version: _schema, idempotency_replayed: _replay, ...command } = supplyResponse(original);
+    const status = vi.fn().mockResolvedValue({ schema_version: "1.0", lookup_status: "confirmed",
+      command: { ...command, occurred_at: "2026-09-05T08:00:00Z" } });
+    const next = adapter({ list: vi.fn().mockResolvedValue(page(later)), detail: vi.fn().mockResolvedValue(later), supplyCommandStatus: status });
+    render(<FormalMaterialRequestsPage adapter={next} />);
+    await waitFor(() => expect(sessionStorage.getItem("cloud-oam-material-request-supply-sentinel-v1")).toBeNull());
+    expect(status).toHaveBeenCalledWith(sentinel.x_request_id);
+    expect(next.mutate).not.toHaveBeenCalled();
+    expect(await screen.findByText("计划已取消")).toBeTruthy();
+  });
+
+  it("updates and cancels a supply task without editing its material quantity or advancing inventory", async () => {
+    let current = withSupplyPlan(supplyReadyDetail());
+    const originalStates = current.states;
+    const mutate = vi.fn(async (intent: any) => {
+      const task = current.supply_tasks[0];
+      current = { ...current, request_version: current.request_version + 1, supply_tasks: [{
+        ...task, reference_no: intent.body.reference_no, expected_date: intent.body.expected_date,
+        status: intent.body.status, version: task.version + 1,
+        allowed_actions: intent.body.status === "cancelled" ? [] : ["update_supply_task", "cancel_supply_task"],
+      }] };
+      return supplyResponse(current, intent.action);
+    });
+    const client = adapter({ list: vi.fn().mockResolvedValue(page(current)), detail: vi.fn(async () => current), mutate });
+    await renderReady(client);
+    const panel = await openDetail();
+    fireEvent.click(within(panel).getByRole("button", { name: "更新计划" }));
+    const updateForm = await screen.findByRole("dialog", { name: "更新供给计划" });
+    expect((within(updateForm).getByLabelText("供给计划数量") as HTMLInputElement).disabled).toBe(true);
+    expect((within(updateForm).getByLabelText("供给类型") as HTMLSelectElement).disabled).toBe(true);
+    fireEvent.change(within(updateForm).getByLabelText("供给参考号"), { target: { value: "STAR-SUPPLY-002" } });
+    fireEvent.change(within(updateForm).getByLabelText("供给计划状态"), { target: { value: "reference_registered" } });
+    fireEvent.click(within(updateForm).getByRole("button", { name: "确认保存供给计划" }));
+    await screen.findByText(/已保存并核验，当前为已登记参考号/);
+    fireEvent.click(within(panel).getByRole("button", { name: "取消计划" }));
+    const cancelForm = await screen.findByRole("dialog", { name: "取消供给计划" });
+    fireEvent.click(within(cancelForm).getByRole("button", { name: "确认保存供给计划" }));
+    await screen.findAllByText(/处理原因无效/);
+    expect(mutate).toHaveBeenCalledTimes(1);
+    fireEvent.change(within(cancelForm).getByLabelText("供给处理说明"), { target: { value: "改由已有库存解决" } });
+    fireEvent.click(within(cancelForm).getByRole("button", { name: "确认保存供给计划" }));
+    await screen.findByText(/已保存并核验，当前为计划已取消/);
+    expect(mutate).toHaveBeenCalledTimes(2);
+    expect(mutate.mock.calls[1][0]).toMatchObject({ action: "cancel_supply_task",
+      path: `/v1/material-requests/${REQUEST_ID}/supply-tasks/${SUPPLY_ID}`,
+      body: { expected_request_version: 7, expected_task_version: 1, status: "cancelled", comment: "改由已有库存解决" } });
+    expect(current.states).toEqual(originalStates);
+    expect(current.supply_tasks[0].expected_qty).toBe("1.001");
+    expect(within(panel).queryByRole("button", { name: "更新计划" })).toBeNull();
+    expect(sessionStorage.getItem("cloud-oam-material-request-supply-sentinel-v1")).toBeNull();
+  });
+
+  it("does not turn not-observed or changed identity into a replacement supply write", async () => {
+    const pending = { v: 1, kind: "material_request_supply", x_request_id: "supply-unobserved-1234", person_id: PERSON_ID,
+      authorization_version: 1, request_id: REQUEST_ID, action: "create_supply_task", request_version: 5, task_id: null, task_version: null };
+    sessionStorage.setItem("cloud-oam-material-request-supply-sentinel-v1", JSON.stringify(pending));
+    const before = supplyReadyDetail();
+    const client = adapter({ list: vi.fn().mockResolvedValue(page(before)), detail: vi.fn().mockResolvedValue(before) });
+    const view = render(<FormalMaterialRequestsPage adapter={client} />);
+    expect(await screen.findByText(/暂未查到供给操作的确定结果/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(sessionStorage.getItem("cloud-oam-material-request-supply-sentinel-v1")).not.toBeNull();
+    expect(client.mutate).not.toHaveBeenCalled();
+    view.unmount();
+    const changed = adapter({ loadIdentity: vi.fn().mockResolvedValue({ schema_version: "1.0", person_id: PERSON_ID, authorization_version: 2 }) });
+    render(<FormalMaterialRequestsPage adapter={changed} />);
+    expect(await screen.findByText(/登录身份或权限已变化，原供给操作/)).toBeTruthy();
+    expect(changed.supplyCommandStatus).not.toHaveBeenCalled();
+    expect(changed.mutate).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("cloud-oam-material-request-supply-sentinel-v1")).not.toBeNull();
+  });
+
+  it.each(["identity_person", "identity_version", "access_person", "access_version", "access_revoked", "generation"])(
+    "retains original supply coordinates if the final recovery guard changes: %s", async (change) => {
+      const { pending, store, client } = supplyRecoveryFixture();
+      const identity = { schema_version: "1.0", person_id: PERSON_ID, authorization_version: 1 };
+      const afterIdentity = { ...identity,
+        ...(change === "identity_person" ? { person_id: OTHER_PERSON_ID } : {}),
+        ...(change === "identity_version" ? { authorization_version: 2 } : {}),
+      };
+      const afterAccess = { ...access(),
+        ...(change === "access_person" ? { person_id: OTHER_PERSON_ID } : {}),
+        ...(change === "access_version" ? { authorization_version: 2 } : {}),
+        ...(change === "access_revoked" ? { can_read: false, can_create: false } : {}),
+      };
+      const loadIdentity = vi.fn().mockResolvedValueOnce(identity).mockResolvedValue(afterIdentity);
+      const loadAccess = vi.fn().mockResolvedValueOnce(access()).mockResolvedValue(afterAccess);
+      const clear = vi.fn((trace: string) => store.clear(trace));
+      const guarded = { ...store, clear };
+      const current = { ...client, loadIdentity, loadAccess };
+      await expect(recoverSupplyCommand(current, guarded, pending, () => change !== "generation")).rejects.toThrow(/核验期间|核验页面/);
+      expect(loadIdentity).toHaveBeenCalledTimes(2);
+      expect(client.supplyCommandStatus).toHaveBeenCalledWith(pending.x_request_id);
+      expect(client.detail).toHaveBeenCalledWith(REQUEST_ID);
+      expect(clear).not.toHaveBeenCalled();
+      expect(store.read()).toEqual({ kind: "valid", value: pending });
+      expect(client.mutate).not.toHaveBeenCalled();
+      expect(client.createDraft).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not clear a recovery sentinel when its panel unmounts before the status read returns", async () => {
+    const { pending, store, client, confirmed } = supplyRecoveryFixture();
+    const status = deferred<unknown>();
+    const supplyCommandStatus = vi.fn().mockReturnValue(status.promise);
+    const clear = vi.fn((trace: string) => store.clear(trace));
+    const current = { ...client, supplyCommandStatus };
+    const view = render(<FormalMaterialRequestsPage adapter={current} supplyRecoveryStore={{ ...store, clear }} />);
+    await waitFor(() => expect(supplyCommandStatus).toHaveBeenCalledTimes(1));
+    view.unmount();
+    await act(async () => { status.resolve(confirmed); await status.promise; });
+    await waitFor(() => expect(client.detail).toHaveBeenCalledWith(REQUEST_ID));
+    expect(clear).not.toHaveBeenCalled();
+    expect(store.read()).toEqual({ kind: "valid", value: pending });
+    expect(client.mutate).not.toHaveBeenCalled();
+  });
+
+  it("clears only after final identity, access and generation checks while retaining historical and current states", async () => {
+    const { pending, store, client, after } = supplyRecoveryFixture();
+    const later = cancelledDetail();
+    later.request_version = after.request_version + 2;
+    later.supply_tasks = [{ ...after.supply_tasks[0], status: "cancelled", version: 1, allowed_actions: [] }];
+    const events: string[] = [];
+    const current = {
+      ...client,
+      loadIdentity: vi.fn(async () => { events.push("identity"); return { schema_version: "1.0", person_id: PERSON_ID, authorization_version: 1 }; }),
+      loadAccess: vi.fn(async () => { events.push("access"); return access(); }),
+      supplyCommandStatus: vi.fn(async (trace: string) => { events.push("status"); return client.supplyCommandStatus(trace); }),
+      detail: vi.fn(async () => { events.push("detail"); return later; }),
+    };
+    const guarded = { ...store, clear: (trace: string) => { events.push("clear"); store.clear(trace); } };
+    const recovered = await recoverSupplyCommand(current, guarded, pending, () => {
+      events.push("generation");
+      expect(store.read().kind).toBe("valid");
+      return true;
+    });
+    expect(events).toEqual(["identity", "access", "status", "detail", "identity", "access", "generation", "clear"]);
+    expect(recovered.command.states.request_status).toBe("approved");
+    expect(recovered.command.task_status).toBe("open");
+    expect(recovered.detail.states.request_status).toBe("cancelled");
+    expect(recovered.detail.supply_tasks[0].status).toBe("cancelled");
+    expect(store.read()).toEqual({ kind: "missing" });
+    expect(current.mutate).not.toHaveBeenCalled();
   });
 });

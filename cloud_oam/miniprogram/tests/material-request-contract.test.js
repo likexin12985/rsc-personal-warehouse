@@ -821,6 +821,28 @@ test('anchors mutation results to exact object, action, version and states', () 
   )
 })
 
+test('supply acknowledgements require exact task anchors and cannot claim fulfillment', () => {
+  const taskId = '80000000-0000-4000-8000-000000000001'
+  const result = {
+    schema_version: '1.0', request_id: REQUEST_ID, action: 'create_supply_task',
+    request_version: 8, revision_id: REVISION_ID, revision_no: 1,
+    approval_instance_id: INSTANCE_ID, approval_attempt_no: 1, current_step_id: null,
+    states: states('approved'), idempotency_replayed: false,
+    supply_task_id: taskId, task_no: 'SUP-001', task_status: 'open', task_version: 0
+  }
+  const expected = { requestId: REQUEST_ID, action: 'create_supply_task', previousVersion: 7 }
+  assert.equal(contract.validateMaterialRequestSupplyTaskMutationResult(result, expected).supply_task_id, taskId)
+  for (const changes of [
+    { task_version: 1 }, { task_status: 'cancelled' }, { task_status: 'fulfilled' },
+    { current_step_id: taskId }, { unexpected: true }, { task_no: 'A'.repeat(101) }
+  ]) assert.throws(() => contract.validateMaterialRequestSupplyTaskMutationResult(Object.assign({}, result, changes), expected))
+  const cancelled = Object.assign({}, result, { action: 'cancel_supply_task', task_status: 'cancelled', task_version: 1 })
+  const cancelExpected = Object.assign({}, expected, { action: 'cancel_supply_task', supplyTaskId: taskId, previousTaskVersion: 0 })
+  assert.equal(contract.validateMaterialRequestSupplyTaskMutationResult(cancelled, cancelExpected).task_version, 1)
+  assert.throws(() => contract.validateMaterialRequestSupplyTaskMutationResult(cancelled, Object.assign({}, cancelExpected, { supplyTaskId: REQUEST_ID })))
+  assert.throws(() => contract.validateMaterialRequestSupplyTaskMutationResult(cancelled, Object.assign({}, cancelExpected, { previousTaskVersion: 1 })))
+})
+
 test('withdraw and cancel mutation results require terminal state and approval anchors', () => {
   for (const [action, requestStatus] of [
     ['withdraw', 'withdrawn'],

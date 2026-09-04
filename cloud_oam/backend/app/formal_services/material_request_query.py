@@ -14,6 +14,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 import hashlib
 import json
 from typing import Any, Final
@@ -100,6 +101,9 @@ _ACTION_ORDER: Final[tuple[str, ...]] = (
     "confirm_substitution",
     "reject_substitution",
     "create_supply_task",
+)
+_ACTIVE_SUPPLY_STATUSES: Final[frozenset[str]] = frozenset(
+    {"open", "reference_registered", "awaiting_supply"}
 )
 
 
@@ -784,7 +788,9 @@ def _detail(context: _ReadContext, graph: _RequestGraph) -> MaterialRequestDetai
             "lines": tuple(_line(line) for line in lines),
             "revision_history": revisions,
             "approval_history": approval_history,
-            "supply_tasks": tuple(_supply_task(task) for task in graph.supply_tasks),
+            "supply_tasks": tuple(
+                _supply_task(context, graph, task) for task in graph.supply_tasks
+            ),
         },
     )
 
@@ -1074,7 +1080,11 @@ def _return_fact(
     )
 
 
-def _supply_task(task: SupplyTask) -> MaterialRequestSupplyTaskOut:
+def _supply_task(
+    context: _ReadContext,
+    graph: _RequestGraph,
+    task: SupplyTask,
+) -> MaterialRequestSupplyTaskOut:
     return _validate_output(
         MaterialRequestSupplyTaskOut,
         {
@@ -1091,9 +1101,7 @@ def _supply_task(task: SupplyTask) -> MaterialRequestSupplyTaskOut:
             "version": task.version,
             "created_at": _aware(task.created_at),
             "updated_at": _aware(task.updated_at),
-            # Supply-task mutation is not part of the mounted phase-one
-            # service.  Existing tasks are a read-only projection here.
-            "allowed_actions": (),
+            "allowed_actions": _supply_task_allowed_actions(context, graph, task),
         },
     )
 
@@ -1173,8 +1181,16 @@ def _allowed_actions(
     ):
         actions.add("cancel")
 
-    # Substitution and supply-task mutations remain dormant until their own
-    # guarded services are mounted.
+    if _supply_management_allowed(context, graph) and any(
+        _unplanned_supply_quantity(graph, line) > 0
+        for line in graph.current_lines
+        if _supply_line_is_current(graph, line)
+        and not _supply_line_has_active_substitution(graph, line.id)
+    ):
+        actions.add("create_supply_task")
+
+    # Substitution mutations remain dormant until their guarded service is
+    # mounted. Supply planning does not advance any fulfillment state axis.
     if graph.instances:
         instance = graph.instances[-1]
         if (
@@ -1242,6 +1258,113 @@ def _allowed_actions(
                 ):
                     actions.add("verify_external_approval")
     return tuple(action for action in _ACTION_ORDER if action in actions)
+
+
+def _supply_management_allowed(context: _ReadContext, graph: _RequestGraph) -> bool:
+    """Mirror the supply command's current national-admin authority.
+
+    A national role and a permission granted through an unrelated assignment
+    cannot be combined to manufacture supply-management authority. Scoped
+    denies still apply to the request's actual organization.
+    """
+
+    request = graph.request
+    if (
+        request.status not in {"approved", "partially_approved"}
+        or not graph.instances
+        or not _state_axes_are_neutral(request)
+    ):
+        return False
+    revision = graph.current_revision
+    latest = graph.instances[-1]
+    if (
+        revision.status != "sealed"
+        or latest.status != "completed"
+        or latest.request_revision_id != revision.id
+        or latest.revision_no != revision.revision_no
+        or latest.current_step_id is not None
+        or latest.current_step_no is not None
+        or latest.completed_at is None
+        or any(row.status == "active" for row in graph.instances)
+    ):
+        return False
+    principal = context.principal
+    administrator_ids = {
+        grant.assignment_id
+        for grant in principal.assignments
+        if grant.role_code == "admin"
+        and grant.scope_type == "national"
+        and grant.scope_id == "*"
+    }
+    if len(administrator_ids) != 1 or not any(
+        entitlement.assignment_id in administrator_ids
+        and entitlement.resource == "supply_task"
+        and entitlement.action == "manage"
+        and entitlement.field_code == ""
+        and entitlement.effect == "allow"
+        for entitlement in principal.entitlements
+    ):
+        return False
+    return _permission_allowed(
+        principal,
+        context.organizations,
+        resource="supply_task",
+        action="manage",
+        field_code="",
+        target_scope_type="organization",
+        target_scope_id=str(request.requester_org_id),
+        target_organization_id=request.requester_org_id,
+    )
+
+
+def _supply_line_is_current(graph: _RequestGraph, line: MaterialRequestLine) -> bool:
+    return (
+        line.request_id == graph.request.id
+        and line.revision_id == graph.current_revision.id
+        and line.revision_no == graph.request.revision_no
+        and line.status in {"approved", "partially_approved"}
+        and line.final_approved_qty > line.cancelled_qty
+    )
+
+
+def _unplanned_supply_quantity(
+    graph: _RequestGraph,
+    line: MaterialRequestLine,
+) -> Decimal:
+    active_quantity = sum(
+        (
+            task.original_equivalent_qty
+            for task in graph.lifecycle_supply_tasks
+            if task.request_line_id == line.id and task.status in _ACTIVE_SUPPLY_STATUSES
+        ),
+        Decimal("0"),
+    )
+    return line.final_approved_qty - line.cancelled_qty - active_quantity
+
+
+def _supply_task_allowed_actions(
+    context: _ReadContext,
+    graph: _RequestGraph,
+    task: SupplyTask,
+) -> tuple[str, ...]:
+    if (
+        task.status not in _ACTIVE_SUPPLY_STATUSES
+        or not _supply_management_allowed(context, graph)
+    ):
+        return ()
+    line = next((row for row in graph.current_lines if row.id == task.request_line_id), None)
+    if line is None or not _supply_line_is_current(graph, line):
+        return ()
+    if _supply_line_has_active_substitution(graph, line.id):
+        return ("cancel_supply_task",)
+    return ("update_supply_task", "cancel_supply_task")
+
+
+def _supply_line_has_active_substitution(graph: _RequestGraph, line_id: uuid.UUID) -> bool:
+    return any(
+        row.request_line_id == line_id and row.status in {"proposed", "confirmed"}
+        for row in graph.lifecycle_substitutions
+    )
 
 
 def _withdraw_graph_is_safe(graph: _RequestGraph) -> bool:

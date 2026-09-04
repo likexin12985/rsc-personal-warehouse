@@ -507,7 +507,7 @@ class SubstitutionConfirmationIn(_StrictRequestModel):
 
 
 class SupplyTaskCreateIn(_StrictRequestModel):
-    expected_request_version: int = Field(ge=0)
+    expected_request_version: StrictInt = Field(ge=0)
     request_line_id: UUID
     supply_type: Literal[
         "cross_region_transfer",
@@ -518,7 +518,7 @@ class SupplyTaskCreateIn(_StrictRequestModel):
     reference_no: StrictStr | None = Field(
         default=None,
         min_length=1,
-        max_length=200,
+        max_length=160,
         pattern=_SAFE_REFERENCE.pattern,
     )
     expected_qty: Decimal
@@ -546,8 +546,8 @@ class SupplyTaskCreateIn(_StrictRequestModel):
 
 
 class SupplyTaskUpdateIn(_StrictRequestModel):
-    expected_request_version: int = Field(ge=0)
-    expected_task_version: int = Field(ge=0)
+    expected_request_version: StrictInt = Field(ge=0)
+    expected_task_version: StrictInt = Field(ge=0)
     # A shortage-planning task records only an external/cross-region supply
     # reference.  It must not claim that allocation, shipment or receipt has
     # happened; those facts belong to their own later bounded services.
@@ -561,7 +561,7 @@ class SupplyTaskUpdateIn(_StrictRequestModel):
     reference_no: StrictStr | None = Field(
         default=None,
         min_length=1,
-        max_length=200,
+        max_length=160,
         pattern=_SAFE_REFERENCE.pattern,
     )
     expected_date: date | None = None
@@ -576,6 +576,8 @@ class SupplyTaskUpdateIn(_StrictRequestModel):
     def validate_terminal_comment(self):
         if self.status in {"cancelled", "closed_no_supply"} and not self.comment:
             raise ValueError("closing a supply task without supply requires a comment")
+        if self.status == "reference_registered" and self.reference_no is None:
+            raise ValueError("registered supply reference requires a reference number")
         return self
 
 

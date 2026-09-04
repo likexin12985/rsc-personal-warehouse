@@ -1190,6 +1190,9 @@ function validateSupplyTask(value: unknown): MaterialRequestSupplyTask {
   ], "正式需求供给任务");
   const status = exactEnum(field(object, "status"), MATERIAL_REQUEST_SUPPLY_TASK_STATUSES, "供给任务状态");
   const referenceNo = nullableText(field(object, "reference_no"), "reference_no");
+  if (referenceNo !== null && referenceNo.length > 160) {
+    invalid("material_request_contract_supply_reference_invalid", "供给参考号不能超过160字符");
+  }
   if (status === "reference_registered" && referenceNo === null) {
     invalid("material_request_contract_supply_reference_missing", "已登记参考的供给任务必须包含参考编号");
   }

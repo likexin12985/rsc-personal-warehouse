@@ -483,6 +483,239 @@ function draft() {
   }
 }
 
+const SUPPLY_TASK_ID = 'e0000000-0000-4000-8000-000000000001'
+
+function supplyApprovedDetail(version = 5, taskStatus = null) {
+  const value = externalVerificationDetail()
+  value.request_version = version
+  value.states = axes('approved')
+  value.updated_at = '2026-09-01T08:50:00+08:00'
+  value.lines[0].status = 'approved'
+  value.lines[0].final_approved_qty = '12.345'
+  Object.assign(value.approval_instance, { status: 'completed', current_step_no: null, current_step_id: null, version: 4 })
+  Object.assign(value.approval_instance.steps[2], {
+    status: 'approved', decided_at: '2026-09-01T08:50:00+08:00', version: 2,
+    line_decisions: [Object.assign(lineDecision(STEP_3_ID, '73000000-0000-4000-8000-000000000001'), {
+      decision_source: 'external_registration', external_registration_id: REGISTRATION_ID,
+      decided_at: '2026-09-01T08:50:00+08:00'
+    })]
+  })
+  Object.assign(value.approval_instance.external_evidence_summaries[0], {
+    status: 'accepted', verified_at: '2026-09-01T08:50:00+08:00', version: 1
+  })
+  value.allowed_actions = ['create_supply_task']
+  if (taskStatus) value.supply_tasks = [{
+    id: SUPPLY_TASK_ID, task_no: 'SUP-TEST-001', request_line_id: LINE_ID,
+    substitution_decision_id: null, supply_type: 'star_replenishment', reference_no: null,
+    expected_qty: '2.500', original_equivalent_qty: '2.500', expected_date: null,
+    status: taskStatus, version: version - 6,
+    created_at: '2026-09-01T08:50:00+08:00', updated_at: '2026-09-01T08:50:00+08:00',
+    allowed_actions: ['cancelled', 'closed_no_supply'].includes(taskStatus) ? [] : ['update_supply_task', 'cancel_supply_task']
+  }]
+  return value
+}
+
+function supplyMutationResult(action, version, taskStatus) {
+  return {
+    schema_version: '1.0', request_id: REQUEST_ID, action, request_version: version,
+    revision_id: REVISION_ID, revision_no: 1, approval_instance_id: INSTANCE_ID,
+    approval_attempt_no: 1, current_step_id: null, states: axes('approved'),
+    idempotency_replayed: false, supply_task_id: SUPPLY_TASK_ID, task_no: 'SUP-TEST-001',
+    task_status: taskStatus, task_version: version - 6
+  }
+}
+
+test('supply create and cancel preserve all axes and acknowledge exact task rereads', async (context) => {
+  const { storage } = globals()
+  let current = supplyApprovedDetail()
+  const intents = []
+  const loaded = loadWith(fakeTransport({
+    async loadAccess() { return Object.assign({}, access(), { can_manage_supply: true }) },
+    async list() { return page(current) },
+    async detail() { return current },
+    async mutate(intent) {
+      intents.push(intent)
+      const taskStatus = intent.action === 'create_supply_task' ? 'open' : 'cancelled'
+      current = supplyApprovedDetail(intent.expected_version + 1, taskStatus)
+      return supplyMutationResult(intent.action, intent.expected_version + 1, taskStatus)
+    }
+  }))
+  context.after(() => { loaded.restore(); delete global.wx })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  instance.openSupplyForm({ currentTarget: { dataset: {} } })
+  assert.ok(instance.data.supplyForm)
+  instance.supplyFieldInput({ currentTarget: { dataset: { field: 'quantity' } }, detail: { value: '2.500' } })
+  await instance.submitSupply()
+  assert.equal(intents.length, 1)
+  assert.equal(instance.data.supplyForm, null)
+  assert.equal(instance.data.supplyBlocked, false)
+  assert.equal(storage.has('rsc_oam_material_request_supply_sentinel'), false)
+  assert.deepEqual(instance.data.detail.states, axes('approved'))
+  instance.openSupplyForm({ currentTarget: { dataset: { task: SUPPLY_TASK_ID } } })
+  instance.supplyChoice({ currentTarget: { dataset: { field: 'status', value: 'cancelled' } } })
+  instance.supplyFieldInput({ currentTarget: { dataset: { field: 'comment' } }, detail: { value: '计划取消但需求保留' } })
+  await instance.submitSupply()
+  assert.equal(intents.length, 2)
+  assert.equal(intents[1].action, 'cancel_supply_task')
+  assert.equal(instance.data.detail.supply_tasks[0].status, 'cancelled')
+  assert.deepEqual(instance.data.detail.states, axes('approved'))
+})
+
+test('uncertain supply write survives restart and blocks every new business command', async (context) => {
+  const { storage } = globals()
+  let calls = 0
+  const current = supplyApprovedDetail()
+  const loaded = loadWith(fakeTransport({
+    async loadAccess() { return Object.assign({}, access(), { can_manage_supply: true }) },
+    async list() { return page(current) }, async detail() { return current },
+    async supplyCommandStatus() { return { schema_version: '1.0', lookup_status: 'not_observed', command: null } },
+    async mutate() { calls += 1; throw new Error('network timeout') }
+  }))
+  context.after(() => { loaded.restore(); delete global.wx })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  instance.openSupplyForm({ currentTarget: { dataset: {} } })
+  instance.supplyFieldInput({ currentTarget: { dataset: { field: 'quantity' } }, detail: { value: '2.500' } })
+  await instance.submitSupply()
+  assert.equal(calls, 1)
+  assert.equal(instance.data.supplyBlocked, true)
+  assert.equal(storage.has('rsc_oam_material_request_supply_sentinel'), true)
+  await instance.submitSupply()
+  await instance.confirmSubmit()
+  await instance.submitApprovalProcess()
+  assert.equal(calls, 1)
+  const restarted = pageInstance(loaded.definition)
+  await restarted.load()
+  assert.equal(restarted.data.supplyBlocked, true)
+  assert.equal(calls, 1)
+  assert.equal(storage.has('rsc_oam_material_request_supply_sentinel'), true)
+})
+
+test('supply plan capacity subtracts active exact decimals before persisting', async (context) => {
+  const { storage } = globals()
+  const current = supplyApprovedDetail(6, 'open')
+  current.supply_tasks[0].expected_qty = '12.344'
+  current.supply_tasks[0].original_equivalent_qty = '12.344'
+  let writes = 0
+  const loaded = loadWith(fakeTransport({
+    async loadAccess() { return Object.assign({}, access(), { can_manage_supply: true }) },
+    async list() { return page(current) }, async detail() { return current },
+    async mutate() { writes += 1; throw new Error('must not send over-capacity plan') }
+  }))
+  context.after(() => { loaded.restore(); delete global.wx })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  instance.openSupplyForm({ currentTarget: { dataset: {} } })
+  instance.supplyFieldInput({ currentTarget: { dataset: { field: 'quantity' } }, detail: { value: '0.002' } })
+  await instance.submitSupply()
+  assert.equal(writes, 0)
+  assert.match(instance.data.supplyForm.error, /批准余量/)
+  assert.equal(storage.has('rsc_oam_material_request_supply_sentinel'), false)
+})
+
+test('supply recovery confirms historical create while showing a later cancelled plan', async (context) => {
+  const trace = `wxreq-${'a'.repeat(36)}`
+  const { storage } = globals({ rsc_oam_material_request_supply_sentinel: {
+    v: 1, kind: 'material_request_supply', trace_request_id: trace,
+    person_id: PERSON_ID, authorization_version: 1, request_id: REQUEST_ID, request_version: 5,
+    revision_id: REVISION_ID, revision_no: 1, action: 'create_supply_task',
+    supply_task_id: null, task_version: null, created_at: '2026-09-01T00:50:00.000Z'
+  } })
+  const current = supplyApprovedDetail(7, 'cancelled')
+  const command = supplyMutationResult('create_supply_task', 6, 'open')
+  delete command.schema_version
+  delete command.idempotency_replayed
+  command.occurred_at = '2026-09-01T00:50:00.000Z'
+  let writes = 0
+  const loaded = loadWith(fakeTransport({
+    async loadAccess() { return Object.assign({}, access(), { can_manage_supply: true }) },
+    async list() { return page(current) }, async detail() { return current },
+    async supplyCommandStatus(value) {
+      assert.equal(value, trace)
+      return { schema_version: '1.0', lookup_status: 'confirmed', command }
+    },
+    async mutate() { writes += 1; throw new Error('must not replay') }
+  }))
+  context.after(() => { loaded.restore(); delete global.wx })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  assert.equal(instance.data.supplyBlocked, false)
+  assert.equal(instance.data.detail.supply_tasks[0].status, 'cancelled')
+  assert.match(instance.data.notice, /历史供给命令/)
+  assert.equal(storage.has('rsc_oam_material_request_supply_sentinel'), false)
+  assert.equal(writes, 0)
+})
+
+test('supply submission retains anchors if identity changes during result reread', async (context) => {
+  const { storage } = globals()
+  let current = supplyApprovedDetail()
+  let switched = false
+  let writes = 0
+  const loaded = loadWith(fakeTransport({
+    async loadIdentity() { return Object.assign({}, freshIdentity(), switched ? { person_id: PERSON_2_ID } : {}) },
+    async loadAccess() { return Object.assign({}, access(), { can_manage_supply: true }, switched ? { person_id: PERSON_2_ID } : {}) },
+    async list() { return page(current) }, async detail() { return current },
+    async mutate() {
+      writes += 1
+      switched = true
+      current = supplyApprovedDetail(6, 'open')
+      return supplyMutationResult('create_supply_task', 6, 'open')
+    }
+  }))
+  context.after(() => { loaded.restore(); delete global.wx })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  await instance.openRequest({ currentTarget: { dataset: { id: REQUEST_ID } } })
+  instance.openSupplyForm({ currentTarget: { dataset: {} } })
+  instance.supplyFieldInput({ currentTarget: { dataset: { field: 'quantity' } }, detail: { value: '2.500' } })
+  await instance.submitSupply()
+  assert.equal(writes, 1)
+  assert.equal(instance.data.supplyBlocked, true)
+  assert.equal(storage.has('rsc_oam_material_request_supply_sentinel'), true)
+  assert.match(instance.data.supplyForm.error, /身份或权限已变化/)
+})
+
+for (const disruption of ['identity', 'unload', 'generation']) {
+  test(`supply recovery keeps durable anchors during ${disruption} drift`, async (context) => {
+    const trace = `wxreq-${'c'.repeat(36)}`
+    const pending = { v: 1, kind: 'material_request_supply', trace_request_id: trace,
+      person_id: PERSON_ID, authorization_version: 1, request_id: REQUEST_ID, request_version: 5,
+      revision_id: REVISION_ID, revision_no: 1, action: 'create_supply_task',
+      supply_task_id: null, task_version: null, created_at: '2026-09-01T00:50:00.000Z' }
+    const { storage } = globals({ rsc_oam_material_request_supply_sentinel: pending })
+    const current = supplyApprovedDetail(6, 'open')
+    const command = supplyMutationResult('create_supply_task', 6, 'open')
+    delete command.schema_version
+    delete command.idempotency_replayed
+    command.occurred_at = '2026-09-01T00:50:00.000Z'
+    let disturbed = false
+    let instance
+    const loaded = loadWith(fakeTransport({
+      async loadIdentity() { return Object.assign({}, freshIdentity(), disturbed && disruption === 'identity' ? { person_id: PERSON_2_ID } : {}) },
+      async loadAccess() { return Object.assign({}, access(), { can_manage_supply: true }) },
+      async supplyCommandStatus() { return { schema_version: '1.0', lookup_status: 'confirmed', command } },
+      async detail() {
+        disturbed = true
+        if (disruption === 'unload') instance._unloaded = true
+        if (disruption === 'generation') instance._loadGeneration += 1
+        return current
+      },
+      async mutate() { throw new Error('must not retry write') }
+    }))
+    context.after(() => { loaded.restore(); delete global.wx })
+    instance = pageInstance(loaded.definition)
+    instance._loadGeneration = 1
+    instance.setData({ supplyBlocked: true })
+    await instance.recoverSupply()
+    assert.deepEqual(storage.get('rsc_oam_material_request_supply_sentinel'), pending)
+    assert.equal(instance.data.supplyBlocked, true)
+  })
+}
+
 function form(attachmentFileIds = [ATTACHMENT_ID]) {
   return {
     workOrder: null,
@@ -533,7 +766,8 @@ function access() {
     can_register_external: false,
     can_verify_external: false,
     can_withdraw: false,
-    can_cancel: false
+    can_cancel: false,
+    can_manage_supply: false
   }
 }
 

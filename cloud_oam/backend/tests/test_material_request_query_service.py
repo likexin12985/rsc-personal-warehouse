@@ -17,6 +17,9 @@ from app.demand_models import (
     ApprovalStep,
     MaterialRequest,
     MaterialRequestLine,
+    MaterialSubstitution,
+    SubstitutionDecision,
+    SupplyTask,
 )
 from app.formal_access import load_formal_principal
 from app.formal_services.material_request_approval import (
@@ -55,6 +58,7 @@ from test_material_request_draft_service import (
     make_world,
     submit_material_request,
 )
+from test_material_request_lifecycle_service import _approved_request
 
 
 def _grant(
@@ -64,17 +68,18 @@ def _grant(
     action: str,
     field_code: str = "",
     roles: tuple[str, ...],
+    resource: str = "material_request",
 ) -> None:
     permission = db.scalar(
         select(Permission).where(
-            Permission.resource == "material_request",
+            Permission.resource == resource,
             Permission.action == action,
             Permission.field_code == field_code,
         )
     )
     if permission is None:
         permission = Permission(
-            resource="material_request",
+            resource=resource,
             action=action,
             field_code=field_code,
             description="query service test",
@@ -591,7 +596,7 @@ def test_external_evidence_is_permission_gated_masked_and_two_person_action(db: 
     assert hidden.approval_instance.external_evidence_summaries is None
 
 
-def test_query_rejects_invalid_limits_and_preserves_supply_as_read_only(db: Session) -> None:
+def test_query_rejects_invalid_limits(db: Session) -> None:
     world = _read_world(db)
     request_id = _create_id(world, "query-invalid-limit")
     _create(db, world, request_id, key="query-invalid-limit")
@@ -602,3 +607,263 @@ def test_query_rejects_invalid_limits_and_preserves_supply_as_read_only(db: Sess
         "material_request_page_limit_invalid",
         422,
     )
+
+
+def _supply_query_world(db: Session, *, key: str):
+    world, request, line, _version = _approved_request(db, key=key)
+    _grant(
+        db,
+        world,
+        action="read",
+        roles=("technician", "provincial_manager", "admin"),
+    )
+    _grant(db, world, resource="supply_task", action="manage", roles=("admin",))
+    db.commit()
+    admin = load_formal_principal(db, world.admin_users[0].id, now=NOW)
+    return world, request, line, admin
+
+
+def _supply_projection(
+    db: Session,
+    *,
+    line: MaterialRequestLine,
+    admin,
+    quantity: str,
+    status: str = "open",
+) -> SupplyTask:
+    assignment = next(grant for grant in admin.assignments if grant.role_code == "admin")
+    task = SupplyTask(
+        id=uuid.uuid4(),
+        task_no=f"SUPPLY-{uuid.uuid4().hex}",
+        request_line_id=line.id,
+        substitution_decision_id=None,
+        supply_type="star_replenishment",
+        reference_no="STAR-REFERENCE-001" if status == "reference_registered" else None,
+        expected_qty=Decimal(quantity),
+        original_equivalent_qty=Decimal(quantity),
+        expected_date=None,
+        status=status,
+        created_by_user_id=admin.user_id,
+        created_by_person_id=admin.person_id,
+        created_role_assignment_id=assignment.assignment_id,
+        authorization_version=admin.authorization_version,
+        cancelled_by_user_id=admin.user_id if status == "cancelled" else None,
+        cancelled_at=NOW if status == "cancelled" else None,
+        version=0,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    db.add(task)
+    db.commit()
+    return task
+
+
+@pytest.mark.parametrize("task_status", ["open", "reference_registered", "awaiting_supply"])
+def test_supply_actions_respect_active_quantity_and_leave_all_state_axes_unchanged(
+    db: Session, task_status: str
+) -> None:
+    _world, request, line, admin = _supply_query_world(db, key="query-supply-capacity")
+    request_id = request.id
+    initial = material_request_detail(db, actor=admin, request_id=request.id, now=NOW)
+    assert initial.allowed_actions == ("create_supply_task",)
+    task = _supply_projection(db, line=line, admin=admin, quantity="1.000", status=task_status)
+    before = material_request_detail(db, actor=admin, request_id=request.id, now=NOW)
+    assert before.allowed_actions == ("create_supply_task",)
+    assert before.supply_tasks[0].allowed_actions == ("update_supply_task", "cancel_supply_task")
+
+    second = _supply_projection(
+        db,
+        line=line,
+        admin=admin,
+        quantity=str(line.final_approved_qty - Decimal("1.000")),
+        status="awaiting_supply",
+    )
+    with patch.object(db, "flush", side_effect=AssertionError("query flushed")), patch.object(
+        db, "commit", side_effect=AssertionError("query committed")
+    ), patch.object(db, "rollback", side_effect=AssertionError("query rolled back")):
+        full = material_request_detail(db, actor=admin, request_id=request_id, now=NOW)
+    assert full.allowed_actions == ()
+    assert {row.id for row in full.supply_tasks} == {task.id, second.id}
+    assert all(row.allowed_actions == ("update_supply_task", "cancel_supply_task") for row in full.supply_tasks)
+    assert full.states == initial.states
+
+    task.status = "cancelled"
+    task.cancelled_by_user_id = admin.user_id
+    task.cancelled_at = NOW
+    db.commit()
+    after = material_request_detail(db, actor=admin, request_id=request.id, now=NOW)
+    assert after.allowed_actions == ("create_supply_task",)
+    assert next(row for row in after.supply_tasks if row.id == task.id).allowed_actions == ()
+    assert after.states == initial.states
+
+
+@pytest.mark.parametrize("decision_status", ("proposed", "confirmed"))
+def test_active_substitution_hides_original_supply_create_and_update_but_keeps_cancel(
+    db: Session, decision_status: str
+) -> None:
+    world, request, line, admin = _supply_query_world(
+        db, key=f"query-supply-substitution-{decision_status}"
+    )
+    task = _supply_projection(
+        db, line=line, admin=admin, quantity="1.000", status="open"
+    )
+    request_id = request.id
+    task_id = task.id
+    before = material_request_detail(
+        db, actor=admin, request_id=request_id, now=NOW
+    )
+    assert before.allowed_actions == ("create_supply_task",)
+    assert before.supply_tasks[0].allowed_actions == (
+        "update_supply_task",
+        "cancel_supply_task",
+    )
+
+    substitute_material = next(
+        material for material in world.materials if material.id != line.material_id
+    )
+    governed = MaterialSubstitution(
+        material_id=line.material_id,
+        substitute_material_id=substitute_material.id,
+        ratio=Decimal("1.000000"),
+        valid_from=NOW,
+        valid_to=None,
+        status="active",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    db.add(governed)
+    db.flush()
+    assignment = next(
+        grant for grant in admin.assignments if grant.role_code == "admin"
+    )
+    decided = decision_status == "confirmed"
+    db.add(
+        SubstitutionDecision(
+            request_line_id=line.id,
+            substitution_id=governed.id,
+            original_approved_qty=line.final_approved_qty,
+            ratio=governed.ratio,
+            substitute_qty=line.final_approved_qty,
+            status=decision_status,
+            proposed_by_user_id=admin.user_id,
+            proposed_by_person_id=admin.person_id,
+            proposed_role_assignment_id=assignment.assignment_id,
+            authorization_version=admin.authorization_version,
+            proposed_at=NOW,
+            decided_by_user_id=admin.user_id if decided else None,
+            decided_by_person_id=admin.person_id if decided else None,
+            decided_role_assignment_id=(
+                assignment.assignment_id if decided else None
+            ),
+            decided_authorization_version=(
+                admin.authorization_version if decided else None
+            ),
+            decided_at=NOW if decided else None,
+            reason="当前明细活动替代料决定",
+            version=1 if decided else 0,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    db.commit()
+
+    with patch.object(
+        db, "flush", side_effect=AssertionError("query flushed")
+    ), patch.object(
+        db, "commit", side_effect=AssertionError("query committed")
+    ), patch.object(
+        db, "rollback", side_effect=AssertionError("query rolled back")
+    ):
+        filtered = material_request_detail(
+            db, actor=admin, request_id=request_id, now=NOW
+        )
+    assert filtered.allowed_actions == ()
+    projected = next(row for row in filtered.supply_tasks if row.id == task_id)
+    assert projected.allowed_actions == ("cancel_supply_task",)
+    assert filtered.states == before.states
+
+
+def test_supply_manage_requires_own_admin_entitlement_and_preserves_engineer_reads(db: Session) -> None:
+    world, request, line, admin = _supply_query_world(db, key="query-supply-authority")
+    _supply_projection(db, line=line, admin=admin, quantity="1.000")
+    _grant(
+        db,
+        world,
+        resource="supply_task",
+        action="manage",
+        roles=("technician", "provincial_manager"),
+    )
+    db.commit()
+    for user_id in (world.actor_user.id, world.manager_users[0].id):
+        principal = load_formal_principal(db, user_id, now=NOW)
+        detail = material_request_detail(db, actor=principal, request_id=request.id, now=NOW)
+        assert "create_supply_task" not in detail.allowed_actions
+        assert len(detail.supply_tasks) == 1
+        assert detail.supply_tasks[0].allowed_actions == ()
+
+    permission = db.scalar(select(Permission).where(
+        Permission.resource == "supply_task", Permission.action == "manage"
+    ))
+    role_permission = db.scalar(select(RolePermission).where(
+        RolePermission.role_id == world.roles["admin"].id,
+        RolePermission.permission_id == permission.id,
+    ))
+    db.delete(role_permission)
+    _assignment(
+        db,
+        world.admin_users[0],
+        world.roles["technician"],
+        scope_type="person",
+        scope_id=str(admin.person_id),
+        assigned_by=world.actor_user.id,
+    )
+    db.commit()
+    fresh = load_formal_principal(db, admin.user_id, now=NOW)
+    without_admin_permission = material_request_detail(db, actor=fresh, request_id=request.id, now=NOW)
+    assert "create_supply_task" not in without_admin_permission.allowed_actions
+    assert without_admin_permission.supply_tasks[0].allowed_actions == ()
+
+    _grant(db, world, resource="supply_task", action="manage", roles=("admin",))
+    role_permission = db.scalar(select(RolePermission).where(
+        RolePermission.role_id == world.roles["admin"].id,
+        RolePermission.permission_id == permission.id,
+    ))
+    role_permission.effect = "deny"
+    db.commit()
+    denied = material_request_detail(db, actor=admin, request_id=request.id, now=NOW)
+    assert "create_supply_task" not in denied.allowed_actions
+    assert denied.supply_tasks[0].allowed_actions == ()
+
+
+@pytest.mark.parametrize("task_status", ["cancelled", "closed_no_supply"])
+def test_terminal_supply_tasks_never_reopen_and_do_not_consume_plan_capacity(
+    db: Session, task_status: str
+) -> None:
+    _world, request, line, admin = _supply_query_world(db, key="query-supply-terminal")
+    _supply_projection(db, line=line, admin=admin, quantity=str(line.final_approved_qty), status=task_status)
+    detail = material_request_detail(db, actor=admin, request_id=request.id, now=NOW)
+    assert detail.allowed_actions == ("create_supply_task",)
+    assert detail.supply_tasks[0].allowed_actions == ()
+
+
+@pytest.mark.parametrize("axis, advanced_status", [
+    ("allocation_status", "allocated"),
+    ("reservation_status", "reserved"),
+    ("outbound_status", "outbound"),
+    ("shipment_status", "shipped"),
+    ("logistics_signature_status", "signed"),
+    ("oam_receipt_status", "synced"),
+    ("personal_inbound_status", "posted"),
+    ("notification_status", "sent"),
+    ("reconciliation_status", "reconciled"),
+])
+def test_supply_commands_are_hidden_when_any_independent_state_is_advanced(
+    db: Session, axis: str, advanced_status: str
+) -> None:
+    _world, request, line, admin = _supply_query_world(db, key="query-supply-state")
+    _supply_projection(db, line=line, admin=admin, quantity="1.000")
+    setattr(request, axis, advanced_status)
+    db.commit()
+    detail = material_request_detail(db, actor=admin, request_id=request.id, now=NOW)
+    assert detail.allowed_actions == ()
+    assert detail.supply_tasks[0].allowed_actions == ()

@@ -10,6 +10,62 @@ const STEP_ID = '30000000-0000-4000-8000-000000000001'
 const REGISTRATION_ID = '40000000-0000-4000-8000-000000000001'
 const MATERIAL_ID = '50000000-0000-4000-8000-000000000001'
 const WORK_ORDER_ID = '60000000-0000-4000-8000-000000000001'
+const SUPPLY_TASK_ID = '70000000-0000-4000-8000-000000000001'
+
+function supplyBody(action) {
+  return action === 'create_supply_task' ? {
+    expected_request_version: 7, request_line_id: MATERIAL_ID,
+    supply_type: 'star_replenishment', reference_no: 'SUP-001',
+    expected_qty: '2.500', expected_date: '2026-09-20', note: ''
+  } : {
+    expected_request_version: 7, expected_task_version: 0,
+    status: action === 'cancel_supply_task' ? 'cancelled' : 'reference_registered',
+    reference_no: 'SUP-001', expected_date: '2026-09-20', comment: '计划处理'
+  }
+}
+
+test('supply plans use exact POST paths and preserve original intent coordinates', async () => {
+  for (const action of ['create_supply_task', 'update_supply_task', 'cancel_supply_task']) {
+    const transport = fakeTransport()
+    const registry = contract.createMaterialRequestIntentRegistry({ coordinateFactory: coordinateFactory() })
+    const path = `/v1/material-requests/${REQUEST_ID}/supply-tasks`
+      + (action === 'create_supply_task' ? '' : `/${SUPPLY_TASK_ID}`)
+    const args = { requestId: REQUEST_ID, action, path, body: supplyBody(action), expectedVersion: 7 }
+    const intent = registry.begin(args)
+    assert.equal(registry.begin(args), intent)
+    await adapter(transport).mutate(intent)
+    assert.equal(transport.calls[0].method, 'POST')
+    assert.equal(transport.calls[0].path, path)
+    assert.equal(transport.calls[0].data, intent.body)
+    assert.equal(transport.calls[0].options.header, intent.headers)
+  }
+})
+
+test('supply plan invalid facts fail before transport', async () => {
+  for (const [action, change] of [
+    ['create_supply_task', { expected_qty: 2.5 }],
+    ['create_supply_task', { expected_qty: '0.000' }],
+    ['create_supply_task', { reference_no: 'A'.repeat(161) }],
+    ['create_supply_task', { expected_date: '2026-02-30' }],
+    ['create_supply_task', { supply_type: 'shipment' }],
+    ['create_supply_task', { personal_inbound_status: 'posted' }],
+    ['update_supply_task', { status: 'cancelled' }],
+    ['update_supply_task', { status: 'fulfilled' }],
+    ['update_supply_task', { reference_no: null }],
+    ['update_supply_task', { expected_task_version: true }],
+    ['cancel_supply_task', { comment: '' }]
+  ]) {
+    const transport = fakeTransport()
+    const actionPath = `/v1/material-requests/${REQUEST_ID}/supply-tasks`
+      + (action === 'create_supply_task' ? '' : `/${SUPPLY_TASK_ID}`)
+    const intent = contract.createMaterialRequestIntentRegistry({ coordinateFactory: coordinateFactory() }).begin({
+      requestId: REQUEST_ID, action, path: actionPath,
+      body: Object.assign(supplyBody(action), change), expectedVersion: 7
+    })
+    await assert.rejects(adapter(transport).mutate(intent))
+    assert.equal(transport.calls.length, 0)
+  }
+})
 
 function accessContext() {
   return {
@@ -167,7 +223,8 @@ test('loadAccess projects only fresh matching material-request read/create grant
     can_register_external: true,
     can_verify_external: true,
     can_withdraw: true,
-    can_cancel: true
+    can_cancel: true,
+    can_manage_supply: false
   })
   assert.deepEqual(transport.calls, [
     {
