@@ -48,7 +48,8 @@ STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION = "20260903_0049"
 STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION = "20260903_0050"
 STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION = "20260903_0051"
 OPENING_TERMINAL_GUARD_EXECUTION_REVISION = "20260903_0052"
-HEAD_REVISION = OPENING_TERMINAL_GUARD_EXECUTION_REVISION
+OPENING_GRAPH_TABLE_DISPATCH_REVISION = "20260904_0053"
+HEAD_REVISION = OPENING_GRAPH_TABLE_DISPATCH_REVISION
 OPENING_BACKFILL_DATABASE_PREFIX = f"{DATABASE_NAME}_0052_backfill_"
 RLS_BINDING_TABLE = "oam_sync_scope_bindings"
 RLS_READY_FUNCTION = "public.rsc_oam_runtime_binding_ready_0044()"
@@ -161,6 +162,13 @@ OPENING_TERMINAL_GUARD_EXECUTION_MIGRATION_0052 = (
     / "alembic"
     / "versions"
     / "20260903_0052_opening_terminal_guard_execution.py"
+)
+OPENING_GRAPH_TABLE_DISPATCH_MIGRATION_0053 = (
+    CLOUD_ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260904_0053_opening_graph_table_dispatch.py"
 )
 STOCKTAKE_OBSERVATION_BODY_SHA256_0050 = (
     "06cf2fafa1d90f120fe4bba21cc1dc55dba70bd63f649671b4333a6159af06bb"
@@ -4513,6 +4521,17 @@ def _load_opening_terminal_guard_execution_migration_0052() -> object:
     return migration
 
 
+def _load_opening_graph_table_dispatch_migration_0053() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_pg16_gate_migration_0053_opening_graph_dispatch_manifest",
+        OPENING_GRAPH_TABLE_DISPATCH_MIGRATION_0053,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
 def _0049_function_coordinate(signature: str) -> tuple[str, str, int]:
     assert signature.startswith("public.") and signature.endswith(")")
     function_name, argument_types = signature[len("public.") : -1].split(
@@ -4541,7 +4560,10 @@ def _expected_0049_function_body_sha256(
         }
     )
     hardened_scope_completion_revisions = frozenset(
-        {OPENING_TERMINAL_GUARD_EXECUTION_REVISION, HEAD_REVISION}
+        {
+            OPENING_TERMINAL_GUARD_EXECUTION_REVISION,
+            OPENING_GRAPH_TABLE_DISPATCH_REVISION,
+        }
     )
     assert expected_revision in (
         legacy_scope_completion_revisions
@@ -4703,7 +4725,8 @@ def _assert_0049_recount_guard_catalog(
         observation_scope_mode_fixed = expected_revision in {
             STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION,
             STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION,
-            HEAD_REVISION,
+            OPENING_TERMINAL_GUARD_EXECUTION_REVISION,
+            OPENING_GRAPH_TABLE_DISPATCH_REVISION,
         }
     expected_function_rows = []
     for (
@@ -5091,6 +5114,9 @@ def _assert_0052_opening_terminal_catalog(
     expected_revision: str,
 ) -> None:
     migration = _load_opening_terminal_guard_execution_migration_0052()
+    dispatch_migration = (
+        _load_opening_graph_table_dispatch_migration_0053()
+    )
     assert migration.revision == OPENING_TERMINAL_GUARD_EXECUTION_REVISION
     assert migration.down_revision == (
         STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION
@@ -5253,7 +5279,16 @@ def _assert_0052_opening_terminal_catalog(
                 row[7],
                 False,
                 row[8],
-                row[9],
+                (
+                    dispatch_migration.GRAPH_CLOSURE_BODY_SHA256_0053
+                    if (
+                        expected_revision
+                        == OPENING_GRAPH_TABLE_DISPATCH_REVISION
+                        and row[0]
+                        == dispatch_migration.GRAPH_CLOSURE_SIGNATURE
+                    )
+                    else row[9]
+                ),
                 False,
             )
             for row in migration.HEAD_ONLY_FUNCTION_CATALOG
@@ -6823,6 +6858,128 @@ def _assert_0052_legacy_backfill_and_atomic_rejection() -> None:
         _drop_opening_backfill_database(rejected_database)
 
 
+def _0053_graph_dispatch_catalog_state() -> dict[str, object]:
+    migration = _load_opening_graph_table_dispatch_migration_0053()
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT function_row.oid, "
+                "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+                "function_row.prosrc, 'UTF8')), 'hex'), function_row.prosrc "
+                "FROM pg_catalog.pg_proc AS function_row "
+                "WHERE function_row.oid = pg_catalog.to_regprocedure(%s)",
+                (migration.GRAPH_CLOSURE_SIGNATURE,),
+            )
+            graph_row = cursor.fetchone()
+            cursor.execute(
+                "SELECT function_row.oid, "
+                "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+                "function_row.prosrc, 'UTF8')), 'hex'), function_row.prosrc "
+                "FROM pg_catalog.pg_proc AS function_row "
+                "WHERE function_row.oid = pg_catalog.to_regprocedure(%s)",
+                (migration.RUNTIME_READY_SIGNATURE,),
+            )
+            readiness_row = cursor.fetchone()
+            cursor.execute(
+                "SELECT namespace_row.nspname, table_row.relname, "
+                "trigger_row.tgname, trigger_row.tgfoid, "
+                "trigger_row.tgtype, trigger_row.tgenabled, "
+                "trigger_row.tgconstraint, trigger_row.tgdeferrable, "
+                "trigger_row.tginitdeferred "
+                "FROM pg_catalog.pg_trigger AS trigger_row "
+                "JOIN pg_catalog.pg_class AS table_row "
+                "ON table_row.oid = trigger_row.tgrelid "
+                "JOIN pg_catalog.pg_namespace AS namespace_row "
+                "ON namespace_row.oid = table_row.relnamespace "
+                "WHERE NOT trigger_row.tgisinternal "
+                "AND trigger_row.tgfoid = pg_catalog.to_regprocedure(%s) "
+                "ORDER BY namespace_row.nspname, table_row.relname, "
+                "trigger_row.tgname",
+                (migration.GRAPH_CLOSURE_SIGNATURE,),
+            )
+            trigger_rows = cursor.fetchall()
+
+    assert graph_row is not None
+    assert readiness_row is not None
+    assert len(trigger_rows) == len(migration.GRAPH_CLOSURE_TRIGGER_CATALOG)
+    return {
+        "graph_oid": graph_row[0],
+        "graph_sha256": graph_row[1],
+        "graph_source": graph_row[2],
+        "readiness_oid": readiness_row[0],
+        "readiness_sha256": readiness_row[1],
+        "readiness_source": readiness_row[2],
+        "triggers": trigger_rows,
+    }
+
+
+def _assert_0053_empty_graph_downgrade_and_reupgrade() -> None:
+    assert _current_revision() == HEAD_REVISION
+    migration = _load_opening_graph_table_dispatch_migration_0053()
+    assert migration.revision == OPENING_GRAPH_TABLE_DISPATCH_REVISION
+    assert migration.down_revision == OPENING_TERMINAL_GUARD_EXECUTION_REVISION
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_catalog.count(*) FROM public.stocktake_tasks "
+                "WHERE task_type = 'opening'"
+            )
+            assert cursor.fetchone() == (0,)
+
+    head_state = _0053_graph_dispatch_catalog_state()
+    assert head_state["graph_sha256"] == (
+        migration.GRAPH_CLOSURE_BODY_SHA256_0053
+    )
+    assert head_state["readiness_sha256"] == (
+        migration.RUNTIME_READY_BODY_SHA256_0053
+    )
+    assert head_state["graph_source"].count(
+        migration.GRAPH_ROUND_DISPATCH_0053
+    ) == 1
+    assert migration.GRAPH_ROUND_DISPATCH_0052 not in head_state["graph_source"]
+    assert migration.RUNTIME_READY_REVISION_0053 in head_state[
+        "readiness_source"
+    ]
+    _assert_0052_opening_terminal_catalog(
+        hardened=True,
+        expected_revision=HEAD_REVISION,
+    )
+
+    _run_alembic("downgrade", OPENING_TERMINAL_GUARD_EXECUTION_REVISION)
+    assert _current_revision() == OPENING_TERMINAL_GUARD_EXECUTION_REVISION
+    legacy_state = _0053_graph_dispatch_catalog_state()
+    assert legacy_state["graph_sha256"] == (
+        migration.GRAPH_CLOSURE_BODY_SHA256_0052
+    )
+    assert legacy_state["readiness_sha256"] == (
+        migration.RUNTIME_READY_BODY_SHA256_0052
+    )
+    assert legacy_state["graph_source"].count(
+        migration.GRAPH_ROUND_DISPATCH_0052
+    ) == 1
+    assert migration.GRAPH_ROUND_DISPATCH_0053 not in legacy_state[
+        "graph_source"
+    ]
+    assert migration.RUNTIME_READY_REVISION_0052 in legacy_state[
+        "readiness_source"
+    ]
+    assert legacy_state["graph_oid"] == head_state["graph_oid"]
+    assert legacy_state["readiness_oid"] == head_state["readiness_oid"]
+    assert legacy_state["triggers"] == head_state["triggers"]
+    _assert_0052_opening_terminal_catalog(
+        hardened=True,
+        expected_revision=OPENING_TERMINAL_GUARD_EXECUTION_REVISION,
+    )
+
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    assert _0053_graph_dispatch_catalog_state() == head_state
+    _assert_0052_opening_terminal_catalog(
+        hardened=True,
+        expected_revision=HEAD_REVISION,
+    )
+
+
 def _assert_0052_empty_graph_downgrade_and_reupgrade() -> None:
     assert _current_revision() == HEAD_REVISION
     migration = _load_opening_terminal_guard_execution_migration_0052()
@@ -6914,7 +7071,9 @@ def _assert_0052_opening_history_downgrade_rejected(
     *,
     task_id: uuid.UUID,
 ) -> None:
-    migration = _load_opening_terminal_guard_execution_migration_0052()
+    dispatch_migration = (
+        _load_opening_graph_table_dispatch_migration_0053()
+    )
     with psycopg.connect(**_admin_parameters()) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -6930,7 +7089,9 @@ def _assert_0052_opening_history_downgrade_rejected(
         STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION,
         expect_success=False,
     )
-    assert migration.DOWNGRADE_BLOCKER in (blocked.stdout + blocked.stderr)
+    assert dispatch_migration.DOWNGRADE_BLOCKER in (
+        blocked.stdout + blocked.stderr
+    )
     assert _current_revision() == HEAD_REVISION
 
     with psycopg.connect(**_admin_parameters()) as connection:
@@ -14875,6 +15036,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
+    _assert_0053_empty_graph_downgrade_and_reupgrade()
     _assert_0052_empty_graph_downgrade_and_reupgrade()
     _assert_0051_empty_graph_downgrade_and_reupgrade()
     _assert_0050_empty_graph_downgrade_and_reupgrade()

@@ -387,7 +387,14 @@ OPENING_TERMINAL_GUARD_EXECUTION_REVISION = (
     / "versions"
     / "20260903_0052_opening_terminal_guard_execution.py"
 )
-HEAD_REVISION = "20260903_0052"
+OPENING_GRAPH_TABLE_DISPATCH_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260904_0053_opening_graph_table_dispatch.py"
+)
+HEAD_REVISION = "20260904_0053"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -409,6 +416,8 @@ STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION_ID = "20260903_0049"
 STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID = "20260903_0050"
 STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID = "20260903_0051"
 OPENING_TERMINAL_GUARD_EXECUTION_REVISION_ID = "20260903_0052"
+OPENING_GRAPH_TABLE_DISPATCH_REVISION_ID = "20260904_0053"
+PRE_OPENING_GRAPH_TABLE_DISPATCH_HEAD_REVISION = "20260903_0052"
 PRE_OPENING_TERMINAL_GUARD_EXECUTION_HEAD_REVISION = "20260903_0051"
 PRE_STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_HEAD_REVISION = "20260903_0050"
 PRE_STOCKTAKE_OBSERVATION_SCOPE_MODE_HEAD_REVISION = "20260903_0049"
@@ -1414,8 +1423,14 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
+    assert head.down_revision == PRE_OPENING_GRAPH_TABLE_DISPATCH_HEAD_REVISION
+    previous_opening_graph_table_dispatch_head = script.get_revision(
+        PRE_OPENING_GRAPH_TABLE_DISPATCH_HEAD_REVISION
+    )
+    assert previous_opening_graph_table_dispatch_head is not None
     assert (
-        head.down_revision == PRE_OPENING_TERMINAL_GUARD_EXECUTION_HEAD_REVISION
+        previous_opening_graph_table_dispatch_head.down_revision
+        == PRE_OPENING_TERMINAL_GUARD_EXECUTION_HEAD_REVISION
     )
     previous_opening_terminal_guard_execution_head = script.get_revision(
         PRE_OPENING_TERMINAL_GUARD_EXECUTION_HEAD_REVISION
@@ -2895,6 +2910,17 @@ def _load_0052_migration_module():
     spec = importlib.util.spec_from_file_location(
         "opening_terminal_guard_execution_migration_0052",
         OPENING_TERMINAL_GUARD_EXECUTION_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_0053_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "opening_graph_table_dispatch_migration_0053",
+        OPENING_GRAPH_TABLE_DISPATCH_REVISION,
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -6178,6 +6204,293 @@ def test_0052_postgresql_offline_downgrade_blocks_active_opening_and_restores(
         < sql.index(f"ALTER FUNCTION {module.COMMIT_SIGNATURE} SECURITY INVOKER")
         < sql.index("legacy downgrade postflight")
         < sql.index(ready_sql)
+    )
+
+
+def test_0053_pins_nested_round_dispatch_and_exact_function_sources(
+    monkeypatch,
+) -> None:
+    migration_0052 = _load_0052_migration_module()
+    module = _load_0053_migration_module()
+    assert module.revision == OPENING_GRAPH_TABLE_DISPATCH_REVISION_ID
+    assert module.down_revision == PRE_OPENING_GRAPH_TABLE_DISPATCH_HEAD_REVISION
+    assert module.PREVIOUS_SCHEMA_REVISION == module.down_revision
+    assert len(module.GRAPH_CLOSURE_TRIGGER_CATALOG) == 15
+    assert len({row[1] for row in module.GRAPH_CLOSURE_TRIGGER_CATALOG}) == 15
+    assert module.GRAPH_CLOSURE_TRIGGER_CATALOG == tuple(
+        (
+            table_name,
+            trigger_name,
+            21 if operations == "INSERT OR UPDATE" else 5,
+        )
+        for table_name, trigger_name, operations
+        in migration_0052.GRAPH_CLOSURE_TRIGGER_CATALOG
+    )
+    assert {row[0] for row in module.GRAPH_CLOSURE_TRIGGER_CATALOG} <= set(
+        module.LOCK_TABLES
+    )
+    assert len(module.LOCK_TABLES) == 57
+    assert len(set(module.LOCK_TABLES)) == len(module.LOCK_TABLES)
+    assert module.LOCK_TABLES == migration_0052.LOCK_TABLES
+
+    legacy_body = migration_0052.GRAPH_CLOSURE_BODY
+    assert hashlib.sha256(legacy_body.encode("utf-8")).hexdigest() == (
+        module.GRAPH_CLOSURE_BODY_SHA256_0052
+    )
+    assert legacy_body.count(module.GRAPH_ROUND_DISPATCH_0052) == 1
+    assert module.GRAPH_ROUND_DISPATCH_0053 not in legacy_body
+    fixed_body = legacy_body.replace(
+        module.GRAPH_ROUND_DISPATCH_0052,
+        module.GRAPH_ROUND_DISPATCH_0053,
+    )
+    assert hashlib.sha256(fixed_body.encode("utf-8")).hexdigest() == (
+        module.GRAPH_CLOSURE_BODY_SHA256_0053
+    )
+    assert fixed_body.count(module.GRAPH_ROUND_DISPATCH_0053) == 1
+    assert module.GRAPH_ROUND_DISPATCH_0052 not in fixed_body
+    assert fixed_body.replace(
+        module.GRAPH_ROUND_DISPATCH_0053,
+        module.GRAPH_ROUND_DISPATCH_0052,
+    ) == legacy_body
+    legacy_table_dispatch_conditions = re.findall(
+        r"\bIF\s+(TG_TABLE_NAME\b.*?)\s+THEN\b",
+        " ".join(legacy_body.split()),
+        flags=re.IGNORECASE,
+    )
+    fixed_table_dispatch_conditions = re.findall(
+        r"\bIF\s+(TG_TABLE_NAME\b.*?)\s+THEN\b",
+        " ".join(fixed_body.split()),
+        flags=re.IGNORECASE,
+    )
+    assert any(
+        re.search(r"\b(?:AND|OR)\b", condition, flags=re.IGNORECASE)
+        and re.search(r"\b(?:NEW|OLD)\.", condition, flags=re.IGNORECASE)
+        for condition in legacy_table_dispatch_conditions
+    )
+    assert not any(
+        re.search(r"\b(?:AND|OR)\b", condition, flags=re.IGNORECASE)
+        and re.search(r"\b(?:NEW|OLD)\.", condition, flags=re.IGNORECASE)
+        for condition in fixed_table_dispatch_conditions
+    )
+    assert "IF TG_TABLE_NAME = 'stocktake_rounds' THEN" in fixed_body
+    assert "        IF NEW.status = 'counting' THEN" in fixed_body
+
+    legacy_ready_sql = migration_0052._oam_runtime_ready_function_sql(
+        module.PREVIOUS_SCHEMA_REVISION
+    )
+    legacy_ready_body = legacy_ready_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    assert hashlib.sha256(legacy_ready_body.encode("utf-8")).hexdigest() == (
+        module.RUNTIME_READY_BODY_SHA256_0052
+    )
+    assert legacy_ready_body.count(module.RUNTIME_READY_REVISION_0052) == 1
+    fixed_ready_body = legacy_ready_body.replace(
+        module.RUNTIME_READY_REVISION_0052,
+        module.RUNTIME_READY_REVISION_0053,
+    )
+    assert hashlib.sha256(fixed_ready_body.encode("utf-8")).hexdigest() == (
+        module.RUNTIME_READY_BODY_SHA256_0053
+    )
+
+    parser = pytest.importorskip("pglast.parser")
+    parser.parse_sql(
+        "CREATE FUNCTION public.rsc_0053_parse_probe() RETURNS trigger "
+        "LANGUAGE plpgsql AS $rsc_0053_parse$"
+        + fixed_body
+        + "$rsc_0053_parse$"
+    )
+    parser.parse_plpgsql_json(
+        "CREATE FUNCTION public.rsc_0053_parse_probe() RETURNS trigger "
+        "LANGUAGE plpgsql AS $rsc_0053_parse$"
+        + fixed_body
+        + "$rsc_0053_parse$"
+    )
+    statements: list[str] = []
+    monkeypatch.setattr(module.op, "execute", statements.append)
+    module._verify_graph_catalog(
+        expected_body_sha256=module.GRAPH_CLOSURE_BODY_SHA256_0052,
+        phase="legacy parse probe",
+    )
+    module._verify_graph_catalog(
+        expected_body_sha256=module.GRAPH_CLOSURE_BODY_SHA256_0053,
+        phase="fixed parse probe",
+    )
+    module._verify_runtime_ready_catalog(
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0052,
+        phase="legacy readiness parse probe",
+    )
+    module._verify_runtime_ready_catalog(
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0053,
+        phase="fixed readiness parse probe",
+    )
+    module._replace_function_source(
+        signature=module.GRAPH_CLOSURE_SIGNATURE,
+        expected_body_sha256=module.GRAPH_CLOSURE_BODY_SHA256_0052,
+        expected_replacement_body_sha256=(
+            module.GRAPH_CLOSURE_BODY_SHA256_0053
+        ),
+        source_fragment=module.GRAPH_ROUND_DISPATCH_0052,
+        replacement_fragment=module.GRAPH_ROUND_DISPATCH_0053,
+        phase="graph parse probe",
+    )
+    module._replace_function_source(
+        signature=module.RUNTIME_READY_SIGNATURE,
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0052,
+        expected_replacement_body_sha256=(
+            module.RUNTIME_READY_BODY_SHA256_0053
+        ),
+        source_fragment=module.RUNTIME_READY_REVISION_0052,
+        replacement_fragment=module.RUNTIME_READY_REVISION_0053,
+        phase="readiness parse probe",
+    )
+    module._require_no_opening_evidence()
+    for statement in statements:
+        assert not sa.text(statement)._bindparams
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+
+    with pytest.raises(ValueError, match="unsupported 0053 graph body hash"):
+        module._verify_graph_catalog(
+            expected_body_sha256="0" * 64,
+            phase="invalid",
+        )
+    with pytest.raises(ValueError, match="unsupported 0053 readiness body hash"):
+        module._verify_runtime_ready_catalog(
+            expected_body_sha256="0" * 64,
+            phase="invalid",
+        )
+    with pytest.raises(ValueError, match="unsupported 0053 function"):
+        module._replace_function_source(
+            signature=module.GRAPH_CLOSURE_SIGNATURE,
+            expected_body_sha256=module.GRAPH_CLOSURE_BODY_SHA256_0052,
+            expected_replacement_body_sha256=(
+                module.GRAPH_CLOSURE_BODY_SHA256_0053
+            ),
+            source_fragment=module.GRAPH_ROUND_DISPATCH_0053,
+            replacement_fragment=module.GRAPH_ROUND_DISPATCH_0052,
+            phase="invalid",
+        )
+
+
+def test_0053_postgresql_offline_upgrade_is_source_only_and_fail_closed(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0053_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_OPENING_GRAPH_TABLE_DISPATCH_HEAD_REVISION}:"
+        f"{OPENING_GRAPH_TABLE_DISPATCH_REVISION_ID}",
+        sql=True,
+    )
+    sql = output.getvalue()
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(
+            f"public.{table_name}" for table_name in module.LOCK_TABLES
+        )
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    assert "-- Running upgrade 20260903_0052 -> 20260904_0053" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count("EXECUTE replacement_definition") == 2
+    for failure_reason in (
+        "migration role mismatch",
+        "graph identity mismatch",
+        "graph function mismatch",
+        "graph ACL mismatch",
+        "graph trigger mismatch",
+        "readiness identity mismatch",
+        "readiness function mismatch",
+        "readiness ACL mismatch",
+        "source mismatch",
+        "definition mismatch",
+        "replacement hash mismatch",
+    ):
+        assert failure_reason in sql
+    assert module.GRAPH_CLOSURE_BODY_SHA256_0052 in sql
+    assert module.GRAPH_CLOSURE_BODY_SHA256_0053 in sql
+    assert module.RUNTIME_READY_BODY_SHA256_0052 in sql
+    assert module.RUNTIME_READY_BODY_SHA256_0053 in sql
+    assert module.GRAPH_ROUND_DISPATCH_0052 in sql
+    assert module.GRAPH_ROUND_DISPATCH_0053 in sql
+    assert "function_row.proowner = migrator_oid" in sql
+    assert "function_row.proconfig = ARRAY['search_path=pg_catalog, public']" in sql
+    assert "function_row.proconfig = ARRAY['search_path=pg_catalog']" in sql
+    assert "function_acl.grantee NOT IN" in sql
+    assert "trigger_row.tgenabled = 'A'" in sql
+    assert "trigger_row.tgdeferrable" in sql
+    assert "trigger_row.tginitdeferred" in sql
+    assert "CREATE TABLE" not in sql
+    assert "ALTER TABLE" not in sql
+    assert "DROP TRIGGER" not in sql
+    assert "CREATE TRIGGER" not in sql
+    assert "GRANT " not in sql
+    assert "REVOKE " not in sql
+    assert "INSERT INTO public." not in sql
+    assert "UPDATE public." not in sql
+    assert "DELETE FROM public." not in sql
+    assert module.DOWNGRADE_BLOCKER not in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("upgrade preflight")
+        < sql.index("graph upgrade")
+        < sql.index("readiness upgrade")
+        < sql.index("upgrade postflight")
+    )
+
+
+def test_0053_postgresql_offline_downgrade_requires_empty_opening_graph(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0053_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.downgrade(
+        config,
+        f"{OPENING_GRAPH_TABLE_DISPATCH_REVISION_ID}:"
+        f"{PRE_OPENING_GRAPH_TABLE_DISPATCH_HEAD_REVISION}",
+        sql=True,
+    )
+    sql = output.getvalue()
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(
+            f"public.{table_name}" for table_name in module.LOCK_TABLES
+        )
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    assert "-- Running downgrade 20260904_0053 -> 20260903_0052" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count("EXECUTE replacement_definition") == 2
+    assert sql.count(module.DOWNGRADE_BLOCKER) == 1
+    assert "task.task_type = 'opening'" in sql
+    assert "FROM public.inventory_opening_establishments" in sql
+    assert "opening-reconciliation-" in sql
+    assert "CREATE TABLE" not in sql
+    assert "ALTER TABLE" not in sql
+    assert "DROP TRIGGER" not in sql
+    assert "CREATE TRIGGER" not in sql
+    assert "GRANT " not in sql
+    assert "REVOKE " not in sql
+    assert "INSERT INTO public." not in sql
+    assert "UPDATE public." not in sql
+    assert "DELETE FROM public." not in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("downgrade preflight")
+        < sql.index(module.DOWNGRADE_BLOCKER)
+        < sql.index("readiness downgrade")
+        < sql.index("graph downgrade")
+        < sql.index("downgrade postflight")
     )
 
 

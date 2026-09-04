@@ -3434,7 +3434,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_require_opening_count_write_current_0052", ""):
         "1eba1b857922dbe1b60a9e7b3c98c5b2250162057262c8849a504441bebeb537",
     ("rsc_require_opening_live_graph_0052", ""):
-        "5d9dc35f6ff5a98ded70055d629484bbc9c2aa420f5bd84f3b45070563dd3c24",
+        "4fd3e6f9dd5ab04b21d86b9c6575171c1de92a2a54f7391ecd226ac09b4d0564",
     ("rsc_validate_stocktake_scope_region_owner_0025", ""):
         "904a443c2c5930356af0f15f444f29ec6b6ce61f32294e4b2e3b40dd3a0e4e8e",
     ("rsc_guard_reconciliation_effect_0026", ""):

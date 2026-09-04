@@ -291,6 +291,13 @@ OPENING_TERMINAL_GUARD_EXECUTION_MIGRATION_0052 = (
     / "versions"
     / "20260903_0052_opening_terminal_guard_execution.py"
 )
+OPENING_GRAPH_TABLE_DISPATCH_MIGRATION_0053 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260904_0053_opening_graph_table_dispatch.py"
+)
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
     / "backend"
@@ -834,6 +841,17 @@ def _load_opening_terminal_guard_execution_migration_0052() -> object:
     spec = importlib.util.spec_from_file_location(
         "rsc_migration_0052_opening_terminal_guard_execution_manifest",
         OPENING_TERMINAL_GUARD_EXECUTION_MIGRATION_0052,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_opening_graph_table_dispatch_migration_0053() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0053_opening_graph_table_dispatch_manifest",
+        OPENING_GRAPH_TABLE_DISPATCH_MIGRATION_0053,
     )
     assert spec is not None and spec.loader is not None
     migration = importlib.util.module_from_spec(spec)
@@ -1954,6 +1972,17 @@ def _opening_terminal_0052_function_bodies() -> dict[tuple[str, str], str]:
         "rsc_migration_0026_opening_terminal_0052_manifest",
     )
     migration_0052 = _load_opening_terminal_guard_execution_migration_0052()
+    migration_0053 = _load_opening_graph_table_dispatch_migration_0053()
+    assert migration_0052.GRAPH_CLOSURE_BODY.count(
+        migration_0053.GRAPH_ROUND_DISPATCH_0052
+    ) == 1
+    head_graph_closure_body = migration_0052.GRAPH_CLOSURE_BODY.replace(
+        migration_0053.GRAPH_ROUND_DISPATCH_0052,
+        migration_0053.GRAPH_ROUND_DISPATCH_0053,
+    )
+    assert hashlib.sha256(
+        head_graph_closure_body.encode("utf-8")
+    ).hexdigest() == migration_0053.GRAPH_CLOSURE_BODY_SHA256_0053
 
     executed_0011: list[str] = []
     migration_0011.op = SimpleNamespace(execute=executed_0011.append)
@@ -2085,7 +2114,7 @@ def _opening_terminal_0052_function_bodies() -> dict[tuple[str, str], str]:
             migration_0052.INSERT_GUARD_BODY,
         migration_0052.COUNT_WRITE_FUNCTION: migration_0052.COUNT_WRITE_BODY,
         migration_0052.GRAPH_CLOSURE_FUNCTION:
-            migration_0052.GRAPH_CLOSURE_BODY,
+            head_graph_closure_body,
     }
     for row in migration_0052.HEAD_ONLY_FUNCTION_CATALOG:
         coordinate = (row[1], ", ".join(row[5]))
@@ -2096,6 +2125,7 @@ def _opening_terminal_0052_function_bodies() -> dict[tuple[str, str], str]:
 def test_0052_opening_terminal_internal_function_manifest_is_exact() -> None:
     bodies = _opening_terminal_0052_function_bodies()
     migration_0052 = _load_opening_terminal_guard_execution_migration_0052()
+    migration_0053 = _load_opening_graph_table_dispatch_migration_0053()
     actor_assignment_coordinate = (
         "rsc_stocktake_actor_assignment_valid_0011",
         (
@@ -2205,7 +2235,11 @@ def test_0052_opening_terminal_internal_function_manifest_is_exact() -> None:
         coordinate = (row[1], ", ".join(row[5]))
         expected_definitions[coordinate] = (row[4], row[7], row[3], row[8])
         expected_shapes[coordinate] = ("f", row[2], False)
-        expected_hashes[coordinate] = row[9]
+        expected_hashes[coordinate] = (
+            migration_0053.GRAPH_CLOSURE_BODY_SHA256_0053
+            if row[1] == migration_0052.GRAPH_CLOSURE_FUNCTION
+            else row[9]
+        )
 
     assert migration_0052.revision == "20260903_0052"
     assert migration_0052.down_revision == "20260903_0051"
