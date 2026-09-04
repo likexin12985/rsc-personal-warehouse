@@ -5728,6 +5728,21 @@ ORDER BY event.id
 )
 
 
+def _select_material_request_approval_functions(
+    rows: list[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    # Keep unknown functions in these migration families visible to the exact
+    # catalog-set validator. Selecting only manifest names would hide drift.
+    return [
+        row
+        for row in rows
+        if isinstance(row.get("function_name"), str)
+        and row["function_name"].endswith(
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060")
+        )
+    ]
+
+
 def validate_production_database_security(
     engine: Engine,
     *,
@@ -5753,14 +5768,9 @@ def validate_production_database_security(
             column_acl = connection.execute(_COLUMN_ACL_SQL).mappings().all()
             sequence_acl = connection.execute(_SEQUENCE_ACL_SQL).mappings().all()
             function_acl = connection.execute(_FUNCTION_ACL_SQL).mappings().all()
-            material_request_approval_functions = [
-                row
-                for row in function_acl
-                if isinstance(row.get("function_name"), str)
-                and row["function_name"].endswith(
-                    ("_0029", "_0030", "_0045", "_0046")
-                )
-            ]
+            material_request_approval_functions = (
+                _select_material_request_approval_functions(function_acl)
+            )
             audit_triggers = connection.execute(_AUDIT_TRIGGER_SQL).mappings().all()
             audit_stream_columns = connection.execute(
                 _AUDIT_STREAM_COLUMN_SQL

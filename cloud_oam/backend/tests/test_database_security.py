@@ -6930,6 +6930,38 @@ def _valid_material_request_approval_function_rows(
     return rows
 
 
+def test_runtime_approval_function_selector_covers_every_manifest_family(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.database_security import _select_material_request_approval_functions
+
+    functions = _valid_material_request_approval_function_rows(monkeypatch)
+    unrelated = {"function_name": "rsc_non_supply_function_0015"}
+    selected = _select_material_request_approval_functions([
+        *functions, unrelated, {"function_name": None},
+    ])
+    assert selected == functions
+    assert {
+        (row["function_name"], row["argument_types"]) for row in selected
+    } == set(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256)
+    _assert_valid_material_request_approval_catalog(monkeypatch, functions=selected)
+
+
+@pytest.mark.parametrize("suffix", ["0059", "0060"])
+def test_runtime_approval_function_selector_does_not_hide_unknown_supply_function(
+    monkeypatch: pytest.MonkeyPatch,
+    suffix: str,
+) -> None:
+    from app.database_security import _select_material_request_approval_functions
+
+    functions = _valid_material_request_approval_function_rows(monkeypatch)
+    unexpected = {**functions[0], "function_name": f"rsc_unreviewed_supply_{suffix}"}
+    selected = _select_material_request_approval_functions([*functions, unexpected])
+    assert unexpected in selected
+    with pytest.raises(DatabaseSecurityBoundaryError, match="function_set"):
+        _assert_valid_material_request_approval_catalog(monkeypatch, functions=selected)
+
+
 def _valid_material_request_content_manifest_columns(
 ) -> list[dict[str, object]]:
     return [dict(EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_COLUMN)]
