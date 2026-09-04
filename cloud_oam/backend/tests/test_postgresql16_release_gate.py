@@ -4525,6 +4525,51 @@ def _0049_function_coordinate(signature: str) -> tuple[str, str, int]:
     return function_name, database_argument_types, argument_count
 
 
+def _expected_0049_function_body_sha256(
+    migration: object,
+    *,
+    signature: str,
+    expected_revision: str,
+    observation_scope_mode_fixed: bool,
+) -> str:
+    legacy_scope_completion_revisions = frozenset(
+        {
+            STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION,
+            STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION,
+            STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION,
+            STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION,
+        }
+    )
+    hardened_scope_completion_revisions = frozenset(
+        {OPENING_TERMINAL_GUARD_EXECUTION_REVISION, HEAD_REVISION}
+    )
+    assert expected_revision in (
+        legacy_scope_completion_revisions
+        | hardened_scope_completion_revisions
+    ), f"unsupported 0049 catalog revision: {expected_revision}"
+
+    expected_body_sha256 = migration.EXPECTED_FUNCTION_BODY_SHA256[signature]
+    if (
+        observation_scope_mode_fixed
+        and signature == migration.OBSERVATION_CALLER_0021_SIGNATURE
+    ):
+        expected_body_sha256 = STOCKTAKE_OBSERVATION_BODY_SHA256_0050
+    if (
+        expected_revision in hardened_scope_completion_revisions
+        and signature == migration.SCOPE_COMPLETION_CALLER_0021_SIGNATURE
+    ):
+        opening_migration = (
+            _load_opening_terminal_guard_execution_migration_0052()
+        )
+        assert signature == (
+            opening_migration.SCOPE_COMPLETION_GUARD_SIGNATURE_0021
+        )
+        expected_body_sha256 = (
+            opening_migration.FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
+        )
+    return expected_body_sha256
+
+
 def _assert_0049_recount_guard_catalog(
     *,
     callers_security_definer: bool,
@@ -4702,12 +4747,13 @@ def _assert_0049_recount_guard_catalog(
                     if expected_search_path is None
                     else [expected_search_path]
                 ),
-                (
-                    STOCKTAKE_OBSERVATION_BODY_SHA256_0050
-                    if observation_scope_mode_fixed
-                    and signature
-                    == migration.OBSERVATION_CALLER_0021_SIGNATURE
-                    else migration.EXPECTED_FUNCTION_BODY_SHA256[signature]
+                _expected_0049_function_body_sha256(
+                    migration,
+                    signature=signature,
+                    expected_revision=expected_revision,
+                    observation_scope_mode_fixed=(
+                        observation_scope_mode_fixed
+                    ),
                 ),
                 False,
                 False,

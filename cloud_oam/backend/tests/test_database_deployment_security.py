@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -170,6 +173,58 @@ def test_postgresql16_scratch_cleanup_always_restores_projector_connect() -> Non
     assert "_restore_main_projector_connect()" in create_source
     assert "raise cleanup_error from creation_error" in create_source
     assert "raise cleanup_error from setup_error" in create_source
+
+
+def test_postgresql16_0049_catalog_uses_0052_scope_guard_hash_by_revision() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_pg16_gate_catalog_hash_test",
+        PG16_RELEASE_GATE_TEST,
+    )
+    assert spec is not None and spec.loader is not None
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+
+    migration_0049 = gate._load_stocktake_recount_guard_security_migration_0049()
+    migration_0052 = gate._load_opening_terminal_guard_execution_migration_0052()
+    signature = migration_0049.SCOPE_COMPLETION_CALLER_0021_SIGNATURE
+    assert signature == migration_0052.SCOPE_COMPLETION_GUARD_SIGNATURE_0021
+
+    for legacy_revision in (
+        gate.STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION,
+        gate.STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION,
+        gate.STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION,
+        gate.STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION,
+    ):
+        assert gate._expected_0049_function_body_sha256(
+            migration_0049,
+            signature=signature,
+            expected_revision=legacy_revision,
+            observation_scope_mode_fixed=True,
+        ) == migration_0052.LEGACY_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
+
+    assert gate.HEAD_REVISION == gate.OPENING_TERMINAL_GUARD_EXECUTION_REVISION
+    assert gate._expected_0049_function_body_sha256(
+        migration_0049,
+        signature=signature,
+        expected_revision=gate.HEAD_REVISION,
+        observation_scope_mode_fixed=True,
+    ) == migration_0052.FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
+
+    with pytest.raises(AssertionError, match="unsupported 0049 catalog revision"):
+        gate._expected_0049_function_body_sha256(
+            migration_0049,
+            signature=signature,
+            expected_revision="20260904_0053",
+            observation_scope_mode_fixed=True,
+        )
+
+    unrelated_signature = migration_0049.COUNT_LINE_CALLER_0021_SIGNATURE
+    assert gate._expected_0049_function_body_sha256(
+        migration_0049,
+        signature=unrelated_signature,
+        expected_revision=gate.OPENING_TERMINAL_GUARD_EXECUTION_REVISION,
+        observation_scope_mode_fixed=True,
+    ) == migration_0049.EXPECTED_FUNCTION_BODY_SHA256[unrelated_signature]
 
 
 def test_deployment_verifier_allows_only_0044_runtime_entrypoints() -> None:
