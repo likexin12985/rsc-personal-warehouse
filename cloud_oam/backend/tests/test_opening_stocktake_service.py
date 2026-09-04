@@ -74,6 +74,10 @@ from app.inventory_models import (
     CustodyAssignment,
 )
 from app.models import User
+from app.opening_stocktake_schemas import (
+    OpeningPhysicalObservationIn,
+    OpeningStocktakeCountIn,
+)
 from app.stocktake_models import (
     FormalStocktakeScope,
     FormalStocktakeTask,
@@ -2019,6 +2023,17 @@ def test_initial_scope_count_seals_round_without_creating_inventory_facts(
     assert line is not None
     assert line.stock_account_id == world.account.id
     assert line.counted_qty == Decimal("2.000")
+    completion = db.scalar(select(StocktakeScopeCountCompletion))
+    assert completion is not None
+    expected_request = opening_count_service._request_document(
+        world.principals["manager_x"],
+        command,
+    )
+    assert completion.request_jsonb == expected_request
+    assert completion.request_sha256 == opening_count_service._hash_document(
+        expected_request
+    )
+    assert expected_request["physical_observations"][0]["material_id"] is None
     assert db.scalar(
         select(func.count()).select_from(StocktakeScopeCountCompletion)
     ) == 1
@@ -2402,6 +2417,17 @@ def test_empty_scope_requires_and_accepts_explicit_zero_confirmation(
     assert completion.zero_confirmed is True
     assert completion.count_line_count == 0
     assert completion.observation_line_count == 0
+    assert completion.request_resolution_jsonb == {
+        "items": [],
+        "request_sha256": completion.request_sha256,
+        "round_id": str(completion.round_id),
+        "schema": (
+            "cloud_oam.opening_stocktake."
+            "scope_count_request_resolution.v1"
+        ),
+        "scope_id": str(completion.scope_id),
+        "task_id": str(completion.task_id),
+    }
     assert world.db.scalar(
         select(func.count()).select_from(StocktakeCountLine)
     ) == 0
@@ -2459,6 +2485,13 @@ def test_pending_observation_seals_round_as_non_postable_physical_difference(
     assert observation is not None
     assert observation.verification_status == "pending_verification"
     assert observation.material_id is None
+    completion = world.db.scalar(select(StocktakeScopeCountCompletion))
+    assert completion is not None
+    resolution_item = completion.request_resolution_jsonb["items"][0]
+    assert resolution_item["target_type"] == "observation"
+    assert resolution_item["target_id"] == str(observation.id)
+    assert resolution_item["resolved_material_id"] is None
+    assert resolution_item["policy"] is None
     difference = world.db.scalar(
         select(StocktakeDifference).where(
             StocktakeDifference.observed_line_id == observation.id
@@ -2474,6 +2507,61 @@ def test_pending_observation_seals_round_as_non_postable_physical_difference(
     assert world.db.scalar(
         select(func.count()).select_from(InventoryOpeningEstablishment)
     ) == 0
+
+
+def test_pending_observation_scope_dimension_tamper_breaks_replay(
+    world: SimpleNamespace,
+):
+    personal_command = replace(
+        world.command,
+        task_no="OPEN-X-PENDING-OBSERVATION-SCOPE-TAMPER",
+        scopes=(
+            OpeningStocktakeScopeInput(
+                owner_org_id=world.region_x.id,
+                location_id=world.personal_location.id,
+                assignee_user_id=world.technician.user.id,
+                freeze_mode="hard",
+            ),
+        ),
+    )
+    started = _start(
+        world,
+        command=personal_command,
+        key="opening-idempotency-pending-scope-tamper",
+    )
+    command = _scope_count_command(
+        world,
+        started,
+        observations=(
+            OpeningPhysicalObservationInput(
+                material_identifier_raw="SITE-UNRESOLVED-SCOPE-TAMPER",
+                material_identifier_type="unknown",
+                condition_code="new",
+                availability_bucket="available",
+                counted_qty=Decimal("1"),
+            ),
+        ),
+    )
+    key = "opening-count-idempotency-pending-scope-tamper"
+    _submit_scope_count(
+        world,
+        actor=world.principals["technician"],
+        command=command,
+        key=key,
+    )
+    observation = world.db.scalar(select(StocktakeCountObservation))
+    assert observation is not None
+    observation.owner_org_id = world.region_y.id
+    world.db.flush()
+
+    assert _count_error_code(
+        lambda: _submit_scope_count(
+            world,
+            actor=world.principals["technician"],
+            command=command,
+            key=key,
+        )
+    ) == "opening_count_replay_evidence_invalid"
 
 
 def test_last_of_multiple_scopes_mechanically_seals_initial_round(
@@ -2820,23 +2908,24 @@ def test_material_qr_and_lot_number_are_resolved_by_server_master_data(
     db.commit()
 
     started = _start(world, key="opening-idempotency-count-material-qr-lot")
+    command = _scope_count_command(
+        world,
+        started,
+        observations=(
+            OpeningPhysicalObservationInput(
+                material_identifier_raw=material_qr.code,
+                material_identifier_type="qr_code",
+                condition_code="new",
+                availability_bucket="available",
+                lot_no_raw=lot.lot_no,
+                counted_qty=Decimal("2.000"),
+            ),
+        ),
+    )
     result = _submit_scope_count(
         world,
         actor=world.principals["manager_x"],
-        command=_scope_count_command(
-            world,
-            started,
-            observations=(
-                OpeningPhysicalObservationInput(
-                    material_identifier_raw=material_qr.code,
-                    material_identifier_type="qr_code",
-                    condition_code="new",
-                    availability_bucket="available",
-                    lot_no_raw=lot.lot_no,
-                    counted_qty=Decimal("2.000"),
-                ),
-            ),
-        ),
+        command=command,
         key="opening-count-idempotency-material-qr-lot",
     )
 
@@ -2846,6 +2935,29 @@ def test_material_qr_and_lot_number_are_resolved_by_server_master_data(
     assert line.stock_account_id == world.account.id
     assert line.counted_qty == Decimal("2.000")
     assert db.scalar(select(func.count()).select_from(StocktakeCountObservation)) == 0
+    completion = db.scalar(select(StocktakeScopeCountCompletion))
+    assert completion is not None
+    request_item = completion.request_jsonb["physical_observations"][0]
+    assert request_item["material_identifier_raw"] == material_qr.code
+    assert request_item["material_identifier_type"] == "qr_code"
+    assert request_item["material_id"] is None
+    assert request_item["lot_id"] is None
+    assert request_item["lot_no_raw"] == lot.lot_no
+    resolution_item = completion.request_resolution_jsonb["items"][0]
+    assert resolution_item["target_type"] == "count_line"
+    assert resolution_item["target_id"] == str(line.id)
+    assert resolution_item["material_qr_mapping_id"] == str(material_qr.id)
+    assert resolution_item["resolved_material_id"] == str(world.material.id)
+    assert resolution_item["resolved_lot_id"] == str(lot.id)
+    assert resolution_item["policy"] == {
+        "allow_fraction": True,
+        "effective_from": opening_count_service._canonical_timestamp(
+            policy.effective_from
+        ),
+        "id": str(policy.id),
+        "quantity_scale": 3,
+        "tracking_mode": "lot",
+    }
 
 
 def test_serial_number_and_serial_qr_are_piece_counted_and_manifest_tamper_fails(
@@ -2928,6 +3040,20 @@ def test_serial_number_and_serial_qr_are_piece_counted_and_manifest_tamper_fails
         first_serial.id,
         second_serial.id,
     }
+    completion = db.scalar(select(StocktakeScopeCountCompletion))
+    assert completion is not None
+    resolution_items = completion.request_resolution_jsonb["items"]
+    assert len(resolution_items) == 2
+    assert {row["target_id"] for row in resolution_items} == {str(line.id)}
+    assert {row["resolved_serial_id"] for row in resolution_items} == {
+        str(first_serial.id),
+        str(second_serial.id),
+    }
+    assert {row["serial_qr_mapping_id"] for row in resolution_items} == {
+        None,
+        str(serial_qr_mapping.id),
+    }
+    assert all(row["policy"]["tracking_mode"] == "serial" for row in resolution_items)
 
     serial_rows[0].result = "present"
     db.flush()
@@ -2939,6 +3065,424 @@ def test_serial_number_and_serial_qr_are_piece_counted_and_manifest_tamper_fails
             key=key,
         )
     ) == "opening_count_replay_evidence_invalid"
+
+
+def test_replay_rejects_serial_shared_by_count_line_and_observation(
+    world: SimpleNamespace,
+):
+    db = world.db
+    policy = db.scalar(
+        select(MaterialInventoryPolicy).where(
+            MaterialInventoryPolicy.material_id == world.material.id
+        )
+    )
+    policy.tracking_mode = "serial"
+    policy.quantity_scale = 0
+    policy.allow_fraction = False
+    line_serial = InventorySerial(
+        id=uuid.uuid4(),
+        material_id=world.material.id,
+        serial_no="SN-REPLAY-CROSS-TABLE-001",
+        qr_code="QR-REPLAY-CROSS-TABLE-001",
+        lot_id=None,
+        lifecycle_status="active",
+    )
+    observation_serial = InventorySerial(
+        id=uuid.uuid4(),
+        material_id=world.material.id,
+        serial_no="SN-REPLAY-CROSS-TABLE-002",
+        qr_code="QR-REPLAY-CROSS-TABLE-002",
+        lot_id=None,
+        lifecycle_status="active",
+    )
+    db.add_all([line_serial, observation_serial])
+    db.commit()
+
+    started = _start(world, key="opening-idempotency-replay-cross-table-serial")
+    command = _scope_count_command(
+        world,
+        started,
+        observations=(
+            OpeningPhysicalObservationInput(
+                material_identifier_raw=world.material.sku_code,
+                material_identifier_type="sku_code",
+                condition_code="new",
+                availability_bucket="available",
+                serial_no_raw=line_serial.serial_no,
+                serial_identifier_type="serial_no",
+                counted_qty=Decimal("1"),
+            ),
+            OpeningPhysicalObservationInput(
+                material_identifier_raw=world.material.sku_code,
+                material_identifier_type="sku_code",
+                condition_code="used",
+                availability_bucket="available",
+                serial_no_raw=observation_serial.serial_no,
+                serial_identifier_type="serial_no",
+                counted_qty=Decimal("1"),
+            ),
+        ),
+    )
+    key = "opening-count-idempotency-replay-cross-table-serial"
+    _submit_scope_count(
+        world,
+        actor=world.principals["manager_x"],
+        command=command,
+        key=key,
+    )
+
+    completion = db.scalar(select(StocktakeScopeCountCompletion))
+    line = db.scalar(select(StocktakeCountLine))
+    observation = db.scalar(select(StocktakeCountObservation))
+    count_serial = db.scalar(select(StocktakeCountSerial))
+    assert completion is not None
+    assert line is not None
+    assert observation is not None
+    assert count_serial is not None
+    assert count_serial.serial_id == line_serial.id
+    assert observation.serial_id == observation_serial.id
+    assert opening_count_service._persisted_request_resolution_document_valid(
+        db,
+        completion,
+        lines=(line,),
+        observations=(observation,),
+        count_serials=(count_serial,),
+    )
+
+    # Forge a document that remains internally consistent at the observation
+    # target: both the relational observation and its immutable resolution now
+    # claim the count-line serial. Only round-wide/cross-table uniqueness makes
+    # this evidence invalid.
+    observation.serial_id = line_serial.id
+    resolution = completion.request_resolution_jsonb
+    completion.request_resolution_jsonb = {
+        **resolution,
+        "items": [
+            (
+                {
+                    **item,
+                    "resolved_serial_id": str(line_serial.id),
+                }
+                if item["target_type"] == "observation"
+                else item
+            )
+            for item in resolution["items"]
+        ],
+    }
+    db.flush()
+
+    assert not opening_count_service._persisted_request_resolution_document_valid(
+        db,
+        completion,
+        lines=(line,),
+        observations=(observation,),
+        count_serials=(count_serial,),
+    )
+    assert not opening_count_service._persisted_round_serial_uniqueness_valid(
+        db,
+        task_id=completion.task_id,
+        round_id=completion.round_id,
+        completions=(completion,),
+    )
+    assert _count_error_code(
+        lambda: _submit_scope_count(
+            world,
+            actor=world.principals["manager_x"],
+            command=command,
+            key=key,
+        )
+    ) == "opening_count_replay_evidence_invalid"
+
+
+def test_round_serial_alias_replay_fold_is_ascii_only(
+    world: SimpleNamespace,
+):
+    task_id = uuid.uuid4()
+    round_id = uuid.uuid4()
+
+    def completion_with_aliases(*aliases: tuple[str, str]) -> SimpleNamespace:
+        return SimpleNamespace(
+            request_jsonb={
+                "physical_observations": [
+                    {
+                        "serial_identifier_type": identifier_type,
+                        "serial_no_raw": raw,
+                    }
+                    for identifier_type, raw in aliases
+                ]
+            },
+            request_resolution_jsonb={
+                "items": [
+                    {
+                        "request_ordinal": ordinal,
+                        "serial_alias_keys": [
+                            opening_count_service._fold_serial_alias(raw)
+                        ],
+                    }
+                    for ordinal, (_identifier_type, raw) in enumerate(
+                        aliases,
+                        start=1,
+                    )
+                ]
+            },
+        )
+
+    # Unicode case folding is intentionally not part of the persisted key:
+    # Python and PostgreSQL must both leave non-ASCII code points unchanged.
+    assert opening_count_service._persisted_round_serial_uniqueness_valid(
+        world.db,
+        task_id=task_id,
+        round_id=round_id,
+        completions=(
+            completion_with_aliases(
+                ("serial_no", "SN-STRAßE"),
+                ("qr_code", "sn-strasse"),
+            ),
+        ),
+    )
+    # ASCII aliases remain case-insensitive even across identifier types.
+    assert not opening_count_service._persisted_round_serial_uniqueness_valid(
+        world.db,
+        task_id=task_id,
+        round_id=round_id,
+        completions=(
+            completion_with_aliases(
+                ("serial_no", "SN-Ascii-Alias-001"),
+                ("qr_code", "sn-aSCII-aLIAS-001"),
+            ),
+        ),
+    )
+
+
+def test_ambiguous_global_serial_reference_is_rejected_before_count(
+    world: SimpleNamespace,
+):
+    first = InventorySerial(
+        id=uuid.uuid4(),
+        material_id=world.material.id,
+        serial_no="SN-AMBIGUOUS-RAW",
+        qr_code="QR-AMBIGUOUS-FIRST",
+        lot_id=None,
+        lifecycle_status="active",
+    )
+    second = InventorySerial(
+        id=uuid.uuid4(),
+        material_id=world.material.id,
+        serial_no="SN-AMBIGUOUS-SECOND",
+        qr_code="SN-AMBIGUOUS-RAW",
+        lot_id=None,
+        lifecycle_status="active",
+    )
+    world.db.add_all([first, second])
+    world.db.commit()
+    started = _start(world, key="opening-idempotency-ambiguous-serial-reference")
+    command = _scope_count_command(
+        world,
+        started,
+        observations=(
+            OpeningPhysicalObservationInput(
+                material_identifier_raw="UNRESOLVED-AMBIGUOUS-MATERIAL",
+                material_identifier_type="unknown",
+                condition_code="new",
+                availability_bucket="available",
+                serial_no_raw="SN-AMBIGUOUS-RAW",
+                serial_identifier_type="unknown",
+                counted_qty=Decimal("1"),
+            ),
+        ),
+    )
+
+    assert _count_error_code(
+        lambda: _submit_scope_count(
+            world,
+            actor=world.principals["manager_x"],
+            command=command,
+            key="opening-count-idempotency-ambiguous-serial-reference",
+        )
+    ) == "opening_count_serial_reference_ambiguous"
+    assert world.db.scalar(
+        select(func.count()).select_from(StocktakeScopeCountCompletion)
+    ) == 0
+
+
+def test_unknown_serial_without_any_master_candidate_remains_observable(
+    world: SimpleNamespace,
+):
+    started = _start(world, key="opening-idempotency-zero-serial-candidate")
+    raw_serial = "SN-NOT-YET-IN-MASTER"
+    command = _scope_count_command(
+        world,
+        started,
+        observations=(
+            OpeningPhysicalObservationInput(
+                material_identifier_raw="UNRESOLVED-ZERO-CANDIDATE-MATERIAL",
+                material_identifier_type="unknown",
+                condition_code="new",
+                availability_bucket="available",
+                serial_no_raw=raw_serial,
+                serial_identifier_type="unknown",
+                counted_qty=Decimal("1"),
+            ),
+        ),
+    )
+
+    result = _submit_scope_count(
+        world,
+        actor=world.principals["manager_x"],
+        command=command,
+        key="opening-count-idempotency-zero-serial-candidate",
+    )
+
+    assert result.has_pending_verification
+    completion = world.db.scalar(select(StocktakeScopeCountCompletion))
+    assert completion is not None
+    assert completion.request_resolution_jsonb["items"][0][
+        "serial_alias_keys"
+    ] == [opening_count_service._fold_serial_alias(raw_serial)]
+
+
+def test_opening_count_physical_observation_limit_is_enforced_in_schema_and_service(
+    world: SimpleNamespace,
+):
+    schema_observation = OpeningPhysicalObservationIn(
+        material_identifier_raw="UNKNOWN-LIMIT-MATERIAL",
+        material_identifier_type="unknown",
+        condition_code="new",
+        availability_bucket="available",
+        counted_qty="1",
+    )
+    accepted_schema = OpeningStocktakeCountIn(
+        physical_observations=(schema_observation,) * 10_000,
+    )
+    assert len(accepted_schema.physical_observations) == 10_000
+    with pytest.raises(ValueError):
+        OpeningStocktakeCountIn(
+            physical_observations=(schema_observation,) * 10_001,
+        )
+
+    service_observation = OpeningPhysicalObservationInput(
+        material_identifier_raw="UNKNOWN-LIMIT-MATERIAL",
+        material_identifier_type="unknown",
+        condition_code="new",
+        availability_bucket="available",
+        counted_qty=Decimal("1"),
+    )
+    accepted_command = opening_count_service._validate_command(
+        SubmitOpeningStocktakeScopeCountCommand(
+            task_id=uuid.uuid4(),
+            round_id=uuid.uuid4(),
+            scope_id=uuid.uuid4(),
+            physical_observations=(service_observation,) * 10_000,
+        )
+    )
+    assert len(accepted_command.physical_observations) == 10_000
+
+    oversized_command = SubmitOpeningStocktakeScopeCountCommand(
+        task_id=uuid.uuid4(),
+        round_id=uuid.uuid4(),
+        scope_id=uuid.uuid4(),
+        physical_observations=(service_observation,) * 10_001,
+    )
+    assert _count_error_code(
+        lambda: submit_opening_stocktake_scope_count(
+            world.db,
+            actor=world.principals["manager_x"],
+            command=oversized_command,
+            idempotency_key="opening-count-idempotency-oversized-direct-service",
+            request_id="opening-count-request-oversized-direct-service",
+        )
+    ) == "opening_count_too_many_lines"
+
+
+def test_unresolved_serial_alias_snapshot_is_immutable_and_blocks_forged_qr_replay(
+    world: SimpleNamespace,
+):
+    serial = InventorySerial(
+        id=uuid.uuid4(),
+        material_id=world.material.id,
+        serial_no="SN-UNRESOLVED-SNAPSHOT-001",
+        qr_code="QR-UNRESOLVED-SNAPSHOT-001",
+        lot_id=None,
+        lifecycle_status="active",
+    )
+    world.db.add(serial)
+    world.db.commit()
+    started = _start(
+        world,
+        key="opening-idempotency-unresolved-alias-snapshot",
+    )
+    command = _scope_count_command(
+        world,
+        started,
+        observations=(
+            OpeningPhysicalObservationInput(
+                material_identifier_raw="UNKNOWN-MATERIAL-ALIAS-SNAPSHOT",
+                material_identifier_type="unknown",
+                condition_code="new",
+                availability_bucket="available",
+                serial_no_raw=serial.serial_no,
+                serial_identifier_type="serial_no",
+                counted_qty=Decimal("1"),
+            ),
+        ),
+    )
+    key = "opening-count-idempotency-unresolved-alias-snapshot"
+    first = _submit_scope_count(
+        world,
+        actor=world.principals["manager_x"],
+        command=command,
+        key=key,
+    )
+    completion = world.db.scalar(select(StocktakeScopeCountCompletion))
+    assert completion is not None
+    alias_keys = sorted(
+        {
+            opening_count_service._fold_serial_alias(serial.serial_no),
+            opening_count_service._fold_serial_alias(serial.qr_code),
+        }
+    )
+    assert completion.request_resolution_jsonb["items"][0][
+        "serial_alias_keys"
+    ] == alias_keys
+
+    forged_qr_completion = SimpleNamespace(
+        request_jsonb={
+            "physical_observations": [
+                {
+                    "serial_identifier_type": "qr_code",
+                    "serial_no_raw": serial.qr_code,
+                }
+            ]
+        },
+        request_resolution_jsonb={
+            "items": [
+                {
+                    "request_ordinal": 1,
+                    "serial_alias_keys": alias_keys,
+                }
+            ]
+        },
+    )
+    assert not opening_count_service._persisted_round_serial_uniqueness_valid(
+        world.db,
+        task_id=completion.task_id,
+        round_id=completion.round_id,
+        completions=(completion, forged_qr_completion),
+    )
+
+    serial.serial_no = "SN-UNRESOLVED-SNAPSHOT-RENAMED"
+    serial.qr_code = "QR-UNRESOLVED-SNAPSHOT-RENAMED"
+    world.db.flush()
+    replay = _submit_scope_count(
+        world,
+        actor=world.principals["manager_x"],
+        command=command,
+        key=key,
+    )
+    assert replay == replace(first, replayed=True)
+    assert completion.request_resolution_jsonb["items"][0][
+        "serial_alias_keys"
+    ] == alias_keys
 
 
 def test_resolved_serial_cannot_be_recounted_in_another_scope_by_qr_alias(
@@ -3257,6 +3801,36 @@ def test_same_verified_dimension_cannot_be_double_counted_by_sku_qr_alias(
     ) == "opening_count_observation_duplicate"
 
 
+def test_exact_duplicate_request_items_fail_with_stable_domain_error(
+    world: SimpleNamespace,
+):
+    started = _start(world, key="opening-idempotency-exact-duplicate")
+    observation = OpeningPhysicalObservationInput(
+        material_identifier_raw=world.material.sku_code,
+        material_identifier_type="sku_code",
+        condition_code="new",
+        availability_bucket="available",
+        counted_qty=Decimal("1"),
+    )
+    command = _scope_count_command(
+        world,
+        started,
+        observations=(observation, observation),
+    )
+
+    assert _count_error_code(
+        lambda: _submit_scope_count(
+            world,
+            actor=world.principals["manager_x"],
+            command=command,
+            key="opening-count-idempotency-exact-duplicate",
+        )
+    ) == "opening_count_observation_duplicate"
+    assert world.db.scalar(
+        select(func.count()).select_from(StocktakeScopeCountCompletion)
+    ) == 0
+
+
 def test_physical_observation_order_is_ignored_for_same_key_replay(
     world: SimpleNamespace,
 ):
@@ -3292,6 +3866,119 @@ def test_physical_observation_order_is_ignored_for_same_key_replay(
         key=key,
     )
     assert replay == replace(first, replayed=True)
+    completion = world.db.scalar(select(StocktakeScopeCountCompletion))
+    assert completion is not None
+    persisted_observations = completion.request_jsonb["physical_observations"]
+    assert persisted_observations == sorted(
+        persisted_observations,
+        key=opening_count_service._canonical_json,
+    )
+    resolution_items = completion.request_resolution_jsonb["items"]
+    assert [row["request_ordinal"] for row in resolution_items] == [1, 2]
+    assert [row["request_item_sha256"] for row in resolution_items] == [
+        opening_count_service._hash_document(row)
+        for row in persisted_observations
+    ]
+
+
+def test_scope_count_replay_rejects_tampered_request_resolution_target(
+    world: SimpleNamespace,
+):
+    started = _start(world, key="opening-idempotency-resolution-tamper")
+    command = _scope_count_command(
+        world,
+        started,
+        observations=(
+            OpeningPhysicalObservationInput(
+                material_identifier_raw=world.material.sku_code,
+                material_identifier_type="sku_code",
+                condition_code="new",
+                availability_bucket="available",
+                counted_qty=Decimal("1"),
+            ),
+        ),
+    )
+    key = "opening-count-idempotency-resolution-tamper"
+    _submit_scope_count(
+        world,
+        actor=world.principals["manager_x"],
+        command=command,
+        key=key,
+    )
+    completion = world.db.scalar(select(StocktakeScopeCountCompletion))
+    assert completion is not None
+    document = completion.request_resolution_jsonb
+    completion.request_resolution_jsonb = {
+        **document,
+        "items": [
+            {
+                **document["items"][0],
+                "target_id": str(uuid.uuid4()),
+            }
+        ],
+    }
+    world.db.flush()
+
+    assert _count_error_code(
+        lambda: _submit_scope_count(
+            world,
+            actor=world.principals["manager_x"],
+            command=command,
+            key=key,
+        )
+    ) == "opening_count_replay_evidence_invalid"
+
+
+def test_scope_count_replay_rejects_unhashable_resolution_enum(
+    world: SimpleNamespace,
+):
+    started = _start(world, key="opening-idempotency-resolution-enum")
+    command = _scope_count_command(
+        world,
+        started,
+        observations=(
+            OpeningPhysicalObservationInput(
+                material_identifier_raw=world.material.sku_code,
+                material_identifier_type="sku_code",
+                condition_code="new",
+                availability_bucket="available",
+                counted_qty=Decimal("1"),
+            ),
+        ),
+    )
+    key = "opening-count-idempotency-resolution-enum"
+    _submit_scope_count(
+        world,
+        actor=world.principals["manager_x"],
+        command=command,
+        key=key,
+    )
+    completion = world.db.scalar(select(StocktakeScopeCountCompletion))
+    assert completion is not None
+    request_item = completion.request_jsonb["physical_observations"][0]
+    assert opening_count_service._persisted_request_observation_quantity(
+        {**request_item, "availability_bucket": []}
+    ) is None
+    document = completion.request_resolution_jsonb
+    completion.request_resolution_jsonb = {
+        **document,
+        "items": [
+            {
+                **document["items"][0],
+                "target_type": [],
+            }
+        ],
+    }
+    world.db.flush()
+
+    assert _count_error_code(
+        lambda: _submit_scope_count(
+            world,
+            actor=world.principals["manager_x"],
+            command=command,
+            key=key,
+        )
+    ) == "opening_count_replay_evidence_invalid"
 
 
 def test_region_location_custody_does_not_turn_scope_into_personal_count(

@@ -659,6 +659,7 @@ def _record_disposition(
         after_jsonb=_audit_after_jsonb(row, difference_completion),
         request_id=_request_reference(checked_request_id),
         occurred_at=now,
+        created_at=now,
     )
     db.flush()
     return _result(row, replayed=False)

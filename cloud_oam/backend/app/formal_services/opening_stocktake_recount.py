@@ -2263,6 +2263,7 @@ def _open_recount(
         },
         request_id=_request_reference(checked_request_id),
         occurred_at=now,
+        created_at=now,
     )
     db.flush()
     return OpeningStocktakeRecountResult(

@@ -85,6 +85,7 @@ def append_audit_event(
     after_jsonb: dict[str, Any] | None,
     request_id: str,
     occurred_at: datetime,
+    created_at: datetime | None = None,
 ) -> AuditEvent:
     """Append one event and advance its pre-seeded chain head atomically.
 
@@ -93,7 +94,9 @@ def append_audit_event(
     flushed into the caller's current transaction, but are never committed by
     this function.  Any flush error leaves that transaction failed, requiring
     the caller to roll it back rather than committing a business mutation
-    without its audit evidence.
+    without its audit evidence.  A supplied ``created_at`` is normalized to
+    UTC and must not precede ``occurred_at``; when omitted, the model's existing
+    creation-time default remains authoritative for backward compatibility.
     """
 
     checked_stream_key = _require_text("stream_key", stream_key)
@@ -102,7 +105,22 @@ def append_audit_event(
     checked_aggregate_type = _require_text("aggregate_type", aggregate_type)
     checked_aggregate_id = _require_text("aggregate_id", aggregate_id)
     checked_request_id = _require_text("request_id", request_id)
-    checked_occurred_at = _require_aware_datetime(occurred_at)
+    checked_occurred_at = _require_aware_datetime(
+        "occurred_at",
+        occurred_at,
+    )
+    checked_created_at = (
+        None
+        if created_at is None
+        else _require_aware_datetime("created_at", created_at)
+    )
+    if (
+        checked_created_at is not None
+        and checked_created_at < checked_occurred_at
+    ):
+        raise AuditChainValidationError(
+            "created_at must not be earlier than occurred_at"
+        )
     before_snapshot = _snapshot_json_document("before_jsonb", before_jsonb)
     after_snapshot = _snapshot_json_document("after_jsonb", after_jsonb)
 
@@ -123,6 +141,9 @@ def append_audit_event(
         previous_hash=head.last_hash,
         occurred_at=checked_occurred_at,
     )
+    created_at_argument = (
+        {} if checked_created_at is None else {"created_at": checked_created_at}
+    )
     event = AuditEvent(
         id=event_id,
         stream_key=checked_stream_key,
@@ -137,6 +158,7 @@ def append_audit_event(
         previous_hash=head.last_hash,
         event_hash=event_hash,
         occurred_at=checked_occurred_at,
+        **created_at_argument,
     )
     db.add(event)
 
@@ -471,11 +493,11 @@ def _optional_text(field: str, value: str | None) -> str | None:
     return _require_text(field, value)
 
 
-def _require_aware_datetime(value: datetime) -> datetime:
+def _require_aware_datetime(field: str, value: datetime) -> datetime:
     if not isinstance(value, datetime):
-        raise AuditChainValidationError("occurred_at must be a datetime")
+        raise AuditChainValidationError(f"{field} must be a datetime")
     if value.tzinfo is None or value.utcoffset() is None:
-        raise AuditChainValidationError("occurred_at must include a timezone")
+        raise AuditChainValidationError(f"{field} must include a timezone")
     return value.astimezone(timezone.utc)
 
 

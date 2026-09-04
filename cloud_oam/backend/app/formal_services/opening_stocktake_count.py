@@ -122,10 +122,15 @@ _AVAILABILITY = frozenset(
     }
 )
 _COUNT_METHODS = frozenset({"scan", "manual", "import"})
+_MAX_PHYSICAL_OBSERVATIONS: Final[int] = 10_000
 _MATERIAL_IDENTIFIER_TYPES = frozenset(
     {"sku_code", "qr_code", "external_code", "unknown"}
 )
 _SERIAL_IDENTIFIER_TYPES = frozenset({"serial_no", "qr_code", "unknown"})
+_ASCII_IDENTIFIER_FOLD_TABLE: Final[dict[int, int]] = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "abcdefghijklmnopqrstuvwxyz",
+)
 _DOWNSTREAM_REPLAY_TASK_STATUSES = frozenset(
     {
         "submitted",
@@ -139,6 +144,70 @@ _DOWNSTREAM_REPLAY_TASK_STATUSES = frozenset(
     }
 )
 _OPENING_COUNT_REPLAY_PLAN_SEAL: Final[object] = object()
+_SCOPE_COUNT_REQUEST_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "actor_person_id",
+        "actor_user_id",
+        "physical_observations",
+        "round_id",
+        "schema",
+        "scope_id",
+        "task_id",
+        "zero_confirmed",
+    }
+)
+_SCOPE_COUNT_OBSERVATION_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "availability_bucket",
+        "condition_code",
+        "count_method",
+        "counted_qty",
+        "lot_id",
+        "lot_no_raw",
+        "material_id",
+        "material_identifier_raw",
+        "material_identifier_type",
+        "reason_code",
+        "remark",
+        "serial_id",
+        "serial_identifier_type",
+        "serial_no_raw",
+    }
+)
+_SCOPE_COUNT_RESOLUTION_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "items",
+        "request_sha256",
+        "round_id",
+        "schema",
+        "scope_id",
+        "task_id",
+    }
+)
+_SCOPE_COUNT_RESOLUTION_ITEM_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "material_qr_mapping_id",
+        "policy",
+        "request_item_sha256",
+        "request_ordinal",
+        "resolved_lot_id",
+        "resolved_material_id",
+        "resolved_serial_id",
+        "serial_alias_keys",
+        "serial_qr_mapping_id",
+        "target_id",
+        "target_type",
+    }
+)
+_SCOPE_COUNT_RESOLUTION_POLICY_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "allow_fraction",
+        "effective_from",
+        "id",
+        "quantity_scale",
+        "tracking_mode",
+    }
+)
 
 _HTTP_STATUS_BY_CATEGORY = {
     "invalid_request": 422,
@@ -232,6 +301,7 @@ class _PreparedAccountCount:
     count_method: str
     reason_code: str | None
     remark: str
+    request_items: tuple[_PreparedObservation, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,12 +312,18 @@ class _PreparedObservation:
     serial: InventorySerial | None
     verification_status: str
     dimension_sha256: str
+    request_ordinal: int
+    request_item_sha256: str
+    material_qr_mapping_id: uuid.UUID | None
+    serial_qr_mapping_id: uuid.UUID | None
+    serial_alias_keys: tuple[str, ...]
+    policy: MaterialInventoryPolicy | None
 
 
 @dataclass(frozen=True, slots=True)
 class _LockedMaterialIdentifier:
     materials: tuple[FormalMaterial, ...]
-    qr_mapping_count: int
+    qr_mappings: tuple[QrCode, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -471,7 +547,8 @@ def _submit_opening_stocktake_scope_count(
 
     now = _database_now(db)
     current_actor = _require_current_actor(db, supplied_actor, now)
-    request_sha256 = _request_sha256(current_actor, checked)
+    request_document = _request_document(current_actor, checked)
+    request_sha256 = _hash_document(request_document)
     freezes = tuple(
         db.scalars(
             select(InventoryFreeze)
@@ -565,6 +642,7 @@ def _submit_opening_stocktake_scope_count(
             or existing_by_key.scope_id != checked.scope_id
             or existing_by_key.completed_by_user_id != current_actor.user_id
             or existing_by_key.request_sha256 != request_sha256
+            or existing_by_key.request_jsonb != request_document
         ):
             _fail(
                 "opening_count_idempotency_conflict",
@@ -788,6 +866,7 @@ def _submit_opening_stocktake_scope_count(
             zero_confirmed=checked.zero_confirmed,
             key_hash=key_hash,
             request_sha256=request_sha256,
+            request_document=request_document,
             request_reference=_request_reference(checked_request_id),
             now=now,
             expected_recount_assignment=expected_recount_assignment,
@@ -914,6 +993,7 @@ def _write_scope_count(
     zero_confirmed: bool,
     key_hash: str,
     request_sha256: str,
+    request_document: dict[str, object],
     request_reference: str,
     now: datetime,
     expected_recount_assignment: StocktakeRecountScopeAssignment | None,
@@ -1020,6 +1100,16 @@ def _write_scope_count(
         observations,
         authorization_sha256,
     )
+    request_resolution_document = _scope_count_request_resolution_document(
+        task=task,
+        round_row=round_row,
+        scope=scope,
+        request_sha256=request_sha256,
+        prepared_counts=prepared_counts,
+        count_lines=count_lines,
+        prepared_observations=prepared_observations,
+        observations=observations,
+    )
     completion = StocktakeScopeCountCompletion(
         id=uuid.uuid4(),
         task_id=task.id,
@@ -1032,6 +1122,8 @@ def _write_scope_count(
         zero_confirmed=zero_confirmed,
         evidence_manifest_sha256=evidence_manifest,
         request_sha256=request_sha256,
+        request_jsonb=request_document,
+        request_resolution_jsonb=request_resolution_document,
         idempotency_key_hash=key_hash,
         completed_by_user_id=actor.user_id,
         completed_by_person_id=actor.person_id,
@@ -1226,6 +1318,7 @@ def _write_scope_count(
         },
         request_id=request_reference,
         occurred_at=now,
+        created_at=now,
     )
     if sealed:
         append_audit_event(
@@ -1239,6 +1332,7 @@ def _write_scope_count(
             after_jsonb=event_context,
             request_id=request_reference,
             occurred_at=now,
+            created_at=now,
         )
     db.flush()
     return OpeningStocktakeScopeCountResult(
@@ -2248,6 +2342,7 @@ def _prepare_physical_set(
                 count_method=metadata[0],
                 reason_code=metadata[1],
                 remark=metadata[2],
+                request_items=tuple(observed),
             )
         )
     return tuple(prepared), tuple(unexpected)
@@ -2487,7 +2582,7 @@ def _read_locked_command_material_references(
             )
         locked[key] = _LockedMaterialIdentifier(
             materials=materials,
-            qr_mapping_count=len(mappings),
+            qr_mappings=mappings,
         )
     return locked
 
@@ -2645,6 +2740,10 @@ def _read_locked_command_serial_references(
                 "service_unavailable",
                 "现场 SN 主数据在锁定期间发生变化",
             )
+        _require_unambiguous_serial_reference(
+            locked_serials=serials,
+            mappings=mappings,
+        )
         base_identifiers[key] = _LockedSerialIdentifier(
             serials=serials,
             qr_mappings=mappings,
@@ -2730,9 +2829,43 @@ def _resolve_physical_observations(
 ) -> tuple[_PreparedObservation, ...]:
     prepared: list[_PreparedObservation] = []
     seen_dimensions: set[str] = set()
+    canonical_request_items = sorted(
+        [
+            (
+                _canonical_json(_observation_evidence_document(value)),
+                _observation_evidence_document(value),
+            )
+            for value in values
+        ],
+        key=lambda row: row[0],
+    )
+    if len({item[0] for item in canonical_request_items}) != len(
+        canonical_request_items
+    ):
+        _fail(
+            "opening_count_observation_duplicate",
+            "invalid_request",
+            "同一现场维度必须合并数量后提交",
+        )
+    request_coordinates = {
+        canonical: (ordinal, _hash_document(document))
+        for ordinal, (canonical, document) in enumerate(
+            canonical_request_items,
+            start=1,
+        )
+    }
     for supplied_value in values:
+        request_document = _observation_evidence_document(supplied_value)
+        request_ordinal, request_item_sha256 = request_coordinates[
+            _canonical_json(request_document)
+        ]
         material = _resolve_material_identifier(
             supplied_value,
+            locked_material_identifiers,
+        )
+        material_qr_mapping_id = _resolved_material_qr_mapping_id(
+            supplied_value,
+            material,
             locked_material_identifiers,
         )
         value = replace(
@@ -2741,6 +2874,8 @@ def _resolve_physical_observations(
         )
         lot: InventoryLot | None = None
         serial: InventorySerial | None = None
+        serial_qr_mapping_id: uuid.UUID | None = None
+        policy: MaterialInventoryPolicy | None = None
         verification = "pending_verification"
         if material is not None:
             policy = _load_policy(db, material.id, task.cutoff_at)
@@ -2752,6 +2887,12 @@ def _resolve_physical_observations(
                 material,
                 lot,
                 value,
+                locked_serial_references,
+            )
+            serial_qr_mapping_id = _resolved_serial_qr_mapping_id(
+                material,
+                value,
+                serial,
                 locked_serial_references,
             )
             value = replace(
@@ -2772,6 +2913,12 @@ def _resolve_physical_observations(
         if value.serial_no_raw is not None:
             if value.counted_qty != Decimal("1"):
                 _fail("opening_count_serial_quantity_mismatch", "invalid_request", "SN 必须逐件盘点")
+        serial_alias_keys = _serial_alias_keys(
+            locked_serial_references,
+            identifier_type=value.serial_identifier_type,
+            raw=value.serial_no_raw,
+            resolved_serial=serial,
+        )
         dimension = _observation_dimension_sha256(scope, value, verification)
         if dimension in seen_dimensions:
             _fail("opening_count_observation_duplicate", "invalid_request", "同一现场维度必须合并数量后提交")
@@ -2784,6 +2931,12 @@ def _resolve_physical_observations(
                 serial=serial,
                 verification_status=verification,
                 dimension_sha256=dimension,
+                request_ordinal=request_ordinal,
+                request_item_sha256=request_item_sha256,
+                material_qr_mapping_id=material_qr_mapping_id,
+                serial_qr_mapping_id=serial_qr_mapping_id,
+                serial_alias_keys=serial_alias_keys,
+                policy=policy,
             )
         )
     _validate_round_serial_uniqueness(
@@ -2794,6 +2947,72 @@ def _resolve_physical_observations(
     )
     prepared.sort(key=lambda row: row.dimension_sha256)
     return tuple(prepared)
+
+
+def _resolved_material_qr_mapping_id(
+    value: OpeningPhysicalObservationInput,
+    material: FormalMaterial | None,
+    locked_material_identifiers: Mapping[
+        tuple[str, str], _LockedMaterialIdentifier
+    ],
+) -> uuid.UUID | None:
+    if value.material_identifier_type != "qr_code":
+        return None
+    locked = locked_material_identifiers.get(
+        (value.material_identifier_type, value.material_identifier_raw)
+    )
+    if locked is None:
+        _fail(
+            "opening_count_material_reference_changed",
+            "service_unavailable",
+            "现场物料主数据未进入锁定候选全集",
+        )
+    mappings = locked.qr_mappings
+    if len(mappings) > 1:
+        _fail(
+            "opening_count_material_identifier_ambiguous",
+            "precondition_failed",
+            "现场物料标识无法唯一解析",
+        )
+    if not mappings:
+        return None
+    mapping = mappings[0]
+    if material is None or mapping.object_id != material.id:
+        _fail(
+            "opening_count_material_qr_mapping_conflict",
+            "precondition_failed",
+            "现场物料二维码主数据映射冲突",
+        )
+    return mapping.id
+
+
+def _resolved_serial_qr_mapping_id(
+    material: FormalMaterial,
+    value: OpeningPhysicalObservationInput,
+    serial: InventorySerial | None,
+    locked_serial_references: _LockedSerialReferences,
+) -> uuid.UUID | None:
+    if value.serial_no_raw is None or value.serial_identifier_type != "qr_code":
+        return None
+    locked = locked_serial_references.identifiers.get(
+        (material.id, value.serial_identifier_type, value.serial_no_raw)
+    )
+    if locked is None:
+        _fail(
+            "opening_count_serial_reference_changed",
+            "service_unavailable",
+            "现场 SN 主数据未进入锁定候选全集",
+        )
+    mappings = locked.qr_mappings
+    if not mappings:
+        return None
+    if len(mappings) != 1 or serial is None or mappings[0].object_id != serial.id:
+        _fail(
+            "opening_count_serial_qr_mapping_conflict",
+            "precondition_failed",
+            "SN 二维码主数据映射冲突",
+        )
+    return mappings[0].id
 
 
 def _resolve_material_identifier(
@@ -2823,7 +3042,7 @@ def _resolve_material_identifier(
     candidates = list(locked.materials)
     if (
         value.material_identifier_type == "qr_code"
-        and locked.qr_mapping_count > 1
+        and len(locked.qr_mappings) > 1
     ):
         _fail(
             "opening_count_material_identifier_ambiguous",
@@ -2970,6 +3189,31 @@ def _validate_round_serial_uniqueness(
 ) -> None:
     used_ids: set[uuid.UUID] = set()
     used_aliases: set[str] = set()
+    existing_completions = tuple(
+        db.scalars(
+            select(StocktakeScopeCountCompletion)
+            .where(StocktakeScopeCountCompletion.round_id == round_id)
+            .order_by(StocktakeScopeCountCompletion.scope_id)
+            .execution_options(populate_existing=True)
+        ).all()
+    )
+    persisted_occurrences = _persisted_serial_alias_occurrences(
+        existing_completions
+    )
+    if persisted_occurrences is None:
+        _fail(
+            "opening_count_serial_evidence_invalid",
+            "service_unavailable",
+            "已封存 SN 别名证据不完整",
+        )
+    for aliases in persisted_occurrences:
+        if used_aliases.intersection(aliases):
+            _fail(
+                "opening_count_serial_evidence_invalid",
+                "service_unavailable",
+                "已封存 SN 别名证据重复",
+            )
+        used_aliases.update(aliases)
     existing_observations = db.scalars(
         select(StocktakeCountObservation)
         .where(
@@ -2993,7 +3237,9 @@ def _validate_round_serial_uniqueness(
     ).all()
     for serial_id, serial_no, qr_code in serial_rows:
         used_ids.add(serial_id)
-        used_aliases.update({serial_no.casefold(), qr_code.casefold()})
+        used_aliases.update(
+            {_fold_serial_alias(serial_no), _fold_serial_alias(qr_code)}
+        )
     existing_serials = locked_serial_references.serials_by_id
     for observation in existing_observations:
         used_aliases.update(
@@ -3013,24 +3259,15 @@ def _validate_round_serial_uniqueness(
                     "已封存 SN 证据缺失",
                 )
             used_aliases.update(
-                {serial.serial_no.casefold(), serial.qr_code.casefold()}
+                {
+                    _fold_serial_alias(serial.serial_no),
+                    _fold_serial_alias(serial.qr_code),
+                }
             )
     for row in prepared:
         if row.value.serial_no_raw is None:
             continue
-        aliases = {row.value.serial_no_raw.casefold()}
-        if row.serial is not None:
-            aliases.update(
-                {row.serial.serial_no.casefold(), row.serial.qr_code.casefold()}
-            )
-        else:
-            aliases.update(
-                _unresolved_serial_aliases(
-                    locked_serial_references,
-                    row.value.serial_identifier_type,
-                    row.value.serial_no_raw,
-                )
-            )
+        aliases = set(row.serial_alias_keys)
         if (
             row.serial is not None
             and row.serial.id in used_ids
@@ -3051,6 +3288,33 @@ def _unresolved_serial_aliases(
     identifier_type: str | None,
     raw: str,
 ) -> set[str]:
+    return set(
+        _serial_alias_keys(
+            locked_serial_references,
+            identifier_type=identifier_type,
+            raw=raw,
+            resolved_serial=None,
+        )
+    )
+
+
+def _serial_alias_keys(
+    locked_serial_references: _LockedSerialReferences,
+    *,
+    identifier_type: str | None,
+    raw: str | None,
+    resolved_serial: InventorySerial | None,
+) -> tuple[str, ...]:
+    """Snapshot the exact aliases used by round-wide SN uniqueness."""
+
+    if raw is None:
+        if identifier_type is not None or resolved_serial is not None:
+            _fail(
+                "opening_count_serial_evidence_invalid",
+                "service_unavailable",
+                "现场 SN 别名证据不完整",
+            )
+        return ()
     locked = locked_serial_references.identifiers.get(
         (None, identifier_type, raw)
     )
@@ -3060,16 +3324,123 @@ def _unresolved_serial_aliases(
             "service_unavailable",
             "现场 SN 别名未进入锁定候选全集",
         )
-    candidates = locked.serials
-    identities = {row.id for row in candidates}
-    if len(identities) != 1:
-        return {raw.casefold()}
-    serial = candidates[0]
-    return {
-        raw.casefold(),
-        serial.serial_no.casefold(),
-        serial.qr_code.casefold(),
-    }
+    _require_unambiguous_serial_reference(
+        locked_serials=locked.serials,
+        mappings=locked.qr_mappings,
+    )
+    aliases = {_fold_serial_alias(raw)}
+    candidate = resolved_serial
+    if candidate is None and len(locked.serials) == 1:
+        candidate = locked.serials[0]
+    if candidate is not None:
+        aliases.update(
+            {
+                _fold_serial_alias(candidate.serial_no),
+                _fold_serial_alias(candidate.qr_code),
+            }
+        )
+    return tuple(sorted(aliases))
+
+
+def _require_unambiguous_serial_reference(
+    *,
+    locked_serials: Sequence[InventorySerial],
+    mappings: Sequence[QrCode],
+) -> None:
+    """Reject one raw identifier that can denote multiple serial identities."""
+
+    identity_ids = {row.id for row in locked_serials}
+    identity_ids.update(row.object_id for row in mappings)
+    if len(identity_ids) > 1:
+        _fail(
+            "opening_count_serial_reference_ambiguous",
+            "precondition_failed",
+            "现场 SN 标识对应多个主数据身份，无法安全盘点",
+        )
+
+
+def _fold_serial_alias(value: str) -> str:
+    """Fold only ASCII A-Z so Python and PostgreSQL use identical keys."""
+
+    return value.translate(_ASCII_IDENTIFIER_FOLD_TABLE)
+
+
+def _persisted_serial_alias_keys(
+    value: object,
+    *,
+    serial_no_raw: object,
+) -> tuple[str, ...] | None:
+    """Validate one immutable, canonical SN alias snapshot."""
+
+    if not isinstance(value, list) or len(value) > 3 or any(
+        not isinstance(alias, str)
+        or not alias
+        or len(alias) > 250
+        or _fold_serial_alias(alias) != alias
+        for alias in value
+    ):
+        return None
+    aliases = tuple(value)
+    if list(aliases) != sorted(set(aliases)):
+        return None
+    if serial_no_raw is None:
+        return aliases if not aliases else None
+    if not isinstance(serial_no_raw, str):
+        return None
+    return (
+        aliases
+        if _fold_serial_alias(serial_no_raw) in aliases
+        else None
+    )
+
+
+def _persisted_serial_alias_occurrences(
+    completions: Sequence[StocktakeScopeCountCompletion],
+) -> tuple[tuple[str, ...], ...] | None:
+    occurrences: list[tuple[str, ...]] = []
+    for completion in completions:
+        request = completion.request_jsonb
+        resolution = completion.request_resolution_jsonb
+        if not isinstance(request, dict) or not isinstance(resolution, dict):
+            return None
+        request_items = request.get("physical_observations")
+        resolution_items = resolution.get("items")
+        if (
+            not isinstance(request_items, list)
+            or not isinstance(resolution_items, list)
+            or len(request_items) != len(resolution_items)
+        ):
+            return None
+        for ordinal, (request_item, resolution_item) in enumerate(
+            zip(request_items, resolution_items, strict=True),
+            start=1,
+        ):
+            if (
+                not isinstance(request_item, dict)
+                or not isinstance(resolution_item, dict)
+                or type(resolution_item.get("request_ordinal")) is not int
+                or resolution_item.get("request_ordinal") != ordinal
+            ):
+                return None
+            raw = request_item.get("serial_no_raw")
+            identifier_type = request_item.get("serial_identifier_type")
+            if raw is None:
+                if identifier_type is not None:
+                    return None
+            elif (
+                not isinstance(raw, str)
+                or not isinstance(identifier_type, str)
+                or identifier_type not in _SERIAL_IDENTIFIER_TYPES
+            ):
+                return None
+            aliases = _persisted_serial_alias_keys(
+                resolution_item.get("serial_alias_keys"),
+                serial_no_raw=raw,
+            )
+            if aliases is None:
+                return None
+            occurrences.append(aliases)
+    return tuple(occurrences)
 
 
 def _load_policy(
@@ -3623,6 +3994,13 @@ def _capture_opening_count_replay_evidence(
             .execution_options(populate_existing=True)
         ).all()
     )
+    if not _persisted_round_serial_uniqueness_valid(
+        db,
+        task_id=task.id,
+        round_id=round_row.id,
+        completions=completions,
+    ):
+        _invalid_replay()
     if (
         all(row.id != requested_completion.id for row in completions)
         or len(completions) > len(scopes)
@@ -4019,6 +4397,52 @@ def _capture_opening_count_replay_evidence(
             ),
         )
     return tuple(sorted(set(audit_event_ids), key=str))
+
+
+def _persisted_round_serial_uniqueness_valid(
+    db: Session,
+    *,
+    task_id: uuid.UUID,
+    round_id: uuid.UUID,
+    completions: Sequence[StocktakeScopeCountCompletion],
+) -> bool:
+    """Reprove the stable, round-wide portion of scan-time SN uniqueness."""
+
+    count_serial_ids = tuple(
+        db.scalars(
+            select(StocktakeCountSerial.serial_id).where(
+                StocktakeCountSerial.round_id == round_id
+            )
+        ).all()
+    )
+    observation_serial_ids = tuple(
+        db.scalars(
+            select(StocktakeCountObservation.serial_id).where(
+                StocktakeCountObservation.task_id == task_id,
+                StocktakeCountObservation.round_id == round_id,
+                StocktakeCountObservation.serial_id.is_not(None),
+            )
+        ).all()
+    )
+    if (
+        len(count_serial_ids) != len(set(count_serial_ids))
+        or len(observation_serial_ids) != len(set(observation_serial_ids))
+        or not set(count_serial_ids).isdisjoint(observation_serial_ids)
+    ):
+        return False
+
+    # Each item snapshots the exact ASCII-fold aliases proven while the master
+    # references were locked. Replay compares those immutable sets, so later
+    # serial-name or QR changes cannot either poison or weaken historical proof.
+    occurrences = _persisted_serial_alias_occurrences(completions)
+    if occurrences is None:
+        return False
+    used_aliases: set[str] = set()
+    for aliases in occurrences:
+        if used_aliases.intersection(aliases):
+            return False
+        used_aliases.update(aliases)
+    return True
 
 
 def _plan_opening_count_replay_evidence(
@@ -4655,6 +5079,10 @@ def _validate_completion_evidence(
         )
         if (
             row.verification_status not in {"verified", "pending_verification"}
+            or row.owner_org_id != scope.owner_org_id
+            or row.location_id != scope.location_id
+            or row.custodian_person_id_snapshot
+            != scope.custodian_person_id_snapshot
             or row.dimension_sha256
             != _observation_dimension_sha256(
                 scope,
@@ -4730,6 +5158,14 @@ def _validate_completion_evidence(
         or completion.zero_confirmed
         != (not snapshots and not lines and not observations and total == _ZERO)
         or completion.authorization_sha256 != authorization_sha256
+        or not _persisted_request_document_valid(completion)
+        or not _persisted_request_resolution_document_valid(
+            db,
+            completion,
+            lines=lines,
+            observations=observations,
+            count_serials=count_serials,
+        )
         or completion.evidence_manifest_sha256 != manifest
         or _as_utc(completion.created_at) != completed_at
     ):
@@ -5049,6 +5485,12 @@ def _validate_command(
     scope_id = _require_uuid("scope_id", command.scope_id)
     if not isinstance(command.physical_observations, tuple):
         _fail("opening_count_lines_invalid", "invalid_request", "盘点实物行必须使用不可变元组")
+    if len(command.physical_observations) > _MAX_PHYSICAL_OBSERVATIONS:
+        _fail(
+            "opening_count_too_many_lines",
+            "invalid_request",
+            "单范围盘点明细不能超过 10000 行",
+        )
     observations: list[OpeningPhysicalObservationInput] = []
     for row in command.physical_observations:
         if not isinstance(row, OpeningPhysicalObservationInput):
@@ -5100,26 +5542,822 @@ def _validate_command(
     )
 
 
-def _request_sha256(
+def _request_document(
     actor: FormalPrincipal, command: SubmitOpeningStocktakeScopeCountCommand
-) -> str:
+) -> dict[str, object]:
     physical_documents = [
         _observation_evidence_document(row)
         for row in command.physical_observations
     ]
     physical_documents.sort(key=_canonical_json)
-    return _hash_document(
-        {
-            "actor_person_id": str(actor.person_id),
-            "actor_user_id": actor.user_id,
-            "round_id": str(command.round_id),
-            "schema": "cloud_oam.opening_stocktake.scope_count_request.v1",
-            "scope_id": str(command.scope_id),
-            "task_id": str(command.task_id),
-            "physical_observations": physical_documents,
-            "zero_confirmed": command.zero_confirmed,
-        }
+    return {
+        "actor_person_id": str(actor.person_id),
+        "actor_user_id": actor.user_id,
+        "round_id": str(command.round_id),
+        "schema": "cloud_oam.opening_stocktake.scope_count_request.v1",
+        "scope_id": str(command.scope_id),
+        "task_id": str(command.task_id),
+        "physical_observations": physical_documents,
+        "zero_confirmed": command.zero_confirmed,
+    }
+
+
+def _scope_count_request_resolution_document(
+    *,
+    task: FormalStocktakeTask,
+    round_row: StocktakeRound,
+    scope: FormalStocktakeScope,
+    request_sha256: str,
+    prepared_counts: Sequence[_PreparedAccountCount],
+    count_lines: Sequence[StocktakeCountLine],
+    prepared_observations: Sequence[_PreparedObservation],
+    observations: Sequence[StocktakeCountObservation],
+) -> dict[str, object]:
+    """Bind every canonical request item to its exact persisted result row."""
+
+    if len(prepared_counts) != len(count_lines) or len(
+        prepared_observations
+    ) != len(observations):
+        _fail(
+            "opening_count_request_resolution_invalid",
+            "service_unavailable",
+            "盘点请求解析证据无法与结果行一一绑定",
+        )
+    items: list[dict[str, object]] = []
+    for prepared, line in zip(prepared_counts, count_lines, strict=True):
+        items.extend(
+            _scope_count_request_resolution_item(
+                source,
+                target_type="count_line",
+                target_id=line.id,
+            )
+            for source in prepared.request_items
+        )
+    items.extend(
+        _scope_count_request_resolution_item(
+            prepared,
+            target_type="observation",
+            target_id=observation.id,
+        )
+        for prepared, observation in zip(
+            prepared_observations,
+            observations,
+            strict=True,
+        )
     )
+    items.sort(key=lambda row: int(row["request_ordinal"]))
+    if [row["request_ordinal"] for row in items] != list(
+        range(1, len(items) + 1)
+    ) or len({row["request_item_sha256"] for row in items}) != len(items):
+        _fail(
+            "opening_count_request_resolution_invalid",
+            "service_unavailable",
+            "盘点请求解析证据存在缺项或重复项",
+        )
+    return {
+        "items": items,
+        "request_sha256": request_sha256,
+        "round_id": str(round_row.id),
+        "schema": (
+            "cloud_oam.opening_stocktake."
+            "scope_count_request_resolution.v1"
+        ),
+        "scope_id": str(scope.id),
+        "task_id": str(task.id),
+    }
+
+
+def _scope_count_request_resolution_item(
+    source: _PreparedObservation,
+    *,
+    target_type: str,
+    target_id: uuid.UUID,
+) -> dict[str, object]:
+    policy = source.policy
+    policy_document: dict[str, object] | None = None
+    if policy is not None:
+        policy_document = {
+            "allow_fraction": policy.allow_fraction,
+            "effective_from": _canonical_timestamp(policy.effective_from),
+            "id": str(policy.id),
+            "quantity_scale": policy.quantity_scale,
+            "tracking_mode": policy.tracking_mode,
+        }
+    return {
+        "material_qr_mapping_id": (
+            str(source.material_qr_mapping_id)
+            if source.material_qr_mapping_id is not None
+            else None
+        ),
+        "policy": policy_document,
+        "request_item_sha256": source.request_item_sha256,
+        "request_ordinal": source.request_ordinal,
+        "resolved_lot_id": str(source.lot.id) if source.lot is not None else None,
+        "resolved_material_id": (
+            str(source.material.id) if source.material is not None else None
+        ),
+        "resolved_serial_id": (
+            str(source.serial.id) if source.serial is not None else None
+        ),
+        "serial_alias_keys": list(source.serial_alias_keys),
+        "serial_qr_mapping_id": (
+            str(source.serial_qr_mapping_id)
+            if source.serial_qr_mapping_id is not None
+            else None
+        ),
+        "target_id": str(target_id),
+        "target_type": target_type,
+    }
+
+
+def _persisted_request_document_valid(
+    completion: StocktakeScopeCountCompletion,
+) -> bool:
+    document = completion.request_jsonb
+    if (
+        not isinstance(document, dict)
+        or set(document) != _SCOPE_COUNT_REQUEST_KEYS
+        or document.get("actor_person_id")
+        != str(completion.completed_by_person_id)
+        or document.get("actor_user_id") != completion.completed_by_user_id
+        or document.get("round_id") != str(completion.round_id)
+        or document.get("schema")
+        != "cloud_oam.opening_stocktake.scope_count_request.v1"
+        or document.get("scope_id") != str(completion.scope_id)
+        or document.get("task_id") != str(completion.task_id)
+        or document.get("zero_confirmed") is not completion.zero_confirmed
+        or not isinstance(document.get("physical_observations"), list)
+    ):
+        return False
+    observations = document["physical_observations"]
+    if len(observations) > _MAX_PHYSICAL_OBSERVATIONS:
+        return False
+    quantities: list[Decimal] = []
+    canonical_items: list[str] = []
+    for item in observations:
+        quantity = _persisted_request_observation_quantity(item)
+        if quantity is None:
+            return False
+        quantities.append(quantity)
+        canonical_items.append(_canonical_json(item))
+    if (
+        canonical_items != sorted(canonical_items)
+        or len(canonical_items) != len(set(canonical_items))
+        or (
+            completion.zero_confirmed
+            and bool(observations)
+        )
+        or sum(quantities, start=_ZERO) != completion.total_counted_qty
+        or sum(
+            item["serial_no_raw"] is not None
+            for item in observations
+        )
+        != completion.serial_count
+    ):
+        return False
+    try:
+        return completion.request_sha256 == _hash_document(document)
+    except OpeningStocktakeCountError:
+        return False
+
+
+def _persisted_request_observation_quantity(
+    value: object,
+) -> Decimal | None:
+    if not isinstance(value, dict) or set(value) != _SCOPE_COUNT_OBSERVATION_KEYS:
+        return None
+    if (
+        not isinstance(value.get("availability_bucket"), str)
+        or value.get("availability_bucket") not in _AVAILABILITY
+        or not isinstance(value.get("condition_code"), str)
+        or value.get("condition_code") not in _CONDITIONS
+        or not isinstance(value.get("count_method"), str)
+        or value.get("count_method") not in _COUNT_METHODS
+        or not isinstance(value.get("material_identifier_type"), str)
+        or value.get("material_identifier_type") not in _MATERIAL_IDENTIFIER_TYPES
+        or not _persisted_request_text_valid(
+            value.get("material_identifier_raw"),
+            limit=300,
+        )
+        or not _persisted_request_text_valid(
+            value.get("remark"),
+            limit=4000,
+            empty=True,
+        )
+        or not all(
+            _persisted_request_optional_text_valid(value.get(field), limit)
+            for field, limit in (
+                ("lot_no_raw", 160),
+                ("reason_code", 80),
+                ("serial_identifier_type", 24),
+                ("serial_no_raw", 200),
+            )
+        )
+        or not all(
+            _persisted_request_optional_uuid_valid(value.get(field))
+            for field in ("lot_id", "material_id", "serial_id")
+        )
+        or (value.get("serial_no_raw") is None)
+        != (value.get("serial_identifier_type") is None)
+        or (
+            value.get("serial_id") is not None
+            and value.get("serial_no_raw") is None
+        )
+        or (
+            value.get("lot_id") is not None
+            and value.get("lot_no_raw") is None
+        )
+        or (
+            value.get("serial_identifier_type") is not None
+            and (
+                not isinstance(value.get("serial_identifier_type"), str)
+                or value.get("serial_identifier_type")
+                not in _SERIAL_IDENTIFIER_TYPES
+            )
+        )
+    ):
+        return None
+    raw_quantity = value.get("counted_qty")
+    if not isinstance(raw_quantity, str):
+        return None
+    try:
+        quantity = Decimal(raw_quantity)
+    except (ArithmeticError, ValueError):
+        return None
+    if (
+        not quantity.is_finite()
+        or quantity <= _ZERO
+        or quantity >= _MAX_QUANTITY
+        or _decimal_scale(quantity) > 3
+        or _canonical_decimal(quantity) != raw_quantity
+    ):
+        return None
+    return quantity
+
+
+def _persisted_request_resolution_document_valid(
+    db: Session,
+    completion: StocktakeScopeCountCompletion,
+    *,
+    lines: Sequence[StocktakeCountLine],
+    observations: Sequence[StocktakeCountObservation],
+    count_serials: Sequence[StocktakeCountSerial],
+) -> bool:
+    request = completion.request_jsonb
+    document = completion.request_resolution_jsonb
+    if (
+        not isinstance(request, dict)
+        or not isinstance(request.get("physical_observations"), list)
+        or not isinstance(document, dict)
+        or set(document) != _SCOPE_COUNT_RESOLUTION_KEYS
+        or document.get("request_sha256") != completion.request_sha256
+        or document.get("round_id") != str(completion.round_id)
+        or document.get("schema")
+        != (
+            "cloud_oam.opening_stocktake."
+            "scope_count_request_resolution.v1"
+        )
+        or document.get("scope_id") != str(completion.scope_id)
+        or document.get("task_id") != str(completion.task_id)
+        or not isinstance(document.get("items"), list)
+    ):
+        return False
+    request_items = request["physical_observations"]
+    resolution_items = document["items"]
+    if len(resolution_items) != len(request_items):
+        return False
+
+    lines_by_id = {row.id: row for row in lines}
+    observations_by_id = {row.id: row for row in observations}
+    if len(lines_by_id) != len(lines) or len(observations_by_id) != len(
+        observations
+    ):
+        return False
+    serials_by_line: dict[uuid.UUID, list[StocktakeCountSerial]] = defaultdict(
+        list
+    )
+    for serial in count_serials:
+        serials_by_line[serial.count_line_id].append(serial)
+    count_serial_ids = [row.serial_id for row in count_serials]
+    observation_serial_ids = [
+        row.serial_id for row in observations if row.serial_id is not None
+    ]
+    if (
+        len(count_serial_ids) != len(set(count_serial_ids))
+        or len(observation_serial_ids) != len(set(observation_serial_ids))
+        or not set(count_serial_ids).isdisjoint(observation_serial_ids)
+    ):
+        return False
+
+    task = db.get(FormalStocktakeTask, completion.task_id)
+    scope = db.get(FormalStocktakeScope, completion.scope_id)
+    location = db.get(StockLocation, scope.location_id) if scope is not None else None
+    if task is None or scope is None or location is None:
+        return False
+
+    line_sources: dict[
+        uuid.UUID,
+        list[tuple[dict[str, object], dict[str, object], Decimal]],
+    ] = defaultdict(list)
+    seen_observation_targets: set[uuid.UUID] = set()
+    seen_item_hashes: set[str] = set()
+    seen_serial_aliases: set[str] = set()
+
+    for expected_ordinal, item in enumerate(resolution_items, start=1):
+        if (
+            not isinstance(item, dict)
+            or set(item) != _SCOPE_COUNT_RESOLUTION_ITEM_KEYS
+            or type(item.get("request_ordinal")) is not int
+            or item.get("request_ordinal") != expected_ordinal
+            or not isinstance(item.get("target_type"), str)
+            or item.get("target_type") not in {"count_line", "observation"}
+        ):
+            return False
+        request_item = request_items[expected_ordinal - 1]
+        quantity = _persisted_request_observation_quantity(request_item)
+        if quantity is None:
+            return False
+        serial_alias_keys = _persisted_serial_alias_keys(
+            item.get("serial_alias_keys"),
+            serial_no_raw=request_item.get("serial_no_raw"),
+        )
+        if (
+            serial_alias_keys is None
+            or seen_serial_aliases.intersection(serial_alias_keys)
+        ):
+            return False
+        seen_serial_aliases.update(serial_alias_keys)
+        try:
+            request_item_sha256 = _hash_document(request_item)
+        except OpeningStocktakeCountError:
+            return False
+        if (
+            item.get("request_item_sha256") != request_item_sha256
+            or not _SHA256.fullmatch(request_item_sha256)
+            or request_item_sha256 in seen_item_hashes
+        ):
+            return False
+        seen_item_hashes.add(request_item_sha256)
+
+        target_id = _persisted_resolution_uuid(item.get("target_id"))
+        resolved_material_id = _persisted_resolution_optional_uuid(
+            item.get("resolved_material_id")
+        )
+        resolved_lot_id = _persisted_resolution_optional_uuid(
+            item.get("resolved_lot_id")
+        )
+        resolved_serial_id = _persisted_resolution_optional_uuid(
+            item.get("resolved_serial_id")
+        )
+        material_qr_mapping_id = _persisted_resolution_optional_uuid(
+            item.get("material_qr_mapping_id")
+        )
+        serial_qr_mapping_id = _persisted_resolution_optional_uuid(
+            item.get("serial_qr_mapping_id")
+        )
+        if (
+            target_id is None
+            or resolved_material_id is _INVALID_RESOLUTION_UUID
+            or resolved_lot_id is _INVALID_RESOLUTION_UUID
+            or resolved_serial_id is _INVALID_RESOLUTION_UUID
+            or material_qr_mapping_id is _INVALID_RESOLUTION_UUID
+            or serial_qr_mapping_id is _INVALID_RESOLUTION_UUID
+        ):
+            return False
+
+        supplied_material_id = _persisted_resolution_optional_uuid(
+            request_item.get("material_id")
+        )
+        supplied_lot_id = _persisted_resolution_optional_uuid(
+            request_item.get("lot_id")
+        )
+        supplied_serial_id = _persisted_resolution_optional_uuid(
+            request_item.get("serial_id")
+        )
+        if (
+            supplied_material_id is _INVALID_RESOLUTION_UUID
+            or supplied_lot_id is _INVALID_RESOLUTION_UUID
+            or supplied_serial_id is _INVALID_RESOLUTION_UUID
+            or (
+                supplied_material_id is not None
+                and supplied_material_id != resolved_material_id
+            )
+            or (
+                supplied_lot_id is not None
+                and supplied_lot_id != resolved_lot_id
+            )
+            or (
+                supplied_serial_id is not None
+                and supplied_serial_id != resolved_serial_id
+            )
+        ):
+            return False
+
+        material_identifier_type = request_item.get("material_identifier_type")
+        serial_identifier_type = request_item.get("serial_identifier_type")
+        if (
+            material_identifier_type in {"external_code", "unknown"}
+            and (
+                resolved_material_id is not None
+                or material_qr_mapping_id is not None
+            )
+            or material_identifier_type != "qr_code"
+            and material_qr_mapping_id is not None
+            or material_qr_mapping_id is not None
+            and resolved_material_id is None
+            or serial_identifier_type != "qr_code"
+            and serial_qr_mapping_id is not None
+            or serial_qr_mapping_id is not None
+            and resolved_serial_id is None
+            or request_item.get("lot_no_raw") is None
+            and resolved_lot_id is not None
+            or request_item.get("serial_no_raw") is None
+            and resolved_serial_id is not None
+        ):
+            return False
+
+        policy = item.get("policy")
+        if not _persisted_resolution_policy_valid(policy, resolved_material_id):
+            return False
+        if not _persisted_resolution_master_binding_valid(
+            db,
+            task=task,
+            request_item=request_item,
+            policy_document=policy,
+            resolved_material_id=resolved_material_id,
+            resolved_lot_id=resolved_lot_id,
+            resolved_serial_id=resolved_serial_id,
+            material_qr_mapping_id=material_qr_mapping_id,
+            serial_qr_mapping_id=serial_qr_mapping_id,
+        ):
+            return False
+        if isinstance(policy, dict):
+            tracking_mode = policy["tracking_mode"]
+            expected_tracking = {
+                "none": (False, False),
+                "lot": (True, False),
+                "serial": (False, True),
+                "lot_and_serial": (True, True),
+            }[tracking_mode]
+            if (
+                (
+                    request_item.get("lot_no_raw") is not None,
+                    request_item.get("serial_no_raw") is not None,
+                )
+                != expected_tracking
+                or _decimal_scale(quantity) > policy["quantity_scale"]
+                or (
+                    not policy["allow_fraction"]
+                    and quantity != quantity.to_integral_value()
+                )
+            ):
+                return False
+        if request_item.get("serial_no_raw") is not None and quantity != Decimal(
+            "1"
+        ):
+            return False
+
+        verification_status = (
+            "pending_verification"
+            if resolved_material_id is None
+            or (
+                request_item.get("lot_no_raw") is not None
+                and resolved_lot_id is None
+            )
+            or (
+                request_item.get("serial_no_raw") is not None
+                and resolved_serial_id is None
+            )
+            else "verified"
+        )
+        matching_line_ids: set[uuid.UUID] = set()
+        if verification_status == "verified":
+            for candidate_line in lines:
+                candidate_account = db.get(
+                    StockAccount,
+                    candidate_line.stock_account_id,
+                )
+                if (
+                    candidate_account is not None
+                    and candidate_account.owner_org_id == scope.owner_org_id
+                    and candidate_account.location_id == scope.location_id
+                    and (
+                        location.location_type != "personal"
+                        or candidate_account.custodian_person_id
+                        == scope.custodian_person_id_snapshot
+                    )
+                    and candidate_account.material_id == resolved_material_id
+                    and candidate_account.condition_code
+                    == request_item.get("condition_code")
+                    and candidate_account.availability_bucket
+                    == request_item.get("availability_bucket")
+                    and candidate_account.lot_id == resolved_lot_id
+                ):
+                    matching_line_ids.add(candidate_line.id)
+        if item["target_type"] == "observation":
+            observation = observations_by_id.get(target_id)
+            if (
+                observation is None
+                or target_id in seen_observation_targets
+                or matching_line_ids
+                or observation.owner_org_id != scope.owner_org_id
+                or observation.location_id != scope.location_id
+                or observation.custodian_person_id_snapshot
+                != scope.custodian_person_id_snapshot
+                or observation.material_identifier_raw
+                != request_item.get("material_identifier_raw")
+                or observation.material_identifier_type
+                != material_identifier_type
+                or observation.condition_code != request_item.get("condition_code")
+                or observation.availability_bucket
+                != request_item.get("availability_bucket")
+                or observation.counted_qty != quantity
+                or observation.material_id != resolved_material_id
+                or observation.lot_id != resolved_lot_id
+                or observation.lot_no_raw != request_item.get("lot_no_raw")
+                or observation.serial_id != resolved_serial_id
+                or observation.serial_no_raw != request_item.get("serial_no_raw")
+                or observation.serial_identifier_type != serial_identifier_type
+                or observation.verification_status != verification_status
+                or observation.count_method != request_item.get("count_method")
+                or observation.reason_code != request_item.get("reason_code")
+                or observation.remark != request_item.get("remark")
+            ):
+                return False
+            seen_observation_targets.add(target_id)
+            continue
+
+        line = lines_by_id.get(target_id)
+        account = db.get(StockAccount, line.stock_account_id) if line else None
+        if (
+            line is None
+            or account is None
+            or verification_status != "verified"
+            or matching_line_ids != {target_id}
+            or account.owner_org_id != scope.owner_org_id
+            or account.location_id != scope.location_id
+            or (
+                location.location_type == "personal"
+                and account.custodian_person_id
+                != scope.custodian_person_id_snapshot
+            )
+            or account.material_id != resolved_material_id
+            or account.condition_code != request_item.get("condition_code")
+            or account.availability_bucket
+            != request_item.get("availability_bucket")
+            or account.lot_id != resolved_lot_id
+        ):
+            return False
+        line_sources[target_id].append((item, request_item, quantity))
+
+    if seen_observation_targets != set(observations_by_id):
+        return False
+    for line in lines:
+        sources = line_sources.get(line.id, [])
+        serial_rows = serials_by_line.get(line.id, [])
+        if not sources:
+            if (
+                line.counted_qty != _ZERO
+                or line.count_method != "manual"
+                or line.reason_code != "scope_full_set_zero"
+                or line.remark != ""
+                or serial_rows
+            ):
+                return False
+            continue
+        if sum((source[2] for source in sources), start=_ZERO) != line.counted_qty:
+            return False
+        metadata = {
+            (
+                source[1]["count_method"],
+                source[1]["reason_code"],
+                source[1]["remark"],
+            )
+            for source in sources
+        }
+        if (
+            len(metadata) != 1
+            or next(iter(metadata))
+            != (line.count_method, line.reason_code, line.remark)
+        ):
+            return False
+        tracking_modes = {
+            source[0]["policy"]["tracking_mode"] for source in sources
+        }
+        if len(tracking_modes) != 1:
+            return False
+        tracking_mode = next(iter(tracking_modes))
+        if tracking_mode not in {"serial", "lot_and_serial"} and len(sources) != 1:
+            return False
+        expected_serial_ids = {
+            source[0]["resolved_serial_id"]
+            for source in sources
+            if source[0]["resolved_serial_id"] is not None
+        }
+        if (
+            any(row.result != "unexpected" for row in serial_rows)
+            or len(serial_rows) != len({row.serial_id for row in serial_rows})
+            or {str(row.serial_id) for row in serial_rows} != expected_serial_ids
+            or (
+                tracking_mode in {"serial", "lot_and_serial"}
+                and line.counted_qty != Decimal(len(serial_rows))
+            )
+            or (
+                tracking_mode not in {"serial", "lot_and_serial"}
+                and serial_rows
+            )
+        ):
+            return False
+    return set(line_sources).issubset(lines_by_id)
+
+
+_INVALID_RESOLUTION_UUID: Final[object] = object()
+
+
+def _persisted_resolution_optional_uuid(
+    value: object,
+) -> uuid.UUID | None | object:
+    if value is None:
+        return None
+    parsed = _persisted_resolution_uuid(value)
+    return parsed if parsed is not None else _INVALID_RESOLUTION_UUID
+
+
+def _persisted_resolution_uuid(value: object) -> uuid.UUID | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = uuid.UUID(value)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return parsed if parsed.int != 0 and str(parsed) == value else None
+
+
+def _persisted_resolution_policy_valid(
+    value: object,
+    resolved_material_id: uuid.UUID | None | object,
+) -> bool:
+    if resolved_material_id is None:
+        return value is None
+    if (
+        resolved_material_id is _INVALID_RESOLUTION_UUID
+        or not isinstance(value, dict)
+        or set(value) != _SCOPE_COUNT_RESOLUTION_POLICY_KEYS
+        or _persisted_resolution_uuid(value.get("id")) is None
+        or not isinstance(value.get("tracking_mode"), str)
+        or value.get("tracking_mode")
+        not in {"none", "lot", "serial", "lot_and_serial"}
+        or type(value.get("quantity_scale")) is not int
+        or not 0 <= value["quantity_scale"] <= 3
+        or type(value.get("allow_fraction")) is not bool
+        or not _persisted_resolution_timestamp_valid(value.get("effective_from"))
+    ):
+        return False
+    return True
+
+
+def _persisted_resolution_master_binding_valid(
+    db: Session,
+    *,
+    task: FormalStocktakeTask,
+    request_item: dict[str, object],
+    policy_document: object,
+    resolved_material_id: uuid.UUID | None | object,
+    resolved_lot_id: uuid.UUID | None | object,
+    resolved_serial_id: uuid.UUID | None | object,
+    material_qr_mapping_id: uuid.UUID | None | object,
+    serial_qr_mapping_id: uuid.UUID | None | object,
+) -> bool:
+    if any(
+        value is _INVALID_RESOLUTION_UUID
+        for value in (
+            resolved_material_id,
+            resolved_lot_id,
+            resolved_serial_id,
+            material_qr_mapping_id,
+            serial_qr_mapping_id,
+        )
+    ):
+        return False
+    if resolved_material_id is None:
+        return (
+            resolved_lot_id is None
+            and resolved_serial_id is None
+            and material_qr_mapping_id is None
+            and serial_qr_mapping_id is None
+            and policy_document is None
+        )
+    assert isinstance(resolved_material_id, uuid.UUID)
+    material = db.get(FormalMaterial, resolved_material_id)
+    identifier_type = request_item.get("material_identifier_type")
+    if material is None or identifier_type not in {"sku_code", "qr_code"}:
+        return False
+    if identifier_type == "sku_code":
+        if material_qr_mapping_id is not None:
+            return False
+    else:
+        if not isinstance(material_qr_mapping_id, uuid.UUID):
+            return False
+        mapping = db.get(QrCode, material_qr_mapping_id)
+        if (
+            mapping is None
+            or mapping.object_type != "material"
+            or mapping.object_id != material.id
+        ):
+            return False
+
+    if resolved_lot_id is not None:
+        assert isinstance(resolved_lot_id, uuid.UUID)
+        lot = db.get(InventoryLot, resolved_lot_id)
+        if (
+            lot is None
+            or lot.material_id != material.id
+        ):
+            return False
+
+    serial_identifier_type = request_item.get("serial_identifier_type")
+    if resolved_serial_id is not None:
+        assert isinstance(resolved_serial_id, uuid.UUID)
+        serial = db.get(InventorySerial, resolved_serial_id)
+        if (
+            serial is None
+            or serial.material_id != material.id
+            or serial.lot_id != resolved_lot_id
+            or serial_identifier_type not in {"serial_no", "qr_code"}
+        ):
+            return False
+    if serial_qr_mapping_id is not None:
+        if not isinstance(resolved_serial_id, uuid.UUID) or not isinstance(
+            serial_qr_mapping_id,
+            uuid.UUID,
+        ):
+            return False
+        mapping = db.get(QrCode, serial_qr_mapping_id)
+        if (
+            mapping is None
+            or mapping.object_type != "serial"
+            or mapping.object_id != resolved_serial_id
+        ):
+            return False
+
+    if not isinstance(policy_document, dict) or task.cutoff_at is None:
+        return False
+    policy_id = _persisted_resolution_uuid(policy_document.get("id"))
+    policy = db.get(MaterialInventoryPolicy, policy_id) if policy_id else None
+    cutoff_at = _as_utc(task.cutoff_at)
+    return bool(
+        policy is not None
+        and policy.material_id == material.id
+        and policy.tracking_mode == policy_document.get("tracking_mode")
+        and policy.quantity_scale == policy_document.get("quantity_scale")
+        and policy.allow_fraction is policy_document.get("allow_fraction")
+        and _canonical_timestamp(policy.effective_from)
+        == policy_document.get("effective_from")
+        and _as_utc(policy.effective_from) <= cutoff_at
+    )
+
+
+def _persisted_resolution_timestamp_valid(value: object) -> bool:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.removesuffix("Z") + "+00:00")
+    except (TypeError, ValueError):
+        return False
+    return _canonical_timestamp(parsed) == value
+
+
+def _persisted_request_text_valid(
+    value: object,
+    *,
+    limit: int,
+    empty: bool = False,
+) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) <= limit
+        and value == value.strip()
+        and (empty or bool(value))
+    )
+
+
+def _persisted_request_optional_text_valid(
+    value: object,
+    limit: int,
+) -> bool:
+    return value is None or _persisted_request_text_valid(value, limit=limit)
+
+
+def _persisted_request_optional_uuid_valid(value: object) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = uuid.UUID(value)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return parsed.int != 0 and str(parsed) == value
 
 
 def _scope_evidence_manifest(

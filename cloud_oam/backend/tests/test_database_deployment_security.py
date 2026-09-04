@@ -15,6 +15,9 @@ BACKUP = ROOT / "scripts" / "backup.sh"
 PG16_WORKFLOW = ROOT.parent / ".github" / "workflows" / (
     "postgresql16-release-gate.yml"
 )
+PG16_RELEASE_GATE_TEST = ROOT / "backend" / "tests" / (
+    "test_postgresql16_release_gate.py"
+)
 DEPLOYMENT = ROOT / "deployment"
 EDGE_SCOPE_PROVISION = DEPLOYMENT / "provision_oam_edge_scope.sql"
 
@@ -123,16 +126,50 @@ def test_postgresql16_gate_covers_main_prs_and_edge_role_provisioning() -> None:
     assert workflow.count(
         '      - "cloud_oam/deployment/provision_oam_edge_scope.sql"\n'
     ) == 2
-    for approval_gate in (
+    for required_gate in (
         "backend/tests/test_database_security.py",
         "backend/tests/test_oam_projection_security.py",
         "backend/tests/test_material_request_draft_service.py",
         "backend/tests/test_material_request_approval_service.py",
         "backend/tests/test_material_request_lifecycle_service.py",
         "backend/tests/test_material_request_query_service.py",
+        "backend/tests/test_audit_chain.py",
+        "backend/tests/test_inventory_posting.py",
+        "backend/tests/test_opening_stocktake_service.py",
+        "backend/tests/test_opening_stocktake_review_service.py",
     ):
-        assert approval_gate in workflow
+        assert required_gate in workflow
     assert "pytest==9.1.1 pglast==7.18 httpx==0.28.1" in workflow
+
+
+def test_postgresql16_scratch_cleanup_always_restores_projector_connect() -> None:
+    source = PG16_RELEASE_GATE_TEST.read_text(encoding="utf-8")
+    restore_source = source.split(
+        "def _restore_main_projector_connect() -> None:\n", 1
+    )[1].split("\ndef ", 1)[0]
+    create_source = source.split(
+        "def _create_opening_backfill_database() -> str:\n", 1
+    )[1].split("\ndef ", 1)[0]
+    cleanup_source = source.split(
+        "def _drop_opening_backfill_database(database_name: str) -> None:\n",
+        1,
+    )[1].split("\ndef ", 1)[0]
+
+    assert (
+        "GRANT CONNECT ON DATABASE {} TO star_oam_projector"
+        in restore_source
+    )
+    assert "except BaseException as exc:" in cleanup_source
+    assert "cleanup_error = exc" in cleanup_source
+    assert "finally:" in cleanup_source
+    finally_source = cleanup_source.split("finally:", 1)[1]
+    assert "_restore_main_projector_connect()" in finally_source
+    assert "raise restoration_error from cleanup_error" in finally_source
+    assert "except BaseException as creation_error:" in create_source
+    assert "finally:" in create_source
+    assert "_restore_main_projector_connect()" in create_source
+    assert "raise cleanup_error from creation_error" in create_source
+    assert "raise cleanup_error from setup_error" in create_source
 
 
 def test_deployment_verifier_allows_only_0044_runtime_entrypoints() -> None:

@@ -3388,7 +3388,7 @@ def test_0048_postgresql_offline_downgrade_restores_exact_invoker_guard(
     )
 
 
-def test_0048_through_0052_sqlite_noops_share_one_ordered_revision_chain(
+def test_0048_through_0051_sqlite_noops_then_0052_adds_request_evidence(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3403,9 +3403,9 @@ def test_0048_through_0052_sqlite_noops_share_one_ordered_revision_chain(
         module_0049,
         module_0050,
         module_0051,
-        module_0052,
     ):
         assert "SQLite is an explicit schema no-op" in (module.__doc__ or "")
+    assert "SQLite receives only the" in (module_0052.__doc__ or "")
 
     database_url = f"sqlite+pysqlite:///{tmp_path / 'security-noops.db'}"
     config = _config(database_url)
@@ -3441,14 +3441,35 @@ def test_0048_through_0052_sqlite_noops_share_one_ordered_revision_chain(
         STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION_ID,
         STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID,
         STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID,
-        OPENING_TERMINAL_GUARD_EXECUTION_REVISION_ID,
     ):
         command.upgrade(config, target_revision)
         assert schema_snapshot() == baseline_schema
         assert_revision(target_revision)
 
-    for target_revision in (
+    command.upgrade(config, OPENING_TERMINAL_GUARD_EXECUTION_REVISION_ID)
+    assert_revision(OPENING_TERMINAL_GUARD_EXECUTION_REVISION_ID)
+    engine = sa.create_engine(database_url)
+    try:
+        columns = {
+            column["name"]
+            for column in sa.inspect(engine).get_columns(
+                "stocktake_scope_count_completions"
+            )
+        }
+    finally:
+        engine.dispose()
+    assert module_0052.COUNT_REQUEST_COLUMN in columns
+    assert module_0052.COUNT_REQUEST_RESOLUTION_COLUMN in columns
+    assert schema_snapshot() != baseline_schema
+
+    command.downgrade(
+        config,
         STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID,
+    )
+    assert schema_snapshot() == baseline_schema
+    assert_revision(STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID)
+
+    for target_revision in (
         STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID,
         STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION_ID,
         STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION_ID,
@@ -3457,6 +3478,124 @@ def test_0048_through_0052_sqlite_noops_share_one_ordered_revision_chain(
         command.downgrade(config, target_revision)
         assert schema_snapshot() == baseline_schema
         assert_revision(target_revision)
+
+
+def test_0052_sqlite_online_downgrade_blocks_either_request_evidence_column(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0052_migration_module()
+    database_url = f"sqlite+pysqlite:///{tmp_path / '0052-evidence.db'}"
+    config = _config(database_url)
+    command.upgrade(config, OPENING_TERMINAL_GUARD_EXECUTION_REVISION_ID)
+
+    row_id = uuid.uuid4().hex
+    occurred_at = "2026-09-04 00:00:00.000000"
+    engine = sa.create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            assert connection.exec_driver_sql(
+                "PRAGMA foreign_keys"
+            ).scalar_one() == 0
+            trigger_names = tuple(
+                connection.exec_driver_sql(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type = 'trigger' "
+                    "AND tbl_name = 'stocktake_scope_count_completions'"
+                ).scalars()
+            )
+            assert trigger_names
+            for trigger_name in trigger_names:
+                quoted_name = trigger_name.replace('"', '""')
+                connection.exec_driver_sql(
+                    f'DROP TRIGGER "{quoted_name}"'
+                )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO stocktake_scope_count_completions ("
+                    "id, task_id, round_id, scope_id, count_line_count, "
+                    "observation_line_count, serial_count, total_counted_qty, "
+                    "zero_confirmed, evidence_manifest_sha256, request_sha256, "
+                    "idempotency_key_hash, completed_by_user_id, "
+                    "completed_by_person_id, completed_role_assignment_id, "
+                    "authorization_version, role_code, scope_type, "
+                    "scope_id_snapshot, authorization_sha256, completed_at, "
+                    "created_at, count_ledger_cursor, request_jsonb, "
+                    "request_resolution_jsonb"
+                    ") VALUES ("
+                    ":id, :task_id, :round_id, :scope_id, 0, 0, 0, 0, 1, "
+                    ":hash_a, :hash_b, :hash_c, :user_id, :person_id, "
+                    ":assignment_id, 1, 'admin', 'national', '*', :hash_d, "
+                    ":completed_at, :created_at, NULL, '{}', NULL"
+                    ")"
+                ),
+                {
+                    "id": row_id,
+                    "task_id": uuid.uuid4().hex,
+                    "round_id": uuid.uuid4().hex,
+                    "scope_id": uuid.uuid4().hex,
+                    "hash_a": "a" * 64,
+                    "hash_b": "b" * 64,
+                    "hash_c": "c" * 64,
+                    "user_id": f"0052-{uuid.uuid4().hex[:20]}",
+                    "person_id": uuid.uuid4().hex,
+                    "assignment_id": uuid.uuid4().hex,
+                    "hash_d": "d" * 64,
+                    "completed_at": occurred_at,
+                    "created_at": occurred_at,
+                },
+            )
+            connection.commit()
+    finally:
+        engine.dispose()
+
+    def assert_evidence_preserved() -> None:
+        current_engine = sa.create_engine(database_url)
+        try:
+            with current_engine.connect() as connection:
+                assert connection.exec_driver_sql(
+                    "SELECT version_num FROM alembic_version"
+                ).scalar_one() == OPENING_TERMINAL_GUARD_EXECUTION_REVISION_ID
+                columns = {
+                    column[1]
+                    for column in connection.exec_driver_sql(
+                        "PRAGMA table_info(stocktake_scope_count_completions)"
+                    ).all()
+                }
+                assert module.COUNT_REQUEST_COLUMN in columns
+                assert module.COUNT_REQUEST_RESOLUTION_COLUMN in columns
+        finally:
+            current_engine.dispose()
+
+    with pytest.raises(RuntimeError, match=re.escape(module.DOWNGRADE_BLOCKER)):
+        command.downgrade(
+            config,
+            STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID,
+        )
+    assert_evidence_preserved()
+
+    engine = sa.create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "UPDATE stocktake_scope_count_completions "
+                    "SET request_jsonb = NULL, request_resolution_jsonb = '{}' "
+                    "WHERE id = :id"
+                ),
+                {"id": row_id},
+            )
+    finally:
+        engine.dispose()
+
+    with pytest.raises(RuntimeError, match=re.escape(module.DOWNGRADE_BLOCKER)):
+        command.downgrade(
+            config,
+            STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID,
+        )
+    assert_evidence_preserved()
 
 
 def test_0049_pins_exact_nested_guard_bodies_catalog_and_runtime_ready_sql(
@@ -4522,6 +4661,7 @@ def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
         "bigint, timestamptz, text, text, text)",
         "public.rsc_require_stocktake_difference_completion_0016()",
         "public.rsc_block_stocktake_review_fact_mutation_0016()",
+        "public.rsc_validate_stocktake_scope_completion_insert_0021()",
         "public.rsc_opening_terminal_graph_complete_0022(uuid, uuid)",
         "public.rsc_require_opening_terminal_graph_0022()",
         "public.rsc_require_opening_observation_account_0023()",
@@ -4597,6 +4737,10 @@ def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
         "opening_count_observations_migration_0011_for_0052",
         OPENING_COUNT_OBSERVATION_REVISION,
     )
+    legacy_0021 = load_legacy(
+        "stocktake_round_assignment_guards_migration_0021_for_0052",
+        STOCKTAKE_ROUND_ASSIGNMENT_GUARDS_REVISION,
+    )
 
     def body(statement: str) -> str:
         body_match = re.search(
@@ -4610,6 +4754,9 @@ def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
     graph_sql = current_0023._postgresql_graph_function_sql(current=True)
     legacy_commit_sql = legacy_0022._postgresql_commit_function_sql()
     legacy_account_sql = current_0023._postgresql_account_function_sql()
+    legacy_scope_completion_sql = (
+        legacy_0021._postgresql_completion_function_sql(round_aware=True)
+    )
     actor_statements: list[str] = []
     monkeypatch.setattr(legacy_0011.op, "execute", actor_statements.append)
     legacy_0011._create_postgresql_count_contract_triggers()
@@ -4618,6 +4765,7 @@ def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
     graph_body = body(graph_sql)
     legacy_commit_body = body(legacy_commit_sql)
     legacy_account_body = body(legacy_account_sql)
+    legacy_scope_completion_body = body(legacy_scope_completion_sql)
     assert hashlib.sha256(actor_body.encode("utf-8")).hexdigest() == (
         module.ACTOR_ASSIGNMENT_BODY_SHA256
     )
@@ -4630,12 +4778,22 @@ def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
     assert hashlib.sha256(legacy_account_body.encode("utf-8")).hexdigest() == (
         module.LEGACY_ACCOUNT_BODY_SHA256
     )
+    assert hashlib.sha256(
+        legacy_scope_completion_body.encode("utf-8")
+    ).hexdigest() == module.LEGACY_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
     assert legacy_commit_body.count(module.LEGACY_TASK_BRANCH) == 1
     assert module.FIXED_TASK_BRANCH not in legacy_commit_body
     assert legacy_account_body.count(
         module.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT
     ) == 1
     assert module.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT not in legacy_account_body
+    assert legacy_scope_completion_body.count(
+        module.LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021
+    ) == 1
+    assert (
+        module.FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021
+        not in legacy_scope_completion_body
+    )
 
     fixed_commit_body = legacy_commit_body.replace(
         module.LEGACY_TASK_BRANCH,
@@ -4645,12 +4803,19 @@ def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
         module.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT,
         module.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT,
     )
+    fixed_scope_completion_body = legacy_scope_completion_body.replace(
+        module.LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+        module.FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+    )
     assert hashlib.sha256(fixed_commit_body.encode("utf-8")).hexdigest() == (
         module.FIXED_COMMIT_BODY_SHA256
     )
     assert hashlib.sha256(fixed_account_body.encode("utf-8")).hexdigest() == (
         module.FIXED_ACCOUNT_BODY_SHA256
     )
+    assert hashlib.sha256(
+        fixed_scope_completion_body.encode("utf-8")
+    ).hexdigest() == module.FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
     assert fixed_commit_body.replace(
         module.FIXED_TASK_BRANCH,
         module.LEGACY_TASK_BRANCH,
@@ -4659,6 +4824,10 @@ def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
         module.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT,
         module.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT,
     ) == legacy_account_body
+    assert fixed_scope_completion_body.replace(
+        module.FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+        module.LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+    ) == legacy_scope_completion_body
 
     normalized_fixed_branch = " ".join(module.FIXED_TASK_BRANCH.split())
     for required_guard in (
@@ -4803,11 +4972,16 @@ def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
         module.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT,
         module.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT,
     )
+    fixed_scope_completion_sql = legacy_scope_completion_sql.replace(
+        module.LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+        module.FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+    )
     for statement in (
         actor_sql,
         graph_sql,
         fixed_commit_sql,
         fixed_account_sql,
+        fixed_scope_completion_sql,
     ):
         assert not sa.text(statement)._bindparams
         parser.parse_sql(statement)
@@ -4832,6 +5006,19 @@ def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
         source_fragment=module.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT,
         replacement_fragment=module.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT,
         phase="account parse probe",
+    )
+    module._replace_function_body(
+        signature=module.SCOPE_COMPLETION_GUARD_SIGNATURE_0021,
+        expected_body_sha256=(
+            module.LEGACY_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
+        ),
+        source_fragment=(
+            module.LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021
+        ),
+        replacement_fragment=(
+            module.FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021
+        ),
+        phase="scope completion parse probe",
     )
     for statement in statements:
         assert not sa.text(statement)._bindparams
@@ -4944,7 +5131,8 @@ def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
     hardened_values = module._function_catalog_values(hardened=True)
     assert legacy_values.count("FALSE") == 6
     assert hardened_values.count("FALSE") == 4
-    assert hardened_values.count("TRUE") == 2
+    assert legacy_values.count("TRUE") == 1
+    assert hardened_values.count("TRUE") == 3
     assert "NULL::text" in legacy_values
     assert (
         f"'{module.ACTOR_ASSIGNMENT_SIGNATURE}', "
@@ -4962,6 +5150,8 @@ def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
         module.FIXED_COMMIT_BODY_SHA256,
         module.LEGACY_ACCOUNT_BODY_SHA256,
         module.FIXED_ACCOUNT_BODY_SHA256,
+        module.LEGACY_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021,
+        module.FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021,
     ):
         assert re.fullmatch(r"[0-9a-f]{64}", expected_hash)
 
@@ -5389,6 +5579,250 @@ def test_0052_parses_named_helpers_and_closes_event_ownership(
         "snapshot_scope.custodian_person_id_snapshot"
         not in normalized_start_graph
     )
+    normalized_scope_graph = " ".join(module.SCOPE_COMPLETION_BODY.split())
+    assert (
+        "current_location.location_type = 'region' AND "
+        "current_location.custodian_person_id IS NOT NULL AND "
+        "current_location.custodian_person_id IS DISTINCT FROM "
+        "current_scope.custodian_person_id_snapshot"
+        in normalized_scope_graph
+    )
+    assert (
+        "current_location.location_type = 'region' AND "
+        "current_location.custodian_person_id IS NOT NULL AND "
+        "current_location.custodian_person_id <> "
+        "current_scope.custodian_person_id_snapshot"
+        not in normalized_scope_graph
+    )
+    assert module._fixed_scale_quantity_sql(
+        "terminal_posting.total_quantity"
+    ) == (
+        "pg_catalog.to_char((terminal_posting.total_quantity)::numeric(18, 3), "
+        "'FM999999999999990.000')"
+    )
+    normalized_terminal_graph = " ".join(module.TERMINAL_GRAPH_BODY.split())
+    assert module._fixed_scale_quantity_sql(
+        "terminal_posting.total_quantity"
+    ) in module.TERMINAL_GRAPH_BODY
+    assert (
+        "pg_catalog.trim_scale((terminal_posting.total_quantity)::numeric)::text"
+        not in normalized_terminal_graph
+    )
+    normalized_review_graph = " ".join(module.REVIEW_GRAPH_BODY.split())
+    assert normalized_review_graph.count(
+        "historical_assignment.status IN ( 'scheduled', 'active', "
+        "'expired', 'revoked' )"
+    ) == 2
+    assert (
+        "review_row.decision <> 'approve' OR "
+        "sibling_review.review_stage <> 'headquarters' OR "
+        "sibling_review.reviewed_at <= review_row.reviewed_at"
+        in normalized_review_graph
+    )
+    assert "scope_completion.request_jsonb" in module.SCOPE_COMPLETION_BODY
+    assert (
+        "scope_completion.request_resolution_jsonb"
+        in module.SCOPE_COMPLETION_BODY
+    )
+    assert module.CANONICAL_JSON_FUNCTION in module._scope_count_request_sha256_sql(
+        "scope_completion"
+    )
+    request_proof = module._scope_count_request_document_proof_sql(
+        "scope_task.id",
+        "scope_round",
+        "scope_row",
+        "scope_completion",
+    )
+    for request_key in (
+        "actor_person_id",
+        "actor_user_id",
+        "physical_observations",
+        "round_id",
+        "schema",
+        "scope_id",
+        "task_id",
+        "zero_confirmed",
+    ):
+        assert f"'{request_key}'" in request_proof
+    assert "WITH ORDINALITY" in request_proof
+    assert "pg_catalog.convert_to(" in request_proof
+    assert "ordered_request.prior_document" in request_proof
+    assert "ordered_request.document" in request_proof
+    assert module.PYTHON_STRIP_CHARACTERS_SQL in request_proof
+    assert "request_item.value ->> 'counted_qty'" in request_proof
+    assert "pg_catalog.jsonb_array_length(" in request_proof
+    assert ") <= 10000" in request_proof
+    current_resolution_proof = (
+        module._scope_count_request_resolution_proof_sql(
+            "scope_task.id",
+            "scope_round",
+            "scope_row",
+            "scope_completion",
+            historical=False,
+        )
+    )
+    historical_resolution_proof = (
+        module._scope_count_request_resolution_proof_sql(
+            "scope_task.id",
+            "scope_round",
+            "scope_row",
+            "scope_completion",
+            historical=True,
+        )
+    )
+    for resolution_key in (
+        "items",
+        "request_sha256",
+        "round_id",
+        "schema",
+        "scope_id",
+        "task_id",
+    ):
+        assert f"'{resolution_key}'" in current_resolution_proof
+    for item_key in (
+        "material_qr_mapping_id",
+        "policy",
+        "request_item_sha256",
+        "request_ordinal",
+        "resolved_lot_id",
+        "resolved_material_id",
+        "resolved_serial_id",
+        "serial_alias_keys",
+        "serial_qr_mapping_id",
+        "target_id",
+        "target_type",
+    ):
+        assert f"'{item_key}'" in current_resolution_proof
+    for policy_key in (
+        "allow_fraction",
+        "effective_from",
+        "id",
+        "quantity_scale",
+        "tracking_mode",
+    ):
+        assert f"'{policy_key}'" in current_resolution_proof
+    assert (
+        "cloud_oam.opening_stocktake.scope_count_request_resolution.v1"
+        in current_resolution_proof
+    )
+    assert "request_item_sha256' <>" in current_resolution_proof
+    assert "resolution_item.value -> 'request_ordinal'" in current_resolution_proof
+    assert "'^[1-9][0-9]*$'" in current_resolution_proof
+    assert "resolution_item.ordinal::text" in current_resolution_proof
+    assert "policy' -> 'quantity_scale'" in current_resolution_proof
+    assert "policy' ->> 'quantity_scale') ~ '^[0-3]$'" in current_resolution_proof
+    assert module._serial_alias_key_sql("candidate.value") == (
+        "(pg_catalog.translate(candidate.value, "
+        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') COLLATE \"C\")"
+    )
+    for resolution_proof in (
+        current_resolution_proof,
+        historical_resolution_proof,
+    ):
+        assert "resolution_item.value -> 'serial_alias_keys'" in resolution_proof
+        assert "pg_catalog.jsonb_typeof(serial_alias.value)" in resolution_proof
+        assert "pg_catalog.char_length(((serial_alias.value #>> '{}')" in (
+            resolution_proof
+        )
+        assert 'COLLATE "C"' in resolution_proof
+        assert "ordered_serial_alias.prior_alias_key" in resolution_proof
+        assert "pg_catalog.jsonb_array_length(" in resolution_proof
+        assert ") <= 3" in resolution_proof
+        assert "alias_completion.request_resolution_jsonb -> 'items'" in (
+            resolution_proof
+        )
+        assert "DISTINCT round_serial_alias.occurrence_id" in resolution_proof
+    assert "resolution_alias_master.serial_no" in current_resolution_proof
+    assert "resolution_alias_candidate.id" in current_resolution_proof
+    assert "AS current_serial_reference_identity" in current_resolution_proof
+    assert "current_serial_candidate.id AS serial_id" in current_resolution_proof
+    assert (
+        "current_serial_mapping.object_id AS serial_id"
+        in current_resolution_proof
+    )
+    assert "AS current_serial_reference_identity" not in historical_resolution_proof
+    assert "resolution_alias_master.serial_no" not in historical_resolution_proof
+    assert "resolution_alias_candidate.id" not in historical_resolution_proof
+    assert "covered_line.counted_qty <>" in current_resolution_proof
+    assert "), 0)::numeric(18, 3)" not in current_resolution_proof
+    for resolution_proof in (
+        current_resolution_proof,
+        historical_resolution_proof,
+    ):
+        assert "AS round_count_serial" in resolution_proof
+        assert "AS round_serial_observation" in resolution_proof
+        assert (
+            "round_serial_observation.serial_id =\n"
+            "                   round_count_serial.serial_id"
+        ) in resolution_proof
+    assert "scope_full_set_zero" in current_resolution_proof
+    assert "covered_serial.result = 'unexpected'" in current_resolution_proof
+    assert "current_sku_material.status = 'active'" in current_resolution_proof
+    assert "current_resolved_serial.lifecycle_status =" in current_resolution_proof
+    assert "current_sku_material.status = 'active'" not in historical_resolution_proof
+    assert "current_resolved_serial.lifecycle_status =" not in historical_resolution_proof
+    assert "historical_material_mapping.object_id::text" in historical_resolution_proof
+    assert "historical_material_mapping.code" not in historical_resolution_proof
+    legacy_resolution = module._legacy_scope_count_request_resolution_document_sql(
+        "completion.task_id",
+        "round_row",
+        "scope_row",
+        "completion",
+        "candidate_request",
+    )
+    for lossless_backfill_guard in (
+        "legacy_resolved_material.sku_code =",
+        "legacy_resolved_material.created_at <=",
+        "legacy_resolved_material.updated_at <=",
+        "legacy_material_mapping.mapping_id IS NOT NULL",
+        "legacy_resolved_lot.lot_no =",
+        "legacy_resolved_lot.created_at <=",
+        "legacy_resolved_lot.updated_at <=",
+        "legacy_serial_mapping.mapping_id IS NOT NULL",
+        "legacy_policy.document IS NOT NULL",
+        "legacy_mutable_policy.updated_at >",
+    ):
+        assert lossless_backfill_guard in legacy_resolution
+    assert "'serial_alias_keys'" in legacy_resolution
+    assert "legacy_alias_candidate.updated_at >" in legacy_resolution
+    assert "AS legacy_serial_reference_identity" in legacy_resolution
+    assert "legacy_identity_candidate.id AS serial_id" in legacy_resolution
+    assert "legacy_identity_mapping.object_id AS serial_id" in legacy_resolution
+    assert "legacy_mutable_identity_mapping.updated_at >" in legacy_resolution
+    assert module.COUNT_WRITE_BODY.count(
+        "pg_catalog.pg_advisory_xact_lock("
+    ) == 2
+    assert "rsc-opening-round-serial-0052" in module.COUNT_WRITE_BODY
+    assert module.OPENING_ROUND_SERIAL_DUPLICATE_ERROR in module.COUNT_WRITE_BODY
+    assert module.COUNT_WRITE_BODY.count(
+        "pg_catalog.current_setting('transaction_isolation') <>"
+    ) == 4
+    assert module.COUNT_WRITE_BODY.count(
+        module.OPENING_COUNT_ISOLATION_ERROR
+    ) == 4
+    assert "AS existing_round_serial_alias" in module.COUNT_WRITE_BODY
+    assert "new_count_serial_alias.value" in module.COUNT_WRITE_BODY
+    assert "new_observation_alias.alias_key" in module.COUNT_WRITE_BODY
+    assert module.COUNT_WRITE_BODY.count(
+        "ORDER BY pg_catalog.hashtext("
+    ) == 2
+    assert "ordered_count_alias.alias_key" in module.COUNT_WRITE_BODY
+    for aggregate_proof in (
+        module.ROUND_SUBMISSION_BODY,
+        module.SCOPE_COMPLETION_BODY,
+        module.REVIEW_GRAPH_BODY,
+        module.RECOUNT_GRAPH_BODY,
+        module.DISPOSITION_GRAPH_BODY,
+        module.TERMINAL_GRAPH_BODY,
+    ):
+        assert "), 0)::numeric(18, 3)" not in aggregate_proof
+        assert "))::numeric(18, 3)" not in aggregate_proof
+        assert "sum(control.control_qty)::numeric(18, 3)" not in (
+            aggregate_proof
+        )
+    assert "request_resolution_jsonb" in module.ROUND_SUBMISSION_BODY
+    assert "request_jsonb IS NULL OR" not in module.SCOPE_COMPLETION_BODY
+    assert "request_resolution_jsonb IS NULL OR" not in module.SCOPE_COMPLETION_BODY
     assert "opening_headquarters_review_recount" not in module.REVIEW_GRAPH_BODY
     assert "review_row.review_stage = 'headquarters'" in module.REVIEW_GRAPH_BODY
     assert "review_row.decision = 'recount'" in module.REVIEW_GRAPH_BODY
@@ -5577,7 +6011,7 @@ def test_0052_postgresql_offline_upgrade_repairs_callers_and_task_guard(
     assert "legacy upgrade preflight" in sql
     assert "hardened upgrade postflight" in sql
     assert sql.count(module.CATALOG_ERROR) == 14
-    assert sql.count(module.REPLACEMENT_ERROR) == 6
+    assert sql.count(module.REPLACEMENT_ERROR) == 9
     assert sql.count(module.EXISTING_ROWS_ERROR) == 4
     assert "JOIN public.stocktake_recount_cases AS recount_case" in sql
     assert "source_round.submitted_at = task.submitted_at" in sql
@@ -5623,6 +6057,8 @@ def test_0052_postgresql_offline_upgrade_repairs_callers_and_task_guard(
         module.FIXED_COMMIT_BODY_SHA256,
         module.LEGACY_ACCOUNT_BODY_SHA256,
         module.FIXED_ACCOUNT_BODY_SHA256,
+        module.LEGACY_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021,
+        module.FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021,
     ):
         assert expected_hash in sql
     assert "NEW.current_round_no <> OLD.current_round_no + 1" in sql
@@ -5630,14 +6066,35 @@ def test_0052_postgresql_offline_upgrade_repairs_callers_and_task_guard(
     assert "JOIN public.stocktake_round_submissions AS submission" in sql
     assert module.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT in sql
     assert module.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT in sql
+    assert module.LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021 in sql
+    assert module.FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021 in sql
     assert "pg_catalog.pg_get_functiondef(function_oid)" in sql
-    assert sql.count("EXECUTE pg_catalog.replace") == 2
+    assert sql.count("EXECUTE pg_catalog.replace") == 3
     assert sql.count(ready_sql) == 1
     assert "pg_catalog.min(version_num) = '20260903_0052'" in sql
     assert module.DOWNGRADE_BLOCKER not in sql
     assert "GRANT " not in sql
     assert "INSERT INTO public." not in sql
-    assert "UPDATE public." not in sql
+    assert sql.count("UPDATE public.") == 1
+    assert (
+        "UPDATE public.stocktake_scope_count_completions AS completion"
+        in sql
+    )
+    assert module.REQUEST_EVIDENCE_ERROR in sql
+    assert "ADD COLUMN request_jsonb JSONB" in sql
+    assert "ADD COLUMN request_resolution_jsonb JSONB" in sql
+    assert "request_item_sha256" in sql
+    assert "target_type', 'observation'" in sql
+    assert "mapping.updated_at <=" in sql
+    assert "policy.updated_at <=" in sql
+    assert (
+        "DISABLE TRIGGER " + module.COUNT_COMPLETION_IMMUTABLE_TRIGGER
+        in sql
+    )
+    assert (
+        "ENABLE TRIGGER " + module.COUNT_COMPLETION_IMMUTABLE_TRIGGER
+        in sql
+    )
     assert "DELETE FROM public." not in sql
     assert (
         sql.index(lock_sql)
@@ -5645,6 +6102,7 @@ def test_0052_postgresql_offline_upgrade_repairs_callers_and_task_guard(
         < sql.index(module.EXISTING_ROWS_ERROR)
         < sql.index("commit upgrade")
         < sql.index("account upgrade")
+        < sql.index("scope completion guard upgrade")
         < sql.index(f"ALTER FUNCTION {module.COMMIT_SIGNATURE} SECURITY DEFINER")
         < sql.index("hardened upgrade postflight")
         < sql.index(ready_sql)
@@ -5684,7 +6142,7 @@ def test_0052_postgresql_offline_downgrade_blocks_active_opening_and_restores(
     assert "hardened downgrade preflight" in sql
     assert "legacy downgrade postflight" in sql
     assert sql.count(module.CATALOG_ERROR) == 14
-    assert sql.count(module.REPLACEMENT_ERROR) == 6
+    assert sql.count(module.REPLACEMENT_ERROR) == 9
     assert sql.count(module.DOWNGRADE_BLOCKER) == 1
     assert "task.task_type = 'opening'" in sql
     assert "task.status <> 'closed'" not in sql
@@ -5696,19 +6154,27 @@ def test_0052_postgresql_offline_downgrade_blocks_active_opening_and_restores(
         assert f"ALTER FUNCTION {signature} SECURITY DEFINER" not in sql
     assert f"ALTER FUNCTION {module.GRAPH_SIGNATURE} SECURITY" not in sql
     assert f"ALTER FUNCTION {module.ACTOR_ASSIGNMENT_SIGNATURE} SECURITY" not in sql
-    assert sql.count("EXECUTE pg_catalog.replace") == 2
+    assert module.FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021 in sql
+    assert module.LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021 in sql
+    assert sql.count("EXECUTE pg_catalog.replace") == 3
     assert sql.count(ready_sql) == 1
     assert "pg_catalog.min(version_num) = '20260903_0051'" in sql
     assert "GRANT " not in sql
     assert "INSERT INTO public." not in sql
     assert "UPDATE public." not in sql
     assert "DELETE FROM public." not in sql
+    assert "DROP COLUMN request_jsonb" in sql
+    assert "DROP COLUMN request_resolution_jsonb" in sql
+    assert sql.index("DROP COLUMN request_resolution_jsonb") < sql.index(
+        "DROP COLUMN request_jsonb"
+    )
     assert (
         sql.index(lock_sql)
         < sql.index("hardened downgrade preflight")
         < sql.index(module.DOWNGRADE_BLOCKER)
         < sql.index("account downgrade")
         < sql.index("commit downgrade")
+        < sql.index("scope completion guard downgrade")
         < sql.index(f"ALTER FUNCTION {module.COMMIT_SIGNATURE} SECURITY INVOKER")
         < sql.index("legacy downgrade postflight")
         < sql.index(ready_sql)

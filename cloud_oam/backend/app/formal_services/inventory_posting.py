@@ -1546,6 +1546,7 @@ def _post_new_transaction(
             },
             request_id=request_reference,
             occurred_at=now,
+            created_at=now,
         )
         db.flush()
     except AuditChainError as exc:
@@ -2017,6 +2018,7 @@ def _post_prelocked_stocktake_inventory_batch(
                 },
                 request_id=request_reference,
                 occurred_at=checked_now,
+                created_at=checked_now,
             )
         db.flush()
     except AuditChainError as exc:

@@ -882,6 +882,7 @@ def _write_start_facts(
         },
         request_id=request_reference,
         occurred_at=now,
+        created_at=now,
     )
     db.flush()
 

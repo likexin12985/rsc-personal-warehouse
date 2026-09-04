@@ -1236,6 +1236,82 @@ def test_region_review_flushes_without_commit_and_replay_is_read_only(
     ) == "opening_review_idempotency_conflict"
 
 
+def test_effective_scheduled_reviewer_assignment_survives_historical_replay(
+    world: SimpleNamespace,
+) -> None:
+    prepared = _prepare_submitted(world)
+    assignment = world.db.get(RoleAssignment, world.manager_x.assignment.id)
+    assert assignment is not None
+    assert review_service._as_optional_utc(assignment.valid_from) < NOW + timedelta(
+        hours=2
+    )
+    assignment.status = "scheduled"
+    world.db.flush()
+    scheduled_actor = load_formal_principal(
+        world.db,
+        world.manager_x.user.id,
+        now=NOW + timedelta(hours=2),
+    )
+
+    result = submit_opening_region_review(
+        world.db,
+        actor=scheduled_actor,
+        command=_review_command(world.db, prepared),
+        idempotency_key="opening-region-review-effective-scheduled",
+        request_id="region-review-effective-scheduled-request",
+    )
+    review = world.db.get(StocktakeReview, result.review_id)
+    assert review is not None
+    assert assignment.status == "scheduled"
+    assert review_service._as_optional_utc(
+        assignment.valid_from
+    ) <= review_service._as_optional_utc(review.reviewed_at)
+
+    verified = review_service.validate_opening_review_evidence_for_replay(
+        world.db,
+        task_id=prepared.task.id,
+        round_id=prepared.round.id,
+        review_id=review.id,
+        expected_stage=review.review_stage,
+        expected_decision=review.decision,
+    )
+
+    assert verified.id == review.id
+
+
+def test_future_scheduled_reviewer_assignment_fails_historical_replay(
+    world: SimpleNamespace,
+) -> None:
+    prepared = _prepare_submitted(world)
+    result = submit_opening_region_review(
+        world.db,
+        actor=world.principals["manager_x"],
+        command=_review_command(world.db, prepared),
+        idempotency_key="opening-region-review-future-scheduled",
+        request_id="region-review-future-scheduled-request",
+    )
+    review = world.db.get(StocktakeReview, result.review_id)
+    assignment = world.db.get(RoleAssignment, world.manager_x.assignment.id)
+    assert review is not None
+    assert assignment is not None
+    assignment.status = "scheduled"
+    assignment.valid_from = review_service._as_optional_utc(
+        review.reviewed_at
+    ) + timedelta(microseconds=1)
+    world.db.flush()
+
+    assert _review_error(
+        lambda: review_service.validate_opening_review_evidence_for_replay(
+            world.db,
+            task_id=prepared.task.id,
+            round_id=prepared.round.id,
+            review_id=review.id,
+            expected_stage=review.review_stage,
+            expected_decision=review.decision,
+        )
+    ) == "opening_review_replay_evidence_invalid"
+
+
 def test_review_locks_one_complete_0027_reference_graph_in_order(
     world: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,

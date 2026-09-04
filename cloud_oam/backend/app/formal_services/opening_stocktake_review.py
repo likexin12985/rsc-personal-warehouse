@@ -1517,6 +1517,7 @@ def _write_review(
         },
         request_id=request_reference,
         occurred_at=now,
+        created_at=now,
     )
     db.flush()
     return _result(review, differences)
@@ -2857,7 +2858,12 @@ def _validate_historical_reviewer_authorization(
         or valid_from > reviewed_at
         or (valid_to is not None and reviewed_at >= valid_to)
         or (revoked_at is not None and reviewed_at >= revoked_at)
-        or assignment.status not in {"active", "expired", "revoked"}
+        or assignment.status not in {
+            "scheduled",
+            "active",
+            "expired",
+            "revoked",
+        }
         or assignment.user_id != review.reviewer_user_id
         or assignment.scope_type != expected_scope_type
         or assignment.scope_id != expected_scope_id

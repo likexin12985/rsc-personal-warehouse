@@ -4423,6 +4423,7 @@ def _append_task_effects(
         },
         request_id=request_reference,
         occurred_at=now,
+        created_at=now,
     )
 
 

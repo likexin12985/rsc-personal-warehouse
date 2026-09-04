@@ -34,21 +34,28 @@ bindings.  It then:
 * makes the 0022 trigger caller SECURITY DEFINER while leaving its 0023 graph
   helper SECURITY INVOKER with a closed ACL; and
 * makes the 0023 account caller SECURITY DEFINER while changing its API
-  principal check from ``current_user`` to ``session_user::text``.
+  principal check from ``current_user`` to ``session_user::text``; and
+* adds the immutable raw count-request document and per-item resolution
+  manifest needed to prove both the request hash and its exact result mapping
+  without reversing aggregated count lines.  Existing opening facts are
+  backfilled only when an observation-backed legacy candidate is lossless and
+  already matches the stored request hash; otherwise upgrade aborts.
 
-No business row or table privilege is changed.  Downgrade restores the exact
-0051 definitions only when no opening task or reserved opening evidence
-remains; even closed history is rejected because 0051 cannot preserve the
-0052 event-ownership guarantees.
-SQLite is an explicit schema no-op for local migration-chain compatibility;
-it is not PostgreSQL security evidence.
+No table privilege is changed.  Downgrade restores the exact 0051 definitions
+and removes the request-evidence columns only when no opening task or reserved
+opening evidence remains; even closed history is rejected because 0051 cannot
+preserve the 0052 event-ownership guarantees.  SQLite receives only the
+nullable schema columns for local model compatibility; none of the PostgreSQL
+security changes or legacy evidence backfill run there.
 """
 
 from __future__ import annotations
 
 from typing import Sequence, Union
 
+import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects.postgresql import JSONB
 
 
 revision: str = "20260903_0052"
@@ -62,6 +69,28 @@ MIGRATION_ROLE = "star_oam_migrator"
 OAM_RUNTIME_READY_FUNCTION = "rsc_oam_runtime_binding_ready_0044"
 PREVIOUS_SCHEMA_REVISION = "20260903_0051"
 FIXED_SEARCH_PATH = "search_path=pg_catalog, public"
+COUNT_REQUEST_COLUMN = "request_jsonb"
+COUNT_REQUEST_RESOLUTION_COLUMN = "request_resolution_jsonb"
+COUNT_COMPLETION_IMMUTABLE_TRIGGER = (
+    "trg_stocktake_scope_count_completions_immutable_0011"
+)
+COUNT_COMPLETION_IMMUTABLE_FUNCTION = (
+    "rsc_block_opening_count_fact_mutation_0011"
+)
+COUNT_COMPLETION_IMMUTABLE_SIGNATURE = (
+    f"public.{COUNT_COMPLETION_IMMUTABLE_FUNCTION}()"
+)
+COUNT_COMPLETION_IMMUTABLE_BODY_SHA256 = (
+    "5b435ed0965786b3f0273abbbd4245cc41c8aaf5386f877a19ccd2a0adfacedf"
+)
+# Python ``str.strip()`` recognizes this exact Unicode whitespace set.  Pin it
+# in SQL so a direct database writer cannot admit request text that the formal
+# service would reject.  U& escapes keep the migration source ASCII-only.
+PYTHON_STRIP_CHARACTERS_SQL = (
+    r"U&'\0009\000A\000B\000C\000D\001C\001D\001E\001F\0020"
+    r"\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006"
+    r"\2007\2008\2009\200A\2028\2029\202F\205F\3000'"
+)
 
 GRAPH_FUNCTION = "rsc_opening_terminal_graph_complete_0022"
 COMMIT_FUNCTION = "rsc_require_opening_terminal_graph_0022"
@@ -69,6 +98,9 @@ ACCOUNT_FUNCTION = "rsc_require_opening_observation_account_0023"
 ACTOR_ASSIGNMENT_FUNCTION = "rsc_stocktake_actor_assignment_valid_0011"
 REVIEW_COMPLETION_FUNCTION = "rsc_require_stocktake_difference_completion_0016"
 REVIEW_IMMUTABLE_FUNCTION = "rsc_block_stocktake_review_fact_mutation_0016"
+SCOPE_COMPLETION_GUARD_FUNCTION_0021 = (
+    "rsc_validate_stocktake_scope_completion_insert_0021"
+)
 START_GRAPH_FUNCTION = "rsc_opening_start_graph_complete_0052"
 ROUND_SUBMISSION_FUNCTION = "rsc_opening_round_submission_complete_0052"
 SCOPE_COMPLETION_FUNCTION = "rsc_opening_scope_count_complete_0052"
@@ -89,6 +121,9 @@ ACTOR_ASSIGNMENT_SIGNATURE = (
 )
 REVIEW_COMPLETION_SIGNATURE = f"public.{REVIEW_COMPLETION_FUNCTION}()"
 REVIEW_IMMUTABLE_SIGNATURE = f"public.{REVIEW_IMMUTABLE_FUNCTION}()"
+SCOPE_COMPLETION_GUARD_SIGNATURE_0021 = (
+    f"public.{SCOPE_COMPLETION_GUARD_FUNCTION_0021}()"
+)
 START_GRAPH_SIGNATURE = f"public.{START_GRAPH_FUNCTION}(uuid, boolean)"
 ROUND_SUBMISSION_SIGNATURE = (
     f"public.{ROUND_SUBMISSION_FUNCTION}(uuid, uuid, boolean)"
@@ -122,6 +157,7 @@ PERSISTENT_FUNCTION_SIGNATURES = (
     ACTOR_ASSIGNMENT_SIGNATURE,
     REVIEW_COMPLETION_SIGNATURE,
     REVIEW_IMMUTABLE_SIGNATURE,
+    SCOPE_COMPLETION_GUARD_SIGNATURE_0021,
     GRAPH_SIGNATURE,
     COMMIT_SIGNATURE,
     ACCOUNT_SIGNATURE,
@@ -135,7 +171,7 @@ LEGACY_COMMIT_BODY_SHA256 = (
     "7f7e740c0faffaa61910adddef31fc7aaa469972ca5b264aa842e05ff298acba"
 )
 FIXED_COMMIT_BODY_SHA256 = (
-    "cf8bde9a034cc8ce8999aa20b63f7aff34eec6a08909ac2d7e76ce7c1df38d60"
+    "4678c65493a2ca0c8d596343053977db4d93d7758e00f1291e30e6be038d36e8"
 )
 LEGACY_ACCOUNT_BODY_SHA256 = (
     "2e52965c8086e01fc242e1ddb0205eb961304faf588b04f28182588cbdb4728a"
@@ -151,6 +187,18 @@ REVIEW_COMPLETION_BODY_SHA256 = (
 )
 REVIEW_IMMUTABLE_BODY_SHA256 = (
     "abb2ae9087445ec056fdd8c7e3b5dae2a598af6f0fc1e61d469646e8aa2d1726"
+)
+LEGACY_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021 = (
+    "7470b118731f1fd6e53269457d511f73308eab704048109b32bd039f8df0824f"
+)
+FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021 = (
+    "9fda4b71155e3bdb6802e2f09bf32b90284b0f0643f4d518ee3aa286bf9efdc9"
+)
+LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021 = (
+    "    actual_total numeric(18, 3);"
+)
+FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021 = (
+    "    actual_total numeric;"
 )
 CANONICAL_JSON_BODY_SHA256 = (
     "35a956052a13a94d1c6b57f252273f46fa806b2e9c596531205a148114b7dc53"
@@ -500,6 +548,7 @@ def _historical_review_actor_sql(
            AND historical_user.authorization_version >=
                {review_alias}.authorization_version
            AND historical_assignment.status IN (
+               'scheduled',
                'active',
                'expired',
                'revoked'
@@ -1812,7 +1861,7 @@ def _observation_dimension_sha256_sql(
     return _canonical_text_sha256_sql(document)
 
 
-def _scope_count_request_sha256_sql(
+def _legacy_scope_count_request_document_sql(
     task_id_sql: str,
     round_alias: str,
     scope_alias: str,
@@ -1856,7 +1905,10 @@ def _scope_count_request_sha256_sql(
         ',"physical_observations":[' || COALESCE((
             SELECT pg_catalog.string_agg(
                        request_observation_document.document,
-                       ',' ORDER BY request_observation_document.document
+                       ',' ORDER BY pg_catalog.convert_to(
+                           request_observation_document.document,
+                           'UTF8'
+                       )
                    )
               FROM public.stocktake_count_observations
                    AS request_observation
@@ -1874,7 +1926,1683 @@ def _scope_count_request_sha256_sql(
         ',"zero_confirmed":' || {completion_alias}.zero_confirmed::text ||
         '}}'
     )"""
-    return _canonical_text_sha256_sql(document)
+    return document
+
+
+def _scope_count_request_sha256_sql(completion_alias: str) -> str:
+    """Hash the persisted pre-resolution request, never derived result rows."""
+
+    return _canonical_jsonb_sha256_sql(f"{completion_alias}.request_jsonb")
+
+
+def _serial_alias_key_sql(value_sql: str) -> str:
+    """Canonical SN alias key shared with the formal Python service.
+
+    Only ASCII A-Z fold to a-z.  Every other code point is retained, avoiding
+    locale-dependent ``lower`` and the cross-runtime differences of casefold.
+    """
+
+    return (
+        "(pg_catalog.translate("
+        f"{value_sql}, "
+        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', "
+        "'abcdefghijklmnopqrstuvwxyz'"
+        ") COLLATE \"C\")"
+    )
+
+
+def _current_round_serial_alias_rows_sql(round_id_sql: str) -> str:
+    """Return every current canonical alias keyed by physical occurrence."""
+
+    count_alias = _serial_alias_key_sql("count_serial_alias.value")
+    observation_raw_alias = _serial_alias_key_sql(
+        "alias_observation.serial_no_raw"
+    )
+    observation_serial_alias = _serial_alias_key_sql(
+        "observation_serial_alias.value"
+    )
+    candidate_serial_alias = _serial_alias_key_sql(
+        "candidate_serial_alias.value"
+    )
+    return f"""
+        SELECT 'count:' || count_serial.count_line_id::text || ':' ||
+               count_serial.serial_id::text AS occurrence_id,
+               {count_alias} AS alias_key
+          FROM public.stocktake_count_serials AS count_serial
+          JOIN public.stocktake_count_lines AS alias_count_line
+            ON alias_count_line.id = count_serial.count_line_id
+           AND alias_count_line.round_id = count_serial.round_id
+          JOIN public.inventory_serials AS alias_count_serial
+            ON alias_count_serial.id = count_serial.serial_id
+          CROSS JOIN LATERAL (
+              VALUES (alias_count_serial.serial_no),
+                     (alias_count_serial.qr_code)
+          ) AS count_serial_alias(value)
+         WHERE count_serial.round_id = {round_id_sql}
+        UNION ALL
+        SELECT 'observation:' || alias_observation.id::text,
+               {observation_raw_alias}
+          FROM public.stocktake_count_observations AS alias_observation
+         WHERE alias_observation.round_id = {round_id_sql}
+           AND alias_observation.serial_no_raw IS NOT NULL
+        UNION ALL
+        SELECT 'observation:' || alias_observation.id::text,
+               {observation_serial_alias}
+          FROM public.stocktake_count_observations AS alias_observation
+          JOIN public.inventory_serials AS alias_observation_serial
+            ON alias_observation_serial.id = alias_observation.serial_id
+          CROSS JOIN LATERAL (
+              VALUES (alias_observation_serial.serial_no),
+                     (alias_observation_serial.qr_code)
+          ) AS observation_serial_alias(value)
+         WHERE alias_observation.round_id = {round_id_sql}
+        UNION ALL
+        SELECT 'observation:' || alias_observation.id::text,
+               {candidate_serial_alias}
+          FROM public.stocktake_count_observations AS alias_observation
+          JOIN LATERAL (
+              SELECT pg_catalog.array_agg(
+                         alias_candidate.id ORDER BY alias_candidate.id
+                     ) AS candidate_ids
+                FROM public.inventory_serials AS alias_candidate
+               WHERE alias_candidate.lifecycle_status = 'active'
+                 AND (
+                     (
+                         alias_observation.serial_identifier_type =
+                             'serial_no'
+                         AND alias_candidate.serial_no =
+                             alias_observation.serial_no_raw
+                     )
+                     OR (
+                         alias_observation.serial_identifier_type = 'qr_code'
+                         AND alias_candidate.qr_code =
+                             alias_observation.serial_no_raw
+                     )
+                     OR (
+                         alias_observation.serial_identifier_type = 'unknown'
+                         AND (
+                             alias_candidate.serial_no =
+                                 alias_observation.serial_no_raw
+                             OR alias_candidate.qr_code =
+                                 alias_observation.serial_no_raw
+                         )
+                     )
+                 )
+          ) AS alias_candidate_set
+            ON pg_catalog.cardinality(alias_candidate_set.candidate_ids) = 1
+          JOIN public.inventory_serials AS alias_candidate_serial
+            ON alias_candidate_serial.id =
+               alias_candidate_set.candidate_ids[1]
+          CROSS JOIN LATERAL (
+              VALUES (alias_candidate_serial.serial_no),
+                     (alias_candidate_serial.qr_code)
+          ) AS candidate_serial_alias(value)
+         WHERE alias_observation.round_id = {round_id_sql}
+           AND alias_observation.serial_no_raw IS NOT NULL
+           AND alias_observation.serial_id IS NULL
+    """
+
+
+def _round_serial_alias_uniqueness_sql(
+    round_id_sql: str,
+) -> str:
+    """Replay persisted generation-time aliases across every round scope."""
+
+    resolution_items = """CASE
+        WHEN pg_catalog.jsonb_typeof(
+                 alias_completion.request_resolution_jsonb -> 'items'
+             ) = 'array'
+        THEN alias_completion.request_resolution_jsonb -> 'items'
+        ELSE '[]'::jsonb
+    END"""
+    alias_keys = """CASE
+        WHEN pg_catalog.jsonb_typeof(
+                 alias_resolution.value -> 'serial_alias_keys'
+             ) = 'array'
+        THEN alias_resolution.value -> 'serial_alias_keys'
+        ELSE '[]'::jsonb
+    END"""
+    alias_rows = f"""
+        SELECT alias_completion.id::text || ':' ||
+               alias_resolution.ordinal::text AS occurrence_id,
+               (alias_key.value #>> '{{}}') COLLATE "C" AS alias_key
+          FROM public.stocktake_scope_count_completions AS alias_completion
+          CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(
+              {resolution_items}
+          ) WITH ORDINALITY AS alias_resolution(value, ordinal)
+          CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(
+              {alias_keys}
+          ) AS alias_key(value)
+         WHERE alias_completion.round_id = {round_id_sql}
+           AND pg_catalog.jsonb_typeof(alias_key.value) = 'string'
+    """
+    return f"""NOT EXISTS (
+        SELECT 1
+          FROM ({alias_rows}) AS round_serial_alias
+         GROUP BY round_serial_alias.alias_key
+        HAVING pg_catalog.count(
+                   DISTINCT round_serial_alias.occurrence_id
+               ) > 1
+    )"""
+
+
+def _scope_count_request_document_proof_sql(
+    task_id_sql: str,
+    round_alias: str,
+    scope_alias: str,
+    completion_alias: str,
+) -> str:
+    """Prove the immutable v1 request document and its canonical ordering."""
+
+    request = f"{completion_alias}.request_jsonb"
+    observations = f"""CASE
+        WHEN pg_catalog.jsonb_typeof(
+                 {request} -> 'physical_observations'
+             ) = 'array'
+        THEN {request} -> 'physical_observations'
+        ELSE '[]'::jsonb
+    END"""
+    item = "request_item.value"
+    exact_item = f"""{item} = pg_catalog.jsonb_build_object(
+        'availability_bucket', {item} -> 'availability_bucket',
+        'condition_code', {item} -> 'condition_code',
+        'count_method', {item} -> 'count_method',
+        'counted_qty', {item} -> 'counted_qty',
+        'lot_id', {item} -> 'lot_id',
+        'lot_no_raw', {item} -> 'lot_no_raw',
+        'material_id', {item} -> 'material_id',
+        'material_identifier_raw', {item} -> 'material_identifier_raw',
+        'material_identifier_type', {item} -> 'material_identifier_type',
+        'reason_code', {item} -> 'reason_code',
+        'remark', {item} -> 'remark',
+        'serial_id', {item} -> 'serial_id',
+        'serial_identifier_type', {item} -> 'serial_identifier_type',
+        'serial_no_raw', {item} -> 'serial_no_raw'
+    )"""
+    nullable_text_fields = (
+        ("lot_no_raw", 160),
+        ("reason_code", 80),
+        ("serial_identifier_type", 24),
+        ("serial_no_raw", 200),
+    )
+    nullable_text_invalid = " OR ".join(
+        f"""(
+            {item} -> '{field}' <> 'null'::jsonb
+            AND (
+                pg_catalog.jsonb_typeof({item} -> '{field}')
+                    IS DISTINCT FROM 'string'
+                OR pg_catalog.char_length({item} ->> '{field}') = 0
+                OR pg_catalog.char_length({item} ->> '{field}') > {limit}
+                OR pg_catalog.btrim(
+                       {item} ->> '{field}',
+                       {PYTHON_STRIP_CHARACTERS_SQL}
+                   ) <>
+                   {item} ->> '{field}'
+            )
+        )"""
+        for field, limit in nullable_text_fields
+    )
+    uuid_pattern = (
+        "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+        "[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
+    nullable_uuid_invalid = " OR ".join(
+        f"""(
+            {item} -> '{field}' <> 'null'::jsonb
+            AND (
+                pg_catalog.jsonb_typeof({item} -> '{field}')
+                    IS DISTINCT FROM 'string'
+                OR ({item} ->> '{field}') !~ '{uuid_pattern}'
+                OR ({item} ->> '{field}') =
+                   '00000000-0000-0000-0000-000000000000'
+            )
+        )"""
+        for field in ("lot_id", "material_id", "serial_id")
+    )
+    canonical_item = f"public.{CANONICAL_JSON_FUNCTION}({item})"
+    return f"""(
+        pg_catalog.jsonb_typeof({request}) = 'object'
+        AND {request} = pg_catalog.jsonb_build_object(
+            'actor_person_id', {completion_alias}.completed_by_person_id::text,
+            'actor_user_id', {completion_alias}.completed_by_user_id,
+            'physical_observations',
+                {request} -> 'physical_observations',
+            'round_id', {round_alias}.id::text,
+            'schema',
+                'cloud_oam.opening_stocktake.scope_count_request.v1',
+            'scope_id', {scope_alias}.id::text,
+            'task_id', ({task_id_sql})::text,
+            'zero_confirmed', {completion_alias}.zero_confirmed
+        )
+        AND pg_catalog.jsonb_typeof(
+                {request} -> 'physical_observations'
+            ) = 'array'
+        AND pg_catalog.jsonb_array_length({observations}) <= 10000
+        AND NOT EXISTS (
+            SELECT 1
+              FROM pg_catalog.jsonb_array_elements({observations})
+                   WITH ORDINALITY AS request_item(value, ordinal)
+             WHERE pg_catalog.jsonb_typeof({item}) IS DISTINCT FROM 'object'
+                OR NOT ({exact_item})
+                OR pg_catalog.jsonb_typeof(
+                       {item} -> 'availability_bucket'
+                   ) IS DISTINCT FROM 'string'
+                OR ({item} ->> 'availability_bucket') NOT IN (
+                    'available', 'reserved', 'picking', 'outbound',
+                    'in_transit', 'arrived_pending', 'frozen',
+                    'return_pending', 'scrap_pending'
+                )
+                OR pg_catalog.jsonb_typeof({item} -> 'condition_code')
+                   IS DISTINCT FROM 'string'
+                OR ({item} ->> 'condition_code') NOT IN (
+                    'new', 'used', 'damaged', 'scrapped'
+                )
+                OR pg_catalog.jsonb_typeof({item} -> 'count_method')
+                   IS DISTINCT FROM 'string'
+                OR ({item} ->> 'count_method') NOT IN (
+                    'scan', 'manual', 'import'
+                )
+                OR pg_catalog.jsonb_typeof({item} -> 'counted_qty')
+                   IS DISTINCT FROM 'string'
+                OR ({item} ->> 'counted_qty') !~
+                   '^(0|[1-9][0-9]{{0,14}})(\\.[0-9]{{0,2}}[1-9])?$'
+                OR ({item} ->> 'counted_qty') = '0'
+                OR ({nullable_uuid_invalid})
+                OR ({nullable_text_invalid})
+                OR pg_catalog.jsonb_typeof(
+                       {item} -> 'material_identifier_raw'
+                   ) IS DISTINCT FROM 'string'
+                OR pg_catalog.char_length(
+                       {item} ->> 'material_identifier_raw'
+                   ) NOT BETWEEN 1 AND 300
+                OR pg_catalog.btrim(
+                       {item} ->> 'material_identifier_raw',
+                       {PYTHON_STRIP_CHARACTERS_SQL}
+                   ) <> {item} ->> 'material_identifier_raw'
+                OR pg_catalog.jsonb_typeof(
+                       {item} -> 'material_identifier_type'
+                   ) IS DISTINCT FROM 'string'
+                OR ({item} ->> 'material_identifier_type') NOT IN (
+                    'sku_code', 'qr_code', 'external_code', 'unknown'
+                )
+                OR pg_catalog.jsonb_typeof({item} -> 'remark')
+                   IS DISTINCT FROM 'string'
+                OR pg_catalog.char_length({item} ->> 'remark') > 4000
+                OR pg_catalog.btrim(
+                       {item} ->> 'remark',
+                       {PYTHON_STRIP_CHARACTERS_SQL}
+                   ) <>
+                   {item} ->> 'remark'
+                OR (
+                    ({item} -> 'serial_no_raw' = 'null'::jsonb) <>
+                    ({item} -> 'serial_identifier_type' = 'null'::jsonb)
+                )
+                OR (
+                    {item} -> 'serial_id' <> 'null'::jsonb
+                    AND {item} -> 'serial_no_raw' = 'null'::jsonb
+                )
+                OR (
+                    {item} -> 'lot_id' <> 'null'::jsonb
+                    AND {item} -> 'lot_no_raw' = 'null'::jsonb
+                )
+                OR (
+                    {item} -> 'serial_identifier_type' <> 'null'::jsonb
+                    AND ({item} ->> 'serial_identifier_type') NOT IN (
+                        'serial_no', 'qr_code', 'unknown'
+                    )
+                )
+        )
+        AND NOT EXISTS (
+            SELECT 1
+              FROM (
+                  SELECT request_order.document,
+                         pg_catalog.lag(request_order.document) OVER (
+                             ORDER BY request_order.ordinal
+                         ) AS prior_document
+                    FROM (
+                        SELECT request_item.ordinal,
+                               {canonical_item} AS document
+                          FROM pg_catalog.jsonb_array_elements({observations})
+                               WITH ORDINALITY
+                               AS request_item(value, ordinal)
+                    ) AS request_order
+              ) AS ordered_request
+             WHERE pg_catalog.convert_to(
+                       ordered_request.prior_document,
+                       'UTF8'
+                   ) >= pg_catalog.convert_to(
+                       ordered_request.document,
+                       'UTF8'
+                   )
+        )
+        AND (
+            NOT {completion_alias}.zero_confirmed
+            OR pg_catalog.jsonb_array_length({observations}) = 0
+        )
+        AND COALESCE((
+            SELECT pg_catalog.sum(
+                       (request_item.value ->> 'counted_qty')::numeric(18, 3)
+                   )
+              FROM pg_catalog.jsonb_array_elements({observations})
+                   AS request_item(value)
+             WHERE (request_item.value ->> 'counted_qty') ~
+                   '^(0|[1-9][0-9]{{0,14}})(\\.[0-9]{{0,2}}[1-9])?$'
+        ), 0) = {completion_alias}.total_counted_qty
+        AND (
+            SELECT pg_catalog.count(*)
+              FROM pg_catalog.jsonb_array_elements({observations})
+                   AS request_item(value)
+             WHERE request_item.value -> 'serial_no_raw' <> 'null'::jsonb
+        ) = {completion_alias}.serial_count
+    )"""
+
+
+def _scope_count_request_resolution_proof_sql(
+    task_id_sql: str,
+    round_alias: str,
+    scope_alias: str,
+    completion_alias: str,
+    *,
+    historical: bool,
+) -> str:
+    """Prove every canonical request item resolves to exactly one result.
+
+    The current path recomputes identifier resolution from live master data.
+    The historical path keeps the immutable UUID/policy anchors authoritative
+    while tolerating later identifier/status changes; it never accepts a
+    missing referenced master row or a changed QR object binding.
+    """
+
+    request = f"{completion_alias}.request_jsonb"
+    resolution = f"{completion_alias}.request_resolution_jsonb"
+    request_items = f"""CASE
+        WHEN pg_catalog.jsonb_typeof(
+                 {request} -> 'physical_observations'
+             ) = 'array'
+        THEN {request} -> 'physical_observations'
+        ELSE '[]'::jsonb
+    END"""
+    resolution_items = f"""CASE
+        WHEN pg_catalog.jsonb_typeof({resolution} -> 'items') = 'array'
+        THEN {resolution} -> 'items'
+        ELSE '[]'::jsonb
+    END"""
+    item = "resolution_item.value"
+    request_item = "resolution_request.value"
+    uuid_pattern = (
+        "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+        "[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
+    sha256_pattern = "^[0-9a-f]{64}$"
+    quantity_pattern = (
+        r"^(0|[1-9][0-9]{0,14})(\.[0-9]{0,2}[1-9])?$"
+    )
+    quantity = f"""CASE
+        WHEN pg_catalog.jsonb_typeof(
+                 {request_item} -> 'counted_qty'
+             ) = 'string'
+             AND ({request_item} ->> 'counted_qty') ~
+                 '{quantity_pattern}'
+        THEN ({request_item} ->> 'counted_qty')::numeric(18, 3)
+        ELSE NULL::numeric
+    END"""
+    nullable_resolution_uuid_invalid = " OR ".join(
+        f"""(
+            {item} -> '{field}' <> 'null'::jsonb
+            AND (
+                pg_catalog.jsonb_typeof({item} -> '{field}')
+                    IS DISTINCT FROM 'string'
+                OR ({item} ->> '{field}') !~ '{uuid_pattern}'
+                OR ({item} ->> '{field}') =
+                   '00000000-0000-0000-0000-000000000000'
+            )
+        )"""
+        for field in (
+            "material_qr_mapping_id",
+            "resolved_lot_id",
+            "resolved_material_id",
+            "resolved_serial_id",
+            "serial_qr_mapping_id",
+        )
+    )
+    exact_item = f"""{item} = pg_catalog.jsonb_build_object(
+        'material_qr_mapping_id', {item} -> 'material_qr_mapping_id',
+        'policy', {item} -> 'policy',
+        'request_item_sha256', {item} -> 'request_item_sha256',
+        'request_ordinal', {item} -> 'request_ordinal',
+        'resolved_lot_id', {item} -> 'resolved_lot_id',
+        'resolved_material_id', {item} -> 'resolved_material_id',
+        'resolved_serial_id', {item} -> 'resolved_serial_id',
+        'serial_alias_keys', {item} -> 'serial_alias_keys',
+        'serial_qr_mapping_id', {item} -> 'serial_qr_mapping_id',
+        'target_id', {item} -> 'target_id',
+        'target_type', {item} -> 'target_type'
+    )"""
+    policy = f"{item} -> 'policy'"
+    exact_policy = f"""{policy} = pg_catalog.jsonb_build_object(
+        'allow_fraction', {policy} -> 'allow_fraction',
+        'effective_from', {policy} -> 'effective_from',
+        'id', {policy} -> 'id',
+        'quantity_scale', {policy} -> 'quantity_scale',
+        'tracking_mode', {policy} -> 'tracking_mode'
+    )"""
+    serial_alias_keys = f"{item} -> 'serial_alias_keys'"
+    safe_serial_alias_keys = f"""CASE
+        WHEN pg_catalog.jsonb_typeof({serial_alias_keys}) = 'array'
+        THEN {serial_alias_keys}
+        ELSE '[]'::jsonb
+    END"""
+    serial_alias_text = "((serial_alias.value #>> '{}') COLLATE \"C\")"
+    request_serial_alias = _serial_alias_key_sql(
+        f"{request_item} ->> 'serial_no_raw'"
+    )
+    current_serial_alias = _serial_alias_key_sql(
+        "resolution_alias_serial.value"
+    )
+    candidate_serial_alias = _serial_alias_key_sql(
+        "resolution_candidate_alias.value"
+    )
+    current_serial_reference_identity_count = f"""(
+        SELECT pg_catalog.count(*)
+          FROM (
+              SELECT current_serial_candidate.id AS serial_id
+                FROM public.inventory_serials AS current_serial_candidate
+               WHERE current_serial_candidate.lifecycle_status = 'active'
+                 AND {request_item} ->> 'serial_no_raw' IS NOT NULL
+                 AND (
+                     (
+                         {request_item} ->> 'serial_identifier_type' =
+                             'serial_no'
+                         AND current_serial_candidate.serial_no =
+                             {request_item} ->> 'serial_no_raw'
+                     )
+                     OR (
+                         {request_item} ->> 'serial_identifier_type' =
+                             'qr_code'
+                         AND current_serial_candidate.qr_code =
+                             {request_item} ->> 'serial_no_raw'
+                     )
+                     OR (
+                         {request_item} ->> 'serial_identifier_type' =
+                             'unknown'
+                         AND (
+                             current_serial_candidate.serial_no =
+                                 {request_item} ->> 'serial_no_raw'
+                             OR current_serial_candidate.qr_code =
+                                 {request_item} ->> 'serial_no_raw'
+                         )
+                     )
+                 )
+              UNION
+              SELECT current_serial_mapping.object_id AS serial_id
+                FROM public.qr_codes AS current_serial_mapping
+               WHERE {request_item} ->> 'serial_identifier_type' =
+                         'qr_code'
+                 AND current_serial_mapping.code =
+                     {request_item} ->> 'serial_no_raw'
+                 AND current_serial_mapping.object_type = 'serial'
+                 AND current_serial_mapping.status = 'active'
+          ) AS current_serial_reference_identity
+    )"""
+    expected_serial_alias_keys = f"""COALESCE((
+        SELECT pg_catalog.jsonb_agg(
+                   expected_alias.alias_key
+                   ORDER BY pg_catalog.convert_to(
+                       expected_alias.alias_key,
+                       'UTF8'
+                   )
+               )
+          FROM (
+              SELECT {request_serial_alias} AS alias_key
+               WHERE {request_item} ->> 'serial_no_raw' IS NOT NULL
+              UNION
+              SELECT {current_serial_alias}
+                FROM public.inventory_serials AS resolution_alias_master
+                CROSS JOIN LATERAL (
+                    VALUES (resolution_alias_master.serial_no),
+                           (resolution_alias_master.qr_code)
+                ) AS resolution_alias_serial(value)
+               WHERE resolution_alias_master.id::text =
+                     {item} ->> 'resolved_serial_id'
+              UNION
+              SELECT {candidate_serial_alias}
+                FROM LATERAL (
+                    SELECT pg_catalog.array_agg(
+                               resolution_alias_candidate.id
+                               ORDER BY resolution_alias_candidate.id
+                           ) AS candidate_ids
+                      FROM public.inventory_serials
+                           AS resolution_alias_candidate
+                     WHERE resolution_alias_candidate.lifecycle_status =
+                           'active'
+                       AND (
+                           (
+                               {request_item} ->>
+                                   'serial_identifier_type' = 'serial_no'
+                               AND resolution_alias_candidate.serial_no =
+                                   {request_item} ->> 'serial_no_raw'
+                           )
+                           OR (
+                               {request_item} ->>
+                                   'serial_identifier_type' = 'qr_code'
+                               AND resolution_alias_candidate.qr_code =
+                                   {request_item} ->> 'serial_no_raw'
+                           )
+                           OR (
+                               {request_item} ->>
+                                   'serial_identifier_type' = 'unknown'
+                               AND (
+                                   resolution_alias_candidate.serial_no =
+                                       {request_item} ->> 'serial_no_raw'
+                                   OR resolution_alias_candidate.qr_code =
+                                       {request_item} ->> 'serial_no_raw'
+                               )
+                           )
+                       )
+                ) AS resolution_alias_candidates
+                JOIN public.inventory_serials
+                     AS resolution_alias_candidate_master
+                  ON resolution_alias_candidate_master.id =
+                     resolution_alias_candidates.candidate_ids[1]
+                CROSS JOIN LATERAL (
+                    VALUES (resolution_alias_candidate_master.serial_no),
+                           (resolution_alias_candidate_master.qr_code)
+                ) AS resolution_candidate_alias(value)
+               WHERE {item} ->> 'resolved_serial_id' IS NULL
+                 AND {request_item} ->> 'serial_no_raw' IS NOT NULL
+                 AND pg_catalog.cardinality(
+                         resolution_alias_candidates.candidate_ids
+                     ) = 1
+          ) AS expected_alias
+    ), '[]'::jsonb)"""
+    serial_alias_structure = f"""(
+        pg_catalog.jsonb_typeof({serial_alias_keys}) = 'array'
+        AND pg_catalog.jsonb_array_length({safe_serial_alias_keys}) <= 3
+        AND NOT EXISTS (
+            SELECT 1
+              FROM pg_catalog.jsonb_array_elements({safe_serial_alias_keys})
+                   WITH ORDINALITY AS serial_alias(value, ordinal)
+             WHERE pg_catalog.jsonb_typeof(serial_alias.value)
+                       IS DISTINCT FROM 'string'
+                OR pg_catalog.char_length({serial_alias_text})
+                   NOT BETWEEN 1 AND 250
+                OR {serial_alias_text} <>
+                   {_serial_alias_key_sql(serial_alias_text)}
+        )
+        AND NOT EXISTS (
+            SELECT 1
+              FROM (
+                  SELECT serial_alias_order.alias_key,
+                         pg_catalog.lag(serial_alias_order.alias_key) OVER (
+                             ORDER BY serial_alias_order.ordinal
+                         ) AS prior_alias_key
+                    FROM (
+                        SELECT serial_alias.ordinal,
+                               {serial_alias_text} AS alias_key
+                          FROM pg_catalog.jsonb_array_elements(
+                                   {safe_serial_alias_keys}
+                               ) WITH ORDINALITY
+                               AS serial_alias(value, ordinal)
+                    ) AS serial_alias_order
+              ) AS ordered_serial_alias
+             WHERE pg_catalog.convert_to(
+                       ordered_serial_alias.prior_alias_key,
+                       'UTF8'
+                   ) >= pg_catalog.convert_to(
+                       ordered_serial_alias.alias_key,
+                       'UTF8'
+                   )
+        )
+        AND (
+            (
+                {request_item} ->> 'serial_no_raw' IS NULL
+                AND {serial_alias_keys} = '[]'::jsonb
+            )
+            OR (
+                {request_item} ->> 'serial_no_raw' IS NOT NULL
+                AND {serial_alias_keys} @>
+                    pg_catalog.jsonb_build_array({request_serial_alias})
+            )
+        )
+    )"""
+    # Historical graph replay must not re-resolve mutable identifiers: every
+    # admitted document was either proved by the current write guard or built
+    # by the lossless legacy backfill below, and the completion is immutable.
+    # The common structure/max-size proof still constrains that sealed snapshot.
+    serial_alias_resolution = (
+        serial_alias_structure
+        if historical
+        else f"""(
+            {serial_alias_structure}
+            AND ({current_serial_reference_identity_count}) <= 1
+            AND {serial_alias_keys} = ({expected_serial_alias_keys})
+        )"""
+    )
+
+    request_material_id_matches = f"""(
+        {request_item} ->> 'material_id' IS NULL
+        OR {request_item} ->> 'material_id' =
+           {item} ->> 'resolved_material_id'
+    )"""
+    if historical:
+        material_resolution = f"""(
+            (
+                {request_item} ->> 'material_identifier_type' IN (
+                    'external_code', 'unknown'
+                )
+                AND {request_item} ->> 'material_id' IS NULL
+                AND {item} ->> 'resolved_material_id' IS NULL
+                AND {item} ->> 'material_qr_mapping_id' IS NULL
+            )
+            OR
+            (
+                {request_item} ->> 'material_identifier_type' = 'sku_code'
+                AND {item} ->> 'material_qr_mapping_id' IS NULL
+                AND (
+                    (
+                        {item} ->> 'resolved_material_id' IS NULL
+                        AND {request_item} ->> 'material_id' IS NULL
+                    )
+                    OR (
+                        {item} ->> 'resolved_material_id' IS NOT NULL
+                        AND {request_material_id_matches}
+                        AND EXISTS (
+                            SELECT 1
+                              FROM public.materials
+                                   AS historical_resolved_material
+                             WHERE historical_resolved_material.id::text =
+                                   {item} ->> 'resolved_material_id'
+                        )
+                    )
+                )
+            )
+            OR
+            (
+                {request_item} ->> 'material_identifier_type' = 'qr_code'
+                AND (
+                    (
+                        {item} ->> 'resolved_material_id' IS NULL
+                        AND {request_item} ->> 'material_id' IS NULL
+                        AND {item} ->> 'material_qr_mapping_id' IS NULL
+                    )
+                    OR (
+                        {item} ->> 'resolved_material_id' IS NOT NULL
+                        AND {item} ->> 'material_qr_mapping_id' IS NOT NULL
+                        AND {request_material_id_matches}
+                        AND EXISTS (
+                            SELECT 1
+                              FROM public.materials
+                                   AS historical_resolved_material
+                             WHERE historical_resolved_material.id::text =
+                                   {item} ->> 'resolved_material_id'
+                        )
+                        AND EXISTS (
+                            SELECT 1
+                              FROM public.qr_codes
+                                   AS historical_material_mapping
+                             WHERE historical_material_mapping.id::text =
+                                   {item} ->> 'material_qr_mapping_id'
+                               AND historical_material_mapping.object_type =
+                                   'material'
+                               AND historical_material_mapping.object_id::text =
+                                   {item} ->> 'resolved_material_id'
+                        )
+                    )
+                )
+            )
+        )"""
+    else:
+        material_resolution = f"""(
+            (
+                {request_item} ->> 'material_identifier_type' IN (
+                    'external_code', 'unknown'
+                )
+                AND {request_item} ->> 'material_id' IS NULL
+                AND {item} ->> 'resolved_material_id' IS NULL
+                AND {item} ->> 'material_qr_mapping_id' IS NULL
+            )
+            OR
+            (
+                {request_item} ->> 'material_identifier_type' = 'sku_code'
+                AND {item} ->> 'material_qr_mapping_id' IS NULL
+                AND (
+                    (
+                        {item} ->> 'resolved_material_id' IS NULL
+                        AND {request_item} ->> 'material_id' IS NULL
+                        AND (
+                            SELECT pg_catalog.count(*)
+                              FROM public.materials
+                                   AS current_sku_material
+                             WHERE current_sku_material.status = 'active'
+                               AND current_sku_material.sku_code =
+                                   {request_item} ->>
+                                   'material_identifier_raw'
+                        ) = 0
+                    )
+                    OR (
+                        {item} ->> 'resolved_material_id' IS NOT NULL
+                        AND {request_material_id_matches}
+                        AND (
+                            SELECT pg_catalog.count(*)
+                              FROM public.materials
+                                   AS current_sku_material
+                             WHERE current_sku_material.status = 'active'
+                               AND current_sku_material.sku_code =
+                                   {request_item} ->>
+                                   'material_identifier_raw'
+                        ) = 1
+                        AND EXISTS (
+                            SELECT 1
+                              FROM public.materials
+                                   AS current_sku_material
+                             WHERE current_sku_material.id::text =
+                                   {item} ->> 'resolved_material_id'
+                               AND current_sku_material.status = 'active'
+                               AND current_sku_material.sku_code =
+                                   {request_item} ->>
+                                   'material_identifier_raw'
+                        )
+                    )
+                )
+            )
+            OR
+            (
+                {request_item} ->> 'material_identifier_type' = 'qr_code'
+                AND (
+                    (
+                        {item} ->> 'resolved_material_id' IS NULL
+                        AND {request_item} ->> 'material_id' IS NULL
+                        AND {item} ->> 'material_qr_mapping_id' IS NULL
+                        AND (
+                            SELECT pg_catalog.count(*)
+                              FROM public.qr_codes
+                                   AS current_material_mapping
+                             WHERE current_material_mapping.code =
+                                   {request_item} ->>
+                                   'material_identifier_raw'
+                               AND current_material_mapping.object_type =
+                                   'material'
+                               AND current_material_mapping.status = 'active'
+                        ) = 0
+                    )
+                    OR (
+                        {item} ->> 'resolved_material_id' IS NOT NULL
+                        AND {item} ->> 'material_qr_mapping_id' IS NOT NULL
+                        AND {request_material_id_matches}
+                        AND (
+                            SELECT pg_catalog.count(*)
+                              FROM public.qr_codes
+                                   AS current_material_mapping
+                             WHERE current_material_mapping.code =
+                                   {request_item} ->>
+                                   'material_identifier_raw'
+                               AND current_material_mapping.object_type =
+                                   'material'
+                               AND current_material_mapping.status = 'active'
+                        ) = 1
+                        AND EXISTS (
+                            SELECT 1
+                              FROM public.qr_codes
+                                   AS current_material_mapping
+                              JOIN public.materials
+                                   AS current_qr_material
+                                ON current_qr_material.id =
+                                   current_material_mapping.object_id
+                               AND current_qr_material.status = 'active'
+                             WHERE current_material_mapping.id::text =
+                                   {item} ->> 'material_qr_mapping_id'
+                               AND current_material_mapping.code =
+                                   {request_item} ->>
+                                   'material_identifier_raw'
+                               AND current_material_mapping.object_type =
+                                   'material'
+                               AND current_material_mapping.status = 'active'
+                               AND current_qr_material.id::text =
+                                   {item} ->> 'resolved_material_id'
+                        )
+                    )
+                )
+            )
+        )"""
+
+    request_lot_id_matches = f"""(
+        {request_item} ->> 'lot_id' IS NULL
+        OR {request_item} ->> 'lot_id' = {item} ->> 'resolved_lot_id'
+    )"""
+    if historical:
+        lot_resolution = f"""(
+            (
+                {item} ->> 'resolved_material_id' IS NULL
+                AND {request_item} ->> 'lot_id' IS NULL
+                AND {item} ->> 'resolved_lot_id' IS NULL
+            )
+            OR
+            (
+                {item} ->> 'resolved_material_id' IS NOT NULL
+                AND (
+                    (
+                        {request_item} ->> 'lot_no_raw' IS NULL
+                        AND {request_item} ->> 'lot_id' IS NULL
+                        AND {item} ->> 'resolved_lot_id' IS NULL
+                    )
+                    OR (
+                        {request_item} ->> 'lot_no_raw' IS NOT NULL
+                        AND {item} ->> 'resolved_lot_id' IS NULL
+                        AND {request_item} ->> 'lot_id' IS NULL
+                    )
+                    OR (
+                        {request_item} ->> 'lot_no_raw' IS NOT NULL
+                        AND {item} ->> 'resolved_lot_id' IS NOT NULL
+                        AND {request_lot_id_matches}
+                        AND EXISTS (
+                            SELECT 1
+                              FROM public.inventory_lots
+                                   AS historical_resolved_lot
+                             WHERE historical_resolved_lot.id::text =
+                                   {item} ->> 'resolved_lot_id'
+                               AND historical_resolved_lot.material_id::text =
+                                   {item} ->> 'resolved_material_id'
+                        )
+                    )
+                )
+            )
+        )"""
+    else:
+        lot_resolution = f"""(
+            (
+                {item} ->> 'resolved_material_id' IS NULL
+                AND {request_item} ->> 'lot_id' IS NULL
+                AND {item} ->> 'resolved_lot_id' IS NULL
+            )
+            OR
+            (
+                {item} ->> 'resolved_material_id' IS NOT NULL
+                AND (
+                    (
+                        {request_item} ->> 'lot_no_raw' IS NULL
+                        AND {request_item} ->> 'lot_id' IS NULL
+                        AND {item} ->> 'resolved_lot_id' IS NULL
+                    )
+                    OR (
+                        {request_item} ->> 'lot_no_raw' IS NOT NULL
+                        AND {item} ->> 'resolved_lot_id' IS NULL
+                        AND {request_item} ->> 'lot_id' IS NULL
+                        AND (
+                            SELECT pg_catalog.count(*)
+                              FROM public.inventory_lots
+                                   AS current_resolved_lot
+                             WHERE current_resolved_lot.material_id::text =
+                                   {item} ->> 'resolved_material_id'
+                               AND current_resolved_lot.lot_no =
+                                   {request_item} ->> 'lot_no_raw'
+                        ) = 0
+                    )
+                    OR (
+                        {request_item} ->> 'lot_no_raw' IS NOT NULL
+                        AND {item} ->> 'resolved_lot_id' IS NOT NULL
+                        AND {request_lot_id_matches}
+                        AND (
+                            SELECT pg_catalog.count(*)
+                              FROM public.inventory_lots
+                                   AS current_resolved_lot
+                             WHERE current_resolved_lot.material_id::text =
+                                   {item} ->> 'resolved_material_id'
+                               AND current_resolved_lot.lot_no =
+                                   {request_item} ->> 'lot_no_raw'
+                        ) = 1
+                        AND EXISTS (
+                            SELECT 1
+                              FROM public.inventory_lots
+                                   AS current_resolved_lot
+                             WHERE current_resolved_lot.id::text =
+                                   {item} ->> 'resolved_lot_id'
+                               AND current_resolved_lot.material_id::text =
+                                   {item} ->> 'resolved_material_id'
+                               AND current_resolved_lot.lot_no =
+                                   {request_item} ->> 'lot_no_raw'
+                        )
+                    )
+                )
+            )
+        )"""
+
+    request_serial_id_matches = f"""(
+        {request_item} ->> 'serial_id' IS NULL
+        OR {request_item} ->> 'serial_id' =
+           {item} ->> 'resolved_serial_id'
+    )"""
+    historical_serial_mapping = f"""(
+        {item} ->> 'serial_qr_mapping_id' IS NULL
+        OR EXISTS (
+            SELECT 1
+              FROM public.qr_codes AS historical_serial_mapping
+             WHERE historical_serial_mapping.id::text =
+                   {item} ->> 'serial_qr_mapping_id'
+               AND historical_serial_mapping.object_type = 'serial'
+               AND historical_serial_mapping.object_id::text =
+                   {item} ->> 'resolved_serial_id'
+        )
+    )"""
+    current_serial_mapping = f"""(
+        (
+            {item} ->> 'serial_qr_mapping_id' IS NULL
+            AND (
+                SELECT pg_catalog.count(*)
+                  FROM public.qr_codes AS current_serial_mapping
+                 WHERE current_serial_mapping.code =
+                       {request_item} ->> 'serial_no_raw'
+                   AND current_serial_mapping.object_type = 'serial'
+                   AND current_serial_mapping.status = 'active'
+            ) = 0
+        )
+        OR (
+            {item} ->> 'serial_qr_mapping_id' IS NOT NULL
+            AND (
+                SELECT pg_catalog.count(*)
+                  FROM public.qr_codes AS current_serial_mapping
+                 WHERE current_serial_mapping.code =
+                       {request_item} ->> 'serial_no_raw'
+                   AND current_serial_mapping.object_type = 'serial'
+                   AND current_serial_mapping.status = 'active'
+            ) = 1
+            AND EXISTS (
+                SELECT 1
+                  FROM public.qr_codes AS current_serial_mapping
+                 WHERE current_serial_mapping.id::text =
+                       {item} ->> 'serial_qr_mapping_id'
+                   AND current_serial_mapping.code =
+                       {request_item} ->> 'serial_no_raw'
+                   AND current_serial_mapping.object_type = 'serial'
+                   AND current_serial_mapping.object_id::text =
+                       {item} ->> 'resolved_serial_id'
+                   AND current_serial_mapping.status = 'active'
+            )
+        )
+    )"""
+    if historical:
+        serial_resolution = f"""(
+            (
+                {item} ->> 'resolved_material_id' IS NULL
+                AND {request_item} ->> 'serial_id' IS NULL
+                AND {item} ->> 'resolved_serial_id' IS NULL
+                AND {item} ->> 'serial_qr_mapping_id' IS NULL
+            )
+            OR
+            (
+                {item} ->> 'resolved_material_id' IS NOT NULL
+                AND (
+                    (
+                        {request_item} ->> 'serial_no_raw' IS NULL
+                        AND {request_item} ->> 'serial_id' IS NULL
+                        AND {item} ->> 'resolved_serial_id' IS NULL
+                        AND {item} ->> 'serial_qr_mapping_id' IS NULL
+                    )
+                    OR (
+                        {request_item} ->> 'serial_no_raw' IS NOT NULL
+                        AND {request_item} ->> 'serial_identifier_type' =
+                            'unknown'
+                        AND {request_item} ->> 'serial_id' IS NULL
+                        AND {item} ->> 'resolved_serial_id' IS NULL
+                        AND {item} ->> 'serial_qr_mapping_id' IS NULL
+                    )
+                    OR (
+                        {request_item} ->> 'serial_no_raw' IS NOT NULL
+                        AND {request_item} ->> 'serial_identifier_type' IN (
+                            'serial_no', 'qr_code'
+                        )
+                        AND {item} ->> 'resolved_serial_id' IS NULL
+                        AND {request_item} ->> 'serial_id' IS NULL
+                        AND {item} ->> 'serial_qr_mapping_id' IS NULL
+                    )
+                    OR (
+                        {request_item} ->> 'serial_no_raw' IS NOT NULL
+                        AND {request_item} ->> 'serial_identifier_type' IN (
+                            'serial_no', 'qr_code'
+                        )
+                        AND {item} ->> 'resolved_serial_id' IS NOT NULL
+                        AND {request_serial_id_matches}
+                        AND EXISTS (
+                            SELECT 1
+                              FROM public.inventory_serials
+                                   AS historical_resolved_serial
+                             WHERE historical_resolved_serial.id::text =
+                                   {item} ->> 'resolved_serial_id'
+                               AND historical_resolved_serial.material_id::text =
+                                   {item} ->> 'resolved_material_id'
+                               AND historical_resolved_serial.lot_id::text
+                                   IS NOT DISTINCT FROM
+                                   {item} ->> 'resolved_lot_id'
+                        )
+                        AND (
+                            (
+                                {request_item} ->>
+                                    'serial_identifier_type' = 'serial_no'
+                                AND {item} ->>
+                                    'serial_qr_mapping_id' IS NULL
+                            )
+                            OR (
+                                {request_item} ->>
+                                    'serial_identifier_type' = 'qr_code'
+                                AND {historical_serial_mapping}
+                            )
+                        )
+                    )
+                )
+            )
+        )"""
+    else:
+        serial_resolution = f"""(
+            (
+                {item} ->> 'resolved_material_id' IS NULL
+                AND {request_item} ->> 'serial_id' IS NULL
+                AND {item} ->> 'resolved_serial_id' IS NULL
+                AND {item} ->> 'serial_qr_mapping_id' IS NULL
+            )
+            OR
+            (
+                {item} ->> 'resolved_material_id' IS NOT NULL
+                AND (
+                    (
+                        {request_item} ->> 'serial_no_raw' IS NULL
+                        AND {request_item} ->> 'serial_id' IS NULL
+                        AND {item} ->> 'resolved_serial_id' IS NULL
+                        AND {item} ->> 'serial_qr_mapping_id' IS NULL
+                    )
+                    OR (
+                        {request_item} ->> 'serial_no_raw' IS NOT NULL
+                        AND {request_item} ->> 'serial_identifier_type' =
+                            'unknown'
+                        AND {request_item} ->> 'serial_id' IS NULL
+                        AND {item} ->> 'resolved_serial_id' IS NULL
+                        AND {item} ->> 'serial_qr_mapping_id' IS NULL
+                    )
+                    OR (
+                        {request_item} ->> 'serial_no_raw' IS NOT NULL
+                        AND {request_item} ->> 'serial_identifier_type' IN (
+                            'serial_no', 'qr_code'
+                        )
+                        AND {item} ->> 'resolved_serial_id' IS NULL
+                        AND {request_item} ->> 'serial_id' IS NULL
+                        AND {item} ->> 'serial_qr_mapping_id' IS NULL
+                        AND (
+                            SELECT pg_catalog.count(*)
+                              FROM public.inventory_serials
+                                   AS current_resolved_serial
+                             WHERE current_resolved_serial.material_id::text =
+                                   {item} ->> 'resolved_material_id'
+                               AND current_resolved_serial.lifecycle_status =
+                                   'active'
+                               AND (
+                                   (
+                                       {request_item} ->>
+                                           'serial_identifier_type' =
+                                           'serial_no'
+                                       AND current_resolved_serial.serial_no =
+                                           {request_item} ->>
+                                           'serial_no_raw'
+                                   )
+                                   OR (
+                                       {request_item} ->>
+                                           'serial_identifier_type' =
+                                           'qr_code'
+                                       AND current_resolved_serial.qr_code =
+                                           {request_item} ->>
+                                           'serial_no_raw'
+                                   )
+                               )
+                        ) = 0
+                        AND (
+                            {request_item} ->>
+                                'serial_identifier_type' <> 'qr_code'
+                            OR (
+                                SELECT pg_catalog.count(*)
+                                  FROM public.qr_codes
+                                       AS unresolved_serial_mapping
+                                 WHERE unresolved_serial_mapping.code =
+                                       {request_item} ->> 'serial_no_raw'
+                                   AND unresolved_serial_mapping.object_type =
+                                       'serial'
+                                   AND unresolved_serial_mapping.status =
+                                       'active'
+                            ) = 0
+                        )
+                    )
+                    OR (
+                        {request_item} ->> 'serial_no_raw' IS NOT NULL
+                        AND {request_item} ->> 'serial_identifier_type' IN (
+                            'serial_no', 'qr_code'
+                        )
+                        AND {item} ->> 'resolved_serial_id' IS NOT NULL
+                        AND {request_serial_id_matches}
+                        AND (
+                            SELECT pg_catalog.count(*)
+                              FROM public.inventory_serials
+                                   AS current_resolved_serial
+                             WHERE current_resolved_serial.material_id::text =
+                                   {item} ->> 'resolved_material_id'
+                               AND current_resolved_serial.lifecycle_status =
+                                   'active'
+                               AND (
+                                   (
+                                       {request_item} ->>
+                                           'serial_identifier_type' =
+                                           'serial_no'
+                                       AND current_resolved_serial.serial_no =
+                                           {request_item} ->>
+                                           'serial_no_raw'
+                                   )
+                                   OR (
+                                       {request_item} ->>
+                                           'serial_identifier_type' =
+                                           'qr_code'
+                                       AND current_resolved_serial.qr_code =
+                                           {request_item} ->>
+                                           'serial_no_raw'
+                                   )
+                               )
+                        ) = 1
+                        AND EXISTS (
+                            SELECT 1
+                              FROM public.inventory_serials
+                                   AS current_resolved_serial
+                             WHERE current_resolved_serial.id::text =
+                                   {item} ->> 'resolved_serial_id'
+                               AND current_resolved_serial.material_id::text =
+                                   {item} ->> 'resolved_material_id'
+                               AND current_resolved_serial.lot_id::text
+                                   IS NOT DISTINCT FROM
+                                   {item} ->> 'resolved_lot_id'
+                               AND current_resolved_serial.lifecycle_status =
+                                   'active'
+                               AND (
+                                   (
+                                       {request_item} ->>
+                                           'serial_identifier_type' =
+                                           'serial_no'
+                                       AND current_resolved_serial.serial_no =
+                                           {request_item} ->>
+                                           'serial_no_raw'
+                                   )
+                                   OR (
+                                       {request_item} ->>
+                                           'serial_identifier_type' =
+                                           'qr_code'
+                                       AND current_resolved_serial.qr_code =
+                                           {request_item} ->>
+                                           'serial_no_raw'
+                                   )
+                               )
+                        )
+                        AND (
+                            (
+                                {request_item} ->>
+                                    'serial_identifier_type' = 'serial_no'
+                                AND {item} ->>
+                                    'serial_qr_mapping_id' IS NULL
+                            )
+                            OR (
+                                {request_item} ->>
+                                    'serial_identifier_type' = 'qr_code'
+                                AND {current_serial_mapping}
+                            )
+                        )
+                    )
+                )
+            )
+        )"""
+
+    # Keep the cutoff expression explicit instead of inferring an alias from
+    # ``task_id_sql``; callers may pass either a column or a function argument.
+    policy_cardinality = (
+        "TRUE"
+        if historical
+        else f"""(
+            SELECT pg_catalog.count(*)
+              FROM public.material_inventory_policies
+                   AS current_resolution_policy
+              JOIN public.stocktake_tasks AS resolution_policy_task
+                ON resolution_policy_task.id = {task_id_sql}
+             WHERE current_resolution_policy.material_id::text =
+                   {item} ->> 'resolved_material_id'
+               AND current_resolution_policy.effective_from <=
+                   resolution_policy_task.cutoff_at
+               AND (
+                   current_resolution_policy.effective_to IS NULL
+                   OR resolution_policy_task.cutoff_at <
+                      current_resolution_policy.effective_to
+               )
+        ) = 1"""
+    )
+    policy_validity = (
+        "resolved_policy.effective_from <= resolved_policy_task.cutoff_at"
+        if historical
+        else """(
+            resolved_policy.effective_from <= resolved_policy_task.cutoff_at
+            AND (
+                resolved_policy.effective_to IS NULL
+                OR resolved_policy_task.cutoff_at < resolved_policy.effective_to
+            )
+        )"""
+    )
+    policy_resolution = f"""(
+        (
+            {item} ->> 'resolved_material_id' IS NULL
+            AND {policy} = 'null'::jsonb
+        )
+        OR (
+            {item} ->> 'resolved_material_id' IS NOT NULL
+            AND pg_catalog.jsonb_typeof({policy}) = 'object'
+            AND ({exact_policy})
+            AND pg_catalog.jsonb_typeof(
+                    {policy} -> 'quantity_scale'
+                ) = 'number'
+            AND ({policy} ->> 'quantity_scale') ~ '^[0-3]$'
+            AND ({policy_cardinality})
+            AND EXISTS (
+                SELECT 1
+                  FROM public.material_inventory_policies
+                       AS resolved_policy
+                  JOIN public.stocktake_tasks AS resolved_policy_task
+                    ON resolved_policy_task.id = {task_id_sql}
+                 WHERE resolved_policy.id::text = {policy} ->> 'id'
+                   AND resolved_policy.material_id::text =
+                       {item} ->> 'resolved_material_id'
+                   AND {policy_validity}
+                   AND {policy} = pg_catalog.jsonb_build_object(
+                       'allow_fraction', resolved_policy.allow_fraction,
+                       'effective_from', pg_catalog.to_char(
+                           pg_catalog.timezone(
+                               'UTC', resolved_policy.effective_from
+                           ),
+                           'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+                       ),
+                       'id', resolved_policy.id::text,
+                       'quantity_scale', resolved_policy.quantity_scale,
+                       'tracking_mode', resolved_policy.tracking_mode
+                   )
+                   AND pg_catalog.round(
+                           ({quantity}), resolved_policy.quantity_scale
+                       ) = ({quantity})
+                   AND (
+                       resolved_policy.allow_fraction
+                       OR ({quantity}) = pg_catalog.trunc(({quantity}))
+                   )
+                   AND (
+                       (
+                           resolved_policy.tracking_mode = 'none'
+                           AND {request_item} ->> 'lot_no_raw' IS NULL
+                           AND {request_item} ->> 'serial_no_raw' IS NULL
+                       )
+                       OR (
+                           resolved_policy.tracking_mode = 'lot'
+                           AND {request_item} ->> 'lot_no_raw' IS NOT NULL
+                           AND {request_item} ->> 'serial_no_raw' IS NULL
+                       )
+                       OR (
+                           resolved_policy.tracking_mode = 'serial'
+                           AND {request_item} ->> 'lot_no_raw' IS NULL
+                           AND {request_item} ->> 'serial_no_raw' IS NOT NULL
+                       )
+                       OR (
+                           resolved_policy.tracking_mode = 'lot_and_serial'
+                           AND {request_item} ->> 'lot_no_raw' IS NOT NULL
+                           AND {request_item} ->> 'serial_no_raw' IS NOT NULL
+                       )
+                   )
+                   AND (
+                       {request_item} ->> 'serial_no_raw' IS NULL
+                       OR ({quantity}) = 1
+                   )
+            )
+        )
+    )"""
+
+    verification = f"""(
+        {item} ->> 'resolved_material_id' IS NOT NULL
+        AND (
+            {request_item} ->> 'lot_no_raw' IS NULL
+            OR {item} ->> 'resolved_lot_id' IS NOT NULL
+        )
+        AND (
+            {request_item} ->> 'serial_no_raw' IS NULL
+            OR {item} ->> 'resolved_serial_id' IS NOT NULL
+        )
+    )"""
+    matching_line_predicate = f"""
+        resolution_snapshot.task_id = {task_id_sql}
+        AND resolution_snapshot.scope_id = {scope_alias}.id
+        AND resolution_account.id = resolution_snapshot.stock_account_id
+        AND resolution_account.owner_org_id = {scope_alias}.owner_org_id
+        AND resolution_account.location_id = {scope_alias}.location_id
+        AND resolution_account.material_id::text =
+            {item} ->> 'resolved_material_id'
+        AND resolution_account.condition_code =
+            {request_item} ->> 'condition_code'
+        AND resolution_account.availability_bucket =
+            {request_item} ->> 'availability_bucket'
+        AND resolution_account.lot_id::text IS NOT DISTINCT FROM
+            {item} ->> 'resolved_lot_id'
+        AND EXISTS (
+            SELECT 1
+              FROM public.stock_locations AS resolution_location
+             WHERE resolution_location.id = {scope_alias}.location_id
+               AND (
+                   resolution_location.location_type = 'region'
+                   OR resolution_account.custodian_person_id
+                      IS NOT DISTINCT FROM
+                      {scope_alias}.custodian_person_id_snapshot
+               )
+        )
+        AND resolution_line.task_id = {task_id_sql}
+        AND resolution_line.round_id = {round_alias}.id
+        AND resolution_line.scope_id = {scope_alias}.id
+        AND resolution_line.stock_account_id = resolution_account.id
+    """
+    matching_line_count = f"""(
+        SELECT pg_catalog.count(*)
+          FROM public.stocktake_snapshot_lines AS resolution_snapshot
+          JOIN public.stock_accounts AS resolution_account
+            ON resolution_account.id = resolution_snapshot.stock_account_id
+          JOIN public.stocktake_count_lines AS resolution_line
+            ON resolution_line.stock_account_id = resolution_account.id
+         WHERE {matching_line_predicate}
+    )"""
+    target_line_exists = f"""EXISTS (
+        SELECT 1
+          FROM public.stocktake_snapshot_lines AS resolution_snapshot
+          JOIN public.stock_accounts AS resolution_account
+            ON resolution_account.id = resolution_snapshot.stock_account_id
+          JOIN public.stocktake_count_lines AS resolution_line
+            ON resolution_line.stock_account_id = resolution_account.id
+         WHERE {matching_line_predicate}
+           AND resolution_line.id::text = {item} ->> 'target_id'
+    )"""
+    target_observation_exists = f"""EXISTS (
+        SELECT 1
+          FROM public.stocktake_count_observations AS resolution_observation
+         WHERE resolution_observation.id::text = {item} ->> 'target_id'
+           AND resolution_observation.task_id = {task_id_sql}
+           AND resolution_observation.round_id = {round_alias}.id
+           AND resolution_observation.scope_id = {scope_alias}.id
+           AND resolution_observation.material_identifier_raw =
+               {request_item} ->> 'material_identifier_raw'
+           AND resolution_observation.material_identifier_type =
+               {request_item} ->> 'material_identifier_type'
+           AND resolution_observation.condition_code =
+               {request_item} ->> 'condition_code'
+           AND resolution_observation.availability_bucket =
+               {request_item} ->> 'availability_bucket'
+           AND resolution_observation.counted_qty = ({quantity})
+           AND resolution_observation.material_id::text
+               IS NOT DISTINCT FROM {item} ->> 'resolved_material_id'
+           AND resolution_observation.lot_id::text
+               IS NOT DISTINCT FROM {item} ->> 'resolved_lot_id'
+           AND resolution_observation.lot_no_raw
+               IS NOT DISTINCT FROM {request_item} ->> 'lot_no_raw'
+           AND resolution_observation.serial_id::text
+               IS NOT DISTINCT FROM {item} ->> 'resolved_serial_id'
+           AND resolution_observation.serial_no_raw
+               IS NOT DISTINCT FROM {request_item} ->> 'serial_no_raw'
+           AND resolution_observation.serial_identifier_type
+               IS NOT DISTINCT FROM
+               {request_item} ->> 'serial_identifier_type'
+           AND resolution_observation.verification_status = CASE
+               WHEN {verification} THEN 'verified'
+               ELSE 'pending_verification'
+           END
+           AND resolution_observation.count_method =
+               {request_item} ->> 'count_method'
+           AND resolution_observation.reason_code
+               IS NOT DISTINCT FROM {request_item} ->> 'reason_code'
+           AND resolution_observation.remark =
+               {request_item} ->> 'remark'
+    )"""
+    route_resolution = f"""(
+        (
+            {item} ->> 'target_type' = 'count_line'
+            AND {verification}
+            AND {matching_line_count} = 1
+            AND {target_line_exists}
+        )
+        OR (
+            {item} ->> 'target_type' = 'observation'
+            AND (NOT {verification} OR {matching_line_count} = 0)
+            AND {target_observation_exists}
+        )
+    )"""
+
+    line_quantity = f"""COALESCE((
+        SELECT pg_catalog.sum(CASE
+                   WHEN pg_catalog.jsonb_typeof(
+                            line_request.value -> 'counted_qty'
+                        ) = 'string'
+                        AND (line_request.value ->> 'counted_qty') ~
+                            '{quantity_pattern}'
+                   THEN (line_request.value ->> 'counted_qty')::numeric(18, 3)
+                   ELSE NULL::numeric
+               END)
+          FROM pg_catalog.jsonb_array_elements({resolution_items})
+               WITH ORDINALITY AS line_resolution(value, ordinal)
+          JOIN pg_catalog.jsonb_array_elements({request_items})
+               WITH ORDINALITY AS line_request(value, ordinal)
+            ON line_request.ordinal = line_resolution.ordinal
+         WHERE line_resolution.value ->> 'target_type' = 'count_line'
+           AND line_resolution.value ->> 'target_id' =
+               covered_line.id::text
+    ), 0)"""
+    line_item_count = f"""(
+        SELECT pg_catalog.count(*)
+          FROM pg_catalog.jsonb_array_elements({resolution_items})
+               AS line_resolution(value)
+         WHERE line_resolution.value ->> 'target_type' = 'count_line'
+           AND line_resolution.value ->> 'target_id' =
+               covered_line.id::text
+    )"""
+    round_serial_alias_uniqueness = _round_serial_alias_uniqueness_sql(
+        f"{round_alias}.id"
+    )
+
+    return f"""(
+        pg_catalog.jsonb_typeof({resolution}) = 'object'
+        AND {resolution} = pg_catalog.jsonb_build_object(
+            'items', {resolution} -> 'items',
+            'request_sha256', {completion_alias}.request_sha256,
+            'round_id', {round_alias}.id::text,
+            'schema',
+                'cloud_oam.opening_stocktake.scope_count_request_resolution.v1',
+            'scope_id', {scope_alias}.id::text,
+            'task_id', ({task_id_sql})::text
+        )
+        AND pg_catalog.jsonb_typeof({resolution} -> 'items') = 'array'
+        AND pg_catalog.jsonb_array_length({resolution_items}) =
+            pg_catalog.jsonb_array_length({request_items})
+        AND ({round_serial_alias_uniqueness})
+        AND NOT EXISTS (
+            SELECT 1
+              FROM public.stocktake_count_serials AS round_count_serial
+              JOIN public.stocktake_count_lines AS round_serial_line
+                ON round_serial_line.id = round_count_serial.count_line_id
+               AND round_serial_line.round_id = round_count_serial.round_id
+              JOIN public.stocktake_count_observations
+                   AS round_serial_observation
+                ON round_serial_observation.task_id =
+                   round_serial_line.task_id
+               AND round_serial_observation.round_id =
+                   round_count_serial.round_id
+               AND round_serial_observation.serial_id =
+                   round_count_serial.serial_id
+             WHERE round_serial_line.task_id = {task_id_sql}
+               AND round_count_serial.round_id = {round_alias}.id
+        )
+        AND NOT EXISTS (
+            SELECT 1
+              FROM pg_catalog.jsonb_array_elements({resolution_items})
+                   WITH ORDINALITY AS resolution_item(value, ordinal)
+              JOIN pg_catalog.jsonb_array_elements({request_items})
+                   WITH ORDINALITY AS resolution_request(value, ordinal)
+                ON resolution_request.ordinal = resolution_item.ordinal
+             WHERE pg_catalog.jsonb_typeof({item})
+                       IS DISTINCT FROM 'object'
+                OR NOT ({exact_item})
+                OR pg_catalog.jsonb_typeof(
+                       {item} -> 'request_ordinal'
+                   ) IS DISTINCT FROM 'number'
+                OR COALESCE(
+                       ({item} ->> 'request_ordinal') !~
+                           '^[1-9][0-9]*$',
+                       TRUE
+                   )
+                OR ({item} ->> 'request_ordinal') IS DISTINCT FROM
+                   resolution_item.ordinal::text
+                OR pg_catalog.jsonb_typeof(
+                       {item} -> 'request_item_sha256'
+                   ) IS DISTINCT FROM 'string'
+                OR ({item} ->> 'request_item_sha256') !~
+                   '{sha256_pattern}'
+                OR {item} ->> 'request_item_sha256' <>
+                   {_canonical_jsonb_sha256_sql(request_item)}
+                OR pg_catalog.jsonb_typeof({item} -> 'target_id')
+                   IS DISTINCT FROM 'string'
+                OR ({item} ->> 'target_id') !~ '{uuid_pattern}'
+                OR ({item} ->> 'target_id') =
+                   '00000000-0000-0000-0000-000000000000'
+                OR pg_catalog.jsonb_typeof({item} -> 'target_type')
+                   IS DISTINCT FROM 'string'
+                OR ({item} ->> 'target_type') NOT IN (
+                    'count_line', 'observation'
+                )
+                OR ({nullable_resolution_uuid_invalid})
+                OR NOT COALESCE(({serial_alias_resolution}), FALSE)
+                OR NOT COALESCE(({material_resolution}), FALSE)
+                OR NOT COALESCE(({lot_resolution}), FALSE)
+                OR NOT COALESCE(({serial_resolution}), FALSE)
+                OR NOT COALESCE(({policy_resolution}), FALSE)
+                OR NOT COALESCE(({route_resolution}), FALSE)
+        )
+        AND NOT EXISTS (
+            SELECT 1
+              FROM public.stocktake_count_observations
+                   AS covered_observation
+             WHERE covered_observation.task_id = {task_id_sql}
+               AND covered_observation.round_id = {round_alias}.id
+               AND covered_observation.scope_id = {scope_alias}.id
+               AND (
+                   SELECT pg_catalog.count(*)
+                     FROM pg_catalog.jsonb_array_elements({resolution_items})
+                          AS observation_resolution(value)
+                    WHERE observation_resolution.value ->> 'target_type' =
+                          'observation'
+                      AND observation_resolution.value ->> 'target_id' =
+                          covered_observation.id::text
+               ) <> 1
+        )
+        AND NOT EXISTS (
+            SELECT 1
+              FROM public.stocktake_count_lines AS covered_line
+             WHERE covered_line.task_id = {task_id_sql}
+               AND covered_line.round_id = {round_alias}.id
+               AND covered_line.scope_id = {scope_alias}.id
+               AND (
+                   covered_line.counted_qty <> ({line_quantity})
+                   OR (
+                       {line_item_count} = 0
+                       AND (
+                           covered_line.counted_qty <> 0
+                           OR covered_line.count_method <> 'manual'
+                           OR covered_line.reason_code
+                              IS DISTINCT FROM 'scope_full_set_zero'
+                           OR covered_line.remark <> ''
+                       )
+                   )
+                   OR (
+                       {line_item_count} > 0
+                       AND EXISTS (
+                           SELECT 1
+                             FROM pg_catalog.jsonb_array_elements(
+                                      {resolution_items}
+                                  ) WITH ORDINALITY
+                                  AS line_resolution(value, ordinal)
+                             JOIN pg_catalog.jsonb_array_elements(
+                                      {request_items}
+                                  ) WITH ORDINALITY
+                                  AS line_request(value, ordinal)
+                               ON line_request.ordinal =
+                                  line_resolution.ordinal
+                            WHERE line_resolution.value ->> 'target_type' =
+                                  'count_line'
+                              AND line_resolution.value ->> 'target_id' =
+                                  covered_line.id::text
+                              AND (
+                                  line_request.value ->> 'count_method' <>
+                                      covered_line.count_method
+                                  OR line_request.value ->> 'reason_code'
+                                     IS DISTINCT FROM
+                                     covered_line.reason_code
+                                  OR line_request.value ->> 'remark' <>
+                                      covered_line.remark
+                              )
+                       )
+                   )
+                   OR (
+                       SELECT pg_catalog.count(*)
+                         FROM pg_catalog.jsonb_array_elements(
+                                  {resolution_items}
+                              ) AS nonserial_resolution(value)
+                        WHERE nonserial_resolution.value ->> 'target_type' =
+                              'count_line'
+                          AND nonserial_resolution.value ->> 'target_id' =
+                              covered_line.id::text
+                          AND nonserial_resolution.value -> 'policy' ->>
+                              'tracking_mode' IN ('none', 'lot')
+                   ) > 1
+                   OR EXISTS (
+                       SELECT 1
+                         FROM pg_catalog.jsonb_array_elements(
+                                  {resolution_items}
+                              ) AS serial_resolution(value)
+                        WHERE serial_resolution.value ->> 'target_type' =
+                              'count_line'
+                          AND serial_resolution.value ->> 'target_id' =
+                              covered_line.id::text
+                          AND serial_resolution.value ->>
+                              'resolved_serial_id' IS NOT NULL
+                          AND NOT EXISTS (
+                              SELECT 1
+                                FROM public.stocktake_count_serials
+                                     AS covered_serial
+                               WHERE covered_serial.count_line_id =
+                                     covered_line.id
+                                 AND covered_serial.round_id =
+                                     {round_alias}.id
+                                 AND covered_serial.serial_id::text =
+                                     serial_resolution.value ->>
+                                     'resolved_serial_id'
+                                 AND covered_serial.result = 'unexpected'
+                          )
+                   )
+                   OR EXISTS (
+                       SELECT 1
+                         FROM public.stocktake_count_serials
+                              AS covered_serial
+                        WHERE covered_serial.count_line_id = covered_line.id
+                          AND covered_serial.round_id = {round_alias}.id
+                          AND NOT EXISTS (
+                              SELECT 1
+                                FROM pg_catalog.jsonb_array_elements(
+                                         {resolution_items}
+                                     ) AS serial_resolution(value)
+                               WHERE serial_resolution.value ->>
+                                         'target_type' = 'count_line'
+                                 AND serial_resolution.value ->> 'target_id' =
+                                     covered_line.id::text
+                                 AND serial_resolution.value ->>
+                                         'resolved_serial_id' =
+                                     covered_serial.serial_id::text
+                          )
+                   )
+               )
+        )
+    )"""
 
 
 def _observation_child_idempotency_sha256_sql(
@@ -2644,10 +4372,22 @@ def _round_submission_proof_sql(
         "sealed_completion"
     )
     completion_request = _scope_count_request_sha256_sql(
+        "sealed_completion"
+    )
+    completion_request_document = _scope_count_request_document_proof_sql(
         task_id_sql,
         round_alias,
         "sealed_scope",
         "sealed_completion",
+    )
+    completion_request_resolution = (
+        _scope_count_request_resolution_proof_sql(
+            task_id_sql,
+            round_alias,
+            "sealed_scope",
+            "sealed_completion",
+            historical=historical,
+        )
     )
     completion_evidence = _scope_evidence_manifest_sha256_sql(
         task_id_sql,
@@ -2782,7 +4522,7 @@ def _round_submission_proof_sql(
         AND {submission_alias}.total_counted_qty = (
             SELECT COALESCE(pg_catalog.sum(
                        sealed_completion.total_counted_qty
-                   ), 0)::numeric(18, 3)
+                   ), 0)
               FROM public.stocktake_scope_count_completions
                    AS sealed_completion
              WHERE sealed_completion.task_id = {task_id_sql}
@@ -2895,7 +4635,7 @@ def _round_submission_proof_sql(
                               AND sealed_observation.scope_id =
                                   sealed_completion.scope_id
                        )
-                   )::numeric(18, 3)
+                   )
                    OR sealed_completion.zero_confirmed IS DISTINCT FROM (
                        NOT EXISTS (
                            SELECT 1
@@ -2913,6 +4653,10 @@ def _round_submission_proof_sql(
                        ({completion_authorization})
                    OR sealed_completion.request_sha256 IS DISTINCT FROM
                        ({completion_request})
+                   OR NOT ({completion_request_document})
+                   OR NOT COALESCE(
+                       ({completion_request_resolution}), FALSE
+                   )
                    OR sealed_completion.evidence_manifest_sha256
                        IS DISTINCT FROM ({completion_evidence})
                    OR NOT ({completion_actor})
@@ -3141,6 +4885,15 @@ def _nullable_json_text_sql(expression: str) -> str:
 
 def _canonical_quantity_sql(expression: str) -> str:
     return f"pg_catalog.trim_scale(({expression})::numeric)::text"
+
+
+def _fixed_scale_quantity_sql(expression: str) -> str:
+    """Render one Numeric(18, 3) value exactly like the formal API."""
+
+    return (
+        f"pg_catalog.to_char(({expression})::numeric(18, 3), "
+        "'FM999999999999990.000')"
+    )
 
 
 def _difference_manifest_sha256_sql(
@@ -3397,7 +5150,7 @@ def _expected_difference_set_proof_sql(
                                     AND observation.condition_code =
                                         control.condition_code
                              ), 0)
-                         )::numeric(18, 3)
+                         )
               ) AS ambiguous_control
         )
         AND NOT EXISTS (
@@ -3510,7 +5263,7 @@ def _expected_difference_set_proof_sql(
                        NULL::uuid,
                        NULL::uuid,
                        NULL::uuid,
-                       pg_catalog.sum(control.control_qty)::numeric(18, 3),
+                       pg_catalog.sum(control.control_qty),
                        (
                            COALESCE((
                                SELECT pg_catalog.sum(line.counted_qty)
@@ -3533,7 +5286,7 @@ def _expected_difference_set_proof_sql(
                                   AND observation.condition_code =
                                       control.condition_code
                            ), 0)
-                       )::numeric(18, 3),
+                       ),
                        (
                            COALESCE((
                                SELECT pg_catalog.sum(line.counted_qty)
@@ -3556,7 +5309,7 @@ def _expected_difference_set_proof_sql(
                                   AND observation.condition_code =
                                       control.condition_code
                            ), 0) - pg_catalog.sum(control.control_qty)
-                       )::numeric(18, 3),
+                       ),
                        pg_catalog.abs((
                            COALESCE((
                                SELECT pg_catalog.sum(line.counted_qty)
@@ -3579,7 +5332,7 @@ def _expected_difference_set_proof_sql(
                                   AND observation.condition_code =
                                       control.condition_code
                            ), 0) - pg_catalog.sum(control.control_qty)
-                       ))::numeric(18, 3),
+                       )),
                        'opening_control_reconciliation'::text,
                        'OAM 省级控制数量与期初实物汇总不一致，仅用于对账'::text,
                        TRUE
@@ -3610,7 +5363,7 @@ def _expected_difference_set_proof_sql(
                               AND observation.condition_code =
                                   control.condition_code
                        ), 0)
-                   )::numeric(18, 3)
+                   )
             ), expected AS (
                 SELECT pg_catalog.row_number() OVER (
                            ORDER BY group_no, sort_scope_no, sort_no,
@@ -3756,7 +5509,7 @@ def _review_difference_completion_proof_sql(
                SELECT COALESCE(
                           pg_catalog.sum(reviewed_difference.affected_qty),
                           0
-                      )::numeric(18, 3)
+                       )
                  FROM public.stocktake_differences AS reviewed_difference
                 WHERE reviewed_difference.task_id = {task_id_sql}
                   AND reviewed_difference.round_id = {round_alias}.id
@@ -4245,7 +5998,7 @@ def _recount_case_replay_proof_sql(
             SELECT COALESCE(
                        pg_catalog.sum(replay_difference.affected_qty),
                        0
-                   )::numeric(18, 3)
+                   )
               FROM public.stocktake_differences AS replay_difference
              WHERE replay_difference.task_id = {task_id_sql}
                AND replay_difference.round_id = {source_round_alias}.id
@@ -4875,7 +6628,7 @@ def _current_scope_master_proof_sql(
                    OR (
                        current_location.location_type = 'region'
                        AND current_location.custodian_person_id IS NOT NULL
-                       AND current_location.custodian_person_id <>
+                       AND current_location.custodian_person_id IS DISTINCT FROM
                            current_scope.custodian_person_id_snapshot
                    )
                )
@@ -6310,8 +8063,16 @@ def _scope_completion_helper_body() -> str:
         authorization = _scope_completion_authorization_sha256_sql(
             "scope_completion"
         )
-        request = _scope_count_request_sha256_sql(
+        request = _scope_count_request_sha256_sql("scope_completion")
+        request_document = _scope_count_request_document_proof_sql(
             "scope_task.id", "scope_round", "scope_row", "scope_completion"
+        )
+        request_resolution = _scope_count_request_resolution_proof_sql(
+            "scope_task.id",
+            "scope_round",
+            "scope_row",
+            "scope_completion",
+            historical=historical,
         )
         evidence = _scope_evidence_manifest_sha256_sql(
             "scope_task.id", "scope_round", "scope_row", "scope_completion"
@@ -6446,7 +8207,7 @@ def _scope_completion_helper_body() -> str:
                   WHERE scope_observation.task_id = scope_task.id
                     AND scope_observation.round_id = scope_round.id
                     AND scope_observation.scope_id = scope_row.id)
-            )::numeric(18, 3)
+            )
             AND scope_completion.zero_confirmed IS NOT DISTINCT FROM (
                 NOT EXISTS (
                     SELECT 1
@@ -6459,6 +8220,8 @@ def _scope_completion_helper_body() -> str:
             )
             AND scope_completion.authorization_sha256 = ({authorization})
             AND scope_completion.request_sha256 = ({request})
+            AND ({request_document})
+            AND COALESCE(({request_resolution}), FALSE)
             AND scope_completion.evidence_manifest_sha256 = ({evidence})
             AND scope_completion.idempotency_key_hash ~ '^[0-9a-f]{{64}}$'
             AND ({actor})
@@ -6766,6 +8529,28 @@ def _review_graph_helper_body() -> str:
                  END)
             )
         )"""
+        sibling_reviews = (
+            """NOT EXISTS (
+                SELECT 1
+                  FROM public.stocktake_reviews AS sibling_review
+                 WHERE sibling_review.task_id = review_task.id
+                   AND sibling_review.round_id = review_round.id
+                   AND sibling_review.id <> review_row.id
+                   AND (
+                       review_row.decision <> 'approve'
+                       OR sibling_review.review_stage <> 'headquarters'
+                       OR sibling_review.reviewed_at <= review_row.reviewed_at
+                   )
+            )"""
+            if historical
+            else """NOT EXISTS (
+                SELECT 1
+                  FROM public.stocktake_reviews AS sibling_review
+                 WHERE sibling_review.task_id = review_task.id
+                   AND sibling_review.round_id = review_round.id
+                   AND sibling_review.id <> review_row.id
+            )"""
+        )
         return f"""(
             review_row.created_at = review_row.reviewed_at
             AND NOT (
@@ -6788,13 +8573,7 @@ def _review_graph_helper_body() -> str:
             AND (
                 (review_row.review_stage = 'region'
                  AND ({region_actor})
-                 AND NOT EXISTS (
-                     SELECT 1
-                       FROM public.stocktake_reviews AS prior_review
-                      WHERE prior_review.task_id = review_task.id
-                        AND prior_review.round_id = review_round.id
-                        AND prior_review.id <> review_row.id
-                 ))
+                 AND ({sibling_reviews}))
                 OR
                 (review_row.review_stage = 'headquarters'
                  AND ({headquarters_actor})
@@ -8026,7 +9805,7 @@ def _terminal_task_effect_proof_sql(
             'round_id', {posting_alias}.round_id::text,
             'task_version', {task_version},
             'total_quantity',
-                {_canonical_quantity_sql(f'{posting_alias}.total_quantity')}
+                {_fixed_scale_quantity_sql(f'{posting_alias}.total_quantity')}
         )"""
     else:
         anchor = (
@@ -8384,9 +10163,9 @@ def _terminal_graph_helper_body() -> str:
                     AND (
                         terminal_posting.inventory_transaction_id IS NULL
                         OR ({transaction_historical})
-                    )
                 )
-            )"""
+            )
+        )"""
         return f"""(
             terminal_task.task_type = 'opening'
             AND terminal_task.status IN ('posted', 'closed')
@@ -8473,22 +10252,22 @@ START_GRAPH_BODY_SHA256 = (
     "6db62f66efe1b87c556211e9392ab701cd2d8c6fa2c86150c1b95ee0d7f15833"
 )
 ROUND_SUBMISSION_BODY_SHA256 = (
-    "8d006592f17ba330ab852659c77de1b59f3c92661f48aded882fdfb444a4120f"
+    "fe1de83cfa07151d62506658cb65307a1823594ecc20df6964846461a897bd3f"
 )
 SCOPE_COMPLETION_BODY_SHA256 = (
-    "b6f05d5cb7915ee79c57c4ebc009edd40292df1302051f29797c946570246430"
+    "e0c2628cdf871c1b4e7adb8234fdce6ef1dd3ee9dc80930b8cb71684f670b1e7"
 )
 REVIEW_GRAPH_BODY_SHA256 = (
-    "2d5b50eb94a5d6cb83f087d4b1638840d09b9286bb40d87ee1d138b57239bff5"
+    "f6b614e42e35da34e072cd12ba103688163a53fc763d3c48979883813369126a"
 )
 RECOUNT_GRAPH_BODY_SHA256 = (
-    "444925db06a41cd804bf05ca77036c48731bb3b35e74dcc45c7256447333c864"
+    "b3a26276b6b46f8e7bcbbfbd5a33f9e8171be582f471ed330dba69ea85ebcd0f"
 )
 DISPOSITION_GRAPH_BODY_SHA256 = (
-    "726114484a2665a95ca98a61cc3b895eb136c7bde2fe0796eb743044d401b5eb"
+    "4a5006029f95b5425704ba2b994c0ee2ff242c74e4e5c1660d368a400ffe5b0b"
 )
 TERMINAL_GRAPH_BODY_SHA256 = (
-    "617cf43cc0cf9dc41ec7e971fd696415681a5b0b9858429ce81d97a342d79d0c"
+    "d816a65969b6112edb19a6d817918eded8d470f0e2ccb3087fabd9f55dac426d"
 )
 
 
@@ -8518,6 +10297,12 @@ INSERT_GUARD_BODY_SHA256 = (
 
 OPENING_COUNT_WRITE_ERROR = (
     "0052 opening count write is not current or authorized"
+)
+OPENING_COUNT_ISOLATION_ERROR = (
+    "0052 opening count writes require read committed isolation"
+)
+OPENING_ROUND_SERIAL_DUPLICATE_ERROR = (
+    "0052 opening round serial is claimed by both count paths"
 )
 COUNT_WRITE_FUNCTION = "rsc_require_opening_count_write_current_0052"
 COUNT_WRITE_SIGNATURE = f"public.{COUNT_WRITE_FUNCTION}()"
@@ -8708,9 +10493,23 @@ def _opening_count_write_guard_body() -> str:
         target_scope_id_sql="completion_location.owner_org_id::text",
         alias_suffix="count_write_location_owner",
     )
+    current_round_serial_aliases = _current_round_serial_alias_rows_sql(
+        "NEW.round_id"
+    )
+    new_count_serial_alias = _serial_alias_key_sql(
+        "new_count_serial_alias.value"
+    )
+    new_observation_raw_alias = _serial_alias_key_sql("NEW.serial_no_raw")
+    new_observation_serial_alias = _serial_alias_key_sql(
+        "new_observation_serial_alias.value"
+    )
+    new_candidate_serial_alias = _serial_alias_key_sql(
+        "new_candidate_serial_alias.value"
+    )
     return f"""
 DECLARE
     opening_task boolean;
+    serial_alias text;
 BEGIN
     IF TG_TABLE_NAME = 'stocktake_count_lines' THEN
         SELECT task.task_type = 'opening'
@@ -8719,6 +10518,11 @@ BEGIN
          WHERE task.id = NEW.task_id;
         IF NOT COALESCE(opening_task, FALSE) THEN
             RETURN NEW;
+        END IF;
+        IF pg_catalog.current_setting('transaction_isolation') <>
+           'read committed' THEN
+            RAISE EXCEPTION '{OPENING_COUNT_ISOLATION_ERROR}'
+                USING ERRCODE = '23514';
         END IF;
         IF NEW.counted_at < pg_catalog.transaction_timestamp()
            OR NEW.counted_at > pg_catalog.clock_timestamp()
@@ -8785,6 +10589,44 @@ BEGIN
         IF NOT COALESCE(opening_task, FALSE) THEN
             RETURN NEW;
         END IF;
+        IF pg_catalog.current_setting('transaction_isolation') <>
+           'read committed' THEN
+            RAISE EXCEPTION '{OPENING_COUNT_ISOLATION_ERROR}'
+                USING ERRCODE = '23514';
+        END IF;
+        FOR serial_alias IN
+            SELECT ordered_count_alias.alias_key
+              FROM (
+                  SELECT DISTINCT {new_count_serial_alias} AS alias_key
+                    FROM public.inventory_serials AS new_count_serial
+                    CROSS JOIN LATERAL (
+                        VALUES (new_count_serial.serial_no),
+                               (new_count_serial.qr_code)
+                    ) AS new_count_serial_alias(value)
+                   WHERE new_count_serial.id = NEW.serial_id
+              ) AS ordered_count_alias
+             ORDER BY pg_catalog.hashtext(
+                          NEW.round_id::text || ':' ||
+                          ordered_count_alias.alias_key
+                      ),
+                      ordered_count_alias.alias_key
+        LOOP
+            PERFORM pg_catalog.pg_advisory_xact_lock(
+                pg_catalog.hashtext('rsc-opening-round-serial-0052'),
+                pg_catalog.hashtext(
+                    NEW.round_id::text || ':' || serial_alias
+                )
+            );
+            IF EXISTS (
+                SELECT 1
+                  FROM ({current_round_serial_aliases})
+                       AS existing_round_serial_alias
+                 WHERE existing_round_serial_alias.alias_key = serial_alias
+            ) THEN
+                RAISE EXCEPTION '{OPENING_ROUND_SERIAL_DUPLICATE_ERROR}'
+                    USING ERRCODE = '23514';
+            END IF;
+        END LOOP;
         IF NEW.created_at < pg_catalog.transaction_timestamp()
            OR NEW.created_at > pg_catalog.clock_timestamp()
            OR NOT EXISTS (
@@ -8852,6 +10694,95 @@ BEGIN
         IF NOT COALESCE(opening_task, FALSE) THEN
             RETURN NEW;
         END IF;
+        IF pg_catalog.current_setting('transaction_isolation') <>
+           'read committed' THEN
+            RAISE EXCEPTION '{OPENING_COUNT_ISOLATION_ERROR}'
+                USING ERRCODE = '23514';
+        END IF;
+        IF NEW.serial_no_raw IS NOT NULL THEN
+            FOR serial_alias IN
+                SELECT new_observation_alias.alias_key
+                  FROM (
+                      SELECT {new_observation_raw_alias} AS alias_key
+                      UNION
+                      SELECT {new_observation_serial_alias}
+                        FROM public.inventory_serials
+                             AS new_observation_serial
+                        CROSS JOIN LATERAL (
+                            VALUES (new_observation_serial.serial_no),
+                                   (new_observation_serial.qr_code)
+                        ) AS new_observation_serial_alias(value)
+                       WHERE new_observation_serial.id = NEW.serial_id
+                      UNION
+                      SELECT {new_candidate_serial_alias}
+                        FROM LATERAL (
+                            SELECT pg_catalog.array_agg(
+                                       new_alias_candidate.id
+                                       ORDER BY new_alias_candidate.id
+                                   ) AS candidate_ids
+                              FROM public.inventory_serials
+                                   AS new_alias_candidate
+                             WHERE new_alias_candidate.lifecycle_status =
+                                   'active'
+                               AND (
+                                   (
+                                       NEW.serial_identifier_type =
+                                           'serial_no'
+                                       AND new_alias_candidate.serial_no =
+                                           NEW.serial_no_raw
+                                   )
+                                   OR (
+                                       NEW.serial_identifier_type = 'qr_code'
+                                       AND new_alias_candidate.qr_code =
+                                           NEW.serial_no_raw
+                                   )
+                                   OR (
+                                       NEW.serial_identifier_type = 'unknown'
+                                       AND (
+                                           new_alias_candidate.serial_no =
+                                               NEW.serial_no_raw
+                                           OR new_alias_candidate.qr_code =
+                                               NEW.serial_no_raw
+                                       )
+                                   )
+                               )
+                        ) AS new_alias_candidate_set
+                        JOIN public.inventory_serials
+                             AS new_alias_candidate_serial
+                          ON new_alias_candidate_serial.id =
+                             new_alias_candidate_set.candidate_ids[1]
+                        CROSS JOIN LATERAL (
+                            VALUES (new_alias_candidate_serial.serial_no),
+                                   (new_alias_candidate_serial.qr_code)
+                        ) AS new_candidate_serial_alias(value)
+                       WHERE NEW.serial_id IS NULL
+                         AND pg_catalog.cardinality(
+                                 new_alias_candidate_set.candidate_ids
+                             ) = 1
+                  ) AS new_observation_alias
+                 ORDER BY pg_catalog.hashtext(
+                              NEW.round_id::text || ':' ||
+                              new_observation_alias.alias_key
+                          ),
+                          new_observation_alias.alias_key
+            LOOP
+                PERFORM pg_catalog.pg_advisory_xact_lock(
+                    pg_catalog.hashtext('rsc-opening-round-serial-0052'),
+                    pg_catalog.hashtext(
+                        NEW.round_id::text || ':' || serial_alias
+                    )
+                );
+                IF EXISTS (
+                    SELECT 1
+                      FROM ({current_round_serial_aliases})
+                           AS existing_round_serial_alias
+                     WHERE existing_round_serial_alias.alias_key = serial_alias
+                ) THEN
+                    RAISE EXCEPTION '{OPENING_ROUND_SERIAL_DUPLICATE_ERROR}'
+                        USING ERRCODE = '23514';
+                END IF;
+            END LOOP;
+        END IF;
         IF NEW.counted_at < pg_catalog.transaction_timestamp()
            OR NEW.counted_at > pg_catalog.clock_timestamp()
            OR NEW.created_at IS DISTINCT FROM NEW.counted_at
@@ -8916,6 +10847,11 @@ BEGIN
          WHERE task.id = NEW.task_id;
         IF NOT COALESCE(opening_task, FALSE) THEN
             RETURN NEW;
+        END IF;
+        IF pg_catalog.current_setting('transaction_isolation') <>
+           'read committed' THEN
+            RAISE EXCEPTION '{OPENING_COUNT_ISOLATION_ERROR}'
+                USING ERRCODE = '23514';
         END IF;
         IF NEW.completed_at < pg_catalog.transaction_timestamp()
            OR NEW.completed_at > pg_catalog.clock_timestamp()
@@ -9057,7 +10993,7 @@ END;
 
 COUNT_WRITE_BODY = _opening_count_write_guard_body()
 COUNT_WRITE_BODY_SHA256 = (
-    "762841d77fc3ff57bb61b42c473aa5a5c46cc2aa0125e8d6abe0642882070b07"
+    "1eba1b857922dbe1b60a9e7b3c98c5b2250162057262c8849a504441bebeb537"
 )
 
 
@@ -11120,8 +13056,8 @@ TRIGGER_CATALOG = (
     ),
 )
 
-# table, trigger, caller signature, PostgreSQL tgtype.  These 0016 bindings
-# are ordinary immediate guards, not the deferred terminal constraint graph.
+# table, trigger, caller signature, PostgreSQL tgtype.  These inherited
+# bindings are ordinary immediate guards, not the deferred terminal graph.
 REVIEW_GUARD_TRIGGER_CATALOG = (
     (
         "stocktake_reviews",
@@ -11154,6 +13090,12 @@ REVIEW_GUARD_TRIGGER_CATALOG = (
         REVIEW_IMMUTABLE_SIGNATURE,
         34,
     ),
+    (
+        "stocktake_scope_count_completions",
+        "trg_stocktake_scope_completions_assignment_0021",
+        SCOPE_COMPLETION_GUARD_SIGNATURE_0021,
+        7,
+    ),
 )
 
 CATALOG_ERROR = "0052 opening terminal guard catalog verification failed"
@@ -11177,6 +13119,9 @@ REPLACEMENT_ERROR = "0052 opening terminal guard replacement failed"
 EXISTING_ROWS_ERROR = (
     "0052 existing opening stocktake round binding is not canonical"
 )
+REQUEST_EVIDENCE_ERROR = (
+    "0052 existing opening count request evidence is not recoverable"
+)
 DOWNGRADE_BLOCKER = (
     "cannot downgrade 0052 while opening stocktake history or reserved "
     "evidence exists"
@@ -11190,8 +13135,927 @@ def _dialect_name() -> str:
     return dialect
 
 
+def _add_count_request_column() -> None:
+    for column_name in (
+        COUNT_REQUEST_COLUMN,
+        COUNT_REQUEST_RESOLUTION_COLUMN,
+    ):
+        op.add_column(
+            "stocktake_scope_count_completions",
+            sa.Column(
+                column_name,
+                sa.JSON(none_as_null=True).with_variant(
+                    JSONB(none_as_null=True),
+                    "postgresql",
+                ),
+                nullable=True,
+            ),
+            schema="public" if _dialect_name() == "postgresql" else None,
+        )
+
+
+def _drop_count_request_column() -> None:
+    for column_name in (
+        COUNT_REQUEST_RESOLUTION_COLUMN,
+        COUNT_REQUEST_COLUMN,
+    ):
+        op.drop_column(
+            "stocktake_scope_count_completions",
+            column_name,
+            schema="public" if _dialect_name() == "postgresql" else None,
+        )
+
+
+def _require_no_sqlite_count_request_evidence() -> None:
+    """Refuse a lossy SQLite downgrade before either evidence column drops."""
+
+    if op.get_context().as_sql:
+        raise RuntimeError(
+            "0052 SQLite downgrade requires an online evidence check"
+        )
+    if (
+        op.get_bind()
+        .exec_driver_sql(
+            "SELECT 1 FROM stocktake_scope_count_completions "
+            f"WHERE {COUNT_REQUEST_COLUMN} IS NOT NULL "
+            f"OR {COUNT_REQUEST_RESOLUTION_COLUMN} IS NOT NULL LIMIT 1"
+        )
+        .first()
+        is not None
+    ):
+        raise RuntimeError(DOWNGRADE_BLOCKER)
+
+
+def _verify_count_completion_immutable_catalog(
+    *,
+    phase: str,
+    enabled: bool,
+) -> None:
+    """Pin the sole guard temporarily disabled for lossless backfill."""
+
+    escaped_phase = phase.replace("'", "''")
+    expected_enabled = "O" if enabled else "D"
+    op.execute(
+        f"""
+DO $rsc_0052_request_trigger_catalog$
+DECLARE
+    function_oid oid := pg_catalog.to_regprocedure(
+        '{COUNT_COMPLETION_IMMUTABLE_SIGNATURE}'
+    );
+    migrator_oid oid;
+BEGIN
+    SELECT role_row.oid
+      INTO migrator_oid
+      FROM pg_catalog.pg_roles AS role_row
+     WHERE role_row.rolname = '{MIGRATION_ROLE}';
+    IF current_user <> '{MIGRATION_ROLE}'
+       OR session_user <> '{MIGRATION_ROLE}'
+       OR migrator_oid IS NULL
+       OR function_oid IS NULL
+       OR (
+            SELECT pg_catalog.count(*)
+              FROM pg_catalog.pg_proc AS procedure
+              JOIN pg_catalog.pg_namespace AS namespace
+                ON namespace.oid = procedure.pronamespace
+              JOIN pg_catalog.pg_language AS language
+                ON language.oid = procedure.prolang
+             WHERE procedure.oid = function_oid
+               AND namespace.nspname = 'public'
+               AND procedure.proname =
+                   '{COUNT_COMPLETION_IMMUTABLE_FUNCTION}'
+               AND procedure.proowner = migrator_oid
+               AND procedure.prokind = 'f'
+               AND procedure.prorettype = pg_catalog.to_regtype('trigger')
+               AND NOT procedure.proretset
+               AND procedure.pronargs = 0
+               AND procedure.proallargtypes IS NULL
+               AND procedure.proargmodes IS NULL
+               AND procedure.proargnames IS NULL
+               AND procedure.pronargdefaults = 0
+               AND procedure.proargdefaults IS NULL
+               AND procedure.provariadic = 0
+               AND language.lanname = 'plpgsql'
+               AND procedure.provolatile = 'v'
+               AND NOT procedure.proisstrict
+               AND NOT procedure.proleakproof
+               AND procedure.proparallel = 'u'
+               AND NOT procedure.prosecdef
+               AND procedure.proconfig IS NULL
+               AND pg_catalog.encode(
+                       pg_catalog.sha256(
+                           pg_catalog.convert_to(procedure.prosrc, 'UTF8')
+                       ),
+                       'hex'
+                   ) = '{COUNT_COMPLETION_IMMUTABLE_BODY_SHA256}'
+        ) <> 1
+       OR (
+            SELECT pg_catalog.count(*)
+              FROM pg_catalog.pg_proc AS procedure
+              JOIN pg_catalog.pg_namespace AS namespace
+                ON namespace.oid = procedure.pronamespace
+             WHERE procedure.proname =
+                   '{COUNT_COMPLETION_IMMUTABLE_FUNCTION}'
+        ) <> 1
+       OR EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_proc AS procedure
+             CROSS JOIN LATERAL pg_catalog.aclexplode(
+                 COALESCE(
+                     procedure.proacl,
+                     pg_catalog.acldefault('f', procedure.proowner)
+                 )
+             ) AS function_acl
+             WHERE procedure.oid = function_oid
+               AND (
+                   function_acl.privilege_type <> 'EXECUTE'
+                   OR function_acl.grantee <> migrator_oid
+                   OR function_acl.grantor <> migrator_oid
+                   OR function_acl.is_grantable
+               )
+        )
+       OR (
+            SELECT pg_catalog.count(*)
+              FROM pg_catalog.pg_proc AS procedure
+             CROSS JOIN LATERAL pg_catalog.aclexplode(
+                 COALESCE(
+                     procedure.proacl,
+                     pg_catalog.acldefault('f', procedure.proowner)
+                 )
+             ) AS function_acl
+             WHERE procedure.oid = function_oid
+               AND function_acl.privilege_type = 'EXECUTE'
+               AND function_acl.grantee = migrator_oid
+               AND function_acl.grantor = migrator_oid
+               AND NOT function_acl.is_grantable
+        ) <> 1
+       OR (
+            SELECT pg_catalog.count(*)
+              FROM pg_catalog.pg_trigger AS trigger_row
+             WHERE trigger_row.tgname =
+                   '{COUNT_COMPLETION_IMMUTABLE_TRIGGER}'
+               AND NOT trigger_row.tgisinternal
+               AND trigger_row.tgrelid = pg_catalog.to_regclass(
+                   'public.stocktake_scope_count_completions'
+               )
+               AND trigger_row.tgfoid = function_oid
+               AND trigger_row.tgenabled = '{expected_enabled}'
+               AND trigger_row.tgtype = 27
+               AND trigger_row.tgconstraint = 0
+               AND NOT trigger_row.tgdeferrable
+               AND NOT trigger_row.tginitdeferred
+               AND trigger_row.tgconstrrelid = 0
+               AND trigger_row.tgconstrindid = 0
+               AND trigger_row.tgparentid = 0
+               AND trigger_row.tgqual IS NULL
+               AND trigger_row.tgoldtable IS NULL
+               AND trigger_row.tgnewtable IS NULL
+               AND trigger_row.tgnargs = 0
+               AND trigger_row.tgattr = ''::pg_catalog.int2vector
+        ) <> 1
+       OR (
+            SELECT pg_catalog.count(*)
+              FROM pg_catalog.pg_trigger AS trigger_row
+             WHERE trigger_row.tgname =
+                   '{COUNT_COMPLETION_IMMUTABLE_TRIGGER}'
+               AND NOT trigger_row.tgisinternal
+        ) <> 1 THEN
+        RAISE EXCEPTION
+            '{REQUEST_EVIDENCE_ERROR}: {escaped_phase}';
+    END IF;
+END
+$rsc_0052_request_trigger_catalog$
+"""
+    )
+
+
+def _legacy_scope_count_request_resolution_document_sql(
+    task_id_sql: str,
+    round_alias: str,
+    scope_alias: str,
+    completion_alias: str,
+    request_document_sql: str,
+) -> str:
+    """Reconstruct only observation-backed legacy request resolutions.
+
+    A positive count-line contribution cannot be recovered from an aggregated
+    legacy result and therefore has no candidate here.  The enclosing request
+    hash gate plus the final strict graph proof aborts rather than inventing
+    any missing mapping.  QR and policy snapshots are emitted only when one
+    unchanged, temporally prior catalog row proves the exact identity.
+    """
+
+    request_items = f"""CASE
+        WHEN pg_catalog.jsonb_typeof(
+                 (({request_document_sql})::jsonb) ->
+                 'physical_observations'
+             ) = 'array'
+        THEN (({request_document_sql})::jsonb) -> 'physical_observations'
+        ELSE '[]'::jsonb
+    END"""
+    legacy_raw_alias = _serial_alias_key_sql(
+        "legacy_observation.serial_no_raw"
+    )
+    legacy_resolved_alias = _serial_alias_key_sql(
+        "legacy_resolved_alias.value"
+    )
+    legacy_candidate_alias = _serial_alias_key_sql(
+        "legacy_candidate_alias.value"
+    )
+    legacy_resolved_serial_proof = f"""EXISTS (
+        SELECT 1
+          FROM public.inventory_serials AS legacy_resolved_serial
+         WHERE legacy_resolved_serial.id = legacy_observation.serial_id
+           AND legacy_resolved_serial.material_id =
+               legacy_observation.material_id
+           AND legacy_resolved_serial.lot_id IS NOT DISTINCT FROM
+               legacy_observation.lot_id
+           AND legacy_resolved_serial.lifecycle_status = 'active'
+           AND (
+               (
+                   legacy_observation.serial_identifier_type = 'serial_no'
+                   AND legacy_resolved_serial.serial_no =
+                       legacy_observation.serial_no_raw
+               )
+               OR (
+                   legacy_observation.serial_identifier_type = 'qr_code'
+                   AND legacy_resolved_serial.qr_code =
+                       legacy_observation.serial_no_raw
+               )
+           )
+           AND legacy_resolved_serial.created_at <=
+               {completion_alias}.completed_at
+           AND legacy_resolved_serial.updated_at <=
+               {completion_alias}.completed_at
+    )"""
+    legacy_candidate_predicate = """(
+        (
+            legacy_observation.serial_identifier_type = 'serial_no'
+            AND legacy_alias_candidate.serial_no =
+                legacy_observation.serial_no_raw
+        )
+        OR (
+            legacy_observation.serial_identifier_type = 'qr_code'
+            AND legacy_alias_candidate.qr_code =
+                legacy_observation.serial_no_raw
+        )
+        OR (
+            legacy_observation.serial_identifier_type = 'unknown'
+            AND (
+                legacy_alias_candidate.serial_no =
+                    legacy_observation.serial_no_raw
+                OR legacy_alias_candidate.qr_code =
+                    legacy_observation.serial_no_raw
+            )
+        )
+    )"""
+    legacy_serial_reference_identity_rows = f"""
+        SELECT legacy_identity_candidate.id AS serial_id
+          FROM public.inventory_serials AS legacy_identity_candidate
+         WHERE legacy_identity_candidate.lifecycle_status = 'active'
+           AND legacy_identity_candidate.created_at <=
+               {completion_alias}.completed_at
+           AND legacy_identity_candidate.updated_at <=
+               {completion_alias}.completed_at
+           AND (
+               (
+                   legacy_observation.serial_identifier_type = 'serial_no'
+                   AND legacy_identity_candidate.serial_no =
+                       legacy_observation.serial_no_raw
+               )
+               OR (
+                   legacy_observation.serial_identifier_type = 'qr_code'
+                   AND legacy_identity_candidate.qr_code =
+                       legacy_observation.serial_no_raw
+               )
+               OR (
+                   legacy_observation.serial_identifier_type = 'unknown'
+                   AND (
+                       legacy_identity_candidate.serial_no =
+                           legacy_observation.serial_no_raw
+                       OR legacy_identity_candidate.qr_code =
+                           legacy_observation.serial_no_raw
+                   )
+               )
+           )
+        UNION
+        SELECT legacy_identity_mapping.object_id AS serial_id
+          FROM public.qr_codes AS legacy_identity_mapping
+         WHERE legacy_observation.serial_identifier_type = 'qr_code'
+           AND legacy_identity_mapping.code =
+               legacy_observation.serial_no_raw
+           AND legacy_identity_mapping.object_type = 'serial'
+           AND legacy_identity_mapping.status = 'active'
+           AND legacy_identity_mapping.created_at <=
+               {completion_alias}.completed_at
+           AND legacy_identity_mapping.updated_at <=
+               {completion_alias}.completed_at
+    """
+    legacy_serial_reference_unambiguous = f"""(
+        legacy_observation.serial_no_raw IS NULL
+        OR (
+            NOT EXISTS (
+                SELECT 1
+                  FROM public.inventory_serials
+                       AS legacy_mutable_identity_candidate
+                 WHERE legacy_mutable_identity_candidate.created_at <=
+                       {completion_alias}.completed_at
+                   AND legacy_mutable_identity_candidate.updated_at >
+                       {completion_alias}.completed_at
+            )
+            AND (
+                legacy_observation.serial_identifier_type <> 'qr_code'
+                OR NOT EXISTS (
+                    SELECT 1
+                      FROM public.qr_codes
+                           AS legacy_mutable_identity_mapping
+                     WHERE legacy_mutable_identity_mapping.object_type =
+                           'serial'
+                       AND legacy_mutable_identity_mapping.created_at <=
+                           {completion_alias}.completed_at
+                       AND legacy_mutable_identity_mapping.updated_at >
+                           {completion_alias}.completed_at
+                )
+            )
+            AND (
+                SELECT pg_catalog.count(*)
+                  FROM ({legacy_serial_reference_identity_rows})
+                       AS legacy_serial_reference_identity
+            ) <= 1
+        )
+    )"""
+    legacy_serial_alias_document = f"""CASE
+        WHEN legacy_observation.serial_no_raw IS NULL THEN '[]'::jsonb
+        WHEN legacy_observation.serial_id IS NOT NULL THEN CASE
+            WHEN {legacy_resolved_serial_proof} THEN (
+                SELECT pg_catalog.jsonb_agg(
+                           resolved_alias.alias_key
+                           ORDER BY pg_catalog.convert_to(
+                               resolved_alias.alias_key,
+                               'UTF8'
+                           )
+                       )
+                  FROM (
+                      SELECT {legacy_raw_alias} AS alias_key
+                      UNION
+                      SELECT {legacy_resolved_alias}
+                        FROM public.inventory_serials
+                             AS legacy_resolved_serial
+                        CROSS JOIN LATERAL (
+                            VALUES (legacy_resolved_serial.serial_no),
+                                   (legacy_resolved_serial.qr_code)
+                        ) AS legacy_resolved_alias(value)
+                       WHERE legacy_resolved_serial.id =
+                             legacy_observation.serial_id
+                  ) AS resolved_alias
+            )
+            ELSE NULL::jsonb
+        END
+        WHEN EXISTS (
+            SELECT 1
+              FROM public.inventory_serials AS legacy_alias_candidate
+             WHERE legacy_alias_candidate.created_at <=
+                   {completion_alias}.completed_at
+               AND legacy_alias_candidate.updated_at >
+                   {completion_alias}.completed_at
+        ) THEN NULL::jsonb
+        WHEN (
+            SELECT pg_catalog.count(*)
+              FROM public.inventory_serials AS legacy_alias_candidate
+             WHERE legacy_alias_candidate.lifecycle_status = 'active'
+               AND legacy_alias_candidate.created_at <=
+                   {completion_alias}.completed_at
+               AND legacy_alias_candidate.updated_at <=
+                   {completion_alias}.completed_at
+               AND {legacy_candidate_predicate}
+        ) = 1 THEN (
+            SELECT pg_catalog.jsonb_agg(
+                       candidate_alias.alias_key
+                       ORDER BY pg_catalog.convert_to(
+                           candidate_alias.alias_key,
+                           'UTF8'
+                       )
+                   )
+              FROM (
+                  SELECT {legacy_raw_alias} AS alias_key
+                  UNION
+                  SELECT {legacy_candidate_alias}
+                    FROM public.inventory_serials
+                         AS legacy_alias_candidate
+                    CROSS JOIN LATERAL (
+                        VALUES (legacy_alias_candidate.serial_no),
+                               (legacy_alias_candidate.qr_code)
+                    ) AS legacy_candidate_alias(value)
+                   WHERE legacy_alias_candidate.lifecycle_status = 'active'
+                     AND legacy_alias_candidate.created_at <=
+                         {completion_alias}.completed_at
+                     AND legacy_alias_candidate.updated_at <=
+                         {completion_alias}.completed_at
+                     AND {legacy_candidate_predicate}
+              ) AS candidate_alias
+        )
+        ELSE pg_catalog.jsonb_build_array({legacy_raw_alias})
+    END"""
+    legacy_material_proof = f"""(
+        (
+            legacy_observation.material_id IS NULL
+            AND (
+                legacy_observation.material_identifier_type IN (
+                    'external_code', 'unknown'
+                )
+                OR (
+                    legacy_observation.material_identifier_type = 'sku_code'
+                    AND NOT EXISTS (
+                        SELECT 1
+                          FROM public.materials AS legacy_mutable_material
+                         WHERE legacy_mutable_material.created_at <=
+                               {completion_alias}.completed_at
+                           AND legacy_mutable_material.updated_at >
+                               {completion_alias}.completed_at
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                          FROM public.materials AS legacy_unresolved_material
+                         WHERE legacy_unresolved_material.sku_code =
+                               legacy_observation.material_identifier_raw
+                           AND legacy_unresolved_material.created_at <=
+                               {completion_alias}.completed_at
+                           AND (
+                               legacy_unresolved_material.status = 'active'
+                               OR legacy_unresolved_material.updated_at >
+                                  {completion_alias}.completed_at
+                           )
+                    )
+                )
+                OR (
+                    legacy_observation.material_identifier_type = 'qr_code'
+                    AND NOT EXISTS (
+                        SELECT 1
+                          FROM public.qr_codes
+                               AS legacy_mutable_material_mapping
+                         WHERE legacy_mutable_material_mapping.object_type =
+                               'material'
+                           AND legacy_mutable_material_mapping.created_at <=
+                               {completion_alias}.completed_at
+                           AND legacy_mutable_material_mapping.updated_at >
+                               {completion_alias}.completed_at
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                          FROM public.qr_codes
+                               AS legacy_unresolved_material_mapping
+                         WHERE legacy_unresolved_material_mapping.code =
+                               legacy_observation.material_identifier_raw
+                           AND legacy_unresolved_material_mapping.object_type =
+                               'material'
+                           AND legacy_unresolved_material_mapping.created_at <=
+                               {completion_alias}.completed_at
+                           AND (
+                               legacy_unresolved_material_mapping.status =
+                                   'active'
+                               OR legacy_unresolved_material_mapping.updated_at >
+                                  {completion_alias}.completed_at
+                           )
+                    )
+                )
+            )
+        )
+        OR (
+            legacy_observation.material_id IS NOT NULL
+            AND EXISTS (
+                SELECT 1
+                  FROM public.materials AS legacy_resolved_material
+                 WHERE legacy_resolved_material.id =
+                       legacy_observation.material_id
+                   AND legacy_resolved_material.status = 'active'
+                   AND legacy_resolved_material.created_at <=
+                       {completion_alias}.completed_at
+                   AND legacy_resolved_material.updated_at <=
+                       {completion_alias}.completed_at
+                   AND (
+                       (
+                           legacy_observation.material_identifier_type =
+                               'sku_code'
+                           AND legacy_resolved_material.sku_code =
+                               legacy_observation.material_identifier_raw
+                       )
+                       OR (
+                           legacy_observation.material_identifier_type =
+                               'qr_code'
+                           AND legacy_material_mapping.mapping_id IS NOT NULL
+                       )
+                   )
+            )
+        )
+    )"""
+    legacy_lot_proof = f"""(
+        (
+            legacy_observation.lot_id IS NULL
+            AND (
+                legacy_observation.material_id IS NULL
+                OR legacy_observation.lot_no_raw IS NULL
+                OR (
+                    NOT EXISTS (
+                        SELECT 1
+                          FROM public.inventory_lots AS legacy_mutable_lot
+                         WHERE legacy_mutable_lot.material_id =
+                               legacy_observation.material_id
+                           AND legacy_mutable_lot.created_at <=
+                               {completion_alias}.completed_at
+                           AND legacy_mutable_lot.updated_at >
+                               {completion_alias}.completed_at
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                          FROM public.inventory_lots AS legacy_unresolved_lot
+                         WHERE legacy_unresolved_lot.material_id =
+                               legacy_observation.material_id
+                           AND legacy_unresolved_lot.lot_no =
+                               legacy_observation.lot_no_raw
+                           AND legacy_unresolved_lot.created_at <=
+                               {completion_alias}.completed_at
+                    )
+                )
+            )
+        )
+        OR (
+            legacy_observation.lot_id IS NOT NULL
+            AND EXISTS (
+                SELECT 1
+                  FROM public.inventory_lots AS legacy_resolved_lot
+                 WHERE legacy_resolved_lot.id = legacy_observation.lot_id
+                   AND legacy_resolved_lot.material_id =
+                       legacy_observation.material_id
+                   AND legacy_resolved_lot.lot_no =
+                       legacy_observation.lot_no_raw
+                   AND legacy_resolved_lot.created_at <=
+                       {completion_alias}.completed_at
+                   AND legacy_resolved_lot.updated_at <=
+                       {completion_alias}.completed_at
+            )
+        )
+    )"""
+    legacy_serial_proof = f"""(
+        (
+            legacy_observation.serial_id IS NULL
+            AND (
+                legacy_observation.serial_no_raw IS NULL
+                OR legacy_observation.serial_identifier_type = 'unknown'
+                OR legacy_observation.material_id IS NULL
+                OR (
+                    legacy_observation.serial_identifier_type IN (
+                        'serial_no', 'qr_code'
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                          FROM public.inventory_serials
+                               AS legacy_mutable_serial
+                         WHERE legacy_mutable_serial.material_id =
+                               legacy_observation.material_id
+                           AND legacy_mutable_serial.created_at <=
+                               {completion_alias}.completed_at
+                           AND legacy_mutable_serial.updated_at >
+                               {completion_alias}.completed_at
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                          FROM public.inventory_serials
+                               AS legacy_unresolved_serial
+                         WHERE legacy_unresolved_serial.material_id =
+                               legacy_observation.material_id
+                           AND legacy_unresolved_serial.lifecycle_status =
+                               'active'
+                           AND legacy_unresolved_serial.created_at <=
+                               {completion_alias}.completed_at
+                           AND (
+                               (
+                                   legacy_observation.serial_identifier_type =
+                                       'serial_no'
+                                   AND legacy_unresolved_serial.serial_no =
+                                       legacy_observation.serial_no_raw
+                               )
+                               OR (
+                                   legacy_observation.serial_identifier_type =
+                                       'qr_code'
+                                   AND legacy_unresolved_serial.qr_code =
+                                       legacy_observation.serial_no_raw
+                               )
+                           )
+                    )
+                    AND (
+                        legacy_observation.serial_identifier_type <> 'qr_code'
+                        OR (
+                            NOT EXISTS (
+                                SELECT 1
+                                  FROM public.qr_codes
+                                       AS legacy_mutable_serial_mapping
+                                 WHERE legacy_mutable_serial_mapping.object_type =
+                                       'serial'
+                                   AND legacy_mutable_serial_mapping.created_at <=
+                                       {completion_alias}.completed_at
+                                   AND legacy_mutable_serial_mapping.updated_at >
+                                       {completion_alias}.completed_at
+                            )
+                            AND NOT EXISTS (
+                                SELECT 1
+                                  FROM public.qr_codes
+                                       AS legacy_unresolved_serial_mapping
+                                 WHERE legacy_unresolved_serial_mapping.code =
+                                       legacy_observation.serial_no_raw
+                                   AND legacy_unresolved_serial_mapping.object_type =
+                                       'serial'
+                                   AND legacy_unresolved_serial_mapping.status =
+                                       'active'
+                                   AND legacy_unresolved_serial_mapping.created_at <=
+                                       {completion_alias}.completed_at
+                            )
+                        )
+                    )
+                )
+            )
+        )
+        OR (
+            {legacy_resolved_serial_proof}
+            AND (
+                legacy_observation.serial_identifier_type <> 'qr_code'
+                OR legacy_serial_mapping.mapping_id IS NOT NULL
+                OR (
+                    NOT EXISTS (
+                        SELECT 1
+                          FROM public.qr_codes
+                               AS legacy_mutable_resolved_serial_mapping
+                         WHERE legacy_mutable_resolved_serial_mapping.object_type =
+                               'serial'
+                           AND legacy_mutable_resolved_serial_mapping.created_at <=
+                               {completion_alias}.completed_at
+                           AND legacy_mutable_resolved_serial_mapping.updated_at >
+                               {completion_alias}.completed_at
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                          FROM public.qr_codes
+                               AS legacy_missing_resolved_serial_mapping
+                         WHERE legacy_missing_resolved_serial_mapping.code =
+                               legacy_observation.serial_no_raw
+                           AND legacy_missing_resolved_serial_mapping.object_type =
+                               'serial'
+                           AND legacy_missing_resolved_serial_mapping.status =
+                               'active'
+                           AND legacy_missing_resolved_serial_mapping.created_at <=
+                               {completion_alias}.completed_at
+                    )
+                )
+            )
+        )
+    )"""
+    return f"""pg_catalog.jsonb_build_object(
+        'items', COALESCE((
+            SELECT pg_catalog.jsonb_agg(
+                       pg_catalog.jsonb_build_object(
+                           'material_qr_mapping_id',
+                               legacy_material_mapping.mapping_id,
+                           'policy', legacy_policy.document,
+                           'request_item_sha256',
+                               {_canonical_jsonb_sha256_sql('legacy_request_item.value')},
+                           'request_ordinal', legacy_request_item.ordinal,
+                           'resolved_lot_id',
+                               legacy_observation.lot_id::text,
+                           'resolved_material_id',
+                               legacy_observation.material_id::text,
+                           'resolved_serial_id',
+                               legacy_observation.serial_id::text,
+                           'serial_alias_keys',
+                               {legacy_serial_alias_document},
+                           'serial_qr_mapping_id',
+                               legacy_serial_mapping.mapping_id,
+                           'target_id', legacy_observation.id::text,
+                           'target_type', 'observation'
+                       )
+                       ORDER BY legacy_request_item.ordinal
+                   )
+              FROM pg_catalog.jsonb_array_elements({request_items})
+                   WITH ORDINALITY AS legacy_request_item(value, ordinal)
+              JOIN public.stocktake_count_observations
+                   AS legacy_observation
+                ON legacy_observation.task_id = {task_id_sql}
+               AND legacy_observation.round_id = {round_alias}.id
+               AND legacy_observation.scope_id = {scope_alias}.id
+               AND legacy_observation.availability_bucket =
+                   legacy_request_item.value ->> 'availability_bucket'
+               AND legacy_observation.condition_code =
+                   legacy_request_item.value ->> 'condition_code'
+               AND legacy_observation.count_method =
+                   legacy_request_item.value ->> 'count_method'
+               AND {_canonical_quantity_sql('legacy_observation.counted_qty')} =
+                   legacy_request_item.value ->> 'counted_qty'
+               AND legacy_observation.lot_id::text IS NOT DISTINCT FROM
+                   legacy_request_item.value ->> 'lot_id'
+               AND legacy_observation.lot_no_raw IS NOT DISTINCT FROM
+                   legacy_request_item.value ->> 'lot_no_raw'
+               AND legacy_observation.material_id::text IS NOT DISTINCT FROM
+                   legacy_request_item.value ->> 'material_id'
+               AND legacy_observation.material_identifier_raw =
+                   legacy_request_item.value ->> 'material_identifier_raw'
+               AND legacy_observation.material_identifier_type =
+                   legacy_request_item.value ->> 'material_identifier_type'
+               AND legacy_observation.reason_code IS NOT DISTINCT FROM
+                   legacy_request_item.value ->> 'reason_code'
+               AND legacy_observation.remark =
+                   legacy_request_item.value ->> 'remark'
+               AND legacy_observation.serial_id::text IS NOT DISTINCT FROM
+                   legacy_request_item.value ->> 'serial_id'
+               AND legacy_observation.serial_identifier_type
+                   IS NOT DISTINCT FROM
+                   legacy_request_item.value ->> 'serial_identifier_type'
+               AND legacy_observation.serial_no_raw IS NOT DISTINCT FROM
+                   legacy_request_item.value ->> 'serial_no_raw'
+              LEFT JOIN LATERAL (
+                  SELECT CASE
+                      WHEN pg_catalog.count(*) = 1
+                      THEN pg_catalog.min(mapping.id::text)
+                      ELSE NULL
+                  END AS mapping_id
+                    FROM public.qr_codes AS mapping
+                   WHERE legacy_observation.material_identifier_type =
+                         'qr_code'
+                     AND legacy_observation.material_id IS NOT NULL
+                     AND mapping.code =
+                         legacy_observation.material_identifier_raw
+                     AND mapping.object_type = 'material'
+                     AND mapping.object_id = legacy_observation.material_id
+                     AND mapping.status = 'active'
+                     AND mapping.created_at <=
+                         {completion_alias}.completed_at
+                     AND mapping.updated_at <=
+                         {completion_alias}.completed_at
+              ) AS legacy_material_mapping ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT CASE
+                      WHEN pg_catalog.count(*) = 1
+                      THEN pg_catalog.min(mapping.id::text)
+                      ELSE NULL
+                  END AS mapping_id
+                    FROM public.qr_codes AS mapping
+                   WHERE legacy_observation.serial_identifier_type =
+                         'qr_code'
+                     AND legacy_observation.serial_id IS NOT NULL
+                     AND mapping.code = legacy_observation.serial_no_raw
+                     AND mapping.object_type = 'serial'
+                     AND mapping.object_id = legacy_observation.serial_id
+                     AND mapping.status = 'active'
+                     AND mapping.created_at <=
+                         {completion_alias}.completed_at
+                     AND mapping.updated_at <=
+                         {completion_alias}.completed_at
+              ) AS legacy_serial_mapping ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT CASE
+                      WHEN pg_catalog.count(*) = 1
+                      THEN pg_catalog.jsonb_agg(
+                               pg_catalog.jsonb_build_object(
+                                   'allow_fraction', policy.allow_fraction,
+                                   'effective_from', pg_catalog.to_char(
+                                       pg_catalog.timezone(
+                                           'UTC', policy.effective_from
+                                       ),
+                                       'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+                                   ),
+                                   'id', policy.id::text,
+                                   'quantity_scale', policy.quantity_scale,
+                                   'tracking_mode', policy.tracking_mode
+                               ) ORDER BY policy.id
+                           ) -> 0
+                      ELSE NULL
+                  END AS document
+                    FROM public.material_inventory_policies AS policy
+                    JOIN public.stocktake_tasks AS legacy_policy_task
+                      ON legacy_policy_task.id = {task_id_sql}
+                   WHERE policy.material_id = legacy_observation.material_id
+                     AND NOT EXISTS (
+                         SELECT 1
+                           FROM public.material_inventory_policies
+                                AS legacy_mutable_policy
+                          WHERE legacy_mutable_policy.material_id =
+                                legacy_observation.material_id
+                            AND legacy_mutable_policy.created_at <=
+                                {completion_alias}.completed_at
+                            AND legacy_mutable_policy.updated_at >
+                                {completion_alias}.completed_at
+                     )
+                     AND policy.effective_from <=
+                         legacy_policy_task.cutoff_at
+                     AND (
+                         policy.effective_to IS NULL
+                         OR legacy_policy_task.cutoff_at < policy.effective_to
+                     )
+                     AND policy.created_at <= {completion_alias}.completed_at
+                     AND policy.updated_at <= {completion_alias}.completed_at
+              ) AS legacy_policy ON TRUE
+             WHERE {legacy_material_proof}
+               AND {legacy_lot_proof}
+               AND {legacy_serial_reference_unambiguous}
+               AND {legacy_serial_proof}
+               AND (
+                   legacy_observation.material_id IS NULL
+                   OR legacy_policy.document IS NOT NULL
+               )
+        ), '[]'::jsonb),
+        'request_sha256', {completion_alias}.request_sha256,
+        'round_id', {round_alias}.id::text,
+        'schema',
+            'cloud_oam.opening_stocktake.scope_count_request_resolution.v1',
+        'scope_id', {scope_alias}.id::text,
+        'task_id', ({task_id_sql})::text
+    )"""
+
+
+def _backfill_provable_count_request_documents() -> None:
+    """Backfill only lossless legacy candidates under the migration lock."""
+
+    candidate = _legacy_scope_count_request_document_sql(
+        "completion.task_id",
+        "round_row",
+        "scope_row",
+        "completion",
+    )
+    candidate_sha256 = _canonical_text_sha256_sql(candidate)
+    resolution_candidate = (
+        _legacy_scope_count_request_resolution_document_sql(
+            "completion.task_id",
+            "round_row",
+            "scope_row",
+            "completion",
+            candidate,
+        )
+    )
+    _verify_count_completion_immutable_catalog(
+        phase="backfill preflight",
+        enabled=True,
+    )
+    op.execute(
+        "ALTER TABLE public.stocktake_scope_count_completions DISABLE TRIGGER "
+        f"{COUNT_COMPLETION_IMMUTABLE_TRIGGER}"
+    )
+    _verify_count_completion_immutable_catalog(
+        phase="backfill disabled",
+        enabled=False,
+    )
+    op.execute(
+        f"""
+UPDATE public.stocktake_scope_count_completions AS completion
+   SET {COUNT_REQUEST_COLUMN} = ({candidate})::jsonb,
+       {COUNT_REQUEST_RESOLUTION_COLUMN} = ({resolution_candidate})::jsonb
+  FROM public.stocktake_tasks AS task,
+       public.stocktake_rounds AS round_row,
+       public.stocktake_scopes AS scope_row
+ WHERE task.id = completion.task_id
+   AND task.task_type = 'opening'
+   AND round_row.id = completion.round_id
+   AND round_row.task_id = completion.task_id
+   AND scope_row.id = completion.scope_id
+   AND scope_row.task_id = completion.task_id
+   AND completion.{COUNT_REQUEST_COLUMN} IS NULL
+   AND completion.{COUNT_REQUEST_RESOLUTION_COLUMN} IS NULL
+   AND completion.request_sha256 = ({candidate_sha256})
+"""
+    )
+    op.execute(
+        "ALTER TABLE public.stocktake_scope_count_completions ENABLE TRIGGER "
+        f"{COUNT_COMPLETION_IMMUTABLE_TRIGGER}"
+    )
+    _verify_count_completion_immutable_catalog(
+        phase="backfill postflight",
+        enabled=True,
+    )
+    op.execute(
+        f"""
+DO $rsc_0052_request_evidence$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+          FROM public.stocktake_scope_count_completions AS completion
+          JOIN public.stocktake_tasks AS task
+            ON task.id = completion.task_id
+         WHERE task.task_type = 'opening'
+           AND (
+               pg_catalog.jsonb_typeof(
+                   completion.{COUNT_REQUEST_COLUMN}
+               ) IS DISTINCT FROM 'object'
+               OR pg_catalog.jsonb_typeof(
+                   completion.{COUNT_REQUEST_RESOLUTION_COLUMN}
+               ) IS DISTINCT FROM 'object'
+           )
+    ) THEN
+        RAISE EXCEPTION '{REQUEST_EVIDENCE_ERROR}';
+    END IF;
+END
+$rsc_0052_request_evidence$
+"""
+    )
+
+
 def upgrade() -> None:
     if _dialect_name() == "sqlite":
+        _add_count_request_column()
         return
 
     _lock_boundary_tables()
@@ -11210,6 +14074,8 @@ def upgrade() -> None:
         present=False,
         phase="legacy upgrade preflight",
     )
+    _add_count_request_column()
+    _backfill_provable_count_request_documents()
     _create_opening_helpers()
     _verify_helper_catalog(present=True, phase="helper upgrade installation")
     _verify_existing_opening_rows()
@@ -11230,6 +14096,15 @@ def upgrade() -> None:
         source_fragment=LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT,
         replacement_fragment=FIXED_ACCOUNT_PRINCIPAL_FRAGMENT,
         phase="account upgrade",
+    )
+    _replace_function_body(
+        signature=SCOPE_COMPLETION_GUARD_SIGNATURE_0021,
+        expected_body_sha256=(
+            LEGACY_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
+        ),
+        source_fragment=LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+        replacement_fragment=FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+        phase="scope completion guard upgrade",
     )
     _set_caller_security(security_definer=True)
     _set_review_completion_search_path(hardened=True)
@@ -11253,6 +14128,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     if _dialect_name() == "sqlite":
+        _require_no_sqlite_count_request_evidence()
+        _drop_count_request_column()
         return
 
     _lock_boundary_tables()
@@ -11289,9 +14166,17 @@ def downgrade() -> None:
         replacement_fragment=LEGACY_TASK_BRANCH,
         phase="commit downgrade",
     )
+    _replace_function_body(
+        signature=SCOPE_COMPLETION_GUARD_SIGNATURE_0021,
+        expected_body_sha256=FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021,
+        source_fragment=FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+        replacement_fragment=LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+        phase="scope completion guard downgrade",
+    )
     _set_caller_security(security_definer=False)
     _set_review_completion_search_path(hardened=False)
     _drop_opening_helpers()
+    _drop_count_request_column()
     _verify_catalog(hardened=False, phase="legacy downgrade postflight")
     _verify_helper_catalog(present=False, phase="legacy downgrade postflight")
     _verify_insert_guard_catalog(present=False, phase="legacy downgrade postflight")
@@ -15050,6 +17935,23 @@ def _function_catalog_values(*, hardened: bool) -> str:
             REVIEW_IMMUTABLE_BODY_SHA256,
         ),
         (
+            SCOPE_COMPLETION_GUARD_SIGNATURE_0021,
+            SCOPE_COMPLETION_GUARD_FUNCTION_0021,
+            "trigger",
+            "plpgsql",
+            "v",
+            0,
+            "",
+            None,
+            True,
+            FIXED_SEARCH_PATH,
+            (
+                FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
+                if hardened
+                else LEGACY_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
+            ),
+        ),
+        (
             GRAPH_SIGNATURE,
             GRAPH_FUNCTION,
             "boolean",
@@ -15450,9 +18352,16 @@ BEGIN
            AND trigger_row.tgfoid = pg_catalog.to_regprocedure(
                '{REVIEW_IMMUTABLE_SIGNATURE}'
            )
-    ) <> 4 THEN
+    ) <> 4 OR (
+        SELECT pg_catalog.count(*)
+          FROM pg_catalog.pg_trigger AS trigger_row
+         WHERE NOT trigger_row.tgisinternal
+           AND trigger_row.tgfoid = pg_catalog.to_regprocedure(
+               '{SCOPE_COMPLETION_GUARD_SIGNATURE_0021}'
+           )
+    ) <> 1 THEN
         RAISE EXCEPTION
-            '{CATALOG_ERROR}: {escaped_phase}: review guard binding mismatch';
+            '{CATALOG_ERROR}: {escaped_phase}: inherited guard binding mismatch';
     END IF;
 END
 $rsc_0052_catalog$
@@ -15492,6 +18401,18 @@ def _replace_function_body(
             FIXED_ACCOUNT_BODY_SHA256,
             FIXED_ACCOUNT_PRINCIPAL_FRAGMENT,
             LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT,
+        ),
+        (
+            SCOPE_COMPLETION_GUARD_SIGNATURE_0021,
+            LEGACY_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021,
+            LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+            FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+        ),
+        (
+            SCOPE_COMPLETION_GUARD_SIGNATURE_0021,
+            FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021,
+            FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+            LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
         ),
     }
     if (

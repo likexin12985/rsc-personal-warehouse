@@ -287,7 +287,9 @@ class OpeningPhysicalObservationIn(_StrictRequestModel):
 
 
 class OpeningStocktakeCountIn(_StrictRequestModel):
-    physical_observations: tuple[OpeningPhysicalObservationIn, ...] = ()
+    physical_observations: tuple[OpeningPhysicalObservationIn, ...] = Field(
+        default=(), max_length=10000
+    )
     zero_confirmed: StrictBool = False
 
 

@@ -636,6 +636,7 @@ def _write_draft(
         },
         request_id=_request_reference(trace_request_id),
         occurred_at=now,
+        created_at=now,
     )
     db.flush()
     return result
@@ -976,6 +977,7 @@ def _start_stocktake_task_impl(
         },
         request_id=_request_reference(trace_id),
         occurred_at=now,
+        created_at=now,
     )
     db.flush()
     authorization_sha256 = _start_authorization_sha256(

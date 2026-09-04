@@ -27,7 +27,7 @@ import uuid
 import psycopg
 from psycopg import sql
 import pytest
-from sqlalchemy import URL, create_engine, func, select, text
+from sqlalchemy import URL, create_engine, event, func, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
@@ -49,6 +49,7 @@ STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION = "20260903_0050"
 STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION = "20260903_0051"
 OPENING_TERMINAL_GUARD_EXECUTION_REVISION = "20260903_0052"
 HEAD_REVISION = OPENING_TERMINAL_GUARD_EXECUTION_REVISION
+OPENING_BACKFILL_DATABASE_PREFIX = f"{DATABASE_NAME}_0052_backfill_"
 RLS_BINDING_TABLE = "oam_sync_scope_bindings"
 RLS_READY_FUNCTION = "public.rsc_oam_runtime_binding_ready_0044()"
 EDGE_RECEIVER_ROLE = "edge_inbox"
@@ -325,8 +326,38 @@ def _connection_parameters(*, role: str, password: str) -> dict[str, object]:
     }
 
 
-def _sqlalchemy_url(*, role: str, password: str) -> URL:
+def _isolated_connection_parameters(
+    *,
+    database_name: str,
+    role: str,
+    password: str,
+) -> dict[str, object]:
+    suffix = database_name.removeprefix(OPENING_BACKFILL_DATABASE_PREFIX)
+    if (
+        not database_name.startswith(OPENING_BACKFILL_DATABASE_PREFIX)
+        or not suffix
+        or not suffix.isalnum()
+    ):
+        pytest.fail("PostgreSQL 16 gate rejected an unreviewed isolated database")
     parameters = _connection_parameters(role=role, password=password)
+    parameters["dbname"] = database_name
+    return parameters
+
+
+def _sqlalchemy_url(
+    *,
+    role: str,
+    password: str,
+    database_name: str = DATABASE_NAME,
+) -> URL:
+    if database_name == DATABASE_NAME:
+        parameters = _connection_parameters(role=role, password=password)
+    else:
+        parameters = _isolated_connection_parameters(
+            database_name=database_name,
+            role=role,
+            password=password,
+        )
     return URL.create(
         "postgresql+psycopg",
         username=str(parameters["user"]),
@@ -498,10 +529,13 @@ def _bootstrap_roles() -> None:
             )
 
 
-def _migration_environment() -> dict[str, str]:
+def _migration_environment(
+    *, database_name: str = DATABASE_NAME
+) -> dict[str, str]:
     migration_url = _sqlalchemy_url(
         role="star_oam_migrator",
         password=_role_password("star_oam_migrator"),
+        database_name=database_name,
     )
     environment = os.environ.copy()
     environment.update(
@@ -518,12 +552,14 @@ def _migration_environment() -> dict[str, str]:
 
 
 def _run_alembic(
-    *arguments: str, expect_success: bool = True
+    *arguments: str,
+    expect_success: bool = True,
+    database_name: str = DATABASE_NAME,
 ) -> subprocess.CompletedProcess[str]:
     completed = subprocess.run(
         [sys.executable, "-m", "alembic", "-c", "alembic.ini", *arguments],
         cwd=CLOUD_ROOT,
-        env=_migration_environment(),
+        env=_migration_environment(database_name=database_name),
         capture_output=True,
         text=True,
         timeout=180,
@@ -658,6 +694,151 @@ def _current_revision() -> str:
         with connection.cursor() as cursor:
             cursor.execute("SELECT version_num FROM alembic_version")
             return cursor.fetchone()[0]
+
+
+def _isolated_current_revision(database_name: str) -> str:
+    with psycopg.connect(
+        **_isolated_connection_parameters(
+            database_name=database_name,
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+        )
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT version_num FROM alembic_version")
+            return cursor.fetchone()[0]
+
+
+def _restore_main_projector_connect() -> None:
+    with psycopg.connect(**_admin_parameters(), autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                sql.SQL(
+                    "GRANT CONNECT ON DATABASE {} TO star_oam_projector"
+                ).format(sql.Identifier(DATABASE_NAME))
+            )
+
+
+def _create_opening_backfill_database() -> str:
+    database_name = (
+        f"{OPENING_BACKFILL_DATABASE_PREFIX}{uuid.uuid4().hex[:12]}"
+    )
+    created = False
+    with psycopg.connect(**_admin_parameters(), autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                sql.SQL("REVOKE CONNECT ON DATABASE {} FROM star_oam_projector").format(
+                    sql.Identifier(DATABASE_NAME)
+                )
+            )
+            try:
+                cursor.execute(
+                    sql.SQL("CREATE DATABASE {} OWNER star_oam_migrator").format(
+                        sql.Identifier(database_name)
+                    )
+                )
+                created = True
+                cursor.execute(
+                    sql.SQL("REVOKE ALL ON DATABASE {} FROM PUBLIC").format(
+                        sql.Identifier(database_name)
+                    )
+                )
+                cursor.execute(
+                    sql.SQL(
+                        "GRANT CONNECT ON DATABASE {} TO "
+                        "star_oam_migrator, star_oam_api, star_oam_backup, "
+                        "star_oam_projector"
+                    ).format(sql.Identifier(database_name))
+                )
+            except BaseException as creation_error:
+                cleanup_error: BaseException | None = None
+                try:
+                    if created:
+                        cursor.execute(
+                            sql.SQL(
+                                "DROP DATABASE {} WITH (FORCE)"
+                            ).format(sql.Identifier(database_name))
+                        )
+                except BaseException as exc:
+                    cleanup_error = exc
+                finally:
+                    try:
+                        _restore_main_projector_connect()
+                    except BaseException as restoration_error:
+                        if cleanup_error is not None:
+                            raise restoration_error from cleanup_error
+                        raise restoration_error from creation_error
+                if cleanup_error is not None:
+                    raise cleanup_error from creation_error
+                raise
+
+    isolated_admin = _admin_parameters()
+    isolated_admin["dbname"] = database_name
+    try:
+        with psycopg.connect(
+            **isolated_admin,
+            autocommit=True,
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "ALTER SCHEMA public OWNER TO star_oam_migrator"
+                )
+                cursor.execute(
+                    "REVOKE ALL ON SCHEMA public FROM PUBLIC, star_oam_api, "
+                    "star_oam_backup, star_oam_projector, star_oam_edge"
+                )
+                cursor.execute(
+                    "GRANT USAGE, CREATE ON SCHEMA public "
+                    "TO star_oam_migrator"
+                )
+                cursor.execute(
+                    "GRANT USAGE ON SCHEMA public TO star_oam_api, "
+                    "star_oam_backup, star_oam_projector"
+                )
+    except BaseException as setup_error:
+        try:
+            _drop_opening_backfill_database(database_name)
+        except BaseException as cleanup_error:
+            raise cleanup_error from setup_error
+        raise
+    return database_name
+
+
+def _drop_opening_backfill_database(database_name: str) -> None:
+    _isolated_connection_parameters(
+        database_name=database_name,
+        role="star_oam_migrator",
+        password=_role_password("star_oam_migrator"),
+    )
+    cleanup_error: BaseException | None = None
+    try:
+        with psycopg.connect(
+            **_admin_parameters(), autocommit=True
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pg_catalog.pg_terminate_backend(pid) "
+                    "FROM pg_catalog.pg_stat_activity "
+                    "WHERE datname = %s "
+                    "AND pid <> pg_catalog.pg_backend_pid()",
+                    (database_name,),
+                )
+                cursor.fetchall()
+                cursor.execute(
+                    sql.SQL(
+                        "DROP DATABASE IF EXISTS {} WITH (FORCE)"
+                    ).format(sql.Identifier(database_name))
+                )
+    except BaseException as exc:
+        cleanup_error = exc
+        raise
+    finally:
+        try:
+            _restore_main_projector_connect()
+        except BaseException as restoration_error:
+            if cleanup_error is not None:
+                raise restoration_error from cleanup_error
+            raise
 
 
 def _table_exists(table_name: str) -> bool:
@@ -4869,11 +5050,11 @@ def _assert_0052_opening_terminal_catalog(
         STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION
     )
     assert migration.PREVIOUS_SCHEMA_REVISION == migration.down_revision
-    assert len(migration.PERSISTENT_FUNCTION_SIGNATURES) == 6
+    assert len(migration.PERSISTENT_FUNCTION_SIGNATURES) == 7
     assert len(migration.HEAD_ONLY_FUNCTION_CATALOG) == 10
     assert len(migration.INHERITED_RECONCILIATION_FUNCTION_CATALOG) == 3
     assert len(migration.TRIGGER_CATALOG) == 12
-    assert len(migration.REVIEW_GUARD_TRIGGER_CATALOG) == 5
+    assert len(migration.REVIEW_GUARD_TRIGGER_CATALOG) == 6
     assert len(migration.INHERITED_RECONCILIATION_TRIGGER_CATALOG) == 6
     assert len(migration.OPENING_0052_TRIGGER_CATALOG) == 20
     assert len(migration.GRAPH_CLOSURE_TRIGGER_CATALOG) == 15
@@ -4938,6 +5119,24 @@ def _assert_0052_opening_terminal_catalog(
             False,
             None,
             migration.REVIEW_IMMUTABLE_BODY_SHA256,
+            False,
+        ),
+        (
+            migration.SCOPE_COMPLETION_GUARD_SIGNATURE_0021,
+            migration.SCOPE_COMPLETION_GUARD_FUNCTION_0021,
+            "trigger",
+            "plpgsql",
+            "v",
+            (),
+            (),
+            True,
+            False,
+            (migration.FIXED_SEARCH_PATH,),
+            (
+                migration.FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
+                if hardened
+                else migration.LEGACY_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
+            ),
             False,
         ),
         (
@@ -5203,6 +5402,19 @@ def _assert_0052_opening_terminal_catalog(
         if hardened
         else migration.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT
     ) in sources[migration.ACCOUNT_FUNCTION]
+    scope_completion_source = sources[
+        migration.SCOPE_COMPLETION_GUARD_FUNCTION_0021
+    ]
+    assert (
+        migration.FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021
+        if hardened
+        else migration.LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021
+    ) in scope_completion_source
+    assert (
+        migration.LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021
+        if hardened
+        else migration.FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021
+    ) not in scope_completion_source
 
     expected_trigger_catalog = [
         *(
@@ -5945,6 +6157,623 @@ def _assert_0052_startup_rejects_catalog_drift(api_engine) -> None:
     _validate_runtime_security(api_engine)
 
 
+def _seed_0051_observation_only_completion(
+    database_name: str,
+    *,
+    mutate_policy_after_completion: bool,
+) -> dict[str, object]:
+    from app.formal_access import load_formal_principal
+    from app.formal_services.opening_stocktake import (
+        INVENTORY_LEDGER_HEAD_ID,
+        OpeningStocktakeScopeInput,
+        StartOpeningStocktakeCommand,
+        start_opening_stocktake,
+    )
+    from app.formal_services.opening_stocktake_count import (
+        OpeningPhysicalObservationInput,
+        SubmitOpeningStocktakeScopeCountCommand,
+        submit_opening_stocktake_scope_count,
+    )
+    from app.foundation_models import (
+        AuditChainHead,
+        Permission,
+        Role,
+        SourceSystem,
+    )
+    from app.inventory_models import (
+        InventoryLedgerHead,
+        MaterialInventoryPolicy,
+        StockAccount,
+        StockBalance,
+        StockLocation,
+    )
+    from app.stocktake_models import (
+        FormalStocktakeScope,
+        StocktakeCountLine,
+        StocktakeCountObservation,
+        StocktakeScopeCountCompletion,
+    )
+    import test_opening_stocktake_service as opening_fixtures
+
+    _run_alembic(
+        "upgrade",
+        STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION,
+        database_name=database_name,
+    )
+    assert _isolated_current_revision(database_name) == (
+        STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION
+    )
+
+    migrator_parameters = _isolated_connection_parameters(
+        database_name=database_name,
+        role="star_oam_migrator",
+        password=_role_password("star_oam_migrator"),
+    )
+    with psycopg.connect(**migrator_parameters) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "ALTER TABLE public.stocktake_scope_count_completions "
+                "ADD COLUMN request_jsonb jsonb, "
+                "ADD COLUMN request_resolution_jsonb jsonb"
+            )
+
+    engine = create_engine(
+        _sqlalchemy_url(
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+            database_name=database_name,
+        ),
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=5,
+    )
+    original_fixture_now = opening_fixtures.NOW
+    try:
+        with Session(engine, expire_on_commit=False) as session:
+            fixture_now = session.scalar(select(func.now()))
+            assert (
+                isinstance(fixture_now, datetime)
+                and fixture_now.tzinfo is not None
+            )
+            opening_fixtures.NOW = fixture_now
+
+            roles = {
+                role.code: role
+                for role in session.scalars(
+                    select(Role).where(
+                        Role.code.in_(("admin", "provincial_manager"))
+                    )
+                )
+            }
+            assert set(roles) == {"admin", "provincial_manager"}
+            assert {
+                (permission.resource, permission.action)
+                for permission in session.scalars(
+                    select(Permission).where(
+                        Permission.resource == "stocktake",
+                        Permission.action.in_(("manage", "count")),
+                        Permission.field_code == "",
+                    )
+                )
+            } == {("stocktake", "manage"), ("stocktake", "count")}
+
+            headquarters = opening_fixtures._organization(
+                session,
+                f"PG16-HQ-{uuid.uuid4().hex[:8]}",
+                "PG16 0051 回填总部",
+                "headquarters",
+            )
+            region = opening_fixtures._organization(
+                session,
+                f"PG16-REG-{uuid.uuid4().hex[:8]}",
+                "PG16 0051 回填区域",
+                "region_company",
+                parent=headquarters,
+            )
+            source = session.scalar(
+                select(SourceSystem)
+                .where(func.lower(SourceSystem.code) == "oam")
+                .order_by(SourceSystem.id)
+                .limit(1)
+            )
+            if source is None:
+                source = SourceSystem(
+                    id=uuid.uuid4(),
+                    code="OAM",
+                    name="PG16 0051 回填只读控制源",
+                    mode="read_only",
+                    enabled=True,
+                    configuration_jsonb={},
+                    created_at=fixture_now - timedelta(days=2),
+                    updated_at=fixture_now - timedelta(days=2),
+                )
+                session.add(source)
+                session.flush()
+            assert (source.mode, source.enabled) == ("read_only", True)
+            manager = opening_fixtures._user_with_role(
+                session,
+                region,
+                roles["provincial_manager"],
+                "organization",
+                str(region.id),
+                "PG16 0051 回填区域负责人",
+            )
+            material = opening_fixtures._material(session, source, "serial")
+            location = StockLocation(
+                id=uuid.uuid4(),
+                code=f"PG16-0051-WH-{uuid.uuid4().hex[:10]}",
+                name="PG16 0051 回填区域仓",
+                location_type="region",
+                owner_org_id=region.id,
+                parent_id=None,
+                custodian_person_id=None,
+                status="active",
+                created_at=fixture_now - timedelta(days=1),
+                updated_at=fixture_now - timedelta(days=1),
+            )
+            session.add(location)
+            session.flush()
+            account = StockAccount(
+                id=uuid.uuid4(),
+                owner_org_id=region.id,
+                custodian_person_id=None,
+                location_id=location.id,
+                material_id=material.id,
+                condition_code="new",
+                availability_bucket="available",
+                lot_id=None,
+                created_at=fixture_now - timedelta(days=1),
+                updated_at=fixture_now - timedelta(days=1),
+            )
+            session.add(account)
+            session.flush()
+            session.add(
+                StockBalance(
+                    stock_account_id=account.id,
+                    quantity=Decimal("0"),
+                    ledger_cursor=0,
+                    version=1,
+                    updated_at=fixture_now - timedelta(days=1),
+                )
+            )
+            assert session.get(
+                InventoryLedgerHead,
+                INVENTORY_LEDGER_HEAD_ID,
+            ) is not None
+            assert session.scalar(
+                select(AuditChainHead).where(
+                    AuditChainHead.stream_key == "inventory"
+                )
+            ) is not None
+
+            control = opening_fixtures._install_control_sync(
+                session,
+                source=source,
+                region=region,
+                material=material,
+                rows=(
+                    {
+                        "external_business_key": (
+                            f"PG16-0051-CONTROL-{uuid.uuid4().hex}"
+                        ),
+                        "material_id": material.id,
+                        "condition_code": "new",
+                        "control_qty": Decimal("0"),
+                        "mapping_status": "resolved",
+                        "mapping_note": "",
+                    },
+                ),
+            )
+
+            policy = session.scalar(
+                select(MaterialInventoryPolicy).where(
+                    MaterialInventoryPolicy.material_id == material.id
+                )
+            )
+            assert policy is not None
+            session.commit()
+
+            started = start_opening_stocktake(
+                session,
+                actor=load_formal_principal(
+                    session,
+                    manager.user.id,
+                    now=session.scalar(select(func.now())),
+                ),
+                command=StartOpeningStocktakeCommand(
+                    task_no=f"PG16-0051-{uuid.uuid4().hex[:16]}",
+                    region_org_id=region.id,
+                    control_source_system_id=source.id,
+                    control_sync_run_id=control.sync_run.id,
+                    control_sync_scope_key=control.sync_run.scope_key,
+                    scopes=(
+                        OpeningStocktakeScopeInput(
+                            owner_org_id=region.id,
+                            location_id=location.id,
+                            assignee_user_id=manager.user.id,
+                            freeze_mode="hard",
+                        ),
+                    ),
+                    control_lines=control.lines,
+                    blind_count=True,
+                    deadline=fixture_now + timedelta(days=2),
+                    note="PG16 0051 observation-only migration fixture",
+                ),
+                idempotency_key=(
+                    f"pg16-0052-legacy-start-{uuid.uuid4().hex}"
+                ),
+                request_id=f"pg16-0052-legacy-start-{uuid.uuid4().hex}",
+            )
+            session.commit()
+            scope_id = session.scalar(
+                select(FormalStocktakeScope.id).where(
+                    FormalStocktakeScope.task_id == started.task_id
+                )
+            )
+            assert isinstance(scope_id, uuid.UUID)
+
+            missing_serial = (
+                "PG16-0052-LEGACY-MISSING-SERIAL-"
+                f"{uuid.uuid4().hex[:12].upper()}"
+            )
+            # 0051 is the broken predecessor under test: its 0022 task caller
+            # rejects every legitimate counting -> submitted timestamp write.
+            # Disable only that exact legacy UPDATE trigger while producing the
+            # otherwise fully guarded historical graph, then restore ALWAYS
+            # before presenting the database to the real 0052 migration.
+            with psycopg.connect(
+                **migrator_parameters,
+                autocommit=True,
+            ) as guard_connection:
+                with guard_connection.cursor() as guard_cursor:
+                    guard_cursor.execute(
+                        "ALTER TABLE public.stocktake_tasks DISABLE TRIGGER "
+                        "trg_stocktake_tasks_opening_commit_0022"
+                    )
+            try:
+                count_result = submit_opening_stocktake_scope_count(
+                    session,
+                    actor=load_formal_principal(
+                        session,
+                        manager.user.id,
+                        now=session.scalar(select(func.now())),
+                    ),
+                    command=SubmitOpeningStocktakeScopeCountCommand(
+                        task_id=started.task_id,
+                        round_id=started.initial_round_id,
+                        scope_id=scope_id,
+                        physical_observations=(
+                            OpeningPhysicalObservationInput(
+                                material_identifier_raw=material.sku_code,
+                                material_identifier_type="sku_code",
+                                condition_code="new",
+                                availability_bucket="available",
+                                serial_no_raw=missing_serial,
+                                serial_identifier_type="serial_no",
+                                counted_qty=Decimal("1"),
+                                count_method="manual",
+                                remark="0051 legacy observation-only backfill",
+                            ),
+                        ),
+                        zero_confirmed=False,
+                    ),
+                    idempotency_key=(
+                        f"pg16-0052-legacy-count-{uuid.uuid4().hex}"
+                    ),
+                    request_id=f"pg16-0052-legacy-count-{uuid.uuid4().hex}",
+                )
+                assert count_result.round_sealed is True
+                assert count_result.has_pending_verification is True
+                session.commit()
+            finally:
+                session.rollback()
+                with psycopg.connect(
+                    **migrator_parameters,
+                    autocommit=True,
+                ) as guard_connection:
+                    with guard_connection.cursor() as guard_cursor:
+                        guard_cursor.execute(
+                            "ALTER TABLE public.stocktake_tasks ENABLE ALWAYS "
+                            "TRIGGER trg_stocktake_tasks_opening_commit_0022"
+                        )
+
+            completion = session.scalar(select(StocktakeScopeCountCompletion))
+            observation = session.scalar(select(StocktakeCountObservation))
+            assert completion is not None
+            assert observation is not None
+            assert observation.verification_status == "pending_verification"
+            assert observation.material_id == material.id
+            assert observation.serial_id is None
+            assert session.scalar(
+                select(func.count()).select_from(StocktakeCountLine)
+            ) == 0
+            original_request = completion.request_jsonb
+            original_resolution = completion.request_resolution_jsonb
+            assert original_request is not None
+            assert original_resolution is not None
+            assert original_resolution["items"][0]["target_type"] == (
+                "observation"
+            )
+            assert original_resolution["items"][0]["serial_alias_keys"] == [
+                missing_serial.lower()
+            ]
+
+            if mutate_policy_after_completion:
+                session.execute(
+                    text(
+                        "UPDATE public.material_inventory_policies "
+                        "SET updated_at = :updated_at WHERE id = :policy_id"
+                    ),
+                    {
+                        "updated_at": completion.completed_at
+                        + timedelta(seconds=1),
+                        "policy_id": policy.id,
+                    },
+                )
+                session.commit()
+                assert session.scalar(
+                    select(MaterialInventoryPolicy.updated_at).where(
+                        MaterialInventoryPolicy.id == policy.id
+                    )
+                ) > completion.completed_at
+
+            evidence = {
+                "completion_id": completion.id,
+                "expected_request_jsonb": original_request,
+                "expected_request_resolution_jsonb": original_resolution,
+                "observation_id": observation.id,
+                "policy_id": policy.id,
+                "request_sha256": completion.request_sha256,
+                "serial_alias_key": missing_serial.lower(),
+                "task_id": started.task_id,
+            }
+    finally:
+        opening_fixtures.NOW = original_fixture_now
+        engine.dispose()
+
+    with psycopg.connect(**migrator_parameters) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "ALTER TABLE public.stocktake_scope_count_completions "
+                "DROP COLUMN request_resolution_jsonb, "
+                "DROP COLUMN request_jsonb"
+            )
+            cursor.execute(
+                "SELECT pg_catalog.count(*) "
+                "FROM public.stocktake_scope_count_completions "
+                "WHERE id = %s",
+                (evidence["completion_id"],),
+            )
+            assert cursor.fetchone() == (1,)
+    return evidence
+
+
+def _assert_0052_isolated_legacy_catalog_state(
+    database_name: str,
+    *,
+    installed: bool,
+) -> None:
+    migration = _load_opening_terminal_guard_execution_migration_0052()
+    parameters = _isolated_connection_parameters(
+        database_name=database_name,
+        role="star_oam_migrator",
+        password=_role_password("star_oam_migrator"),
+    )
+    with psycopg.connect(**parameters) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT attribute.attname "
+                "FROM pg_catalog.pg_attribute AS attribute "
+                "WHERE attribute.attrelid = "
+                "'public.stocktake_scope_count_completions'::regclass "
+                "AND attribute.attnum > 0 AND NOT attribute.attisdropped "
+                "AND attribute.attname = ANY(%s) ORDER BY attribute.attname",
+                (
+                    [
+                        migration.COUNT_REQUEST_COLUMN,
+                        migration.COUNT_REQUEST_RESOLUTION_COLUMN,
+                    ],
+                ),
+            )
+            columns = [row[0] for row in cursor.fetchall()]
+            function_presence = []
+            for signature in migration.HEAD_ONLY_FUNCTION_SIGNATURES:
+                cursor.execute(
+                    "SELECT pg_catalog.to_regprocedure(%s) IS NOT NULL",
+                    (signature,),
+                )
+                function_presence.append(cursor.fetchone()[0])
+            persistent_function_state = {}
+            for signature in (
+                migration.REVIEW_COMPLETION_SIGNATURE,
+                migration.COMMIT_SIGNATURE,
+                migration.ACCOUNT_SIGNATURE,
+            ):
+                cursor.execute(
+                    "SELECT function_row.prosecdef, function_row.proconfig, "
+                    "pg_catalog.encode(pg_catalog.sha256("
+                    "pg_catalog.convert_to(function_row.prosrc, 'UTF8')), "
+                    "'hex') FROM pg_catalog.pg_proc AS function_row "
+                    "WHERE function_row.oid = pg_catalog.to_regprocedure(%s)",
+                    (signature,),
+                )
+                persistent_function_state[signature] = cursor.fetchone()
+            trigger_names = [
+                row[1] for row in migration.OPENING_0052_TRIGGER_CATALOG
+            ]
+            cursor.execute(
+                "SELECT trigger_row.tgname "
+                "FROM pg_catalog.pg_trigger AS trigger_row "
+                "WHERE NOT trigger_row.tgisinternal "
+                "AND trigger_row.tgname = ANY(%s) "
+                "ORDER BY trigger_row.tgname",
+                (trigger_names,),
+            )
+            installed_trigger_names = [row[0] for row in cursor.fetchall()]
+
+    expected_columns = sorted(
+        [
+            migration.COUNT_REQUEST_COLUMN,
+            migration.COUNT_REQUEST_RESOLUTION_COLUMN,
+        ]
+    )
+    assert columns == (expected_columns if installed else [])
+    assert function_presence == (
+        [True] * len(migration.HEAD_ONLY_FUNCTION_SIGNATURES)
+        if installed
+        else [False] * len(migration.HEAD_ONLY_FUNCTION_SIGNATURES)
+    )
+    assert persistent_function_state == {
+        migration.REVIEW_COMPLETION_SIGNATURE: (
+            False,
+            [migration.FIXED_SEARCH_PATH] if installed else None,
+            migration.REVIEW_COMPLETION_BODY_SHA256,
+        ),
+        migration.COMMIT_SIGNATURE: (
+            installed,
+            [migration.FIXED_SEARCH_PATH],
+            (
+                migration.FIXED_COMMIT_BODY_SHA256
+                if installed
+                else migration.LEGACY_COMMIT_BODY_SHA256
+            ),
+        ),
+        migration.ACCOUNT_SIGNATURE: (
+            installed,
+            [migration.FIXED_SEARCH_PATH],
+            (
+                migration.FIXED_ACCOUNT_BODY_SHA256
+                if installed
+                else migration.LEGACY_ACCOUNT_BODY_SHA256
+            ),
+        ),
+    }
+    assert installed_trigger_names == (
+        sorted(trigger_names) if installed else []
+    )
+
+
+def _assert_0052_legacy_backfill_and_atomic_rejection() -> None:
+    migration = _load_opening_terminal_guard_execution_migration_0052()
+
+    successful_database = _create_opening_backfill_database()
+    try:
+        success = _seed_0051_observation_only_completion(
+            successful_database,
+            mutate_policy_after_completion=False,
+        )
+        _assert_0052_isolated_legacy_catalog_state(
+            successful_database,
+            installed=False,
+        )
+        _run_alembic(
+            "upgrade",
+            HEAD_REVISION,
+            database_name=successful_database,
+        )
+        assert _isolated_current_revision(successful_database) == HEAD_REVISION
+        _assert_0052_isolated_legacy_catalog_state(
+            successful_database,
+            installed=True,
+        )
+        parameters = _isolated_connection_parameters(
+            database_name=successful_database,
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+        )
+        with psycopg.connect(**parameters) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT request_jsonb, request_resolution_jsonb "
+                    "FROM public.stocktake_scope_count_completions "
+                    "WHERE id = %s",
+                    (success["completion_id"],),
+                )
+                request_document, resolution_document = cursor.fetchone()
+        assert request_document == success["expected_request_jsonb"]
+        assert resolution_document == success[
+            "expected_request_resolution_jsonb"
+        ]
+        assert request_document["schema"] == (
+            "cloud_oam.opening_stocktake.scope_count_request.v1"
+        )
+        assert request_document["physical_observations"][0][
+            "serial_no_raw"
+        ].lower() == success["serial_alias_key"]
+        assert resolution_document["request_sha256"] == success[
+            "request_sha256"
+        ]
+        assert len(resolution_document["items"]) == 1
+        resolution_item = resolution_document["items"][0]
+        assert resolution_item["request_ordinal"] == 1
+        assert resolution_item["serial_alias_keys"] == [
+            success["serial_alias_key"]
+        ]
+        assert resolution_item["target_id"] == str(success["observation_id"])
+        assert resolution_item["target_type"] == "observation"
+    finally:
+        _drop_opening_backfill_database(successful_database)
+
+    rejected_database = _create_opening_backfill_database()
+    try:
+        rejected = _seed_0051_observation_only_completion(
+            rejected_database,
+            mutate_policy_after_completion=True,
+        )
+        _assert_0052_isolated_legacy_catalog_state(
+            rejected_database,
+            installed=False,
+        )
+        blocked = _run_alembic(
+            "upgrade",
+            HEAD_REVISION,
+            expect_success=False,
+            database_name=rejected_database,
+        )
+        output = blocked.stdout + blocked.stderr
+        assert (
+            migration.REQUEST_EVIDENCE_ERROR in output
+            or migration.EXISTING_ROWS_ERROR in output
+        )
+        assert _isolated_current_revision(rejected_database) == (
+            STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION
+        )
+        _assert_0052_isolated_legacy_catalog_state(
+            rejected_database,
+            installed=False,
+        )
+        parameters = _isolated_connection_parameters(
+            database_name=rejected_database,
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+        )
+        with psycopg.connect(**parameters) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT completion.request_sha256, "
+                    "observation.id IS NOT NULL, "
+                    "policy.updated_at > completion.completed_at "
+                    "FROM public.stocktake_scope_count_completions "
+                    "AS completion "
+                    "LEFT JOIN public.stocktake_count_observations "
+                    "AS observation ON observation.id = %s "
+                    "JOIN public.material_inventory_policies AS policy "
+                    "ON policy.id = %s WHERE completion.id = %s",
+                    (
+                        rejected["observation_id"],
+                        rejected["policy_id"],
+                        rejected["completion_id"],
+                    ),
+                )
+                assert cursor.fetchone() == (
+                    rejected["request_sha256"],
+                    True,
+                    True,
+                )
+    finally:
+        _drop_opening_backfill_database(rejected_database)
+
+
 def _assert_0052_empty_graph_downgrade_and_reupgrade() -> None:
     assert _current_revision() == HEAD_REVISION
     migration = _load_opening_terminal_guard_execution_migration_0052()
@@ -6146,7 +6975,16 @@ def _assert_0052_raw_opening_task_insert_rejected(
             )
             assert cursor.rowcount == 1
             with pytest.raises(psycopg.Error) as failure:
-                connection.commit()
+                # The inherited 0047 deferred guard also rejects this forged
+                # row at COMMIT, but reports its own error contract.  Force
+                # the exact 0052 constraint so this assertion proves the new
+                # opening-insert guard rather than whichever deferred trigger
+                # PostgreSQL happens to evaluate first.
+                cursor.execute(
+                    sql.SQL("SET CONSTRAINTS {} IMMEDIATE").format(
+                        sql.Identifier(migration.INSERT_GUARD_TRIGGER)
+                    )
+                )
             assert failure.value.sqlstate == "23514"
             assert migration.OPENING_INSERT_ERROR in str(failure.value)
         connection.rollback()
@@ -10408,6 +11246,65 @@ def _seed_0047_stocktake_inventory(
                 material_external_object.current_version_id
                 == material_external_version.id
             )
+
+            concurrency_material_id = uuid.uuid4()
+            concurrency_material_sku_code = (
+                f"PG16-CONCURRENT-SKU-{concurrency_material_id.hex[:16].upper()}"
+            )
+            concurrency_material_version_id = uuid.uuid4()
+            concurrency_material_payload = {
+                "baseUnit": "件",
+                "materialCode": concurrency_material_sku_code,
+                "materialName": "PostgreSQL 16 并发别名物料",
+                "specification": "",
+                "status": "active",
+            }
+            concurrency_material_source = ExternalObject(
+                id=uuid.uuid4(),
+                source_system_id=oam_source.id,
+                entity_type="material",
+                external_id=(
+                    "PG16-CONCURRENT-MATERIAL-"
+                    f"{concurrency_material_id.hex}"
+                ),
+                current_version_id=concurrency_material_version_id,
+                deleted_at=None,
+                created_at=material_created_at,
+                updated_at=material_created_at,
+            )
+            session.add(concurrency_material_source)
+            session.flush()
+            concurrency_material_version = ExternalObjectVersion(
+                id=concurrency_material_version_id,
+                external_object_id=concurrency_material_source.id,
+                source_version="pg16-concurrent-material-v1",
+                source_updated_at=material_created_at,
+                valid_from=material_created_at,
+                valid_to=None,
+                payload_jsonb=concurrency_material_payload,
+                payload_sha256=_projector_gate_sha256(
+                    concurrency_material_payload
+                ),
+                is_current=True,
+                created_at=material_created_at,
+            )
+            concurrency_material = FormalMaterial(
+                id=concurrency_material_id,
+                external_object_id=concurrency_material_source.id,
+                sku_code=concurrency_material_sku_code,
+                name="PostgreSQL 16 并发别名物料",
+                specification="",
+                base_unit="件",
+                status="active",
+                source_updated_at=material_created_at,
+                created_at=material_created_at,
+                updated_at=material_created_at,
+            )
+            session.add_all(
+                (concurrency_material_version, concurrency_material)
+            )
+            session.flush()
+
             policy = MaterialInventoryPolicy(
                 id=uuid.uuid4(),
                 material_id=material.id,
@@ -10429,6 +11326,33 @@ def _seed_0047_stocktake_inventory(
                 created_at=now - timedelta(days=1),
                 updated_at=now - timedelta(days=1),
             )
+            concurrency_policy = MaterialInventoryPolicy(
+                id=uuid.uuid4(),
+                material_id=concurrency_material.id,
+                tracking_mode="serial",
+                quantity_scale=3,
+                allow_fraction=False,
+                effective_from=now - timedelta(days=1),
+                effective_to=None,
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
+            concurrency_serial = InventorySerial(
+                id=uuid.uuid4(),
+                material_id=concurrency_material.id,
+                serial_no=(
+                    "PG16-CONCURRENT-SERIAL-"
+                    f"{concurrency_material.id.hex[:16].upper()}"
+                ),
+                qr_code=(
+                    "PG16-CONCURRENT-QR-"
+                    f"{concurrency_material.id.hex.upper()}"
+                ),
+                lot_id=None,
+                lifecycle_status="active",
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
             location_id = uuid.uuid4()
             location = StockLocation(
                 id=location_id,
@@ -10442,18 +11366,55 @@ def _seed_0047_stocktake_inventory(
                 created_at=now - timedelta(days=1),
                 updated_at=now - timedelta(days=1),
             )
-            session.add_all((policy, serial, location))
+            concurrency_location_id = uuid.uuid4()
+            concurrency_location = StockLocation(
+                id=concurrency_location_id,
+                code=(
+                    "PG16-CONCURRENT-"
+                    f"{concurrency_location_id.hex[:16].upper()}"
+                ),
+                name="PostgreSQL 16 并发别名隔离仓",
+                location_type="region",
+                owner_org_id=region_org_id,
+                parent_id=None,
+                custodian_person_id=manager_person.id,
+                status="active",
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
+            session.add_all(
+                (
+                    policy,
+                    serial,
+                    location,
+                    concurrency_policy,
+                    concurrency_serial,
+                    concurrency_location,
+                )
+            )
             session.flush()
-            session.add(
-                CustodyAssignment(
-                    id=uuid.uuid4(),
-                    location_id=location.id,
-                    custodian_person_id=manager_person.id,
-                    valid_from=now - timedelta(days=1),
-                    valid_to=None,
-                    handover_case_id=None,
-                    created_at=now - timedelta(days=1),
-                    updated_at=now - timedelta(days=1),
+            session.add_all(
+                (
+                    CustodyAssignment(
+                        id=uuid.uuid4(),
+                        location_id=location.id,
+                        custodian_person_id=manager_person.id,
+                        valid_from=now - timedelta(days=1),
+                        valid_to=None,
+                        handover_case_id=None,
+                        created_at=now - timedelta(days=1),
+                        updated_at=now - timedelta(days=1),
+                    ),
+                    CustodyAssignment(
+                        id=uuid.uuid4(),
+                        location_id=concurrency_location.id,
+                        custodian_person_id=manager_person.id,
+                        valid_from=now - timedelta(days=1),
+                        valid_to=None,
+                        handover_case_id=None,
+                        created_at=now - timedelta(days=1),
+                        updated_at=now - timedelta(days=1),
+                    ),
                 )
             )
             account = StockAccount(
@@ -10468,7 +11429,19 @@ def _seed_0047_stocktake_inventory(
                 created_at=now - timedelta(days=1),
                 updated_at=now - timedelta(days=1),
             )
-            session.add(account)
+            concurrency_account = StockAccount(
+                id=uuid.uuid4(),
+                owner_org_id=region_org_id,
+                custodian_person_id=None,
+                location_id=concurrency_location.id,
+                material_id=concurrency_material.id,
+                condition_code="new",
+                availability_bucket="available",
+                lot_id=None,
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
+            session.add_all((account, concurrency_account))
             session.flush()
 
             control_sync_run_id = uuid.uuid4()
@@ -10627,14 +11600,25 @@ def _seed_0047_stocktake_inventory(
                 "control_scope_key": control_scope_key,
                 "control_source_system_id": oam_source.id,
                 "control_sync_run_id": control_sync_run.id,
+                "concurrency_account_id": concurrency_account.id,
+                "concurrency_location_id": concurrency_location.id,
+                "concurrency_material_id": concurrency_material.id,
+                "concurrency_material_sku_code": concurrency_material.sku_code,
+                "concurrency_serial_id": concurrency_serial.id,
+                "concurrency_serial_no": concurrency_serial.serial_no,
+                "concurrency_serial_qr_code": concurrency_serial.qr_code,
                 "deadline": now + timedelta(days=2),
                 "location_id": location.id,
                 "material_external_object_id": material_external_object.id,
                 "material_external_version_id": material_external_version.id,
                 "material_id": material.id,
+                "material_policy_id": policy.id,
+                "material_sku_code": material.sku_code,
                 "opening_token": location_id.hex,
                 "region_org_id": region_org_id,
                 "serial_id": serial.id,
+                "serial_no": serial.serial_no,
+                "serial_qr_code": serial.qr_code,
             }
     finally:
         migrator_engine.dispose()
@@ -10689,6 +11673,7 @@ def _seed_0047_stocktake_inventory(
         InventoryOpeningEstablishment,
         StocktakeCountLine,
         StocktakeCountObservation,
+        StocktakeCountSerial,
         StocktakeDifference,
         StocktakeDifferenceSetCompletion,
         StocktakeObservationDisposition,
@@ -10833,6 +11818,17 @@ def _seed_0047_stocktake_inventory(
             scope_id=opening_scope_id,
             physical_observations=(
                 OpeningPhysicalObservationInput(
+                    material_identifier_raw=str(
+                        fixture["material_sku_code"]
+                    ),
+                    material_identifier_type="sku_code",
+                    condition_code="new",
+                    availability_bucket="available",
+                    counted_qty=Decimal("1.000"),
+                    count_method="manual",
+                    remark="PG16 0052 已知 SKU 原始请求证据",
+                ),
+                OpeningPhysicalObservationInput(
                     material_identifier_raw=pending_identifier,
                     material_identifier_type="unknown",
                     condition_code="new",
@@ -10974,6 +11970,568 @@ def _seed_0047_stocktake_inventory(
     finally:
         replica_engine.dispose()
 
+    before_resolution_tamper = opening_count_snapshot(api_engine)
+
+    def submit_with_wide_aggregate_overflow() -> None:
+        wide_quantity = Decimal("600000000000000.000")
+        base_command = opening_count_command()
+        wide_command = replace(
+            base_command,
+            physical_observations=tuple(
+                replace(observation, counted_qty=wide_quantity)
+                for observation in base_command.physical_observations
+            ),
+        )
+        assert len(wide_command.physical_observations) == 2
+        assert sum(
+            (
+                observation.counted_qty
+                for observation in wide_command.physical_observations
+            ),
+            start=Decimal("0.000"),
+        ) > Decimal("999999999999999.999")
+        with Session(api_engine, expire_on_commit=False) as session:
+            try:
+                # Model a direct database writer that bypasses only the
+                # service aggregate cap: each persisted row still fits
+                # numeric(18, 3), while their sum deliberately does not.
+                with patch.object(
+                    opening_count_service,
+                    "_require_aggregate_quantity",
+                    return_value=Decimal("999999999999999.999"),
+                ):
+                    submit_opening_stocktake_scope_count(
+                        session,
+                        actor=current_principal(session, assignee_user_id),
+                        command=wide_command,
+                        idempotency_key=(
+                            "pg16-opening-count-wide-aggregate-"
+                            f"{opening_token}"
+                        ),
+                        request_id=(
+                            "trace-pg16-opening-count-wide-aggregate-"
+                            f"{opening_token}"
+                        ),
+                    )
+                session.commit()
+            finally:
+                session.rollback()
+
+    with pytest.raises(
+        SanitizedPostgreSQLDiagnosticError
+    ) as wide_aggregate_overflow:
+        _reveal_pg16_service_database_error(
+            api_engine,
+            submit_with_wide_aggregate_overflow,
+        )
+    assert wide_aggregate_overflow.value.diagnostic.sqlstate == "23514"
+    assert wide_aggregate_overflow.value.diagnostic.sqlstate != "22003"
+    assert opening_count_snapshot(api_engine) == before_resolution_tamper
+
+    def submit_with_forged_request_resolution() -> None:
+        tampered = False
+
+        def forge_resolution_before_insert(
+            session: Session,
+            _flush_context,
+            _instances,
+        ) -> None:
+            nonlocal tampered
+            for candidate in tuple(session.new):
+                if not isinstance(candidate, StocktakeScopeCountCompletion):
+                    continue
+                document = candidate.request_resolution_jsonb
+                assert isinstance(document, dict)
+                items = [dict(row) for row in document["items"]]
+                target_index = next(
+                    index
+                    for index, row in enumerate(items)
+                    if row["target_type"] == "count_line"
+                )
+                items[target_index]["resolved_material_id"] = str(uuid.uuid4())
+                candidate.request_resolution_jsonb = {
+                    **document,
+                    "items": items,
+                }
+                tampered = True
+
+        with Session(api_engine, expire_on_commit=False) as session:
+            event.listen(session, "before_flush", forge_resolution_before_insert)
+            try:
+                submit_opening_stocktake_scope_count(
+                    session,
+                    actor=current_principal(session, assignee_user_id),
+                    command=opening_count_command(),
+                    idempotency_key=(
+                        f"pg16-opening-count-forged-resolution-{opening_token}"
+                    ),
+                    request_id=(
+                        "trace-pg16-opening-count-forged-resolution-"
+                        f"{opening_token}"
+                    ),
+                )
+                assert tampered is True
+                session.commit()
+            finally:
+                event.remove(
+                    session,
+                    "before_flush",
+                    forge_resolution_before_insert,
+                )
+                session.rollback()
+
+    with pytest.raises(SanitizedPostgreSQLDiagnosticError) as forged_resolution:
+        _reveal_pg16_service_database_error(
+            api_engine,
+            submit_with_forged_request_resolution,
+        )
+    assert forged_resolution.value.diagnostic.sqlstate == "23514"
+    assert opening_count_snapshot(api_engine) == before_resolution_tamper
+
+    def submit_with_noncanonical_resolution_number(field_name: str) -> None:
+        tampered = False
+
+        def forge_number_before_insert(
+            session: Session,
+            _flush_context,
+            _instances,
+        ) -> None:
+            nonlocal tampered
+            for candidate in tuple(session.new):
+                if not isinstance(candidate, StocktakeScopeCountCompletion):
+                    continue
+                document = candidate.request_resolution_jsonb
+                assert isinstance(document, dict)
+                items = [dict(row) for row in document["items"]]
+                target_index = next(
+                    index
+                    for index, row in enumerate(items)
+                    if row["target_type"] == "count_line"
+                )
+                if field_name == "request_ordinal":
+                    items[target_index]["request_ordinal"] = float(
+                        items[target_index]["request_ordinal"]
+                    )
+                else:
+                    assert field_name == "policy.quantity_scale"
+                    policy_document = dict(items[target_index]["policy"])
+                    policy_document["quantity_scale"] = float(
+                        policy_document["quantity_scale"]
+                    )
+                    items[target_index]["policy"] = policy_document
+                candidate.request_resolution_jsonb = {
+                    **document,
+                    "items": items,
+                }
+                tampered = True
+
+        with Session(api_engine, expire_on_commit=False) as session:
+            event.listen(session, "before_flush", forge_number_before_insert)
+            try:
+                submit_opening_stocktake_scope_count(
+                    session,
+                    actor=current_principal(session, assignee_user_id),
+                    command=opening_count_command(),
+                    idempotency_key=(
+                        "pg16-opening-count-noncanonical-number-"
+                        f"{field_name.replace('.', '-')}-{opening_token}"
+                    ),
+                    request_id=(
+                        "trace-pg16-opening-count-noncanonical-number-"
+                        f"{field_name.replace('.', '-')}-{opening_token}"
+                    ),
+                )
+                assert tampered is True
+                session.commit()
+            finally:
+                event.remove(session, "before_flush", forge_number_before_insert)
+                session.rollback()
+
+    for noncanonical_number_field in (
+        "request_ordinal",
+        "policy.quantity_scale",
+    ):
+        with pytest.raises(
+            SanitizedPostgreSQLDiagnosticError
+        ) as noncanonical_number:
+            _reveal_pg16_service_database_error(
+                api_engine,
+                lambda field_name=noncanonical_number_field: (
+                    submit_with_noncanonical_resolution_number(field_name)
+                ),
+            )
+        assert noncanonical_number.value.diagnostic.sqlstate == "23514"
+        assert opening_count_snapshot(api_engine) == before_resolution_tamper
+
+    def set_material_tracking_mode(tracking_mode: str) -> None:
+        policy_engine = create_engine(
+            _sqlalchemy_url(
+                role="star_oam_migrator",
+                password=_role_password("star_oam_migrator"),
+            ),
+            pool_size=1,
+            max_overflow=0,
+            pool_timeout=5,
+        )
+        try:
+            with policy_engine.begin() as connection:
+                updated = connection.execute(
+                    text(
+                        "UPDATE public.material_inventory_policies "
+                        "SET tracking_mode = :tracking_mode "
+                        "WHERE id = :policy_id"
+                    ),
+                    {
+                        "tracking_mode": tracking_mode,
+                        "policy_id": str(fixture["material_policy_id"]),
+                    },
+                )
+                assert updated.rowcount == 1
+        finally:
+            policy_engine.dispose()
+
+    def submit_cross_table_duplicate_serial() -> None:
+        command = SubmitOpeningStocktakeScopeCountCommand(
+            task_id=started.task_id,
+            round_id=started.initial_round_id,
+            scope_id=opening_scope_id,
+            physical_observations=(
+                OpeningPhysicalObservationInput(
+                    material_identifier_raw=str(
+                        fixture["material_sku_code"]
+                    ),
+                    material_identifier_type="sku_code",
+                    condition_code="new",
+                    availability_bucket="available",
+                    counted_qty=Decimal("1.000"),
+                    serial_no_raw=str(fixture["serial_no"]),
+                    serial_identifier_type="serial_no",
+                    count_method="manual",
+                    remark="PG16 0052 已知账户 SN",
+                ),
+                OpeningPhysicalObservationInput(
+                    material_identifier_raw=str(
+                        fixture["material_sku_code"]
+                    ),
+                    material_identifier_type="sku_code",
+                    condition_code="used",
+                    availability_bucket="available",
+                    counted_qty=Decimal("1.000"),
+                    serial_no_raw=str(fixture["serial_no"]),
+                    serial_identifier_type="serial_no",
+                    count_method="manual",
+                    remark="PG16 0052 无账户观察 SN",
+                ),
+            ),
+            zero_confirmed=False,
+        )
+        with Session(api_engine, expire_on_commit=False) as session:
+            with patch.object(
+                opening_count_service,
+                "_validate_round_serial_uniqueness",
+                return_value=None,
+            ):
+                submit_opening_stocktake_scope_count(
+                    session,
+                    actor=current_principal(session, assignee_user_id),
+                    command=command,
+                    idempotency_key=(
+                        "pg16-opening-count-cross-table-serial-"
+                        f"{opening_token}"
+                    ),
+                    request_id=(
+                        "trace-pg16-opening-count-cross-table-serial-"
+                        f"{opening_token}"
+                    ),
+                )
+            session.commit()
+
+    def submit_cross_alias_duplicate_serial() -> None:
+        command = SubmitOpeningStocktakeScopeCountCommand(
+            task_id=started.task_id,
+            round_id=started.initial_round_id,
+            scope_id=opening_scope_id,
+            physical_observations=(
+                OpeningPhysicalObservationInput(
+                    material_identifier_raw=str(
+                        fixture["material_sku_code"]
+                    ),
+                    material_identifier_type="sku_code",
+                    condition_code="new",
+                    availability_bucket="available",
+                    counted_qty=Decimal("1.000"),
+                    serial_no_raw=str(fixture["serial_no"]),
+                    serial_identifier_type="serial_no",
+                    count_method="manual",
+                    remark="PG16 0052 已知账户 SN 别名",
+                ),
+                OpeningPhysicalObservationInput(
+                    material_identifier_raw=(
+                        f"PG16-UNKNOWN-MATERIAL-{opening_token[:12]}"
+                    ),
+                    material_identifier_type="unknown",
+                    condition_code="used",
+                    availability_bucket="available",
+                    counted_qty=Decimal("1.000"),
+                    serial_no_raw=str(fixture["serial_qr_code"]).lower(),
+                    serial_identifier_type="qr_code",
+                    count_method="manual",
+                    remark="PG16 0052 pending QR 大小写别名",
+                ),
+            ),
+            zero_confirmed=False,
+        )
+        with Session(api_engine, expire_on_commit=False) as session:
+            with patch.object(
+                opening_count_service,
+                "_validate_round_serial_uniqueness",
+                return_value=None,
+            ):
+                submit_opening_stocktake_scope_count(
+                    session,
+                    actor=current_principal(session, assignee_user_id),
+                    command=command,
+                    idempotency_key=(
+                        "pg16-opening-count-cross-alias-serial-"
+                        f"{opening_token}"
+                    ),
+                    request_id=(
+                        "trace-pg16-opening-count-cross-alias-serial-"
+                        f"{opening_token}"
+                    ),
+                )
+            session.commit()
+
+    def assert_cross_alias_writers_serialize(
+        *,
+        isolation_task_id: uuid.UUID,
+        isolation_round_id: uuid.UUID,
+        isolation_scope_id: uuid.UUID,
+    ) -> None:
+        migration = _load_opening_terminal_guard_execution_migration_0052()
+        api_parameters = _connection_parameters(
+            role="star_oam_api",
+            password=_role_password("star_oam_api"),
+        )
+        observation_id = uuid.uuid4()
+        second_started = threading.Event()
+        second_inserted = threading.Event()
+        second_pid: list[int] = []
+        second_failures: list[tuple[str | None, str]] = []
+
+        def insert_competing_observation_row(
+            cursor: psycopg.Cursor,
+            *,
+            competing_observation_id: uuid.UUID,
+        ) -> None:
+            cursor.execute(
+                "INSERT INTO public.stocktake_count_observations ("
+                "id, task_id, round_id, scope_id, observation_no, "
+                "owner_org_id, location_id, "
+                "custodian_person_id_snapshot, material_id, "
+                "material_identifier_raw, material_identifier_type, "
+                "condition_code, availability_bucket, lot_id, "
+                "lot_no_raw, serial_id, serial_no_raw, "
+                "serial_identifier_type, counted_qty, "
+                "verification_status, count_method, reason_code, "
+                "remark, counted_by_user_id, counted_at, "
+                "dimension_sha256, request_sha256, "
+                "idempotency_key_hash, created_at) "
+                "SELECT %s, %s, %s, %s, 1, scope.owner_org_id, "
+                "scope.location_id, "
+                "scope.custodian_person_id_snapshot, NULL, %s, "
+                "'unknown', 'used', 'available', NULL, NULL, NULL, "
+                "%s, 'qr_code', 1, 'pending_verification', "
+                "'manual', NULL, %s, %s, "
+                "pg_catalog.transaction_timestamp(), %s, %s, %s, "
+                "pg_catalog.transaction_timestamp() "
+                "FROM public.stocktake_scopes AS scope "
+                "WHERE scope.id = %s AND scope.task_id = %s",
+                (
+                    competing_observation_id,
+                    isolation_task_id,
+                    isolation_round_id,
+                    isolation_scope_id,
+                    f"PG16-CONCURRENT-UNKNOWN-{opening_token[:12]}",
+                    str(fixture["concurrency_serial_qr_code"]).lower(),
+                    "PG16 0052 并发 pending QR 别名",
+                    assignee_user_id,
+                    hashlib.sha256(
+                        f"dimension:{competing_observation_id}".encode()
+                    ).hexdigest(),
+                    hashlib.sha256(
+                        f"request:{competing_observation_id}".encode()
+                    ).hexdigest(),
+                    hashlib.sha256(
+                        f"idempotency:{competing_observation_id}".encode()
+                    ).hexdigest(),
+                    isolation_scope_id,
+                    isolation_task_id,
+                ),
+            )
+
+        def insert_competing_observation() -> None:
+            with psycopg.connect(**api_parameters) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT pg_backend_pid()")
+                    second_pid.append(cursor.fetchone()[0])
+                    cursor.execute("SET LOCAL statement_timeout = '20s'")
+                    second_started.set()
+                    try:
+                        insert_competing_observation_row(
+                            cursor,
+                            competing_observation_id=observation_id,
+                        )
+                        assert cursor.rowcount == 1
+                        second_inserted.set()
+                    except psycopg.Error as exc:
+                        second_failures.append((exc.sqlstate, str(exc)))
+                    finally:
+                        connection.rollback()
+
+        first = Session(api_engine, expire_on_commit=False)
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = None
+        try:
+            first_counted = submit_opening_stocktake_scope_count(
+                first,
+                actor=current_principal(first, assignee_user_id),
+                command=SubmitOpeningStocktakeScopeCountCommand(
+                    task_id=isolation_task_id,
+                    round_id=isolation_round_id,
+                    scope_id=isolation_scope_id,
+                    physical_observations=(
+                        OpeningPhysicalObservationInput(
+                            material_identifier_raw=str(
+                                fixture["concurrency_material_sku_code"]
+                            ),
+                            material_identifier_type="sku_code",
+                            condition_code="new",
+                            availability_bucket="available",
+                            counted_qty=Decimal("1.000"),
+                            serial_no_raw=str(
+                                fixture["concurrency_serial_no"]
+                            ),
+                            serial_identifier_type="serial_no",
+                            count_method="manual",
+                            remark="PG16 0052 并发胜者完整 scope graph",
+                        ),
+                    ),
+                    zero_confirmed=False,
+                ),
+                idempotency_key=(
+                    f"pg16-opening-concurrent-winner-{opening_token}"
+                ),
+                request_id=(
+                    f"trace-pg16-opening-concurrent-winner-{opening_token}"
+                ),
+            )
+            assert first_counted.task_status == "submitted"
+            assert first_counted.round_status == "submitted"
+            assert first_counted.round_sealed is True
+            assert first.scalar(
+                select(func.count())
+                .select_from(StocktakeCountSerial)
+                .join(
+                    StocktakeCountLine,
+                    StocktakeCountLine.id
+                    == StocktakeCountSerial.count_line_id,
+                )
+                .where(
+                    StocktakeCountLine.task_id == isolation_task_id,
+                    StocktakeCountSerial.round_id == isolation_round_id,
+                    StocktakeCountSerial.serial_id
+                    == fixture["concurrency_serial_id"],
+                )
+            ) == 1
+            assert first.scalar(
+                select(func.count())
+                .select_from(StocktakeCountObservation)
+                .where(
+                    StocktakeCountObservation.task_id == isolation_task_id,
+                    StocktakeCountObservation.round_id == isolation_round_id,
+                )
+            ) == 0
+
+            repeatable_read_failure: tuple[str | None, str] | None = None
+            with psycopg.connect(
+                **api_parameters,
+                autocommit=True,
+            ) as repeatable_read_connection:
+                with repeatable_read_connection.cursor() as cursor:
+                    cursor.execute(
+                        "BEGIN ISOLATION LEVEL REPEATABLE READ READ WRITE"
+                    )
+                    cursor.execute(
+                        "SELECT status FROM public.stocktake_tasks "
+                        "WHERE id = %s",
+                        (isolation_task_id,),
+                    )
+                    assert cursor.fetchone() == ("counting",)
+                    try:
+                        insert_competing_observation_row(
+                            cursor,
+                            competing_observation_id=uuid.uuid4(),
+                        )
+                    except psycopg.Error as exc:
+                        repeatable_read_failure = (exc.sqlstate, str(exc))
+                    finally:
+                        cursor.execute("ROLLBACK")
+            assert repeatable_read_failure is not None
+            assert repeatable_read_failure[0] == "23514"
+            assert migration.OPENING_COUNT_ISOLATION_ERROR in (
+                repeatable_read_failure[1]
+            )
+            assert first.scalar(
+                select(func.count())
+                .select_from(StocktakeCountObservation)
+                .where(
+                    StocktakeCountObservation.task_id == isolation_task_id,
+                    StocktakeCountObservation.round_id == isolation_round_id,
+                )
+            ) == 0
+
+            future = executor.submit(insert_competing_observation)
+            assert second_started.wait(timeout=10)
+            assert second_pid
+            _wait_for_backend_lock(second_pid[0])
+            assert second_inserted.is_set() is False
+            first.commit()
+            future.result(timeout=15)
+            assert second_inserted.is_set() is False
+            assert len(second_failures) == 1
+            assert second_failures[0][0] == "23514"
+            assert migration.OPENING_ROUND_SERIAL_DUPLICATE_ERROR in (
+                second_failures[0][1]
+            )
+        finally:
+            first.rollback()
+            first.close()
+            executor.shutdown(wait=True, cancel_futures=True)
+
+    set_material_tracking_mode("serial")
+    try:
+        with pytest.raises(
+            SanitizedPostgreSQLDiagnosticError
+        ) as duplicate_serial:
+            _reveal_pg16_service_database_error(
+                api_engine,
+                submit_cross_table_duplicate_serial,
+            )
+        assert duplicate_serial.value.diagnostic.sqlstate == "23514"
+        assert opening_count_snapshot(api_engine) == before_resolution_tamper
+        with pytest.raises(
+            SanitizedPostgreSQLDiagnosticError
+        ) as duplicate_serial_alias:
+            _reveal_pg16_service_database_error(
+                api_engine,
+                submit_cross_alias_duplicate_serial,
+            )
+        assert duplicate_serial_alias.value.diagnostic.sqlstate == "23514"
+        assert opening_count_snapshot(api_engine) == before_resolution_tamper
+    finally:
+        set_material_tracking_mode("none")
+
     with Session(api_engine, expire_on_commit=False) as session:
         scope = session.scalar(
             select(FormalStocktakeScope).where(
@@ -11029,6 +12587,118 @@ def _seed_0047_stocktake_inventory(
             round_submission.sealing_completion_id,
         )
         assert sealing is not None
+        assert isinstance(sealing.request_jsonb, dict)
+        request_observations = sealing.request_jsonb.get(
+            "physical_observations"
+        )
+        assert isinstance(request_observations, list)
+        known_request_rows = tuple(
+            row
+            for row in request_observations
+            if isinstance(row, dict)
+            and row.get("material_identifier_raw")
+            == fixture["material_sku_code"]
+        )
+        assert len(known_request_rows) == 1
+        assert (
+            known_request_rows[0].get("material_identifier_type"),
+            known_request_rows[0].get("material_identifier_raw"),
+            known_request_rows[0].get("material_id"),
+            known_request_rows[0].get("counted_qty"),
+        ) == (
+            "sku_code",
+            fixture["material_sku_code"],
+            None,
+            "1",
+        )
+        assert sealing.request_sha256 == opening_count_service._hash_document(
+            sealing.request_jsonb
+        )
+        assert isinstance(sealing.request_resolution_jsonb, dict)
+        resolution_document = sealing.request_resolution_jsonb
+        assert (
+            resolution_document.get("schema"),
+            resolution_document.get("request_sha256"),
+            resolution_document.get("task_id"),
+            resolution_document.get("round_id"),
+            resolution_document.get("scope_id"),
+        ) == (
+            (
+                "cloud_oam.opening_stocktake."
+                "scope_count_request_resolution.v1"
+            ),
+            sealing.request_sha256,
+            str(started.task_id),
+            str(started.initial_round_id),
+            str(opening_scope_id),
+        )
+        resolution_items = resolution_document.get("items")
+        assert isinstance(resolution_items, list)
+        assert [row.get("request_ordinal") for row in resolution_items] == [
+            1,
+            2,
+        ]
+        assert [row.get("request_item_sha256") for row in resolution_items] == [
+            opening_count_service._hash_document(row)
+            for row in request_observations
+        ]
+        known_count_line = session.scalar(
+            select(StocktakeCountLine).where(
+                StocktakeCountLine.task_id == started.task_id,
+                StocktakeCountLine.round_id == started.initial_round_id,
+                StocktakeCountLine.stock_account_id == fixture["account_id"],
+            )
+        )
+        assert known_count_line is not None
+        assert known_count_line.counted_qty == Decimal("1.000")
+        known_request_ordinal = request_observations.index(
+            known_request_rows[0]
+        ) + 1
+        known_resolution = resolution_items[known_request_ordinal - 1]
+        assert (
+            known_resolution.get("target_type"),
+            known_resolution.get("target_id"),
+            known_resolution.get("resolved_material_id"),
+            known_resolution.get("resolved_lot_id"),
+            known_resolution.get("resolved_serial_id"),
+            known_resolution.get("material_qr_mapping_id"),
+            known_resolution.get("serial_qr_mapping_id"),
+        ) == (
+            "count_line",
+            str(known_count_line.id),
+            str(fixture["material_id"]),
+            None,
+            None,
+            None,
+            None,
+        )
+        assert known_resolution.get("policy", {}).get("id") == str(
+            fixture["material_policy_id"]
+        )
+        assert known_resolution.get("policy", {}).get("tracking_mode") == "none"
+        assert session.scalar(
+            select(func.count())
+            .select_from(StocktakeCountObservation)
+            .where(
+                StocktakeCountObservation.task_id == started.task_id,
+                StocktakeCountObservation.round_id
+                == started.initial_round_id,
+                StocktakeCountObservation.material_identifier_raw
+                == fixture["material_sku_code"],
+            )
+        ) == 0
+        pending_request = next(
+            row
+            for row in request_observations
+            if row.get("material_identifier_raw") == pending_identifier
+        )
+        pending_ordinal = request_observations.index(pending_request) + 1
+        pending_resolution = resolution_items[pending_ordinal - 1]
+        assert (
+            pending_resolution.get("target_type"),
+            pending_resolution.get("resolved_material_id"),
+            pending_resolution.get("policy"),
+        ) == ("observation", None, None)
         assert difference_completion.authorization_sha256 == (
             sealing.authorization_sha256
         )
@@ -11099,15 +12769,36 @@ def _seed_0047_stocktake_inventory(
                 .order_by(StocktakeDifference.difference_no)
             ).all()
         )
-        assert len(initial_differences) == 1
+        assert len(initial_differences) == 3
+        pending_difference = next(
+            row
+            for row in initial_differences
+            if row.observed_line_id == observation.id
+        )
         assert (
-            initial_differences[0].observed_line_id,
-            initial_differences[0].difference_type,
-            initial_differences[0].reason_code,
+            pending_difference.observed_line_id,
+            pending_difference.difference_type,
+            pending_difference.reason_code,
         ) == (
             observation.id,
             "excess",
             "opening_pending_verification",
+        )
+        physical_difference = next(
+            row
+            for row in initial_differences
+            if row.observed_account_id == fixture["account_id"]
+        )
+        assert (
+            physical_difference.difference_type,
+            physical_difference.reason_code,
+            physical_difference.book_qty,
+            physical_difference.counted_qty,
+        ) == (
+            "excess",
+            "opening_physical_excess",
+            Decimal("0.000"),
+            Decimal("1.000"),
         )
         regional_recount = _reveal_pg16_service_database_error(
             api_engine,
@@ -11121,7 +12812,12 @@ def _seed_0047_stocktake_inventory(
                     items=tuple(
                         OpeningStocktakeReviewItemInput(
                             difference_id=row.id,
-                            decision="recount",
+                            decision=(
+                                "pending_verification"
+                                if row.difference_type
+                                == "control_unassigned"
+                                else "recount"
+                            ),
                             comment="待核实观察已处置，进入同范围复盘",
                         )
                         for row in initial_differences
@@ -11137,8 +12833,8 @@ def _seed_0047_stocktake_inventory(
             )
         )
         assert regional_recount.resulting_task_status == "recount_required"
-        assert regional_recount.item_count == 1
-        assert regional_recount.pending_control_count == 0
+        assert regional_recount.item_count == len(initial_differences)
+        assert regional_recount.pending_control_count == 1
         session.commit()
 
     _assert_0052_wrong_opening_audit_action_rejected(
@@ -11422,6 +13118,31 @@ def _seed_0047_stocktake_inventory(
         approved_version = approved_task.version
         session.commit()
 
+    migration_0052 = _load_opening_terminal_guard_execution_migration_0052()
+    review_helper = sql.Identifier(migration_0052.REVIEW_GRAPH_FUNCTION)
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                sql.SQL(
+                    "SELECT public.{}(%s::uuid, FALSE), "
+                    "public.{}(%s::uuid, TRUE), "
+                    "public.{}(%s::uuid, FALSE), "
+                    "public.{}(%s::uuid, TRUE)"
+                ).format(
+                    review_helper,
+                    review_helper,
+                    review_helper,
+                    review_helper,
+                ),
+                (
+                    regional_review.review_id,
+                    regional_review.review_id,
+                    headquarters_review.review_id,
+                    headquarters_review.review_id,
+                ),
+            )
+            assert tuple(cursor.fetchone()) == (False, True, True, True)
+
     with Session(api_engine, expire_on_commit=False) as session:
         opening_posted = _reveal_pg16_service_database_error(
             api_engine,
@@ -11442,6 +13163,57 @@ def _seed_0047_stocktake_inventory(
         assert opening_posted.established_scope_count == 1
         assert opening_posted.pending_control_difference_count == 0
         session.commit()
+
+    terminal_helper = sql.Identifier(migration_0052.TERMINAL_GRAPH_FUNCTION)
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                sql.SQL(
+                    """
+SELECT posting.total_quantity::text,
+       pg_catalog.jsonb_typeof(
+           state_event.metadata_jsonb -> 'total_quantity'
+       ),
+       state_event.metadata_jsonb ->> 'total_quantity',
+       pg_catalog.jsonb_typeof(
+           outbox_event.payload_jsonb -> 'total_quantity'
+       ),
+       outbox_event.payload_jsonb ->> 'total_quantity',
+       pg_catalog.jsonb_typeof(
+           audit_event.after_jsonb -> 'total_quantity'
+       ),
+       audit_event.after_jsonb ->> 'total_quantity',
+       public.{}(posting.task_id, FALSE),
+       public.{}(posting.task_id, TRUE)
+  FROM public.stocktake_postings AS posting
+  JOIN public.state_transition_events AS state_event
+    ON state_event.aggregate_type = 'stocktake_task'
+   AND state_event.aggregate_id = posting.task_id::text
+   AND state_event.reason = 'opening_stocktake_posted'
+  JOIN public.outbox_events AS outbox_event
+    ON outbox_event.aggregate_type = 'stocktake_task'
+   AND outbox_event.aggregate_id = posting.task_id::text
+   AND outbox_event.event_type = 'stocktake.opening.posted'
+  JOIN public.audit_events AS audit_event
+    ON audit_event.aggregate_type = 'stocktake_posting'
+   AND audit_event.aggregate_id = posting.id::text
+   AND audit_event.action = 'stocktake.opening.posted'
+ WHERE posting.id = %s::uuid
+"""
+                ).format(terminal_helper, terminal_helper),
+                (opening_posted.posting_id,),
+            )
+            assert tuple(cursor.fetchone()) == (
+                "0.000",
+                "string",
+                "0.000",
+                "string",
+                "0.000",
+                "string",
+                "0.000",
+                True,
+                True,
+            )
 
     _assert_0052_premature_close_artifacts_rejected(
         api_engine,
@@ -11515,6 +13287,77 @@ def _seed_0047_stocktake_inventory(
             terminal_opening.status,
             terminal_opening.version,
         ) == ("opening", "closed", opening_closed.task_version)
+
+    with Session(api_engine, expire_on_commit=False) as session:
+        isolation_started = _start_opening_stocktake_impl(
+            session,
+            actor=current_principal(session, assignee_user_id),
+            command=StartOpeningStocktakeCommand(
+                task_no=(
+                    "PG16-OPENING-CONCURRENT-"
+                    f"{opening_token[:12].upper()}"
+                ),
+                region_org_id=fixture["region_org_id"],
+                control_source_system_id=fixture[
+                    "control_source_system_id"
+                ],
+                control_sync_run_id=fixture["control_sync_run_id"],
+                control_sync_scope_key=str(fixture["control_scope_key"]),
+                scopes=(
+                    OpeningStocktakeScopeInput(
+                        owner_org_id=fixture["region_org_id"],
+                        location_id=fixture["concurrency_location_id"],
+                        assignee_user_id=assignee_user_id,
+                        freeze_mode="hard",
+                    ),
+                ),
+                control_lines=fixture["control_lines"],
+                blind_count=True,
+                deadline=fixture["deadline"],
+                note="PG16 0052 双会话 SN 别名隔离任务",
+            ),
+            idempotency_key=(
+                f"pg16-opening-concurrent-start-{opening_token}"
+            ),
+            request_id=(
+                f"trace-pg16-opening-concurrent-start-{opening_token}"
+            ),
+        )
+        assert isolation_started.status == "counting"
+        assert isolation_started.scope_count == 1
+        assert isolation_started.snapshot_line_count == 1
+        session.commit()
+
+    with Session(api_engine) as session:
+        isolation_scope_id = session.scalar(
+            select(FormalStocktakeScope.id).where(
+                FormalStocktakeScope.task_id == isolation_started.task_id
+            )
+        )
+        assert isinstance(isolation_scope_id, uuid.UUID)
+
+    assert_cross_alias_writers_serialize(
+        isolation_task_id=isolation_started.task_id,
+        isolation_round_id=isolation_started.initial_round_id,
+        isolation_scope_id=isolation_scope_id,
+    )
+    with Session(api_engine) as session:
+        isolation_task = session.get(
+            FormalStocktakeTask,
+            isolation_started.task_id,
+        )
+        assert isolation_task is not None
+        assert isolation_task.status == "submitted"
+        assert session.scalar(
+            select(func.count())
+            .select_from(StocktakeScopeCountCompletion)
+            .where(
+                StocktakeScopeCountCompletion.task_id
+                == isolation_started.task_id,
+                StocktakeScopeCountCompletion.round_id
+                == isolation_started.initial_round_id,
+            )
+        ) == 1
 
     with Session(api_engine, expire_on_commit=False) as session:
         effective_at = session.scalar(select(func.now()))
@@ -12822,6 +14665,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _bootstrap_roles()
     _assert_edge_receiver_provision_rolls_back_on_cross_database_connect()
     _provision_edge_receiver_role()
+    _assert_0052_legacy_backfill_and_atomic_rejection()
 
     _run_alembic("upgrade", "20260902_0042")
     assert _current_revision() == "20260902_0042"

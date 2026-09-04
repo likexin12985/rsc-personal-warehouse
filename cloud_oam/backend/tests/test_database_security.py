@@ -1255,6 +1255,7 @@ def test_0049_recount_guard_function_bodies_and_security_manifest_are_exact(
     )
     migration_0049 = _load_stocktake_recount_guard_security_migration_0049()
     migration_0050 = _load_stocktake_observation_scope_mode_migration_0050()
+    migration_0052 = _load_opening_terminal_guard_execution_migration_0052()
 
     executed_0011: list[str] = []
     with monkeypatch.context() as patcher:
@@ -1405,11 +1406,14 @@ def test_0049_recount_guard_function_bodies_and_security_manifest_are_exact(
         assert body_hash == migration_0049.EXPECTED_FUNCTION_BODY_SHA256[
             signature
         ]
-        expected_runtime_hash = (
-            migration_0050.QUALIFIED_BODY_SHA256
-            if signature == migration_0050.FUNCTION_SIGNATURE
-            else body_hash
-        )
+        if signature == migration_0050.FUNCTION_SIGNATURE:
+            expected_runtime_hash = migration_0050.QUALIFIED_BODY_SHA256
+        elif signature == migration_0052.SCOPE_COMPLETION_GUARD_SIGNATURE_0021:
+            expected_runtime_hash = (
+                migration_0052.FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
+            )
+        else:
+            expected_runtime_hash = body_hash
         assert (
             FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
             == expected_runtime_hash
@@ -1939,6 +1943,10 @@ def _opening_terminal_0052_function_bodies() -> dict[tuple[str, str], str]:
         OPENING_OBSERVATION_DISPOSITIONS_MIGRATION_0016,
         "rsc_migration_0016_opening_terminal_0052_manifest",
     )
+    migration_0021 = load(
+        ROUND_ASSIGNMENT_GUARDS_MIGRATION_0021,
+        "rsc_migration_0021_opening_terminal_0052_manifest",
+    )
     migration_0022 = _load_opening_terminal_runtime_migration_0022()
     migration_0023 = _load_opening_observation_posting_migration_0023()
     migration_0026 = load(
@@ -1982,6 +1990,9 @@ def _opening_terminal_0052_function_bodies() -> dict[tuple[str, str], str]:
     graph_sql = migration_0023._postgresql_graph_function_sql(current=True)
     commit_sql = migration_0022._postgresql_commit_function_sql()
     legacy_account_sql = migration_0023._postgresql_account_function_sql()
+    legacy_scope_completion_sql = (
+        migration_0021._postgresql_completion_function_sql(round_aware=True)
+    )
     actor_body = actor_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
     review_completion_body = review_completion_sql.split(
         "AS $$", 1
@@ -1995,6 +2006,9 @@ def _opening_terminal_0052_function_bodies() -> dict[tuple[str, str], str]:
     graph_body = graph_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
     legacy_commit_body = commit_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
     legacy_account_body = legacy_account_sql.split(
+        "AS $$", 1
+    )[1].rsplit("$$", 1)[0]
+    legacy_scope_completion_body = legacy_scope_completion_sql.split(
         "AS $$", 1
     )[1].rsplit("$$", 1)[0]
     assert hashlib.sha256(graph_body.encode("utf-8")).hexdigest() == (
@@ -2023,6 +2037,17 @@ def _opening_terminal_0052_function_bodies() -> dict[tuple[str, str], str]:
         migration_0052.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT,
         migration_0052.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT,
     )
+    assert legacy_scope_completion_body.count(
+        migration_0052.LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021
+    ) == 1
+    assert (
+        migration_0052.FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021
+        not in legacy_scope_completion_body
+    )
+    hardened_scope_completion_body = legacy_scope_completion_body.replace(
+        migration_0052.LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+        migration_0052.FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021,
+    )
     bodies = {
         (
             migration_0052.ACTOR_ASSIGNMENT_FUNCTION,
@@ -2035,6 +2060,8 @@ def _opening_terminal_0052_function_bodies() -> dict[tuple[str, str], str]:
             review_completion_body,
         (migration_0052.REVIEW_IMMUTABLE_FUNCTION, ""):
             review_immutable_body,
+        (migration_0052.SCOPE_COMPLETION_GUARD_FUNCTION_0021, ""):
+            hardened_scope_completion_body,
         (migration_0022.PG_GRAPH_CHECK_FUNCTION, "uuid, uuid"): graph_body,
         (migration_0022.PG_COMMIT_FUNCTION, ""): hardened_commit_body,
         (migration_0023.PG_ACCOUNT_FUNCTION, ""): hardened_account_body,
@@ -2084,6 +2111,10 @@ def test_0052_opening_terminal_internal_function_manifest_is_exact() -> None:
         "rsc_block_stocktake_review_fact_mutation_0016",
         "",
     )
+    scope_completion_guard_coordinate = (
+        "rsc_validate_stocktake_scope_completion_insert_0021",
+        "",
+    )
     graph_coordinate = (
         "rsc_opening_terminal_graph_complete_0022",
         "uuid, uuid",
@@ -2097,6 +2128,14 @@ def test_0052_opening_terminal_internal_function_manifest_is_exact() -> None:
         "rsc_guard_reconciliation_effect_0026",
         "",
     )
+    round_submission_coordinate = (
+        migration_0052.ROUND_SUBMISSION_FUNCTION,
+        "uuid, uuid, boolean",
+    )
+    scope_completion_coordinate = (
+        migration_0052.SCOPE_COMPLETION_FUNCTION,
+        "uuid, uuid, uuid, boolean",
+    )
     expected_definitions = {
         actor_assignment_coordinate: ("s", False, "sql", ()),
         review_completion_coordinate: (
@@ -2106,6 +2145,12 @@ def test_0052_opening_terminal_internal_function_manifest_is_exact() -> None:
             (migration_0052.FIXED_SEARCH_PATH,),
         ),
         review_immutable_coordinate: ("v", False, "plpgsql", ()),
+        scope_completion_guard_coordinate: (
+            "v",
+            True,
+            "plpgsql",
+            (migration_0052.FIXED_SEARCH_PATH,),
+        ),
         graph_coordinate: (
             "s",
             False,
@@ -2135,6 +2180,7 @@ def test_0052_opening_terminal_internal_function_manifest_is_exact() -> None:
         actor_assignment_coordinate: ("f", "boolean", False),
         review_completion_coordinate: ("f", "trigger", False),
         review_immutable_coordinate: ("f", "trigger", False),
+        scope_completion_guard_coordinate: ("f", "trigger", False),
         graph_coordinate: ("f", "boolean", False),
         commit_coordinate: ("f", "trigger", False),
         account_coordinate: ("f", "trigger", False),
@@ -2146,6 +2192,9 @@ def test_0052_opening_terminal_internal_function_manifest_is_exact() -> None:
             migration_0052.REVIEW_COMPLETION_BODY_SHA256,
         review_immutable_coordinate:
             migration_0052.REVIEW_IMMUTABLE_BODY_SHA256,
+        scope_completion_guard_coordinate: (
+            migration_0052.FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
+        ),
         graph_coordinate: migration_0052.GRAPH_BODY_SHA256,
         commit_coordinate: migration_0052.FIXED_COMMIT_BODY_SHA256,
         account_coordinate: migration_0052.FIXED_ACCOUNT_BODY_SHA256,
@@ -2163,7 +2212,7 @@ def test_0052_opening_terminal_internal_function_manifest_is_exact() -> None:
     assert migration_0052.PREVIOUS_SCHEMA_REVISION == (
         migration_0052.down_revision
     )
-    assert len(migration_0052.PERSISTENT_FUNCTION_SIGNATURES) == 6
+    assert len(migration_0052.PERSISTENT_FUNCTION_SIGNATURES) == 7
     assert len(migration_0052.HEAD_ONLY_FUNCTION_SIGNATURES) == 10
     assert migration_0052.ALL_FUNCTION_SIGNATURES == (
         *migration_0052.PERSISTENT_FUNCTION_SIGNATURES,
@@ -2234,6 +2283,26 @@ def test_0052_opening_terminal_internal_function_manifest_is_exact() -> None:
     assert "current_user" not in bodies[account_coordinate]
     assert migration_0052.FIXED_TASK_BRANCH in bodies[commit_coordinate]
     assert migration_0052.LEGACY_TASK_BRANCH not in bodies[commit_coordinate]
+    assert (
+        migration_0052.FIXED_SCOPE_COMPLETION_TOTAL_DECLARATION_0021
+        in bodies[scope_completion_guard_coordinate]
+    )
+    assert (
+        migration_0052.LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021
+        not in bodies[scope_completion_guard_coordinate]
+    )
+    for coordinate in (
+        round_submission_coordinate,
+        scope_completion_coordinate,
+    ):
+        assert "request_resolution_jsonb" in bodies[coordinate]
+        assert (
+            "cloud_oam.opening_stocktake.scope_count_request_resolution.v1"
+            in bodies[coordinate]
+        )
+        assert FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate] == (
+            hashlib.sha256(bodies[coordinate].encode("utf-8")).hexdigest()
+        )
     assert set(FORMAL_FILE_INTERNAL_FUNCTION_SHAPES) == set(
         FORMAL_FILE_INTERNAL_FUNCTIONS
     )
@@ -2249,7 +2318,7 @@ def test_0052_opening_trigger_catalogs_are_pinned_by_startup_guards() -> None:
         return signature.split("(", 1)[0].rsplit(".", 1)[1]
 
     assert len(migration.TRIGGER_CATALOG) == 12
-    assert len(migration.REVIEW_GUARD_TRIGGER_CATALOG) == 5
+    assert len(migration.REVIEW_GUARD_TRIGGER_CATALOG) == 6
     assert len(migration.OPENING_0052_TRIGGER_CATALOG) == 20
     assert len(migration.INHERITED_RECONCILIATION_TRIGGER_CATALOG) == 6
     assert len(EXPECTED_OPENING_TERMINAL_TRIGGERS) == 53
@@ -2281,7 +2350,14 @@ def test_0052_opening_trigger_catalogs_are_pinned_by_startup_guards() -> None:
     for table_name, trigger_name, signature, trigger_type in (
         migration.REVIEW_GUARD_TRIGGER_CATALOG
     ):
-        assert EXPECTED_OPENING_TERMINAL_TRIGGERS[trigger_name] == (
+        expected_trigger = EXPECTED_OPENING_TERMINAL_TRIGGERS.get(
+            trigger_name
+        )
+        if expected_trigger is None:
+            expected_trigger = EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS[
+                trigger_name
+            ][:4]
+        assert expected_trigger == (
             table_name,
             function_name(signature),
             "A",

@@ -126,6 +126,10 @@ jobs:
             backend/tests/test_material_request_approval_service.py \
             backend/tests/test_material_request_lifecycle_service.py \
             backend/tests/test_material_request_query_service.py \
+            backend/tests/test_audit_chain.py \
+            backend/tests/test_inventory_posting.py \
+            backend/tests/test_opening_stocktake_service.py \
+            backend/tests/test_opening_stocktake_review_service.py \
             backend/tests/test_stocktake_task_service.py \
             backend/tests/test_formal_stocktake_api.py \
             backend/tests/test_legacy_oam_work_order_redaction_artifact.py \

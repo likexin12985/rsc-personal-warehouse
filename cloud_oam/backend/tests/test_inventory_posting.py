@@ -729,8 +729,8 @@ def establish_account_for_posting(
         stock_account_id=account.id,
         counted_qty=Decimal("0.000"),
         count_method="manual",
-        reason_code=None,
-        remark="明确零库存实盘",
+        reason_code="scope_full_set_zero",
+        remark="",
         counted_by_user_id=world.user.id,
         counted_at=submitted_at,
         created_at=submitted_at,
@@ -784,6 +784,28 @@ def establish_account_for_posting(
             "user_id": world.user.id,
         }
     )
+    scope_request_document = {
+        "actor_person_id": str(world.person.id),
+        "actor_user_id": world.user.id,
+        "physical_observations": [],
+        "round_id": str(round_row.id),
+        "schema": "cloud_oam.opening_stocktake.scope_count_request.v1",
+        "scope_id": str(scope.id),
+        "task_id": str(task.id),
+        "zero_confirmed": False,
+    }
+    scope_request_sha256 = count_service._hash_document(scope_request_document)
+    scope_request_resolution = {
+        "items": [],
+        "request_sha256": scope_request_sha256,
+        "round_id": str(round_row.id),
+        "schema": (
+            "cloud_oam.opening_stocktake."
+            "scope_count_request_resolution.v1"
+        ),
+        "scope_id": str(scope.id),
+        "task_id": str(task.id),
+    }
     scope_completion = StocktakeScopeCountCompletion(
         id=uuid.uuid4(),
         task_id=task.id,
@@ -795,9 +817,9 @@ def establish_account_for_posting(
         total_counted_qty=Decimal("0.000"),
         zero_confirmed=False,
         evidence_manifest_sha256="0" * 64,
-        request_sha256=hashlib.sha256(
-            f"scope-request:{token}".encode()
-        ).hexdigest(),
+        request_sha256=scope_request_sha256,
+        request_jsonb=scope_request_document,
+        request_resolution_jsonb=scope_request_resolution,
         idempotency_key_hash=hashlib.sha256(
             f"scope-completion:{token}".encode()
         ).hexdigest(),
@@ -1794,7 +1816,33 @@ def make_positive_opening_facts(
     assert not serials or Decimal(len(serials)) == quantity
     account = db.get(StockAccount, facts.count_line.stock_account_id)
     assert account is not None
+    material = db.get(FormalMaterial, account.material_id)
+    assert material is not None and facts.task.cutoff_at is not None
+    policies = [
+        row
+        for row in db.scalars(
+            select(MaterialInventoryPolicy).where(
+                MaterialInventoryPolicy.material_id == account.material_id
+            )
+        ).all()
+        if count_service._as_utc(row.effective_from)
+        <= count_service._as_utc(facts.task.cutoff_at)
+        and (
+            row.effective_to is None
+            or count_service._as_utc(facts.task.cutoff_at)
+            < count_service._as_utc(row.effective_to)
+        )
+    ]
+    assert len(policies) == 1
+    policy = policies[0]
+    if policy.tracking_mode in {"serial", "lot_and_serial"}:
+        assert serials and Decimal(len(serials)) == quantity
+    else:
+        assert not serials
     facts.count_line.counted_qty = quantity
+    facts.count_line.count_method = "manual"
+    facts.count_line.reason_code = None
+    facts.count_line.remark = ""
     facts.count_line.updated_at = facts.round.submitted_at
     count_serials = tuple(
         StocktakeCountSerial(
@@ -2056,6 +2104,106 @@ def make_positive_opening_facts(
     )
     facts.scope_completion.serial_count = len(count_serials)
     facts.scope_completion.total_counted_qty = quantity
+    lot_no = None
+    if account.lot_id is not None:
+        from app.inventory_models import InventoryLot
+
+        lot = db.get(InventoryLot, account.lot_id)
+        assert lot is not None
+        lot_no = lot.lot_no
+    if policy.tracking_mode in {"lot", "lot_and_serial"}:
+        assert lot_no is not None
+    else:
+        assert lot_no is None
+    request_pairs = []
+    for serial in serials or (None,):
+        request_item = {
+            "availability_bucket": account.availability_bucket,
+            "condition_code": account.condition_code,
+            "count_method": "manual",
+            "counted_qty": count_service._canonical_decimal(
+                Decimal("1") if serial is not None else quantity
+            ),
+            "lot_id": None,
+            "lot_no_raw": lot_no,
+            "material_id": None,
+            "material_identifier_raw": material.sku_code,
+            "material_identifier_type": "sku_code",
+            "reason_code": None,
+            "remark": "",
+            "serial_id": None,
+            "serial_identifier_type": (
+                "serial_no" if serial is not None else None
+            ),
+            "serial_no_raw": serial.serial_no if serial is not None else None,
+        }
+        request_pairs.append((request_item, serial))
+    request_pairs.sort(key=lambda row: count_service._canonical_json(row[0]))
+    scope_request_document = {
+        "actor_person_id": str(facts.scope_completion.completed_by_person_id),
+        "actor_user_id": facts.scope_completion.completed_by_user_id,
+        "physical_observations": [row[0] for row in request_pairs],
+        "round_id": str(facts.round.id),
+        "schema": "cloud_oam.opening_stocktake.scope_count_request.v1",
+        "scope_id": str(facts.scope.id),
+        "task_id": str(facts.task.id),
+        "zero_confirmed": False,
+    }
+    scope_request_sha256 = count_service._hash_document(scope_request_document)
+    facts.scope_completion.request_jsonb = scope_request_document
+    facts.scope_completion.request_sha256 = scope_request_sha256
+    facts.scope_completion.request_resolution_jsonb = {
+        "items": [
+            {
+                "material_qr_mapping_id": None,
+                "policy": {
+                    "allow_fraction": policy.allow_fraction,
+                    "effective_from": count_service._canonical_timestamp(
+                        policy.effective_from
+                    ),
+                    "id": str(policy.id),
+                    "quantity_scale": policy.quantity_scale,
+                    "tracking_mode": policy.tracking_mode,
+                },
+                "request_item_sha256": count_service._hash_document(
+                    request_item
+                ),
+                "request_ordinal": ordinal,
+                "resolved_lot_id": (
+                    str(account.lot_id) if account.lot_id is not None else None
+                ),
+                "resolved_material_id": str(account.material_id),
+                "resolved_serial_id": (
+                    str(serial.id) if serial is not None else None
+                ),
+                "serial_alias_keys": (
+                    sorted(
+                        {
+                            count_service._fold_serial_alias(serial.serial_no),
+                            count_service._fold_serial_alias(serial.qr_code),
+                        }
+                    )
+                    if serial is not None
+                    else []
+                ),
+                "serial_qr_mapping_id": None,
+                "target_id": str(facts.count_line.id),
+                "target_type": "count_line",
+            }
+            for ordinal, (request_item, serial) in enumerate(
+                request_pairs,
+                start=1,
+            )
+        ],
+        "request_sha256": scope_request_sha256,
+        "round_id": str(facts.round.id),
+        "schema": (
+            "cloud_oam.opening_stocktake."
+            "scope_count_request_resolution.v1"
+        ),
+        "scope_id": str(facts.scope.id),
+        "task_id": str(facts.task.id),
+    }
     facts.scope_completion.evidence_manifest_sha256 = (
         count_service._scope_evidence_manifest(
             db,
@@ -2203,8 +2351,8 @@ def add_zero_scope_to_opening_task(
         stock_account_id=account.id,
         counted_qty=Decimal("0.000"),
         count_method="manual",
-        reason_code=None,
-        remark="明确零库存实盘",
+        reason_code="scope_full_set_zero",
+        remark="",
         counted_by_user_id=scope.assignee_user_id,
         counted_at=round_submitted_at,
         created_at=round_submitted_at,
@@ -2212,6 +2360,30 @@ def add_zero_scope_to_opening_task(
     )
     db.add_all([freeze, snapshot, count_line])
     db.flush()
+    scope_request_document = {
+        "actor_person_id": str(
+            facts.scope_completion.completed_by_person_id
+        ),
+        "actor_user_id": facts.scope_completion.completed_by_user_id,
+        "physical_observations": [],
+        "round_id": str(facts.round.id),
+        "schema": "cloud_oam.opening_stocktake.scope_count_request.v1",
+        "scope_id": str(scope.id),
+        "task_id": str(facts.task.id),
+        "zero_confirmed": False,
+    }
+    scope_request_sha256 = count_service._hash_document(scope_request_document)
+    scope_request_resolution = {
+        "items": [],
+        "request_sha256": scope_request_sha256,
+        "round_id": str(facts.round.id),
+        "schema": (
+            "cloud_oam.opening_stocktake."
+            "scope_count_request_resolution.v1"
+        ),
+        "scope_id": str(scope.id),
+        "task_id": str(facts.task.id),
+    }
     scope_completion = StocktakeScopeCountCompletion(
         id=uuid.uuid4(),
         task_id=facts.task.id,
@@ -2223,9 +2395,9 @@ def add_zero_scope_to_opening_task(
         total_counted_qty=Decimal("0.000"),
         zero_confirmed=False,
         evidence_manifest_sha256="0" * 64,
-        request_sha256=hashlib.sha256(
-            f"scope-request:{scope.id}".encode()
-        ).hexdigest(),
+        request_sha256=scope_request_sha256,
+        request_jsonb=scope_request_document,
+        request_resolution_jsonb=scope_request_resolution,
         idempotency_key_hash=hashlib.sha256(
             f"scope-completion:{scope.id}".encode()
         ).hexdigest(),

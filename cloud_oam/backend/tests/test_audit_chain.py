@@ -4,7 +4,7 @@ import hashlib
 import inspect
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine, event as sqlalchemy_event, func, select
@@ -416,6 +416,60 @@ def test_naive_timestamp_and_non_json_payload_are_rejected(db: Session):
     with pytest.raises(AuditChainValidationError, match="canonical JSON"):
         append_audit_event(db, **kwargs)
     assert db.scalar(select(func.count()).select_from(AuditEvent)) == 0
+
+
+def test_explicit_created_at_is_normalized_and_cannot_precede_event(
+    db: Session,
+):
+    actor = make_actor(db)
+    head = seed_head(db)
+    db.commit()
+    kwargs = append_kwargs(actor)
+
+    kwargs["created_at"] = datetime(2026, 8, 30, 16, 9, 11)
+    with pytest.raises(AuditChainValidationError, match="created_at.*timezone"):
+        append_audit_event(db, **kwargs)
+
+    kwargs["created_at"] = datetime(
+        2026,
+        8,
+        30,
+        16,
+        9,
+        9,
+        123456,
+        tzinfo=timezone(timedelta(hours=8)),
+    )
+    with pytest.raises(AuditChainValidationError, match="earlier than occurred_at"):
+        append_audit_event(db, **kwargs)
+
+    assert db.scalar(select(func.count()).select_from(AuditEvent)) == 0
+    db.refresh(head)
+    assert head.version == 0
+
+    kwargs["created_at"] = datetime(
+        2026,
+        8,
+        30,
+        16,
+        9,
+        10,
+        123456,
+        tzinfo=timezone(timedelta(hours=8)),
+    )
+    audit_event = append_audit_event(db, **kwargs)
+
+    assert audit_event.occurred_at == NOW
+    assert audit_event.created_at == datetime(
+        2026,
+        8,
+        30,
+        8,
+        9,
+        10,
+        123456,
+        tzinfo=timezone.utc,
+    )
 
 
 def test_database_failure_requires_rollback_and_leaves_chain_unchanged(

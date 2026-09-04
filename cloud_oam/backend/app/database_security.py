@@ -3400,11 +3400,11 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_validate_stocktake_observation_insert_0021", ""):
         "06cf2fafa1d90f120fe4bba21cc1dc55dba70bd63f649671b4333a6159af06bb",
     ("rsc_validate_stocktake_scope_completion_insert_0021", ""):
-        "7470b118731f1fd6e53269457d511f73308eab704048109b32bd039f8df0824f",
+        "9fda4b71155e3bdb6802e2f09bf32b90284b0f0643f4d518ee3aa286bf9efdc9",
     ("rsc_opening_terminal_graph_complete_0022", "uuid, uuid"):
         "1eaf4e9bae4bac31f821ba1470d70059d9249d5459b7463e89683b03f0dc73d2",
     ("rsc_require_opening_terminal_graph_0022", ""):
-        "cf8bde9a034cc8ce8999aa20b63f7aff34eec6a08909ac2d7e76ce7c1df38d60",
+        "4678c65493a2ca0c8d596343053977db4d93d7758e00f1291e30e6be038d36e8",
     ("rsc_require_opening_observation_account_0023", ""):
         "c0079cfdaf15a4e9f9b66d76596828c0901b322d32ff4ea63fbbadc3acff163b",
     ("rsc_opening_start_graph_complete_0052", "uuid, boolean"):
@@ -3412,27 +3412,27 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     (
         "rsc_opening_round_submission_complete_0052",
         "uuid, uuid, boolean",
-    ): "8d006592f17ba330ab852659c77de1b59f3c92661f48aded882fdfb444a4120f",
+    ): "fe1de83cfa07151d62506658cb65307a1823594ecc20df6964846461a897bd3f",
     (
         "rsc_opening_scope_count_complete_0052",
         "uuid, uuid, uuid, boolean",
-    ): "b6f05d5cb7915ee79c57c4ebc009edd40292df1302051f29797c946570246430",
+    ): "e0c2628cdf871c1b4e7adb8234fdce6ef1dd3ee9dc80930b8cb71684f670b1e7",
     ("rsc_opening_review_complete_0052", "uuid, boolean"):
-        "2d5b50eb94a5d6cb83f087d4b1638840d09b9286bb40d87ee1d138b57239bff5",
+        "f6b614e42e35da34e072cd12ba103688163a53fc763d3c48979883813369126a",
     ("rsc_opening_recount_complete_0052", "uuid, boolean"):
-        "444925db06a41cd804bf05ca77036c48731bb3b35e74dcc45c7256447333c864",
+        "b3a26276b6b46f8e7bcbbfbd5a33f9e8171be582f471ed330dba69ea85ebcd0f",
     (
         "rsc_opening_observation_disposition_complete_0052",
         "uuid, boolean",
-    ): "726114484a2665a95ca98a61cc3b895eb136c7bde2fe0796eb743044d401b5eb",
+    ): "4a5006029f95b5425704ba2b994c0ee2ff242c74e4e5c1660d368a400ffe5b0b",
     (
         "rsc_opening_terminal_side_effects_complete_0052",
         "uuid, boolean",
-    ): "617cf43cc0cf9dc41ec7e971fd696415681a5b0b9858429ce81d97a342d79d0c",
+    ): "d816a65969b6112edb19a6d817918eded8d470f0e2ccb3087fabd9f55dac426d",
     ("rsc_require_opening_task_insert_graph_0052", ""):
         "9241a81d1261fe3e3a81b81e631893b9e1b4f82112379338e09eedbb5f6e1668",
     ("rsc_require_opening_count_write_current_0052", ""):
-        "762841d77fc3ff57bb61b42c473aa5a5c46cc2aa0125e8d6abe0642882070b07",
+        "1eba1b857922dbe1b60a9e7b3c98c5b2250162057262c8849a504441bebeb537",
     ("rsc_require_opening_live_graph_0052", ""):
         "5d9dc35f6ff5a98ded70055d629484bbc9c2aa420f5bd84f3b45070563dd3c24",
     ("rsc_validate_stocktake_scope_region_owner_0025", ""):

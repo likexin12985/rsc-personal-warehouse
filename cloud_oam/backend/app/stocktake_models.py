@@ -42,6 +42,10 @@ from .database import Base
 UUID_TYPE = Uuid(as_uuid=True)
 QUANTITY = Numeric(18, 3)
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
+NULLABLE_JSON_DOCUMENT = JSON(none_as_null=True).with_variant(
+    JSONB(none_as_null=True),
+    "postgresql",
+)
 
 
 def uuid4_value() -> uuid.UUID:
@@ -1062,6 +1066,23 @@ class StocktakeScopeCountCompletion(CreatedAtMixin, Base):
     zero_confirmed: Mapped[bool] = mapped_column(Boolean)
     evidence_manifest_sha256: Mapped[str] = mapped_column(String(64))
     request_sha256: Mapped[str] = mapped_column(String(64))
+    # Opening counts persist the canonical caller request so the database can
+    # prove its hash without trying to reverse resolved/aggregated result rows.
+    # The column remains nullable for legacy and non-opening count facts; the
+    # PostgreSQL opening graph requires a strict object for every new opening
+    # completion and migration 0052 only backfills historically provable rows.
+    request_jsonb: Mapped[dict[str, Any] | None] = mapped_column(
+        NULLABLE_JSON_DOCUMENT,
+        nullable=True,
+    )
+    # The immutable resolution manifest binds every canonical request item to
+    # the exact count line or unresolved observation produced from it.  It is
+    # nullable only so non-opening and pre-migration facts remain representable;
+    # the PostgreSQL opening graph requires a strict v1 document.
+    request_resolution_jsonb: Mapped[dict[str, Any] | None] = mapped_column(
+        NULLABLE_JSON_DOCUMENT,
+        nullable=True,
+    )
     idempotency_key_hash: Mapped[str] = mapped_column(String(64))
     completed_by_user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="RESTRICT")
