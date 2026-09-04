@@ -394,7 +394,14 @@ OPENING_GRAPH_TABLE_DISPATCH_REVISION = (
     / "versions"
     / "20260904_0053_opening_graph_table_dispatch.py"
 )
-HEAD_REVISION = "20260904_0053"
+OPENING_RECOUNT_SOURCE_HISTORY_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260904_0054_opening_recount_source_history.py"
+)
+HEAD_REVISION = "20260904_0054"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -417,6 +424,8 @@ STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID = "20260903_0050"
 STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID = "20260903_0051"
 OPENING_TERMINAL_GUARD_EXECUTION_REVISION_ID = "20260903_0052"
 OPENING_GRAPH_TABLE_DISPATCH_REVISION_ID = "20260904_0053"
+OPENING_RECOUNT_SOURCE_HISTORY_REVISION_ID = "20260904_0054"
+PRE_OPENING_RECOUNT_SOURCE_HISTORY_HEAD_REVISION = "20260904_0053"
 PRE_OPENING_GRAPH_TABLE_DISPATCH_HEAD_REVISION = "20260903_0052"
 PRE_OPENING_TERMINAL_GUARD_EXECUTION_HEAD_REVISION = "20260903_0051"
 PRE_STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_HEAD_REVISION = "20260903_0050"
@@ -1423,7 +1432,15 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == PRE_OPENING_GRAPH_TABLE_DISPATCH_HEAD_REVISION
+    assert head.down_revision == PRE_OPENING_RECOUNT_SOURCE_HISTORY_HEAD_REVISION
+    previous_opening_recount_source_history_head = script.get_revision(
+        PRE_OPENING_RECOUNT_SOURCE_HISTORY_HEAD_REVISION
+    )
+    assert previous_opening_recount_source_history_head is not None
+    assert (
+        previous_opening_recount_source_history_head.down_revision
+        == PRE_OPENING_GRAPH_TABLE_DISPATCH_HEAD_REVISION
+    )
     previous_opening_graph_table_dispatch_head = script.get_revision(
         PRE_OPENING_GRAPH_TABLE_DISPATCH_HEAD_REVISION
     )
@@ -2921,6 +2938,17 @@ def _load_0053_migration_module():
     spec = importlib.util.spec_from_file_location(
         "opening_graph_table_dispatch_migration_0053",
         OPENING_GRAPH_TABLE_DISPATCH_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_0054_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "opening_recount_source_history_migration_0054",
+        OPENING_RECOUNT_SOURCE_HISTORY_REVISION,
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -6490,6 +6518,322 @@ def test_0053_postgresql_offline_downgrade_requires_empty_opening_graph(
         < sql.index(module.DOWNGRADE_BLOCKER)
         < sql.index("readiness downgrade")
         < sql.index("graph downgrade")
+        < sql.index("downgrade postflight")
+    )
+
+
+def test_0054_pins_historical_recount_assignment_exception_and_catalog(
+    monkeypatch,
+) -> None:
+    migration_0052 = _load_0052_migration_module()
+    migration_0053 = _load_0053_migration_module()
+    module = _load_0054_migration_module()
+    assert module.revision == OPENING_RECOUNT_SOURCE_HISTORY_REVISION_ID
+    assert module.down_revision == PRE_OPENING_RECOUNT_SOURCE_HISTORY_HEAD_REVISION
+    assert module.PREVIOUS_SCHEMA_REVISION == module.down_revision
+    assert len(module.LOCK_TABLES) == 57
+    assert len(set(module.LOCK_TABLES)) == len(module.LOCK_TABLES)
+    assert module.LOCK_TABLES == migration_0053.LOCK_TABLES
+    assert len(module.ROUND_SUBMISSION_CALLER_CATALOG) == 6
+    assert len(
+        {row[0] for row in module.ROUND_SUBMISSION_CALLER_CATALOG}
+    ) == 6
+    assert sum(row[6] for row in module.ROUND_SUBMISSION_CALLER_CATALOG) == 14
+    assert sum(row[7] for row in module.ROUND_SUBMISSION_CALLER_CATALOG) == 26
+    assert module.ROUND_SUBMISSION_TRIGGER_CATALOG == (
+        *tuple(
+            (
+                module.GRAPH_CLOSURE_SIGNATURE,
+                table_name,
+                trigger_name,
+                trigger_type,
+            )
+            for table_name, trigger_name, trigger_type
+            in migration_0053.GRAPH_CLOSURE_TRIGGER_CATALOG
+        ),
+        *tuple(
+            (function_signature, table_name, trigger_name, trigger_type)
+            for table_name, trigger_name, function_signature, trigger_type
+            in migration_0052.TRIGGER_CATALOG
+            if function_signature == module.TERMINAL_COMMIT_SIGNATURE
+        ),
+    )
+    assert len(module.ROUND_SUBMISSION_TRIGGER_CATALOG) == 26
+    assert len(
+        {row[2] for row in module.ROUND_SUBMISSION_TRIGGER_CATALOG}
+    ) == 26
+    assert {
+        row[1] for row in module.ROUND_SUBMISSION_TRIGGER_CATALOG
+    }.issubset(set(module.LOCK_TABLES))
+    caller_trigger_counts = {
+        row[0]: row[7] for row in module.ROUND_SUBMISSION_CALLER_CATALOG
+    }
+    assert {
+        signature: sum(
+            1
+            for trigger_row in module.ROUND_SUBMISSION_TRIGGER_CATALOG
+            if trigger_row[0] == signature
+        )
+        for signature in caller_trigger_counts
+        if caller_trigger_counts[signature]
+    } == {
+        signature: trigger_count
+        for signature, trigger_count in caller_trigger_counts.items()
+        if trigger_count
+    }
+
+    legacy_body = migration_0052.ROUND_SUBMISSION_BODY
+    assert hashlib.sha256(legacy_body.encode("utf-8")).hexdigest() == (
+        module.ROUND_SUBMISSION_BODY_SHA256_0053
+    )
+    assert legacy_body.count(module.INITIAL_ASSIGNMENT_REJECTION_0053) == 2
+    assert module.INITIAL_ASSIGNMENT_REJECTION_0054 not in legacy_body
+    fixed_body = legacy_body.replace(
+        module.INITIAL_ASSIGNMENT_REJECTION_0053,
+        module.INITIAL_ASSIGNMENT_REJECTION_0054,
+    )
+    assert hashlib.sha256(fixed_body.encode("utf-8")).hexdigest() == (
+        module.ROUND_SUBMISSION_BODY_SHA256_0054
+    )
+    assert fixed_body.count(module.INITIAL_ASSIGNMENT_REJECTION_0054) == 2
+    assert module.INITIAL_ASSIGNMENT_REJECTION_0053 not in fixed_body
+    assert fixed_body.replace(
+        module.INITIAL_ASSIGNMENT_REJECTION_0054,
+        module.INITIAL_ASSIGNMENT_REJECTION_0053,
+    ) == legacy_body
+    assert fixed_body.count("AND NOT p_historical") == (
+        legacy_body.count("AND NOT p_historical") + 2
+    )
+
+    ready_0052_sql = migration_0052._oam_runtime_ready_function_sql(
+        migration_0052.revision
+    )
+    ready_0052 = ready_0052_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    ready_0053 = ready_0052.replace(
+        migration_0053.RUNTIME_READY_REVISION_0052,
+        migration_0053.RUNTIME_READY_REVISION_0053,
+    )
+    assert hashlib.sha256(ready_0053.encode("utf-8")).hexdigest() == (
+        module.RUNTIME_READY_BODY_SHA256_0053
+    )
+    assert ready_0053.count(module.RUNTIME_READY_REVISION_0053) == 1
+    ready_0054 = ready_0053.replace(
+        module.RUNTIME_READY_REVISION_0053,
+        module.RUNTIME_READY_REVISION_0054,
+    )
+    assert hashlib.sha256(ready_0054.encode("utf-8")).hexdigest() == (
+        module.RUNTIME_READY_BODY_SHA256_0054
+    )
+
+    parser = pytest.importorskip("pglast.parser")
+    parser.parse_sql(
+        "CREATE FUNCTION public.rsc_0054_parse_probe("
+        "p_task_id uuid, p_round_id uuid, p_historical boolean) "
+        "RETURNS boolean LANGUAGE sql AS $rsc_0054_parse$"
+        + fixed_body
+        + "$rsc_0054_parse$"
+    )
+    statements: list[str] = []
+    monkeypatch.setattr(module.op, "execute", statements.append)
+    module._verify_round_submission_catalog(
+        expected_body_sha256=module.ROUND_SUBMISSION_BODY_SHA256_0053,
+        phase="legacy helper parse probe",
+    )
+    module._verify_round_submission_catalog(
+        expected_body_sha256=module.ROUND_SUBMISSION_BODY_SHA256_0054,
+        phase="fixed helper parse probe",
+    )
+    module._verify_round_submission_callers(phase="caller parse probe")
+    module._verify_runtime_ready_catalog(
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0053,
+        phase="legacy readiness parse probe",
+    )
+    module._verify_runtime_ready_catalog(
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0054,
+        phase="fixed readiness parse probe",
+    )
+    module._replace_function_source(
+        signature=module.ROUND_SUBMISSION_SIGNATURE,
+        expected_body_sha256=module.ROUND_SUBMISSION_BODY_SHA256_0053,
+        expected_replacement_body_sha256=(
+            module.ROUND_SUBMISSION_BODY_SHA256_0054
+        ),
+        source_fragment=module.INITIAL_ASSIGNMENT_REJECTION_0053,
+        replacement_fragment=module.INITIAL_ASSIGNMENT_REJECTION_0054,
+        expected_source_count=2,
+        phase="helper parse probe",
+    )
+    module._replace_function_source(
+        signature=module.RUNTIME_READY_SIGNATURE,
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0053,
+        expected_replacement_body_sha256=module.RUNTIME_READY_BODY_SHA256_0054,
+        source_fragment=module.RUNTIME_READY_REVISION_0053,
+        replacement_fragment=module.RUNTIME_READY_REVISION_0054,
+        expected_source_count=1,
+        phase="readiness parse probe",
+    )
+    module._require_no_opening_evidence()
+    for statement in statements:
+        assert not sa.text(statement)._bindparams
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+
+    with pytest.raises(ValueError, match="unsupported 0054 round submission"):
+        module._verify_round_submission_catalog(
+            expected_body_sha256="0" * 64,
+            phase="invalid",
+        )
+    with pytest.raises(ValueError, match="unsupported 0054 readiness"):
+        module._verify_runtime_ready_catalog(
+            expected_body_sha256="0" * 64,
+            phase="invalid",
+        )
+    with pytest.raises(ValueError, match="unsupported 0054 function"):
+        module._replace_function_source(
+            signature=module.ROUND_SUBMISSION_SIGNATURE,
+            expected_body_sha256=module.ROUND_SUBMISSION_BODY_SHA256_0053,
+            expected_replacement_body_sha256=(
+                module.ROUND_SUBMISSION_BODY_SHA256_0054
+            ),
+            source_fragment=module.INITIAL_ASSIGNMENT_REJECTION_0053,
+            replacement_fragment=module.INITIAL_ASSIGNMENT_REJECTION_0054,
+            expected_source_count=1,
+            phase="invalid",
+        )
+
+
+def test_0054_postgresql_offline_upgrade_is_source_only_and_fail_closed(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0054_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_OPENING_RECOUNT_SOURCE_HISTORY_HEAD_REVISION}:"
+        f"{OPENING_RECOUNT_SOURCE_HISTORY_REVISION_ID}",
+        sql=True,
+    )
+    sql = output.getvalue()
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(
+            f"public.{table_name}" for table_name in module.LOCK_TABLES
+        )
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    assert "-- Running upgrade 20260904_0053 -> 20260904_0054" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count("EXECUTE replacement_definition") == 2
+    for failure_reason in (
+        "migration role mismatch",
+        "helper identity mismatch",
+        "helper function mismatch",
+        "helper ACL mismatch",
+        "caller role mismatch",
+        "caller catalog mismatch",
+        "caller trigger mismatch",
+        "readiness identity mismatch",
+        "readiness function mismatch",
+        "readiness ACL mismatch",
+        "source mismatch",
+        "definition mismatch",
+        "replacement mismatch",
+    ):
+        assert failure_reason in sql
+    assert module.ROUND_SUBMISSION_BODY_SHA256_0053 in sql
+    assert module.ROUND_SUBMISSION_BODY_SHA256_0054 in sql
+    assert module.RUNTIME_READY_BODY_SHA256_0053 in sql
+    assert module.RUNTIME_READY_BODY_SHA256_0054 in sql
+    assert module.INITIAL_ASSIGNMENT_REJECTION_0053 in sql
+    assert module.INITIAL_ASSIGNMENT_REJECTION_0054 in sql
+    assert "function_row.proowner = migrator_oid" in sql
+    assert "expected_caller.trigger_count" in sql
+    assert "function_row.proallargtypes IS NULL" in sql
+    assert "function_row.pronargdefaults = 0" in sql
+    assert "named_function.proname" in sql
+    assert "candidate_namespace" not in sql
+    assert "expected_trigger.function_signature" in sql
+    assert "namespace_row.nspname = 'public'" in sql
+    assert "trigger_row.tgenabled = 'A'" in sql
+    assert "trigger_row.tgdeferrable" in sql
+    assert "trigger_row.tginitdeferred" in sql
+    assert "trigger_row.tgqual IS NULL" in sql
+    for _signature, table_name, trigger_name, trigger_type in (
+        module.ROUND_SUBMISSION_TRIGGER_CATALOG
+    ):
+        assert f"'{table_name}'" in sql
+        assert f"'{trigger_name}'" in sql
+        assert f", {trigger_type})" in sql
+    assert "CREATE TABLE" not in sql
+    assert "ALTER TABLE" not in sql
+    assert "DROP TRIGGER" not in sql
+    assert "CREATE TRIGGER" not in sql
+    assert "GRANT " not in sql
+    assert "REVOKE " not in sql
+    assert "INSERT INTO public." not in sql
+    assert "UPDATE public." not in sql
+    assert "DELETE FROM public." not in sql
+    assert module.DOWNGRADE_BLOCKER not in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("upgrade preflight")
+        < sql.index("round submission upgrade")
+        < sql.index("readiness upgrade")
+        < sql.index("upgrade postflight")
+    )
+
+
+def test_0054_postgresql_offline_downgrade_requires_empty_opening_graph(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0054_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.downgrade(
+        config,
+        f"{OPENING_RECOUNT_SOURCE_HISTORY_REVISION_ID}:"
+        f"{PRE_OPENING_RECOUNT_SOURCE_HISTORY_HEAD_REVISION}",
+        sql=True,
+    )
+    sql = output.getvalue()
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(
+            f"public.{table_name}" for table_name in module.LOCK_TABLES
+        )
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    assert "-- Running downgrade 20260904_0054 -> 20260904_0053" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count("EXECUTE replacement_definition") == 2
+    assert sql.count(module.DOWNGRADE_BLOCKER) == 1
+    assert "task.task_type = 'opening'" in sql
+    assert "FROM public.inventory_opening_establishments" in sql
+    assert "opening-reconciliation-" in sql
+    assert "CREATE TABLE" not in sql
+    assert "ALTER TABLE" not in sql
+    assert "DROP TRIGGER" not in sql
+    assert "CREATE TRIGGER" not in sql
+    assert "GRANT " not in sql
+    assert "REVOKE " not in sql
+    assert "INSERT INTO public." not in sql
+    assert "UPDATE public." not in sql
+    assert "DELETE FROM public." not in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("downgrade preflight")
+        < sql.index(module.DOWNGRADE_BLOCKER)
+        < sql.index("readiness downgrade")
+        < sql.index("round submission downgrade")
         < sql.index("downgrade postflight")
     )
 

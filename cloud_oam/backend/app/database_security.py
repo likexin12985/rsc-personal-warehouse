@@ -3412,7 +3412,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     (
         "rsc_opening_round_submission_complete_0052",
         "uuid, uuid, boolean",
-    ): "fe1de83cfa07151d62506658cb65307a1823594ecc20df6964846461a897bd3f",
+    ): "d57abd63b6be3b13ac0c19786f76fcc6e7eeaf4ec4dc9bd84d45fbe2452ff206",
     (
         "rsc_opening_scope_count_complete_0052",
         "uuid, uuid, uuid, boolean",

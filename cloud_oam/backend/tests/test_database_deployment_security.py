@@ -202,7 +202,7 @@ def test_postgresql16_0049_catalog_uses_0052_scope_guard_hash_by_revision() -> N
             observation_scope_mode_fixed=True,
         ) == migration_0052.LEGACY_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
 
-    assert gate.HEAD_REVISION == gate.OPENING_GRAPH_TABLE_DISPATCH_REVISION
+    assert gate.HEAD_REVISION == gate.OPENING_RECOUNT_SOURCE_HISTORY_REVISION
     assert gate._expected_0049_function_body_sha256(
         migration_0049,
         signature=signature,
