@@ -175,7 +175,7 @@ def test_postgresql16_scratch_cleanup_always_restores_projector_connect() -> Non
     assert "raise cleanup_error from setup_error" in create_source
 
 
-def test_postgresql16_0049_catalog_uses_0052_scope_guard_hash_by_revision() -> None:
+def test_postgresql16_0049_catalog_uses_head_guard_hashes_by_revision() -> None:
     spec = importlib.util.spec_from_file_location(
         "rsc_pg16_gate_catalog_hash_test",
         PG16_RELEASE_GATE_TEST,
@@ -186,6 +186,16 @@ def test_postgresql16_0049_catalog_uses_0052_scope_guard_hash_by_revision() -> N
 
     migration_0049 = gate._load_stocktake_recount_guard_security_migration_0049()
     migration_0052 = gate._load_opening_terminal_guard_execution_migration_0052()
+    migration_0055 = gate._load_nonopening_start_audit_order_migration_0055()
+    migration_0056 = (
+        gate._load_nonopening_count_guard_compatibility_migration_0056()
+    )
+    migration_0057 = (
+        gate._load_nonopening_difference_replay_lock_migration_0057()
+    )
+    migration_0058 = (
+        gate._load_nonopening_review_terminal_status_migration_0058()
+    )
     signature = migration_0049.SCOPE_COMPLETION_CALLER_0021_SIGNATURE
     assert signature == migration_0052.SCOPE_COMPLETION_GUARD_SIGNATURE_0021
 
@@ -202,13 +212,50 @@ def test_postgresql16_0049_catalog_uses_0052_scope_guard_hash_by_revision() -> N
             observation_scope_mode_fixed=True,
         ) == migration_0052.LEGACY_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
 
-    assert gate.HEAD_REVISION == gate.OPENING_RECOUNT_SOURCE_HISTORY_REVISION
+    assert (
+        gate.HEAD_REVISION
+        == gate.NONOPENING_REVIEW_TERMINAL_STATUS_REVISION
+    )
+    assert migration_0058.revision == gate.HEAD_REVISION
+    assert migration_0058.down_revision == migration_0057.revision
+    assert migration_0057.down_revision == migration_0056.revision
+    assert migration_0056.down_revision == gate.NONOPENING_START_AUDIT_ORDER_REVISION
+    assert migration_0055.revision == migration_0056.down_revision
+    assert migration_0055.down_revision == gate.OPENING_RECOUNT_SOURCE_HISTORY_REVISION
     assert gate._expected_0049_function_body_sha256(
         migration_0049,
         signature=signature,
         expected_revision=gate.HEAD_REVISION,
         observation_scope_mode_fixed=True,
     ) == migration_0052.FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
+
+    helper_signature = migration_0049.ROUND_ASSIGNMENT_HELPER_0021_SIGNATURE
+    assert gate._expected_0049_function_body_sha256(
+        migration_0049,
+        signature=helper_signature,
+        expected_revision=gate.NONOPENING_START_AUDIT_ORDER_REVISION,
+        observation_scope_mode_fixed=True,
+    ) == migration_0056.LEGACY_BODY_SHA256
+    assert gate._expected_0049_function_body_sha256(
+        migration_0049,
+        signature=helper_signature,
+        expected_revision=gate.HEAD_REVISION,
+        observation_scope_mode_fixed=True,
+    ) == migration_0056.FIXED_BODY_SHA256
+
+    review_signature = migration_0049.REVIEW_GRAPH_VALIDATOR_0032_SIGNATURE
+    assert gate._expected_0049_function_body_sha256(
+        migration_0049,
+        signature=review_signature,
+        expected_revision=gate.NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
+        observation_scope_mode_fixed=True,
+    ) == migration_0058.LEGACY_BODY_SHA256
+    assert gate._expected_0049_function_body_sha256(
+        migration_0049,
+        signature=review_signature,
+        expected_revision=gate.HEAD_REVISION,
+        observation_scope_mode_fixed=True,
+    ) == migration_0058.FIXED_BODY_SHA256
 
     with pytest.raises(AssertionError, match="unsupported 0049 catalog revision"):
         gate._expected_0049_function_body_sha256(

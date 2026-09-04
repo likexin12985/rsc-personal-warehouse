@@ -70,6 +70,11 @@ from ..stocktake_models import (
 from .audit_chain import AuditChainError, append_audit_event, lock_audit_chain_head
 from . import formal_files as formal_file_service
 from .inventory_posting import INVENTORY_LEDGER_HEAD_ID, INVENTORY_STREAM_KEY
+from .postgresql_lock_graph import (
+    lock_inventory_reference_graph,
+    lock_inventory_serial_graph,
+    lock_opening_stocktake_start_reference,
+)
 from . import stocktake_task as task_service
 
 
@@ -213,6 +218,387 @@ class _PreparedObservation:
     dimension_sha256: str
 
 
+@dataclass(frozen=True, slots=True)
+class _CountReferencePlan:
+    """Bounded request-reference candidates captured around the owner lock."""
+
+    owner_lock_material_ids: tuple[uuid.UUID, ...]
+    resolved_material_ids: tuple[uuid.UUID, ...]
+    lot_ids: tuple[uuid.UUID, ...]
+    owner_lock_serial_ids: tuple[uuid.UUID, ...]
+    material_qr_code_ids: tuple[uuid.UUID, ...]
+    serial_qr_code_ids: tuple[uuid.UUID, ...]
+    manifest_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SnapshotReferencePlan:
+    """Task-local snapshot coordinates probed before shared owner locks."""
+
+    account_ids: tuple[uuid.UUID, ...]
+    serial_ids: tuple[uuid.UUID, ...]
+    manifest_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedResolution:
+    """Canonical, write-ready resolution captured on one database read."""
+
+    counts: tuple[_PreparedCount, ...]
+    observations: tuple[_PreparedObservation, ...]
+    sha256: str
+
+
+def _capture_snapshot_reference_plan(
+    db: Session,
+    task_id: uuid.UUID,
+) -> _SnapshotReferencePlan:
+    rows = tuple(
+        db.scalars(
+            select(StocktakeSnapshotLine)
+            .where(StocktakeSnapshotLine.task_id == task_id)
+            .order_by(
+                StocktakeSnapshotLine.scope_id,
+                StocktakeSnapshotLine.stock_account_id,
+                StocktakeSnapshotLine.id,
+            )
+            .execution_options(populate_existing=True)
+        ).all()
+    )
+    serial_ids = tuple(
+        sorted(
+            {
+                serial_id
+                for row in rows
+                for serial_id in _snapshot_serial_ids(row)
+            },
+            key=str,
+        )
+    )
+    return _SnapshotReferencePlan(
+        account_ids=tuple(
+            sorted({row.stock_account_id for row in rows}, key=str)
+        ),
+        serial_ids=serial_ids,
+        manifest_sha256=_sha256(
+            {
+                "rows": [
+                    {
+                        "account_dimension_sha256": row.account_dimension_sha256,
+                        "book_qty": _canonical_quantity(row.book_qty),
+                        "created_at": _timestamp(row.created_at),
+                        "id": str(row.id),
+                        "ledger_cursor": row.ledger_cursor,
+                        "scope_id": str(row.scope_id),
+                        "serial_count": row.serial_count,
+                        "serial_snapshot_jsonb": row.serial_snapshot_jsonb,
+                        "serial_snapshot_sha256": row.serial_snapshot_sha256,
+                        "stock_account_id": str(row.stock_account_id),
+                        "task_id": str(row.task_id),
+                    }
+                    for row in rows
+                ],
+                "schema": "cloud_oam.stocktake.count_snapshot_reference_probe.v1",
+                "task_id": str(task_id),
+            }
+        ),
+    )
+
+
+def _capture_count_reference_plan(
+    db: Session,
+    task: FormalStocktakeTask,
+    command: SubmitStocktakeInitialScopeCountCommand,
+    scopes: Sequence[FormalStocktakeScope],
+) -> _CountReferencePlan:
+    """Capture every request candidate and exact 0027 owner-lock union.
+
+    Owner-lock ids deliberately retain explicit ids and QR ``object_id`` values
+    even when no referenced master row exists.  PostgreSQL's migration-owned
+    helpers then reject a dangling reference instead of silently shrinking the
+    lock graph to the rows that happened to resolve during this pre-read.
+    """
+
+    observations = command.physical_observations
+    sku_values = tuple(
+        sorted(
+            {
+                row.material_identifier_raw
+                for row in observations
+                if row.material_identifier_type in {"sku_code", "unknown"}
+            }
+        )
+    )
+    external_values: set[uuid.UUID] = set()
+    for row in observations:
+        if row.material_identifier_type not in {"external_code", "unknown"}:
+            continue
+        try:
+            external_values.add(uuid.UUID(row.material_identifier_raw))
+        except (ValueError, TypeError, AttributeError):
+            pass
+    qr_values = tuple(
+        sorted(
+            {
+                row.material_identifier_raw
+                for row in observations
+                if row.material_identifier_type in {"qr_code", "unknown"}
+            }
+        )
+    )
+    material_qr_rows = tuple(
+        db.scalars(
+            select(QrCode)
+            .where(
+                QrCode.code.in_(qr_values),
+                QrCode.object_type == "material",
+                QrCode.status == "active",
+            )
+            .order_by(QrCode.id)
+            .execution_options(populate_existing=True)
+        ).all()
+    ) if qr_values else ()
+
+    explicit_material_ids = {
+        row.material_id for row in observations if row.material_id is not None
+    }
+    scope_material_ids = {
+        row.material_id for row in scopes if row.material_id is not None
+    }
+    material_conditions = []
+    if sku_values:
+        material_conditions.append(
+            (FormalMaterial.sku_code.in_(sku_values))
+            & (FormalMaterial.status == "active")
+        )
+    if external_values:
+        material_conditions.append(
+            (FormalMaterial.external_object_id.in_(tuple(external_values)))
+            & (FormalMaterial.status == "active")
+        )
+    qr_object_ids = {row.object_id for row in material_qr_rows}
+    if qr_object_ids:
+        material_conditions.append(
+            (FormalMaterial.id.in_(tuple(qr_object_ids)))
+            & (FormalMaterial.status == "active")
+        )
+    if explicit_material_ids:
+        material_conditions.append(FormalMaterial.id.in_(tuple(explicit_material_ids)))
+    material_rows = tuple(
+        db.scalars(
+            select(FormalMaterial)
+            .where(or_(*material_conditions))
+            .order_by(FormalMaterial.id)
+            .execution_options(populate_existing=True)
+        ).all()
+    ) if material_conditions else ()
+    resolved_material_ids = tuple(sorted({row.id for row in material_rows}, key=str))
+    owner_lock_material_ids = tuple(
+        sorted(
+            scope_material_ids
+            | explicit_material_ids
+            | qr_object_ids
+            | set(resolved_material_ids),
+            key=str,
+        )
+    )
+
+    lot_numbers = tuple(
+        sorted({row.lot_no_raw for row in observations if row.lot_no_raw is not None})
+    )
+    lot_rows = tuple(
+        db.scalars(
+            select(InventoryLot)
+            .where(
+                InventoryLot.material_id.in_(resolved_material_ids),
+                InventoryLot.lot_no.in_(lot_numbers),
+            )
+            .order_by(InventoryLot.id)
+            .execution_options(populate_existing=True)
+        ).all()
+    ) if resolved_material_ids and lot_numbers else ()
+
+    serial_number_values = tuple(
+        sorted(
+            {
+                row.serial_no_raw
+                for row in observations
+                if row.serial_no_raw is not None
+                and row.serial_identifier_type in {"serial_no", "unknown"}
+            }
+        )
+    )
+    serial_qr_values = tuple(
+        sorted(
+            {
+                row.serial_no_raw
+                for row in observations
+                if row.serial_no_raw is not None
+                and row.serial_identifier_type in {"qr_code", "unknown"}
+            }
+        )
+    )
+    serial_qr_rows = tuple(
+        db.scalars(
+            select(QrCode)
+            .where(
+                QrCode.code.in_(serial_qr_values),
+                QrCode.object_type == "serial",
+                QrCode.status == "active",
+            )
+            .order_by(QrCode.id)
+            .execution_options(populate_existing=True)
+        ).all()
+    ) if serial_qr_values else ()
+    explicit_serial_ids = {
+        serial_id
+        for row in command.account_counts
+        for serial_id in row.serial_ids
+    }
+    explicit_serial_ids.update(
+        row.serial_id for row in observations if row.serial_id is not None
+    )
+    serial_qr_object_ids = {row.object_id for row in serial_qr_rows}
+    serial_conditions = []
+    if explicit_serial_ids or serial_qr_object_ids:
+        serial_conditions.append(
+            InventorySerial.id.in_(tuple(explicit_serial_ids | serial_qr_object_ids))
+        )
+    if serial_number_values:
+        serial_conditions.append(InventorySerial.serial_no.in_(serial_number_values))
+    if serial_qr_values:
+        serial_conditions.append(InventorySerial.qr_code.in_(serial_qr_values))
+    serial_rows = tuple(
+        db.scalars(
+            select(InventorySerial)
+            .where(or_(*serial_conditions))
+            .order_by(InventorySerial.id)
+            .execution_options(populate_existing=True)
+        ).all()
+    ) if serial_conditions else ()
+    owner_lock_serial_ids = tuple(
+        sorted(
+            explicit_serial_ids
+            | serial_qr_object_ids
+            | {row.id for row in serial_rows},
+            key=str,
+        )
+    )
+
+    policy_rows = tuple(
+        db.scalars(
+            select(MaterialInventoryPolicy)
+            .where(
+                MaterialInventoryPolicy.material_id.in_(resolved_material_ids),
+                MaterialInventoryPolicy.effective_from <= task.cutoff_at,
+                or_(
+                    MaterialInventoryPolicy.effective_to.is_(None),
+                    MaterialInventoryPolicy.effective_to > task.cutoff_at,
+                ),
+            )
+            .order_by(
+                MaterialInventoryPolicy.material_id,
+                MaterialInventoryPolicy.effective_from,
+                MaterialInventoryPolicy.id,
+            )
+            .execution_options(populate_existing=True)
+        ).all()
+    ) if resolved_material_ids and task.cutoff_at is not None else ()
+
+    manifest = _sha256(
+        {
+            "lots": [
+                {
+                    "expiry_date": row.expiry_date.isoformat() if row.expiry_date else None,
+                    "id": str(row.id),
+                    "lot_no": row.lot_no,
+                    "manufacture_date": (
+                        row.manufacture_date.isoformat() if row.manufacture_date else None
+                    ),
+                    "material_id": str(row.material_id),
+                    "updated_at": _timestamp(row.updated_at),
+                }
+                for row in lot_rows
+            ],
+            "materials": [
+                {
+                    "base_unit": row.base_unit,
+                    "external_object_id": str(row.external_object_id),
+                    "id": str(row.id),
+                    "sku_code": row.sku_code,
+                    "source_updated_at": _timestamp(row.source_updated_at),
+                    "status": row.status,
+                    "updated_at": _timestamp(row.updated_at),
+                }
+                for row in material_rows
+            ],
+            "policies": [
+                {
+                    "allow_fraction": row.allow_fraction,
+                    "effective_from": _timestamp(row.effective_from),
+                    "effective_to": _timestamp(row.effective_to),
+                    "id": str(row.id),
+                    "material_id": str(row.material_id),
+                    "quantity_scale": row.quantity_scale,
+                    "tracking_mode": row.tracking_mode,
+                    "updated_at": _timestamp(row.updated_at),
+                }
+                for row in policy_rows
+            ],
+            "qr_codes": [
+                {
+                    "code": row.code,
+                    "id": str(row.id),
+                    "object_id": str(row.object_id),
+                    "object_type": row.object_type,
+                    "printed_at": _timestamp(row.printed_at),
+                    "status": row.status,
+                    "updated_at": _timestamp(row.updated_at),
+                }
+                for row in material_qr_rows
+            ],
+            "serial_qr_codes": [
+                {
+                    "code": row.code,
+                    "id": str(row.id),
+                    "object_id": str(row.object_id),
+                    "object_type": row.object_type,
+                    "printed_at": _timestamp(row.printed_at),
+                    "status": row.status,
+                    "updated_at": _timestamp(row.updated_at),
+                }
+                for row in serial_qr_rows
+            ],
+            "schema": "cloud_oam.stocktake.count_input_reference_probe.v1",
+            "serials": [
+                {
+                    "id": str(row.id),
+                    "lifecycle_status": row.lifecycle_status,
+                    "lot_id": str(row.lot_id) if row.lot_id is not None else None,
+                    "material_id": str(row.material_id),
+                    "qr_code": row.qr_code,
+                    "serial_no": row.serial_no,
+                    "updated_at": _timestamp(row.updated_at),
+                }
+                for row in serial_rows
+            ],
+        }
+    )
+    return _CountReferencePlan(
+        owner_lock_material_ids=owner_lock_material_ids,
+        resolved_material_ids=resolved_material_ids,
+        lot_ids=tuple(sorted({row.id for row in lot_rows}, key=str)),
+        owner_lock_serial_ids=owner_lock_serial_ids,
+        material_qr_code_ids=tuple(
+            sorted({row.id for row in material_qr_rows}, key=str)
+        ),
+        serial_qr_code_ids=tuple(
+            sorted({row.id for row in serial_qr_rows}, key=str)
+        ),
+        manifest_sha256=manifest,
+    )
+
+
 def submit_stocktake_initial_scope_count(
     db: Session,
     *,
@@ -317,10 +703,12 @@ def _submit_stocktake_initial_scope_count(
         )
     scopes = tuple(
         db.scalars(
-            select(FormalStocktakeScope)
-            .where(FormalStocktakeScope.task_id == task.id)
-            .order_by(FormalStocktakeScope.scope_no, FormalStocktakeScope.id)
-            .with_for_update()
+            _select_only_reference_statement(
+                db,
+                select(FormalStocktakeScope)
+                .where(FormalStocktakeScope.task_id == task.id)
+                .order_by(FormalStocktakeScope.scope_no, FormalStocktakeScope.id),
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -344,6 +732,44 @@ def _submit_stocktake_initial_scope_count(
     )
     if round_row is None:
         _fail("stocktake_count_round_not_found", "not_found", "盘点轮次不存在")
+
+    reference_plan = _capture_count_reference_plan(db, task, checked, scopes)
+    snapshot_probe = _capture_snapshot_reference_plan(db, task.id)
+    if task.cutoff_at is None:
+        _fail(
+            "stocktake_count_cutoff_missing",
+            "service_unavailable",
+            "盘点截止时点缺失",
+        )
+    lock_opening_stocktake_start_reference(
+        db,
+        task.region_org_id,
+        tuple(row.owner_org_id for row in scopes),
+        tuple(row.location_id for row in scopes),
+        reference_plan.owner_lock_material_ids,
+        task.cutoff_at,
+    )
+    lock_inventory_reference_graph(db, snapshot_probe.account_ids, task.cutoff_at)
+    lock_inventory_serial_graph(
+        db,
+        tuple(
+            sorted(
+                set(reference_plan.owner_lock_serial_ids).union(
+                    snapshot_probe.serial_ids
+                ),
+                key=str,
+            )
+        ),
+    )
+    if (
+        _capture_count_reference_plan(db, task, checked, scopes) != reference_plan
+        or _capture_snapshot_reference_plan(db, task.id) != snapshot_probe
+    ):
+        _fail(
+            "stocktake_count_reference_graph_changed",
+            "conflict",
+            "盘点输入引用在锁定期间发生变化，请回滚并重新读取",
+        )
 
     now = _database_now(db)
     current = _require_current_actor(db, supplied, now)
@@ -378,27 +804,21 @@ def _submit_stocktake_initial_scope_count(
             "提交盘点模式与任务冻结的明盘/盲盘契约不一致",
         )
 
-    snapshots = tuple(
-        db.scalars(
-            select(StocktakeSnapshotLine)
-            .where(StocktakeSnapshotLine.task_id == task.id)
-            .order_by(
-                StocktakeSnapshotLine.scope_id,
-                StocktakeSnapshotLine.stock_account_id,
-            )
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).all()
+    snapshots, accounts, scope_snapshots = _load_count_snapshot_graph(
+        db,
+        task=task,
+        plans=plans,
+        scope=scope,
     )
-    accounts = _lock_snapshot_accounts(db, snapshots)
-    _validate_snapshot_manifest(task, plans, snapshots, accounts)
-    scope_snapshots = tuple(row for row in snapshots if row.scope_id == scope.id)
 
     files = _lock_evidence_files(db, checked.evidence_file_ids, current.user_id)
     existing = db.scalar(
-        select(StocktakeScopeCountCompletion)
-        .where(StocktakeScopeCountCompletion.idempotency_key_hash == key_hash)
-        .with_for_update()
+        _select_only_reference_statement(
+            db,
+            select(StocktakeScopeCountCompletion).where(
+                StocktakeScopeCountCompletion.idempotency_key_hash == key_hash
+            ),
+        )
         .execution_options(populate_existing=True)
     )
     if existing is not None:
@@ -437,41 +857,24 @@ def _submit_stocktake_initial_scope_count(
             "该范围存在未封印的盘点证据，请回滚并重新读取",
         )
 
-    prepared_counts = _prepare_snapshot_counts(
+    prepared_resolution = _prepare_count_resolution(
         db,
         task=task,
         scope=scope,
         snapshots=scope_snapshots,
         accounts=accounts,
-        values=checked.account_counts,
-        count_mode=checked.count_mode,
+        command=checked,
+        round_id=round_row.id,
     )
-    prepared_observations = _prepare_observations(
-        db,
-        task=task,
-        scope=scope,
-        snapshots=scope_snapshots,
-        accounts=accounts,
-        values=checked.physical_observations,
-    )
-    if not scope_snapshots and not prepared_observations and not checked.zero_confirmed:
+    if (
+        _capture_count_reference_plan(db, task, checked, scopes) != reference_plan
+        or _capture_snapshot_reference_plan(db, task.id) != snapshot_probe
+    ):
         _fail(
-            "stocktake_count_zero_confirmation_required",
-            "invalid_request",
-            "空盘点范围必须显式零确认",
+            "stocktake_count_reference_graph_changed",
+            "conflict",
+            "盘点输入引用在处理期间发生变化，请回滚并重新读取",
         )
-    if checked.zero_confirmed and (scope_snapshots or prepared_observations or prepared_counts):
-        _fail(
-            "stocktake_count_zero_confirmation_conflict",
-            "invalid_request",
-            "零确认不能与账面账户或实盘记录同时提交",
-        )
-    _validate_round_serial_uniqueness(
-        db,
-        round_row.id,
-        prepared_counts,
-        prepared_observations,
-    )
 
     # The audit head is the final shared mutable lock.  Principal, task,
     # round, scope, snapshot, policy, SN and file rows are already locked.
@@ -483,6 +886,43 @@ def _submit_stocktake_initial_scope_count(
     _validate_task_round_and_freeze(task, round_row, scope, plan.freeze_mode, freeze, now)
     _require_new_submission_state(task, round_row, scopes, now)
 
+    # The audit-head wait is the final point at which this transaction can be
+    # delayed by another writer.  Re-read every owner-locked reference and
+    # rebuild the resolution from fresh ORM state.  Compare only a canonical
+    # scalar digest: ORM identity/equality is not a concurrency proof.
+    if (
+        _capture_count_reference_plan(db, task, checked, scopes) != reference_plan
+        or _capture_snapshot_reference_plan(db, task.id) != snapshot_probe
+    ):
+        _fail(
+            "stocktake_count_reference_graph_changed",
+            "conflict",
+            "盘点输入引用在审计锁等待期间发生变化，请回滚并重新读取",
+        )
+    _fresh_snapshots, fresh_accounts, fresh_scope_snapshots = (
+        _load_count_snapshot_graph(
+            db,
+            task=task,
+            plans=plans,
+            scope=scope,
+        )
+    )
+    fresh_resolution = _prepare_count_resolution(
+        db,
+        task=task,
+        scope=scope,
+        snapshots=fresh_scope_snapshots,
+        accounts=fresh_accounts,
+        command=checked,
+        round_id=round_row.id,
+    )
+    if fresh_resolution.sha256 != prepared_resolution.sha256:
+        _fail(
+            "stocktake_count_prepared_resolution_changed",
+            "conflict",
+            "盘点解析结果在审计锁等待期间发生变化，请回滚并重新读取",
+        )
+
     return _write_scope_count(
         db,
         actor=current,
@@ -492,8 +932,8 @@ def _submit_stocktake_initial_scope_count(
         round_row=round_row,
         scopes=scopes,
         scope=scope,
-        prepared_counts=prepared_counts,
-        prepared_observations=prepared_observations,
+        prepared_counts=fresh_resolution.counts,
+        prepared_observations=fresh_resolution.observations,
         files=files,
         zero_confirmed=checked.zero_confirmed,
         key_hash=key_hash,
@@ -878,6 +1318,258 @@ def _seal_initial_round(
     db.flush()
 
 
+def _load_count_snapshot_graph(
+    db: Session,
+    *,
+    task: FormalStocktakeTask,
+    plans: Sequence[task_service._ScopePlan],
+    scope: FormalStocktakeScope,
+) -> tuple[
+    tuple[StocktakeSnapshotLine, ...],
+    Mapping[uuid.UUID, StockAccount],
+    tuple[StocktakeSnapshotLine, ...],
+]:
+    snapshots = tuple(
+        db.scalars(
+            _select_only_reference_statement(
+                db,
+                select(StocktakeSnapshotLine)
+                .where(StocktakeSnapshotLine.task_id == task.id)
+                .order_by(
+                    StocktakeSnapshotLine.scope_id,
+                    StocktakeSnapshotLine.stock_account_id,
+                ),
+            )
+            .execution_options(populate_existing=True)
+        ).all()
+    )
+    accounts = _lock_snapshot_accounts(db, snapshots)
+    _validate_snapshot_manifest(task, plans, snapshots, accounts)
+    return (
+        snapshots,
+        accounts,
+        tuple(row for row in snapshots if row.scope_id == scope.id),
+    )
+
+
+def _prepare_count_resolution(
+    db: Session,
+    *,
+    task: FormalStocktakeTask,
+    scope: FormalStocktakeScope,
+    snapshots: Sequence[StocktakeSnapshotLine],
+    accounts: Mapping[uuid.UUID, StockAccount],
+    command: SubmitStocktakeInitialScopeCountCommand,
+    round_id: uuid.UUID,
+) -> _PreparedResolution:
+    counts = _prepare_snapshot_counts(
+        db,
+        task=task,
+        scope=scope,
+        snapshots=snapshots,
+        accounts=accounts,
+        values=command.account_counts,
+        count_mode=command.count_mode,
+    )
+    observations = _prepare_observations(
+        db,
+        task=task,
+        scope=scope,
+        snapshots=snapshots,
+        accounts=accounts,
+        values=command.physical_observations,
+    )
+    if not snapshots and not observations and not command.zero_confirmed:
+        _fail(
+            "stocktake_count_zero_confirmation_required",
+            "invalid_request",
+            "空盘点范围必须显式零确认",
+        )
+    if command.zero_confirmed and (snapshots or observations or counts):
+        _fail(
+            "stocktake_count_zero_confirmation_conflict",
+            "invalid_request",
+            "零确认不能与账面账户或实盘记录同时提交",
+        )
+    _validate_round_serial_uniqueness(db, round_id, counts, observations)
+    return _PreparedResolution(
+        counts=counts,
+        observations=observations,
+        sha256=_prepared_resolution_sha256(counts, observations),
+    )
+
+
+def _prepared_resolution_sha256(
+    counts: Sequence[_PreparedCount],
+    observations: Sequence[_PreparedObservation],
+) -> str:
+    """Freeze only canonical scalar resolution state, never ORM equality."""
+
+    count_documents = [
+        {
+            "account": {
+                "availability_bucket": row.account.availability_bucket,
+                "condition_code": row.account.condition_code,
+                "created_at": _timestamp(row.account.created_at),
+                "custodian_person_id": (
+                    str(row.account.custodian_person_id)
+                    if row.account.custodian_person_id is not None
+                    else None
+                ),
+                "id": str(row.account.id),
+                "location_id": str(row.account.location_id),
+                "lot_id": (
+                    str(row.account.lot_id) if row.account.lot_id is not None else None
+                ),
+                "material_id": str(row.account.material_id),
+                "owner_org_id": str(row.account.owner_org_id),
+                "updated_at": _timestamp(row.account.updated_at),
+            },
+            "input": {
+                "book_qty_confirmation": _canonical_quantity(
+                    row.value.book_qty_confirmation
+                ),
+                "count_method": row.value.count_method,
+                "counted_qty": _canonical_quantity(row.value.counted_qty),
+                "reason_code": row.value.reason_code,
+                "remark": row.value.remark,
+                "serial_ids": [str(value) for value in row.value.serial_ids],
+                "stock_account_id": str(row.value.stock_account_id),
+            },
+            "policy": _policy_resolution_document(row.policy),
+            "resolved_serials": [
+                _serial_resolution_document(value)
+                for value in sorted(row.serials, key=lambda value: str(value.id))
+            ],
+            "snapshot": {
+                "account_dimension_sha256": row.snapshot.account_dimension_sha256,
+                "book_qty": _canonical_quantity(row.snapshot.book_qty),
+                "created_at": _timestamp(row.snapshot.created_at),
+                "id": str(row.snapshot.id),
+                "ledger_cursor": row.snapshot.ledger_cursor,
+                "scope_id": str(row.snapshot.scope_id),
+                "serial_count": row.snapshot.serial_count,
+                "serial_snapshot_jsonb": row.snapshot.serial_snapshot_jsonb,
+                "serial_snapshot_sha256": row.snapshot.serial_snapshot_sha256,
+                "stock_account_id": str(row.snapshot.stock_account_id),
+                "task_id": str(row.snapshot.task_id),
+            },
+            "snapshot_serial_ids": [
+                str(value) for value in sorted(row.snapshot_serial_ids, key=str)
+            ],
+        }
+        for row in sorted(counts, key=lambda value: str(value.account.id))
+    ]
+    observation_documents = [
+        {
+            "dimension_sha256": row.dimension_sha256,
+            "input": {
+                "availability_bucket": row.value.availability_bucket,
+                "condition_code": row.value.condition_code,
+                "count_method": row.value.count_method,
+                "counted_qty": _canonical_quantity(row.value.counted_qty),
+                "lot_id": str(row.value.lot_id) if row.value.lot_id else None,
+                "lot_no_raw": row.value.lot_no_raw,
+                "material_id": (
+                    str(row.value.material_id)
+                    if row.value.material_id is not None
+                    else None
+                ),
+                "material_identifier_raw": row.value.material_identifier_raw,
+                "material_identifier_type": row.value.material_identifier_type,
+                "reason_code": row.value.reason_code,
+                "remark": row.value.remark,
+                "serial_id": (
+                    str(row.value.serial_id)
+                    if row.value.serial_id is not None
+                    else None
+                ),
+                "serial_identifier_type": row.value.serial_identifier_type,
+                "serial_no_raw": row.value.serial_no_raw,
+            },
+            "lot": (
+                {
+                    "expiry_date": (
+                        row.lot.expiry_date.isoformat()
+                        if row.lot.expiry_date is not None
+                        else None
+                    ),
+                    "id": str(row.lot.id),
+                    "lot_no": row.lot.lot_no,
+                    "manufacture_date": (
+                        row.lot.manufacture_date.isoformat()
+                        if row.lot.manufacture_date is not None
+                        else None
+                    ),
+                    "material_id": str(row.lot.material_id),
+                    "updated_at": _timestamp(row.lot.updated_at),
+                }
+                if row.lot is not None
+                else None
+            ),
+            "material": (
+                {
+                    "base_unit": row.material.base_unit,
+                    "external_object_id": str(row.material.external_object_id),
+                    "id": str(row.material.id),
+                    "sku_code": row.material.sku_code,
+                    "source_updated_at": _timestamp(row.material.source_updated_at),
+                    "status": row.material.status,
+                    "updated_at": _timestamp(row.material.updated_at),
+                }
+                if row.material is not None
+                else None
+            ),
+            "policy": (
+                _policy_resolution_document(row.policy)
+                if row.policy is not None
+                else None
+            ),
+            "serial": (
+                _serial_resolution_document(row.serial)
+                if row.serial is not None
+                else None
+            ),
+            "verification_status": row.verification_status,
+        }
+        for row in sorted(observations, key=lambda value: value.dimension_sha256)
+    ]
+    return _sha256(
+        {
+            "counts": count_documents,
+            "observations": observation_documents,
+            "schema": "cloud_oam.stocktake.prepared_resolution.v1",
+        }
+    )
+
+
+def _policy_resolution_document(
+    policy: MaterialInventoryPolicy,
+) -> Mapping[str, object]:
+    return {
+        "allow_fraction": policy.allow_fraction,
+        "effective_from": _timestamp(policy.effective_from),
+        "effective_to": _timestamp(policy.effective_to),
+        "id": str(policy.id),
+        "material_id": str(policy.material_id),
+        "quantity_scale": policy.quantity_scale,
+        "tracking_mode": policy.tracking_mode,
+        "updated_at": _timestamp(policy.updated_at),
+    }
+
+
+def _serial_resolution_document(serial: InventorySerial) -> Mapping[str, object]:
+    return {
+        "id": str(serial.id),
+        "lifecycle_status": serial.lifecycle_status,
+        "lot_id": str(serial.lot_id) if serial.lot_id is not None else None,
+        "material_id": str(serial.material_id),
+        "qr_code": serial.qr_code,
+        "serial_no": serial.serial_no,
+        "updated_at": _timestamp(serial.updated_at),
+    }
+
+
 def _prepare_snapshot_counts(
     db: Session,
     *,
@@ -1245,9 +1937,10 @@ def _authorize_exact_scope_actor(
             "只有冻结范围指定执行人可以提交实盘",
         )
     location = db.scalar(
-        select(StockLocation)
-        .where(StockLocation.id == scope.location_id)
-        .with_for_update()
+        _select_only_reference_statement(
+            db,
+            select(StockLocation).where(StockLocation.id == scope.location_id),
+        )
         .execution_options(populate_existing=True)
     )
     if location is None or location.status != "active":
@@ -1397,10 +2090,12 @@ def _lock_snapshot_accounts(
     ids = tuple(sorted({row.stock_account_id for row in snapshots}, key=str))
     rows = tuple(
         db.scalars(
-            select(StockAccount)
-            .where(StockAccount.id.in_(ids))
-            .order_by(StockAccount.id)
-            .with_for_update()
+            _select_only_reference_statement(
+                db,
+                select(StockAccount)
+                .where(StockAccount.id.in_(ids))
+                .order_by(StockAccount.id),
+            )
             .execution_options(populate_existing=True)
         ).all()
     ) if ids else ()
@@ -1420,10 +2115,12 @@ def _lock_serials(
     ids = tuple(sorted(set(serial_ids), key=str))
     rows = tuple(
         db.scalars(
-            select(InventorySerial)
-            .where(InventorySerial.id.in_(ids))
-            .order_by(InventorySerial.id)
-            .with_for_update()
+            _select_only_reference_statement(
+                db,
+                select(InventorySerial)
+                .where(InventorySerial.id.in_(ids))
+                .order_by(InventorySerial.id),
+            )
             .execution_options(populate_existing=True)
         ).all()
     ) if ids else ()
@@ -1475,17 +2172,19 @@ def _load_policy(
         _fail("stocktake_count_cutoff_missing", "service_unavailable", "盘点截止时点缺失")
     rows = tuple(
         db.scalars(
-            select(MaterialInventoryPolicy)
-            .where(
-                MaterialInventoryPolicy.material_id == material_id,
-                MaterialInventoryPolicy.effective_from <= cutoff_at,
-                or_(
-                    MaterialInventoryPolicy.effective_to.is_(None),
-                    MaterialInventoryPolicy.effective_to > cutoff_at,
-                ),
+            _select_only_reference_statement(
+                db,
+                select(MaterialInventoryPolicy)
+                .where(
+                    MaterialInventoryPolicy.material_id == material_id,
+                    MaterialInventoryPolicy.effective_from <= cutoff_at,
+                    or_(
+                        MaterialInventoryPolicy.effective_to.is_(None),
+                        MaterialInventoryPolicy.effective_to > cutoff_at,
+                    ),
+                )
+                .order_by(MaterialInventoryPolicy.id),
             )
-            .order_by(MaterialInventoryPolicy.id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -1516,13 +2215,15 @@ def _resolve_observation_material(
     if value.material_identifier_type == "sku_code":
         candidates = tuple(
             db.scalars(
-                select(FormalMaterial)
-                .where(
-                    FormalMaterial.sku_code == value.material_identifier_raw,
-                    FormalMaterial.status == "active",
+                _select_only_reference_statement(
+                    db,
+                    select(FormalMaterial)
+                    .where(
+                        FormalMaterial.sku_code == value.material_identifier_raw,
+                        FormalMaterial.status == "active",
+                    )
+                    .order_by(FormalMaterial.id),
                 )
-                .order_by(FormalMaterial.id)
-                .with_for_update()
                 .execution_options(populate_existing=True)
             ).all()
         )
@@ -1534,40 +2235,46 @@ def _resolve_observation_material(
         else:
             candidates = tuple(
                 db.scalars(
-                    select(FormalMaterial)
-                    .where(
-                        FormalMaterial.external_object_id == external_id,
-                        FormalMaterial.status == "active",
+                    _select_only_reference_statement(
+                        db,
+                        select(FormalMaterial)
+                        .where(
+                            FormalMaterial.external_object_id == external_id,
+                            FormalMaterial.status == "active",
+                        )
+                        .order_by(FormalMaterial.id),
                     )
-                    .order_by(FormalMaterial.id)
-                    .with_for_update()
                     .execution_options(populate_existing=True)
                 ).all()
             )
     elif value.material_identifier_type == "qr_code":
         mappings = tuple(
             db.scalars(
-                select(QrCode)
-                .where(
-                    QrCode.code == value.material_identifier_raw,
-                    QrCode.object_type == "material",
-                    QrCode.status == "active",
+                _select_only_reference_statement(
+                    db,
+                    select(QrCode)
+                    .where(
+                        QrCode.code == value.material_identifier_raw,
+                        QrCode.object_type == "material",
+                        QrCode.status == "active",
+                    )
+                    .order_by(QrCode.id),
                 )
-                .order_by(QrCode.id)
-                .with_for_update()
                 .execution_options(populate_existing=True)
             ).all()
         )
         object_ids = tuple(sorted({row.object_id for row in mappings}, key=str))
         candidates = tuple(
             db.scalars(
-                select(FormalMaterial)
-                .where(
-                    FormalMaterial.id.in_(object_ids),
-                    FormalMaterial.status == "active",
+                _select_only_reference_statement(
+                    db,
+                    select(FormalMaterial)
+                    .where(
+                        FormalMaterial.id.in_(object_ids),
+                        FormalMaterial.status == "active",
+                    )
+                    .order_by(FormalMaterial.id),
                 )
-                .order_by(FormalMaterial.id)
-                .with_for_update()
                 .execution_options(populate_existing=True)
             ).all()
         ) if object_ids else ()
@@ -1576,13 +2283,15 @@ def _resolve_observation_material(
         # Zero matches remains pending; more than one distinct material fails.
         by_id: dict[uuid.UUID, FormalMaterial] = {}
         for row in db.scalars(
-            select(FormalMaterial)
-            .where(
-                FormalMaterial.sku_code == value.material_identifier_raw,
-                FormalMaterial.status == "active",
+            _select_only_reference_statement(
+                db,
+                select(FormalMaterial)
+                .where(
+                    FormalMaterial.sku_code == value.material_identifier_raw,
+                    FormalMaterial.status == "active",
+                )
+                .order_by(FormalMaterial.id),
             )
-            .order_by(FormalMaterial.id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all():
             by_id[row.id] = row
@@ -1592,39 +2301,45 @@ def _resolve_observation_material(
             external_id = None
         if external_id is not None:
             for row in db.scalars(
-                select(FormalMaterial)
-                .where(
-                    FormalMaterial.external_object_id == external_id,
-                    FormalMaterial.status == "active",
+                _select_only_reference_statement(
+                    db,
+                    select(FormalMaterial)
+                    .where(
+                        FormalMaterial.external_object_id == external_id,
+                        FormalMaterial.status == "active",
+                    )
+                    .order_by(FormalMaterial.id),
                 )
-                .order_by(FormalMaterial.id)
-                .with_for_update()
                 .execution_options(populate_existing=True)
             ).all():
                 by_id[row.id] = row
         mappings = tuple(
             db.scalars(
-                select(QrCode)
-                .where(
-                    QrCode.code == value.material_identifier_raw,
-                    QrCode.object_type == "material",
-                    QrCode.status == "active",
+                _select_only_reference_statement(
+                    db,
+                    select(QrCode)
+                    .where(
+                        QrCode.code == value.material_identifier_raw,
+                        QrCode.object_type == "material",
+                        QrCode.status == "active",
+                    )
+                    .order_by(QrCode.id),
                 )
-                .order_by(QrCode.id)
-                .with_for_update()
                 .execution_options(populate_existing=True)
             ).all()
         )
         object_ids = tuple(sorted({row.object_id for row in mappings}, key=str))
         if object_ids:
             for row in db.scalars(
-                select(FormalMaterial)
-                .where(
-                    FormalMaterial.id.in_(object_ids),
-                    FormalMaterial.status == "active",
+                _select_only_reference_statement(
+                    db,
+                    select(FormalMaterial)
+                    .where(
+                        FormalMaterial.id.in_(object_ids),
+                        FormalMaterial.status == "active",
+                    )
+                    .order_by(FormalMaterial.id),
                 )
-                .order_by(FormalMaterial.id)
-                .with_for_update()
                 .execution_options(populate_existing=True)
             ).all():
                 by_id[row.id] = row
@@ -1638,9 +2353,10 @@ def _resolve_observation_material(
     resolved = candidates[0] if candidates else None
     if value.material_id is not None:
         selected = db.scalar(
-            select(FormalMaterial)
-            .where(FormalMaterial.id == value.material_id)
-            .with_for_update()
+            _select_only_reference_statement(
+                db,
+                select(FormalMaterial).where(FormalMaterial.id == value.material_id),
+            )
             .execution_options(populate_existing=True)
         )
         if selected is None or selected.status != "active":
@@ -1670,13 +2386,15 @@ def _resolve_observation_lot(
         _fail("stocktake_count_observation_lot_invalid", "invalid_request", "批次物料必须保留现场批次标识")
     matches = tuple(
         db.scalars(
-            select(InventoryLot)
-            .where(
-                InventoryLot.material_id == material.id,
-                InventoryLot.lot_no == value.lot_no_raw,
+            _select_only_reference_statement(
+                db,
+                select(InventoryLot)
+                .where(
+                    InventoryLot.material_id == material.id,
+                    InventoryLot.lot_no == value.lot_no_raw,
+                )
+                .order_by(InventoryLot.id),
             )
-            .order_by(InventoryLot.id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -1712,19 +2430,54 @@ def _resolve_observation_serial(
         clauses.append(InventorySerial.serial_no == value.serial_no_raw)
     if value.serial_identifier_type in {"qr_code", "unknown"}:
         clauses.append(InventorySerial.qr_code == value.serial_no_raw)
-    matches = tuple(
+    direct_matches = tuple(
         db.scalars(
-            select(InventorySerial)
-            .where(
-                InventorySerial.material_id == material.id,
-                or_(*clauses),
+            _select_only_reference_statement(
+                db,
+                select(InventorySerial)
+                .where(or_(*clauses))
+                .order_by(InventorySerial.id),
             )
-            .order_by(InventorySerial.id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
-    unique = {row.id: row for row in matches}
+    mapped_matches: tuple[InventorySerial, ...] = ()
+    if value.serial_identifier_type in {"qr_code", "unknown"}:
+        mappings = tuple(
+            db.scalars(
+                _select_only_reference_statement(
+                    db,
+                    select(QrCode)
+                    .where(
+                        QrCode.code == value.serial_no_raw,
+                        QrCode.object_type == "serial",
+                        QrCode.status == "active",
+                    )
+                    .order_by(QrCode.id),
+                )
+                .execution_options(populate_existing=True)
+            ).all()
+        )
+        mapped_ids = tuple(sorted({row.object_id for row in mappings}, key=str))
+        if mapped_ids:
+            mapped_matches = tuple(
+                db.scalars(
+                    _select_only_reference_statement(
+                        db,
+                        select(InventorySerial)
+                        .where(InventorySerial.id.in_(mapped_ids))
+                        .order_by(InventorySerial.id),
+                    )
+                    .execution_options(populate_existing=True)
+                ).all()
+            )
+            if len(mapped_matches) != len(mapped_ids):
+                _fail(
+                    "stocktake_count_observation_serial_mismatch",
+                    "precondition_failed",
+                    "现场 SN 二维码映射引用了不存在的正式 SN",
+                )
+    unique = {row.id: row for row in (*direct_matches, *mapped_matches)}
     if len(unique) > 1:
         _fail("stocktake_count_observation_serial_ambiguous", "precondition_failed", "现场 SN 标识匹配多个序列号，禁止猜测")
     serial = next(iter(unique.values()), None)
@@ -1835,15 +2588,18 @@ def _validate_replay(
         )
     attachments = tuple(
         db.scalars(
-            select(DocumentAttachment)
-            .where(
-                DocumentAttachment.document_type == "stocktake_scope_count_completion",
-                DocumentAttachment.document_id == str(completion.id),
-                DocumentAttachment.attachment_type == "stocktake_evidence",
-                DocumentAttachment.status == "active",
+            _select_only_reference_statement(
+                db,
+                select(DocumentAttachment)
+                .where(
+                    DocumentAttachment.document_type
+                    == "stocktake_scope_count_completion",
+                    DocumentAttachment.document_id == str(completion.id),
+                    DocumentAttachment.attachment_type == "stocktake_evidence",
+                    DocumentAttachment.status == "active",
+                )
+                .order_by(DocumentAttachment.file_id),
             )
-            .order_by(DocumentAttachment.file_id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -2624,6 +3380,14 @@ def _take_advisory_locks(db: Session, coordinates: Sequence[int]) -> None:
         return
     for coordinate in sorted(set(coordinates)):
         db.execute(text("SELECT pg_advisory_xact_lock(:coordinate)"), {"coordinate": coordinate})
+
+
+def _select_only_reference_statement(db: Session, statement):
+    """Use direct row locks locally; PostgreSQL relies on owner helpers."""
+
+    if db.get_bind().dialect.name != "postgresql":
+        return statement.with_for_update()
+    return statement
 
 
 def _database_now(db: Session) -> datetime:

@@ -781,6 +781,33 @@ STOCKTAKE_DIFFERENCE_COMPLETION_TRIGGER_0031 = (
     "trg_stocktake_difference_set_completions_validate_0031"
 )
 EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS = {
+    "trg_stocktake_control_snapshot_00_nonopening_0057": (
+        "stocktake_control_snapshot_lines",
+        "rsc_guard_nonopening_control_snapshot_0057",
+        "A",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_control_snapshot_lines_immutable_0010": (
+        "stocktake_control_snapshot_lines",
+        "rsc_block_stocktake_fact_mutation_0010",
+        "O",
+        27,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_control_snapshot_lines_sealed_insert_0010": (
+        "stocktake_control_snapshot_lines",
+        "rsc_seal_opening_start_evidence_0010",
+        "O",
+        7,
+        False,
+        False,
+        False,
+    ),
     "trg_stock_locations_stocktake_personal_continuity_0020": (
         "stock_locations",
         "rsc_preserve_stocktake_personal_location_0020",
@@ -1751,6 +1778,12 @@ EXPECTED_OPENING_TERMINAL_INDEX = (
     "uq_stocktake_postings_one_opening_task_0022"
 )
 EXPECTED_FORMAL_FILE_TRIGGERS = {
+    "trg_document_attachments_00_stocktake_evidence_seal_0057": (
+        "document_attachments",
+        "rsc_guard_stocktake_evidence_seal_0057",
+        "A",
+        7,
+    ),
     "trg_files_formal_runtime_guard_0036": (
         "files", "rsc_guard_formal_file_object_0036", "A", 31
     ),
@@ -2949,6 +2982,15 @@ RUNTIME_EXECUTE_FUNCTIONS = {
         "plpgsql",
         ("search_path=pg_catalog, public",),
     ),
+    (
+        "rsc_lock_nonopening_stocktake_difference_replay_graph_0057",
+        "uuid, uuid, text",
+    ): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
     ("rsc_lock_material_request_work_order_reference_0042", "uuid"): (
         "v",
         True,
@@ -3007,6 +3049,10 @@ RUNTIME_FUNCTION_BODY_SHA256 = {
         "ebf8f6e2a7eecfcc6dca09a8df90f732977382d0ed9d973204ab14b14e4e9dd2",
     ("rsc_lock_nonopening_stocktake_close_graph_0038", "uuid"):
         "45c71e5a7129800399e1c20480bf7e2a000c478743635cff99db024c0b62118e",
+    (
+        "rsc_lock_nonopening_stocktake_difference_replay_graph_0057",
+        "uuid, uuid, text",
+    ): "7771bc7f9b59465fb47426eaabbff79deeb92967c0c77bbed79c0fe01585596c",
     ("rsc_lock_material_request_work_order_reference_0042", "uuid"):
         "d889b397912e98e1b9c2ec1de03ada750f42df01803c87239b9d04a624221982",
 }
@@ -3302,6 +3348,18 @@ FORMAL_FILE_INTERNAL_FUNCTIONS = {
         "plpgsql",
         ("search_path=pg_catalog, public",),
     ),
+    ("rsc_guard_stocktake_evidence_seal_0057", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_guard_nonopening_control_snapshot_0057", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
     ("rsc_guard_stocktake_start_completion_0047", ""): (
         "v",
         True,
@@ -3394,7 +3452,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
             "uuid, uuid, uuid, text, uuid, uuid, bigint, text, text, text, "
             "timestamp with time zone, boolean"
         ),
-    ): "87618c74ed03d25dc0d98d6a0490cec54a5f3f8f836c4ccc7b5e08593852e717",
+    ): "d6c31c4284d2861a8eea3bc98a845e44d4013e454c81a9c591860cd015931708",
     ("rsc_validate_stocktake_count_line_insert_0021", ""):
         "319b1804e6fa6af3c7d3510524755d4b4d74b556a90640f6adfa6efa17f19693",
     ("rsc_validate_stocktake_observation_insert_0021", ""):
@@ -3444,7 +3502,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_stocktake_recount_scope_graph_valid_0032", "uuid"):
         "a1308f871cb0c7ba6fb0584dc28520b0ea4361d956d3c3d30a758f8ffafa1619",
     ("rsc_require_nonopening_stocktake_review_graph_0032", ""):
-        "2eaaa6b02e7a1abf4403ee3cacb12ccabb11d36f7687ca2821e5e93134a76a1a",
+        "17903808923c509cb2695f818152c598908c6fb12077abf8b398a52191caf58e",
     ("rsc_validate_stocktake_recount_case_0032", ""):
         "65db070bee60e91203b32a6afe56092992ae7d1984ec92d6490faabc6930e211",
     ("rsc_validate_stocktake_recount_task_advance_0032", ""):
@@ -3481,10 +3539,14 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
         "17588eaffe3b5225272a5b9c342088ff0d934c7492625db18748217cf15feabf",
     ("rsc_guard_sms_challenge_dispatch_0041", ""):
         "42201b13bb8998ea8522b190bfed67bbc7faab4c7bc355b4a7f5c2c13cd59993",
+    ("rsc_guard_stocktake_evidence_seal_0057", ""):
+        "7a5ae0c9fd3117cb784dce34c7882b8301759e846321ac7a6233235c6333222c",
+    ("rsc_guard_nonopening_control_snapshot_0057", ""):
+        "40d7a6223b6250316f7bed15c0dd4749238066865f7581156646c5b89b509249",
     ("rsc_guard_stocktake_start_completion_0047", ""):
-        "7d3729edf7f14a3f3be228b02fc25ad51a296c3ef972245271cab74ea589c2f3",
+        "19fcb84567c36bbcf426eac4f844bfa70e32ee3247f50c402a444171c5879718",
     ("rsc_validate_nonopening_stocktake_start_causality_0047", "uuid"):
-        "fac0c8ebdb46d53b1eec62f5ffb15e69a21a5975b9a99445270968f23d27ebe9",
+        "82537a53254a6493eea33f07795b8b47d941ecc6bd25ed8dcab8c35bcf18d3f8",
     ("rsc_dispatch_nonopening_stocktake_start_causality_0047", ""):
         "7ae3cda26d356cabf5529bae88eb33e0f85bcab538e8ab9b8bb256eebf54ac40",
 }
@@ -4134,6 +4196,7 @@ JOIN pg_namespace AS function_schema
 WHERE table_schema.nspname = 'public'
   AND table_row.relname IN (
       'stock_locations',
+      'stocktake_control_snapshot_lines',
       'stocktake_count_lines',
       'stocktake_count_observations',
       'stocktake_scope_count_completions',

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
+from types import SimpleNamespace
 import uuid
 
 import pytest
@@ -25,6 +26,7 @@ from app.foundation_models import (
     StateTransitionEvent,
 )
 from app.inventory_models import (
+    FormalMaterial,
     InventoryMovement,
     InventoryTransaction,
     MaterialInventoryPolicy,
@@ -652,6 +654,58 @@ def test_unresolved_sn_on_known_serial_material_is_retained_piecewise(world):
     assert observation.verification_status == "pending_verification"
 
 
+def test_serial_qr_mapping_is_planned_and_resolved_as_one_locked_candidate(world):
+    created, _started_row, scopes, round_row = _started(
+        world,
+        key="mapped-serial",
+        draft=_managed_draft(
+            world,
+            material_id=world.material_b.id,
+            condition_code="damaged",
+        ),
+    )
+    mapping = QrCode(
+        id=uuid.uuid4(),
+        code="SERIAL-MAPPING-ONLY",
+        object_type="serial",
+        object_id=world.serial.id,
+        status="active",
+        printed_at=NOW,
+    )
+    world.db.add(mapping)
+    world.db.flush()
+
+    _submit(
+        world,
+        key="mapped-serial-count",
+        command=SubmitStocktakeInitialScopeCountCommand(
+            task_id=created.task_id,
+            round_id=round_row.id,
+            scope_id=scopes[0].id,
+            count_mode="blind",
+            physical_observations=(
+                StocktakePhysicalObservationInput(
+                    material_id=world.material_b.id,
+                    material_identifier_raw=world.material_b.sku_code,
+                    material_identifier_type="sku_code",
+                    condition_code="damaged",
+                    availability_bucket="available",
+                    counted_qty=Decimal("1"),
+                    serial_id=world.serial.id,
+                    serial_no_raw=mapping.code,
+                    serial_identifier_type="qr_code",
+                    count_method="scan",
+                ),
+            ),
+        ),
+    )
+
+    observation = world.db.scalar(select(StocktakeCountObservation))
+    assert observation is not None
+    assert observation.serial_id == world.serial.id
+    assert observation.verification_status == "verified"
+
+
 def test_ambiguous_unknown_material_identifier_and_stale_or_wrong_actor_fail_closed(world):
     created, _started_row, scopes, round_row = _started(
         world,
@@ -707,3 +761,424 @@ def test_ambiguous_unknown_material_identifier_and_stale_or_wrong_actor_fail_clo
             trace_request_id="trace-stale-actor",
         )
     assert failure.value.code == "stocktake_count_actor_principal_stale"
+
+
+def test_postgresql_reference_adapter_keeps_select_only_reads_unlocked() -> None:
+    statement = select(FormalMaterial).where(FormalMaterial.status == "active")
+    postgresql_db = SimpleNamespace(
+        get_bind=lambda: SimpleNamespace(
+            dialect=SimpleNamespace(name="postgresql")
+        )
+    )
+    sqlite_db = SimpleNamespace(
+        get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+    )
+
+    assert service._select_only_reference_statement(
+        postgresql_db, statement
+    )._for_update_arg is None
+    assert service._select_only_reference_statement(
+        sqlite_db, statement
+    )._for_update_arg is not None
+
+
+def test_initial_count_owner_helpers_receive_canonical_reference_union_in_order(
+    world,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created, _started_row, scopes, round_row = _started(
+        world,
+        key="count-owner-lock-order",
+        draft=_managed_draft(
+            world,
+            material_id=world.material_a.id,
+            condition_code="new",
+        ),
+    )
+    calls: list[tuple[str, tuple[uuid.UUID, ...]]] = []
+
+    def record_start(_db, _region_id, _owner_ids, _location_ids, material_ids, _at):
+        calls.append(("start", tuple(material_ids)))
+
+    def record_inventory(_db, account_ids, _at):
+        calls.append(("inventory", tuple(account_ids)))
+
+    def record_serial(_db, serial_ids):
+        calls.append(("serial", tuple(serial_ids)))
+
+    monkeypatch.setattr(service, "lock_opening_stocktake_start_reference", record_start)
+    monkeypatch.setattr(service, "lock_inventory_reference_graph", record_inventory)
+    monkeypatch.setattr(service, "lock_inventory_serial_graph", record_serial)
+
+    _submit(
+        world,
+        key="count-owner-lock-order-submit",
+        command=SubmitStocktakeInitialScopeCountCommand(
+            task_id=created.task_id,
+            round_id=round_row.id,
+            scope_id=scopes[0].id,
+            count_mode="blind",
+            account_counts=(
+                StocktakeSnapshotCountInput(
+                    stock_account_id=world.region_new.id,
+                    counted_qty=Decimal("5.000"),
+                ),
+            ),
+        ),
+    )
+
+    assert [name for name, _ids in calls] == ["start", "inventory", "serial"]
+    assert calls[0][1] == (world.material_a.id,)
+    assert calls[1][1] == (world.region_new.id,)
+    assert calls[2][1] == ()
+
+
+def test_reference_plan_retains_explicit_and_dangling_owner_lock_ids(world) -> None:
+    created, _started_row, scopes, round_row = _started(
+        world,
+        key="count-reference-union",
+        draft=_managed_draft(
+            world,
+            material_id=world.material_a.id,
+            condition_code="damaged",
+        ),
+    )
+    task = world.db.get(FormalStocktakeTask, created.task_id)
+    assert task is not None
+    explicit_missing_material_id = uuid.uuid4()
+    mapped_missing_material_id = uuid.uuid4()
+    explicit_missing_serial_id = uuid.uuid4()
+    count_missing_serial_id = uuid.uuid4()
+    mapped_missing_serial_id = uuid.uuid4()
+    material_mapping_id = uuid.uuid4()
+    serial_mapping_id = uuid.uuid4()
+    world.db.add_all(
+        [
+            QrCode(
+                id=material_mapping_id,
+                code="MAT-QR-DANGLING",
+                object_type="material",
+                object_id=mapped_missing_material_id,
+                status="active",
+                printed_at=NOW,
+            ),
+            QrCode(
+                id=serial_mapping_id,
+                code="SERIAL-QR-DANGLING",
+                object_type="serial",
+                object_id=mapped_missing_serial_id,
+                status="active",
+                printed_at=NOW,
+            ),
+        ]
+    )
+    world.db.flush()
+
+    command = SubmitStocktakeInitialScopeCountCommand(
+        task_id=created.task_id,
+        round_id=round_row.id,
+        scope_id=scopes[0].id,
+        count_mode="blind",
+        account_counts=(
+            StocktakeSnapshotCountInput(
+                stock_account_id=world.region_new.id,
+                counted_qty=Decimal("5.000"),
+                serial_ids=(count_missing_serial_id,),
+            ),
+        ),
+        physical_observations=(
+            StocktakePhysicalObservationInput(
+                material_id=explicit_missing_material_id,
+                material_identifier_raw="MAT-QR-DANGLING",
+                material_identifier_type="qr_code",
+                condition_code="damaged",
+                availability_bucket="available",
+                counted_qty=Decimal("1.000"),
+            ),
+            StocktakePhysicalObservationInput(
+                material_id=world.material_b.id,
+                material_identifier_raw=world.material_b.sku_code,
+                material_identifier_type="sku_code",
+                condition_code="damaged",
+                availability_bucket="available",
+                counted_qty=Decimal("1"),
+                serial_id=explicit_missing_serial_id,
+                serial_no_raw="SERIAL-QR-DANGLING",
+                serial_identifier_type="qr_code",
+            ),
+            StocktakePhysicalObservationInput(
+                material_id=world.material_b.id,
+                material_identifier_raw=world.material_b.sku_code,
+                material_identifier_type="sku_code",
+                condition_code="damaged",
+                availability_bucket="available",
+                counted_qty=Decimal("1"),
+                serial_no_raw=world.serial.qr_code,
+                serial_identifier_type="qr_code",
+            ),
+        ),
+    )
+    plan = service._capture_count_reference_plan(world.db, task, command, scopes)
+
+    assert set(plan.owner_lock_material_ids) >= {
+        world.material_a.id,
+        world.material_b.id,
+        explicit_missing_material_id,
+        mapped_missing_material_id,
+    }
+    assert set(plan.owner_lock_serial_ids) >= {
+        world.serial.id,
+        explicit_missing_serial_id,
+        count_missing_serial_id,
+        mapped_missing_serial_id,
+    }
+    assert material_mapping_id in plan.material_qr_code_ids
+    assert serial_mapping_id in plan.serial_qr_code_ids
+
+
+def test_reference_plan_drift_conflicts_before_any_count_write(
+    world,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created, _started_row, scopes, round_row = _started(
+        world,
+        key="count-reference-drift",
+        draft=_managed_draft(
+            world,
+            material_id=world.material_a.id,
+            condition_code="new",
+        ),
+    )
+    original_capture = service._capture_count_reference_plan
+    capture_count = 0
+
+    def drifting_capture(db, task, command, all_scopes):
+        nonlocal capture_count
+        capture_count += 1
+        plan = original_capture(db, task, command, all_scopes)
+        if capture_count == 2:
+            return replace(plan, manifest_sha256="f" * 64)
+        return plan
+
+    monkeypatch.setattr(service, "_capture_count_reference_plan", drifting_capture)
+    command = SubmitStocktakeInitialScopeCountCommand(
+        task_id=created.task_id,
+        round_id=round_row.id,
+        scope_id=scopes[0].id,
+        count_mode="blind",
+        account_counts=(
+            StocktakeSnapshotCountInput(
+                stock_account_id=world.region_new.id,
+                counted_qty=Decimal("5.000"),
+            ),
+        ),
+    )
+
+    with pytest.raises(StocktakeCountError) as failure:
+        _submit(world, key="count-reference-drift-submit", command=command)
+
+    assert failure.value.code == "stocktake_count_reference_graph_changed"
+    assert world.db.scalar(select(func.count()).select_from(StocktakeCountLine)) == 0
+    assert world.db.scalar(
+        select(func.count()).select_from(StocktakeScopeCountCompletion)
+    ) == 0
+
+
+def test_audit_linearization_rebuilds_and_writes_only_fresh_resolution(
+    world,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created, _started_row, scopes, round_row = _started(
+        world,
+        key="count-audit-linearization",
+        draft=_managed_draft(
+            world,
+            material_id=world.material_a.id,
+            condition_code="new",
+        ),
+    )
+    command = SubmitStocktakeInitialScopeCountCommand(
+        task_id=created.task_id,
+        round_id=round_row.id,
+        scope_id=scopes[0].id,
+        count_mode="blind",
+        account_counts=(
+            StocktakeSnapshotCountInput(
+                stock_account_id=world.region_new.id,
+                counted_qty=Decimal("5.000"),
+            ),
+        ),
+    )
+    events: list[str] = []
+    prepared_count_results: list[tuple[object, ...]] = []
+    written_counts: list[tuple[object, ...]] = []
+
+    def wrap(name, original):
+        def instrumented(*args, **kwargs):
+            events.append(name)
+            return original(*args, **kwargs)
+
+        return instrumented
+
+    original_prepare_counts = service._prepare_snapshot_counts
+
+    def prepare_counts(*args, **kwargs):
+        events.append("prepare_counts")
+        result = original_prepare_counts(*args, **kwargs)
+        prepared_count_results.append(result)
+        return result
+
+    original_write = service._write_scope_count
+
+    def write_scope_count(*args, **kwargs):
+        events.append("write")
+        written_counts.append(kwargs["prepared_counts"])
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(
+        service,
+        "lock_opening_stocktake_start_reference",
+        wrap("owner_start", service.lock_opening_stocktake_start_reference),
+    )
+    monkeypatch.setattr(
+        service,
+        "lock_inventory_reference_graph",
+        wrap("owner_inventory", service.lock_inventory_reference_graph),
+    )
+    monkeypatch.setattr(
+        service,
+        "lock_inventory_serial_graph",
+        wrap("owner_serial", service.lock_inventory_serial_graph),
+    )
+    monkeypatch.setattr(
+        service,
+        "_capture_count_reference_plan",
+        wrap("capture_reference", service._capture_count_reference_plan),
+    )
+    monkeypatch.setattr(
+        service,
+        "_capture_snapshot_reference_plan",
+        wrap("capture_snapshot", service._capture_snapshot_reference_plan),
+    )
+    monkeypatch.setattr(service, "_prepare_snapshot_counts", prepare_counts)
+    monkeypatch.setattr(
+        service,
+        "_prepare_observations",
+        wrap("prepare_observations", service._prepare_observations),
+    )
+    monkeypatch.setattr(
+        service,
+        "_prepared_resolution_sha256",
+        wrap("prepared_proof", service._prepared_resolution_sha256),
+    )
+    monkeypatch.setattr(
+        service,
+        "lock_audit_chain_head",
+        wrap("audit_head", service.lock_audit_chain_head),
+    )
+    monkeypatch.setattr(service, "_write_scope_count", write_scope_count)
+
+    _submit(
+        world,
+        key="count-audit-linearization-submit",
+        command=command,
+    )
+
+    owner_end = events.index("owner_serial")
+    first_prepare_count = events.index("prepare_counts")
+    first_prepare_observation = events.index("prepare_observations")
+    audit_head = events.index("audit_head")
+    final_capture_reference = max(
+        index for index, value in enumerate(events) if value == "capture_reference"
+    )
+    final_capture_snapshot = max(
+        index for index, value in enumerate(events) if value == "capture_snapshot"
+    )
+    final_prepare_count = max(
+        index for index, value in enumerate(events) if value == "prepare_counts"
+    )
+    final_prepare_observation = max(
+        index for index, value in enumerate(events) if value == "prepare_observations"
+    )
+    final_proof = max(
+        index for index, value in enumerate(events) if value == "prepared_proof"
+    )
+    write = events.index("write")
+
+    assert owner_end < first_prepare_count <= first_prepare_observation < audit_head
+    assert audit_head < final_capture_reference < final_prepare_count
+    assert audit_head < final_capture_snapshot < final_prepare_count
+    assert final_prepare_count <= final_prepare_observation < final_proof < write
+    assert len(prepared_count_results) == 2
+    assert written_counts == [prepared_count_results[1]]
+    assert written_counts[0] is prepared_count_results[1]
+
+
+def test_post_audit_prepared_resolution_drift_is_conflict_with_zero_write(
+    world,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created, _started_row, scopes, round_row = _started(
+        world,
+        key="count-post-audit-drift",
+        draft=_managed_draft(
+            world,
+            material_id=world.material_a.id,
+            condition_code="new",
+        ),
+    )
+    command = SubmitStocktakeInitialScopeCountCommand(
+        task_id=created.task_id,
+        round_id=round_row.id,
+        scope_id=scopes[0].id,
+        count_mode="blind",
+        account_counts=(
+            StocktakeSnapshotCountInput(
+                stock_account_id=world.region_new.id,
+                counted_qty=Decimal("5.000"),
+            ),
+        ),
+    )
+    original_proof = service._prepared_resolution_sha256
+    proof_count = 0
+    audit_count = 0
+    write_called = False
+
+    def drifting_proof(counts, observations):
+        nonlocal proof_count
+        proof_count += 1
+        proof = original_proof(counts, observations)
+        return proof if proof_count == 1 else "f" * 64
+
+    original_audit_lock = service.lock_audit_chain_head
+
+    def audit_lock(*args, **kwargs):
+        nonlocal audit_count
+        audit_count += 1
+        return original_audit_lock(*args, **kwargs)
+
+    def forbidden_write(*_args, **_kwargs):
+        nonlocal write_called
+        write_called = True
+        raise AssertionError("drifted prepared resolution must not be written")
+
+    monkeypatch.setattr(service, "_prepared_resolution_sha256", drifting_proof)
+    monkeypatch.setattr(service, "lock_audit_chain_head", audit_lock)
+    monkeypatch.setattr(service, "_write_scope_count", forbidden_write)
+
+    with pytest.raises(StocktakeCountError) as failure:
+        _submit(
+            world,
+            key="count-post-audit-drift-submit",
+            command=command,
+        )
+
+    assert failure.value.code == "stocktake_count_prepared_resolution_changed"
+    assert failure.value.category == "conflict"
+    assert audit_count == 1
+    assert proof_count == 2
+    assert write_called is False
+    assert world.db.scalar(select(func.count()).select_from(StocktakeCountLine)) == 0
+    assert world.db.scalar(
+        select(func.count()).select_from(StocktakeScopeCountCompletion)
+    ) == 0

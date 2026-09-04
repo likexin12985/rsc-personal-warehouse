@@ -45,6 +45,9 @@ _PG_LOCK_NONOPENING_STOCKTAKE_POSTING_GRAPH = (
 _PG_LOCK_NONOPENING_STOCKTAKE_CLOSE_GRAPH = (
     "public.rsc_lock_nonopening_stocktake_close_graph_0038"
 )
+_PG_LOCK_NONOPENING_STOCKTAKE_DIFFERENCE_REPLAY_GRAPH = (
+    "public.rsc_lock_nonopening_stocktake_difference_replay_graph_0057"
+)
 _PG_LOCK_MATERIAL_REQUEST_WORK_ORDER = (
     "public.rsc_lock_material_request_work_order_reference_0042"
 )
@@ -210,6 +213,35 @@ def lock_nonopening_stocktake_review_graph(
     )
 
 
+def lock_nonopening_stocktake_difference_replay_graph(
+    db: Session,
+    task_id: uuid.UUID,
+    round_id: uuid.UUID,
+    actor_user_id: str,
+) -> None:
+    """Lock the complete submitted initial-difference replay graph.
+
+    Revision 0057 owns the inventory-head-first lock order, including scoped
+    and replay endpoint accounts, bounded ledger facts, evidence files and the
+    full reference union.  SQLite has no equivalent concurrency claim.
+    """
+
+    if not _is_postgresql(db):
+        return
+    db.execute(
+        text(
+            f"SELECT {_PG_LOCK_NONOPENING_STOCKTAKE_DIFFERENCE_REPLAY_GRAPH}("
+            "CAST(:task_id AS uuid), CAST(:round_id AS uuid), "
+            "CAST(:actor_user_id AS text))"
+        ),
+        {
+            "task_id": str(task_id),
+            "round_id": str(round_id),
+            "actor_user_id": actor_user_id,
+        },
+    )
+
+
 def lock_nonopening_stocktake_posting_graph(
     db: Session,
     task_id: uuid.UUID,
@@ -295,5 +327,6 @@ __all__ = [
     "lock_opening_terminal_reference_union",
     "lock_nonopening_stocktake_posting_graph",
     "lock_nonopening_stocktake_close_graph",
+    "lock_nonopening_stocktake_difference_replay_graph",
     "lock_nonopening_stocktake_review_graph",
 ]

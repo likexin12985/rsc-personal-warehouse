@@ -15,6 +15,7 @@ from app.formal_services.postgresql_lock_graph import (
     lock_inventory_reference_graph,
     lock_inventory_serial_graph,
     lock_material_request_work_order,
+    lock_nonopening_stocktake_difference_replay_graph,
     lock_opening_control_import,
     lock_opening_stocktake_start_reference,
     lock_opening_stocktake_task_evidence,
@@ -151,6 +152,47 @@ def test_postgresql_lock_graph_uses_only_fixed_migration_entrypoints() -> None:
     ) in db.executed[5][0]
     assert work_order_parameters == {"work_order_id": str(first)}
     assert "CAST(:work_order_id AS uuid)" in db.executed[6][0]
+
+
+def test_difference_replay_lock_is_postgresql_only_and_sqlite_noop() -> None:
+    db = _RecordingSession("sqlite")
+
+    lock_nonopening_stocktake_difference_replay_graph(
+        db,
+        uuid.UUID("10000000-0000-4000-8000-000000000001"),
+        uuid.UUID("10000000-0000-4000-8000-000000000002"),
+        "engineer-0057",
+    )
+
+    assert db.executed == []
+
+
+def test_difference_replay_lock_forwards_exact_postgresql_signature() -> None:
+    db = _RecordingSession("postgresql")
+    task_id = uuid.UUID("10000000-0000-4000-8000-000000000001")
+    round_id = uuid.UUID("10000000-0000-4000-8000-000000000002")
+    actor_user_id = "engineer-0057"
+
+    lock_nonopening_stocktake_difference_replay_graph(
+        db,
+        task_id,
+        round_id,
+        actor_user_id,
+    )
+
+    assert db.executed == [
+        (
+            "SELECT "
+            "public.rsc_lock_nonopening_stocktake_difference_replay_graph_0057("
+            "CAST(:task_id AS uuid), CAST(:round_id AS uuid), "
+            "CAST(:actor_user_id AS text))",
+            {
+                "task_id": str(task_id),
+                "round_id": str(round_id),
+                "actor_user_id": actor_user_id,
+            },
+        )
+    ]
 
 
 def test_postgresql_start_reference_rejects_unpaired_scope_coordinates() -> None:

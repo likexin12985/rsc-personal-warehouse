@@ -401,7 +401,35 @@ OPENING_RECOUNT_SOURCE_HISTORY_REVISION = (
     / "versions"
     / "20260904_0054_opening_recount_source_history.py"
 )
-HEAD_REVISION = "20260904_0054"
+NONOPENING_START_AUDIT_ORDER_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0055_nonopening_start_audit_order.py"
+)
+NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0056_nonopening_count_guard_compatibility.py"
+)
+NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0057_nonopening_difference_replay_lock.py"
+)
+NONOPENING_REVIEW_TERMINAL_STATUS_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0058_nonopening_review_terminal_status.py"
+)
+HEAD_REVISION = "20260905_0058"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -425,6 +453,14 @@ STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID = "20260903_0051"
 OPENING_TERMINAL_GUARD_EXECUTION_REVISION_ID = "20260903_0052"
 OPENING_GRAPH_TABLE_DISPATCH_REVISION_ID = "20260904_0053"
 OPENING_RECOUNT_SOURCE_HISTORY_REVISION_ID = "20260904_0054"
+NONOPENING_START_AUDIT_ORDER_REVISION_ID = "20260905_0055"
+NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION_ID = "20260905_0056"
+NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION_ID = "20260905_0057"
+NONOPENING_REVIEW_TERMINAL_STATUS_REVISION_ID = "20260905_0058"
+PRE_NONOPENING_REVIEW_TERMINAL_STATUS_HEAD_REVISION = "20260905_0057"
+PRE_NONOPENING_DIFFERENCE_REPLAY_LOCK_HEAD_REVISION = "20260905_0056"
+PRE_NONOPENING_COUNT_GUARD_COMPATIBILITY_HEAD_REVISION = "20260905_0055"
+PRE_NONOPENING_START_AUDIT_ORDER_HEAD_REVISION = "20260904_0054"
 PRE_OPENING_RECOUNT_SOURCE_HISTORY_HEAD_REVISION = "20260904_0053"
 PRE_OPENING_GRAPH_TABLE_DISPATCH_HEAD_REVISION = "20260903_0052"
 PRE_OPENING_TERMINAL_GUARD_EXECUTION_HEAD_REVISION = "20260903_0051"
@@ -1432,7 +1468,42 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == PRE_OPENING_RECOUNT_SOURCE_HISTORY_HEAD_REVISION
+    assert (
+        head.down_revision
+        == PRE_NONOPENING_REVIEW_TERMINAL_STATUS_HEAD_REVISION
+    )
+    previous_nonopening_review_terminal_head = script.get_revision(
+        PRE_NONOPENING_REVIEW_TERMINAL_STATUS_HEAD_REVISION
+    )
+    assert previous_nonopening_review_terminal_head is not None
+    assert (
+        previous_nonopening_review_terminal_head.down_revision
+        == PRE_NONOPENING_DIFFERENCE_REPLAY_LOCK_HEAD_REVISION
+    )
+    previous_nonopening_difference_replay_head = script.get_revision(
+        PRE_NONOPENING_DIFFERENCE_REPLAY_LOCK_HEAD_REVISION
+    )
+    assert previous_nonopening_difference_replay_head is not None
+    assert (
+        previous_nonopening_difference_replay_head.down_revision
+        == PRE_NONOPENING_COUNT_GUARD_COMPATIBILITY_HEAD_REVISION
+    )
+    previous_nonopening_count_guard_head = script.get_revision(
+        PRE_NONOPENING_COUNT_GUARD_COMPATIBILITY_HEAD_REVISION
+    )
+    assert previous_nonopening_count_guard_head is not None
+    assert (
+        previous_nonopening_count_guard_head.down_revision
+        == PRE_NONOPENING_START_AUDIT_ORDER_HEAD_REVISION
+    )
+    previous_nonopening_start_audit_order_head = script.get_revision(
+        PRE_NONOPENING_START_AUDIT_ORDER_HEAD_REVISION
+    )
+    assert previous_nonopening_start_audit_order_head is not None
+    assert (
+        previous_nonopening_start_audit_order_head.down_revision
+        == PRE_OPENING_RECOUNT_SOURCE_HISTORY_HEAD_REVISION
+    )
     previous_opening_recount_source_history_head = script.get_revision(
         PRE_OPENING_RECOUNT_SOURCE_HISTORY_HEAD_REVISION
     )
@@ -2934,6 +3005,17 @@ def _load_0052_migration_module():
     return module
 
 
+def _load_0032_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "nonopening_stocktake_review_recount_migration_0032",
+        NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_0053_migration_module():
     spec = importlib.util.spec_from_file_location(
         "opening_graph_table_dispatch_migration_0053",
@@ -2949,6 +3031,50 @@ def _load_0054_migration_module():
     spec = importlib.util.spec_from_file_location(
         "opening_recount_source_history_migration_0054",
         OPENING_RECOUNT_SOURCE_HISTORY_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_0055_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "nonopening_start_audit_order_migration_0055",
+        NONOPENING_START_AUDIT_ORDER_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_0056_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "nonopening_count_guard_compatibility_migration_0056",
+        NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_0057_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "nonopening_difference_replay_lock_migration_0057",
+        NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_0058_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "nonopening_review_terminal_status_migration_0058",
+        NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -6834,6 +6960,1459 @@ def test_0054_postgresql_offline_downgrade_requires_empty_opening_graph(
         < sql.index(module.DOWNGRADE_BLOCKER)
         < sql.index("readiness downgrade")
         < sql.index("round submission downgrade")
+        < sql.index("downgrade postflight")
+    )
+
+
+def test_0055_pins_nonopening_start_audit_order_and_catalog(
+    monkeypatch,
+) -> None:
+    migration_0047 = _load_0047_migration_module()
+    module = _load_0055_migration_module()
+
+    assert module.revision == NONOPENING_START_AUDIT_ORDER_REVISION_ID
+    assert module.down_revision == PRE_NONOPENING_START_AUDIT_ORDER_HEAD_REVISION
+    assert module.PREVIOUS_SCHEMA_REVISION == module.down_revision
+    assert module.DEFERRED_TABLES == migration_0047.DEFERRED_TABLES
+    assert len(module.LOCK_TABLES) == 30
+    assert module.LOCK_TABLES == tuple(sorted(set(module.LOCK_TABLES)))
+    assert set(module.DEFERRED_TABLES).issubset(module.LOCK_TABLES)
+    assert set(module.LOCK_TABLES) == {
+        "audit_events",
+        "auth_identities",
+        "custody_assignments",
+        "inventory_freezes",
+        "inventory_ledger_heads",
+        "inventory_lots",
+        "inventory_movement_serials",
+        "inventory_movements",
+        "inventory_serials",
+        "inventory_transactions",
+        "material_inventory_policies",
+        "materials",
+        "organizations",
+        "people",
+        "permissions",
+        "role_assignments",
+        "role_permissions",
+        "roles",
+        "serial_current_positions",
+        "state_transition_events",
+        "stock_accounts",
+        "stock_balances",
+        "stock_locations",
+        "stocktake_postings",
+        "stocktake_rounds",
+        "stocktake_scopes",
+        "stocktake_snapshot_lines",
+        "stocktake_start_completions",
+        "stocktake_tasks",
+        "users",
+    }
+
+    expected_guard_triggers = {
+        (
+            migration_0047.COMPLETION_TABLE,
+            migration_0047.PG_GUARD_TRIGGER,
+            31,
+        ),
+        *{
+            (
+                table_name,
+                migration_0047.PG_SEALED_GUARD_TRIGGERS[table_name],
+                31,
+            )
+            for table_name in migration_0047.SEALED_GUARD_TABLES
+        },
+    }
+    assert set(module.GUARD_TRIGGER_CATALOG) == expected_guard_triggers
+    assert len(module.GUARD_TRIGGER_CATALOG) == 8
+    assert len({row[1] for row in module.GUARD_TRIGGER_CATALOG}) == 8
+    assert module.DISPATCH_TRIGGER_CATALOG == tuple(
+        (
+            table_name,
+            migration_0047.PG_DEFERRED_TRIGGERS[table_name],
+            29,
+        )
+        for table_name in migration_0047.DEFERRED_TABLES
+    )
+    assert len({row[1] for row in module.DISPATCH_TRIGGER_CATALOG}) == 8
+    assert module.START_FUNCTION_CATALOG == (
+        (
+            module.GUARD_SIGNATURE,
+            module.GUARD_FUNCTION,
+            "trigger",
+            (),
+            (),
+            module.GUARD_BODY_SHA256_0054,
+            module.GUARD_BODY_SHA256_0055,
+            8,
+        ),
+        (
+            module.VALIDATOR_SIGNATURE,
+            module.VALIDATOR_FUNCTION,
+            "void",
+            ("uuid",),
+            ("checked_task_id",),
+            module.VALIDATOR_BODY_SHA256_0054,
+            module.VALIDATOR_BODY_SHA256_0055,
+            0,
+        ),
+    )
+
+    def function_body(statement: str) -> str:
+        return statement.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+
+    legacy_guard = function_body(migration_0047._postgresql_guard_function_sql())
+    legacy_validator = function_body(
+        migration_0047._postgresql_validator_function_sql()
+    )
+    dispatch_body = function_body(
+        migration_0047._postgresql_dispatch_function_sql()
+    )
+    for legacy_body, legacy_hash, fixed_hash in (
+        (
+            legacy_guard,
+            module.GUARD_BODY_SHA256_0054,
+            module.GUARD_BODY_SHA256_0055,
+        ),
+        (
+            legacy_validator,
+            module.VALIDATOR_BODY_SHA256_0054,
+            module.VALIDATOR_BODY_SHA256_0055,
+        ),
+    ):
+        assert hashlib.sha256(legacy_body.encode("utf-8")).hexdigest() == (
+            legacy_hash
+        )
+        assert legacy_body.count(module.LEGACY_AUDIT_ORDER) == 1
+        assert module.FIXED_AUDIT_ORDER not in legacy_body
+        fixed_body = legacy_body.replace(
+            module.LEGACY_AUDIT_ORDER,
+            module.FIXED_AUDIT_ORDER,
+        )
+        assert hashlib.sha256(fixed_body.encode("utf-8")).hexdigest() == fixed_hash
+        assert fixed_body.count(module.FIXED_AUDIT_ORDER) == 1
+        assert module.LEGACY_AUDIT_ORDER not in fixed_body
+        assert fixed_body.replace(
+            module.FIXED_AUDIT_ORDER,
+            module.LEGACY_AUDIT_ORDER,
+        ) == legacy_body
+    assert hashlib.sha256(dispatch_body.encode("utf-8")).hexdigest() == (
+        module.DISPATCH_BODY_SHA256
+    )
+    assert dispatch_body.count(module.VALIDATOR_FUNCTION) == 3
+    assert module.LEGACY_AUDIT_ORDER not in dispatch_body
+    assert module.FIXED_AUDIT_ORDER not in dispatch_body
+
+    ready_0047 = function_body(
+        migration_0047._oam_runtime_ready_function_sql(migration_0047.revision)
+    )
+    assert ready_0047.count(migration_0047.revision) == 1
+    ready_0054 = ready_0047.replace(
+        migration_0047.revision,
+        module.RUNTIME_READY_REVISION_0054,
+    )
+    assert hashlib.sha256(ready_0054.encode("utf-8")).hexdigest() == (
+        module.RUNTIME_READY_BODY_SHA256_0054
+    )
+    assert ready_0054.count(module.RUNTIME_READY_REVISION_0054) == 1
+    ready_0055 = ready_0054.replace(
+        module.RUNTIME_READY_REVISION_0054,
+        module.RUNTIME_READY_REVISION_0055,
+    )
+    assert hashlib.sha256(ready_0055.encode("utf-8")).hexdigest() == (
+        module.RUNTIME_READY_BODY_SHA256_0055
+    )
+    assert ready_0055.count(module.RUNTIME_READY_REVISION_0055) == 1
+
+    parser = pytest.importorskip("pglast.parser")
+    for fixed_body, function_name, arguments, result_type in (
+        (
+            legacy_guard.replace(
+                module.LEGACY_AUDIT_ORDER,
+                module.FIXED_AUDIT_ORDER,
+            ),
+            "rsc_0055_guard_parse_probe",
+            "",
+            "trigger",
+        ),
+        (
+            legacy_validator.replace(
+                module.LEGACY_AUDIT_ORDER,
+                module.FIXED_AUDIT_ORDER,
+            ),
+            "rsc_0055_validator_parse_probe",
+            "checked_task_id uuid",
+            "void",
+        ),
+    ):
+        parser.parse_sql(
+            f"CREATE FUNCTION public.{function_name}({arguments}) "
+            f"RETURNS {result_type} LANGUAGE plpgsql AS $rsc_0055_parse$"
+            + fixed_body
+            + "$rsc_0055_parse$"
+        )
+
+    statements: list[str] = []
+    monkeypatch.setattr(module.op, "execute", statements.append)
+    module._verify_audit_sequence_catalog(phase="audit parse probe")
+    module._verify_start_function_catalog(fixed=False, phase="legacy parse probe")
+    module._verify_start_function_catalog(fixed=True, phase="fixed parse probe")
+    module._verify_dispatch_catalog(phase="dispatch parse probe")
+    module._verify_runtime_ready_catalog(
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0054,
+        phase="legacy readiness parse probe",
+    )
+    module._verify_runtime_ready_catalog(
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0055,
+        phase="fixed readiness parse probe",
+    )
+    module._replace_function_source(
+        signature=module.GUARD_SIGNATURE,
+        expected_body_sha256=module.GUARD_BODY_SHA256_0054,
+        expected_replacement_body_sha256=module.GUARD_BODY_SHA256_0055,
+        source_fragment=module.LEGACY_AUDIT_ORDER,
+        replacement_fragment=module.FIXED_AUDIT_ORDER,
+        phase="guard parse probe",
+    )
+    module._replace_function_source(
+        signature=module.VALIDATOR_SIGNATURE,
+        expected_body_sha256=module.VALIDATOR_BODY_SHA256_0054,
+        expected_replacement_body_sha256=module.VALIDATOR_BODY_SHA256_0055,
+        source_fragment=module.LEGACY_AUDIT_ORDER,
+        replacement_fragment=module.FIXED_AUDIT_ORDER,
+        phase="validator parse probe",
+    )
+    module._replace_function_source(
+        signature=module.RUNTIME_READY_SIGNATURE,
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0054,
+        expected_replacement_body_sha256=module.RUNTIME_READY_BODY_SHA256_0055,
+        source_fragment=module.RUNTIME_READY_REVISION_0054,
+        replacement_fragment=module.RUNTIME_READY_REVISION_0055,
+        phase="readiness parse probe",
+    )
+    module._validate_existing_start_graphs(phase="graph parse probe")
+    module._require_no_start_graph()
+    for statement in statements:
+        assert not sa.text(statement)._bindparams
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+
+    with pytest.raises(ValueError, match="unsupported 0055 start function"):
+        module._verify_start_function_catalog(fixed=None, phase="invalid")
+    with pytest.raises(ValueError, match="unsupported 0055 readiness"):
+        module._verify_runtime_ready_catalog(
+            expected_body_sha256="0" * 64,
+            phase="invalid",
+        )
+    with pytest.raises(ValueError, match="unsupported 0055 function"):
+        module._replace_function_source(
+            signature=module.GUARD_SIGNATURE,
+            expected_body_sha256=module.GUARD_BODY_SHA256_0054,
+            expected_replacement_body_sha256=module.GUARD_BODY_SHA256_0055,
+            source_fragment=module.FIXED_AUDIT_ORDER,
+            replacement_fragment=module.LEGACY_AUDIT_ORDER,
+            phase="invalid",
+        )
+
+
+def test_0055_postgresql_offline_upgrade_is_source_only_and_fail_closed(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0055_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_NONOPENING_START_AUDIT_ORDER_HEAD_REVISION}:"
+        f"{NONOPENING_START_AUDIT_ORDER_REVISION_ID}",
+        sql=True,
+    )
+    sql = output.getvalue()
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(f"public.{table_name}" for table_name in module.LOCK_TABLES)
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    assert "-- Running upgrade 20260904_0054 -> 20260905_0055" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count("EXECUTE replacement_definition") == 3
+    for failure_reason in (
+        "migration role mismatch",
+        "audit identity mismatch",
+        "audit sequence mismatch",
+        "function identity mismatch",
+        "function catalog mismatch",
+        "guard trigger mismatch",
+        "dispatcher identity mismatch",
+        "dispatcher function mismatch",
+        "dispatcher ACL mismatch",
+        "dispatcher trigger mismatch",
+        "readiness identity mismatch",
+        "readiness function mismatch",
+        "readiness ACL mismatch",
+        "source mismatch",
+        "definition mismatch",
+        "replacement mismatch",
+    ):
+        assert failure_reason in sql
+    for body_hash in (
+        module.GUARD_BODY_SHA256_0054,
+        module.GUARD_BODY_SHA256_0055,
+        module.VALIDATOR_BODY_SHA256_0054,
+        module.VALIDATOR_BODY_SHA256_0055,
+        module.DISPATCH_BODY_SHA256,
+        module.RUNTIME_READY_BODY_SHA256_0054,
+        module.RUNTIME_READY_BODY_SHA256_0055,
+    ):
+        assert body_hash in sql
+    assert module.LEGACY_AUDIT_ORDER in sql
+    assert module.FIXED_AUDIT_ORDER in sql
+    assert "attribute_row.atttypid = 'character varying'::pg_catalog.regtype" in sql
+    assert "attribute_row.atttypmod = 164" in sql
+    assert "attribute_row.attname = 'sequence_no'" in sql
+    assert "uq_audit_events_stream_version_0017" in sql
+    assert "FROM pg_catalog.pg_proc AS caller_row" in sql
+    assert (
+        "PERFORM public.rsc_validate_nonopening_stocktake_start_causality_0047"
+        in sql
+    )
+    assert "function_row.proowner = migrator_oid" in sql
+    assert "function_row.proallargtypes IS NULL" in sql
+    assert "function_row.pronargdefaults = 0" in sql
+    assert "trigger_row.tgenabled = 'A'" in sql
+    assert "trigger_row.tgdeferrable" in sql
+    assert "trigger_row.tginitdeferred" in sql
+    assert "trigger_row.tgqual IS NULL" in sql
+    for table_name, trigger_name, trigger_type in (
+        *module.GUARD_TRIGGER_CATALOG,
+        *module.DISPATCH_TRIGGER_CATALOG,
+    ):
+        assert f"'{table_name}'" in sql
+        assert f"'{trigger_name}'" in sql
+        assert f", {trigger_type})" in sql
+    assert "CREATE TABLE" not in sql
+    assert "ALTER TABLE" not in sql
+    assert "DROP TRIGGER" not in sql
+    assert "CREATE TRIGGER" not in sql
+    assert "GRANT " not in sql
+    assert "REVOKE " not in sql
+    assert "INSERT INTO public." not in sql
+    assert "UPDATE public." not in sql
+    assert "DELETE FROM public." not in sql
+    assert module.DOWNGRADE_BLOCKER not in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("upgrade preflight")
+        < sql.index("guard upgrade")
+        < sql.index("validator upgrade")
+        < sql.index("upgrade replacement")
+        < sql.index("readiness upgrade")
+        < sql.index("upgrade postflight")
+    )
+
+
+def test_0055_postgresql_offline_downgrade_requires_empty_start_graph(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0055_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.downgrade(
+        config,
+        f"{NONOPENING_START_AUDIT_ORDER_REVISION_ID}:"
+        f"{PRE_NONOPENING_START_AUDIT_ORDER_HEAD_REVISION}",
+        sql=True,
+    )
+    sql = output.getvalue()
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(f"public.{table_name}" for table_name in module.LOCK_TABLES)
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    assert "-- Running downgrade 20260905_0055 -> 20260904_0054" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count("EXECUTE replacement_definition") == 3
+    assert sql.count(module.DOWNGRADE_BLOCKER) == 1
+    assert "FROM public.stocktake_start_completions" in sql
+    assert f"task.task_type IN {module.NONOPENING_SQL}" in sql
+    assert "task.status <> 'draft'" in sql
+    assert "stocktake_task_issued" in sql
+    assert "stocktake.task.started" in sql
+    assert module.COMMAND_SCHEMA in sql
+    assert "CREATE TABLE" not in sql
+    assert "ALTER TABLE" not in sql
+    assert "DROP TRIGGER" not in sql
+    assert "CREATE TRIGGER" not in sql
+    assert "GRANT " not in sql
+    assert "REVOKE " not in sql
+    assert "INSERT INTO public." not in sql
+    assert "UPDATE public." not in sql
+    assert "DELETE FROM public." not in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("downgrade preflight")
+        < sql.index(module.DOWNGRADE_BLOCKER)
+        < sql.index("readiness downgrade")
+        < sql.index("validator downgrade")
+        < sql.index("guard downgrade")
+        < sql.index("downgrade postflight")
+    )
+
+
+def test_0056_pins_nonopening_count_helper_callers_and_readiness(
+    monkeypatch,
+) -> None:
+    legacy_spec = importlib.util.spec_from_file_location(
+        "stocktake_round_assignment_guards_migration_0021_for_0056",
+        STOCKTAKE_ROUND_ASSIGNMENT_GUARDS_REVISION,
+    )
+    assert legacy_spec is not None and legacy_spec.loader is not None
+    legacy = importlib.util.module_from_spec(legacy_spec)
+    legacy_spec.loader.exec_module(legacy)
+    migration_0047 = _load_0047_migration_module()
+    module = _load_0056_migration_module()
+
+    assert module.revision == NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION_ID
+    assert (
+        module.down_revision
+        == PRE_NONOPENING_COUNT_GUARD_COMPATIBILITY_HEAD_REVISION
+    )
+    assert module.PREVIOUS_SCHEMA_REVISION == module.down_revision
+    assert module.NONOPENING_TASK_TYPES == (
+        "full",
+        "sample",
+        "ad_hoc",
+        "personal",
+        "termination",
+    )
+    assert module.LOCK_TABLES == tuple(sorted(set(module.LOCK_TABLES)))
+    assert {
+        "role_assignments",
+        "roles",
+        "stock_accounts",
+        "stocktake_count_lines",
+        "stocktake_count_observations",
+        "stocktake_count_serials",
+        "stocktake_recount_scope_assignments",
+        "stocktake_round_submissions",
+        "stocktake_rounds",
+        "stocktake_scope_count_completions",
+        "stocktake_scopes",
+        "stocktake_snapshot_lines",
+        "stocktake_tasks",
+        "users",
+    } <= set(module.LOCK_TABLES)
+    assert module.CALLER_CATALOG == (
+        (
+            "public.rsc_validate_stocktake_count_line_insert_0021()",
+            "rsc_validate_stocktake_count_line_insert_0021",
+            "319b1804e6fa6af3c7d3510524755d4b4d74b556a90640f6adfa6efa17f19693",
+            "stocktake_count_lines",
+            "trg_stocktake_count_lines_assignment_0021",
+        ),
+        (
+            "public.rsc_validate_stocktake_observation_insert_0021()",
+            "rsc_validate_stocktake_observation_insert_0021",
+            "06cf2fafa1d90f120fe4bba21cc1dc55dba70bd63f649671b4333a6159af06bb",
+            "stocktake_count_observations",
+            "trg_stocktake_count_observations_assignment_0021",
+        ),
+        (
+            "public.rsc_validate_stocktake_scope_completion_insert_0021()",
+            "rsc_validate_stocktake_scope_completion_insert_0021",
+            "9fda4b71155e3bdb6802e2f09bf32b90284b0f0643f4d518ee3aa286bf9efdc9",
+            "stocktake_scope_count_completions",
+            "trg_stocktake_scope_completions_assignment_0021",
+        ),
+    )
+
+    def function_body(statement: str) -> str:
+        return statement.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+
+    legacy_body = function_body(legacy._postgresql_actor_function_sql())
+    assert hashlib.sha256(legacy_body.encode("utf-8")).hexdigest() == (
+        module.LEGACY_BODY_SHA256
+    )
+    assert legacy_body.count(module.LEGACY_SOURCE_FRAGMENT) == 1
+    assert module.FIXED_SOURCE_FRAGMENT not in legacy_body
+    fixed_body = legacy_body.replace(
+        module.LEGACY_SOURCE_FRAGMENT,
+        module.FIXED_SOURCE_FRAGMENT,
+    )
+    assert hashlib.sha256(fixed_body.encode("utf-8")).hexdigest() == (
+        module.FIXED_BODY_SHA256
+    )
+    assert fixed_body.count(module.FIXED_SOURCE_FRAGMENT) == 1
+    assert module.LEGACY_SOURCE_FRAGMENT not in fixed_body
+    assert fixed_body.replace(
+        module.FIXED_SOURCE_FRAGMENT,
+        module.LEGACY_SOURCE_FRAGMENT,
+    ) == legacy_body
+
+    ready_0047 = function_body(
+        migration_0047._oam_runtime_ready_function_sql(migration_0047.revision)
+    )
+    ready_0055 = ready_0047.replace(
+        migration_0047.revision,
+        module.PREVIOUS_SCHEMA_REVISION,
+    )
+    ready_0056 = ready_0055.replace(
+        module.PREVIOUS_SCHEMA_REVISION,
+        module.revision,
+    )
+    assert hashlib.sha256(ready_0055.encode("utf-8")).hexdigest() == (
+        module.RUNTIME_READY_BODY_SHA256_0055
+    )
+    assert hashlib.sha256(ready_0056.encode("utf-8")).hexdigest() == (
+        module.RUNTIME_READY_BODY_SHA256_0056
+    )
+
+    parser = pytest.importorskip("pglast.parser")
+    parser.parse_sql(
+        "CREATE FUNCTION public.rsc_0056_helper_parse_probe("
+        "p_task_id uuid, p_round_id uuid, p_scope_id uuid, p_user_id text, "
+        "p_person_id uuid, p_assignment_id uuid, "
+        "p_authorization_version bigint, p_role_code text, "
+        "p_scope_type text, p_scope_id_snapshot text, "
+        "p_occurred_at timestamptz, p_require_full_snapshot boolean) "
+        "RETURNS boolean LANGUAGE sql AS $rsc_0056_parse$"
+        + fixed_body
+        + "$rsc_0056_parse$"
+    )
+
+    statements: list[str] = []
+    monkeypatch.setattr(module.op, "execute", statements.append)
+    module._verify_guard_catalog(fixed=False, phase="legacy parse probe")
+    module._verify_guard_catalog(fixed=True, phase="fixed parse probe")
+    module._verify_runtime_ready_catalog(
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0055,
+        phase="legacy readiness parse probe",
+    )
+    module._verify_runtime_ready_catalog(
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0056,
+        phase="fixed readiness parse probe",
+    )
+    module._require_no_nonopening_count_facts(
+        blocker=module.UPGRADE_BLOCKER,
+        phase="upgrade fact parse probe",
+    )
+    module._require_no_nonopening_count_facts(
+        blocker=module.DOWNGRADE_BLOCKER,
+        phase="downgrade fact parse probe",
+    )
+    module._replace_function_source(
+        signature=module.HELPER_SIGNATURE,
+        expected_body_sha256=module.LEGACY_BODY_SHA256,
+        expected_replacement_body_sha256=module.FIXED_BODY_SHA256,
+        source_fragment=module.LEGACY_SOURCE_FRAGMENT,
+        replacement_fragment=module.FIXED_SOURCE_FRAGMENT,
+        phase="helper parse probe",
+    )
+    module._replace_function_source(
+        signature=module.RUNTIME_READY_SIGNATURE,
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0055,
+        expected_replacement_body_sha256=module.RUNTIME_READY_BODY_SHA256_0056,
+        source_fragment=module.PREVIOUS_SCHEMA_REVISION,
+        replacement_fragment=module.revision,
+        phase="readiness parse probe",
+    )
+    for statement in statements:
+        assert not sa.text(statement)._bindparams
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+
+    with pytest.raises(ValueError, match="unsupported 0056 guard"):
+        module._verify_guard_catalog(fixed=None, phase="invalid")
+    with pytest.raises(ValueError, match="unsupported 0056 readiness"):
+        module._verify_runtime_ready_catalog(
+            expected_body_sha256="0" * 64,
+            phase="invalid",
+        )
+    with pytest.raises(ValueError, match="unsupported 0056 non-opening"):
+        module._require_no_nonopening_count_facts(
+            blocker="invalid",
+            phase="invalid",
+        )
+    with pytest.raises(ValueError, match="unsupported 0056 function"):
+        module._replace_function_source(
+            signature=module.HELPER_SIGNATURE,
+            expected_body_sha256=module.LEGACY_BODY_SHA256,
+            expected_replacement_body_sha256=module.FIXED_BODY_SHA256,
+            source_fragment=module.FIXED_SOURCE_FRAGMENT,
+            replacement_fragment=module.LEGACY_SOURCE_FRAGMENT,
+            phase="invalid",
+        )
+
+
+def test_0056_postgresql_offline_upgrade_is_locked_and_fail_closed(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0056_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_NONOPENING_COUNT_GUARD_COMPATIBILITY_HEAD_REVISION}:"
+        f"{NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION_ID}",
+        sql=True,
+    )
+    sql = output.getvalue()
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(f"public.{table_name}" for table_name in module.LOCK_TABLES)
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    assert "-- Running upgrade 20260905_0055 -> 20260905_0056" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count("EXECUTE replacement_definition") == 2
+    assert sql.count(module.UPGRADE_BLOCKER) == 1
+    assert module.DOWNGRADE_BLOCKER not in sql
+    for body_hash in (
+        module.LEGACY_BODY_SHA256,
+        module.FIXED_BODY_SHA256,
+        module.RUNTIME_READY_BODY_SHA256_0055,
+        module.RUNTIME_READY_BODY_SHA256_0056,
+        *(row[2] for row in module.CALLER_CATALOG),
+    ):
+        assert body_hash in sql
+    assert module.LEGACY_SOURCE_FRAGMENT in sql
+    assert module.FIXED_SOURCE_FRAGMENT in sql
+    assert "function_row.prosecdef" in sql
+    assert "NOT function_row.prosecdef" in sql
+    assert "trigger_row.tgenabled = 'A'" in sql
+    assert "trigger_row.tgtype = 7" in sql
+    assert "FROM pg_catalog.pg_proc AS caller_row" in sql
+    for _, _, _, table_name, trigger_name in module.CALLER_CATALOG:
+        assert f"'{table_name}'" in sql
+        assert f"'{trigger_name}'" in sql
+    for forbidden in (
+        "CREATE TABLE",
+        "ALTER TABLE",
+        "DROP TRIGGER",
+        "CREATE TRIGGER",
+        "GRANT ",
+        "REVOKE ",
+        "INSERT INTO public.",
+        "UPDATE public.",
+        "DELETE FROM public.",
+    ):
+        assert forbidden not in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("upgrade preflight")
+        < sql.index(module.UPGRADE_BLOCKER)
+        < sql.index("helper upgrade")
+        < sql.index("upgrade replacement")
+        < sql.index("readiness upgrade")
+        < sql.index("upgrade postflight")
+    )
+
+
+def test_0056_postgresql_offline_downgrade_rejects_nonopening_facts(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0056_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.downgrade(
+        config,
+        f"{NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION_ID}:"
+        f"{PRE_NONOPENING_COUNT_GUARD_COMPATIBILITY_HEAD_REVISION}",
+        sql=True,
+    )
+    sql = output.getvalue()
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(f"public.{table_name}" for table_name in module.LOCK_TABLES)
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    assert "-- Running downgrade 20260905_0056 -> 20260905_0055" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count("EXECUTE replacement_definition") == 2
+    assert sql.count(module.DOWNGRADE_BLOCKER) == 1
+    assert module.UPGRADE_BLOCKER not in sql
+    assert f"task.task_type IN {module.NONOPENING_SQL}" in sql
+    for fact_table in (
+        "stocktake_count_lines",
+        "stocktake_count_observations",
+        "stocktake_scope_count_completions",
+    ):
+        assert f"FROM public.{fact_table} AS fact" in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("downgrade preflight")
+        < sql.index(module.DOWNGRADE_BLOCKER)
+        < sql.index("readiness downgrade")
+        < sql.index("helper downgrade")
+        < sql.index("downgrade postflight")
+    )
+
+
+def test_0057_pins_difference_replay_functions_catalog_acl_and_readiness(
+    monkeypatch,
+) -> None:
+    migration_0047 = _load_0047_migration_module()
+    module = _load_0057_migration_module()
+
+    assert module.revision == NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION_ID
+    assert module.down_revision == (
+        PRE_NONOPENING_DIFFERENCE_REPLAY_LOCK_HEAD_REVISION
+    )
+    assert module.PREVIOUS_SCHEMA_REVISION == module.down_revision
+    script = ScriptDirectory.from_config(_config("sqlite+pysqlite:///:memory:"))
+    revision_row = script.get_revision(module.revision)
+    successor_row = script.get_revision(NONOPENING_REVIEW_TERMINAL_STATUS_REVISION_ID)
+    assert revision_row is not None
+    assert revision_row.down_revision == module.down_revision
+    assert successor_row is not None
+    assert successor_row.down_revision == module.revision
+    assert module.LOCK_TABLES == tuple(sorted(set(module.LOCK_TABLES)))
+    assert module.MAXIMUM_LOCK_ROWS == 100_000
+    assert module.LOCK_SIGNATURE == (
+        "public.rsc_lock_nonopening_stocktake_difference_replay_graph_0057("
+        "uuid, uuid, text)"
+    )
+    assert module.SEAL_SIGNATURE == (
+        "public.rsc_guard_stocktake_evidence_seal_0057()"
+    )
+    assert module.CONTROL_GUARD_SIGNATURE == (
+        "public.rsc_guard_nonopening_control_snapshot_0057()"
+    )
+    assert module.PRINCIPAL_HELPER_BODY_SHA256 == (
+        "4b7d3e47541a1de999f33af65d95a697ffd44cfea8930f6fbeb265d4fd727aaf"
+    )
+    assert module.REVIEW_HELPER_BODY_SHA256 == (
+        "ce7dda6f207c9a17bfde049749aa6e689e3f84d9e2c3892c66f17ac15c411ee3"
+    )
+    assert {
+        "document_attachments",
+        "files",
+        "inventory_ledger_heads",
+        "inventory_movement_serials",
+        "inventory_movements",
+        "inventory_transactions",
+        "stock_accounts",
+        "stocktake_control_snapshot_lines",
+        "stocktake_difference_set_completions",
+        "stocktake_differences",
+        "stocktake_postings",
+        "stocktake_review_items",
+        "stocktake_reviews",
+        "stocktake_round_submissions",
+        "stocktake_rounds",
+        "stocktake_tasks",
+    } <= set(module.LOCK_TABLES)
+
+    def function_body(statement: str) -> str:
+        return statement.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+
+    function_catalog = (
+        (
+            module._postgresql_lock_function_sql(),
+            module.LOCK_BODY_SHA256,
+            "RETURNS void",
+        ),
+        (
+            module._postgresql_seal_function_sql(),
+            module.SEAL_BODY_SHA256,
+            "RETURNS trigger",
+        ),
+        (
+            module._postgresql_control_guard_function_sql(),
+            module.CONTROL_GUARD_BODY_SHA256,
+            "RETURNS trigger",
+        ),
+    )
+    assert module.LOCK_BODY_SHA256 == (
+        "7771bc7f9b59465fb47426eaabbff79deeb92967c0c77bbed79c0fe01585596c"
+    )
+    assert module.SEAL_BODY_SHA256 == (
+        "7a5ae0c9fd3117cb784dce34c7882b8301759e846321ac7a6233235c6333222c"
+    )
+    assert module.CONTROL_GUARD_BODY_SHA256 == (
+        "40d7a6223b6250316f7bed15c0dd4749238066865f7581156646c5b89b509249"
+    )
+    parser = pytest.importorskip("pglast.parser")
+    for function_sql, expected_hash, return_shape in function_catalog:
+        assert "pg_catalog.coalesce" not in function_sql.lower()
+        assert function_sql.count("CREATE FUNCTION public.") == 1
+        assert return_shape in function_sql
+        assert "LANGUAGE plpgsql" in function_sql
+        assert "VOLATILE" in function_sql
+        assert "SECURITY DEFINER" in function_sql
+        assert "SET search_path = pg_catalog, public" in function_sql
+        assert hashlib.sha256(
+            function_body(function_sql).encode("utf-8")
+        ).hexdigest() == expected_hash
+        parser.parse_sql(function_sql)
+        parser.parse_plpgsql_json(function_sql)
+
+    lock_body = function_body(module._postgresql_lock_function_sql())
+    assert lock_body.index("FROM public.inventory_ledger_heads AS head") < (
+        lock_body.index("FROM public.stocktake_tasks AS task")
+    )
+    assert lock_body.index("rsc_lock_formal_principal_graph_0026") < (
+        lock_body.index("FROM public.stock_accounts AS account")
+    )
+    assert lock_body.index("FROM public.stock_accounts AS account") < (
+        lock_body.index("rsc_lock_nonopening_stocktake_review_graph_0032")
+    )
+    assert lock_body.index("rsc_lock_nonopening_stocktake_review_graph_0032") < (
+        lock_body.index(
+            "PERFORM transaction_row.id FROM public.inventory_transactions "
+            "AS transaction_row"
+        )
+    )
+    assert "graph_count > 100000" in lock_body
+    assert "pg_catalog.cardinality(principal_user_ids) NOT BETWEEN 1 AND 1000" in (
+        lock_body
+    )
+
+    ready_0047 = function_body(
+        migration_0047._oam_runtime_ready_function_sql(migration_0047.revision)
+    )
+    ready_0056 = ready_0047.replace(
+        migration_0047.revision,
+        module.PREVIOUS_SCHEMA_REVISION,
+    )
+    ready_0057 = ready_0056.replace(
+        module.PREVIOUS_SCHEMA_REVISION,
+        module.revision,
+    )
+    assert hashlib.sha256(ready_0056.encode("utf-8")).hexdigest() == (
+        module.RUNTIME_READY_BODY_SHA256_0056
+    )
+    assert hashlib.sha256(ready_0057.encode("utf-8")).hexdigest() == (
+        module.RUNTIME_READY_BODY_SHA256_0057
+    )
+    assert module.RUNTIME_READY_BODY_SHA256_0057 == (
+        "9b97c355d0fcbb5ee4dfcf1e90fd76339b2eafd64f5f5b287a21aa3d364cfdc5"
+    )
+
+    statements: list[str] = []
+    monkeypatch.setattr(module.op, "execute", statements.append)
+    module._verify_postgresql_prerequisites()
+    prerequisite_sql = statements.pop()
+    module._verify_postgresql_catalog(
+        expected_ready_hash=module.RUNTIME_READY_BODY_SHA256_0057
+    )
+    catalog_sql = statements.pop()
+    module._replace_runtime_ready(
+        expected_hash=module.RUNTIME_READY_BODY_SHA256_0056,
+        replacement_hash=module.RUNTIME_READY_BODY_SHA256_0057,
+        old_revision=module.PREVIOUS_SCHEMA_REVISION,
+        new_revision=module.revision,
+    )
+    readiness_sql = statements.pop()
+    module._apply_postgresql_acl()
+    acl_sql = tuple(statements)
+
+    for statement in (prerequisite_sql, catalog_sql, readiness_sql, *acl_sql):
+        assert "pg_catalog.coalesce" not in statement.lower()
+        assert not sa.text(statement)._bindparams
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+
+    for signature, body_hash, argtypes, pronargs in (
+        (
+            "public.rsc_lock_formal_principal_graph_0026(text[])",
+            module.PRINCIPAL_HELPER_BODY_SHA256,
+            "text[]",
+            "row.pronargs = 1",
+        ),
+        (
+            "public.rsc_lock_nonopening_stocktake_review_graph_0032(uuid, uuid)",
+            module.REVIEW_HELPER_BODY_SHA256,
+            "uuid, uuid",
+            "row.pronargs = 2",
+        ),
+    ):
+        assert signature in prerequisite_sql
+        assert body_hash in prerequisite_sql
+        assert f"pg_catalog.oidvectortypes(row.proargtypes) = '{argtypes}'" in (
+            prerequisite_sql
+        )
+        assert pronargs in prerequisite_sql
+    for prerequisite_fragment in (
+        "row.proowner = migrator_oid",
+        "row.prokind = 'f'",
+        "row.prorettype = 'void'::pg_catalog.regtype",
+        "NOT row.proretset",
+        "row.proallargtypes IS NULL",
+        "row.proargmodes IS NULL",
+        "row.pronargdefaults = 0",
+        "row.proargdefaults IS NULL",
+        "row.provariadic = 0",
+        "language_row.lanname = 'plpgsql'",
+        "row.provolatile = 'v'",
+        "row.prosecdef",
+        "NOT row.proisstrict",
+        "NOT row.proleakproof",
+        "row.proparallel = 'u'",
+        "row.proconfig = ARRAY['search_path=pg_catalog, public']::text[]",
+        "acl.grantor <> migrator_oid",
+        "acl.grantee NOT IN (migrator_oid, api_oid)",
+        "acl.is_grantable",
+    ):
+        assert prerequisite_fragment in prerequisite_sql
+    assert prerequisite_sql.count("acl.grantor = migrator_oid") >= 2
+    assert prerequisite_sql.count("AND NOT acl.is_grantable) <> 2") >= 2
+    assert "trg_document_attachments_stocktake_evidence_guard_0036" in (
+        prerequisite_sql
+    )
+    assert "trigger_row.tgenabled = 'A'" in prerequisite_sql
+
+    for catalog_fragment in (
+        "row.oid = lock_oid AND row.proowner = migrator_oid",
+        "row.prorettype = 'void'::pg_catalog.regtype",
+        "row.pronargs = 3",
+        "pg_catalog.oidvectortypes(row.proargtypes) = 'uuid, uuid, text'",
+        "'requested_actor_user_id'",
+        "row.proallargtypes IS NULL AND row.proargmodes IS NULL",
+        "row.pronargdefaults = 0 AND row.proargdefaults IS NULL",
+        "row.provariadic = 0",
+        "row.provolatile = 'v'",
+        "row.prosecdef",
+        "NOT row.proisstrict",
+        "NOT row.proleakproof",
+        "row.proparallel = 'u'",
+        "row.proconfig = ARRAY['search_path=pg_catalog, public']::text[]",
+        "acl.grantor <> migrator_oid",
+        "acl.grantee NOT IN (migrator_oid, api_oid)",
+        "acl.grantee IN (migrator_oid, api_oid)",
+        "row.prorettype = 'trigger'::pg_catalog.regtype",
+        "pg_catalog.has_function_privilege(api_oid, expected.function_oid, 'EXECUTE')",
+        "trigger_row.tgenabled = 'A'",
+        "trigger_row.tgtype = 7",
+        "trigger_row.tgconstraint = 0",
+        "NOT trigger_row.tgdeferrable",
+        "NOT trigger_row.tginitdeferred",
+        "trigger_row.tgconstrrelid = 0",
+        "trigger_row.tgconstrindid = 0",
+        "trigger_row.tgparentid = 0",
+        "trigger_row.tgqual IS NULL",
+        "trigger_row.tgoldtable IS NULL",
+        "trigger_row.tgnewtable IS NULL",
+        "trigger_row.tgnargs = 0",
+        "trigger_row.tgattr = ''::pg_catalog.int2vector",
+        "row.prorettype = 'boolean'::pg_catalog.regtype",
+        "row.proconfig = ARRAY['search_path=pg_catalog']::text[]",
+    ):
+        assert catalog_fragment in catalog_sql
+    for body_hash in (
+        module.LOCK_BODY_SHA256,
+        module.SEAL_BODY_SHA256,
+        module.CONTROL_GUARD_BODY_SHA256,
+        module.RUNTIME_READY_BODY_SHA256_0057,
+    ):
+        assert body_hash in catalog_sql
+    assert module.SEAL_TRIGGER in catalog_sql
+    assert module.CONTROL_GUARD_TRIGGER in catalog_sql
+    assert f"'{module.SEAL_TRIGGER}' >=" in catalog_sql
+    assert catalog_sql.count("acl.grantor = migrator_oid") >= 1
+
+    assert module.RUNTIME_READY_BODY_SHA256_0056 in readiness_sql
+    assert module.RUNTIME_READY_BODY_SHA256_0057 in readiness_sql
+    assert module.PREVIOUS_SCHEMA_REVISION in readiness_sql
+    assert module.revision in readiness_sql
+    assert "EXECUTE pg_catalog.replace(" in readiness_sql
+    assert acl_sql == (
+        f"REVOKE EXECUTE ON FUNCTION {module.LOCK_SIGNATURE} FROM PUBLIC",
+        f"ALTER FUNCTION {module.LOCK_SIGNATURE} OWNER TO {module.MIGRATION_ROLE}",
+        f"REVOKE EXECUTE ON FUNCTION {module.SEAL_SIGNATURE} FROM PUBLIC",
+        f"ALTER FUNCTION {module.SEAL_SIGNATURE} OWNER TO {module.MIGRATION_ROLE}",
+        f"REVOKE EXECUTE ON FUNCTION {module.CONTROL_GUARD_SIGNATURE} FROM PUBLIC",
+        (
+            f"ALTER FUNCTION {module.CONTROL_GUARD_SIGNATURE} OWNER TO "
+            f"{module.MIGRATION_ROLE}"
+        ),
+        (
+            f"GRANT EXECUTE ON FUNCTION {module.LOCK_SIGNATURE} TO "
+            f"{module.PRODUCTION_API_ROLE}"
+        ),
+        (
+            f"REVOKE EXECUTE ON FUNCTION {module.SEAL_SIGNATURE} FROM "
+            f"{module.PRODUCTION_API_ROLE}"
+        ),
+        (
+            f"REVOKE EXECUTE ON FUNCTION {module.CONTROL_GUARD_SIGNATURE} FROM "
+            f"{module.PRODUCTION_API_ROLE}"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="unsupported 0057 catalog state"):
+        module._verify_postgresql_catalog(expected_ready_hash="0" * 64)
+
+
+def test_0057_postgresql_offline_upgrade_emits_pinned_catalog_sql(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0057_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_NONOPENING_DIFFERENCE_REPLAY_LOCK_HEAD_REVISION}:"
+        f"{NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION_ID}",
+        sql=True,
+    )
+    sql = output.getvalue()
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(f"public.{table_name}" for table_name in module.LOCK_TABLES)
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    assert "-- Running upgrade 20260905_0056 -> 20260905_0057" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count(f"CREATE FUNCTION public.{module.LOCK_FUNCTION}") == 1
+    assert sql.count(f"CREATE FUNCTION public.{module.SEAL_FUNCTION}") == 1
+    assert sql.count(f"CREATE FUNCTION public.{module.CONTROL_GUARD_FUNCTION}") == 1
+    assert sql.count(f"CREATE TRIGGER {module.SEAL_TRIGGER}") == 1
+    assert sql.count(f"CREATE TRIGGER {module.CONTROL_GUARD_TRIGGER}") == 1
+    assert sql.count("ENABLE ALWAYS TRIGGER") == 2
+    for body_hash in (
+        module.PRINCIPAL_HELPER_BODY_SHA256,
+        module.REVIEW_HELPER_BODY_SHA256,
+        module.LOCK_BODY_SHA256,
+        module.SEAL_BODY_SHA256,
+        module.CONTROL_GUARD_BODY_SHA256,
+        module.RUNTIME_READY_BODY_SHA256_0056,
+        module.RUNTIME_READY_BODY_SHA256_0057,
+    ):
+        assert body_hash in sql
+    assert "acl.grantor <> migrator_oid" in sql
+    assert "acl.grantor = migrator_oid" in sql
+    assert "trigger_row.tgenabled = 'A'" in sql
+    assert "trigger_row.tgtype = 7" in sql
+    assert "trigger_row.tgnargs = 0" in sql
+    assert "trigger_row.tgqual IS NULL" in sql
+    assert "GRANT EXECUTE ON FUNCTION" in sql
+    assert module.LOCK_SIGNATURE in sql
+    assert sql.index(lock_sql) < sql.index("0057 prerequisite catalog mismatch")
+    assert sql.index("0057 prerequisite catalog mismatch") < sql.index(
+        f"CREATE FUNCTION public.{module.SEAL_FUNCTION}"
+    )
+    assert sql.index(f"CREATE FUNCTION public.{module.SEAL_FUNCTION}") < sql.index(
+        f"CREATE FUNCTION public.{module.LOCK_FUNCTION}"
+    )
+    assert sql.index(f"CREATE FUNCTION public.{module.LOCK_FUNCTION}") < sql.index(
+        "0057 runtime readiness source mismatch"
+    )
+    assert sql.index("0057 runtime readiness source mismatch") < sql.index(
+        "0057 catalog identity mismatch"
+    )
+    parser = pytest.importorskip("pglast.parser")
+    parser.parse_sql(sql)
+    parser.parse_plpgsql_json(sql)
+
+
+def test_0057_offline_modes_fail_closed_when_online_evidence_is_required(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    postgres_output = io.StringIO()
+    postgres_config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=postgres_output,
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="0057 downgrade requires an online evidence check",
+    ):
+        command.downgrade(
+            postgres_config,
+            f"{NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION_ID}:"
+            f"{PRE_NONOPENING_DIFFERENCE_REPLAY_LOCK_HEAD_REVISION}",
+            sql=True,
+        )
+
+    sqlite_output = io.StringIO()
+    sqlite_config = _config(
+        f"sqlite+pysqlite:///{tmp_path / '0057-offline.db'}",
+        output_buffer=sqlite_output,
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="0057 SQLite upgrade requires an online connection",
+    ):
+        command.upgrade(
+            sqlite_config,
+            f"{PRE_NONOPENING_DIFFERENCE_REPLAY_LOCK_HEAD_REVISION}:"
+            f"{NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION_ID}",
+            sql=True,
+        )
+
+
+def test_0057_sqlite_triggers_parse_and_online_downgrade_blocks_sealed_facts(
+    monkeypatch,
+) -> None:
+    module = _load_0057_migration_module()
+    seal_sql = module._sqlite_seal_trigger_sql()
+    control_sql = module._sqlite_control_guard_trigger_sql()
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "CREATE TABLE document_attachments ("
+                "document_type text, attachment_type text, document_id text)"
+            )
+            connection.exec_driver_sql(
+                "CREATE TABLE stocktake_control_snapshot_lines (task_id text)"
+            )
+            connection.exec_driver_sql(seal_sql)
+            connection.exec_driver_sql(control_sql)
+            triggers = dict(
+                connection.exec_driver_sql(
+                    "SELECT name, sql FROM sqlite_master "
+                    "WHERE type = 'trigger' ORDER BY name"
+                ).all()
+            )
+        assert set(triggers) == {
+            module.SQLITE_SEAL_TRIGGER,
+            module.CONTROL_GUARD_TRIGGER,
+        }
+        assert "BEFORE INSERT ON document_attachments" in triggers[
+            module.SQLITE_SEAL_TRIGGER
+        ]
+        assert "stocktake_round_submissions" in triggers[
+            module.SQLITE_SEAL_TRIGGER
+        ]
+        assert "sealed non-opening stocktake evidence is immutable" in triggers[
+            module.SQLITE_SEAL_TRIGGER
+        ]
+        assert "BEFORE INSERT ON stocktake_control_snapshot_lines" in triggers[
+            module.CONTROL_GUARD_TRIGGER
+        ]
+        assert module.NONOPENING_SQL in triggers[module.CONTROL_GUARD_TRIGGER]
+    finally:
+        engine.dispose()
+
+    class _FakeResult:
+        def __init__(self, row):
+            self._row = row
+
+        def first(self):
+            return self._row
+
+    class _FakeBind:
+        def __init__(self, row):
+            self.row = row
+            self.queries: list[str] = []
+
+        def exec_driver_sql(self, statement: str):
+            self.queries.append(statement)
+            return _FakeResult(self.row)
+
+    blocked_bind = _FakeBind((1,))
+    executed: list[str] = []
+    monkeypatch.setattr(module.context, "is_offline_mode", lambda: False)
+    monkeypatch.setattr(module, "_dialect_name", lambda: "sqlite")
+    monkeypatch.setattr(module, "_ensure_sqlite_migration_transaction", lambda: None)
+    monkeypatch.setattr(module.op, "get_bind", lambda: blocked_bind)
+    monkeypatch.setattr(module.op, "execute", executed.append)
+    with pytest.raises(RuntimeError, match=re.escape(module.DOWNGRADE_BLOCKER)):
+        module.downgrade()
+    assert executed == []
+    assert len(blocked_bind.queries) == 1
+    assert "stocktake_round_submissions" in blocked_bind.queries[0]
+    assert "stocktake_difference_set_completions" in blocked_bind.queries[0]
+    assert f"task.task_type IN {module.NONOPENING_SQL}" in blocked_bind.queries[0]
+
+    clear_bind = _FakeBind(None)
+    monkeypatch.setattr(module.op, "get_bind", lambda: clear_bind)
+    module.downgrade()
+    assert executed == [
+        f"DROP TRIGGER IF EXISTS {module.SQLITE_SEAL_TRIGGER}",
+        f"DROP TRIGGER IF EXISTS {module.CONTROL_GUARD_TRIGGER}",
+    ]
+
+
+def test_0058_pins_review_terminal_function_triggers_and_readiness(
+    monkeypatch,
+) -> None:
+    migration_0032 = _load_0032_migration_module()
+    migration_0047 = _load_0047_migration_module()
+    migration_0057 = _load_0057_migration_module()
+    module = _load_0058_migration_module()
+
+    assert module.revision == NONOPENING_REVIEW_TERMINAL_STATUS_REVISION_ID
+    assert module.down_revision == (
+        PRE_NONOPENING_REVIEW_TERMINAL_STATUS_HEAD_REVISION
+    )
+    assert module.PREVIOUS_SCHEMA_REVISION == module.down_revision
+    assert migration_0057.revision == module.down_revision
+    assert migration_0057.down_revision == (
+        NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION_ID
+    )
+    assert module.LOCK_TABLES == tuple(sorted(set(module.LOCK_TABLES)))
+    assert set(module.LOCK_TABLES) == {
+        "alembic_version",
+        "role_assignments",
+        "roles",
+        "stocktake_difference_set_completions",
+        "stocktake_differences",
+        "stocktake_review_items",
+        "stocktake_reviews",
+        "stocktake_rounds",
+        "stocktake_tasks",
+        "users",
+    }
+    assert module.REVIEW_GRAPH_TRIGGERS == (
+        (
+            "stocktake_review_items",
+            "trg_nonopening_review_graph_item_0032",
+        ),
+        (
+            "stocktake_reviews",
+            "trg_nonopening_review_graph_review_0032",
+        ),
+        (
+            "stocktake_tasks",
+            "trg_nonopening_review_graph_task_0032",
+        ),
+    )
+
+    def function_body(statement: str) -> str:
+        return statement.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+
+    legacy_sql = migration_0032._postgresql_review_graph_function_sql()
+    legacy_body = function_body(legacy_sql)
+    assert hashlib.sha256(legacy_body.encode("utf-8")).hexdigest() == (
+        module.LEGACY_BODY_SHA256
+    )
+    assert legacy_body.count(module.LEGACY_SOURCE_FRAGMENT) == 1
+    assert module.FIXED_SOURCE_FRAGMENT not in legacy_body
+    fixed_body = legacy_body.replace(
+        module.LEGACY_SOURCE_FRAGMENT,
+        module.FIXED_SOURCE_FRAGMENT,
+    )
+    assert hashlib.sha256(fixed_body.encode("utf-8")).hexdigest() == (
+        module.FIXED_BODY_SHA256
+    )
+    assert fixed_body.count(module.FIXED_SOURCE_FRAGMENT) == 1
+    assert module.LEGACY_SOURCE_FRAGMENT not in fixed_body
+    assert fixed_body.replace(
+        module.FIXED_SOURCE_FRAGMENT,
+        module.LEGACY_SOURCE_FRAGMENT,
+    ) == legacy_body
+
+    ready_0047 = function_body(
+        migration_0047._oam_runtime_ready_function_sql(migration_0047.revision)
+    )
+    ready_0057 = ready_0047.replace(
+        migration_0047.revision,
+        module.PREVIOUS_SCHEMA_REVISION,
+    )
+    ready_0058 = ready_0057.replace(
+        module.PREVIOUS_SCHEMA_REVISION,
+        module.revision,
+    )
+    assert hashlib.sha256(ready_0057.encode("utf-8")).hexdigest() == (
+        module.RUNTIME_READY_BODY_SHA256_0057
+    )
+    assert hashlib.sha256(ready_0058.encode("utf-8")).hexdigest() == (
+        module.RUNTIME_READY_BODY_SHA256_0058
+    )
+
+    parser = pytest.importorskip("pglast.parser")
+    fixed_sql = legacy_sql.replace(
+        module.LEGACY_SOURCE_FRAGMENT,
+        module.FIXED_SOURCE_FRAGMENT,
+    )
+    parser.parse_sql(fixed_sql)
+    parser.parse_plpgsql_json(fixed_sql)
+
+    statements: list[str] = []
+    monkeypatch.setattr(module.op, "execute", statements.append)
+    module._verify_review_catalog(fixed=False, phase="legacy parse probe")
+    module._verify_review_catalog(fixed=True, phase="fixed parse probe")
+    module._verify_runtime_ready_catalog(
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0057,
+        phase="legacy readiness parse probe",
+    )
+    module._verify_runtime_ready_catalog(
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0058,
+        phase="fixed readiness parse probe",
+    )
+    module._require_no_nonopening_terminal_facts(
+        blocker=module.UPGRADE_BLOCKER,
+        phase="upgrade fact parse probe",
+    )
+    module._require_no_nonopening_terminal_facts(
+        blocker=module.DOWNGRADE_BLOCKER,
+        phase="downgrade fact parse probe",
+    )
+    module._replace_function_source(
+        signature=module.REVIEW_GRAPH_SIGNATURE,
+        expected_body_sha256=module.LEGACY_BODY_SHA256,
+        expected_replacement_body_sha256=module.FIXED_BODY_SHA256,
+        source_fragment=module.LEGACY_SOURCE_FRAGMENT,
+        replacement_fragment=module.FIXED_SOURCE_FRAGMENT,
+        phase="review parse probe",
+    )
+    module._replace_function_source(
+        signature=module.RUNTIME_READY_SIGNATURE,
+        expected_body_sha256=module.RUNTIME_READY_BODY_SHA256_0057,
+        expected_replacement_body_sha256=module.RUNTIME_READY_BODY_SHA256_0058,
+        source_fragment=module.PREVIOUS_SCHEMA_REVISION,
+        replacement_fragment=module.revision,
+        phase="readiness parse probe",
+    )
+    for statement in statements:
+        assert not sa.text(statement)._bindparams
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+
+    with pytest.raises(ValueError, match="unsupported 0058 review"):
+        module._verify_review_catalog(fixed=None, phase="invalid")
+    with pytest.raises(ValueError, match="unsupported 0058 readiness"):
+        module._verify_runtime_ready_catalog(
+            expected_body_sha256="0" * 64,
+            phase="invalid",
+        )
+    with pytest.raises(ValueError, match="unsupported 0058 non-opening"):
+        module._require_no_nonopening_terminal_facts(
+            blocker="invalid",
+            phase="invalid",
+        )
+    with pytest.raises(ValueError, match="unsupported 0058 function"):
+        module._replace_function_source(
+            signature=module.REVIEW_GRAPH_SIGNATURE,
+            expected_body_sha256=module.LEGACY_BODY_SHA256,
+            expected_replacement_body_sha256=module.FIXED_BODY_SHA256,
+            source_fragment=module.FIXED_SOURCE_FRAGMENT,
+            replacement_fragment=module.LEGACY_SOURCE_FRAGMENT,
+            phase="invalid",
+        )
+
+
+def test_0058_postgresql_offline_upgrade_is_locked_and_fail_closed(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0058_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_NONOPENING_REVIEW_TERMINAL_STATUS_HEAD_REVISION}:"
+        f"{NONOPENING_REVIEW_TERMINAL_STATUS_REVISION_ID}",
+        sql=True,
+    )
+    sql = output.getvalue()
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(f"public.{table_name}" for table_name in module.LOCK_TABLES)
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    assert "-- Running upgrade 20260905_0057 -> 20260905_0058" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count("EXECUTE replacement_definition") == 2
+    assert sql.count(module.UPGRADE_BLOCKER) == 1
+    assert module.DOWNGRADE_BLOCKER not in sql
+    for body_hash in (
+        module.LEGACY_BODY_SHA256,
+        module.FIXED_BODY_SHA256,
+        module.RUNTIME_READY_BODY_SHA256_0057,
+        module.RUNTIME_READY_BODY_SHA256_0058,
+    ):
+        assert body_hash in sql
+    assert module.LEGACY_SOURCE_FRAGMENT in sql
+    assert module.FIXED_SOURCE_FRAGMENT in sql
+    assert "task.status IN ('posted', 'closed')" in sql
+    assert "NOT function_row.prosecdef" in sql
+    assert "trigger_row.tgenabled = 'A'" in sql
+    assert "trigger_row.tgtype = 29" in sql
+    assert "trigger_row.tgdeferrable" in sql
+    assert "trigger_row.tginitdeferred" in sql
+    assert "array_agg(trigger_row.oid ORDER BY trigger_row.oid)" in sql
+    for table_name, trigger_name in module.REVIEW_GRAPH_TRIGGERS:
+        assert f"'{table_name}'" in sql
+        assert f"'{trigger_name}'" in sql
+    for forbidden in (
+        "CREATE TABLE",
+        "ALTER TABLE",
+        "DROP TRIGGER",
+        "CREATE TRIGGER",
+        "GRANT ",
+        "REVOKE ",
+        "INSERT INTO public.",
+        "UPDATE public.",
+        "DELETE FROM public.",
+    ):
+        assert forbidden not in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("upgrade preflight")
+        < sql.index(module.UPGRADE_BLOCKER)
+        < sql.index("review validator upgrade")
+        < sql.index("upgrade replacement")
+        < sql.index("readiness upgrade")
+        < sql.index("upgrade postflight")
+    )
+
+
+def test_0058_postgresql_offline_downgrade_rejects_terminal_facts(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0058_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.downgrade(
+        config,
+        f"{NONOPENING_REVIEW_TERMINAL_STATUS_REVISION_ID}:"
+        f"{PRE_NONOPENING_REVIEW_TERMINAL_STATUS_HEAD_REVISION}",
+        sql=True,
+    )
+    sql = output.getvalue()
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(f"public.{table_name}" for table_name in module.LOCK_TABLES)
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    assert "-- Running downgrade 20260905_0058 -> 20260905_0057" in sql
+    assert sql.count(lock_sql) == 1
+    assert sql.count("EXECUTE replacement_definition") == 2
+    assert sql.count(module.DOWNGRADE_BLOCKER) == 1
+    assert module.UPGRADE_BLOCKER not in sql
+    assert f"task.task_type IN {module.NONOPENING_SQL}" in sql
+    assert "task.status IN ('posted', 'closed')" in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("downgrade preflight")
+        < sql.index(module.DOWNGRADE_BLOCKER)
+        < sql.index("readiness downgrade")
+        < sql.index("review validator downgrade")
         < sql.index("downgrade postflight")
     )
 

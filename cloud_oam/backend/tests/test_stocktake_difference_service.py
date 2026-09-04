@@ -2,11 +2,16 @@ from __future__ import annotations
 
 from datetime import timedelta
 from decimal import Decimal
+from importlib.util import module_from_spec, spec_from_file_location
 import inspect
+from pathlib import Path
+from types import SimpleNamespace
 import uuid
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import IntegrityError
 
 import app.formal_services.stocktake_count as count_service
 import app.formal_services.stocktake_difference as service
@@ -62,6 +67,20 @@ from test_stocktake_task_service import (  # noqa: F401
 
 
 EVALUATED_AT = NOW + timedelta(minutes=5)
+
+
+class _DialectOnlySession:
+    def __init__(self, dialect_name: str) -> None:
+        self._bind = SimpleNamespace(
+            dialect=SimpleNamespace(name=dialect_name)
+        )
+
+    def get_bind(self) -> object:
+        return self._bind
+
+
+def _postgresql_sql(statement: object) -> str:
+    return str(statement.compile(dialect=postgresql.dialect()))
 
 
 @pytest.fixture(autouse=True)
@@ -586,6 +605,171 @@ def test_count_locks_ledger_head_before_any_task_or_scope_row_lock():
     assert source.index("count_ledger_cursor = _lock_current_ledger_cursor(db)") < source.index(
         "select(FormalStocktakeTask)"
     )
+
+
+def test_difference_select_only_facts_use_owner_locks_on_postgresql():
+    statement = select(StockAccount).order_by(StockAccount.id)
+
+    production_statement = service._select_only_reference_statement(
+        _DialectOnlySession("postgresql"),
+        statement,
+    )
+    local_statement = service._select_only_reference_statement(
+        _DialectOnlySession("sqlite"),
+        statement,
+    )
+
+    assert "FOR UPDATE" not in _postgresql_sql(production_statement)
+    assert "FOR UPDATE" in _postgresql_sql(local_statement)
+
+
+def test_difference_owner_lock_precedes_select_only_evidence_graph():
+    source = inspect.getsource(service._generate_stocktake_initial_differences)
+    ordered_markers = (
+        "select(FormalStocktakeTask)",
+        "select(StocktakeRound)",
+        "lock_nonopening_stocktake_difference_replay_graph",
+        "select(FormalStocktakeScope)",
+        "lock_formal_principal_graph",
+        "select(StocktakeRoundSubmission)",
+    )
+    offsets = [source.index(marker) for marker in ordered_markers]
+
+    assert offsets == sorted(offsets)
+    assert source.count(".with_for_update()") == 2
+    assert ".with_for_update()" not in inspect.getsource(
+        service._lock_dimension_graph
+    )
+    manifest_source = inspect.getsource(
+        service._validate_completion_and_submission_manifests
+    )
+    assert manifest_source.index("_select_only_reference_statement") < (
+        manifest_source.index("select(DocumentAttachment)")
+    )
+    assert manifest_source.count(".with_for_update()") == 0
+
+
+def test_difference_0057_migration_owns_complete_replay_and_evidence_graph():
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "20260905_0057_nonopening_difference_replay_lock.py"
+    ).read_text(encoding="utf-8")
+    lock_source = migration[
+        migration.index("def _postgresql_lock_function_sql") :
+        migration.index("def _sqlite_seal_trigger_sql")
+    ]
+
+    assert 'down_revision: Union[str, Sequence[str], None] = "20260905_0056"' in migration
+    assert "rsc_lock_nonopening_stocktake_difference_replay_graph_0057" in migration
+    assert lock_source.index("inventory_ledger_heads AS head") < lock_source.index(
+        "stocktake_tasks AS task"
+    )
+    assert lock_source.index("stocktake_tasks AS task") < lock_source.index(
+        "rsc_lock_formal_principal_graph_0026"
+    ) < lock_source.index("stocktake_rounds AS round_row")
+    assert lock_source.index("rsc_lock_formal_principal_graph_0026") < (
+        lock_source.index("PERFORM account.id")
+    )
+    assert lock_source.index("PERFORM organization.id") < lock_source.index(
+        "rsc_lock_nonopening_stocktake_review_graph_0032"
+    )
+    assert "requested_actor_user_id text" in lock_source
+    assert "cardinality(principal_user_ids) NOT BETWEEN 1 AND 1000" in lock_source
+    assert "REVIEW_HELPER_BODY_SHA256" in migration
+    assert "ce7dda6f207c9a17bfde049749aa6e689e3f84d9e2c3892c66f17ac15c411ee3" in migration
+    assert "row.oid = review_oid AND row.proowner = migrator_oid" in migration
+    assert "acl.grantor <> migrator_oid" in migration
+    for table_name in (
+        "stock_accounts",
+        "inventory_transactions",
+        "inventory_movements",
+        "inventory_movement_serials",
+        "document_attachments",
+        "files",
+        "stocktake_difference_set_completions",
+        "stocktake_differences",
+        "stocktake_reviews",
+        "stocktake_postings",
+    ):
+        assert table_name in migration
+    assert "non-opening difference replay lock graph exceeds 100000 rows" in migration
+    assert "trg_document_attachments_00_stocktake_evidence_seal_0057" in migration
+    assert "CREATE TRIGGER {SQLITE_SEAL_TRIGGER}" in migration
+
+
+def test_difference_0057_sqlite_guards_sealed_evidence_and_control_phantoms():
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "20260905_0057_nonopening_difference_replay_lock.py"
+    )
+    spec = spec_from_file_location("test_stocktake_difference_0057", migration_path)
+    assert spec is not None and spec.loader is not None
+    migration = module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as connection:
+        for ddl in (
+            "CREATE TABLE stocktake_tasks (id TEXT PRIMARY KEY, task_type TEXT NOT NULL, status TEXT NOT NULL)",
+            "CREATE TABLE stocktake_rounds (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, status TEXT NOT NULL)",
+            "CREATE TABLE stocktake_scope_count_completions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, round_id TEXT NOT NULL)",
+            "CREATE TABLE stocktake_round_submissions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, round_id TEXT NOT NULL)",
+            "CREATE TABLE document_attachments (id TEXT PRIMARY KEY, document_type TEXT NOT NULL, document_id TEXT NOT NULL, attachment_type TEXT NOT NULL)",
+            "CREATE TABLE stocktake_control_snapshot_lines (id TEXT PRIMARY KEY, task_id TEXT NOT NULL)",
+        ):
+            connection.exec_driver_sql(ddl)
+        connection.exec_driver_sql(migration._sqlite_seal_trigger_sql())
+        connection.exec_driver_sql(migration._sqlite_control_guard_trigger_sql())
+        connection.exec_driver_sql(
+            "INSERT INTO stocktake_tasks VALUES ('task-n', 'full', 'counting'), ('task-o', 'opening', 'submitted')"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO stocktake_rounds VALUES ('round-n', 'task-n', 'counting'), ('round-o', 'task-o', 'submitted')"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO stocktake_scope_count_completions VALUES "
+            "('completion-n', 'task-n', 'round-n'), "
+            "('completion-o', 'task-o', 'round-o')"
+        )
+
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "INSERT INTO document_attachments VALUES "
+            "('evidence-before-seal', 'stocktake_scope_count_completion', "
+            "'completion-n', 'stocktake_evidence')"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO stocktake_round_submissions VALUES "
+            "('submission-n', 'task-n', 'round-n')"
+        )
+    with pytest.raises(IntegrityError, match="sealed non-opening stocktake evidence"):
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "INSERT INTO document_attachments VALUES "
+                "('evidence-after-seal', 'stocktake_scope_count_completion', "
+                "'completion-n', 'stocktake_evidence')"
+            )
+
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "INSERT INTO document_attachments VALUES "
+            "('opening-evidence', 'stocktake_scope_count_completion', "
+            "'completion-o', 'stocktake_evidence')"
+        )
+    with pytest.raises(IntegrityError, match="non-opening stocktake control snapshot"):
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "INSERT INTO stocktake_control_snapshot_lines VALUES "
+                "('control-n', 'task-n')"
+            )
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "INSERT INTO stocktake_control_snapshot_lines VALUES "
+            "('control-o', 'task-o')"
+        )
 
 
 def test_cutoff_replay_applies_quantity_movement_committed_before_count(world):

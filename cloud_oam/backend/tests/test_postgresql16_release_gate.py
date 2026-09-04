@@ -50,7 +50,11 @@ STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION = "20260903_0051"
 OPENING_TERMINAL_GUARD_EXECUTION_REVISION = "20260903_0052"
 OPENING_GRAPH_TABLE_DISPATCH_REVISION = "20260904_0053"
 OPENING_RECOUNT_SOURCE_HISTORY_REVISION = "20260904_0054"
-HEAD_REVISION = OPENING_RECOUNT_SOURCE_HISTORY_REVISION
+NONOPENING_START_AUDIT_ORDER_REVISION = "20260905_0055"
+NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION = "20260905_0056"
+NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION = "20260905_0057"
+NONOPENING_REVIEW_TERMINAL_STATUS_REVISION = "20260905_0058"
+HEAD_REVISION = NONOPENING_REVIEW_TERMINAL_STATUS_REVISION
 OPENING_BACKFILL_DATABASE_PREFIX = f"{DATABASE_NAME}_0052_backfill_"
 RLS_BINDING_TABLE = "oam_sync_scope_bindings"
 RLS_READY_FUNCTION = "public.rsc_oam_runtime_binding_ready_0044()"
@@ -177,6 +181,34 @@ OPENING_RECOUNT_SOURCE_HISTORY_MIGRATION_0054 = (
     / "alembic"
     / "versions"
     / "20260904_0054_opening_recount_source_history.py"
+)
+NONOPENING_START_AUDIT_ORDER_MIGRATION_0055 = (
+    CLOUD_ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0055_nonopening_start_audit_order.py"
+)
+NONOPENING_COUNT_GUARD_COMPATIBILITY_MIGRATION_0056 = (
+    CLOUD_ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0056_nonopening_count_guard_compatibility.py"
+)
+NONOPENING_DIFFERENCE_REPLAY_LOCK_MIGRATION_0057 = (
+    CLOUD_ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0057_nonopening_difference_replay_lock.py"
+)
+NONOPENING_REVIEW_TERMINAL_STATUS_MIGRATION_0058 = (
+    CLOUD_ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0058_nonopening_review_terminal_status.py"
 )
 STOCKTAKE_OBSERVATION_BODY_SHA256_0050 = (
     "06cf2fafa1d90f120fe4bba21cc1dc55dba70bd63f649671b4333a6159af06bb"
@@ -4551,6 +4583,50 @@ def _load_opening_recount_source_history_migration_0054() -> object:
     return migration
 
 
+def _load_nonopening_start_audit_order_migration_0055() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_pg16_gate_migration_0055_nonopening_start_audit_order_manifest",
+        NONOPENING_START_AUDIT_ORDER_MIGRATION_0055,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_nonopening_count_guard_compatibility_migration_0056() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_pg16_gate_migration_0056_nonopening_count_guard_manifest",
+        NONOPENING_COUNT_GUARD_COMPATIBILITY_MIGRATION_0056,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_nonopening_difference_replay_lock_migration_0057() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_pg16_gate_migration_0057_nonopening_difference_replay_lock",
+        NONOPENING_DIFFERENCE_REPLAY_LOCK_MIGRATION_0057,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_nonopening_review_terminal_status_migration_0058() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_pg16_gate_migration_0058_nonopening_review_terminal_status",
+        NONOPENING_REVIEW_TERMINAL_STATUS_MIGRATION_0058,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
 def _0049_function_coordinate(signature: str) -> tuple[str, str, int]:
     assert signature.startswith("public.") and signature.endswith(")")
     function_name, argument_types = signature[len("public.") : -1].split(
@@ -4583,6 +4659,10 @@ def _expected_0049_function_body_sha256(
             OPENING_TERMINAL_GUARD_EXECUTION_REVISION,
             OPENING_GRAPH_TABLE_DISPATCH_REVISION,
             OPENING_RECOUNT_SOURCE_HISTORY_REVISION,
+            NONOPENING_START_AUDIT_ORDER_REVISION,
+            NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION,
+            NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
+            NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
         }
     )
     assert expected_revision in (
@@ -4609,6 +4689,28 @@ def _expected_0049_function_body_sha256(
         expected_body_sha256 = (
             opening_migration.FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
         )
+    if (
+        expected_revision in {
+            NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION,
+            NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
+            NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
+        }
+        and signature == migration.ROUND_ASSIGNMENT_HELPER_0021_SIGNATURE
+    ):
+        compatibility_migration = (
+            _load_nonopening_count_guard_compatibility_migration_0056()
+        )
+        assert signature == compatibility_migration.HELPER_SIGNATURE
+        expected_body_sha256 = compatibility_migration.FIXED_BODY_SHA256
+    if (
+        expected_revision == NONOPENING_REVIEW_TERMINAL_STATUS_REVISION
+        and signature == migration.REVIEW_GRAPH_VALIDATOR_0032_SIGNATURE
+    ):
+        terminal_migration = (
+            _load_nonopening_review_terminal_status_migration_0058()
+        )
+        assert signature == terminal_migration.REVIEW_GRAPH_SIGNATURE
+        expected_body_sha256 = terminal_migration.FIXED_BODY_SHA256
     return expected_body_sha256
 
 
@@ -4748,6 +4850,10 @@ def _assert_0049_recount_guard_catalog(
             OPENING_TERMINAL_GUARD_EXECUTION_REVISION,
             OPENING_GRAPH_TABLE_DISPATCH_REVISION,
             OPENING_RECOUNT_SOURCE_HISTORY_REVISION,
+            NONOPENING_START_AUDIT_ORDER_REVISION,
+            NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION,
+            NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
+            NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
         }
     expected_function_rows = []
     for (
@@ -5307,6 +5413,10 @@ def _assert_0052_opening_terminal_catalog(
                         expected_revision in {
                             OPENING_GRAPH_TABLE_DISPATCH_REVISION,
                             OPENING_RECOUNT_SOURCE_HISTORY_REVISION,
+                            NONOPENING_START_AUDIT_ORDER_REVISION,
+                            NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION,
+                            NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
+                            NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
                         }
                         and row[0]
                         == dispatch_migration.GRAPH_CLOSURE_SIGNATURE
@@ -5314,7 +5424,13 @@ def _assert_0052_opening_terminal_catalog(
                     else history_migration.ROUND_SUBMISSION_BODY_SHA256_0054
                     if (
                         expected_revision
-                        == OPENING_RECOUNT_SOURCE_HISTORY_REVISION
+                        in {
+                            OPENING_RECOUNT_SOURCE_HISTORY_REVISION,
+                            NONOPENING_START_AUDIT_ORDER_REVISION,
+                            NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION,
+                            NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
+                            NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
+                        }
                         and row[0]
                         == history_migration.ROUND_SUBMISSION_SIGNATURE
                     )
@@ -6889,6 +7005,1192 @@ def _assert_0052_legacy_backfill_and_atomic_rejection() -> None:
         _drop_opening_backfill_database(rejected_database)
 
 
+def _0058_review_terminal_catalog_state() -> dict[str, object]:
+    migration = _load_nonopening_review_terminal_status_migration_0058()
+    signatures = (
+        migration.REVIEW_GRAPH_SIGNATURE,
+        migration.DIFFERENCE_REPLAY_LOCK_SIGNATURE,
+        migration.RUNTIME_READY_SIGNATURE,
+    )
+    function_rows: dict[str, tuple[object, ...]] = {}
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            for signature in signatures:
+                cursor.execute(
+                    "SELECT function_row.oid, namespace_row.nspname, "
+                    "function_row.proname, "
+                    "pg_catalog.oidvectortypes(function_row.proargtypes), "
+                    "pg_catalog.array_to_string(function_row.proargnames, ','), "
+                    "pg_catalog.pg_get_function_result(function_row.oid), "
+                    "function_row.prokind, language_row.lanname, "
+                    "function_row.provolatile, function_row.proisstrict, "
+                    "function_row.proleakproof, function_row.proparallel, "
+                    "function_row.prosecdef, owner.rolname, "
+                    "function_row.proconfig, function_row.proacl::text, "
+                    "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+                    "function_row.prosrc, 'UTF8')), 'hex'), function_row.prosrc, "
+                    "(SELECT pg_catalog.count(*) FROM pg_catalog.pg_trigger "
+                    "AS trigger_row WHERE NOT trigger_row.tgisinternal "
+                    "AND trigger_row.tgfoid = function_row.oid), "
+                    "pg_catalog.has_function_privilege("
+                    "'star_oam_api', function_row.oid, 'EXECUTE') "
+                    "FROM pg_catalog.pg_proc AS function_row "
+                    "JOIN pg_catalog.pg_namespace AS namespace_row "
+                    "ON namespace_row.oid = function_row.pronamespace "
+                    "JOIN pg_catalog.pg_language AS language_row "
+                    "ON language_row.oid = function_row.prolang "
+                    "JOIN pg_catalog.pg_roles AS owner "
+                    "ON owner.oid = function_row.proowner "
+                    "WHERE function_row.oid = pg_catalog.to_regprocedure(%s)",
+                    (signature,),
+                )
+                row = cursor.fetchone()
+                assert row is not None
+                function_rows[signature] = row
+            cursor.execute(
+                "SELECT trigger_row.oid, trigger_row.tgfoid, "
+                "namespace_row.nspname, table_row.relname, "
+                "trigger_row.tgname, trigger_row.tgenabled, "
+                "trigger_row.tgtype, trigger_row.tgconstraint, "
+                "trigger_row.tgdeferrable, trigger_row.tginitdeferred, "
+                "trigger_row.tgconstrrelid, trigger_row.tgconstrindid, "
+                "trigger_row.tgparentid, trigger_row.tgqual IS NULL, "
+                "trigger_row.tgoldtable IS NULL, "
+                "trigger_row.tgnewtable IS NULL, trigger_row.tgnargs, "
+                "trigger_row.tgattr::text "
+                "FROM pg_catalog.pg_trigger AS trigger_row "
+                "JOIN pg_catalog.pg_class AS table_row "
+                "ON table_row.oid = trigger_row.tgrelid "
+                "JOIN pg_catalog.pg_namespace AS namespace_row "
+                "ON namespace_row.oid = table_row.relnamespace "
+                "WHERE NOT trigger_row.tgisinternal "
+                "AND trigger_row.tgfoid = %s ORDER BY table_row.relname",
+                (function_rows[migration.REVIEW_GRAPH_SIGNATURE][0],),
+            )
+            trigger_rows = tuple(cursor.fetchall())
+            cursor.execute(
+                "SELECT function_row.oid, function_row.proname, "
+                "(pg_catalog.length(function_row.prosrc) - "
+                "pg_catalog.length(pg_catalog.replace(function_row.prosrc, "
+                "%s, ''))) / pg_catalog.length(%s) "
+                "FROM pg_catalog.pg_proc AS function_row "
+                "WHERE pg_catalog.strpos(function_row.prosrc, %s) > 0",
+                (
+                    migration.UPSTREAM_REVIEW_LOCK_FUNCTION,
+                    migration.UPSTREAM_REVIEW_LOCK_FUNCTION,
+                    migration.UPSTREAM_REVIEW_LOCK_FUNCTION,
+                ),
+            )
+            upstream_callers = tuple(cursor.fetchall())
+    return {
+        "functions": function_rows,
+        "triggers": trigger_rows,
+        "upstream_callers": upstream_callers,
+    }
+
+
+def _assert_0058_review_terminal_catalog_state(
+    state: dict[str, object], *, fixed: bool
+) -> None:
+    migration = _load_nonopening_review_terminal_status_migration_0058()
+    functions = state["functions"]
+    assert isinstance(functions, dict)
+    validator = functions[migration.REVIEW_GRAPH_SIGNATURE]
+    assert validator[1:16] == (
+        "public", migration.REVIEW_GRAPH_FUNCTION, "", None, "trigger", "f",
+        "plpgsql", "v", False, False, "u", False, migration.MIGRATION_ROLE,
+        [migration.FIXED_SEARCH_PATH],
+        "{star_oam_migrator=X/star_oam_migrator}",
+    )
+    assert validator[16] == (
+        migration.FIXED_BODY_SHA256 if fixed else migration.LEGACY_BODY_SHA256
+    )
+    expected_fragment = (
+        migration.FIXED_SOURCE_FRAGMENT
+        if fixed else migration.LEGACY_SOURCE_FRAGMENT
+    )
+    forbidden_fragment = (
+        migration.LEGACY_SOURCE_FRAGMENT
+        if fixed else migration.FIXED_SOURCE_FRAGMENT
+    )
+    assert validator[17].count(expected_fragment) == 1
+    assert forbidden_fragment not in validator[17]
+    assert validator[18:] == (3, False)
+
+    replay_lock = functions[migration.DIFFERENCE_REPLAY_LOCK_SIGNATURE]
+    assert replay_lock[1:16] == (
+        "public", migration.DIFFERENCE_REPLAY_LOCK_FUNCTION,
+        "uuid, uuid, text",
+        "requested_task_id,requested_round_id,requested_actor_user_id",
+        "void", "f", "plpgsql", "v", False, False, "u", True,
+        migration.MIGRATION_ROLE, [migration.FIXED_SEARCH_PATH],
+        "{star_oam_migrator=X/star_oam_migrator,"
+        "star_oam_api=X/star_oam_migrator}",
+    )
+    assert replay_lock[16] == migration.DIFFERENCE_REPLAY_LOCK_BODY_SHA256
+    assert replay_lock[17].count(migration.UPSTREAM_REVIEW_LOCK_FUNCTION) == 1
+    assert replay_lock[18:] == (0, True)
+    assert state["upstream_callers"] == (
+        (replay_lock[0], migration.DIFFERENCE_REPLAY_LOCK_FUNCTION, 1),
+    )
+
+    readiness = functions[migration.RUNTIME_READY_SIGNATURE]
+    assert readiness[1:15] == (
+        "public", migration.RUNTIME_READY_FUNCTION, "", None, "boolean", "f",
+        "sql", "s", False, False, "u", True, migration.MIGRATION_ROLE,
+        ["search_path=pg_catalog"],
+    )
+    assert readiness[16] == (
+        migration.RUNTIME_READY_BODY_SHA256_0058
+        if fixed else migration.RUNTIME_READY_BODY_SHA256_0057
+    )
+    assert readiness[17].count(
+        migration.revision if fixed else migration.down_revision
+    ) == 1
+
+    expected_triggers = tuple(
+        (
+            trigger[0], validator[0], "public", table_name, trigger_name,
+            "A", 29, trigger[7], True, True, 0, 0, 0, True, True, True, 0, "",
+        )
+        for trigger, (table_name, trigger_name) in zip(
+            state["triggers"], migration.REVIEW_GRAPH_TRIGGERS, strict=True
+        )
+    )
+    assert state["triggers"] == expected_triggers
+
+
+def _assert_0058_empty_terminal_downgrade_and_reupgrade() -> None:
+    assert _current_revision() == HEAD_REVISION
+    migration = _load_nonopening_review_terminal_status_migration_0058()
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_catalog.count(*) FROM public.stocktake_tasks "
+                "WHERE task_type IN ('full','sample','ad_hoc','personal',"
+                "'termination') AND status IN ('posted','closed')"
+            )
+            assert cursor.fetchone() == (0,)
+    head_state = _0058_review_terminal_catalog_state()
+    _assert_0058_review_terminal_catalog_state(head_state, fixed=True)
+    _run_alembic("downgrade", NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION)
+    assert _current_revision() == NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION
+    legacy_state = _0058_review_terminal_catalog_state()
+    _assert_0058_review_terminal_catalog_state(legacy_state, fixed=False)
+    assert legacy_state["triggers"] == head_state["triggers"]
+    assert legacy_state["functions"][migration.REVIEW_GRAPH_SIGNATURE][0] == (
+        head_state["functions"][migration.REVIEW_GRAPH_SIGNATURE][0]
+    )
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    assert _0058_review_terminal_catalog_state() == head_state
+
+
+def _0057_difference_replay_catalog_state() -> dict[str, object]:
+    migration = _load_nonopening_difference_replay_lock_migration_0057()
+    signatures = (
+        migration.LOCK_SIGNATURE,
+        migration.SEAL_SIGNATURE,
+        migration.CONTROL_GUARD_SIGNATURE,
+    )
+    functions: dict[str, tuple[object, ...]] = {}
+    acls: dict[str, tuple[tuple[object, ...], ...]] = {}
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            for signature in signatures:
+                cursor.execute(
+                    "SELECT function_row.oid, namespace_row.nspname, "
+                    "function_row.proname, "
+                    "pg_catalog.oidvectortypes(function_row.proargtypes), "
+                    "function_row.proargnames, "
+                    "pg_catalog.pg_get_function_result(function_row.oid), "
+                    "function_row.prokind, language_row.lanname, "
+                    "function_row.provolatile, function_row.prosecdef, "
+                    "function_row.proisstrict, function_row.proleakproof, "
+                    "function_row.proparallel, owner.rolname, "
+                    "function_row.proconfig, function_row.proretset, "
+                    "function_row.pronargs, function_row.proallargtypes, "
+                    "function_row.proargmodes, function_row.pronargdefaults, "
+                    "function_row.proargdefaults IS NULL, "
+                    "function_row.provariadic, "
+                    "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+                    "function_row.prosrc, 'UTF8')), 'hex'), function_row.prosrc "
+                    "FROM pg_catalog.pg_proc AS function_row "
+                    "JOIN pg_catalog.pg_namespace AS namespace_row "
+                    "ON namespace_row.oid = function_row.pronamespace "
+                    "JOIN pg_catalog.pg_language AS language_row "
+                    "ON language_row.oid = function_row.prolang "
+                    "JOIN pg_catalog.pg_roles AS owner "
+                    "ON owner.oid = function_row.proowner "
+                    "WHERE function_row.oid = pg_catalog.to_regprocedure(%s)",
+                    (signature,),
+                )
+                function_row = cursor.fetchone()
+                assert function_row is not None
+                functions[signature] = function_row
+                cursor.execute(
+                    "SELECT grantor.rolname, "
+                    "CASE WHEN function_acl.grantee = 0 THEN 'PUBLIC' "
+                    "ELSE grantee.rolname END, function_acl.privilege_type, "
+                    "function_acl.is_grantable "
+                    "FROM pg_catalog.pg_proc AS function_row "
+                    "CROSS JOIN LATERAL pg_catalog.aclexplode("
+                    "COALESCE(function_row.proacl, "
+                    "pg_catalog.acldefault('f', function_row.proowner))) "
+                    "AS function_acl "
+                    "JOIN pg_catalog.pg_roles AS grantor "
+                    "ON grantor.oid = function_acl.grantor "
+                    "LEFT JOIN pg_catalog.pg_roles AS grantee "
+                    "ON grantee.oid = function_acl.grantee "
+                    "WHERE function_row.oid = pg_catalog.to_regprocedure(%s) "
+                    "ORDER BY 2, 1, 3",
+                    (signature,),
+                )
+                acls[signature] = tuple(cursor.fetchall())
+
+            cursor.execute(
+                "SELECT trigger_row.oid, trigger_row.tgfoid, "
+                "namespace_row.nspname, table_row.relname, "
+                "trigger_row.tgname, trigger_row.tgenabled, "
+                "trigger_row.tgtype, trigger_row.tgconstraint, "
+                "trigger_row.tgdeferrable, trigger_row.tginitdeferred, "
+                "trigger_row.tgconstrrelid, trigger_row.tgconstrindid, "
+                "trigger_row.tgparentid, trigger_row.tgqual IS NULL, "
+                "trigger_row.tgoldtable IS NULL, "
+                "trigger_row.tgnewtable IS NULL, trigger_row.tgnargs, "
+                "trigger_row.tgattr::text "
+                "FROM pg_catalog.pg_trigger AS trigger_row "
+                "JOIN pg_catalog.pg_class AS table_row "
+                "ON table_row.oid = trigger_row.tgrelid "
+                "JOIN pg_catalog.pg_namespace AS namespace_row "
+                "ON namespace_row.oid = table_row.relnamespace "
+                "WHERE NOT trigger_row.tgisinternal "
+                "AND trigger_row.tgname IN (%s, %s) "
+                "ORDER BY trigger_row.tgname",
+                (migration.SEAL_TRIGGER, migration.CONTROL_GUARD_TRIGGER),
+            )
+            triggers = tuple(cursor.fetchall())
+            cursor.execute(
+                "SELECT trigger_row.tgname, trigger_row.tgenabled "
+                "FROM pg_catalog.pg_trigger AS trigger_row "
+                "JOIN pg_catalog.pg_class AS table_row "
+                "ON table_row.oid = trigger_row.tgrelid "
+                "JOIN pg_catalog.pg_namespace AS namespace_row "
+                "ON namespace_row.oid = table_row.relnamespace "
+                "WHERE NOT trigger_row.tgisinternal "
+                "AND namespace_row.nspname = 'public' "
+                "AND table_row.relname = 'document_attachments' "
+                "AND trigger_row.tgname IN (%s, %s) "
+                "ORDER BY trigger_row.tgname",
+                (
+                    migration.SEAL_TRIGGER,
+                    "trg_document_attachments_stocktake_evidence_guard_0036",
+                ),
+            )
+            attachment_trigger_order = tuple(cursor.fetchall())
+            cursor.execute(
+                "SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+                "function_row.prosrc, 'UTF8')), 'hex'), function_row.prosrc "
+                "FROM pg_catalog.pg_proc AS function_row "
+                "WHERE function_row.oid = pg_catalog.to_regprocedure(%s)",
+                (migration.RUNTIME_READY_SIGNATURE,),
+            )
+            readiness = cursor.fetchone()
+            assert readiness is not None
+    return {
+        "functions": functions,
+        "acls": acls,
+        "triggers": triggers,
+        "attachment_trigger_order": attachment_trigger_order,
+        "readiness": readiness,
+    }
+
+
+def _assert_0057_difference_replay_catalog_state(
+    state: dict[str, object],
+    *,
+    expected_readiness_hash: str,
+    expected_revision: str,
+) -> None:
+    migration = _load_nonopening_difference_replay_lock_migration_0057()
+    functions = state["functions"]
+    acls = state["acls"]
+    assert isinstance(functions, dict) and isinstance(acls, dict)
+    expected = {
+        migration.LOCK_SIGNATURE: (
+            migration.LOCK_FUNCTION,
+            "uuid, uuid, text",
+            [
+                "requested_task_id",
+                "requested_round_id",
+                "requested_actor_user_id",
+            ],
+            "void",
+            migration.LOCK_BODY_SHA256,
+            True,
+        ),
+        migration.SEAL_SIGNATURE: (
+            migration.SEAL_FUNCTION,
+            "",
+            None,
+            "trigger",
+            migration.SEAL_BODY_SHA256,
+            False,
+        ),
+        migration.CONTROL_GUARD_SIGNATURE: (
+            migration.CONTROL_GUARD_FUNCTION,
+            "",
+            None,
+            "trigger",
+            migration.CONTROL_GUARD_BODY_SHA256,
+            False,
+        ),
+    }
+    for signature, (
+        function_name,
+        argument_types,
+        argument_names,
+        result_type,
+        body_sha256,
+        api_execute,
+    ) in expected.items():
+        row = functions[signature]
+        assert row[1:23] == (
+            "public",
+            function_name,
+            argument_types,
+            argument_names,
+            result_type,
+            "f",
+            "plpgsql",
+            "v",
+            True,
+            False,
+            False,
+            "u",
+            migration.MIGRATION_ROLE,
+            ["search_path=pg_catalog, public"],
+            False,
+            len(argument_names or ()),
+            None,
+            None,
+            0,
+            True,
+            0,
+            body_sha256,
+        )
+        expected_grantees = (
+            (
+                migration.MIGRATION_ROLE,
+                migration.PRODUCTION_API_ROLE,
+                "EXECUTE",
+                False,
+            ),
+            (migration.MIGRATION_ROLE, migration.MIGRATION_ROLE, "EXECUTE", False),
+        ) if api_execute else (
+            (migration.MIGRATION_ROLE, migration.MIGRATION_ROLE, "EXECUTE", False),
+        )
+        assert acls[signature] == expected_grantees
+
+    expected_trigger_bindings = {
+        migration.SEAL_TRIGGER: (
+            functions[migration.SEAL_SIGNATURE][0],
+            "document_attachments",
+        ),
+        migration.CONTROL_GUARD_TRIGGER: (
+            functions[migration.CONTROL_GUARD_SIGNATURE][0],
+            "stocktake_control_snapshot_lines",
+        ),
+    }
+    assert len(state["triggers"]) == 2
+    for row in state["triggers"]:
+        trigger_name = row[4]
+        function_oid, table_name = expected_trigger_bindings[trigger_name]
+        assert row[1:] == (
+            function_oid,
+            "public",
+            table_name,
+            trigger_name,
+            "A",
+            7,
+            0,
+            False,
+            False,
+            0,
+            0,
+            0,
+            True,
+            True,
+            True,
+            0,
+            "",
+        )
+    assert state["attachment_trigger_order"] == (
+        (migration.SEAL_TRIGGER, "A"),
+        ("trg_document_attachments_stocktake_evidence_guard_0036", "A"),
+    )
+    readiness = state["readiness"]
+    assert readiness[0] == expected_readiness_hash
+    assert readiness[1].count(expected_revision) == 1
+
+
+def _assert_0057_absent_at_0056() -> None:
+    migration = _load_nonopening_difference_replay_lock_migration_0057()
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_catalog.to_regprocedure(%s), "
+                "pg_catalog.to_regprocedure(%s), "
+                "pg_catalog.to_regprocedure(%s)",
+                (
+                    migration.LOCK_SIGNATURE,
+                    migration.SEAL_SIGNATURE,
+                    migration.CONTROL_GUARD_SIGNATURE,
+                ),
+            )
+            assert cursor.fetchone() == (None, None, None)
+            cursor.execute(
+                "SELECT pg_catalog.count(*) FROM pg_catalog.pg_trigger "
+                "WHERE NOT tgisinternal AND tgname IN (%s, %s)",
+                (migration.SEAL_TRIGGER, migration.CONTROL_GUARD_TRIGGER),
+            )
+            assert cursor.fetchone() == (0,)
+
+
+def _assert_0057_empty_graph_downgrade_and_reupgrade() -> None:
+    assert _current_revision() == HEAD_REVISION
+    migration = _load_nonopening_difference_replay_lock_migration_0057()
+    assert migration.revision == NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION
+    assert migration.down_revision == NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION
+    head_state = _0057_difference_replay_catalog_state()
+    _assert_0057_difference_replay_catalog_state(
+        head_state,
+        expected_readiness_hash=(
+            _load_nonopening_review_terminal_status_migration_0058()
+            .RUNTIME_READY_BODY_SHA256_0058
+        ),
+        expected_revision=HEAD_REVISION,
+    )
+
+    _run_alembic("downgrade", NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION)
+    assert _current_revision() == NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION
+    revision_state = _0057_difference_replay_catalog_state()
+    _assert_0057_difference_replay_catalog_state(
+        revision_state,
+        expected_readiness_hash=migration.RUNTIME_READY_BODY_SHA256_0057,
+        expected_revision=NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
+    )
+    for signature in revision_state["functions"]:
+        assert revision_state["functions"][signature] == (
+            head_state["functions"][signature]
+        )
+    assert revision_state["acls"] == head_state["acls"]
+    assert revision_state["triggers"] == head_state["triggers"]
+
+    _run_alembic("downgrade", NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION)
+    assert _current_revision() == NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION
+    _assert_0057_absent_at_0056()
+    count_migration = _load_nonopening_count_guard_compatibility_migration_0056()
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+                "function_row.prosrc, 'UTF8')), 'hex') "
+                "FROM pg_catalog.pg_proc AS function_row "
+                "WHERE function_row.oid = pg_catalog.to_regprocedure(%s)",
+                (count_migration.RUNTIME_READY_SIGNATURE,),
+            )
+            assert cursor.fetchone() == (
+                count_migration.RUNTIME_READY_BODY_SHA256_0056,
+            )
+
+    _run_alembic("upgrade", NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION)
+    assert _current_revision() == NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION
+    reupgraded = _0057_difference_replay_catalog_state()
+    _assert_0057_difference_replay_catalog_state(
+        reupgraded,
+        expected_readiness_hash=migration.RUNTIME_READY_BODY_SHA256_0057,
+        expected_revision=NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
+    )
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    final_state = _0057_difference_replay_catalog_state()
+    _assert_0057_difference_replay_catalog_state(
+        final_state,
+        expected_readiness_hash=(
+            _load_nonopening_review_terminal_status_migration_0058()
+            .RUNTIME_READY_BODY_SHA256_0058
+        ),
+        expected_revision=HEAD_REVISION,
+    )
+    assert final_state["functions"] == reupgraded["functions"]
+    assert final_state["acls"] == reupgraded["acls"]
+    assert final_state["triggers"] == reupgraded["triggers"]
+
+
+def _0056_count_guard_catalog_state() -> dict[str, object]:
+    migration = _load_nonopening_count_guard_compatibility_migration_0056()
+    signatures = (
+        migration.HELPER_SIGNATURE,
+        *(row[0] for row in migration.CALLER_CATALOG),
+        migration.RUNTIME_READY_SIGNATURE,
+    )
+    function_rows: dict[str, tuple[object, ...]] = {}
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            for signature in signatures:
+                cursor.execute(
+                    "SELECT function_row.oid, namespace_row.nspname, "
+                    "function_row.proname, "
+                    "pg_catalog.oidvectortypes(function_row.proargtypes), "
+                    "pg_catalog.array_to_string(function_row.proargnames, ','), "
+                    "pg_catalog.pg_get_function_result(function_row.oid), "
+                    "function_row.prokind, language_row.lanname, "
+                    "function_row.provolatile, function_row.proisstrict, "
+                    "function_row.proleakproof, function_row.proparallel, "
+                    "function_row.prosecdef, owner.rolname, "
+                    "function_row.proconfig, function_row.proacl::text, "
+                    "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+                    "function_row.prosrc, 'UTF8')), 'hex'), function_row.prosrc, "
+                    "(SELECT pg_catalog.count(*) "
+                    "FROM pg_catalog.pg_trigger AS trigger_row "
+                    "WHERE NOT trigger_row.tgisinternal "
+                    "AND trigger_row.tgfoid = function_row.oid), "
+                    "pg_catalog.has_function_privilege("
+                    "'star_oam_api', function_row.oid, 'EXECUTE') "
+                    "FROM pg_catalog.pg_proc AS function_row "
+                    "JOIN pg_catalog.pg_namespace AS namespace_row "
+                    "ON namespace_row.oid = function_row.pronamespace "
+                    "JOIN pg_catalog.pg_language AS language_row "
+                    "ON language_row.oid = function_row.prolang "
+                    "JOIN pg_catalog.pg_roles AS owner "
+                    "ON owner.oid = function_row.proowner "
+                    "WHERE function_row.oid = pg_catalog.to_regprocedure(%s)",
+                    (signature,),
+                )
+                function_row = cursor.fetchone()
+                assert function_row is not None
+                function_rows[signature] = function_row
+
+            cursor.execute(
+                "SELECT function_row.proname, trigger_row.tgfoid, "
+                "namespace_row.nspname, table_row.relname, "
+                "trigger_row.tgname, trigger_row.tgenabled, "
+                "trigger_row.tgtype, trigger_row.tgconstraint, "
+                "trigger_row.tgdeferrable, trigger_row.tginitdeferred, "
+                "trigger_row.tgconstrrelid, trigger_row.tgconstrindid, "
+                "trigger_row.tgparentid, trigger_row.tgqual IS NULL, "
+                "trigger_row.tgoldtable IS NULL, "
+                "trigger_row.tgnewtable IS NULL, trigger_row.tgnargs, "
+                "trigger_row.tgattr::text "
+                "FROM pg_catalog.pg_trigger AS trigger_row "
+                "JOIN pg_catalog.pg_proc AS function_row "
+                "ON function_row.oid = trigger_row.tgfoid "
+                "JOIN pg_catalog.pg_class AS table_row "
+                "ON table_row.oid = trigger_row.tgrelid "
+                "JOIN pg_catalog.pg_namespace AS namespace_row "
+                "ON namespace_row.oid = table_row.relnamespace "
+                "WHERE NOT trigger_row.tgisinternal "
+                "AND trigger_row.tgfoid = ANY(%s::pg_catalog.oid[]) "
+                "ORDER BY function_row.proname, table_row.relname, "
+                "trigger_row.tgname",
+                (
+                    [
+                        function_rows[row[0]][0]
+                        for row in migration.CALLER_CATALOG
+                    ],
+                ),
+            )
+            trigger_rows = tuple(cursor.fetchall())
+            cursor.execute(
+                "SELECT function_row.oid, function_row.proname, "
+                "(pg_catalog.length(function_row.prosrc) - "
+                "pg_catalog.length(pg_catalog.replace(function_row.prosrc, "
+                "%s, ''))) / pg_catalog.length(%s) "
+                "FROM pg_catalog.pg_proc AS function_row "
+                "WHERE pg_catalog.strpos(function_row.prosrc, %s) > 0 "
+                "ORDER BY function_row.proname",
+                (
+                    migration.HELPER_FUNCTION,
+                    migration.HELPER_FUNCTION,
+                    migration.HELPER_FUNCTION,
+                ),
+            )
+            helper_callers = tuple(cursor.fetchall())
+
+    return {
+        "functions": function_rows,
+        "triggers": trigger_rows,
+        "helper_callers": helper_callers,
+    }
+
+
+def _assert_0056_count_guard_catalog_state(
+    state: dict[str, object],
+    *,
+    fixed: bool,
+    expected_ready_hash: str | None = None,
+    expected_ready_revision: str | None = None,
+) -> None:
+    migration = _load_nonopening_count_guard_compatibility_migration_0056()
+    functions = state["functions"]
+    assert isinstance(functions, dict)
+    helper_row = functions[migration.HELPER_SIGNATURE]
+    expected_fragment = (
+        migration.FIXED_SOURCE_FRAGMENT
+        if fixed
+        else migration.LEGACY_SOURCE_FRAGMENT
+    )
+    forbidden_fragment = (
+        migration.LEGACY_SOURCE_FRAGMENT
+        if fixed
+        else migration.FIXED_SOURCE_FRAGMENT
+    )
+    assert helper_row[1:16] == (
+        "public",
+        migration.HELPER_FUNCTION,
+        ", ".join(migration.HELPER_ARGUMENT_TYPES),
+        ",".join(migration.HELPER_ARGUMENT_NAMES),
+        "boolean",
+        "f",
+        "sql",
+        "s",
+        False,
+        False,
+        "u",
+        False,
+        migration.MIGRATION_ROLE,
+        [migration.FIXED_SEARCH_PATH],
+        "{star_oam_migrator=X/star_oam_migrator}",
+    )
+    assert helper_row[16] == (
+        migration.FIXED_BODY_SHA256 if fixed else migration.LEGACY_BODY_SHA256
+    )
+    assert helper_row[17].count(expected_fragment) == 1
+    assert forbidden_fragment not in helper_row[17]
+    assert helper_row[18:] == (0, False)
+
+    for signature, function_name, body_hash, _, _ in migration.CALLER_CATALOG:
+        caller_row = functions[signature]
+        assert caller_row[1:16] == (
+            "public",
+            function_name,
+            "",
+            None,
+            "trigger",
+            "f",
+            "plpgsql",
+            "v",
+            False,
+            False,
+            "u",
+            True,
+            migration.MIGRATION_ROLE,
+            [migration.FIXED_SEARCH_PATH],
+            "{star_oam_migrator=X/star_oam_migrator}",
+        )
+        assert caller_row[16] == body_hash
+        assert caller_row[17].count(migration.HELPER_FUNCTION) == 1
+        assert caller_row[18:] == (1, False)
+
+    readiness_row = functions[migration.RUNTIME_READY_SIGNATURE]
+    assert readiness_row[1:15] == (
+        "public",
+        migration.RUNTIME_READY_FUNCTION,
+        "",
+        None,
+        "boolean",
+        "f",
+        "sql",
+        "s",
+        False,
+        False,
+        "u",
+        True,
+        migration.MIGRATION_ROLE,
+        ["search_path=pg_catalog"],
+    )
+    expected_ready_hash = expected_ready_hash or (
+        migration.RUNTIME_READY_BODY_SHA256_0056
+        if fixed
+        else migration.RUNTIME_READY_BODY_SHA256_0055
+    )
+    expected_revision = expected_ready_revision or (
+        migration.revision if fixed else migration.down_revision
+    )
+    forbidden_revision = migration.down_revision if fixed else migration.revision
+    assert readiness_row[16] == expected_ready_hash
+    assert readiness_row[17].count(expected_revision) == 1
+    assert forbidden_revision not in readiness_row[17]
+    assert readiness_row[18:] == (0, False)
+
+    expected_triggers = tuple(
+        sorted(
+            (
+                function_name,
+                functions[signature][0],
+                "public",
+                table_name,
+                trigger_name,
+                "A",
+                7,
+                0,
+                False,
+                False,
+                0,
+                0,
+                0,
+                True,
+                True,
+                True,
+                0,
+                "",
+            )
+            for (
+                signature,
+                function_name,
+                _,
+                table_name,
+                trigger_name,
+            ) in migration.CALLER_CATALOG
+        )
+    )
+    assert state["triggers"] == expected_triggers
+    assert state["helper_callers"] == tuple(
+        sorted(
+            (
+                functions[signature][0],
+                function_name,
+                1,
+            )
+            for signature, function_name, *_ in migration.CALLER_CATALOG
+        )
+    )
+
+
+def _assert_0056_empty_graph_downgrade_and_reupgrade() -> None:
+    assert _current_revision() == HEAD_REVISION
+    migration = _load_nonopening_count_guard_compatibility_migration_0056()
+    assert migration.revision == NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION
+    assert migration.down_revision == NONOPENING_START_AUDIT_ORDER_REVISION
+    _run_alembic("downgrade", NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION)
+    assert _current_revision() == NONOPENING_COUNT_GUARD_COMPATIBILITY_REVISION
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            for fact_table in (
+                "stocktake_count_lines",
+                "stocktake_count_observations",
+                "stocktake_scope_count_completions",
+            ):
+                cursor.execute(
+                    sql.SQL(
+                        "SELECT pg_catalog.count(*) FROM public.{} AS fact "
+                        "JOIN public.stocktake_tasks AS task "
+                        "ON task.id = fact.task_id "
+                        "WHERE task.task_type IN "
+                        "('full', 'sample', 'ad_hoc', 'personal', "
+                        "'termination')"
+                    ).format(sql.Identifier(fact_table))
+                )
+                assert cursor.fetchone() == (0,)
+
+    head_state = _0056_count_guard_catalog_state()
+    _assert_0056_count_guard_catalog_state(head_state, fixed=True)
+    _run_alembic("downgrade", NONOPENING_START_AUDIT_ORDER_REVISION)
+    assert _current_revision() == NONOPENING_START_AUDIT_ORDER_REVISION
+    legacy_state = _0056_count_guard_catalog_state()
+    _assert_0056_count_guard_catalog_state(legacy_state, fixed=False)
+    for signature in head_state["functions"]:
+        head_function = head_state["functions"][signature]
+        legacy_function = legacy_state["functions"][signature]
+        assert head_function[:16] + head_function[18:] == (
+            legacy_function[:16] + legacy_function[18:]
+        )
+    assert legacy_state["triggers"] == head_state["triggers"]
+    assert legacy_state["helper_callers"] == head_state["helper_callers"]
+
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    reupgraded_state = _0056_count_guard_catalog_state()
+    for signature in (
+        migration.HELPER_SIGNATURE,
+        *(row[0] for row in migration.CALLER_CATALOG),
+    ):
+        assert reupgraded_state["functions"][signature] == (
+            head_state["functions"][signature]
+        )
+    assert reupgraded_state["triggers"] == head_state["triggers"]
+    assert reupgraded_state["helper_callers"] == head_state["helper_callers"]
+    _assert_0049_recount_guard_catalog(
+        callers_security_definer=True,
+        expected_revision=HEAD_REVISION,
+    )
+
+
+def _0055_start_audit_order_catalog_state() -> dict[str, object]:
+    migration = _load_nonopening_start_audit_order_migration_0055()
+    signatures = (
+        migration.GUARD_SIGNATURE,
+        migration.VALIDATOR_SIGNATURE,
+        migration.DISPATCH_SIGNATURE,
+        migration.RUNTIME_READY_SIGNATURE,
+    )
+    function_rows: dict[str, tuple[object, ...]] = {}
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            for signature in signatures:
+                cursor.execute(
+                    "SELECT function_row.oid, namespace_row.nspname, "
+                    "function_row.proname, "
+                    "pg_catalog.oidvectortypes(function_row.proargtypes), "
+                    "pg_catalog.array_to_string(function_row.proargnames, ','), "
+                    "pg_catalog.pg_get_function_result(function_row.oid), "
+                    "function_row.prokind, language_row.lanname, "
+                    "function_row.provolatile, function_row.proisstrict, "
+                    "function_row.proleakproof, function_row.proparallel, "
+                    "function_row.prosecdef, owner.rolname, "
+                    "function_row.proconfig, function_row.proacl::text, "
+                    "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+                    "function_row.prosrc, 'UTF8')), 'hex'), function_row.prosrc, "
+                    "(SELECT pg_catalog.count(*) "
+                    "FROM pg_catalog.pg_trigger AS trigger_row "
+                    "WHERE NOT trigger_row.tgisinternal "
+                    "AND trigger_row.tgfoid = function_row.oid), "
+                    "pg_catalog.has_function_privilege("
+                    "'star_oam_api', function_row.oid, 'EXECUTE') "
+                    "FROM pg_catalog.pg_proc AS function_row "
+                    "JOIN pg_catalog.pg_namespace AS namespace_row "
+                    "ON namespace_row.oid = function_row.pronamespace "
+                    "JOIN pg_catalog.pg_language AS language_row "
+                    "ON language_row.oid = function_row.prolang "
+                    "JOIN pg_catalog.pg_roles AS owner "
+                    "ON owner.oid = function_row.proowner "
+                    "WHERE function_row.oid = pg_catalog.to_regprocedure(%s)",
+                    (signature,),
+                )
+                function_row = cursor.fetchone()
+                assert function_row is not None
+                function_rows[signature] = function_row
+
+            cursor.execute(
+                "SELECT function_row.proname, trigger_row.tgfoid, "
+                "namespace_row.nspname, table_row.relname, "
+                "trigger_row.tgname, trigger_row.tgenabled, "
+                "trigger_row.tgtype, trigger_row.tgconstraint <> 0, "
+                "trigger_row.tgdeferrable, trigger_row.tginitdeferred, "
+                "trigger_row.tgconstrrelid, trigger_row.tgconstrindid, "
+                "trigger_row.tgparentid, trigger_row.tgqual IS NULL, "
+                "trigger_row.tgoldtable IS NULL, "
+                "trigger_row.tgnewtable IS NULL, trigger_row.tgnargs, "
+                "trigger_row.tgattr::text "
+                "FROM pg_catalog.pg_trigger AS trigger_row "
+                "JOIN pg_catalog.pg_proc AS function_row "
+                "ON function_row.oid = trigger_row.tgfoid "
+                "JOIN pg_catalog.pg_class AS table_row "
+                "ON table_row.oid = trigger_row.tgrelid "
+                "JOIN pg_catalog.pg_namespace AS namespace_row "
+                "ON namespace_row.oid = table_row.relnamespace "
+                "WHERE NOT trigger_row.tgisinternal "
+                "AND trigger_row.tgfoid IN ("
+                "pg_catalog.to_regprocedure(%s), "
+                "pg_catalog.to_regprocedure(%s)) "
+                "ORDER BY function_row.proname, table_row.relname, "
+                "trigger_row.tgname",
+                (migration.GUARD_SIGNATURE, migration.DISPATCH_SIGNATURE),
+            )
+            trigger_rows = tuple(cursor.fetchall())
+            cursor.execute(
+                "SELECT function_row.oid, function_row.proname, "
+                "(pg_catalog.length(function_row.prosrc) - "
+                "pg_catalog.length(pg_catalog.replace(function_row.prosrc, "
+                "%s, ''))) / pg_catalog.length(%s) "
+                "FROM pg_catalog.pg_proc AS function_row "
+                "WHERE pg_catalog.strpos(function_row.prosrc, %s) > 0 "
+                "ORDER BY function_row.proname",
+                (
+                    migration.VALIDATOR_FUNCTION,
+                    migration.VALIDATOR_FUNCTION,
+                    migration.VALIDATOR_FUNCTION,
+                ),
+            )
+            validator_callers = tuple(cursor.fetchall())
+            cursor.execute(
+                "SELECT attribute_row.attname, "
+                "pg_catalog.format_type("
+                "attribute_row.atttypid, attribute_row.atttypmod), "
+                "attribute_row.attnotnull "
+                "FROM pg_catalog.pg_attribute AS attribute_row "
+                "WHERE attribute_row.attrelid = "
+                "pg_catalog.to_regclass('public.audit_events') "
+                "AND attribute_row.attname IN "
+                "('sequence_no', 'stream_key', 'stream_version') "
+                "AND attribute_row.attnum > 0 "
+                "AND NOT attribute_row.attisdropped "
+                "ORDER BY attribute_row.attname"
+            )
+            audit_attributes = tuple(cursor.fetchall())
+            cursor.execute(
+                "SELECT constraint_row.conname, constraint_row.contype, "
+                "constraint_row.convalidated, "
+                "pg_catalog.pg_get_constraintdef(constraint_row.oid, true) "
+                "FROM pg_catalog.pg_constraint AS constraint_row "
+                "WHERE constraint_row.conrelid = "
+                "pg_catalog.to_regclass('public.audit_events') "
+                "AND constraint_row.conname = "
+                "'uq_audit_events_stream_version_0017'"
+            )
+            audit_constraint = cursor.fetchone()
+
+    return {
+        "functions": function_rows,
+        "triggers": trigger_rows,
+        "validator_callers": validator_callers,
+        "audit_attributes": audit_attributes,
+        "audit_constraint": audit_constraint,
+    }
+
+
+def _assert_0055_start_audit_order_catalog_state(
+    state: dict[str, object],
+    *,
+    fixed: bool,
+) -> None:
+    migration = _load_nonopening_start_audit_order_migration_0055()
+    functions = state["functions"]
+    assert isinstance(functions, dict)
+    expected_fragment = (
+        migration.FIXED_AUDIT_ORDER if fixed else migration.LEGACY_AUDIT_ORDER
+    )
+    forbidden_fragment = (
+        migration.LEGACY_AUDIT_ORDER if fixed else migration.FIXED_AUDIT_ORDER
+    )
+
+    for (
+        signature,
+        function_name,
+        result_type,
+        argument_types,
+        argument_names,
+        legacy_hash,
+        fixed_hash,
+        trigger_count,
+    ) in migration.START_FUNCTION_CATALOG:
+        function_row = functions[signature]
+        assert function_row[1:16] == (
+            "public",
+            function_name,
+            ", ".join(argument_types),
+            ",".join(argument_names) if argument_names else None,
+            result_type,
+            "f",
+            "plpgsql",
+            "v",
+            False,
+            False,
+            "u",
+            True,
+            migration.MIGRATION_ROLE,
+            [migration.FIXED_SEARCH_PATH],
+            "{star_oam_migrator=X/star_oam_migrator}",
+        )
+        assert function_row[16] == (fixed_hash if fixed else legacy_hash)
+        assert function_row[17].count(expected_fragment) == 1
+        assert forbidden_fragment not in function_row[17]
+        assert function_row[18:] == (trigger_count, False)
+
+    dispatch_row = functions[migration.DISPATCH_SIGNATURE]
+    assert dispatch_row[1:16] == (
+        "public",
+        migration.DISPATCH_FUNCTION,
+        "",
+        None,
+        "trigger",
+        "f",
+        "plpgsql",
+        "v",
+        False,
+        False,
+        "u",
+        True,
+        migration.MIGRATION_ROLE,
+        [migration.FIXED_SEARCH_PATH],
+        "{star_oam_migrator=X/star_oam_migrator}",
+    )
+    assert dispatch_row[16] == migration.DISPATCH_BODY_SHA256
+    assert dispatch_row[17].count(migration.VALIDATOR_FUNCTION) == 3
+    assert dispatch_row[18:] == (len(migration.DISPATCH_TRIGGER_CATALOG), False)
+
+    readiness_row = functions[migration.RUNTIME_READY_SIGNATURE]
+    assert readiness_row[1:15] == (
+        "public",
+        migration.RUNTIME_READY_FUNCTION,
+        "",
+        None,
+        "boolean",
+        "f",
+        "sql",
+        "s",
+        False,
+        False,
+        "u",
+        True,
+        migration.MIGRATION_ROLE,
+        ["search_path=pg_catalog"],
+    )
+    assert readiness_row[16] == (
+        migration.RUNTIME_READY_BODY_SHA256_0055
+        if fixed
+        else migration.RUNTIME_READY_BODY_SHA256_0054
+    )
+    expected_revision = (
+        migration.RUNTIME_READY_REVISION_0055
+        if fixed
+        else migration.RUNTIME_READY_REVISION_0054
+    )
+    forbidden_revision = (
+        migration.RUNTIME_READY_REVISION_0054
+        if fixed
+        else migration.RUNTIME_READY_REVISION_0055
+    )
+    assert readiness_row[17].count(expected_revision) == 1
+    assert forbidden_revision not in readiness_row[17]
+    assert readiness_row[18:] == (0, False)
+
+    guard_oid = functions[migration.GUARD_SIGNATURE][0]
+    dispatch_oid = functions[migration.DISPATCH_SIGNATURE][0]
+    expected_triggers = [
+        (
+            migration.GUARD_FUNCTION,
+            guard_oid,
+            "public",
+            table_name,
+            trigger_name,
+            "A",
+            trigger_type,
+            False,
+            False,
+            False,
+            0,
+            0,
+            0,
+            True,
+            True,
+            True,
+            0,
+            "",
+        )
+        for table_name, trigger_name, trigger_type in migration.GUARD_TRIGGER_CATALOG
+    ]
+    expected_triggers.extend(
+        (
+            migration.DISPATCH_FUNCTION,
+            dispatch_oid,
+            "public",
+            table_name,
+            trigger_name,
+            "A",
+            trigger_type,
+            True,
+            True,
+            True,
+            0,
+            0,
+            0,
+            True,
+            True,
+            True,
+            0,
+            "",
+        )
+        for table_name, trigger_name, trigger_type in (
+            migration.DISPATCH_TRIGGER_CATALOG
+        )
+    )
+    assert state["triggers"] == tuple(
+        sorted(expected_triggers, key=lambda row: (row[0], row[3], row[4]))
+    )
+    assert state["validator_callers"] == (
+        (dispatch_oid, migration.DISPATCH_FUNCTION, 3),
+    )
+    assert state["audit_attributes"] == (
+        ("stream_key", "character varying(160)", True),
+        ("stream_version", "bigint", True),
+    )
+    assert state["audit_constraint"] == (
+        "uq_audit_events_stream_version_0017",
+        "u",
+        True,
+        "UNIQUE (stream_key, stream_version)",
+    )
+
+
+def _assert_0055_empty_graph_downgrade_and_reupgrade() -> None:
+    assert _current_revision() == HEAD_REVISION
+    migration = _load_nonopening_start_audit_order_migration_0055()
+    assert migration.revision == NONOPENING_START_AUDIT_ORDER_REVISION
+    assert migration.down_revision == OPENING_RECOUNT_SOURCE_HISTORY_REVISION
+    assert len(migration.LOCK_TABLES) == 30
+    assert len(migration.GUARD_TRIGGER_CATALOG) == 8
+    assert len(migration.DISPATCH_TRIGGER_CATALOG) == 8
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_catalog.count(*) "
+                "FROM public.stocktake_start_completions"
+            )
+            assert cursor.fetchone() == (0,)
+            cursor.execute(f"SELECT {migration._legacy_start_exists_sql()}")
+            assert cursor.fetchone() == (False,)
+
+    _run_alembic("downgrade", NONOPENING_START_AUDIT_ORDER_REVISION)
+    assert _current_revision() == NONOPENING_START_AUDIT_ORDER_REVISION
+    head_state = _0055_start_audit_order_catalog_state()
+    _assert_0055_start_audit_order_catalog_state(head_state, fixed=True)
+
+    _run_alembic("downgrade", OPENING_RECOUNT_SOURCE_HISTORY_REVISION)
+    assert _current_revision() == OPENING_RECOUNT_SOURCE_HISTORY_REVISION
+    legacy_state = _0055_start_audit_order_catalog_state()
+    _assert_0055_start_audit_order_catalog_state(legacy_state, fixed=False)
+    for signature in (
+        migration.GUARD_SIGNATURE,
+        migration.VALIDATOR_SIGNATURE,
+        migration.RUNTIME_READY_SIGNATURE,
+    ):
+        head_function = head_state["functions"][signature]
+        legacy_function = legacy_state["functions"][signature]
+        assert head_function[:16] + head_function[18:] == (
+            legacy_function[:16] + legacy_function[18:]
+        )
+    assert (
+        legacy_state["functions"][migration.DISPATCH_SIGNATURE]
+        == head_state["functions"][migration.DISPATCH_SIGNATURE]
+    )
+    for key in (
+        "triggers",
+        "validator_callers",
+        "audit_attributes",
+        "audit_constraint",
+    ):
+        assert legacy_state[key] == head_state[key]
+
+    _run_alembic("upgrade", NONOPENING_START_AUDIT_ORDER_REVISION)
+    assert _current_revision() == NONOPENING_START_AUDIT_ORDER_REVISION
+    assert _0055_start_audit_order_catalog_state() == head_state
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    head_migration = _load_nonopening_review_terminal_status_migration_0058()
+    _assert_0056_count_guard_catalog_state(
+        _0056_count_guard_catalog_state(),
+        fixed=True,
+        expected_ready_hash=head_migration.RUNTIME_READY_BODY_SHA256_0058,
+        expected_ready_revision=head_migration.revision,
+    )
+    _assert_0052_opening_terminal_catalog(
+        hardened=True,
+        expected_revision=HEAD_REVISION,
+    )
+
+
 def _0054_recount_history_catalog_state() -> dict[str, object]:
     migration = _load_opening_recount_source_history_migration_0054()
     with psycopg.connect(**_admin_parameters()) as connection:
@@ -6997,6 +8299,8 @@ def _assert_0054_empty_graph_downgrade_and_reupgrade() -> None:
     migration = _load_opening_recount_source_history_migration_0054()
     assert migration.revision == OPENING_RECOUNT_SOURCE_HISTORY_REVISION
     assert migration.down_revision == OPENING_GRAPH_TABLE_DISPATCH_REVISION
+    _run_alembic("downgrade", OPENING_RECOUNT_SOURCE_HISTORY_REVISION)
+    assert _current_revision() == OPENING_RECOUNT_SOURCE_HISTORY_REVISION
     with psycopg.connect(**_admin_parameters()) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -7066,7 +8370,7 @@ def _assert_0054_empty_graph_downgrade_and_reupgrade() -> None:
     )
     _assert_0052_opening_terminal_catalog(
         hardened=True,
-        expected_revision=HEAD_REVISION,
+        expected_revision=OPENING_RECOUNT_SOURCE_HISTORY_REVISION,
     )
 
     _run_alembic("downgrade", OPENING_GRAPH_TABLE_DISPATCH_REVISION)
@@ -7160,9 +8464,11 @@ def _assert_0054_empty_graph_downgrade_and_reupgrade() -> None:
             with connection.cursor() as cursor:
                 cursor.execute(f"DROP SCHEMA {shadow_schema} CASCADE")
 
+    _run_alembic("upgrade", OPENING_RECOUNT_SOURCE_HISTORY_REVISION)
+    assert _current_revision() == OPENING_RECOUNT_SOURCE_HISTORY_REVISION
+    assert _0054_recount_history_catalog_state() == head_state
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
-    assert _0054_recount_history_catalog_state() == head_state
     _assert_0052_opening_terminal_catalog(
         hardened=True,
         expected_revision=HEAD_REVISION,
@@ -11932,6 +13238,22 @@ def _seed_0047_stocktake_inventory(
                 created_at=now - timedelta(days=1),
                 updated_at=now - timedelta(days=1),
             )
+            difference_peer_location_id = uuid.uuid4()
+            difference_peer_location = StockLocation(
+                id=difference_peer_location_id,
+                code=(
+                    "PG16-DIFFERENCE-PEER-"
+                    f"{difference_peer_location_id.hex[:16].upper()}"
+                ),
+                name="PostgreSQL 16 差异回放锁序空仓",
+                location_type="region",
+                owner_org_id=region_org_id,
+                parent_id=None,
+                custodian_person_id=manager_person.id,
+                status="active",
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
             session.add_all(
                 (
                     policy,
@@ -11941,6 +13263,7 @@ def _seed_0047_stocktake_inventory(
                     concurrency_serial,
                     concurrency_location,
                     concurrency_competing_location,
+                    difference_peer_location,
                 )
             )
             session.flush()
@@ -11976,6 +13299,16 @@ def _seed_0047_stocktake_inventory(
                         created_at=now - timedelta(days=1),
                         updated_at=now - timedelta(days=1),
                     ),
+                    CustodyAssignment(
+                        id=uuid.uuid4(),
+                        location_id=difference_peer_location.id,
+                        custodian_person_id=manager_person.id,
+                        valid_from=now - timedelta(days=1),
+                        valid_to=None,
+                        handover_case_id=None,
+                        created_at=now - timedelta(days=1),
+                        updated_at=now - timedelta(days=1),
+                    ),
                 )
             )
             account = StockAccount(
@@ -12002,7 +13335,21 @@ def _seed_0047_stocktake_inventory(
                 created_at=now - timedelta(days=1),
                 updated_at=now - timedelta(days=1),
             )
-            session.add_all((account, concurrency_account))
+            difference_peer_account = StockAccount(
+                id=uuid.uuid4(),
+                owner_org_id=region_org_id,
+                custodian_person_id=None,
+                location_id=difference_peer_location.id,
+                material_id=material.id,
+                condition_code="new",
+                availability_bucket="available",
+                lot_id=None,
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
+            session.add_all(
+                (account, concurrency_account, difference_peer_account)
+            )
             session.flush()
 
             control_sync_run_id = uuid.uuid4()
@@ -12172,6 +13519,8 @@ def _seed_0047_stocktake_inventory(
                 "concurrency_serial_no": concurrency_serial.serial_no,
                 "concurrency_serial_qr_code": concurrency_serial.qr_code,
                 "deadline": now + timedelta(days=2),
+                "difference_peer_account_id": difference_peer_account.id,
+                "difference_peer_location_id": difference_peer_location.id,
                 "location_id": location.id,
                 "material_external_object_id": material_external_object.id,
                 "material_external_version_id": material_external_version.id,
@@ -14101,6 +15450,553 @@ SELECT posting.total_quantity::text,
     return fixture
 
 
+def _assert_0056_nonopening_wrong_assignee_count_rejected(
+    api_engine,
+    *,
+    task_id: uuid.UUID,
+    round_id: uuid.UUID,
+    scope_id: uuid.UUID,
+    stock_account_id: uuid.UUID,
+    wrong_user_id: str,
+) -> None:
+    """Exercise the repaired helper through its real immediate count trigger."""
+
+    count_line_id = uuid.uuid4()
+    api_parameters = _connection_parameters(
+        role="star_oam_api",
+        password=_role_password("star_oam_api"),
+    )
+    with psycopg.connect(**api_parameters) as connection:
+        with connection.cursor() as cursor:
+            with pytest.raises(psycopg.Error) as failure:
+                cursor.execute(
+                    "INSERT INTO public.stocktake_count_lines ("
+                    "id, task_id, round_id, scope_id, stock_account_id, "
+                    "counted_qty, count_method, reason_code, remark, "
+                    "counted_by_user_id, counted_at, created_at, updated_at) "
+                    "VALUES (%s, %s, %s, %s, %s, 5, 'manual', NULL, %s, %s, "
+                    "pg_catalog.transaction_timestamp(), "
+                    "pg_catalog.transaction_timestamp(), "
+                    "pg_catalog.transaction_timestamp())",
+                    (
+                        count_line_id,
+                        task_id,
+                        round_id,
+                        scope_id,
+                        stock_account_id,
+                        "0056 wrong non-opening initial-count assignee",
+                        wrong_user_id,
+                    ),
+                )
+            assert failure.value.sqlstate == "P0001"
+            assert (
+                "stocktake count child is sealed, outside snapshot, or unassigned"
+                in str(failure.value)
+            )
+        connection.rollback()
+
+    with Session(api_engine) as session:
+        assert session.execute(
+            text(
+                "SELECT pg_catalog.count(*) "
+                "FROM public.stocktake_count_lines WHERE id = :line_id"
+            ),
+            {"line_id": count_line_id},
+        ).scalar_one() == 0
+
+
+def _assert_0057_submitted_difference_replay_boundary(
+    api_engine,
+    *,
+    task_id: uuid.UUID,
+    round_id: uuid.UUID,
+    actor_user_id: str,
+) -> None:
+    """Execute the API helper and prove its head-first seal boundaries."""
+
+    migration = _load_nonopening_difference_replay_lock_migration_0057()
+    api_parameters = _connection_parameters(
+        role="star_oam_api",
+        password=_role_password("star_oam_api"),
+    )
+    from app.formal_services.postgresql_lock_graph import (
+        lock_nonopening_stocktake_difference_replay_graph,
+    )
+
+    with Session(api_engine) as session:
+        lock_nonopening_stocktake_difference_replay_graph(
+            session,
+            task_id,
+            round_id,
+            actor_user_id,
+        )
+        session.rollback()
+
+    holder_locked = threading.Event()
+    contender_started = threading.Event()
+    contender_acquired = threading.Event()
+    contender_pid: list[int] = []
+    release_holder = threading.Event()
+
+    def hold_inventory_head() -> None:
+        with psycopg.connect(**_admin_parameters()) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout = '20s'")
+                cursor.execute(
+                    "SELECT id FROM public.inventory_ledger_heads "
+                    "WHERE stream_key = 'inventory' FOR UPDATE"
+                )
+                assert cursor.fetchone() is not None
+                holder_locked.set()
+                assert release_holder.wait(timeout=20)
+            connection.rollback()
+
+    def contend_through_api_helper() -> None:
+        assert holder_locked.wait(timeout=20)
+        with psycopg.connect(**api_parameters) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout = '20s'")
+                cursor.execute("SELECT pg_backend_pid()")
+                contender_pid.append(cursor.fetchone()[0])
+                contender_started.set()
+                cursor.execute(
+                    sql.SQL("SELECT {}(%s::uuid, %s::uuid, %s::text)").format(
+                        sql.SQL(migration.LOCK_SIGNATURE.rsplit("(", 1)[0])
+                    ),
+                    (task_id, round_id, actor_user_id),
+                )
+                assert cursor.fetchone() is not None
+                contender_acquired.set()
+            connection.rollback()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        holder = executor.submit(hold_inventory_head)
+        contender = executor.submit(contend_through_api_helper)
+        try:
+            assert holder_locked.wait(timeout=20)
+            assert contender_started.wait(timeout=20)
+            assert contender_pid
+            _wait_for_backend_lock(contender_pid[0])
+            assert contender_acquired.is_set() is False
+        finally:
+            release_holder.set()
+        holder.result(timeout=20)
+        contender.result(timeout=20)
+    assert contender_acquired.is_set() is True
+
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id FROM public.stocktake_scope_count_completions "
+                "WHERE task_id = %s AND round_id = %s",
+                (task_id, round_id),
+            )
+            completion_row = cursor.fetchone()
+            assert completion_row is not None
+            completion_id = completion_row[0]
+
+    attachment_id = uuid.uuid4()
+    with psycopg.connect(**api_parameters) as connection:
+        with connection.cursor() as cursor:
+            with pytest.raises(psycopg.Error) as failure:
+                cursor.execute(
+                    "INSERT INTO public.document_attachments ("
+                    "id, document_type, document_id, file_id, attachment_type, "
+                    "status, uploaded_by, created_at) VALUES ("
+                    "%s, 'stocktake_scope_count_completion', %s, %s, "
+                    "'stocktake_evidence', 'active', %s, "
+                    "pg_catalog.transaction_timestamp())",
+                    (
+                        attachment_id,
+                        str(completion_id),
+                        uuid.uuid4(),
+                        actor_user_id,
+                    ),
+                )
+            assert failure.value.sqlstate == "55000"
+            assert "sealed non-opening stocktake evidence is immutable" in str(
+                failure.value
+            )
+        connection.rollback()
+
+    control_id = uuid.uuid4()
+    with psycopg.connect(**api_parameters) as connection:
+        with connection.cursor() as cursor:
+            with pytest.raises(psycopg.Error) as failure:
+                cursor.execute(
+                    "INSERT INTO public.stocktake_control_snapshot_lines ("
+                    "id, task_id, line_no, external_business_key, material_id, "
+                    "condition_code, control_qty, mapping_status, "
+                    "source_updated_at, payload_sha256, mapping_note, created_at) "
+                    "VALUES (%s, %s, 1, %s, NULL, NULL, 0, 'unresolved', NULL, "
+                    "%s, %s, pg_catalog.transaction_timestamp())",
+                    (
+                        control_id,
+                        task_id,
+                        f"pg16-0057-control-{control_id.hex}",
+                        "0" * 64,
+                        "0057 non-opening control snapshot must be rejected",
+                    ),
+                )
+            assert failure.value.sqlstate == "23514"
+            assert "non-opening stocktake control snapshot is forbidden" in str(
+                failure.value
+            )
+        connection.rollback()
+
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT EXISTS (SELECT 1 FROM public.document_attachments "
+                "WHERE id = %s), EXISTS (SELECT 1 FROM "
+                "public.stocktake_control_snapshot_lines WHERE id = %s)",
+                (attachment_id, control_id),
+            )
+            assert cursor.fetchone() == (False, False)
+
+
+def _assert_0057_cross_task_principal_material_lock_order(
+    api_engine,
+    *,
+    difference_task_id: uuid.UUID,
+    difference_round_id: uuid.UUID,
+    difference_expected_task_version: int,
+    actor_user_id: str,
+    assignee_user_id: str,
+    region_org_id: uuid.UUID,
+    assignee_person_id: uuid.UUID,
+    competing_location_id: uuid.UUID,
+    peer_account_id: uuid.UUID,
+    shared_material_id: uuid.UUID,
+    deadline: datetime,
+    idempotency_hmac_secret: bytes,
+):
+    """Prove different tasks cannot invert shared principal/material locks."""
+
+    from app.formal_access import lock_formal_principal_graph
+    from app.formal_services.postgresql_lock_graph import (
+        lock_nonopening_stocktake_review_graph,
+    )
+    from app.formal_services.stocktake_count import (
+        StocktakeSnapshotCountInput,
+        SubmitStocktakeInitialScopeCountCommand,
+        submit_stocktake_initial_scope_count,
+    )
+    from app.formal_services.stocktake_difference import (
+        GenerateStocktakeDifferenceCommand,
+        generate_stocktake_initial_differences,
+    )
+    from app.formal_services.stocktake_task import (
+        create_stocktake_task_draft,
+        start_stocktake_task,
+    )
+    from app.inventory_models import StockAccount
+    from app.stocktake_models import (
+        FormalStocktakeScope,
+        FormalStocktakeTask,
+        StocktakeDifference,
+        StocktakeDifferenceSetCompletion,
+        StocktakeReview,
+        StocktakeRound,
+        StocktakeSnapshotLine,
+    )
+    from app.stocktake_task_schemas import (
+        StocktakeScopeSelectionIn,
+        StocktakeTaskCreateIn,
+        StocktakeTaskStartIn,
+    )
+    from test_material_request_approval_service import _principal
+
+    # Task B has a different freeze owner but explicitly references Task A's
+    # material and assignee.  Its zero-balance account produces a real snapshot
+    # while preserving exactly the two shared lock axes under test.
+    peer_draft = StocktakeTaskCreateIn(
+        task_type="sample",
+        region_org_id=region_org_id,
+        blind_count=True,
+        scopes=(
+            StocktakeScopeSelectionIn(
+                owner_org_id=region_org_id,
+                location_id=competing_location_id,
+                assignee_person_id=assignee_person_id,
+                scope_mode="filtered",
+                material_id=shared_material_id,
+                condition_code=None,
+                availability_bucket=None,
+                freeze_mode="hard",
+            ),
+        ),
+        deadline=deadline,
+        note="PG16 0057 cross-task principal/material lock-order peer",
+    )
+    with Session(api_engine, expire_on_commit=False) as session:
+        peer_created = create_stocktake_task_draft(
+            session,
+            actor=_principal(session, actor_user_id),
+            draft=peer_draft,
+            idempotency_key="pg16-0057-cross-task-peer-create-v1",
+            idempotency_hmac_secret=idempotency_hmac_secret,
+            trace_request_id="trace-pg16-0057-cross-task-peer-create-v1",
+        )
+        assert peer_created.status == "draft"
+        session.commit()
+    with Session(api_engine, expire_on_commit=False) as session:
+        peer_started = start_stocktake_task(
+            session,
+            actor=_principal(session, actor_user_id),
+            task_id=peer_created.task_id,
+            command=StocktakeTaskStartIn(expected_version=peer_created.version),
+            idempotency_key="pg16-0057-cross-task-peer-start-v1",
+            idempotency_hmac_secret=idempotency_hmac_secret,
+            trace_request_id="trace-pg16-0057-cross-task-peer-start-v1",
+        )
+        assert peer_started.status == "counting"
+        assert peer_started.snapshot_line_count == 1
+        session.commit()
+    with Session(api_engine, expire_on_commit=False) as session:
+        peer_scope = session.scalar(
+            select(FormalStocktakeScope).where(
+                FormalStocktakeScope.task_id == peer_started.task_id
+            )
+        )
+        assert peer_scope is not None
+        assert peer_scope.location_id == competing_location_id
+        assert peer_scope.material_id == shared_material_id
+        assert peer_scope.assignee_user_id == assignee_user_id
+        peer_account = session.get(StockAccount, peer_account_id)
+        peer_snapshot = session.scalar(
+            select(StocktakeSnapshotLine).where(
+                StocktakeSnapshotLine.task_id == peer_started.task_id,
+                StocktakeSnapshotLine.stock_account_id == peer_account_id,
+            )
+        )
+        assert peer_account is not None and peer_snapshot is not None
+        assert peer_account.material_id == shared_material_id
+        peer_counted = submit_stocktake_initial_scope_count(
+            session,
+            actor=_principal(session, assignee_user_id),
+            command=SubmitStocktakeInitialScopeCountCommand(
+                task_id=peer_started.task_id,
+                round_id=peer_started.initial_round_id,
+                scope_id=peer_scope.id,
+                count_mode="blind",
+                account_counts=(
+                    StocktakeSnapshotCountInput(
+                        stock_account_id=peer_account_id,
+                        counted_qty=Decimal("0.000"),
+                    ),
+                ),
+                physical_observations=(),
+            ),
+            idempotency_key="pg16-0057-cross-task-peer-count-v1",
+            idempotency_hmac_secret=idempotency_hmac_secret,
+            trace_request_id="trace-pg16-0057-cross-task-peer-count-v1",
+        )
+        assert peer_counted.round_submitted is True
+        assert (peer_counted.task_status, peer_counted.round_status) == (
+            "submitted",
+            "submitted",
+        )
+        session.commit()
+
+    principal_held = threading.Event()
+    difference_started = threading.Event()
+    allow_review_graph = threading.Event()
+    review_graph_locked = threading.Event()
+    release_review_transaction = threading.Event()
+    review_pid: list[int] = []
+    difference_pid: list[int] = []
+    evaluated_results: list[object] = []
+    failures: list[Exception] = []
+
+    def review_order_transaction() -> None:
+        try:
+            with Session(api_engine) as session:
+                session.execute(text("SET LOCAL statement_timeout = '20s'"))
+                review_pid.append(session.scalar(text("SELECT pg_backend_pid()")))
+                peer_task = session.scalar(
+                    select(FormalStocktakeTask)
+                    .where(FormalStocktakeTask.id == peer_started.task_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                assert peer_task is not None
+                assert peer_task.status == "submitted"
+                # This is the exact task -> principal prefix used by
+                # stocktake_review._submit_review.  The event deliberately
+                # exposes the former principal/material inversion window.
+                lock_formal_principal_graph(session, (assignee_user_id,))
+                principal_held.set()
+                assert allow_review_graph.wait(timeout=20)
+                peer_round = session.scalar(
+                    select(StocktakeRound)
+                    .where(
+                        StocktakeRound.id == peer_started.initial_round_id,
+                        StocktakeRound.task_id == peer_started.task_id,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                assert peer_round is not None
+                assert peer_round.status == "submitted"
+                lock_nonopening_stocktake_review_graph(
+                    session, peer_task.id, peer_round.id
+                )
+                review_graph_locked.set()
+                assert release_review_transaction.wait(timeout=20)
+                session.rollback()
+        except Exception as failure:  # surfaced with SQLSTATE below
+            failures.append(failure)
+
+    def difference_transaction() -> None:
+        try:
+            with Session(api_engine, expire_on_commit=False) as session:
+                session.execute(text("SET LOCAL statement_timeout = '20s'"))
+                difference_pid.append(
+                    session.scalar(text("SELECT pg_backend_pid()"))
+                )
+                difference_started.set()
+                evaluated = generate_stocktake_initial_differences(
+                    session,
+                    actor=_principal(session, actor_user_id),
+                    command=GenerateStocktakeDifferenceCommand(
+                        task_id=difference_task_id,
+                        round_id=difference_round_id,
+                        expected_task_version=difference_expected_task_version,
+                    ),
+                    idempotency_key=(
+                        "pg16-0057-cross-task-primary-difference-v1"
+                    ),
+                    idempotency_hmac_secret=idempotency_hmac_secret,
+                    trace_request_id=(
+                        "trace-pg16-0057-cross-task-primary-difference-v1"
+                    ),
+                )
+                session.commit()
+                evaluated_results.append(evaluated)
+        except Exception as failure:  # surfaced with SQLSTATE below
+            failures.append(failure)
+
+    def lock_state(backend_pid: int) -> tuple[str | None, list[int], bool]:
+        with psycopg.connect(**_admin_parameters()) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT activity.wait_event_type, "
+                    "pg_catalog.pg_blocking_pids(activity.pid), "
+                    "EXISTS (SELECT 1 FROM pg_catalog.pg_locks AS lock_row "
+                    "WHERE lock_row.pid = activity.pid "
+                    "AND NOT lock_row.granted) "
+                    "FROM pg_catalog.pg_stat_activity AS activity "
+                    "WHERE activity.pid = %s",
+                    (backend_pid,),
+                )
+                row = cursor.fetchone()
+        assert row is not None
+        return row
+
+    executor = ThreadPoolExecutor(max_workers=2)
+    review_future = executor.submit(review_order_transaction)
+    difference_future = None
+    try:
+        assert principal_held.wait(timeout=20)
+        assert review_pid
+        difference_future = executor.submit(difference_transaction)
+        assert difference_started.wait(timeout=20)
+        assert difference_pid
+        _wait_for_backend_lock(difference_pid[0])
+        waiting_state = lock_state(difference_pid[0])
+        assert waiting_state[0] == "Lock"
+        assert review_pid[0] in waiting_state[1]
+        assert waiting_state[2] is True
+
+        allow_review_graph.set()
+        assert review_graph_locked.wait(timeout=20)
+        # The review-order transaction reached the shared material while the
+        # difference transaction still waits on its principal.  Therefore it
+        # cannot be the material -> principal order that caused 40P01.
+        assert lock_state(review_pid[0])[0] != "Lock"
+        still_waiting = lock_state(difference_pid[0])
+        assert still_waiting[0] == "Lock"
+        assert review_pid[0] in still_waiting[1]
+        assert still_waiting[2] is True
+    finally:
+        allow_review_graph.set()
+        release_review_transaction.set()
+        review_future.result(timeout=25)
+        if difference_future is not None:
+            difference_future.result(timeout=25)
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    def sqlstate(failure: Exception) -> str | None:
+        original = failure.orig if isinstance(failure, DBAPIError) else failure
+        return getattr(original, "sqlstate", None)
+
+    failure_states = {sqlstate(failure) for failure in failures}
+    assert "40P01" not in failure_states
+    assert "57014" not in failure_states
+    assert failures == []
+    assert len(evaluated_results) == 1
+    evaluated = evaluated_results[0]
+    assert evaluated.task_status == "submitted"
+    assert evaluated.round_status == "submitted"
+    assert evaluated.difference_status == "evaluated"
+    assert evaluated.difference_count == 0
+    assert evaluated.total_affected_qty == Decimal("0.000")
+
+    with Session(api_engine) as session:
+        primary_task = session.get(FormalStocktakeTask, difference_task_id)
+        peer_task = session.get(FormalStocktakeTask, peer_started.task_id)
+        primary_round = session.get(StocktakeRound, difference_round_id)
+        peer_round = session.get(StocktakeRound, peer_started.initial_round_id)
+        assert primary_task is not None and peer_task is not None
+        assert primary_round is not None and peer_round is not None
+        assert (primary_task.status, primary_round.status) == (
+            "submitted",
+            "submitted",
+        )
+        assert (peer_task.status, peer_round.status) == (
+            "submitted",
+            "submitted",
+        )
+        assert peer_task.version == peer_counted.task_version
+        assert session.scalar(
+            select(func.count())
+            .select_from(StocktakeDifferenceSetCompletion)
+            .where(
+                StocktakeDifferenceSetCompletion.task_id == difference_task_id,
+                StocktakeDifferenceSetCompletion.round_id == difference_round_id,
+            )
+        ) == 1
+        for model in (
+            StocktakeDifferenceSetCompletion,
+            StocktakeDifference,
+            StocktakeReview,
+        ):
+            peer_rows = session.scalar(
+                select(func.count())
+                .select_from(model)
+                .where(
+                    model.task_id == peer_started.task_id,
+                    model.round_id == peer_started.initial_round_id,
+                )
+            )
+            assert peer_rows == 0
+            observed_pairs = set(
+                session.execute(
+                    select(model.task_id, model.round_id).where(
+                        model.task_id.in_(
+                            (difference_task_id, peer_started.task_id)
+                        )
+                    )
+                ).all()
+            )
+            assert observed_pairs <= {
+                (difference_task_id, difference_round_id),
+                (peer_started.task_id, peer_started.initial_round_id),
+            }
+    return evaluated
+
+
 def _complete_0051_nonopening_stocktake_service_chain(
     api_engine,
     *,
@@ -14109,6 +16005,12 @@ def _complete_0051_nonopening_stocktake_service_chain(
     actor_user_id: str,
     assignee_user_id: str,
     account_id: uuid.UUID,
+    region_org_id: uuid.UUID,
+    assignee_person_id: uuid.UUID,
+    competing_location_id: uuid.UUID,
+    peer_account_id: uuid.UUID,
+    shared_material_id: uuid.UUID,
+    deadline: datetime,
     idempotency_hmac_secret: bytes,
 ) -> int:
     """Persist each independent non-opening lifecycle fact, then round-trip 0051."""
@@ -14123,10 +16025,6 @@ def _complete_0051_nonopening_stocktake_service_chain(
         StocktakeSnapshotCountInput,
         SubmitStocktakeInitialScopeCountCommand,
         submit_stocktake_initial_scope_count,
-    )
-    from app.formal_services.stocktake_difference import (
-        GenerateStocktakeDifferenceCommand,
-        generate_stocktake_initial_differences,
     )
     from app.formal_services.stocktake_posting import (
         PostApprovedStocktakeDifferencesCommand,
@@ -14201,6 +16099,14 @@ def _complete_0051_nonopening_stocktake_service_chain(
             "counting",
             "counting",
         )
+        _assert_0056_nonopening_wrong_assignee_count_rejected(
+            api_engine,
+            task_id=task_id,
+            round_id=initial_round_id,
+            scope_id=scope.id,
+            stock_account_id=account_id,
+            wrong_user_id=actor_user_id,
+        )
         counted = _reveal_pg16_service_database_error(
             api_engine,
             lambda: submit_stocktake_initial_scope_count(
@@ -14242,29 +16148,28 @@ def _complete_0051_nonopening_stocktake_service_chain(
         0,
         0,
     )
+    _assert_0057_submitted_difference_replay_boundary(
+        api_engine,
+        task_id=task_id,
+        round_id=initial_round_id,
+        actor_user_id=actor_user_id,
+    )
 
-    with Session(api_engine, expire_on_commit=False) as session:
-        evaluated = _reveal_pg16_service_database_error(
-            api_engine,
-            lambda: generate_stocktake_initial_differences(
-                session,
-                actor=_principal(session, actor_user_id),
-                command=GenerateStocktakeDifferenceCommand(
-                    task_id=task_id,
-                    round_id=initial_round_id,
-                    expected_task_version=counted.task_version,
-                ),
-                idempotency_key="pg16-sample-stocktake-difference-v1",
-                idempotency_hmac_secret=idempotency_hmac_secret,
-                trace_request_id="trace-pg16-sample-stocktake-difference-v1",
-            ),
-        )
-        assert evaluated.task_status == "submitted"
-        assert evaluated.round_status == "submitted"
-        assert evaluated.difference_status == "evaluated"
-        assert evaluated.difference_count == 0
-        assert evaluated.total_affected_qty == Decimal("0.000")
-        session.commit()
+    evaluated = _assert_0057_cross_task_principal_material_lock_order(
+        api_engine,
+        difference_task_id=task_id,
+        difference_round_id=initial_round_id,
+        difference_expected_task_version=counted.task_version,
+        actor_user_id=actor_user_id,
+        assignee_user_id=assignee_user_id,
+        region_org_id=region_org_id,
+        assignee_person_id=assignee_person_id,
+        competing_location_id=competing_location_id,
+        peer_account_id=peer_account_id,
+        shared_material_id=shared_material_id,
+        deadline=deadline,
+        idempotency_hmac_secret=idempotency_hmac_secret,
+    )
 
     assert lifecycle_state() == (
         "sample",
@@ -14394,6 +16299,34 @@ def _complete_0051_nonopening_stocktake_service_chain(
         assert posted.difference_count == 0
         assert posted.transaction_count == posted.movement_count == 0
         assert posted.total_quantity == Decimal("0.000")
+        session.commit()
+
+    assert lifecycle_state() == (
+        "sample",
+        "posted",
+        posted.task_version,
+        frozenset({"region", "headquarters"}),
+        1,
+        0,
+        0,
+    )
+
+    with Session(api_engine, expire_on_commit=False) as session:
+        replayed_post = _reveal_pg16_service_database_error(
+            api_engine,
+            lambda: post_approved_stocktake_differences(
+                session,
+                actor=_principal(session, actor_user_id),
+                command=PostApprovedStocktakeDifferencesCommand(
+                    task_id=task_id,
+                    expected_task_version=headquarters.task_version,
+                ),
+                idempotency_key="pg16-sample-stocktake-post-v1",
+                idempotency_hmac_secret=idempotency_hmac_secret,
+                trace_request_id="trace-pg16-sample-stocktake-post-replay-v1",
+            ),
+        )
+        assert replayed_post == replace(posted, replayed=True)
         session.commit()
 
     assert lifecycle_state() == (
@@ -14731,15 +16664,18 @@ def _assert_0047_real_api_stocktake_start(
                     StateTransitionEvent.aggregate_type == "stocktake_task",
                     StateTransitionEvent.aggregate_id == str(task_id),
                 )
-                .order_by(StateTransitionEvent.occurred_at, StateTransitionEvent.id)
             ).all()
         )
-        assert transition_rows == (
+        # The three start transitions intentionally share one command timestamp.
+        # Their UUID primary keys are not a causal sequence, so verify the exact
+        # transition graph instead of imposing a random UUID tie-break order.
+        assert len(transition_rows) == 4
+        assert set(transition_rows) == {
             (None, "draft", "stocktake_task_created"),
             ("draft", "issued", "stocktake_task_issued"),
             ("issued", "frozen", "stocktake_task_frozen"),
             ("frozen", "counting", "stocktake_initial_round_started"),
-        )
+        }
         audit_actions = tuple(
             session.scalars(
                 select(AuditEvent.action)
@@ -14747,7 +16683,7 @@ def _assert_0047_real_api_stocktake_start(
                     AuditEvent.aggregate_type == "stocktake_task",
                     AuditEvent.aggregate_id == str(task_id),
                 )
-                .order_by(AuditEvent.sequence_no)
+                .order_by(AuditEvent.stream_version, AuditEvent.id)
             ).all()
         )
         assert audit_actions == (
@@ -14811,13 +16747,25 @@ def _assert_0047_real_api_stocktake_start(
     import app.formal_services.stocktake_task as stocktake_service
     from unittest.mock import patch
 
+    overlap_scope = draft.scopes[0].model_copy(
+        update={
+            "scope_mode": "filtered",
+            "material_id": fixture["material_id"],
+        }
+    )
+    overlapping_draft = draft.model_copy(
+        update={
+            "note": "PG16 跨任务冻结重叠拒绝样本",
+            "scopes": (overlap_scope,),
+        }
+    )
     with Session(api_engine) as session:
         overlapping = _reveal_pg16_service_database_error(
             api_engine,
             lambda: create_stocktake_task_draft(
                 session,
                 actor=_principal(session, actor_user_id),
-                draft=replace(draft, note="PG16 跨任务冻结重叠拒绝样本"),
+                draft=overlapping_draft,
                 idempotency_key="pg16-stocktake-overlap-create",
                 idempotency_hmac_secret=secret,
                 trace_request_id="trace-pg16-stocktake-overlap-create",
@@ -14869,7 +16817,9 @@ def _assert_0047_real_api_stocktake_start(
             lambda: create_stocktake_task_draft(
                 session,
                 actor=_principal(session, actor_user_id),
-                draft=replace(draft, note="PG16 直接伪造启动拒绝样本"),
+                draft=draft.model_copy(
+                    update={"note": "PG16 直接伪造启动拒绝样本"}
+                ),
                 idempotency_key="pg16-stocktake-forged-start-draft",
                 idempotency_hmac_secret=secret,
                 trace_request_id="trace-pg16-stocktake-forged-start-draft",
@@ -14893,8 +16843,18 @@ def _assert_0047_real_api_stocktake_start(
                 "task_id": forged_draft.task_id,
             },
         )
+        # Several independent deferred stocktake guards reject this forged
+        # state.  Force the 0047 constraint explicitly so this regression
+        # proves the non-opening start graph boundary rather than depending on
+        # PostgreSQL's cross-constraint firing order.
         with pytest.raises(DBAPIError) as forged_failure:
-            session.commit()
+            session.execute(
+                text(
+                    "SET CONSTRAINTS "
+                    "trg_stocktake_tasks_stocktake_start_causality_0047 "
+                    "IMMEDIATE"
+                )
+            )
         assert "non-opening stocktake start causality is invalid" in str(
             forged_failure.value
         )
@@ -14961,17 +16921,19 @@ def _assert_0047_real_api_stocktake_start(
             )
         ) == scope_count_before
 
-    # The same deferred validator seals an already completed start graph.
+    # The ordinary guard seals an already completed start graph immediately;
+    # keep commit inside the assertion as a defensive check if firing timing
+    # ever changes without weakening the expected database rejection.
     with Session(api_engine) as session:
-        session.execute(
-            text(
-                "UPDATE public.stocktake_tasks "
-                "SET cutoff_at = cutoff_at + INTERVAL '1 microsecond' "
-                "WHERE id = :task_id"
-            ),
-            {"task_id": task_id},
-        )
         with pytest.raises(DBAPIError) as drift_failure:
+            session.execute(
+                text(
+                    "UPDATE public.stocktake_tasks "
+                    "SET cutoff_at = cutoff_at + INTERVAL '1 microsecond' "
+                    "WHERE id = :task_id"
+                ),
+                {"task_id": task_id},
+            )
             session.commit()
         assert "non-opening stocktake start causality is invalid" in str(
             drift_failure.value
@@ -15045,14 +17007,14 @@ def _assert_0047_real_api_stocktake_start(
                     "current_setting('session_replication_role')"
                 )
             ).one() == ("star_oam_migrator", "postgres", "replica")
-            session.execute(
-                text(
-                    "UPDATE public.stocktake_snapshot_lines "
-                    "SET book_qty = book_qty + 1 WHERE id = :snapshot_id"
-                ),
-                {"snapshot_id": snapshot_before.id},
-            )
             with pytest.raises(DBAPIError) as replica_failure:
+                session.execute(
+                    text(
+                        "UPDATE public.stocktake_snapshot_lines "
+                        "SET book_qty = book_qty + 1 WHERE id = :snapshot_id"
+                    ),
+                    {"snapshot_id": snapshot_before.id},
+                )
                 session.commit()
             assert "non-opening stocktake start causality is invalid" in str(
                 replica_failure.value
@@ -15073,6 +17035,12 @@ def _assert_0047_real_api_stocktake_start(
         actor_user_id=actor_user_id,
         assignee_user_id=assignee_user_id,
         account_id=fixture["account_id"],
+        region_org_id=fixture["region_org_id"],
+        assignee_person_id=fixture["assignee_person_id"],
+        competing_location_id=fixture["difference_peer_location_id"],
+        peer_account_id=fixture["difference_peer_account_id"],
+        shared_material_id=fixture["material_id"],
+        deadline=fixture["deadline"],
         idempotency_hmac_secret=secret,
     )
     with Session(api_engine) as session:
@@ -15104,7 +17072,7 @@ def _assert_0047_rejects_nonempty_start_downgrade(
     from app.stocktake_models import FormalStocktakeTask, StocktakeStartCompletion
 
     assert _current_revision() == HEAD_REVISION
-    migration = _load_opening_terminal_guard_execution_migration_0052()
+    migration = _load_nonopening_review_terminal_status_migration_0058()
     blocked = _run_alembic(
         "downgrade",
         CONTENT_CAUSALITY_REVISION,
@@ -15112,6 +17080,9 @@ def _assert_0047_rejects_nonempty_start_downgrade(
     )
     assert migration.DOWNGRADE_BLOCKER in (blocked.stdout + blocked.stderr)
     assert _current_revision() == HEAD_REVISION
+    _assert_0058_review_terminal_catalog_state(
+        _0058_review_terminal_catalog_state(), fixed=True
+    )
     _assert_0052_opening_terminal_catalog(
         hardened=True,
         expected_revision=HEAD_REVISION,
@@ -15389,6 +17360,10 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
+    _assert_0058_empty_terminal_downgrade_and_reupgrade()
+    _assert_0057_empty_graph_downgrade_and_reupgrade()
+    _assert_0056_empty_graph_downgrade_and_reupgrade()
+    _assert_0055_empty_graph_downgrade_and_reupgrade()
     _assert_0054_empty_graph_downgrade_and_reupgrade()
     _assert_0053_empty_graph_downgrade_and_reupgrade()
     _assert_0052_empty_graph_downgrade_and_reupgrade()
@@ -15513,6 +17488,9 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     )
     try:
         _validate_runtime_security(api_engine)
+        _assert_0058_review_terminal_catalog_state(
+            _0058_review_terminal_catalog_state(), fixed=True
+        )
         _assert_0052_opening_terminal_catalog(
             hardened=True,
             expected_revision=HEAD_REVISION,

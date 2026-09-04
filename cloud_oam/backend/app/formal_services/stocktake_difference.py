@@ -76,6 +76,9 @@ from .inventory_posting import (
     INVENTORY_LEDGER_HEAD_ID,
     INVENTORY_STREAM_KEY,
 )
+from .postgresql_lock_graph import (
+    lock_nonopening_stocktake_difference_replay_graph,
+)
 
 
 _NON_OPENING_TYPES: Final[frozenset[str]] = frozenset(
@@ -267,20 +270,61 @@ def _generate_stocktake_initial_differences(
         ),
     )
 
-    task = db.scalar(
-        select(FormalStocktakeTask)
-        .where(FormalStocktakeTask.id == checked.task_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
+    is_postgresql = db.get_bind().dialect.name == "postgresql"
+    task_statement = select(FormalStocktakeTask).where(
+        FormalStocktakeTask.id == checked.task_id
     )
+    if not is_postgresql:
+        task_statement = task_statement.with_for_update()
+    task = db.scalar(task_statement.execution_options(populate_existing=True))
     if task is None or task.task_type not in _NON_OPENING_TYPES:
         _fail("stocktake_difference_task_not_found", "not_found", "非期初盘点任务不存在")
+
+    round_statement = select(StocktakeRound).where(
+        StocktakeRound.id == checked.round_id,
+        StocktakeRound.task_id == task.id,
+    )
+    if not is_postgresql:
+        round_statement = round_statement.with_for_update()
+    round_row = db.scalar(
+        round_statement.execution_options(populate_existing=True)
+    )
+    if round_row is None:
+        _fail("stocktake_difference_round_not_found", "not_found", "盘点初盘轮次不存在")
+    if is_postgresql:
+        lock_nonopening_stocktake_difference_replay_graph(
+            db, task.id, round_row.id, supplied.user_id
+        )
+        # The preflight above preserves stable not-found errors.  Re-read after
+        # the owner boundary acquires the inventory-head-first graph so every
+        # later validation observes the locked rows.
+        task = db.scalar(
+            select(FormalStocktakeTask)
+            .where(FormalStocktakeTask.id == checked.task_id)
+            .execution_options(populate_existing=True)
+        )
+        round_row = db.scalar(
+            select(StocktakeRound)
+            .where(
+                StocktakeRound.id == checked.round_id,
+                StocktakeRound.task_id == checked.task_id,
+            )
+            .execution_options(populate_existing=True)
+        )
+        if task is None or round_row is None:
+            _fail(
+                "stocktake_difference_lock_graph_changed",
+                "conflict",
+                "盘点任务在锁定期间发生变化，请重新读取",
+            )
     scopes = tuple(
         db.scalars(
-            select(FormalStocktakeScope)
-            .where(FormalStocktakeScope.task_id == task.id)
-            .order_by(FormalStocktakeScope.scope_no, FormalStocktakeScope.id)
-            .with_for_update()
+            _select_only_reference_statement(
+                db,
+                select(FormalStocktakeScope)
+                .where(FormalStocktakeScope.task_id == task.id)
+                .order_by(FormalStocktakeScope.scope_no, FormalStocktakeScope.id),
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -291,23 +335,17 @@ def _generate_stocktake_initial_differences(
         db,
         tuple(sorted({supplied.user_id, *(row.assignee_user_id for row in scopes)})),
     )
-    round_row = db.scalar(
-        select(StocktakeRound)
-        .where(StocktakeRound.id == checked.round_id, StocktakeRound.task_id == task.id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
-    if round_row is None:
-        _fail("stocktake_difference_round_not_found", "not_found", "盘点初盘轮次不存在")
     submissions = tuple(
         db.scalars(
-            select(StocktakeRoundSubmission)
-            .where(
-                StocktakeRoundSubmission.task_id == task.id,
-                StocktakeRoundSubmission.round_id == round_row.id,
+            _select_only_reference_statement(
+                db,
+                select(StocktakeRoundSubmission)
+                .where(
+                    StocktakeRoundSubmission.task_id == task.id,
+                    StocktakeRoundSubmission.round_id == round_row.id,
+                )
+                .order_by(StocktakeRoundSubmission.id),
             )
-            .order_by(StocktakeRoundSubmission.id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -326,10 +364,15 @@ def _generate_stocktake_initial_differences(
     plans = task_service._load_and_validate_scope_plans(db, task, scopes, now=now)
     freezes = tuple(
         db.scalars(
-            select(InventoryFreeze)
-            .where(InventoryFreeze.task_id == task.id)
-            .order_by(InventoryFreeze.stocktake_scope_id, InventoryFreeze.id)
-            .with_for_update()
+            _select_only_reference_statement(
+                db,
+                select(InventoryFreeze)
+                .where(InventoryFreeze.task_id == task.id)
+                .order_by(
+                    InventoryFreeze.stocktake_scope_id,
+                    InventoryFreeze.id,
+                ),
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -371,10 +414,15 @@ def _generate_stocktake_initial_differences(
 
     snapshots = tuple(
         db.scalars(
-            select(StocktakeSnapshotLine)
-            .where(StocktakeSnapshotLine.task_id == task.id)
-            .order_by(StocktakeSnapshotLine.scope_id, StocktakeSnapshotLine.stock_account_id)
-            .with_for_update()
+            _select_only_reference_statement(
+                db,
+                select(StocktakeSnapshotLine)
+                .where(StocktakeSnapshotLine.task_id == task.id)
+                .order_by(
+                    StocktakeSnapshotLine.scope_id,
+                    StocktakeSnapshotLine.stock_account_id,
+                ),
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -382,47 +430,64 @@ def _generate_stocktake_initial_differences(
     count_service._validate_snapshot_manifest(task, plans, snapshots, accounts)
     count_lines = tuple(
         db.scalars(
-            select(StocktakeCountLine)
-            .where(
-                StocktakeCountLine.task_id == task.id,
-                StocktakeCountLine.round_id == round_row.id,
+            _select_only_reference_statement(
+                db,
+                select(StocktakeCountLine)
+                .where(
+                    StocktakeCountLine.task_id == task.id,
+                    StocktakeCountLine.round_id == round_row.id,
+                )
+                .order_by(
+                    StocktakeCountLine.scope_id,
+                    StocktakeCountLine.stock_account_id,
+                ),
             )
-            .order_by(StocktakeCountLine.scope_id, StocktakeCountLine.stock_account_id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
     count_line_ids = tuple(row.id for row in count_lines)
     count_serials = tuple(
         db.scalars(
-            select(StocktakeCountSerial)
-            .where(StocktakeCountSerial.count_line_id.in_(count_line_ids))
-            .order_by(StocktakeCountSerial.count_line_id, StocktakeCountSerial.serial_id)
-            .with_for_update()
+            _select_only_reference_statement(
+                db,
+                select(StocktakeCountSerial)
+                .where(StocktakeCountSerial.count_line_id.in_(count_line_ids))
+                .order_by(
+                    StocktakeCountSerial.count_line_id,
+                    StocktakeCountSerial.serial_id,
+                ),
+            )
             .execution_options(populate_existing=True)
         ).all()
     ) if count_line_ids else ()
     observations = tuple(
         db.scalars(
-            select(StocktakeCountObservation)
-            .where(
-                StocktakeCountObservation.task_id == task.id,
-                StocktakeCountObservation.round_id == round_row.id,
+            _select_only_reference_statement(
+                db,
+                select(StocktakeCountObservation)
+                .where(
+                    StocktakeCountObservation.task_id == task.id,
+                    StocktakeCountObservation.round_id == round_row.id,
+                )
+                .order_by(
+                    StocktakeCountObservation.scope_id,
+                    StocktakeCountObservation.observation_no,
+                ),
             )
-            .order_by(StocktakeCountObservation.scope_id, StocktakeCountObservation.observation_no)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
     completions = tuple(
         db.scalars(
-            select(StocktakeScopeCountCompletion)
-            .where(
-                StocktakeScopeCountCompletion.task_id == task.id,
-                StocktakeScopeCountCompletion.round_id == round_row.id,
+            _select_only_reference_statement(
+                db,
+                select(StocktakeScopeCountCompletion)
+                .where(
+                    StocktakeScopeCountCompletion.task_id == task.id,
+                    StocktakeScopeCountCompletion.round_id == round_row.id,
+                )
+                .order_by(StocktakeScopeCountCompletion.scope_id),
             )
-            .order_by(StocktakeScopeCountCompletion.scope_id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -474,30 +539,34 @@ def _generate_stocktake_initial_differences(
     )
     existing_differences = tuple(
         db.scalars(
-            select(StocktakeDifference)
-            .where(
-                StocktakeDifference.task_id == task.id,
-                StocktakeDifference.round_id == round_row.id,
+            _select_only_reference_statement(
+                db,
+                select(StocktakeDifference)
+                .where(
+                    StocktakeDifference.task_id == task.id,
+                    StocktakeDifference.round_id == round_row.id,
+                )
+                .order_by(StocktakeDifference.difference_no),
             )
-            .order_by(StocktakeDifference.difference_no)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
     existing_completions = tuple(
         db.scalars(
-            select(StocktakeDifferenceSetCompletion)
-            .where(
-                or_(
-                    StocktakeDifferenceSetCompletion.idempotency_key_hash == key_hash,
-                    (
-                        (StocktakeDifferenceSetCompletion.task_id == task.id)
-                        & (StocktakeDifferenceSetCompletion.round_id == round_row.id)
+            _select_only_reference_statement(
+                db,
+                select(StocktakeDifferenceSetCompletion)
+                .where(
+                    or_(
+                        StocktakeDifferenceSetCompletion.idempotency_key_hash == key_hash,
+                        (
+                            (StocktakeDifferenceSetCompletion.task_id == task.id)
+                            & (StocktakeDifferenceSetCompletion.round_id == round_row.id)
+                        ),
                     ),
                 )
+                .order_by(StocktakeDifferenceSetCompletion.id),
             )
-            .order_by(StocktakeDifferenceSetCompletion.id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -708,7 +777,7 @@ def _authorize_evaluator(
         _fail("stocktake_difference_forbidden", "forbidden", "当前正式授权不能评估该盘点差异")
     statement = select(RoleAssignment).where(RoleAssignment.id == grant.assignment_id)
     if lock_rows:
-        statement = statement.with_for_update()
+        statement = _select_only_reference_statement(db, statement)
     assignment = db.scalar(statement.execution_options(populate_existing=True))
     role = db.get(Role, assignment.role_id) if assignment is not None else None
     if (
@@ -755,10 +824,12 @@ def _lock_dimension_graph(
     )
     locations = tuple(
         db.scalars(
-            select(StockLocation)
-            .where(StockLocation.id.in_(location_ids))
-            .order_by(StockLocation.id)
-            .with_for_update()
+            _select_only_reference_statement(
+                db,
+                select(StockLocation)
+                .where(StockLocation.id.in_(location_ids))
+                .order_by(StockLocation.id),
+            )
             .execution_options(populate_existing=True)
         ).all()
     ) if location_ids else ()
@@ -775,10 +846,12 @@ def _lock_dimension_graph(
     if org_ids:
         organizations = tuple(
             db.scalars(
-                select(Organization)
-                .where(Organization.id.in_(org_ids))
-                .order_by(Organization.id)
-                .with_for_update()
+                _select_only_reference_statement(
+                    db,
+                    select(Organization)
+                    .where(Organization.id.in_(org_ids))
+                    .order_by(Organization.id),
+                )
                 .execution_options(populate_existing=True)
             ).all()
         )
@@ -800,10 +873,12 @@ def _lock_dimension_graph(
     if person_ids:
         people = tuple(
             db.scalars(
-                select(Person)
-                .where(Person.id.in_(person_ids))
-                .order_by(Person.id)
-                .with_for_update()
+                _select_only_reference_statement(
+                    db,
+                    select(Person)
+                    .where(Person.id.in_(person_ids))
+                    .order_by(Person.id),
+                )
                 .execution_options(populate_existing=True)
             ).all()
         )
@@ -820,10 +895,12 @@ def _lock_dimension_graph(
     )
     materials = tuple(
         db.scalars(
-            select(FormalMaterial)
-            .where(FormalMaterial.id.in_(material_ids))
-            .order_by(FormalMaterial.id)
-            .with_for_update()
+            _select_only_reference_statement(
+                db,
+                select(FormalMaterial)
+                .where(FormalMaterial.id.in_(material_ids))
+                .order_by(FormalMaterial.id),
+            )
             .execution_options(populate_existing=True)
         ).all()
     ) if material_ids else ()
@@ -845,10 +922,12 @@ def _lock_dimension_graph(
     )
     lots = tuple(
         db.scalars(
-            select(InventoryLot)
-            .where(InventoryLot.id.in_(lot_ids))
-            .order_by(InventoryLot.id)
-            .with_for_update()
+            _select_only_reference_statement(
+                db,
+                select(InventoryLot)
+                .where(InventoryLot.id.in_(lot_ids))
+                .order_by(InventoryLot.id),
+            )
             .execution_options(populate_existing=True)
         ).all()
     ) if lot_ids else ()
@@ -893,10 +972,12 @@ def _lock_dimension_graph(
     )
     serials = tuple(
         db.scalars(
-            select(InventorySerial)
-            .where(InventorySerial.id.in_(serial_ids))
-            .order_by(InventorySerial.id)
-            .with_for_update()
+            _select_only_reference_statement(
+                db,
+                select(InventorySerial)
+                .where(InventorySerial.id.in_(serial_ids))
+                .order_by(InventorySerial.id),
+            )
             .execution_options(populate_existing=True)
         ).all()
     ) if serial_ids else ()
@@ -1093,14 +1174,20 @@ def _validate_completion_and_submission_manifests(
     completion_ids = tuple(str(row.id) for row in completions)
     attachments = tuple(
         db.scalars(
-            select(DocumentAttachment)
-            .where(
-                DocumentAttachment.document_type == "stocktake_scope_count_completion",
-                DocumentAttachment.document_id.in_(completion_ids),
-                DocumentAttachment.attachment_type == "stocktake_evidence",
+            _select_only_reference_statement(
+                db,
+                select(DocumentAttachment)
+                .where(
+                    DocumentAttachment.document_type
+                    == "stocktake_scope_count_completion",
+                    DocumentAttachment.document_id.in_(completion_ids),
+                    DocumentAttachment.attachment_type == "stocktake_evidence",
+                )
+                .order_by(
+                    DocumentAttachment.document_id,
+                    DocumentAttachment.file_id,
+                ),
             )
-            .order_by(DocumentAttachment.document_id, DocumentAttachment.file_id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     ) if completion_ids else ()
@@ -1112,10 +1199,12 @@ def _validate_completion_and_submission_manifests(
     file_ids = tuple(sorted({row.file_id for row in attachments}, key=str))
     files = tuple(
         db.scalars(
-            select(FileObject)
-            .where(FileObject.id.in_(file_ids))
-            .order_by(FileObject.id)
-            .with_for_update()
+            _select_only_reference_statement(
+                db,
+                select(FileObject)
+                .where(FileObject.id.in_(file_ids))
+                .order_by(FileObject.id),
+            )
             .execution_options(populate_existing=True)
         ).all()
     ) if file_ids else ()
@@ -1224,9 +1313,13 @@ def _validate_historical_authorization(
     completion: StocktakeScopeCountCompletion,
 ) -> None:
     assignment = db.scalar(
-        select(RoleAssignment)
-        .where(RoleAssignment.id == completion.completed_role_assignment_id)
-        .with_for_update()
+        _select_only_reference_statement(
+            db,
+            select(RoleAssignment).where(
+                RoleAssignment.id
+                == completion.completed_role_assignment_id
+            ),
+        )
         .execution_options(populate_existing=True)
     )
     role = db.get(Role, assignment.role_id) if assignment is not None else None
@@ -2399,6 +2492,14 @@ def _take_advisory_locks(db: Session, coordinates: Sequence[int]) -> None:
         return
     for coordinate in sorted(set(coordinates)):
         db.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": coordinate})
+
+
+def _select_only_reference_statement(db: Session, statement):
+    """Use the 0032 owner lock on PostgreSQL; retain local lock semantics."""
+
+    if db.get_bind().dialect.name != "postgresql":
+        return statement.with_for_update()
+    return statement
 
 
 def _database_now(db: Session) -> datetime:

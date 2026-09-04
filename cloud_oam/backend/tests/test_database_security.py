@@ -305,6 +305,34 @@ OPENING_RECOUNT_SOURCE_HISTORY_MIGRATION_0054 = (
     / "versions"
     / "20260904_0054_opening_recount_source_history.py"
 )
+NONOPENING_START_AUDIT_ORDER_MIGRATION_0055 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0055_nonopening_start_audit_order.py"
+)
+NONOPENING_COUNT_GUARD_COMPATIBILITY_MIGRATION_0056 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0056_nonopening_count_guard_compatibility.py"
+)
+NONOPENING_DIFFERENCE_REPLAY_LOCK_MIGRATION_0057 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0057_nonopening_difference_replay_lock.py"
+)
+NONOPENING_REVIEW_TERMINAL_STATUS_MIGRATION_0058 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0058_nonopening_review_terminal_status.py"
+)
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
     / "backend"
@@ -877,6 +905,50 @@ def _load_opening_recount_source_history_migration_0054() -> object:
     return migration
 
 
+def _load_nonopening_start_audit_order_migration_0055() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0055_nonopening_start_audit_order_manifest",
+        NONOPENING_START_AUDIT_ORDER_MIGRATION_0055,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_nonopening_count_guard_compatibility_migration_0056() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0056_nonopening_count_guard_compatibility_manifest",
+        NONOPENING_COUNT_GUARD_COMPATIBILITY_MIGRATION_0056,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_nonopening_difference_replay_lock_migration_0057() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0057_nonopening_difference_replay_lock_manifest",
+        NONOPENING_DIFFERENCE_REPLAY_LOCK_MIGRATION_0057,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_nonopening_review_terminal_status_migration_0058() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0058_nonopening_review_terminal_status_manifest",
+        NONOPENING_REVIEW_TERMINAL_STATUS_MIGRATION_0058,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
 def _load_stocktake_difference_evaluator_migration_0031() -> object:
     spec = importlib.util.spec_from_file_location(
         "rsc_migration_0031_difference_evaluator_manifest",
@@ -1047,7 +1119,10 @@ def _valid_nonopening_stocktake_start_guard_kwargs() -> dict[str, object]:
 def test_0047_nonopening_start_runtime_manifest_and_function_bodies_are_exact(
 ) -> None:
     migration = _load_nonopening_stocktake_start_migration_0047()
+    repair = _load_nonopening_start_audit_order_migration_0055()
     assert migration.down_revision == "20260903_0046"
+    assert repair.revision == "20260905_0055"
+    assert repair.down_revision == "20260904_0054"
     assert migration.COMPLETION_TABLE == "stocktake_start_completions"
     assert tuple(migration.DEFERRED_TABLES) == (
         "stocktake_tasks",
@@ -1112,11 +1187,48 @@ def test_0047_nonopening_start_runtime_manifest_and_function_bodies_are_exact(
     assert "assignment.status" not in validator_sql
     assert set(function_sql) <= set(FORMAL_FILE_INTERNAL_FUNCTIONS)
     assert set(function_sql).isdisjoint(RUNTIME_EXECUTE_FUNCTIONS)
+    repaired_hashes = {
+        (migration.PG_GUARD_FUNCTION, ""): (
+            repair.GUARD_BODY_SHA256_0054,
+            repair.GUARD_BODY_SHA256_0055,
+        ),
+        (migration.PG_VALIDATE_FUNCTION, "uuid"): (
+            repair.VALIDATOR_BODY_SHA256_0054,
+            repair.VALIDATOR_BODY_SHA256_0055,
+        ),
+    }
     for coordinate, sql in function_sql.items():
         body = sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
-        assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (
-            FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
-        )
+        body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        if coordinate in repaired_hashes:
+            legacy_hash, fixed_hash = repaired_hashes[coordinate]
+            assert body_hash == legacy_hash
+            assert body.count(repair.LEGACY_AUDIT_ORDER) == 1
+            assert repair.FIXED_AUDIT_ORDER not in body
+            fixed_body = body.replace(
+                repair.LEGACY_AUDIT_ORDER,
+                repair.FIXED_AUDIT_ORDER,
+            )
+            assert hashlib.sha256(fixed_body.encode("utf-8")).hexdigest() == (
+                fixed_hash
+            )
+            assert fixed_body.count(repair.FIXED_AUDIT_ORDER) == 1
+            assert repair.LEGACY_AUDIT_ORDER not in fixed_body
+            assert fixed_body.replace(
+                repair.FIXED_AUDIT_ORDER,
+                repair.LEGACY_AUDIT_ORDER,
+            ) == body
+            assert (
+                FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
+                == fixed_hash
+            )
+        else:
+            assert coordinate == (migration.PG_DISPATCH_FUNCTION, "")
+            assert body_hash == repair.DISPATCH_BODY_SHA256
+            assert (
+                FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
+                == body_hash
+            )
         assert FORMAL_FILE_INTERNAL_FUNCTIONS[coordinate] == (
             "v",
             True,
@@ -1292,6 +1404,12 @@ def test_0049_recount_guard_function_bodies_and_security_manifest_are_exact(
     migration_0049 = _load_stocktake_recount_guard_security_migration_0049()
     migration_0050 = _load_stocktake_observation_scope_mode_migration_0050()
     migration_0052 = _load_opening_terminal_guard_execution_migration_0052()
+    migration_0056 = (
+        _load_nonopening_count_guard_compatibility_migration_0056()
+    )
+    migration_0058 = (
+        _load_nonopening_review_terminal_status_migration_0058()
+    )
 
     executed_0011: list[str] = []
     with monkeypatch.context() as patcher:
@@ -1444,6 +1562,10 @@ def test_0049_recount_guard_function_bodies_and_security_manifest_are_exact(
         ]
         if signature == migration_0050.FUNCTION_SIGNATURE:
             expected_runtime_hash = migration_0050.QUALIFIED_BODY_SHA256
+        elif signature == migration_0056.HELPER_SIGNATURE:
+            expected_runtime_hash = migration_0056.FIXED_BODY_SHA256
+        elif signature == migration_0058.REVIEW_GRAPH_SIGNATURE:
+            expected_runtime_hash = migration_0058.FIXED_BODY_SHA256
         elif signature == migration_0052.SCOPE_COMPLETION_GUARD_SIGNATURE_0021:
             expected_runtime_hash = (
                 migration_0052.FIXED_SCOPE_COMPLETION_GUARD_BODY_SHA256_0021
@@ -1485,6 +1607,44 @@ def test_0049_recount_guard_function_bodies_and_security_manifest_are_exact(
     assert FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[
         (migration_0050.FUNCTION_NAME, "")
     ] == migration_0050.QUALIFIED_BODY_SHA256
+
+    legacy_helper_sql = function_sql[migration_0056.HELPER_SIGNATURE]
+    legacy_helper_body = legacy_helper_sql.split(
+        "AS $$", 1
+    )[1].rsplit("$$", 1)[0]
+    assert legacy_helper_body.count(migration_0056.LEGACY_SOURCE_FRAGMENT) == 1
+    assert migration_0056.FIXED_SOURCE_FRAGMENT not in legacy_helper_body
+    fixed_helper_body = legacy_helper_body.replace(
+        migration_0056.LEGACY_SOURCE_FRAGMENT,
+        migration_0056.FIXED_SOURCE_FRAGMENT,
+    )
+    assert hashlib.sha256(fixed_helper_body.encode("utf-8")).hexdigest() == (
+        migration_0056.FIXED_BODY_SHA256
+    )
+    assert FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[
+        (
+            migration_0056.HELPER_FUNCTION,
+            "uuid, uuid, uuid, text, uuid, uuid, bigint, text, text, text, "
+            "timestamp with time zone, boolean",
+        )
+    ] == migration_0056.FIXED_BODY_SHA256
+
+    legacy_review_sql = function_sql[migration_0058.REVIEW_GRAPH_SIGNATURE]
+    legacy_review_body = legacy_review_sql.split(
+        "AS $$", 1
+    )[1].rsplit("$$", 1)[0]
+    assert legacy_review_body.count(migration_0058.LEGACY_SOURCE_FRAGMENT) == 1
+    assert migration_0058.FIXED_SOURCE_FRAGMENT not in legacy_review_body
+    fixed_review_body = legacy_review_body.replace(
+        migration_0058.LEGACY_SOURCE_FRAGMENT,
+        migration_0058.FIXED_SOURCE_FRAGMENT,
+    )
+    assert hashlib.sha256(fixed_review_body.encode("utf-8")).hexdigest() == (
+        migration_0058.FIXED_BODY_SHA256
+    )
+    assert FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[
+        (migration_0058.REVIEW_GRAPH_FUNCTION, "")
+    ] == migration_0058.FIXED_BODY_SHA256
 
 
 def test_0049_recount_guard_security_mutations_and_catalog_are_exact(
@@ -4975,6 +5135,92 @@ def test_0042_work_order_lock_is_in_exact_runtime_manifest() -> None:
     assert "GRANT EXECUTE ON FUNCTION" in source
 
 
+def test_0057_difference_replay_runtime_and_guard_manifests_are_exact() -> None:
+    migration = _load_nonopening_difference_replay_lock_migration_0057()
+    source = NONOPENING_DIFFERENCE_REPLAY_LOCK_MIGRATION_0057.read_text(
+        encoding="utf-8"
+    )
+    lock_coordinate = (
+        migration.LOCK_FUNCTION,
+        "uuid, uuid, text",
+    )
+    assert RUNTIME_EXECUTE_FUNCTIONS[lock_coordinate] == (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    )
+    assert RUNTIME_FUNCTION_SHAPES[lock_coordinate] == ("f", "void", False)
+    lock_sql = migration._postgresql_lock_function_sql()
+    lock_body = lock_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    assert hashlib.sha256(lock_body.encode("utf-8")).hexdigest() == (
+        migration.LOCK_BODY_SHA256
+    )
+    assert RUNTIME_FUNCTION_BODY_SHA256[lock_coordinate] == (
+        migration.LOCK_BODY_SHA256
+    )
+
+    internal_functions = {
+        (migration.SEAL_FUNCTION, ""): (
+            migration._postgresql_seal_function_sql(),
+            migration.SEAL_BODY_SHA256,
+        ),
+        (migration.CONTROL_GUARD_FUNCTION, ""): (
+            migration._postgresql_control_guard_function_sql(),
+            migration.CONTROL_GUARD_BODY_SHA256,
+        ),
+    }
+    for coordinate, (function_sql, expected_hash) in internal_functions.items():
+        body = function_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+        assert hashlib.sha256(body.encode("utf-8")).hexdigest() == expected_hash
+        assert FORMAL_FILE_INTERNAL_FUNCTIONS[coordinate] == (
+            "v",
+            True,
+            "plpgsql",
+            ("search_path=pg_catalog, public",),
+        )
+        assert FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[coordinate] == (
+            "f",
+            "trigger",
+            False,
+        )
+        assert FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate] == (
+            expected_hash
+        )
+        assert coordinate not in RUNTIME_EXECUTE_FUNCTIONS
+
+    assert EXPECTED_FORMAL_FILE_TRIGGERS[migration.SEAL_TRIGGER] == (
+        "document_attachments",
+        migration.SEAL_FUNCTION,
+        "A",
+        7,
+    )
+    assert EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS[
+        migration.CONTROL_GUARD_TRIGGER
+    ] == (
+        "stocktake_control_snapshot_lines",
+        migration.CONTROL_GUARD_FUNCTION,
+        "A",
+        7,
+        False,
+        False,
+        False,
+    )
+    assert set(RUNTIME_FUNCTION_SHAPES) == set(RUNTIME_EXECUTE_FUNCTIONS)
+    assert set(RUNTIME_FUNCTION_BODY_SHA256) == set(RUNTIME_EXECUTE_FUNCTIONS)
+    assert set(FORMAL_FILE_INTERNAL_FUNCTION_SHAPES) == set(
+        FORMAL_FILE_INTERNAL_FUNCTIONS
+    )
+    assert set(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256) == set(
+        FORMAL_FILE_INTERNAL_FUNCTIONS
+    )
+    assert (
+        "GRANT EXECUTE ON FUNCTION {LOCK_SIGNATURE} TO {PRODUCTION_API_ROLE}"
+        in source
+    )
+    assert "GRANT INSERT ON TABLE" not in source
+
+
 def _valid_audit_trigger_rows() -> list[dict[str, object]]:
     return [
         {
@@ -6183,6 +6429,7 @@ def test_stocktake_technician_personal_location_guards_are_exact_startup_proof(
     sensitive_query = str(_STOCKTAKE_SENSITIVE_TRIGGER_SQL)
     for table_name in (
         "stock_locations",
+        "stocktake_control_snapshot_lines",
         "stocktake_count_lines",
         "stocktake_count_observations",
         "stocktake_scope_count_completions",
@@ -6255,6 +6502,9 @@ def test_stocktake_technician_personal_location_guards_are_exact_startup_proof(
 def test_sensitive_stocktake_trigger_allowlist_matches_migration_catalog(
 ) -> None:
     assert set(EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS) == {
+        "trg_stocktake_control_snapshot_00_nonopening_0057",
+        "trg_stocktake_control_snapshot_lines_immutable_0010",
+        "trg_stocktake_control_snapshot_lines_sealed_insert_0010",
         "trg_stock_locations_stocktake_personal_continuity_0020",
         "trg_stocktake_count_lines_submitted_immutable_0010",
         "trg_stocktake_count_lines_immutable_0011",
@@ -6282,6 +6532,9 @@ def test_sensitive_stocktake_trigger_allowlist_matches_migration_catalog(
         name: expected[2]
         for name, expected in EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS.items()
     } == {
+        "trg_stocktake_control_snapshot_00_nonopening_0057": "A",
+        "trg_stocktake_control_snapshot_lines_immutable_0010": "O",
+        "trg_stocktake_control_snapshot_lines_sealed_insert_0010": "O",
         "trg_stock_locations_stocktake_personal_continuity_0020": "A",
         "trg_stocktake_count_lines_submitted_immutable_0010": "O",
         "trg_stocktake_count_lines_immutable_0011": "O",

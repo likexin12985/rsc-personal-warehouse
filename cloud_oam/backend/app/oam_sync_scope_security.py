@@ -438,13 +438,53 @@ OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0053 = {
     ),
 }
 
-OAM_SYNC_FUNCTION_MANIFEST = {
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0054 = {
     **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0053,
     "rsc_oam_runtime_binding_ready_0044()": (
         *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0053[
             "rsc_oam_runtime_binding_ready_0044()"
         ][:6],
         "9be94cc48bd9d15f84d237177f29b929126593426c3cba7b1ad1947a1e66c011",
+    ),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0055 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0054,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0054[
+            "rsc_oam_runtime_binding_ready_0044()"
+        ][:6],
+        "3f6b6b7a849746154cbdd54ff8c1d3153aa24faa3cf081b6e0d3d6ef832c7f70",
+    ),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0056 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0055,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0055[
+            "rsc_oam_runtime_binding_ready_0044()"
+        ][:6],
+        "449f0f8526292713d6344d07d25d35654b0c9967183ea83559e989dc982b04c7",
+    ),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0057 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0056,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0056[
+            "rsc_oam_runtime_binding_ready_0044()"
+        ][:6],
+        "9b97c355d0fcbb5ee4dfcf1e90fd76339b2eafd64f5f5b287a21aa3d364cfdc5",
+    ),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0057,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0057[
+            "rsc_oam_runtime_binding_ready_0044()"
+        ][:6],
+        "194c166aa7eeca78e70b9ab9376f060457d7e9715fd9bead34b3cf1703f32907",
     ),
 }
 
@@ -897,6 +937,10 @@ __all__ = [
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0051",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0052",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0053",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0054",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0055",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0056",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0057",
     "RLS_REVISION",
     "RLS_TABLES",
     "_RLS_BOUNDARY_SQL",
