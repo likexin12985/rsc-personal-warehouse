@@ -6,11 +6,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadFormalOpeningStocktakeDetail,
   loadFormalOpeningStocktakes,
+  openOpeningRecount,
   postOpeningStocktake,
   recordOpeningObservationDisposition,
   submitOpeningRegionReview,
   submitOpeningScopeCount,
 } from "../formalOpeningStocktake";
+import { loadOpeningRecountAssignees } from "../formalOpeningRecountAssignees";
+import type {
+  OpeningRecountActor,
+  OpeningRecountAssigneeContext,
+} from "../formalOpeningRecountAssignees";
 import FormalOpeningStocktakesPage from "./FormalOpeningStocktakes";
 
 vi.mock("../formalOpeningStocktake", async (loadOriginal) => {
@@ -29,6 +35,11 @@ vi.mock("../formalOpeningStocktake", async (loadOriginal) => {
   };
 });
 
+vi.mock("../formalOpeningRecountAssignees", async (loadOriginal) => {
+  const original = await loadOriginal<typeof import("../formalOpeningRecountAssignees")>();
+  return { ...original, loadOpeningRecountAssignees: vi.fn() };
+});
+
 const TASK_ID = "10000000-0000-4000-8000-000000000001";
 const REGION_ID = "20000000-0000-4000-8000-000000000002";
 const ROUND_ID = "30000000-0000-4000-8000-000000000003";
@@ -39,6 +50,13 @@ const DIFFERENCE_ID = "70000000-0000-4000-8000-000000000007";
 const OBSERVATION_ID = "80000000-0000-4000-8000-000000000008";
 const DISPOSITION_ID = "90000000-0000-4000-8000-000000000009";
 const MATERIAL_ID = "a0000000-0000-4000-8000-00000000000a";
+const ACTOR_PERSON_ID = "b0000000-0000-4000-8000-00000000000b";
+const ASSIGNEE_PERSON_ID = "c0000000-0000-4000-8000-00000000000c";
+const ASSIGNEE_USER_ID = "formal-user-01";
+const ACTOR: OpeningRecountActor = {
+  person_id: ACTOR_PERSON_ID,
+  authorization_version: 7,
+};
 
 function summary(allowedActions: string[] = ["count"]) {
   return {
@@ -172,6 +190,42 @@ function observationDetail(allowedDispositions: string[] = [
   return source;
 }
 
+function recountDetail(taskVersion = 5) {
+  return {
+    ...sealedDetail(["open_recount"]),
+    status: "recount_required",
+    task_version: taskVersion,
+  };
+}
+
+function recountContext(detail = recountDetail()): OpeningRecountAssigneeContext {
+  return {
+    task_id: TASK_ID,
+    source_round_id: ROUND_ID,
+    scope_id: SCOPE_ID,
+    location_id: LOCATION_ID,
+    region_org_id: REGION_ID,
+    task_version: detail.task_version,
+    actor_person_id: ACTOR.person_id,
+    actor_authorization_version: ACTOR.authorization_version,
+  };
+}
+
+function recountAssigneePage(detail = recountDetail()) {
+  return {
+    ...recountContext(detail),
+    schema_version: "1.0" as const,
+    items: [{
+      user_id: ASSIGNEE_USER_ID,
+      person_id: ASSIGNEE_PERSON_ID,
+      display_name: "测试工程师",
+      employee_no: "TEST-001",
+      role_code: "technician" as const,
+    }],
+    next_after_person_id: null,
+  };
+}
+
 function page() {
   return {
     schema_version: "1.0" as const,
@@ -180,10 +234,13 @@ function page() {
   };
 }
 
-async function renderAndOpen(detail: any): Promise<void> {
+async function renderAndOpen(
+  detail: any,
+  actor?: OpeningRecountActor,
+): Promise<void> {
   vi.mocked(loadFormalOpeningStocktakes).mockResolvedValue(page());
   vi.mocked(loadFormalOpeningStocktakeDetail).mockResolvedValue(detail);
-  render(<FormalOpeningStocktakesPage />);
+  render(<FormalOpeningStocktakesPage actor={actor} />);
   fireEvent.click(await screen.findByRole("button", { name: "查看" }));
   expect(await screen.findByLabelText("盘点详情")).toBeTruthy();
 }
@@ -432,5 +489,130 @@ describe("formal opening stocktake PC page", () => {
         }],
       }),
     ));
+  });
+
+  it("opens recount with an explicitly selected user id and fresh task/round anchors", async () => {
+    const before = recountDetail();
+    vi.mocked(loadOpeningRecountAssignees).mockResolvedValue(
+      recountAssigneePage(before),
+    );
+    vi.mocked(openOpeningRecount).mockResolvedValue({
+      before,
+      result: {} as any,
+      detail: hiddenDetail([]),
+    });
+    await renderAndOpen(before, ACTOR);
+
+    fireEvent.click(screen.getByRole("button", { name: "发起复盘" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "范围 1" }));
+    const assignee = await screen.findByRole("combobox", {
+      name: "范围 1 复盘人员",
+    }) as HTMLSelectElement;
+    await waitFor(() => expect(assignee.disabled).toBe(false));
+    expect(assignee.value).toBe("");
+    fireEvent.change(assignee, { target: { value: ASSIGNEE_USER_ID } });
+    fireEvent.change(screen.getByLabelText("复盘原因"), {
+      target: { value: "区域复核确认需要重新实盘" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建复盘轮次" }));
+
+    await waitFor(() => expect(openOpeningRecount).toHaveBeenCalledWith(
+      TASK_ID,
+      {
+        assignments: [{
+          scope_id: SCOPE_ID,
+          assignee_user_id: ASSIGNEE_USER_ID,
+        }],
+        reason: "区域复核确认需要重新实盘",
+      },
+      { task_version: before.task_version, source_round_id: ROUND_ID },
+    ));
+    const body = vi.mocked(openOpeningRecount).mock.calls[0][1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty("task_version");
+    expect(body).not.toHaveProperty("source_round_id");
+    expect(ASSIGNEE_USER_ID).not.toBe(ASSIGNEE_PERSON_ID);
+  });
+
+  it("does not submit with no selected scope, no directory option, or an unchecked scope", async () => {
+    const before = recountDetail();
+    vi.mocked(loadOpeningRecountAssignees).mockResolvedValue({
+      ...recountAssigneePage(before),
+      items: [],
+    });
+    await renderAndOpen(before, ACTOR);
+    fireEvent.click(screen.getByRole("button", { name: "发起复盘" }));
+    fireEvent.change(screen.getByLabelText("复盘原因"), {
+      target: { value: "必须显式选择范围和人员" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建复盘轮次" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "请选择至少一个复盘范围",
+    );
+    expect(openOpeningRecount).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "范围 1" }));
+    expect(await screen.findByText("本页没有合格人员，请管理员核对正式授权。")).toBeTruthy();
+    fireEvent.submit(screen.getByRole("dialog", {
+      name: "发起独立复盘轮次",
+    }).querySelector("form")!);
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain(
+      "复盘人员选择已失效",
+    ));
+    expect(openOpeningRecount).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "范围 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建复盘轮次" }));
+    expect(openOpeningRecount).not.toHaveBeenCalled();
+  });
+
+  it("keeps the recount POST disabled without a current formal actor", async () => {
+    const before = recountDetail();
+    await renderAndOpen(before);
+
+    fireEvent.click(screen.getByRole("button", { name: "发起复盘" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "范围 1" }));
+
+    expect(screen.getByRole("alert").textContent).toContain("当前身份、任务或轮次尚未核验");
+    expect((screen.getByRole("button", {
+      name: "创建复盘轮次",
+    }) as HTMLButtonElement).disabled).toBe(true);
+    expect(loadOpeningRecountAssignees).not.toHaveBeenCalled();
+    expect(openOpeningRecount).not.toHaveBeenCalled();
+  });
+
+  it("invalidates a selected assignee when the task version changes before submit", async () => {
+    const before = recountDetail(5);
+    const changed = recountDetail(6);
+    vi.mocked(loadOpeningRecountAssignees)
+      .mockResolvedValueOnce(recountAssigneePage(before))
+      .mockResolvedValueOnce(recountAssigneePage(changed));
+    await renderAndOpen(before, ACTOR);
+    fireEvent.click(screen.getByRole("button", { name: "发起复盘" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "范围 1" }));
+    const select = await screen.findByRole("combobox", {
+      name: "范围 1 复盘人员",
+    }) as HTMLSelectElement;
+    await waitFor(() => expect(select.disabled).toBe(false));
+    fireEvent.change(select, { target: { value: ASSIGNEE_USER_ID } });
+    fireEvent.change(screen.getByLabelText("复盘原因"), {
+      target: { value: "旧版本不得提交" },
+    });
+
+    vi.mocked(loadFormalOpeningStocktakeDetail).mockResolvedValueOnce(changed);
+    fireEvent.click(screen.getByRole("button", { name: "查看" }));
+    await waitFor(() => expect(loadOpeningRecountAssignees).toHaveBeenCalledTimes(2));
+    const refreshedSelect = await screen.findByRole("combobox", {
+      name: "范围 1 复盘人员",
+    }) as HTMLSelectElement;
+    await waitFor(() => expect(refreshedSelect.disabled).toBe(false));
+    expect(refreshedSelect.value).toBe("");
+    fireEvent.submit(screen.getByRole("dialog", {
+      name: "发起独立复盘轮次",
+    }).querySelector("form")!);
+
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain(
+      "复盘人员选择已失效",
+    ));
+    expect(openOpeningRecount).not.toHaveBeenCalled();
   });
 });

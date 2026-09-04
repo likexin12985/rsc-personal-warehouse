@@ -2092,13 +2092,22 @@ export async function submitOpeningHeadquartersReview(
 export async function openOpeningRecount(
   taskId: string,
   input: OpeningRecountInput,
+  expected?: Readonly<{ task_version: number; source_round_id: string }>,
 ): Promise<VersionedOpeningMutationResult<OpeningStocktakeTaskDetail, OpeningRecountResult>> {
+  const selectedRoundId = expected === undefined ? undefined : uuid(expected.source_round_id, "source_round_id");
+  const selectedVersion = expected?.task_version;
+  if (expected !== undefined && (typeof selectedVersion !== "number" || !Number.isSafeInteger(selectedVersion) || selectedVersion < 0)) {
+    invalid("复盘人员选择绑定的任务版本无效");
+  }
   return executeFormalOpeningWrite({
     taskId,
     action: "open_recount",
     prefix: "opening-recount",
     resolve: (detail) => {
       const round = requiredCurrentRound(detail);
+      if (expected !== undefined && (detail.task_version !== selectedVersion || round.round_id.toLowerCase() !== selectedRoundId)) {
+        invalid("复盘人员选择绑定的任务版本或来源轮次已变化，请重新选择");
+      }
       if (input.assignments.length === 0) invalid("复盘必须至少指派一个范围");
       const visibleScopes = new Set(detail.scopes.map((row) => row.scope_id.toLowerCase()));
       const seen = new Set<string>();

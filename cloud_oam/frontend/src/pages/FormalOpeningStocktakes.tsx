@@ -39,6 +39,11 @@ import {
   formatDate,
   showError,
 } from "../ui";
+import {
+  openingRecountAssigneeContext, openingRecountAssigneeContextKey,
+  type OpeningRecountActor, type OpeningRecountAssigneeContext, type OpeningRecountAssigneeSelection,
+} from "../formalOpeningRecountAssignees";
+import OpeningRecountAssigneePicker from "./OpeningRecountAssigneePicker";
 
 const STATUS_LABELS: Record<string, string> = {
   counting: "计数中",
@@ -180,7 +185,7 @@ function TaskTable({
   </table></div>;
 }
 
-export default function FormalOpeningStocktakesPage() {
+export default function FormalOpeningStocktakesPage({ actor }: { actor?: OpeningRecountActor } = {}) {
   const [tasks, setTasks] = useState<OpeningStocktakeTaskSummary[]>([]);
   const tasksRef = useRef<OpeningStocktakeTaskSummary[]>([]);
   const [nextAfterId, setNextAfterId] = useState<string | null>(null);
@@ -200,7 +205,7 @@ export default function FormalOpeningStocktakesPage() {
   const [reviewComment, setReviewComment] = useState("");
   const [itemComments, setItemComments] = useState<Record<string, string>>({});
   const [recountSelections, setRecountSelections] = useState<Record<string, boolean>>({});
-  const [recountAssignees, setRecountAssignees] = useState<Record<string, string>>({});
+  const [recountAssignees, setRecountAssignees] = useState<Record<string, OpeningRecountAssigneeSelection>>({});
   const [recountReason, setRecountReason] = useState("");
   const [dispositionReason, setDispositionReason] = useState("");
   const [dispositionComment, setDispositionComment] = useState("");
@@ -249,6 +254,16 @@ export default function FormalOpeningStocktakesPage() {
     () => new Set(detail?.allowed_actions || []),
     [detail],
   );
+
+  const recountContexts = useMemo(() => {
+    const contexts: Record<string, OpeningRecountAssigneeContext | null> = {};
+    if (!detail || !actor) return contexts;
+    for (const scope of detail.scopes) {
+      try { contexts[scope.scope_id] = openingRecountAssigneeContext(detail, scope.scope_id, actor); }
+      catch { contexts[scope.scope_id] = null; }
+    }
+    return contexts;
+  }, [detail, actor?.person_id, actor?.authorization_version]);
 
   function resetDialog(): void {
     setDialog(null);
@@ -406,17 +421,26 @@ export default function FormalOpeningStocktakesPage() {
 
   async function submitRecount(event: React.FormEvent): Promise<void> {
     event.preventDefault();
-    if (!detail || dialog?.kind !== "open_recount") return;
-    const assignments = detail.scopes
-      .filter((scope) => recountSelections[scope.scope_id])
-      .map((scope) => ({
-        scope_id: scope.scope_id,
-        assignee_user_id: (recountAssignees[scope.scope_id] || "").trim(),
-      }));
-    await completeAction(() => openOpeningRecount(detail.task_id, {
-      assignments,
-      reason: recountReason.trim(),
-    }), "复盘轮次已独立创建；原轮次证据保持不变。");
+    if (!detail || dialog?.kind !== "open_recount" || busy) return;
+    try {
+      if (!actor || !detail.current_round) throw new Error("缺少当前正式身份，请刷新后重新选择复盘人员");
+      const selectedScopes = detail.scopes.filter((scope) => recountSelections[scope.scope_id]);
+      if (!selectedScopes.length) throw new Error("请选择至少一个复盘范围及合格人员");
+      const assignments = selectedScopes.map((scope) => {
+        const context = openingRecountAssigneeContext(detail, scope.scope_id, actor);
+        const selection = recountAssignees[scope.scope_id];
+        if (!selection || openingRecountAssigneeContextKey(selection.context) !== openingRecountAssigneeContextKey(context)) {
+          throw new Error("复盘人员选择已失效，请按当前任务和身份重新选择");
+        }
+        return { scope_id: scope.scope_id, assignee_user_id: selection.assignee.user_id };
+      });
+      const expected = { task_version: detail.task_version, source_round_id: detail.current_round.round_id };
+      await completeAction(() => openOpeningRecount(detail.task_id, {
+        assignments, reason: recountReason.trim(),
+      }, expected), "复盘轮次已独立创建；原轮次证据保持不变。");
+    } catch (err) {
+      setError(showError(err));
+    }
   }
 
   async function terminal(action: "post" | "close"): Promise<void> {
@@ -604,13 +628,24 @@ export default function FormalOpeningStocktakesPage() {
 
     {detail && dialog?.kind === "open_recount" && <Modal title="发起独立复盘轮次" onClose={resetDialog} wide>
       <form className="form-stack" onSubmit={(event) => void submitRecount(event)}>
-        <div className="alert alert-info">复盘会创建新轮次，不覆盖原计数、差异或复核证据。人员标识必须来自正式人员目录。</div>
+        <div className="alert alert-info">复盘会创建新轮次，不覆盖原计数、差异或复核证据。仅可选择当前任务、范围和权限下的正式人员。</div>
         <div className="opening-recount-list">{detail.scopes.map((scope) => <div key={scope.scope_id}>
-          <label className="opening-check"><input type="checkbox" checked={Boolean(recountSelections[scope.scope_id])} onChange={(event) => setRecountSelections((current) => ({ ...current, [scope.scope_id]: event.target.checked }))} />范围 {scope.scope_no}</label>
-          <Field label="工程师人员标识"><input disabled={!recountSelections[scope.scope_id]} required={Boolean(recountSelections[scope.scope_id])} maxLength={36} value={recountAssignees[scope.scope_id] || ""} onChange={(event) => setRecountAssignees((current) => ({ ...current, [scope.scope_id]: event.target.value }))} /></Field>
+          <label className="opening-check"><input type="checkbox" disabled={busy} checked={Boolean(recountSelections[scope.scope_id])} onChange={(event) => {
+            setRecountSelections((current) => ({ ...current, [scope.scope_id]: event.target.checked }));
+            setRecountAssignees((current) => { const next = { ...current }; delete next[scope.scope_id]; return next; });
+          }} />范围 {scope.scope_no}</label>
+          {recountSelections[scope.scope_id] && recountContexts[scope.scope_id] && <OpeningRecountAssigneePicker
+            context={recountContexts[scope.scope_id]!}
+            label={`范围 ${scope.scope_no} 复盘人员`} selection={recountAssignees[scope.scope_id] || null} disabled={busy}
+            onChange={(selection) => setRecountAssignees((current) => {
+              const next = { ...current };
+              if (selection) next[scope.scope_id] = selection; else delete next[scope.scope_id];
+              return next;
+            })} />}
+          {recountSelections[scope.scope_id] && !recountContexts[scope.scope_id] && <div role="alert">当前身份、任务或轮次尚未核验，不能选择复盘人员。</div>}
         </div>)}</div>
         <Field label="复盘原因"><textarea required rows={3} maxLength={4000} value={recountReason} onChange={(event) => setRecountReason(event.target.value)} /></Field>
-        <div className="form-actions"><Button type="button" tone="quiet" onClick={resetDialog}>取消</Button><Button type="submit" disabled={busy}>{busy ? "正在创建" : "创建复盘轮次"}</Button></div>
+        <div className="form-actions"><Button type="button" tone="quiet" onClick={resetDialog}>取消</Button><Button type="submit" disabled={busy || !actor}>{busy ? "正在创建" : "创建复盘轮次"}</Button></div>
       </form>
     </Modal>}
   </>;

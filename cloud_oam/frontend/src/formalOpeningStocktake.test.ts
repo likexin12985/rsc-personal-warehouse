@@ -1526,7 +1526,7 @@ describe("formal opening stocktake mutation policy", () => {
     })).rejects.toThrow("discard malformed disposition");
   });
 
-  it("binds recount assignments to visible scopes and the freshly read round", async () => {
+  it.each([false, true])("binds recount assignments to visible scopes and the freshly read round (selector=%s)", async (withSelector) => {
     const before = {
       ...sealedDetail(),
       status: "recount_required",
@@ -1560,7 +1560,7 @@ describe("formal opening stocktake mutation policy", () => {
     await openOpeningRecount(TASK_ID, {
       assignments: [{ scope_id: SCOPE_ID, assignee_user_id: "engineer-001" }],
       reason: "区域复核要求重新清点",
-    });
+    }, withSelector ? { task_version: before.task_version, source_round_id: ROUND_ID } : undefined);
 
     expect(api).toHaveBeenNthCalledWith(
       2,
@@ -1571,5 +1571,17 @@ describe("formal opening stocktake mutation policy", () => {
       assignments: [{ scope_id: SCOPE_ID, assignee_user_id: "engineer-001" }],
       reason: "区域复核要求重新清点",
     });
+  });
+
+  it.each([
+    { task_version: 3, source_round_id: ROUND_ID },
+    { task_version: 4, source_round_id: "90000000-0000-4000-8000-000000000009" },
+  ])("rejects stale selector coordinates before a recount POST %#", async (expected) => {
+    vi.mocked(api).mockResolvedValue({ ...sealedDetail(), status: "recount_required", allowed_actions: ["open_recount"] });
+    await expect(openOpeningRecount(TASK_ID, {
+      assignments: [{ scope_id: SCOPE_ID, assignee_user_id: "engineer-001" }], reason: "区域复核要求重新清点",
+    }, expected)).rejects.toThrow("人员选择绑定");
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(mutationHeaders).not.toHaveBeenCalled();
   });
 });

@@ -13601,6 +13601,10 @@ def _seed_0047_stocktake_inventory(
         OpeningStocktakeRecountScopeAssignmentInput,
         open_opening_stocktake_recount,
     )
+    from app.formal_services.opening_recount_assignee_options import (
+        OpeningRecountAssigneeOptionError,
+        list_opening_recount_assignee_options,
+    )
     from app.formal_services.opening_stocktake_review import (
         OpeningStocktakeReviewItemInput,
         SubmitOpeningStocktakeReviewCommand,
@@ -14837,6 +14841,93 @@ def _seed_0047_stocktake_inventory(
     )
     recount_idempotency_key = f"pg16-opening-recount-{opening_token}"
 
+    # Exercise the actual least-privilege API role in a READ ONLY transaction:
+    # any hidden row lock or write in the directory must fail in PostgreSQL,
+    # not merely disappear when compiling a SQLite test query.
+    with Session(api_engine) as session:
+        session.execute(text("SET TRANSACTION READ ONLY"))
+        assert session.scalar(text("SHOW transaction_read_only")) == "on"
+        directory_actor = current_principal(session, assignee_user_id)
+        directory_version = session.scalar(
+            select(FormalStocktakeTask.version).where(
+                FormalStocktakeTask.id == started.task_id
+            )
+        )
+        directory_page = list_opening_recount_assignee_options(
+            session,
+            actor=directory_actor,
+            task_id=started.task_id,
+            source_round_id=started.initial_round_id,
+            scope_id=opening_scope_id,
+            expected_task_version=directory_version,
+            limit=100,
+        )
+        assert directory_page.task_id == started.task_id
+        assert directory_page.source_round_id == started.initial_round_id
+        assert directory_page.scope_id == opening_scope_id
+        assert directory_page.location_id == fixture["location_id"]
+        assert directory_page.region_org_id == fixture["region_org_id"]
+        assert directory_page.task_version == directory_version
+        assert directory_page.actor_person_id == directory_actor.person_id
+        assert (
+            directory_page.actor_authorization_version
+            == directory_actor.authorization_version
+        )
+        assert assignee_user_id in {row.user_id for row in directory_page.items}
+        assert all(
+            row.role_code in {"admin", "provincial_manager"}
+            for row in directory_page.items
+        )
+        assert directory_page.next_after_person_id is None
+        expected_directory_ids = tuple(row.person_id for row in directory_page.items)
+        paged_directory_ids = []
+        directory_cursor = None
+        for _ in range(len(expected_directory_ids) + 1):
+            single_page = list_opening_recount_assignee_options(
+                session,
+                actor=directory_actor,
+                task_id=started.task_id,
+                source_round_id=started.initial_round_id,
+                scope_id=opening_scope_id,
+                expected_task_version=directory_version,
+                limit=1,
+                after_person_id=directory_cursor,
+            )
+            assert len(single_page.items) <= 1
+            paged_directory_ids.extend(row.person_id for row in single_page.items)
+            if single_page.next_after_person_id is None:
+                break
+            assert single_page.items
+            assert single_page.next_after_person_id == single_page.items[-1].person_id
+            assert (
+                directory_cursor is None
+                or single_page.next_after_person_id.int > directory_cursor.int
+            )
+            directory_cursor = single_page.next_after_person_id
+        else:
+            pytest.fail("authorized PostgreSQL assignee pagination did not terminate")
+        assert tuple(paged_directory_ids) == expected_directory_ids
+        assert len(paged_directory_ids) == len(set(paged_directory_ids))
+        assert session.scalar(text("SHOW transaction_read_only")) == "on"
+        with pytest.raises(OpeningRecountAssigneeOptionError) as stale_directory:
+            list_opening_recount_assignee_options(
+                session,
+                actor=directory_actor,
+                task_id=started.task_id,
+                source_round_id=started.initial_round_id,
+                scope_id=opening_scope_id,
+                expected_task_version=directory_version - 1,
+                limit=100,
+            )
+        assert stale_directory.value.code == (
+            "opening_recount_assignee_task_version_conflict"
+        )
+        assert session.scalar(
+            select(FormalStocktakeTask.version).where(
+                FormalStocktakeTask.id == started.task_id
+            )
+        ) == directory_version
+
     # The inherited 0032 trigger above proves an incomplete raw transition is
     # rejected immediately.  Build the valid predecessor/case/round graph
     # through the real service as a separate negative test, omit only its state
@@ -14909,6 +15000,27 @@ def _seed_0047_stocktake_inventory(
 
     history_migration = _load_opening_recount_source_history_migration_0054()
     opening_migration = _load_opening_terminal_guard_execution_migration_0052()
+    with Session(api_engine) as session:
+        session.execute(text("SET TRANSACTION READ ONLY"))
+        current_version = session.scalar(
+            select(FormalStocktakeTask.version).where(
+                FormalStocktakeTask.id == started.task_id
+            )
+        )
+        assert current_version == directory_version + 1
+        with pytest.raises(OpeningRecountAssigneeOptionError) as replaced_directory:
+            list_opening_recount_assignee_options(
+                session,
+                actor=current_principal(session, assignee_user_id),
+                task_id=started.task_id,
+                source_round_id=started.initial_round_id,
+                scope_id=opening_scope_id,
+                expected_task_version=current_version,
+                limit=100,
+            )
+        assert replaced_directory.value.code == (
+            "opening_recount_assignee_task_state_invalid"
+        )
     with psycopg.connect(**_admin_parameters()) as connection:
         with connection.cursor() as cursor:
             cursor.execute(

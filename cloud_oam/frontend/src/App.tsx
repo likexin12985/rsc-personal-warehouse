@@ -518,7 +518,10 @@ export default function App() {
       <Route path="/inventory" element={canReadInventory ? <FormalInventoryPage /> : <Navigate to="/dashboard" replace />} />
       <Route path="/material-requests" element={canReadMaterialRequests ? <FormalMaterialRequestsRoute access={access} /> : <Navigate to="/dashboard" replace />} />
       <Route path="/stocktakes" element={canReadStocktake ? <FormalStocktakesRoute access={access} /> : <Navigate to="/dashboard" replace />} />
-      <Route path="/opening-stocktakes" element={canReadStocktake ? <FormalOpeningStocktakesPage /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/opening-stocktakes" element={canReadStocktake ? <FormalOpeningStocktakesPage
+        key={`${access.person_id}:${access.authorization_version}`}
+        actor={{ person_id: access.person_id, authorization_version: access.authorization_version }}
+      /> : <Navigate to="/dashboard" replace />} />
       <Route path="/opening-reconciliations" element={canReadReconciliation ? <FormalOpeningReconciliationsPage canCreate={canCreateOpeningReconciliation} /> : <Navigate to="/dashboard" replace />} />
       <Route path="/provincial-managers" element={canManageProvincial ? <ProvincialManagersPage /> : <Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
