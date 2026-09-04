@@ -380,7 +380,14 @@ STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION = (
     / "versions"
     / "20260903_0051_stocktake_difference_authorization_hash.py"
 )
-HEAD_REVISION = "20260903_0051"
+OPENING_TERMINAL_GUARD_EXECUTION_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0052_opening_terminal_guard_execution.py"
+)
+HEAD_REVISION = "20260903_0052"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -401,6 +408,8 @@ STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION_ID = "20260903_0048"
 STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION_ID = "20260903_0049"
 STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID = "20260903_0050"
 STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID = "20260903_0051"
+OPENING_TERMINAL_GUARD_EXECUTION_REVISION_ID = "20260903_0052"
+PRE_OPENING_TERMINAL_GUARD_EXECUTION_HEAD_REVISION = "20260903_0051"
 PRE_STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_HEAD_REVISION = "20260903_0050"
 PRE_STOCKTAKE_OBSERVATION_SCOPE_MODE_HEAD_REVISION = "20260903_0049"
 PRE_STOCKTAKE_RECOUNT_GUARD_SECURITY_HEAD_REVISION = "20260903_0048"
@@ -1406,7 +1415,14 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
     assert (
-        head.down_revision
+        head.down_revision == PRE_OPENING_TERMINAL_GUARD_EXECUTION_HEAD_REVISION
+    )
+    previous_opening_terminal_guard_execution_head = script.get_revision(
+        PRE_OPENING_TERMINAL_GUARD_EXECUTION_HEAD_REVISION
+    )
+    assert previous_opening_terminal_guard_execution_head is not None
+    assert (
+        previous_opening_terminal_guard_execution_head.down_revision
         == PRE_STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_HEAD_REVISION
     )
     previous_difference_authorization_hash_head = script.get_revision(
@@ -2875,6 +2891,17 @@ def _load_0051_migration_module():
     return module
 
 
+def _load_0052_migration_module():
+    spec = importlib.util.spec_from_file_location(
+        "opening_terminal_guard_execution_migration_0052",
+        OPENING_TERMINAL_GUARD_EXECUTION_REVISION,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_0047_postgresql_functions_parse_as_sql_and_plpgsql() -> None:
     parser = pytest.importorskip("pglast.parser")
     module = _load_0047_migration_module()
@@ -3361,7 +3388,7 @@ def test_0048_postgresql_offline_downgrade_restores_exact_invoker_guard(
     )
 
 
-def test_0048_0049_0050_0051_sqlite_noops_share_one_ordered_revision_chain(
+def test_0048_through_0052_sqlite_noops_share_one_ordered_revision_chain(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3370,7 +3397,14 @@ def test_0048_0049_0050_0051_sqlite_noops_share_one_ordered_revision_chain(
     module_0049 = _load_0049_migration_module()
     module_0050 = _load_0050_migration_module()
     module_0051 = _load_0051_migration_module()
-    for module in (module_0048, module_0049, module_0050, module_0051):
+    module_0052 = _load_0052_migration_module()
+    for module in (
+        module_0048,
+        module_0049,
+        module_0050,
+        module_0051,
+        module_0052,
+    ):
         assert "SQLite is an explicit schema no-op" in (module.__doc__ or "")
 
     database_url = f"sqlite+pysqlite:///{tmp_path / 'security-noops.db'}"
@@ -3407,12 +3441,14 @@ def test_0048_0049_0050_0051_sqlite_noops_share_one_ordered_revision_chain(
         STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION_ID,
         STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID,
         STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID,
+        OPENING_TERMINAL_GUARD_EXECUTION_REVISION_ID,
     ):
         command.upgrade(config, target_revision)
         assert schema_snapshot() == baseline_schema
         assert_revision(target_revision)
 
     for target_revision in (
+        STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION_ID,
         STOCKTAKE_OBSERVATION_SCOPE_MODE_REVISION_ID,
         STOCKTAKE_RECOUNT_GUARD_SECURITY_REVISION_ID,
         STOCKTAKE_SCOPE_GUARD_SECURITY_REVISION_ID,
@@ -4470,6 +4506,1072 @@ def test_0051_postgresql_offline_downgrade_restores_legacy_hash_and_origin(
             "CREATE OR REPLACE FUNCTION public."
             "rsc_oam_runtime_binding_ready_0044()"
         )
+    )
+
+
+def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
+    monkeypatch,
+) -> None:
+    module = _load_0052_migration_module()
+    assert module.revision == OPENING_TERMINAL_GUARD_EXECUTION_REVISION_ID
+    assert module.down_revision == (
+        PRE_OPENING_TERMINAL_GUARD_EXECUTION_HEAD_REVISION
+    )
+    assert module.PERSISTENT_FUNCTION_SIGNATURES == (
+        "public.rsc_stocktake_actor_assignment_valid_0011(text, uuid, uuid, "
+        "bigint, timestamptz, text, text, text)",
+        "public.rsc_require_stocktake_difference_completion_0016()",
+        "public.rsc_block_stocktake_review_fact_mutation_0016()",
+        "public.rsc_opening_terminal_graph_complete_0022(uuid, uuid)",
+        "public.rsc_require_opening_terminal_graph_0022()",
+        "public.rsc_require_opening_observation_account_0023()",
+    )
+    assert module.HEAD_ONLY_FUNCTION_SIGNATURES == tuple(
+        row[0] for row in module.HEAD_ONLY_FUNCTION_CATALOG
+    )
+    assert module.ALL_FUNCTION_SIGNATURES == (
+        *module.PERSISTENT_FUNCTION_SIGNATURES,
+        *module.HEAD_ONLY_FUNCTION_SIGNATURES,
+    )
+    assert module.CALLER_SIGNATURES == (
+        module.COMMIT_SIGNATURE,
+        module.ACCOUNT_SIGNATURE,
+    )
+    assert len(module.LOCK_TABLES) == 57
+    assert len(set(module.LOCK_TABLES)) == len(module.LOCK_TABLES)
+    assert {
+        "role_assignments",
+        "roles",
+        "inventory_serials",
+        "opening_control_reconciliation_command_consumptions",
+        "opening_control_reconciliation_runs",
+        "qr_codes",
+        "reconciliation_commands",
+        "reconciliation_items",
+        "stocktake_observation_dispositions",
+        "users",
+    } <= set(module.LOCK_TABLES)
+    assert set(row[0] for row in module.TRIGGER_CATALOG) <= set(
+        module.LOCK_TABLES
+    )
+    assert len(module.TRIGGER_CATALOG) == 12
+    assert len({row[1] for row in module.TRIGGER_CATALOG}) == 12
+    assert tuple(row[3] for row in module.TRIGGER_CATALOG) == (
+        *((5,) * 6),
+        17,
+        17,
+        5,
+        5,
+        5,
+        5,
+    )
+    assert {row[2] for row in module.TRIGGER_CATALOG} == {
+        module.COMMIT_SIGNATURE,
+        module.ACCOUNT_SIGNATURE,
+    }
+    assert sum(
+        row[2] == module.COMMIT_SIGNATURE
+        for row in module.TRIGGER_CATALOG
+    ) == 11
+    assert sum(
+        row[2] == module.ACCOUNT_SIGNATURE
+        for row in module.TRIGGER_CATALOG
+    ) == 1
+
+    def load_legacy(name: str, path: Path):
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        legacy_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(legacy_module)
+        return legacy_module
+
+    legacy_0022 = load_legacy(
+        "opening_terminal_runtime_migration_0022_for_0052",
+        OPENING_TERMINAL_RUNTIME_BOUNDARY_REVISION,
+    )
+    current_0023 = load_legacy(
+        "opening_observation_posting_migration_0023_for_0052",
+        OPENING_OBSERVATION_POSTING_REVISION,
+    )
+    legacy_0011 = load_legacy(
+        "opening_count_observations_migration_0011_for_0052",
+        OPENING_COUNT_OBSERVATION_REVISION,
+    )
+
+    def body(statement: str) -> str:
+        body_match = re.search(
+            r"AS \$\$(?P<body>.*?)\$\$",
+            statement,
+            flags=re.DOTALL,
+        )
+        assert body_match is not None
+        return body_match.group("body")
+
+    graph_sql = current_0023._postgresql_graph_function_sql(current=True)
+    legacy_commit_sql = legacy_0022._postgresql_commit_function_sql()
+    legacy_account_sql = current_0023._postgresql_account_function_sql()
+    actor_statements: list[str] = []
+    monkeypatch.setattr(legacy_0011.op, "execute", actor_statements.append)
+    legacy_0011._create_postgresql_count_contract_triggers()
+    actor_sql = actor_statements[0]
+    actor_body = body(actor_sql)
+    graph_body = body(graph_sql)
+    legacy_commit_body = body(legacy_commit_sql)
+    legacy_account_body = body(legacy_account_sql)
+    assert hashlib.sha256(actor_body.encode("utf-8")).hexdigest() == (
+        module.ACTOR_ASSIGNMENT_BODY_SHA256
+    )
+    assert hashlib.sha256(graph_body.encode("utf-8")).hexdigest() == (
+        module.GRAPH_BODY_SHA256
+    )
+    assert hashlib.sha256(legacy_commit_body.encode("utf-8")).hexdigest() == (
+        module.LEGACY_COMMIT_BODY_SHA256
+    )
+    assert hashlib.sha256(legacy_account_body.encode("utf-8")).hexdigest() == (
+        module.LEGACY_ACCOUNT_BODY_SHA256
+    )
+    assert legacy_commit_body.count(module.LEGACY_TASK_BRANCH) == 1
+    assert module.FIXED_TASK_BRANCH not in legacy_commit_body
+    assert legacy_account_body.count(
+        module.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT
+    ) == 1
+    assert module.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT not in legacy_account_body
+
+    fixed_commit_body = legacy_commit_body.replace(
+        module.LEGACY_TASK_BRANCH,
+        module.FIXED_TASK_BRANCH,
+    )
+    fixed_account_body = legacy_account_body.replace(
+        module.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT,
+        module.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT,
+    )
+    assert hashlib.sha256(fixed_commit_body.encode("utf-8")).hexdigest() == (
+        module.FIXED_COMMIT_BODY_SHA256
+    )
+    assert hashlib.sha256(fixed_account_body.encode("utf-8")).hexdigest() == (
+        module.FIXED_ACCOUNT_BODY_SHA256
+    )
+    assert fixed_commit_body.replace(
+        module.FIXED_TASK_BRANCH,
+        module.LEGACY_TASK_BRANCH,
+    ) == legacy_commit_body
+    assert fixed_account_body.replace(
+        module.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT,
+        module.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT,
+    ) == legacy_account_body
+
+    normalized_fixed_branch = " ".join(module.FIXED_TASK_BRANCH.split())
+    for required_guard in (
+        "OLD.status = 'recount_required' AND NEW.status = 'counting'",
+        "NEW.current_round_no <> OLD.current_round_no + 1",
+        "OLD.submitted_at IS DISTINCT FROM NEW.submitted_at",
+        "FROM public.stocktake_rounds AS current_round JOIN public."
+        "stocktake_recount_cases AS recount_case",
+        "recount_case.id = current_round.recount_case_id",
+        "recount_case.task_id = NEW.id",
+        "recount_case.next_round_no = current_round.round_no",
+        "recount_case.opened_at = NEW.updated_at",
+        "source_round.id = recount_case.source_round_id",
+        "source_round.round_no = OLD.current_round_no",
+        "submission.id = recount_case.source_round_submission_id",
+        "current_round.round_no = NEW.current_round_no",
+        "current_round.round_type = 'recount'",
+        "current_round.status = 'counting'",
+        "current_round.started_at = NEW.updated_at",
+        "current_round.created_at = NEW.updated_at",
+        "current_round.updated_at = NEW.updated_at",
+        "transition_event.from_status = 'recount_required'",
+        "transition_event.to_status = 'counting'",
+        "transition_event.reason = 'opening_recount_opened'",
+        "OLD.status = 'counting' AND NEW.status = 'submitted'",
+        "OLD.submitted_at IS NOT DISTINCT FROM NEW.submitted_at",
+        "NEW.current_round_no IS DISTINCT FROM OLD.current_round_no",
+        "OLD.submitted_at IS NOT NULL AND NEW.submitted_at <= "
+        "OLD.submitted_at",
+        "FROM public.stocktake_rounds AS round_row JOIN public."
+        "stocktake_round_submissions AS submission",
+        "submission.task_id = NEW.id",
+        "submission.round_id = round_row.id",
+        "submission.submitted_at = NEW.submitted_at",
+        "submission.count_manifest_sha256 = round_row."
+        "count_manifest_sha256",
+        "sealing.id = submission.sealing_completion_id",
+        "sealing.completed_by_user_id = submission.submitted_by_user_id",
+        "sealing.completed_by_person_id = submission.submitted_by_person_id",
+        "sealing.completed_role_assignment_id = submission."
+        "submitted_role_assignment_id",
+        "round_row.task_id = NEW.id",
+        "round_row.round_no = NEW.current_round_no",
+        "round_row.status = 'submitted'",
+        "round_row.submitted_at = NEW.submitted_at",
+        "round_row.count_manifest_sha256 ~ '^[0-9a-f]{64}$'",
+        "OLD.status = 'submitted' AND NEW.status IN ('hq_review', "
+        "'recount_required')",
+        "review.review_stage = 'region'",
+        "NEW.status = 'hq_review' AND review.decision = 'approve'",
+        "NEW.status = 'recount_required' AND review.decision IN "
+        "('recount', 'reject')",
+        "transition_event.from_status = 'submitted'",
+        "transition_event.to_status = NEW.status",
+        "'opening_region_review_' || review.decision",
+        "item.review_id = review.id",
+        "item.difference_id = difference.id",
+        "OLD.status = 'hq_review' AND NEW.status IN ('approved', "
+        "'recount_required')",
+        "region_review.review_stage = 'region'",
+        "region_review.decision = 'approve'",
+        "review.review_stage = 'headquarters'",
+        "review.decision = CASE NEW.status WHEN 'approved' THEN 'approve' "
+        "ELSE 'reject' END",
+        "review.reviewed_at > region_review.reviewed_at",
+        "transition_event.from_status = 'hq_review'",
+        "'opening_headquarters_review_' || review.decision",
+        "OLD.status = NEW.status",
+        "OLD.version IS DISTINCT FROM NEW.version",
+        "OLD.updated_at IS DISTINCT FROM NEW.updated_at",
+        "opening task status transition is invalid",
+        "OLD.posted_at IS DISTINCT FROM NEW.posted_at",
+        "OLD.closed_at IS DISTINCT FROM NEW.closed_at",
+        "NEW.current_round_no IS DISTINCT FROM OLD.current_round_no OR NEW."
+        "submitted_at IS DISTINCT FROM OLD.submitted_at OR OLD.posted_at IS "
+        "NOT NULL",
+        "OLD.status = NEW.status THEN IF OLD.current_round_no IS DISTINCT "
+        "FROM NEW.current_round_no OR OLD.submitted_at IS DISTINCT FROM NEW."
+        "submitted_at",
+    ):
+        assert required_guard in normalized_fixed_branch
+    assert module.FIXED_TASK_BRANCH.count(
+        f"public.{module.ACTOR_ASSIGNMENT_FUNCTION}("
+    ) == 0
+    for actor_guard in (
+        "review.reviewer_user_id <> region_review.reviewer_user_id",
+        "review.reviewer_person_id <> region_review.reviewer_person_id",
+        "review.reviewer_role_assignment_id <> region_review."
+        "reviewer_role_assignment_id",
+    ):
+        assert actor_guard in normalized_fixed_branch
+    for item_guard in (
+        "decision_difference.difference_type = 'control_unassigned' THEN "
+        "'pending_verification'",
+        "decision_difference.observed_line_id IS NULL",
+        "round_row.round_no > 1 AND round_row.round_type = 'recount'",
+        "decision_observation.verification_status = 'verified'",
+        "decision_disposition.disposition = 'pending_verification'",
+        "decision_disposition.disposition IN ( 'requires_recount', "
+        "'resolved_existing_master' )",
+        "decision_item.decision = 'pending_verification' AND pg_catalog."
+        "btrim(decision_item.comment) = ''",
+    ):
+        assert item_guard in normalized_fixed_branch
+    assert module.FIXED_TASK_BRANCH.count(
+        "JOIN public.stocktake_observation_dispositions"
+    ) == 5
+    for event_guard in (
+        "submission_event.reason = CASE WHEN round_row.round_no = 1",
+        "submission_event.metadata_jsonb = CASE",
+        "transition_event.metadata_jsonb = pg_catalog.jsonb_build_object",
+        "region_transition_event.metadata_jsonb = pg_catalog."
+        "jsonb_build_object",
+        "'assignment_manifest_sha256', recount_case."
+        "assignment_manifest_sha256",
+        "'next_round_id', current_round.id::text",
+        "'recount_case_id', recount_case.id::text",
+        "'source_round_id', recount_case.source_round_id::text",
+    ):
+        assert event_guard in normalized_fixed_branch
+    assert (
+        "OR OLD.current_round_no IS DISTINCT FROM NEW.current_round_no"
+        not in module.FIXED_TASK_BRANCH
+    )
+    fixed_binding_prefix = module.FIXED_TASK_BRANCH.split(
+        "        IF OLD.status = 'recount_required' AND NEW.status = 'counting'",
+        maxsplit=1,
+    )[0]
+    assert "OLD.submitted_at IS DISTINCT FROM NEW.submitted_at" not in (
+        fixed_binding_prefix
+    )
+    assert "OLD.cancelled_at IS DISTINCT FROM NEW.cancelled_at" in (
+        module.FIXED_TASK_BRANCH
+    )
+
+    parser = pytest.importorskip("pglast.parser")
+    fixed_commit_sql = legacy_commit_sql.replace(
+        module.LEGACY_TASK_BRANCH,
+        module.FIXED_TASK_BRANCH,
+    )
+    fixed_account_sql = legacy_account_sql.replace(
+        module.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT,
+        module.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT,
+    )
+    for statement in (
+        actor_sql,
+        graph_sql,
+        fixed_commit_sql,
+        fixed_account_sql,
+    ):
+        assert not sa.text(statement)._bindparams
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+
+    statements: list[str] = []
+    monkeypatch.setattr(module.op, "execute", statements.append)
+    module._verify_catalog(hardened=False, phase="legacy parse probe")
+    module._verify_catalog(hardened=True, phase="hardened parse probe")
+    module._verify_existing_opening_rows()
+    module._require_no_active_opening_task()
+    module._replace_function_body(
+        signature=module.COMMIT_SIGNATURE,
+        expected_body_sha256=module.LEGACY_COMMIT_BODY_SHA256,
+        source_fragment=module.LEGACY_TASK_BRANCH,
+        replacement_fragment=module.FIXED_TASK_BRANCH,
+        phase="commit parse probe",
+    )
+    module._replace_function_body(
+        signature=module.ACCOUNT_SIGNATURE,
+        expected_body_sha256=module.LEGACY_ACCOUNT_BODY_SHA256,
+        source_fragment=module.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT,
+        replacement_fragment=module.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT,
+        phase="account parse probe",
+    )
+    for statement in statements:
+        assert not sa.text(statement)._bindparams
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+
+    existing_rows_sql = next(
+        statement
+        for statement in statements
+        if module.EXISTING_ROWS_ERROR in statement
+    )
+    normalized_existing_rows_sql = " ".join(existing_rows_sql.split())
+    for required_existing_guard in (
+        "FROM public.stocktake_recount_cases AS task_recount_case WHERE "
+        "task_recount_case.task_id = task.id ) IS DISTINCT FROM pg_catalog."
+        "greatest( task.current_round_no - 1, 0 )",
+        "task.status = 'counting' AND task.current_round_no = 1 AND "
+        "task.submitted_at IS NULL",
+        "task.status = 'counting' AND task.current_round_no > 1 AND "
+        "task.submitted_at IS NOT NULL",
+        "JOIN public.stocktake_recount_cases AS recount_case",
+        "recount_case.id = current_round.recount_case_id",
+        "recount_case.task_id = task.id",
+        "recount_case.next_round_no = current_round.round_no",
+        "submission.id = recount_case.source_round_submission_id",
+        "source_round.round_no = current_round.round_no - 1",
+        "source_round.status = 'submitted'",
+        "source_round.submitted_at = task.submitted_at",
+        "JOIN public.stocktake_scope_count_completions AS sealing",
+        "sealing.id = submission.sealing_completion_id",
+        "sealing.completed_by_user_id = submission.submitted_by_user_id",
+        "sealing.completed_by_person_id = submission.submitted_by_person_id",
+        "sealing.completed_role_assignment_id = submission."
+        "submitted_role_assignment_id",
+        "sealing.authorization_version = submission.authorization_version",
+        "sealing.completed_at = submission.submitted_at",
+        "task.status IN ( 'submitted', 'hq_review', 'approved', "
+        "'recount_required', 'posted', 'closed' )",
+        "current_round.status = 'submitted'",
+        "current_round.submitted_at = task.submitted_at",
+        "submission.count_manifest_sha256 = current_round."
+        "count_manifest_sha256",
+        "task.status = 'submitted' AND task.updated_at = task.submitted_at "
+        "AND NOT EXISTS ( SELECT 1 FROM public.stocktake_reviews AS "
+        "premature_review JOIN public.stocktake_rounds AS submitted_round",
+        "submitted_round.round_no = task.current_round_no",
+        "task.status IN ('approved', 'posted', 'closed')",
+        "task.status = 'approved' AND hq_review.reviewed_at = task.updated_at",
+        "task.status IN ('posted', 'closed') AND task.posted_at IS NOT NULL "
+        "AND hq_review.reviewed_at <= task.posted_at",
+        f"public.{module.GRAPH_FUNCTION}( task.id, posting."
+        "inventory_transaction_id )",
+        "historical_user.authorization_version >= region_review."
+        "authorization_version",
+        "historical_role.code = 'provincial_manager'",
+        "historical_assignment.scope_type = 'organization'",
+        "historical_assignment.scope_id = task.region_org_id::text",
+        "historical_user.authorization_version >= hq_review."
+        "authorization_version",
+        "historical_role.code = 'admin'",
+        "historical_assignment.scope_type = 'national'",
+        "historical_assignment.scope_id = '*'",
+        "hq_review.reviewer_user_id <> region_review.reviewer_user_id",
+        "hq_review.reviewer_person_id <> region_review.reviewer_person_id",
+        "hq_review.reviewer_role_assignment_id <> region_review."
+        "reviewer_role_assignment_id",
+        "FROM public.stocktake_recount_cases AS recount_case JOIN public."
+        "stocktake_tasks AS recount_task",
+        "trigger_review.id = recount_case.trigger_review_id",
+        "trigger_review.review_stage = 'region' AND trigger_review.decision "
+        "IN ( 'recount', 'reject' )",
+        "trigger_review.review_stage = 'headquarters' AND trigger_review."
+        "decision = 'reject'",
+        "source_region_review.review_stage = 'region'",
+        "source_region_review.decision = 'approve'",
+        "source_region_review.reviewer_user_id <> trigger_review."
+        "reviewer_user_id",
+        "source_region_review.reviewer_person_id <> trigger_review."
+        "reviewer_person_id",
+        "source_region_review.reviewer_role_assignment_id <> trigger_review."
+        "reviewer_role_assignment_id",
+        "trigger_review_event.metadata_jsonb = pg_catalog."
+        "jsonb_build_object",
+        "source_region_review_event.metadata_jsonb = pg_catalog."
+        "jsonb_build_object",
+        "next_round.recount_case_id = recount_case.id",
+        "recount_open_event.reason = 'opening_recount_opened'",
+        "recount_open_event.metadata_jsonb = pg_catalog.jsonb_build_object",
+    ):
+        assert required_existing_guard in normalized_existing_rows_sql
+    assert normalized_existing_rows_sql.count(
+        "decision_difference.difference_type = 'control_unassigned'"
+    ) >= 7
+    assert normalized_existing_rows_sql.count(
+        "JOIN public.stocktake_observation_dispositions"
+    ) >= 7
+    assert normalized_existing_rows_sql.count(
+        "premature_review.round_id = current_round.id"
+    ) == 2
+    assert "historical_role.status" not in existing_rows_sql
+    assert f"public.{module.ACTOR_ASSIGNMENT_FUNCTION}(" not in (
+        existing_rows_sql
+    )
+    assert "'cancelled'" not in existing_rows_sql
+    assert "'region_review'" not in existing_rows_sql
+
+    legacy_values = module._function_catalog_values(hardened=False)
+    hardened_values = module._function_catalog_values(hardened=True)
+    assert legacy_values.count("FALSE") == 6
+    assert hardened_values.count("FALSE") == 4
+    assert hardened_values.count("TRUE") == 2
+    assert "NULL::text" in legacy_values
+    assert (
+        f"'{module.ACTOR_ASSIGNMENT_SIGNATURE}', "
+        f"'{module.ACTOR_ASSIGNMENT_FUNCTION}', 'boolean', 'sql', 's', 8"
+    ) in legacy_values
+    assert (
+        "'p_user_id,p_person_id,p_assignment_id,p_authorization_version,"
+        "p_occurred_at,p_role_code,p_scope_type,p_scope_id'::text, FALSE, "
+        "NULL::text"
+    ) in legacy_values
+    for expected_hash in (
+        module.ACTOR_ASSIGNMENT_BODY_SHA256,
+        module.GRAPH_BODY_SHA256,
+        module.LEGACY_COMMIT_BODY_SHA256,
+        module.FIXED_COMMIT_BODY_SHA256,
+        module.LEGACY_ACCOUNT_BODY_SHA256,
+        module.FIXED_ACCOUNT_BODY_SHA256,
+    ):
+        assert re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+
+    for expected_revision in (module.PREVIOUS_SCHEMA_REVISION, module.revision):
+        ready_sql = module._oam_runtime_ready_function_sql(expected_revision)
+        assert not sa.text(ready_sql)._bindparams
+        parser.parse_sql(ready_sql)
+        parser.parse_plpgsql_json(ready_sql)
+    ready_body = body(module._oam_runtime_ready_function_sql(module.revision))
+    assert hashlib.sha256(ready_body.encode("utf-8")).hexdigest() == (
+        "7b87874563d011de3c6c02e598892700d4400dd0cccfee38c7f573068c319f12"
+    )
+    previous_ready_body = body(
+        module._oam_runtime_ready_function_sql(module.PREVIOUS_SCHEMA_REVISION)
+    )
+    assert hashlib.sha256(previous_ready_body.encode("utf-8")).hexdigest() == (
+        "8764e8b910dff314b5a3e0478043c1145e228cbbd9ec70a1715426cd8ad714c3"
+    )
+
+    with pytest.raises(ValueError, match="unsupported opening terminal"):
+        module._replace_function_body(
+            signature=module.GRAPH_SIGNATURE,
+            expected_body_sha256=module.GRAPH_BODY_SHA256,
+            source_fragment=module.LEGACY_TASK_BRANCH,
+            replacement_fragment=module.FIXED_TASK_BRANCH,
+            phase="invalid",
+        )
+    with pytest.raises(ValueError, match="unsupported OAM runtime"):
+        module._oam_runtime_ready_function_sql("20260903_9999")
+
+
+def test_0052_exports_exact_head_and_inherited_dependency_catalogs() -> None:
+    module = _load_0052_migration_module()
+
+    assert module.HEAD_ONLY_FUNCTION_CATALOG_FIELDS == (
+        "signature",
+        "name",
+        "return_type",
+        "language",
+        "volatility",
+        "argument_types",
+        "argument_names",
+        "security_definer",
+        "search_path",
+        "body_sha256",
+    )
+    assert len(module.HEAD_ONLY_FUNCTION_CATALOG) == 10
+    assert len({row[0] for row in module.HEAD_ONLY_FUNCTION_CATALOG}) == 10
+    assert tuple(row[0] for row in module.HEAD_ONLY_FUNCTION_CATALOG) == (
+        *module.NEW_HELPER_SIGNATURES,
+        module.INSERT_GUARD_SIGNATURE,
+        module.COUNT_WRITE_SIGNATURE,
+        module.GRAPH_CLOSURE_SIGNATURE,
+    )
+    body_by_signature = {
+        module.START_GRAPH_SIGNATURE: module.START_GRAPH_BODY,
+        module.ROUND_SUBMISSION_SIGNATURE: module.ROUND_SUBMISSION_BODY,
+        module.SCOPE_COMPLETION_SIGNATURE: module.SCOPE_COMPLETION_BODY,
+        module.REVIEW_GRAPH_SIGNATURE: module.REVIEW_GRAPH_BODY,
+        module.RECOUNT_GRAPH_SIGNATURE: module.RECOUNT_GRAPH_BODY,
+        module.DISPOSITION_GRAPH_SIGNATURE: module.DISPOSITION_GRAPH_BODY,
+        module.TERMINAL_GRAPH_SIGNATURE: module.TERMINAL_GRAPH_BODY,
+        module.INSERT_GUARD_SIGNATURE: module.INSERT_GUARD_BODY,
+        module.COUNT_WRITE_SIGNATURE: module.COUNT_WRITE_BODY,
+        module.GRAPH_CLOSURE_SIGNATURE: module.GRAPH_CLOSURE_BODY,
+    }
+    for row in module.HEAD_ONLY_FUNCTION_CATALOG:
+        (
+            signature,
+            _function_name,
+            return_type,
+            language,
+            volatility,
+            argument_types,
+            argument_names,
+            security_definer,
+            search_path,
+            body_sha256,
+        ) = row
+        assert volatility == "v"
+        assert search_path == (module.FIXED_SEARCH_PATH,)
+        assert re.fullmatch(r"[0-9a-f]{64}", body_sha256)
+        assert hashlib.sha256(
+            body_by_signature[signature].encode("utf-8")
+        ).hexdigest() == body_sha256
+        if signature in module.NEW_HELPER_SIGNATURES:
+            assert return_type == "boolean"
+            assert language == "sql"
+            assert argument_types
+            assert len(argument_names) == len(argument_types)
+            assert not security_definer
+        else:
+            assert return_type == "trigger"
+            assert language == "plpgsql"
+            assert argument_types == ()
+            assert argument_names == ()
+            assert security_definer
+
+    assert module.INHERITED_RECONCILIATION_FUNCTION_CATALOG_FIELDS == (
+        "signature",
+        "name",
+        "return_type",
+        "language",
+        "volatility",
+        "argument_types",
+        "argument_names",
+        "security_definer",
+        "strict",
+        "search_path",
+        "body_sha256",
+        "api_execute",
+    )
+    assert module.INHERITED_RECONCILIATION_FUNCTION_CATALOG == (
+        (
+            "public.rsc_canonical_reconciliation_json_0026(jsonb)",
+            "rsc_canonical_reconciliation_json_0026",
+            "text",
+            "plpgsql",
+            "i",
+            ("jsonb",),
+            ("document",),
+            False,
+            True,
+            (module.FIXED_SEARCH_PATH,),
+            "35a956052a13a94d1c6b57f252273f46fa806b2e9c596531205a148114b7dc53",
+            True,
+        ),
+        (
+            "public.rsc_reconciliation_event_key_0026(text, text, text)",
+            "rsc_reconciliation_event_key_0026",
+            "text",
+            "sql",
+            "i",
+            ("text", "text", "text"),
+            ("operation_name", "anchor", "suffix"),
+            False,
+            True,
+            (module.FIXED_SEARCH_PATH,),
+            "9ec2f326f040fa1cd223e570b83ae6d6ff3dad7eb81f56e55e3342b45d9e5446",
+            True,
+        ),
+        (
+            "public.rsc_guard_reconciliation_effect_0026()",
+            "rsc_guard_reconciliation_effect_0026",
+            "trigger",
+            "plpgsql",
+            "v",
+            (),
+            (),
+            False,
+            False,
+            (module.FIXED_SEARCH_PATH,),
+            "6e7e845ac518f378139b6f79218da0f08a55f9398b63429686af47f8f10024fe",
+            False,
+        ),
+    )
+    assert module.INHERITED_RECONCILIATION_TRIGGER_CATALOG == (
+        (
+            "state_transition_events",
+            "trg_reconciliation_state_effect_guard_0026",
+            module.RECONCILIATION_EFFECT_SIGNATURE,
+            31,
+        ),
+        (
+            "outbox_events",
+            "trg_reconciliation_outbox_effect_guard_0026",
+            module.RECONCILIATION_EFFECT_SIGNATURE,
+            31,
+        ),
+        (
+            "audit_events",
+            "trg_reconciliation_audit_effect_guard_0026",
+            module.RECONCILIATION_EFFECT_SIGNATURE,
+            31,
+        ),
+        (
+            "state_transition_events",
+            "trg_reconciliation_state_effect_no_truncate_0026",
+            module.RECONCILIATION_EFFECT_SIGNATURE,
+            34,
+        ),
+        (
+            "outbox_events",
+            "trg_reconciliation_outbox_effect_no_truncate_0026",
+            module.RECONCILIATION_EFFECT_SIGNATURE,
+            34,
+        ),
+        (
+            "audit_events",
+            "trg_reconciliation_audit_effect_no_truncate_0026",
+            module.RECONCILIATION_EFFECT_SIGNATURE,
+            34,
+        ),
+    )
+
+    assert module.COUNT_WRITE_TRIGGER_CATALOG == (
+        ("stocktake_count_lines", "trg_stocktake_count_lines_current_0052"),
+        ("stocktake_count_serials", "trg_stocktake_count_serials_current_0052"),
+        (
+            "stocktake_count_observations",
+            "trg_stocktake_count_observations_current_0052",
+        ),
+        (
+            "stocktake_scope_count_completions",
+            "trg_stocktake_scope_count_completions_current_0052",
+        ),
+    )
+    assert module.GRAPH_CLOSURE_TRIGGER_CATALOG == (
+        ("stocktake_count_lines", "trg_stocktake_count_lines_graph_0052", "INSERT"),
+        ("stocktake_count_serials", "trg_stocktake_count_serials_graph_0052", "INSERT"),
+        (
+            "stocktake_count_observations",
+            "trg_stocktake_count_observations_graph_0052",
+            "INSERT",
+        ),
+        (
+            "stocktake_scope_count_completions",
+            "trg_stocktake_scope_count_completions_graph_0052",
+            "INSERT",
+        ),
+        (
+            "stocktake_round_submissions",
+            "trg_stocktake_round_submissions_graph_0052",
+            "INSERT",
+        ),
+        ("stocktake_rounds", "trg_stocktake_rounds_graph_0052", "INSERT OR UPDATE"),
+        ("stocktake_reviews", "trg_stocktake_reviews_graph_0052", "INSERT"),
+        ("stocktake_review_items", "trg_stocktake_review_items_graph_0052", "INSERT"),
+        ("stocktake_differences", "trg_stocktake_differences_graph_0052", "INSERT"),
+        (
+            "stocktake_difference_set_completions",
+            "trg_stocktake_difference_set_completions_graph_0052",
+            "INSERT",
+        ),
+        (
+            "stocktake_observation_dispositions",
+            "trg_stocktake_observation_dispositions_graph_0052",
+            "INSERT",
+        ),
+        (
+            "stocktake_postings",
+            "trg_stocktake_postings_graph_0052",
+            "INSERT",
+        ),
+        (
+            "state_transition_events",
+            "trg_state_transition_events_opening_graph_0052",
+            "INSERT",
+        ),
+        ("outbox_events", "trg_outbox_events_opening_graph_0052", "INSERT"),
+        ("audit_events", "trg_audit_events_opening_graph_0052", "INSERT"),
+    )
+    assert module.OPENING_0052_TRIGGER_CATALOG_FIELDS == (
+        "table",
+        "name",
+        "function_signature",
+        "tgtype",
+        "constraint",
+        "deferrable",
+        "initially_deferred",
+        "enabled",
+    )
+    assert len(module.OPENING_0052_TRIGGER_CATALOG) == 20
+    assert len({row[1] for row in module.OPENING_0052_TRIGGER_CATALOG}) == 20
+    assert sum(
+        row[2] == module.INSERT_GUARD_SIGNATURE
+        for row in module.OPENING_0052_TRIGGER_CATALOG
+    ) == 1
+    assert sum(
+        row[2] == module.COUNT_WRITE_SIGNATURE
+        for row in module.OPENING_0052_TRIGGER_CATALOG
+    ) == 4
+    assert sum(
+        row[2] == module.GRAPH_CLOSURE_SIGNATURE
+        for row in module.OPENING_0052_TRIGGER_CATALOG
+    ) == 15
+    assert sum(row[3] == 21 for row in module.OPENING_0052_TRIGGER_CATALOG) == 1
+    assert sum(row[7] == "A" for row in module.OPENING_0052_TRIGGER_CATALOG) == 16
+
+
+def test_0052_parses_named_helpers_and_closes_event_ownership(
+    monkeypatch,
+) -> None:
+    module = _load_0052_migration_module()
+    parser = pytest.importorskip("pglast.parser")
+
+    assert "snapshot_account.created_at IS NULL" in module.START_GRAPH_BODY
+    assert (
+        "snapshot_account.created_at > start_task.cutoff_at"
+        in module.START_GRAPH_BODY
+    )
+    assert (
+        "scoped_account.created_at <= start_task.cutoff_at"
+        in module.START_GRAPH_BODY
+    )
+    assert "opening_headquarters_review_recount" not in module.REVIEW_GRAPH_BODY
+    assert "review_row.review_stage = 'headquarters'" in module.REVIEW_GRAPH_BODY
+    assert "review_row.decision = 'recount'" in module.REVIEW_GRAPH_BODY
+    assert module.FIXED_TASK_BRANCH.count(module.TERMINAL_GRAPH_FUNCTION) == 1
+    assert module.LEGACY_TASK_BRANCH.count(module.TERMINAL_GRAPH_FUNCTION) == 0
+    assert "__RSC_0052_" not in module.FIXED_TASK_BRANCH
+
+    runtime_audit_binding = module._audit_event_chain_binding_sql(
+        "audit_row",
+        require_head=False,
+    )
+    full_chain_binding = module._audit_stream_full_chain_binding_sql(
+        "audit_head"
+    )
+    assert "WITH RECURSIVE" not in runtime_audit_binding
+    assert "audit_predecessor" in runtime_audit_binding
+    assert "audit_successor" in runtime_audit_binding
+    assert "audit_chain_heads" in runtime_audit_binding
+    assert "WITH RECURSIVE" in full_chain_binding
+    assert module.CANONICAL_JSON_FUNCTION in full_chain_binding
+    for helper_body in (
+        module.START_GRAPH_BODY,
+        module.ROUND_SUBMISSION_BODY,
+        module.SCOPE_COMPLETION_BODY,
+        module.REVIEW_GRAPH_BODY,
+        module.RECOUNT_GRAPH_BODY,
+        module.DISPOSITION_GRAPH_BODY,
+        module.TERMINAL_GRAPH_BODY,
+    ):
+        assert module.CANONICAL_JSON_FUNCTION in helper_body
+
+    normalized_closure = " ".join(module.GRAPH_CLOSURE_BODY.split())
+    assert module.GRAPH_CLOSURE_BODY.count("AS forbidden_owner") == 2
+    assert "TG_TABLE_NAME = 'stocktake_postings'" in normalized_closure
+    assert "NEW.posting_kind <> 'opening'" in normalized_closure
+    assert (
+        "NEW.reason = 'opening_' || review_row.review_stage || "
+        "'_review_' || review_row.decision"
+    ) in normalized_closure
+    assert (
+        "NEW.event_type = 'stocktake.opening.' || review_row.review_stage || "
+        "'_reviewed'"
+    ) in normalized_closure
+    review_audit_dispatch = normalized_closure.split(
+        "ELSIF NEW.aggregate_type = 'stocktake_review'",
+        maxsplit=1,
+    )[1].split(
+        "ELSIF NEW.aggregate_type = 'stocktake_recount_case'",
+        maxsplit=1,
+    )[0]
+    review_owner_select = review_audit_dispatch.split(
+        "IF resolved_task_id IS NOT NULL",
+        maxsplit=1,
+    )[0]
+    assert "NEW.action" not in review_owner_select
+    assert "review_row.review_stage" in review_owner_select
+    assert (
+        "NEW.action <> 'stocktake.opening.' || resolved_review_stage || "
+        "'_reviewed'"
+    ) in review_audit_dispatch
+    assert "terminal_task.status = CASE NEW.reason" in normalized_closure
+    assert "terminal_task.status = CASE NEW.event_type" in normalized_closure
+    assert "terminal_task.status = 'posted'" in normalized_closure
+    state_reconciliation = normalized_closure.split(
+        "ELSIF TG_TABLE_NAME = 'state_transition_events'",
+        maxsplit=1,
+    )[1].split("IF NEW.aggregate_type = 'stocktake_task'", maxsplit=1)[0]
+    outbox_reconciliation = normalized_closure.split(
+        "ELSIF TG_TABLE_NAME = 'outbox_events'",
+        maxsplit=1,
+    )[1].split("IF NEW.aggregate_type = 'stocktake_task'", maxsplit=1)[0]
+    assert "reconciliation.opening.approve' ) AND" in state_reconciliation
+    assert "reconciliation.opening.approve' ) AND" in outbox_reconciliation
+    task_outbox = normalized_closure.split(
+        "ELSIF TG_TABLE_NAME = 'outbox_events'",
+        maxsplit=1,
+    )[1].split(
+        "ELSIF NEW.aggregate_type = 'stocktake_round'",
+        maxsplit=1,
+    )[0]
+    assert "stocktake.opening.round_submitted" not in task_outbox
+
+    helper_statements: list[str] = []
+    monkeypatch.setattr(module.op, "execute", helper_statements.append)
+    module._create_opening_helpers()
+    for catalog_row in module.HEAD_ONLY_FUNCTION_CATALOG[:7]:
+        (
+            signature,
+            function_name,
+            _return_type,
+            _language,
+            _volatility,
+            argument_types,
+            argument_names,
+            *_rest,
+        ) = catalog_row
+        create_statement = next(
+            statement
+            for statement in helper_statements
+            if f"CREATE FUNCTION public.{function_name}(" in statement
+        )
+        assert f"CREATE FUNCTION {signature}" not in create_statement
+        for argument_name, argument_type in zip(
+            argument_names,
+            argument_types,
+            strict=True,
+        ):
+            assert f"{argument_name} {argument_type}" in create_statement
+        assert "VOLATILE" in create_statement
+        parser.parse_sql(create_statement)
+
+    guard_statements: list[str] = []
+    monkeypatch.setattr(module.op, "execute", guard_statements.append)
+    module._create_opening_insert_guard()
+    module._create_opening_count_write_guard()
+    module._create_opening_graph_closure()
+    assert sum("CREATE CONSTRAINT TRIGGER" in row for row in guard_statements) == 16
+    assert sum("CREATE TRIGGER" in row for row in guard_statements) == 4
+    assert sum("ENABLE ALWAYS TRIGGER" in row for row in guard_statements) == 16
+    for statement in guard_statements:
+        parser.parse_sql(statement)
+        if "CREATE FUNCTION" in statement:
+            parser.parse_plpgsql_json(statement)
+
+    verification_statements: list[str] = []
+    monkeypatch.setattr(module.op, "execute", verification_statements.append)
+    module._verify_helper_catalog(present=True, phase="parse probe")
+    module._verify_insert_guard_catalog(present=True, phase="parse probe")
+    module._verify_count_write_guard_catalog(present=True, phase="parse probe")
+    module._verify_graph_closure_catalog(present=True, phase="parse probe")
+    module._verify_canonical_json_catalog(phase="parse probe")
+    module._verify_reconciliation_dependency_catalog(phase="parse probe")
+    module._verify_existing_graph_closure_rows()
+    module._require_no_active_opening_task()
+    verification_sql = "\n".join(verification_statements)
+    assert "has_function_privilege('public'" not in verification_sql.lower()
+    assert module.RECONCILIATION_EVENT_KEY_BODY_SHA256 in verification_sql
+    assert module.RECONCILIATION_EFFECT_BODY_SHA256 in verification_sql
+    assert "trigger_row.tgenabled = 'A'" in verification_sql
+    assert "audit_only_owner" in verification_sql
+    assert "state_review.review_stage" in verification_sql
+    assert "outbox_review.review_stage" in verification_sql
+    assert "state_task.status = 'closed'" in verification_sql
+    assert "outbox_task.status = 'closed'" in verification_sql
+    for statement in verification_statements:
+        parser.parse_sql(statement)
+        parser.parse_plpgsql_json(statement)
+
+
+def test_0052_postgresql_offline_upgrade_repairs_callers_and_task_guard(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0052_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.upgrade(
+        config,
+        f"{PRE_OPENING_TERMINAL_GUARD_EXECUTION_HEAD_REVISION}:"
+        f"{OPENING_TERMINAL_GUARD_EXECUTION_REVISION_ID}",
+        sql=True,
+    )
+    sql = output.getvalue()
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(
+            f"public.{table_name}" for table_name in module.LOCK_TABLES
+        )
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    ready_sql = (
+        "CREATE OR REPLACE FUNCTION public."
+        "rsc_oam_runtime_binding_ready_0044()"
+    )
+    assert "-- Running upgrade 20260903_0051 -> 20260903_0052" in sql
+    assert sql.count(lock_sql) == 1
+    assert "legacy upgrade preflight" in sql
+    assert "hardened upgrade postflight" in sql
+    assert sql.count(module.CATALOG_ERROR) == 14
+    assert sql.count(module.REPLACEMENT_ERROR) == 6
+    assert sql.count(module.EXISTING_ROWS_ERROR) == 4
+    assert "JOIN public.stocktake_recount_cases AS recount_case" in sql
+    assert "source_round.submitted_at = task.submitted_at" in sql
+    assert "JOIN public.stocktake_scope_count_completions AS sealing" in sql
+    assert "function_row.proowner = migrator_oid" in sql
+    assert "function_row.prokind = 'f'" in sql
+    assert "NOT function_row.proretset" in sql
+    assert "function_row.pronargs = expected_function.argument_count" in sql
+    assert "pg_catalog.oidvectortypes(function_row.proargtypes)" in sql
+    assert "function_row.proallargtypes IS NULL" in sql
+    assert "function_row.proargmodes IS NULL" in sql
+    assert "function_row.pronargdefaults = 0" in sql
+    assert "function_row.proargdefaults IS NULL" in sql
+    assert "function_row.provariadic = 0" in sql
+    assert "function_row.proconfig IS NOT DISTINCT FROM CASE" in sql
+    assert "WHEN expected_function.search_path IS NULL" in sql
+    assert "THEN NULL::text[]" in sql
+    assert "ELSE ARRAY[expected_function.search_path]::text[]" in sql
+    assert "function_acl.grantor <> migrator_oid" in sql
+    assert "function_acl.grantee = 0" in sql
+    assert "pg_catalog.has_function_privilege" in sql
+    assert "trigger_row.tgenabled = 'A'" in sql
+    assert "trigger_row.tgconstraint <> 0" in sql
+    assert "trigger_row.tgdeferrable" in sql
+    assert "trigger_row.tginitdeferred" in sql
+    assert "trigger_row.tgconstrrelid = 0" in sql
+    assert "trigger_row.tgconstrindid = 0" in sql
+    assert "trigger_row.tgparentid = 0" in sql
+    assert "trigger_row.tgqual IS NULL" in sql
+    assert "trigger_row.tgoldtable IS NULL" in sql
+    assert "trigger_row.tgnewtable IS NULL" in sql
+    assert "trigger_row.tgnargs = 0" in sql
+    assert "trigger_row.tgattr = ''::pg_catalog.int2vector" in sql
+    for signature in module.CALLER_SIGNATURES:
+        assert sql.count(f"ALTER FUNCTION {signature} SECURITY DEFINER") == 1
+        assert f"ALTER FUNCTION {signature} SECURITY INVOKER" not in sql
+    assert f"ALTER FUNCTION {module.GRAPH_SIGNATURE} SECURITY" not in sql
+    assert f"ALTER FUNCTION {module.ACTOR_ASSIGNMENT_SIGNATURE} SECURITY" not in sql
+    for expected_hash in (
+        module.ACTOR_ASSIGNMENT_BODY_SHA256,
+        module.GRAPH_BODY_SHA256,
+        module.LEGACY_COMMIT_BODY_SHA256,
+        module.FIXED_COMMIT_BODY_SHA256,
+        module.LEGACY_ACCOUNT_BODY_SHA256,
+        module.FIXED_ACCOUNT_BODY_SHA256,
+    ):
+        assert expected_hash in sql
+    assert "NEW.current_round_no <> OLD.current_round_no + 1" in sql
+    assert "OLD.submitted_at IS DISTINCT FROM NEW.submitted_at" in sql
+    assert "JOIN public.stocktake_round_submissions AS submission" in sql
+    assert module.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT in sql
+    assert module.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT in sql
+    assert "pg_catalog.pg_get_functiondef(function_oid)" in sql
+    assert sql.count("EXECUTE pg_catalog.replace") == 2
+    assert sql.count(ready_sql) == 1
+    assert "pg_catalog.min(version_num) = '20260903_0052'" in sql
+    assert module.DOWNGRADE_BLOCKER not in sql
+    assert "GRANT " not in sql
+    assert "INSERT INTO public." not in sql
+    assert "UPDATE public." not in sql
+    assert "DELETE FROM public." not in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("legacy upgrade preflight")
+        < sql.index(module.EXISTING_ROWS_ERROR)
+        < sql.index("commit upgrade")
+        < sql.index("account upgrade")
+        < sql.index(f"ALTER FUNCTION {module.COMMIT_SIGNATURE} SECURITY DEFINER")
+        < sql.index("hardened upgrade postflight")
+        < sql.index(ready_sql)
+    )
+
+
+def test_0052_postgresql_offline_downgrade_blocks_active_opening_and_restores(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
+    module = _load_0052_migration_module()
+    output = io.StringIO()
+    config = _config(
+        "postgresql+psycopg://offline:offline@localhost/offline",
+        output_buffer=output,
+    )
+    command.downgrade(
+        config,
+        f"{OPENING_TERMINAL_GUARD_EXECUTION_REVISION_ID}:"
+        f"{PRE_OPENING_TERMINAL_GUARD_EXECUTION_HEAD_REVISION}",
+        sql=True,
+    )
+    sql = output.getvalue()
+    lock_sql = (
+        "LOCK TABLE "
+        + ", ".join(
+            f"public.{table_name}" for table_name in module.LOCK_TABLES
+        )
+        + " IN ACCESS EXCLUSIVE MODE"
+    )
+    ready_sql = (
+        "CREATE OR REPLACE FUNCTION public."
+        "rsc_oam_runtime_binding_ready_0044()"
+    )
+    assert "-- Running downgrade 20260903_0052 -> 20260903_0051" in sql
+    assert sql.count(lock_sql) == 1
+    assert "hardened downgrade preflight" in sql
+    assert "legacy downgrade postflight" in sql
+    assert sql.count(module.CATALOG_ERROR) == 14
+    assert sql.count(module.REPLACEMENT_ERROR) == 6
+    assert sql.count(module.DOWNGRADE_BLOCKER) == 1
+    assert "task.task_type = 'opening'" in sql
+    assert "task.status <> 'closed'" not in sql
+    assert "task.status NOT IN ('closed', 'cancelled')" not in sql
+    assert "FROM public.inventory_opening_establishments" in sql
+    assert "opening-reconciliation-" in sql
+    for signature in module.CALLER_SIGNATURES:
+        assert sql.count(f"ALTER FUNCTION {signature} SECURITY INVOKER") == 1
+        assert f"ALTER FUNCTION {signature} SECURITY DEFINER" not in sql
+    assert f"ALTER FUNCTION {module.GRAPH_SIGNATURE} SECURITY" not in sql
+    assert f"ALTER FUNCTION {module.ACTOR_ASSIGNMENT_SIGNATURE} SECURITY" not in sql
+    assert sql.count("EXECUTE pg_catalog.replace") == 2
+    assert sql.count(ready_sql) == 1
+    assert "pg_catalog.min(version_num) = '20260903_0051'" in sql
+    assert "GRANT " not in sql
+    assert "INSERT INTO public." not in sql
+    assert "UPDATE public." not in sql
+    assert "DELETE FROM public." not in sql
+    assert (
+        sql.index(lock_sql)
+        < sql.index("hardened downgrade preflight")
+        < sql.index(module.DOWNGRADE_BLOCKER)
+        < sql.index("account downgrade")
+        < sql.index("commit downgrade")
+        < sql.index(f"ALTER FUNCTION {module.COMMIT_SIGNATURE} SECURITY INVOKER")
+        < sql.index("legacy downgrade postflight")
+        < sql.index(ready_sql)
     )
 
 

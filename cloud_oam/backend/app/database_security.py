@@ -475,6 +475,14 @@ EXPECTED_AUDIT_TRIGGERS = {
         True,
         True,
     ),
+    "trg_audit_events_opening_graph_0052": (
+        "audit_events",
+        "rsc_require_opening_live_graph_0052",
+        5,
+        True,
+        True,
+        True,
+    ),
     "trg_reconciliation_audit_effect_guard_0026": (
         "audit_events",
         "rsc_guard_reconciliation_effect_0026",
@@ -791,6 +799,24 @@ EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS = {
         False,
         False,
     ),
+    "trg_stocktake_scope_count_completions_current_0052": (
+        "stocktake_scope_count_completions",
+        "rsc_require_opening_count_write_current_0052",
+        "O",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_scope_count_completions_graph_0052": (
+        "stocktake_scope_count_completions",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+        True,
+        True,
+        True,
+    ),
     "trg_stocktake_scope_completions_assignment_0021": (
         "stocktake_scope_count_completions",
         "rsc_validate_stocktake_scope_completion_insert_0021",
@@ -899,6 +925,24 @@ EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS = {
         False,
         False,
     ),
+    "trg_stocktake_count_lines_current_0052": (
+        "stocktake_count_lines",
+        "rsc_require_opening_count_write_current_0052",
+        "O",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_count_lines_graph_0052": (
+        "stocktake_count_lines",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+        True,
+        True,
+        True,
+    ),
     "trg_stocktake_count_observations_immutable_0011": (
         "stocktake_count_observations",
         "rsc_block_opening_count_fact_mutation_0011",
@@ -916,6 +960,24 @@ EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS = {
         False,
         False,
         False,
+    ),
+    "trg_stocktake_count_observations_current_0052": (
+        "stocktake_count_observations",
+        "rsc_require_opening_count_write_current_0052",
+        "O",
+        7,
+        False,
+        False,
+        False,
+    ),
+    "trg_stocktake_count_observations_graph_0052": (
+        "stocktake_count_observations",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+        True,
+        True,
+        True,
     ),
 }
 EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS = {
@@ -1532,6 +1594,156 @@ EXPECTED_OPENING_TERMINAL_TRIGGERS = {
         "rsc_require_opening_terminal_graph_0022",
         "A",
         17,
+    ),
+    "trg_stocktake_reviews_difference_completion_0016": (
+        "stocktake_reviews",
+        "rsc_require_stocktake_difference_completion_0016",
+        "A",
+        7,
+    ),
+    "trg_stocktake_difference_set_completions_immutable_0016": (
+        "stocktake_difference_set_completions",
+        "rsc_block_stocktake_review_fact_mutation_0016",
+        "A",
+        27,
+    ),
+    "trg_stocktake_difference_set_completions_immutable_truncate_0016": (
+        "stocktake_difference_set_completions",
+        "rsc_block_stocktake_review_fact_mutation_0016",
+        "A",
+        34,
+    ),
+    "trg_stocktake_observation_dispositions_immutable_0016": (
+        "stocktake_observation_dispositions",
+        "rsc_block_stocktake_review_fact_mutation_0016",
+        "A",
+        27,
+    ),
+    "trg_stocktake_observation_dispositions_immutable_truncate_0016": (
+        "stocktake_observation_dispositions",
+        "rsc_block_stocktake_review_fact_mutation_0016",
+        "A",
+        34,
+    ),
+    "trg_stocktake_tasks_opening_insert_graph_0052": (
+        "stocktake_tasks",
+        "rsc_require_opening_task_insert_graph_0052",
+        "A",
+        5,
+    ),
+    "trg_stocktake_count_lines_current_0052": (
+        "stocktake_count_lines",
+        "rsc_require_opening_count_write_current_0052",
+        "O",
+        7,
+    ),
+    "trg_stocktake_count_serials_current_0052": (
+        "stocktake_count_serials",
+        "rsc_require_opening_count_write_current_0052",
+        "O",
+        7,
+    ),
+    "trg_stocktake_count_observations_current_0052": (
+        "stocktake_count_observations",
+        "rsc_require_opening_count_write_current_0052",
+        "O",
+        7,
+    ),
+    "trg_stocktake_scope_count_completions_current_0052": (
+        "stocktake_scope_count_completions",
+        "rsc_require_opening_count_write_current_0052",
+        "O",
+        7,
+    ),
+    "trg_stocktake_count_lines_graph_0052": (
+        "stocktake_count_lines",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+    ),
+    "trg_stocktake_count_serials_graph_0052": (
+        "stocktake_count_serials",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+    ),
+    "trg_stocktake_count_observations_graph_0052": (
+        "stocktake_count_observations",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+    ),
+    "trg_stocktake_scope_count_completions_graph_0052": (
+        "stocktake_scope_count_completions",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+    ),
+    "trg_stocktake_round_submissions_graph_0052": (
+        "stocktake_round_submissions",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+    ),
+    "trg_stocktake_rounds_graph_0052": (
+        "stocktake_rounds",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        21,
+    ),
+    "trg_stocktake_reviews_graph_0052": (
+        "stocktake_reviews",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+    ),
+    "trg_stocktake_review_items_graph_0052": (
+        "stocktake_review_items",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+    ),
+    "trg_stocktake_differences_graph_0052": (
+        "stocktake_differences",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+    ),
+    "trg_stocktake_difference_set_completions_graph_0052": (
+        "stocktake_difference_set_completions",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+    ),
+    "trg_stocktake_observation_dispositions_graph_0052": (
+        "stocktake_observation_dispositions",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+    ),
+    "trg_stocktake_postings_graph_0052": (
+        "stocktake_postings",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+    ),
+    "trg_state_transition_events_opening_graph_0052": (
+        "state_transition_events",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+    ),
+    "trg_outbox_events_opening_graph_0052": (
+        "outbox_events",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
+    ),
+    "trg_audit_events_opening_graph_0052": (
+        "audit_events",
+        "rsc_require_opening_live_graph_0052",
+        "A",
+        5,
     ),
 }
 EXPECTED_OPENING_TERMINAL_INDEX = (
@@ -2581,6 +2793,22 @@ OPENING_COMMIT_TRIGGER_NAMES = frozenset(
         "trg_stocktake_posting_items_opening_commit_0022",
         "trg_stocktake_postings_opening_commit_0022",
         "trg_stocktake_tasks_opening_commit_0022",
+        "trg_stocktake_tasks_opening_insert_graph_0052",
+        "trg_stocktake_count_lines_graph_0052",
+        "trg_stocktake_count_serials_graph_0052",
+        "trg_stocktake_count_observations_graph_0052",
+        "trg_stocktake_scope_count_completions_graph_0052",
+        "trg_stocktake_round_submissions_graph_0052",
+        "trg_stocktake_rounds_graph_0052",
+        "trg_stocktake_reviews_graph_0052",
+        "trg_stocktake_review_items_graph_0052",
+        "trg_stocktake_differences_graph_0052",
+        "trg_stocktake_difference_set_completions_graph_0052",
+        "trg_stocktake_observation_dispositions_graph_0052",
+        "trg_stocktake_postings_graph_0052",
+        "trg_state_transition_events_opening_graph_0052",
+        "trg_outbox_events_opening_graph_0052",
+        "trg_audit_events_opening_graph_0052",
     }
 )
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -2791,6 +3019,18 @@ FORMAL_FILE_INTERNAL_FUNCTIONS = {
         "sql",
         (),
     ),
+    ("rsc_require_stocktake_difference_completion_0016", ""): (
+        "v",
+        False,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_block_stocktake_review_fact_mutation_0016", ""): (
+        "v",
+        False,
+        "plpgsql",
+        (),
+    ),
     ("rsc_validate_stocktake_observation_disposition_0016", ""): (
         "v",
         True,
@@ -2833,9 +3073,105 @@ FORMAL_FILE_INTERNAL_FUNCTIONS = {
         "plpgsql",
         ("search_path=pg_catalog, public",),
     ),
+    ("rsc_opening_terminal_graph_complete_0022", "uuid, uuid"): (
+        "s",
+        False,
+        "sql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_require_opening_terminal_graph_0022", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_require_opening_observation_account_0023", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_opening_start_graph_complete_0052", "uuid, boolean"): (
+        "v",
+        False,
+        "sql",
+        ("search_path=pg_catalog, public",),
+    ),
+    (
+        "rsc_opening_round_submission_complete_0052",
+        "uuid, uuid, boolean",
+    ): (
+        "v",
+        False,
+        "sql",
+        ("search_path=pg_catalog, public",),
+    ),
+    (
+        "rsc_opening_scope_count_complete_0052",
+        "uuid, uuid, uuid, boolean",
+    ): (
+        "v",
+        False,
+        "sql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_opening_review_complete_0052", "uuid, boolean"): (
+        "v",
+        False,
+        "sql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_opening_recount_complete_0052", "uuid, boolean"): (
+        "v",
+        False,
+        "sql",
+        ("search_path=pg_catalog, public",),
+    ),
+    (
+        "rsc_opening_observation_disposition_complete_0052",
+        "uuid, boolean",
+    ): (
+        "v",
+        False,
+        "sql",
+        ("search_path=pg_catalog, public",),
+    ),
+    (
+        "rsc_opening_terminal_side_effects_complete_0052",
+        "uuid, boolean",
+    ): (
+        "v",
+        False,
+        "sql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_require_opening_task_insert_graph_0052", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_require_opening_count_write_current_0052", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_require_opening_live_graph_0052", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
     ("rsc_validate_stocktake_scope_region_owner_0025", ""): (
         "v",
         True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
+    ("rsc_guard_reconciliation_effect_0026", ""): (
+        "v",
+        False,
         "plpgsql",
         ("search_path=pg_catalog, public",),
     ),
@@ -3004,6 +3340,26 @@ FORMAL_FILE_INTERNAL_FUNCTION_SHAPES = {
                 ),
             ),
             ("rsc_stocktake_recount_scope_graph_valid_0032", "uuid"),
+            ("rsc_opening_terminal_graph_complete_0022", "uuid, uuid"),
+            ("rsc_opening_start_graph_complete_0052", "uuid, boolean"),
+            (
+                "rsc_opening_round_submission_complete_0052",
+                "uuid, uuid, boolean",
+            ),
+            (
+                "rsc_opening_scope_count_complete_0052",
+                "uuid, uuid, uuid, boolean",
+            ),
+            ("rsc_opening_review_complete_0052", "uuid, boolean"),
+            ("rsc_opening_recount_complete_0052", "uuid, boolean"),
+            (
+                "rsc_opening_observation_disposition_complete_0052",
+                "uuid, boolean",
+            ),
+            (
+                "rsc_opening_terminal_side_effects_complete_0052",
+                "uuid, boolean",
+            ),
         }
         else "void"
         if coordinate in {
@@ -3023,6 +3379,10 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
         "rsc_stocktake_actor_assignment_valid_0011",
         "text, uuid, uuid, bigint, timestamp with time zone, text, text, text",
     ): "09720a289e550a66f2ea400fdb0541d1646916d661538af0d2706f9fe5c326d1",
+    ("rsc_require_stocktake_difference_completion_0016", ""):
+        "13dbc1a56efe49c1cd7065b65374c05f824f779a7e7d5c7f1434dd5047e973ac",
+    ("rsc_block_stocktake_review_fact_mutation_0016", ""):
+        "abb2ae9087445ec056fdd8c7e3b5dae2a598af6f0fc1e61d469646e8aa2d1726",
     ("rsc_validate_stocktake_observation_disposition_0016", ""):
         "94cb47e8e75bd3eac0b448334992299c2cd3cd96f33798ab46e14e2dfe1f9c97",
     ("rsc_validate_stocktake_recount_scope_assignment_0018", ""):
@@ -3040,8 +3400,44 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
         "06cf2fafa1d90f120fe4bba21cc1dc55dba70bd63f649671b4333a6159af06bb",
     ("rsc_validate_stocktake_scope_completion_insert_0021", ""):
         "7470b118731f1fd6e53269457d511f73308eab704048109b32bd039f8df0824f",
+    ("rsc_opening_terminal_graph_complete_0022", "uuid, uuid"):
+        "1eaf4e9bae4bac31f821ba1470d70059d9249d5459b7463e89683b03f0dc73d2",
+    ("rsc_require_opening_terminal_graph_0022", ""):
+        "a74e28ac1b09a7f92ef0179b93e3357d23fd1d7afb7d6c859b1e333ff3699a84",
+    ("rsc_require_opening_observation_account_0023", ""):
+        "c0079cfdaf15a4e9f9b66d76596828c0901b322d32ff4ea63fbbadc3acff163b",
+    ("rsc_opening_start_graph_complete_0052", "uuid, boolean"):
+        "fe1874929ac02dbc1aa590dd0aa3fef03a853e0845849f06943be906aa55491a",
+    (
+        "rsc_opening_round_submission_complete_0052",
+        "uuid, uuid, boolean",
+    ): "29d1e2b9c3ed9cdec240c91134497469fb193e7b88d9ce63fcdec70c46008afa",
+    (
+        "rsc_opening_scope_count_complete_0052",
+        "uuid, uuid, uuid, boolean",
+    ): "b56ff329437860ba3f3011e695df0b56606368cbb33c61ae7b921b3b07a18681",
+    ("rsc_opening_review_complete_0052", "uuid, boolean"):
+        "875ee69968300febafc15cace5b5df7d1f4520ecbff7d071d6132858f205e1ad",
+    ("rsc_opening_recount_complete_0052", "uuid, boolean"):
+        "0372b5fe0a8c2316c6d73f9152495bfabc3b65a3c4e258b180c5df29188ed7a3",
+    (
+        "rsc_opening_observation_disposition_complete_0052",
+        "uuid, boolean",
+    ): "a311f39beff3ec429129d14abf51ea0a1abb7d31971df5248978f44420ba8ccb",
+    (
+        "rsc_opening_terminal_side_effects_complete_0052",
+        "uuid, boolean",
+    ): "33b466605ce587ee7a3505d523e45f8bc6e877060e22a988169724a0fdbdec76",
+    ("rsc_require_opening_task_insert_graph_0052", ""):
+        "9241a81d1261fe3e3a81b81e631893b9e1b4f82112379338e09eedbb5f6e1668",
+    ("rsc_require_opening_count_write_current_0052", ""):
+        "762841d77fc3ff57bb61b42c473aa5a5c46cc2aa0125e8d6abe0642882070b07",
+    ("rsc_require_opening_live_graph_0052", ""):
+        "5d9dc35f6ff5a98ded70055d629484bbc9c2aa420f5bd84f3b45070563dd3c24",
     ("rsc_validate_stocktake_scope_region_owner_0025", ""):
         "904a443c2c5930356af0f15f444f29ec6b6ce61f32294e4b2e3b40dd3a0e4e8e",
+    ("rsc_guard_reconciliation_effect_0026", ""):
+        "6e7e845ac518f378139b6f79218da0f08a55f9398b63429686af47f8f10024fe",
     (STOCKTAKE_DIFFERENCE_COMPLETION_FUNCTION_0031, ""):
         "ead5a0a72c25cd326a1d036dddd384bb583b66141512f568b8929ab31b4773a9",
     ("rsc_stocktake_recount_scope_graph_valid_0032", "uuid"):
@@ -3830,6 +4226,15 @@ ORDER BY trigger_row.tgname
 _OPENING_TERMINAL_TRIGGER_NAME_LITERALS = ",\n      ".join(
     f"'{name}'" for name in sorted(EXPECTED_OPENING_TERMINAL_TRIGGERS)
 )
+_OPENING_TERMINAL_EXACT_CALLER_FUNCTION_LITERALS = ", ".join(
+    f"'{name}'"
+    for name in sorted(
+        {
+            definition[1]
+            for definition in EXPECTED_OPENING_TERMINAL_TRIGGERS.values()
+        }
+    )
+)
 
 _RECONCILIATION_TRIGGER_NAME_LITERALS = ",\n      ".join(
     f"'{name}'" for name in sorted(EXPECTED_RECONCILIATION_TRIGGERS)
@@ -3950,6 +4355,7 @@ _OPENING_TERMINAL_TRIGGER_SQL = text(
 SELECT
     trigger_row.tgname AS trigger_name,
     table_row.relname AS table_name,
+    table_schema.nspname AS table_schema,
     function_row.proname AS function_name,
     function_schema.nspname AS function_schema,
     trigger_row.tgenabled AS enabled,
@@ -3968,9 +4374,20 @@ JOIN pg_proc AS function_row
   ON function_row.oid = trigger_row.tgfoid
 JOIN pg_namespace AS function_schema
   ON function_schema.oid = function_row.pronamespace
-WHERE table_schema.nspname = 'public'
-  AND trigger_row.tgname IN (
-      {_OPENING_TERMINAL_TRIGGER_NAME_LITERALS}
+WHERE (
+      (
+          table_schema.nspname = 'public'
+          AND trigger_row.tgname IN (
+              {_OPENING_TERMINAL_TRIGGER_NAME_LITERALS}
+          )
+      )
+      OR (
+          function_schema.nspname = 'public'
+          AND function_row.proname IN (
+              {_OPENING_TERMINAL_EXACT_CALLER_FUNCTION_LITERALS}
+          )
+          AND pg_catalog.oidvectortypes(function_row.proargtypes) = ''
+      )
   )
   AND NOT trigger_row.tgisinternal
 ORDER BY trigger_row.tgname
@@ -6385,6 +6802,8 @@ def _assert_opening_terminal_triggers(
             continue
         if row.get("table_name") != table_name:
             failures.append(f"{name}.table")
+        if row.get("table_schema") != "public":
+            failures.append(f"{name}.table_schema")
         if (
             row.get("function_schema") != "public"
             or row.get("function_name") != function_name

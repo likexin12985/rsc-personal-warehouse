@@ -284,6 +284,13 @@ STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_MIGRATION_0051 = (
     / "versions"
     / "20260903_0051_stocktake_difference_authorization_hash.py"
 )
+OPENING_TERMINAL_GUARD_EXECUTION_MIGRATION_0052 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260903_0052_opening_terminal_guard_execution.py"
+)
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
     / "backend"
@@ -318,6 +325,13 @@ OPENING_TERMINAL_RUNTIME_MIGRATION_0022 = (
     / "alembic"
     / "versions"
     / "20260831_0022_opening_terminal_runtime_boundary.py"
+)
+OPENING_OBSERVATION_POSTING_MIGRATION_0023 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260831_0023_opening_observation_posting.py"
 )
 
 
@@ -816,10 +830,43 @@ def _load_stocktake_difference_authorization_hash_migration_0051() -> object:
     return migration
 
 
+def _load_opening_terminal_guard_execution_migration_0052() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0052_opening_terminal_guard_execution_manifest",
+        OPENING_TERMINAL_GUARD_EXECUTION_MIGRATION_0052,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
 def _load_stocktake_difference_evaluator_migration_0031() -> object:
     spec = importlib.util.spec_from_file_location(
         "rsc_migration_0031_difference_evaluator_manifest",
         STOCKTAKE_DIFFERENCE_EVALUATOR_MIGRATION_0031,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_opening_terminal_runtime_migration_0022() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0022_opening_terminal_security_manifest",
+        OPENING_TERMINAL_RUNTIME_MIGRATION_0022,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_opening_observation_posting_migration_0023() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0023_opening_observation_security_manifest",
+        OPENING_OBSERVATION_POSTING_MIGRATION_0023,
     )
     assert spec is not None and spec.loader is not None
     migration = importlib.util.module_from_spec(spec)
@@ -1874,6 +1921,554 @@ def test_0051_difference_completion_trigger_is_one_exact_always_binding(
             indexes=_valid_stocktake_recount_indexes(),
             triggers=[*valid, alias],
         )
+
+
+def _opening_terminal_0052_function_bodies() -> dict[tuple[str, str], str]:
+    def load(path: Path, module_name: str) -> object:
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        assert spec is not None and spec.loader is not None
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        return migration
+
+    migration_0011 = load(
+        STOCKTAKE_COUNT_OBSERVATIONS_MIGRATION_0011,
+        "rsc_migration_0011_opening_terminal_0052_manifest",
+    )
+    migration_0016 = load(
+        OPENING_OBSERVATION_DISPOSITIONS_MIGRATION_0016,
+        "rsc_migration_0016_opening_terminal_0052_manifest",
+    )
+    migration_0022 = _load_opening_terminal_runtime_migration_0022()
+    migration_0023 = _load_opening_observation_posting_migration_0023()
+    migration_0026 = load(
+        ACL_MIGRATION,
+        "rsc_migration_0026_opening_terminal_0052_manifest",
+    )
+    migration_0052 = _load_opening_terminal_guard_execution_migration_0052()
+
+    executed_0011: list[str] = []
+    migration_0011.op = SimpleNamespace(execute=executed_0011.append)
+    migration_0011._create_postgresql_count_contract_triggers()
+    actor_sql = next(
+        statement
+        for statement in executed_0011
+        if statement.lstrip().startswith(
+            "CREATE FUNCTION rsc_stocktake_actor_assignment_valid_0011("
+        )
+    )
+    executed_0016: list[str] = []
+    migration_0016.op = SimpleNamespace(execute=executed_0016.append)
+    migration_0016._create_postgresql_guards()
+    review_immutable_sql = next(
+        statement
+        for statement in executed_0016
+        if statement.lstrip().startswith(
+            "CREATE FUNCTION rsc_block_stocktake_review_fact_mutation_0016()"
+        )
+    )
+    review_completion_sql = migration_0016._postgresql_review_function_sql()
+    executed_0026: list[str] = []
+    migration_0026.op = SimpleNamespace(execute=executed_0026.append)
+    migration_0026._create_postgresql_guards()
+    reconciliation_effect_sql = next(
+        statement
+        for statement in executed_0026
+        if statement.lstrip().startswith(
+            "CREATE FUNCTION public.rsc_guard_reconciliation_effect_0026()"
+        )
+    )
+
+    graph_sql = migration_0023._postgresql_graph_function_sql(current=True)
+    commit_sql = migration_0022._postgresql_commit_function_sql()
+    legacy_account_sql = migration_0023._postgresql_account_function_sql()
+    actor_body = actor_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    review_completion_body = review_completion_sql.split(
+        "AS $$", 1
+    )[1].rsplit("$$", 1)[0]
+    review_immutable_body = review_immutable_sql.split(
+        "AS $$", 1
+    )[1].rsplit("$$", 1)[0]
+    reconciliation_effect_body = reconciliation_effect_sql.split(
+        "AS $$", 1
+    )[1].rsplit("$$", 1)[0]
+    graph_body = graph_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    legacy_commit_body = commit_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+    legacy_account_body = legacy_account_sql.split(
+        "AS $$", 1
+    )[1].rsplit("$$", 1)[0]
+    assert hashlib.sha256(graph_body.encode("utf-8")).hexdigest() == (
+        migration_0052.GRAPH_BODY_SHA256
+    )
+    assert hashlib.sha256(legacy_commit_body.encode("utf-8")).hexdigest() == (
+        migration_0052.LEGACY_COMMIT_BODY_SHA256
+    )
+    assert legacy_commit_body.count(migration_0052.LEGACY_TASK_BRANCH) == 1
+    assert migration_0052.FIXED_TASK_BRANCH not in legacy_commit_body
+    hardened_commit_body = legacy_commit_body.replace(
+        migration_0052.LEGACY_TASK_BRANCH,
+        migration_0052.FIXED_TASK_BRANCH,
+    )
+    assert hashlib.sha256(legacy_account_body.encode("utf-8")).hexdigest() == (
+        migration_0052.LEGACY_ACCOUNT_BODY_SHA256
+    )
+    assert legacy_account_body.count(
+        migration_0052.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT
+    ) == 1
+    assert (
+        migration_0052.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT
+        not in legacy_account_body
+    )
+    hardened_account_body = legacy_account_body.replace(
+        migration_0052.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT,
+        migration_0052.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT,
+    )
+    bodies = {
+        (
+            migration_0052.ACTOR_ASSIGNMENT_FUNCTION,
+            (
+                "text, uuid, uuid, bigint, timestamp with time zone, "
+                "text, text, text"
+            ),
+        ): actor_body,
+        (migration_0052.REVIEW_COMPLETION_FUNCTION, ""):
+            review_completion_body,
+        (migration_0052.REVIEW_IMMUTABLE_FUNCTION, ""):
+            review_immutable_body,
+        (migration_0022.PG_GRAPH_CHECK_FUNCTION, "uuid, uuid"): graph_body,
+        (migration_0022.PG_COMMIT_FUNCTION, ""): hardened_commit_body,
+        (migration_0023.PG_ACCOUNT_FUNCTION, ""): hardened_account_body,
+        (migration_0026.PG_EFFECT_FUNCTION, ""): reconciliation_effect_body,
+    }
+    head_bodies = {
+        migration_0052.START_GRAPH_FUNCTION: migration_0052.START_GRAPH_BODY,
+        migration_0052.ROUND_SUBMISSION_FUNCTION:
+            migration_0052.ROUND_SUBMISSION_BODY,
+        migration_0052.SCOPE_COMPLETION_FUNCTION:
+            migration_0052.SCOPE_COMPLETION_BODY,
+        migration_0052.REVIEW_GRAPH_FUNCTION:
+            migration_0052.REVIEW_GRAPH_BODY,
+        migration_0052.RECOUNT_GRAPH_FUNCTION:
+            migration_0052.RECOUNT_GRAPH_BODY,
+        migration_0052.DISPOSITION_GRAPH_FUNCTION:
+            migration_0052.DISPOSITION_GRAPH_BODY,
+        migration_0052.TERMINAL_GRAPH_FUNCTION:
+            migration_0052.TERMINAL_GRAPH_BODY,
+        migration_0052.INSERT_GUARD_FUNCTION:
+            migration_0052.INSERT_GUARD_BODY,
+        migration_0052.COUNT_WRITE_FUNCTION: migration_0052.COUNT_WRITE_BODY,
+        migration_0052.GRAPH_CLOSURE_FUNCTION:
+            migration_0052.GRAPH_CLOSURE_BODY,
+    }
+    for row in migration_0052.HEAD_ONLY_FUNCTION_CATALOG:
+        coordinate = (row[1], ", ".join(row[5]))
+        bodies[coordinate] = head_bodies[row[1]]
+    return bodies
+
+
+def test_0052_opening_terminal_internal_function_manifest_is_exact() -> None:
+    bodies = _opening_terminal_0052_function_bodies()
+    migration_0052 = _load_opening_terminal_guard_execution_migration_0052()
+    actor_assignment_coordinate = (
+        "rsc_stocktake_actor_assignment_valid_0011",
+        (
+            "text, uuid, uuid, bigint, timestamp with time zone, "
+            "text, text, text"
+        ),
+    )
+    review_completion_coordinate = (
+        "rsc_require_stocktake_difference_completion_0016",
+        "",
+    )
+    review_immutable_coordinate = (
+        "rsc_block_stocktake_review_fact_mutation_0016",
+        "",
+    )
+    graph_coordinate = (
+        "rsc_opening_terminal_graph_complete_0022",
+        "uuid, uuid",
+    )
+    commit_coordinate = ("rsc_require_opening_terminal_graph_0022", "")
+    account_coordinate = (
+        "rsc_require_opening_observation_account_0023",
+        "",
+    )
+    reconciliation_effect_coordinate = (
+        "rsc_guard_reconciliation_effect_0026",
+        "",
+    )
+    expected_definitions = {
+        actor_assignment_coordinate: ("s", False, "sql", ()),
+        review_completion_coordinate: (
+            "v",
+            False,
+            "plpgsql",
+            (migration_0052.FIXED_SEARCH_PATH,),
+        ),
+        review_immutable_coordinate: ("v", False, "plpgsql", ()),
+        graph_coordinate: (
+            "s",
+            False,
+            "sql",
+            ("search_path=pg_catalog, public",),
+        ),
+        commit_coordinate: (
+            "v",
+            True,
+            "plpgsql",
+            ("search_path=pg_catalog, public",),
+        ),
+        account_coordinate: (
+            "v",
+            True,
+            "plpgsql",
+            ("search_path=pg_catalog, public",),
+        ),
+        reconciliation_effect_coordinate: (
+            "v",
+            False,
+            "plpgsql",
+            (migration_0052.FIXED_SEARCH_PATH,),
+        ),
+    }
+    expected_shapes = {
+        actor_assignment_coordinate: ("f", "boolean", False),
+        review_completion_coordinate: ("f", "trigger", False),
+        review_immutable_coordinate: ("f", "trigger", False),
+        graph_coordinate: ("f", "boolean", False),
+        commit_coordinate: ("f", "trigger", False),
+        account_coordinate: ("f", "trigger", False),
+        reconciliation_effect_coordinate: ("f", "trigger", False),
+    }
+    expected_hashes = {
+        actor_assignment_coordinate: migration_0052.ACTOR_ASSIGNMENT_BODY_SHA256,
+        review_completion_coordinate:
+            migration_0052.REVIEW_COMPLETION_BODY_SHA256,
+        review_immutable_coordinate:
+            migration_0052.REVIEW_IMMUTABLE_BODY_SHA256,
+        graph_coordinate: migration_0052.GRAPH_BODY_SHA256,
+        commit_coordinate: migration_0052.FIXED_COMMIT_BODY_SHA256,
+        account_coordinate: migration_0052.FIXED_ACCOUNT_BODY_SHA256,
+        reconciliation_effect_coordinate:
+            migration_0052.INHERITED_RECONCILIATION_FUNCTION_CATALOG[2][10],
+    }
+    for row in migration_0052.HEAD_ONLY_FUNCTION_CATALOG:
+        coordinate = (row[1], ", ".join(row[5]))
+        expected_definitions[coordinate] = (row[4], row[7], row[3], row[8])
+        expected_shapes[coordinate] = ("f", row[2], False)
+        expected_hashes[coordinate] = row[9]
+
+    assert migration_0052.revision == "20260903_0052"
+    assert migration_0052.down_revision == "20260903_0051"
+    assert migration_0052.PREVIOUS_SCHEMA_REVISION == (
+        migration_0052.down_revision
+    )
+    assert len(migration_0052.PERSISTENT_FUNCTION_SIGNATURES) == 6
+    assert len(migration_0052.HEAD_ONLY_FUNCTION_SIGNATURES) == 10
+    assert migration_0052.ALL_FUNCTION_SIGNATURES == (
+        *migration_0052.PERSISTENT_FUNCTION_SIGNATURES,
+        *migration_0052.HEAD_ONLY_FUNCTION_SIGNATURES,
+    )
+    assert migration_0052.HEAD_ONLY_FUNCTION_SIGNATURES == tuple(
+        row[0] for row in migration_0052.HEAD_ONLY_FUNCTION_CATALOG
+    )
+    helper_catalog = migration_0052.HEAD_ONLY_FUNCTION_CATALOG[:7]
+    guard_catalog = migration_0052.HEAD_ONLY_FUNCTION_CATALOG[7:]
+    assert all(
+        row[2] == "boolean"
+        and row[3] == "sql"
+        and row[4] == "v"
+        and row[7] is False
+        and row[8] == (migration_0052.FIXED_SEARCH_PATH,)
+        for row in helper_catalog
+    )
+    assert all(
+        row[2] == "trigger"
+        and row[3] == "plpgsql"
+        and row[4] == "v"
+        and row[5] == ()
+        and row[7] is True
+        and row[8] == (migration_0052.FIXED_SEARCH_PATH,)
+        for row in guard_catalog
+    )
+    assert migration_0052.CALLER_SIGNATURES == (
+        migration_0052.COMMIT_SIGNATURE,
+        migration_0052.ACCOUNT_SIGNATURE,
+    )
+    assert migration_0052.ACTOR_ASSIGNMENT_BODY_SHA256 == (
+        FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[
+            actor_assignment_coordinate
+        ]
+    )
+    assert FORMAL_FILE_INTERNAL_FUNCTIONS[actor_assignment_coordinate] == (
+        "s",
+        False,
+        "sql",
+        (),
+    )
+    assert {
+        row[1] for row in migration_0052.INHERITED_RECONCILIATION_FUNCTION_CATALOG
+    } == {
+        "rsc_canonical_reconciliation_json_0026",
+        "rsc_reconciliation_event_key_0026",
+        "rsc_guard_reconciliation_effect_0026",
+    }
+    assert set(bodies) == set(expected_definitions)
+    for coordinate, body in bodies.items():
+        assert FORMAL_FILE_INTERNAL_FUNCTIONS[coordinate] == (
+            expected_definitions[coordinate]
+        )
+        assert FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[coordinate] == (
+            expected_shapes[coordinate]
+        )
+        body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        assert body_hash == expected_hashes[coordinate]
+        assert FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate] == (
+            body_hash
+        )
+        assert coordinate not in RUNTIME_EXECUTE_FUNCTIONS
+
+    assert "session_user::text <> 'star_oam_api'" in (
+        bodies[account_coordinate]
+    )
+    assert "current_user" not in bodies[account_coordinate]
+    assert migration_0052.FIXED_TASK_BRANCH in bodies[commit_coordinate]
+    assert migration_0052.LEGACY_TASK_BRANCH not in bodies[commit_coordinate]
+    assert set(FORMAL_FILE_INTERNAL_FUNCTION_SHAPES) == set(
+        FORMAL_FILE_INTERNAL_FUNCTIONS
+    )
+    assert set(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256) == set(
+        FORMAL_FILE_INTERNAL_FUNCTIONS
+    )
+
+
+def test_0052_opening_trigger_catalogs_are_pinned_by_startup_guards() -> None:
+    migration = _load_opening_terminal_guard_execution_migration_0052()
+
+    def function_name(signature: str) -> str:
+        return signature.split("(", 1)[0].rsplit(".", 1)[1]
+
+    assert len(migration.TRIGGER_CATALOG) == 12
+    assert len(migration.REVIEW_GUARD_TRIGGER_CATALOG) == 5
+    assert len(migration.OPENING_0052_TRIGGER_CATALOG) == 20
+    assert len(migration.INHERITED_RECONCILIATION_TRIGGER_CATALOG) == 6
+    assert len(EXPECTED_OPENING_TERMINAL_TRIGGERS) == 53
+    assert len(OPENING_COMMIT_TRIGGER_NAMES) == 28
+
+    for table_name, trigger_name, signature, trigger_type in (
+        migration.TRIGGER_CATALOG
+    ):
+        assert EXPECTED_OPENING_TERMINAL_TRIGGERS[trigger_name] == (
+            table_name,
+            function_name(signature),
+            "A",
+            trigger_type,
+        )
+        assert trigger_name in OPENING_COMMIT_TRIGGER_NAMES
+
+    for table_name, trigger_name, signature, trigger_type in (
+        migration.REVIEW_GUARD_TRIGGER_CATALOG
+    ):
+        assert EXPECTED_OPENING_TERMINAL_TRIGGERS[trigger_name] == (
+            table_name,
+            function_name(signature),
+            "A",
+            trigger_type,
+        )
+        assert trigger_name not in OPENING_COMMIT_TRIGGER_NAMES
+
+    for (
+        table_name,
+        trigger_name,
+        signature,
+        trigger_type,
+        is_constraint_trigger,
+        is_deferrable,
+        is_initially_deferred,
+        enabled,
+    ) in migration.OPENING_0052_TRIGGER_CATALOG:
+        caller = function_name(signature)
+        assert EXPECTED_OPENING_TERMINAL_TRIGGERS[trigger_name] == (
+            table_name,
+            caller,
+            enabled,
+            trigger_type,
+        )
+        assert (trigger_name in OPENING_COMMIT_TRIGGER_NAMES) is (
+            is_constraint_trigger and is_deferrable and is_initially_deferred
+        )
+
+    sensitive_0052 = {
+        trigger_name
+        for (
+            table_name,
+            trigger_name,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+        ) in migration.OPENING_0052_TRIGGER_CATALOG
+        if table_name in {
+            "stocktake_count_lines",
+            "stocktake_count_observations",
+            "stocktake_scope_count_completions",
+        }
+    }
+    assert len(sensitive_0052) == 6
+    for trigger_name in sensitive_0052:
+        table_name, caller, enabled, trigger_type = (
+            EXPECTED_OPENING_TERMINAL_TRIGGERS[trigger_name]
+        )
+        is_deferred = trigger_name in OPENING_COMMIT_TRIGGER_NAMES
+        assert EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS[trigger_name] == (
+            table_name,
+            caller,
+            enabled,
+            trigger_type,
+            is_deferred,
+            is_deferred,
+            is_deferred,
+        )
+
+    audit_trigger = "trg_audit_events_opening_graph_0052"
+    assert EXPECTED_AUDIT_TRIGGERS[audit_trigger] == (
+        "audit_events",
+        "rsc_require_opening_live_graph_0052",
+        5,
+        True,
+        True,
+        True,
+    )
+    for table_name, trigger_name, signature, trigger_type in (
+        migration.INHERITED_RECONCILIATION_TRIGGER_CATALOG
+    ):
+        assert EXPECTED_RECONCILIATION_TRIGGERS[trigger_name] == (
+            table_name,
+            function_name(signature),
+            "A",
+            trigger_type,
+        )
+
+
+def test_0052_opening_terminal_startup_rejects_function_security_body_and_acl_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bodies = _opening_terminal_0052_function_bodies()
+    definitions = {
+        coordinate: FORMAL_FILE_INTERNAL_FUNCTIONS[coordinate]
+        for coordinate in bodies
+    }
+    shapes = {
+        coordinate: FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[coordinate]
+        for coordinate in bodies
+    }
+    hashes = {
+        coordinate: FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
+        for coordinate in bodies
+    }
+    rows: list[dict[str, object]] = []
+    for function_id, coordinate in enumerate(sorted(bodies), start=1):
+        function_name, argument_types = coordinate
+        volatility, is_security_definer, language_name, configuration = (
+            definitions[coordinate]
+        )
+        function_kind, result_type, is_strict = shapes[coordinate]
+        rows.append(
+            {
+                "function_id": function_id,
+                "function_name": function_name,
+                "argument_types": argument_types,
+                "function_kind": function_kind,
+                "result_type": result_type,
+                "returns_set": False,
+                "variadic_type": 0,
+                "argument_modes": None,
+                "argument_default_count": 0,
+                "is_strict": is_strict,
+                "source_body": bodies[coordinate],
+                "volatility": volatility,
+                "parallel_safety": "u",
+                "is_leakproof": False,
+                "is_security_definer": is_security_definer,
+                "language_name": language_name,
+                "configuration": list(configuration),
+                "owner_name": "star_oam_migrator",
+                "can_execute": False,
+                "api_execute_is_grantable": False,
+                "unexpected_execute_grantee_count": 0,
+                "public_can_execute": False,
+                "edge_can_execute": False,
+                "backup_can_execute": False,
+                "edge_receiver_can_execute": False,
+                "projector_can_execute": False,
+            }
+        )
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(database_security, "RUNTIME_EXECUTE_FUNCTIONS", {})
+        patcher.setattr(database_security, "RUNTIME_FUNCTION_SHAPES", {})
+        patcher.setattr(database_security, "RUNTIME_FUNCTION_BODY_SHA256", {})
+        patcher.setattr(
+            database_security,
+            "FORMAL_FILE_INTERNAL_FUNCTIONS",
+            definitions,
+        )
+        patcher.setattr(
+            database_security,
+            "FORMAL_FILE_INTERNAL_FUNCTION_SHAPES",
+            shapes,
+        )
+        patcher.setattr(
+            database_security,
+            "FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256",
+            hashes,
+        )
+        patcher.setattr(database_security, "OAM_SYNC_RUNTIME_FUNCTIONS", set())
+        patcher.setattr(
+            database_security, "OAM_SYNC_RUNTIME_FUNCTION_DEFINITIONS", {}
+        )
+        patcher.setattr(
+            database_security, "OAM_SYNC_RUNTIME_FUNCTION_SHAPES", {}
+        )
+        patcher.setattr(
+            database_security, "OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256", {}
+        )
+
+        _assert_runtime_function_acl(
+            rows, expected_migration_role="star_oam_migrator"
+        )
+
+        for target_index, target_row in enumerate(rows):
+            drift_cases = (
+                ("source_body", "tampered opening terminal function body"),
+                (
+                    "is_security_definer",
+                    not bool(target_row["is_security_definer"]),
+                ),
+                ("configuration", ["search_path=public"]),
+                ("owner_name", "star_oam_api"),
+                ("can_execute", True),
+                ("api_execute_is_grantable", True),
+                ("unexpected_execute_grantee_count", 1),
+                ("public_can_execute", True),
+                ("edge_can_execute", True),
+                ("backup_can_execute", True),
+                ("edge_receiver_can_execute", True),
+                ("projector_can_execute", True),
+            )
+            for field, value in drift_cases:
+                drifted = [dict(row) for row in rows]
+                drifted[target_index][field] = value
+                with pytest.raises(
+                    DatabaseSecurityBoundaryError,
+                    match=str(target_row["function_name"]),
+                ):
+                    _assert_runtime_function_acl(
+                        drifted,
+                        expected_migration_role="star_oam_migrator",
+                    )
 
 
 def test_0047_nonopening_start_catalog_guard_is_exact_and_rejects_drift(
@@ -4020,12 +4615,19 @@ def test_runtime_function_acl_rejects_execute_or_wrong_owner(
                 expected_migration_role="star_oam_migrator",
             )
 
+    drift_target = allowed_rows[0]
     for field, value in (
-        ("can_execute", False),
+        ("can_execute", not bool(drift_target["can_execute"])),
         ("api_execute_is_grantable", True),
         ("unexpected_execute_grantee_count", 1),
-        ("volatility", "v"),
-        ("is_security_definer", True),
+        (
+            "volatility",
+            "i" if drift_target["volatility"] != "i" else "v",
+        ),
+        (
+            "is_security_definer",
+            not bool(drift_target["is_security_definer"]),
+        ),
         ("argument_types", "text"),
         ("function_kind", "p"),
         ("result_type", "record"),
@@ -4252,6 +4854,7 @@ def _valid_opening_terminal_trigger_rows() -> list[dict[str, object]]:
         {
             "trigger_name": name,
             "table_name": table_name,
+            "table_schema": "public",
             "function_name": function_name,
             "function_schema": "public",
             "enabled": enabled,
@@ -4277,9 +4880,20 @@ def test_opening_terminal_trigger_guard_requires_exact_always_bindings() -> None
     query = str(_OPENING_TERMINAL_TRIGGER_SQL)
     for trigger_name in EXPECTED_OPENING_TERMINAL_TRIGGERS:
         assert f"'{trigger_name}'" in query
+    assert "function_row.proname IN" in query
+    exact_callers = {
+        expected[1]
+        for expected in EXPECTED_OPENING_TERMINAL_TRIGGERS.values()
+    }
+    for caller in exact_callers:
+        assert f"'{caller}'" in query
+    assert "oidvectortypes(function_row.proargtypes) = ''" in query
 
     for field, value in (
+        ("table_name", "stocktake_scopes"),
+        ("function_name", "rsc_unapproved_opening_guard"),
         ("enabled", "D"),
+        ("table_schema", "attacker"),
         ("function_schema", "attacker"),
         ("has_when_clause", True),
         ("has_column_filter", True),
@@ -4292,11 +4906,51 @@ def test_opening_terminal_trigger_guard_requires_exact_always_bindings() -> None
         ):
             _assert_opening_terminal_triggers(drifted)
 
+    representative_names = (
+        "trg_stocktake_reviews_difference_completion_0016",
+        "trg_stocktake_count_lines_current_0052",
+        "trg_stocktake_count_lines_graph_0052",
+    )
+    for trigger_name in representative_names:
+        target_index = next(
+            index
+            for index, row in enumerate(rows)
+            if row["trigger_name"] == trigger_name
+        )
+        target = rows[target_index]
+        for field, value in (
+            ("trigger_type", 0),
+            (
+                "is_constraint_trigger",
+                not bool(target["is_constraint_trigger"]),
+            ),
+            ("is_deferrable", not bool(target["is_deferrable"])),
+            (
+                "is_initially_deferred",
+                not bool(target["is_initially_deferred"]),
+            ),
+        ):
+            drifted = [row.copy() for row in rows]
+            drifted[target_index][field] = value
+            with pytest.raises(
+                DatabaseSecurityBoundaryError,
+                match="opening terminal trigger",
+            ):
+                _assert_opening_terminal_triggers(drifted)
+
     with pytest.raises(
         DatabaseSecurityBoundaryError,
         match="opening terminal trigger",
     ):
         _assert_opening_terminal_triggers(rows[:-1])
+
+    extra_alias = rows[0].copy()
+    extra_alias["trigger_name"] = "trg_unapproved_opening_caller_alias"
+    with pytest.raises(
+        DatabaseSecurityBoundaryError,
+        match="opening terminal trigger",
+    ):
+        _assert_opening_terminal_triggers([*rows, extra_alias])
 
 
 def _valid_reconciliation_trigger_rows() -> list[dict[str, object]]:
@@ -4531,19 +5185,23 @@ def test_audit_trigger_guard_requires_exact_enabled_bindings() -> None:
 def test_audit_trigger_inventory_covers_cross_domain_manifests() -> None:
     cross_domain: dict[str, tuple[object, ...]] = {}
 
-    opening_name = "trg_audit_events_opening_commit_0022"
-    table_name, function_name, enabled, trigger_type = (
-        EXPECTED_OPENING_TERMINAL_TRIGGERS[opening_name]
-    )
-    assert enabled == "A"
-    cross_domain[opening_name] = (
-        table_name,
-        function_name,
-        trigger_type,
-        True,
-        True,
-        True,
-    )
+    for opening_name in (
+        "trg_audit_events_opening_commit_0022",
+        "trg_audit_events_opening_graph_0052",
+    ):
+        table_name, function_name, enabled, trigger_type = (
+            EXPECTED_OPENING_TERMINAL_TRIGGERS[opening_name]
+        )
+        assert enabled == "A"
+        assert opening_name in OPENING_COMMIT_TRIGGER_NAMES
+        cross_domain[opening_name] = (
+            table_name,
+            function_name,
+            trigger_type,
+            True,
+            True,
+            True,
+        )
 
     for name, (table_name, function_name, enabled, trigger_type) in (
         EXPECTED_RECONCILIATION_TRIGGERS.items()
@@ -4640,6 +5298,7 @@ def test_audit_trigger_inventory_covers_cross_domain_manifests() -> None:
 
     assert set(cross_domain) == {
         "trg_audit_events_opening_commit_0022",
+        "trg_audit_events_opening_graph_0052",
         "trg_reconciliation_audit_effect_guard_0026",
         "trg_reconciliation_audit_effect_no_truncate_0026",
         "trg_audit_events_cancellation_graph_0037",
@@ -5446,10 +6105,16 @@ def test_sensitive_stocktake_trigger_allowlist_matches_migration_catalog(
         "trg_stocktake_count_lines_submitted_immutable_0010",
         "trg_stocktake_count_lines_immutable_0011",
         "trg_stocktake_count_lines_assignment_0021",
+        "trg_stocktake_count_lines_current_0052",
+        "trg_stocktake_count_lines_graph_0052",
         "trg_stocktake_count_observations_immutable_0011",
         "trg_stocktake_count_observations_assignment_0021",
+        "trg_stocktake_count_observations_current_0052",
+        "trg_stocktake_count_observations_graph_0052",
         "trg_stocktake_scope_count_completions_immutable_0011",
         "trg_stocktake_scope_completions_assignment_0021",
+        "trg_stocktake_scope_count_completions_current_0052",
+        "trg_stocktake_scope_count_completions_graph_0052",
         POSTGRESQL_COMPLETION_PERSONAL_TRIGGER_0019,
         "trg_stocktake_recount_scope_assignments_validate_0018",
         "trg_stocktake_recount_scope_assignments_immutable_0018",
@@ -5467,10 +6132,16 @@ def test_sensitive_stocktake_trigger_allowlist_matches_migration_catalog(
         "trg_stocktake_count_lines_submitted_immutable_0010": "O",
         "trg_stocktake_count_lines_immutable_0011": "O",
         "trg_stocktake_count_lines_assignment_0021": "A",
+        "trg_stocktake_count_lines_current_0052": "O",
+        "trg_stocktake_count_lines_graph_0052": "A",
         "trg_stocktake_count_observations_immutable_0011": "O",
         "trg_stocktake_count_observations_assignment_0021": "A",
+        "trg_stocktake_count_observations_current_0052": "O",
+        "trg_stocktake_count_observations_graph_0052": "A",
         "trg_stocktake_scope_count_completions_immutable_0011": "O",
         "trg_stocktake_scope_completions_assignment_0021": "A",
+        "trg_stocktake_scope_count_completions_current_0052": "O",
+        "trg_stocktake_scope_count_completions_graph_0052": "A",
         POSTGRESQL_COMPLETION_PERSONAL_TRIGGER_0019: "A",
         "trg_stocktake_recount_scope_assignments_validate_0018": "A",
         "trg_stocktake_recount_scope_assignments_immutable_0018": "A",

@@ -1261,6 +1261,114 @@ def test_cross_region_physical_location_is_rejected(world: SimpleNamespace):
     ) == "stock_location_outside_region"
 
 
+def test_personal_location_must_remain_a_leaf(world: SimpleNamespace):
+    child = StockLocation(
+        id=uuid.uuid4(),
+        code="PERSONAL-CHILD",
+        name="个人仓非法子库位",
+        location_type="personal",
+        owner_org_id=world.region_x.id,
+        parent_id=world.personal_location.id,
+        custodian_person_id=world.technician.person.id,
+        status="active",
+    )
+    world.db.add(child)
+    world.db.flush()
+    command = replace(
+        world.command,
+        task_no="OPEN-X-PERSONAL-NOT-LEAF",
+        scopes=(
+            OpeningStocktakeScopeInput(
+                owner_org_id=world.region_x.id,
+                location_id=world.personal_location.id,
+                assignee_user_id=world.technician.user.id,
+            ),
+        ),
+    )
+
+    assert _error_code(
+        lambda: _start(
+            world,
+            command=command,
+            key="opening-idempotency-personal-not-leaf",
+        )
+    ) == "personal_location_not_leaf"
+    assert world.db.scalar(
+        select(func.count()).select_from(FormalStocktakeTask)
+    ) == 0
+
+
+@pytest.mark.parametrize("parent_mode", ("inactive", "wrong_owner"))
+def test_personal_location_requires_same_owner_region_parent(
+    world: SimpleNamespace,
+    parent_mode: str,
+):
+    if parent_mode == "inactive":
+        world.region_location.status = "inactive"
+    else:
+        world.region_location.owner_org_id = world.region_y.id
+    world.db.flush()
+    command = replace(
+        world.command,
+        task_no=f"OPEN-X-PERSONAL-PARENT-{parent_mode.upper()}",
+        scopes=(
+            OpeningStocktakeScopeInput(
+                owner_org_id=world.region_x.id,
+                location_id=world.personal_location.id,
+                assignee_user_id=world.technician.user.id,
+            ),
+        ),
+    )
+
+    assert _error_code(
+        lambda: _start(
+            world,
+            command=command,
+            key=f"opening-idempotency-personal-parent-{parent_mode}",
+        )
+    ) == "personal_location_parent_invalid"
+    assert world.db.scalar(
+        select(func.count()).select_from(FormalStocktakeTask)
+    ) == 0
+
+
+def test_personal_location_owner_must_be_an_active_region_company(
+    world: SimpleNamespace,
+):
+    department = _organization(
+        world.db,
+        "REG-X-DEPT-PERSONAL",
+        "区域 X 个人仓部门",
+        "department",
+        parent=world.region_x,
+    )
+    world.region_location.owner_org_id = department.id
+    world.personal_location.owner_org_id = department.id
+    world.db.flush()
+    command = replace(
+        world.command,
+        task_no="OPEN-X-PERSONAL-OWNER-TYPE",
+        scopes=(
+            OpeningStocktakeScopeInput(
+                owner_org_id=world.region_x.id,
+                location_id=world.personal_location.id,
+                assignee_user_id=world.technician.user.id,
+            ),
+        ),
+    )
+
+    assert _error_code(
+        lambda: _start(
+            world,
+            command=command,
+            key="opening-idempotency-personal-owner-type",
+        )
+    ) == "personal_location_owner_invalid"
+    assert world.db.scalar(
+        select(func.count()).select_from(FormalStocktakeTask)
+    ) == 0
+
+
 def test_manager_cannot_cross_owner_even_with_second_region_manage_grant(
     world: SimpleNamespace,
 ):

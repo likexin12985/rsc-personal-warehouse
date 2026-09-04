@@ -2780,6 +2780,60 @@ def _require_location_in_region_tree(
     *,
     lock_rows: bool = False,
 ) -> None:
+    if location.location_type == "personal":
+        location_owner_statement = (
+            select(Organization)
+            .where(Organization.id == location.owner_org_id)
+            .execution_options(populate_existing=True)
+        )
+        if lock_rows and db.get_bind().dialect.name != "postgresql":
+            location_owner_statement = location_owner_statement.with_for_update()
+        location_owner = db.scalar(location_owner_statement)
+        if (
+            location_owner is None
+            or location_owner.status != "active"
+            or location_owner.org_type != "region_company"
+        ):
+            _fail(
+                "personal_location_owner_invalid",
+                "precondition_failed",
+                "个人仓归属组织必须是启用的区域公司",
+            )
+
+        child_statement = (
+            select(StockLocation.id)
+            .where(StockLocation.parent_id == location.id)
+            .limit(1)
+        )
+        if lock_rows and db.get_bind().dialect.name != "postgresql":
+            child_statement = child_statement.with_for_update()
+        if db.scalar(child_statement) is not None:
+            _fail(
+                "personal_location_not_leaf",
+                "precondition_failed",
+                "个人仓必须是位置树叶子节点",
+            )
+
+        parent_statement = (
+            select(StockLocation)
+            .where(StockLocation.id == location.parent_id)
+            .execution_options(populate_existing=True)
+        )
+        if lock_rows and db.get_bind().dialect.name != "postgresql":
+            parent_statement = parent_statement.with_for_update()
+        parent = db.scalar(parent_statement)
+        if (
+            parent is None
+            or parent.status != "active"
+            or parent.location_type != "region"
+            or parent.owner_org_id != location.owner_org_id
+        ):
+            _fail(
+                "personal_location_parent_invalid",
+                "precondition_failed",
+                "个人仓必须直接挂在同归属的启用区域仓下",
+            )
+
     current: StockLocation | None = location
     seen_locations: set[uuid.UUID] = set()
     while current is not None:
