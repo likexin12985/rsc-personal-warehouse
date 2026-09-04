@@ -565,6 +565,31 @@ readiness，保持函数身份、权限、安全属性和触发器绑定。有�
 该提交时小程序通用 4xx 清标、两端身份/硬刷新恢复和命令核验仍待补齐，
 不得将数据库门禁通过或脱敏完成等同于一期、预生产或生产放行。
 
+后续 `ff9611e97ce53adb98c6e05a9af15b59176b6c8a` 已补小程序首次直接拒绝白名单与确认弹窗
+防重（全套 229 项通过）。复盘人员选择候选 `31b1ae52df57bc6fcdd1ca8d8b894685622c7d21`
+已替换 PC 手填 UUID：新只读目录严格按任务/来源轮次/范围/版本/人员授权筛选并复证；游标只含
+已返回的授权人员，超过内部扫描上限整体失败关闭。Web 509 项、TypeScript/构建与后端定向
+90 项通过；[run 33928469889](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33928469889)
+已通过该准确 SHA 的 PostgreSQL 门禁：静态 `1351 passed, 1 skipped, 1 warning`（590.95 秒），
+动态 `1 passed, 1 warning`（193.17 秒）。独立 worktree 的本地后端/边缘全量
+`2326 passed, 2 skipped`（927.66 秒）。后续历史计数核验 API 候选
+`a3f0483298108e4411f9d1b1167617364038ff7b` 的 50 项新增定向测试通过，
+[run 33929437568](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33929437568)
+静态 1401 项通过，动态失败于“初盘已处置记录→复盘后历史核验”。修复
+`ca1a45cf1bafabd6372c1e29f7fdb8a20703b317` 已补齐同任务已预锁证据集合，定向 99 项通过；
+[run 33930872181](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33930872181)
+已被最终客户端候选取代并取消，不计通过。最终 `e54765a` 的
+[run 33931135022](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33931135022)
+正在执行，未宣告通过。
+PC 基础 `8df5447` 与页面 `d553ef5` 已保存：Web 676 项与 TypeScript/构建通过，已接持久 count
+恢复、单次 POST 和同源多标签任务写屏障。小程序 `d6f166c` 已完成持久计数接线及独立复核，
+516 项通过；PC `e54765a` 进一步补齐合法小数、数值上限、SN 单件和精确重复维度前置校验，
+最终 Web 691 项及 TypeScript/构建通过。不代表其他写意图、未执行封存或上述 PostgreSQL
+门禁已完成。故障矩阵与真机待验边界见
+[计数恢复验收清单](docs/OPENING_COUNT_RECOVERY_ACCEPTANCE.md)。
+完整剩余边界见
+[一期剩余验收清单](docs/PHASE1_REMAINING_ACCEPTANCE_20260905.md)。
+
 以下为 `0052–0058` 已完成盘点迁移的兼容背景，不是当前 head 的发布证据。
 `20260903_0052` 的期初盘点请求证据链不支持新旧应用与数据库混合运行；
 `0053` 以前向迁移修复十五表共享延迟触发器在非 `stocktake_rounds` 记录上访问轮次专属字段的问题。

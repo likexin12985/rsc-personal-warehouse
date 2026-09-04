@@ -215,3 +215,37 @@ Web 定向 `61 passed`、全套 `425 passed`，TypeScript 和构建通过；小�
 
 当前正向连续历史及精确 SQL 静态断言已覆盖版本连续约束；完整恶意历史 `0,1,1,3` 图在
 `0059 → 0060` 升级时拒绝的专项真库夹具仍需补充，不能声称该反例已经过真实执行。
+
+## 后续复盘人员目录与历史计数核验切片
+
+`31b1ae52df57bc6fcdd1ca8d8b894685622c7d21` 新增任务绑定的复盘人员目录和 PC 选择入口，
+没有数据库迁移或 ACL 变化；真实 API 角色 SQL READ ONLY 分页、版本漂移和开启复盘后状态拒绝
+已通过 [run 33928469889](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33928469889)：
+静态 `1351 passed, 1 skipped, 1 warning`（590.95 秒），动态 `1 passed, 1 warning`（193.17 秒）。
+该 SHA 独立临时 worktree 的本地后端/边缘全量 `2326 passed, 2 skipped`（927.66 秒）；Web 509 项
+与 TypeScript/构建通过，小程序既有 229 项通过。不同测试范围和提交不能混作一个全量结果。
+
+后续 `a3f0483298108e4411f9d1b1167617364038ff7b` 新增历史计数 command-status API，50 项
+定向测试通过；新增真库夹具覆盖未封轮/封轮、后续复盘、过账、关闭和未知请求，逐次比较业务表
+计数及库存/版本不变。该查询无业务写入但持有既有规范锁，不能在 SQL READ ONLY 事务执行。
+精确 SHA [run 33929437568](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33929437568)
+静态 `1401 passed, 1 skipped, 1 warning`（611.56 秒），动态 `1 failed`（167.98 秒）。
+失败点为 `test_postgresql16_release_gate.py` 的初盘处置后开启复盘，再查询历史计数：
+当前轮空处置解析遗漏来源初盘事实，历史复核因此失败关闭。后续仅修复同任务已预锁解析集合，
+保留缺失/重复/越任务拒绝；不通过放松验证或放宽数据库权限解决。
+
+修复 `ca1a45cf1bafabd6372c1e29f7fdb8a20703b317` 已提交并推送，仅合并目标任务的已预锁
+处置证据，拒绝漏轮、重复轮、越任务候选、重复观测和伪造证明；当前轮处置回放仍使用逐轮集合。
+历史状态/正式详情两文件定向 99 项通过（55.21 秒）；真库夹具新增普通当前详情不改业务表的断言。
+[run 33930872181](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33930872181)
+已因最终客户端候选取代而取消，不计通过。最终 `e54765a` 的
+[run 33931135022](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33931135022)
+正在执行；结果未出前最新全绿仍为 `31b1ae5`，不得按本地测试提前放行。
+
+PC `8df5447`、`d553ef5` 已推送持久计数协调与页面接线，Web 676 项、TypeScript/构建
+通过（662.91 KB 既有大包提示）。小程序 `d6f166c5d2e95b281ca4e548dbfa66fdc30994dd`
+已完成持久计数模块/页面及独立复核，完整 516 项通过（根任务复跑 3.99 秒）。
+PC `e54765a10b4d465c6073df69e3fa97296ef90f93` 补齐小数/SN/重复维度前置校验后，
+最终 Web 全套 691 项（15.39 秒）、TypeScript/构建通过（663.44 KB 大包提示仍属 P2）。
+未执行封存、非计数动作持久恢复及生产 UAT 尚未完成。此处客户端证据不得替换上述失败或
+进行中的真库结果；详细故障矩阵见 `OPENING_COUNT_RECOVERY_ACCEPTANCE.md`。
