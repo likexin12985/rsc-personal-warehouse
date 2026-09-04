@@ -2306,7 +2306,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_guard_material_request_supply_write_0060", ""):
         "0fe289826a8aa4d14e2ecd48a9900484bf8929a054dbfa52340fa27786453f26",
     ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint"):
-        "092a41ff7072397c8b8311f3bab658dcc4a69212a4bf893dc9e9271a0dd625f0",
+        "f5803e9a3e0c931228692260c04c9bd4e544eb147aea45192277e57c7b969403",
     ("rsc_dispatch_material_request_supply_causality_0059", ""):
         "935be3c5144f0bb9d5dad8652bb8284bc7116caaefc9ccb5d177e922b41530c5",
     ("rsc_guard_material_request_content_write_0046", ""):

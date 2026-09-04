@@ -28,7 +28,9 @@ def assert_supply_gate(api_engine, *, security_engine, source_request_id, manage
         MaterialRequestCommand, MaterialRequestFile, MaterialRequestLine, SupplyTask,
     )
     from app.dependencies import get_formal_principal
-    from app.formal_services.material_request_draft import create_material_request_draft, submit_material_request
+    from app.formal_services.material_request_draft import (
+        create_material_request_draft, derive_material_request_create_id, submit_material_request,
+    )
     from app.formal_services.audit_chain import append_audit_event
     from app.formal_services.material_request_lifecycle import (
         MaterialRequestCancelInput, MaterialRequestCancellationLineInput, cancel_material_request,
@@ -45,7 +47,6 @@ def assert_supply_gate(api_engine, *, security_engine, source_request_id, manage
     from test_material_request_approval_service import _approve, _evidence, _principal, _register_external, _verify_external
     from test_material_request_draft_service import SECRET, _draft
 
-    request_id = uuid.uuid4()
     with Session(api_engine) as db:
         source = db.get(MaterialRequest, source_request_id)
         requester_id = source.requester_user_id
@@ -58,10 +59,13 @@ def assert_supply_gate(api_engine, *, security_engine, source_request_id, manage
             .join(ApprovalInstance, ApprovalInstance.id == ApprovalStep.instance_id)
             .where(ApprovalInstance.request_id == source.id, ApprovalExternalRegistration.status == "accepted"))
         assert verifier_id and verifier_id != admin_user_id
+        requester = _principal(db, requester_id)
+        request_id = derive_material_request_create_id(actor=requester,
+            idempotency_key="pg16-supply-demand-create", idempotency_hmac_secret=SECRET)
         world = SimpleNamespace(actor_person=SimpleNamespace(id=source.requester_person_id),
             materials=(SimpleNamespace(id=line.material_id),), attachment=SimpleNamespace(id=attachment.file_id))
         draft = _draft(world, request_id)
-        created = create_material_request_draft(db, actor=_principal(db, requester_id),
+        created = create_material_request_draft(db, actor=requester,
             material_request_id=request_id, draft=draft, idempotency_key="pg16-supply-demand-create",
             idempotency_hmac_secret=SECRET, trace_request_id="pg16-supply-demand-create-trace")
         db.commit()

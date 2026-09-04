@@ -347,6 +347,13 @@ MATERIAL_REQUEST_SUPPLY_SECURITY_MIGRATION_0060 = (
     / "versions"
     / "20260905_0060_material_request_supply_security_hardening.py"
 )
+MATERIAL_REQUEST_SUPPLY_EVENT_KEY_MIGRATION_0061 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260905_0061_material_request_supply_event_key_expression.py"
+)
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
     / "backend"
@@ -988,6 +995,17 @@ def _load_material_request_supply_security_migration_0060() -> object:
     spec = importlib.util.spec_from_file_location(
         "rsc_migration_0060_material_request_supply_security_manifest",
         MATERIAL_REQUEST_SUPPLY_SECURITY_MIGRATION_0060,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _load_material_request_supply_event_key_migration_0061() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0061_material_request_supply_event_key_manifest",
+        MATERIAL_REQUEST_SUPPLY_EVENT_KEY_MIGRATION_0061,
     )
     assert spec is not None and spec.loader is not None
     migration = importlib.util.module_from_spec(spec)
@@ -7603,7 +7621,7 @@ def test_0059_supply_guard_bodies_triggers_and_runtime_acl_match_manifest() -> N
     }
 
 
-def test_0060_supply_security_hashes_and_triggers_match_current_manifest() -> None:
+def test_0060_supply_security_hashes_and_triggers_match_historical_body() -> None:
     old = _load_material_request_supply_causality_migration_0059()
     migration = _load_material_request_supply_security_migration_0060()
 
@@ -7629,9 +7647,7 @@ def test_0060_supply_security_hashes_and_triggers_match_current_manifest() -> No
     ):
         validator = validator.replace(legacy, fixed)
     assert hashlib.sha256(validator.encode()).hexdigest() == (
-        MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[
-            (migration.VALIDATOR_FUNCTION, "uuid, bigint")
-        ]
+        migration.VALIDATOR_BODY_SHA256_0060
     )
 
     dispatcher = old._supply_dispatcher_sql().split("AS $$", 1)[1].rsplit(
@@ -7656,6 +7672,63 @@ def test_0060_supply_security_hashes_and_triggers_match_current_manifest() -> No
         migration.TASK_GUARD_TRIGGER
     ][:4] == (
         "supply_tasks", migration.WRITE_GUARD_FUNCTION, "A", 7
+    )
+
+
+def test_0061_supply_event_key_hashes_match_current_security_manifests() -> None:
+    migration_0059 = _load_material_request_supply_causality_migration_0059()
+    migration_0060 = _load_material_request_supply_security_migration_0060()
+    migration = _load_material_request_supply_event_key_migration_0061()
+
+    validator = migration_0059._supply_validator_sql().split(
+        "AS $$", 1
+    )[1].rsplit("$$", 1)[0]
+    for legacy, fixed in (
+        (
+            migration_0060.VALIDATOR_DECLARATION_0059,
+            migration_0060.VALIDATOR_DECLARATION_0060,
+        ),
+        (
+            migration_0060.VALIDATOR_ACTOR_0059,
+            migration_0060.VALIDATOR_ACTOR_0060,
+        ),
+        (
+            migration_0060.VALIDATOR_TASK_COUNT_0059,
+            migration_0060.VALIDATOR_TASK_COUNT_0060,
+        ),
+        (
+            migration_0060.VALIDATOR_TASK_IF_0059,
+            migration_0060.VALIDATOR_TASK_IF_0060,
+        ),
+        (
+            migration_0060.VALIDATOR_ORDERED_0059,
+            migration_0060.VALIDATOR_ORDERED_0060,
+        ),
+        (
+            migration_0060.VALIDATOR_SEQUENCE_0059,
+            migration_0060.VALIDATOR_SEQUENCE_0060,
+        ),
+    ):
+        validator = validator.replace(legacy, fixed)
+    assert hashlib.sha256(validator.encode()).hexdigest() == (
+        migration.PRIOR_VALIDATOR_BODY_SHA256
+    )
+    validator = validator.replace(
+        migration.LEGACY_EVENT_KEY_EXPRESSION,
+        migration.FIXED_EVENT_KEY_EXPRESSION,
+    )
+    assert hashlib.sha256(validator.encode()).hexdigest() == (
+        migration.FIXED_VALIDATOR_BODY_SHA256
+    )
+    assert migration.FIXED_VALIDATOR_BODY_SHA256 == (
+        MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[
+            ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint")
+        ]
+    )
+    assert migration.RUNTIME_READY_BODY_SHA256_0061 == (
+        OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256[
+            ("rsc_oam_runtime_binding_ready_0044", "")
+        ]
     )
 
 

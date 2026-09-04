@@ -9,6 +9,7 @@ import uuid
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
 from app.demand_models import (
@@ -120,6 +121,39 @@ def _downstream_counts(db: Session) -> tuple[int, int, int]:
         db.scalar(select(func.count()).select_from(NotificationEvent)),
         db.scalar(select(func.count()).select_from(OutboxEvent)),
     )
+
+
+def test_supply_reads_substitutions_under_parent_lock_without_update_privilege(
+    approval_db: Session,
+) -> None:
+    db = approval_db
+    world, request, line, version = _approved_request(db, key="supply-parent-lock")
+    _grant_supply_manage(db, world)
+    actor = _principal(db, world.admin_users[0].id)
+    statements: list[str] = []
+    original_scalar, original_scalars = db.scalar, db.scalars
+
+    def scalar(statement, *args, **kwargs):
+        statements.append(str(statement.compile(dialect=postgresql.dialect())))
+        return original_scalar(statement, *args, **kwargs)
+
+    def scalars(statement, *args, **kwargs):
+        statements.append(str(statement.compile(dialect=postgresql.dialect())))
+        return original_scalars(statement, *args, **kwargs)
+
+    with patch.object(db, "scalar", side_effect=scalar), patch.object(
+        db, "scalars", side_effect=scalars
+    ):
+        _create(db, actor=actor, request=request, line=line,
+                request_version=version, key="supply-select-only-substitutions")
+
+    parent_locks = [index for index, sql in enumerate(statements)
+                    if "FROM material_requests " in sql and "FOR UPDATE" in sql]
+    substitution_reads = [index for index, sql in enumerate(statements)
+                          if "FROM substitution_decisions" in sql]
+    assert parent_locks and substitution_reads
+    assert min(parent_locks) < min(substitution_reads)
+    assert all("FOR UPDATE" not in statements[index] for index in substitution_reads)
 
 
 def test_create_supply_plan_is_final_approval_bounded_and_exactly_replayable(

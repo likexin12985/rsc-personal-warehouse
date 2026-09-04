@@ -968,6 +968,9 @@ def _lock_supply_graph(
             "需求单缺少可核验的最终审批实例",
         )
     line_ids = tuple(line.id for line in lines)
+    # The parent request is already locked. Every substitution INSERT/UPDATE
+    # takes that same parent lock through the ALWAYS 0037 trigger. Read the
+    # stable decision set without requiring UPDATE authority on this table.
     substitutions = (
         tuple(
             db.scalars(
@@ -977,7 +980,6 @@ def _lock_supply_graph(
                     SubstitutionDecision.request_line_id,
                     SubstitutionDecision.id,
                 )
-                .with_for_update()
                 .execution_options(populate_existing=True)
             ).all()
         )
