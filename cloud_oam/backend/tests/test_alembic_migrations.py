@@ -4846,8 +4846,8 @@ def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
     normalized_existing_rows_sql = " ".join(existing_rows_sql.split())
     for required_existing_guard in (
         "FROM public.stocktake_recount_cases AS task_recount_case WHERE "
-        "task_recount_case.task_id = task.id ) IS DISTINCT FROM pg_catalog."
-        "greatest( task.current_round_no - 1, 0 )",
+        "task_recount_case.task_id = task.id ) IS DISTINCT FROM GREATEST( "
+        "task.current_round_no - 1, 0 )",
         "task.status = 'counting' AND task.current_round_no = 1 AND "
         "task.submitted_at IS NULL",
         "task.status = 'counting' AND task.current_round_no > 1 AND "
@@ -4932,6 +4932,8 @@ def test_0052_pins_exact_opening_terminal_bodies_catalog_and_ready_sql(
         "premature_review.round_id = current_round.id"
     ) == 2
     assert "historical_role.status" not in existing_rows_sql
+    assert "pg_catalog.greatest(" not in existing_rows_sql.lower()
+    assert "pg_catalog.least(" not in existing_rows_sql.lower()
     assert f"public.{module.ACTOR_ASSIGNMENT_FUNCTION}(" not in (
         existing_rows_sql
     )
@@ -5508,6 +5510,8 @@ def test_0052_postgresql_offline_upgrade_repairs_callers_and_task_guard(
         sql=True,
     )
     sql = output.getvalue()
+    assert "pg_catalog.greatest(" not in sql.lower()
+    assert "pg_catalog.least(" not in sql.lower()
     lock_sql = (
         "LOCK TABLE "
         + ", ".join(

@@ -13846,7 +13846,7 @@ BEGIN
                    SELECT pg_catalog.count(*)
                      FROM public.stocktake_recount_cases AS task_recount_case
                     WHERE task_recount_case.task_id = task.id
-               ) IS DISTINCT FROM pg_catalog.greatest(
+               ) IS DISTINCT FROM GREATEST(
                    task.current_round_no - 1,
                    0
                )
