@@ -135,7 +135,7 @@ LEGACY_COMMIT_BODY_SHA256 = (
     "7f7e740c0faffaa61910adddef31fc7aaa469972ca5b264aa842e05ff298acba"
 )
 FIXED_COMMIT_BODY_SHA256 = (
-    "620447501293b1304d3fa0d7b73bbfb0939619dd9ff528dc1bfdd8232b4be36f"
+    "cf8bde9a034cc8ce8999aa20b63f7aff34eec6a08909ac2d7e76ce7c1df38d60"
 )
 LEGACY_ACCOUNT_BODY_SHA256 = (
     "2e52965c8086e01fc242e1ddb0205eb961304faf588b04f28182588cbdb4728a"
@@ -802,7 +802,7 @@ def _review_side_effect_proof_sql(
                     '_reviewed'
                 AND review_audit.aggregate_type = 'stocktake_review'
                 AND review_audit.aggregate_id = {review_alias}.id::text
-                AND review_audit.before_jsonb IS NULL
+                AND {_jsonb_null_sql('review_audit.before_jsonb')}
                 AND review_audit.after_jsonb = ({metadata}) ||
                     pg_catalog.jsonb_build_object(
                         'authorization_version',
@@ -1013,7 +1013,7 @@ def _recount_side_effect_proof_sql(
                 AND recount_audit.aggregate_type =
                     'stocktake_recount_case'
                 AND recount_audit.aggregate_id = {case_alias}.id::text
-                AND recount_audit.before_jsonb IS NULL
+                AND {_jsonb_null_sql('recount_audit.before_jsonb')}
                 AND recount_audit.after_jsonb = {audit_payload}
                 AND recount_audit.request_id ~
                     '^opening-recount-request-[0-9a-f]{{64}}$'
@@ -1039,6 +1039,17 @@ def _json_text_sql(expression: str) -> str:
     """Render a non-null scalar exactly as Python's compact UTF-8 JSON."""
 
     return f"pg_catalog.to_json(({expression})::text)::text"
+
+
+def _jsonb_null_sql(expression: str) -> str:
+    """Accept the two persisted representations of a semantic JSON null.
+
+    SQLAlchemy's default PostgreSQL JSONB binding stores Python ``None`` as the
+    JSON scalar ``null``.  Older SQL writers may instead have stored SQL NULL.
+    Both canonicalize to the same JSON null in the audit-event hash document.
+    """
+
+    return f"({expression} IS NULL OR {expression} = 'null'::jsonb)"
 
 
 def _timestamp_json_sql(expression: str) -> str:
@@ -2335,7 +2346,7 @@ def _round_submission_side_effect_proof_sql(
                               'stocktake.opening.scope_count_completed'
                           AND side_audit.actor_user_id =
                               side_completion.completed_by_user_id
-                          AND side_audit.before_jsonb IS NULL
+                          AND {_jsonb_null_sql('side_audit.before_jsonb')}
                           AND side_audit.occurred_at =
                               side_completion.completed_at
                           AND side_audit.created_at >=
@@ -2425,7 +2436,7 @@ def _round_submission_side_effect_proof_sql(
                 AND round_audit.action = 'stocktake.opening.round_submitted'
                 AND round_audit.actor_user_id =
                     {submission_alias}.submitted_by_user_id
-                AND round_audit.before_jsonb IS NULL
+                AND {_jsonb_null_sql('round_audit.before_jsonb')}
                 AND round_audit.after_jsonb = {context}
                 AND round_audit.request_id ~
                     '^opening-count-request-[0-9a-f]{{64}}$'
@@ -5969,7 +5980,7 @@ SELECT COALESCE((
                AND start_audit.action = 'stocktake.opening.started'
                AND start_audit.aggregate_type = 'stocktake_task'
                AND start_audit.aggregate_id = start_task.id::text
-               AND start_audit.before_jsonb IS NULL
+               AND {_jsonb_null_sql('start_audit.before_jsonb')}
                AND start_audit.after_jsonb =
                    pg_catalog.jsonb_build_object(
                        'control_line_count', (
@@ -6215,7 +6226,7 @@ def _scope_completion_side_effect_proof_sql(
                     'stocktake.opening.scope_count_completed'
                 AND scope_audit.actor_user_id =
                     {completion_alias}.completed_by_user_id
-                AND scope_audit.before_jsonb IS NULL
+                AND {_jsonb_null_sql('scope_audit.before_jsonb')}
                 AND scope_audit.after_jsonb = ({context}) ||
                     pg_catalog.jsonb_build_object(
                         'has_pending_verification', EXISTS (
@@ -7327,7 +7338,7 @@ def _disposition_audit_proof_sql(
                 'stocktake.opening.observation_disposed'
             AND disposition_audit.actor_user_id =
                 {disposition_alias}.decided_by_user_id
-            AND disposition_audit.before_jsonb IS NULL
+            AND {_jsonb_null_sql('disposition_audit.before_jsonb')}
             AND disposition_audit.after_jsonb = {after_json}
             AND disposition_audit.request_id ~
                 '^opening-observation-disposition-request-[0-9a-f]{{64}}$'
@@ -8255,7 +8266,7 @@ def _opening_inventory_transaction_effect_proof_sql(
                AND inventory_audit.action = 'inventory.transaction.posted'
                AND inventory_audit.actor_user_id =
                    {transaction_alias}.actor_user_id
-               AND inventory_audit.before_jsonb IS NULL
+               AND {_jsonb_null_sql('inventory_audit.before_jsonb')}
                AND inventory_audit.after_jsonb =
                    pg_catalog.jsonb_build_object(
                        'ledger_cursor', {transaction_alias}.ledger_cursor,
@@ -8459,25 +8470,25 @@ TERMINAL_GRAPH_BODY = _terminal_graph_helper_body()
 # Updated mechanically after the SQL bodies are finalized.  Catalog checks
 # fail closed if either source changes without its digest changing with it.
 START_GRAPH_BODY_SHA256 = (
-    "44ba812784bf4ec1b402587121437199bed7abab07ce734a58706339035b51ea"
+    "6db62f66efe1b87c556211e9392ab701cd2d8c6fa2c86150c1b95ee0d7f15833"
 )
 ROUND_SUBMISSION_BODY_SHA256 = (
-    "29d1e2b9c3ed9cdec240c91134497469fb193e7b88d9ce63fcdec70c46008afa"
+    "8d006592f17ba330ab852659c77de1b59f3c92661f48aded882fdfb444a4120f"
 )
 SCOPE_COMPLETION_BODY_SHA256 = (
-    "b56ff329437860ba3f3011e695df0b56606368cbb33c61ae7b921b3b07a18681"
+    "b6f05d5cb7915ee79c57c4ebc009edd40292df1302051f29797c946570246430"
 )
 REVIEW_GRAPH_BODY_SHA256 = (
-    "165945a7bd299e9e4f11b5b2c4e775036793ef5bee8b2c2320a3b1235cbc4847"
+    "2d5b50eb94a5d6cb83f087d4b1638840d09b9286bb40d87ee1d138b57239bff5"
 )
 RECOUNT_GRAPH_BODY_SHA256 = (
-    "0372b5fe0a8c2316c6d73f9152495bfabc3b65a3c4e258b180c5df29188ed7a3"
+    "444925db06a41cd804bf05ca77036c48731bb3b35e74dcc45c7256447333c864"
 )
 DISPOSITION_GRAPH_BODY_SHA256 = (
-    "a311f39beff3ec429129d14abf51ea0a1abb7d31971df5248978f44420ba8ccb"
+    "726114484a2665a95ca98a61cc3b895eb136c7bde2fe0796eb743044d401b5eb"
 )
 TERMINAL_GRAPH_BODY_SHA256 = (
-    "00e0bcb715b683a0ccd366aca3a88444c4b7f63bd333a32fd662c5a170f179c7"
+    "617cf43cc0cf9dc41ec7e971fd696415681a5b0b9858429ce81d97a342d79d0c"
 )
 
 

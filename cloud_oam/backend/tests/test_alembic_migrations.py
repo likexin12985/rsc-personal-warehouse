@@ -5341,6 +5341,31 @@ def test_0052_parses_named_helpers_and_closes_event_ownership(
         in module.START_GRAPH_BODY
     )
     normalized_start_graph = " ".join(module.START_GRAPH_BODY.split())
+    assert module._jsonb_null_sql("audit_row.before_jsonb") == (
+        "(audit_row.before_jsonb IS NULL OR "
+        "audit_row.before_jsonb = 'null'::jsonb)"
+    )
+    audit_null_proofs = (
+        (module.START_GRAPH_BODY, "start_audit"),
+        (module.ROUND_SUBMISSION_BODY, "side_audit"),
+        (module.ROUND_SUBMISSION_BODY, "round_audit"),
+        (module.SCOPE_COMPLETION_BODY, "scope_audit"),
+        (module.REVIEW_GRAPH_BODY, "review_audit"),
+        (module.RECOUNT_GRAPH_BODY, "recount_audit"),
+        (module.DISPOSITION_GRAPH_BODY, "disposition_audit"),
+        (module.TERMINAL_GRAPH_BODY, "inventory_audit"),
+    )
+    for helper_body, audit_alias in audit_null_proofs:
+        normalized_helper = " ".join(helper_body.split())
+        assert (
+            f"({audit_alias}.before_jsonb IS NULL OR "
+            f"{audit_alias}.before_jsonb = 'null'::jsonb)"
+            in normalized_helper
+        )
+        assert (
+            f"AND {audit_alias}.before_jsonb IS NULL AND"
+            not in normalized_helper
+        )
     assert (
         "pg_catalog.lower(pg_catalog.btrim(control_source.code)) = 'oam'"
         in normalized_start_graph

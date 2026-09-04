@@ -10745,6 +10745,21 @@ def _seed_0047_stocktake_inventory(
         assert started.control_line_count == 1
         session.commit()
 
+    with Session(api_engine) as session:
+        assert tuple(
+            session.execute(
+                text(
+                    "SELECT before_jsonb IS NULL, "
+                    "before_jsonb = 'null'::jsonb "
+                    "FROM public.audit_events "
+                    "WHERE aggregate_type = 'stocktake_task' "
+                    "AND aggregate_id = :task_id "
+                    "AND action = 'stocktake.opening.started'"
+                ),
+                {"task_id": str(started.task_id)},
+            ).one()
+        ) == (False, True)
+
     _assert_0052_raw_opening_task_insert_rejected(
         api_engine,
         task_id=started.task_id,

@@ -3404,31 +3404,31 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_opening_terminal_graph_complete_0022", "uuid, uuid"):
         "1eaf4e9bae4bac31f821ba1470d70059d9249d5459b7463e89683b03f0dc73d2",
     ("rsc_require_opening_terminal_graph_0022", ""):
-        "620447501293b1304d3fa0d7b73bbfb0939619dd9ff528dc1bfdd8232b4be36f",
+        "cf8bde9a034cc8ce8999aa20b63f7aff34eec6a08909ac2d7e76ce7c1df38d60",
     ("rsc_require_opening_observation_account_0023", ""):
         "c0079cfdaf15a4e9f9b66d76596828c0901b322d32ff4ea63fbbadc3acff163b",
     ("rsc_opening_start_graph_complete_0052", "uuid, boolean"):
-        "44ba812784bf4ec1b402587121437199bed7abab07ce734a58706339035b51ea",
+        "6db62f66efe1b87c556211e9392ab701cd2d8c6fa2c86150c1b95ee0d7f15833",
     (
         "rsc_opening_round_submission_complete_0052",
         "uuid, uuid, boolean",
-    ): "29d1e2b9c3ed9cdec240c91134497469fb193e7b88d9ce63fcdec70c46008afa",
+    ): "8d006592f17ba330ab852659c77de1b59f3c92661f48aded882fdfb444a4120f",
     (
         "rsc_opening_scope_count_complete_0052",
         "uuid, uuid, uuid, boolean",
-    ): "b56ff329437860ba3f3011e695df0b56606368cbb33c61ae7b921b3b07a18681",
+    ): "b6f05d5cb7915ee79c57c4ebc009edd40292df1302051f29797c946570246430",
     ("rsc_opening_review_complete_0052", "uuid, boolean"):
-        "165945a7bd299e9e4f11b5b2c4e775036793ef5bee8b2c2320a3b1235cbc4847",
+        "2d5b50eb94a5d6cb83f087d4b1638840d09b9286bb40d87ee1d138b57239bff5",
     ("rsc_opening_recount_complete_0052", "uuid, boolean"):
-        "0372b5fe0a8c2316c6d73f9152495bfabc3b65a3c4e258b180c5df29188ed7a3",
+        "444925db06a41cd804bf05ca77036c48731bb3b35e74dcc45c7256447333c864",
     (
         "rsc_opening_observation_disposition_complete_0052",
         "uuid, boolean",
-    ): "a311f39beff3ec429129d14abf51ea0a1abb7d31971df5248978f44420ba8ccb",
+    ): "726114484a2665a95ca98a61cc3b895eb136c7bde2fe0796eb743044d401b5eb",
     (
         "rsc_opening_terminal_side_effects_complete_0052",
         "uuid, boolean",
-    ): "00e0bcb715b683a0ccd366aca3a88444c4b7f63bd333a32fd662c5a170f179c7",
+    ): "617cf43cc0cf9dc41ec7e971fd696415681a5b0b9858429ce81d97a342d79d0c",
     ("rsc_require_opening_task_insert_graph_0052", ""):
         "9241a81d1261fe3e3a81b81e631893b9e1b4f82112379338e09eedbb5f6e1668",
     ("rsc_require_opening_count_write_current_0052", ""):
