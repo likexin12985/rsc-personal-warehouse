@@ -13,8 +13,10 @@ import {
   openingReviewItemPolicy,
   postOpeningStocktake,
   recordOpeningObservationDisposition,
+  resolveOpeningScopeCount,
   submitOpeningRegionReview,
   submitOpeningScopeCount,
+  type OpeningPhysicalObservationInput,
   validateOpeningStocktakeTaskDetail,
   validateOpeningStocktakeTaskPage,
 } from "./formalOpeningStocktake";
@@ -49,6 +51,8 @@ const DIFFERENCE_ID = "70000000-0000-4000-8000-000000000007";
 const OBSERVATION_ID = "80000000-0000-4000-8000-000000000008";
 const DISPOSITION_ID = "90000000-0000-4000-8000-000000000009";
 const MATERIAL_ID = "a0000000-0000-4000-8000-00000000000a";
+const SECOND_MATERIAL_ID = "a1000000-0000-4000-8000-00000000000a";
+const LOT_ID = "b0000000-0000-4000-8000-00000000000b";
 
 function resetOpeningMutationTestState(): void {
   if (!__openingMutationIntentTestOnly) {
@@ -108,6 +112,19 @@ function hiddenDetail() {
     differences: [],
     reviews: [],
     allowed_actions: ["count"],
+  };
+}
+
+function countObservation(
+  overrides: Partial<OpeningPhysicalObservationInput> = {},
+): OpeningPhysicalObservationInput {
+  return {
+    material_identifier_type: "unknown",
+    material_identifier_raw: "FIELD-MATERIAL-001",
+    condition_code: "new",
+    availability_bucket: "available",
+    counted_qty: "1.000",
+    ...overrides,
   };
 }
 
@@ -712,6 +729,148 @@ describe("formal opening stocktake mutation policy", () => {
     expect(vi.mocked(api).mock.calls.filter(([, init]) => init?.method === "POST"))
       .toHaveLength(1);
     expect(mutationHeaders).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["zero", "0"],
+    ["zero decimal", "0.000"],
+    ["leading zero", "01.000"],
+    ["more than three decimals", "1.0000"],
+    ["numeric(18,3) overflow", "1000000000000000.000"],
+  ])("rejects %s count quantity before allocating coordinates", async (_case, countedQty) => {
+    vi.mocked(api).mockResolvedValueOnce(hiddenDetail());
+
+    await expect(submitOpeningScopeCount(TASK_ID, SCOPE_ID, {
+      physical_observations: [countObservation({ counted_qty: countedQty })],
+      zero_confirmed: false,
+    })).rejects.toThrow(/实盘数量/);
+
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(api).toHaveBeenCalledWith(`/v1/stocktakes/opening/${TASK_ID}`);
+    expect(mutationHeaders).not.toHaveBeenCalled();
+  });
+
+  it("rejects a runtime numeric quantity instead of coercing it through the regex", async () => {
+    vi.mocked(api).mockResolvedValueOnce(hiddenDetail());
+    const observation = {
+      ...countObservation(),
+      counted_qty: 1,
+    } as unknown as OpeningPhysicalObservationInput;
+
+    await expect(submitOpeningScopeCount(TASK_ID, SCOPE_ID, {
+      physical_observations: [observation],
+      zero_confirmed: false,
+    })).rejects.toThrow(/实盘数量/);
+
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(mutationHeaders).not.toHaveBeenCalled();
+  });
+
+  it("rejects a multi-piece SN count before allocating coordinates", async () => {
+    vi.mocked(api).mockResolvedValueOnce(hiddenDetail());
+
+    await expect(submitOpeningScopeCount(TASK_ID, SCOPE_ID, {
+      physical_observations: [countObservation({
+        counted_qty: "2.000",
+        serial_no_raw: "SN-001",
+        serial_identifier_type: "serial_no",
+      })],
+      zero_confirmed: false,
+    })).rejects.toThrow(/带 SN 的实盘行数量必须为一件/);
+
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(mutationHeaders).not.toHaveBeenCalled();
+  });
+
+  it("rejects duplicate exact raw and master dimensions despite different quantity or remark", async () => {
+    const first = countObservation({
+      material_id: MATERIAL_ID,
+      lot_id: LOT_ID,
+      lot_no_raw: "LOT-001",
+      counted_qty: "1.000",
+      remark: "first quantity",
+    });
+    vi.mocked(api).mockResolvedValueOnce(hiddenDetail());
+
+    await expect(submitOpeningScopeCount(TASK_ID, SCOPE_ID, {
+      physical_observations: [
+        first,
+        { ...first, counted_qty: "2.000", remark: "different remark" },
+      ],
+      zero_confirmed: false,
+    })).rejects.toThrow(/同一现场维度必须合并数量后提交/);
+
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(mutationHeaders).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["numeric(18,3) upper bound", countObservation({
+      counted_qty: "999999999999999.999",
+    })],
+    ["minimum positive increment", countObservation({ counted_qty: "0.001" })],
+    ["SN integer one", countObservation({
+      counted_qty: "1",
+      serial_no_raw: "SN-1",
+      serial_identifier_type: "serial_no",
+    })],
+    ["SN one decimal", countObservation({
+      counted_qty: "1.0",
+      serial_no_raw: "SN-10",
+      serial_identifier_type: "serial_no",
+    })],
+    ["SN two decimals", countObservation({
+      counted_qty: "1.00",
+      serial_no_raw: "SN-100",
+      serial_identifier_type: "serial_no",
+    })],
+    ["SN three decimals", countObservation({
+      counted_qty: "1.000",
+      serial_no_raw: "SN-1000",
+      serial_identifier_type: "serial_no",
+    })],
+  ])("accepts %s", (_case, observation) => {
+    const input = {
+      physical_observations: [observation],
+      zero_confirmed: false,
+    } as const;
+
+    const resolved = resolveOpeningScopeCount(
+      TASK_ID,
+      SCOPE_ID,
+      input,
+      validateOpeningStocktakeTaskDetail(hiddenDetail()),
+    );
+
+    expect(resolved.body).toBe(input);
+    expect(resolved.roundId).toBe(ROUND_ID);
+    expect(resolved.path).toBe(
+      `/v1/stocktakes/opening/${TASK_ID}/rounds/${ROUND_ID}/scopes/${SCOPE_ID}/count`,
+    );
+    expect(api).not.toHaveBeenCalled();
+    expect(mutationHeaders).not.toHaveBeenCalled();
+  });
+
+  it("does not guess aliases when raw or explicit master dimensions differ", () => {
+    const shared = countObservation({
+      material_id: MATERIAL_ID,
+      counted_qty: "1.000",
+    });
+    const input = {
+      physical_observations: [
+        shared,
+        { ...shared, material_identifier_raw: "field-material-001" },
+        { ...shared, material_id: SECOND_MATERIAL_ID },
+      ],
+      zero_confirmed: false,
+    } as const;
+
+    expect(() => resolveOpeningScopeCount(
+      TASK_ID,
+      SCOPE_ID,
+      input,
+      validateOpeningStocktakeTaskDetail(hiddenDetail()),
+    )).not.toThrow();
   });
 
   it("binds a count to the freshly read round and assigned scope without a router-only version", async () => {

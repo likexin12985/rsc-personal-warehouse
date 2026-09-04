@@ -7,6 +7,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 const QUANTITY = /^(?:0|[1-9]\d*)\.\d{3}$/;
 const SIGNED_QUANTITY = /^-?(?:0|[1-9]\d*)\.\d{3}$/;
+const INPUT_QUANTITY = /^(?:0|[1-9]\d{0,14})(?:\.\d{1,3})?$/;
+const ZERO_INPUT_QUANTITY = /^0(?:\.0{1,3})?$/;
+const SERIAL_UNIT_QUANTITY = /^1(?:\.0{1,3})?$/;
 
 const OPENING_ACTIONS = [
   "count",
@@ -1978,11 +1981,38 @@ export function resolveOpeningScopeCount(
   if (!input.zero_confirmed && input.physical_observations.length === 0) {
     invalid("非零盘点必须提交至少一条实盘行");
   }
+  const dimensions = new Set<string>();
   for (const row of input.physical_observations) {
     exactText(row.material_identifier_raw, "物料标识");
-    if (!/^(?:[1-9]\d*)(?:\.\d{1,3})?$/.test(row.counted_qty)) {
-      invalid("实盘数量必须是正数且最多三位小数");
+    if (
+      typeof row.counted_qty !== "string"
+      || !INPUT_QUANTITY.test(row.counted_qty)
+      || ZERO_INPUT_QUANTITY.test(row.counted_qty)
+    ) {
+      invalid("实盘数量必须是 numeric(18,3) 范围内的正数且最多三位小数");
     }
+    const hasSerial = row.serial_no_raw !== undefined && row.serial_no_raw !== null;
+    if (hasSerial && !SERIAL_UNIT_QUANTITY.test(row.counted_qty)) {
+      invalid("带 SN 的实盘行数量必须为一件");
+    }
+    // Only identical explicit raw/master dimensions are detected and rejected here. Do not
+    // infer aliases or normalize source identifiers on the client.
+    const dimension = JSON.stringify([
+      row.material_identifier_raw,
+      row.material_identifier_type,
+      row.condition_code,
+      row.availability_bucket,
+      row.material_id ?? null,
+      row.lot_id ?? null,
+      row.lot_no_raw ?? null,
+      row.serial_id ?? null,
+      row.serial_no_raw ?? null,
+      row.serial_identifier_type ?? null,
+    ]);
+    if (dimensions.has(dimension)) {
+      invalid("同一现场维度必须合并数量后提交");
+    }
+    dimensions.add(dimension);
   }
   return {
     path: `${formalOpeningTaskPath(taskId)}/rounds/${round.round_id}/scopes/${checkedScopeId}/count`,
