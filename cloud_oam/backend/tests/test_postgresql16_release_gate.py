@@ -13542,6 +13542,8 @@ def _seed_0047_stocktake_inventory(
                 f"public.{history_migration.ROUND_SUBMISSION_FUNCTION}"
                 "(%s, %s, FALSE), "
                 f"public.{opening_migration.RECOUNT_GRAPH_FUNCTION}"
+                "(%s, TRUE), "
+                f"public.{opening_migration.RECOUNT_GRAPH_FUNCTION}"
                 "(%s, FALSE)",
                 (
                     started.task_id,
@@ -13549,9 +13551,15 @@ def _seed_0047_stocktake_inventory(
                     started.task_id,
                     started.initial_round_id,
                     opened_recount.recount_case_id,
+                    opened_recount.recount_case_id,
                 ),
             )
-            assert cursor.fetchone() == (True, False, True)
+            # Current-mode proof is intentionally confined to the transaction
+            # that creates the fact: it requires opened_at to be no earlier
+            # than transaction_timestamp().  A later admin transaction must
+            # use historical proof and must not be able to re-admit the fact
+            # as current.
+            assert cursor.fetchone() == (True, False, True, False)
 
     with Session(api_engine) as session:
         recount_open_task = session.get(FormalStocktakeTask, started.task_id)
@@ -13812,7 +13820,10 @@ def _seed_0047_stocktake_inventory(
                     headquarters_review.review_id,
                 ),
             )
-            assert tuple(cursor.fetchone()) == (False, True, True, True)
+            # Both reviews were created in earlier transactions.  Historical
+            # proof remains valid, while current-mode proof must reject their
+            # reviewed_at timestamps as pre-dating this admin transaction.
+            assert tuple(cursor.fetchone()) == (False, True, False, True)
 
     with Session(api_engine, expire_on_commit=False) as session:
         opening_posted = _reveal_pg16_service_database_error(
@@ -13882,7 +13893,10 @@ SELECT posting.total_quantity::text,
                 "0.000",
                 "string",
                 "0.000",
-                True,
+                # The posting was committed by the preceding service
+                # transaction.  Current-mode proof is transaction-fresh and
+                # must reject it here; durable historical proof remains true.
+                False,
                 True,
             )
 
