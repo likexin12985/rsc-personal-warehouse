@@ -1,7 +1,7 @@
 # RSC 个人仓项目跨账号交接
 
 - 交接日期：2026-09-01
-- 最新状态核验：2026-09-04
+- 最新状态核验：2026-09-05
 - 交接方式：GitHub 私有仓库 + 新账号重新连接仓库
 - 当前边界：GitHub 私有仓库已创建，`main` 已推送至
   `https://github.com/likexin12985/rsc-personal-warehouse`；后续功能必须使用独立分支开发、验证和评审
@@ -38,7 +38,7 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 
 ## 4. 当前源码状态
 
-- Alembic 当前唯一 head 为 `20260904_0054`。
+- Alembic 当前唯一 head 为 `20260905_0058`。
 - `0052` 已为期初盘点范围完成事实增加不可变 `request_jsonb` 原始请求和
   `request_resolution_jsonb` 解析证据，数据库会独立校验请求、策略快照、主数据解析、观测、
   盘点行、序列号别名、复核、过账、对账和关闭之间的因果关系。同轮序列号跨盘点行/观测互斥、
@@ -48,8 +48,14 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
   并把 readiness 精确推进到 `0053`。`0054` 再以前向迁移只修复有效复盘建立后对已封印来源初盘轮
   的历史复证：当前提交证明仍拒绝提前存在的复盘范围分配，仅历史证明允许读取复盘图独立封印的
   后继分配；它原位替换既有 helper 和 readiness 的函数源，保持函数 OID、签名、所有者、ACL、
-  六个调用方和全部触发器绑定，不新增或改写表、业务行及权限。`0052`、`0053` 均不得改写或停留，
-  当前应用只支持 `0054`；对应准确 Git SHA 的远端 PostgreSQL 16 门禁尚未取得成功证据。正式顺序见
+  六个调用方和全部触发器绑定，不新增或改写表、业务行及权限。`0055` 以前向迁移修复非期初盘点
+  启动 guard/validator 误用不存在的 `audit_events.sequence_no`，改为按
+  `audit.stream_version, audit.id` 重证审计顺序；`0056` 原位修复共享轮次 assignment
+  helper 仅接受 `opening` 的错误限制，使非期初初盘事实继续受同一数据库授权图约束；`0057` 增加
+  非期初差异回放的 ledger-head-first owner-lock 图、已封印盘点附件不可追加门禁和非期初控制
+  快照拒绝门禁；`0058` 仅修复最终批准复核图在合法 `posted`、对账及 `closed` 终态下的持续成立。
+  `0052` 至 `0057` 均为不可改写的迁移历史，当前应用只支持 `0058`。对应准确 Git SHA 的 GitHub
+  disposable PostgreSQL 16 门禁已经通过；正式顺序见
   `docs/OPENING_STOCKTAKE_0052_RELEASE_RUNBOOK.md`。
 - 本地源码已包含正式需求提报/三级逐行审批/安全撤回取消，以及期初和非期初盘点的实盘、差异、
   复核、复盘、过账、独立对账和关闭能力。撤回/取消已增加仅以 `X-Request-ID` 查询的服务端只读
@@ -63,17 +69,19 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
   旧草稿的不可选引用只能明确清除或正式重选；写后工单/修订锚点回读不一致继续保留原幂等坐标。
   正式 OAM 工单投影采集、校验、发布 writer 仍未实现，当前没有正式投影时选择器会安全为空，
   不得接入旧工单接口或浏览器直连 OAM 作为替代。
-- PostgreSQL 16 真实迁移、双会话并发与死锁演练、预生产迁移、真实身份/附件 UAT、备份恢复和
-  发布回滚仍是发布门禁；当前源码不得直接投产。
+- 对应准确 Git SHA 的 GitHub disposable PostgreSQL 16 真实迁移、双会话并发与锁等待门禁已经
+  通过，但这不等于预生产或生产放行。预生产迁移、真实身份/附件 UAT、备份恢复、发布回滚及
+  正式变更审批仍是发布门禁；当前源码不得直接投产。
 - 本地源码已实现 KMS envelope-key 注册表加载、`0040` 不可变 `kms_data_key_pins` 账本、
   确定性 `--plan`、只读 pin gate、请求前置解密和 live/ready 单飞 TTL 健康边界；仍未生成或
-  接入真实 KMS 数据密钥/ECS RAM 角色，也未在 PostgreSQL 16 执行迁移、pin 双签落库、
+  接入真实 KMS 数据密钥/ECS RAM 角色，也未在预生产或生产 PostgreSQL 16 执行迁移、pin 双签落库、
   WAF/ALB 限流或真实 UAT，因此不能据此放行生产。
 - `0041` 已在本地新增短信 dispatch 单 owner 账本、租约/迟到调用门禁、
   `prepared/sending/accepted/uncertain/expired` 独立状态、最小列级 ACL 和生产启动目录/函数体
   校验。发送使用独立无 overflow 数据库池，发送/校验共用有界 provider 容量门；未决发送和重复
-  频控拒绝不会造成持久化写放大。该实现禁止自动重发不确定发送，但尚未完成真实 PostgreSQL 16 迁移/进程中断矩阵、
-  backup/edge 间接角色继承的有效权限门禁、PNVS 回执恢复和隔离号码联调，因此生产短信继续关闭。
+  频控拒绝不会造成持久化写放大。对应准确 Git SHA 的 disposable PostgreSQL 16 迁移和进程中断
+  门禁已经通过，但 backup/edge 间接角色继承的生产部署复核、PNVS 回执恢复、用户 1000 条套餐
+  与 PNVS 接口兼容性及隔离号码联调仍未完成，因此生产短信继续关闭。
 
 最新细节必须以 `cloud_oam/README.md` 和当前测试结果为准。
 
@@ -92,27 +100,44 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
   独立通知送达能力；在事件展开、接收人快照、delivery/attempt、回执验签、幂等回调、重试和
   额度告警完成前，不得复用登录验证码模板，也不得把 provider 接受发送当作通知已送达。
 
-## 6. 本地验收基线
+## 6. 当前验收基线
 
-2026-09-04 当前 `0054` 工作树在不访问任何外部生产系统的前提下，已通过与 GitHub 工作流一致的
-静态发布清单 `972 passed`，其中完整 Alembic 回归为 `145 passed`；SQLite 空库已升级到唯一 head。
-FastAPI 后端全量回归为 `2065 passed, 1 skipped`，仓库安全检查为
-`527 candidate files, 17,856,178 bytes` 且通过。
-在本地 disposable PostgreSQL 18 上还验证了 `0053 -> 0054 -> 0053 -> 0054` 的空期初图函数原位替换、
-OID/所有者/ACL/函数 hash 保持或恢复，以及 26 个触发器精确绑定、禁用触发器和跨 schema 伪调用方
-均失败关闭。这些仅是辅助验证，不是目标 PostgreSQL 16 发布证据。准确 Git SHA 的远端 PostgreSQL
-16 release gate、预生产和生产验收仍须重新执行并留档，当前不得宣称 `0054` 已通过远端发布门禁。
+2026-09-05 当前 `0058` 源码在不访问任何外部生产系统的前提下，已取得准确 Git SHA
+`20c29f724d46112d06fd1734091ecee90500d636` 的 GitHub disposable PostgreSQL 16 成功证据：
 
-以下计数是加入 `0054` 前的 `0053` 本地历史快照，不能作为 `0054` 的当前放行证据：
+- GitHub Actions run：
+  [`33907501757`](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33907501757)，
+  attempt `1`，触发方式 `push`，job
+  `postgresql16-release-gate`；运行时间为 `2026-09-04T18:44:25Z` 至
+  `2026-09-04T18:55:55Z`。
+- PostgreSQL 16 镜像 digest：
+  `sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685`；Python
+  版本为 `3.12.13`。
+- GitHub 静态发布清单为 `1044 passed, 1 skipped, 1 warning`；隔离 PostgreSQL 16 动态迁移、
+  ACL、触发器、API 真链、降级阻断及并发锁门禁为 `1 passed`，耗时 `142.36s`。
+- 同一代码提交的本地精确静态发布清单为 `1046 passed`；本地 disposable PostgreSQL 18 辅助门禁为
+  `1 passed`，耗时 `130.34s`。
+
+上述结果证明该 SHA 在一次性 disposable PostgreSQL 16 环境中的源码、迁移及并发门禁通过，不能
+替代预生产迁移、备份恢复、真实身份/附件 UAT、PNVS/套餐兼容性验收、生产变更审批或生产发布。
+当前仍不得宣称已通过预生产或生产放行。
+
+以下 2026-09-04 `0054` 结果现为历史快照，不能作为 `0058` 的当前放行证据：静态发布清单
+`972 passed`（其中 Alembic 回归 `145 passed`）、FastAPI 后端全量
+`2065 passed, 1 skipped`、仓库安全检查 `527 candidate files, 17,856,178 bytes`，以及本地
+disposable PostgreSQL 18 的 `0053 -> 0054 -> 0053 -> 0054` 空图函数原位替换、OID/所有者/ACL/
+函数 hash 和 26 个触发器验证。
+
+以下计数是加入 `0054` 前的 `0053` 本地历史快照，同样不能作为 `0058` 的当前放行证据：
 
 - 期初盘点、入账和审计链回归 `254 passed`。
 - Alembic 迁移、数据库权限及部署安全回归 `434 passed`。
 - 与 PostgreSQL 16 GitHub 工作流一致的静态发布测试清单 `969 passed`。
 - FastAPI 后端全量 `2062 passed, 1 skipped`；边缘同步全量 `36 passed`。
 - Python 编译、`git diff --check`、单一 Alembic head 和仓库安全检查通过。
-- 本机没有受控 PostgreSQL 16。`0051 -> 0052 -> 0053 -> 0054` 历史回填、共享触发器表分派、
-  历史来源轮复证、双会话并发、直接 SQL 篡改、数值溢出、角色/ACL 和函数体哈希仍必须以本次
-  准确 Git SHA 触发的新 GitHub release-gate 成功为最终证据。
+- 本机没有受控 PostgreSQL 16。该历史快照中的迁移、共享触发器、历史来源轮复证、双会话并发、
+  直接 SQL 篡改、数值溢出、角色/ACL 和函数体哈希结论，现已由上方准确 Git SHA 的 GitHub
+  disposable PostgreSQL 16 run 取代；它们不得继续冒充当前证据。
 
 以下 2026-09-02 内容保留为历史交接快照，不能替代上面的当前复核：
 
@@ -148,11 +173,13 @@ Key ID 复用应用版本。联系人当前记录和全部历史 revision 的旧
 均强制不超过 4 秒，生产拒绝 `DEBUG=sdk` 并禁用阿里云 SDK 自带流式日志。WAF/ALB 在 KMS 前的
 认证接口限流和 readiness 来源限制属于外部发布硬门禁，未配置不得投产。
 微信正式登录已改为先提交唯一 `pending` 幂等 owner、再兑换一次性 code；provider 失败审计与
-加密失败终态同事务提交。同键并发的真实 PostgreSQL 16 验收、provider 返回后崩溃的不确定结果
-恢复仍是发布门禁。短信挑战已在本地实现 `0041` 单 owner dispatch，发送/校验均禁用 SDK 自动
+加密失败终态同事务提交。同键并发已由上方准确 SHA 的 disposable PostgreSQL 16 gate 验证，
+provider 返回后崩溃的不确定结果恢复仍是发布门禁。短信挑战已在本地实现 `0041` 单 owner
+dispatch，发送/校验均禁用 SDK 自动
 重试并严格绑定 `OutId`；provider 结果不确定时不自动重发，网络调用前以 challenge+dispatch
 双行锁阻断迟到 owner 与过期替换竞态。`OutId` 不是 provider 幂等保证；回执对账恢复、真实
-PostgreSQL 16 并发/kill 测试，以及 PNVS 与用户 1000 条套餐的兼容性仍未确认，生产短信继续关闭。
+PostgreSQL 16 并发/kill 已由上方准确 SHA 的 disposable gate 验证，但 PNVS 回执对账恢复、PNVS
+与用户 1000 条套餐的兼容性及隔离号码联调仍未确认，生产短信继续关闭。
 客户端发布顺序必须是：先完成全部后端实例的 `0042`（包含 `0039`、`0040`、`0041`）迁移、pin gate 与新版切换，
 再发布启用恢复哨兵的 PC/小程序。
 
