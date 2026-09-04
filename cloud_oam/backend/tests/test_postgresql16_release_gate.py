@@ -7057,7 +7057,6 @@ def _assert_0052_cross_domain_posting_rejected(
 ) -> None:
     migration = _load_opening_terminal_guard_execution_migration_0052()
     posting_id = uuid.uuid4()
-    now = datetime.now(timezone.utc)
     api_parameters = _connection_parameters(
         role="star_oam_api",
         password=_role_password("star_oam_api"),
@@ -7071,7 +7070,8 @@ def _assert_0052_cross_domain_posting_rejected(
                 "total_quantity, idempotency_key_hash, request_hash, "
                 "posted_by_user_id, posted_at, created_at) "
                 "VALUES (%s, %s, %s, 'difference_adjustment', NULL, NULL, "
-                "0, %s, %s, %s, %s, %s)",
+                "0, %s, %s, %s, pg_catalog.transaction_timestamp(), "
+                "pg_catalog.transaction_timestamp())",
                 (
                     posting_id,
                     task_id,
@@ -7081,13 +7081,18 @@ def _assert_0052_cross_domain_posting_rejected(
                         f"posting-request:{posting_id}".encode()
                     ).hexdigest(),
                     posted_by_user_id,
-                    now,
-                    now,
                 ),
             )
             assert cursor.rowcount == 1
             with pytest.raises(psycopg.Error) as failure:
-                connection.commit()
+                # The inherited evidence guard also rejects a posting for a
+                # round that is still counting.  Force the exact 0052 graph
+                # constraint so this regression proves the cross-domain
+                # posting boundary independently of deferred-trigger order.
+                cursor.execute(
+                    "SET CONSTRAINTS "
+                    "trg_stocktake_postings_graph_0052 IMMEDIATE"
+                )
             assert failure.value.sqlstate == "23514"
             assert migration.GRAPH_CLOSURE_ERROR in str(failure.value)
         connection.rollback()
@@ -11799,12 +11804,6 @@ def _seed_0047_stocktake_inventory(
         task_id=started.task_id,
     )
     _assert_0052_forged_reconciliation_prefix_rejected(api_engine)
-    _assert_0052_cross_domain_posting_rejected(
-        api_engine,
-        task_id=started.task_id,
-        round_id=started.initial_round_id,
-        posted_by_user_id=assignee_user_id,
-    )
     _assert_0052_raw_opening_task_transition_rejected(
         api_engine,
         task_id=started.task_id,
@@ -12758,6 +12757,12 @@ def _seed_0047_stocktake_inventory(
         assert set(difference_completion.authorization_sha256) <= set(
             "0123456789abcdef"
         )
+    _assert_0052_cross_domain_posting_rejected(
+        api_engine,
+        task_id=started.task_id,
+        round_id=started.initial_round_id,
+        posted_by_user_id=assignee_user_id,
+    )
     _assert_0051_difference_completion_catalog(
         repaired=True,
         expected_revision=HEAD_REVISION,
