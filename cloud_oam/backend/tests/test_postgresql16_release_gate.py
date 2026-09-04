@@ -6444,6 +6444,7 @@ def _seed_0051_observation_only_completion(
                         scope_id=scope_id,
                         physical_observations=(
                             OpeningPhysicalObservationInput(
+                                material_id=material.id,
                                 material_identifier_raw=material.sku_code,
                                 material_identifier_type="sku_code",
                                 condition_code="new",
@@ -6484,9 +6485,11 @@ def _seed_0051_observation_only_completion(
             assert observation.verification_status == "pending_verification"
             assert observation.material_id == material.id
             assert observation.serial_id is None
-            assert session.scalar(
-                select(func.count()).select_from(StocktakeCountLine)
-            ) == 0
+            implicit_zero_lines = tuple(
+                session.scalars(select(StocktakeCountLine)).all()
+            )
+            assert len(implicit_zero_lines) == 1
+            assert implicit_zero_lines[0].counted_qty == Decimal("0")
             original_request = completion.request_jsonb
             original_resolution = completion.request_resolution_jsonb
             assert original_request is not None
