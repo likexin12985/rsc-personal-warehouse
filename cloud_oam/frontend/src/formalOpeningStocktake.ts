@@ -1991,6 +1991,7 @@ export function resolveOpeningScopeCount(
   };
 }
 
+/** @deprecated PC writes must use submitDurableOpeningScopeCount; this adapter has no cross-refresh recovery. */
 export async function submitOpeningScopeCount(
   taskId: string,
   scopeId: string,

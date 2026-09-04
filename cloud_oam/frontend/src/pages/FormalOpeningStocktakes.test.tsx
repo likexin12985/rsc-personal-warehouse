@@ -7,10 +7,11 @@ import {
   loadFormalOpeningStocktakeDetail,
   loadFormalOpeningStocktakes,
   openOpeningRecount,
+  closeOpeningStocktake,
   postOpeningStocktake,
   recordOpeningObservationDisposition,
   submitOpeningRegionReview,
-  submitOpeningScopeCount,
+  submitOpeningHeadquartersReview,
 } from "../formalOpeningStocktake";
 import { loadOpeningRecountAssignees } from "../formalOpeningRecountAssignees";
 import type {
@@ -18,6 +19,10 @@ import type {
   OpeningRecountAssigneeContext,
 } from "../formalOpeningRecountAssignees";
 import FormalOpeningStocktakesPage from "./FormalOpeningStocktakes";
+import { submitDurableOpeningScopeCount } from "../openingCountSubmission";
+import { getOpeningCountRecoveryStore } from "../openingCountRecoveryStore";
+
+vi.mock("../openingCountSubmission", () => ({ submitDurableOpeningScopeCount: vi.fn() }));
 
 vi.mock("../formalOpeningStocktake", async (loadOriginal) => {
   const original = await loadOriginal<typeof import("../formalOpeningStocktake")>();
@@ -243,6 +248,14 @@ async function renderAndOpen(
   render(<FormalOpeningStocktakesPage actor={actor} />);
   fireEvent.click(await screen.findByRole("button", { name: "查看" }));
   expect(await screen.findByLabelText("盘点详情")).toBeTruthy();
+  await waitFor(() => expect(screen.queryByLabelText("盘点计数恢复")).toBeNull());
+  await waitFor(() => {
+    const buttons = within(screen.getByLabelText("盘点详情")).queryAllByRole("button");
+    for (const button of buttons) {
+      if (button.textContent === "提交计数" && !actor) continue;
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+    }
+  });
 }
 
 afterEach(() => {
@@ -253,6 +266,147 @@ afterEach(() => {
 describe("formal opening stocktake PC page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    const held = new Set<string>();
+    Object.defineProperty(navigator, "locks", { configurable: true, value: {
+      async request(name: string, _options: unknown, work: (lock: object | null) => Promise<unknown>) {
+        if (held.has(name)) return work(null);
+        held.add(name);
+        try { return await work({ name }); } finally { held.delete(name); }
+      },
+    } });
+  });
+
+  async function seedPending(): Promise<void> {
+    await getOpeningCountRecoveryStore().withTaskLease(TASK_ID, async (lease) => { lease.persist({
+      v: 1, kind: "opening_scope_count", task_id: TASK_ID, round_id: ROUND_ID, round_no: 1,
+      scope_id: SCOPE_ID, actor_person_id: ACTOR.person_id, actor_authorization_version: ACTOR.authorization_version,
+      trace_request_id: "page-pending-count-0001",
+    }); });
+  }
+
+  it.each(["post", "close"] as const)("blocks %s at execution even before a cross-tab storage event arrives", async (action) => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const source = sealedDetail([action]);
+    source.status = action === "post" ? "approved" : "posted";
+    await renderAndOpen(source, ACTOR);
+    await seedPending();
+    fireEvent.click(screen.getByRole("button", { name: action === "post" ? "独立过账" : "独立关闭" }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("禁止其他写入"));
+    expect(postOpeningStocktake).not.toHaveBeenCalled();
+    expect(closeOpeningStocktake).not.toHaveBeenCalled();
+    expect(getOpeningCountRecoveryStore().read(TASK_ID).kind).toBe("valid");
+  });
+
+  it("blocks a review opened before a pending marker appears", async () => {
+    const source = sealedDetail(["review_region"]);
+    source.differences = [];
+    await renderAndOpen(source, ACTOR);
+    fireEvent.click(screen.getByRole("button", { name: "区域复核" }));
+    fireEvent.change(screen.getByLabelText("本级决定"), { target: { value: "approve" } });
+    await seedPending();
+    fireEvent.click(screen.getByRole("button", { name: "提交本级复核" }));
+    await screen.findByRole("alert");
+    expect(submitOpeningRegionReview).not.toHaveBeenCalled();
+  });
+
+  it("blocks headquarters review when a pending count appears after its dialog opens", async () => {
+    const source = sealedDetail(["review_headquarters"]);
+    source.status = "hq_review";
+    source.differences = [];
+    source.reviews = [{ stage: "region", decision: "approve", reviewed_at: "2026-08-31T09:10:00Z" }];
+    await renderAndOpen(source, ACTOR);
+    fireEvent.click(screen.getByRole("button", { name: "总部复核" }));
+    fireEvent.change(screen.getByLabelText("本级决定"), { target: { value: "approve" } });
+    await seedPending();
+    fireEvent.click(screen.getByRole("button", { name: "提交本级复核" }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("禁止其他写入"));
+    expect(submitOpeningHeadquartersReview).not.toHaveBeenCalled();
+    expect(getOpeningCountRecoveryStore().read(TASK_ID).kind).toBe("valid");
+  });
+
+  it("blocks recount creation when a pending count appears after selecting an authorized assignee", async () => {
+    const source = recountDetail();
+    vi.mocked(loadOpeningRecountAssignees).mockResolvedValue(recountAssigneePage(source));
+    await renderAndOpen(source, ACTOR);
+    fireEvent.click(screen.getByRole("button", { name: "发起复盘" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "范围 1" }));
+    const assignee = await screen.findByRole("combobox", { name: "范围 1 复盘人员" }) as HTMLSelectElement;
+    await waitFor(() => expect(assignee.disabled).toBe(false));
+    fireEvent.change(assignee, { target: { value: ASSIGNEE_USER_ID } });
+    fireEvent.change(screen.getByLabelText("复盘原因"), { target: { value: "正式授权人员重新实盘" } });
+    await seedPending();
+    fireEvent.click(screen.getByRole("button", { name: "创建复盘轮次" }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("禁止其他写入"));
+    expect(openOpeningRecount).not.toHaveBeenCalled();
+    expect(getOpeningCountRecoveryStore().read(TASK_ID).kind).toBe("valid");
+  });
+
+  it("blocks observation disposition when a pending count appears after its dialog opens", async () => {
+    await renderAndOpen(observationDetail(), ACTOR);
+    fireEvent.click(screen.getByRole("button", { name: "绑定正式主数据" }));
+    fireEvent.change(screen.getByLabelText("正式物料 UUID"), { target: { value: MATERIAL_ID } });
+    fireEvent.change(screen.getByLabelText("原因代码"), { target: { value: "MASTER_CONFIRMED" } });
+    fireEvent.change(screen.getByLabelText("处置说明"), { target: { value: "人工核验主数据" } });
+    await seedPending();
+    fireEvent.click(screen.getByRole("button", { name: "确认处置" }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("禁止其他写入"));
+    expect(recordOpeningObservationDisposition).not.toHaveBeenCalled();
+    expect(getOpeningCountRecoveryStore().read(TASK_ID).kind).toBe("valid");
+  });
+
+  it("keeps an unknown count draft and does not invoke the coordinator again", async () => {
+    vi.mocked(submitDurableOpeningScopeCount).mockImplementation(async () => {
+      await seedPending();
+      throw new Error("原盘点仍待核验");
+    });
+    await renderAndOpen(hiddenDetail(), ACTOR);
+    fireEvent.click(screen.getByRole("button", { name: "提交计数" }));
+    fireEvent.change(screen.getByLabelText("物料标识"), { target: { value: "FIELD-SKU" } });
+    fireEvent.change(screen.getByLabelText("实盘数量"), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认提交计数" }));
+    await screen.findByRole("alert");
+    expect((screen.getByLabelText("物料标识") as HTMLInputElement).value).toBe("FIELD-SKU");
+    expect((screen.getByLabelText("实盘数量") as HTMLInputElement).value).toBe("2");
+    fireEvent.click(screen.getByRole("button", { name: "确认提交计数" }));
+    expect(submitDurableOpeningScopeCount).toHaveBeenCalledTimes(1);
+    expect(getOpeningCountRecoveryStore().read(TASK_ID).kind).toBe("valid");
+  });
+
+  it("invalidates a count coordinator's commit guard when another detail view opens", async () => {
+    let captured!: () => boolean;
+    let finish!: (value: any) => void;
+    vi.mocked(submitDurableOpeningScopeCount).mockImplementation((options) => {
+      captured = options.canCommit!;
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    await renderAndOpen(hiddenDetail(), ACTOR);
+    fireEvent.click(screen.getByRole("button", { name: "提交计数" }));
+    fireEvent.click(screen.getByText("确认该范围现场为零库存"));
+    fireEvent.click(screen.getByRole("button", { name: "确认提交计数" }));
+    await waitFor(() => expect(captured()).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "查看" }));
+    await screen.findByLabelText("盘点详情");
+    expect(captured()).toBe(false);
+    finish({ recovered: true, command: {}, detail: sealedDetail([]) });
+    await waitFor(() => expect(screen.queryByText(/历史提交已核验/)).toBeNull());
+  });
+
+  it("does not carry an unsent count draft into a new round of the same scope", async () => {
+    await renderAndOpen(hiddenDetail(), ACTOR);
+    fireEvent.click(screen.getByRole("button", { name: "提交计数" }));
+    fireEvent.change(screen.getByLabelText("物料标识"), { target: { value: "OLD-ROUND-SKU" } });
+    fireEvent.change(screen.getByLabelText("实盘数量"), { target: { value: "9" } });
+    const next = hiddenDetail();
+    next.current_round = { ...next.current_round, round_id: DIFFERENCE_ID, round_no: 2, round_type: "recount" };
+    vi.mocked(loadFormalOpeningStocktakeDetail).mockResolvedValue(next);
+    fireEvent.click(screen.getByRole("button", { name: "查看" }));
+    await screen.findByText("第 2 轮 · 计数中");
+    await waitFor(() => expect((screen.getByRole("button", { name: "提交计数" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "提交计数" }));
+    expect((screen.getByLabelText("物料标识") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("实盘数量") as HTMLInputElement).value).toBe("");
+    expect(submitDurableOpeningScopeCount).not.toHaveBeenCalled();
   });
 
   it("keeps a blind round quantity-blind and renders only the server-allowed count", async () => {
@@ -278,23 +432,22 @@ describe("formal opening stocktake PC page", () => {
   it("submits a zero count through the exact selected scope and uses the reread detail", async () => {
     const before = hiddenDetail(["count"]);
     const after = sealedDetail([]);
-    vi.mocked(submitOpeningScopeCount).mockResolvedValue({
-      before,
-      result: {} as any,
+    vi.mocked(submitDurableOpeningScopeCount).mockResolvedValue({
+      recovered: false,
+      command: {} as any,
       detail: after,
     });
-    await renderAndOpen(before);
+    await renderAndOpen(before, ACTOR);
 
     fireEvent.click(screen.getByRole("button", { name: "提交计数" }));
     fireEvent.click(screen.getByText("确认该范围现场为零库存"));
     fireEvent.click(screen.getByRole("button", { name: "确认提交计数" }));
 
-    await waitFor(() => expect(submitOpeningScopeCount).toHaveBeenCalledWith(
-      TASK_ID,
-      SCOPE_ID,
-      { physical_observations: [], zero_confirmed: true },
-    ));
-    expect(await screen.findByText(/详情已从服务端重新读取/)).toBeTruthy();
+    await waitFor(() => expect(submitDurableOpeningScopeCount).toHaveBeenCalledWith({
+      taskId: TASK_ID, scopeId: SCOPE_ID, expectedIdentity: ACTOR, canCommit: expect.any(Function),
+      input: { physical_observations: [], zero_confirmed: true },
+    }));
+    expect(await screen.findByText(/历史计数与当前任务详情均已确认/)).toBeTruthy();
   });
 
   it("shows sealed observations but never invents a disposition button", async () => {
@@ -600,6 +753,8 @@ describe("formal opening stocktake PC page", () => {
 
     vi.mocked(loadFormalOpeningStocktakeDetail).mockResolvedValueOnce(changed);
     fireEvent.click(screen.getByRole("button", { name: "查看" }));
+    await waitFor(() => expect((screen.getByRole("button", { name: "发起复盘" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "发起复盘" }));
     await waitFor(() => expect(loadOpeningRecountAssignees).toHaveBeenCalledTimes(2));
     const refreshedSelect = await screen.findByRole("combobox", {
       name: "范围 1 复盘人员",

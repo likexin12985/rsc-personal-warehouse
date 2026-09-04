@@ -19,7 +19,6 @@ import {
   recordOpeningObservationDisposition,
   submitOpeningHeadquartersReview,
   submitOpeningRegionReview,
-  submitOpeningScopeCount,
   type OpeningAllowedAction,
   type OpeningObservationDisposition,
   type OpeningPhysicalObservationInput,
@@ -44,6 +43,9 @@ import {
   type OpeningRecountActor, type OpeningRecountAssigneeContext, type OpeningRecountAssigneeSelection,
 } from "../formalOpeningRecountAssignees";
 import OpeningRecountAssigneePicker from "./OpeningRecountAssigneePicker";
+import OpeningCountRecoveryPanel from "./OpeningCountRecoveryPanel";
+import { submitDurableOpeningScopeCount } from "../openingCountSubmission";
+import { getOpeningCountRecoveryStore, withNoPendingOpeningCount } from "../openingCountRecoveryStore";
 
 const STATUS_LABELS: Record<string, string> = {
   counting: "计数中",
@@ -186,6 +188,15 @@ function TaskTable({
 }
 
 export default function FormalOpeningStocktakesPage({ actor }: { actor?: OpeningRecountActor } = {}) {
+  const mounted = useRef(true);
+  const viewEpoch = useRef(0);
+  const listEpoch = useRef(0);
+  const actorRef = useRef(actor);
+  actorRef.current = actor;
+  const actionRunning = useRef(false);
+  const countDraftAnchor = useRef("");
+  const [recoveryRevision, setRecoveryRevision] = useState(0);
+  const [countBlocked, setCountBlocked] = useState(true);
   const [tasks, setTasks] = useState<OpeningStocktakeTaskSummary[]>([]);
   const tasksRef = useRef<OpeningStocktakeTaskSummary[]>([]);
   const [nextAfterId, setNextAfterId] = useState<string | null>(null);
@@ -214,10 +225,12 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
   const [resolvedSerialId, setResolvedSerialId] = useState("");
 
   const loadList = useCallback(async (afterId: string | null = null) => {
+    const epoch = ++listEpoch.current;
     setListLoading(true);
     setError("");
     try {
       const page = await loadFormalOpeningStocktakes(afterId);
+      if (!mounted.current || epoch !== listEpoch.current) return;
       const current = tasksRef.current;
       if (
         afterId !== null
@@ -228,27 +241,38 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
       setTasks(merged);
       setNextAfterId(page.next_after_id);
     } catch (err) {
-      setError(showError(err));
+      if (mounted.current && epoch === listEpoch.current) setError(showError(err));
     } finally {
-      setListLoading(false);
+      if (mounted.current && epoch === listEpoch.current) setListLoading(false);
     }
   }, []);
 
   const openDetail = useCallback(async (taskId: string) => {
+    const epoch = ++viewEpoch.current;
+    setDetail(null);
+    setDialog(null);
+    setCountBlocked(true);
     setDetailLoading(true);
     setError("");
     setNotice("");
     try {
-      setDetail(await loadFormalOpeningStocktakeDetail(taskId));
+      const next = await loadFormalOpeningStocktakeDetail(taskId);
+      if (mounted.current && epoch === viewEpoch.current) setDetail(next);
     } catch (err) {
+      if (!mounted.current || epoch !== viewEpoch.current) return;
       setDetail(null);
       setError(showError(err));
     } finally {
-      setDetailLoading(false);
+      if (mounted.current && epoch === viewEpoch.current) setDetailLoading(false);
     }
   }, []);
 
-  useEffect(() => { void loadList(); }, [loadList]);
+  useEffect(() => {
+    mounted.current = true;
+    void loadList();
+    return () => { mounted.current = false; viewEpoch.current += 1; listEpoch.current += 1; };
+  }, [loadList]);
+  useEffect(() => () => { viewEpoch.current += 1; }, [actor?.person_id, actor?.authorization_version]);
 
   const availableActions = useMemo(
     () => new Set(detail?.allowed_actions || []),
@@ -265,11 +289,19 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
     return contexts;
   }, [detail, actor?.person_id, actor?.authorization_version]);
 
-  function resetDialog(): void {
+  function resetDialog(clearConfirmedCount = false): void {
+    let preserveCount = busy;
+    if (detail && !clearConfirmedCount) {
+      try { preserveCount ||= getOpeningCountRecoveryStore().read(detail.task_id).kind !== "missing"; }
+      catch { preserveCount = true; }
+    }
     setDialog(null);
-    setZeroConfirmed(false);
-    observationKey.current += 1;
-    setObservations([newObservation(observationKey.current)]);
+    if (clearConfirmedCount || !preserveCount) {
+      setZeroConfirmed(false);
+      observationKey.current += 1;
+      setObservations([newObservation(observationKey.current)]);
+      countDraftAnchor.current = "";
+    }
     setReviewDecision("");
     setReviewComment("");
     setItemComments({});
@@ -308,32 +340,52 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
   }
 
   async function completeAction(
-    work: () => Promise<{ detail: OpeningStocktakeTaskDetail }>,
+    work: (canCommit: () => boolean) => Promise<{ detail: OpeningStocktakeTaskDetail; recovered?: boolean }>,
     success: string,
+    isCount = false,
   ): Promise<void> {
+    if (!detail || actionRunning.current) return;
+    const epoch = viewEpoch.current;
+    const expectedActor = actor;
+    const live = () => mounted.current && epoch === viewEpoch.current
+      && actorRef.current?.person_id === expectedActor?.person_id
+      && actorRef.current?.authorization_version === expectedActor?.authorization_version;
+    actionRunning.current = true;
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      const result = await work();
+      const execute = () => { if (!live()) throw new Error("当前盘点页面已变化，已停止操作"); return work(live); };
+      const result = await (isCount ? execute() : withNoPendingOpeningCount(detail.task_id, execute));
+      if (!live()) return;
       setDetail(result.detail);
-      setNotice(success);
-      resetDialog();
+      setNotice(result.recovered ? "历史提交已核验；当前任务可能已进入后续轮，本次未重新提交计数。" : success);
+      resetDialog(isCount);
       await loadList();
     } catch (err) {
-      setError(showError(err));
+      if (live()) setError(showError(err));
     } finally {
-      setBusy(false);
+      actionRunning.current = false;
+      if (mounted.current) { setBusy(false); setRecoveryRevision((value) => value + 1); }
     }
   }
 
   async function submitCount(event: React.FormEvent): Promise<void> {
     event.preventDefault();
-    if (!detail || dialog?.kind !== "count") return;
-    await completeAction(() => submitOpeningScopeCount(
-      detail.task_id,
-      dialog.scopeId,
-      {
+    if (!detail || dialog?.kind !== "count" || busy) return;
+    if (!actor) { setError("缺少当前正式身份，请刷新后核验"); return; }
+    // A cross-tab storage event may not yet have rendered. The coordinator also
+    // checks the marker under its own whole-operation lock before transport.
+    try {
+      if (getOpeningCountRecoveryStore().read(detail.task_id).kind !== "missing") {
+        setError("原计数仍待核验，请使用只读核验入口；禁止重新提交");
+        setRecoveryRevision((value) => value + 1);
+        return;
+      }
+    } catch { setError("盘点恢复记录不可用，已停止提交"); return; }
+    await completeAction((canCommit) => submitDurableOpeningScopeCount({
+      taskId: detail.task_id, scopeId: dialog.scopeId, expectedIdentity: actor, canCommit,
+      input: {
         zero_confirmed: zeroConfirmed,
         physical_observations: zeroConfirmed ? [] : observations.map((row) => ({
           material_identifier_raw: row.materialIdentifier.trim(),
@@ -350,7 +402,7 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
           remark: row.remark.trim(),
         })),
       },
-    ), "该范围计数已提交；详情已从服务端重新读取。");
+    }), "该范围计数已提交并核验；历史计数与当前任务详情均已确认。", true);
   }
 
   function reviewItems(): OpeningReviewItemInput[] {
@@ -463,6 +515,19 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
     setObservations((rows) => rows.map((row) => row.key === key ? { ...row, ...patch } : row));
   }
 
+  function openCount(scopeId: string): void {
+    if (!detail || busy || countBlocked) return;
+    const anchor = `${detail.task_id}:${detail.current_round?.round_id}:${scopeId}`;
+    if (countDraftAnchor.current !== anchor) {
+      setZeroConfirmed(false);
+      observationKey.current += 1;
+      setObservations([newObservation(observationKey.current)]);
+      countDraftAnchor.current = anchor;
+    }
+    setDialog({ kind: "count", scopeId });
+  }
+  const renderedEpoch = viewEpoch.current;
+
   return <>
     <SectionHeader
       title="盘点中心"
@@ -486,6 +551,16 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
     {detailLoading && <Loading label="正在读取盘点详情" />}
     {detail && <section className="content-section opening-detail" aria-label="盘点详情">
       <div className="content-title"><div><h2>{detail.task_no}</h2><p className="mono">{detail.task_id}</p></div><span className={`status status-${detail.status}`}>{statusLabel(detail.status)}</span></div>
+      <OpeningCountRecoveryPanel key={`${detail.task_id}:${renderedEpoch}`} taskId={detail.task_id} actor={actor}
+        revision={recoveryRevision} onBlockedChange={setCountBlocked}
+        canCommit={() => mounted.current && viewEpoch.current === renderedEpoch}
+        onRecovered={(recovered) => {
+          setDetail(recovered);
+          setNotice("历史提交已核验；当前任务可能已进入后续轮，本次未重新提交计数。");
+          setError("");
+          resetDialog(true);
+          void loadList();
+        }} />
       <div className={`alert ${detail.evidence_status === "sealed" ? "alert-info" : "alert-warning"}`}>{evidenceLabel(detail)}</div>
       <Lifecycle detail={detail} />
       <dl className="detail-grid opening-detail-grid">
@@ -508,7 +583,7 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
               <td>{scope.total_counted_qty}</td>
             </> : <td colSpan={4}>封存前隐藏</td>}
             <td>{availableActions.has("count") && scope.assigned_to_me && scope.completion_status === "pending"
-              ? <Button tone="secondary" onClick={() => setDialog({ kind: "count", scopeId: scope.scope_id })}>提交计数</Button>
+              ? <Button tone="secondary" disabled={busy || countBlocked || !actor} onClick={() => openCount(scope.scope_id)}>提交计数</Button>
               : "-"}</td>
           </tr>)}
         </tbody></table></div>
@@ -543,7 +618,7 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
                   {observation.allowed_dispositions.map((disposition) => <Button
                     key={disposition}
                     tone="secondary"
-                    disabled={busy}
+                    disabled={busy || countBlocked}
                     onClick={() => openObservationDisposition(
                       observation.observation_id,
                       disposition,
@@ -558,11 +633,11 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
       <div className="opening-detail-section opening-command-section">
         <header><div><h3>当前允许操作</h3><p>服务端未返回的操作不会显示，也不能从状态推断。</p></div></header>
         <div className="opening-command-buttons">
-          {availableActions.has("review_region") && <Button onClick={() => openReview("review_region")}>区域复核</Button>}
-          {availableActions.has("review_headquarters") && <Button onClick={() => openReview("review_headquarters")}>总部复核</Button>}
-          {availableActions.has("open_recount") && <Button tone="secondary" icon={<RotateCcw size={16} />} onClick={() => setDialog({ kind: "open_recount" })}>发起复盘</Button>}
-          {availableActions.has("post") && <Button icon={<CheckCircle2 size={16} />} disabled={busy} onClick={() => void terminal("post")}>独立过账</Button>}
-          {availableActions.has("close") && <Button tone="secondary" disabled={busy} onClick={() => void terminal("close")}>独立关闭</Button>}
+          {availableActions.has("review_region") && <Button disabled={busy || countBlocked} onClick={() => openReview("review_region")}>区域复核</Button>}
+          {availableActions.has("review_headquarters") && <Button disabled={busy || countBlocked} onClick={() => openReview("review_headquarters")}>总部复核</Button>}
+          {availableActions.has("open_recount") && <Button tone="secondary" disabled={busy || countBlocked} icon={<RotateCcw size={16} />} onClick={() => setDialog({ kind: "open_recount" })}>发起复盘</Button>}
+          {availableActions.has("post") && <Button icon={<CheckCircle2 size={16} />} disabled={busy || countBlocked} onClick={() => void terminal("post")}>独立过账</Button>}
+          {availableActions.has("close") && <Button tone="secondary" disabled={busy || countBlocked} onClick={() => void terminal("close")}>独立关闭</Button>}
           {detail.allowed_actions.length === 0 && <span className="opening-no-action">当前没有服务端授权操作</span>}
         </div>
       </div>
@@ -589,7 +664,7 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
             <Button type="button" tone="quiet" aria-label="删除实盘行" disabled={observations.length === 1} onClick={() => setObservations((rows) => rows.filter((item) => item.key !== row.key))}><Trash2 size={16} /></Button>
           </div>)}
         </div>}
-        <div className="form-actions"><Button type="button" tone="quiet" onClick={resetDialog}>取消</Button><Button type="submit" disabled={busy}>{busy ? "正在提交" : "确认提交计数"}</Button></div>
+        <div className="form-actions"><Button type="button" tone="quiet" onClick={() => resetDialog()}>取消</Button><Button type="submit" disabled={busy || countBlocked}>{busy ? "正在提交" : "确认提交计数"}</Button></div>
       </form>
     </Modal>}
 
@@ -603,7 +678,7 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
           {detail.differences.map((row) => <ReviewDifferenceRow key={row.difference_id} detail={detail} difference={row} topLevelDecision={reviewDecision} comment={itemComments[row.difference_id] || ""} onComment={(value) => setItemComments((current) => ({ ...current, [row.difference_id]: value }))} />)}
         </tbody></table></div>}
         <Field label="复核说明"><textarea rows={3} maxLength={10000} required={Boolean(reviewDecision && reviewDecision !== "approve")} value={reviewComment} onChange={(event) => setReviewComment(event.target.value)} /></Field>
-        <div className="form-actions"><Button type="button" tone="quiet" onClick={resetDialog}>取消</Button><Button type="submit" disabled={busy}>{busy ? "正在提交" : "提交本级复核"}</Button></div>
+        <div className="form-actions"><Button type="button" tone="quiet" onClick={() => resetDialog()}>取消</Button><Button type="submit" disabled={busy || countBlocked}>{busy ? "正在提交" : "提交本级复核"}</Button></div>
       </form>
     </Modal>}
 
@@ -622,7 +697,7 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
         </>}
         <Field label="原因代码"><input required maxLength={80} value={dispositionReason} onChange={(event) => setDispositionReason(event.target.value)} /></Field>
         <Field label="处置说明"><textarea required={dialog.disposition !== "resolved_existing_master"} rows={3} maxLength={4000} value={dispositionComment} onChange={(event) => setDispositionComment(event.target.value)} /></Field>
-        <div className="form-actions"><Button type="button" tone="quiet" onClick={resetDialog}>取消</Button><Button type="submit" disabled={busy}>{busy ? "正在提交" : "确认处置"}</Button></div>
+        <div className="form-actions"><Button type="button" tone="quiet" onClick={() => resetDialog()}>取消</Button><Button type="submit" disabled={busy || countBlocked}>{busy ? "正在提交" : "确认处置"}</Button></div>
       </form>
     </Modal>}
 
@@ -645,7 +720,7 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
           {recountSelections[scope.scope_id] && !recountContexts[scope.scope_id] && <div role="alert">当前身份、任务或轮次尚未核验，不能选择复盘人员。</div>}
         </div>)}</div>
         <Field label="复盘原因"><textarea required rows={3} maxLength={4000} value={recountReason} onChange={(event) => setRecountReason(event.target.value)} /></Field>
-        <div className="form-actions"><Button type="button" tone="quiet" onClick={resetDialog}>取消</Button><Button type="submit" disabled={busy || !actor}>{busy ? "正在创建" : "创建复盘轮次"}</Button></div>
+        <div className="form-actions"><Button type="button" tone="quiet" onClick={() => resetDialog()}>取消</Button><Button type="submit" disabled={busy || countBlocked || !actor}>{busy ? "正在创建" : "创建复盘轮次"}</Button></div>
       </form>
     </Modal>}
   </>;

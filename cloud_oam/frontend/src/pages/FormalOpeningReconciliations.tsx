@@ -28,6 +28,7 @@ import {
   formatDate,
   showError,
 } from "../ui";
+import { withNoPendingOpeningCount } from "../openingCountRecoveryStore";
 
 
 type Dialog = "explain" | "approve" | null;
@@ -193,7 +194,7 @@ export default function FormalOpeningReconciliationsPage({
     setError("");
     setNotice("");
     try {
-      const result = await startOpeningReconciliation(checkedTaskId);
+      const result = await withNoPendingOpeningCount(checkedTaskId, () => startOpeningReconciliation(checkedTaskId));
       setDetail(result.detail);
       setTaskId("");
       setNotice(`已创建独立对账，共 ${result.result.item_count} 项待核差异；未执行期初关闭。`);
@@ -212,7 +213,7 @@ export default function FormalOpeningReconciliationsPage({
     setError("");
     setNotice("");
     try {
-      const result = await explainOpeningReconciliation(
+      const result = await withNoPendingOpeningCount(detail.task_id, () => explainOpeningReconciliation(
         detail.reconciliation_run_id,
         detail.items.map((item) => {
           const draft = drafts[item.reconciliation_item_id];
@@ -223,7 +224,7 @@ export default function FormalOpeningReconciliationsPage({
             evidence_file_id: draft?.evidenceFileId.trim() || null,
           };
         }),
-      );
+      ));
       setDetail(result.detail);
       setNotice(`已完整解释 ${result.result.explained_item_count} 项控制差异；总部批准与期初关闭仍为独立动作。`);
       closeDialog();
@@ -242,10 +243,10 @@ export default function FormalOpeningReconciliationsPage({
     setError("");
     setNotice("");
     try {
-      const result = await approveOpeningReconciliation(
+      const result = await withNoPendingOpeningCount(detail.task_id, () => approveOpeningReconciliation(
         detail.reconciliation_run_id,
         approvalComment.trim(),
-      );
+      ));
       setDetail(result.detail);
       setNotice(`总部已批准 ${result.result.resolved_item_count} 项控制差异；期初任务不会在本页自动关闭。`);
       closeDialog();

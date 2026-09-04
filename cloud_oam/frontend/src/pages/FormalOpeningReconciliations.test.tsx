@@ -11,6 +11,7 @@ import {
   startOpeningReconciliation,
 } from "../formalOpeningReconciliation";
 import FormalOpeningReconciliationsPage from "./FormalOpeningReconciliations";
+import { getOpeningCountRecoveryStore } from "../openingCountRecoveryStore";
 
 
 vi.mock("../formalOpeningReconciliation", async (loadOriginal) => {
@@ -144,7 +145,41 @@ afterEach(() => {
 describe("formal opening reconciliation PC page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    Object.defineProperty(navigator, "locks", { configurable: true, value: {
+      async request(_name: string, _options: unknown, work: (lock: object) => Promise<unknown>) { return work({}); },
+    } });
     vi.mocked(loadOpeningReconciliations).mockResolvedValue(listPage());
+  });
+
+  async function seedPending(): Promise<void> {
+    await getOpeningCountRecoveryStore().withTaskLease(TASK_ID, async (lease) => { lease.persist({
+      v: 1, kind: "opening_scope_count", task_id: TASK_ID, round_id: RUN_ID, round_no: 1,
+      scope_id: ITEM_ID, actor_person_id: FILE_ID, actor_authorization_version: 1,
+      trace_request_id: "reconciliation-pending-count-0001",
+    }); });
+  }
+
+  it.each(["start", "explain", "approve"] as const)("blocks %s under the same-task durable count barrier", async (action) => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    await renderAndOpen(action === "approve" ? explainedDetail() : detail(), action === "start");
+    if (action === "start") fireEvent.change(screen.getByLabelText("期初任务标识"), { target: { value: TASK_ID } });
+    if (action === "explain") {
+      fireEvent.click(screen.getByRole("button", { name: "逐项解释差异" }));
+      fireEvent.change(screen.getByLabelText("OAM-JS-SKU-001 差异原因"), { target: { value: "测试原因" } });
+      fireEvent.change(screen.getByLabelText("OAM-JS-SKU-001 证据引用"), { target: { value: "TEST-EVIDENCE" } });
+    }
+    if (action === "approve") {
+      fireEvent.click(screen.getByRole("button", { name: "总部批准对账" }));
+      fireEvent.change(screen.getByLabelText("批准说明"), { target: { value: "总部核验" } });
+    }
+    await seedPending();
+    fireEvent.click(screen.getByRole("button", { name: { start: "创建独立对账", explain: "提交全部解释", approve: "确认总部批准" }[action] }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("禁止其他写入"));
+    expect(startOpeningReconciliation).not.toHaveBeenCalled();
+    expect(explainOpeningReconciliation).not.toHaveBeenCalled();
+    expect(approveOpeningReconciliation).not.toHaveBeenCalled();
+    expect(getOpeningCountRecoveryStore().read(TASK_ID).kind).toBe("valid");
   });
 
   it("shows independent left/right facts and only the server-allowed action", async () => {
