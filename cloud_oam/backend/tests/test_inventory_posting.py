@@ -61,6 +61,7 @@ from app.foundation_models import (
     SyncRun,
 )
 from app.inventory_models import (
+    CustodyAssignment,
     FormalMaterial,
     InventoryLedgerHead,
     InventoryMovement,
@@ -4149,7 +4150,31 @@ def _service_built_submitted_recount_chain(
 
     monkeypatch.setattr(recount_service, "_database_now", recount_clock)
     service_world = review_fixtures.world.__wrapped__(db)
+    # Regional warehouse responsibility belongs to the location/custody
+    # history.  Its pooled stock account remains valid without a personal
+    # custodian dimension; finalization must not apply the personal-warehouse
+    # account rule to this shape.
+    assert service_world.account.custodian_person_id is None
+    service_world.location.custodian_person_id = service_world.manager_x.person.id
+    db.add(
+        CustodyAssignment(
+            id=uuid.uuid4(),
+            location_id=service_world.location.id,
+            custodian_person_id=service_world.manager_x.person.id,
+            valid_from=service_now - timedelta(days=1),
+            valid_to=None,
+            handover_case_id=None,
+            created_at=service_now - timedelta(days=1),
+            updated_at=service_now - timedelta(days=1),
+        )
+    )
+    db.flush()
     prepared = review_fixtures._prepare_submitted(service_world)
+    assert service_world.location.location_type == "region"
+    assert (
+        prepared.scope.custodian_person_id_snapshot
+        == service_world.manager_x.person.id
+    )
     trigger_region = submit_opening_region_review(
         db,
         actor=service_world.principals["manager_x"],
@@ -4410,6 +4435,49 @@ def test_append_only_recount_chain_uses_current_assignment_and_reproves_old_coun
         ).all(),
         expected_assignee_by_scope=assignment_map,
     )
+
+    personal_parent = StockLocation(
+        id=uuid.uuid4(),
+        code=f"RECOUNT-PERSONAL-PARENT-{uuid.uuid4().hex[:12]}",
+        name="复盘个人仓负例父级区域仓",
+        location_type="region",
+        owner_org_id=facts.world.region_x.id,
+        parent_id=None,
+        custodian_person_id=None,
+        status="active",
+    )
+    db.add(personal_parent)
+    db.flush()
+    facts.world.location.parent_id = personal_parent.id
+    facts.world.location.location_type = "personal"
+    db.flush()
+    with pytest.raises(InventoryPostingError) as personal_mismatch:
+        posting_service._validate_opening_count_evidence(
+            db,
+            task=facts.task,
+            scopes=scopes,
+            scope_by_id={row.id: row for row in scopes},
+            round_row=final_round,
+            snapshot_lines=db.scalars(
+                select(StocktakeSnapshotLine).where(
+                    StocktakeSnapshotLine.task_id == facts.task.id
+                )
+            ).all(),
+            count_lines=final_count_lines,
+            count_serials=db.scalars(
+                select(StocktakeCountSerial).where(
+                    StocktakeCountSerial.round_id == final_round.id
+                )
+            ).all(),
+            expected_assignee_by_scope=assignment_map,
+        )
+    assert (
+        personal_mismatch.value.code
+        == "inventory_opening_establishment_invalid"
+    )
+    facts.world.location.location_type = "region"
+    facts.world.location.parent_id = None
+    db.flush()
 
     source_count = db.scalar(
         select(StocktakeCountLine).where(

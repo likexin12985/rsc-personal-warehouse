@@ -5022,6 +5022,27 @@ def _validate_opening_count_evidence(
         or round_submitted_at < round_started_at
     ):
         _invalid_opening_establishment()
+    location_ids = tuple(sorted({row.location_id for row in scopes}, key=str))
+    location_statement = _select_only_reference_statement(
+        db,
+        select(StockLocation)
+        .where(StockLocation.id.in_(location_ids))
+        .order_by(StockLocation.id),
+    )
+    locations = {
+        row.id: row
+        for row in db.scalars(
+            location_statement.execution_options(populate_existing=True)
+        ).all()
+    }
+    if (
+        len(locations) != len(location_ids)
+        or any(
+            row.location_type not in {"region", "personal"}
+            for row in locations.values()
+        )
+    ):
+        _invalid_opening_establishment()
     all_scope_accounts = db.scalars(
         select(StockAccount).where(
             or_(
@@ -5077,17 +5098,22 @@ def _validate_opening_count_evidence(
         snapshot = snapshot_by_account[account_id]
         count = count_by_account[account_id]
         scope = scope_by_id.get(snapshot.scope_id)
+        location = locations.get(scope.location_id) if scope is not None else None
         counted_at = _persisted_timestamp_utc(count.counted_at)
         if (
             scope is None
+            or location is None
             or count.scope_id != scope.id
             or snapshot.task_id != task.id
             or count.task_id != task.id
             or count.round_id != round_row.id
             or account.owner_org_id != scope.owner_org_id
             or account.location_id != scope.location_id
-            or account.custodian_person_id
-            != scope.custodian_person_id_snapshot
+            or (
+                location.location_type == "personal"
+                and account.custodian_person_id
+                != scope.custodian_person_id_snapshot
+            )
             or snapshot.ledger_cursor != task.cutoff_ledger_cursor
             or snapshot.book_qty != _ZERO
             or _persisted_timestamp_utc(snapshot.created_at) != frozen_at
