@@ -34,7 +34,11 @@ function confirmedWriteIntent(page, kind, path, body, metadata = {}) {
       error.status = 409
       throw error
     }
-    showPendingWriteNotice(page, pending, 'retryable')
+    showPendingWriteNotice(
+      page,
+      pending,
+      hasRecordedWriteResponse(pending) ? 'projection_pending' : 'retryable'
+    )
     return pending
   }
   if (
@@ -74,6 +78,7 @@ function clearWriteIntent(page, intent) {
 
 function showPendingWriteNotice(page, intent, state) {
   const retryable = state === 'retryable'
+  const projectionPending = state === 'projection_pending'
   const actionLabel = intent.kind === 'count'
     ? '实盘封存'
     : (intent.kind === 'post' ? '期初过账' : '任务关闭')
@@ -82,7 +87,9 @@ function showPendingWriteNotice(page, intent, state) {
     : `任务 ${intent.taskId} · 期望版本 v${intent.expectedVersion}`
   const message = retryable
     ? `上一笔${actionLabel}仍待精确确认。对象仍处于原请求可重放状态；再次确认只会复用原请求坐标。`
-    : `上一笔${actionLabel}结果待确认。当前详情不足以确认原请求结果；即使对象状态已变化，也不能认定原请求成功。小程序已停止新写入，请联系管理员，凭下列对象和追踪 ID 进行只读核验。`
+    : (projectionPending
+        ? `上一笔${actionLabel}的成功响应已严格确认，但当前详情尚未包含对应完成状态。小程序不会再次发送该请求；当前只允许刷新并进行只读核验。`
+        : `上一笔${actionLabel}结果待确认。当前详情不足以确认原请求结果；即使对象状态已变化，也不能认定原请求成功。小程序已停止新写入，请联系管理员，凭下列对象和追踪 ID 进行只读核验。`)
   page.setData({
     writePending: true,
     pendingWriteKind: intent.kind,
@@ -101,15 +108,150 @@ function recordExactWriteResponse(intent, response) {
   }
 }
 
-function hasExactWriteResponse(intent) {
+function hasRecordedWriteResponse(intent) {
+  return Boolean(intent && intent.confirmedResponse)
+}
+
+function exactWriteResponse(intent) {
   const confirmation = intent && intent.confirmedResponse
-  return Boolean(
-    confirmation &&
-    confirmation.idempotencyKey === intent.idempotencyKey &&
-    confirmation.requestId === intent.requestId &&
-    typeof confirmation.responseSignature === 'string' &&
-    confirmation.responseSignature.length
+  if (
+    !confirmation ||
+    confirmation.idempotencyKey !== intent.idempotencyKey ||
+    confirmation.requestId !== intent.requestId ||
+    typeof confirmation.responseSignature !== 'string' ||
+    !confirmation.responseSignature.length
+  ) return null
+  try {
+    const response = JSON.parse(confirmation.responseSignature)
+    return intent.kind === 'count'
+      ? validateOpeningStocktakeCountWriteResult(
+          response,
+          intent.taskId,
+          intent.roundId,
+          intent.scopeId
+        )
+      : validateOpeningStocktakeTerminalWriteResult(
+          response,
+          intent.kind,
+          intent.taskId,
+          intent.roundId || null,
+          intent.expectedVersion
+        )
+  } catch (_) {
+    return null
+  }
+}
+
+function sameIdentifier(left, right) {
+  return typeof left === 'string' && typeof right === 'string' &&
+    left.toLowerCase() === right.toLowerCase()
+}
+
+function countTaskProjectionContainsResult(resultStatus, currentStatus) {
+  const allowedSuccessors = {
+    counting: [
+      'counting',
+      'submitted',
+      'region_review',
+      'hq_review',
+      'approved',
+      'recount_required',
+      'posted',
+      'closed'
+    ],
+    submitted: [
+      'submitted',
+      'region_review',
+      'hq_review',
+      'approved',
+      'recount_required',
+      'posted',
+      'closed'
+    ],
+    region_review: [
+      'region_review',
+      'hq_review',
+      'approved',
+      'recount_required',
+      'posted',
+      'closed'
+    ],
+    hq_review: ['hq_review', 'approved', 'recount_required', 'posted', 'closed'],
+    approved: ['approved', 'posted', 'closed'],
+    recount_required: ['recount_required'],
+    posted: ['posted', 'closed'],
+    closed: ['closed']
+  }
+  return Array.isArray(allowedSuccessors[resultStatus]) &&
+    allowedSuccessors[resultStatus].includes(currentStatus)
+}
+
+function countProjectionContainsResult(intent, result, detail) {
+  if (
+    !detail.current_round ||
+    !sameIdentifier(detail.current_round.round_id, result.round_id) ||
+    !sameIdentifier(intent.roundId, result.round_id) ||
+    !countTaskProjectionContainsResult(result.task_status, detail.status)
+  ) return false
+  const scope = detail.scopes.find((row) => (
+    sameIdentifier(row.scope_id, result.scope_id) &&
+    row.completion_status === 'completed' &&
+    typeof row.completed_at === 'string'
+  ))
+  if (!scope) return false
+  if (result.round_sealed) {
+    return detail.current_round.status === 'submitted' &&
+      detail.evidence_status === 'sealed'
+  }
+  return detail.current_round.status === 'counting' || (
+    detail.current_round.status === 'submitted' &&
+    detail.evidence_status === 'sealed'
   )
+}
+
+function terminalProjectionContainsResult(intent, result, detail) {
+  if (
+    !intent.roundId ||
+    !detail.current_round ||
+    !sameIdentifier(detail.current_round.round_id, intent.roundId) ||
+    detail.current_round.status !== 'submitted' ||
+    detail.evidence_status !== 'sealed' ||
+    detail.task_version < result.task_version
+  ) return false
+  if (intent.kind === 'post') {
+    return detail.status === 'posted' || (
+      detail.status === 'closed' &&
+      detail.task_version > result.task_version
+    )
+  }
+  return intent.kind === 'close' && detail.status === 'closed'
+}
+
+function projectionContainsWriteResult(intent, result, detail) {
+  return intent.kind === 'count'
+    ? countProjectionContainsResult(intent, result, detail)
+    : terminalProjectionContainsResult(intent, result, detail)
+}
+
+function blockWriteRequest(page, kind, label) {
+  if (page.data.submitting) {
+    wx.showToast({ title: `${label}正在处理，请勿重复提交`, icon: 'none' })
+    return true
+  }
+  const pending = page._pendingWriteIntent
+  if (hasRecordedWriteResponse(pending)) {
+    showPendingWriteNotice(page, pending, 'projection_pending')
+    wx.showToast({ title: '原请求成功响应已确认，当前仅允许刷新详情', icon: 'none' })
+    return true
+  }
+  if (
+    page.data.writePending &&
+    !(page.data.pendingWriteRetryable && page.data.pendingWriteKind === kind)
+  ) {
+    wx.showToast({ title: `原${label}请求仍待核验，禁止创建新请求`, icon: 'none' })
+    return true
+  }
+  return false
 }
 
 function validateAndRecordCountResponse(intent, response) {
@@ -156,8 +298,17 @@ function uncertainWriteFailure(error) {
 }
 
 function writeIntentState(intent, detail) {
-  if (!intent || !detail || detail.task_id !== intent.taskId) return 'unresolved'
-  if (hasExactWriteResponse(intent)) return 'confirmed'
+  if (!intent) return 'unresolved'
+  const responseRecorded = hasRecordedWriteResponse(intent)
+  if (!detail || !sameIdentifier(detail.task_id, intent.taskId)) {
+    return responseRecorded ? 'projection_pending' : 'unresolved'
+  }
+  if (responseRecorded) {
+    const result = exactWriteResponse(intent)
+    return result && projectionContainsWriteResult(intent, result, detail)
+      ? 'confirmed'
+      : 'projection_pending'
+  }
   if (intent.kind === 'count') {
     const scope = detail.scopes.find((row) => row.scope_id === intent.scopeId)
     if (
@@ -513,16 +664,9 @@ Page({
 
   async submitCount(event) {
     const zero = event.currentTarget.dataset.zero === 'true'
+    if (blockWriteRequest(this, 'count', '实盘')) return
     const detail = this.data.detail
     if (
-      this.data.writePending &&
-      !(this.data.pendingWriteRetryable && this.data.pendingWriteKind === 'count')
-    ) {
-      wx.showToast({ title: '原实盘请求需在 PC 核验，禁止创建新请求', icon: 'none' })
-      return
-    }
-    if (
-      this.data.submitting ||
       !detail ||
       !detail.current_round ||
       !detail.canCount ||
@@ -545,7 +689,7 @@ Page({
       success: (result) => resolve(result.confirm),
       fail: () => resolve(false)
     }))
-    if (!confirmed) return
+    if (!confirmed || blockWriteRequest(this, 'count', '实盘')) return
     this.setData({ submitting: true })
     let intent = null
     try {
@@ -559,11 +703,16 @@ Page({
         roundId: detail.current_round.round_id,
         scopeId: this.data.selectedScopeId
       })
+      if (hasRecordedWriteResponse(intent)) {
+        showPendingWriteNotice(this, intent, 'projection_pending')
+        return
+      }
       const response = await api.post(path, intent.body, {
         idempotencyKey: intent.idempotencyKey,
         requestId: intent.requestId
       })
       validateAndRecordCountResponse(intent, response)
+      showPendingWriteNotice(this, intent, 'projection_pending')
       const refreshed = await this.load()
       const state = this._lastWriteIntentState || 'unresolved'
       if (refreshed && state === 'confirmed') {
@@ -602,21 +751,11 @@ Page({
 
   async terminalAction(event) {
     const action = String(event.currentTarget.dataset.action || '')
+    if (!['post', 'close'].includes(action)) return
+    if (blockWriteRequest(this, action, '状态')) return
     const detail = this.data.detail
     if (
-      this.data.writePending &&
-      !(
-        this.data.pendingWriteRetryable &&
-        this.data.pendingWriteKind === action
-      )
-    ) {
-      wx.showToast({ title: '原状态请求需在 PC 核验，禁止创建新请求', icon: 'none' })
-      return
-    }
-    if (
-      this.data.submitting ||
       !detail ||
-      !['post', 'close'].includes(action) ||
       !((action === 'post' && detail.canPost) || (action === 'close' && detail.canClose))
     ) return
     const confirmed = await new Promise((resolve) => wx.showModal({
@@ -628,7 +767,7 @@ Page({
       success: (result) => resolve(result.confirm),
       fail: () => resolve(false)
     }))
-    if (!confirmed) return
+    if (!confirmed || blockWriteRequest(this, action, '状态')) return
     this.setData({ submitting: true })
     let intent = null
     try {
@@ -639,16 +778,24 @@ Page({
         roundId: detail.current_round ? detail.current_round.round_id : null,
         expectedVersion: detail.task_version
       })
+      if (hasRecordedWriteResponse(intent)) {
+        showPendingWriteNotice(this, intent, 'projection_pending')
+        return
+      }
       const response = await api.post(path, intent.body, {
         idempotencyKey: intent.idempotencyKey,
         requestId: intent.requestId
       })
       validateAndRecordTerminalResponse(intent, response)
+      showPendingWriteNotice(this, intent, 'projection_pending')
       const refreshed = await this.load()
       const state = this._lastWriteIntentState || 'unresolved'
       if (refreshed && state === 'confirmed') {
         clearWriteIntent(this, intent)
-        wx.showToast({ title: action === 'post' ? '已过账，尚未关闭' : '盘点已关闭', icon: 'success' })
+        const postTitle = this.data.detail && this.data.detail.status === 'closed'
+          ? '过账已确认，当前已关闭'
+          : '已过账，尚未关闭'
+        wx.showToast({ title: action === 'post' ? postTitle : '盘点已关闭', icon: 'success' })
       } else {
         wx.showToast({
           title: refreshed

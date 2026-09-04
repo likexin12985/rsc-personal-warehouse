@@ -405,15 +405,28 @@ function validateOpeningStocktakeCountWriteResult(
   requireExpectedUuid(own(result, 'task_id'), expectedTaskId, 'task_id')
   requireExpectedUuid(own(result, 'round_id'), expectedRoundId, 'round_id')
   requireExpectedUuid(own(result, 'scope_id'), expectedScopeId, 'scope_id')
-  enumValue(own(result, 'task_status'), COUNT_RESULT_TASK_STATUSES, 'task_status')
-  enumValue(own(result, 'round_status'), ROUND_STATUSES, 'round_status')
+  const taskStatus = enumValue(
+    own(result, 'task_status'),
+    COUNT_RESULT_TASK_STATUSES,
+    'task_status'
+  )
+  const roundStatus = enumValue(own(result, 'round_status'), ROUND_STATUSES, 'round_status')
   if (!booleanValue(own(result, 'scope_completed'), 'scope_completed')) {
     fail(
       'stocktake_write_result_not_completed',
       '正式盘点实盘写响应未确认目标范围完成'
     )
   }
-  booleanValue(own(result, 'round_sealed'), 'round_sealed')
+  const roundSealed = booleanValue(own(result, 'round_sealed'), 'round_sealed')
+  if (
+    (roundSealed && (roundStatus !== 'submitted' || taskStatus === 'counting')) ||
+    (!roundSealed && (roundStatus !== 'counting' || taskStatus !== 'counting'))
+  ) {
+    fail(
+      'stocktake_write_result_round_seal_mismatch',
+      '正式盘点实盘写响应的轮次封存状态不一致'
+    )
+  }
   booleanValue(
     own(result, 'has_pending_verification'),
     'has_pending_verification'

@@ -975,7 +975,7 @@ describe("formal opening stocktake mutation policy", () => {
     expect(api).toHaveBeenCalledTimes(4);
   });
 
-  it("clears coordinates after a definitive HTTP 4xx rejection", async () => {
+  it("clears coordinates only after a first direct action-specific no-effect rejection", async () => {
     const before = hiddenDetail();
     const after = sealedDetail();
     const countResult = {
@@ -992,7 +992,9 @@ describe("formal opening stocktake mutation policy", () => {
     };
     vi.mocked(api)
       .mockResolvedValueOnce(before)
-      .mockRejectedValueOnce(new ApiError(422, "invalid count", {}))
+      .mockRejectedValueOnce(new ApiError(412, "invalid count", {
+        category: "precondition_failed", code: "opening_count_state_invalid",
+      }))
       .mockResolvedValueOnce(before)
       .mockResolvedValueOnce(countResult)
       .mockResolvedValueOnce(after);
@@ -1011,6 +1013,172 @@ describe("formal opening stocktake mutation policy", () => {
       .not.toEqual(vi.mocked(api).mock.calls[3][1]?.headers);
     expect(api).toHaveBeenCalledTimes(5);
   });
+
+  it.each([
+    new ApiError(401, "retain", {}),
+    new ApiError(403, "retain", {}),
+    new ApiError(404, "retain", {}),
+    new ApiError(409, "retain", { category: "conflict", code: "idempotency_conflict" }),
+    new ApiError(422, "retain", {}),
+    new ApiError(429, "retain", {}),
+    new ApiError(500, "retain", {}),
+    new ApiError(412, "retain"),
+    new ApiError(412, "retain", { category: "precondition_failed", code: "database_guard_rejected" }),
+    new ApiError(412, "retain", { category: "precondition_failed", code: "opening_recount_state_invalid" }),
+    new ApiError(400, "retain", { category: "invalid_request", code: "unknown_rejection" }),
+  ])("retains coordinates for non-whitelisted count rejection %#", async (error) => {
+    vi.mocked(api).mockImplementation(async (_path, init) => {
+      if (init?.method === "POST") throw error;
+      return hiddenDetail();
+    });
+    const execute = () => submitOpeningScopeCount(TASK_ID, SCOPE_ID, {
+      physical_observations: [], zero_confirmed: true,
+    });
+    await expect(execute()).rejects.toBe(error);
+    await expect(execute()).rejects.toBe(error);
+    const writes = vi.mocked(api).mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(writes).toHaveLength(2);
+    expect(writes[0][1]?.headers).toEqual(writes[1][1]?.headers);
+    expect(mutationHeaders).toHaveBeenCalledTimes(1);
+  });
+
+  it("never clears an unknown count when its later same-coordinate retry is rejected", async () => {
+    let attempts = 0;
+    vi.mocked(api).mockImplementation(async (_path, init) => {
+      if (init?.method !== "POST") return hiddenDetail();
+      attempts += 1;
+      throw attempts === 1 ? new TypeError("unknown") : new ApiError(412, "later rejection", {
+        category: "precondition_failed", code: "opening_count_state_invalid",
+      });
+    });
+    const execute = () => submitOpeningScopeCount(TASK_ID, SCOPE_ID, {
+      physical_observations: [], zero_confirmed: true,
+    });
+    await expect(execute()).rejects.toThrow("unknown");
+    await expect(execute()).rejects.toThrow("later rejection");
+    await expect(execute()).rejects.toThrow("later rejection");
+    expect(mutationHeaders).toHaveBeenCalledTimes(1);
+    const writes = vi.mocked(api).mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(writes).toHaveLength(3);
+    for (const [, init] of writes) expect(init?.headers).toEqual(writes[0][1]?.headers);
+  });
+
+  it("blocks an overlapping count while the exact first POST is unresolved", async () => {
+    let rejectPost!: (error: unknown) => void;
+    const post = new Promise<never>((_resolve, reject) => { rejectPost = reject; });
+    vi.mocked(api).mockImplementation(async (_path, init) => (
+      init?.method === "POST" ? post : hiddenDetail()
+    ));
+    const execute = () => submitOpeningScopeCount(TASK_ID, SCOPE_ID, {
+      physical_observations: [], zero_confirmed: true,
+    });
+    const first = execute().catch((error: unknown) => error);
+    await vi.waitFor(() => expect(mutationHeaders).toHaveBeenCalledTimes(1));
+    await expect(execute()).rejects.toThrow("正在核验");
+    expect(vi.mocked(api).mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    const error = new TypeError("first remains unknown");
+    rejectPost(error);
+    expect(await first).toBe(error);
+    expect(mutationHeaders).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not mistake a typed error from result validation for a direct POST rejection", async () => {
+    const error = new ApiError(412, "validator failure", {
+      category: "precondition_failed", code: "opening_finalize_state_invalid",
+    });
+    vi.mocked(api).mockImplementation(async () => detail(3));
+    const execute = () => executeVersionedOpeningTerminalAction({
+      taskId: TASK_ID, action: "post", expectedRoundId: () => ROUND_ID,
+      validateDetail, validateResult: () => { throw error; },
+    });
+    await expect(execute()).rejects.toBe(error);
+    await expect(execute()).rejects.toBe(error);
+    expect(mutationHeaders).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks overlapping recovery until the original mandatory detail read completes", async () => {
+    const countResult = {
+      schema_version: "1.0", task_id: TASK_ID, round_id: ROUND_ID, scope_id: SCOPE_ID,
+      task_status: "region_review", round_status: "submitted", scope_completed: true,
+      round_sealed: true, has_pending_verification: false, replayed: false,
+    };
+    let finishRead!: (value: unknown) => void;
+    let reads = 0;
+    let writes = 0;
+    vi.mocked(api).mockImplementation(async (_path, init) => {
+      if (init?.method === "POST") {
+        writes += 1;
+        return countResult;
+      }
+      reads += 1;
+      if (reads === 2) {
+        return new Promise((resolve) => { finishRead = resolve; });
+      }
+      return hiddenDetail();
+    });
+    const execute = () => submitOpeningScopeCount(TASK_ID, SCOPE_ID, {
+      physical_observations: [], zero_confirmed: true,
+    });
+    const first = execute();
+    await vi.waitFor(() => expect(finishRead).toBeTypeOf("function"));
+    await expect(execute()).rejects.toThrow("正在核验");
+    await expect(closeOpeningStocktake(TASK_ID)).rejects.toThrow("正在核验");
+    expect(reads).toBe(2);
+    expect(writes).toBe(1);
+    finishRead(sealedDetail());
+    expect((await first).detail.status).toBe("region_review");
+    expect(mutationHeaders).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a second invocation before its GET can outlive a first strong rejection", async () => {
+    let rejectPost!: (error: unknown) => void;
+    let reads = 0;
+    vi.mocked(api).mockImplementation(async (_path, init) => {
+      if (init?.method === "POST") return new Promise((_resolve, reject) => { rejectPost = reject; });
+      reads += 1;
+      return hiddenDetail();
+    });
+    const execute = () => submitOpeningScopeCount(TASK_ID, SCOPE_ID, {
+      physical_observations: [], zero_confirmed: true,
+    });
+    const first = execute().catch((error: unknown) => error);
+    await vi.waitFor(() => expect(rejectPost).toBeTypeOf("function"));
+    await expect(execute()).rejects.toThrow("正在核验");
+    const rejection = new ApiError(412, "no effect", {
+      category: "precondition_failed", code: "opening_count_state_invalid",
+    });
+    rejectPost(rejection);
+    expect(await first).toBe(rejection);
+    expect(reads).toBe(1);
+    expect(mutationHeaders).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api).mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  });
+
+  it.each(["count", "generic_terminal", "observation"] as const)(
+    "serializes %s before the first preflight GET", async (action) => {
+      let rejectRead!: (error: unknown) => void;
+      vi.mocked(api).mockImplementation(async () => new Promise((_resolve, reject) => { rejectRead = reject; }));
+      const execute = () => action === "count"
+        ? submitOpeningScopeCount(TASK_ID, SCOPE_ID, { physical_observations: [], zero_confirmed: true })
+        : action === "observation"
+          ? recordOpeningObservationDisposition(TASK_ID, OBSERVATION_ID, {
+              disposition: "pending_verification", reason_code: "needs_review", comment: "保持原现场观察待核验",
+              resolved_material_id: null, resolved_lot_id: null, resolved_serial_id: null,
+            })
+          : executeVersionedOpeningTerminalAction({
+              taskId: TASK_ID, action: "close", validateDetail,
+              validateResult: (value) => value as { task_id: string; resulting_task_status: "closed"; task_version: number },
+            });
+      const first = execute().catch((error: unknown) => error);
+      await vi.waitFor(() => expect(rejectRead).toBeTypeOf("function"));
+      await expect(execute()).rejects.toThrow("正在核验");
+      expect(api).toHaveBeenCalledTimes(1);
+      expect(mutationHeaders).not.toHaveBeenCalled();
+      const failure = new TypeError("preflight unavailable");
+      rejectRead(failure);
+      expect(await first).toBe(failure);
+    },
+  );
 
   it("rejects a terminal success whose mandatory reread does not contain the post", async () => {
     const before = {

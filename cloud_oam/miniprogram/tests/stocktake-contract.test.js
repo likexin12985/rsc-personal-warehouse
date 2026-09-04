@@ -261,6 +261,36 @@ test('count write confirmation requires the exact task, round and scope anchors'
     ),
     (error) => error.code === 'stocktake_write_result_not_completed'
   )
+
+  const unsealed = clone(result)
+  unsealed.task_status = 'counting'
+  unsealed.round_status = 'counting'
+  unsealed.round_sealed = false
+  assert.equal(
+    contract.validateOpeningStocktakeCountWriteResult(
+      unsealed,
+      TASK_ID,
+      ROUND_ID,
+      SCOPE_ID
+    ),
+    unsealed
+  )
+
+  for (const mismatch of [
+    Object.assign(clone(result), { round_status: 'counting' }),
+    Object.assign(clone(result), { task_status: 'counting' }),
+    Object.assign(clone(result), { round_sealed: false })
+  ]) {
+    assert.throws(
+      () => contract.validateOpeningStocktakeCountWriteResult(
+        mismatch,
+        TASK_ID,
+        ROUND_ID,
+        SCOPE_ID
+      ),
+      (error) => error.code === 'stocktake_write_result_round_seal_mismatch'
+    )
+  }
 })
 
 test('terminal write confirmation requires exact action anchors and next version', () => {

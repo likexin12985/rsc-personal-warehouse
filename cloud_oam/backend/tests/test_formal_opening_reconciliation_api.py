@@ -56,6 +56,101 @@ def _headers() -> dict[str, str]:
     }
 
 
+def _start_body() -> dict[str, object]:
+    return {"expected_task_version": 7}
+
+
+def _explain_body() -> dict[str, object]:
+    return {
+        "expected_version": 1,
+        "items": [
+            {
+                "reconciliation_item_id": str(ITEM_ID),
+                "expected_version": 1,
+                "explanation": "区域负责人核实为历史在途差额",
+                "evidence_reference": "REGION-EVIDENCE-20260831-0001",
+                "evidence_file_id": str(FILE_ID),
+            }
+        ],
+    }
+
+
+def _approve_body() -> dict[str, object]:
+    return {
+        "expected_version": 2,
+        "comment": "总部复核证据完整，同意关闭门禁",
+    }
+
+
+def _start_result():
+    return service.OpeningControlReconciliationStartResult(
+        reconciliation_run_id=RUN_ID,
+        task_id=TASK_ID,
+        status="differences",
+        version=0,
+        item_count=2,
+        created_at=NOW,
+    )
+
+
+def _explain_result():
+    return service.OpeningControlReconciliationExplainResult(
+        reconciliation_run_id=RUN_ID,
+        task_id=TASK_ID,
+        status="differences",
+        version=2,
+        explained_item_count=1,
+        explained_at=NOW,
+        replayed=False,
+    )
+
+
+def _approve_result():
+    return service.OpeningControlReconciliationApproveResult(
+        reconciliation_run_id=RUN_ID,
+        task_id=TASK_ID,
+        status="approved",
+        version=3,
+        resolved_item_count=1,
+        approved_at=NOW,
+    )
+
+
+_RECONCILIATION_ACTIONS = [
+    (
+        "start",
+        f"/api/v1/reconciliations/opening/tasks/{TASK_ID}",
+        _start_body(),
+        "start_opening_control_reconciliation",
+        _start_result,
+    ),
+    (
+        "explain",
+        f"/api/v1/reconciliations/opening/{RUN_ID}/explanations",
+        _explain_body(),
+        "explain_opening_control_reconciliation",
+        _explain_result,
+    ),
+    (
+        "approve",
+        f"/api/v1/reconciliations/opening/{RUN_ID}/approve",
+        _approve_body(),
+        "approve_opening_control_reconciliation",
+        _approve_result,
+    ),
+]
+
+
+_RECONCILIATION_412_CASES = [
+    (*_RECONCILIATION_ACTIONS[0][:4], "opening_reconciliation_task_state_invalid"),
+    (*_RECONCILIATION_ACTIONS[0][:4], "opening_reconciliation_not_required"),
+    (*_RECONCILIATION_ACTIONS[1][:4], "opening_reconciliation_explain_state_invalid"),
+    (*_RECONCILIATION_ACTIONS[1][:4], "opening_reconciliation_item_set_mismatch"),
+    (*_RECONCILIATION_ACTIONS[2][:4], "opening_reconciliation_approve_state_invalid"),
+    (*_RECONCILIATION_ACTIONS[2][:4], "opening_reconciliation_explanation_incomplete"),
+]
+
+
 def test_start_maps_server_owned_task_and_commits_once(
     api_client, monkeypatch
 ) -> None:
@@ -298,3 +393,131 @@ def test_expected_versions_are_strict_integers(
     called.assert_not_called()
     db.commit.assert_not_called()
     db.rollback.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("_action", "path", "body", "function_name", "_result_factory"),
+    _RECONCILIATION_ACTIONS,
+)
+@pytest.mark.parametrize(
+    ("headers", "expected_code"),
+    [
+        (
+            {"X-Request-ID": "opening-reconciliation-request-0001"},
+            "idempotency_key_invalid",
+        ),
+        (
+            {
+                "Idempotency-Key": "opening-reconciliation-api-0001",
+                "X-Request-ID": "bad request",
+            },
+            "x_request_id_invalid",
+        ),
+    ],
+)
+def test_reconciliation_header_rejection_is_exact_and_never_enters_service(
+    api_client,
+    monkeypatch,
+    _action,
+    path,
+    body,
+    function_name,
+    _result_factory,
+    headers,
+    expected_code,
+) -> None:
+    client, db, _principal = api_client
+    called = Mock()
+    monkeypatch.setattr(service, function_name, called)
+
+    response = client.post(path, json=body, headers=headers)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "code": expected_code,
+        "category": "invalid_request",
+        "message": (
+            "Idempotency-Key 必须是 16-128 位安全字符"
+            if expected_code == "idempotency_key_invalid"
+            else "X-Request-ID 必须是 8-160 位安全字符"
+        ),
+    }
+    called.assert_not_called()
+    db.commit.assert_not_called()
+    db.rollback.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("action", "path", "body", "function_name", "error_code"),
+    _RECONCILIATION_412_CASES,
+)
+def test_reconciliation_exact_precondition_rejection_rolls_back_before_response(
+    api_client,
+    monkeypatch,
+    action,
+    path,
+    body,
+    function_name,
+    error_code,
+) -> None:
+    client, db, _principal = api_client
+    events: list[str] = []
+    staged: list[str] = []
+
+    def rollback() -> None:
+        events.append("rollback")
+        staged.clear()
+
+    def reject(_db, **_kwargs):
+        assert _db is db
+        events.append("service")
+        staged.append(f"staged:{action}")
+        raise service.OpeningControlReconciliationError(
+            error_code,
+            "precondition_failed",
+            "当前状态不允许执行该期初控制账对账操作",
+        )
+
+    db.rollback.side_effect = rollback
+    monkeypatch.setattr(service, function_name, reject)
+
+    response = client.post(path, json=body, headers=_headers())
+
+    assert response.status_code == 412
+    assert response.json()["detail"] == {
+        "code": error_code,
+        "category": "precondition_failed",
+        "message": "当前状态不允许执行该期初控制账对账操作",
+    }
+    assert events == ["service", "rollback"]
+    assert staged == []
+    db.rollback.assert_called_once_with()
+    db.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("_action", "path", "body", "function_name", "result_factory"),
+    _RECONCILIATION_ACTIONS,
+)
+def test_reconciliation_commit_exception_is_not_translated_to_domain_4xx(
+    api_client,
+    monkeypatch,
+    _action,
+    path,
+    body,
+    function_name,
+    result_factory,
+) -> None:
+    client, db, _principal = api_client
+    monkeypatch.setattr(
+        service,
+        function_name,
+        lambda *_args, **_kwargs: result_factory(),
+    )
+    db.commit.side_effect = RuntimeError("commit outcome unknown")
+
+    with pytest.raises(RuntimeError, match="commit outcome unknown"):
+        client.post(path, json=body, headers=_headers())
+
+    db.commit.assert_called_once_with()
+    db.rollback.assert_called_once_with()

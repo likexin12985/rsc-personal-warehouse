@@ -566,6 +566,206 @@ _WRITE_REQUESTS = [
 ]
 
 
+_WEB_OPENING_REJECTION_REQUESTS = [
+    (
+        "count",
+        f"/api/v1/stocktakes/opening/{TASK_ID}/rounds/{ROUND_ID}/scopes/{SCOPE_ID}/count",
+        _count_body(),
+        count_service,
+        "submit_opening_stocktake_scope_count",
+        count_service.OpeningStocktakeCountError,
+        "opening_count_state_invalid",
+    ),
+    (
+        "review_region",
+        f"/api/v1/stocktakes/opening/{TASK_ID}/rounds/{ROUND_ID}/reviews/region",
+        _review_body(),
+        review_service,
+        "submit_opening_region_review",
+        review_service.OpeningStocktakeReviewError,
+        "opening_review_stage_state_invalid",
+    ),
+    (
+        "review_headquarters",
+        f"/api/v1/stocktakes/opening/{TASK_ID}/rounds/{ROUND_ID}/reviews/headquarters",
+        _review_body(),
+        review_service,
+        "submit_opening_headquarters_review",
+        review_service.OpeningStocktakeReviewError,
+        "opening_review_stage_state_invalid",
+    ),
+    (
+        "recount",
+        f"/api/v1/stocktakes/opening/{TASK_ID}/rounds/{ROUND_ID}/recount",
+        _recount_body(),
+        recount_service,
+        "open_opening_stocktake_recount",
+        recount_service.OpeningStocktakeRecountError,
+        "opening_recount_state_invalid",
+    ),
+    (
+        "disposition",
+        f"/api/v1/stocktakes/opening/{TASK_ID}/rounds/{ROUND_ID}/observations/{OBSERVATION_ID}/disposition",
+        _disposition_body(),
+        disposition_service,
+        "record_opening_observation_disposition",
+        disposition_service.OpeningObservationDispositionError,
+        "opening_observation_disposition_state_invalid",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    (
+        "_action",
+        "path",
+        "body",
+        "service_module",
+        "function_name",
+        "_error_type",
+        "_error_code",
+    ),
+    _WEB_OPENING_REJECTION_REQUESTS,
+)
+@pytest.mark.parametrize(
+    ("headers", "expected_code"),
+    [
+        ({"X-Request-ID": "request-write-0001"}, "idempotency_key_invalid"),
+        (
+            {
+                "Idempotency-Key": "opening-write-0001",
+                "X-Request-ID": "bad request",
+            },
+            "x_request_id_invalid",
+        ),
+    ],
+)
+def test_web_opening_header_rejection_is_exact_and_never_enters_service(
+    write_api_client,
+    monkeypatch,
+    _action,
+    path,
+    body,
+    service_module,
+    function_name,
+    _error_type,
+    _error_code,
+    headers,
+    expected_code,
+):
+    client, db, _principal = write_api_client
+    called = Mock()
+    monkeypatch.setattr(service_module, function_name, called)
+
+    response = client.post(path, json=body, headers=headers)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "code": expected_code,
+        "category": "invalid_request",
+        "message": (
+            "Idempotency-Key 必须是 16-128 位安全字符"
+            if expected_code == "idempotency_key_invalid"
+            else "X-Request-ID 必须是 8-160 位安全字符"
+        ),
+    }
+    called.assert_not_called()
+    db.commit.assert_not_called()
+    db.rollback.assert_not_called()
+    db.execute.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    (
+        "action",
+        "path",
+        "body",
+        "service_module",
+        "function_name",
+        "error_type",
+        "error_code",
+    ),
+    _WEB_OPENING_REJECTION_REQUESTS,
+)
+def test_web_opening_exact_state_rejection_rolls_back_staged_work_before_response(
+    write_api_client,
+    monkeypatch,
+    action,
+    path,
+    body,
+    service_module,
+    function_name,
+    error_type,
+    error_code,
+):
+    client, db, _principal = write_api_client
+    events: list[str] = []
+    staged: list[str] = []
+
+    def rollback() -> None:
+        events.append("rollback")
+        staged.clear()
+
+    def reject(_db, **_kwargs):
+        assert _db is db
+        events.append("service")
+        staged.append(f"staged:{action}")
+        raise error_type(
+            error_code,
+            "precondition_failed",
+            "当前状态不允许执行该期初盘点操作",
+        )
+
+    db.rollback.side_effect = rollback
+    monkeypatch.setattr(service_module, function_name, reject)
+
+    response = client.post(path, json=body, headers=_headers())
+
+    assert response.status_code == 412
+    assert response.json()["detail"] == {
+        "code": error_code,
+        "category": "precondition_failed",
+        "message": "当前状态不允许执行该期初盘点操作",
+    }
+    assert events == ["service", "rollback"]
+    assert staged == []
+    db.rollback.assert_called_once_with()
+    db.commit.assert_not_called()
+
+
+def test_web_opening_commit_exception_is_not_translated_to_domain_4xx(
+    write_api_client,
+    monkeypatch,
+):
+    client, db, _principal = write_api_client
+    monkeypatch.setattr(
+        count_service,
+        "submit_opening_stocktake_scope_count",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            task_id=TASK_ID,
+            round_id=ROUND_ID,
+            scope_id=SCOPE_ID,
+            task_status="submitted",
+            round_status="submitted",
+            scope_completed=True,
+            round_sealed=True,
+            has_pending_verification=False,
+            replayed=False,
+        ),
+    )
+    db.commit.side_effect = RuntimeError("commit outcome unknown")
+
+    with pytest.raises(RuntimeError, match="commit outcome unknown"):
+        client.post(
+            f"/api/v1/stocktakes/opening/{TASK_ID}/rounds/{ROUND_ID}/scopes/{SCOPE_ID}/count",
+            json=_count_body(),
+            headers=_headers(),
+        )
+
+    db.commit.assert_called_once_with()
+    db.rollback.assert_called_once_with()
+
+
 @pytest.mark.parametrize(("path", "body", "_permission"), _WRITE_REQUESTS)
 def test_every_write_requires_both_safe_headers(
     write_api_client, path, body, _permission

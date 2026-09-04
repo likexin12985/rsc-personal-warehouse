@@ -147,9 +147,47 @@ function terminalDetail(action) {
 
 function reflectedCountDetail() {
   const detail = taskDetail()
+  detail.status = 'submitted'
+  detail.task_version = 2
+  detail.current_round.status = 'submitted'
+  detail.current_round.submitted_at = '2026-08-31T01:50:00Z'
+  detail.evidence_status = 'sealed'
   detail.scopes[0].completion_status = 'completed'
   detail.scopes[0].completed_at = '2026-08-31T01:50:00Z'
   detail.allowed_actions = []
+  return detail
+}
+
+function completedButUnsealedCountDetail() {
+  const detail = taskDetail()
+  detail.scopes[0].completion_status = 'completed'
+  detail.scopes[0].completed_at = '2026-08-31T01:45:00Z'
+  return detail
+}
+
+function completedWithoutTimestampCountDetail() {
+  const detail = reflectedCountDetail()
+  detail.scopes[0].completed_at = null
+  return detail
+}
+
+function conflictingTaskStatusCountDetail() {
+  const detail = reflectedCountDetail()
+  detail.status = 'issued'
+  return detail
+}
+
+function recountCountDetail() {
+  const detail = taskDetail()
+  detail.task_version = 2
+  detail.current_round = {
+    round_id: '20000000-0000-4000-8000-000000000002',
+    round_no: 2,
+    round_type: 'recount',
+    status: 'counting',
+    started_at: '2026-08-31T02:30:00Z',
+    submitted_at: null
+  }
   return detail
 }
 
@@ -163,6 +201,36 @@ function reflectedTerminalDetail(action) {
     detail.status = 'closed'
     detail.task_version = 9
     detail.allowed_actions = []
+  }
+  return detail
+}
+
+function conflictingTerminalDetail(action) {
+  const detail = terminalDetail(action)
+  if (action === 'post') {
+    detail.status = 'closed'
+    detail.task_version = 8
+    detail.allowed_actions = []
+  } else {
+    detail.task_version = 9
+  }
+  return detail
+}
+
+function wrongRoundTerminalDetail(action) {
+  const detail = reflectedTerminalDetail(action)
+  detail.current_round.round_id = '20000000-0000-4000-8000-000000000099'
+  return detail
+}
+
+function compatibleLaterTerminalDetail(action) {
+  const detail = reflectedTerminalDetail(action)
+  if (action === 'post') {
+    detail.status = 'closed'
+    detail.task_version = 9
+    detail.allowed_actions = []
+  } else {
+    detail.task_version = 10
   }
   return detail
 }
@@ -417,6 +485,178 @@ test('count POST 200 keeps coordinates and never claims success when reread fail
   assert.deepEqual(instance.data.draftObservations, [observation])
   assert.equal(toasts.some((toast) => toast.icon === 'success'), false)
   assert.match(toasts.at(-1).title, /回读失败/)
+})
+
+test('accepted count waits for its exact same-round projection and never posts again', async (context) => {
+  const toasts = []
+  let postCalls = 0
+  let projection = 'pending'
+  global.wx = {
+    showToast(options) { toasts.push(options) },
+    showModal(options) { options.success({ confirm: true }) }
+  }
+  global.getApp = () => ({ setUser: () => true })
+  const loaded = loadPage('../pages/formal-stocktake-detail/index', {
+    '../utils/api': {
+      createIdempotencyKey: () => IDEMPOTENCY_KEY,
+      createRequestId: () => REQUEST_ID,
+      async get(pathname) {
+        if (pathname === '/auth/me') return USER
+        if (pathname === '/access/context') return CONTEXT
+        if (!postCalls || projection === 'pending') return taskDetail()
+        if (projection === 'unsealed') return completedButUnsealedCountDetail()
+        if (projection === 'missing_timestamp') return completedWithoutTimestampCountDetail()
+        if (projection === 'wrong_task_status') return conflictingTaskStatusCountDetail()
+        if (projection === 'recount') return recountCountDetail()
+        return reflectedCountDetail()
+      },
+      async post() {
+        postCalls += 1
+        return countWriteResult()
+      }
+    },
+    '../utils/session': { ensureLogin: () => true }
+  })
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+    delete global.getApp
+  })
+  const observation = {
+    material_identifier_raw: 'SKU-PROJECTION-PENDING',
+    material_identifier_type: 'sku_code',
+    condition_code: 'new',
+    availability_bucket: 'available',
+    counted_qty: '2.000',
+    lot_no_raw: null,
+    serial_no_raw: null,
+    serial_identifier_type: null,
+    count_method: 'manual',
+    reason_code: null,
+    remark: 'keep until the exact original round is visible'
+  }
+  const instance = pageInstance(loaded.definition)
+  instance.setData({ taskId: TASK_ID })
+  await instance.load()
+  instance.setData({ draftObservations: [observation] })
+
+  await instance.submitCount({ currentTarget: { dataset: { zero: 'false' } } })
+
+  assert.equal(postCalls, 1)
+  assert.ok(instance._pendingWriteIntent.confirmedResponse)
+  assert.equal(instance._lastWriteIntentState, 'projection_pending')
+  assert.deepEqual(instance.data.draftObservations, [observation])
+  assert.equal(instance.data.pendingWriteRetryable, false)
+  assert.match(instance.data.pendingWriteMessage, /成功响应已严格确认/)
+  assert.match(instance.data.pendingWriteMessage, /只允许刷新/)
+  assert.equal(toasts.some((toast) => toast.icon === 'success'), false)
+
+  await instance.submitCount({ currentTarget: { dataset: { zero: 'false' } } })
+  assert.equal(postCalls, 1)
+
+  projection = 'unsealed'
+  await instance.load()
+  assert.equal(instance._lastWriteIntentState, 'projection_pending')
+  assert.ok(instance._pendingWriteIntent)
+  assert.deepEqual(instance.data.draftObservations, [observation])
+
+  projection = 'missing_timestamp'
+  await instance.load()
+  assert.equal(instance._lastWriteIntentState, 'projection_pending')
+  assert.ok(instance._pendingWriteIntent)
+  assert.deepEqual(instance.data.draftObservations, [observation])
+
+  projection = 'wrong_task_status'
+  await instance.load()
+  assert.equal(instance._lastWriteIntentState, 'projection_pending')
+  assert.ok(instance._pendingWriteIntent)
+  assert.deepEqual(instance.data.draftObservations, [observation])
+
+  projection = 'recount'
+  await instance.load()
+  assert.equal(instance._lastWriteIntentState, 'projection_pending')
+  assert.ok(instance._pendingWriteIntent)
+  assert.deepEqual(instance.data.draftObservations, [observation])
+
+  projection = 'matched'
+  await instance.load()
+  assert.equal(instance._lastWriteIntentState, 'confirmed')
+  assert.equal(instance._pendingWriteIntent, null)
+  assert.deepEqual(instance.data.draftObservations, [])
+  assert.equal(postCalls, 1)
+})
+
+test('two count dialogs can start only one in-flight POST', async (context) => {
+  const modalCallbacks = []
+  let finishPost
+  let postCalls = 0
+  let keyCalls = 0
+  global.wx = {
+    showToast() {},
+    showModal(options) { modalCallbacks.push(options.success) }
+  }
+  global.getApp = () => ({ setUser: () => true })
+  const loaded = loadPage('../pages/formal-stocktake-detail/index', {
+    '../utils/api': {
+      createIdempotencyKey() {
+        keyCalls += 1
+        return IDEMPOTENCY_KEY
+      },
+      createRequestId: () => REQUEST_ID,
+      async get(pathname) {
+        if (pathname === '/auth/me') return USER
+        if (pathname === '/access/context') return CONTEXT
+        return postCalls ? reflectedCountDetail() : taskDetail()
+      },
+      post() {
+        postCalls += 1
+        return new Promise((resolve) => { finishPost = resolve })
+      }
+    },
+    '../utils/session': { ensureLogin: () => true }
+  })
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+    delete global.getApp
+  })
+  const instance = pageInstance(loaded.definition)
+  instance.setData({ taskId: TASK_ID })
+  await instance.load()
+  instance.setData({
+    draftObservations: [{
+      material_identifier_raw: 'SKU-DOUBLE-TAP',
+      material_identifier_type: 'sku_code',
+      condition_code: 'new',
+      availability_bucket: 'available',
+      counted_qty: '1.000',
+      lot_no_raw: null,
+      serial_no_raw: null,
+      serial_identifier_type: null,
+      count_method: 'manual',
+      reason_code: null,
+      remark: ''
+    }]
+  })
+
+  const first = instance.submitCount({ currentTarget: { dataset: { zero: 'false' } } })
+  const second = instance.submitCount({ currentTarget: { dataset: { zero: 'false' } } })
+  assert.equal(modalCallbacks.length, 2)
+
+  modalCallbacks[0]({ confirm: true })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(postCalls, 1)
+  assert.equal(keyCalls, 1)
+
+  modalCallbacks[1]({ confirm: true })
+  await second
+  assert.equal(postCalls, 1)
+  assert.equal(keyCalls, 1)
+
+  finishPost(countWriteResult())
+  await first
+  assert.equal(postCalls, 1)
+  assert.equal(instance._pendingWriteIntent, null)
 })
 
 test('non-blind counting never renders blind wording for unavailable quantities', async (context) => {
@@ -854,6 +1094,145 @@ test('terminal POST 200 keeps coordinates and never claims success when reread f
       assert.equal(instance._pendingWriteIntent.idempotencyKey, IDEMPOTENCY_KEY)
       assert.equal(toasts.some((toast) => toast.icon === 'success'), false)
       assert.match(toasts.at(-1).title, /回读失败/)
+    } finally {
+      loaded.restore()
+      delete global.wx
+      delete global.getApp
+    }
+  }
+})
+
+test('accepted post and close wait for a compatible current projection without replay', async () => {
+  for (const action of ['post', 'close']) {
+    const toasts = []
+    let postCalls = 0
+    let projection = 'stale'
+    global.wx = {
+      showToast(options) { toasts.push(options) },
+      showModal(options) { options.success({ confirm: true }) }
+    }
+    global.getApp = () => ({ setUser: () => true })
+    const loaded = loadPage('../pages/formal-stocktake-detail/index', {
+      '../utils/api': {
+        createIdempotencyKey: () => IDEMPOTENCY_KEY,
+        createRequestId: () => REQUEST_ID,
+        async get(pathname) {
+          if (pathname === '/auth/me') return USER
+          if (pathname === '/access/context') return CONTEXT
+          if (!postCalls || projection === 'stale') return terminalDetail(action)
+          if (projection === 'conflict') return conflictingTerminalDetail(action)
+          if (projection === 'wrong_round') return wrongRoundTerminalDetail(action)
+          return compatibleLaterTerminalDetail(action)
+        },
+        async post() {
+          postCalls += 1
+          return terminalWriteResult(action)
+        }
+      },
+      '../utils/session': { ensureLogin: () => true }
+    })
+    try {
+      const instance = pageInstance(loaded.definition)
+      instance.setData({ taskId: TASK_ID })
+      await instance.load()
+
+      await instance.terminalAction({ currentTarget: { dataset: { action } } })
+
+      assert.equal(postCalls, 1)
+      assert.ok(instance._pendingWriteIntent.confirmedResponse)
+      assert.equal(instance._lastWriteIntentState, 'projection_pending')
+      assert.equal(instance.data.pendingWriteRetryable, false)
+      assert.match(instance.data.pendingWriteMessage, /成功响应已严格确认/)
+      assert.equal(toasts.some((toast) => toast.icon === 'success'), false)
+
+      await instance.terminalAction({ currentTarget: { dataset: { action } } })
+      assert.equal(postCalls, 1)
+
+      projection = 'conflict'
+      await instance.load()
+      assert.equal(instance._lastWriteIntentState, 'projection_pending')
+      assert.ok(instance._pendingWriteIntent)
+
+      projection = 'wrong_round'
+      await instance.load()
+      assert.equal(instance._lastWriteIntentState, 'projection_pending')
+      assert.ok(instance._pendingWriteIntent)
+
+      projection = 'matched'
+      await instance.load()
+      assert.equal(instance._lastWriteIntentState, 'confirmed')
+      assert.equal(instance._pendingWriteIntent, null)
+      assert.equal(postCalls, 1)
+      assert.equal(toasts.some((toast) => toast.icon === 'success'), false)
+    } finally {
+      loaded.restore()
+      delete global.wx
+      delete global.getApp
+    }
+  }
+})
+
+test('two terminal dialogs cannot replay after the first response is accepted', async () => {
+  for (const action of ['post', 'close']) {
+    const modalCallbacks = []
+    const toasts = []
+    let postCalls = 0
+    let keyCalls = 0
+    let requestCalls = 0
+    global.wx = {
+      showToast(options) { toasts.push(options) },
+      showModal(options) { modalCallbacks.push(options.success) }
+    }
+    global.getApp = () => ({ setUser: () => true })
+    const loaded = loadPage('../pages/formal-stocktake-detail/index', {
+      '../utils/api': {
+        createIdempotencyKey() {
+          keyCalls += 1
+          return IDEMPOTENCY_KEY
+        },
+        createRequestId() {
+          requestCalls += 1
+          return REQUEST_ID
+        },
+        async get(pathname) {
+          if (pathname === '/auth/me') return USER
+          if (pathname === '/access/context') return CONTEXT
+          return terminalDetail(action)
+        },
+        async post() {
+          postCalls += 1
+          return terminalWriteResult(action)
+        }
+      },
+      '../utils/session': { ensureLogin: () => true }
+    })
+    try {
+      const instance = pageInstance(loaded.definition)
+      instance.setData({ taskId: TASK_ID })
+      await instance.load()
+
+      const first = instance.terminalAction({ currentTarget: { dataset: { action } } })
+      const second = instance.terminalAction({ currentTarget: { dataset: { action } } })
+      assert.equal(modalCallbacks.length, 2)
+
+      modalCallbacks[0]({ confirm: true })
+      await first
+      assert.equal(postCalls, 1)
+      assert.equal(instance._lastWriteIntentState, 'projection_pending')
+      assert.ok(instance._pendingWriteIntent.confirmedResponse)
+
+      modalCallbacks[1]({ confirm: true })
+      await second
+      assert.equal(postCalls, 1)
+      assert.equal(keyCalls, 1)
+      assert.equal(requestCalls, 1)
+
+      await instance.terminalAction({
+        currentTarget: { dataset: { action: action === 'post' ? 'close' : 'post' } }
+      })
+      assert.equal(modalCallbacks.length, 2)
+      assert.equal(postCalls, 1)
+      assert.equal(toasts.some((toast) => toast.icon === 'success'), false)
     } finally {
       loaded.restore()
       delete global.wx

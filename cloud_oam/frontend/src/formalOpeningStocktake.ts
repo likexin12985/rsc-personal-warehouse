@@ -988,17 +988,22 @@ type OpeningMutationIntent = {
   readonly signature: string;
   readonly coordinates: OpeningMutationCoordinates;
   readonly before: unknown;
+  postAttempted: boolean;
+  inFlight: boolean;
   accepted: boolean;
   acceptedResponse?: unknown;
 };
 const uncertainOpeningMutationIntents = new Map<string, OpeningMutationIntent>();
+const activeOpeningMutationCalls = new Map<string, symbol>();
 const MAX_UNCERTAIN_OPENING_INTENTS = 64;
 
 export const __openingMutationIntentTestOnly = import.meta.env.MODE === "test"
   ? Object.freeze({
       reset(): void {
         uncertainOpeningMutationIntents.clear();
+        activeOpeningMutationCalls.clear();
       },
+      isDefinitiveRejection: isDefinitiveClientRejection,
     })
   : undefined;
 
@@ -1034,6 +1039,18 @@ function openingIntentSignature(options: Readonly<{
 
 function taskIntentKey(taskId: string): string {
   return taskId.toLowerCase();
+}
+
+async function withOpeningMutationCall<TResult>(taskId: string, work: () => Promise<TResult>): Promise<TResult> {
+  const key = uuid(taskId, "task_id");
+  if (activeOpeningMutationCalls.has(key)) invalid("同一期初盘点写入正在核验，请勿重复提交");
+  const invocation = Symbol();
+  activeOpeningMutationCalls.set(key, invocation);
+  try {
+    return await work();
+  } finally {
+    if (activeOpeningMutationCalls.get(key) === invocation) activeOpeningMutationCalls.delete(key);
+  }
 }
 
 function transportedJsonValue(value: unknown): unknown {
@@ -1100,11 +1117,26 @@ function exactPendingOpeningIntent(
   return intent;
 }
 
-function isDefinitiveClientRejection(error: unknown): boolean {
-  return error instanceof ApiError
-    && error.responseReceived
-    && error.status >= 400
-    && error.status < 500;
+const NO_EFFECT_STATE_REJECTIONS: Readonly<Record<OpeningMutationAction, readonly string[]>> = {
+  count: ["opening_count_state_invalid"],
+  review_region: ["opening_review_stage_state_invalid"],
+  review_headquarters: ["opening_review_stage_state_invalid"],
+  open_recount: ["opening_recount_state_invalid"],
+  dispose_observation: ["opening_observation_disposition_state_invalid"],
+  post: ["opening_finalize_state_invalid"],
+  close: ["opening_finalize_state_invalid", "opening_close_reconciliation_pending"],
+};
+
+function isDefinitiveClientRejection(error: unknown, action: OpeningMutationAction): boolean {
+  if (!(error instanceof ApiError) || !error.responseReceived || !error.code) return false;
+  // Only exact route/header or rolled-back domain rejections, never generic
+  // 4xx, authentication failures, conflicts or database/evidence guard errors.
+  if (error.status === 400 && error.category === "invalid_request") {
+    return error.code === "idempotency_key_invalid" || error.code === "x_request_id_invalid";
+  }
+  return error.status === 412
+    && error.category === "precondition_failed"
+    && NO_EFFECT_STATE_REJECTIONS[action].includes(error.code);
 }
 
 async function executeOpeningMutationIntent<TResult>(options: Readonly<{
@@ -1118,12 +1150,13 @@ async function executeOpeningMutationIntent<TResult>(options: Readonly<{
   reread: () => Promise<unknown>;
 }>): Promise<Readonly<{
   result: TResult;
-  signature: string;
+  intent: OpeningMutationIntent;
   recoveredAcceptedResult: boolean;
 }>> {
   const signature = openingIntentSignature(options);
   const taskKey = taskIntentKey(options.taskId);
   let intent = uncertainOpeningMutationIntents.get(taskKey);
+  const createdForThisInvocation = !intent;
   if (intent && intent.signature !== signature) {
     openingMutationHandoff(intent, "different_request");
   }
@@ -1139,35 +1172,50 @@ async function executeOpeningMutationIntent<TResult>(options: Readonly<{
       signature,
       coordinates: mutationHeaders(options.prefix),
       before: options.before,
+      postAttempted: false,
+      inFlight: false,
       accepted: false,
     };
     uncertainOpeningMutationIntents.set(taskKey, intent);
   }
+  if (intent.inFlight) invalid("同一期初盘点写入正在核验，请勿重复提交");
   if (intent.accepted) {
     return {
       result: options.accept(transportedJsonValue(intent.acceptedResponse)),
-      signature,
+      intent,
       recoveredAcceptedResult: true,
     };
   }
+  const firstDirectPost = createdForThisInvocation && !intent.postAttempted;
+  intent.postAttempted = true;
+  intent.inFlight = true;
+  let directPostRejected = false;
+  let directPostRejection: unknown;
   try {
-    const response = transportedJsonValue(await api<unknown>(intent.path, {
-      method: "POST",
-      ...intent.coordinates,
-      ...jsonBody(intent.body),
-    }));
+    const request = { method: "POST", ...intent.coordinates, ...jsonBody(intent.body) };
+    let rawResponse: unknown;
+    try {
+      rawResponse = await api<unknown>(intent.path, request);
+    } catch (error) {
+      directPostRejected = true;
+      directPostRejection = error;
+      throw error;
+    }
+    const response = transportedJsonValue(rawResponse);
     const result = options.accept(transportedJsonValue(response));
     // A response is recoverable only after the caller's strict action/target/
     // result validator has accepted it.  Keep it with the original request
     // coordinates until a trustworthy detail can be returned to the UI.
     intent.acceptedResponse = response;
     intent.accepted = true;
-    return { result, signature, recoveredAcceptedResult: false };
+    return { result, intent, recoveredAcceptedResult: false };
   } catch (error) {
-    if (isDefinitiveClientRejection(error)) {
-      if (uncertainOpeningMutationIntents.get(taskKey) === intent) {
-        uncertainOpeningMutationIntents.delete(taskKey);
-      }
+    if (
+      firstDirectPost && directPostRejected && error === directPostRejection
+      && uncertainOpeningMutationIntents.get(taskKey) === intent
+      && isDefinitiveClientRejection(error, intent.action)
+    ) {
+      uncertainOpeningMutationIntents.delete(taskKey);
     } else {
       // Transport failures, 5xx responses and malformed success payloads are
       // all uncertain.  Re-read before yielding and retain the coordinates so
@@ -1179,15 +1227,15 @@ async function executeOpeningMutationIntent<TResult>(options: Readonly<{
       }
     }
     throw error;
+  } finally {
+    intent.inFlight = false;
   }
 }
 
-function confirmOpeningMutationIntent(signature: string): void {
-  for (const [taskKey, intent] of uncertainOpeningMutationIntents) {
-    if (intent.signature === signature) {
-      uncertainOpeningMutationIntents.delete(taskKey);
-      return;
-    }
+function confirmOpeningMutationIntent(intent: OpeningMutationIntent): void {
+  const taskKey = taskIntentKey(intent.taskId);
+  if (uncertainOpeningMutationIntents.get(taskKey) === intent) {
+    uncertainOpeningMutationIntents.delete(taskKey);
   }
 }
 
@@ -1206,6 +1254,14 @@ type VersionedOpeningTerminalResult = Readonly<{
 }>;
 
 export async function executeVersionedOpeningTerminalAction<
+  TDetail extends VersionedOpeningDetail,
+  TResult extends VersionedOpeningTerminalResult,
+>(options: Parameters<typeof executeVersionedOpeningTerminalActionUnlocked<TDetail, TResult>>[0])
+  : Promise<VersionedOpeningMutationResult<TDetail, TResult>> {
+  return withOpeningMutationCall(options.taskId, () => executeVersionedOpeningTerminalActionUnlocked(options));
+}
+
+async function executeVersionedOpeningTerminalActionUnlocked<
   TDetail extends VersionedOpeningDetail,
   TResult extends VersionedOpeningTerminalResult,
 >(options: Readonly<{
@@ -1291,7 +1347,7 @@ export async function executeVersionedOpeningTerminalAction<
     options.validateDetail(await api<unknown>(taskPath)),
     options.taskId,
   );
-  confirmOpeningMutationIntent(attempt.signature);
+  confirmOpeningMutationIntent(attempt.intent);
   return { before, result: attempt.result, detail };
 }
 
@@ -1473,7 +1529,13 @@ function exactMutationResultTarget(
   }
 }
 
-async function executeFormalOpeningWrite<TResult>(options: Readonly<{
+async function executeFormalOpeningWrite<TResult>(
+  options: Parameters<typeof executeFormalOpeningWriteUnlocked<TResult>>[0],
+): Promise<VersionedOpeningMutationResult<OpeningStocktakeTaskDetail, TResult>> {
+  return withOpeningMutationCall(options.taskId, () => executeFormalOpeningWriteUnlocked(options));
+}
+
+async function executeFormalOpeningWriteUnlocked<TResult>(options: Readonly<{
   taskId: string;
   action: OpeningAllowedAction;
   prefix: string;
@@ -1567,7 +1629,7 @@ async function executeFormalOpeningWrite<TResult>(options: Readonly<{
   });
   const detail = await loadFormalOpeningStocktakeDetail(options.taskId);
   options.validateAfter(before, attempt.result, detail);
-  confirmOpeningMutationIntent(attempt.signature);
+  confirmOpeningMutationIntent(attempt.intent);
   return { before, result: attempt.result, detail };
 }
 
@@ -1736,6 +1798,14 @@ export async function recordOpeningObservationDisposition(
   taskId: string,
   observationId: string,
   input: OpeningObservationDispositionInput,
+): Promise<VersionedOpeningMutationResult<OpeningStocktakeTaskDetail, OpeningObservationDispositionResult>> {
+  return withOpeningMutationCall(taskId, () => recordOpeningObservationDispositionUnlocked(taskId, observationId, input));
+}
+
+async function recordOpeningObservationDispositionUnlocked(
+  taskId: string,
+  observationId: string,
+  input: OpeningObservationDispositionInput,
 ): Promise<VersionedOpeningMutationResult<
   OpeningStocktakeTaskDetail,
   OpeningObservationDispositionResult
@@ -1877,7 +1947,7 @@ export async function recordOpeningObservationDisposition(
     || !dispositionMatchesInput(afterObservation.disposition, body)
     || afterObservation.allowed_dispositions.length > 0
   ) invalid("现场观察处置写后详情未包含精确处置事实");
-  confirmOpeningMutationIntent(attempt.signature);
+  confirmOpeningMutationIntent(attempt.intent);
   return { before, result: attempt.result, detail };
 }
 

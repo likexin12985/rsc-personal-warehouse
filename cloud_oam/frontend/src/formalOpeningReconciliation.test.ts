@@ -376,6 +376,120 @@ describe("formal opening reconciliation mutations", () => {
       .toEqual(vi.mocked(api).mock.calls[4][1]?.headers);
   });
 
+  it("releases coordinates only for the first direct action-specific no-effect rejection", async () => {
+    const error = new ApiError(412, "rejected", {
+      category: "precondition_failed", code: "opening_reconciliation_explain_state_invalid",
+    });
+    vi.mocked(api).mockImplementation(async (_path, init) => {
+      if (init?.method === "POST") throw error;
+      return differenceDetail();
+    });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await expect(explainOpeningReconciliation(RUN_ID, explanationInput())).rejects.toBe(error);
+    }
+    expect(mutationHeaders).toHaveBeenCalledTimes(2);
+    expect(api).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    new ApiError(401, "retain", {}),
+    new ApiError(403, "retain", {}),
+    new ApiError(404, "retain", {}),
+    new ApiError(409, "retain", { category: "conflict", code: "idempotency_conflict" }),
+    new ApiError(422, "retain", {}),
+    new ApiError(429, "retain", {}),
+    new ApiError(500, "retain", {}),
+    new ApiError(412, "retain"),
+    new ApiError(412, "retain", { category: "precondition_failed", code: "database_guard_rejected" }),
+    new ApiError(412, "retain", { category: "precondition_failed", code: "opening_reconciliation_approve_state_invalid" }),
+    new ApiError(400, "retain", { category: "invalid_request", code: "unknown_rejection" }),
+  ])("retains coordinates for non-whitelisted reconciliation rejection %#", async (error) => {
+    vi.mocked(api).mockImplementation(async (_path, init) => {
+      if (init?.method === "POST") throw error;
+      return differenceDetail();
+    });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await expect(explainOpeningReconciliation(RUN_ID, explanationInput())).rejects.toBe(error);
+    }
+    expect(mutationHeaders).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api).mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(2);
+  });
+
+  it("never clears an unknown reconciliation when a later same-coordinate retry is rejected", async () => {
+    let attempts = 0;
+    vi.mocked(api).mockImplementation(async (_path, init) => {
+      if (init?.method !== "POST") return differenceDetail();
+      attempts += 1;
+      throw attempts === 1 ? new TypeError("unknown") : new ApiError(412, "later rejection", {
+        category: "precondition_failed", code: "opening_reconciliation_explain_state_invalid",
+      });
+    });
+    const execute = () => explainOpeningReconciliation(RUN_ID, explanationInput());
+    await expect(execute()).rejects.toThrow("unknown");
+    await expect(execute()).rejects.toThrow("later rejection");
+    await expect(execute()).rejects.toThrow("later rejection");
+    expect(mutationHeaders).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api).mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(3);
+  });
+
+  it("blocks an overlapping reconciliation while its first POST is unresolved", async () => {
+    let rejectPost!: (error: unknown) => void;
+    const post = new Promise<never>((_resolve, reject) => { rejectPost = reject; });
+    vi.mocked(api).mockImplementation(async (_path, init) => (
+      init?.method === "POST" ? post : differenceDetail()
+    ));
+    const execute = () => explainOpeningReconciliation(RUN_ID, explanationInput());
+    const first = execute().catch((error: unknown) => error);
+    await vi.waitFor(() => expect(mutationHeaders).toHaveBeenCalledTimes(1));
+    await expect(execute()).rejects.toThrow("正在核验");
+    expect(vi.mocked(api).mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    const error = new TypeError("first remains unknown");
+    rejectPost(error);
+    expect(await first).toBe(error);
+    expect(mutationHeaders).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a second invocation before its GET can outlive a first strong reconciliation rejection", async () => {
+    let rejectPost!: (error: unknown) => void;
+    let reads = 0;
+    vi.mocked(api).mockImplementation(async (_path, init) => {
+      if (init?.method === "POST") return new Promise((_resolve, reject) => { rejectPost = reject; });
+      reads += 1;
+      return differenceDetail();
+    });
+    const execute = () => explainOpeningReconciliation(RUN_ID, explanationInput());
+    const first = execute().catch((error: unknown) => error);
+    await vi.waitFor(() => expect(rejectPost).toBeTypeOf("function"));
+    await expect(execute()).rejects.toThrow("正在核验");
+    const rejection = new ApiError(412, "no effect", {
+      category: "precondition_failed", code: "opening_reconciliation_explain_state_invalid",
+    });
+    rejectPost(rejection);
+    expect(await first).toBe(rejection);
+    expect(reads).toBe(1);
+    expect(mutationHeaders).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api).mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  });
+
+  it.each(["start", "explain", "approve"] as const)(
+    "serializes reconciliation %s before the first preflight GET", async (action) => {
+      let rejectRead!: (error: unknown) => void;
+      const pendingRead = new Promise<never>((_resolve, reject) => { rejectRead = reject; });
+      vi.mocked(api).mockImplementation(async () => pendingRead);
+      vi.mocked(loadFormalOpeningStocktakeDetail).mockImplementation(async () => pendingRead);
+      const execute = () => action === "start" ? startOpeningReconciliation(TASK_ID)
+        : action === "explain" ? explainOpeningReconciliation(RUN_ID, explanationInput())
+          : approveOpeningReconciliation(RUN_ID, "总部复核证据完整");
+      const first = execute().catch((error: unknown) => error);
+      await expect(execute()).rejects.toThrow("正在核验");
+      expect(vi.mocked(api).mock.calls.length + vi.mocked(loadFormalOpeningStocktakeDetail).mock.calls.length).toBe(1);
+      expect(mutationHeaders).not.toHaveBeenCalled();
+      const failure = new TypeError("preflight unavailable");
+      rejectRead(failure);
+      expect(await first).toBe(failure);
+    },
+  );
+
   it("recovers an accepted response without a second POST when final proof read fails", async () => {
     const result = {
       schema_version: "1.0",

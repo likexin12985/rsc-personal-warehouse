@@ -84,6 +84,31 @@ def _close_result(*, replayed: bool = False):
     )
 
 
+_TERMINAL_REQUESTS = [
+    (
+        "post",
+        f"/api/v1/stocktakes/opening/{TASK_ID}/post",
+        {"expected_version": 5},
+        "post_approved_opening_stocktake",
+        _post_result,
+    ),
+    (
+        "close",
+        f"/api/v1/stocktakes/opening/{TASK_ID}/close",
+        {"expected_version": 6},
+        "close_posted_opening_stocktake",
+        _close_result,
+    ),
+]
+
+
+_TERMINAL_412_CASES = [
+    (*_TERMINAL_REQUESTS[0][:4], "opening_finalize_state_invalid"),
+    (*_TERMINAL_REQUESTS[1][:4], "opening_finalize_state_invalid"),
+    (*_TERMINAL_REQUESTS[1][:4], "opening_close_reconciliation_pending"),
+]
+
+
 def test_post_route_commits_once_and_exposes_only_terminal_result(
     api_client, monkeypatch
 ):
@@ -273,6 +298,131 @@ def test_invalid_domain_output_rolls_back_before_commit(
 
     db.rollback.assert_called_once_with()
     db.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("_action", "path", "body", "function_name", "_result_factory"),
+    _TERMINAL_REQUESTS,
+)
+@pytest.mark.parametrize(
+    ("headers", "expected_code"),
+    [
+        ({"X-Request-ID": "request-0001"}, "idempotency_key_invalid"),
+        (
+            {
+                "Idempotency-Key": "opening-terminal-0001",
+                "X-Request-ID": "bad request",
+            },
+            "x_request_id_invalid",
+        ),
+    ],
+)
+def test_terminal_header_rejection_is_exact_and_never_enters_service(
+    api_client,
+    monkeypatch,
+    _action,
+    path,
+    body,
+    function_name,
+    _result_factory,
+    headers,
+    expected_code,
+):
+    client, db, _principal = api_client
+    called = Mock()
+    monkeypatch.setattr(terminal_service, function_name, called)
+
+    response = client.post(path, json=body, headers=headers)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "code": expected_code,
+        "category": "invalid_request",
+        "message": (
+            "Idempotency-Key 必须是 16-128 位安全字符"
+            if expected_code == "idempotency_key_invalid"
+            else "X-Request-ID 必须是 8-160 位安全字符"
+        ),
+    }
+    called.assert_not_called()
+    db.commit.assert_not_called()
+    db.rollback.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("action", "path", "body", "function_name", "error_code"),
+    _TERMINAL_412_CASES,
+)
+def test_terminal_exact_state_rejection_rolls_back_staged_work_before_response(
+    api_client,
+    monkeypatch,
+    action,
+    path,
+    body,
+    function_name,
+    error_code,
+):
+    client, db, _principal = api_client
+    events: list[str] = []
+    staged: list[str] = []
+
+    def rollback() -> None:
+        events.append("rollback")
+        staged.clear()
+
+    def reject(_db, **_kwargs):
+        assert _db is db
+        events.append("service")
+        staged.append(f"staged:{action}")
+        raise terminal_service.OpeningStocktakeFinalizeError(
+            error_code,
+            "precondition_failed",
+            "期初任务当前状态不允许执行终态操作",
+        )
+
+    db.rollback.side_effect = rollback
+    monkeypatch.setattr(terminal_service, function_name, reject)
+
+    response = client.post(path, json=body, headers=_headers())
+
+    assert response.status_code == 412
+    assert response.json()["detail"] == {
+        "code": error_code,
+        "category": "precondition_failed",
+        "message": "期初任务当前状态不允许执行终态操作",
+    }
+    assert events == ["service", "rollback"]
+    assert staged == []
+    db.rollback.assert_called_once_with()
+    db.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("_action", "path", "body", "function_name", "result_factory"),
+    _TERMINAL_REQUESTS,
+)
+def test_terminal_commit_exception_is_not_translated_to_domain_4xx(
+    api_client,
+    monkeypatch,
+    _action,
+    path,
+    body,
+    function_name,
+    result_factory,
+):
+    client, db, _principal = api_client
+    monkeypatch.setattr(
+        terminal_service,
+        function_name,
+        lambda *_args, **_kwargs: result_factory(),
+    )
+    db.commit.side_effect = RuntimeError("commit outcome unknown")
+
+    with pytest.raises(RuntimeError, match="commit outcome unknown"):
+        client.post(path, json=body, headers=_headers())
+
+    db.commit.assert_called_once_with()
+    db.rollback.assert_called_once_with()
 
 
 def test_terminal_routes_are_mounted_in_the_formal_v1_namespace():

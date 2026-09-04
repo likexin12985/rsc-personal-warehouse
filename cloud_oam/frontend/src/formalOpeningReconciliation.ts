@@ -131,18 +131,23 @@ type ReconciliationMutationIntent = {
   readonly signature: string;
   readonly coordinates: ReconciliationMutationCoordinates;
   readonly before: unknown;
+  postAttempted: boolean;
+  inFlight: boolean;
   accepted: boolean;
   acceptedResponse?: unknown;
 };
 
 const uncertainReconciliationIntents = new Map<string, ReconciliationMutationIntent>();
+const activeReconciliationCalls = new Map<string, symbol>();
 const MAX_UNCERTAIN_RECONCILIATION_INTENTS = 64;
 
 export const __openingReconciliationIntentTestOnly = import.meta.env.MODE === "test"
   ? Object.freeze({
       reset(): void {
         uncertainReconciliationIntents.clear();
+        activeReconciliationCalls.clear();
       },
+      isDefinitiveRejection: isDefinitiveClientRejection,
     })
   : undefined;
 
@@ -601,11 +606,22 @@ function handoff(
   throw new OpeningReconciliationHandoffError(intent, reason);
 }
 
-function isDefinitiveClientRejection(error: unknown): boolean {
-  return error instanceof ApiError
-    && error.responseReceived
-    && error.status >= 400
-    && error.status < 500;
+const NO_EFFECT_STATE_REJECTIONS: Readonly<Record<ReconciliationMutationAction, readonly string[]>> = {
+  start: ["opening_reconciliation_task_state_invalid", "opening_reconciliation_not_required"],
+  explain: ["opening_reconciliation_explain_state_invalid", "opening_reconciliation_item_set_mismatch"],
+  approve: ["opening_reconciliation_approve_state_invalid", "opening_reconciliation_explanation_incomplete"],
+};
+
+function isDefinitiveClientRejection(error: unknown, action: ReconciliationMutationAction): boolean {
+  if (!(error instanceof ApiError) || !error.responseReceived || !error.code) return false;
+  // The backend must reject this exact action before commit. A later rejection
+  // cannot prove that an earlier request with an unknown outcome had no effect.
+  if (error.status === 400 && error.category === "invalid_request") {
+    return error.code === "idempotency_key_invalid" || error.code === "x_request_id_invalid";
+  }
+  return error.status === 412
+    && error.category === "precondition_failed"
+    && NO_EFFECT_STATE_REJECTIONS[action].includes(error.code);
 }
 
 function exactPendingIntent(
@@ -639,6 +655,7 @@ async function executeMutationIntent<TResult>(options: Readonly<{
 }>): Promise<Readonly<{ result: TResult; intent: ReconciliationMutationIntent }>> {
   const signature = intentSignature(options);
   let intent = uncertainReconciliationIntents.get(options.targetKey);
+  const createdForThisInvocation = !intent;
   if (intent && intent.signature !== signature) handoff(intent, "different_request");
   if (!intent) {
     if (uncertainReconciliationIntents.size >= MAX_UNCERTAIN_RECONCILIATION_INTENTS) {
@@ -653,31 +670,46 @@ async function executeMutationIntent<TResult>(options: Readonly<{
       signature,
       coordinates: mutationHeaders(options.prefix),
       before: transportedJsonValue(options.before),
+      postAttempted: false,
+      inFlight: false,
       accepted: false,
     };
     uncertainReconciliationIntents.set(options.targetKey, intent);
   }
+  if (intent.inFlight) invalid("同一期初对账写入正在核验，请勿重复提交");
   if (intent.accepted) {
     return {
       result: options.accept(transportedJsonValue(intent.acceptedResponse)),
       intent,
     };
   }
+  const firstDirectPost = createdForThisInvocation && !intent.postAttempted;
+  intent.postAttempted = true;
+  intent.inFlight = true;
+  let directPostRejected = false;
+  let directPostRejection: unknown;
   try {
-    const response = transportedJsonValue(await api<unknown>(intent.path, {
-      method: "POST",
-      ...intent.coordinates,
-      ...jsonBody(intent.body),
-    }));
+    const request = { method: "POST", ...intent.coordinates, ...jsonBody(intent.body) };
+    let rawResponse: unknown;
+    try {
+      rawResponse = await api<unknown>(intent.path, request);
+    } catch (error) {
+      directPostRejected = true;
+      directPostRejection = error;
+      throw error;
+    }
+    const response = transportedJsonValue(rawResponse);
     const result = options.accept(transportedJsonValue(response));
     intent.acceptedResponse = response;
     intent.accepted = true;
     return { result, intent };
   } catch (error) {
-    if (isDefinitiveClientRejection(error)) {
-      if (uncertainReconciliationIntents.get(options.targetKey) === intent) {
-        uncertainReconciliationIntents.delete(options.targetKey);
-      }
+    if (
+      firstDirectPost && directPostRejected && error === directPostRejection
+      && uncertainReconciliationIntents.get(options.targetKey) === intent
+      && isDefinitiveClientRejection(error, intent.action)
+    ) {
+      uncertainReconciliationIntents.delete(options.targetKey);
     } else {
       try {
         await options.reread();
@@ -686,12 +718,25 @@ async function executeMutationIntent<TResult>(options: Readonly<{
       }
     }
     throw error;
+  } finally {
+    intent.inFlight = false;
   }
 }
 
 function confirmIntent(targetKey: string, intent: ReconciliationMutationIntent): void {
   if (uncertainReconciliationIntents.get(targetKey) === intent) {
     uncertainReconciliationIntents.delete(targetKey);
+  }
+}
+
+async function withReconciliationCall<TResult>(targetKey: string, work: () => Promise<TResult>): Promise<TResult> {
+  if (activeReconciliationCalls.has(targetKey)) invalid("同一期初对账写入正在核验，请勿重复提交");
+  const invocation = Symbol();
+  activeReconciliationCalls.set(targetKey, invocation);
+  try {
+    return await work();
+  } finally {
+    if (activeReconciliationCalls.get(targetKey) === invocation) activeReconciliationCalls.delete(targetKey);
   }
 }
 
@@ -721,6 +766,12 @@ function requireAction(
 }
 
 export async function startOpeningReconciliation(
+  taskId: string,
+): Promise<OpeningReconciliationMutationResult<OpeningStocktakeTaskDetail, OpeningReconciliationStartResult>> {
+  return withReconciliationCall(`task:${uuid(taskId, "task_id")}`, () => startOpeningReconciliationUnlocked(taskId));
+}
+
+async function startOpeningReconciliationUnlocked(
   taskId: string,
 ): Promise<OpeningReconciliationMutationResult<OpeningStocktakeTaskDetail, OpeningReconciliationStartResult>> {
   const checkedTaskId = uuid(taskId, "task_id");
@@ -850,6 +901,13 @@ export async function explainOpeningReconciliation(
   runId: string,
   inputs: readonly OpeningReconciliationExplanationInput[],
 ): Promise<OpeningReconciliationMutationResult<OpeningReconciliationDetail, OpeningReconciliationExplainResult>> {
+  return withReconciliationCall(`run:${uuid(runId, "reconciliation_run_id")}`, () => explainOpeningReconciliationUnlocked(runId, inputs));
+}
+
+async function explainOpeningReconciliationUnlocked(
+  runId: string,
+  inputs: readonly OpeningReconciliationExplanationInput[],
+): Promise<OpeningReconciliationMutationResult<OpeningReconciliationDetail, OpeningReconciliationExplainResult>> {
   const checkedRunId = uuid(runId, "reconciliation_run_id");
   const targetKey = `run:${checkedRunId}`;
   const path = `${openingReconciliationPath(checkedRunId)}/explanations`;
@@ -926,6 +984,13 @@ export async function explainOpeningReconciliation(
 }
 
 export async function approveOpeningReconciliation(
+  runId: string,
+  comment: string,
+): Promise<OpeningReconciliationMutationResult<OpeningReconciliationDetail, OpeningReconciliationApproveResult>> {
+  return withReconciliationCall(`run:${uuid(runId, "reconciliation_run_id")}`, () => approveOpeningReconciliationUnlocked(runId, comment));
+}
+
+async function approveOpeningReconciliationUnlocked(
   runId: string,
   comment: string,
 ): Promise<OpeningReconciliationMutationResult<OpeningReconciliationDetail, OpeningReconciliationApproveResult>> {
