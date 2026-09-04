@@ -1,5 +1,8 @@
 const api = require('../../utils/api')
 const session = require('../../utils/session')
+const { getOpeningCountRecoveryStore, withNoPendingOpeningCount } = require('../../utils/opening-count-recovery-store')
+const { createOpeningCountRecoveryAdapter, recoverOpeningCountCommand, validateOpeningCountDetail } = require('../../utils/opening-count-recovery')
+const { submitDurableOpeningScopeCount } = require('../../utils/opening-count-submission')
 const { stocktakeAccessDecision } = require('../../utils/production-guard')
 const {
   validateOpeningStocktakeDetail,
@@ -25,6 +28,7 @@ function writeIntentSignature(path, body) {
 }
 
 function confirmedWriteIntent(page, kind, path, body, metadata = {}) {
+  if (!['post', 'close'].includes(kind)) throw new Error('计数必须使用持久恢复协调器')
   const signature = writeIntentSignature(path, body)
   const pending = page._pendingWriteIntent
   if (pending) {
@@ -78,6 +82,7 @@ function clearWriteIntent(page, intent) {
 }
 
 function showPendingWriteNotice(page, intent, state) {
+  if (!pageActive(page)) return
   const retryable = state === 'retryable'
   const projectionPending = state === 'projection_pending'
   const actionLabel = intent.kind === 'count'
@@ -356,6 +361,9 @@ function isDefinitiveFirstPostRejection(intent, error, attempt) {
 
 function writeIntentState(intent, detail) {
   if (!intent) return 'unresolved'
+  // Legacy volatile count evidence has no durable historical proof. Never
+  // upgrade it by guessing, replay it, or clear it using only a current detail.
+  if (intent.kind === 'count') return 'handoff_required'
   const responseRecorded = hasRecordedWriteResponse(intent)
   if (!detail || !sameIdentifier(detail.task_id, intent.taskId)) {
     return responseRecorded ? 'projection_pending' : 'unresolved'
@@ -475,6 +483,67 @@ function presentDetail(detail) {
   })
 }
 
+function pageActive(page) { return page._hidden !== true && page._unloaded !== true }
+function publicIdentity(user) {
+  if (!user || typeof user.person_id !== 'string' || !UUID.test(user.person_id)
+    || !Number.isSafeInteger(user.authorization_version) || user.authorization_version < 1) return null
+  return Object.freeze({ person_id: user.person_id.toLowerCase(), authorization_version: user.authorization_version })
+}
+function sameIdentity(left, right) {
+  return Boolean(left && right && left.person_id === right.person_id && left.authorization_version === right.authorization_version)
+}
+function pageGuard(page, includeLoad = true) {
+  const view = page._viewGeneration || 0
+  const load = page._loadGeneration || 0
+  const expected = page._verifiedIdentity
+  return () => pageActive(page) && (page._viewGeneration || 0) === view
+    && (!includeLoad || (page._loadGeneration || 0) === load)
+    && sameIdentity(expected, page._verifiedIdentity)
+    && typeof session.getUser === 'function' && sameIdentity(expected, publicIdentity(session.getUser()))
+}
+function refreshCountRecovery(page) {
+  if (!pageActive(page) || !page.data.taskId) return
+  let record
+  try { record = getOpeningCountRecoveryStore().read(page.data.taskId) } catch (_) { record = { kind: 'unavailable' } }
+  const matches = record.kind === 'valid' && sameIdentity(page._verifiedIdentity, {
+    person_id: record.value.actor_person_id, authorization_version: record.value.actor_authorization_version
+  }) && typeof session.getUser === 'function' && sameIdentity(page._verifiedIdentity, publicIdentity(session.getUser()))
+  page.setData({ countRecoveryBlocked: record.kind !== 'missing', countRecoveryCanCheck: matches,
+    countRecoveryMessage: record.kind === 'missing' ? '' : (matches
+      ? '原计数仍待核验。仅可只读查询历史；查无结果不代表未执行，禁止重新提交或执行其他写入。'
+      : '恢复记录不可用或身份权限与原请求不符，已停止写入；请联系管理员核验。'),
+    countRecoveryTarget: matches ? `任务 ${record.value.task_id} · 第 ${record.value.round_no} 轮 ${record.value.round_id} · 范围 ${record.value.scope_id}` : '',
+    countRecoveryTrace: matches ? record.value.trace_request_id : '' })
+}
+function clearCountDraft(page) {
+  page._countDraftAnchor = ''
+  page._countDraftIdentity = null
+  page.setData({ draftObservations: [], materialIdentifier: '', quantity: '', lotNo: '', serialNo: '', remark: '', countMethod: 'manual' })
+}
+function bindCountDraft(page, detail, scopeId) {
+  const actor = page._verifiedIdentity
+  const anchor = actor && detail.current_round && scopeId
+    ? `${actor.person_id}:${actor.authorization_version}:${detail.task_id}:${detail.current_round.round_id}:${scopeId}` : ''
+  if (page._countDraftAnchor && page._countDraftAnchor !== anchor) {
+    // Unknown original content stays only in this page's draft, never bound to a
+    // later round. A different actor must not inherit it even while blocked.
+    if (page.data.countRecoveryBlocked && sameIdentity(actor, page._countDraftIdentity)) return ''
+    clearCountDraft(page)
+  }
+  page._countDraftAnchor = anchor
+  page._countDraftIdentity = actor
+  return scopeId
+}
+function applyCountDetail(page, verified, recovered) {
+  const detail = presentDetail(verified)
+  clearCountDraft(page)
+  refreshCountRecovery(page)
+  const countable = detail.canCount && detail.scopes.find((scope) => scope.assigned_to_me && scope.completion_status === 'pending')
+  const selected = bindCountDraft(page, detail, countable ? countable.scope_id : '')
+  page.setData({ detail, selectedScopeId: selected, accessAllowed: true,
+    countRecoveryNotice: recovered ? '历史提交已核验；当前任务可能已进入后续轮，本次未重新提交计数。' : '原范围计数与当前任务均已核验；复核、过账和关闭仍为独立操作。' })
+}
+
 Page({
   data: {
     taskId: '',
@@ -485,6 +554,12 @@ Page({
     detail: null,
     selectedScopeId: '',
     draftObservations: [],
+    countRecoveryBlocked: true,
+    countRecoveryCanCheck: false,
+    countRecoveryMessage: '',
+    countRecoveryTarget: '',
+    countRecoveryTrace: '',
+    countRecoveryNotice: '',
     writePending: false,
     pendingWriteKind: '',
     pendingWriteRetryable: false,
@@ -526,6 +601,8 @@ Page({
   },
 
   onLoad(options) {
+    this._hidden = false
+    this._unloaded = false
     let taskId = ''
     try { taskId = decodeURIComponent(String(options.task_id || '')) } catch (_) {}
     if (!UUID.test(taskId)) {
@@ -536,18 +613,27 @@ Page({
   },
 
   onShow() {
+    this._hidden = false
     if (!this.data.taskId || !session.ensureLogin()) return
+    refreshCountRecovery(this)
     this.load()
   },
+
+  onHide() { this._hidden = true; this._viewGeneration = (this._viewGeneration || 0) + 1; this._loadGeneration = (this._loadGeneration || 0) + 1 },
+  onUnload() { this._unloaded = true; this._viewGeneration = (this._viewGeneration || 0) + 1; this._loadGeneration = (this._loadGeneration || 0) + 1 },
 
   onPullDownRefresh() {
     this.load().finally(() => wx.stopPullDownRefresh())
   },
 
   async load() {
-    if (!this.data.taskId) return false
+    if (!this.data.taskId || !pageActive(this)) return false
     const generation = (this._loadGeneration || 0) + 1
     this._loadGeneration = generation
+    if (this._countDraftIdentity && (typeof session.getUser !== 'function'
+      || !sameIdentity(this._countDraftIdentity, publicIdentity(session.getUser())))) clearCountDraft(this)
+    this._verifiedIdentity = null
+    refreshCountRecovery(this)
     this.setData({
       loading: true,
       accessAllowed: false,
@@ -560,7 +646,8 @@ Page({
         api.get('/auth/me'),
         api.get('/access/context')
       ])
-      if (generation !== this._loadGeneration) return false
+      if (generation !== this._loadGeneration || !pageActive(this)) return false
+      if (this._countDraftIdentity && !sameIdentity(this._countDraftIdentity, publicIdentity(user))) clearCountDraft(this)
       if (!getApp().setUser(user)) {
         session.ensureLogin()
         return false
@@ -570,11 +657,17 @@ Page({
         this.setData({ accessMessage: decision.message })
         return false
       }
-      const verified = validateOpeningStocktakeDetail(
+      this._verifiedIdentity = publicIdentity(user)
+      if (!this._verifiedIdentity) throw new Error('正式身份无效')
+      refreshCountRecovery(this)
+      const verified = validateOpeningCountDetail(
         await api.get(`/v1/stocktakes/opening/${this.data.taskId}`),
         this.data.taskId
       )
-      if (generation !== this._loadGeneration) return false
+      if (generation !== this._loadGeneration || !pageActive(this)) return false
+      if (typeof session.getUser !== 'function' || !sameIdentity(this._verifiedIdentity, publicIdentity(session.getUser()))) {
+        throw new Error('登录人员或权限已变化')
+      }
       const detail = presentDetail(verified)
       const countable = detail.canCount
         ? detail.scopes.find((scope) => (
@@ -585,12 +678,12 @@ Page({
         accessAllowed: true,
         accessMessage: '正式盘点证据已验证',
         detail,
-        selectedScopeId: countable ? countable.scope_id : ''
+        selectedScopeId: bindCountDraft(this, detail, countable ? countable.scope_id : '')
       })
       this._lastWriteIntentState = reconcileWriteIntent(this, detail)
       return true
     } catch (error) {
-      if (generation !== this._loadGeneration) return false
+      if (generation !== this._loadGeneration || !pageActive(this)) return false
       this.setData({
         accessAllowed: false,
         accessMessage: '无法确认身份、权限或盘点响应契约，已失败关闭。',
@@ -601,12 +694,12 @@ Page({
       this._lastWriteIntentState = 'unresolved'
       return false
     } finally {
-      if (generation === this._loadGeneration) this.setData({ loading: false })
+      if (generation === this._loadGeneration && pageActive(this)) { this.setData({ loading: false }); refreshCountRecovery(this) }
     }
   },
 
   chooseScope(event) {
-    if (this.data.writePending) {
+    if (this.data.writePending || this.data.countRecoveryBlocked) {
       wx.showToast({ title: '上一写请求仍待确认，已停止切换盘点范围', icon: 'none' })
       return
     }
@@ -623,7 +716,7 @@ Page({
       item.assigned_to_me &&
       item.completion_status === 'pending'
     ))
-    if (scope) this.setData({ selectedScopeId: scopeId })
+    if (scope) this.setData({ selectedScopeId: bindCountDraft(this, this.data.detail, scopeId) })
   },
 
   bindMaterial(event) { this.setData({ materialIdentifier: event.detail.value }) },
@@ -636,30 +729,32 @@ Page({
   changeAvailability(event) { this.setData({ availabilityIndex: Number(event.detail.value) }) },
 
   scanMaterial() {
+    const live = pageGuard(this)
     wx.scanCode({
       onlyFromCamera: true,
-      success: (result) => this.setData({
+      success: (result) => { if (live()) this.setData({
         materialIdentifier: String(result.result || '').trim(),
         identifierIndex: 1,
         countMethod: 'scan'
-      }),
-      fail: () => wx.showToast({ title: '未读取到物料二维码', icon: 'none' })
+      }) },
+      fail: () => { if (live()) wx.showToast({ title: '未读取到物料二维码', icon: 'none' }) }
     })
   },
 
   scanSerial() {
+    const live = pageGuard(this)
     wx.scanCode({
       onlyFromCamera: true,
-      success: (result) => this.setData({
+      success: (result) => { if (live()) this.setData({
         serialNo: String(result.result || '').trim(),
         countMethod: 'scan'
-      }),
-      fail: () => wx.showToast({ title: '未读取到 SN', icon: 'none' })
+      }) },
+      fail: () => { if (live()) wx.showToast({ title: '未读取到 SN', icon: 'none' }) }
     })
   },
 
   addObservation() {
-    if (this.data.writePending) {
+    if (this.data.writePending || this.data.countRecoveryBlocked) {
       wx.showToast({ title: '上一写请求仍待确认，草稿已锁定', icon: 'none' })
       return
     }
@@ -668,11 +763,11 @@ Page({
     const lotNo = this.data.lotNo.trim()
     const serialNo = this.data.serialNo.trim()
     const remark = this.data.remark.trim()
-    if (!material || !QUANTITY.test(quantity) || Number(quantity) <= 0) {
-      wx.showToast({ title: '请填写物料号和正数数量（最多三位小数）', icon: 'none' })
+    if (!material || !QUANTITY.test(quantity) || quantity.split('.')[0].length > 15 || Number(quantity) <= 0) {
+      wx.showToast({ title: '请填写物料号和正数数量（最多15位整数、3位小数）', icon: 'none' })
       return
     }
-    if (serialNo && Number(quantity) !== 1) {
+    if (serialNo && !/^1(?:\.0{1,3})?$/.test(quantity)) {
       wx.showToast({ title: 'SN 物料每条实盘数量必须为 1', icon: 'none' })
       return
     }
@@ -713,7 +808,7 @@ Page({
   },
 
   removeObservation(event) {
-    if (this.data.writePending) {
+    if (this.data.writePending || this.data.countRecoveryBlocked) {
       wx.showToast({ title: '上一写请求仍待确认，草稿已锁定', icon: 'none' })
       return
     }
@@ -726,6 +821,10 @@ Page({
 
   async submitCount(event) {
     const zero = event.currentTarget.dataset.zero === 'true'
+    if (!pageActive(this)) return
+    refreshCountRecovery(this)
+    if (this._pendingWriteIntent) { wx.showToast({ title: '存在其他或旧版未决请求，请先核验', icon: 'none' }); return }
+    if (this.data.countRecoveryBlocked) { wx.showToast({ title: '原计数仍待核验，请使用只读核验', icon: 'none' }); return }
     if (blockWriteRequest(this, 'count', '实盘')) return
     const detail = this.data.detail
     if (
@@ -744,98 +843,72 @@ Page({
     }
     const invocation = beginWriteInvocation(this, '实盘')
     if (!invocation) return
+    const live = pageGuard(this)
+    const scopeId = this.data.selectedScopeId
+    this.setData({ submitting: true, countRecoveryNotice: '' })
     try {
-      const confirmed = await new Promise((resolve) => wx.showModal({
-        title: zero ? '确认本范围为零库存？' : '提交本范围完整实盘？',
-        content: zero
-          ? '提交后本轮该范围将封存，不能继续追加明细。'
-          : `将一次性提交 ${this.data.draftObservations.length} 条实盘证据，提交后不能追加。`,
-        confirmText: '确认提交',
-        success: (result) => resolve(result.confirm),
-        fail: () => resolve(false)
-      }))
-      if (!confirmed || blockWriteRequest(this, 'count', '实盘', invocation)) return
-      this.setData({ submitting: true })
-      let intent = null
-      let firstDirectPost = false
-      let directPostRejected = false
-      let directPostRejection
-      try {
-        const path = `/v1/stocktakes/opening/${detail.task_id}/rounds/${detail.current_round.round_id}/scopes/${this.data.selectedScopeId}/count`
-        const body = {
-          physical_observations: zero ? [] : this.data.draftObservations,
-          zero_confirmed: zero
-        }
-        const pendingBeforeInvocation = this._pendingWriteIntent
-        intent = confirmedWriteIntent(this, 'count', path, body, {
-          taskId: detail.task_id,
-          roundId: detail.current_round.round_id,
-          scopeId: this.data.selectedScopeId
-        })
-        if (hasRecordedWriteResponse(intent)) {
-          showPendingWriteNotice(this, intent, 'projection_pending')
-          return
-        }
-        firstDirectPost = !pendingBeforeInvocation &&
-          this._pendingWriteIntent === intent &&
-          intent.postAttempted !== true
-        intent.postAttempted = true
-        let response
-        try {
-          response = await api.post(path, intent.body, {
-            idempotencyKey: intent.idempotencyKey,
-            requestId: intent.requestId
-          })
-        } catch (error) {
-          directPostRejected = true
-          directPostRejection = error
-          throw error
-        }
-        validateAndRecordCountResponse(intent, response)
-        showPendingWriteNotice(this, intent, 'projection_pending')
-        const refreshed = await this.load()
-        const state = this._lastWriteIntentState || 'unresolved'
-        if (refreshed && state === 'confirmed') {
-          clearWriteIntent(this, intent)
-          this.setData({ draftObservations: [] })
-          wx.showToast({ title: '本范围实盘已封存', icon: 'success' })
-        } else {
-          wx.showToast({
-            title: refreshed
-              ? '提交已受理，但回读未确认生效；禁止创建新请求'
-              : '提交已受理，但回读失败；请恢复网络后刷新确认',
-            icon: 'none'
-          })
-        }
-      } catch (error) {
-        const outcome = await recoverWriteFailure(
-          this,
-          intent || this._pendingWriteIntent,
-          error,
-          { firstDirectPost, directPostRejected, directPostRejection }
-        )
-        const uncertainMessage = !outcome.refreshed
-          ? '提交结果未确认且回读失败，禁止新请求；请恢复网络后刷新'
-          : (outcome.state === 'retryable'
-              ? '提交结果未确认；已回读，再次确认将复用原请求'
-              : '对象状态虽已变化但无法匹配原请求；仍待确认，请联系管理员核验')
-        wx.showToast({
-          title: outcome.uncertain
-            ? uncertainMessage
-            : (error.message || '实盘提交失败，已重新读取'),
-          icon: 'none'
-        })
-      } finally {
-        this.setData({ submitting: false })
+      const result = await submitDurableOpeningScopeCount({ taskId: detail.task_id, scopeId,
+        input: { physical_observations: zero ? [] : this.data.draftObservations, zero_confirmed: zero },
+        expectedIdentity: this._verifiedIdentity, canCommit: live,
+        confirm: (context) => {
+          if (!live() || context.task_id !== detail.task_id || context.round_id !== detail.current_round.round_id || context.scope_id !== scopeId) {
+            if (live()) wx.showToast({ title: '盘点轮次或范围已变化，请刷新', icon: 'none' })
+            return false
+          }
+          return new Promise((resolve) => wx.showModal({
+            title: context.zero_confirmed ? '确认本范围为零库存？' : '提交本范围完整实盘？',
+            content: context.zero_confirmed ? '提交后本轮该范围将封存，不能继续追加明细。'
+              : `将一次性提交 ${context.observation_count} 条实盘证据，提交后不能追加。`,
+            confirmText: '确认提交', success: (response) => resolve(response.confirm === true), fail: () => resolve(false)
+          }))
+        } })
+      if (result && live()) {
+        applyCountDetail(this, result.detail, result.recovered)
+        wx.showToast({ title: result.recovered ? '历史实盘已核验' : '原范围实盘已核验', icon: 'success' })
+      }
+    } catch (_) {
+      if (live()) {
+        let missing = false
+        try { missing = getOpeningCountRecoveryStore().read(detail.task_id).kind === 'missing' } catch (_) {}
+        wx.showToast({ title: missing ? '本次未完成提交，请刷新后检查' : '原计数未完成核验，禁止重新提交', icon: 'none' })
       }
     } finally {
       endWriteInvocation(this, invocation)
+      if (pageActive(this)) { this.setData({ submitting: false }); refreshCountRecovery(this) }
+    }
+  },
+
+  async recoverCount() {
+    if (!pageActive(this) || !this._verifiedIdentity || this._activeWriteInvocation) return
+    refreshCountRecovery(this)
+    if (!this.data.countRecoveryCanCheck) return
+    const invocation = beginWriteInvocation(this, '历史核验')
+    if (!invocation) return
+    const live = pageGuard(this)
+    this.setData({ submitting: true, countRecoveryNotice: '' })
+    try {
+      const store = getOpeningCountRecoveryStore()
+      const result = await store.withTaskLease(this.data.taskId, (lease) => {
+        const original = lease.read()
+        if (original.kind !== 'valid') throw new Error('恢复记录不可用')
+        return recoverOpeningCountCommand(lease, original.value, createOpeningCountRecoveryAdapter(this._verifiedIdentity), live)
+      })
+      if (live()) {
+        applyCountDetail(this, result.detail, true)
+        wx.showToast({ title: '历史实盘已核验', icon: 'success' })
+      }
+    } catch (_) {
+      if (live()) wx.showToast({ title: '暂未确认历史结果，继续保留记录', icon: 'none' })
+    } finally {
+      endWriteInvocation(this, invocation)
+      if (pageActive(this)) { this.setData({ submitting: false }); refreshCountRecovery(this) }
     }
   },
 
   async terminalAction(event) {
     const action = String(event.currentTarget.dataset.action || '')
     if (!['post', 'close'].includes(action)) return
+    if (!pageActive(this)) return
     if (blockWriteRequest(this, action, '状态')) return
     const detail = this.data.detail
     if (
@@ -844,7 +917,11 @@ Page({
     ) return
     const invocation = beginWriteInvocation(this, '状态')
     if (!invocation) return
+    const live = pageGuard(this)
+    const visible = pageGuard(this, false)
     try {
+      await withNoPendingOpeningCount(detail.task_id, async () => {
+      if (!live()) return
       const confirmed = await new Promise((resolve) => wx.showModal({
         title: action === 'post' ? '确认期初过账？' : '确认关闭盘点？',
         content: action === 'post'
@@ -854,7 +931,7 @@ Page({
         success: (result) => resolve(result.confirm),
         fail: () => resolve(false)
       }))
-      if (!confirmed || blockWriteRequest(this, action, '状态', invocation)) return
+      if (!confirmed || !live() || blockWriteRequest(this, action, '状态', invocation)) return
       this.setData({ submitting: true })
       let intent = null
       let firstDirectPost = false
@@ -889,8 +966,10 @@ Page({
           throw error
         }
         validateAndRecordTerminalResponse(intent, response)
+        if (!live()) return
         showPendingWriteNotice(this, intent, 'projection_pending')
         const refreshed = await this.load()
+        if (!visible()) return
         const state = this._lastWriteIntentState || 'unresolved'
         if (refreshed && state === 'confirmed') {
           clearWriteIntent(this, intent)
@@ -907,12 +986,14 @@ Page({
           })
         }
       } catch (error) {
+        if (!live()) return
         const outcome = await recoverWriteFailure(
           this,
           intent || this._pendingWriteIntent,
           error,
           { firstDirectPost, directPostRejected, directPostRejection }
         )
+        if (!visible()) return
         const uncertainMessage = !outcome.refreshed
           ? '状态结果未确认且回读失败，禁止新请求；请恢复网络后刷新'
           : (outcome.state === 'retryable'
@@ -925,10 +1006,14 @@ Page({
           icon: 'none'
         })
       } finally {
-        this.setData({ submitting: false })
+        if (pageActive(this)) this.setData({ submitting: false })
       }
+      })
+    } catch (_) {
+      if (pageActive(this)) wx.showToast({ title: '原计数待核验或协调不可用，已停止写入', icon: 'none' })
     } finally {
       endWriteInvocation(this, invocation)
+      refreshCountRecovery(this)
     }
   }
 })

@@ -436,6 +436,11 @@ function post(path, data = {}, options = {}) {
   return request(path, Object.assign({}, options, { method: 'POST', data }))
 }
 
+// Durable business commands recover through GET; even a 401 must not replay the POST.
+function postNoReplay(path, data = {}, options = {}) {
+  return post(path, data, Object.assign({}, options, { noRefresh: true }))
+}
+
 function put(path, data = {}, options = {}) {
   return request(path, Object.assign({}, options, { method: 'PUT', data }))
 }
@@ -525,6 +530,7 @@ module.exports = {
   request,
   get,
   post,
+  postNoReplay,
   put,
   upload,
   download,

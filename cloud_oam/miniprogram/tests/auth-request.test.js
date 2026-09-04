@@ -16,6 +16,44 @@ function getRandomValues({ length }) {
   return randomFillSync(new Uint8Array(length))
 }
 
+for (const outcome of ['unauthorized', 'network', 'rejected']) {
+  test(`durable POST ${outcome} is never automatically refreshed or replayed`, async (context) => {
+    const requests = []
+    global.wx = {
+      getRandomValues,
+      getAccountInfoSync() { return { miniProgram: { envVersion: 'develop' } } },
+      getStorageSync() { return '' },
+      request(options) {
+        requests.push(options)
+        if (outcome === 'network') options.fail({ errMsg: 'response lost' })
+        else options.success({ statusCode: outcome === 'unauthorized' ? 401 : 400,
+          data: { detail: { message: 'rejected', code: 'x_request_id_invalid', category: 'invalid_request' } } })
+      }
+    }
+    global.getApp = () => ({ globalData: {} })
+    resetApiModules()
+    context.after(() => { resetApiModules(); delete global.wx; delete global.getApp })
+    const api = require('../utils/api')
+    const coordinates = { noRefresh: false, requestId: `wxreq-${'a'.repeat(36)}`, idempotencyKey: `wxidem-${'b'.repeat(36)}` }
+    await assert.rejects(api.postNoReplay('/v1/stocktakes/opening/task/rounds/round/scopes/scope/count', {
+      zero_confirmed: true, physical_observations: []
+    }, coordinates), (error) => {
+      assert.equal(error.status, outcome === 'network' ? 0 : outcome === 'unauthorized' ? 401 : 400)
+      assert.equal(error.responseReceived, outcome !== 'network')
+      if (outcome !== 'network') {
+        assert.equal(error.code, 'x_request_id_invalid')
+        assert.equal(error.category, 'invalid_request')
+      }
+      return true
+    })
+    assert.equal(requests.length, 1)
+    assert.equal(requests[0].method, 'POST')
+    assert.equal(requests[0].header['X-Request-ID'], coordinates.requestId)
+    assert.equal(requests[0].header['Idempotency-Key'], coordinates.idempotencyKey)
+    assert.equal(coordinates.noRefresh, false)
+  })
+}
+
 test('exact identity reads force no-store while ordinary reads keep default headers', async (context) => {
   const requests = []
   global.wx = {

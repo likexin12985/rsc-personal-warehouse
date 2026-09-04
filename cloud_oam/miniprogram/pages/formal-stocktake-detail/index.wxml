@@ -4,6 +4,17 @@
   <block wx:else>
     <view class="card access-card status-{{accessAllowed ? 'success' : 'danger'}}">{{accessMessage}}</view>
 
+    <view wx:if="{{countRecoveryBlocked}}" class="card pending-write-card">
+      <text class="pending-write-title">原计数待核验，其他写入已阻止</text>
+      <text class="pending-write-text">{{countRecoveryMessage}}</text>
+      <view wx:if="{{countRecoveryCanCheck}}" class="pending-write-coordinates">
+        <text class="small mono">{{countRecoveryTarget}}</text>
+        <text class="small mono">核验追踪号：{{countRecoveryTrace}}</text>
+        <button class="button button-secondary" bindtap="recoverCount" disabled="{{submitting}}">只读核验原计数</button>
+      </view>
+    </view>
+    <view wx:if="{{countRecoveryNotice}}" class="card">{{countRecoveryNotice}}</view>
+
     <view wx:if="{{writePending}}" class="card pending-write-card">
       <text class="pending-write-title">写请求结果待确认</text>
       <text class="pending-write-text">{{pendingWriteMessage}}</text>
@@ -45,28 +56,28 @@
       <view wx:if="{{detail.canCount && selectedScopeId}}" class="section">
         <view class="section-heading"><text class="section-title">提交完整实盘</text></view>
         <view class="card count-card">
-          <view class="field"><text class="field-label">物料标识类型</text><picker range="{{identifierOptions}}" range-key="label" value="{{identifierIndex}}" bindchange="changeIdentifierType" disabled="{{writePending}}"><view class="picker-field"><text>{{identifierOptions[identifierIndex].label}}</text><text class="muted">选择</text></view></picker></view>
-          <view class="field"><text class="field-label">物料号</text><input class="input" value="{{materialIdentifier}}" bindinput="bindMaterial" placeholder="输入 SKU 物料号" disabled="{{writePending}}" /></view>
-          <button class="button button-secondary scan-button" bindtap="scanMaterial" disabled="{{submitting || writePending}}">扫码读取物料标识</button>
-          <view class="field"><text class="field-label">成色</text><picker range="{{conditionOptions}}" range-key="label" value="{{conditionIndex}}" bindchange="changeCondition" disabled="{{writePending}}"><view class="picker-field"><text>{{conditionOptions[conditionIndex].label}}</text><text class="muted">选择</text></view></picker></view>
-          <view class="field"><text class="field-label">库存状态</text><picker range="{{availabilityOptions}}" range-key="label" value="{{availabilityIndex}}" bindchange="changeAvailability" disabled="{{writePending}}"><view class="picker-field"><text>{{availabilityOptions[availabilityIndex].label}}</text><text class="muted">选择</text></view></picker></view>
-          <view class="field"><text class="field-label">数量</text><input class="input" value="{{quantity}}" bindinput="bindQuantity" type="digit" placeholder="最多三位小数；SN 每条为 1" disabled="{{writePending}}" /></view>
-          <view class="field"><text class="field-label">批次号（可选）</text><input class="input" value="{{lotNo}}" bindinput="bindLot" placeholder="按物料追踪策略填写" disabled="{{writePending}}" /></view>
-          <view class="field"><text class="field-label">SN（可选）</text><input class="input" value="{{serialNo}}" bindinput="bindSerial" placeholder="SN 物料逐件添加" disabled="{{writePending}}" /></view>
-          <button class="button button-secondary scan-button" bindtap="scanSerial" disabled="{{submitting || writePending}}">扫码读取 SN</button>
-          <view class="field"><text class="field-label">备注（可选）</text><input class="input" value="{{remark}}" bindinput="bindRemark" placeholder="现场差异原因或说明" disabled="{{writePending}}" /></view>
-          <button class="button button-secondary" bindtap="addObservation" disabled="{{submitting || writePending}}">加入本次实盘明细</button>
+          <view class="field"><text class="field-label">物料标识类型</text><picker range="{{identifierOptions}}" range-key="label" value="{{identifierIndex}}" bindchange="changeIdentifierType" disabled="{{writePending || countRecoveryBlocked}}"><view class="picker-field"><text>{{identifierOptions[identifierIndex].label}}</text><text class="muted">选择</text></view></picker></view>
+          <view class="field"><text class="field-label">物料号</text><input class="input" value="{{materialIdentifier}}" bindinput="bindMaterial" placeholder="输入 SKU 物料号" disabled="{{writePending || countRecoveryBlocked}}" /></view>
+          <button class="button button-secondary scan-button" bindtap="scanMaterial" disabled="{{submitting || writePending || countRecoveryBlocked}}">扫码读取物料标识</button>
+          <view class="field"><text class="field-label">成色</text><picker range="{{conditionOptions}}" range-key="label" value="{{conditionIndex}}" bindchange="changeCondition" disabled="{{writePending || countRecoveryBlocked}}"><view class="picker-field"><text>{{conditionOptions[conditionIndex].label}}</text><text class="muted">选择</text></view></picker></view>
+          <view class="field"><text class="field-label">库存状态</text><picker range="{{availabilityOptions}}" range-key="label" value="{{availabilityIndex}}" bindchange="changeAvailability" disabled="{{writePending || countRecoveryBlocked}}"><view class="picker-field"><text>{{availabilityOptions[availabilityIndex].label}}</text><text class="muted">选择</text></view></picker></view>
+          <view class="field"><text class="field-label">数量</text><input class="input" value="{{quantity}}" bindinput="bindQuantity" type="digit" placeholder="最多三位小数；SN 每条为 1" disabled="{{writePending || countRecoveryBlocked}}" /></view>
+          <view class="field"><text class="field-label">批次号（可选）</text><input class="input" value="{{lotNo}}" bindinput="bindLot" placeholder="按物料追踪策略填写" disabled="{{writePending || countRecoveryBlocked}}" /></view>
+          <view class="field"><text class="field-label">SN（可选）</text><input class="input" value="{{serialNo}}" bindinput="bindSerial" placeholder="SN 物料逐件添加" disabled="{{writePending || countRecoveryBlocked}}" /></view>
+          <button class="button button-secondary scan-button" bindtap="scanSerial" disabled="{{submitting || writePending || countRecoveryBlocked}}">扫码读取 SN</button>
+          <view class="field"><text class="field-label">备注（可选）</text><input class="input" value="{{remark}}" bindinput="bindRemark" placeholder="现场差异原因或说明" disabled="{{writePending || countRecoveryBlocked}}" /></view>
+          <button class="button button-secondary" bindtap="addObservation" disabled="{{submitting || writePending || countRecoveryBlocked}}">加入本次实盘明细</button>
         </view>
 
         <view wx:for="{{draftObservations}}" wx:key="index" class="list-card draft-row">
           <view class="row between"><text class="mono">{{item.material_identifier_raw}}</text><text>{{item.counted_qty}}</text></view>
           <view class="small muted">{{item.serial_no_raw ? 'SN ' + item.serial_no_raw : '非 SN 行'}}{{item.lot_no_raw ? ' · 批次 ' + item.lot_no_raw : ''}}</view>
-          <button class="button button-danger button-small" bindtap="removeObservation" data-index="{{index}}" disabled="{{submitting || writePending}}">移除</button>
+          <button class="button button-danger button-small" bindtap="removeObservation" data-index="{{index}}" disabled="{{submitting || writePending || countRecoveryBlocked}}">移除</button>
         </view>
 
         <view class="action-stack">
-          <button class="button button-primary" bindtap="submitCount" data-zero="false" loading="{{submitting}}" disabled="{{submitting || !draftObservations.length || (writePending && !(pendingWriteRetryable && pendingWriteKind === 'count'))}}">提交全部实盘并封存范围</button>
-          <button class="button button-secondary" bindtap="submitCount" data-zero="true" disabled="{{submitting || draftObservations.length || (writePending && !(pendingWriteRetryable && pendingWriteKind === 'count'))}}">确认本范围零库存</button>
+          <button class="button button-primary" bindtap="submitCount" data-zero="false" loading="{{submitting}}" disabled="{{submitting || !draftObservations.length || writePending || countRecoveryBlocked}}">提交全部实盘并封存范围</button>
+          <button class="button button-secondary" bindtap="submitCount" data-zero="true" disabled="{{submitting || draftObservations.length || writePending || countRecoveryBlocked}}">确认本范围零库存</button>
         </view>
       </view>
 
@@ -88,8 +99,8 @@
       </view>
 
       <view wx:if="{{detail.canPost || detail.canClose}}" class="action-stack sticky-action">
-        <button wx:if="{{detail.canPost}}" class="button button-primary" bindtap="terminalAction" data-action="post" loading="{{submitting}}" disabled="{{submitting || (writePending && !(pendingWriteRetryable && pendingWriteKind === 'post'))}}">期初过账（不关闭）</button>
-        <button wx:if="{{detail.canClose}}" class="button button-secondary" bindtap="terminalAction" data-action="close" loading="{{submitting}}" disabled="{{submitting || (writePending && !(pendingWriteRetryable && pendingWriteKind === 'close'))}}">对账完成后关闭</button>
+        <button wx:if="{{detail.canPost}}" class="button button-primary" bindtap="terminalAction" data-action="post" loading="{{submitting}}" disabled="{{submitting || countRecoveryBlocked || (writePending && !(pendingWriteRetryable && pendingWriteKind === 'post'))}}">期初过账（不关闭）</button>
+        <button wx:if="{{detail.canClose}}" class="button button-secondary" bindtap="terminalAction" data-action="close" loading="{{submitting}}" disabled="{{submitting || countRecoveryBlocked || (writePending && !(pendingWriteRetryable && pendingWriteKind === 'close'))}}">对账完成后关闭</button>
       </view>
     </block>
   </block>
