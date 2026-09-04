@@ -5067,7 +5067,7 @@ def test_0052_exports_exact_head_and_inherited_dependency_catalogs() -> None:
         "argument_types",
         "argument_names",
         "security_definer",
-        "strict",
+        "is_strict",
         "search_path",
         "body_sha256",
         "api_execute",
@@ -5393,6 +5393,10 @@ def test_0052_parses_named_helpers_and_closes_event_ownership(
     assert "has_function_privilege('public'" not in verification_sql.lower()
     assert module.RECONCILIATION_EVENT_KEY_BODY_SHA256 in verification_sql
     assert module.RECONCILIATION_EFFECT_BODY_SHA256 in verification_sql
+    # STRICT is a reserved PL/pgSQL keyword.  It parses as a column alias but
+    # cannot be dereferenced as an unquoted record field on PostgreSQL 16.
+    assert "expected_function.is_strict" in verification_sql
+    assert "expected_function.strict" not in verification_sql
     assert "trigger_row.tgenabled = 'A'" in verification_sql
     assert "audit_only_owner" in verification_sql
     assert "state_review.review_stage" in verification_sql

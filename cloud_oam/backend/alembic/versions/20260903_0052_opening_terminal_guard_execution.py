@@ -173,7 +173,7 @@ INHERITED_RECONCILIATION_FUNCTION_CATALOG_FIELDS = (
     "argument_types",
     "argument_names",
     "security_definer",
-    "strict",
+    "is_strict",
     "search_path",
     "body_sha256",
     "api_execute",
@@ -11827,7 +11827,7 @@ def _reconciliation_dependency_catalog_values() -> str:
                     else "NULL::text"
                 ),
                 "TRUE" if security_definer else "FALSE",
-                "TRUE" if strict else "FALSE",
+                "TRUE" if is_strict else "FALSE",
                 _sql_literal(body_sha256),
                 "TRUE" if api_execute else "FALSE",
             )
@@ -11842,7 +11842,7 @@ def _reconciliation_dependency_catalog_values() -> str:
             argument_types,
             argument_names,
             security_definer,
-            strict,
+            is_strict,
             _search_path,
             body_sha256,
             api_execute,
@@ -11901,7 +11901,7 @@ BEGIN
               argument_types,
               argument_names,
               security_definer,
-              strict,
+              is_strict,
               body_sha256,
               api_execute
           )
@@ -11948,7 +11948,7 @@ BEGIN
                AND function_row.provariadic = 0
                AND language_row.lanname = expected_function.language_name
                AND function_row.provolatile = expected_function.volatility
-               AND function_row.proisstrict = expected_function.strict
+               AND function_row.proisstrict = expected_function.is_strict
                AND NOT function_row.proleakproof
                AND function_row.proparallel = 'u'
                AND function_row.prosecdef =
