@@ -5340,6 +5340,30 @@ def test_0052_parses_named_helpers_and_closes_event_ownership(
         "scoped_account.created_at <= start_task.cutoff_at"
         in module.START_GRAPH_BODY
     )
+    normalized_start_graph = " ".join(module.START_GRAPH_BODY.split())
+    assert (
+        "pg_catalog.lower(pg_catalog.btrim(control_source.code)) = 'oam'"
+        in normalized_start_graph
+    )
+    assert "control_source.code = 'oam'" not in normalized_start_graph
+    assert (
+        "LEFT JOIN public.stock_locations AS snapshot_location ON "
+        "snapshot_location.id = snapshot_scope.location_id"
+        in normalized_start_graph
+    )
+    assert "OR snapshot_location.id IS NULL" in normalized_start_graph
+    assert (
+        "snapshot_location.location_type = 'personal' AND "
+        "snapshot_account.custodian_person_id IS DISTINCT FROM "
+        "snapshot_scope.custodian_person_id_snapshot"
+        in normalized_start_graph
+    )
+    assert (
+        "snapshot_scope.custodian_person_id_snapshot IS NOT NULL AND "
+        "snapshot_account.custodian_person_id IS DISTINCT FROM "
+        "snapshot_scope.custodian_person_id_snapshot"
+        not in normalized_start_graph
+    )
     assert "opening_headquarters_review_recount" not in module.REVIEW_GRAPH_BODY
     assert "review_row.review_stage = 'headquarters'" in module.REVIEW_GRAPH_BODY
     assert "review_row.decision = 'recount'" in module.REVIEW_GRAPH_BODY

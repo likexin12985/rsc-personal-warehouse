@@ -5287,7 +5287,7 @@ SELECT COALESCE((
         AND start_task.control_manifest_sha256 = {control_manifest}
         AND start_task.control_manifest_sha256 = control_sync.manifest_sha256
         AND start_task.snapshot_manifest_sha256 = {snapshot_manifest}
-        AND control_source.code = 'oam'
+        AND pg_catalog.lower(pg_catalog.btrim(control_source.code)) = 'oam'
         AND control_source.mode IN ('read_only', 'mirror_only')
         AND control_sync.source_system_id = control_source.id
         AND control_sync.status = 'completed'
@@ -5660,10 +5660,13 @@ SELECT COALESCE((
                AND snapshot_scope.task_id = start_task.id
               LEFT JOIN public.stock_accounts AS snapshot_account
                 ON snapshot_account.id = snapshot_line.stock_account_id
+              LEFT JOIN public.stock_locations AS snapshot_location
+                ON snapshot_location.id = snapshot_scope.location_id
              WHERE snapshot_line.task_id = start_task.id
                AND (
                    snapshot_scope.id IS NULL
                    OR snapshot_account.id IS NULL
+                   OR snapshot_location.id IS NULL
                    OR snapshot_account.created_at IS NULL
                    OR snapshot_account.created_at > start_task.cutoff_at
                    OR snapshot_account.owner_org_id <>
@@ -5671,7 +5674,7 @@ SELECT COALESCE((
                    OR snapshot_account.location_id <>
                       snapshot_scope.location_id
                    OR (
-                       snapshot_scope.custodian_person_id_snapshot IS NOT NULL
+                       snapshot_location.location_type = 'personal'
                        AND snapshot_account.custodian_person_id IS DISTINCT
                            FROM snapshot_scope.custodian_person_id_snapshot
                    )
@@ -8456,7 +8459,7 @@ TERMINAL_GRAPH_BODY = _terminal_graph_helper_body()
 # Updated mechanically after the SQL bodies are finalized.  Catalog checks
 # fail closed if either source changes without its digest changing with it.
 START_GRAPH_BODY_SHA256 = (
-    "fe1874929ac02dbc1aa590dd0aa3fef03a853e0845849f06943be906aa55491a"
+    "44ba812784bf4ec1b402587121437199bed7abab07ce734a58706339035b51ea"
 )
 ROUND_SUBMISSION_BODY_SHA256 = (
     "29d1e2b9c3ed9cdec240c91134497469fb193e7b88d9ce63fcdec70c46008afa"

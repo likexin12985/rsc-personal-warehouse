@@ -3408,7 +3408,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_require_opening_observation_account_0023", ""):
         "c0079cfdaf15a4e9f9b66d76596828c0901b322d32ff4ea63fbbadc3acff163b",
     ("rsc_opening_start_graph_complete_0052", "uuid, boolean"):
-        "fe1874929ac02dbc1aa590dd0aa3fef03a853e0845849f06943be906aa55491a",
+        "44ba812784bf4ec1b402587121437199bed7abab07ce734a58706339035b51ea",
     (
         "rsc_opening_round_submission_complete_0052",
         "uuid, uuid, boolean",
