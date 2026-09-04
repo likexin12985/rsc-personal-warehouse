@@ -7085,10 +7085,11 @@ def _assert_0052_cross_domain_posting_rejected(
             )
             assert cursor.rowcount == 1
             with pytest.raises(psycopg.Error) as failure:
-                # The inherited evidence guard also rejects a posting for a
-                # round that is still counting.  Force the exact 0052 graph
-                # constraint so this regression proves the cross-domain
-                # posting boundary independently of deferred-trigger order.
+                # This helper runs only after the real round is submitted so
+                # the inherited immediate evidence guard admits the forged
+                # row.  Force the exact 0052 graph constraint to prove the
+                # cross-domain boundary independently of deferred-trigger
+                # order.
                 cursor.execute(
                     "SET CONSTRAINTS "
                     "trg_stocktake_postings_graph_0052 IMMEDIATE"
@@ -12072,8 +12073,11 @@ def _seed_0047_stocktake_inventory(
             api_engine,
             submit_with_wide_aggregate_overflow,
         )
-    assert wide_aggregate_overflow.value.diagnostic.sqlstate == "23514"
+    assert wide_aggregate_overflow.value.diagnostic.sqlstate == "P0001"
     assert wide_aggregate_overflow.value.diagnostic.sqlstate != "22003"
+    assert wide_aggregate_overflow.value.diagnostic.plpgsql_function == (
+        "rsc_validate_stocktake_scope_completion_insert_0021"
+    )
     assert opening_count_snapshot(api_engine) == before_resolution_tamper
 
     def submit_with_forged_request_resolution() -> None:
