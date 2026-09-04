@@ -68,7 +68,6 @@ function clearWriteIntent(page, intent) {
     pendingWriteRetryable: false,
     pendingWriteMessage: '',
     pendingWriteTarget: '',
-    pendingWriteIdempotencyKey: '',
     pendingWriteRequestId: ''
   })
 }
@@ -82,15 +81,14 @@ function showPendingWriteNotice(page, intent, state) {
     ? `任务 ${intent.taskId} · 轮次 ${intent.roundId} · 范围 ${intent.scopeId}`
     : `任务 ${intent.taskId} · 期望版本 v${intent.expectedVersion}`
   const message = retryable
-    ? `上一笔${actionLabel}仍待精确确认。对象仍处于原请求可重放状态；再次确认只会复用原幂等键和请求 ID。`
-    : `上一笔${actionLabel}结果待确认。当前详情不含可匹配原幂等键、请求 ID 或请求 hash 的证据；即使对象状态已变化，也不能认定原请求成功。小程序已停止新写入，请在 PC 正式盘点中心按下列坐标核验。`
+    ? `上一笔${actionLabel}仍待精确确认。对象仍处于原请求可重放状态；再次确认只会复用原请求坐标。`
+    : `上一笔${actionLabel}结果待确认。当前详情不足以确认原请求结果；即使对象状态已变化，也不能认定原请求成功。小程序已停止新写入，请联系管理员，凭下列对象和追踪 ID 进行只读核验。`
   page.setData({
     writePending: true,
     pendingWriteKind: intent.kind,
     pendingWriteRetryable: retryable,
     pendingWriteMessage: message,
     pendingWriteTarget: target,
-    pendingWriteIdempotencyKey: intent.idempotencyKey,
     pendingWriteRequestId: intent.requestId
   })
 }
@@ -198,7 +196,6 @@ function reconcileWriteIntent(page, detail) {
       pendingWriteRetryable: false,
       pendingWriteMessage: '',
       pendingWriteTarget: '',
-      pendingWriteIdempotencyKey: '',
       pendingWriteRequestId: ''
     })
     return 'none'
@@ -280,7 +277,6 @@ Page({
     pendingWriteRetryable: false,
     pendingWriteMessage: '',
     pendingWriteTarget: '',
-    pendingWriteIdempotencyKey: '',
     pendingWriteRequestId: '',
     identifierOptions: [
       { label: 'SKU 物料号', value: 'sku_code' },

@@ -1042,12 +1042,9 @@ function transportedJsonValue(value: unknown): unknown {
   return JSON.parse(transported);
 }
 
-function safeCoordinate(
-  coordinates: OpeningMutationCoordinates,
-  name: "Idempotency-Key" | "X-Request-ID",
-): string {
+function safeRequestId(coordinates: OpeningMutationCoordinates): string {
   try {
-    const value = new Headers(coordinates.headers).get(name);
+    const value = new Headers(coordinates.headers).get("X-Request-ID");
     return value && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
       ? value
       : "unavailable";
@@ -1061,21 +1058,18 @@ export class OpeningMutationHandoffError extends ApiError {
   readonly task_id: string;
   readonly action: OpeningMutationAction;
   readonly path: string;
-  readonly idempotency_key: string;
   readonly request_id: string;
 
   constructor(intent: OpeningMutationIntent, reason: "different_request" | "state_advanced") {
-    const idempotencyKey = safeCoordinate(intent.coordinates, "Idempotency-Key");
-    const requestId = safeCoordinate(intent.coordinates, "X-Request-ID");
+    const requestId = safeRequestId(intent.coordinates);
     super(
       409,
-      `正式期初盘点存在未确认写入，已停止同任务新写；请人工核验 action=${intent.action} request_id=${requestId} idempotency_key=${idempotencyKey} reason=${reason}`,
+      `正式期初盘点存在未确认写入，已停止同任务新写；请人工核验 action=${intent.action} request_id=${requestId} reason=${reason}`,
     );
     this.name = "OpeningMutationHandoffError";
     this.task_id = intent.taskId;
     this.action = intent.action;
     this.path = intent.path;
-    this.idempotency_key = idempotencyKey;
     this.request_id = requestId;
   }
 }

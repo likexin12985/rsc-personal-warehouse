@@ -603,7 +603,12 @@ test('count timeout followed by an unmatched completed scope stays pending and k
   assert.equal(instance.data.pendingWriteRetryable, false)
   assert.equal(instance.data.selectedScopeId, '')
   assert.match(instance.data.pendingWriteMessage, /不能认定原请求成功/)
-  assert.match(instance.data.pendingWriteMessage, /PC 正式盘点中心/)
+  assert.match(instance.data.pendingWriteMessage, /联系管理员/)
+  assert.match(instance.data.pendingWriteMessage, /对象和追踪 ID 进行只读核验/)
+  assert.equal(Object.prototype.hasOwnProperty.call(instance.data, 'pendingWriteIdempotencyKey'), false)
+  assert.equal(JSON.stringify(instance.data).includes(IDEMPOTENCY_KEY), false)
+  assert.equal(instance.data.pendingWriteMessage.includes(IDEMPOTENCY_KEY), false)
+  assert.doesNotMatch(instance.data.pendingWriteMessage, /Idempotency-Key|幂等键/)
   assert.equal(toasts.some((toast) => toast.icon === 'success'), false)
 
   instance.removeObservation({ currentTarget: { dataset: { index: 0 } } })
@@ -616,7 +621,13 @@ test('count timeout followed by an unmatched completed scope stays pending and k
     path.join(__dirname, '../pages/formal-stocktake-detail/index.wxml'),
     'utf8'
   )
-  assert.match(wxml, /Idempotency-Key: \{\{pendingWriteIdempotencyKey\}\}/)
+  const pageSource = fs.readFileSync(
+    path.join(__dirname, '../pages/formal-stocktake-detail/index.js'),
+    'utf8'
+  )
+  assert.doesNotMatch(pageSource, /pendingWriteIdempotencyKey/)
+  assert.doesNotMatch(wxml, /Idempotency-Key|pendingWriteIdempotencyKey/)
+  assert.equal(wxml.includes(IDEMPOTENCY_KEY), false)
   assert.match(wxml, /X-Request-ID: \{\{pendingWriteRequestId\}\}/)
 })
 
@@ -789,7 +800,8 @@ test('terminal timeout followed by an unmatched posted or closed state never sel
       assert.equal(instance.data.writePending, true)
       assert.equal(instance.data.pendingWriteRetryable, false)
       assert.match(instance.data.pendingWriteMessage, /不能认定原请求成功/)
-      assert.match(instance.data.pendingWriteMessage, /PC 正式盘点中心/)
+      assert.match(instance.data.pendingWriteMessage, /联系管理员/)
+      assert.match(instance.data.pendingWriteMessage, /对象和追踪 ID 进行只读核验/)
       assert.equal(toasts.some((toast) => toast.icon === 'success'), false)
 
       await instance.terminalAction({

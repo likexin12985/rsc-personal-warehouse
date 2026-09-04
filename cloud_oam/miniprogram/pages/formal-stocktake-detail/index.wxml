@@ -9,7 +9,6 @@
       <text class="pending-write-text">{{pendingWriteMessage}}</text>
       <view class="pending-write-coordinates">
         <text class="small mono">{{pendingWriteTarget}}</text>
-        <text class="small mono">Idempotency-Key: {{pendingWriteIdempotencyKey}}</text>
         <text class="small mono">X-Request-ID: {{pendingWriteRequestId}}</text>
       </view>
     </view>

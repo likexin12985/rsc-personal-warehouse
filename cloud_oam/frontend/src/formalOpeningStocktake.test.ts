@@ -916,7 +916,7 @@ describe("formal opening stocktake mutation policy", () => {
       path: `/v1/stocktakes/opening/${handoffTaskId}/post`,
     });
     expect(String((retryError as Error).message)).toMatch(
-      /request_id=web-opening-\d{3} idempotency_key=opening-post-\d{3}-safe-key reason=state_advanced/,
+      /request_id=web-opening-\d{3} reason=state_advanced/,
     );
     expect(String((retryError as Error).message)).not.toContain("expected_version");
 
@@ -926,6 +926,17 @@ describe("formal opening stocktake mutation policy", () => {
     expect(differentActionError).toBeInstanceOf(OpeningMutationHandoffError);
     expect((differentActionError as OpeningMutationHandoffError).request_id)
       .toBe((retryError as OpeningMutationHandoffError).request_id);
+    const originalHeaders = new Headers(vi.mocked(api).mock.calls[1][1]?.headers);
+    const originalKey = originalHeaders.get("Idempotency-Key");
+    expect(originalKey).toMatch(/^opening-post-\d{3}-safe-key$/);
+    for (const handoff of [retryError, differentActionError] as OpeningMutationHandoffError[]) {
+      expect(handoff.request_id).toBe(originalHeaders.get("X-Request-ID"));
+      expect(handoff).not.toHaveProperty("idempotency_key");
+      for (const rendered of [String(handoff), handoff.message, handoff.stack, JSON.stringify(handoff)]) {
+        expect(rendered).not.toContain(originalKey);
+        expect(rendered).not.toContain("idempotency_key");
+      }
+    }
     expect(mutationHeaders).toHaveBeenCalledTimes(1);
     expect(api).toHaveBeenCalledTimes(4);
   });

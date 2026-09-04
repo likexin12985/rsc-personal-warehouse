@@ -422,8 +422,20 @@ describe("formal opening reconciliation mutations", () => {
       action: "explain",
       path: `/v1/reconciliations/opening/${RUN_ID}/explanations`,
     });
-    await expect(approveOpeningReconciliation(RUN_ID, "总部准备批准该批次"))
-      .rejects.toBeInstanceOf(OpeningReconciliationHandoffError);
+    const differentActionError = await approveOpeningReconciliation(RUN_ID, "总部准备批准该批次")
+      .catch((reason: unknown) => reason);
+    expect(differentActionError).toBeInstanceOf(OpeningReconciliationHandoffError);
+    const originalHeaders = new Headers(vi.mocked(api).mock.calls[1][1]?.headers);
+    const originalKey = originalHeaders.get("Idempotency-Key");
+    expect(originalKey).toBeTruthy();
+    for (const handoff of [error, differentActionError] as OpeningReconciliationHandoffError[]) {
+      expect(handoff.request_id).toBe(originalHeaders.get("X-Request-ID"));
+      expect(handoff).not.toHaveProperty("idempotency_key");
+      for (const rendered of [String(handoff), handoff.message, handoff.stack, JSON.stringify(handoff)]) {
+        expect(rendered).not.toContain(originalKey);
+        expect(rendered).not.toContain("idempotency_key");
+      }
+    }
     expect(mutationHeaders).toHaveBeenCalledTimes(1);
   });
 });

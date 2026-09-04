@@ -562,12 +562,9 @@ function intentSignature(options: Readonly<{
   });
 }
 
-function safeCoordinate(
-  coordinates: ReconciliationMutationCoordinates,
-  name: "Idempotency-Key" | "X-Request-ID",
-): string {
+function safeRequestId(coordinates: ReconciliationMutationCoordinates): string {
   try {
-    const value = new Headers(coordinates.headers).get(name);
+    const value = new Headers(coordinates.headers).get("X-Request-ID");
     return value && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
       ? value
       : "unavailable";
@@ -581,21 +578,18 @@ export class OpeningReconciliationHandoffError extends ApiError {
   readonly target_id: string;
   readonly action: ReconciliationMutationAction;
   readonly path: string;
-  readonly idempotency_key: string;
   readonly request_id: string;
 
   constructor(intent: ReconciliationMutationIntent, reason: "different_request" | "state_advanced") {
-    const idempotencyKey = safeCoordinate(intent.coordinates, "Idempotency-Key");
-    const requestId = safeCoordinate(intent.coordinates, "X-Request-ID");
+    const requestId = safeRequestId(intent.coordinates);
     super(
       409,
-      `正式期初对账存在未确认写入，已停止同一对象的新写；请人工核验 action=${intent.action} request_id=${requestId} idempotency_key=${idempotencyKey} reason=${reason}`,
+      `正式期初对账存在未确认写入，已停止同一对象的新写；请人工核验 action=${intent.action} request_id=${requestId} reason=${reason}`,
     );
     this.name = "OpeningReconciliationHandoffError";
     this.target_id = intent.targetId;
     this.action = intent.action;
     this.path = intent.path;
-    this.idempotency_key = idempotencyKey;
     this.request_id = requestId;
   }
 }
