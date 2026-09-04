@@ -487,6 +487,15 @@ function authenticationRefreshCoordinator(): AuthenticationRefreshCoordinator {
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return requestApi<T>(path, init, true);
+}
+
+/** A durable command must never be replayed automatically after a 401. */
+export async function apiNoReplay<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return requestApi<T>(path, init, false);
+}
+
+async function requestApi<T>(path: string, init: RequestInit, allowRefreshReplay: boolean): Promise<T> {
   const method = init.method || "GET";
   const normalizedPath = path.split("?", 1)[0].replace(/\/+$/, "") || "/";
   const isPrivateIdentityRead = method.toUpperCase() === "GET" && (
@@ -523,7 +532,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       ? await refreshCoordinator.authenticate(transport)
       : await transport();
   if (
-    response.status === 401
+    allowRefreshReplay
+    && response.status === 401
     && refreshCoordinator
     && await refreshCoordinator.refresh(refreshVersionBeforeRequest)
   ) {

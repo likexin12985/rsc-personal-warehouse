@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   api,
+  apiNoReplay,
   createAuthenticationRefreshCoordinator,
   createIdempotencyKey,
   mutationHeaders,
@@ -128,6 +129,58 @@ function installBrowserRefreshCoordination(): void {
 
 describe("API transport quarantine", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("never refreshes or replays an opted-out command after a direct 401", async () => {
+    installBrowserRefreshCoordination();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: {
+      message: "authentication required", code: "authentication_required", category: "authentication",
+    } }), { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(apiNoReplay("/v1/stocktakes/opening/test/rounds/round/scopes/scope/count", {
+      method: "POST", body: "{}", headers: {
+        "X-Request-ID": "single-count-request", "Idempotency-Key": "opening-count-0123456789012345",
+      },
+    })).rejects.toMatchObject({ status: 401, responseReceived: true, code: "authentication_required" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.credentials).toBe("include");
+    expect(new Headers(init.headers).get("X-Request-ID")).toBe("single-count-request");
+    expect(new Headers(init.headers).get("Idempotency-Key")).toBe("opening-count-0123456789012345");
+    expect(new Headers(init.headers).get("content-type")).toBe("application/json");
+  });
+
+  it("keeps a no-replay transport failure unknown without a second fetch", async () => {
+    const lost = new TypeError("network response lost");
+    const fetchMock = vi.fn().mockRejectedValue(lost);
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(apiNoReplay("/v1/stocktakes/opening/test/count", { method: "POST" })).rejects.toBe(lost);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("preserves direct no-effect rejection metadata without replay", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: {
+      message: "invalid request", category: "invalid_request", code: "x_request_id_invalid",
+    } }), { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(apiNoReplay("/v1/stocktakes/opening/test/count", { method: "POST" })).rejects.toMatchObject({
+      status: 400, responseReceived: true, category: "invalid_request", code: "x_request_id_invalid",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not resend a no-replay command whose success body is malformed", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("invalid json", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(apiNoReplay("/v1/stocktakes/opening/test/count", { method: "POST" })).rejects.toBeInstanceOf(SyntaxError);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("still quarantines legacy writes through the no-replay transport", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(apiNoReplay("/transfers/legacy/dispatch", { method: "POST" })).rejects.toMatchObject({ status: 403 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
   it("rejects a legacy write before fetch is called", async () => {
     const fetchMock = vi.fn();

@@ -1351,7 +1351,7 @@ async function executeVersionedOpeningTerminalActionUnlocked<
   return { before, result: attempt.result, detail };
 }
 
-function validateCountResult(value: unknown): OpeningCountResult {
+export function validateCountResult(value: unknown): OpeningCountResult {
   const object = record(value);
   schemaVersion(object);
   uuid(field(object, "task_id"), "task_id");
@@ -1957,6 +1957,40 @@ async function recordOpeningObservationDispositionUnlocked(
  * holding their locks, so different scopes can still be counted concurrently.
  * The client nevertheless binds every write to a fresh detail and rereads it.
  */
+/** Shared preparation only; does not allocate an intent or perform transport. */
+export function resolveOpeningScopeCount(
+  taskId: string,
+  scopeId: string,
+  input: OpeningScopeCountInput,
+  detail: OpeningStocktakeTaskDetail,
+) {
+  const round = requiredCurrentRound(detail);
+  if (round.status !== "counting") invalid("当前盘点轮次不可计数");
+  const checkedScopeId = uuid(scopeId, "scope_id");
+  const scope = detail.scopes.find((row) => row.scope_id.toLowerCase() === checkedScopeId);
+  if (!scope || !scope.assigned_to_me || scope.completion_status !== "pending") {
+    invalid("当前人员不可提交该盘点范围");
+  }
+  if (typeof input.zero_confirmed !== "boolean") invalid("零库存确认标记无效");
+  if (input.zero_confirmed && input.physical_observations.length > 0) {
+    invalid("零库存确认不能同时提交实盘行");
+  }
+  if (!input.zero_confirmed && input.physical_observations.length === 0) {
+    invalid("非零盘点必须提交至少一条实盘行");
+  }
+  for (const row of input.physical_observations) {
+    exactText(row.material_identifier_raw, "物料标识");
+    if (!/^(?:[1-9]\d*)(?:\.\d{1,3})?$/.test(row.counted_qty)) {
+      invalid("实盘数量必须是正数且最多三位小数");
+    }
+  }
+  return {
+    path: `${formalOpeningTaskPath(taskId)}/rounds/${round.round_id}/scopes/${checkedScopeId}/count`,
+    body: input,
+    roundId: round.round_id,
+  };
+}
+
 export async function submitOpeningScopeCount(
   taskId: string,
   scopeId: string,
@@ -1966,33 +2000,7 @@ export async function submitOpeningScopeCount(
     taskId,
     action: "count",
     prefix: "opening-count",
-    resolve: (detail) => {
-      const round = requiredCurrentRound(detail);
-      if (round.status !== "counting") invalid("当前盘点轮次不可计数");
-      const checkedScopeId = uuid(scopeId, "scope_id");
-      const scope = detail.scopes.find((row) => row.scope_id.toLowerCase() === checkedScopeId);
-      if (!scope || !scope.assigned_to_me || scope.completion_status !== "pending") {
-        invalid("当前人员不可提交该盘点范围");
-      }
-      if (typeof input.zero_confirmed !== "boolean") invalid("零库存确认标记无效");
-      if (input.zero_confirmed && input.physical_observations.length > 0) {
-        invalid("零库存确认不能同时提交实盘行");
-      }
-      if (!input.zero_confirmed && input.physical_observations.length === 0) {
-        invalid("非零盘点必须提交至少一条实盘行");
-      }
-      for (const row of input.physical_observations) {
-        exactText(row.material_identifier_raw, "物料标识");
-        if (!/^(?:[1-9]\d*)(?:\.\d{1,3})?$/.test(row.counted_qty)) {
-          invalid("实盘数量必须是正数且最多三位小数");
-        }
-      }
-      return {
-        path: `${formalOpeningTaskPath(taskId)}/rounds/${round.round_id}/scopes/${checkedScopeId}/count`,
-        body: input,
-        roundId: round.round_id,
-      };
-    },
+    resolve: (detail) => resolveOpeningScopeCount(taskId, scopeId, input, detail),
     validateResult: (value) => {
       const result = validateCountResult(value);
       if (result.scope_id.toLowerCase() !== scopeId.toLowerCase()) {
