@@ -66,6 +66,15 @@ const TRANSACTION_ID = '70000000-0000-4000-8000-000000000001'
 const IDEMPOTENCY_KEY = `wxidem-${'a'.repeat(36)}`
 const REQUEST_ID = `wxreq-${'b'.repeat(36)}`
 
+function responseRejection(status, category, code, responseReceived = true) {
+  const error = new Error(`rejected:${status}:${category || '-'}:${code || '-'}`)
+  error.status = status
+  error.responseReceived = responseReceived
+  if (category !== undefined) error.category = category
+  if (code !== undefined) error.code = code
+  return error
+}
+
 function taskSummary() {
   return {
     task_id: TASK_ID,
@@ -277,6 +286,25 @@ function terminalWriteResult(action, replayed = false) {
     closed_at: '2026-08-31T03:00:00Z',
     replayed
   }
+}
+
+function detailForWriteKind(kind) {
+  return kind === 'count' ? taskDetail() : terminalDetail(kind)
+}
+
+function resultForWriteKind(kind, replayed = false) {
+  return kind === 'count' ? countWriteResult(replayed) : terminalWriteResult(kind, replayed)
+}
+
+function reflectedDetailForWriteKind(kind) {
+  return kind === 'count' ? reflectedCountDetail() : reflectedTerminalDetail(kind)
+}
+
+async function invokeWriteKind(instance, kind) {
+  if (kind === 'count') {
+    return instance.submitCount({ currentTarget: { dataset: { zero: 'true' } } })
+  }
+  return instance.terminalAction({ currentTarget: { dataset: { action: kind } } })
 }
 
 test('formal stocktake list verifies identity and reads only the v1 namespace', async (context) => {
@@ -586,7 +614,7 @@ test('accepted count waits for its exact same-round projection and never posts a
   assert.equal(postCalls, 1)
 })
 
-test('two count dialogs can start only one in-flight POST', async (context) => {
+test('a count invocation lease permits only one dialog and one in-flight POST', async (context) => {
   const modalCallbacks = []
   let finishPost
   let postCalls = 0
@@ -641,15 +669,14 @@ test('two count dialogs can start only one in-flight POST', async (context) => {
 
   const first = instance.submitCount({ currentTarget: { dataset: { zero: 'false' } } })
   const second = instance.submitCount({ currentTarget: { dataset: { zero: 'false' } } })
-  assert.equal(modalCallbacks.length, 2)
+  assert.equal(modalCallbacks.length, 1)
+  await second
 
   modalCallbacks[0]({ confirm: true })
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(postCalls, 1)
   assert.equal(keyCalls, 1)
 
-  modalCallbacks[1]({ confirm: true })
-  await second
   assert.equal(postCalls, 1)
   assert.equal(keyCalls, 1)
 
@@ -871,7 +898,7 @@ test('count timeout followed by an unmatched completed scope stays pending and k
   assert.match(wxml, /X-Request-ID: \{\{pendingWriteRequestId\}\}/)
 })
 
-test('definitive count rejection clears coordinates before a new intent', async (context) => {
+test('first direct exact count no-effect rejection clears coordinates before a new intent', async (context) => {
   const keys = [`wxidem-${'c'.repeat(36)}`, `wxidem-${'d'.repeat(36)}`]
   const posts = []
   let keyIndex = 0
@@ -892,9 +919,11 @@ test('definitive count rejection clears coordinates before a new intent', async 
       async post(_pathname, _body, options) {
         posts.push(options)
         if (posts.length === 1) {
-          const error = new Error('version conflict')
-          error.status = 409
-          throw error
+          throw responseRejection(
+            412,
+            'precondition_failed',
+            'opening_count_state_invalid'
+          )
         }
         return countWriteResult()
       }
@@ -924,11 +953,542 @@ test('definitive count rejection clears coordinates before a new intent', async 
   }
   instance.setData({ draftObservations: [observation] })
   await instance.submitCount({ currentTarget: { dataset: { zero: 'false' } } })
+  assert.equal(instance._pendingWriteIntent, null)
+  assert.equal(keyIndex, 1)
   instance.setData({ draftObservations: [observation] })
   await instance.submitCount({ currentTarget: { dataset: { zero: 'false' } } })
 
   assert.deepEqual(posts.map((row) => row.idempotencyKey), keys)
   assert.equal(instance._pendingWriteIntent, null)
+})
+
+test('count and terminal rejection matrix retains every non-whitelisted first POST', async () => {
+  const cases = [
+    ['401', (code) => responseRejection(401, 'precondition_failed', code)],
+    ['403', (code) => responseRejection(403, 'precondition_failed', code)],
+    ['404', (code) => responseRejection(404, 'precondition_failed', code)],
+    ['408', (code) => responseRejection(408, 'precondition_failed', code)],
+    ['409 idempotency', () => responseRejection(409, 'conflict', 'idempotency_conflict')],
+    ['422', (code) => responseRejection(422, 'precondition_failed', code)],
+    ['425', (code) => responseRejection(425, 'precondition_failed', code)],
+    ['429', (code) => responseRejection(429, 'precondition_failed', code)],
+    ['500', (code) => responseRejection(500, 'precondition_failed', code)],
+    ['503', (code) => responseRejection(503, 'precondition_failed', code)],
+    ['504', (code) => responseRejection(504, 'precondition_failed', code)],
+    ['missing response proof', (code) => responseRejection(412, 'precondition_failed', code, false)],
+    ['non-boolean response proof', (code) => responseRejection(412, 'precondition_failed', code, 1)],
+    ['missing metadata', () => responseRejection(412, undefined, undefined)],
+    ['wrong category', (code) => responseRejection(412, 'invalid_request', code)],
+    ['unknown code', () => responseRejection(412, 'precondition_failed', 'unknown_rejection')],
+    ['database guard', () => responseRejection(412, 'precondition_failed', 'database_guard_rejected')],
+    ['wrong action code', (_code, kind) => responseRejection(
+      412,
+      'precondition_failed',
+      kind === 'count'
+        ? 'opening_finalize_state_invalid'
+        : (kind === 'post'
+            ? 'opening_close_reconciliation_pending'
+            : 'opening_count_state_invalid')
+    )],
+    ['header code wrong status', () => responseRejection(412, 'invalid_request', 'idempotency_key_invalid')],
+    ['header code wrong category', () => responseRejection(400, 'precondition_failed', 'x_request_id_invalid')],
+    ['unknown header code', () => responseRejection(400, 'invalid_request', 'unknown_rejection')]
+  ]
+  for (const kind of ['count', 'post', 'close']) {
+    const exactCode = kind === 'count'
+      ? 'opening_count_state_invalid'
+      : 'opening_finalize_state_invalid'
+    for (const [label, buildError] of cases) {
+      const error = buildError(exactCode, kind)
+      const posts = []
+      let keyCalls = 0
+      global.wx = {
+        showToast() {},
+        showModal(options) { options.success({ confirm: true }) }
+      }
+      global.getApp = () => ({ setUser: () => true })
+      const loaded = loadPage('../pages/formal-stocktake-detail/index', {
+        '../utils/api': {
+          createIdempotencyKey() {
+            keyCalls += 1
+            return IDEMPOTENCY_KEY
+          },
+          createRequestId: () => REQUEST_ID,
+          async get(pathname) {
+            if (pathname === '/auth/me') return USER
+            if (pathname === '/access/context') return CONTEXT
+            return detailForWriteKind(kind)
+          },
+          async post(_pathname, _body, options) {
+            posts.push(options)
+            throw error
+          }
+        },
+        '../utils/session': { ensureLogin: () => true }
+      })
+      try {
+        const instance = pageInstance(loaded.definition)
+        instance.setData({ taskId: TASK_ID })
+        await instance.load()
+        await invokeWriteKind(instance, kind)
+        const originalIntent = instance._pendingWriteIntent
+        await invokeWriteKind(instance, kind)
+
+        assert.equal(posts.length, 2, `${kind}/${label} must remain replayable`)
+        assert.equal(keyCalls, 1, `${kind}/${label} must reuse its original coordinates`)
+        assert.equal(instance._pendingWriteIntent, originalIntent, `${kind}/${label} must retain the same intent`)
+        assert.equal(instance._pendingWriteIntent.idempotencyKey, IDEMPOTENCY_KEY)
+        assert.equal(instance._pendingWriteIntent.postAttempted, true)
+        assert.equal(instance.data.writePending, true)
+        assert.deepEqual(posts[0], posts[1])
+      } finally {
+        loaded.restore()
+        delete global.wx
+        delete global.getApp
+      }
+    }
+  }
+})
+
+test('exact terminal no-effect rejections clear only the first intent and allow new coordinates', async () => {
+  for (const [action, code] of [
+    ['post', 'opening_finalize_state_invalid'],
+    ['close', 'opening_finalize_state_invalid'],
+    ['close', 'opening_close_reconciliation_pending']
+  ]) {
+    const keys = [`wxidem-${'c'.repeat(36)}`, `wxidem-${'d'.repeat(36)}`]
+    const requests = [`wxreq-${'e'.repeat(36)}`, `wxreq-${'f'.repeat(36)}`]
+    const posts = []
+    let keyIndex = 0
+    let requestIndex = 0
+    global.wx = {
+      showToast() {},
+      showModal(options) { options.success({ confirm: true }) }
+    }
+    global.getApp = () => ({ setUser: () => true })
+    const loaded = loadPage('../pages/formal-stocktake-detail/index', {
+      '../utils/api': {
+        createIdempotencyKey: () => keys[keyIndex++],
+        createRequestId: () => requests[requestIndex++],
+        async get(pathname) {
+          if (pathname === '/auth/me') return USER
+          if (pathname === '/access/context') return CONTEXT
+          return posts.length >= 2
+            ? reflectedTerminalDetail(action)
+            : terminalDetail(action)
+        },
+        async post(_pathname, _body, options) {
+          posts.push(options)
+          if (posts.length === 1) {
+            throw responseRejection(412, 'precondition_failed', code)
+          }
+          return terminalWriteResult(action)
+        }
+      },
+      '../utils/session': { ensureLogin: () => true }
+    })
+    try {
+      const instance = pageInstance(loaded.definition)
+      instance.setData({ taskId: TASK_ID })
+      await instance.load()
+      await invokeWriteKind(instance, action)
+      assert.equal(instance._pendingWriteIntent, null)
+      assert.equal(keyIndex, 1)
+      assert.equal(requestIndex, 1)
+
+      await invokeWriteKind(instance, action)
+      assert.deepEqual(posts.map((row) => row.idempotencyKey), keys)
+      assert.deepEqual(posts.map((row) => row.requestId), requests)
+      assert.equal(instance._pendingWriteIntent, null)
+    } finally {
+      loaded.restore()
+      delete global.wx
+      delete global.getApp
+    }
+  }
+})
+
+test('exact response-backed header rejections allow fresh coordinates for count and terminal writes', async () => {
+  for (const kind of ['count', 'post', 'close']) {
+    for (const code of ['idempotency_key_invalid', 'x_request_id_invalid']) {
+      const keys = [`wxidem-${'c'.repeat(36)}`, `wxidem-${'d'.repeat(36)}`]
+      const requests = [`wxreq-${'e'.repeat(36)}`, `wxreq-${'f'.repeat(36)}`]
+      const posts = []
+      let keyIndex = 0
+      let requestIndex = 0
+      global.wx = {
+        showToast() {},
+        showModal(options) { options.success({ confirm: true }) }
+      }
+      global.getApp = () => ({ setUser: () => true })
+      const loaded = loadPage('../pages/formal-stocktake-detail/index', {
+        '../utils/api': {
+          createIdempotencyKey: () => keys[keyIndex++],
+          createRequestId: () => requests[requestIndex++],
+          async get(pathname) {
+            if (pathname === '/auth/me') return USER
+            if (pathname === '/access/context') return CONTEXT
+            return posts.length >= 2
+              ? reflectedDetailForWriteKind(kind)
+              : detailForWriteKind(kind)
+          },
+          async post(_pathname, _body, options) {
+            posts.push(options)
+            if (posts.length === 1) {
+              throw responseRejection(400, 'invalid_request', code)
+            }
+            return resultForWriteKind(kind)
+          }
+        },
+        '../utils/session': { ensureLogin: () => true }
+      })
+      try {
+        const instance = pageInstance(loaded.definition)
+        instance.setData({ taskId: TASK_ID })
+        await instance.load()
+        await invokeWriteKind(instance, kind)
+        assert.equal(instance._pendingWriteIntent, null, `${kind}/${code} must clear its first intent`)
+        await invokeWriteKind(instance, kind)
+
+        assert.deepEqual(posts.map((row) => row.idempotencyKey), keys)
+        assert.deepEqual(posts.map((row) => row.requestId), requests)
+        assert.equal(instance._pendingWriteIntent, null)
+      } finally {
+        loaded.restore()
+        delete global.wx
+        delete global.getApp
+      }
+    }
+  }
+})
+
+test('an overlapping invocation cannot keep a stale dialog past a first strong rejection', async () => {
+  for (const [kind, code] of [
+    ['count', 'opening_count_state_invalid'],
+    ['post', 'opening_finalize_state_invalid'],
+    ['close', 'opening_close_reconciliation_pending']
+  ]) {
+    const modalCallbacks = []
+    let postCalls = 0
+    global.wx = {
+      showToast() {},
+      showModal(options) { modalCallbacks.push(options.success) }
+    }
+    global.getApp = () => ({ setUser: () => true })
+    const loaded = loadPage('../pages/formal-stocktake-detail/index', {
+      '../utils/api': {
+        createIdempotencyKey: () => IDEMPOTENCY_KEY,
+        createRequestId: () => REQUEST_ID,
+        async get(pathname) {
+          if (pathname === '/auth/me') return USER
+          if (pathname === '/access/context') return CONTEXT
+          return detailForWriteKind(kind)
+        },
+        async post() {
+          postCalls += 1
+          throw responseRejection(412, 'precondition_failed', code)
+        }
+      },
+      '../utils/session': { ensureLogin: () => true }
+    })
+    try {
+      const instance = pageInstance(loaded.definition)
+      instance.setData({ taskId: TASK_ID })
+      await instance.load()
+      const first = invokeWriteKind(instance, kind)
+      const overlapping = invokeWriteKind(instance, kind)
+
+      assert.equal(modalCallbacks.length, 1)
+      await overlapping
+      modalCallbacks[0]({ confirm: true })
+      await first
+
+      assert.equal(postCalls, 1)
+      assert.equal(instance._pendingWriteIntent, null)
+      assert.equal(instance._activeWriteInvocation, null)
+    } finally {
+      loaded.restore()
+      delete global.wx
+      delete global.getApp
+    }
+  }
+})
+
+test('cancelled and failed dialogs release the invocation lease without creating coordinates', async () => {
+  for (const [kind, resolution] of [
+    ['count', 'cancel'],
+    ['post', 'fail']
+  ]) {
+    const modals = []
+    let keyCalls = 0
+    let postCalls = 0
+    global.wx = {
+      showToast() {},
+      showModal(options) { modals.push(options) }
+    }
+    global.getApp = () => ({ setUser: () => true })
+    const loaded = loadPage('../pages/formal-stocktake-detail/index', {
+      '../utils/api': {
+        createIdempotencyKey() {
+          keyCalls += 1
+          return IDEMPOTENCY_KEY
+        },
+        createRequestId: () => REQUEST_ID,
+        async get(pathname) {
+          if (pathname === '/auth/me') return USER
+          if (pathname === '/access/context') return CONTEXT
+          return detailForWriteKind(kind)
+        },
+        async post() { postCalls += 1 }
+      },
+      '../utils/session': { ensureLogin: () => true }
+    })
+    try {
+      const instance = pageInstance(loaded.definition)
+      instance.setData({ taskId: TASK_ID })
+      await instance.load()
+      const first = invokeWriteKind(instance, kind)
+      assert.equal(modals.length, 1)
+      if (resolution === 'cancel') modals[0].success({ confirm: false })
+      else modals[0].fail()
+      await first
+
+      assert.equal(instance._activeWriteInvocation, null)
+      assert.equal(instance._pendingWriteIntent, undefined)
+      assert.equal(keyCalls, 0)
+      assert.equal(postCalls, 0)
+
+      const second = invokeWriteKind(instance, kind)
+      assert.equal(modals.length, 2)
+      modals[1].success({ confirm: false })
+      await second
+      assert.equal(instance._activeWriteInvocation, null)
+      assert.equal(postCalls, 0)
+    } finally {
+      loaded.restore()
+      delete global.wx
+      delete global.getApp
+    }
+  }
+})
+
+test('a first strong rejection cannot clear a different current intent reference', async (context) => {
+  const replacementKey = `wxidem-${'9'.repeat(36)}`
+  let instance
+  let replacementIntent
+  global.wx = {
+    showToast() {},
+    showModal(options) { options.success({ confirm: true }) }
+  }
+  global.getApp = () => ({ setUser: () => true })
+  const loaded = loadPage('../pages/formal-stocktake-detail/index', {
+    '../utils/api': {
+      createIdempotencyKey: () => IDEMPOTENCY_KEY,
+      createRequestId: () => REQUEST_ID,
+      async get(pathname) {
+        if (pathname === '/auth/me') return USER
+        if (pathname === '/access/context') return CONTEXT
+        return taskDetail()
+      },
+      async post() {
+        replacementIntent = Object.assign({}, instance._pendingWriteIntent, {
+          idempotencyKey: replacementKey
+        })
+        instance._pendingWriteIntent = replacementIntent
+        throw responseRejection(412, 'precondition_failed', 'opening_count_state_invalid')
+      }
+    },
+    '../utils/session': { ensureLogin: () => true }
+  })
+  context.after(() => {
+    loaded.restore()
+    delete global.wx
+    delete global.getApp
+  })
+  instance = pageInstance(loaded.definition)
+  instance.setData({ taskId: TASK_ID })
+  await instance.load()
+  await invokeWriteKind(instance, 'count')
+
+  assert.equal(instance._pendingWriteIntent, replacementIntent)
+  assert.equal(instance._pendingWriteIntent.idempotencyKey, replacementKey)
+  assert.equal(instance.data.writePending, true)
+})
+
+test('an unknown POST followed by a whitelisted rejection never clears original coordinates', async () => {
+  for (const [kind, status, category, code] of [
+    ['count', 412, 'precondition_failed', 'opening_count_state_invalid'],
+    ['post', 412, 'precondition_failed', 'opening_finalize_state_invalid'],
+    ['close', 412, 'precondition_failed', 'opening_close_reconciliation_pending'],
+    ['count', 400, 'invalid_request', 'idempotency_key_invalid'],
+    ['post', 400, 'invalid_request', 'x_request_id_invalid'],
+    ['close', 400, 'invalid_request', 'idempotency_key_invalid']
+  ]) {
+    const posts = []
+    let keyCalls = 0
+    global.wx = {
+      showToast() {},
+      showModal(options) { options.success({ confirm: true }) }
+    }
+    global.getApp = () => ({ setUser: () => true })
+    const loaded = loadPage('../pages/formal-stocktake-detail/index', {
+      '../utils/api': {
+        createIdempotencyKey() {
+          keyCalls += 1
+          return IDEMPOTENCY_KEY
+        },
+        createRequestId: () => REQUEST_ID,
+        async get(pathname) {
+          if (pathname === '/auth/me') return USER
+          if (pathname === '/access/context') return CONTEXT
+          return detailForWriteKind(kind)
+        },
+        async post(_pathname, _body, options) {
+          posts.push(options)
+          if (posts.length === 1) {
+            const error = new Error('network outcome unknown')
+            error.status = 0
+            error.responseReceived = false
+            throw error
+          }
+          throw responseRejection(status, category, code)
+        }
+      },
+      '../utils/session': { ensureLogin: () => true }
+    })
+    try {
+      const instance = pageInstance(loaded.definition)
+      instance.setData({ taskId: TASK_ID })
+      await instance.load()
+      await invokeWriteKind(instance, kind)
+      const originalIntent = instance._pendingWriteIntent
+      await invokeWriteKind(instance, kind)
+
+      assert.equal(posts.length, 2)
+      assert.equal(keyCalls, 1)
+      assert.equal(instance._pendingWriteIntent, originalIntent)
+      assert.deepEqual(posts[0], posts[1])
+      assert.equal(instance.data.writePending, true)
+    } finally {
+      loaded.restore()
+      delete global.wx
+      delete global.getApp
+    }
+  }
+})
+
+test('a strong-looking result-contract error is never treated as the direct POST rejection', async () => {
+  for (const [kind, code] of [
+    ['count', 'opening_count_state_invalid'],
+    ['post', 'opening_finalize_state_invalid'],
+    ['close', 'opening_close_reconciliation_pending']
+  ]) {
+    const contractError = responseRejection(412, 'precondition_failed', code)
+    const deceptiveResponse = {}
+    Object.defineProperty(deceptiveResponse, 'schema_version', {
+      enumerable: true,
+      get() { throw contractError }
+    })
+    let postCalls = 0
+    let keyCalls = 0
+    global.wx = {
+      showToast() {},
+      showModal(options) { options.success({ confirm: true }) }
+    }
+    global.getApp = () => ({ setUser: () => true })
+    const loaded = loadPage('../pages/formal-stocktake-detail/index', {
+      '../utils/api': {
+        createIdempotencyKey() {
+          keyCalls += 1
+          return IDEMPOTENCY_KEY
+        },
+        createRequestId: () => REQUEST_ID,
+        async get(pathname) {
+          if (pathname === '/auth/me') return USER
+          if (pathname === '/access/context') return CONTEXT
+          return detailForWriteKind(kind)
+        },
+        async post() {
+          postCalls += 1
+          return deceptiveResponse
+        }
+      },
+      '../utils/session': { ensureLogin: () => true }
+    })
+    try {
+      const instance = pageInstance(loaded.definition)
+      instance.setData({ taskId: TASK_ID })
+      await instance.load()
+      await invokeWriteKind(instance, kind)
+
+      assert.equal(postCalls, 1)
+      assert.equal(keyCalls, 1)
+      assert.ok(instance._pendingWriteIntent)
+      assert.equal(instance._pendingWriteIntent.idempotencyKey, IDEMPOTENCY_KEY)
+      assert.equal(instance._pendingWriteIntent.confirmedResponse, undefined)
+      assert.equal(instance.data.writePending, true)
+    } finally {
+      loaded.restore()
+      delete global.wx
+      delete global.getApp
+    }
+  }
+})
+
+test('a strong-looking detail-read rejection cannot clear an accepted POST response', async () => {
+  for (const [kind, code] of [
+    ['count', 'opening_count_state_invalid'],
+    ['post', 'opening_finalize_state_invalid'],
+    ['close', 'opening_close_reconciliation_pending']
+  ]) {
+    const readError = responseRejection(412, 'precondition_failed', code)
+    const toasts = []
+    let postCalls = 0
+    let keyCalls = 0
+    global.wx = {
+      showToast(options) { toasts.push(options) },
+      showModal(options) { options.success({ confirm: true }) }
+    }
+    global.getApp = () => ({ setUser: () => true })
+    const loaded = loadPage('../pages/formal-stocktake-detail/index', {
+      '../utils/api': {
+        createIdempotencyKey() {
+          keyCalls += 1
+          return IDEMPOTENCY_KEY
+        },
+        createRequestId: () => REQUEST_ID,
+        async get(pathname) {
+          if (postCalls) throw readError
+          if (pathname === '/auth/me') return USER
+          if (pathname === '/access/context') return CONTEXT
+          return detailForWriteKind(kind)
+        },
+        async post() {
+          postCalls += 1
+          return resultForWriteKind(kind)
+        }
+      },
+      '../utils/session': { ensureLogin: () => true }
+    })
+    try {
+      const instance = pageInstance(loaded.definition)
+      instance.setData({ taskId: TASK_ID })
+      await instance.load()
+      await invokeWriteKind(instance, kind)
+
+      assert.equal(postCalls, 1)
+      assert.equal(keyCalls, 1)
+      assert.ok(instance._pendingWriteIntent)
+      assert.ok(instance._pendingWriteIntent.confirmedResponse)
+      assert.equal(instance.data.writePending, true)
+      assert.equal(instance.data.pendingWriteRetryable, false)
+      assert.equal(toasts.some((toast) => toast.icon === 'success'), false)
+    } finally {
+      loaded.restore()
+      delete global.wx
+      delete global.getApp
+    }
+  }
 })
 
 test('uncertain post and close retries preserve independent exact coordinates', async (context) => {
@@ -1172,7 +1732,7 @@ test('accepted post and close wait for a compatible current projection without r
   }
 })
 
-test('two terminal dialogs cannot replay after the first response is accepted', async () => {
+test('a terminal invocation lease permits only one dialog and never replays an accepted response', async () => {
   for (const action of ['post', 'close']) {
     const modalCallbacks = []
     const toasts = []
@@ -1213,7 +1773,8 @@ test('two terminal dialogs cannot replay after the first response is accepted', 
 
       const first = instance.terminalAction({ currentTarget: { dataset: { action } } })
       const second = instance.terminalAction({ currentTarget: { dataset: { action } } })
-      assert.equal(modalCallbacks.length, 2)
+      assert.equal(modalCallbacks.length, 1)
+      await second
 
       modalCallbacks[0]({ confirm: true })
       await first
@@ -1221,8 +1782,6 @@ test('two terminal dialogs cannot replay after the first response is accepted', 
       assert.equal(instance._lastWriteIntentState, 'projection_pending')
       assert.ok(instance._pendingWriteIntent.confirmedResponse)
 
-      modalCallbacks[1]({ confirm: true })
-      await second
       assert.equal(postCalls, 1)
       assert.equal(keyCalls, 1)
       assert.equal(requestCalls, 1)
@@ -1230,7 +1789,7 @@ test('two terminal dialogs cannot replay after the first response is accepted', 
       await instance.terminalAction({
         currentTarget: { dataset: { action: action === 'post' ? 'close' : 'post' } }
       })
-      assert.equal(modalCallbacks.length, 2)
+      assert.equal(modalCallbacks.length, 1)
       assert.equal(postCalls, 1)
       assert.equal(toasts.some((toast) => toast.icon === 'success'), false)
     } finally {

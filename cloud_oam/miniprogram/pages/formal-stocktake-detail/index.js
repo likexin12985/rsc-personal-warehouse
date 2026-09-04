@@ -56,7 +56,8 @@ function confirmedWriteIntent(page, kind, path, body, metadata = {}) {
     body: stableBody,
     signature: writeIntentSignature(path, stableBody),
     idempotencyKey: api.createIdempotencyKey(),
-    requestId: api.createRequestId()
+    requestId: api.createRequestId(),
+    postAttempted: false
   }, metadata)
   page._pendingWriteIntent = intent
   showPendingWriteNotice(page, intent, 'in_flight')
@@ -233,8 +234,11 @@ function projectionContainsWriteResult(intent, result, detail) {
     : terminalProjectionContainsResult(intent, result, detail)
 }
 
-function blockWriteRequest(page, kind, label) {
-  if (page.data.submitting) {
+function blockWriteRequest(page, kind, label, invocation = null) {
+  if (
+    page.data.submitting ||
+    (page._activeWriteInvocation && page._activeWriteInvocation !== invocation)
+  ) {
     wx.showToast({ title: `${label}正在处理，请勿重复提交`, icon: 'none' })
     return true
   }
@@ -252,6 +256,22 @@ function blockWriteRequest(page, kind, label) {
     return true
   }
   return false
+}
+
+function beginWriteInvocation(page, label) {
+  if (page._activeWriteInvocation) {
+    wx.showToast({ title: `${label}正在处理，请勿重复提交`, icon: 'none' })
+    return null
+  }
+  const invocation = Symbol(label)
+  page._activeWriteInvocation = invocation
+  return invocation
+}
+
+function endWriteInvocation(page, invocation) {
+  if (page._activeWriteInvocation === invocation) {
+    page._activeWriteInvocation = null
+  }
 }
 
 function validateAndRecordCountResponse(intent, response) {
@@ -295,6 +315,43 @@ function uncertainWriteFailure(error) {
     error.status === 425 ||
     error.status >= 500
   )
+}
+
+const NO_EFFECT_WRITE_REJECTIONS = Object.freeze({
+  count: Object.freeze(['opening_count_state_invalid']),
+  post: Object.freeze(['opening_finalize_state_invalid']),
+  close: Object.freeze([
+    'opening_finalize_state_invalid',
+    'opening_close_reconciliation_pending'
+  ])
+})
+
+function isDefinitiveFirstPostRejection(intent, error, attempt) {
+  const actionCodes = intent && Object.prototype.hasOwnProperty.call(
+    NO_EFFECT_WRITE_REJECTIONS,
+    intent.kind
+  )
+    ? NO_EFFECT_WRITE_REJECTIONS[intent.kind]
+    : null
+  if (
+    !Array.isArray(actionCodes) ||
+    !error ||
+    error.responseReceived !== true ||
+    !attempt ||
+    attempt.firstDirectPost !== true ||
+    attempt.directPostRejected !== true ||
+    attempt.directPostRejection !== error
+  ) return false
+  if (
+    error.status === 400 &&
+    error.category === 'invalid_request'
+  ) {
+    return error.code === 'idempotency_key_invalid' ||
+      error.code === 'x_request_id_invalid'
+  }
+  return error.status === 412 &&
+    error.category === 'precondition_failed' &&
+    actionCodes.includes(error.code)
 }
 
 function writeIntentState(intent, detail) {
@@ -369,12 +426,17 @@ function reconcileWriteIntent(page, detail) {
   return state
 }
 
-async function recoverWriteFailure(page, intent, error) {
+async function recoverWriteFailure(page, intent, error, attempt) {
   if (!intent) return { uncertain: uncertainWriteFailure(error), refreshed: false, state: 'none' }
-  if (!uncertainWriteFailure(error)) {
+  if (
+    page._pendingWriteIntent === intent &&
+    intent.postAttempted === true &&
+    !hasRecordedWriteResponse(intent) &&
+    isDefinitiveFirstPostRejection(intent, error, attempt)
+  ) {
     clearWriteIntent(page, intent)
-    await page.load()
-    return { uncertain: false, refreshed: true, state: 'definitive' }
+    const refreshed = await page.load()
+    return { uncertain: false, refreshed, state: 'definitive' }
   }
   const refreshed = await page.load()
   return {
@@ -680,72 +742,94 @@ Page({
       wx.showToast({ title: '请先添加完整实盘明细，或使用零库存确认', icon: 'none' })
       return
     }
-    const confirmed = await new Promise((resolve) => wx.showModal({
-      title: zero ? '确认本范围为零库存？' : '提交本范围完整实盘？',
-      content: zero
-        ? '提交后本轮该范围将封存，不能继续追加明细。'
-        : `将一次性提交 ${this.data.draftObservations.length} 条实盘证据，提交后不能追加。`,
-      confirmText: '确认提交',
-      success: (result) => resolve(result.confirm),
-      fail: () => resolve(false)
-    }))
-    if (!confirmed || blockWriteRequest(this, 'count', '实盘')) return
-    this.setData({ submitting: true })
-    let intent = null
+    const invocation = beginWriteInvocation(this, '实盘')
+    if (!invocation) return
     try {
-      const path = `/v1/stocktakes/opening/${detail.task_id}/rounds/${detail.current_round.round_id}/scopes/${this.data.selectedScopeId}/count`
-      const body = {
-        physical_observations: zero ? [] : this.data.draftObservations,
-        zero_confirmed: zero
-      }
-      intent = confirmedWriteIntent(this, 'count', path, body, {
-        taskId: detail.task_id,
-        roundId: detail.current_round.round_id,
-        scopeId: this.data.selectedScopeId
-      })
-      if (hasRecordedWriteResponse(intent)) {
+      const confirmed = await new Promise((resolve) => wx.showModal({
+        title: zero ? '确认本范围为零库存？' : '提交本范围完整实盘？',
+        content: zero
+          ? '提交后本轮该范围将封存，不能继续追加明细。'
+          : `将一次性提交 ${this.data.draftObservations.length} 条实盘证据，提交后不能追加。`,
+        confirmText: '确认提交',
+        success: (result) => resolve(result.confirm),
+        fail: () => resolve(false)
+      }))
+      if (!confirmed || blockWriteRequest(this, 'count', '实盘', invocation)) return
+      this.setData({ submitting: true })
+      let intent = null
+      let firstDirectPost = false
+      let directPostRejected = false
+      let directPostRejection
+      try {
+        const path = `/v1/stocktakes/opening/${detail.task_id}/rounds/${detail.current_round.round_id}/scopes/${this.data.selectedScopeId}/count`
+        const body = {
+          physical_observations: zero ? [] : this.data.draftObservations,
+          zero_confirmed: zero
+        }
+        const pendingBeforeInvocation = this._pendingWriteIntent
+        intent = confirmedWriteIntent(this, 'count', path, body, {
+          taskId: detail.task_id,
+          roundId: detail.current_round.round_id,
+          scopeId: this.data.selectedScopeId
+        })
+        if (hasRecordedWriteResponse(intent)) {
+          showPendingWriteNotice(this, intent, 'projection_pending')
+          return
+        }
+        firstDirectPost = !pendingBeforeInvocation &&
+          this._pendingWriteIntent === intent &&
+          intent.postAttempted !== true
+        intent.postAttempted = true
+        let response
+        try {
+          response = await api.post(path, intent.body, {
+            idempotencyKey: intent.idempotencyKey,
+            requestId: intent.requestId
+          })
+        } catch (error) {
+          directPostRejected = true
+          directPostRejection = error
+          throw error
+        }
+        validateAndRecordCountResponse(intent, response)
         showPendingWriteNotice(this, intent, 'projection_pending')
-        return
-      }
-      const response = await api.post(path, intent.body, {
-        idempotencyKey: intent.idempotencyKey,
-        requestId: intent.requestId
-      })
-      validateAndRecordCountResponse(intent, response)
-      showPendingWriteNotice(this, intent, 'projection_pending')
-      const refreshed = await this.load()
-      const state = this._lastWriteIntentState || 'unresolved'
-      if (refreshed && state === 'confirmed') {
-        clearWriteIntent(this, intent)
-        this.setData({ draftObservations: [] })
-        wx.showToast({ title: '本范围实盘已封存', icon: 'success' })
-      } else {
+        const refreshed = await this.load()
+        const state = this._lastWriteIntentState || 'unresolved'
+        if (refreshed && state === 'confirmed') {
+          clearWriteIntent(this, intent)
+          this.setData({ draftObservations: [] })
+          wx.showToast({ title: '本范围实盘已封存', icon: 'success' })
+        } else {
+          wx.showToast({
+            title: refreshed
+              ? '提交已受理，但回读未确认生效；禁止创建新请求'
+              : '提交已受理，但回读失败；请恢复网络后刷新确认',
+            icon: 'none'
+          })
+        }
+      } catch (error) {
+        const outcome = await recoverWriteFailure(
+          this,
+          intent || this._pendingWriteIntent,
+          error,
+          { firstDirectPost, directPostRejected, directPostRejection }
+        )
+        const uncertainMessage = !outcome.refreshed
+          ? '提交结果未确认且回读失败，禁止新请求；请恢复网络后刷新'
+          : (outcome.state === 'retryable'
+              ? '提交结果未确认；已回读，再次确认将复用原请求'
+              : '对象状态虽已变化但无法匹配原请求；仍待确认，请联系管理员核验')
         wx.showToast({
-          title: refreshed
-            ? '提交已受理，但回读未确认生效；禁止创建新请求'
-            : '提交已受理，但回读失败；请恢复网络后刷新确认',
+          title: outcome.uncertain
+            ? uncertainMessage
+            : (error.message || '实盘提交失败，已重新读取'),
           icon: 'none'
         })
+      } finally {
+        this.setData({ submitting: false })
       }
-    } catch (error) {
-      const outcome = await recoverWriteFailure(
-        this,
-        intent || this._pendingWriteIntent,
-        error
-      )
-      const uncertainMessage = !outcome.refreshed
-        ? '提交结果未确认且回读失败，禁止新请求；请恢复网络后刷新'
-        : (outcome.state === 'retryable'
-            ? '提交结果未确认；已回读，再次确认将复用原请求'
-            : '对象状态虽已变化但无法匹配原请求；仍待确认，请在 PC 核验')
-      wx.showToast({
-        title: outcome.uncertain
-          ? uncertainMessage
-          : (error.message || '实盘提交失败，已重新读取'),
-        icon: 'none'
-      })
     } finally {
-      this.setData({ submitting: false })
+      endWriteInvocation(this, invocation)
     }
   },
 
@@ -758,71 +842,93 @@ Page({
       !detail ||
       !((action === 'post' && detail.canPost) || (action === 'close' && detail.canClose))
     ) return
-    const confirmed = await new Promise((resolve) => wx.showModal({
-      title: action === 'post' ? '确认期初过账？' : '确认关闭盘点？',
-      content: action === 'post'
-        ? '过账只建立库存事实，不等于任务关闭。过账后仍需单独核对并关闭。'
-        : '仅在账面、实盘、流水与 SN 均完成对账后关闭。',
-      confirmText: action === 'post' ? '确认过账' : '确认关闭',
-      success: (result) => resolve(result.confirm),
-      fail: () => resolve(false)
-    }))
-    if (!confirmed || blockWriteRequest(this, action, '状态')) return
-    this.setData({ submitting: true })
-    let intent = null
+    const invocation = beginWriteInvocation(this, '状态')
+    if (!invocation) return
     try {
-      const path = `/v1/stocktakes/opening/${detail.task_id}/${action}`
-      const body = { expected_version: detail.task_version }
-      intent = confirmedWriteIntent(this, action, path, body, {
-        taskId: detail.task_id,
-        roundId: detail.current_round ? detail.current_round.round_id : null,
-        expectedVersion: detail.task_version
-      })
-      if (hasRecordedWriteResponse(intent)) {
+      const confirmed = await new Promise((resolve) => wx.showModal({
+        title: action === 'post' ? '确认期初过账？' : '确认关闭盘点？',
+        content: action === 'post'
+          ? '过账只建立库存事实，不等于任务关闭。过账后仍需单独核对并关闭。'
+          : '仅在账面、实盘、流水与 SN 均完成对账后关闭。',
+        confirmText: action === 'post' ? '确认过账' : '确认关闭',
+        success: (result) => resolve(result.confirm),
+        fail: () => resolve(false)
+      }))
+      if (!confirmed || blockWriteRequest(this, action, '状态', invocation)) return
+      this.setData({ submitting: true })
+      let intent = null
+      let firstDirectPost = false
+      let directPostRejected = false
+      let directPostRejection
+      try {
+        const path = `/v1/stocktakes/opening/${detail.task_id}/${action}`
+        const body = { expected_version: detail.task_version }
+        const pendingBeforeInvocation = this._pendingWriteIntent
+        intent = confirmedWriteIntent(this, action, path, body, {
+          taskId: detail.task_id,
+          roundId: detail.current_round ? detail.current_round.round_id : null,
+          expectedVersion: detail.task_version
+        })
+        if (hasRecordedWriteResponse(intent)) {
+          showPendingWriteNotice(this, intent, 'projection_pending')
+          return
+        }
+        firstDirectPost = !pendingBeforeInvocation &&
+          this._pendingWriteIntent === intent &&
+          intent.postAttempted !== true
+        intent.postAttempted = true
+        let response
+        try {
+          response = await api.post(path, intent.body, {
+            idempotencyKey: intent.idempotencyKey,
+            requestId: intent.requestId
+          })
+        } catch (error) {
+          directPostRejected = true
+          directPostRejection = error
+          throw error
+        }
+        validateAndRecordTerminalResponse(intent, response)
         showPendingWriteNotice(this, intent, 'projection_pending')
-        return
-      }
-      const response = await api.post(path, intent.body, {
-        idempotencyKey: intent.idempotencyKey,
-        requestId: intent.requestId
-      })
-      validateAndRecordTerminalResponse(intent, response)
-      showPendingWriteNotice(this, intent, 'projection_pending')
-      const refreshed = await this.load()
-      const state = this._lastWriteIntentState || 'unresolved'
-      if (refreshed && state === 'confirmed') {
-        clearWriteIntent(this, intent)
-        const postTitle = this.data.detail && this.data.detail.status === 'closed'
-          ? '过账已确认，当前已关闭'
-          : '已过账，尚未关闭'
-        wx.showToast({ title: action === 'post' ? postTitle : '盘点已关闭', icon: 'success' })
-      } else {
+        const refreshed = await this.load()
+        const state = this._lastWriteIntentState || 'unresolved'
+        if (refreshed && state === 'confirmed') {
+          clearWriteIntent(this, intent)
+          const postTitle = this.data.detail && this.data.detail.status === 'closed'
+            ? '过账已确认，当前已关闭'
+            : '已过账，尚未关闭'
+          wx.showToast({ title: action === 'post' ? postTitle : '盘点已关闭', icon: 'success' })
+        } else {
+          wx.showToast({
+            title: refreshed
+              ? '状态请求已受理，但回读未确认生效；禁止创建新请求'
+              : '状态请求已受理，但回读失败；请恢复网络后刷新确认',
+            icon: 'none'
+          })
+        }
+      } catch (error) {
+        const outcome = await recoverWriteFailure(
+          this,
+          intent || this._pendingWriteIntent,
+          error,
+          { firstDirectPost, directPostRejected, directPostRejection }
+        )
+        const uncertainMessage = !outcome.refreshed
+          ? '状态结果未确认且回读失败，禁止新请求；请恢复网络后刷新'
+          : (outcome.state === 'retryable'
+              ? '状态结果未确认；已回读，再次确认将复用原请求'
+              : '对象状态虽已变化但无法匹配原请求；仍待确认，请联系管理员核验')
         wx.showToast({
-          title: refreshed
-            ? '状态请求已受理，但回读未确认生效；禁止创建新请求'
-            : '状态请求已受理，但回读失败；请恢复网络后刷新确认',
+          title: outcome.uncertain
+            ? uncertainMessage
+            : (error.message || '状态操作失败，已重新读取'),
           icon: 'none'
         })
+      } finally {
+        this.setData({ submitting: false })
       }
-    } catch (error) {
-      const outcome = await recoverWriteFailure(
-        this,
-        intent || this._pendingWriteIntent,
-        error
-      )
-      const uncertainMessage = !outcome.refreshed
-        ? '状态结果未确认且回读失败，禁止新请求；请恢复网络后刷新'
-        : (outcome.state === 'retryable'
-            ? '状态结果未确认；已回读，再次确认将复用原请求'
-            : '对象状态虽已变化但无法匹配原请求；仍待确认，请在 PC 核验')
-      wx.showToast({
-        title: outcome.uncertain
-          ? uncertainMessage
-          : (error.message || '状态操作失败，已重新读取'),
-        icon: 'none'
-      })
     } finally {
-      this.setData({ submitting: false })
+      endWriteInvocation(this, invocation)
     }
   }
 })
