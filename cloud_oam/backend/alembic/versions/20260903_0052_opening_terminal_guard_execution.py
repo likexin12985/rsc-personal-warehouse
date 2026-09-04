@@ -135,7 +135,7 @@ LEGACY_COMMIT_BODY_SHA256 = (
     "7f7e740c0faffaa61910adddef31fc7aaa469972ca5b264aa842e05ff298acba"
 )
 FIXED_COMMIT_BODY_SHA256 = (
-    "a74e28ac1b09a7f92ef0179b93e3357d23fd1d7afb7d6c859b1e333ff3699a84"
+    "620447501293b1304d3fa0d7b73bbfb0939619dd9ff528dc1bfdd8232b4be36f"
 )
 LEGACY_ACCOUNT_BODY_SHA256 = (
     "2e52965c8086e01fc242e1ddb0205eb961304faf588b04f28182588cbdb4728a"
@@ -1434,12 +1434,23 @@ def _current_authorization_sql(
         )
         ELSE NULL::uuid
     END"""
-    denied_organization_coverage = _organization_descends_sql(
-        deny_target_organization,
-        "denied_assignment.scope_id::uuid",
-        require_active=False,
-        alias_suffix=f"deny_{alias_suffix}",
-    )
+    if scope_type_sql == "'national'":
+        if scope_id_sql != "'*'":
+            raise ValueError("national authorization requires wildcard scope")
+        # An organization-scoped deny cannot cover a national target.  More
+        # importantly, omitting this unreachable graph prevents PostgreSQL
+        # from constant-folding the canonical '*' scope id as a UUID while
+        # parsing a SQL-language function.
+        denied_organization_coverage = "FALSE"
+    else:
+        if scope_id_sql == "'*'":
+            raise ValueError("wildcard scope requires national authorization")
+        denied_organization_coverage = _organization_descends_sql(
+            deny_target_organization,
+            "denied_assignment.scope_id::uuid",
+            require_active=False,
+            alias_suffix=f"deny_{alias_suffix}",
+        )
     return f"""EXISTS (
         SELECT 1
           FROM public.role_assignments AS {assignment}
@@ -1591,6 +1602,14 @@ def _current_entitlement_target_sql(
         "post_opening",
     }:
         raise ValueError("unsupported current entitlement target")
+    if target_scope_type_sql == "'national'":
+        if target_scope_id_sql != "'*'":
+            raise ValueError("national entitlement requires wildcard scope")
+        literal_national_target = True
+    else:
+        if target_scope_id_sql == "'*'":
+            raise ValueError("wildcard scope requires national entitlement")
+        literal_national_target = False
 
     def coverage(assignment: str, suffix: str) -> str:
         target_organization = f"""CASE
@@ -1605,12 +1624,15 @@ def _current_entitlement_target_sql(
             )
             ELSE NULL::uuid
         END"""
-        organization_coverage = _organization_descends_sql(
-            target_organization,
-            f"{assignment}.scope_id::uuid",
-            require_active=False,
-            alias_suffix=f"target_{suffix}",
-        )
+        if literal_national_target:
+            organization_coverage = "FALSE"
+        else:
+            organization_coverage = _organization_descends_sql(
+                target_organization,
+                f"{assignment}.scope_id::uuid",
+                require_active=False,
+                alias_suffix=f"target_{suffix}",
+            )
         return f"""(
             (
                 {assignment}.scope_type = 'national'
@@ -8443,7 +8465,7 @@ SCOPE_COMPLETION_BODY_SHA256 = (
     "b56ff329437860ba3f3011e695df0b56606368cbb33c61ae7b921b3b07a18681"
 )
 REVIEW_GRAPH_BODY_SHA256 = (
-    "875ee69968300febafc15cace5b5df7d1f4520ecbff7d071d6132858f205e1ad"
+    "165945a7bd299e9e4f11b5b2c4e775036793ef5bee8b2c2320a3b1235cbc4847"
 )
 RECOUNT_GRAPH_BODY_SHA256 = (
     "0372b5fe0a8c2316c6d73f9152495bfabc3b65a3c4e258b180c5df29188ed7a3"
@@ -8452,7 +8474,7 @@ DISPOSITION_GRAPH_BODY_SHA256 = (
     "a311f39beff3ec429129d14abf51ea0a1abb7d31971df5248978f44420ba8ccb"
 )
 TERMINAL_GRAPH_BODY_SHA256 = (
-    "33b466605ce587ee7a3505d523e45f8bc6e877060e22a988169724a0fdbdec76"
+    "00e0bcb715b683a0ccd366aca3a88444c4b7f63bd333a32fd662c5a170f179c7"
 )
 
 

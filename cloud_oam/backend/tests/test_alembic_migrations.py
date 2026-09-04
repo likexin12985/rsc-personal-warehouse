@@ -5255,6 +5255,74 @@ def test_0052_exports_exact_head_and_inherited_dependency_catalogs() -> None:
     assert sum(row[7] == "A" for row in module.OPENING_0052_TRIGGER_CATALOG) == 16
 
 
+def test_0052_national_authorization_omits_unreachable_uuid_coverage() -> None:
+    module = _load_0052_migration_module()
+    national_authorization = module._current_authorization_sql(
+        user_id_sql="review.reviewer_user_id",
+        person_id_sql="review.reviewer_person_id",
+        assignment_id_sql="review.reviewer_role_assignment_id",
+        authorization_version_sql="review.authorization_version",
+        occurred_at_sql="review.reviewed_at",
+        role_code_sql="'admin'",
+        scope_type_sql="'national'",
+        scope_id_sql="'*'",
+        permission_resource="stocktake",
+        permission_action="review_headquarters",
+        allow_scheduled=True,
+        alias_suffix="national_compile_guard",
+    )
+
+    assert "('*')::uuid" not in national_authorization
+    assert "organization_lineage_deny_national_compile_guard" not in (
+        national_authorization
+    )
+    assert "AND (FALSE)" in national_authorization
+    national_entitlement = module._current_entitlement_target_sql(
+        user_id_sql="review.reviewer_user_id",
+        assignment_id_sql="review.reviewer_role_assignment_id",
+        permission_resource="stocktake",
+        permission_action="review_headquarters",
+        target_scope_type_sql="'national'",
+        target_scope_id_sql="'*'",
+        alias_suffix="national_entitlement_compile_guard",
+    )
+    assert "('*')::uuid" not in national_entitlement
+    assert "organization_lineage_target_" not in national_entitlement
+    assert national_entitlement.count("AND (FALSE)") == 2
+    for body in (
+        module.REVIEW_GRAPH_BODY,
+        module.TERMINAL_GRAPH_BODY,
+        module.FIXED_TASK_BRANCH,
+    ):
+        assert "('*')::uuid" not in body
+
+    with pytest.raises(ValueError, match="national authorization"):
+        module._current_authorization_sql(
+            user_id_sql="review.reviewer_user_id",
+            person_id_sql="review.reviewer_person_id",
+            assignment_id_sql="review.reviewer_role_assignment_id",
+            authorization_version_sql="review.authorization_version",
+            occurred_at_sql="review.reviewed_at",
+            role_code_sql="'admin'",
+            scope_type_sql="'national'",
+            scope_id_sql="'not-wildcard'",
+            permission_resource="stocktake",
+            permission_action="review_headquarters",
+            allow_scheduled=True,
+            alias_suffix="invalid_national_compile_guard",
+        )
+    with pytest.raises(ValueError, match="wildcard scope"):
+        module._current_entitlement_target_sql(
+            user_id_sql="review.reviewer_user_id",
+            assignment_id_sql="review.reviewer_role_assignment_id",
+            permission_resource="stocktake",
+            permission_action="review_region",
+            target_scope_type_sql="'organization'",
+            target_scope_id_sql="'*'",
+            alias_suffix="invalid_wildcard_compile_guard",
+        )
+
+
 def test_0052_parses_named_helpers_and_closes_event_ownership(
     monkeypatch,
 ) -> None:

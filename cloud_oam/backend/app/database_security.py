@@ -3404,7 +3404,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_opening_terminal_graph_complete_0022", "uuid, uuid"):
         "1eaf4e9bae4bac31f821ba1470d70059d9249d5459b7463e89683b03f0dc73d2",
     ("rsc_require_opening_terminal_graph_0022", ""):
-        "a74e28ac1b09a7f92ef0179b93e3357d23fd1d7afb7d6c859b1e333ff3699a84",
+        "620447501293b1304d3fa0d7b73bbfb0939619dd9ff528dc1bfdd8232b4be36f",
     ("rsc_require_opening_observation_account_0023", ""):
         "c0079cfdaf15a4e9f9b66d76596828c0901b322d32ff4ea63fbbadc3acff163b",
     ("rsc_opening_start_graph_complete_0052", "uuid, boolean"):
@@ -3418,7 +3418,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
         "uuid, uuid, uuid, boolean",
     ): "b56ff329437860ba3f3011e695df0b56606368cbb33c61ae7b921b3b07a18681",
     ("rsc_opening_review_complete_0052", "uuid, boolean"):
-        "875ee69968300febafc15cace5b5df7d1f4520ecbff7d071d6132858f205e1ad",
+        "165945a7bd299e9e4f11b5b2c4e775036793ef5bee8b2c2320a3b1235cbc4847",
     ("rsc_opening_recount_complete_0052", "uuid, boolean"):
         "0372b5fe0a8c2316c6d73f9152495bfabc3b65a3c4e258b180c5df29188ed7a3",
     (
@@ -3428,7 +3428,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     (
         "rsc_opening_terminal_side_effects_complete_0052",
         "uuid, boolean",
-    ): "33b466605ce587ee7a3505d523e45f8bc6e877060e22a988169724a0fdbdec76",
+    ): "00e0bcb715b683a0ccd366aca3a88444c4b7f63bd333a32fd662c5a170f179c7",
     ("rsc_require_opening_task_insert_graph_0052", ""):
         "9241a81d1261fe3e3a81b81e631893b9e1b4f82112379338e09eedbb5f6e1668",
     ("rsc_require_opening_count_write_current_0052", ""):
