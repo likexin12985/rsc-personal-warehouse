@@ -136,6 +136,7 @@ jobs:
             backend/tests/test_opening_stocktake_service.py \
             backend/tests/test_opening_stocktake_review_service.py \
             backend/tests/test_opening_recount_assignee_options.py \
+            backend/tests/test_opening_count_command_status.py \
             backend/tests/test_formal_opening_stocktake_write_api.py \
             backend/tests/test_formal_opening_stocktake_api.py \
             backend/tests/test_formal_opening_reconciliation_api.py \

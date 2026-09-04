@@ -13605,6 +13605,10 @@ def _seed_0047_stocktake_inventory(
         OpeningRecountAssigneeOptionError,
         list_opening_recount_assignee_options,
     )
+    from app.formal_services.opening_count_command_status import (
+        OpeningCountCommandStatusError,
+        opening_count_command_status,
+    )
     from app.formal_services.opening_stocktake_review import (
         OpeningStocktakeReviewItemInput,
         SubmitOpeningStocktakeReviewCommand,
@@ -13811,6 +13815,73 @@ def _seed_0047_stocktake_inventory(
                 round_row.count_manifest_sha256,
                 *counts,
             )
+
+    def assert_historical_count_status(
+        *, task_id, round_id, scope_id, trace_id, round_no, sealed,
+    ):
+        from app.foundation_models import AuditEvent, OutboxEvent, StateTransitionEvent
+        from app.inventory_models import InventoryMovement, InventoryTransaction, StockBalance
+
+        def durable_snapshot():
+            with Session(api_engine) as session:
+                task_version = session.scalar(
+                    select(FormalStocktakeTask.version).where(FormalStocktakeTask.id == task_id)
+                )
+                facts = tuple(
+                    session.scalar(select(func.count()).select_from(model))
+                    for model in (AuditEvent, OutboxEvent, StateTransitionEvent,
+                                  InventoryTransaction, InventoryMovement, StocktakeScopeCountCompletion)
+                )
+                balances = tuple(session.execute(select(
+                    StockBalance.stock_account_id, StockBalance.quantity,
+                    StockBalance.version, StockBalance.ledger_cursor,
+                ).order_by(StockBalance.stock_account_id)).all())
+                return task_version, facts, balances
+
+        before_status = durable_snapshot()
+        # This recovery deliberately reuses the canonical owner-lock graph.
+        # It is non-mutating, but must NOT be labelled a READ ONLY transaction.
+        with Session(api_engine) as session:
+            identity = current_principal(session, assignee_user_id)
+            result = opening_count_command_status(
+                session, actor=identity, task_id=task_id, round_id=round_id,
+                scope_id=scope_id, actor_person_id=identity.person_id,
+                actor_authorization_version=identity.authorization_version,
+                trace_request_id=trace_id,
+            )
+            assert result.lookup_status == "confirmed"
+            assert result.command is not None
+            assert result.command.round_no == round_no
+            assert result.command.scope_completed is True
+            assert result.command.caused_round_submission is sealed
+            assert result.trace_request_id == trace_id
+            assert result.task_id == task_id and result.round_id == round_id
+            assert result.scope_id == scope_id
+            assert result.actor_person_id == identity.person_id
+            assert result.actor_authorization_version == identity.authorization_version
+            assert set(result.command.model_dump()) == {
+                "completion_id", "round_no", "completed_at", "scope_completed", "caused_round_submission",
+            }
+        with Session(api_engine) as session:
+            identity = current_principal(session, assignee_user_id)
+            unseen = opening_count_command_status(
+                session, actor=identity, task_id=task_id, round_id=round_id,
+                scope_id=scope_id, actor_person_id=identity.person_id,
+                actor_authorization_version=identity.authorization_version,
+                trace_request_id=f"trace-never-sent-{uuid.uuid4().hex}",
+            )
+            assert unseen.lookup_status == "not_observed" and unseen.command is None
+        with Session(api_engine) as session:
+            identity = current_principal(session, assignee_user_id)
+            with pytest.raises(OpeningCountCommandStatusError) as stale_identity:
+                opening_count_command_status(
+                    session, actor=identity, task_id=task_id, round_id=round_id,
+                    scope_id=scope_id, actor_person_id=identity.person_id,
+                    actor_authorization_version=identity.authorization_version + 1,
+                    trace_request_id=trace_id,
+                )
+            assert stale_identity.value.code == "opening_count_command_status_authorization_changed"
+        assert durable_snapshot() == before_status
 
     def reject_noncanonical_difference_completion_hash(
         engine,
@@ -14474,6 +14545,15 @@ def _seed_0047_stocktake_inventory(
             assert sealed.round_sealed is True
             session.commit()
 
+        assert_historical_count_status(
+            task_id=isolation_task_id, round_id=isolation_round_id, scope_id=winner_scope_id,
+            trace_id=f"trace-pg16-opening-concurrent-winner-{opening_token}", round_no=1, sealed=False,
+        )
+        assert_historical_count_status(
+            task_id=isolation_task_id, round_id=isolation_round_id, scope_id=competing_scope_id,
+            trace_id=f"trace-pg16-opening-concurrent-peer-{opening_token}", round_no=1, sealed=True,
+        )
+
     set_material_tracking_mode("serial")
     try:
         with pytest.raises(
@@ -14520,6 +14600,11 @@ def _seed_0047_stocktake_inventory(
         assert counted.has_pending_verification is True
         opening_scope_id = scope.id
         session.commit()
+
+    assert_historical_count_status(
+        task_id=started.task_id, round_id=started.initial_round_id, scope_id=opening_scope_id,
+        trace_id=f"trace-pg16-opening-count-{opening_token}", round_no=1, sealed=True,
+    )
 
     with Session(api_engine) as session:
         initial_task = session.get(FormalStocktakeTask, started.task_id)
@@ -15058,6 +15143,11 @@ def _seed_0047_stocktake_inventory(
             recount_open_task.submitted_at,
         ) == ("counting", 2, initial_submitted_at)
 
+    assert_historical_count_status(
+        task_id=started.task_id, round_id=started.initial_round_id, scope_id=opening_scope_id,
+        trace_id=f"trace-pg16-opening-count-{opening_token}", round_no=1, sealed=True,
+    )
+
     with Session(api_engine, expire_on_commit=False) as session:
         recount_counted = _reveal_pg16_service_database_error(
             api_engine,
@@ -15334,6 +15424,15 @@ def _seed_0047_stocktake_inventory(
         assert opening_posted.pending_control_difference_count == 0
         session.commit()
 
+    assert_historical_count_status(
+        task_id=started.task_id, round_id=started.initial_round_id, scope_id=opening_scope_id,
+        trace_id=f"trace-pg16-opening-count-{opening_token}", round_no=1, sealed=True,
+    )
+    assert_historical_count_status(
+        task_id=started.task_id, round_id=opened_recount.next_round_id, scope_id=opening_scope_id,
+        trace_id=f"trace-pg16-opening-recount-count-{opening_token}", round_no=2, sealed=True,
+    )
+
     terminal_helper = sql.Identifier(migration_0052.TERMINAL_GRAPH_FUNCTION)
     with psycopg.connect(**_admin_parameters()) as connection:
         with connection.cursor() as cursor:
@@ -15447,6 +15546,15 @@ SELECT posting.total_quantity::text,
             material_version.payload_jsonb
         )
         session.commit()
+
+    assert_historical_count_status(
+        task_id=started.task_id, round_id=started.initial_round_id, scope_id=opening_scope_id,
+        trace_id=f"trace-pg16-opening-count-{opening_token}", round_no=1, sealed=True,
+    )
+    assert_historical_count_status(
+        task_id=started.task_id, round_id=opened_recount.next_round_id, scope_id=opening_scope_id,
+        trace_id=f"trace-pg16-opening-recount-count-{opening_token}", round_no=2, sealed=True,
+    )
 
     # Even a fully closed opening task retains state/event/audit evidence that
     # the legacy 0051 runtime cannot protect.  Downgrade therefore fails closed
