@@ -41,9 +41,10 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 ### 2026-09-06 当前续开发状态
 
 当前工作分支 `codex/production-readiness-gates` 的本地与远端均为准确 SHA
-`d95a3fe61eaa656d0d144d307a4ab9348c048194`。该提交新增盘点历史 cutoff replay、SN/逐件、
-多范围、尾部身份重验及 owner-lock 顺序的静态契约预检；Client release gate
-`33979437995` 与 PostgreSQL 16 release gate `33979438009` 均已通过。该提交没有新增迁移，
+`18dfbd72b7d578aff5886029304a5afadb75b8f2`。其父提交 `d95a3fe61eaa656d0d144d307a4ab9348c048194`
+已通过 Client release gate `33979437995` 与 PostgreSQL 16 release gate `33979438009`；当前
+`18dfbd7` 的独立门禁仍以 GitHub 最新结果为准。该提交新增盘点历史 cutoff replay、SN/逐件、
+多范围、尾部身份重验及 owner-lock 顺序的静态契约预检；该提交没有新增迁移，
 也没有把静态源码契约当作真库业务验收。
 
 当前真库样本仍为单范围、hard freeze、非 SN。下一项必须先完成准确 SHA 的 SN + cutoff replay
