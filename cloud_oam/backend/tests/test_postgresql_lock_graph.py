@@ -11,6 +11,7 @@ import app.formal_services.opening_stocktake_count as count_service
 import app.formal_services.opening_stocktake_finalize as finalize_service
 import app.formal_services.opening_stocktake_recount as recount_service
 import app.formal_services.opening_stocktake_review as review_service
+import app.formal_services.stocktake_posting as posting_service
 from app.formal_services.postgresql_lock_graph import (
     lock_inventory_reference_graph,
     lock_inventory_serial_graph,
@@ -391,3 +392,17 @@ def test_opening_writers_use_plain_role_reproof_after_audit_head() -> None:
     assert "if lock_rows:" in inspect.getsource(
         finalize_service._authorize_finalizer
     )
+
+
+def test_nonopening_posting_reproves_authorization_after_batch_audit() -> None:
+    source = inspect.getsource(posting_service._post_approved_stocktake_differences)
+    batch_anchor = source.index("_post_prelocked_stocktake_inventory_batch(")
+    audit_anchor = source.index("_verify_source_audits(", batch_anchor)
+    tail_anchor = source.index("_reprove_posting_authorization(", audit_anchor)
+    completion_anchor = source.index("_persist_posting_completion(", tail_anchor)
+    assert audit_anchor < tail_anchor < completion_anchor
+
+    helper_source = inspect.getsource(posting_service._reprove_posting_authorization)
+    assert "_require_current_stocktake_difference_finalizer" in helper_source
+    assert "_current_admin_assignment" in helper_source
+    assert "stocktake_posting_authorization_changed" in helper_source

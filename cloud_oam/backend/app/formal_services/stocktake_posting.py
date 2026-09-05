@@ -468,6 +468,11 @@ def _post_approved_stocktake_differences(
             db, stream_key=INVENTORY_STREAM_KEY
         )
         _verify_source_audits(db, task=task, approval=approval, proof=audit_proof)
+        _reprove_posting_authorization(
+            db,
+            actor=current,
+            assignment=assignment,
+        )
         _validate_persisted_posting_completion(
             db,
             task=task,
@@ -554,6 +559,15 @@ def _post_approved_stocktake_differences(
         task=task,
         approval=approval,
         proof=batch.audit_proof,
+    )
+    # The inventory batch and its source audits are the last mutable business
+    # facts before the immutable completion seal.  Re-read the full principal
+    # and the exact national-admin assignment here so a stale or altered
+    # authorization can never be sealed as a successful posting.
+    current, assignment = _reprove_posting_authorization(
+        db,
+        actor=current,
+        assignment=assignment,
     )
     completion = _persist_posting_completion(
         db,
@@ -2941,6 +2955,114 @@ def _current_admin_assignment(
             "总部管理员授权已失效",
         )
     return assignment
+
+
+def _reprove_posting_authorization(
+    db: Session,
+    *,
+    actor: FormalPrincipal,
+    assignment: RoleAssignment,
+) -> tuple[FormalPrincipal, RoleAssignment]:
+    """Revalidate the posting actor immediately before sealing completion.
+
+    The writer already holds the canonical principal graph locks.  This second
+    read is intentional: the inventory batch and source-audit proof must not
+    be followed by a completion row carrying a principal or assignment
+    different from the one that was authorized at the start of the command.
+    All drift is collapsed to one stable, retry-safe boundary error.
+    """
+
+    try:
+        current = inventory_service._require_current_stocktake_difference_finalizer(
+            db, actor
+        )
+        current_assignment = _current_admin_assignment(db, current)
+    except (inventory_service.InventoryPostingError, StocktakeDifferencePostingError) as exc:
+        _fail(
+            "stocktake_posting_authorization_changed",
+            "precondition_failed",
+            "盘点过账期间人员或授权发生变化，请回滚并重新读取",
+            cause=exc,
+        )
+
+    assignment_coordinate = (
+        assignment.id,
+        assignment.user_id,
+        assignment.role_id,
+        assignment.scope_type,
+        assignment.scope_id,
+        assignment.status,
+        assignment.valid_from,
+        assignment.valid_to,
+        assignment.revoked_at,
+        assignment.revoked_by,
+    )
+    current_assignment_coordinate = (
+        current_assignment.id,
+        current_assignment.user_id,
+        current_assignment.role_id,
+        current_assignment.scope_type,
+        current_assignment.scope_id,
+        current_assignment.status,
+        current_assignment.valid_from,
+        current_assignment.valid_to,
+        current_assignment.revoked_at,
+        current_assignment.revoked_by,
+    )
+    def principal_authorization_coordinate(
+        principal: FormalPrincipal,
+    ) -> tuple[tuple[object, ...], tuple[object, ...]]:
+        grants = tuple(
+            sorted(
+                (
+                    (
+                        str(row.assignment_id),
+                        row.role_code,
+                        row.scope_type,
+                        row.scope_id,
+                        _timestamp(row.valid_from),
+                        _timestamp(row.valid_to) if row.valid_to is not None else None,
+                    )
+                    for row in principal.assignments
+                )
+            )
+        )
+        entitlements = tuple(
+            sorted(
+                (
+                    (
+                        str(row.assignment_id),
+                        row.role_code,
+                        row.scope_type,
+                        row.scope_id,
+                        row.resource,
+                        row.action,
+                        row.field_code,
+                        row.effect,
+                    )
+                    for row in principal.entitlements
+                )
+            )
+        )
+        return grants, entitlements
+
+    if (
+        current.user_id != actor.user_id
+        or current.person_id != actor.person_id
+        or current.account_status != actor.account_status
+        or current.employment_status != actor.employment_status
+        or current.authorization_version != actor.authorization_version
+        or current.access_mode != actor.access_mode
+        or principal_authorization_coordinate(current)
+        != principal_authorization_coordinate(actor)
+        or current_assignment_coordinate != assignment_coordinate
+    ):
+        _fail(
+            "stocktake_posting_authorization_changed",
+            "precondition_failed",
+            "盘点过账期间人员或授权发生变化，请回滚并重新读取",
+        )
+    return current, current_assignment
 
 
 def _validate_supplied_actor(actor: FormalPrincipal) -> FormalPrincipal:

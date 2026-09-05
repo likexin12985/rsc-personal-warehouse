@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 import importlib.util
@@ -304,6 +305,31 @@ def test_posting_requires_exact_version_and_exact_idempotency_request(
             version=expected_version - 1,
         )
     assert conflict.value.code == "stocktake_posting_idempotency_conflict"
+
+
+def test_posting_tail_authorization_reproof_fails_closed(posting_world, monkeypatch):
+    actor = posting_world.principals["admin"]
+    assignment = posting_service._current_admin_assignment(posting_world.db, actor)
+    drifted = replace(
+        actor,
+        authorization_version=actor.authorization_version + 1,
+    )
+    monkeypatch.setattr(
+        inventory_service,
+        "_require_current_stocktake_difference_finalizer",
+        lambda _db, _actor: drifted,
+    )
+
+    with pytest.raises(StocktakeDifferencePostingError) as caught:
+        posting_service._reprove_posting_authorization(
+            posting_world.db,
+            actor=actor,
+            assignment=assignment,
+        )
+
+    assert caught.value.code == "stocktake_posting_authorization_changed"
+    assert caught.value.category == "precondition_failed"
+    assert caught.value.http_status_code == 412
 
 
 def test_accepted_loss_uses_one_union_batch_and_appends_immutable_ledger(
