@@ -422,7 +422,15 @@ def _manager_can_manage_region(
             ),
         )
         try:
-            if selected.allows(
+            # A selected manager grant must allow the region without dropping
+            # a matching deny from any other effective grant on this actor.
+            if actor.allows(
+                db,
+                "stocktake",
+                "manage",
+                target_scope_type="organization",
+                target_scope_id=str(region_org_id),
+            ) and selected.allows(
                 db,
                 "stocktake",
                 "manage",
