@@ -41,7 +41,7 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 ### 2026-09-06 当前续开发状态
 
 当前工作分支 `codex/production-readiness-gates` 的本地与远端 HEAD 均为准确 SHA
-`508d91553823d0bd135b8d1f41d187f4393a0b1c`（仅文档更新）；最新已验收功能代码基线为
+`fd4a9ea6da842c28a5a823a40835686bc45d1302`（仅文档更新）；最新已验收功能代码基线为
 `f482b8eeff11a4479937be2e2287bc14a3e6a8a3`。其父提交 `18dfbd72b7d578aff5886029304a5afadb75b8f2`（再之前为
 `d95a3fe61eaa656d0d144d307a4ab9348c048194`）
 已通过 Client release gate `33979437995` 与 PostgreSQL 16 release gate `33979438009`；当前
@@ -56,7 +56,7 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 post/close 命令状态持久证据与两端跨重启恢复仍未完成。
 
 `f482b8e` 的过账恢复切片已通过 PostgreSQL 16 release gate（run `33982740333`）；当前 HEAD
-`508d915` 的 Client release gate（run `33983847280`）也已通过；随后
+`fd4a9ea` 的 Client release gate（run `33984126951`）也已通过；此前
 文档提交 `d98c6df` 的 Client release gate（run `33982782831`）也已通过。该切片的非 opening
 盘点新增只读
 `/{task_id}/post-differences-command-status`，使用精确 `X-Request-ID` 映射并重证审计、状态转换、
@@ -440,8 +440,8 @@ Git 仓库根目录设置在当前 `oam` 目录，但根 `.gitignore` 默认拒�
 > 请接管当前私有仓库中的 RSC 个人仓项目。先完整阅读仓库根目录 AGENTS.md、
 > docs/RSC个人仓与物资运营扩展系统_正式生产版需求与架构设计_V1.0.md 和
 > cloud_oam/README.md。后续所有代码、文档、迁移、状态和验收必须遵循这些基线。
-> 当前分支 codex/production-readiness-gates，当前 HEAD 为 docs-only 后继 508d915，最新已验收功能代码为
-> f482b8e，迁移 head 为 20260905_0062；f482b8e 的 PostgreSQL 16 run 为 33982740333，当前文档 Client run 为 33983847280。
+> 当前分支 codex/production-readiness-gates，当前 HEAD 为 docs-only 后继 fd4a9ea，最新已验收功能代码为
+> f482b8e，迁移 head 为 20260905_0062；f482b8e 的 PostgreSQL 16 run 为 33982740333，当前文档 Client run 为 33984126951。
 > 先读 cloud_oam/docs/DAILY_COUNT_HISTORY_TERMINAL_ACCEPTANCE.md 中最新准确 SHA 验证状态。
 > 已实施专用有界 owner、released 冻结历史证明、递归祖先审计及一次完整附件锁；不放宽写侧守卫。
 > 历史 b57f3c3 已补齐专用库位真实零期初6步独立提交，再保留原日常+1盘盈；新增7项静态回归、
