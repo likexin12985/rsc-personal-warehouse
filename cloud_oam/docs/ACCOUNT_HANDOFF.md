@@ -58,6 +58,7 @@ post/close 命令状态持久证据与两端跨重启恢复仍未完成。
 复核命令状态查询目前只完成只读设计审查，未写入代码：`stocktake_reviews` 没有可重建的历史
 `task_version`，不能把当前任务版本冒充命令结果。下一阶段须先做前向迁移并同步审计、触发器、
 权限和数据库安全清单；在此之前保持未知结果阻塞。
+迁移字段和验收边界已整理在 `cloud_oam/docs/REVIEW_COMMAND_STATUS_MIGRATION_PLAN.md`，接管后先按该计划做 0063 前向迁移设计评审。
 
 `f482b8e` 的过账恢复切片已通过 PostgreSQL 16 release gate（run `33982740333`）；当前 HEAD
 `fd4a9ea` 的 Client release gate（run `33984126951`）也已通过；此前

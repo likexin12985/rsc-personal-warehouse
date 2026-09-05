@@ -21,6 +21,7 @@ run `33981032060` 均已通过。当前 HEAD 为文档后继 `fd4a9ea`，其 Cli
 复核命令状态查询已完成只读设计审查但未实现：现有 `stocktake_reviews` 未持久化可重建的历史
 `task_version`，直接复用当前任务版本会制造错误恢复证据。正式实现前必须新增前向迁移，明确
 结果版本字段及其审计、触发器、权限和安全清单同步；在此之前不得返回“已复核”历史状态。
+具体字段、兼容策略、函数指纹和验收矩阵见 `cloud_oam/docs/REVIEW_COMMAND_STATUS_MIGRATION_PLAN.md`。
 
 随后提交 `f482b8e` 的过账恢复切片已通过 PostgreSQL 16 release gate（run `33982740333`）：
 非 opening 盘点新增只读
