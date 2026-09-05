@@ -240,12 +240,21 @@ Web 定向 `61 passed`、全套 `425 passed`，TypeScript 和构建通过；小�
 [run 33930872181](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33930872181)
 已因最终客户端候选取代而取消，不计通过。最终 `e54765a` 的
 [run 33931135022](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33931135022)
-正在执行；结果未出前最新全绿仍为 `31b1ae5`，不得按本地测试提前放行。
+已成功（workflow_dispatch、attempt 1、job `101209827262`，2026-09-04T23:53:50Z 至
+2026-09-05T00:07:29Z）：静态 `1412 passed, 1 skipped, 1 warning`（551.04 秒），动态
+`1 passed, 1 warning`（186.29 秒），包括清理的全部步骤成功。最新完整验收代码为
+`e54765a10b4d465c6073df69e3fa97296ef90f93`；后续目录安全候选必须独立验证。
 
 PC `8df5447`、`d553ef5` 已推送持久计数协调与页面接线，Web 676 项、TypeScript/构建
 通过（662.91 KB 既有大包提示）。小程序 `d6f166c5d2e95b281ca4e548dbfa66fdc30994dd`
 已完成持久计数模块/页面及独立复核，完整 516 项通过（根任务复跑 3.99 秒）。
 PC `e54765a10b4d465c6073df69e3fa97296ef90f93` 补齐小数/SN/重复维度前置校验后，
 最终 Web 全套 691 项（15.39 秒）、TypeScript/构建通过（663.44 KB 大包提示仍属 P2）。
-未执行封存、非计数动作持久恢复及生产 UAT 尚未完成。此处客户端证据不得替换上述失败或
-进行中的真库结果；详细故障矩阵见 `OPENING_COUNT_RECOVERY_ACCEPTANCE.md`。
+未执行封存、非计数动作持久恢复及生产 UAT 尚未完成。客户端、真库、容器和真机证据须分别
+记录，不能互相替代；详细故障矩阵见 `OPENING_COUNT_RECOVERY_ACCEPTANCE.md`。
+
+`ca1a45c` / `e54765a` 相同后端/边缘/测试及工作流的本地全量回归为
+`2389 passed, 1 skipped`（938.69 秒），退出码 0；运行期间这些源码保持冻结并经 Git 比较确认。
+构建声明提交 `2e188208d892e87cd46467bf6e1a4de455eb673a` 未改变包解析图，仅精确固定
+12 项声明和 pnpm 版本；独立目录离线冻结安装 111 包复用、0 下载后，pnpm exec Web 691 项
+（16.30 秒）、类型及构建通过。该验证不代表 Docker Node 22/Alpine 或客户端 CI 已通过。

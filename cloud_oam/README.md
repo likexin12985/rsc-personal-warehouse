@@ -580,12 +580,13 @@ readiness，保持函数身份、权限、安全属性和触发器绑定。有�
 [run 33930872181](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33930872181)
 已被最终客户端候选取代并取消，不计通过。最终 `e54765a` 的
 [run 33931135022](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33931135022)
-正在执行，未宣告通过。
+已通过该准确 SHA：静态 `1412 passed, 1 skipped, 1 warning`（551.04 秒），动态
+`1 passed, 1 warning`（186.29 秒）；容器清理等全部步骤成功。后续目录授权修复须另跑门禁。
 PC 基础 `8df5447` 与页面 `d553ef5` 已保存：Web 676 项与 TypeScript/构建通过，已接持久 count
 恢复、单次 POST 和同源多标签任务写屏障。小程序 `d6f166c` 已完成持久计数接线及独立复核，
 516 项通过；PC `e54765a` 进一步补齐合法小数、数值上限、SN 单件和精确重复维度前置校验，
-最终 Web 691 项及 TypeScript/构建通过。不代表其他写意图、未执行封存或上述 PostgreSQL
-门禁已完成。故障矩阵与真机待验边界见
+最终 Web 691 项及 TypeScript/构建通过。不代表其他写意图、未执行封存或预生产/生产放行
+已完成。故障矩阵与真机待验边界见
 [计数恢复验收清单](docs/OPENING_COUNT_RECOVERY_ACCEPTANCE.md)。
 完整剩余边界见
 [一期剩余验收清单](docs/PHASE1_REMAINING_ACCEPTANCE_20260905.md)。
