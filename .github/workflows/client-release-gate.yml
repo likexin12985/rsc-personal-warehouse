@@ -1,0 +1,82 @@
+{
+  "name": "Client release gate",
+  "on": {
+    "workflow_dispatch": {},
+    "pull_request": {
+      "branches": ["main"]
+    },
+    "push": {
+      "branches": ["main", "codex/production-readiness-gates"]
+    }
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "concurrency": {
+    "group": "client-release-gate-${{ github.ref }}",
+    "cancel-in-progress": true
+  },
+  "jobs": {
+    "client-release-gate": {
+      "name": "Web and WeChat client release gate",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 15,
+      "defaults": {
+        "run": {
+          "shell": "bash"
+        }
+      },
+      "steps": [
+        {
+          "name": "Check out reviewed source (checkout v7.0.1)",
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "persist-credentials": false
+          }
+        },
+        {
+          "name": "Set up Node 24.19.0 (setup-node v6.0.0)",
+          "uses": "actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903",
+          "with": {
+            "node-version": "24.19.0",
+            "check-latest": false,
+            "package-manager-cache": false
+          }
+        },
+        {
+          "name": "Install and verify pinned client toolchain",
+          "run": "test \"$(node --version)\" = \"v24.19.0\"\nnpm install --global --ignore-scripts --no-audit --no-fund pnpm@11.19.0\ntest \"$(pnpm --version)\" = \"11.19.0\""
+        },
+        {
+          "name": "Check repository safety",
+          "run": "bash cloud_oam/scripts/verify_repository_safety.sh"
+        },
+        {
+          "name": "Install frozen Web dependencies without lifecycle scripts",
+          "working-directory": "cloud_oam/frontend",
+          "run": "pnpm install --frozen-lockfile --ignore-scripts"
+        },
+        {
+          "name": "Run Web tests",
+          "working-directory": "cloud_oam/frontend",
+          "run": "pnpm test"
+        },
+        {
+          "name": "Check Web types",
+          "working-directory": "cloud_oam/frontend",
+          "run": "pnpm exec tsc -b"
+        },
+        {
+          "name": "Build Web assets without deployment",
+          "working-directory": "cloud_oam/frontend",
+          "run": "pnpm exec vite build"
+        },
+        {
+          "name": "Run WeChat mini-program and gate contract tests",
+          "working-directory": "cloud_oam/miniprogram",
+          "run": "node --test tests/*.test.js"
+        }
+      ]
+    }
+  }
+}
