@@ -28,7 +28,7 @@ from test_stocktake_difference_service import _submitted
 from test_stocktake_review_recount_service import review_world, _prepare  # noqa: F401
 from test_stocktake_recount_execution_service import (
     recount_world, _recount_clocks, _open_recount, _count_recount,
-    _prepare_two_scope_initial,
+    _prepare_two_scope_initial, _evaluate_recount, RECOUNT_REVIEWED_AT,
 )  # noqa: F401
 from test_stocktake_safe_posting_service import posting_world, _approve, _post  # noqa: F401
 from test_stocktake_close_service import (
@@ -81,6 +81,17 @@ def _assert_blocked(world, target, statuses=(403, 404, 412, 503), **changes):
     with pytest.raises(service.StocktakeCountCommandStatusError) as caught:
         _lookup(world, target, **changes)
     assert caught.value.http_status_code in statuses
+
+
+def test_pg16_durable_snapshot_supports_composite_evidence_keys(world):
+    from app.stocktake_models import StocktakeCountSerial
+    from test_postgresql16_release_gate import _ordered_durable_model_rows
+    _initial(world)
+    rows = _ordered_durable_model_rows(world.db, (AuditEvent, StocktakeCountSerial))
+    assert rows[0] and rows[1] == ()
+    expected = tuple(world.db.execute(select(*AuditEvent.__table__.c).order_by(AuditEvent.id)).all())
+    assert rows[0] == expected
+    assert not hasattr(StocktakeCountSerial.__table__.c, "id")
 
 
 def test_initial_confirmation_is_minimal_historical_fact(world):
@@ -153,6 +164,101 @@ def test_initial_history_and_recount_history_remain_separate(recount_world):
     assert result.command.caused_round_submission is True
     assert _lookup(recount_world, old).command.round_no == 1
     _assert_blocked(recount_world, new, operation="initial_count", statuses=(400, 404, 412, 503))
+
+
+def _three_round_history(world, monkeypatch, *, stage="third_submitted"):
+    from app.formal_services import (
+        stocktake_recount, stocktake_recount_count,
+        stocktake_recount_difference, stocktake_review,
+    )
+
+    task, initial = _prepare(world, key="status-three")
+    difference, _opened2, round2 = _open_recount(world, task, initial, key="status-three-r2")
+    _count_recount(world, task, round2, difference.scope_id,
+                   key="status-three-r2", counted_qty=Decimal("4.000"))
+    _evaluate_recount(world, task, round2, key="status-three-r2")
+    monkeypatch.setattr(stocktake_review, "_database_now", lambda _db: RECOUNT_REVIEWED_AT)
+    monkeypatch.setattr(stocktake_recount, "_database_now",
+                        lambda _db: RECOUNT_REVIEWED_AT + timedelta(minutes=5))
+    _difference2, _opened3, round3 = _open_recount(world, task, round2, key="status-three-r3")
+    if stage != "third_open":
+        monkeypatch.setattr(stocktake_recount_count, "_database_now",
+                            lambda _db: RECOUNT_REVIEWED_AT + timedelta(minutes=10))
+        _count_recount(world, task, round3, difference.scope_id,
+                       key="status-three-r3", counted_qty=Decimal("5.000"))
+    if stage == "third_evaluated":
+        monkeypatch.setattr(stocktake_recount_difference, "_database_now",
+                            lambda _db: RECOUNT_REVIEWED_AT + timedelta(minutes=15))
+        evaluated = _evaluate_recount(world, task, round3, key="status-three-r3")
+        assert evaluated.difference_count == 0
+    world.db.commit()
+    assert task.current_round_no == 3
+    return tuple(SimpleNamespace(
+        task_id=task.id, scope_id=difference.scope_id, round_id=round_row.id,
+        trace=trace, operation="initial_count" if number == 1 else "recount_count",
+        round_no=number,
+    ) for number, round_row, trace in (
+        (1, initial, "trace-status-three-count"),
+        (2, round2, "trace-status-three-r2-count"),
+        (3, round3, "trace-status-three-r3-count"),
+    ))
+
+
+@pytest.mark.parametrize("stage", ["third_open", "third_submitted", "third_evaluated"])
+def test_three_round_history_keeps_each_original_completion_without_writes(recount_world, monkeypatch, stage):
+    targets = _three_round_history(recount_world, monkeypatch, stage=stage)
+    statements = []
+    def capture(_conn, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement)
+    engine = recount_world.db.get_bind()
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        # The caller, not the GET service, owns the existing transaction.
+        recount_world.db.execute(select(StocktakeRound.id).limit(1))
+        transaction = recount_world.db.get_transaction()
+        for method in ("flush", "commit", "rollback"):
+            monkeypatch.setattr(recount_world.db, method,
+                                lambda *_a, **_k: pytest.fail("historical GET changed caller transaction"))
+        for target in targets:
+            result = _lookup(recount_world, target, operation=target.operation)
+            assert result.round_id == target.round_id and result.operation == target.operation
+            if stage == "third_open" and target.round_no == 3:
+                assert result.lookup_status == "not_observed" and result.command is None
+                continue
+            completion = recount_world.db.scalar(select(StocktakeScopeCountCompletion).where(
+                StocktakeScopeCountCompletion.round_id == target.round_id,
+                StocktakeScopeCountCompletion.scope_id == target.scope_id).execution_options(autoflush=False))
+            assert result.lookup_status == "confirmed" and completion is not None
+            assert result.command.completion_id == completion.id
+            assert result.command.round_no == target.round_no
+            assert service.count._as_utc(result.command.completed_at) == service.count._as_utc(completion.completed_at)
+            assert result.command.scope_completed is True and result.command.caused_round_submission is True
+            assert _lookup(recount_world, target, operation=target.operation,
+                           trace_request_id="trace-three-never-sent").lookup_status == "not_observed"
+        assert recount_world.db.get_transaction() is transaction
+        assert not recount_world.db.new and not recount_world.db.dirty and not recount_world.db.deleted
+        assert statements and all(sql.lstrip().upper().startswith("SELECT") for sql in statements)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+
+
+@pytest.mark.parametrize("source,target", [(0, 1), (1, 2), (2, 1)])
+def test_three_round_history_rejects_trace_belonging_to_another_round(recount_world, monkeypatch, source, target):
+    targets = _three_round_history(recount_world, monkeypatch)
+    _assert_blocked(recount_world, targets[target], operation=targets[target].operation,
+                    trace_request_id=targets[source].trace, statuses=(503,))
+
+
+@pytest.mark.parametrize("source_round", [1, 2])
+def test_third_round_history_rejects_corrupt_recursive_source_evidence(recount_world, monkeypatch, source_round):
+    targets = _three_round_history(recount_world, monkeypatch)
+    completion = recount_world.db.scalar(select(StocktakeScopeCountCompletion).where(
+        StocktakeScopeCountCompletion.round_id == targets[source_round - 1].round_id))
+    completion.evidence_manifest_sha256 = "0" * 64
+    recount_world.db.commit()
+    _assert_blocked(recount_world, targets[2], operation="recount_count", statuses=(503,))
+    _assert_blocked(recount_world, targets[2], operation="recount_count",
+                    trace_request_id="trace-corrupt-source-never-sent", statuses=(503,))
 
 
 @pytest.mark.parametrize("closed", [False, True])

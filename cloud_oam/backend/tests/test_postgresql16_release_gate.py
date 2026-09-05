@@ -13380,6 +13380,38 @@ def _seed_0047_stocktake_inventory(
             )
             session.flush()
 
+            # A separate freeze owner for the multi-round recovery proof. The
+            # difference peer above deliberately remains submitted/frozen.
+            recount_location_id = uuid.uuid4()
+            recount_location = StockLocation(
+                id=recount_location_id,
+                code=f"PG16-RECOUNT-{recount_location_id.hex[:16].upper()}",
+                name="PostgreSQL 16 非期初多轮复盘隔离库位",
+                location_type="region", owner_org_id=region_org_id,
+                parent_id=None, custodian_person_id=manager_person.id,
+                status="active", created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
+            session.add(recount_location)
+            session.flush()
+            session.add(CustodyAssignment(
+                id=uuid.uuid4(), location_id=recount_location_id,
+                custodian_person_id=manager_person.id,
+                valid_from=now - timedelta(days=1), valid_to=None,
+                handover_case_id=None, created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            ))
+            recount_account = StockAccount(
+                id=uuid.uuid4(), owner_org_id=region_org_id,
+                custodian_person_id=None, location_id=recount_location_id,
+                material_id=material.id, condition_code="new",
+                availability_bucket="available", lot_id=None,
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
+            session.add(recount_account)
+            session.flush()
+
             control_sync_run_id = uuid.uuid4()
             control_scope_key = (
                 f"oam_inventory_control:region:{region_org_id}"
@@ -13549,6 +13581,8 @@ def _seed_0047_stocktake_inventory(
                 "deadline": now + timedelta(days=2),
                 "difference_peer_account_id": difference_peer_account.id,
                 "difference_peer_location_id": difference_peer_location.id,
+                "recount_location_id": recount_location_id,
+                "recount_account_id": recount_account.id,
                 "location_id": location.id,
                 "material_external_object_id": material_external_object.id,
                 "material_external_version_id": material_external_version.id,
@@ -16267,6 +16301,347 @@ def _assert_0057_cross_task_principal_material_lock_order(
     return evaluated
 
 
+def _ordered_durable_model_rows(session, models):
+    """Full-row snapshots also support evidence with composite primary keys."""
+    return tuple(
+        tuple(session.execute(select(*model.__table__.c)
+              .order_by(*model.__table__.primary_key.columns)).all())
+        for model in models
+    )
+
+
+def _assert_nonopening_multiround_count_status(
+    api_engine, *, fixture, actor_user_id, assignee_user_id,
+    idempotency_hmac_secret,
+) -> None:
+    """Real PG/API-role writes and HTTP reads; no patched clock or proof rows.
+
+    This one-scope task stays submitted on its isolated freeze owner until the
+    disposable cluster is removed. It does not post, release or rewrite stock.
+    Authentication transport is injected, but principal loading, authorization,
+    route, service, PG locks and durable evidence are real.
+    """
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.database import get_db
+    from app.dependencies import get_formal_principal
+    from app.formal_services import stocktake_count as initial_count
+    from app.formal_services import stocktake_difference as initial_difference
+    from app.formal_services import stocktake_recount as recount
+    from app.formal_services import stocktake_recount_count as recount_count
+    from app.formal_services import stocktake_recount_difference as recount_difference
+    from app.formal_services import stocktake_review as review
+    from app.formal_services.stocktake_task import (
+        create_stocktake_task_draft, start_stocktake_task,
+    )
+    from app.foundation_models import AuditChainHead, AuditEvent, OutboxEvent, StateTransitionEvent
+    from app.inventory_models import (
+        InventoryLedgerHead, InventoryMovement, InventoryTransaction, StockBalance,
+    )
+    from app.routers import formal_stocktakes
+    from app.stocktake_models import (
+        FormalStocktakeScope, FormalStocktakeTask, InventoryFreeze,
+        StocktakeCountLine, StocktakeCountObservation, StocktakeCountSerial,
+        StocktakeDifference, StocktakeDifferenceSetCompletion,
+        StocktakeRecountCase, StocktakeRecountScopeAssignment, StocktakeReview,
+        StocktakeRound, StocktakeRoundSubmission, StocktakeScopeCountCompletion,
+        StocktakeSnapshotLine,
+    )
+    from app.stocktake_task_schemas import (
+        StocktakeScopeSelectionIn, StocktakeTaskCreateIn, StocktakeTaskStartIn,
+    )
+    from app.formal_access import load_formal_principal
+
+    token = uuid.uuid4().hex
+
+    def current_principal(session, user_id):
+        return load_formal_principal(
+            session, user_id, now=session.scalar(select(func.clock_timestamp())),
+        )
+
+    def write(service, user_id, key, **arguments):
+        with Session(api_engine, expire_on_commit=False) as session:
+            assert session.scalar(text("SELECT current_user")) == "star_oam_api"
+            result = _reveal_pg16_service_database_error(
+                api_engine,
+                lambda: service(
+                    session, actor=current_principal(session, user_id),
+                    idempotency_key=f"pg16-multiround-{token}-{key}",
+                    idempotency_hmac_secret=idempotency_hmac_secret,
+                    trace_request_id=f"trace-multiround-{token}-{key}",
+                    **arguments,
+                ),
+            )
+            session.commit()
+            return result
+
+    def inventory_snapshot(session):
+        return (
+            tuple(session.execute(select(
+                *InventoryLedgerHead.__table__.c,
+            ).order_by(InventoryLedgerHead.id)).all()),
+            tuple(session.execute(select(
+                *StockBalance.__table__.c,
+            ).order_by(StockBalance.stock_account_id)).all()),
+            _ordered_durable_model_rows(session, (InventoryTransaction, InventoryMovement)),
+        )
+
+    def durable_snapshot():
+        with Session(api_engine) as session:
+            # Compare full stored rows for every fact touched by this chain,
+            # not just counts (which would miss an in-place update).
+            facts = _ordered_durable_model_rows(session, (
+                    AuditChainHead, AuditEvent, OutboxEvent, StateTransitionEvent,
+                    FormalStocktakeTask, FormalStocktakeScope, InventoryFreeze,
+                    StocktakeSnapshotLine, StocktakeRound, StocktakeCountLine,
+                    StocktakeCountObservation, StocktakeCountSerial,
+                    StocktakeScopeCountCompletion, StocktakeRoundSubmission,
+                    StocktakeDifference, StocktakeDifferenceSetCompletion,
+                    StocktakeReview, StocktakeRecountCase,
+                    StocktakeRecountScopeAssignment,
+            ))
+            return inventory_snapshot(session), facts
+
+    with Session(api_engine) as session:
+        inventory_before = inventory_snapshot(session)
+
+    created = write(
+        create_stocktake_task_draft, actor_user_id, "create",
+        draft=StocktakeTaskCreateIn(
+            task_type="sample", region_org_id=fixture["region_org_id"],
+            blind_count=True, deadline=fixture["deadline"],
+            note="PG16 isolated non-opening three-round historical recovery",
+            scopes=(StocktakeScopeSelectionIn(
+                owner_org_id=fixture["region_org_id"],
+                location_id=fixture["recount_location_id"],
+                assignee_person_id=fixture["assignee_person_id"],
+                scope_mode="filtered", material_id=fixture["material_id"],
+                condition_code="new", availability_bucket="available",
+                freeze_mode="hard",
+            ),),
+        ),
+    )
+    started = write(
+        start_stocktake_task, actor_user_id, "start", task_id=created.task_id,
+        command=StocktakeTaskStartIn(expected_version=created.version),
+    )
+    task_id = created.task_id
+    with Session(api_engine) as session:
+        scope_id = session.scalars(select(FormalStocktakeScope.id).where(
+            FormalStocktakeScope.task_id == task_id,
+        )).one()
+        snapshot = session.scalars(select(StocktakeSnapshotLine).where(
+            StocktakeSnapshotLine.task_id == task_id,
+        )).one()
+        assert snapshot.stock_account_id == fixture["recount_account_id"]
+        assert snapshot.book_qty == Decimal("0.000")
+        sentinel = current_principal(session, assignee_user_id)
+        sentinel_person_id = sentinel.person_id
+        sentinel_version = sentinel.authorization_version
+
+    api = FastAPI()
+    api.include_router(formal_stocktakes.router, prefix="/api")
+    request_actor = {"user_id": assignee_user_id}
+    request_transactions = []
+
+    def request_db():
+        with Session(api_engine) as session:
+            assert session.scalar(text("SELECT current_user")) == "star_oam_api"
+            transaction = session.get_transaction()
+            try:
+                yield session
+            finally:
+                assert session.get_transaction() is transaction
+                assert not session.new and not session.dirty and not session.deleted
+                request_transactions.append(True)
+                # The caller, not the GET, ends its locking transaction.
+                session.rollback()
+
+    def request_principal(session: Session = Depends(get_db)):
+        return current_principal(session, request_actor["user_id"])
+
+    api.dependency_overrides[get_db] = request_db
+    api.dependency_overrides[get_formal_principal] = request_principal
+    history = []
+
+    def lookup(client, round_id, round_no, trace, *, expected="confirmed",
+               operation=None, person_id=None, status_code=200):
+        before = durable_snapshot()
+        calls_before = len(request_transactions)
+        response = client.get(
+            f"/api/v1/stocktakes/{task_id}/rounds/{round_id}/scopes/{scope_id}/count-command-status",
+            params={
+                "operation": operation or ("initial_count" if round_no == 1 else "recount_count"),
+                "actor_person_id": str(person_id or sentinel_person_id),
+                "actor_authorization_version": sentinel_version,
+                "trace_request_id": trace,
+            },
+        )
+        assert response.status_code == status_code, response.text
+        assert len(request_transactions) == calls_before + 1
+        assert response.headers["cache-control"] == "private, no-store, max-age=0"
+        assert response.headers["pragma"] == "no-cache"
+        assert response.headers["referrer-policy"] == "no-referrer"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        if status_code == 200:
+            body = response.json()
+            assert set(body) == {
+                "schema_version", "operation", "task_id", "round_id", "scope_id",
+                "actor_person_id", "actor_authorization_version", "trace_request_id",
+                "lookup_status", "command",
+            }
+            assert body["task_id"] == str(task_id)
+            assert body["round_id"] == str(round_id)
+            assert body["scope_id"] == str(scope_id)
+            assert body["actor_person_id"] == str(sentinel_person_id)
+            assert body["actor_authorization_version"] == sentinel_version
+            assert body["trace_request_id"] == trace
+            assert body["operation"] == ("initial_count" if round_no == 1 else "recount_count")
+            assert body["lookup_status"] == expected
+            if expected == "not_observed":
+                assert body["command"] is None  # never a retry authorization
+            else:
+                with Session(api_engine) as session:
+                    completion = session.scalars(select(StocktakeScopeCountCompletion).where(
+                        StocktakeScopeCountCompletion.task_id == task_id,
+                        StocktakeScopeCountCompletion.round_id == round_id,
+                        StocktakeScopeCountCompletion.scope_id == scope_id,
+                    )).one()
+                    command = body["command"]
+                    assert set(command) == {
+                        "completion_id", "round_no", "completed_at",
+                        "scope_completed", "caused_round_submission",
+                    }
+                    assert command["completion_id"] == str(completion.id)
+                    assert datetime.fromisoformat(command["completed_at"].replace("Z", "+00:00")) == completion.completed_at
+                    assert command["round_no"] == round_no
+                    assert command["scope_completed"] is True
+                    assert command["caused_round_submission"] is True
+        assert durable_snapshot() == before
+
+    with TestClient(api) as client:
+        round_id = started.initial_round_id
+        for round_no in (1, 2, 3):
+            key = f"round-{round_no}-count"
+            trace = f"trace-multiround-{token}-{key}"
+            lookup(client, round_id, round_no, trace, expected="not_observed")
+            count_module = initial_count if round_no == 1 else recount_count
+            command_type = (
+                initial_count.SubmitStocktakeInitialScopeCountCommand if round_no == 1
+                else recount_count.SubmitStocktakeRecountScopeCountCommand
+            )
+            counted = write(
+                count_module.submit_stocktake_initial_scope_count if round_no == 1
+                else count_module.submit_stocktake_recount_scope_count,
+                assignee_user_id, key,
+                command=command_type(
+                    task_id=task_id, round_id=round_id, scope_id=scope_id,
+                    count_mode="blind",
+                    account_counts=(count_module.StocktakeSnapshotCountInput(
+                        stock_account_id=fixture["recount_account_id"],
+                        counted_qty=Decimal("1.000"),
+                    ),),
+                ),
+            )
+            assert counted.round_submitted is True
+            assert counted.task_status == "submitted"
+            history.append((round_id, round_no, trace))
+            for old_round, old_no, old_trace in history:
+                lookup(client, old_round, old_no, old_trace)
+                lookup(client, old_round, old_no,
+                       f"trace-multiround-{token}-unseen-{old_no}", expected="not_observed")
+            if round_no == 3:
+                break
+            difference_module = initial_difference if round_no == 1 else recount_difference
+            difference_command = (
+                initial_difference.GenerateStocktakeDifferenceCommand if round_no == 1
+                else recount_difference.GenerateStocktakeRecountDifferenceCommand
+            )
+            evaluated = write(
+                difference_module.generate_stocktake_initial_differences if round_no == 1
+                else difference_module.generate_stocktake_recount_differences,
+                actor_user_id, f"round-{round_no}-difference",
+                command=difference_command(task_id=task_id, round_id=round_id,
+                                           expected_task_version=counted.task_version),
+            )
+            with Session(api_engine) as session:
+                differences = tuple(session.scalars(select(StocktakeDifference.id).where(
+                    StocktakeDifference.task_id == task_id,
+                    StocktakeDifference.round_id == round_id,
+                )).all())
+                assert differences
+            reviewed = write(
+                review.submit_stocktake_region_review, assignee_user_id,
+                f"round-{round_no}-review",
+                command=review.SubmitStocktakeReviewCommand(
+                    task_id=task_id, round_id=round_id,
+                    expected_task_version=evaluated.task_version,
+                    decision="recount", comment="PG16 independent recount required",
+                    items=tuple(review.StocktakeReviewItemInput(
+                        difference_id=value, decision="recount", comment="Recount this scope",
+                    ) for value in differences),
+                ),
+            )
+            opened = write(
+                recount.open_stocktake_recount, assignee_user_id,
+                f"round-{round_no + 1}-open",
+                command=recount.OpenStocktakeRecountCommand(
+                    task_id=task_id, source_round_id=round_id,
+                    expected_task_version=reviewed.task_version,
+                    assignments=(recount.StocktakeRecountScopeAssignmentInput(
+                        scope_id=scope_id, assignee_user_id=assignee_user_id,
+                    ),), reason="PG16 immutable source-round evidence",
+                ),
+            )
+            assert reviewed.resulting_task_status == "recount_required"
+            assert opened.next_round_no == round_no + 1
+            assert opened.resulting_task_status == "counting"
+            round_id = opened.next_round_id
+            for old_round, old_no, old_trace in history:
+                lookup(client, old_round, old_no, old_trace)
+
+        lookup(client, *history[-1], operation="initial_count", status_code=400)
+        lookup(client, *history[-1], person_id=uuid.uuid4(), status_code=412)
+        # A task-readable admin cannot present the original counter's sentinel.
+        request_actor["user_id"] = actor_user_id
+        lookup(client, *history[-1], status_code=412)
+
+    with Session(api_engine) as session:
+        assert inventory_snapshot(session) == inventory_before
+        task = session.get(FormalStocktakeTask, task_id)
+        assert (task.status, task.current_round_no) == ("submitted", 3)
+        assert session.scalar(select(func.count()).select_from(StocktakeRecountCase).where(
+            StocktakeRecountCase.task_id == task_id,
+        )) == 2
+        assert session.scalar(select(func.count()).select_from(StocktakeScopeCountCompletion).where(
+            StocktakeScopeCountCompletion.task_id == task_id,
+        )) == 3
+        previous_round_id = None
+        for round_id, round_no, _trace in history:
+            round_row = session.get(StocktakeRound, round_id)
+            completion = session.scalars(select(StocktakeScopeCountCompletion).where(
+                StocktakeScopeCountCompletion.task_id == task_id,
+                StocktakeScopeCountCompletion.round_id == round_id,
+            )).one()
+            submission = session.scalars(select(StocktakeRoundSubmission).where(
+                StocktakeRoundSubmission.task_id == task_id,
+                StocktakeRoundSubmission.round_id == round_id,
+            )).one()
+            assert (round_row.status, round_row.round_no) == ("submitted", round_no)
+            assert submission.sealing_completion_id == completion.id
+            assert completion.completed_at >= round_row.started_at
+            assert submission.submitted_at == completion.completed_at == round_row.submitted_at
+            if previous_round_id is not None:
+                case = session.get(StocktakeRecountCase, round_row.recount_case_id)
+                assert (case.source_round_id, case.next_round_no) == (previous_round_id, round_no)
+                assignment = session.scalars(select(StocktakeRecountScopeAssignment).where(
+                    StocktakeRecountScopeAssignment.recount_case_id == case.id,
+                )).one()
+                assert (assignment.scope_id, assignment.assignee_user_id) == (scope_id, assignee_user_id)
+            previous_round_id = round_id
+
+
 def _complete_0051_nonopening_stocktake_service_chain(
     api_engine,
     *,
@@ -17792,6 +18167,10 @@ def _assert_0047_real_api_stocktake_start(
                 ),
             ).where(MaterialRequest.id == material_request_id)
         ).one() == neutral_request_before
+    _assert_nonopening_multiround_count_status(
+        api_engine, fixture=fixture, actor_user_id=actor_user_id,
+        assignee_user_id=assignee_user_id, idempotency_hmac_secret=secret,
+    )
     return task_id, terminal_version
 
 
