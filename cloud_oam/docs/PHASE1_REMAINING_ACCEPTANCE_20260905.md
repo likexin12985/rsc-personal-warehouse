@@ -10,13 +10,18 @@
 ### 2026-09-06 续验收记录
 
 准确父提交 `d95a3fe61eaa656d0d144d307a4ab9348c048194` 已通过 Client release gate
-（run `33979437995`）及 PostgreSQL 16 release gate（run `33979438009`）；当前续验收提交为
-`18dfbd72b7d578aff5886029304a5afadb75b8f2`，其 Client run `33981032052` 与 PostgreSQL 16
-run `33981032060` 均已通过。本次仅新增
+（run `33979437995`）及 PostgreSQL 16 release gate（run `33979438009`）；静态契约提交
+`18dfbd72b7d578aff5886029304a5afadb75b8f2` 的 Client run `33981032052` 与 PostgreSQL 16
+run `33981032060` 均已通过。当前代码提交为 `f482b8e`，其独立门禁仍待完成。本次仅新增
 盘点历史 cutoff replay、SN/逐件、多范围、尾部身份重验和 owner-lock 顺序的静态契约预检，
 没有把源码存在误报为 PostgreSQL 真库场景已验收，也没有新增迁移或改变生产业务逻辑。
 当前真库样本仍是单范围、hard freeze、非 SN；下一项 P0 仍为准确 SHA 的 SN + cutoff replay
 多范围真库样本，随后才是尾部身份竞争、原 POST 锁序和两端非 count 命令持久恢复。
+
+随后提交 `f482b8e` 的过账恢复切片尚未完成独立门禁：非 opening 盘点新增只读
+`/{task_id}/post-differences-command-status`，只接受精确 `X-Request-ID`，并重证过账审计、
+状态转换、审批封印、过账完成及库存事实；9 项定向测试通过，未新增迁移。该接口不扩展为
+review/recount/disposition/close 的通用状态查询，未知证据仍保持阻塞。
 
 当前已验收代码 `b57f3c3`，迁移head0062：先真实零期初6步独立提交建立专用库位，再跑原非零日常盘盈。
 新增7项静态回归、相关76项及既有期初2项通过；完整本地3045项通过、1项环境跳过（814.07秒）。

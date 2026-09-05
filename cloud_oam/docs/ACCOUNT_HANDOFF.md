@@ -41,9 +41,11 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 ### 2026-09-06 当前续开发状态
 
 当前工作分支 `codex/production-readiness-gates` 的本地与远端均为准确 SHA
-`18dfbd72b7d578aff5886029304a5afadb75b8f2`。其父提交 `d95a3fe61eaa656d0d144d307a4ab9348c048194`
+`f482b8e`。其父提交 `18dfbd72b7d578aff5886029304a5afadb75b8f2`（再之前为
+`d95a3fe61eaa656d0d144d307a4ab9348c048194`）
 已通过 Client release gate `33979437995` 与 PostgreSQL 16 release gate `33979438009`；当前
-`18dfbd7` 的 Client run `33981032052` 与 PostgreSQL 16 run `33981032060` 也均已通过。该提交新增
+`18dfbd7` 的 Client run `33981032052` 与 PostgreSQL 16 run `33981032060` 也均已通过。当前
+`f482b8e` 的新过账恢复切片门禁仍待完成。该提交新增
 盘点历史 cutoff replay、SN/逐件、
 多范围、尾部身份重验及 owner-lock 顺序的静态契约预检；该提交没有新增迁移，
 也没有把静态源码契约当作真库业务验收。
@@ -51,6 +53,11 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 当前真库样本仍为单范围、hard freeze、非 SN。下一项必须先完成准确 SHA 的 SN + cutoff replay
 多范围真库样本，再验收尾部身份竞争和原 POST 锁序；非 count 的 review/recount/disposition/
 post/close 命令状态持久证据与两端跨重启恢复仍未完成。
+
+当前工作树另有未独立门禁的 `f482b8e` 过账恢复切片：非 opening 盘点新增只读
+`/{task_id}/post-differences-command-status`，使用精确 `X-Request-ID` 映射并重证审计、状态转换、
+审批、过账完成及库存事实；9 项定向测试通过，未新增迁移。它只覆盖 post，不代表 review、
+recount、disposition、close 或客户端跨重启恢复已经完成。
 
 最新已验收代码为 `b57f3c33be37cca025b17d6f7ea8b7f0db48452d`，已推送；迁移 head 为0062。
 它先由6个正式服务独立提交专用库位零期初闭环，再保持原+1日常盘盈；新增7项静态回归，
