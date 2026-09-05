@@ -277,4 +277,13 @@ schema/客户端字段不变；升级需从第一页重载，不能复用旧版�
 的真实有效 API 角色回归。负例的特权 fixture 修改不提交，始终回滚并比对原权限/分配快照；
 不能把 `session_user=postgres` 的有效角色验证冒称 API 登录写权限验证。未改迁移、函数清单或 ACL。
 [run 33932385447](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33932385447)
-正在执行准确候选；在结果出来前最新完整验收代码仍为 `e54765a`。
+已在准确候选全绿：静态 `1549 passed, 1 skipped, 1 warning`（666.56 秒），动态
+`1 passed, 1 warning`（204.55 秒）。job `101213477671` 于 `2026-09-05T00:31:28Z` 完成，
+包括清理的全部步骤成功。最新完整验收代码已推进到 `75b7e42a988f1178145e91a747b43bba467dac65`，
+不是借用历史 `e54765a` 的结果；后续文档提交与代码验收 SHA 分开记录。
+
+根任务在相同候选后端/边缘/测试源码上完整运行
+`PYTHONPATH=backend .venv/bin/python -m pytest -q backend/tests edge_sync`（工作目录 `cloud_oam`），
+结果 `2482 passed, 1 skipped`（903.41 秒），退出码 0。运行前后 Git 比较确认这些文件及
+工作流与 `75b7e42` 无差异；只更新交接文档，不混入下一模块开发。客户端沿用未变的独立
+Web 691 项、TypeScript/构建及小程序 516 项通过记录。
