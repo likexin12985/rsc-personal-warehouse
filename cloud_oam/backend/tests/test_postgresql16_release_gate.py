@@ -16699,6 +16699,153 @@ def _complete_0051_nonopening_stocktake_service_chain(
     return closed.task_version
 
 
+def _assert_opening_start_option_pages(
+    session,
+    *,
+    actor,
+    now: datetime,
+    assignee_user_id: str,
+    fixture: dict[str, object],
+) -> None:
+    """Read the four preparation directories, never control or stock evidence.
+
+    The caller runs this first with a real star_oam_api login in a read-only
+    transaction, then with explicitly labelled rollback-only policy fixtures.
+    SQL expression inspection independently catches inventory reads, writes and
+    row/advisory locks even in the privileged fixture's read-write transaction.
+    """
+
+    from sqlalchemy.sql import visitors
+    from sqlalchemy.sql.functions import FunctionElement
+    from sqlalchemy.sql.schema import Table
+
+    from app.formal_services import opening_start_options as options
+    from app.models import User
+
+    region_id = fixture["region_org_id"]
+    location_id = fixture["location_id"]
+    allowed_tables = {
+        "organizations", "people", "users", "auth_identities", "roles",
+        "role_assignments", "role_permissions", "permissions",
+        "stock_locations", "custody_assignments",
+    }
+    read_tables: set[str] = set()
+
+    def reference_select_only(_connection, _cursor, _sql, _parameters, context, _many):
+        assert context.compiled is not None, "opening options executed unreviewed textual SQL"
+        statement = context.compiled.statement
+        assert statement.is_select is True, "opening preparation must not write"
+        assert statement._for_update_arg is None, "opening preparation must not lock rows"
+        for node in visitors.iterate(statement):
+            assert not isinstance(node, FunctionElement), "opening options must not invoke SQL functions"
+            if isinstance(node, Table):
+                assert node.name in allowed_tables, "opening options read outside reference data"
+                read_tables.add(node.name)
+
+    common_fields = {
+        "schema_version", "actor_person_id", "authorization_version",
+        "start_ready", "control_evidence_status", "items",
+    }
+    connection = session.connection()
+    assert not session.new and not session.dirty and not session.deleted
+    event.listen(connection, "before_cursor_execute", reference_select_only)
+    try:
+        def collect(service, *, anchors, id_field, cursor_field, after_field, item_fields):
+            full = service(session, actor=actor, limit=100, now=now, **anchors)
+
+            def assert_page(page):
+                payload = page.model_dump(mode="json")
+                assert set(payload) == common_fields | set(anchors) | {cursor_field}
+                assert page.schema_version == "1.0"
+                assert page.actor_person_id == actor.person_id
+                assert page.authorization_version == actor.authorization_version
+                assert page.start_ready is False
+                assert page.control_evidence_status == "control_evidence_not_evaluated"
+                for key, value in anchors.items():
+                    assert getattr(page, key) == value
+                for row in page.items:
+                    assert set(row.model_dump(mode="json")) == item_fields
+
+            assert_page(full)
+            assert full.items, "opening directory positive proof must not be vacuous"
+            assert getattr(full, cursor_field) is None, "gate fixture unexpectedly exceeds 100 candidates"
+            expected_ids = tuple(getattr(row, id_field) for row in full.items)
+            assert expected_ids == tuple(sorted(set(expected_ids), key=lambda value: value.int))
+            paged = []
+            cursor = None
+            for _ in range(100):
+                page = service(
+                    session, actor=actor, limit=1, now=now,
+                    **anchors, **{after_field: cursor},
+                )
+                assert_page(page)
+                assert len(page.items) <= 1
+                if page.items and cursor is not None:
+                    assert getattr(page.items[0], id_field).int > cursor.int
+                paged.extend(page.items)
+                next_cursor = getattr(page, cursor_field)
+                if next_cursor is None:
+                    break
+                assert page.items
+                assert next_cursor == getattr(page.items[-1], id_field)
+                assert cursor is None or next_cursor.int > cursor.int
+                cursor = next_cursor
+            else:
+                pytest.fail("PostgreSQL opening preparation pagination did not terminate")
+            assert tuple(paged) == full.items
+            return full
+
+        regions = collect(
+            options.list_region_options, anchors={}, id_field="region_org_id",
+            cursor_field="next_after_id", after_field="after_id",
+            item_fields={"region_org_id", "code", "name", "province_code"},
+        )
+        assert region_id in {row.region_org_id for row in regions.items}
+        owners = collect(
+            options.list_asset_owner_options, anchors={"region_org_id": region_id},
+            id_field="owner_org_id", cursor_field="next_after_id", after_field="after_id",
+            item_fields={"owner_org_id", "code", "name"},
+        )
+        assert region_id in {row.owner_org_id for row in owners.items}
+        locations = collect(
+            options.list_location_options,
+            anchors={"region_org_id": region_id, "owner_org_id": region_id},
+            id_field="location_id", cursor_field="next_after_id", after_field="after_id",
+            item_fields={
+                "location_id", "code", "name", "location_type",
+                "physical_owner_org_id", "physical_owner_name",
+                "custodian_person_id", "custodian_name",
+            },
+        )
+        assert {
+            location_id, fixture["concurrency_location_id"],
+            fixture["concurrency_competing_location_id"], fixture["difference_peer_location_id"],
+        }.issubset({row.location_id for row in locations.items})
+        # At least four actual eligible locations force continuation pages;
+        # a cursor implementation that skips the private lookahead cannot pass.
+        selected_location = next(row for row in locations.items if row.location_id == location_id)
+        assert selected_location.physical_owner_org_id == region_id
+        assert selected_location.custodian_person_id == fixture["assignee_person_id"]
+        people = collect(
+            options.list_assignee_options,
+            anchors={"region_org_id": region_id, "owner_org_id": region_id, "location_id": location_id},
+            id_field="person_id", cursor_field="next_after_person_id", after_field="after_person_id",
+            item_fields={"assignee_user_id", "person_id", "name"},
+        )
+        assert fixture["assignee_person_id"] in {row.person_id for row in people.items}
+        assert assignee_user_id in {row.assignee_user_id for row in people.items}
+        for row in people.items:
+            persisted = session.execute(select(User.id, User.person_id).where(
+                User.id == row.assignee_user_id,
+            )).one()
+            assert persisted == (row.assignee_user_id, row.person_id)
+            assert row.assignee_user_id != str(row.person_id), "user and person anchors are distinct"
+        assert not session.new and not session.dirty and not session.deleted
+    finally:
+        event.remove(connection, "before_cursor_execute", reference_select_only)
+    assert read_tables == allowed_tables
+
+
 def _assert_stocktake_options_global_deny(
     api_engine,
     *,
@@ -16709,6 +16856,7 @@ def _assert_stocktake_options_global_deny(
     """Prove directory grant/deny composition without changing shared policy."""
 
     from app.formal_access import load_formal_principal
+    from app.formal_services import opening_start_options
     from app.formal_services.stocktake_options import (
         StocktakeOptionError,
         list_assignee_options,
@@ -16759,6 +16907,10 @@ def _assert_stocktake_options_global_deny(
             pytest.fail("PostgreSQL stocktake option pagination did not terminate")
         assert tuple(paged_ids) == expected_ids
         assert len(paged_ids) == len(set(paged_ids))
+        _assert_opening_start_option_pages(
+            session, actor=actor, now=now,
+            assignee_user_id=assignee_user_id, fixture=fixture,
+        )
 
     def assert_api_login_visible():
         # This positive proof uses an actual least-privilege API login, not
@@ -16890,6 +17042,27 @@ def _assert_stocktake_options_global_deny(
                                 with pytest.raises(StocktakeOptionError) as denied:
                                     service(session, **kwargs)
                                 assert denied.value.code == "stocktake_region_forbidden"
+                                assert denied.value.http_status_code == 403
+                            opening_regions = opening_start_options.list_region_options(
+                                session, actor=allowed_snapshot, limit=100, now=now,
+                            )
+                            assert opening_regions.items == ()
+                            assert opening_regions.next_after_id is None
+                            assert opening_regions.start_ready is False
+                            assert opening_regions.control_evidence_status == "control_evidence_not_evaluated"
+                            for service, anchors in (
+                                (opening_start_options.list_asset_owner_options, {}),
+                                (opening_start_options.list_location_options, {"owner_org_id": region_id}),
+                                (opening_start_options.list_assignee_options, {
+                                    "owner_org_id": region_id, "location_id": location_id,
+                                }),
+                            ):
+                                with pytest.raises(opening_start_options.OpeningStartOptionError) as denied:
+                                    service(
+                                        session, actor=allowed_snapshot,
+                                        region_org_id=region_id, limit=100, now=now, **anchors,
+                                    )
+                                assert denied.value.code == "opening_start_options_target_forbidden"
                                 assert denied.value.http_status_code == 403
                 finally:
                     transaction.rollback()

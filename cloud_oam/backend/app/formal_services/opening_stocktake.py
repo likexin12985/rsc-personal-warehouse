@@ -194,6 +194,16 @@ class _PreparedScope:
 
 
 @dataclass(frozen=True, slots=True)
+class _QualifiedOpeningScope:
+    """Reference eligibility only; no task/scope identity or inventory facts."""
+
+    owner: Organization
+    location: StockLocation
+    custodian_person_id: uuid.UUID | None
+    manager_grant: ScopeGrant
+
+
+@dataclass(frozen=True, slots=True)
 class _PreparedControlLine:
     line_no: int
     input: OpeningControlLineInput
@@ -1276,53 +1286,19 @@ def _prepare_scopes(
     prepared: list[_PreparedScope] = []
     for scope_no, value in enumerate(command.scopes, start=1):
         location = locations[value.location_id]
-        if location.status != "active" or location.location_type not in {"region", "personal"}:
-            _fail(
-                "stock_location_invalid",
-                "precondition_failed",
-                "期初盘点仅接受启用的区域仓或个人仓库位",
-            )
-        _require_location_in_region_tree(
-            db,
-            location,
-            command.region_org_id,
-            lock_rows=lock_rows,
-        )
-        manager_grant = _authorize_scope_dimensions(
+        qualified = _qualify_opening_scope(
             db,
             actor=actor,
-            task_region_org_id=command.region_org_id,
-            owner_org_id=value.owner_org_id,
-            location_owner_org_id=location.owner_org_id,
-        )
-        _lock_selected_grant(
-            db,
-            actor,
-            manager_grant,
-            now,
+            region_org_id=command.region_org_id,
+            owner=owners[value.owner_org_id],
+            location=location,
+            effective_custodies=custodies_by_location[location.id],
+            now=now,
             lock_rows=lock_rows,
         )
-
-        effective_custodies = custodies_by_location[location.id]
-        if len(effective_custodies) > 1:
-            _fail(
-                "custody_assignment_ambiguous",
-                "service_unavailable",
-                "库位当前保管责任记录不唯一",
-            )
-        custody = effective_custodies[0] if effective_custodies else None
+        custodian_person_id = qualified.custodian_person_id
         if location.location_type == "personal":
-            if (
-                custody is None
-                or location.custodian_person_id is None
-                or custody.custodian_person_id != location.custodian_person_id
-            ):
-                _fail(
-                    "personal_custody_invalid",
-                    "precondition_failed",
-                    "个人仓必须存在唯一且与库位一致的当前保管责任",
-                )
-            custodian_person_id = custody.custodian_person_id
+            assert custodian_person_id is not None
             _authorize_personal_assignee(
                 db,
                 assignee_user_id=value.assignee_user_id,
@@ -1331,16 +1307,6 @@ def _prepare_scopes(
                 lock_rows=lock_rows,
             )
         else:
-            if location.custodian_person_id is not None and (
-                custody is None
-                or custody.custodian_person_id != location.custodian_person_id
-            ):
-                _fail(
-                    "regional_custody_invalid",
-                    "precondition_failed",
-                    "区域仓库位保管人字段与当前保管责任不一致",
-                )
-            custodian_person_id = custody.custodian_person_id if custody else None
             _authorize_regional_assignee(
                 db,
                 assignee_user_id=value.assignee_user_id,
@@ -1370,6 +1336,87 @@ def _prepare_scopes(
             )
         )
     return tuple(prepared)
+
+
+def _qualify_opening_scope(
+    db: Session,
+    *,
+    actor: FormalPrincipal,
+    region_org_id: uuid.UUID,
+    owner: Organization,
+    location: StockLocation,
+    effective_custodies: Sequence[CustodyAssignment],
+    now: datetime,
+    lock_rows: bool = False,
+) -> _QualifiedOpeningScope:
+    """Share the write-side reference rules with the read-only preparation list.
+
+    Callers fresh-load the selected rows and current custody set.  The write
+    service retains its batched preflight, lock graph, executor checks and
+    final validation.  A directory call explicitly disables the existing row
+    locks and must revalidate its complete read snapshot before returning.
+    This helper neither proves control evidence nor generates business IDs.
+    """
+
+    if owner.status != "active" or owner.org_type != "region_company":
+        _fail(
+            "asset_owner_invalid", "precondition_failed",
+            "资产所有组织必须是启用的区域公司",
+        )
+    if not _organization_descends_from(
+        db, owner.id, region_org_id, lock_rows=lock_rows,
+    ):
+        _fail(
+            "asset_owner_outside_region", "forbidden",
+            "资产所有组织必须位于期初盘点任务区域的有效组织树内",
+        )
+    if location.status != "active" or location.location_type not in {"region", "personal"}:
+        _fail(
+            "stock_location_invalid", "precondition_failed",
+            "期初盘点仅接受启用的区域仓或个人仓库位",
+        )
+    _require_location_in_region_tree(db, location, region_org_id, lock_rows=lock_rows)
+    manager_grant = _authorize_scope_dimensions(
+        db, actor=actor, task_region_org_id=region_org_id,
+        owner_org_id=owner.id, location_owner_org_id=location.owner_org_id,
+    )
+    _lock_selected_grant(db, actor, manager_grant, now, lock_rows=lock_rows)
+    if len(effective_custodies) > 1:
+        _fail(
+            "custody_assignment_ambiguous", "service_unavailable",
+            "库位当前保管责任记录不唯一",
+        )
+    custody = effective_custodies[0] if effective_custodies else None
+    if custody is not None and (
+        custody.location_id != location.id
+        or _as_utc(custody.valid_from) > now
+        or (custody.valid_to is not None and now >= _as_utc(custody.valid_to))
+    ):
+        _fail(
+            "custody_assignment_not_current", "precondition_failed",
+            "库位保管责任与本次范围或校验时点不一致",
+        )
+    if location.location_type == "personal":
+        if (
+            custody is None or location.custodian_person_id is None
+            or custody.custodian_person_id != location.custodian_person_id
+        ):
+            _fail(
+                "personal_custody_invalid", "precondition_failed",
+                "个人仓必须存在唯一且与库位一致的当前保管责任",
+            )
+    elif location.custodian_person_id is not None and (
+        custody is None or custody.custodian_person_id != location.custodian_person_id
+    ):
+        _fail(
+            "regional_custody_invalid", "precondition_failed",
+            "区域仓库位保管人字段与当前保管责任不一致",
+        )
+    return _QualifiedOpeningScope(
+        owner=owner, location=location,
+        custodian_person_id=custody.custodian_person_id if custody else None,
+        manager_grant=manager_grant,
+    )
 
 
 def _prepare_snapshots(
@@ -2867,6 +2914,12 @@ def _require_location_in_region_tree(
         if lock_rows and db.get_bind().dialect.name != "postgresql":
             parent_statement = parent_statement.with_for_update()
         current = db.scalar(parent_statement)
+        if current is None:
+            _fail(
+                "stock_location_parent_missing",
+                "service_unavailable",
+                "库存位置树缺少已引用的父位置",
+            )
 
 
 def _organization_descends_from(

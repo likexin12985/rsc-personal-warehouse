@@ -26,6 +26,7 @@ from .routers import (
     formal_material_catalog,
     formal_material_request_options,
     formal_material_requests,
+    formal_opening_start_options,
     formal_opening_stocktake,
     formal_opening_stocktake_read,
     formal_stocktake_options,
@@ -86,6 +87,7 @@ PRIVATE_COMMAND_RECOVERY_PATHS = frozenset(
     {"/api/v1/material-request-lifecycle-command-status"}
 )
 PRIVATE_MATERIAL_REQUEST_OPTION_PREFIX = "/api/v1/material-request-options"
+PRIVATE_OPENING_START_OPTION_PREFIX = "/api/v1/stocktakes/opening/start-options"
 
 
 def is_production_auth_path(method: str, path: str) -> bool:
@@ -249,7 +251,10 @@ async def block_legacy_prototype_writes(request, call_next):
         response.headers["Pragma"] = "no-cache"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Content-Type-Options"] = "nosniff"
-    if request.url.path.startswith(PRIVATE_MATERIAL_REQUEST_OPTION_PREFIX):
+    if request.url.path.startswith((
+        PRIVATE_MATERIAL_REQUEST_OPTION_PREFIX,
+        PRIVATE_OPENING_START_OPTION_PREFIX,
+    )):
         # Picker rows are live authorization decisions. Apply this to
         # framework and service failures too so a cached 404/403 cannot hide a
         # later source refresh or permission change.
@@ -283,6 +288,9 @@ app.include_router(formal_files.router, prefix="/api")
 # disposition, independent regional/headquarters review, recount, post and
 # close commands.  Each route commits one transition only, revalidates its
 # complete evidence graph and owns no external-system side effect.
+# Literal preparation routes precede the UUID task routes. They never start
+# a task or attest that OAM control evidence is ready.
+app.include_router(formal_opening_start_options.router, prefix="/api")
 app.include_router(formal_opening_stocktake.router, prefix="/api")
 app.include_router(formal_opening_stocktake_read.router, prefix="/api")
 # Managed task creation uses separately scoped read-only pickers so clients do
