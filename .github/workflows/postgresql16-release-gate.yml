@@ -139,8 +139,10 @@ jobs:
             backend/tests/test_opening_count_command_status.py \
             backend/tests/test_formal_opening_stocktake_write_api.py \
             backend/tests/test_formal_opening_stocktake_api.py \
+            backend/tests/test_formal_opening_stocktake_read.py \
             backend/tests/test_formal_opening_reconciliation_api.py \
             backend/tests/test_stocktake_task_service.py \
+            backend/tests/test_stocktake_options.py \
             backend/tests/test_stocktake_count_service.py \
             backend/tests/test_stocktake_difference_service.py \
             backend/tests/test_postgresql_lock_graph.py \

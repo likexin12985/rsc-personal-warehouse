@@ -140,6 +140,10 @@ def test_postgresql16_gate_covers_main_prs_and_edge_role_provisioning() -> None:
         "backend/tests/test_inventory_posting.py",
         "backend/tests/test_opening_stocktake_service.py",
         "backend/tests/test_opening_stocktake_review_service.py",
+        "backend/tests/test_opening_recount_assignee_options.py",
+        "backend/tests/test_opening_count_command_status.py",
+        "backend/tests/test_formal_opening_stocktake_read.py",
+        "backend/tests/test_stocktake_options.py",
     ):
         assert required_gate in workflow
     assert "pytest==9.1.1 pglast==7.18 httpx==0.28.1" in workflow

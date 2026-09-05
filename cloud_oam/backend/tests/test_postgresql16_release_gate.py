@@ -16699,6 +16699,207 @@ def _complete_0051_nonopening_stocktake_service_chain(
     return closed.task_version
 
 
+def _assert_stocktake_options_global_deny(
+    api_engine,
+    *,
+    actor_user_id: str,
+    assignee_user_id: str,
+    fixture: dict[str, object],
+) -> None:
+    """Prove directory grant/deny composition without changing shared policy."""
+
+    from app.formal_access import load_formal_principal
+    from app.formal_services.stocktake_options import (
+        StocktakeOptionError,
+        list_assignee_options,
+        list_location_options,
+        list_region_options,
+    )
+    from app.foundation_models import Permission, Role, RoleAssignment, RolePermission
+
+    region_id = fixture["region_org_id"]
+    location_id = fixture["location_id"]
+
+    def current_principal(session, user_id):
+        now = session.scalar(select(func.now()))
+        assert isinstance(now, datetime) and now.tzinfo is not None
+        return load_formal_principal(session, user_id, now=now), now
+
+    def assert_visible(session, actor, now):
+        regions = list_region_options(session, actor=actor, limit=100, now=now)
+        assert region_id in {row.region_org_id for row in regions.items}
+        locations = list_location_options(
+            session, actor=actor, region_org_id=region_id, limit=100, now=now,
+        )
+        assert location_id in {row.location_id for row in locations.items}
+        people = list_assignee_options(
+            session, actor=actor, region_org_id=region_id,
+            location_id=location_id, limit=100, now=now,
+        )
+        assert fixture["assignee_person_id"] in {row.person_id for row in people.items}
+        assert assignee_user_id in {row.assignee_user_id for row in people.items}
+        assert people.next_after_person_id is None
+        expected_ids = tuple(row.person_id for row in people.items)
+        paged_ids = []
+        cursor = None
+        for _ in range(100):
+            page = list_assignee_options(
+                session, actor=actor, region_org_id=region_id,
+                location_id=location_id, limit=1, after_person_id=cursor, now=now,
+            )
+            assert len(page.items) <= 1
+            paged_ids.extend(row.person_id for row in page.items)
+            if page.next_after_person_id is None:
+                break
+            assert page.items
+            assert page.next_after_person_id == page.items[-1].person_id
+            assert cursor is None or page.next_after_person_id.int > cursor.int
+            cursor = page.next_after_person_id
+        else:
+            pytest.fail("PostgreSQL stocktake option pagination did not terminate")
+        assert tuple(paged_ids) == expected_ids
+        assert len(paged_ids) == len(set(paged_ids))
+
+    def assert_api_login_visible():
+        # This positive proof uses an actual least-privilege API login, not
+        # a privileged connection whose effective role has been switched.
+        with Session(api_engine) as session:
+            session.execute(text("SET TRANSACTION READ ONLY"))
+            assert session.execute(text("SELECT current_user, session_user")).one() == (
+                "star_oam_api", "star_oam_api",
+            )
+            for user_id in (actor_user_id, assignee_user_id):
+                actor, now = current_principal(session, user_id)
+                _reveal_pg16_service_database_error(
+                    api_engine, lambda: assert_visible(session, actor, now),
+                )
+            assert session.scalar(text("SHOW transaction_read_only")) == "on"
+
+    def policy_snapshot():
+        with Session(api_engine) as session:
+            return (
+                tuple(session.execute(select(
+                    RolePermission.id, RolePermission.role_id,
+                    RolePermission.permission_id, RolePermission.effect,
+                ).order_by(RolePermission.id)).all()),
+                tuple(session.execute(select(*RoleAssignment.__table__.columns).where(
+                    RoleAssignment.user_id == actor_user_id,
+                ).order_by(RoleAssignment.id)).all()),
+            )
+
+    assert_api_login_visible()
+    original_policy = policy_snapshot()
+    security_engine = create_engine(
+        _admin_sqlalchemy_url(), pool_size=1, max_overflow=0, pool_timeout=5,
+    )
+    try:
+        for case in ("exact_manager_allow", "global_deny"):
+            # The shared catalog changes are uncommitted fixture mutations in
+            # one connection. No API write privilege or database ACL is added.
+            with security_engine.connect() as connection:
+                transaction = connection.begin()
+                try:
+                    with Session(
+                        bind=connection, expire_on_commit=False,
+                        join_transaction_mode="rollback_only",
+                    ) as session:
+                        assert session.execute(text("SELECT current_user, session_user")).one() == (
+                            "postgres", "postgres",
+                        )
+                        actor, now = current_principal(session, actor_user_id)
+                        roles = {
+                            row.code: row for row in session.scalars(select(Role).where(
+                                Role.code.in_(("admin", "provincial_manager")),
+                            )).all()
+                        }
+                        assert set(roles) == {"admin", "provincial_manager"}
+                        permission = session.scalars(select(Permission).where(
+                            Permission.resource == "stocktake",
+                            Permission.action == "manage",
+                            Permission.field_code == "",
+                        )).one()
+                        role_permissions = {
+                            row.role_id: row for row in session.scalars(select(RolePermission).where(
+                                RolePermission.permission_id == permission.id,
+                                RolePermission.role_id.in_(tuple(row.id for row in roles.values())),
+                            )).all()
+                        }
+                        assert set(role_permissions) == {row.id for row in roles.values()}
+                        assert all(row.effect == "allow" for row in role_permissions.values())
+                        assert any(
+                            grant.role_code == "admin" and grant.scope_type == "national"
+                            and grant.scope_id == "*" for grant in actor.assignments
+                        )
+                        session.add(RoleAssignment(
+                            id=uuid.uuid4(), user_id=actor_user_id,
+                            role_id=roles["provincial_manager"].id,
+                            scope_type="organization", scope_id=str(region_id),
+                            valid_from=now - timedelta(days=1), valid_to=None,
+                            status="active", assigned_by=actor_user_id,
+                            revoked_at=None, revoked_by=None,
+                            reason="PG16 isolated stocktake option grant composition",
+                        ))
+                        session.flush()
+                        # Model the immutable allow snapshot loaded before a
+                        # request's service independently refreshes its actor.
+                        allowed_snapshot, now = current_principal(session, actor_user_id)
+                        assert any(
+                            grant.role_code == "provincial_manager"
+                            and grant.scope_type == "organization"
+                            and grant.scope_id == str(region_id)
+                            for grant in allowed_snapshot.assignments
+                        )
+                        assert allowed_snapshot.allows(
+                            session, "stocktake", "manage",
+                            target_scope_type="organization", target_scope_id=str(region_id),
+                        )
+                        admin_permission = role_permissions[roles["admin"].id]
+                        if case == "exact_manager_allow":
+                            session.delete(admin_permission)
+                        else:
+                            admin_permission.effect = "deny"
+                        session.flush()
+                        session.execute(text("SET LOCAL ROLE star_oam_api"))
+                        # Effective-role proof only: the bootstrap session user
+                        # remains postgres; do not call this an API login write.
+                        assert session.execute(text("SELECT current_user, session_user")).one() == (
+                            "star_oam_api", "postgres",
+                        )
+                        refreshed, now = current_principal(session, actor_user_id)
+                        assert refreshed.allows(
+                            session, "stocktake", "manage",
+                            target_scope_type="organization", target_scope_id=str(region_id),
+                        ) is (case == "exact_manager_allow")
+                        if case == "exact_manager_allow":
+                            _reveal_pg16_service_database_error(
+                                security_engine,
+                                lambda: assert_visible(session, allowed_snapshot, now),
+                            )
+                        else:
+                            regions = list_region_options(
+                                session, actor=allowed_snapshot, limit=100, now=now,
+                            )
+                            assert regions.items == () and regions.next_after_id is None
+                            for service in (list_location_options, list_assignee_options):
+                                kwargs = dict(
+                                    actor=allowed_snapshot, region_org_id=region_id,
+                                    limit=100, now=now,
+                                )
+                                if service is list_assignee_options:
+                                    kwargs["location_id"] = location_id
+                                with pytest.raises(StocktakeOptionError) as denied:
+                                    service(session, **kwargs)
+                                assert denied.value.code == "stocktake_region_forbidden"
+                                assert denied.value.http_status_code == 403
+                finally:
+                    transaction.rollback()
+            assert policy_snapshot() == original_policy
+            assert_api_login_visible()
+    finally:
+        security_engine.dispose()
+    _validate_runtime_security(api_engine)
+
+
 def _assert_0047_real_api_stocktake_start(
     api_engine,
     *,
@@ -16742,6 +16943,10 @@ def _assert_0047_real_api_stocktake_start(
         api_engine,
         actor_user_id=actor_user_id,
         assignee_user_id=assignee_user_id,
+    )
+    _assert_stocktake_options_global_deny(
+        api_engine, actor_user_id=actor_user_id,
+        assignee_user_id=assignee_user_id, fixture=fixture,
     )
     create_key = "pg16-stocktake-start-create"
     start_key = "pg16-stocktake-start-command"
