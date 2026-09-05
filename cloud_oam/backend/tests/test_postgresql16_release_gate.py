@@ -15852,40 +15852,6 @@ SELECT posting.total_quantity::text,
         fixture["cutoff_ledger_cursor"] = posting.ledger_cursor
         fixture["seed_transaction_id"] = posting.transaction_id
 
-        # Seed one real serial into the otherwise separate concurrency
-        # account.  The non-opening lifecycle keeps using the ordinary
-        # quantity account above, while the opening alias race and the next
-        # multi-scope recovery sample can prove a serial-backed snapshot
-        # against the same immutable ledger cutoff.
-        serial_posting = _reveal_pg16_service_database_error(
-            api_engine,
-            lambda: post_inventory_transaction(
-                session,
-                actor=current_principal(session, actor_user_id),
-                command=InventoryPostingCommand(
-                    transaction_no="PG16-STOCKTAKE-SEED-SERIAL-1",
-                    movement_type="inbound",
-                    source_document_type="pg16_stocktake_release_fixture",
-                    source_document_id=str(fixture["concurrency_account_id"]),
-                    posting_key="pg16-stocktake-release-fixture-serial-1",
-                    effective_at=effective_at,
-                    movements=(
-                        InventoryMovementCommand(
-                            from_account_id=None,
-                            to_account_id=fixture["concurrency_account_id"],
-                            quantity=Decimal("1.000"),
-                            serial_ids=(fixture["concurrency_serial_id"],),
-                            external_boundary_code="PG16_RELEASE_FIXTURE",
-                        ),
-                    ),
-                ),
-                idempotency_key="pg16-stocktake-release-fixture-serial-1",
-                request_id="trace-pg16-stocktake-release-fixture-serial-1",
-            ),
-        )
-        session.commit()
-        fixture["serial_seed_transaction_id"] = serial_posting.transaction_id
-        fixture["cutoff_ledger_cursor"] = serial_posting.ledger_cursor
     return fixture
 
 
