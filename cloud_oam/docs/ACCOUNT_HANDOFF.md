@@ -452,7 +452,7 @@ Git 仓库根目录设置在当前 `oam` 目录，但根 `.gitignore` 默认拒�
 > docs/RSC个人仓与物资运营扩展系统_正式生产版需求与架构设计_V1.0.md 和
 > cloud_oam/README.md。后续所有代码、文档、迁移、状态和验收必须遵循这些基线。
 > 当前分支 codex/production-readiness-gates，接管时先以 git status、git rev-parse HEAD 和远端分支重新确认；最新已验收功能代码为
-> f482b8e，迁移 head 为 20260905_0062；f482b8e 的 PostgreSQL 16 run 为 33982740333，最近文档 Client run 为 33985348396。
+> c7f98cb，迁移 head 为 20260905_0062；c7f98cb 的 PostgreSQL 16 run 为 33990581994、Client run 为 33990582028，最近文档 Client run 为 33992298015。
 > 先读 cloud_oam/docs/DAILY_COUNT_HISTORY_TERMINAL_ACCEPTANCE.md 中最新准确 SHA 验证状态。
 > 已实施专用有界 owner、released 冻结历史证明、递归祖先审计及一次完整附件锁；不放宽写侧守卫。
 > 历史 b57f3c3 已补齐专用库位真实零期初6步独立提交，再保留原日常+1盘盈；新增7项静态回归、
