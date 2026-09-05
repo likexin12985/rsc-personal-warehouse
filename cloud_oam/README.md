@@ -17,6 +17,7 @@
 文档后继 `88f27d6` 的 Client gate 为 run `33985219835`，均已通过。
 此前 `18dfbd7` 的历史 cutoff/SN/多范围/锁序静态契约门禁也已通过；但当前真库样本仍是单范围、
 hard freeze、非 SN，SN、截止回放、多范围、尾部身份竞争和原 POST 锁序仍需专门真库验收。
+测试提交 `03a66ea` 直接向未完成期初建账的串码账户写入库存，被 PG16 真库以 `inventory_opening_not_established` 拒绝；回退提交 `e227696` 后 Client gate `33988119885`、PG16 gate `33988119864` 全绿。后续动态 SN 样本必须先走独立 opening establishment。
 复核命令状态尚未实现；因 `stocktake_reviews` 缺少可重建的历史任务版本，已冻结 0063 前向迁移设计，
 见[复核状态迁移计划](docs/REVIEW_COMMAND_STATUS_MIGRATION_PLAN.md)。两端非 count 跨重启恢复、
 需求供给纵向链路及审批、分配、占用、出库、发货、物流签收、OAM 收货、RSC/个人仓入库、通知送达、

@@ -53,6 +53,8 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 
 `8046c78` 修复过账命令状态查询在无审计结果分支遗漏的锁后身份/权限复核，并允许已过账后独立关闭的任务继续重证原过账历史；新增撤权竞态和 posted→closed 回归测试。该提交的 Client release gate `33985935542` 与 PostgreSQL 16 release gate `33985935553` 均已通过。
 
+后续测试提交 `03a66ea` 曾尝试直接给串码账户写入库存以扩展非期初 SN 真库样本，PG16 真库按正式规则拒绝并返回 `inventory_opening_not_established`；该测试扩展已由 `e227696` 删除，回退后的 Client gate `33988119885` 与 PostgreSQL 16 gate `33988119864` 均已通过。结论是：非期初 SN/cutoff/multiscope 动态样本必须先复用独立 opening establishment，不能绕过期初建账。
+
 当前真库样本仍为单范围、hard freeze、非 SN。下一项必须先完成准确 SHA 的 SN + cutoff replay
 多范围真库样本，再验收尾部身份竞争和原 POST 锁序；非 count 的 review/recount/disposition/
 post/close 命令状态持久证据与两端跨重启恢复仍未完成。
