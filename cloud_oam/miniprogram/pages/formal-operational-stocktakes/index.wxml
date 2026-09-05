@@ -7,7 +7,7 @@
     <view wx:if="{{pendingMessage}}" class="card pending-card"><text>{{pendingMessage}}</text><button wx:if="{{pendingRetryable}}" class="button button-secondary" bindtap="retryPending" loading="{{busy}}">按原坐标重试</button></view>
     <view class="card safety-card">只访问 /v1/stocktakes 与 /access/context；不访问 legacy /stocktakes、/media、opening 路由或外部系统。过账与关闭分别展示，posted 不等于 closed。</view>
 
-    <view wx:if="{{accessAllowed}}" class="card create-card">
+    <view wx:if="{{accessAllowed && canCount}}" class="card create-card">
       <text class="section-title">个人自盘</text>
       <text class="small muted">人员、区域和个人库位均由服务端正式身份派生。</text>
       <view class="field"><text class="field-label">盘点方式</text><picker range="{{modeOptions}}" range-key="label" value="{{blindCount ? 0 : 1}}" bindchange="changeMode"><view class="picker-field">{{blindCount ? '盲盘' : '明盘'}}</view></picker></view>
@@ -18,12 +18,14 @@
 
     <view class="section">
       <view class="section-heading"><text class="section-title">可见任务</text></view>
+      <button class="button button-secondary" bindtap="load" disabled="{{busy}}">刷新任务</button>
       <view wx:if="{{!tasks.length}}" class="card empty">暂无可见正式日常盘点</view>
       <view wx:for="{{tasks}}" wx:key="task_id" class="list-card task-card" bindtap="openTask" data-id="{{item.task_id}}">
         <view class="row between"><text class="mono task-no">{{item.task_no}}</text><text class="status status-info">{{item.statusLabel}}</text></view>
         <view class="divider"></view>
         <view class="row between small"><text>{{item.typeLabel}} · {{item.modeLabel}}</text><text>{{item.progressLabel}} 范围 · v{{item.version}}</text></view>
       </view>
+      <button wx:if="{{hasMore}}" class="button button-secondary" bindtap="loadMore" loading="{{loadingMore}}" disabled="{{loadingMore || busy}}">加载更多任务（已显示 {{tasks.length}} 项）</button>
     </view>
   </block>
 </view>

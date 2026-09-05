@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { appendFormalStocktakePage } from "./formalStocktakeTaskPages";
 
 import {
   confirmFormalStocktakeWrite,
@@ -37,6 +38,38 @@ function page() {
 function coordinates() {
   return { "Idempotency-Key": `webidem-${"a".repeat(36)}`, "X-Request-ID": `web-${"b".repeat(36)}` };
 }
+
+describe("formal daily stocktake inclusive task pagination", () => {
+  const id = (index: number) => `10000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+  const row = (index: number) => ({ ...page().items[0], task_id: id(index), task_no: `ST-${index}` });
+  const batch = (indices: number[], next: number | null) => ({ schema_version: "1.0", items: indices.map(row), next_after_id: next === null ? null : id(next) });
+
+  it("appends the 51st task with an inclusive cursor and accepts a vanished next row", () => {
+    const first = appendFormalStocktakePage([], batch(Array.from({ length: 50 }, (_, i) => i + 1), 51), null);
+    expect(appendFormalStocktakePage(first.items, batch([51], null), first.next_after_id).items).toHaveLength(51);
+    expect(appendFormalStocktakePage(first.items, batch([52], null), first.next_after_id).items.at(-1)?.task_id).toBe(id(52));
+    expect(appendFormalStocktakePage(first.items, batch([], null), first.next_after_id).next_after_id).toBeNull();
+  });
+
+  it.each([
+    { indices: [1, 1], next: null }, { indices: [2, 1], next: null },
+    { indices: [1], next: 1 }, { indices: [], next: 1 },
+    { indices: Array.from({ length: 51 }, (_, i) => i + 1), next: null },
+  ])("rejects malformed first-page boundaries $indices / $next", ({ indices, next }) => {
+    expect(() => appendFormalStocktakePage([], batch(indices, next), null)).toThrow();
+  });
+
+  it.each([
+    { indices: [1], next: null, cursor: id(2) },
+    { indices: [2], next: 2, cursor: id(2) },
+    { indices: [2], next: null, cursor: id(3) },
+    { indices: [2], next: null, cursor: id(1) },
+    { indices: [2], next: null, cursor: null },
+  ])("does not hide overlapping or backwards pages $indices / $cursor", ({ indices, next, cursor }) => {
+    const first = appendFormalStocktakePage([], batch([1], 2), null);
+    expect(() => appendFormalStocktakePage(first.items, batch(indices, next), cursor)).toThrow();
+  });
+});
 
 function postableDetail(posted = false) {
   const reviewedAt = "2026-09-01T10:00:00+08:00";

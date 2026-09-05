@@ -30,6 +30,7 @@ import FormalFileUploadField, {
   defaultFormalFileUploadClient,
 } from "../FormalFileUploadField";
 import { Button, Empty, Field, Loading, SectionHeader, showError } from "../ui";
+import { appendFormalStocktakePage } from "../formalStocktakeTaskPages";
 
 type Props = Readonly<{
   adapter: FormalStocktakeAdapter;
@@ -125,6 +126,9 @@ function CountForm({ detail, round, scope, action, disabled, fileUploadClient, u
   const [accountSerials, setAccountSerials] = useState<Record<string, string>>({});
   const [observations, setObservations] = useState<StocktakeObservationInput[]>([]);
   const [identifier, setIdentifier] = useState("");
+  const [inputMethod, setInputMethod] = useState<"manual" | "scan">("manual");
+  const [materialIdentifierType, setMaterialIdentifierType] = useState<StocktakeObservationInput["material_identifier_type"]>("sku_code");
+  const [serialIdentifierType, setSerialIdentifierType] = useState<NonNullable<StocktakeObservationInput["serial_identifier_type"]>>("serial_no");
   const [quantity, setQuantity] = useState("");
   const [condition, setCondition] = useState<StocktakeObservationInput["condition_code"]>("new");
   const [availability, setAvailability] = useState<StocktakeObservationInput["availability_bucket"]>("available");
@@ -139,7 +143,7 @@ function CountForm({ detail, round, scope, action, disabled, fileUploadClient, u
     const next: StocktakeObservationInput = {
       material_id: null,
       material_identifier_raw: identifier.trim(),
-      material_identifier_type: "sku_code",
+      material_identifier_type: materialIdentifierType,
       condition_code: condition,
       availability_bucket: availability,
       counted_qty: fixedQuantityText(quantity, true),
@@ -147,12 +151,13 @@ function CountForm({ detail, round, scope, action, disabled, fileUploadClient, u
       lot_no_raw: lotNo.trim() || null,
       serial_id: null,
       serial_no_raw: serialNo.trim() || null,
-      serial_identifier_type: serialNo.trim() ? "serial_no" : null,
-      count_method: "manual",
+      serial_identifier_type: serialNo.trim() ? serialIdentifierType : null,
+      count_method: inputMethod,
       reason_code: null,
       remark: remark.trim(),
     };
     if (!next.material_identifier_raw) throw new Error("请填写现场物料标识");
+    if (next.serial_no_raw && next.counted_qty !== "1.000") throw new Error("SN 必须逐件盘点，每行数量为 1");
     setObservations((rows) => [...rows, next]);
     setIdentifier(""); setQuantity(""); setLotNo(""); setSerialNo(""); setRemark("");
   }
@@ -176,12 +181,22 @@ function CountForm({ detail, round, scope, action, disabled, fileUploadClient, u
     </div>)}
     <h4>现场实物观察</h4>
     <div className="form-grid three">
+      <Field label="标识录入方式"><select aria-label="标识录入方式" value={inputMethod} disabled={disabled} onChange={(event) => {
+        const method = event.target.value as "manual" | "scan";
+        setInputMethod(method); setMaterialIdentifierType(method === "scan" ? "unknown" : "sku_code"); setSerialIdentifierType(method === "scan" ? "unknown" : "serial_no");
+        setIdentifier(""); setSerialNo("");
+      }}><option value="manual">手工录入</option><option value="scan">扫码枪录入</option></select></Field>
+      <Field label="物料标识类型"><select aria-label="物料标识类型" value={materialIdentifierType} disabled={disabled} onChange={(event) => setMaterialIdentifierType(event.target.value as typeof materialIdentifierType)}><option value="sku_code">SKU 编码</option><option value="qr_code">物料二维码</option><option value="unknown">不确定，由服务端核验</option></select></Field>
+      <Field label="SN 标识类型"><select aria-label="SN 标识类型" value={serialIdentifierType} disabled={disabled} onChange={(event) => setSerialIdentifierType(event.target.value as typeof serialIdentifierType)}><option value="serial_no">SN 文本</option><option value="qr_code">SN 二维码</option><option value="unknown">不确定，由服务端核验</option></select></Field>
+    </div>
+    <p>扫码枪录入只保留标签原文；未知或多义标识由服务端核验，不在客户端猜测物料或 SN。SN 逐件录入，每行数量为 1。</p>
+    <div className="form-grid three">
       <Field label="物料标识"><input aria-label="现场物料标识" value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder="SKU/二维码原文" disabled={disabled} /></Field>
       <Field label="实盘数量"><input aria-label="现场实盘数量" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={disabled} /></Field>
       <Field label="成色"><select value={condition} onChange={(event) => setCondition(event.target.value as typeof condition)} disabled={disabled}><option value="new">新件</option><option value="used">旧件</option><option value="damaged">损坏</option><option value="scrapped">报废</option></select></Field>
       <Field label="库存状态"><select value={availability} onChange={(event) => setAvailability(event.target.value as typeof availability)} disabled={disabled}><option value="available">可用</option><option value="reserved">已占用</option><option value="picking">拣货中</option><option value="outbound">已出库</option><option value="in_transit">在途</option><option value="arrived_pending">到达待入库</option><option value="frozen">冻结</option><option value="return_pending">退回待处理</option><option value="scrap_pending">报废待处理</option></select></Field>
       <Field label="批次号（可选）"><input value={lotNo} onChange={(event) => setLotNo(event.target.value)} disabled={disabled} /></Field>
-      <Field label="SN（可选）"><input value={serialNo} onChange={(event) => setSerialNo(event.target.value)} disabled={disabled} /></Field>
+      <Field label="SN（可选）"><input aria-label="现场 SN 标识" value={serialNo} onChange={(event) => setSerialNo(event.target.value)} disabled={disabled} /></Field>
       <Field label="备注"><input value={remark} onChange={(event) => setRemark(event.target.value)} disabled={disabled} /></Field>
     </div>
     <Button tone="secondary" disabled={disabled || !identifier.trim() || !quantity.trim()} onClick={() => { try { addObservation(); } catch (error) { window.alert(showError(error)); } }} icon={<Plus size={16} />}>加入观察行</Button>
@@ -207,11 +222,20 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
   const registry = useRef(createFormalStocktakeIntentRegistry());
   const countEvidenceClaims = useRef(new Map<string, string>());
   const uploadIdentity = useRef("");
+  const readEpoch = useRef(0);
+  const lifecycleEpoch = useRef(0);
+  const activeAdapter = useRef(adapter);
+  const moreLease = useRef<number | null>(null);
+  const taskPage = useRef<ReturnType<typeof appendFormalStocktakePage>>({ items: [], next_after_id: null });
   const [access, setAccess] = useState<FormalStocktakeAccess | null>(null);
   const [items, setItems] = useState<Awaited<ReturnType<FormalStocktakeAdapter["list"]>>["items"]>([]);
+  const [nextAfterId, setNextAfterId] = useState<string | null>(null);
+  const [taskFilter, setTaskFilter] = useState("");
+  const [loadingMore, setLoadingMore] = useState(false);
   const [detail, setDetail] = useState<FormalStocktakeDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [commandBusy, setBusy] = useState(false);
+  const busy = commandBusy || loadingMore;
   const [error, setError] = useState("");
   const [pendingMessage, setPendingMessage] = useState("");
   const [pendingRetryable, setPendingRetryable] = useState(false);
@@ -235,50 +259,121 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
   const [recountLoadingScopeId, setRecountLoadingScopeId] = useState("");
   const [recountReason, setRecountReason] = useState("");
 
-  const load = useCallback(async () => {
-    setLoading(true); setError("");
+  function sameAccess(left: FormalStocktakeAccess, right: FormalStocktakeAccess): boolean {
+    return left.person_id === right.person_id && left.authorization_version === right.authorization_version
+      && left.can_read === right.can_read && left.can_count === right.can_count
+      && left.can_manage === right.can_manage && left.can_review_region === right.can_review_region
+      && left.can_review_headquarters === right.can_review_headquarters && left.can_post === right.can_post
+      && left.can_reconcile === right.can_reconcile && left.can_close === right.can_close;
+  }
+  function clearReadState() {
+    taskPage.current = { items: [], next_after_id: null };
+    countEvidenceClaims.current.clear(); uploadIdentity.current = "";
+    setAccess(null); setItems([]); setNextAfterId(null); setDetail(null); setCountTarget(null);
+    setRegions([]); setLocations([]); setAssignees([]); setManagedScopes([]);
+    setRecountScopes([]); setRecountAssigneeOptions({}); setRecountAssigneeUserIds({});
+  }
+  function publishPage(page: ReturnType<typeof appendFormalStocktakePage>) {
+    taskPage.current = page; setItems(page.items); setNextAfterId(page.next_after_id);
+  }
+  function isCurrentRead(epoch: number): boolean {
+    return readEpoch.current === epoch && activeAdapter.current === adapter;
+  }
+
+  const load = useCallback(async (reloadDetail = true) => {
+    const epoch = ++readEpoch.current;
+    moreLease.current = null;
+    setLoadingMore(false); setLoading(true); setError("");
     try {
       const nextAccess = await adapter.loadAccess();
+      if (!isCurrentRead(epoch)) return;
       if (!nextAccess.can_read) throw new Error("当前授权不包含正式盘点只读权限");
       const nextUploadIdentity = `${nextAccess.person_id}:${nextAccess.authorization_version}`;
-      if (uploadIdentity.current && uploadIdentity.current !== nextUploadIdentity) {
-        countEvidenceClaims.current.clear();
-        setCountTarget(null);
+      const identityChanged = !!uploadIdentity.current && uploadIdentity.current !== nextUploadIdentity;
+      if (identityChanged) {
+        clearReadState();
       }
+      const page = appendFormalStocktakePage([], await adapter.list(null), null);
+      if (!isCurrentRead(epoch)) return;
+      // A selected task can be on a later page; absence from page one is not loss of access.
+      const nextDetail = reloadDetail && !identityChanged && detail ? await adapter.detail(detail.task_id) : null;
+      if (!isCurrentRead(epoch)) return;
+      const nextRegions = nextAccess.can_manage ? await loadAllRegions() : [];
+      if (!isCurrentRead(epoch)) return;
+      const finalAccess = await adapter.loadAccess();
+      if (!isCurrentRead(epoch)) return;
+      if (!sameAccess(nextAccess, finalAccess)) throw new Error("盘点读取期间身份或授权已变化，请重新进入页面");
       uploadIdentity.current = nextUploadIdentity;
-      const page = await adapter.list(null);
-      setAccess(nextAccess); setItems(page.items);
-      if (detail && page.items.some((item) => item.task_id === detail.task_id)) setDetail(await adapter.detail(detail.task_id));
-      if (nextAccess.can_manage) setRegions(await loadAllRegions());
+      setAccess(finalAccess); publishPage(page); setRegions(nextRegions);
+      if (nextDetail) setDetail(nextDetail);
     } catch (loadError) {
-      countEvidenceClaims.current.clear(); uploadIdentity.current = ""; setCountTarget(null);
-      setAccess(null); setItems([]); setDetail(null); setError(showError(loadError));
-    } finally { setLoading(false); }
+      if (isCurrentRead(epoch)) { clearReadState(); setError(showError(loadError)); }
+    } finally { if (isCurrentRead(epoch)) setLoading(false); }
   }, [adapter, detail?.task_id]);
 
   useEffect(() => {
-    void load();
-    return () => { countEvidenceClaims.current.clear(); uploadIdentity.current = ""; };
+    lifecycleEpoch.current += 1;
+    activeAdapter.current = adapter;
+    clearReadState(); setTaskFilter(""); setBusy(false);
+    setPendingRetryable(false);
+    setPendingMessage(registry.current.current() ? "仍有原盘点请求待核实；身份上下文已重新建立，禁止新写或自动重发原请求。" : "");
+    void load(false);
+    return () => { lifecycleEpoch.current += 1; readEpoch.current += 1; moreLease.current = null; countEvidenceClaims.current.clear(); uploadIdentity.current = ""; };
   }, [adapter]);
 
+  async function loadMore() {
+    const cursor = taskPage.current.next_after_id;
+    if (!cursor || !access || loading || commandBusy || moreLease.current !== null) return;
+    const epoch = ++readEpoch.current;
+    const previous = taskPage.current.items;
+    moreLease.current = epoch; setLoadingMore(true); setError("");
+    try {
+      const currentAccess = await adapter.loadAccess();
+      if (!isCurrentRead(epoch)) return;
+      if (!currentAccess.can_read || !sameAccess(access, currentAccess)) throw new Error("盘点读取期间身份或授权已变化，请刷新");
+      const page = appendFormalStocktakePage(previous, await adapter.list(cursor), cursor);
+      if (!isCurrentRead(epoch)) return;
+      const finalAccess = await adapter.loadAccess();
+      if (!isCurrentRead(epoch)) return;
+      if (!sameAccess(currentAccess, finalAccess)) throw new Error("盘点读取期间身份或授权已变化，请刷新");
+      publishPage(page);
+    } catch (loadError) {
+      if (isCurrentRead(epoch)) { clearReadState(); setError(showError(loadError)); }
+    } finally {
+      if (moreLease.current === epoch) { moreLease.current = null; setLoadingMore(false); }
+    }
+  }
+
   async function open(taskId: string) {
+    if (moreLease.current !== null || commandBusy) return;
+    const epoch = ++readEpoch.current;
     setError(""); setBusy(true); setCountTarget(null);
     if (detail?.task_id !== taskId) countEvidenceClaims.current.clear();
     setRecountScopes([]); setRecountAssigneeOptions({}); setRecountAssigneeUserIds({}); setRecountReason("");
-    try { setDetail(await adapter.detail(taskId)); } catch (openError) { setDetail(null); setError(showError(openError)); } finally { setBusy(false); }
+    try {
+      const nextDetail = await adapter.detail(taskId);
+      if (isCurrentRead(epoch)) setDetail(nextDetail);
+    } catch (openError) {
+      if (isCurrentRead(epoch)) { setDetail(null); setError(showError(openError)); }
+    } finally { if (isCurrentRead(epoch)) setBusy(false); }
   }
 
   async function run(input: FormalStocktakeCommandInput) {
+    if (moreLease.current !== null || commandBusy || registry.current.current()) return;
+    const lifecycle = lifecycleEpoch.current;
+    const stillCurrent = () => lifecycle === lifecycleEpoch.current && activeAdapter.current === adapter;
     setBusy(true); setError(""); setPendingMessage(""); setPendingRetryable(false);
     let intent: FormalStocktakeIntent | null = null;
     try {
-      intent = registry.current.current() ?? registry.current.begin(input);
+      intent = registry.current.begin(input);
       const completed = await adapter.execute(intent);
       registry.current.complete(intent);
+      if (!stillCurrent()) return;
       setDetail(completed.detail); setCountTarget(null); setPendingMessage(""); setPendingRetryable(false);
-      const page = await adapter.list(null); setItems(page.items);
+      await load(false);
     } catch (writeError) {
       if (intent && !isFormalStocktakeWriteUncertain(writeError)) registry.current.complete(intent);
+      if (!stillCurrent()) return;
       const retry = formalStocktakeRetryState(writeError);
       setPendingRetryable(isFormalStocktakeWriteUncertain(writeError) && retry === "retryable");
       setPendingMessage(isFormalStocktakeWriteUncertain(writeError)
@@ -287,17 +382,25 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
           : "上一笔写请求结果不确定，精确回读不能确认原请求成功，也不能证明原前置状态仍成立。已停止新写，请按原坐标人工核验。"
         : "");
       setError(showError(writeError));
-    } finally { setBusy(false); }
+    } finally { if (stillCurrent()) setBusy(false); }
   }
 
   async function retryPending() {
+    if (moreLease.current !== null || commandBusy || !pendingRetryable || activeAdapter.current !== adapter) return;
     const intent = registry.current.current();
     if (!intent) return;
+    const lifecycle = lifecycleEpoch.current;
+    const stillCurrent = () => lifecycle === lifecycleEpoch.current && activeAdapter.current === adapter;
     setBusy(true); setError("");
     try {
       const completed = await adapter.execute(intent);
-      registry.current.complete(intent); setDetail(completed.detail); setPendingMessage(""); setPendingRetryable(false); setItems((await adapter.list(null)).items);
-    } catch (writeError) { const retryable = formalStocktakeRetryState(writeError) === "retryable"; setPendingRetryable(retryable); setError(showError(writeError)); setPendingMessage(retryable ? "原写意图仍可使用同一坐标重试。" : "精确回读未确认结果，已停止其他写动作。请人工核验原坐标。"); } finally { setBusy(false); }
+      registry.current.complete(intent);
+      if (!stillCurrent()) return;
+      setDetail(completed.detail); setPendingMessage(""); setPendingRetryable(false); await load(false);
+    } catch (writeError) {
+      if (!stillCurrent()) return;
+      const retryable = formalStocktakeRetryState(writeError) === "retryable"; setPendingRetryable(retryable); setError(showError(writeError)); setPendingMessage(retryable ? "原写意图仍可使用同一坐标重试。" : "精确回读未确认结果，已停止其他写动作。请人工核验原坐标。");
+    } finally { if (stillCurrent()) setBusy(false); }
   }
 
   function submitCountWithEvidence(
@@ -454,7 +557,7 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
 
   if (loading) return <Loading label="正在读取正式非期初盘点" />;
   return <section className="formal-stocktakes-page">
-    <SectionHeader title="日常盘点" subtitle="正式非期初盘点；初盘、差异、两级复核、复盘、过账和关闭保持独立。" actions={<Button tone="secondary" icon={<RefreshCw size={16} />} onClick={() => void load()}>刷新</Button>} />
+    <SectionHeader title="日常盘点" subtitle="正式非期初盘点；初盘、差异、两级复核、复盘、过账和关闭保持独立。" actions={<Button tone="secondary" disabled={commandBusy} icon={<RefreshCw size={16} />} onClick={() => void load()}>刷新</Button>} />
     {error && <div className="alert alert-error" role="alert">{error}</div>}
     {pendingMessage && <div className="alert alert-warning" role="alert">{pendingMessage}{pendingRetryable && registry.current.current() && <Button tone="secondary" disabled={busy} onClick={() => void retryPending()}>按原坐标重试</Button>}</div>}
     <div className="alert alert-info">本页只访问正式 `/v1/stocktakes`、受控 `/v1/stocktake-options` 和 `/access/context`。不会调用 legacy `/stocktakes`、`/media`、opening 路由或外部系统。差异过账是独立总部动作；`posted` 不等于 `closed`。</div>
@@ -488,11 +591,15 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
 
     <section className="content-section">
       <div className="content-title"><div><h2>可见任务</h2><p>只显示服务端按当前授权裁剪后的正式任务。</p></div></div>
-      {!items.length ? <Empty title="暂无可见正式日常盘点" /> : <div className="formal-stocktake-task-list">{items.map((item) => <article key={item.task_id} className={detail?.task_id === item.task_id ? "selected" : ""}>
+      <Field label="筛选已加载任务号"><input aria-label="筛选已加载任务号" value={taskFilter} maxLength={100} onChange={(event) => setTaskFilter(event.target.value)} /></Field>
+      <p>已加载 {items.length} 项；{nextAfterId ? "还有后续任务，可继续加载。筛选只覆盖已加载任务。" : "本次分页已读完；新建任务请刷新。"}</p>
+      {!items.length ? <Empty title="暂无可见正式日常盘点" /> : <div className="formal-stocktake-task-list">{items.filter((item) => item.task_no.toLowerCase().includes(taskFilter.trim().toLowerCase())).map((item) => <article key={item.task_id} className={detail?.task_id === item.task_id ? "selected" : ""}>
         <div><strong>{item.task_no}</strong><span>{formalStocktakeLabels.taskType[item.task_type]} · {formalStocktakeLabels.status[item.status]}</span></div>
         <div><span>{item.current_round_visible_completed_scope_count}/{item.visible_scope_count} 范围</span><span>v{item.version}</span></div>
         <Button tone="secondary" disabled={busy} onClick={() => void open(item.task_id)}>查看</Button>
       </article>)}</div>}
+      {!!items.length && !items.some((item) => item.task_no.toLowerCase().includes(taskFilter.trim().toLowerCase())) && <p>已加载任务中没有匹配项；可继续加载或刷新。</p>}
+      {nextAfterId && <Button tone="secondary" disabled={busy} onClick={() => void loadMore()}>{loadingMore ? "正在加载后续任务" : "加载更多任务"}</Button>}
     </section>
 
     {detail && <section className="content-section formal-stocktake-detail" aria-label="日常盘点详情">

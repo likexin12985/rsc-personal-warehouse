@@ -2,6 +2,7 @@ const session = require('../../utils/session')
 const { formalStocktakeAdapter, createFormalStocktakeIntentRegistry } = require('../../utils/formal-stocktake-adapter')
 const { fixedQuantityText, formalStocktakeLabels } = require('../../utils/formal-stocktake-contract')
 const formalFileUpload = require('../../utils/formal-file-upload')
+const { accessIdentity } = require('../../utils/formal-operational-stocktake-pagination')
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const NONZERO_UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -112,11 +113,15 @@ Page({
     accountDrafts: [],
     observations: [],
     materialIdentifier: '',
+    materialIdentifierType: 'sku_code',
+    materialScanned: false,
     quantity: '',
     conditionCode: 'new',
     availabilityBucket: 'available',
     lotNo: '',
     serialNo: '',
+    serialIdentifierType: 'serial_no',
+    serialScanned: false,
     remark: '',
     evidenceUploadFiles: [],
     evidenceUploadBlocking: false,
@@ -134,15 +139,32 @@ Page({
   },
 
   onLoad(options) {
+    this._hidden = false
     this._taskId = String(options.task_id || '').toLowerCase()
     this._intentRegistry = createFormalStocktakeIntentRegistry()
     this._evidenceClaims = new Map()
     this._uploadIdentity = ''
     ensureEvidenceUploads(this)
   },
-  onShow() { if (session.ensureLogin()) this.load() },
+  onShow() {
+    this._hidden = false
+    if (!session.ensureLogin()) return
+    if (this._writeLease) {
+      this.setData({ loading: false, accessAllowed: false, detail: null, accessMessage: '原盘点请求仍在处理中，请等待结束后下拉刷新；原请求坐标继续保留。' })
+      return
+    }
+    this.load()
+  },
+  onHide() {
+    this._hidden = true
+    this._scanGeneration = (this._scanGeneration || 0) + 1
+    this._loadGeneration = (this._loadGeneration || 0) + 1
+    this.setData({ busy: false, loading: false, accessAllowed: false, detail: null, accessMessage: '返回后须重新校验正式身份与盘点权限', terminalConfirm: '', selectedScopeId: '', countAction: '' })
+    if (this._intentRegistry.current()) this.setData({ pendingMessage: '原盘点写请求结果待核实，已停止新操作；刷新不代表原请求未执行。', pendingRetryable: false })
+  },
   onPullDownRefresh() { this.load().finally(() => wx.stopPullDownRefresh()) },
   onUnload() {
+    this.onHide()
     this._loadGeneration = (this._loadGeneration || 0) + 1
     if (this._evidenceUploads) this._evidenceUploads.clear()
     if (this._evidenceClaims) this._evidenceClaims.clear()
@@ -152,6 +174,8 @@ Page({
   },
 
   async load() {
+    if (this._hidden || this._writeLease) return
+    this._scanGeneration = (this._scanGeneration || 0) + 1
     if (!UUID.test(this._taskId || '')) {
       this.setData({ loading: false, accessAllowed: false, accessMessage: '任务标识无效，已停止读取', detail: null })
       return
@@ -183,6 +207,7 @@ Page({
       this._uploadIdentity = nextUploadIdentity
       this._access = access
       this._detail = detail
+      if (this._intentRegistry.current()) this.setData({ pendingMessage: '原盘点写请求结果待核实，已停止新操作；请按原坐标人工核验。', pendingRetryable: false })
       this.setData({ accessAllowed: true, accessMessage: `正式盘点权限已验证 · v${access.authorization_version}`, detail: viewDetail(detail, access), terminalConfirm: '' })
     } catch (error) {
       if (generation !== this._loadGeneration) return
@@ -194,27 +219,43 @@ Page({
     } finally { if (generation === this._loadGeneration) this.setData({ loading: false }) }
   },
 
-  async run(input) {
-    if (!this._access || !this._detail || this.data.busy) return
+  async run(input, retryIntent = null) {
+    if (!this._access || !this._detail || this.data.busy || this._writeLease || this._hidden || this.data.loading) return
+    const existing = this._intentRegistry.current()
+    if (existing && (retryIntent !== existing || !this.data.pendingRetryable)) {
+      this.setData({ pendingMessage: '原盘点写请求结果待核实，禁止以新操作重发原请求。' })
+      return
+    }
+    if (!existing && retryIntent) return
+    const lease = {}
+    this._writeLease = lease
+    const generation = this._loadGeneration
+    const access = this._access
+    const current = () => !this._hidden && this._writeLease === lease && this._loadGeneration === generation && this._access === access
     let intent
     try {
-      intent = this._intentRegistry.current() || this._intentRegistry.begin(input)
+      intent = existing || this._intentRegistry.begin(input)
       this.setData({ busy: true, errorMessage: '', pendingMessage: '', pendingRetryable: false, terminalConfirm: '' })
       const completed = await formalStocktakeAdapter.execute(intent)
+      if (!current()) return
       this._intentRegistry.complete(intent)
       this._detail = completed.detail
       if (this._evidenceUploads) this._evidenceUploads.clear()
       this.setData({ detail: viewDetail(completed.detail, this._access), selectedScopeId: '', countAction: '', accountDrafts: [], observations: [], pendingMessage: '', pendingRetryable: false, recountSelections: [], recountReason: '', recountReady: false })
     } catch (error) {
+      if (!current()) return
       const uncertain = error && error.write_result_uncertain === true
       if (intent && !uncertain) this._intentRegistry.complete(intent)
       const retryable = uncertain && error.stocktake_retry_state === 'retryable'
       this.setData({ errorMessage: error.message || '正式盘点写入失败', pendingRetryable: retryable, pendingMessage: uncertain ? (retryable ? '原写意图仍可复用同一路径、正文、幂等键和请求 ID 重试。' : '写结果不确定且精确回读不能确认；已停止其他写动作，请人工核验原坐标。') : '' })
-    } finally { this.setData({ busy: false }) }
+    } finally {
+      if (current()) this.setData({ busy: false })
+      if (this._writeLease === lease) this._writeLease = null
+    }
   },
   retryPending() {
     const intent = this._intentRegistry.current()
-    if (intent) this.run({})
+    if (intent && this.data.pendingRetryable) return this.run({}, intent)
   },
   startTask() { this.run({ action: 'start', taskId: this._detail.task_id, expectedTaskVersion: this._detail.version, body: { expected_version: this._detail.version } }) },
 
@@ -249,6 +290,7 @@ Page({
   },
 
   chooseScope(event) {
+    if (!this._detail || !this._access || this.data.busy || this.data.pendingMessage || this._hidden) return
     const scopeId = String(event.currentTarget.dataset.id || '')
     const scope = this._detail.scopes.find((row) => row.scope_id === scopeId)
     if (!scope) return
@@ -256,28 +298,72 @@ Page({
     if (!action || !this._access.can_count) return
     const round = currentRound(this._detail)
     if (!round) return
+    this._scanGeneration = (this._scanGeneration || 0) + 1
     ensureEvidenceUploads(this)
     this._evidenceUploads.bind(`${this._uploadIdentity}:${this._detail.task_id}:${this._detail.version}:${round.round_id}:${scopeId}:${action}`)
-    this.setData({ selectedScopeId: scopeId, countAction: action, accountDrafts: scope.snapshot_accounts.map((account) => Object.assign({}, account, { counted_qty: '', serial_ids_text: '' })), observations: [] })
+    this.setData({ selectedScopeId: scopeId, countAction: action, accountDrafts: scope.snapshot_accounts.map((account) => Object.assign({}, account, { counted_qty: '', serial_ids_text: '' })), observations: [], materialIdentifier: '', materialIdentifierType: 'sku_code', materialScanned: false, serialNo: '', serialIdentifierType: 'serial_no', serialScanned: false, quantity: '', lotNo: '', remark: '' })
   },
   bindAccountQty(event) { const index = Number(event.currentTarget.dataset.index); const rows = this.data.accountDrafts.slice(); rows[index].counted_qty = event.detail.value; this.setData({ accountDrafts: rows, hasAccountInput: rows.some((row) => String(row.counted_qty || '').trim()) }) },
   bindAccountSerials(event) { const index = Number(event.currentTarget.dataset.index); const rows = this.data.accountDrafts.slice(); rows[index].serial_ids_text = event.detail.value; this.setData({ accountDrafts: rows }) },
-  bindMaterial(event) { this.setData({ materialIdentifier: event.detail.value }) },
+  bindMaterial(event) { this._scanGeneration = (this._scanGeneration || 0) + 1; this.setData({ materialIdentifier: event.detail.value, materialIdentifierType: 'sku_code', materialScanned: false }) },
   bindQuantity(event) { this.setData({ quantity: event.detail.value }) },
   bindLot(event) { this.setData({ lotNo: event.detail.value }) },
-  bindSerial(event) { this.setData({ serialNo: event.detail.value }) },
+  bindSerial(event) { this._scanGeneration = (this._scanGeneration || 0) + 1; this.setData({ serialNo: event.detail.value, serialIdentifierType: 'serial_no', serialScanned: false }) },
   bindRemark(event) { this.setData({ remark: event.detail.value }) },
   changeCondition(event) { const index = Number(event.detail.value); this.setData({ conditionIndex: index, conditionCode: this.data.conditionOptions[index].value }) },
   changeAvailability(event) { const index = Number(event.detail.value); this.setData({ availabilityIndex: index, availabilityBucket: this.data.availabilityOptions[index].value }) },
-  scanMaterial() { wx.scanCode({ onlyFromCamera: true, success: (result) => this.setData({ materialIdentifier: String(result.result || '').trim() }) }) },
-  scanSerial() { wx.scanCode({ onlyFromCamera: true, success: (result) => this.setData({ serialNo: String(result.result || '').trim() }) }) },
+  scanCoordinate() {
+    if (this._hidden || this._writeLease || this.data.loading || this.data.busy || this.data.pendingMessage || !this._access || !this._access.can_count || !this._detail) return null
+    const scope = this._detail.scopes.find((item) => item.scope_id === this.data.selectedScopeId)
+    const round = currentRound(this._detail)
+    if (!scope || !round || !scope.allowed_actions.includes(this.data.countAction)) return null
+    return `${accessIdentity(this._access)}:${this._detail.task_id}:${this._detail.version}:${round.round_id}:${scope.scope_id}:${this.data.countAction}`
+  },
+  scanMaterial() { this.scanIdentifier('material') },
+  scanSerial() { this.scanIdentifier('serial') },
+  scanIdentifier(kind) {
+    const coordinate = this.scanCoordinate()
+    if (!coordinate) return
+    const generation = (this._scanGeneration || 0) + 1
+    this._scanGeneration = generation
+    const isCurrent = () => generation === this._scanGeneration && coordinate === this.scanCoordinate()
+    wx.scanCode({ onlyFromCamera: true, success: async (result) => {
+      if (!isCurrent()) return
+      try {
+        const value = String(result.result || '').trim()
+        if (!value || value.length > (kind === 'material' ? 300 : 200)) throw new Error('扫描标识为空或超长，请重新扫描')
+        const access = await formalStocktakeAdapter.loadAccess()
+        if (!isCurrent()) return
+        if (accessIdentity(access) !== accessIdentity(this._access) || !access.can_count) throw new Error('扫码期间身份或盘点权限已变化，请刷新')
+        const detail = await formalStocktakeAdapter.detail(this._detail.task_id)
+        if (!isCurrent()) return
+        const confirmedAccess = await formalStocktakeAdapter.loadAccess()
+        if (!isCurrent()) return
+        if (accessIdentity(confirmedAccess) !== accessIdentity(access) || !confirmedAccess.can_count) throw new Error('扫码期间身份或盘点权限已变化，请刷新')
+        const scope = detail.scopes.find((item) => item.scope_id === this.data.selectedScopeId)
+        const round = currentRound(detail)
+        if (detail.task_id !== this._detail.task_id || detail.version !== this._detail.version || !round || round.round_id !== currentRound(this._detail).round_id || !scope || !scope.allowed_actions.includes(this.data.countAction)) throw new Error('扫码期间盘点范围已变化，请刷新')
+        // Camera codes can contain a SKU/SN or a registered QR code. Preserve
+        // raw input; the server resolves exact matches and rejects ambiguity.
+        this.setData(kind === 'material'
+          ? { materialIdentifier: value, materialIdentifierType: 'unknown', materialScanned: true }
+          : { serialNo: value, serialIdentifierType: 'unknown', serialScanned: true })
+      } catch (error) {
+        if (isCurrent()) this.setData({ errorMessage: error.message || '扫码核验失败，请刷新' })
+      }
+    } })
+  },
   addObservation() {
     try {
+      if (!this.scanCoordinate()) throw new Error('当前盘点范围不可录入，请刷新')
       const identifier = this.data.materialIdentifier.trim()
       if (!identifier) throw new Error('请填写现场物料标识')
       const serial = this.data.serialNo.trim()
-      const row = { material_id: null, material_identifier_raw: identifier, material_identifier_type: 'sku_code', condition_code: this.data.conditionCode, availability_bucket: this.data.availabilityBucket, counted_qty: fixedQuantityText(this.data.quantity, true), lot_id: null, lot_no_raw: this.data.lotNo.trim() || null, serial_id: null, serial_no_raw: serial || null, serial_identifier_type: serial ? 'serial_no' : null, count_method: 'manual', reason_code: null, remark: this.data.remark.trim() }
-      this.setData({ observations: this.data.observations.concat([row]), materialIdentifier: '', quantity: '', lotNo: '', serialNo: '', remark: '' })
+      const quantity = fixedQuantityText(this.data.quantity, true)
+      if (serial && quantity !== '1.000') throw new Error('SN 必须逐件盘点，每条现场观察数量必须为 1')
+      const row = { material_id: null, material_identifier_raw: identifier, material_identifier_type: this.data.materialIdentifierType, condition_code: this.data.conditionCode, availability_bucket: this.data.availabilityBucket, counted_qty: quantity, lot_id: null, lot_no_raw: this.data.lotNo.trim() || null, serial_id: null, serial_no_raw: serial || null, serial_identifier_type: serial ? this.data.serialIdentifierType : null, count_method: this.data.materialScanned || (serial && this.data.serialScanned) ? 'scan' : 'manual', reason_code: null, remark: this.data.remark.trim() }
+      this._scanGeneration = (this._scanGeneration || 0) + 1
+      this.setData({ observations: this.data.observations.concat([row]), materialIdentifier: '', materialIdentifierType: 'sku_code', materialScanned: false, quantity: '', lotNo: '', serialNo: '', serialIdentifierType: 'serial_no', serialScanned: false, remark: '' })
     } catch (error) { wx.showToast({ title: error.message || '观察行无效', icon: 'none' }) }
   },
   removeObservation(event) { const index = Number(event.currentTarget.dataset.index); this.setData({ observations: this.data.observations.filter((_, rowIndex) => rowIndex !== index) }) },

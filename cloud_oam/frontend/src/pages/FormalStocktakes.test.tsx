@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FormalFileUploadClient } from "../FormalFileUploadField";
@@ -73,6 +73,195 @@ function evidenceFile(): File {
 }
 
 afterEach(cleanup);
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+function numberedPage(first: number, count: number, next: number | null) {
+  const id = (index: number) => `10000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+  return { ...page(), items: Array.from({ length: count }, (_, offset) => ({ ...page().items[0], task_id: id(first + offset), task_no: `ST-${String(first + offset).padStart(3, "0")}` })), next_after_id: next === null ? null : id(next) };
+}
+
+describe("daily stocktake task discovery and input provenance", () => {
+  it("loads and opens task 51, filters only loaded tasks and keeps a selected later-page task on refresh", async () => {
+    const client = adapter(true);
+    const second = numberedPage(51, 1, null);
+    vi.mocked(client.list).mockImplementation(async (cursor) => cursor ? second : numberedPage(1, 50, 51));
+    vi.mocked(client.detail).mockResolvedValue({ ...detail(), task_id: second.items[0].task_id, task_no: "ST-051" });
+    render(<FormalStocktakesPage adapter={client} />);
+    expect(await screen.findByText(/已加载 50 项/)).toBeTruthy();
+    const more = screen.getByRole("button", { name: "加载更多任务" });
+    fireEvent.click(more); fireEvent.click(more);
+    expect(await screen.findByText(/已加载 51 项/)).toBeTruthy();
+    expect(client.list).toHaveBeenCalledTimes(2);
+    expect(client.list).toHaveBeenLastCalledWith(second.items[0].task_id);
+    fireEvent.change(screen.getByLabelText("筛选已加载任务号"), { target: { value: "st-051" } });
+    expect(screen.getAllByRole("button", { name: "查看" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "查看" }));
+    expect(await within(await screen.findByLabelText("日常盘点详情")).findByRole("heading", { name: "ST-051" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+    expect(await screen.findByText(/已加载 50 项/)).toBeTruthy();
+    expect(within(screen.getByLabelText("日常盘点详情")).getByRole("heading", { name: "ST-051" })).toBeTruthy();
+  });
+
+  it.each(["overlap", "backwards", "empty_cursor", "unauthorized"])("fails closed on %s pagination without retaining stale tasks", async (kind) => {
+    const client = adapter(true);
+    vi.mocked(client.list).mockResolvedValueOnce(numberedPage(1, 1, 2));
+    if (kind === "unauthorized") vi.mocked(client.list).mockRejectedValueOnce(new Error("权限已撤销"));
+    else vi.mocked(client.list).mockResolvedValueOnce(kind === "overlap" ? numberedPage(1, 1, null) : kind === "backwards" ? numberedPage(2, 1, 2) : numberedPage(2, 0, 3));
+    render(<FormalStocktakesPage adapter={client} />);
+    fireEvent.click(await screen.findByRole("button", { name: "加载更多任务" }));
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.queryByText("ST-001")).toBeNull();
+    expect(screen.queryByRole("button", { name: "创建个人自盘草稿" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "加载更多任务" })).toBeNull();
+  });
+
+  it.each(["before", "after"])("rechecks identity %s receiving the next page", async (timing) => {
+    const client = adapter(true);
+    const original = await client.loadAccess();
+    vi.mocked(client.loadAccess).mockClear();
+    vi.mocked(client.list).mockResolvedValue(numberedPage(1, 1, 2));
+    render(<FormalStocktakesPage adapter={client} />);
+    const more = await screen.findByRole("button", { name: "加载更多任务" });
+    if (timing === "after") {
+      vi.mocked(client.loadAccess).mockResolvedValueOnce(original);
+      vi.mocked(client.list).mockResolvedValueOnce(numberedPage(2, 1, null));
+    }
+    vi.mocked(client.loadAccess).mockResolvedValue({ ...original, authorization_version: 8 });
+    fireEvent.click(more);
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.queryByText("ST-001")).toBeNull();
+    expect(screen.queryByText("ST-002")).toBeNull();
+    expect(client.list).toHaveBeenCalledTimes(timing === "before" ? 1 : 2);
+  });
+
+  it("ignores a late next page after refresh replaces its generation", async () => {
+    const client = adapter(true);
+    const late = deferred<any>();
+    vi.mocked(client.list).mockResolvedValueOnce(numberedPage(1, 1, 2)).mockImplementationOnce(() => late.promise).mockResolvedValueOnce(numberedPage(7, 1, null));
+    render(<FormalStocktakesPage adapter={client} />);
+    fireEvent.click(await screen.findByRole("button", { name: "加载更多任务" }));
+    await vi.waitFor(() => expect(client.list).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+    expect(await screen.findByText("ST-007")).toBeTruthy();
+    await act(async () => late.resolve(numberedPage(2, 1, null)));
+    expect(screen.queryByText("ST-002")).toBeNull();
+    expect(screen.getByText("ST-007")).toBeTruthy();
+  });
+
+  it.each(["list", "detail", "write"])("does not publish late %s results into another adapter or leave it busy", async (operation) => {
+    const old = adapter(true);
+    const next = adapter(true);
+    const late = deferred<any>();
+    vi.mocked(next.list).mockResolvedValue(numberedPage(9, 1, null));
+    if (operation === "list") vi.mocked(old.list).mockImplementation(() => late.promise);
+    if (operation === "detail") vi.mocked(old.detail).mockImplementation(() => late.promise);
+    if (operation === "write") vi.mocked(old.execute).mockImplementation(() => late.promise);
+    const rendered = render(<FormalStocktakesPage adapter={old} />);
+    if (operation === "detail") fireEvent.click(await screen.findByRole("button", { name: "查看" }));
+    if (operation === "write") fireEvent.click(await screen.findByRole("button", { name: "创建个人自盘草稿" }));
+    await vi.waitFor(() => expect(operation === "list" ? old.list : operation === "detail" ? old.detail : old.execute).toHaveBeenCalled());
+    rendered.rerender(<FormalStocktakesPage adapter={next} />);
+    expect(await screen.findByText("ST-009")).toBeTruthy();
+    await act(async () => late.resolve(operation === "list" ? page() : operation === "detail" ? detail() : { result: {}, detail: detail() }));
+    expect(screen.queryByLabelText("日常盘点详情")).toBeNull();
+    expect(screen.queryByText("ST-SELF-001")).toBeNull();
+    expect((screen.getByRole("button", { name: "查看" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "刷新" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(next.list).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report a committed write as uncertain when its list refresh fails", async () => {
+    const client = adapter(true);
+    vi.mocked(client.execute).mockResolvedValue({ result: {}, detail: detail() });
+    vi.mocked(client.list).mockResolvedValueOnce(page()).mockRejectedValueOnce(new Error("列表暂不可用"));
+    render(<FormalStocktakesPage adapter={client} />);
+    fireEvent.click(await screen.findByRole("button", { name: "创建个人自盘草稿" }));
+    expect(await screen.findByText("列表暂不可用")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "按原坐标重试" })).toBeNull();
+    expect(screen.queryByText(/上一笔写请求结果不确定/)).toBeNull();
+    expect(client.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains the unresolved write barrier when the old adapter later reports uncertainty", async () => {
+    const old = adapter(true);
+    const next = adapter(true);
+    const late = deferred<any>();
+    vi.mocked(old.execute).mockImplementation(() => late.promise);
+    const rendered = render(<FormalStocktakesPage adapter={old} />);
+    fireEvent.click(await screen.findByRole("button", { name: "创建个人自盘草稿" }));
+    await vi.waitFor(() => expect(old.execute).toHaveBeenCalledTimes(1));
+    rendered.rerender(<FormalStocktakesPage adapter={next} />);
+    const create = await screen.findByRole("button", { name: "创建个人自盘草稿" });
+    await act(async () => late.reject(Object.assign(new Error("原请求结果未知"), { write_result_uncertain: true, stocktake_retry_state: "unknown" })));
+    expect((create as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(create);
+    expect(next.execute).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("日常盘点详情")).toBeNull();
+  });
+
+  it("does not start a list refresh after an unmounted write completes", async () => {
+    const client = adapter(true);
+    const late = deferred<any>();
+    vi.mocked(client.execute).mockImplementation(() => late.promise);
+    const rendered = render(<FormalStocktakesPage adapter={client} />);
+    fireEvent.click(await screen.findByRole("button", { name: "创建个人自盘草稿" }));
+    await vi.waitFor(() => expect(client.execute).toHaveBeenCalledTimes(1));
+    rendered.unmount();
+    await act(async () => late.resolve({ result: {}, detail: detail() }));
+    expect(client.list).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { method: "manual", materialType: "sku_code", serial: "", serialType: "serial_no", expectedSerialType: null },
+    { method: "manual", materialType: "qr_code", serial: "", serialType: "serial_no", expectedSerialType: null },
+    { method: "manual", materialType: "sku_code", serial: "SN-001", serialType: "serial_no", expectedSerialType: "serial_no" },
+    { method: "manual", materialType: "qr_code", serial: "QR-SERIAL-001", serialType: "qr_code", expectedSerialType: "qr_code" },
+    { method: "scan", materialType: "unknown", serial: "QR-SERIAL-001", serialType: "unknown", expectedSerialType: "unknown" },
+  ])("preserves $method/$materialType/$serialType without resolving client-side IDs", async (example) => {
+    const client = adapter(true);
+    const counting = countDetail();
+    vi.mocked(client.detail).mockResolvedValue(counting);
+    vi.mocked(client.execute).mockResolvedValue({ result: {}, detail: counting });
+    render(<FormalStocktakesPage adapter={client} />);
+    fireEvent.click(await screen.findByRole("button", { name: "查看" }));
+    fireEvent.click(await screen.findByRole("button", { name: "录入初盘" }));
+    const form = within(screen.getByLabelText("盘点计数表单"));
+    fireEvent.change(form.getByLabelText("标识录入方式"), { target: { value: example.method } });
+    fireEvent.change(form.getByLabelText("物料标识类型"), { target: { value: example.materialType } });
+    fireEvent.change(form.getByLabelText("SN 标识类型"), { target: { value: example.serialType } });
+    fireEvent.change(form.getByLabelText("现场物料标识"), { target: { value: "QR-MATERIAL-NOT-SKU" } });
+    fireEvent.change(form.getByLabelText("现场 SN 标识"), { target: { value: example.serial } });
+    fireEvent.change(form.getByLabelText("现场实盘数量"), { target: { value: "1" } });
+    fireEvent.click(form.getByRole("button", { name: "加入观察行" }));
+    fireEvent.click(form.getByRole("button", { name: "提交并封存范围" }));
+    await vi.waitFor(() => expect(client.execute).toHaveBeenCalledTimes(1));
+    const observations = vi.mocked(client.execute).mock.calls[0][0].body.physical_observations;
+    expect(observations).toEqual([expect.objectContaining({ material_id: null, material_identifier_raw: "QR-MATERIAL-NOT-SKU", material_identifier_type: example.materialType, serial_id: null, serial_no_raw: example.serial || null, serial_identifier_type: example.expectedSerialType, count_method: example.method, counted_qty: "1.000" })]);
+  });
+
+  it("rejects a multi-unit SN before adding an observation", async () => {
+    const client = adapter(true);
+    vi.mocked(client.detail).mockResolvedValue(countDetail());
+    const alert = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+    render(<FormalStocktakesPage adapter={client} />);
+    fireEvent.click(await screen.findByRole("button", { name: "查看" }));
+    fireEvent.click(await screen.findByRole("button", { name: "录入初盘" }));
+    fireEvent.change(screen.getByLabelText("现场物料标识"), { target: { value: "SKU-001" } });
+    fireEvent.change(screen.getByLabelText("现场 SN 标识"), { target: { value: "SN-001" } });
+    fireEvent.change(screen.getByLabelText("现场实盘数量"), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "加入观察行" }));
+    expect(alert).toHaveBeenCalledWith("SN 必须逐件盘点，每行数量为 1");
+    expect((screen.getByRole("button", { name: "提交并封存范围" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(client.execute).not.toHaveBeenCalled();
+    alert.mockRestore();
+  });
+});
 
 describe("formal non-opening stocktake PC page", () => {
   it("mounts the separate daily-stocktake entry and renders eight independent axes", async () => {

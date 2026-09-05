@@ -32,16 +32,18 @@
           <input class="input" value="{{item.counted_qty}}" bindinput="bindAccountQty" data-index="{{index}}" type="digit" placeholder="实盘数量" />
           <input class="input" value="{{item.serial_ids_text}}" bindinput="bindAccountSerials" data-index="{{index}}" placeholder="正式 serial_id，逗号分隔" />
         </view>
-        <view class="field"><text class="field-label">现场物料标识</text><input class="input" value="{{materialIdentifier}}" bindinput="bindMaterial" placeholder="SKU/二维码原文" /></view>
-        <button class="button button-secondary" bindtap="scanMaterial">扫描物料标识</button>
+        <view class="field"><text class="field-label">现场物料标识</text><input class="input" value="{{materialIdentifier}}" bindinput="bindMaterial" placeholder="手填 SKU 或使用扫码按钮" /></view>
+        <text class="small muted">{{materialScanned ? '扫码原文：由服务端精确匹配，未知或多义标识不能直接入账。' : '手填按 SKU 识别。'}}</text>
+        <button class="button button-secondary" bindtap="scanMaterial" disabled="{{busy || pendingMessage}}">扫描物料标识</button>
         <view class="field"><text class="field-label">实盘数量</text><input class="input" value="{{quantity}}" bindinput="bindQuantity" type="digit" /></view>
         <view class="field"><text class="field-label">成色</text><picker range="{{conditionOptions}}" range-key="label" value="{{conditionIndex}}" bindchange="changeCondition"><view class="picker-field">{{conditionOptions[conditionIndex].label}}</view></picker></view>
         <view class="field"><text class="field-label">库存状态</text><picker range="{{availabilityOptions}}" range-key="label" value="{{availabilityIndex}}" bindchange="changeAvailability"><view class="picker-field">{{availabilityOptions[availabilityIndex].label}}</view></picker></view>
         <view class="field"><text class="field-label">批次号（可选）</text><input class="input" value="{{lotNo}}" bindinput="bindLot" /></view>
         <view class="field"><text class="field-label">SN（可选）</text><input class="input" value="{{serialNo}}" bindinput="bindSerial" /></view>
-        <button class="button button-secondary" bindtap="scanSerial">扫描 SN</button>
+        <button class="button button-secondary" bindtap="scanSerial" disabled="{{busy || pendingMessage}}">扫描 SN</button>
+        <text class="small muted">{{serialScanned ? '扫码原文：精确匹配 SN 或 SN 二维码。' : '手填按 SN 编号识别。'}}</text>
         <view class="field"><text class="field-label">备注</text><input class="input" value="{{remark}}" bindinput="bindRemark" /></view>
-        <button class="button button-secondary" bindtap="addObservation" disabled="{{!materialIdentifier || !quantity}}">加入现场观察</button>
+        <button class="button button-secondary" bindtap="addObservation" disabled="{{busy || pendingMessage || !materialIdentifier || !quantity}}">加入现场观察</button>
         <view wx:for="{{observations}}" wx:key="index" class="observation-row"><text>{{item.material_identifier_raw}}</text><strong>{{item.counted_qty}}</strong><button class="mini-remove" bindtap="removeObservation" data-index="{{index}}">移除</button></view>
         <view class="upload-card">
           <view class="row between"><text class="field-label">盘点证据</text><button class="button button-secondary" disabled="{{busy || pendingMessage || !evidenceUploadCanChoose}}" bindtap="chooseCountEvidence">选择并上传</button></view>
@@ -65,8 +67,8 @@
       <view wx:if="{{detail.canReviewRegion || detail.canReviewHeadquarters}}" class="card review-card">
         <text class="section-title">独立复核</text><text class="small muted">通过时逐项接受可过账差异；待核验差异保持 pending_verification。复盘/驳回必须填写意见。</text>
         <textarea class="textarea" value="{{reviewComment}}" bindinput="bindReviewComment" placeholder="复核意见" />
-        <view wx:if="{{detail.canReviewRegion}}" class="review-actions"><button class="button button-primary" bindtap="submitReview" data-stage="region" data-decision="approve">区域通过</button><button class="button button-secondary" bindtap="submitReview" data-stage="region" data-decision="recount">区域要求复盘</button><button class="button button-danger" bindtap="submitReview" data-stage="region" data-decision="reject">区域驳回</button></view>
-        <view wx:if="{{detail.canReviewHeadquarters}}" class="review-actions"><button class="button button-primary" bindtap="submitReview" data-stage="headquarters" data-decision="approve">总部通过</button><button class="button button-secondary" bindtap="submitReview" data-stage="headquarters" data-decision="recount">总部要求复盘</button><button class="button button-danger" bindtap="submitReview" data-stage="headquarters" data-decision="reject">总部驳回</button></view>
+        <view wx:if="{{detail.canReviewRegion}}" class="review-actions"><button class="button button-primary" bindtap="submitReview" data-stage="region" data-decision="approve" disabled="{{busy || pendingMessage}}">区域通过</button><button class="button button-secondary" bindtap="submitReview" data-stage="region" data-decision="recount" disabled="{{busy || pendingMessage}}">区域要求复盘</button><button class="button button-danger" bindtap="submitReview" data-stage="region" data-decision="reject" disabled="{{busy || pendingMessage}}">区域驳回</button></view>
+        <view wx:if="{{detail.canReviewHeadquarters}}" class="review-actions"><button class="button button-primary" bindtap="submitReview" data-stage="headquarters" data-decision="approve" disabled="{{busy || pendingMessage}}">总部通过</button><button class="button button-secondary" bindtap="submitReview" data-stage="headquarters" data-decision="recount" disabled="{{busy || pendingMessage}}">总部要求复盘</button><button class="button button-danger" bindtap="submitReview" data-stage="headquarters" data-decision="reject" disabled="{{busy || pendingMessage}}">总部驳回</button></view>
       </view>
 
       <view wx:if="{{detail.canOpenRecount}}" class="card recount-card">

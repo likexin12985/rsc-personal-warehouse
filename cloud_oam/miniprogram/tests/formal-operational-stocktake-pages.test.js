@@ -347,3 +347,509 @@ test('new mini pages are registered separately and contain the explicit recount/
   assert.doesNotMatch(source, /已有正式 file_id|bindEvidence|\/media/)
   assert.equal(source.includes('wx.uploadFile'), false)
 })
+
+function deferred() {
+  let resolve
+  const promise = new Promise((done) => { resolve = done })
+  return { promise, resolve }
+}
+function taskRow(number) {
+  return Object.assign(summary(), { task_id: `10000000-0000-4000-8000-${String(number).padStart(12, '0')}`, task_no: `ST-${number}` })
+}
+function listHarness(adapter) {
+  const loaded = loadPage('../pages/formal-operational-stocktakes/index', {
+    '../utils/session': { ensureLogin: () => true },
+    '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: adapter, createFormalStocktakeIntentRegistry: () => ({ current: () => null }) }
+  })
+  const page = instance(loaded.definition)
+  page.onLoad()
+  return { page, restore: loaded.restore }
+}
+const listAccess = () => ({ person_id: REGION, authorization_version: 7, can_read: true, can_count: true })
+
+test('task 51 is reachable with inclusive cursor; refresh restarts pagination and duplicate taps issue one request', async () => {
+  const second = deferred()
+  const calls = []
+  const { page, restore } = listHarness({
+    loadAccess: async () => listAccess(),
+    async list(cursor) {
+      calls.push(cursor)
+      return cursor === null ? { items: Array.from({ length: 50 }, (_, i) => taskRow(i + 1)), next_after_id: taskRow(51).task_id } : second.promise
+    }
+  })
+  let navigated
+  global.wx = { navigateTo({ url }) { navigated = url } }
+  try {
+    await page.load()
+    assert.equal(page.data.tasks.length, 50)
+    const loading = page.loadMore()
+    page.loadMore()
+    await nextTurn()
+    assert.deepEqual(calls, [null, taskRow(51).task_id])
+    second.resolve({ items: [taskRow(51)], next_after_id: null })
+    await loading
+    assert.equal(page.data.tasks.length, 51)
+    assert.equal(page.data.hasMore, false)
+    page.openTask({ currentTarget: { dataset: { id: taskRow(51).task_id } } })
+    assert.match(navigated, new RegExp(taskRow(51).task_id))
+    await page.load()
+    assert.equal(page.data.tasks.length, 50)
+    assert.equal(page.data.hasMore, true)
+  } finally { restore(); delete global.wx }
+})
+
+test('task pagination rejects duplicate, backwards, empty continuing and looping pages', async () => {
+  for (const invalid of [
+    { items: Array.from({ length: 51 }, (_, index) => taskRow(index + 2)), next_after_id: null },
+    { items: [taskRow(1)], next_after_id: null },
+    { items: [taskRow(2), taskRow(2)], next_after_id: null },
+    { items: [taskRow(3), taskRow(2)], next_after_id: null },
+    { items: [taskRow(2)], next_after_id: taskRow(2).task_id },
+    { items: [], next_after_id: taskRow(3).task_id },
+    { items: [taskRow(2)], next_after_id: taskRow(1).task_id }
+  ]) {
+    const { page, restore } = listHarness({ loadAccess: async () => listAccess(), async list(cursor) {
+      return cursor === null ? { items: [taskRow(1)], next_after_id: taskRow(2).task_id } : invalid
+    } })
+    try {
+      await page.load()
+      await page.loadMore()
+      assert.deepEqual(page.data.tasks, [])
+      assert.equal(page.data.hasMore, false)
+      assert.match(page.data.errorMessage, /分页/)
+    } finally { restore() }
+  }
+})
+
+test('refresh supersedes pending next page; hidden and unloaded pages reject late responses', async () => {
+  for (const end of ['refresh', 'onHide', 'onUnload']) {
+    const pending = deferred()
+    let initialCalls = 0
+    const { page, restore } = listHarness({ loadAccess: async () => listAccess(), async list(cursor) {
+      if (cursor !== null) return pending.promise
+      initialCalls += 1
+      return initialCalls === 1 ? { items: [taskRow(1)], next_after_id: taskRow(2).task_id } : { items: [taskRow(9)], next_after_id: null }
+    } })
+    try {
+      await page.load()
+      const loading = page.loadMore()
+      await nextTurn()
+      if (end === 'refresh') await page.load()
+      else page[end]()
+      pending.resolve({ items: [taskRow(2)], next_after_id: null })
+      await loading
+      assert.deepEqual(page.data.tasks.map((row) => row.task_id), end === 'refresh' ? [taskRow(9).task_id] : [])
+    } finally { restore() }
+  }
+})
+
+test('authorization changes before or after next-page transport clear all previously visible tasks', async () => {
+  for (const changeAfterTransport of [false, true]) {
+    let access = listAccess()
+    const { page, restore } = listHarness({ loadAccess: async () => access, async list(cursor) {
+      if (cursor !== null && changeAfterTransport) access = Object.assign(listAccess(), { authorization_version: 8 })
+      return cursor === null ? { items: [taskRow(1)], next_after_id: taskRow(2).task_id } : { items: [taskRow(2)], next_after_id: null }
+    } })
+    try {
+      await page.load()
+      if (!changeAfterTransport) access = Object.assign(listAccess(), { person_id: LOCATION })
+      await page.loadMore()
+      assert.deepEqual(page.data.tasks, [])
+      assert.equal(page.data.accessAllowed, false)
+      assert.match(page.data.errorMessage, /身份|权限|授权/)
+    } finally { restore() }
+  }
+})
+
+async function scanHarness() {
+  let source = countingDetail(2)
+  let access = listAccess()
+  let scan
+  const loaded = loadPage('../pages/formal-operational-stocktake-detail/index', {
+    '../utils/session': { ensureLogin: () => true },
+    '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {
+      loadAccess: async () => access,
+      detail: async () => source
+    }, createFormalStocktakeIntentRegistry: () => ({ current: () => null }) }
+  })
+  global.wx = { scanCode(value) { scan = value }, showToast() {} }
+  const page = instance(loaded.definition)
+  page.onLoad({ task_id: TASK })
+  await page.load()
+  page.chooseScope({ currentTarget: { dataset: { id: SCOPE } } })
+  return { page, scanned: (value) => scan.success({ result: value }), source: (value) => { source = value }, access: (value) => { access = value }, restore() { loaded.restore(); delete global.wx } }
+}
+
+test('manual input preserves SKU/SN semantics; scanned codes remain unresolved raw identifiers with scan provenance', async () => {
+  const h = await scanHarness()
+  try {
+    h.page.bindMaterial({ detail: { value: 'SKU-1' } })
+    h.page.bindSerial({ detail: { value: 'SN-1' } })
+    h.page.bindQuantity({ detail: { value: '1' } })
+    h.page.addObservation()
+    const manual = h.page.data.observations[0]
+    assert.equal(manual.material_identifier_type, 'sku_code')
+    assert.equal(manual.serial_identifier_type, 'serial_no')
+    assert.equal(manual.count_method, 'manual')
+
+    h.page.scanMaterial()
+    await h.scanned('registered-material-qr-not-sku')
+    h.page.scanSerial()
+    await h.scanned('registered-serial-qr-not-sn')
+    h.page.bindQuantity({ detail: { value: '1' } })
+    h.page.addObservation()
+    const scanned = h.page.data.observations[1]
+    assert.equal(scanned.material_identifier_type, 'unknown')
+    assert.equal(scanned.serial_identifier_type, 'unknown')
+    assert.equal(scanned.material_identifier_raw, 'registered-material-qr-not-sku')
+    assert.equal(scanned.serial_no_raw, 'registered-serial-qr-not-sn')
+    assert.equal(scanned.count_method, 'scan')
+    assert.equal(scanned.material_id, null)
+    assert.equal(scanned.serial_id, null)
+    // Use the real contract, not only the page's UI fields.
+    const intent = contract.createFormalStocktakeIntentRegistry({ coordinateFactory: () => ({ 'Idempotency-Key': `wxidem-${'a'.repeat(36)}`, 'X-Request-ID': `wxreq-${'b'.repeat(36)}` }) }).begin({ action: 'submit_initial_count', taskId: TASK, roundId: ROUND, scopeId: SCOPE, expectedTaskVersion: 1, body: { count_mode: 'blind', account_counts: [], physical_observations: [scanned], evidence_file_ids: [], zero_confirmed: false } })
+    assert.equal(intent.body.physical_observations[0].count_method, 'scan')
+  } finally { h.restore() }
+})
+
+test('manual replacement resets scan provenance and late scan cannot overwrite edited input', async () => {
+  const h = await scanHarness()
+  try {
+    h.page.scanMaterial()
+    h.page.bindMaterial({ detail: { value: 'SKU-edited' } })
+    await h.scanned('late-qr')
+    assert.equal(h.page.data.materialIdentifier, 'SKU-edited')
+    h.page.scanSerial()
+    await h.scanned('qr')
+    h.page.bindSerial({ detail: { value: 'SN-edited' } })
+    h.page.bindQuantity({ detail: { value: '1' } })
+    h.page.addObservation()
+    assert.equal(h.page.data.observations[0].serial_identifier_type, 'serial_no')
+    assert.equal(h.page.data.observations[0].count_method, 'manual')
+  } finally { h.restore() }
+})
+
+test('late camera results cannot cross scope, page lifetime, task version or authorization', async () => {
+  for (const change of ['scope', 'hide', 'unload', 'version', 'identity', 'permission']) {
+    const h = await scanHarness()
+    try {
+      h.page.scanMaterial()
+      if (change === 'scope') h.page.chooseScope({ currentTarget: { dataset: { id: SCOPE_2 } } })
+      if (change === 'hide') h.page.onHide()
+      if (change === 'unload') h.page.onUnload()
+      if (change === 'version') h.source(Object.assign(countingDetail(2), { version: 2 }))
+      if (change === 'identity') h.access(Object.assign(listAccess(), { person_id: LOCATION }))
+      if (change === 'permission') h.access(Object.assign(listAccess(), { can_count: false }))
+      await h.scanned('must-not-accept')
+      assert.equal(h.page.data.materialIdentifier, '', change)
+    } finally { h.restore() }
+  }
+})
+
+test('SN observations require exactly one item and retain the draft after local rejection', async () => {
+  const h = await scanHarness()
+  const toasts = []
+  global.wx.showToast = (message) => toasts.push(message.title)
+  try {
+    h.page.bindMaterial({ detail: { value: 'SKU-1' } })
+    h.page.scanSerial()
+    await h.scanned('registered-sn-qr')
+    for (const quantity of ['2', '0.5']) {
+      h.page.bindQuantity({ detail: { value: quantity } })
+      h.page.addObservation()
+      assert.equal(h.page.data.observations.length, 0)
+      assert.equal(h.page.data.serialNo, 'registered-sn-qr')
+      assert.match(toasts.at(-1), /逐件.*1/)
+    }
+    h.page.bindQuantity({ detail: { value: '1.000' } })
+    h.page.addObservation()
+    assert.equal(h.page.data.observations[0].counted_qty, '1.000')
+  } finally { h.restore() }
+})
+
+test('list reads and creation are mutually exclusive without clearing a pending original intent', async () => {
+  const listing = deferred()
+  const creation = deferred()
+  let listCalls = 0
+  let writes = 0
+  let pending = { original: true }
+  const loaded = loadPage('../pages/formal-operational-stocktakes/index', {
+    '../utils/session': { ensureLogin: () => true },
+    '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {
+      loadAccess: async () => listAccess(),
+      async list(cursor) { listCalls += 1; return cursor ? listing.promise : { items: [taskRow(1)], next_after_id: taskRow(2).task_id } },
+      async execute(intent) { assert.equal(intent, pending); writes += 1; return creation.promise }
+    }, createFormalStocktakeIntentRegistry: () => ({ current: () => pending, complete() { pending = null } }) }
+  })
+  global.wx = { navigateTo() {} }
+  try {
+    const page = instance(loaded.definition)
+    page.onLoad()
+    await page.load()
+    const more = page.loadMore()
+    await page.createPersonal()
+    assert.equal(writes, 0)
+    assert.deepEqual(pending, { original: true })
+    listing.resolve({ items: [taskRow(2)], next_after_id: null })
+    await more
+    page.data.pendingRetryable = true
+    const writing = page.retryPending()
+    await page.load()
+    await page.loadMore()
+    assert.equal(listCalls, 2)
+    assert.equal(writes, 1)
+    creation.resolve({ detail: detail() })
+    await writing
+    assert.equal(listCalls, 3)
+    assert.equal(pending, null)
+  } finally { loaded.restore(); delete global.wx }
+})
+
+test('creation response after hide or unload cannot clear original intent, reload or navigate', async () => {
+  for (const lifecycle of ['onHide', 'onUnload']) {
+    for (const outcome of ['success', 'failure']) {
+      const pendingWrite = deferred()
+      let reads = 0
+      let completed = 0
+      let navigation = 0
+      const intent = { original: true }
+      let registered = null
+      const loaded = loadPage('../pages/formal-operational-stocktakes/index', {
+        '../utils/session': { ensureLogin: () => true },
+        '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {
+          loadAccess: async () => listAccess(),
+          async list() { reads += 1; return { items: [summary()], next_after_id: null } },
+          async execute() { await pendingWrite.promise; if (outcome === 'failure') throw new Error('late rejection'); return { detail: detail() } }
+        }, createFormalStocktakeIntentRegistry: () => ({ current: () => registered, begin() { registered = intent; return intent }, complete() { completed += 1 } }) }
+      })
+      global.wx = { navigateTo() { navigation += 1 } }
+      try {
+        const page = instance(loaded.definition)
+        page.onLoad()
+        await page.load()
+        const writing = page.createPersonal()
+        page[lifecycle]()
+        let updates = 0
+        page.setData = () => { updates += 1 }
+        pendingWrite.resolve()
+        await writing
+        assert.equal(reads, 1)
+        assert.equal(completed, 0)
+        assert.equal(navigation, 0)
+        assert.equal(updates, 0)
+        assert.equal(page._intentRegistry.current(), intent)
+        await page.createPersonal()
+        assert.equal(page._creationLease, null)
+      } finally { loaded.restore(); delete global.wx }
+    }
+  }
+})
+
+test('detail run and retry ignore late success or failure across hide/unload and preserve original intent', async () => {
+  for (const method of ['run', 'retryPending']) {
+    for (const lifecycle of ['onHide', 'onUnload']) {
+      for (const outcome of ['success', 'failure']) {
+        const pending = deferred()
+        const intent = { original: true }
+        let registered = method === 'retryPending' ? intent : null
+        let completions = 0
+        let reads = 0
+        let navigations = 0
+        const loaded = loadPage('../pages/formal-operational-stocktake-detail/index', {
+          '../utils/session': { ensureLogin: () => true },
+          '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {
+            loadAccess: async () => listAccess(),
+            async detail() { reads += 1; return countingDetail() },
+            async execute(value) { assert.equal(value, intent); await pending.promise; if (outcome === 'failure') throw new Error('late failure'); return { detail: countingDetail() } }
+          }, createFormalStocktakeIntentRegistry: () => ({ current: () => registered, begin() { registered = intent; return intent }, complete() { completions += 1 } }) }
+        })
+        global.wx = { navigateTo() { navigations += 1 } }
+        try {
+          const page = instance(loaded.definition)
+          page.onLoad({ task_id: TASK })
+          await page.load()
+          if (method === 'retryPending') page.data.pendingRetryable = true
+          const writing = page[method]({})
+          page[lifecycle]()
+          let updates = 0
+          page.setData = () => { updates += 1 }
+          pending.resolve()
+          await writing
+          assert.equal(completions, 0)
+          assert.equal(updates, 0)
+          assert.equal(reads, 1)
+          assert.equal(navigations, 0)
+          assert.equal(page._intentRegistry.current(), intent)
+          assert.equal(page._writeLease, null)
+        } finally { loaded.restore(); delete global.wx }
+      }
+    }
+  }
+})
+
+test('detail old finally cannot reset another write owner busy state', async () => {
+  const pending = deferred()
+  const intent = { original: true }
+  let registered = null
+  const loaded = loadPage('../pages/formal-operational-stocktake-detail/index', {
+    '../utils/session': { ensureLogin: () => true },
+    '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {
+      loadAccess: async () => listAccess(), detail: async () => countingDetail(),
+      async execute() { await pending.promise; return { detail: countingDetail() } }
+    }, createFormalStocktakeIntentRegistry: () => ({ current: () => registered, begin() { registered = intent; return intent }, complete() { throw new Error('must retain old intent') } }) }
+  })
+  try {
+    const page = instance(loaded.definition)
+    page.onLoad({ task_id: TASK })
+    await page.load()
+    const writing = page.run({})
+    const newerOwner = {}
+    page._writeLease = newerOwner
+    page.data.busy = true
+    pending.resolve()
+    await writing
+    assert.equal(page.data.busy, true)
+    assert.equal(page._writeLease, newerOwner)
+    assert.equal(page.data.errorMessage, '')
+  } finally { loaded.restore() }
+})
+
+test('opening a task is blocked during list loading or creation', async () => {
+  const { page, restore } = listHarness({ loadAccess: async () => listAccess(), list: async () => ({ items: [summary()], next_after_id: null }) })
+  let navigations = 0
+  global.wx = { navigateTo() { navigations += 1 } }
+  try {
+    await page.load()
+    for (const flag of ['busy', '_pageBusy', '_creationLease']) {
+      if (flag === 'busy') page.data.busy = true
+      else page[flag] = true
+      page.openTask({ currentTarget: { dataset: { id: TASK } } })
+      if (flag === 'busy') page.data.busy = false
+      else page[flag] = false
+    }
+    assert.equal(navigations, 0)
+    page.openTask({ currentTarget: { dataset: { id: TASK } } })
+    assert.equal(navigations, 1)
+  } finally { restore(); delete global.wx }
+})
+
+test('returning while detail write is pending hides old authorization until an explicit fresh read', async () => {
+  const pending = deferred()
+  const intent = { original: true }
+  let registered = null
+  let reads = 0
+  let accessReads = 0
+  let writes = 0
+  let completions = 0
+  const loaded = loadPage('../pages/formal-operational-stocktake-detail/index', {
+    '../utils/session': { ensureLogin: () => true },
+    '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {
+      async loadAccess() { accessReads += 1; return listAccess() },
+      async detail() { reads += 1; return countingDetail() },
+      async execute() { writes += 1; await pending.promise; return { detail: countingDetail() } }
+    }, createFormalStocktakeIntentRegistry: () => ({ current: () => registered, begin() { registered = intent; return intent }, complete() { completions += 1 } }) }
+  })
+  try {
+    const page = instance(loaded.definition)
+    page.onLoad({ task_id: TASK })
+    await page.load()
+    assert.equal(page.data.accessAllowed, true)
+    const writing = page.run({})
+    page.onHide()
+    page.onShow()
+    assert.equal(page.data.accessAllowed, false)
+    assert.equal(page.data.detail, null)
+    assert.equal(page.data.loading, false)
+    assert.match(page.data.accessMessage, /等待结束后下拉刷新/)
+    await page.retryPending()
+    assert.equal(writes, 1)
+    assert.equal(reads, 1)
+    pending.resolve()
+    await writing
+    assert.equal(page.data.detail, null)
+    assert.equal(page.data.accessAllowed, false)
+    assert.equal(page.data.loading, false)
+    assert.equal(completions, 0)
+    assert.equal(page._intentRegistry.current(), intent)
+    await page.load()
+    assert.equal(accessReads, 2)
+    assert.equal(reads, 2)
+    assert.equal(page.data.accessAllowed, true)
+    assert.equal(page.data.detail.task_id, TASK)
+    assert.match(page.data.pendingMessage, /待核实/)
+    assert.equal(page.data.pendingRetryable, false)
+    await page.run({ action: 'new-action' })
+    await page.retryPending()
+    assert.equal(writes, 1)
+  } finally { loaded.restore() }
+})
+
+test('list refresh after a hidden creation never replays its retained intent through new create or retry', async () => {
+  const pending = deferred()
+  const intent = { original: true }
+  let registered = null
+  let writes = 0
+  const loaded = loadPage('../pages/formal-operational-stocktakes/index', {
+    '../utils/session': { ensureLogin: () => true },
+    '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {
+      loadAccess: async () => listAccess(),
+      list: async () => ({ items: [summary()], next_after_id: null }),
+      async execute() { writes += 1; await pending.promise; return { detail: detail() } }
+    }, createFormalStocktakeIntentRegistry: () => ({ current: () => registered, begin() { registered = intent; return intent }, complete() { registered = null } }) }
+  })
+  try {
+    const page = instance(loaded.definition)
+    page.onLoad()
+    await page.load()
+    const creating = page.createPersonal()
+    page.onHide()
+    pending.resolve()
+    await creating
+    page._hidden = false
+    await page.load()
+    assert.equal(page.data.accessAllowed, true)
+    assert.match(page.data.pendingMessage, /待核实/)
+    assert.equal(page.data.pendingRetryable, false)
+    await page.createPersonal()
+    await page.retryPending()
+    assert.equal(writes, 1)
+    assert.equal(registered, intent)
+  } finally { loaded.restore() }
+})
+
+test('only the dedicated same-page retry action can replay an explicitly retryable intent', async () => {
+  for (const isDetail of [false, true]) {
+    const intent = { original: true }
+    let registered = null
+    let writes = 0
+    const loaded = loadPage(isDetail ? '../pages/formal-operational-stocktake-detail/index' : '../pages/formal-operational-stocktakes/index', {
+      '../utils/session': { ensureLogin: () => true },
+      '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {
+        loadAccess: async () => listAccess(),
+        list: async () => ({ items: [summary()], next_after_id: null }),
+        detail: async () => countingDetail(),
+        async execute(value) {
+          assert.equal(value, intent)
+          writes += 1
+          throw Object.assign(new Error('uncertain retryable'), { write_result_uncertain: true, stocktake_retry_state: 'retryable' })
+        }
+      }, createFormalStocktakeIntentRegistry: () => ({ current: () => registered, begin() { registered = intent; return intent }, complete() { registered = null } }) }
+    })
+    try {
+      const page = instance(loaded.definition)
+      page.onLoad({ task_id: TASK })
+      await page.load()
+      await (isDetail ? page.run({}) : page.createPersonal())
+      assert.equal(page.data.pendingRetryable, true)
+      await (isDetail ? page.run({ action: 'different-action' }) : page.createPersonal())
+      assert.equal(writes, 1)
+      await page.retryPending()
+      assert.equal(writes, 2)
+      await page.load()
+      assert.equal(page.data.pendingRetryable, false)
+      await page.retryPending()
+      assert.equal(writes, 2)
+      assert.equal(registered, intent)
+    } finally { loaded.restore() }
+  }
+})
