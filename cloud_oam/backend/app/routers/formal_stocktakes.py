@@ -22,6 +22,7 @@ from ..formal_services import stocktake_count_command_status as count_status_ser
 from ..formal_services import stocktake_difference as difference_service
 from ..formal_services import stocktake_query as query_service
 from ..formal_services import stocktake_posting as posting_service
+from ..formal_services import stocktake_posting_command_status as posting_status_service
 from ..formal_services import stocktake_close as close_service
 from ..formal_services import stocktake_recount as recount_service
 from ..formal_services import stocktake_recount_count as recount_count_service
@@ -50,6 +51,7 @@ from ..stocktake_command_schemas import (
 )
 from ..stocktake_read_schemas import StocktakeTaskDetailOut, StocktakeTaskPageOut
 from ..stocktake_count_command_status_schemas import StocktakeCountCommandStatusOut
+from ..stocktake_posting_command_status_schemas import StocktakePostingCommandStatusOut
 from ..stocktake_task_schemas import (
     PersonalStocktakeCreateIn,
     StocktakeTaskCreateIn,
@@ -141,6 +143,45 @@ def formal_stocktake_count_command_status(
             actor_authorization_version=actor_authorization_version, trace_request_id=trace_request_id,
         )
     except count_status_service.StocktakeCountCommandStatusError as exc:
+        raise HTTPException(status_code=exc.http_status_code, detail=exc.as_detail(), headers=headers) from None
+
+
+@router.get(
+    "/{task_id}/post-differences-command-status",
+    response_model=StocktakePostingCommandStatusOut,
+)
+def formal_stocktake_posting_command_status(
+    task_id: UUID,
+    request: Request,
+    response: Response,
+    actor_person_id: Annotated[UUID, Query()],
+    actor_authorization_version: Annotated[int, Query(ge=1)],
+    trace_request_id: Annotated[str, Query(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")],
+    principal: FormalPrincipal = Depends(require_permission("stocktake", "read")),
+    db: Session = Depends(get_db),
+):
+    headers = {"Cache-Control": "private, no-store, max-age=0", "Pragma": "no-cache",
+               "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"}
+    response.headers.update(headers)
+    try:
+        allowed = {"actor_person_id", "actor_authorization_version", "trace_request_id"}
+        if (
+            set(request.query_params) != allowed
+            or any(len(request.query_params.getlist(key)) != 1 for key in allowed)
+            or "idempotency-key" in request.headers
+            or request.headers.get("content-length", "0") != "0"
+            or "transfer-encoding" in request.headers
+        ):
+            posting_status_service._error("input_invalid", "invalid_request", "盘点过账查询请求形状无效")
+        return posting_status_service.stocktake_posting_command_status(
+            db,
+            actor=principal,
+            task_id=task_id,
+            actor_person_id=actor_person_id,
+            actor_authorization_version=actor_authorization_version,
+            trace_request_id=trace_request_id,
+        )
+    except posting_status_service.StocktakePostingCommandStatusError as exc:
         raise HTTPException(status_code=exc.http_status_code, detail=exc.as_detail(), headers=headers) from None
 
 
