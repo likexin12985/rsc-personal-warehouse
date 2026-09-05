@@ -1043,6 +1043,7 @@ export function confirmFormalStocktakePostProjection(
   const totalQuantity = quantity(result.total_quantity, "result.total_quantity");
   const headquartersItems = terminalRound?.headquarters_review?.visible_items ?? [];
   const visibleDifferenceIds = new Set(terminalRound?.visible_differences.map((item) => item.difference_id) ?? []);
+  const headquartersDifferenceIds = new Set(headquartersItems.map((item) => item.difference_id));
   const statusAllowed = detail.status === "posted"
     || (allowAdvancedVersion && detail.status === "closed");
   if (
@@ -1062,6 +1063,8 @@ export function confirmFormalStocktakePostProjection(
     || terminalRound.headquarters_review?.decision !== "approve"
     || terminalRound.headquarters_review?.covers_all_task_scopes !== true
     || headquartersItems.length !== differenceCount
+    || headquartersDifferenceIds.size !== differenceCount
+    || [...visibleDifferenceIds].some((differenceId) => !headquartersDifferenceIds.has(differenceId))
     || headquartersItems.some((item) => !visibleDifferenceIds.has(item.difference_id))
     || headquartersItems.filter((item) => item.decision === "accept_for_posting").length !== acceptedCount
     || headquartersItems.filter((item) => item.decision === "no_adjustment").length !== noAdjustmentCount

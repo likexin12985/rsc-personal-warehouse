@@ -254,6 +254,7 @@ export function validateFormalStocktakePostCommandStatus(
       ? checked.first_ledger_cursor !== null || checked.last_ledger_cursor !== null || checked.movement_count !== 0 || checked.total_quantity !== "0.000"
       : checked.first_ledger_cursor === null || checked.last_ledger_cursor === null
         || checked.last_ledger_cursor - checked.first_ledger_cursor + 1 !== checked.transaction_count
+        || checked.movement_count <= 0
         || checked.total_quantity === "0.000")
   ) fail("盘点过账历史命令数量或流水摘要无效");
   if (checked.task_version !== sentinel.expected_task_version + 1) fail("盘点过账历史命令版本无效");

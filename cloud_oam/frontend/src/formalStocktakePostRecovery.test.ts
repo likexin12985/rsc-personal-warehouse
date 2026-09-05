@@ -141,6 +141,7 @@ describe("formal daily stocktake post durable recovery", () => {
     expect(validateFormalStocktakePostCommandStatus(status(), sentinel())).toMatchObject({ lookup_status: "not_observed", command: null });
     expect(() => validateFormalStocktakePostCommandStatus({ ...status(), operation: "post" }, sentinel())).toThrow();
     expect(() => validateFormalStocktakePostCommandStatus({ ...status("confirmed"), command: {} }, sentinel())).toThrow();
+    expect(() => validateFormalStocktakePostCommandStatus({ ...confirmedStatus(), command: { ...confirmedStatus().command, transaction_count: 1, first_ledger_cursor: 20, last_ledger_cursor: 20, total_quantity: "1.000" } }, sentinel())).toThrow();
   });
 
   it("persists only public coordinates and keeps not_observed sticky without detail or POST replay", async () => {
