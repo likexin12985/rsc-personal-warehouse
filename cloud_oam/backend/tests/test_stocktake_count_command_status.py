@@ -346,6 +346,86 @@ def test_recount_difference_keeps_mutable_file_row_lock():
                and node.func.attr == "with_for_update" for node in ast.walk(file_queries[0]))
 
 
+def _install_pg_recount_parent_state_guard(db):
+    # The historical SQLite 0032 UPDATE trigger lacks this PG immediate check.
+    # Add only its parent-state timing rule to the isolated test fixture.
+    db.execute(text("""
+        CREATE TRIGGER test_pg_recount_parent_counting
+        BEFORE UPDATE ON stocktake_rounds
+        WHEN NEW.round_no > 1 AND NOT EXISTS (
+            SELECT 1 FROM stocktake_tasks
+            WHERE id = NEW.task_id AND status = 'counting'
+              AND current_round_no = NEW.round_no
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'synthetic PG recount parent must still count');
+        END
+    """))
+
+
+def test_three_round_sealing_preserves_immediate_pg_parent_state(recount_world, monkeypatch):
+    from app.stocktake_models import StocktakeRoundSubmission
+    _install_pg_recount_parent_state_guard(recount_world.db)
+    targets = _three_round_history(recount_world, monkeypatch, stage="third_evaluated")
+    for target in targets:
+        assert _lookup(recount_world, target, operation=target.operation).lookup_status == "confirmed"
+        round_row = recount_world.db.get(StocktakeRound, target.round_id)
+        assert round_row.status == "submitted"
+        submission = recount_world.db.scalar(select(StocktakeRoundSubmission).where(
+            StocktakeRoundSubmission.round_id == target.round_id))
+        completion = recount_world.db.get(StocktakeScopeCountCompletion, submission.sealing_completion_id)
+        assert service.count._as_utc(round_row.submitted_at) == service.count._as_utc(submission.submitted_at)
+        assert service.count._as_utc(completion.completed_at) == service.count._as_utc(round_row.submitted_at)
+    task = recount_world.db.get(FormalStocktakeTask, targets[-1].task_id)
+    assert task.status == "submitted"
+    assert service.count._as_utc(task.submitted_at) == service.count._as_utc(round_row.submitted_at)
+
+
+def test_recount_seal_flush_does_not_commit_partial_round(recount_world):
+    from app.formal_services import stocktake_recount_count
+    from app.foundation_models import AuditChainHead, OutboxEvent, StateTransitionEvent
+    from app.stocktake_models import StocktakeCountLine, StocktakeCountObservation, StocktakeRoundSubmission
+    from test_postgresql16_release_gate import _ordered_durable_model_rows
+    world = recount_world
+    task, initial = _prepare(world, key="status-atomic-seal")
+    difference, _opened, round_row = _open_recount(world, task, initial, key="status-atomic-seal")
+    world.db.commit()
+    task_id, round_id, scope_id = task.id, round_row.id, difference.scope_id
+    _install_pg_recount_parent_state_guard(world.db)
+    world.db.execute(text("""
+        CREATE TRIGGER test_reject_parent_after_recount_round
+        BEFORE UPDATE ON stocktake_tasks
+        WHEN OLD.status = 'counting' AND NEW.status = 'submitted' AND NEW.current_round_no > 1
+        BEGIN
+            SELECT RAISE(ABORT, 'synthetic failure after round flush');
+        END
+    """))
+    world.db.commit()
+    models = (FormalStocktakeTask, StocktakeRound, StocktakeCountLine, StocktakeCountObservation,
+              StocktakeScopeCountCompletion, StocktakeRoundSubmission,
+              AuditChainHead, AuditEvent, OutboxEvent, StateTransitionEvent)
+    before = _ordered_durable_model_rows(world.db, models)
+    round_updates = []
+    def record_round_update(_conn, _cursor, statement, _params, _context, _many):
+        if statement.lstrip().upper().startswith("UPDATE STOCKTAKE_ROUNDS SET "):
+            round_updates.append(True)
+    engine = world.db.get_bind()
+    event.listen(engine, "after_cursor_execute", record_round_update)
+    try:
+        with pytest.raises(stocktake_recount_count.StocktakeRecountCountError):
+            _count_recount(world, world.db.get(FormalStocktakeTask, task_id),
+                           world.db.get(StocktakeRound, round_id), scope_id,
+                           key="status-atomic-seal-count", counted_qty=Decimal("4.000"))
+        assert round_updates == [True]  # failure occurred after the round reached SQL.
+    finally:
+        event.remove(engine, "after_cursor_execute", record_round_update)
+    # Only the caller rolls back; an intermediate flush must never commit facts.
+    world.db.rollback()
+    assert _ordered_durable_model_rows(world.db, models) == before
+    assert world.db.get(FormalStocktakeTask, task_id).status == "counting"
+    assert world.db.get(StocktakeRound, round_id).status == "counting"
+
+
 @pytest.mark.parametrize("source_round", [1, 2])
 def test_third_round_history_rejects_corrupt_recursive_source_evidence(recount_world, monkeypatch, source_round):
     targets = _three_round_history(recount_world, monkeypatch)

@@ -868,6 +868,10 @@ def _seal_recount_round(
     round_row.submitted_at = now
     round_row.count_manifest_sha256 = count_manifest
     round_row.updated_at = now
+    # 0032 checks the parent is still counting when this round is updated.
+    # Keep the two projections ordered inside one transaction; flushing both
+    # together lets ORM dependency ordering submit the parent too early.
+    db.flush()
     task.status = "submitted"
     task.submitted_at = now
     task.version += 1
