@@ -588,6 +588,7 @@ def _load_and_build_posting_plan(
     expected_task_version: int,
     approval: StocktakeEffectiveApprovalCompletion,
     posted_replay: bool,
+    allow_closed_history: bool = False,
 ) -> StocktakeDifferencePostingPlan:
     scopes = tuple(
         db.scalars(
@@ -718,10 +719,10 @@ def _load_and_build_posting_plan(
     planning_task: FormalStocktakeTask | _ApprovedTaskView
     if posted_replay:
         if (
-            task.status != "posted"
+            task.status not in ({"posted", "closed"} if allow_closed_history else {"posted"})
             or task.version != expected_task_version + 1
             or task.posted_at is None
-            or task.closed_at is not None
+            or (task.closed_at is not None and not allow_closed_history)
         ):
             _evidence_invalid("幂等重放的盘点任务不是独立 posted 终态")
         planning_task = _ApprovedTaskView(
@@ -1243,11 +1244,12 @@ def _validate_persisted_posting_completion(
     completion: StocktakePostingCompletion,
     plan: StocktakeDifferencePostingPlan,
     audit_proof: object,
+    allow_closed_history: bool = False,
 ) -> None:
     if (
-        task.status != "posted"
+        task.status not in ({"posted", "closed"} if allow_closed_history else {"posted"})
         or task.posted_at is None
-        or task.closed_at is not None
+        or (task.closed_at is not None and not allow_closed_history)
         or task.version != completion.posted_task_version
         or _as_utc(task.posted_at) != _as_utc(completion.posted_at)
         or completion.task_id != task.id

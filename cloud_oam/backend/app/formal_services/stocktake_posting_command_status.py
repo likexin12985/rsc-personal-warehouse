@@ -126,6 +126,16 @@ def stocktake_posting_command_status(
                 ).all()
             )
             if not audits:
+                # An absent audit is only an unknown command result after the
+                # same post-lock actor/principal revalidation used by the
+                # confirmed path.  Returning here without this check would
+                # allow a concurrent authorization revocation to be reported
+                # as a clean ``not_observed`` result.
+                _reread_current_actor_or_error(
+                    db,
+                    actor=actor,
+                    initial_context=context,
+                )
                 return _result(
                     task_id=task_id,
                     actor_person_id=actor_person_id,
@@ -181,6 +191,7 @@ def stocktake_posting_command_status(
                 expected_task_version=completion.expected_task_version,
                 approval=approval,
                 posted_replay=True,
+                allow_closed_history=True,
             )
             posting._validate_persisted_posting_completion(
                 db,
@@ -189,6 +200,7 @@ def stocktake_posting_command_status(
                 completion=completion,
                 plan=plan,
                 audit_proof=proof,
+                allow_closed_history=True,
             )
             _verify_posting_transition(db, task, completion)
             _verify_audit_event_with_prelocked_proof(
@@ -198,16 +210,11 @@ def stocktake_posting_command_status(
                 event_id=audit.id,
             )
 
-            fresh = query._load_read_context(db, actor=actor, now=posting._database_now(db))
-            if (
-                fresh.principal.user_id != context.principal.user_id
-                or fresh.principal.person_id != context.principal.person_id
-                or fresh.principal.authorization_version != context.principal.authorization_version
-                or fresh.principal.account_status != context.principal.account_status
-                or fresh.principal.employment_status != context.principal.employment_status
-                or fresh.principal.access_mode != context.principal.access_mode
-            ):
-                _error("authorization_changed", "precondition_failed", "当前权限版本已变化，请重新查询")
+            _reread_current_actor_or_error(
+                db,
+                actor=actor,
+                initial_context=context,
+            )
             return _result(
                 task_id=task_id,
                 actor_person_id=actor_person_id,
@@ -257,6 +264,21 @@ def _validate_actor(actor, person_id, version):
         _error("authorization_changed", "precondition_failed", "当前人员或授权版本已变化，请重新查询")
     if actor.account_status != "active" or actor.employment_status != "active" or actor.access_mode != "active":
         _error("forbidden", "forbidden", "当前账号或人员状态不允许查询盘点过账命令")
+
+
+def _reread_current_actor_or_error(db, *, actor, initial_context) -> None:
+    """Revalidate identity and access after the writer-compatible lock graph."""
+
+    fresh = query._load_read_context(db, actor=actor, now=posting._database_now(db))
+    if (
+        fresh.principal.user_id != initial_context.principal.user_id
+        or fresh.principal.person_id != initial_context.principal.person_id
+        or fresh.principal.authorization_version != initial_context.principal.authorization_version
+        or fresh.principal.account_status != initial_context.principal.account_status
+        or fresh.principal.employment_status != initial_context.principal.employment_status
+        or fresh.principal.access_mode != initial_context.principal.access_mode
+    ):
+        _error("authorization_changed", "precondition_failed", "当前权限版本已变化，请重新查询")
 
 
 def _verify_posting_audit(audit, completion, task):
