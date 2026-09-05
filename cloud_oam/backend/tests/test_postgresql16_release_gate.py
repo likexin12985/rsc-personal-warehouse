@@ -16889,7 +16889,11 @@ def _assert_dynamic_sn_cutoff_replay_multiscope(
         assert len(snapshots) == 2
         assert all(row.ledger_cursor == started.cutoff_ledger_cursor for row in snapshots)
         assert session.get(StockBalance, fixture["serial_replay_account_id"]).quantity == Decimal("1.000")
-        assert session.get(StockBalance, fixture["dynamic_peer_account_id"]).quantity == Decimal("0.000")
+        # A zero account may legitimately have no projection row yet.  The
+        # stocktake snapshot treats that absent row as an immutable zero
+        # balance; the first legal inbound below creates the projection.
+        peer_balance = session.get(StockBalance, fixture["dynamic_peer_account_id"])
+        assert peer_balance is None or peer_balance.quantity == Decimal("0.000")
         serial_scope, peer_scope = scopes
 
     with Session(api_engine, expire_on_commit=False) as session:
@@ -16967,6 +16971,11 @@ def _assert_dynamic_sn_cutoff_replay_multiscope(
             ),
         )
         session.commit()
+
+    with Session(api_engine) as session:
+        peer_balance = session.get(StockBalance, fixture["dynamic_peer_account_id"])
+        assert peer_balance is not None
+        assert peer_balance.quantity == Decimal("1.000")
 
     peer_count = write(
         stocktake_count.submit_stocktake_initial_scope_count,
