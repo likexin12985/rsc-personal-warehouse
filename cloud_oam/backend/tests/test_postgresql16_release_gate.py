@@ -13525,7 +13525,19 @@ def _seed_0047_stocktake_inventory(
                 created_at=now - timedelta(days=1),
                 updated_at=now - timedelta(days=1),
             )
-            session.add_all((serial_replay_location, serial_replay_serial))
+            serial_replay_extra_serial = InventorySerial(
+                id=uuid.uuid4(), material_id=concurrency_material.id,
+                serial_no=f"PG16-SN-REPLAY-EXTRA-{serial_replay_location_id.hex.upper()}",
+                qr_code=f"PG16-SN-REPLAY-EXTRA-QR-{serial_replay_location_id.hex.upper()}",
+                lot_id=None, lifecycle_status="active",
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
+            session.add_all((
+                serial_replay_location,
+                serial_replay_serial,
+                serial_replay_extra_serial,
+            ))
             session.flush()
             session.add(CustodyAssignment(
                 id=uuid.uuid4(), location_id=serial_replay_location_id,
@@ -13543,6 +13555,40 @@ def _seed_0047_stocktake_inventory(
                 updated_at=now - timedelta(days=1),
             )
             session.add(serial_replay_account)
+            session.flush()
+
+            # A disposable non-serial peer for the real cutoff-replay
+            # multi-scope sample.  It is intentionally independent from the
+            # recount account (whose zero balance is asserted by the existing
+            # three-round recovery proof) and from the alias-race locations.
+            dynamic_peer_location_id = uuid.uuid4()
+            dynamic_peer_location = StockLocation(
+                id=dynamic_peer_location_id,
+                code=f"PG16-DYNAMIC-PEER-{dynamic_peer_location_id.hex[:16].upper()}",
+                name="PostgreSQL 16 截止回放多范围隔离库位",
+                location_type="region", owner_org_id=region_org_id,
+                parent_id=None, custodian_person_id=manager_person.id,
+                status="active", created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
+            session.add(dynamic_peer_location)
+            session.flush()
+            session.add(CustodyAssignment(
+                id=uuid.uuid4(), location_id=dynamic_peer_location_id,
+                custodian_person_id=manager_person.id,
+                valid_from=now - timedelta(days=1), valid_to=None,
+                handover_case_id=None, created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            ))
+            dynamic_peer_account = StockAccount(
+                id=uuid.uuid4(), owner_org_id=region_org_id,
+                custodian_person_id=None, location_id=dynamic_peer_location_id,
+                material_id=material.id, condition_code="new",
+                availability_bucket="available", lot_id=None,
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
+            session.add(dynamic_peer_account)
             session.flush()
 
             control_sync_run_id = uuid.uuid4()
@@ -13719,6 +13765,9 @@ def _seed_0047_stocktake_inventory(
                 "serial_replay_location_id": serial_replay_location_id,
                 "serial_replay_account_id": serial_replay_account.id,
                 "serial_replay_serial_id": serial_replay_serial.id,
+                "serial_replay_extra_serial_id": serial_replay_extra_serial.id,
+                "dynamic_peer_location_id": dynamic_peer_location_id,
+                "dynamic_peer_account_id": dynamic_peer_account.id,
                 "location_id": location.id,
                 "material_external_object_id": material_external_object.id,
                 "material_external_version_id": material_external_version.id,
@@ -15774,6 +15823,12 @@ SELECT posting.total_quantity::text,
         api_engine, fixture=serial_fixture, actor_user_id=actor_user_id,
         assignee_user_id=assignee_user_id,
     )
+    dynamic_fixture = dict(fixture)
+    dynamic_fixture["recount_location_id"] = fixture["dynamic_peer_location_id"]
+    fixture["dynamic_peer_opening_task_id"] = _establish_multiround_stocktake_location(
+        api_engine, fixture=dynamic_fixture, actor_user_id=actor_user_id,
+        assignee_user_id=assignee_user_id,
+    )
 
     with Session(api_engine, expire_on_commit=False) as session:
         isolation_started = _start_opening_stocktake_impl(
@@ -16702,6 +16757,352 @@ def _establish_multiround_stocktake_location(
     return started.task_id
 
 
+def _assert_dynamic_sn_cutoff_replay_multiscope(
+    api_engine, *, fixture, actor_user_id, assignee_user_id,
+    idempotency_hmac_secret,
+) -> None:
+    """Run a real two-scope cutoff replay with one serial-managed scope.
+
+    Each scope is sealed at its own cursor with an explicit serial identity
+    in the first scope.  Legal inbound movements are appended after the task
+    cutoff and before the corresponding counts.  The difference evaluator
+    must replay each scope at its own count cursor and the task must complete
+    through review, posting, reconciliation and close.
+    """
+    from app.formal_access import load_formal_principal
+    from app.formal_services import stocktake_count, stocktake_difference
+    from app.formal_services import stocktake_review, stocktake_posting, stocktake_close
+    from app.formal_services.inventory_posting import (
+        InventoryMovementCommand,
+        InventoryPostingCommand,
+        post_inventory_transaction,
+    )
+    from app.formal_services.stocktake_task import (
+        create_stocktake_task_draft,
+        start_stocktake_task,
+    )
+    from app.inventory_models import StockBalance
+    from app.stocktake_models import (
+        FormalStocktakeScope,
+        FormalStocktakeTask,
+        InventoryFreeze,
+        StocktakeCountLine,
+        StocktakeCountSerial,
+        StocktakeDifference,
+        StocktakeDifferenceSetCompletion,
+        StocktakeScopeCountCompletion,
+    )
+    from app.stocktake_task_schemas import (
+        StocktakeScopeSelectionIn,
+        StocktakeTaskCreateIn,
+        StocktakeTaskStartIn,
+    )
+
+    token = uuid.uuid4().hex
+    secret = idempotency_hmac_secret
+
+    def principal(session, user_id):
+        return load_formal_principal(
+            session, user_id, now=session.scalar(select(func.clock_timestamp()))
+        )
+
+    def write(service, user_id, step, **arguments):
+        with Session(api_engine, expire_on_commit=False) as session:
+            result = _reveal_pg16_service_database_error(
+                api_engine,
+                lambda: service(
+                    session,
+                    actor=principal(session, user_id),
+                    idempotency_key=f"pg16-dynamic-replay-{token}-{step}",
+                    idempotency_hmac_secret=secret,
+                    trace_request_id=f"trace-pg16-dynamic-replay-{token}-{step}",
+                    **arguments,
+                ),
+            )
+            session.commit()
+            return result
+
+    draft = StocktakeTaskCreateIn(
+        task_type="sample",
+        region_org_id=fixture["region_org_id"],
+        blind_count=True,
+        scopes=(
+            StocktakeScopeSelectionIn(
+                owner_org_id=fixture["region_org_id"],
+                location_id=fixture["serial_replay_location_id"],
+                assignee_person_id=fixture["assignee_person_id"],
+                scope_mode="filtered",
+                material_id=fixture["concurrency_material_id"],
+                condition_code="new",
+                availability_bucket="available",
+                freeze_mode="cutoff_replay",
+            ),
+            StocktakeScopeSelectionIn(
+                owner_org_id=fixture["region_org_id"],
+                location_id=fixture["dynamic_peer_location_id"],
+                assignee_person_id=fixture["assignee_person_id"],
+                scope_mode="filtered",
+                material_id=fixture["material_id"],
+                condition_code="new",
+                availability_bucket="available",
+                freeze_mode="cutoff_replay",
+            ),
+        ),
+        deadline=fixture["deadline"],
+        note="PG16 动态串码截止回放多范围真库样本",
+    )
+    created = write(
+        create_stocktake_task_draft,
+        actor_user_id,
+        "create",
+        draft=draft,
+    )
+    started = write(
+        start_stocktake_task,
+        actor_user_id,
+        "start",
+        task_id=created.task_id,
+        command=StocktakeTaskStartIn(expected_version=created.version),
+    )
+    with Session(api_engine) as session:
+        scopes = tuple(
+            session.scalars(
+                select(FormalStocktakeScope)
+                .where(FormalStocktakeScope.task_id == created.task_id)
+                .order_by(FormalStocktakeScope.scope_no)
+            ).all()
+        )
+        assert len(scopes) == 2
+        assert {row.freeze_mode for row in session.scalars(
+            select(InventoryFreeze).where(InventoryFreeze.task_id == created.task_id)
+        ).all()} == {"cutoff_replay"}
+        snapshots = tuple(
+            session.execute(
+                text(
+                    "SELECT stock_account_id, book_qty, ledger_cursor "
+                    "FROM public.stocktake_snapshot_lines WHERE task_id = :task_id "
+                    "ORDER BY stock_account_id"
+                ),
+                {"task_id": str(created.task_id)},
+            ).all()
+        )
+        assert len(snapshots) == 2
+        assert all(row.ledger_cursor == started.cutoff_ledger_cursor for row in snapshots)
+        assert session.get(StockBalance, fixture["serial_replay_account_id"]).quantity == Decimal("1.000")
+        assert session.get(StockBalance, fixture["dynamic_peer_account_id"]).quantity == Decimal("0.000")
+        serial_scope, peer_scope = scopes
+
+    with Session(api_engine, expire_on_commit=False) as session:
+        now = session.scalar(select(func.clock_timestamp()))
+        serial_movement = _reveal_pg16_service_database_error(
+            api_engine,
+            lambda: post_inventory_transaction(
+                session,
+                actor=principal(session, actor_user_id),
+                command=InventoryPostingCommand(
+                    transaction_no=f"PG16-DYNAMIC-SERIAL-INBOUND-{token}",
+                    movement_type="inbound",
+                    source_document_type="pg16_dynamic_cutoff_replay",
+                    source_document_id=str(fixture["serial_replay_account_id"]),
+                    posting_key=f"pg16-dynamic-serial-cutoff-replay-{token}",
+                    effective_at=now,
+                    movements=(InventoryMovementCommand(
+                        from_account_id=None,
+                        to_account_id=fixture["serial_replay_account_id"],
+                        quantity=Decimal("1.000"),
+                        serial_ids=(fixture["serial_replay_extra_serial_id"],),
+                        external_boundary_code="PG16_DYNAMIC_CUTOFF_REPLAY",
+                    ),),
+                ),
+                idempotency_key=f"pg16-dynamic-serial-cutoff-replay-{token}",
+                request_id=f"trace-pg16-dynamic-serial-cutoff-replay-{token}",
+            ),
+        )
+        session.commit()
+
+    serial_count = write(
+        stocktake_count.submit_stocktake_initial_scope_count,
+        assignee_user_id,
+        "serial-count",
+        command=stocktake_count.SubmitStocktakeInitialScopeCountCommand(
+            task_id=created.task_id,
+            round_id=started.initial_round_id,
+            scope_id=serial_scope.id,
+            count_mode="blind",
+            account_counts=(stocktake_count.StocktakeSnapshotCountInput(
+                stock_account_id=fixture["serial_replay_account_id"],
+                counted_qty=Decimal("2.000"),
+                serial_ids=(
+                    fixture["serial_replay_serial_id"],
+                    fixture["serial_replay_extra_serial_id"],
+                ),
+            ),),
+        ),
+    )
+    assert serial_count.round_submitted is False
+
+    with Session(api_engine, expire_on_commit=False) as session:
+        now = session.scalar(select(func.clock_timestamp()))
+        movement = _reveal_pg16_service_database_error(
+            api_engine,
+            lambda: post_inventory_transaction(
+                session,
+                actor=principal(session, actor_user_id),
+                command=InventoryPostingCommand(
+                    transaction_no=f"PG16-DYNAMIC-PEER-INBOUND-{token}",
+                    movement_type="inbound",
+                    source_document_type="pg16_dynamic_cutoff_replay",
+                    source_document_id=str(fixture["dynamic_peer_account_id"]),
+                    posting_key=f"pg16-dynamic-peer-cutoff-replay-{token}",
+                    effective_at=now,
+                    movements=(InventoryMovementCommand(
+                        from_account_id=None,
+                        to_account_id=fixture["dynamic_peer_account_id"],
+                        quantity=Decimal("1.000"),
+                        external_boundary_code="PG16_DYNAMIC_CUTOFF_REPLAY",
+                    ),),
+                ),
+                idempotency_key=f"pg16-dynamic-peer-cutoff-replay-{token}",
+                request_id=f"trace-pg16-dynamic-peer-cutoff-replay-{token}",
+            ),
+        )
+        session.commit()
+
+    peer_count = write(
+        stocktake_count.submit_stocktake_initial_scope_count,
+        assignee_user_id,
+        "peer-count",
+        command=stocktake_count.SubmitStocktakeInitialScopeCountCommand(
+            task_id=created.task_id,
+            round_id=started.initial_round_id,
+            scope_id=peer_scope.id,
+            count_mode="blind",
+            account_counts=(stocktake_count.StocktakeSnapshotCountInput(
+                stock_account_id=fixture["dynamic_peer_account_id"],
+                counted_qty=Decimal("1.000"),
+            ),),
+        ),
+    )
+    assert peer_count.round_submitted is True
+    with Session(api_engine) as session:
+        completions = tuple(
+            session.scalars(
+                select(StocktakeScopeCountCompletion)
+                .join(
+                    FormalStocktakeScope,
+                    FormalStocktakeScope.id == StocktakeScopeCountCompletion.scope_id,
+                )
+                .where(StocktakeScopeCountCompletion.task_id == created.task_id)
+                .order_by(FormalStocktakeScope.scope_no)
+            ).all()
+        )
+        assert len(completions) == 2
+        assert [row.count_ledger_cursor for row in completions] == [
+            serial_movement.ledger_cursor,
+            movement.ledger_cursor,
+        ]
+        assert all(row.count_ledger_cursor > started.cutoff_ledger_cursor for row in completions)
+        assert movement.ledger_cursor > serial_movement.ledger_cursor
+        assert session.scalar(
+            select(func.count()).select_from(StocktakeCountSerial).join(
+                StocktakeCountLine,
+                StocktakeCountLine.id == StocktakeCountSerial.count_line_id,
+            ).where(
+                StocktakeCountLine.task_id == created.task_id,
+                StocktakeCountSerial.round_id == started.initial_round_id,
+            )
+        ) == 2
+
+    evaluated = write(
+        stocktake_difference.generate_stocktake_initial_differences,
+        actor_user_id,
+        "difference",
+        command=stocktake_difference.GenerateStocktakeDifferenceCommand(
+            task_id=created.task_id,
+            round_id=started.initial_round_id,
+            expected_task_version=peer_count.task_version,
+        ),
+    )
+    assert evaluated.difference_count == 0
+    regional = write(
+        stocktake_review.submit_stocktake_region_review,
+        assignee_user_id,
+        "region-review",
+        command=stocktake_review.SubmitStocktakeReviewCommand(
+            task_id=created.task_id,
+            round_id=started.initial_round_id,
+            expected_task_version=evaluated.task_version,
+            decision="approve",
+            items=(),
+            comment="PG16 动态串码截止回放范围复核通过",
+        ),
+    )
+    approved = write(
+        stocktake_review.submit_stocktake_headquarters_review,
+        actor_user_id,
+        "hq-review",
+        command=stocktake_review.SubmitStocktakeReviewCommand(
+            task_id=created.task_id,
+            round_id=started.initial_round_id,
+            expected_task_version=regional.task_version,
+            decision="approve",
+            items=(),
+            effective_scope_ids=tuple(row.id for row in scopes),
+            comment="PG16 动态串码截止回放总部复核通过",
+        ),
+    )
+    posted = write(
+        stocktake_posting.post_approved_stocktake_differences,
+        actor_user_id,
+        "post",
+        command=stocktake_posting.PostApprovedStocktakeDifferencesCommand(
+            task_id=created.task_id,
+            expected_task_version=approved.task_version,
+        ),
+    )
+    assert posted.resulting_task_status == "posted"
+    assert posted.difference_count == posted.accepted_difference_count == 0
+    reconciled = write(
+        stocktake_close.reconcile_posted_stocktake_for_close,
+        actor_user_id,
+        "reconcile",
+        command=stocktake_close.ReconcileStocktakeForCloseCommand(
+            task_id=created.task_id,
+            expected_task_version=posted.task_version,
+        ),
+    )
+    assert reconciled.book_total_qty == reconciled.physical_total_qty == Decimal("3.000")
+    closed = write(
+        stocktake_close.close_reconciled_stocktake,
+        actor_user_id,
+        "close",
+        command=stocktake_close.CloseReconciledStocktakeCommand(
+            task_id=created.task_id,
+            expected_task_version=reconciled.task_version,
+        ),
+    )
+    assert closed.resulting_task_status == "closed"
+    with Session(api_engine) as session:
+        task = session.get(FormalStocktakeTask, created.task_id)
+        assert task is not None and task.status == "closed"
+        assert session.scalar(
+            select(func.count()).select_from(InventoryFreeze).where(
+                InventoryFreeze.task_id == created.task_id,
+                InventoryFreeze.status == "active",
+            )
+        ) == 0
+        assert session.scalar(
+            select(func.count()).select_from(StocktakeDifference).where(
+                StocktakeDifference.task_id == created.task_id,
+            )
+        ) == 0
+        assert session.scalar(
+            select(func.count()).select_from(StocktakeDifferenceSetCompletion).where(
+                StocktakeDifferenceSetCompletion.task_id == created.task_id,
+            )
+        ) == 1
+
+
 def _assert_nonopening_multiround_count_status(
     api_engine, *, fixture, actor_user_id, assignee_user_id,
     idempotency_hmac_secret,
@@ -17232,6 +17633,22 @@ def _assert_pg16_cutoff_replay_multiscope_owner_contract() -> None:
     assert "READ ONLY" not in status_source.upper()
 
     assert "lock_nonopening_stocktake_count_history_graph" in status_source
+
+    # The real PG fixture must retain a dynamic, serial-aware, per-scope
+    # cutoff sample; a static contract prevents silently reverting to the
+    # earlier single-scope/non-SN-only coverage.
+    dynamic_source = inspect.getsource(_assert_dynamic_sn_cutoff_replay_multiscope)
+    for fragment in (
+        "serial_replay_extra_serial_id",
+        'freeze_mode="cutoff_replay"',
+        "serial_ids=",
+        "count_ledger_cursor",
+        "difference_count == 0",
+        "dynamic_peer_location_id",
+    ):
+        assert fragment in dynamic_source
+    entry_source = inspect.getsource(_assert_0047_real_api_stocktake_start)
+    assert "_assert_dynamic_sn_cutoff_replay_multiscope" in entry_source
 
 
 def _complete_0051_nonopening_stocktake_service_chain(
@@ -18760,6 +19177,10 @@ def _assert_0047_real_api_stocktake_start(
             ).where(MaterialRequest.id == material_request_id)
         ).one() == neutral_request_before
     _assert_nonopening_multiround_count_status(
+        api_engine, fixture=fixture, actor_user_id=actor_user_id,
+        assignee_user_id=assignee_user_id, idempotency_hmac_secret=secret,
+    )
+    _assert_dynamic_sn_cutoff_replay_multiscope(
         api_engine, fixture=fixture, actor_user_id=actor_user_id,
         assignee_user_id=assignee_user_id, idempotency_hmac_secret=secret,
     )
