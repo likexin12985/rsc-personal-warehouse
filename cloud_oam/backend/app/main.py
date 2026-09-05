@@ -262,6 +262,14 @@ async def block_legacy_prototype_writes(request, call_next):
         response.headers["Pragma"] = "no-cache"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Content-Type-Options"] = "nosniff"
+    if (request.url.path.startswith("/api/v1/stocktakes/")
+        and request.url.path.endswith("/count-command-status")):
+        # Dynamic recovery coordinates require the same privacy boundary on
+        # authentication/validation/route failures as on successful reads.
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
     return response
 
 app.include_router(auth.router, prefix="/api")

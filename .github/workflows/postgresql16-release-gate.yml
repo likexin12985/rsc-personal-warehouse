@@ -148,6 +148,7 @@ jobs:
             backend/tests/test_stocktake_task_service.py \
             backend/tests/test_stocktake_options.py \
             backend/tests/test_stocktake_count_service.py \
+            backend/tests/test_stocktake_count_command_status.py \
             backend/tests/test_stocktake_difference_service.py \
             backend/tests/test_postgresql_lock_graph.py \
             backend/tests/test_formal_stocktake_api.py \

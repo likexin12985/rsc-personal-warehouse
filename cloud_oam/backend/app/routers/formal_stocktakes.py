@@ -7,10 +7,10 @@ adapter calls OAM, RSC, Workflow, Feishu or another external system.
 from __future__ import annotations
 
 import re
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from ..config import Settings, get_settings
@@ -18,6 +18,7 @@ from ..database import get_db
 from ..dependencies import require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import stocktake_count as count_service
+from ..formal_services import stocktake_count_command_status as count_status_service
 from ..formal_services import stocktake_difference as difference_service
 from ..formal_services import stocktake_query as query_service
 from ..formal_services import stocktake_posting as posting_service
@@ -48,6 +49,7 @@ from ..stocktake_command_schemas import (
     StocktakeTerminalIn,
 )
 from ..stocktake_read_schemas import StocktakeTaskDetailOut, StocktakeTaskPageOut
+from ..stocktake_count_command_status_schemas import StocktakeCountCommandStatusOut
 from ..stocktake_task_schemas import (
     PersonalStocktakeCreateIn,
     StocktakeTaskCreateIn,
@@ -106,6 +108,40 @@ def formal_stocktake_detail(
         _raise_service_error(exc)
     _set_no_store(response)
     return output
+
+
+@router.get(
+    "/{task_id}/rounds/{round_id}/scopes/{scope_id}/count-command-status",
+    response_model=StocktakeCountCommandStatusOut,
+)
+def formal_stocktake_count_command_status(
+    task_id: UUID, round_id: UUID, scope_id: UUID,
+    request: Request, response: Response,
+    operation: Annotated[Literal["initial_count", "recount_count"], Query()],
+    actor_person_id: Annotated[UUID, Query()],
+    actor_authorization_version: Annotated[int, Query(ge=1)],
+    trace_request_id: Annotated[str, Query(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")],
+    principal: FormalPrincipal = Depends(require_permission("stocktake", "read")),
+    db: Session = Depends(get_db),
+):
+    headers = {"Cache-Control": "private, no-store, max-age=0", "Pragma": "no-cache",
+               "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"}
+    response.headers.update(headers)
+    try:
+        allowed = {"operation", "actor_person_id", "actor_authorization_version", "trace_request_id"}
+        if (set(request.query_params) != allowed
+            or any(len(request.query_params.getlist(key)) != 1 for key in allowed)
+            or "idempotency-key" in request.headers
+            or request.headers.get("content-length", "0") != "0"
+            or "transfer-encoding" in request.headers):
+            count_status_service._invalid_input()
+        return count_status_service.stocktake_count_command_status(
+            db, actor=principal, operation=operation, task_id=task_id,
+            round_id=round_id, scope_id=scope_id, actor_person_id=actor_person_id,
+            actor_authorization_version=actor_authorization_version, trace_request_id=trace_request_id,
+        )
+    except count_status_service.StocktakeCountCommandStatusError as exc:
+        raise HTTPException(status_code=exc.http_status_code, detail=exc.as_detail(), headers=headers) from None
 
 
 @router.post("", response_model=StocktakeTaskCreateOut, status_code=201)

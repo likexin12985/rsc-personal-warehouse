@@ -55,7 +55,8 @@ git diff --check
 - 未运行微信真机相机/存储/前后台生命周期验收，Web 扫码枪也需真实设备验证。
 - 未运行最终 Docker/Caddy 产物与 OSS、短信、微信登录联调。
 - 本次未重跑 PostgreSQL 动态门禁；后端/迁移/边缘/PG 工作流与已验收基线不变。
-- 页面生命周期防护不是跨进程持久化恢复。日常盘点仍缺 command-status GET；
+- 页面生命周期防护不是跨进程持久化恢复。本客户端 SHA 尚无日常 command-status GET；
+  后继服务端切片见 `DAILY_COUNT_COMMAND_STATUS_ACCEPTANCE.md`，不改变此客户端验收范围。
   已有期初 count 恢复接口限定 opening，不能直接挪用。
 - 请求未知时不能因超时、刷新、`not_observed` 或换账号而认定未执行、清除屏障或换键重发。
   本切片保留现有未决意图，不声称解决所有历史未知写的恢复和人工封存。

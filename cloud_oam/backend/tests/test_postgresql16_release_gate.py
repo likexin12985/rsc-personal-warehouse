@@ -16319,6 +16319,88 @@ def _complete_0051_nonopening_stocktake_service_chain(
     )
     from test_material_request_approval_service import _principal
 
+    def assert_historical_initial_count_status() -> None:
+        from app.formal_services.stocktake_count_command_status import (
+            stocktake_count_command_status,
+        )
+        from app.foundation_models import AuditEvent, OutboxEvent, StateTransitionEvent
+        from app.inventory_models import InventoryMovement, InventoryTransaction, StockBalance
+
+        def durable_snapshot():
+            with Session(api_engine) as session:
+                task = session.get(FormalStocktakeTask, task_id)
+                assert task is not None
+                facts = tuple(
+                    session.scalar(select(func.count()).select_from(model))
+                    for model in (
+                        AuditEvent, OutboxEvent, StateTransitionEvent,
+                        InventoryTransaction, InventoryMovement,
+                        StocktakeScopeCountCompletion, StocktakeRoundSubmission,
+                    )
+                )
+                balances = tuple(session.execute(select(
+                    StockBalance.stock_account_id, StockBalance.quantity,
+                    StockBalance.version, StockBalance.ledger_cursor,
+                ).order_by(StockBalance.stock_account_id)).all())
+                return task.status, task.version, facts, balances
+
+        before = durable_snapshot()
+        for trace_id, expected_status in (
+            ("trace-pg16-sample-stocktake-count-v1", "confirmed"),
+            (f"trace-pg16-nonopening-never-sent-{uuid.uuid4().hex}", "not_observed"),
+        ):
+            # The real API role owns this transaction. Recovery may take the
+            # canonical owner locks, but it must not create any durable fact.
+            with Session(api_engine) as session:
+                identity = _principal(session, assignee_user_id)
+                transaction = session.get_transaction()
+                result = _reveal_pg16_service_database_error(
+                    api_engine,
+                    lambda: stocktake_count_command_status(
+                        session,
+                        actor=identity,
+                        operation="initial_count",
+                        task_id=task_id,
+                        round_id=initial_round_id,
+                        scope_id=scope.id,
+                        actor_person_id=identity.person_id,
+                        actor_authorization_version=identity.authorization_version,
+                        trace_request_id=trace_id,
+                    ),
+                )
+                assert session.get_transaction() is transaction
+                assert not session.new and not session.dirty and not session.deleted
+                assert result.lookup_status == expected_status
+                assert result.operation == "initial_count"
+                assert result.task_id == task_id
+                assert result.round_id == initial_round_id
+                assert result.scope_id == scope.id
+                assert result.actor_person_id == identity.person_id
+                assert result.actor_authorization_version == identity.authorization_version
+                assert result.trace_request_id == trace_id
+                if expected_status == "confirmed":
+                    completion = session.scalar(select(StocktakeScopeCountCompletion).where(
+                        StocktakeScopeCountCompletion.task_id == task_id,
+                        StocktakeScopeCountCompletion.round_id == initial_round_id,
+                        StocktakeScopeCountCompletion.scope_id == scope.id,
+                    ))
+                    assert completion is not None and result.command is not None
+                    assert result.command.completion_id == completion.id
+                    assert result.command.completed_at == completion.completed_at
+                    assert result.command.round_no == 1
+                    assert result.command.scope_completed is True
+                    assert result.command.caused_round_submission is True
+                    assert set(result.command.model_dump()) == {
+                        "completion_id", "round_no", "completed_at",
+                        "scope_completed", "caused_round_submission",
+                    }
+                else:
+                    # Absence of a matching trace is not permission to submit
+                    # another count, even though this scope is already sealed.
+                    assert result.command is None
+                session.commit()
+        assert durable_snapshot() == before
+
     def lifecycle_state() -> tuple[object, ...]:
         with Session(api_engine) as session:
             task = session.get(FormalStocktakeTask, task_id)
@@ -16409,6 +16491,7 @@ def _complete_0051_nonopening_stocktake_service_chain(
 
     # Count is durable while review, posting, reconciliation and closure are
     # still independently absent.
+    assert_historical_initial_count_status()
     assert lifecycle_state() == (
         "sample",
         "submitted",
@@ -16677,6 +16760,7 @@ def _complete_0051_nonopening_stocktake_service_chain(
     # graph commits.  Earlier-schema round trips are intentionally unavailable
     # once 0052 has durable opening history, because downgrade fails closed.
     assert lifecycle_state() == expected_terminal_state
+    assert_historical_initial_count_status()
     with Session(api_engine) as session:
         terminal_task = session.get(FormalStocktakeTask, task_id)
         completion = session.get(
