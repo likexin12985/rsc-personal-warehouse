@@ -148,6 +148,9 @@ def test_postgresql16_gate_covers_main_prs_and_edge_role_provisioning() -> None:
         "backend/tests/test_opening_count_command_status.py",
         "backend/tests/test_formal_opening_stocktake_read.py",
         "backend/tests/test_stocktake_options.py",
+        "backend/tests/test_stocktake_count_history_context.py",
+        "backend/tests/test_stocktake_history_pg_acceptance.py",
+        "backend/tests/test_stocktake_history_owner_migration.py",
     ):
         assert required_gate in workflow
     assert "pytest==9.1.1 pglast==7.18 httpx==0.28.1" in workflow
@@ -222,10 +225,13 @@ def test_postgresql16_0049_catalog_uses_head_guard_hashes_by_revision() -> None:
 
     assert (
         gate.HEAD_REVISION
-        == gate.SUPPLY_TASK_EVENT_KEY_REVISION
+        == gate.NONOPENING_COUNT_HISTORY_OWNER_REVISION
     )
+    migration_0062 = gate._load_nonopening_count_history_owner_migration_0062()
+    assert migration_0062.revision == gate.HEAD_REVISION
+    assert migration_0062.down_revision == gate.SUPPLY_TASK_EVENT_KEY_REVISION
     migration_0061 = gate._load_supply_event_key_migration_0061()
-    assert migration_0061.revision == gate.HEAD_REVISION
+    assert migration_0061.revision == gate.SUPPLY_TASK_EVENT_KEY_REVISION
     assert migration_0061.down_revision == gate.SUPPLY_TASK_SECURITY_REVISION
     assert migration_0058.revision == gate.NONOPENING_REVIEW_TERMINAL_STATUS_REVISION
     assert migration_0058.down_revision == migration_0057.revision

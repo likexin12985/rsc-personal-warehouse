@@ -13,6 +13,8 @@ notification, outbox, or reconciliation facts.
 
 from __future__ import annotations
 
+from .stocktake_count_history import CountHistoryContext
+
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -885,7 +887,10 @@ def _load_and_validate_recount_assignment_graph(
     task: FormalStocktakeTask,
     round_row: StocktakeRound,
     scopes: Sequence[FormalStocktakeScope],
+    history: CountHistoryContext | None = None,
 ) -> SealedRecountAssignmentGraph:
+    if history is not None:
+        history.require(db, task, round_row, scopes)
     if (
         task.task_type not in _NON_OPENING_TYPES
         or round_row.round_no <= 1
@@ -925,7 +930,7 @@ def _load_and_validate_recount_assignment_graph(
     if source_round is None or source_round.status != "submitted":
         _evidence_invalid("复盘来源轮次缺失或不是不可变已提交轮次")
     source_evidence = review_service._load_and_validate_sealed_difference_evidence(
-        db, task=task, round_row=source_round, now=_database_now(db)
+        db, task=task, round_row=source_round, now=_database_now(db), history=history,
     )
     reviews = review_service._load_reviews(db, task.id, source_round.id)
     trigger_review, trigger_items = recount_service._validate_terminal_review_graph(
@@ -1013,6 +1018,8 @@ def _verify_recount_source_audits(
     graph: SealedRecountAssignmentGraph,
     proof: object,
 ) -> None:
+    if graph.source_evidence.ancestor_graph is not None:
+        _verify_recount_source_audits(db, graph=graph.source_evidence.ancestor_graph, proof=proof)
     review_service._verify_evidence_audit(
         db, graph.source_evidence.source_audit_event, proof
     )

@@ -486,6 +486,7 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0058) == 14
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0059) == 14
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0060) == 14
+    assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061) == 14
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0052" in scope_security.__all__
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0053" in scope_security.__all__
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0054" in scope_security.__all__
@@ -495,6 +496,7 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0058" in scope_security.__all__
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0059" in scope_security.__all__
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0060" in scope_security.__all__
+    assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061" in scope_security.__all__
     assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST) == 14
     ready_signature = "rsc_oam_runtime_binding_ready_0044()"
     for manifest in (
@@ -514,6 +516,7 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0058,
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0059,
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0060,
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061,
         scope_security.OAM_SYNC_FUNCTION_MANIFEST,
     ):
         assert {
@@ -799,7 +802,7 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0060[ready_signature][6]
     )
     assert hashlib.sha256(ready_body_0061.encode("utf-8")).hexdigest() == (
-        scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6]
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061[ready_signature][6]
     )
     assert ready_body_0048_downgrade == ready_body_0047
     assert hashlib.sha256(

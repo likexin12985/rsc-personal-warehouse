@@ -13,6 +13,8 @@ notification, outbox, or reconciliation facts.
 
 from __future__ import annotations
 
+from .stocktake_count_history import CountHistoryContext
+
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -464,7 +466,10 @@ def _load_evaluation_inputs(
     task: FormalStocktakeTask,
     round_row: StocktakeRound,
     now: datetime,
+    history: CountHistoryContext | None = None,
 ) -> _EvaluationInputs:
+    if history is not None:
+        history.require(db, task, round_row)
     # Callers hold the 0032 task-local owner graph. Its immutable evidence is
     # SELECT-only for the API role; taking FOR UPDATE again would violate ACLs.
     scopes = tuple(
@@ -481,7 +486,7 @@ def _load_evaluation_inputs(
     if not scopes:
         _evidence_invalid("盘点任务范围证据缺失")
     graph = recount_count_service._load_and_validate_recount_assignment_graph(
-        db, task=task, round_row=round_row, scopes=scopes
+        db, task=task, round_row=round_row, scopes=scopes, history=history,
     )
     selected_scopes = graph.selected_scopes
     submissions = tuple(
@@ -501,7 +506,7 @@ def _load_evaluation_inputs(
     if len(submissions) != 1:
         _evidence_invalid("已提交复盘轮次必须且只能存在一个轮次封印")
     submission = submissions[0]
-    plans = tuple(task_service._load_and_validate_scope_plans(db, task, scopes, now=now))
+    plans = history.plans if history is not None else tuple(task_service._load_and_validate_scope_plans(db, task, scopes, now=now))
     plan_by_scope = {row.scope_id: row for row in plans}
     selected_plans = tuple(plan_by_scope[row.id] for row in selected_scopes)
     freezes = tuple(
@@ -515,9 +520,10 @@ def _load_evaluation_inputs(
     )
     freeze_by_scope = {row.stocktake_scope_id: row for row in freezes}
     for scope in selected_scopes:
-        recount_count_service._validate_recount_freeze(
-            scope, plan_by_scope[scope.id].freeze_mode, freeze_by_scope.get(scope.id), now
-        )
+        if history is None:
+            recount_count_service._validate_recount_freeze(
+                scope, plan_by_scope[scope.id].freeze_mode, freeze_by_scope.get(scope.id), now
+            )
     if any(
         value is not None
         for value in (
@@ -620,6 +626,7 @@ def _load_evaluation_inputs(
         observations=observations,
         completions=completions,
         submission=submission,
+        history=history,
     )
     replay_evidence = difference_service._replay_scope_expected_states(
         db,
@@ -684,7 +691,10 @@ def _validate_count_and_submission_manifests(
     observations: Sequence[StocktakeCountObservation],
     completions: Sequence[StocktakeScopeCountCompletion],
     submission: StocktakeRoundSubmission,
+    history: CountHistoryContext | None = None,
 ) -> None:
+    if history is not None:
+        history.require(db, task, round_row, graph.selected_scopes)
     selected_scope_ids = graph.selected_scope_ids
     if (
         len(completions) != len(selected_scope_ids)
@@ -755,7 +765,7 @@ def _validate_count_and_submission_manifests(
             _evidence_invalid("复盘附件证据已失效")
         attachments_by_completion[row.document_id].append(row)
     file_ids = tuple(sorted({row.file_id for row in attachments}, key=str))
-    files = tuple(
+    files = history.files_for(db, task, round_row, file_ids) if history is not None else tuple(
         db.scalars(
             select(FileObject)
             .where(FileObject.id.in_(file_ids))
@@ -944,6 +954,7 @@ def _load_and_validate_sealed_recount_difference_evidence(
     task: FormalStocktakeTask,
     round_row: StocktakeRound,
     now: datetime,
+    history: CountHistoryContext | None = None,
 ) -> SealedRecountDifferenceEvidence:
     """Reprove a recount difference seal for review/recount consumers."""
 
@@ -969,7 +980,9 @@ def _load_and_validate_sealed_recount_difference_evidence(
             "precondition_failed",
             "复盘复核必须基于任务当前已提交复盘轮次",
         )
-    if db.scalar(
+    if history is not None:
+        history.require(db, task, round_row)
+    if history is None and db.scalar(
         select(func.count())
         .select_from(StocktakePosting)
         .where(StocktakePosting.task_id == task.id, StocktakePosting.round_id == round_row.id)
@@ -979,7 +992,7 @@ def _load_and_validate_sealed_recount_difference_evidence(
             "precondition_failed",
             "该复盘轮次已经存在过账事实",
         )
-    inputs = _load_evaluation_inputs(db, task=task, round_row=round_row, now=now)
+    inputs = _load_evaluation_inputs(db, task=task, round_row=round_row, now=now, history=history)
     completions = tuple(
         db.scalars(
             select(StocktakeDifferenceSetCompletion)

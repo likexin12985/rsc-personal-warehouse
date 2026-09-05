@@ -48,6 +48,9 @@ _PG_LOCK_NONOPENING_STOCKTAKE_CLOSE_GRAPH = (
 _PG_LOCK_NONOPENING_STOCKTAKE_DIFFERENCE_REPLAY_GRAPH = (
     "public.rsc_lock_nonopening_stocktake_difference_replay_graph_0057"
 )
+_PG_LOCK_NONOPENING_STOCKTAKE_COUNT_HISTORY_GRAPH = (
+    "public.rsc_lock_nonopening_stocktake_count_history_graph_0062"
+)
 _PG_LOCK_MATERIAL_REQUEST_WORK_ORDER = (
     "public.rsc_lock_material_request_work_order_reference_0042"
 )
@@ -242,6 +245,36 @@ def lock_nonopening_stocktake_difference_replay_graph(
     )
 
 
+def lock_nonopening_stocktake_count_history_graph(
+    db: Session,
+    task_id: uuid.UUID,
+    round_id: uuid.UUID,
+    actor_user_id: str,
+) -> None:
+    """Own a complete multi-round historical count graph before source reads.
+
+    Revision 0062 derives every owner coordinate in the database, including
+    terminal evidence and the complete evidence-file union. Authorization and
+    historical/audit proof remain the caller's responsibility. SQLite makes
+    no claim about PostgreSQL concurrency and is an explicit no-op.
+    """
+
+    if not _is_postgresql(db):
+        return
+    db.execute(
+        text(
+            f"SELECT {_PG_LOCK_NONOPENING_STOCKTAKE_COUNT_HISTORY_GRAPH}("
+            "CAST(:task_id AS uuid), CAST(:round_id AS uuid), "
+            "CAST(:actor_user_id AS text))"
+        ),
+        {
+            "task_id": str(task_id),
+            "round_id": str(round_id),
+            "actor_user_id": actor_user_id,
+        },
+    )
+
+
 def lock_nonopening_stocktake_posting_graph(
     db: Session,
     task_id: uuid.UUID,
@@ -328,5 +361,6 @@ __all__ = [
     "lock_nonopening_stocktake_posting_graph",
     "lock_nonopening_stocktake_close_graph",
     "lock_nonopening_stocktake_difference_replay_graph",
+    "lock_nonopening_stocktake_count_history_graph",
     "lock_nonopening_stocktake_review_graph",
 ]

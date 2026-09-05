@@ -31,6 +31,8 @@ from .audit_chain import (
     _lock_audit_chain_head_with_proof, _verify_audit_event_with_prelocked_proof,
 )
 from .postgresql_lock_graph import lock_nonopening_stocktake_review_graph
+from . import postgresql_lock_graph as owner_locks
+from .stocktake_count_history import _make_history_context
 
 
 _TRACE = re.compile(r"[A-Za-z0-9._:-]{8,160}", re.ASCII)
@@ -71,6 +73,17 @@ def stocktake_count_command_status(
         with db.no_autoflush:
             context = _context(db, actor, actor_person_id, actor_authorization_version)
             task = _visible_task(db, context, task_id)
+            # Preserve the not-found/operation contract before the SQL owner
+            # capability (which intentionally exposes only invariant failure).
+            target_round = db.scalar(select(StocktakeRound).where(
+                StocktakeRound.task_id == task_id, StocktakeRound.id == round_id,
+            ).execution_options(populate_existing=True))
+            if target_round is None:
+                _not_found()
+            _validate_operation_round(operation, target_round)
+            # 0062 owns the complete principal/reference/evidence/file union.
+            # Nothing below may discover a new PG owner while proving history.
+            owner_locks.lock_nonopening_stocktake_count_history_graph(db, task_id, round_id, actor.user_id)
             # Same first owner as every count/posting writer; no audit-first
             # recovery path and no POST idempotency advisory lock is needed.
             cursor = count._lock_current_ledger_cursor(db)
@@ -82,10 +95,7 @@ def stocktake_count_command_status(
             ).with_for_update().execution_options(populate_existing=True))
             if target_round is None:
                 _not_found()
-            if (operation == "initial_count") != (
-                target_round.round_type == "initial" and target_round.round_no == 1
-            ) or (operation == "recount_count" and target_round.round_type != "recount"):
-                _invalid_input()
+            _validate_operation_round(operation, target_round)
             lock_nonopening_stocktake_review_graph(db, task_id, round_id)
             if users != _principal_users(db, task_id, actor.user_id):
                 _changed()
@@ -100,33 +110,45 @@ def stocktake_count_command_status(
             _current_scope_dimensions(db, graph, scope)
             if task.cutoff_ledger_cursor is None or cursor < task.cutoff_ledger_cursor:
                 _invalid_evidence()
+            plans = _frozen_scope_plans(db, graph)
+            count._validate_snapshot_manifest(task, plans, graph.snapshots, graph.accounts)
+            attachment_rows, files = _lock_files(db, graph)
+            history = _make_history_context(
+                db, graph=graph, target_round=target_round, scope_id=scope_id,
+                operation=operation, plans=plans, files=tuple(files.values()), now=_database_now(db),
+            )
             recount_graph = None
             if operation == "recount_count":
                 recount_graph = recount._load_and_validate_recount_assignment_graph(
-                    db, task=task, round_row=target_round, scopes=graph.scopes,
+                    db, task=task, round_row=target_round, scopes=graph.scopes, history=history,
                 )
             grant = _authorize(db, context.principal, graph, scope, recount_graph)
-            plans = _frozen_scope_plans(db, graph)
-            count._validate_snapshot_manifest(task, plans, graph.snapshots, graph.accounts)
             completions = tuple(row for row in graph.scope_completions if row.round_id == round_id)
-            # All files used by target/source count manifests have one sorted
-            # owner union. Attachment insertion takes the task owner (0057),
-            # and existing immutable bindings cannot be rewritten by API role.
-            attachment_rows, files = _lock_files(db, graph)
-            if recount_graph is not None:
-                # The first pass acquired the recursive source owners. Rebuild
-                # after the file-owner wait so source file metadata cannot be
-                # accepted from a stale pre-lock read. No new owner set here.
-                recount_graph = recount._load_and_validate_recount_assignment_graph(
-                    db, task=task, round_row=target_round, scopes=graph.scopes,
-                )
             file_counts = _validate_counts(db, graph, target_round, completions, files, attachment_rows, cursor)
-            submission = _validate_submission(db, graph, target_round, completions, recount_graph)
+            submission = _validate_submission(db, graph, target_round, completions, recount_graph, history=history)
+            ancestors = []
+            source_graph = recount_graph
+            while source_graph is not None:
+                source = source_graph.source_evidence
+                prior_graph = source.ancestor_graph
+                prior_completions = tuple(row for row in graph.scope_completions if row.round_id == source.round_row.id)
+                prior_files = _validate_counts(db, graph, source.round_row, prior_completions, files, attachment_rows, cursor)
+                prior_submission = _validate_submission(
+                    db, graph, source.round_row, prior_completions, prior_graph, history=history,
+                )
+                ancestors.append((source.round_row, prior_completions, prior_submission, prior_graph, prior_files))
+                source_graph = prior_graph
             # Last new owner. Everything below is SELECT-only and reuses the
             # prelocked chain proof; no helper may acquire new reference locks.
             _head, proof = _lock_audit_chain_head_with_proof(db, stream_key=count.INVENTORY_STREAM_KEY)
+            history.verify_release_audits(db, task, proof)
             if recount_graph is not None:
                 recount._verify_recount_source_audits(db, graph=recount_graph, proof=proof)
+            for prior_round, prior_completions, prior_submission, prior_graph, prior_files in ancestors:
+                _validate_audits(
+                    db, graph, prior_round, prior_completions, prior_submission, prior_graph,
+                    prior_files, proof, "recount_count" if prior_graph is not None else "initial_count",
+                )
             events = _validate_audits(
                 db, graph, target_round, completions, submission,
                 recount_graph, file_counts, proof, operation,
@@ -176,6 +198,13 @@ def stocktake_count_command_status(
 
 def _database_now(db):
     return count._database_now(db)
+
+
+def _validate_operation_round(operation, round_row):
+    if (operation == "initial_count") != (
+        round_row.round_type == "initial" and round_row.round_no == 1
+    ) or (operation == "recount_count" and round_row.round_type != "recount"):
+        _invalid_input()
 
 
 def _context(db, actor, person_id, version):
@@ -356,7 +385,7 @@ def _validate_counts(db, graph, round_row, completions, files, attachments, curs
     return file_counts
 
 
-def _validate_submission(db, graph, round_row, completions, recount_graph):
+def _validate_submission(db, graph, round_row, completions, recount_graph, *, history=None):
     submissions = tuple(row for row in graph.submissions if row.round_id == round_row.id)
     expected_scopes = recount_graph.selected_scope_ids if recount_graph is not None else {row.id for row in graph.scopes}
     if not {row.scope_id for row in completions} <= expected_scopes:
@@ -378,6 +407,7 @@ def _validate_submission(db, graph, round_row, completions, recount_graph):
             count_serials=tuple(row for row in graph.count_serials if row.round_id == round_row.id),
             observations=tuple(row for row in graph.observations if row.round_id == round_row.id),
             completions=completions, submission=submission,
+            history=history,
         )
     sealing = next((row for row in completions if row.id == submission.sealing_completion_id), None)
     if sealing is None or (

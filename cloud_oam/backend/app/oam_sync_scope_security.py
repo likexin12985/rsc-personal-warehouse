@@ -508,13 +508,23 @@ OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0060 = {
     ),
 }
 
-OAM_SYNC_FUNCTION_MANIFEST = {
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061 = {
     **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0060,
     "rsc_oam_runtime_binding_ready_0044()": (
         *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0060[
             "rsc_oam_runtime_binding_ready_0044()"
         ][:6],
         "900dd22c6ff47e807dddd6dd6110449e433dde3bc410057ad03472e7216bc53c",
+    ),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061[
+            "rsc_oam_runtime_binding_ready_0044()"
+        ][:6],
+        "d019a572ad39a3570ca175479ee50a4a7987eff3a0655c5c910c5b83744ea04d",
     ),
 }
 
@@ -974,6 +984,7 @@ __all__ = [
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0058",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0059",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0060",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061",
     "RLS_REVISION",
     "RLS_TABLES",
     "_RLS_BOUNDARY_SQL",

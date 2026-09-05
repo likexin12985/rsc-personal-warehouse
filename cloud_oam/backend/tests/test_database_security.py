@@ -7725,10 +7725,12 @@ def test_0061_supply_event_key_hashes_match_current_security_manifests() -> None
             ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint")
         ]
     )
+    from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061
+
     assert migration.RUNTIME_READY_BODY_SHA256_0061 == (
-        OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256[
-            ("rsc_oam_runtime_binding_ready_0044", "")
-        ]
+        OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061[
+            "rsc_oam_runtime_binding_ready_0044()"
+        ][6]
     )
 
 

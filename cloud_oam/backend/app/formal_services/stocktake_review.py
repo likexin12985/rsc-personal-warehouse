@@ -11,6 +11,8 @@ flush but never commit or roll back.
 
 from __future__ import annotations
 
+from .stocktake_count_history import CountHistoryContext
+
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -185,6 +187,7 @@ class SealedNonOpeningDifferenceEvidence:
     completion: StocktakeDifferenceSetCompletion
     differences: tuple[StocktakeDifference, ...]
     source_audit_event: AuditEvent
+    ancestor_graph: object | None = None
 
 
 def submit_stocktake_region_review(
@@ -1044,7 +1047,10 @@ def _load_and_validate_sealed_difference_evidence(
     task: FormalStocktakeTask,
     round_row: StocktakeRound,
     now: datetime,
+    history: CountHistoryContext | None = None,
 ) -> SealedNonOpeningDifferenceEvidence:
+    if history is not None:
+        history.require(db, task, round_row)
     if round_row.round_no > 1 or round_row.round_type == "recount":
         # Import lazily: recount counting itself reuses this review evidence
         # boundary to reprove the immutable source round before accepting the
@@ -1058,6 +1064,7 @@ def _load_and_validate_sealed_difference_evidence(
                     task=task,
                     round_row=round_row,
                     now=now,
+                    history=history,
                 )
             )
         except recount_difference_service.StocktakeRecountDifferenceError as exc:
@@ -1075,6 +1082,7 @@ def _load_and_validate_sealed_difference_evidence(
             completion=evidence.completion,
             differences=evidence.differences,
             source_audit_event=evidence.source_audit_event,
+            ancestor_graph=evidence.assignment_graph,
         )
     if (
         task.task_type not in NON_OPENING_TYPES
@@ -1098,7 +1106,7 @@ def _load_and_validate_sealed_difference_evidence(
             "precondition_failed",
             "盘点复核必须基于已提交且不可变的非期初初盘轮次",
         )
-    if db.scalar(
+    if history is None and db.scalar(
         select(func.count())
         .select_from(StocktakePosting)
         .where(
@@ -1175,6 +1183,7 @@ def _load_and_validate_sealed_difference_evidence(
         completion=completion,
         differences=differences,
         now=now,
+        history=history,
     )
     source_events = tuple(
         db.scalars(
@@ -1222,9 +1231,12 @@ def _recompute_initial_count_and_difference_graph(
     completion: StocktakeDifferenceSetCompletion,
     differences: tuple[StocktakeDifference, ...],
     now: datetime,
+    history: CountHistoryContext | None = None,
 ) -> None:
     try:
-        plans = task_service._load_and_validate_scope_plans(
+        if history is not None:
+            history.require(db, task, round_row, scopes)
+        plans = history.plans if history is not None else task_service._load_and_validate_scope_plans(
             db, task, scopes, now=now
         )
         freezes = tuple(
@@ -1247,8 +1259,7 @@ def _recompute_initial_count_and_difference_graph(
                 or freeze is None
                 or freeze.scope_key != scope.scope_key
                 or freeze.freeze_mode != plan.freeze_mode
-                or freeze.status != "active"
-                or freeze.valid_to is not None
+                or (history is None and (freeze.status != "active" or freeze.valid_to is not None))
                 or _as_utc(freeze.valid_from) > now
             ):
                 _evidence_invalid("盘点冻结证据与范围计划不一致")
@@ -1347,6 +1358,7 @@ def _recompute_initial_count_and_difference_graph(
             observations=observations,
             completions=count_completions,
             submission=submission,
+            history=history,
         )
         replay_evidence = difference_service._replay_scope_expected_states(
             db,

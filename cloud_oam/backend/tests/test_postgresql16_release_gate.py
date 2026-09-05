@@ -57,7 +57,8 @@ NONOPENING_REVIEW_TERMINAL_STATUS_REVISION = "20260905_0058"
 SUPPLY_TASK_CAUSALITY_REVISION = "20260905_0059"
 SUPPLY_TASK_SECURITY_REVISION = "20260905_0060"
 SUPPLY_TASK_EVENT_KEY_REVISION = "20260905_0061"
-HEAD_REVISION = SUPPLY_TASK_EVENT_KEY_REVISION
+NONOPENING_COUNT_HISTORY_OWNER_REVISION = "20260905_0062"
+HEAD_REVISION = NONOPENING_COUNT_HISTORY_OWNER_REVISION
 OPENING_BACKFILL_DATABASE_PREFIX = f"{DATABASE_NAME}_0052_backfill_"
 RLS_BINDING_TABLE = "oam_sync_scope_bindings"
 RLS_READY_FUNCTION = "public.rsc_oam_runtime_binding_ready_0044()"
@@ -4673,6 +4674,7 @@ def _expected_0049_function_body_sha256(
             SUPPLY_TASK_CAUSALITY_REVISION,
             SUPPLY_TASK_SECURITY_REVISION,
             SUPPLY_TASK_EVENT_KEY_REVISION,
+            NONOPENING_COUNT_HISTORY_OWNER_REVISION,
         }
     )
     assert expected_revision in (
@@ -4707,6 +4709,7 @@ def _expected_0049_function_body_sha256(
             SUPPLY_TASK_CAUSALITY_REVISION,
             SUPPLY_TASK_SECURITY_REVISION,
             SUPPLY_TASK_EVENT_KEY_REVISION,
+            NONOPENING_COUNT_HISTORY_OWNER_REVISION,
         }
         and signature == migration.ROUND_ASSIGNMENT_HELPER_0021_SIGNATURE
     ):
@@ -4718,7 +4721,8 @@ def _expected_0049_function_body_sha256(
     if (
         expected_revision in {NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
                               SUPPLY_TASK_CAUSALITY_REVISION, SUPPLY_TASK_SECURITY_REVISION,
-                              SUPPLY_TASK_EVENT_KEY_REVISION}
+                              SUPPLY_TASK_EVENT_KEY_REVISION,
+                              NONOPENING_COUNT_HISTORY_OWNER_REVISION}
         and signature == migration.REVIEW_GRAPH_VALIDATOR_0032_SIGNATURE
     ):
         terminal_migration = (
@@ -4872,6 +4876,7 @@ def _assert_0049_recount_guard_catalog(
             SUPPLY_TASK_CAUSALITY_REVISION,
             SUPPLY_TASK_SECURITY_REVISION,
             SUPPLY_TASK_EVENT_KEY_REVISION,
+            NONOPENING_COUNT_HISTORY_OWNER_REVISION,
         }
     expected_function_rows = []
     for (
@@ -5438,6 +5443,7 @@ def _assert_0052_opening_terminal_catalog(
                             SUPPLY_TASK_CAUSALITY_REVISION,
                             SUPPLY_TASK_SECURITY_REVISION,
                             SUPPLY_TASK_EVENT_KEY_REVISION,
+                            NONOPENING_COUNT_HISTORY_OWNER_REVISION,
                         }
                         and row[0]
                         == dispatch_migration.GRAPH_CLOSURE_SIGNATURE
@@ -5454,6 +5460,7 @@ def _assert_0052_opening_terminal_catalog(
                             SUPPLY_TASK_CAUSALITY_REVISION,
                             SUPPLY_TASK_SECURITY_REVISION,
                             SUPPLY_TASK_EVENT_KEY_REVISION,
+                            NONOPENING_COUNT_HISTORY_OWNER_REVISION,
                         }
                         and row[0]
                         == history_migration.ROUND_SUBMISSION_SIGNATURE
@@ -7119,12 +7126,23 @@ def _load_supply_event_key_migration_0061():
     assert specification is not None and specification.loader is not None
     migration = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(migration)
+    assert migration.revision == SUPPLY_TASK_EVENT_KEY_REVISION
+    return migration
+
+
+def _load_nonopening_count_history_owner_migration_0062():
+    path = CLOUD_ROOT / "backend/alembic/versions/20260905_0062_nonopening_count_history_owner_graph.py"
+    specification = importlib.util.spec_from_file_location("pg16_count_history_owner_0062", path)
+    assert specification is not None and specification.loader is not None
+    migration = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(migration)
     assert migration.revision == HEAD_REVISION
+    assert migration.down_revision == SUPPLY_TASK_EVENT_KEY_REVISION
     return migration
 
 
 def _head_runtime_ready_hash() -> str:
-    return _load_supply_event_key_migration_0061().RUNTIME_READY_BODY_SHA256_0061
+    return _load_nonopening_count_history_owner_migration_0062().RUNTIME_READY_BODY_SHA256_0062
 
 
 def _assert_0058_review_terminal_catalog_state(
@@ -11873,7 +11891,9 @@ def _create_0046_available_request_file(
     *,
     uploader_user_id: str,
     marker: str,
+    purpose: str = "request_attachment",
 ) -> uuid.UUID:
+    """Synthetic verified metadata only; never connects to an object store."""
     from app.formal_services import formal_files
     from app.foundation_models import FileObject
     from app.models import User
@@ -11881,12 +11901,12 @@ def _create_0046_available_request_file(
     file_id = uuid.uuid4()
     filename = f"{marker}.png"
     storage_key = (
-        "formal-files/v1/request_attachment/"
+        f"formal-files/v1/{purpose}/"
         f"{file_id.hex[:2]}/{file_id.hex}"
     )
     file_sha256 = hashlib.sha256(f"0046-file:{marker}".encode()).hexdigest()
     prepared = formal_files._PreparedUpload(
-        purpose="request_attachment",
+        purpose=purpose,
         original_filename=filename,
         size_bytes=128,
         mime_type="image/png",
@@ -11904,7 +11924,7 @@ def _create_0046_available_request_file(
                 f"0046-file-key:{marker}".encode()
             ).hexdigest(),
             "provider": "aliyun_oss_v2",
-            "purpose": "request_attachment",
+            "purpose": purpose,
             "request_sha256": formal_files._upload_request_hash(prepared),
             "schema": "cloud_oam.formal_file_upload_intent.v1",
             "storage_key": storage_key,
@@ -16313,14 +16333,111 @@ def _ordered_durable_model_rows(session, models):
     )
 
 
+def _assert_0062_history_owner_boundary(
+    api_engine, *, task_id, round_id, actor_user_id, administrator_user_id,
+    account_id, file_ids,
+) -> None:
+    """Real API execution, denied direct row lock, head-first wait and union locks."""
+    migration = _load_nonopening_count_history_owner_migration_0062()
+    _0062_history_owner_catalog()
+    function_sql = sql.SQL("SELECT {}(%s::uuid, %s::uuid, %s::text)").format(
+        sql.SQL(migration.LOCK_SIGNATURE.rsplit("(", 1)[0]))
+    api_parameters = _connection_parameters(
+        role="star_oam_api", password=_role_password("star_oam_api"))
+    coordinates = (task_id, round_id, actor_user_id)
+    with psycopg.connect(**api_parameters) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT current_user")
+            assert cursor.fetchone() == ("star_oam_api",)
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                cursor.execute("SELECT id FROM public.stocktake_recount_cases WHERE task_id=%s FOR UPDATE",
+                               (task_id,))
+        connection.rollback()
+
+    # The blocked owner must not already own the task: ledger precedes task.
+    contender_pid = []
+    contender_started = threading.Event()
+    holder = psycopg.connect(**_admin_parameters())
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        with holder.cursor() as cursor:
+            cursor.execute("SELECT pg_backend_pid()")
+            holder_pid = cursor.fetchone()[0]
+            cursor.execute("SELECT id FROM public.inventory_ledger_heads WHERE stream_key='inventory' FOR UPDATE")
+            assert cursor.fetchone() is not None
+
+        def wait_for_owner():
+            with psycopg.connect(**api_parameters) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SET LOCAL statement_timeout='20s'")
+                    cursor.execute("SELECT pg_backend_pid()")
+                    contender_pid.append(cursor.fetchone()[0])
+                    contender_started.set()
+                    cursor.execute(function_sql, coordinates)
+                    assert cursor.fetchone() is not None
+                connection.rollback()
+
+        future = executor.submit(wait_for_owner)
+        assert contender_started.wait(timeout=10)
+        _wait_for_backend_lock(contender_pid[0])
+        with psycopg.connect(**_admin_parameters()) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_blocking_pids(%s)", (contender_pid[0],))
+                assert holder_pid in cursor.fetchone()[0]
+                cursor.execute("SELECT id FROM public.stocktake_tasks WHERE id=%s FOR UPDATE NOWAIT", (task_id,))
+                assert cursor.fetchone() == (task_id,)
+            connection.rollback()
+        holder.rollback()
+        future.result(timeout=20)
+    finally:
+        holder.rollback()
+        holder.close()
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    # The oldest/high-UUID file and newer/low-UUID file both belong to the
+    # same prelocked union, as do all ancestors and terminal source facts.
+    targets = [("stocktake_tasks", task_id), ("stock_accounts", account_id)]
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            for table in (
+                "stocktake_scopes", "stocktake_rounds", "stocktake_snapshot_lines",
+                "stocktake_scope_count_completions", "stocktake_round_submissions",
+                "stocktake_recount_cases", "stocktake_reviews",
+                "stocktake_effective_approval_completions", "stocktake_posting_completions",
+                "stocktake_close_reconciliation_completions", "stocktake_close_completions",
+            ):
+                cursor.execute(sql.SQL("SELECT id FROM public.{} WHERE task_id=%s ORDER BY id").format(
+                    sql.Identifier(table)), (task_id,))
+                rows = cursor.fetchall()
+                assert rows, table
+                targets.extend((table, row[0]) for row in rows)
+            cursor.execute("SELECT id, person_id FROM public.users WHERE id=ANY(%s) ORDER BY id",
+                           ([actor_user_id, administrator_user_id],))
+            for user_id, person_id in cursor.fetchall():
+                targets.extend((("users", user_id), ("people", person_id)))
+    targets.extend(("files", value) for value in file_ids)
+    with psycopg.connect(**api_parameters) as owner, psycopg.connect(**_admin_parameters()) as contender:
+        with owner.cursor() as cursor:
+            cursor.execute("SET LOCAL statement_timeout='20s'")
+            cursor.execute(function_sql, coordinates)
+            assert cursor.fetchone() is not None
+        for table, object_id in targets:
+            with contender.cursor() as cursor:
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    cursor.execute(sql.SQL("SELECT id FROM public.{} WHERE id=%s FOR UPDATE NOWAIT").format(
+                        sql.Identifier(table)), (object_id,))
+            contender.rollback()
+        owner.rollback()
+
+
 def _assert_nonopening_multiround_count_status(
     api_engine, *, fixture, actor_user_id, assignee_user_id,
     idempotency_hmac_secret,
 ) -> None:
     """Real PG/API-role writes and HTTP reads; no patched clock or proof rows.
 
-    This one-scope task stays submitted on its isolated freeze owner until the
-    disposable cluster is removed. It does not post, release or rewrite stock.
+    This one-scope task goes through real approvals, a +1 gain posting, a
+    separate reconciliation and close. Only the formal posting changes stock.
     Authentication transport is injected, but principal loading, authorization,
     route, service, PG locks and durable evidence are real.
     """
@@ -16337,12 +16454,18 @@ def _assert_nonopening_multiround_count_status(
     from app.formal_services import stocktake_recount_count as recount_count
     from app.formal_services import stocktake_recount_difference as recount_difference
     from app.formal_services import stocktake_review as review
+    from app.formal_services import stocktake_posting as posting
+    from app.formal_services import stocktake_close as close
     from app.formal_services.stocktake_task import (
         create_stocktake_task_draft, start_stocktake_task,
     )
-    from app.foundation_models import AuditChainHead, AuditEvent, OutboxEvent, StateTransitionEvent
+    from app.foundation_models import (
+        AuditChainHead, AuditEvent, DocumentAttachment, FileObject,
+        OutboxEvent, StateTransitionEvent,
+    )
     from app.inventory_models import (
-        InventoryLedgerHead, InventoryMovement, InventoryTransaction, StockBalance,
+        InventoryLedgerHead, InventoryMovement, InventoryMovementSerial,
+        InventoryTransaction, SerialCurrentPosition, StockBalance,
     )
     from app.routers import formal_stocktakes
     from app.stocktake_models import (
@@ -16351,7 +16474,13 @@ def _assert_nonopening_multiround_count_status(
         StocktakeDifference, StocktakeDifferenceSetCompletion,
         StocktakeRecountCase, StocktakeRecountScopeAssignment, StocktakeReview,
         StocktakeRound, StocktakeRoundSubmission, StocktakeScopeCountCompletion,
-        StocktakeSnapshotLine,
+        StocktakeSnapshotLine, StocktakeReviewItem,
+        StocktakeEffectiveApprovalCompletion, StocktakeEffectiveApprovalScope,
+        StocktakeEffectiveApprovalItem, StocktakePosting, StocktakePostingItem,
+        StocktakePostingCompletion, StocktakePostingCompletionItem,
+        StocktakeCloseReconciliationCompletion, StocktakeCloseReconciliationAccount,
+        StocktakeCloseReconciliationSerial, StocktakeCloseCompletion,
+        StocktakeCloseTransitionAck,
     )
     from app.stocktake_task_schemas import (
         StocktakeScopeSelectionIn, StocktakeTaskCreateIn, StocktakeTaskStartIn,
@@ -16389,7 +16518,10 @@ def _assert_nonopening_multiround_count_status(
             tuple(session.execute(select(
                 *StockBalance.__table__.c,
             ).order_by(StockBalance.stock_account_id)).all()),
-            _ordered_durable_model_rows(session, (InventoryTransaction, InventoryMovement)),
+            _ordered_durable_model_rows(session, (
+                InventoryTransaction, InventoryMovement, InventoryMovementSerial,
+                SerialCurrentPosition,
+            )),
         )
 
     def durable_snapshot():
@@ -16405,11 +16537,27 @@ def _assert_nonopening_multiround_count_status(
                     StocktakeDifference, StocktakeDifferenceSetCompletion,
                     StocktakeReview, StocktakeRecountCase,
                     StocktakeRecountScopeAssignment,
+                    StocktakeReviewItem, StocktakeEffectiveApprovalCompletion,
+                    StocktakeEffectiveApprovalScope, StocktakeEffectiveApprovalItem,
+                    StocktakePosting, StocktakePostingItem, StocktakePostingCompletion,
+                    StocktakePostingCompletionItem, StocktakeCloseReconciliationCompletion,
+                    StocktakeCloseReconciliationAccount, StocktakeCloseReconciliationSerial,
+                    StocktakeCloseCompletion, StocktakeCloseTransitionAck,
+                    DocumentAttachment, FileObject,
             ))
             return inventory_snapshot(session), facts
 
     with Session(api_engine) as session:
         inventory_before = inventory_snapshot(session)
+
+    # Ancestor order intentionally opposes UUID order. A historical graph
+    # must acquire the union before recursively examining an ancestor subset.
+    evidence_files = tuple(sorted((
+        _create_0046_available_request_file(
+            api_engine, uploader_user_id=assignee_user_id,
+            marker=f"multiround-{token}-evidence-{index}", purpose="stocktake_evidence",
+        ) for index in range(2)
+    ), key=lambda value: value.int))
 
     created = write(
         create_stocktake_task_draft, actor_user_id, "create",
@@ -16534,6 +16682,14 @@ def _assert_nonopening_multiround_count_status(
             api_engine, lambda: original_status(*args, **kwargs),
         )
 
+    def assert_all_history(client, *, task_status):
+        with Session(api_engine) as session:
+            assert session.get(FormalStocktakeTask, task_id).status == task_status
+        for old_round, old_no, old_trace in history:
+            lookup(client, old_round, old_no, old_trace)
+            lookup(client, old_round, old_no,
+                   f"trace-multiround-{token}-unseen-{old_no}", expected="not_observed")
+
     with patch.object(count_status, "stocktake_count_command_status", status_with_diagnostics), TestClient(api) as client:
         round_id = started.initial_round_id
         for round_no in (1, 2, 3):
@@ -16556,6 +16712,7 @@ def _assert_nonopening_multiround_count_status(
                         stock_account_id=fixture["recount_account_id"],
                         counted_qty=Decimal("1.000"),
                     ),),
+                    evidence_file_ids=(evidence_files[2 - round_no],) if round_no <= 2 else (),
                 ),
             )
             assert counted.round_submitted is True
@@ -16615,6 +16772,101 @@ def _assert_nonopening_multiround_count_status(
             for old_round, old_no, old_trace in history:
                 lookup(client, old_round, old_no, old_trace)
 
+        # Every terminal fact below is produced by the same formal write
+        # boundary used by the application, in its own committed transaction.
+        # Never manufacture terminal status or a released freeze for a GET.
+        evaluated = write(
+            recount_difference.generate_stocktake_recount_differences,
+            actor_user_id, "round-3-difference",
+            command=recount_difference.GenerateStocktakeRecountDifferenceCommand(
+                task_id=task_id, round_id=round_id,
+                expected_task_version=counted.task_version,
+            ),
+        )
+        with Session(api_engine) as session:
+            final_differences = tuple(session.scalars(select(StocktakeDifference.id).where(
+                StocktakeDifference.task_id == task_id,
+                StocktakeDifference.round_id == round_id,
+            )).all())
+            assert len(final_differences) == 1
+        final_items = tuple(review.StocktakeReviewItemInput(
+            difference_id=value, decision="accept_for_posting",
+            comment="PG16 confirmed physical gain after two independent recounts",
+        ) for value in final_differences)
+        regional = write(
+            review.submit_stocktake_region_review, assignee_user_id, "round-3-region",
+            command=review.SubmitStocktakeReviewCommand(
+                task_id=task_id, round_id=round_id,
+                expected_task_version=evaluated.task_version,
+                decision="approve", items=final_items,
+                comment="PG16 region accepts the final recount difference",
+            ),
+        )
+        approved = write(
+            review.submit_stocktake_headquarters_review, actor_user_id, "round-3-hq",
+            command=review.SubmitStocktakeReviewCommand(
+                task_id=task_id, round_id=round_id,
+                expected_task_version=regional.task_version,
+                decision="approve", items=final_items,
+                effective_scope_ids=(scope_id,),
+                comment="PG16 headquarters independently approves posting",
+            ),
+        )
+        assert approved.resulting_task_status == "approved"
+        assert approved.ready_for_posting is True
+        assert_all_history(client, task_status="approved")
+        with Session(api_engine) as session:
+            assert inventory_snapshot(session) == inventory_before
+        posted = write(
+            posting.post_approved_stocktake_differences, actor_user_id, "post",
+            command=posting.PostApprovedStocktakeDifferencesCommand(
+                task_id=task_id, expected_task_version=approved.task_version,
+            ),
+        )
+        assert posted.resulting_task_status == "posted"
+        assert posted.difference_count == posted.accepted_difference_count == 1
+        assert posted.transaction_count == posted.movement_count == 1
+        assert posted.total_quantity == Decimal("1.000")
+        with Session(api_engine) as session:
+            inventory_after_post = inventory_snapshot(session)
+            assert inventory_after_post != inventory_before
+            assert session.get(StockBalance, fixture["recount_account_id"]).quantity == Decimal("1.000")
+            freezes = tuple(session.scalars(select(InventoryFreeze).where(
+                InventoryFreeze.task_id == task_id,
+            )).all())
+            assert len(freezes) == 1
+            assert all(row.status == "released" and row.release_reason == posting.FREEZE_RELEASE_REASON
+                       for row in freezes)
+        assert_all_history(client, task_status="posted")
+        reconciled = write(
+            close.reconcile_posted_stocktake_for_close, actor_user_id, "reconcile",
+            command=close.ReconcileStocktakeForCloseCommand(
+                task_id=task_id, expected_task_version=posted.task_version,
+            ),
+        )
+        assert reconciled.resulting_task_status == "posted"
+        assert reconciled.book_total_qty == reconciled.physical_total_qty == Decimal("1.000")
+        assert_all_history(client, task_status="posted")
+        closed = write(
+            close.close_reconciled_stocktake, actor_user_id, "close",
+            command=close.CloseReconciledStocktakeCommand(
+                task_id=task_id, expected_task_version=reconciled.task_version,
+            ),
+        )
+        assert closed.resulting_task_status == "closed"
+        assert closed.reconciliation_completion_id == reconciled.completion_id
+        assert_all_history(client, task_status="closed")
+
+        owner_before = durable_snapshot()
+        _assert_0062_history_owner_boundary(
+            api_engine, task_id=task_id, round_id=round_id,
+            actor_user_id=assignee_user_id, administrator_user_id=actor_user_id,
+            account_id=fixture["recount_account_id"], file_ids=evidence_files,
+        )
+        assert durable_snapshot() == owner_before
+
+        lookup(client, uuid.uuid4(), 3, f"trace-multiround-{token}-missing-round", status_code=404)
+        lookup(client, *history[0], operation="recount_count", status_code=400)
         lookup(client, *history[-1], operation="initial_count", status_code=400)
         lookup(client, *history[-1], person_id=uuid.uuid4(), status_code=412)
         # A task-readable admin cannot present the original counter's sentinel.
@@ -16622,9 +16874,12 @@ def _assert_nonopening_multiround_count_status(
         lookup(client, *history[-1], status_code=412)
 
     with Session(api_engine) as session:
-        assert inventory_snapshot(session) == inventory_before
+        assert inventory_snapshot(session) == inventory_after_post
         task = session.get(FormalStocktakeTask, task_id)
-        assert (task.status, task.current_round_no) == ("submitted", 3)
+        assert (task.status, task.current_round_no) == ("closed", 3)
+        for model in (StocktakeEffectiveApprovalCompletion, StocktakePostingCompletion,
+                      StocktakeCloseReconciliationCompletion, StocktakeCloseCompletion):
+            assert session.scalar(select(func.count()).select_from(model).where(model.task_id == task_id)) == 1
         assert session.scalar(select(func.count()).select_from(StocktakeRecountCase).where(
             StocktakeRecountCase.task_id == task_id,
         )) == 2
@@ -18464,6 +18719,81 @@ def _assert_single_owner_and_process_kill(api_engine) -> None:
     assert replay.dispatch_status == "uncertain"
 
 
+def _0062_history_owner_catalog():
+    migration = _load_nonopening_count_history_owner_migration_0062()
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT owner.rolname, proc.prosecdef, proc.proconfig, proc.provolatile, "
+                "proc.proparallel, proc.proisstrict, proc.proleakproof, language.lanname, "
+                "proc.prokind, proc.proretset, proc.provariadic, proc.proargmodes, "
+                "proc.pronargdefaults, pg_get_function_identity_arguments(proc.oid), "
+                "pg_get_function_result(proc.oid), proc.prosrc "
+                "FROM pg_catalog.pg_proc AS proc "
+                "JOIN pg_catalog.pg_roles AS owner ON owner.oid=proc.proowner "
+                "JOIN pg_catalog.pg_language AS language ON language.oid=proc.prolang "
+                "WHERE proc.oid=pg_catalog.to_regprocedure(%s)",
+                (migration.LOCK_SIGNATURE,),
+            )
+            row = cursor.fetchone()
+            assert row is not None
+            body_hash = hashlib.sha256(row[-1].encode()).hexdigest()
+            cursor.execute(
+                "SELECT CASE WHEN acl.grantee=0 THEN 'PUBLIC' ELSE grantee.rolname END, "
+                "acl.privilege_type, acl.is_grantable, grantor.rolname "
+                "FROM pg_catalog.pg_proc AS proc "
+                "CROSS JOIN LATERAL pg_catalog.aclexplode(coalesce(proc.proacl, "
+                "pg_catalog.acldefault('f', proc.proowner))) AS acl "
+                "LEFT JOIN pg_catalog.pg_roles AS grantee ON grantee.oid=acl.grantee "
+                "JOIN pg_catalog.pg_roles AS grantor ON grantor.oid=acl.grantor "
+                "WHERE proc.oid=pg_catalog.to_regprocedure(%s) ORDER BY 1, 2",
+                (migration.LOCK_SIGNATURE,),
+            )
+            acl = tuple(cursor.fetchall())
+    assert row[:-1] == (
+        "star_oam_migrator", True, ["search_path=pg_catalog, public"], "v", "u",
+        False, False, "plpgsql", "f", False, 0, None, 0,
+        "requested_task_id uuid, requested_round_id uuid, requested_actor_user_id text", "void",
+    )
+    assert body_hash == migration.LOCK_BODY_SHA256
+    assert acl == (
+        ("star_oam_api", "EXECUTE", False, "star_oam_migrator"),
+        ("star_oam_migrator", "EXECUTE", False, "star_oam_migrator"),
+    )
+    return (*row[:-1], body_hash), acl
+
+
+def _assert_0062_empty_history_owner_downgrade_and_reupgrade() -> None:
+    migration = _load_nonopening_count_history_owner_migration_0062()
+    before = _0062_history_owner_catalog()
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT oid FROM pg_catalog.pg_proc WHERE oid=pg_catalog.to_regprocedure(%s)",
+                           (RLS_READY_FUNCTION,))
+            ready_oid = cursor.fetchone()[0]
+    _run_alembic("downgrade", SUPPLY_TASK_EVENT_KEY_REVISION)
+    assert _current_revision() == SUPPLY_TASK_EVENT_KEY_REVISION
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_catalog.to_regprocedure(%s)", (migration.LOCK_SIGNATURE,))
+            assert cursor.fetchone() == (None,)
+            cursor.execute("SELECT oid, prosrc FROM pg_catalog.pg_proc WHERE oid=pg_catalog.to_regprocedure(%s)",
+                           (RLS_READY_FUNCTION,))
+            old_ready = cursor.fetchone()
+            assert old_ready[0] == ready_oid
+            assert hashlib.sha256(old_ready[1].encode()).hexdigest() == migration.RUNTIME_READY_BODY_SHA256_0061
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    assert _0062_history_owner_catalog() == before
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT oid, prosrc FROM pg_catalog.pg_proc WHERE oid=pg_catalog.to_regprocedure(%s)",
+                           (RLS_READY_FUNCTION,))
+            new_ready = cursor.fetchone()
+            assert new_ready[0] == ready_oid
+            assert hashlib.sha256(new_ready[1].encode()).hexdigest() == migration.RUNTIME_READY_BODY_SHA256_0062
+
+
 def _assert_0061_empty_event_key_downgrade_and_reupgrade() -> None:
     migration = _load_supply_event_key_migration_0061()
     signatures = (
@@ -18623,6 +18953,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
+    _assert_0062_empty_history_owner_downgrade_and_reupgrade()
     _assert_0061_empty_event_key_downgrade_and_reupgrade()
     _assert_0060_empty_hardening_downgrade_and_reupgrade()
     _assert_0059_empty_graph_downgrade_and_reupgrade()

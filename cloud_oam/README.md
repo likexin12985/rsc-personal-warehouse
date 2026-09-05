@@ -567,7 +567,12 @@ PostgreSQL 16 容器执行迁移、角色/ACL 漂移、跨库连接、双会话�
 一次性数据库上的准确源码、迁移和并发门禁，不等于预生产或生产放行；预生产迁移、备份恢复、
 真实身份/附件 UAT、部署参数与双人变更审批仍须独立完成。
 
-当前 Alembic 唯一 head 为 `20260905_0061`。供给计划准确代码提交
+当前开发候选已以前向迁移推进到 `20260905_0062`：日常盘点历史查询的独立完整 owner 能力、
+显式历史冻结来源与祖先审计证明。验证状态和兼容/降级边界见
+[终态历史查询验收](docs/DAILY_COUNT_HISTORY_TERMINAL_ACCEPTANCE.md)。
+准确 SHA 的新门禁未记录通过前，仍以 `2691ab3` / `0061` 为最近已验收代码，不将候选冒充发布完成。
+
+以下为历史 `20260905_0061` 供给计划验收。供给计划准确代码提交
 `2677546f5ef6041ecb92acee75d1af868c9d80ff` 已通过
 [PostgreSQL 16 run 33924289472](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33924289472)：
 静态 `1234 passed, 1 skipped, 1 warning`，动态 `1 passed, 1 warning`；本地完整后端及边缘

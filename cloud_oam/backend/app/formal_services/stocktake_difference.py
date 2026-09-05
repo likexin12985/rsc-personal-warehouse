@@ -10,6 +10,8 @@ facts.
 
 from __future__ import annotations
 
+from .stocktake_count_history import CountHistoryContext
+
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -1124,7 +1126,10 @@ def _validate_completion_and_submission_manifests(
     observations: Sequence[StocktakeCountObservation],
     completions: Sequence[StocktakeScopeCountCompletion],
     submission: StocktakeRoundSubmission,
+    history: CountHistoryContext | None = None,
 ) -> None:
+    if history is not None:
+        history.require(db, task, round_row, scopes)
     scope_ids = {row.id for row in scopes}
     if len(completions) != len(scopes) or {row.scope_id for row in completions} != scope_ids:
         _fail("stocktake_difference_scope_completion_missing", "service_unavailable", "初盘范围未全部封印")
@@ -1197,7 +1202,7 @@ def _validate_completion_and_submission_manifests(
             _fail("stocktake_difference_attachment_invalid", "service_unavailable", "盘点附件证据已失效")
         attachments_by_completion[row.document_id].append(row)
     file_ids = tuple(sorted({row.file_id for row in attachments}, key=str))
-    files = tuple(
+    files = history.files_for(db, task, round_row, file_ids) if history is not None else tuple(
         db.scalars(
             _select_only_reference_statement(
                 db,
