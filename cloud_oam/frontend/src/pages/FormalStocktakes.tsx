@@ -24,6 +24,16 @@ import {
   formalStocktakeRetryState,
   isFormalStocktakeWriteUncertain,
 } from "../formalStocktakeAdapter";
+import {
+  FormalStocktakePostSubmissionPendingError,
+  recoverFormalStocktakePost,
+  submitDurableFormalStocktakePost,
+} from "../formalStocktakePostRecovery";
+import {
+  getFormalStocktakePostRecoveryStore,
+  type FormalStocktakePostRecoveryStore,
+  type FormalStocktakePostSentinel,
+} from "../formalStocktakePostRecoveryStore";
 import FormalFileUploadField, {
   type AvailableFormalFile,
   type FormalFileUploadClient,
@@ -35,6 +45,8 @@ import { appendFormalStocktakePage } from "../formalStocktakeTaskPages";
 type Props = Readonly<{
   adapter: FormalStocktakeAdapter;
   fileUploadClient?: FormalFileUploadClient;
+  /** Test seam; production uses the browser-backed durable store. */
+  postRecoveryStore?: FormalStocktakePostRecoveryStore;
 }>;
 
 const AXIS_LABELS = {
@@ -218,7 +230,7 @@ function CountForm({ detail, round, scope, action, disabled, fileUploadClient, u
   </section>;
 }
 
-export default function FormalStocktakesPage({ adapter, fileUploadClient = defaultFormalFileUploadClient }: Props) {
+export default function FormalStocktakesPage({ adapter, fileUploadClient = defaultFormalFileUploadClient, postRecoveryStore }: Props) {
   const registry = useRef(createFormalStocktakeIntentRegistry());
   const countEvidenceClaims = useRef(new Map<string, string>());
   const uploadIdentity = useRef("");
@@ -235,10 +247,23 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
   const [detail, setDetail] = useState<FormalStocktakeDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [commandBusy, setBusy] = useState(false);
-  const busy = commandBusy || loadingMore;
   const [error, setError] = useState("");
   const [pendingMessage, setPendingMessage] = useState("");
   const [pendingRetryable, setPendingRetryable] = useState(false);
+  const postRecoveryCapable = typeof adapter.loadIdentityNoReplay === "function"
+    && typeof adapter.loadAccessNoReplay === "function"
+    && typeof adapter.detailNoReplay === "function"
+    && typeof adapter.postingCommandStatus === "function";
+  const resolvedPostRecoveryStore = useMemo<FormalStocktakePostRecoveryStore | null>(() => {
+    if (!postRecoveryCapable) return null;
+    return postRecoveryStore ?? getFormalStocktakePostRecoveryStore();
+  }, [postRecoveryCapable, postRecoveryStore]);
+  const [postRecoveryState, setPostRecoveryState] = useState<Readonly<{
+    kind: "missing" | "corrupt" | "unavailable" | "valid";
+    values?: readonly FormalStocktakePostSentinel[];
+  }>>({ kind: "missing" });
+  const postWriteBlocked = postRecoveryState.kind !== "missing";
+  const busy = commandBusy || loadingMore || postWriteBlocked;
   const [countTarget, setCountTarget] = useState<{ scope: FormalStocktakeScope; round: FormalStocktakeRound; action: "submit_initial_count" | "submit_recount_count" } | null>(null);
   const [personalBlind, setPersonalBlind] = useState(true);
   const [personalFreeze, setPersonalFreeze] = useState<"hard" | "cutoff_replay">("cutoff_replay");
@@ -258,6 +283,24 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
   const [recountAssigneeUserIds, setRecountAssigneeUserIds] = useState<Record<string, string>>({});
   const [recountLoadingScopeId, setRecountLoadingScopeId] = useState("");
   const [recountReason, setRecountReason] = useState("");
+
+  function readPostRecoverySnapshot(): Readonly<{
+    kind: "missing" | "corrupt" | "unavailable" | "valid";
+    values?: readonly FormalStocktakePostSentinel[];
+  }> {
+    if (!resolvedPostRecoveryStore) return { kind: "missing" };
+    const pending = resolvedPostRecoveryStore.readPending();
+    if (pending.kind !== "valid") return { kind: pending.kind };
+    if (!pending.values || pending.values.length === 0) return { kind: "corrupt" };
+    // Multiple tasks may legitimately have unresolved markers. Keep every
+    // coordinate durable and block all new writes; do not relabel this as
+    // corruption merely because more than one task is pending.
+    return { kind: "valid", values: pending.values };
+  }
+
+  function refreshPostRecoveryState(): void {
+    setPostRecoveryState(readPostRecoverySnapshot());
+  }
 
   function sameAccess(left: FormalStocktakeAccess, right: FormalStocktakeAccess): boolean {
     return left.person_id === right.person_id && left.authorization_version === right.authorization_version
@@ -316,10 +359,11 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
     activeAdapter.current = adapter;
     clearReadState(); setTaskFilter(""); setBusy(false);
     setPendingRetryable(false);
+    refreshPostRecoveryState();
     setPendingMessage(registry.current.current() ? "仍有原盘点请求待核实；身份上下文已重新建立，禁止新写或自动重发原请求。" : "");
     void load(false);
     return () => { lifecycleEpoch.current += 1; readEpoch.current += 1; moreLease.current = null; countEvidenceClaims.current.clear(); uploadIdentity.current = ""; };
-  }, [adapter]);
+  }, [adapter, resolvedPostRecoveryStore]);
 
   async function loadMore() {
     const cursor = taskPage.current.next_after_id;
@@ -360,20 +404,50 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
 
   async function run(input: FormalStocktakeCommandInput) {
     if (moreLease.current !== null || commandBusy || registry.current.current()) return;
+    const livePostRecovery = readPostRecoverySnapshot();
+    setPostRecoveryState(livePostRecovery);
+    if (livePostRecovery.kind !== "missing") {
+      setError("仍有原盘点过账待只读核验，已停止所有新写入");
+      return;
+    }
     const lifecycle = lifecycleEpoch.current;
     const stillCurrent = () => lifecycle === lifecycleEpoch.current && activeAdapter.current === adapter;
     setBusy(true); setError(""); setPendingMessage(""); setPendingRetryable(false);
     let intent: FormalStocktakeIntent | null = null;
+    let durablePost = false;
     try {
       intent = registry.current.begin(input);
-      const completed = await adapter.execute(intent);
+      durablePost = input.action === "post" && postRecoveryCapable && resolvedPostRecoveryStore !== null;
+      if (input.action === "post" && !durablePost) {
+        throw new Error("当前浏览器或正式盘点适配器不支持安全的过账持久恢复，已停止过账");
+      }
+      if (durablePost && !access) throw new Error("当前正式盘点权限上下文缺失，已停止过账");
+      const completed = durablePost
+        ? await submitDurableFormalStocktakePost({
+          intent,
+          expectedIdentity: { person_id: access!.person_id, authorization_version: access!.authorization_version },
+          adapter,
+          store: resolvedPostRecoveryStore!,
+          canCommit: stillCurrent,
+        })
+        : await adapter.execute(intent);
       registry.current.complete(intent);
       if (!stillCurrent()) return;
+      refreshPostRecoveryState();
       setDetail(completed.detail); setCountTarget(null); setPendingMessage(""); setPendingRetryable(false);
       await load(false);
     } catch (writeError) {
-      if (intent && !isFormalStocktakeWriteUncertain(writeError)) registry.current.complete(intent);
+      if (intent && (durablePost || !isFormalStocktakeWriteUncertain(writeError))) registry.current.complete(intent);
       if (!stillCurrent()) return;
+      if (durablePost) {
+        refreshPostRecoveryState();
+        setPendingRetryable(false);
+        setPendingMessage(writeError instanceof FormalStocktakePostSubmissionPendingError
+          ? "原盘点过账已进入持久待核验状态；只允许查询原 X-Request-ID 的完成事实，禁止重新 POST。"
+          : "盘点过账未发送或未能建立持久恢复坐标；已失败关闭。请刷新后检查。");
+        setError(showError(writeError));
+        return;
+      }
       const retry = formalStocktakeRetryState(writeError);
       setPendingRetryable(isFormalStocktakeWriteUncertain(writeError) && retry === "retryable");
       setPendingMessage(isFormalStocktakeWriteUncertain(writeError)
@@ -386,7 +460,7 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
   }
 
   async function retryPending() {
-    if (moreLease.current !== null || commandBusy || !pendingRetryable || activeAdapter.current !== adapter) return;
+    if (postWriteBlocked || moreLease.current !== null || commandBusy || !pendingRetryable || activeAdapter.current !== adapter) return;
     const intent = registry.current.current();
     if (!intent) return;
     const lifecycle = lifecycleEpoch.current;
@@ -401,6 +475,32 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
       if (!stillCurrent()) return;
       const retryable = formalStocktakeRetryState(writeError) === "retryable"; setPendingRetryable(retryable); setError(showError(writeError)); setPendingMessage(retryable ? "原写意图仍可使用同一坐标重试。" : "精确回读未确认结果，已停止其他写动作。请人工核验原坐标。");
     } finally { if (stillCurrent()) setBusy(false); }
+  }
+
+  async function recoverPendingPost(target?: FormalStocktakePostSentinel): Promise<void> {
+    const live = readPostRecoverySnapshot();
+    setPostRecoveryState(live);
+    const sentinel = target ?? (live.kind === "valid" ? live.values?.[0] : undefined);
+    if (!sentinel || !resolvedPostRecoveryStore || !postRecoveryCapable || commandBusy) return;
+    const lifecycle = lifecycleEpoch.current;
+    const stillCurrent = () => lifecycle === lifecycleEpoch.current && activeAdapter.current === adapter;
+    setBusy(true); setError(""); setPendingRetryable(false);
+    try {
+      const recovered = await resolvedPostRecoveryStore.withTaskLease(sentinel.task_id, (lease) =>
+        recoverFormalStocktakePost(lease, sentinel, adapter, stillCurrent));
+      if (!stillCurrent()) return;
+      refreshPostRecoveryState();
+      setDetail(recovered.detail);
+      setPendingMessage("");
+      await load(false);
+    } catch (recoveryError) {
+      if (!stillCurrent()) return;
+      refreshPostRecoveryState();
+      setPendingMessage("原盘点过账仍待只读核验；未发送任何新过账请求，恢复坐标继续保留。");
+      setError(showError(recoveryError));
+    } finally {
+      if (stillCurrent()) setBusy(false);
+    }
   }
 
   function submitCountWithEvidence(
@@ -559,6 +659,12 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
   return <section className="formal-stocktakes-page">
     <SectionHeader title="日常盘点" subtitle="正式非期初盘点；初盘、差异、两级复核、复盘、过账和关闭保持独立。" actions={<Button tone="secondary" disabled={commandBusy} icon={<RefreshCw size={16} />} onClick={() => void load()}>刷新</Button>} />
     {error && <div className="alert alert-error" role="alert">{error}</div>}
+    {postRecoveryState.kind !== "missing" && <div className="alert alert-warning" role="alert">
+      {postRecoveryState.kind === "valid" && postRecoveryState.values?.length
+        ? `有 ${postRecoveryState.values.length} 笔盘点过账待核验；所有新写已停止。`
+        : "盘点过账恢复记录损坏或浏览器持久协调不可用；所有新写已失败关闭，禁止覆盖记录。"}
+      {postRecoveryState.kind === "valid" && postRecoveryState.values?.map((pending) => <Button key={`${pending.task_id}:${pending.trace_request_id}`} tone="secondary" disabled={commandBusy} onClick={() => void recoverPendingPost(pending)}>{`只读核验 ${pending.task_id}（v${pending.expected_task_version}→${pending.expected_task_version + 1}）`}</Button>)}
+    </div>}
     {pendingMessage && <div className="alert alert-warning" role="alert">{pendingMessage}{pendingRetryable && registry.current.current() && <Button tone="secondary" disabled={busy} onClick={() => void retryPending()}>按原坐标重试</Button>}</div>}
     <div className="alert alert-info">本页只访问正式 `/v1/stocktakes`、受控 `/v1/stocktake-options` 和 `/access/context`。不会调用 legacy `/stocktakes`、`/media`、opening 路由或外部系统。差异过账是独立总部动作；`posted` 不等于 `closed`。</div>
 

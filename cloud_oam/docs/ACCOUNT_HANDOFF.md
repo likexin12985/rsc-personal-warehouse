@@ -38,6 +38,25 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 
 ## 4. 当前源码状态
 
+### 2026-09-06 最新续开发状态
+
+当前分支 `codex/production-readiness-gates` 的安全提交为 `e5ea7fe`（远端已同步）。前向提交
+`4c0f74a` 的 Client gate `33996107590` 与 PostgreSQL 16 gate `33996107518` 均通过，完成了
+非期初串码/cutoff replay/多范围动态真库验收。`e5ea7fe` 的 Client gate `33997085112` 与
+PostgreSQL 16 gate `33997085137` 均通过；其静态和动态阶段验证了过账尾部授权重读，库存批次、来源
+审计与不可变过账完成事实仍在同一事务内成立。
+
+`e5ea7fe` 没有新增迁移或改变 ACL。尾部 helper 只比较当前 principal 的人员、账号状态、授权版本、角色
+范围、权限坐标及唯一总部管理员 assignment；漂移返回 `stocktake_posting_authorization_changed`（412）
+并由调用方回滚。当前仍缺专门真实 PostgreSQL 竞争窗口对“尾部身份变化”和原 POST 锁序的证明，不能把
+静态/单测视为该项已验收。
+
+本轮已实现 Web 日常盘点过账的 post-only 持久恢复：哨兵只保存 task/version/actor/version/trace 等
+最小非敏感坐标，状态查询、身份、权限和详情回读均使用 no-replay 只读请求；`not_observed`、身份/权限/版本/详情
+漂移均保留阻塞，不自动重发 POST。前端本地 784 项测试、TypeScript 和生产构建已通过；远程 Client/PG 门禁
+仍待本次提交后确认。小程序暂不接入；复核状态仍按 `REVIEW_COMMAND_STATUS_MIGRATION_PLAN.md` 保持
+0063 前向迁移冻结。
+
 ### 2026-09-06 当前续开发状态
 
 当前工作分支 `codex/production-readiness-gates` 的本地与远端 HEAD 应在接管时以 `git rev-parse`

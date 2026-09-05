@@ -6,6 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FormalFileUploadClient } from "../FormalFileUploadField";
 import type { FormalFilePurpose, FormalUploadFile } from "../formalFileUpload";
 import type { FormalStocktakeAdapter } from "../formalStocktakeAdapter";
+import {
+  createFormalStocktakePostRecoveryStore,
+  type FormalStocktakePostLockManager,
+} from "../formalStocktakePostRecoveryStore";
 import FormalStocktakesPage from "./FormalStocktakes";
 
 const TASK = "10000000-0000-4000-8000-000000000001";
@@ -20,6 +24,19 @@ const EVIDENCE_1 = "90000000-0000-4000-8000-000000000001";
 const EVIDENCE_2 = "90000000-0000-4000-8000-000000000002";
 const FILE_SHA = "cd".repeat(32);
 const ASSIGNEE_USER = "engineer-001";
+
+class PostMemoryStorage {
+  private readonly values = new Map<string, string>();
+  get length() { return this.values.size; }
+  key(index: number) { return [...this.values.keys()][index] ?? null; }
+  getItem(key: string) { return this.values.get(key) ?? null; }
+  setItem(key: string, value: string) { this.values.set(key, value); }
+  removeItem(key: string) { this.values.delete(key); }
+}
+
+const postLocks: FormalStocktakePostLockManager = {
+  async request(_name, _options, callback) { return callback({}); },
+};
 
 function axes() { return { count_status: "not_started", difference_status: "not_ready", region_review_status: "not_ready", headquarters_review_status: "not_ready", recount_status: "not_required", posting_status: "not_posted", reconciliation_status: "not_reconciled", closure_status: "open" }; }
 function detail() { return { schema_version: "1.0", task_id: TASK, task_no: "ST-SELF-001", task_type: "personal", region_org_id: REGION, status: "draft", version: 0, blind_count: true, current_round_no: 0, cutoff_ledger_cursor: null, cutoff_at: null, issued_at: null, frozen_at: null, submitted_at: null, posted_at: null, closed_at: null, cancelled_at: null, deadline: null, note: "", state_axes: axes(), close_control: { latest_reconciliation: null, close_completion: null }, scopes: [{ scope_id: SCOPE, scope_no: 1, scope_mode: "location_all", owner_org_id: REGION, location_id: LOCATION, custodian_person_id_snapshot: PERSON, material_id: null, condition_code: null, availability_bucket: null, assigned_to_me: true, freeze: null, snapshot_visibility: "not_started", snapshot_accounts: [], allowed_actions: [] }], rounds: [], allowed_actions: ["start"] } as any; }
@@ -367,8 +384,19 @@ describe("formal non-opening stocktake PC page", () => {
 
   it("requires both HQ gates and explicit confirmation before the independent posting command", async () => {
     const client = postingAdapter(true, true);
+    const postAccess = await client.loadAccess();
+    client.loadIdentityNoReplay = vi.fn(async () => ({ person_id: PERSON, name: "总部管理员", employee_no: "HQ001", organization_code: "HQ", organization_name: "蔚来总部", account_status: "active", employment_status: "active", access_mode: "active", authorization_version: 7, role_codes: ["admin"] }));
+    client.loadAccessNoReplay = vi.fn(async () => postAccess);
+    client.detailNoReplay = vi.fn(async () => { throw new Error("not_observed must not read detail"); });
+    client.postingCommandStatus = vi.fn(async (_taskId, actorPersonId, actorAuthorizationVersion, traceRequestId) => ({ schema_version: "1.0", task_id: TASK, actor_person_id: actorPersonId, actor_authorization_version: actorAuthorizationVersion, trace_request_id: traceRequestId, operation: "post_differences", lookup_status: "not_observed", command: null }));
+    const execute = vi.fn(async (intent: any, options?: any) => {
+      await options?.beforeWrite?.({ intent, access: postAccess, before: null });
+      return { result: {}, detail: { ...detail(), status: "posted", version: 6 } };
+    });
+    client.execute = execute;
+    const postRecoveryStore = createFormalStocktakePostRecoveryStore({ storage: new PostMemoryStorage(), locks: postLocks });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    render(<FormalStocktakesPage adapter={client} />);
+    render(<FormalStocktakesPage adapter={client} postRecoveryStore={postRecoveryStore} />);
     fireEvent.click(await screen.findByRole("button", { name: "查看" }));
     const panel = await screen.findByLabelText("日常盘点详情");
     const button = within(panel).getByRole("button", { name: "确认差异过账" });
@@ -378,11 +406,13 @@ describe("formal non-opening stocktake PC page", () => {
 
     confirm.mockReturnValue(true);
     fireEvent.click(button);
-    await vi.waitFor(() => expect(client.execute).toHaveBeenCalledTimes(1));
-    const intent = vi.mocked(client.execute).mock.calls[0][0];
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+    const intent = execute.mock.calls[0][0];
     expect(intent).toMatchObject({ action: "post", path: `/v1/stocktakes/${TASK}/post-differences`, taskId: TASK, expectedTaskVersion: 5, body: { expected_task_version: 5 } });
     expect(intent.path).not.toContain("opening");
     expect(intent.path).not.toContain("close");
+    expect(await screen.findByText(/所有新写已停止/)).toBeTruthy();
+    expect(client.postingCommandStatus).toHaveBeenCalledTimes(1);
     confirm.mockRestore();
   });
 

@@ -15,6 +15,7 @@ import {
 import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import {
   api,
+  apiNoReplay,
   ApiError,
   jsonBody,
   mutationHeaders,
@@ -366,7 +367,7 @@ function FormalStocktakesRoute({ access }: { access: AccessContext }) {
   const adapter = useMemo(() => createFormalStocktakeAdapter({
     person_id: access.person_id,
     authorization_version: access.authorization_version,
-  }), [access.person_id, access.authorization_version]);
+  }, api, apiNoReplay, apiNoReplay), [access.person_id, access.authorization_version]);
   return <FormalStocktakesPage adapter={adapter} />;
 }
 

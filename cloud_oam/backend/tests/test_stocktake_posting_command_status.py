@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from app.database import get_db
@@ -226,6 +226,39 @@ def test_api_posting_status_is_private_and_exactly_read_only(posting_status_api)
     assert response.headers["x-content-type-options"] == "nosniff"
     for call in (state.db.commit, state.db.rollback, state.db.flush):
         call.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", [401, 422])
+def test_real_app_framework_failures_keep_posting_status_private(posting_world, monkeypatch, failure):
+    """The dynamic posting lookup keeps privacy headers on framework errors."""
+    from app import main
+
+    task, _ = _approve(
+        posting_world,
+        monkeypatch,
+        key=f"posting-status-framework-{failure}",
+        counted_qty=Decimal("4.000"),
+        decision="no_adjustment",
+    )
+    path = f"/api/v1/stocktakes/{task.id}/post-differences-command-status"
+
+    def principal():
+        if failure == 401:
+            raise HTTPException(status_code=401, detail="synthetic unauthenticated")
+        return posting_world.principals["admin"]
+
+    monkeypatch.setitem(main.app.dependency_overrides, get_formal_principal, principal)
+    monkeypatch.setitem(main.app.dependency_overrides, get_db, lambda: posting_world.db)
+    stub = Mock(side_effect=AssertionError("framework rejection reached service"))
+    monkeypatch.setattr(service, "stocktake_posting_command_status", stub)
+    # No lifespan context: exercise the real middleware without startup DB work.
+    response = TestClient(main.app).get(path)
+    assert response.status_code == failure
+    assert response.headers["cache-control"] == "private, no-store, max-age=0"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    stub.assert_not_called()
 
 
 @pytest.mark.parametrize(

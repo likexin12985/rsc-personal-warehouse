@@ -17660,6 +17660,61 @@ def _assert_pg16_cutoff_replay_multiscope_owner_contract() -> None:
     assert "_assert_dynamic_sn_cutoff_replay_multiscope" in entry_source
 
 
+def _assert_pg16_posting_tail_authorization_contract() -> None:
+    """Keep the posting lock order and tail re-proof executable in CI.
+
+    The dynamic gate below exercises a complete approved task, but it must not
+    silently regress to a pre-batch-only authorization check.  This contract
+    deliberately checks source ordering rather than manufacturing another
+    posting lifecycle: the PostgreSQL lock/race proof remains responsible for
+    observing the actual backend wait with ``pg_blocking_pids``/NOWAIT and a
+    bounded ``statement_timeout``.
+    """
+    import inspect
+
+    from app.formal_services import stocktake_posting
+
+    source = inspect.getsource(stocktake_posting._post_approved_stocktake_differences)
+    required = (
+        "ledger_proof = inventory_service._lock_inventory_ledger_head_for_atomic_batch(db)",
+        "lock_nonopening_stocktake_posting_graph(db, checked.task_id)",
+        "lock_formal_principal_graph(db, (supplied.user_id,))",
+        "batch = inventory_service._post_prelocked_stocktake_inventory_batch(",
+        "completion = _persist_posting_completion(",
+    )
+    assert all(fragment in source for fragment in required)
+    positions = tuple(source.index(fragment) for fragment in required)
+    assert positions[:3] == tuple(sorted(positions[:3])), (
+        "posting must retain ledger -> task -> principal lock order"
+    )
+    batch_position = positions[3]
+    post_batch_audit_position = source.index("_verify_source_audits(", batch_position)
+    tail_reproof_position = source.index(
+        "current, assignment = _reprove_posting_authorization(",
+        post_batch_audit_position,
+    )
+    seal_position = positions[4]
+    assert batch_position < post_batch_audit_position < tail_reproof_position < seal_position, (
+        "posting must retain ledger -> task/principal -> batch/audit -> tail re-proof -> seal order"
+    )
+
+    # The replay/idempotent branch is also a durable completion path and must
+    # retain its own authorization re-proof before validating the stored seal.
+    replay_reproof = source.index("_reprove_posting_authorization(")
+    replay_validation = source.index("_validate_persisted_posting_completion(")
+    assert replay_reproof < replay_validation
+
+    # Keep the test-side race vocabulary explicit so a future dynamic proof
+    # cannot be replaced by a sleep or an unbounded lock wait.
+    race_source = inspect.getsource(_assert_0062_history_owner_boundary)
+    for fragment in (
+        "SET LOCAL statement_timeout",
+        "pg_blocking_pids",
+        "FOR UPDATE NOWAIT",
+    ):
+        assert fragment in race_source
+
+
 def _complete_0051_nonopening_stocktake_service_chain(
     api_engine,
     *,
@@ -19839,6 +19894,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     try:
         _validate_runtime_security(api_engine)
         _assert_pg16_cutoff_replay_multiscope_owner_contract()
+        _assert_pg16_posting_tail_authorization_contract()
         _assert_0058_review_terminal_catalog_state(
             _0058_review_terminal_catalog_state(), fixed=True
         )

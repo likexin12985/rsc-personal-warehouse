@@ -64,14 +64,47 @@ export type StocktakeAssigneeOption = Readonly<{
 
 type Requester = (path: string, init?: RequestInit) => Promise<unknown>;
 
+export type FormalStocktakeIdentity = Readonly<{
+  person_id: string;
+  authorization_version: number;
+}>;
+
+export type FormalStocktakeBeforeWriteContext = Readonly<{
+  intent: FormalStocktakeIntent;
+  access: FormalStocktakeAccess;
+  before: FormalStocktakeDetail | null;
+}>;
+
+export type FormalStocktakeExecuteOptions = Readonly<{
+  /** Called after every normal preflight, immediately before the single POST. */
+  beforeWrite?: (context: FormalStocktakeBeforeWriteContext) => Promise<void>;
+  /** Durable commands must use the no-replay requester for every read. */
+  noReplayReads?: boolean;
+}>;
+
 export interface FormalStocktakeAdapter {
   loadAccess(): Promise<FormalStocktakeAccess>;
+  /** Recovery-only access read, wired to the no-replay requester. */
+  loadAccessNoReplay?(): Promise<FormalStocktakeAccess>;
+  /** Raw identity response; recovery modules perform the stricter shape check. */
+  loadIdentity?(): Promise<unknown>;
+  /** Recovery-only identity read, wired to the no-replay requester. */
+  loadIdentityNoReplay?(): Promise<unknown>;
+  /** Read-only historical lookup. It must never carry a body or idempotency key. */
+  postingCommandStatus?(
+    taskId: string,
+    actorPersonId: string,
+    actorAuthorizationVersion: number,
+    traceRequestId: string,
+  ): Promise<unknown>;
+  /** Recovery-only detail read, wired to the no-replay requester. */
+  detailNoReplay?(taskId: string): Promise<FormalStocktakeDetail>;
   list(afterId?: string | null): Promise<FormalStocktakePage>;
   detail(taskId: string): Promise<FormalStocktakeDetail>;
   listRegions(afterId?: string | null): Promise<Readonly<{ items: readonly StocktakeRegionOption[]; next_after_id: string | null }>>;
   listLocations(regionOrgId: string, afterId?: string | null): Promise<Readonly<{ items: readonly StocktakeLocationOption[]; next_after_id: string | null }>>;
   listAssignees(regionOrgId: string, locationId: string, afterPersonId?: string | null): Promise<Readonly<{ items: readonly StocktakeAssigneeOption[]; next_after_person_id: string | null }>>;
-  execute(intent: FormalStocktakeIntent): Promise<Readonly<{ result: Readonly<Record<string, unknown>>; detail: FormalStocktakeDetail }>>;
+  execute(intent: FormalStocktakeIntent, options?: FormalStocktakeExecuteOptions): Promise<Readonly<{ result: Readonly<Record<string, unknown>>; detail: FormalStocktakeDetail }>>;
 }
 
 function fail(message: string, status = 409): never {
@@ -280,7 +313,12 @@ async function verifyRecountAssignees(adapter: FormalStocktakeAdapter, detail: F
   }
 }
 
-export function createFormalStocktakeAdapter(expectedIdentity: FormalStocktakeExpectedIdentity, requester: Requester = api): FormalStocktakeAdapter {
+export function createFormalStocktakeAdapter(
+  expectedIdentity: FormalStocktakeExpectedIdentity,
+  requester: Requester = api,
+  mutationRequester: Requester = requester,
+  statusRequester: Requester = mutationRequester,
+): FormalStocktakeAdapter {
   const expected = Object.freeze({ person_id: uuid(expectedIdentity.person_id, "expected.person_id"), authorization_version: positiveVersion(expectedIdentity.authorization_version, "expected.authorization_version") });
   const noStore = {
     cache: "no-store" as RequestCache,
@@ -288,8 +326,40 @@ export function createFormalStocktakeAdapter(expectedIdentity: FormalStocktakeEx
   };
 
   const adapter: FormalStocktakeAdapter = {
+    async loadIdentity() {
+      return requester("/auth/me", {
+        method: "GET",
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+      });
+    },
+    async loadIdentityNoReplay() {
+      return statusRequester("/auth/me", {
+        method: "GET",
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+      });
+    },
     async loadAccess() {
       return projectAccess(await requester("/access/context", noStore), expected);
+    },
+    async loadAccessNoReplay() {
+      return projectAccess(await statusRequester("/access/context", noStore), expected);
+    },
+    async postingCommandStatus(taskId, actorPersonId, actorAuthorizationVersion, traceRequestId) {
+      const query = new URLSearchParams({
+        actor_person_id: uuid(actorPersonId, "actor_person_id"),
+        actor_authorization_version: String(positiveVersion(actorAuthorizationVersion, "actor_authorization_version")),
+        trace_request_id: text(traceRequestId, "trace_request_id"),
+      });
+      return statusRequester(
+        `/v1/stocktakes/${uuid(taskId, "task_id")}/post-differences-command-status?${query.toString()}`,
+        {
+          method: "GET",
+          cache: "no-store",
+          headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+        },
+      );
     },
     async list(afterId = null) {
       const suffix = afterId ? `&after_id=${uuid(afterId, "after_id")}` : "";
@@ -297,6 +367,9 @@ export function createFormalStocktakeAdapter(expectedIdentity: FormalStocktakeEx
     },
     async detail(taskId) {
       return validateFormalStocktakeDetail(await requester(`/v1/stocktakes/${uuid(taskId, "task_id")}`, noStore));
+    },
+    async detailNoReplay(taskId) {
+      return validateFormalStocktakeDetail(await statusRequester(`/v1/stocktakes/${uuid(taskId, "task_id")}`, noStore));
     },
     async listRegions(afterId = null) {
       const suffix = afterId ? `&after_id=${uuid(afterId, "after_id")}` : "";
@@ -316,32 +389,36 @@ export function createFormalStocktakeAdapter(expectedIdentity: FormalStocktakeEx
       const page = optionPage(await requester(`/v1/stocktake-options/assignees?region_org_id=${region}&location_id=${location}&limit=100${suffix}`, noStore), "assignee", expected, region, location);
       return Object.freeze({ items: page.items as readonly StocktakeAssigneeOption[], next_after_person_id: page.next_after_person_id ?? null });
     },
-    async execute(intent) {
+    async execute(intent, options = {}) {
       if (!intent || intent.method !== "POST" || !expectedPath(intent) || !SAFE_IDEMPOTENCY_KEY.test(intent.headers?.["Idempotency-Key"] || "") || !SAFE_REQUEST_ID.test(intent.headers?.["X-Request-ID"] || "")) fail("盘点写意图路径或坐标无效");
-      const access = await adapter.loadAccess();
+      const readAccess = options.noReplayReads ? adapter.loadAccessNoReplay : adapter.loadAccess;
+      const readDetail = options.noReplayReads ? adapter.detailNoReplay : adapter.detail;
+      if (!readAccess || !readDetail) fail("当前盘点客户端缺少持久过账所需的无重放读取能力");
+      const access = await readAccess();
       if (!access.can_read || !permissionFor(access, intent.action)) fail("当前正式权限不允许该盘点动作", 403);
       let before: FormalStocktakeDetail | null = null;
       if (intent.taskId) {
-        before = await adapter.detail(intent.taskId);
+        before = await readDetail(intent.taskId);
         if (!detailAllows(before, intent)) fail("详情 allowed_actions 与当前权限未同时授权该动作", 409);
         if (intent.action === "open_recount") await verifyRecountAssignees(adapter, before, intent);
       }
+      if (options.beforeWrite) await options.beforeWrite(Object.freeze({ intent, access, before }));
       let rawResult: unknown;
       try {
-        rawResult = await requester(intent.path, { method: intent.method, headers: intent.headers, ...jsonBody(intent.body) });
+        rawResult = await mutationRequester(intent.path, { method: intent.method, headers: intent.headers, ...jsonBody(intent.body) });
       } catch (error) {
         if (!uncertain(error)) throw error;
         let retryState: "retryable" | "handoff_required" = intent.action === "create_personal" || intent.action === "create_managed" ? "retryable" : "handoff_required";
         if (intent.taskId) {
-          try { retryState = stocktakeIntentRetryState(intent, await adapter.detail(intent.taskId)); } catch { /* keep handoff */ }
+          try { retryState = stocktakeIntentRetryState(intent, await readDetail(intent.taskId)); } catch { /* keep handoff */ }
         }
         throw markUncertain(error, retryState);
       }
       let result: Readonly<Record<string, unknown>>;
       try {
         result = validateFormalStocktakeWriteResult(intent, rawResult);
-        await adapter.loadAccess();
-        const detail = await adapter.detail(uuid(result.task_id, "result.task_id"));
+        await readAccess();
+        const detail = await readDetail(uuid(result.task_id, "result.task_id"));
         confirmFormalStocktakeWrite(intent, result, detail);
         return Object.freeze({ result, detail });
       } catch (error) {

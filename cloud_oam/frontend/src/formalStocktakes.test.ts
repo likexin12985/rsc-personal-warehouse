@@ -3,6 +3,7 @@ import { appendFormalStocktakePage } from "./formalStocktakeTaskPages";
 
 import {
   confirmFormalStocktakeWrite,
+  confirmFormalStocktakePostProjection,
   createFormalStocktakeIntentRegistry,
   fixedQuantityText,
   stocktakeIntentRetryState,
@@ -276,6 +277,26 @@ describe("formal non-opening stocktake contract", () => {
       },
     });
     expect(() => confirmFormalStocktakeWrite(intent, result, closed)).toThrow(/精确回读/);
+  });
+
+  it("accepts a historical posting proof after independent reconciliation and close without weakening direct exact-version confirmation", () => {
+    const intent = createFormalStocktakeIntentRegistry({ coordinateFactory: coordinates }).begin({ action: "post", taskId: TASK, expectedTaskVersion: 5, body: { expected_task_version: 5 } });
+    const result = validateFormalStocktakeWriteResult(intent, zeroDifferencePostResult());
+    const reconciliationId = "a0000000-0000-4000-8000-000000000001";
+    const closeId = "b0000000-0000-4000-8000-000000000001";
+    const closed = validateFormalStocktakeDetail({
+      ...postableDetail(true),
+      status: "closed",
+      version: 8,
+      closed_at: "2026-09-01T11:00:00+08:00",
+      state_axes: axes({ count_status: "submitted", difference_status: "evaluated", region_review_status: "approve", headquarters_review_status: "approve", posting_status: "recorded", reconciliation_status: "recorded", closure_status: "closed" }),
+      close_control: {
+        latest_reconciliation: { completion_id: reconciliationId, reconciliation_no: 1, reconciliation_ledger_cursor: 20, reconciled_task_version: 7, reconciled_at: "2026-09-01T10:45:00+08:00" },
+        close_completion: { completion_id: closeId, reconciliation_completion_id: reconciliationId, closed_task_version: 8, closed_at: "2026-09-01T11:00:00+08:00" },
+      },
+    });
+    expect(() => confirmFormalStocktakeWrite(intent, result, closed)).toThrow(/精确回读/);
+    expect(() => confirmFormalStocktakePostProjection(result, closed, 5, true)).not.toThrow();
   });
 
   it("keeps reconcile and close as separate versioned intents with exact completion rereads", () => {

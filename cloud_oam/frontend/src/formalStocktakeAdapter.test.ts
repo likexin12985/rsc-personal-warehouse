@@ -89,6 +89,44 @@ describe("formal stocktake PC adapter", () => {
     });
   });
 
+  it("keeps durable-post identity, access, detail and status reads on the no-replay requester", async () => {
+    const normal = vi.fn(async (path: string) => path === "/access/context" ? headquartersAccess() : detail());
+    const noReplay = vi.fn(async (path: string) => {
+      if (path === "/auth/me") return { person_id: PERSON, name: "总部管理员", employee_no: "HQ001", organization_code: "HQ", organization_name: "蔚来总部", account_status: "active", employment_status: "active", access_mode: "active", authorization_version: 7, role_codes: ["admin"] };
+      if (path === "/access/context") return headquartersAccess();
+      if (path === `/v1/stocktakes/${TASK}`) return postableDetail(true);
+      return { schema_version: "1.0" };
+    });
+    const adapter = createFormalStocktakeAdapter({ person_id: PERSON, authorization_version: 7 }, normal, vi.fn(normal), noReplay);
+    await adapter.loadIdentityNoReplay?.();
+    await adapter.loadAccessNoReplay?.();
+    await adapter.detailNoReplay?.(TASK);
+    await adapter.postingCommandStatus?.(TASK, PERSON, 7, `web-${"c".repeat(36)}`);
+    expect(noReplay.mock.calls.map(([path]) => path)).toEqual([
+      "/auth/me", "/access/context", `/v1/stocktakes/${TASK}`,
+      `/v1/stocktakes/${TASK}/post-differences-command-status?actor_person_id=${PERSON}&actor_authorization_version=7&trace_request_id=web-${"c".repeat(36)}`,
+    ]);
+    expect(normal).not.toHaveBeenCalled();
+  });
+
+  it("uses no-replay preflight and readback for a durable posting execute", async () => {
+    const normal = vi.fn(async () => { throw new Error("normal requester must not be used"); });
+    const mutation = vi.fn(async () => postResult());
+    let posted = false;
+    const noReplay = vi.fn(async (path: string) => {
+      if (path === "/access/context") return headquartersAccess();
+      if (path === `/v1/stocktakes/${TASK}`) return posted ? postableDetail(true) : postableDetail(false);
+      throw new Error(`unexpected no-replay path ${path}`);
+    });
+    mutation.mockImplementation(async () => { posted = true; return postResult(); });
+    const adapter = createFormalStocktakeAdapter({ person_id: PERSON, authorization_version: 7 }, normal, mutation, noReplay);
+    const intent = createFormalStocktakeIntentRegistry({ coordinateFactory: coordinates }).begin({ action: "post", taskId: TASK, expectedTaskVersion: 5, body: { expected_task_version: 5 } });
+    await expect(adapter.execute(intent, { noReplayReads: true })).resolves.toMatchObject({ detail: { status: "posted", version: 6 } });
+    expect(mutation).toHaveBeenCalledTimes(1);
+    expect(normal).not.toHaveBeenCalled();
+    expect(noReplay.mock.calls.map(([path]) => path)).toEqual(["/access/context", `/v1/stocktakes/${TASK}`, "/access/context", `/v1/stocktakes/${TASK}`]);
+  });
+
   it("validates both assignee identities from the authorization-bound option page", async () => {
     const requester = vi.fn(async (path: string, _init?: RequestInit) => {
       if (path === "/access/context") return access(["read", "manage"]);

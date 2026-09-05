@@ -84,7 +84,10 @@ PRIVATE_IDENTITY_READ_PATHS = frozenset(
     }
 )
 PRIVATE_COMMAND_RECOVERY_PATHS = frozenset(
-    {"/api/v1/material-request-lifecycle-command-status"}
+    {
+        "/api/v1/material-request-lifecycle-command-status",
+        "/api/v1/stocktakes/post-differences-command-status",
+    }
 )
 PRIVATE_MATERIAL_REQUEST_OPTION_PREFIX = "/api/v1/material-request-options"
 PRIVATE_OPENING_START_OPTION_PREFIX = "/api/v1/stocktakes/opening/start-options"
@@ -266,6 +269,16 @@ async def block_legacy_prototype_writes(request, call_next):
         and request.url.path.endswith("/count-command-status")):
         # Dynamic recovery coordinates require the same privacy boundary on
         # authentication/validation/route failures as on successful reads.
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    if (request.url.path.startswith("/api/v1/stocktakes/")
+        and request.url.path.endswith("/post-differences-command-status")):
+        # Keep framework-level 401/404/405/422 responses on the historical
+        # posting lookup inside the same private, no-store boundary as the
+        # successful route response.  This endpoint carries identity and
+        # immutable inventory evidence and must never be cacheable.
         response.headers["Cache-Control"] = "private, no-store, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Referrer-Policy"] = "no-referrer"

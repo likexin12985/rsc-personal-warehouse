@@ -983,44 +983,8 @@ export function confirmFormalStocktakeWrite(intent: FormalStocktakeIntent, resul
     return;
   }
   if (intent.action === "post") {
-    const terminalRoundId = uuid(result.terminal_round_id, "result.terminal_round_id");
-    const terminalRound = detail.rounds.find((row) => row.round_id === terminalRoundId);
-    const expectedScopeCount = integer(result.scope_count, "result.scope_count", 1);
-    const differenceCount = integer(result.difference_count, "result.difference_count");
-    const acceptedCount = integer(result.accepted_difference_count, "result.accepted_difference_count");
-    const noAdjustmentCount = integer(result.no_adjustment_count, "result.no_adjustment_count");
-    const movementCount = integer(result.movement_count, "result.movement_count");
-    const transactionCount = integer(result.transaction_count, "result.transaction_count");
-    const totalQuantity = quantity(result.total_quantity, "result.total_quantity");
-    const headquartersItems = terminalRound?.headquarters_review?.visible_items ?? [];
-    const visibleDifferenceIds = new Set(terminalRound?.visible_differences.map((item) => item.difference_id) ?? []);
-    if (
-      !terminalRound
-      || detail.status !== "posted"
-      || detail.posted_at === null
-      || detail.closed_at !== null
-      || detail.state_axes.posting_status !== "recorded"
-      || detail.current_round_no !== terminalRound.round_no
-      || detail.scopes.length !== expectedScopeCount
-      || terminalRound.difference_completion?.visible_difference_count !== differenceCount
-      || terminalRound.difference_completion?.covers_all_task_scopes !== true
-      || terminalRound.visible_differences.length !== differenceCount
-      || terminalRound.region_review?.decision !== "approve"
-      || terminalRound.region_review?.covers_all_task_scopes !== true
-      || terminalRound.headquarters_review?.decision !== "approve"
-      || terminalRound.headquarters_review?.covers_all_task_scopes !== true
-      || headquartersItems.length !== differenceCount
-      || headquartersItems.some((item) => !visibleDifferenceIds.has(item.difference_id))
-      || headquartersItems.filter((item) => item.decision === "accept_for_posting").length !== acceptedCount
-      || headquartersItems.filter((item) => item.decision === "no_adjustment").length !== noAdjustmentCount
-      || terminalRound.posting.posting_fact_count !== movementCount
-      || terminalRound.posting.inventory_transaction_count !== transactionCount
-      || terminalRound.posting.visible_total_quantity !== totalQuantity
-      || !terminalRound.posting.covers_all_task_scopes
-      || (movementCount > 0 && terminalRound.posting.status !== "recorded")
-      || (movementCount === 0 && terminalRound.posting.status !== "not_posted")
-      || detail.allowed_actions.includes("post")
-    ) fail("精确回读未确认独立盘点差异过账完成事实");
+    if (intent.expectedTaskVersion === null) fail("盘点过账意图缺少期望版本");
+    confirmFormalStocktakePostProjection(result, detail, intent.expectedTaskVersion, false);
     return;
   }
   const roundId = intent.action === "start" ? uuid(result.initial_round_id, "initial_round_id") : intent.roundId;
@@ -1044,6 +1008,71 @@ export function confirmFormalStocktakeWrite(intent: FormalStocktakeIntent, resul
     return;
   }
   if (detail.current_round_no !== result.next_round_no || !detail.rounds.some((row) => row.round_id === result.next_round_id && row.recount_cause?.recount_case_id === result.recount_case_id)) fail("精确回读未确认选定范围复盘事实");
+}
+
+/**
+ * Confirm the immutable posting facts against a current detail projection.
+ *
+ * A direct POST readback must use the exact task version.  A recovery lookup
+ * is historical: reconciliation and close may have advanced the live task
+ * version, so it may only accept a version at or after the posting version,
+ * while retaining every posting-axis and quantity invariant.
+ */
+export function confirmFormalStocktakePostProjection(
+  result: WriteResult,
+  detail: FormalStocktakeDetail,
+  expectedTaskVersion: number,
+  allowAdvancedVersion = true,
+): void {
+  const taskId = uuid(result.task_id, "result.task_id");
+  const taskVersion = integer(result.task_version, "result.task_version", 1);
+  if (
+    detail.task_id !== taskId
+    || taskVersion !== expectedTaskVersion + 1
+    || (!allowAdvancedVersion && detail.version !== taskVersion)
+    || (allowAdvancedVersion && detail.version < taskVersion)
+  ) fail("盘点过账历史证据与当前任务版本不一致");
+  const terminalRoundId = uuid(result.terminal_round_id, "result.terminal_round_id");
+  const terminalRound = detail.rounds.find((row) => row.round_id === terminalRoundId);
+  const expectedScopeCount = integer(result.scope_count, "result.scope_count", 1);
+  const differenceCount = integer(result.difference_count, "result.difference_count");
+  const acceptedCount = integer(result.accepted_difference_count, "result.accepted_difference_count");
+  const noAdjustmentCount = integer(result.no_adjustment_count, "result.no_adjustment_count");
+  const movementCount = integer(result.movement_count, "result.movement_count");
+  const transactionCount = integer(result.transaction_count, "result.transaction_count");
+  const totalQuantity = quantity(result.total_quantity, "result.total_quantity");
+  const headquartersItems = terminalRound?.headquarters_review?.visible_items ?? [];
+  const visibleDifferenceIds = new Set(terminalRound?.visible_differences.map((item) => item.difference_id) ?? []);
+  const statusAllowed = detail.status === "posted"
+    || (allowAdvancedVersion && detail.status === "closed");
+  if (
+    !terminalRound
+    || !statusAllowed
+    || detail.posted_at === null
+    || (detail.status === "posted" && detail.closed_at !== null)
+    || (detail.status === "closed" && detail.closed_at === null)
+    || detail.state_axes.posting_status !== "recorded"
+    || detail.current_round_no !== terminalRound.round_no
+    || detail.scopes.length !== expectedScopeCount
+    || terminalRound.difference_completion?.visible_difference_count !== differenceCount
+    || terminalRound.difference_completion?.covers_all_task_scopes !== true
+    || terminalRound.visible_differences.length !== differenceCount
+    || terminalRound.region_review?.decision !== "approve"
+    || terminalRound.region_review?.covers_all_task_scopes !== true
+    || terminalRound.headquarters_review?.decision !== "approve"
+    || terminalRound.headquarters_review?.covers_all_task_scopes !== true
+    || headquartersItems.length !== differenceCount
+    || headquartersItems.some((item) => !visibleDifferenceIds.has(item.difference_id))
+    || headquartersItems.filter((item) => item.decision === "accept_for_posting").length !== acceptedCount
+    || headquartersItems.filter((item) => item.decision === "no_adjustment").length !== noAdjustmentCount
+    || terminalRound.posting.posting_fact_count !== movementCount
+    || terminalRound.posting.inventory_transaction_count !== transactionCount
+    || terminalRound.posting.visible_total_quantity !== totalQuantity
+    || !terminalRound.posting.covers_all_task_scopes
+    || (movementCount > 0 && terminalRound.posting.status !== "recorded")
+    || (movementCount === 0 && terminalRound.posting.status !== "not_posted")
+    || detail.allowed_actions.includes("post")
+  ) fail("精确回读未确认独立盘点差异过账完成事实");
 }
 
 export function stocktakeIntentRetryState(intent: FormalStocktakeIntent, detail: FormalStocktakeDetail | null): "retryable" | "handoff_required" {
