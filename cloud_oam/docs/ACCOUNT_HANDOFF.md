@@ -38,18 +38,38 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 
 ## 4. 当前源码状态
 
-最新通过客户端门禁的功能提交为 `a78d5adae54024aed9f5f8cb5724b94e4ec32de1`：日常盘点分页、SKU/二维码/SN
+最新已验收服务端功能提交 `8cabfdecb0e8734403fb8863e90d06951383f164` 已推送：新增日常初盘/复盘
+scope count 历史核验 GET，绑定当前 actor/person/授权版本、operation、task/round/scope、
+随机 trace，证明不可变 completion/manifest/audit，不返回原计数或重放许可。
+62 项新增定向回归通过；源码独立复核未发现本切片未解决的安全阻塞。
+首次功能 `812debc` 的 PG16 run `33957264704` 静态通过、动态失败，不能算全绿；
+已定位新查询把库存截止与冻结启动时间错误等同，按既有 0047 时序修正并补推进时钟回归。
+当前修正 SHA 的本地后端/边缘全量 `2926 passed, 1 skipped`（539.43 秒），退出码 0；
+测试前后后端/边缘/PG workflow 与该 SHA 无差异。跳过项为 GitHub 一次性 PG16 真库门禁，
+不能计作本地真库通过。准确 SHA 的 PG16
+[`33958198821`](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33958198821)
+已全绿：静态 `1993 passed, 1 skipped, 1 warning`（737.46 秒），动态 `1 passed, 1 warning`
+（223.17 秒），包含容器清理在内的全部步骤成功，job 于 `2026-09-05T09:48:21Z` 完成。
+准确 SHA 客户端 run
+[`33958198902`](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33958198902)
+已全绿（Web 776、小程序 647、类型/构建/安全/清理）。未修改迁移、ACL、客户端、边缘或部署。
+契约和限制见 `DAILY_COUNT_COMMAND_STATUS_ACCEPTANCE.md`：本次 PG 新增只覆盖初盘及其
+关闭后历史，复盘尚缺完整真库服务链；深层来源历史人员变化可能保守阻塞；两端未接入持久哨兵。
+下一切片先补隔离 PG 复盘/多轮证明，再接客户端跨进程恢复。不得因 `not_observed` 换键补写，
+不得把本接口扩称为创建、下发、差异、复核、过账、关闭或整个盘点恢复完成。
+
+客户端自身最近功能提交为 `a78d5adae54024aed9f5f8cb5724b94e4ec32de1`：日常盘点分页、SKU/二维码/SN
 标识录入、逐件 SN 数量预检，以及页面切换后旧列表/写回调隔离。Web 全套 776 项、小程序
 647 项、TypeScript、构建及仓库安全检查本地通过。精确 SHA 的客户端 run
 [`33956352741`](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33956352741)
 已回读全绿，包括冻结安装、测试、类型、构建及清理；HEAD 可以是文档后继。
-该候选不改后端、迁移、ACL、边缘、部署或 PG 工作流；后端仍对应下方已验收基线。
-新增验收和下一任务见 `DAILY_STOCKTAKE_CLIENT_ACCEPTANCE.md`。用户已授权按审计建议
-继续开发，下一切片优先补日常初盘/复盘 count 的历史命令查询与跨重启恢复；不能借刷新
+该客户端候选不改后端、迁移、ACL、边缘、部署或 PG 工作流；其后端对应下方历史基线，
+当前后端以上方 `8cabfde` 为准。客户端验收见 `DAILY_STOCKTAKE_CLIENT_ACCEPTANCE.md`。
+日常历史 GET 已由上方服务端切片交付，后续优先补复盘真库证明和跨重启恢复；不能借刷新
 或 `not_observed` 清除未知请求、换键重发，不能把现有 opening-only 查询用于日常盘点。
 OSS/CSP、审批转派、通知兼容、可信控制投影、部署及恢复演练仍未完成，生产访问仍禁止。
 
-最近已验收后端功能提交为 `262b07a34cf508930c3835f2dad993a141920d97`，HEAD 可以是客户端或文档后继。
+此前已验收后端功能提交为 `262b07a34cf508930c3835f2dad993a141920d97`，以下为其历史基线。
 新增控制库存离线一致性校验：195 项新增定向通过；冻结后端/边缘全量 `2864 passed, 1 skipped`
 （947.35 秒）。准确 SHA 的 PG16 run `33953508516` 已全绿，job 于
 `2026-09-05T08:03:12Z` 完成：静态 `1931 passed, 1 skipped, 1 warning`（674.84 秒），
@@ -351,19 +371,26 @@ Git 仓库根目录设置在当前 `oam` 目录，但根 `.gitignore` 默认拒�
 > 请接管当前私有仓库中的 RSC 个人仓项目。先完整阅读仓库根目录 AGENTS.md、
 > docs/RSC个人仓与物资运营扩展系统_正式生产版需求与架构设计_V1.0.md 和
 > cloud_oam/README.md。后续所有代码、文档、迁移、状态和验收必须遵循这些基线。
-> 当前分支 codex/production-readiness-gates，最新已通过功能提交为
-> 262b07a34cf508930c3835f2dad993a141920d97，其 PG16 run 33953508516 全绿（静态1931、
-> 真库1项通过），本地后端/边缘2864项通过；同SHA客户端run 33953508544全绿（Web745、小程序631）。
-> 本地 HEAD 可以是它的文档后继提交，不得强制回退。先只读检查 git status、HEAD、远端分支
+> 当前分支 codex/production-readiness-gates，最新已验收服务端功能提交为
+> 8cabfdecb0e8734403fb8863e90d06951383f164：日常初盘/复盘原count命令历史核验。
+> PG16 run 33958198821全绿（静态1993、真库1项通过，含容器清理）；同SHA客户端
+> run 33958198902全绿（Web776、小程序647、类型/构建/安全）。准确证据见本交接第4节。
+> 本地后端/边缘2926项通过，1项PG门禁按环境跳过，含62项新增定向回归；
+> 首次812debc的run 33957264704动态失败，已修正冻结时间核验，不得借旧结果算新候选通过。
+> 不能把合成复盘测试或初盘真库断言称作完整PG复盘验收。
+> 本地 HEAD 可以是其文档后继，不得强制回退。先只读检查 git status、HEAD、远端分支
 > 及准确候选的门禁，阅读 cloud_oam/docs/PHASE1_REMAINING_ACCEPTANCE_20260905.md。
 > 运行 cloud_oam/scripts/verify_repository_safety.sh，并重新检查 Alembic head 和相关测试；
 > 不得访问或写入 OAM、RSC、Workflow、飞书及任何外部生产系统。继续一期盘点、
 > 需求提报和处理的剩余发布门禁，不得把需求获批当成分配、占用、出库、发货、签收或个人仓入库。
 > 不重做已经通过的目录权限、分页和计数恢复修复；不得删除恢复哨兵绕过 not_observed。
+> 先读 cloud_oam/docs/DAILY_COUNT_COMMAND_STATUS_ACCEPTANCE.md，补隔离PG复盘/多轮证明，
+> 再接两端日常count持久哨兵和重启核验；来源旧人员/保管变化可能503，需独立历史证据模式。
+> 不把这个scope count GET推广成创建、下发、差异、复核、过账、关闭或人工未执行封存已完成。
 > 两端只读期初准备入口和隔离控制证据一致性校验已完成，但没有可信控制库存发布，不能启动。
 > 请读 cloud_oam/docs/INVENTORY_CONTROL_EVIDENCE_ACCEPTANCE.md 和
-> cloud_oam/docs/OPENING_CONTROL_PROJECTION_NEXT_SLICE.md；继续可信目录、不可变采集证据与
-> 独立控制发布链的前向方案。full-only、45分钟硬TTL和分阶段建账复用策略未被批准，
+> cloud_oam/docs/OPENING_CONTROL_PROJECTION_NEXT_SLICE.md；可信目录、不可变采集证据与
+> 独立控制发布链仍是后续待办。full-only、45分钟硬TTL和分阶段建账复用策略未被批准，
 > 不擅自收紧设计基线，也不接入外部生产系统。
 > 继续保留额度剩余 2% 时暂停新开发、保存并报告交接的约定。
 

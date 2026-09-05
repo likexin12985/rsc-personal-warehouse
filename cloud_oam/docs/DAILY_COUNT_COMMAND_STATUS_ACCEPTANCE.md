@@ -53,19 +53,27 @@ git diff --check
 ```
 
 新增测试明确加入 PostgreSQL 16 workflow 的静态文件清单。
-新增定向合成回归 `58 passed`，含两范围、初盘/复盘、真实服务过账/关闭后历史查询、
-保管移交/尾部授权变化、时间差兼容、无业务写及框架级隐私错误。
-冻结功能源码 `812debc65fa4a85d0a14718d63d4ac4723208bab` 的本地后端/边缘全量
-`2922 passed, 1 skipped`（702.54 秒）；运行前后相关源码与该 SHA 无差异。
+新增定向合成回归 `62 passed`（15.82 秒），含两范围、初盘/复盘、真实服务过账/关闭后历史查询、
+保管移交/尾部授权变化、时间差兼容、推进时钟及逆序负例、无业务写和框架级隐私错误。
+冻结修正源码 `8cabfdecb0e8734403fb8863e90d06951383f164` 的本地后端/边缘全量
+`2926 passed, 1 skipped`（539.43 秒），退出码 0；运行前后后端/边缘/PG workflow 与该 SHA 无差异。
 跳过项仅允许 GitHub 一次性 PG16 数据库执行，不能把它算作本地真库通过。
 动态门禁在真实 API role 下验证初盘提交后及关闭后原 trace / 未见 trace，并检查
 查询前后库存、审计、Outbox、状态事件和计数/提交事实不变，事务仍由调用方持有。
-候选全量及准确 SHA 的 CI 结果见交接文档；在回读成功前不计入已验收发布。
+准确 SHA 的 GitHub PG16
+[run 33958198821](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33958198821)
+已全绿：静态 `1993 passed, 1 skipped, 1 warning`（737.46 秒），动态 `1 passed, 1 warning`
+（223.17 秒），job 于 `2026-09-05T09:48:21Z` 完成，包含测试容器清理在内全部步骤成功。
+同 SHA 的客户端
+[run 33958198902](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33958198902)
+全绿：Web 776、小程序 647、类型检查、构建及仓库安全检查通过。后继文档提交不改变
+已验收后端/边缘/迁移/客户端/PG workflow；上述结果只覆盖本切片，不等于生产放行。
 
 ### 首次 PG16 失败与修正依据
 
 初始功能 SHA `812debc65fa4a85d0a14718d63d4ac4723208bab` 的 run `33957264704`：
 静态 `1989 passed, 1 skipped, 1 warning`（726.76 秒），动态 `1 failed`（203.71 秒）。
+该 SHA 本地全量 `2922 passed, 1 skipped`（702.54 秒）不能替代真库验收。
 失败位于新增 GET 的冻结时间核验，容器已清理；不能将本次 run 计作通过。
 
 非期初启动先捕获 `cutoff_at`，等待审计锁后再次取时，写入
@@ -89,3 +97,34 @@ git diff --check
    禁存原正文、数量、备注、扫描原文、签名 URL、token 和幂等键。重启先查询，不自动重放。
 5. 创建、下发、差异、复核、过账、关闭、人工未执行封存仍须独立命令恢复证明。
    OSS/CSP、审批转派、通知、可信控制投影、最终产物与恢复演练仍为独立待办。
+
+### 下一切片实施顺序（只读定位，尚未实施）
+
+先在 `backend/tests/test_postgresql16_release_gate.py` 增加独立 helper，保留
+`_complete_0051_nonopening_stocktake_service_chain` 原闭环。隔离夹具新增专用有效区域库位、
+保管绑定及零余额账户，不能复用仍持有冻结的 `difference_peer_location`。
+用真实 API role、真实时钟依次创建/启动、初盘计数、生成差异、区域复核要求复盘、
+开复盘、复盘计数，再经复盘差异/复核进入第三轮。每步独立提交，用正式服务生成事实，
+不手填 round/case/audit，不为清理直接解冻。
+
+逐轮原 trace 应分别确认各自 completion；新轮计数前 `not_observed` 不影响旧轮证明。
+每次 GET 对比库存/ledger cursor、审计、Outbox、状态事件、计数和提交事实不变，
+并确认事务仍由调用方结束。另增实际 PG principal + API-role Session 的路由测试，
+不能把直接服务调用称作 HTTP 验收。单范围多轮不替代多范围非封轮、附件竞争或换执行人覆盖。
+
+随后仅将两端 `submit_initial_count` / `submit_recount_count` 分流到独立持久恢复模块：
+
+- Web 入口为 `frontend/src/pages/FormalStocktakes.tsx` 的 `submitCountWithEvidence`；
+  小程序为 `miniprogram/pages/formal-operational-stocktake-detail/index.js` 的 `submitCount`。
+  保留附件 claims、数量与扫码校验，不把所有命令的内存 registry 整体持久化。
+- 借鉴 opening store 的写后回读、精确清理和任务级互斥，但使用独立 storage/lock namespace、
+  kind 和验证器。仅增加版本、kind、轮次编号等非敏感结构字段，不保存原写意图。
+- 当前日常 adapter 使用普通传输，401 可经认证刷新再发原请求；count 必须改走
+  `apiNoReplay` / `postNoReplay`，恢复所需 GET 也不触发认证刷新 POST。
+- 日常详情使用 `rounds[]` / `visible_scope_completions[]`，不得套用 opening 当前轮投影。
+  核验历史轮、范围、completion、操作者、时间和封轮关系；不要求旧 count action 仍可用。
+- 现有 `run` 的泛用非 uncertain 清理及 `retryPending` 原 POST 通道不拥有持久哨兵清理权。
+  count 未知结果只读核验；不得因当前版本/allowed_actions、刷新或普通 4xx 清除屏障。
+- 验收覆盖响应丢失后重启（最多一次 POST）、坐标/操作串证、后续轮及终态、身份变化、
+  页面失效与迟到响应、坏存储/清理失败、同任务竞争及严格落盘字段白名单。
+  Web 原生 Web Locks 与小程序同服务上下文租约不等同于跨设备锁；真机 UAT 仍须独立进行。
