@@ -55,6 +55,10 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 多范围真库样本，再验收尾部身份竞争和原 POST 锁序；非 count 的 review/recount/disposition/
 post/close 命令状态持久证据与两端跨重启恢复仍未完成。
 
+复核命令状态查询目前只完成只读设计审查，未写入代码：`stocktake_reviews` 没有可重建的历史
+`task_version`，不能把当前任务版本冒充命令结果。下一阶段须先做前向迁移并同步审计、触发器、
+权限和数据库安全清单；在此之前保持未知结果阻塞。
+
 `f482b8e` 的过账恢复切片已通过 PostgreSQL 16 release gate（run `33982740333`）；当前 HEAD
 `fd4a9ea` 的 Client release gate（run `33984126951`）也已通过；此前
 文档提交 `d98c6df` 的 Client release gate（run `33982782831`）也已通过。该切片的非 opening

@@ -18,6 +18,10 @@ run `33981032060` 均已通过。当前 HEAD 为文档后继 `fd4a9ea`，其 Cli
 当前真库样本仍是单范围、hard freeze、非 SN；下一项 P0 仍为准确 SHA 的 SN + cutoff replay
 多范围真库样本，随后才是尾部身份竞争、原 POST 锁序和两端非 count 命令持久恢复。
 
+复核命令状态查询已完成只读设计审查但未实现：现有 `stocktake_reviews` 未持久化可重建的历史
+`task_version`，直接复用当前任务版本会制造错误恢复证据。正式实现前必须新增前向迁移，明确
+结果版本字段及其审计、触发器、权限和安全清单同步；在此之前不得返回“已复核”历史状态。
+
 随后提交 `f482b8e` 的过账恢复切片已通过 PostgreSQL 16 release gate（run `33982740333`）：
 非 opening 盘点新增只读
 `/{task_id}/post-differences-command-status`，只接受精确 `X-Request-ID`，并重证过账审计、
