@@ -44,6 +44,7 @@ import {
 } from "../formalOpeningRecountAssignees";
 import OpeningRecountAssigneePicker from "./OpeningRecountAssigneePicker";
 import OpeningCountRecoveryPanel from "./OpeningCountRecoveryPanel";
+import OpeningStartPreparationPanel from "./OpeningStartPreparationPanel";
 import { submitDurableOpeningScopeCount } from "../openingCountSubmission";
 import { getOpeningCountRecoveryStore, withNoPendingOpeningCount } from "../openingCountRecoveryStore";
 
@@ -187,7 +188,9 @@ function TaskTable({
   </table></div>;
 }
 
-export default function FormalOpeningStocktakesPage({ actor }: { actor?: OpeningRecountActor } = {}) {
+export default function FormalOpeningStocktakesPage({ actor, canPrepare = false }: {
+  actor?: OpeningRecountActor; canPrepare?: boolean;
+} = {}) {
   const mounted = useRef(true);
   const viewEpoch = useRef(0);
   const listEpoch = useRef(0);
@@ -540,6 +543,7 @@ export default function FormalOpeningStocktakesPage({ actor }: { actor?: Opening
     </div>
     {error && <div className="alert alert-error" role="alert">{error}</div>}
     {notice && <div className="form-notice opening-notice">{notice}</div>}
+    {canPrepare && actor && <OpeningStartPreparationPanel actor={actor} />}
     <section className="content-section table-section">
       <div className="content-title"><div><h2>正式期初盘点任务</h2><p>仅调用 /api/v1/stocktakes/opening 正式接口族</p></div></div>
       {listLoading && tasks.length === 0 ? <Loading label="正在读取正式盘点任务" />

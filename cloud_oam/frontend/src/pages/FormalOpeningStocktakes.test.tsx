@@ -285,6 +285,23 @@ describe("formal opening stocktake PC page", () => {
     }); });
   }
 
+  it("keeps preparation hidden by default and requires an explicit manage capability and valid actor", async () => {
+    vi.mocked(loadFormalOpeningStocktakes).mockResolvedValue({ items: [], next_after_id: null } as any);
+    const page = render(<FormalOpeningStocktakesPage actor={ACTOR} />);
+    await screen.findByText("暂无可见正式盘点任务");
+    expect(screen.queryByLabelText("期初盘点准备（只读）")).toBeNull();
+    page.rerender(<FormalOpeningStocktakesPage canPrepare />);
+    expect(screen.queryByLabelText("期初盘点准备（只读）")).toBeNull();
+    page.rerender(<FormalOpeningStocktakesPage canPrepare actor={{ ...ACTOR, person_id: "invalid" }} />);
+    expect(screen.queryByLabelText("期初盘点准备（只读）")).toBeNull();
+    page.rerender(<FormalOpeningStocktakesPage canPrepare actor={ACTOR} />);
+    expect(screen.getByLabelText("期初盘点准备（只读）")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "展开准备目录" }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: /启动|创建期初盘点/ })).toBeNull();
+    page.rerender(<FormalOpeningStocktakesPage canPrepare={false} actor={ACTOR} />);
+    expect(screen.queryByLabelText("期初盘点准备（只读）")).toBeNull();
+  });
+
   it.each(["post", "close"] as const)("blocks %s at execution even before a cross-tab storage event arrives", async (action) => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     const source = sealedDetail([action]);

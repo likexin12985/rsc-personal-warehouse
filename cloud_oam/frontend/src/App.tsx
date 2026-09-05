@@ -25,6 +25,7 @@ import {
   canUseFormalOperationalClient,
   formalRoleLabel,
   hasFormalPermission,
+  hasFormalRole,
   isSupportedRole,
   roleLabel,
 } from "./clientPolicy";
@@ -502,6 +503,8 @@ export default function App() {
   const canReadInventory = hasFormalPermission(access, "inventory", "read");
   const canReadMaterialRequests = hasFormalPermission(access, "material_request", "read");
   const canReadStocktake = hasFormalPermission(access, "stocktake", "read");
+  const canPrepareOpeningStocktake = (hasFormalRole(access, "admin") || hasFormalRole(access, "provincial_manager"))
+    && hasFormalPermission(access, "stocktake", "manage");
   const canReadReconciliation = hasFormalPermission(access, "reconciliation", "read");
   const canCreateOpeningReconciliation = canReadStocktake
     && hasFormalPermission(access, "reconciliation", "create_opening");
@@ -521,6 +524,7 @@ export default function App() {
       <Route path="/opening-stocktakes" element={canReadStocktake ? <FormalOpeningStocktakesPage
         key={`${access.person_id}:${access.authorization_version}`}
         actor={{ person_id: access.person_id, authorization_version: access.authorization_version }}
+        canPrepare={canPrepareOpeningStocktake}
       /> : <Navigate to="/dashboard" replace />} />
       <Route path="/opening-reconciliations" element={canReadReconciliation ? <FormalOpeningReconciliationsPage canCreate={canCreateOpeningReconciliation} /> : <Navigate to="/dashboard" replace />} />
       <Route path="/provincial-managers" element={canManageProvincial ? <ProvincialManagersPage /> : <Navigate to="/dashboard" replace />} />

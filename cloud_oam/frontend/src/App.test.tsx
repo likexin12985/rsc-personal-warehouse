@@ -204,6 +204,32 @@ describe("formal opening stocktake navigation", () => {
     vi.mocked(api).mockReset();
   });
 
+  it.each([
+    ["admin", true, true],
+    ["provincial_manager", true, true],
+    ["technician", true, false],
+    ["admin", false, false],
+    ["provincial_manager", false, false],
+  ] as const)("preparation visibility for role %s and manage=%s requires both gates", async (role, canManage, visible) => {
+    const user: AuthenticatedUser = { ...authenticatedUser, role_codes: [role] };
+    const context: AccessContext = { ...accessContext, role_codes: [role], permissions: [
+      { resource: "stocktake", action: "read", field_code: "" },
+      ...(canManage ? [{ resource: "stocktake", action: "manage", field_code: "" }] : []),
+    ] };
+    vi.mocked(api).mockImplementation(async (path) => {
+      if (path === "/auth/me") return user;
+      if (path === "/access/context") return context;
+      if (path === "/v1/stocktakes/opening?limit=20") return {
+        schema_version: "1.0", items: [], next_after_id: null,
+      };
+      throw new Error("unexpected test request");
+    });
+    render(<MemoryRouter initialEntries={["/opening-stocktakes"]}><App /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "盘点中心" });
+    expect(screen.queryByLabelText("期初盘点准备（只读）") !== null).toBe(visible);
+    expect(vi.mocked(api).mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+  });
+
   it("opens the formal stocktake center only with stocktake/read", async () => {
     const stocktakeAccess: AccessContext = {
       ...accessContext,
