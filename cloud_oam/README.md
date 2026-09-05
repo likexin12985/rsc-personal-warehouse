@@ -588,6 +588,11 @@ PC 基础 `8df5447` 与页面 `d553ef5` 已保存：Web 676 项与 TypeScript/�
 最终 Web 691 项及 TypeScript/构建通过。不代表其他写意图、未执行封存或预生产/生产放行
 已完成。故障矩阵与真机待验边界见
 [计数恢复验收清单](docs/OPENING_COUNT_RECOVERY_ACCEPTANCE.md)。
+后续目录安全候选 `75b7e42a988f1178145e91a747b43bba467dac65` 已修复跨 grant 明确拒绝丢失与
+未授权人员游标：有界扫描、仅已返回授权 ID 游标、末次人员/权限/组织/父链刷新，相关本地
+203 项通过。扩大后的静态清单和真实 API 角色回归已提交
+[run 33932385447](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33932385447)，
+结果仍待确认；不借用 `e54765a` 的真库绿灯。目录升级后应从第一页刷新，不沿用旧暂存游标。
 完整剩余边界见
 [一期剩余验收清单](docs/PHASE1_REMAINING_ACCEPTANCE_20260905.md)。
 
