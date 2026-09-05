@@ -615,6 +615,16 @@ PC `0bbc438`、小程序后继 `762150c2d4e6ca1337b00af5b7f01409528f30d9` 已完
 正式控制来源/省级覆盖缺口见[下一投影切片](docs/OPENING_CONTROL_PROJECTION_NEXT_SLICE.md)。
 不要重复已完成的目录开发，不把全量模式或空数据单独当作省级完整性证明。
 
+新增离线控制库存证据校验 `262b07a34cf508930c3835f2dad993a141920d97`：195 项定向回归
+通过；严格绑定独立目录、来源/范围、逐仓分页和零结果，并重算连续增量的完整库存记录集。
+它不 import 生产采集器或数据库配置，现有采集器也尚未产生此新证据；成功仍固定四项未就绪。
+本地冻结后端/边缘全量 `2864 passed, 1 skipped`（947.35 秒）；准确 SHA 的
+[PG16 run 33953508516](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33953508516)
+全绿（静态1931、真库1项通过，含清理，`2026-09-05T08:03:12Z`完成）。同SHA的
+[客户端 run 33953508544](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33953508544)
+全绿（Web745、小程序631、类型/构建）。迁移、ACL和客户端源码未改，head仍为0061。
+详见[控制库存证据验收](docs/INVENTORY_CONTROL_EVIDENCE_ACCEPTANCE.md)。
+
 以下为 `0052–0058` 已完成盘点迁移的兼容背景，不是当前 head 的发布证据。
 `20260903_0052` 的期初盘点请求证据链不支持新旧应用与数据库混合运行；
 `0053` 以前向迁移修复十五表共享延迟触发器在非 `stocktake_rounds` 记录上访问轮次专属字段的问题。

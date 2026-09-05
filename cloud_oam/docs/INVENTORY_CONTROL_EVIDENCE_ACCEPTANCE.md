@@ -74,9 +74,24 @@ count/hash，同时逐仓采集证据必须覆盖重建后的完整集合。删�
 显式零库存、错误绑定、分页/摘要/前驱篡改、严格 JSON 和时间边界；加入 PG16 工作流静态集。
 新增定向回归 195 项通过，包括从现有 edge 源码隔离提取的四个真实纯编码函数，验证 UTF8、
 full/delta hash 和 prepare_entity 输出；不 import 生产采集器。另有无配置子进程验证导入及
-执行均不加载 SQLAlchemy、app.database 或 app.config。冻结后的完整后端/边缘与准确 SHA
-的 GitHub PG16 门禁仍待运行；旧候选结果不计作本切片验收。PG16 动态门禁仅证明原数据库链
-未被本切片破坏，不证明库存 publisher 已实现。
+执行均不加载 SQLAlchemy、app.database 或 app.config。
+
+准确候选 `262b07a34cf508930c3835f2dad993a141920d97` 已验证：
+
+- 本地新增测试与部署门禁契约合计 `209 passed`（2.13 秒）。
+- 冻结后端/边缘全量 `2864 passed, 1 skipped`（947.35 秒），退出码 0；运行前后核对
+  后端、边缘和 PG 工作流与上述 SHA 无差异，未配置本地真实 PG16，跳过项不计通过。
+- [PG16 run 33953508516](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33953508516)
+  全绿，job `101272530240` 于 `2026-09-05T08:03:12Z` 完成。静态
+  `1931 passed, 1 skipped, 1 warning`（674.84 秒），动态 `1 passed, 1 warning`
+  （210.13 秒）；包括容器清理的全部步骤成功。
+- [客户端 run 33953508544](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33953508544)
+  在同一 SHA 全绿，`2026-09-05T07:48:37Z` 完成；Web `745 passed / 34 files`，
+  小程序 `631 passed, 0 failed`，冻结依赖安装、类型检查及构建均通过。
+
+PG16 动态门禁证明原数据库链未被本切片破坏，不证明库存 publisher 已实现。数据库迁移和
+ACL 均未修改，Alembic 唯一 head 保持 `20260905_0061`；客户端源码也未修改。
+后继文档提交不挪用为新业务代码验收；接管时仍须核对实际 HEAD、远端和文件差异。
 
 下一步仍是可信来源/目录/采集证据的前向数据库与最小权限方案、受控控制投影发布、批次选择、
 启动计划和持久恢复。不得复用工单 projector ACL，也不得在未明确复用规则时给 control run

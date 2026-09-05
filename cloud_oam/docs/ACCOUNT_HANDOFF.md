@@ -38,9 +38,16 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 
 ## 4. 当前源码状态
 
-新增控制库存离线一致性校验切片已进入候选验证，195 项定向回归通过；完整后端/边缘和
-准确 SHA 的 PG16 门禁尚待本候选独立运行。它不连接生产、不写数据库，不认证来源/目录，
-不开放启动，也不改变历史 full/incremental 规则。详见 `INVENTORY_CONTROL_EVIDENCE_ACCEPTANCE.md`。
+最新已验收功能提交为 `262b07a34cf508930c3835f2dad993a141920d97`，HEAD 可以是文档后继。
+新增控制库存离线一致性校验：195 项新增定向通过；冻结后端/边缘全量 `2864 passed, 1 skipped`
+（947.35 秒）。准确 SHA 的 PG16 run `33953508516` 已全绿，job 于
+`2026-09-05T08:03:12Z` 完成：静态 `1931 passed, 1 skipped, 1 warning`（674.84 秒），
+动态 `1 passed, 1 warning`（210.13 秒），含清理全部步骤成功。相同 SHA 的客户端 run
+`33953508544` 全绿（Web 745、小程序 631、类型/构建），`2026-09-05T07:48:37Z` 完成。
+它不连接生产、不写数据库、不认证来源/目录、不开放启动，也不改变历史 full/incremental
+规则、迁移或 ACL；Alembic head 仍为 `20260905_0061`。
+证据及未验边界见 `INVENTORY_CONTROL_EVIDENCE_ACCEPTANCE.md`；下一步补可信来源/目录、
+不可变采集证据及独立控制发布链，不要重做已通过的纯校验器和准备目录。
 
 此前已验收功能提交为 `762150c2d4e6ca1337b00af5b7f01409528f30d9`，以下是该历史快照。
 本轮已完成期初四层只读准备目录及 PC/小程序入口，不开放启动按钮，不改迁移或 ACL；head
@@ -334,17 +341,19 @@ Git 仓库根目录设置在当前 `oam` 目录，但根 `.gitignore` 默认拒�
 > docs/RSC个人仓与物资运营扩展系统_正式生产版需求与架构设计_V1.0.md 和
 > cloud_oam/README.md。后续所有代码、文档、迁移、状态和验收必须遵循这些基线。
 > 当前分支 codex/production-readiness-gates，最新已通过功能提交为
-> 762150c2d4e6ca1337b00af5b7f01409528f30d9，客户端 run 33950490567 全绿；后端源码与
-> b192ccfe7186e625d7080271c3a76e2b838914ab 一致，其 PG16 run 33949950302 全绿。
+> 262b07a34cf508930c3835f2dad993a141920d97，其 PG16 run 33953508516 全绿（静态1931、
+> 真库1项通过），本地后端/边缘2864项通过；同SHA客户端run 33953508544全绿（Web745、小程序631）。
 > 本地 HEAD 可以是它的文档后继提交，不得强制回退。先只读检查 git status、HEAD、远端分支
 > 及准确候选的门禁，阅读 cloud_oam/docs/PHASE1_REMAINING_ACCEPTANCE_20260905.md。
 > 运行 cloud_oam/scripts/verify_repository_safety.sh，并重新检查 Alembic head 和相关测试；
 > 不得访问或写入 OAM、RSC、Workflow、飞书及任何外部生产系统。继续一期盘点、
 > 需求提报和处理的剩余发布门禁，不得把需求获批当成分配、占用、出库、发货、签收或个人仓入库。
 > 不重做已经通过的目录权限、分页和计数恢复修复；不得删除恢复哨兵绕过 not_observed。
-> 两端只读期初准备入口已完成，但控制库存未评估、不能启动。请读
-> cloud_oam/docs/OPENING_CONTROL_PROJECTION_NEXT_SLICE.md；full-only 和分阶段建账复用
-> 策略仍待确认，不擅自收紧设计基线，也不接入外部生产系统。
+> 两端只读期初准备入口和隔离控制证据一致性校验已完成，但没有可信控制库存发布，不能启动。
+> 请读 cloud_oam/docs/INVENTORY_CONTROL_EVIDENCE_ACCEPTANCE.md 和
+> cloud_oam/docs/OPENING_CONTROL_PROJECTION_NEXT_SLICE.md；继续可信目录、不可变采集证据与
+> 独立控制发布链的前向方案。full-only、45分钟硬TTL和分阶段建账复用策略未被批准，
+> 不擅自收紧设计基线，也不接入外部生产系统。
 > 继续保留额度剩余 2% 时暂停新开发、保存并报告交接的约定。
 
 ## 9. 远端仓库状态与后续规则
