@@ -133,6 +133,7 @@ jobs:
             backend/tests/test_supply_task_read_contract.py \
             backend/tests/test_audit_chain.py \
             backend/tests/test_inventory_posting.py \
+            backend/tests/test_inventory_control_evidence.py \
             backend/tests/test_opening_stocktake_service.py \
             backend/tests/test_opening_scope_qualification.py \
             backend/tests/test_opening_start_options.py \

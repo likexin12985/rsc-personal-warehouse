@@ -138,6 +138,7 @@ def test_postgresql16_gate_covers_main_prs_and_edge_role_provisioning() -> None:
         "backend/tests/test_material_request_query_service.py",
         "backend/tests/test_audit_chain.py",
         "backend/tests/test_inventory_posting.py",
+        "backend/tests/test_inventory_control_evidence.py",
         "backend/tests/test_opening_stocktake_service.py",
         "backend/tests/test_opening_scope_qualification.py",
         "backend/tests/test_opening_start_options.py",
