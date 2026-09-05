@@ -42,7 +42,7 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 
 当前工作分支 `codex/production-readiness-gates` 的本地与远端 HEAD 应在接管时以 `git rev-parse`
 重新核验（HEAD 可能是仅文档更新的后继）；最新已验收功能代码基线为
-`8046c78f04e1b18b016013a59946593531da2149`，前一功能基线为 `f482b8eeff11a4479937be2e2287bc14a3e6a8a3`。其父提交 `18dfbd72b7d578aff5886029304a5afadb75b8f2`（再之前为
+`c7f98cb282a99456b923a4fcbfede943d5cc6482`，前一功能基线为 `8046c78f04e1b18b016013a59946593531da2149`，再前为 `f482b8eeff11a4479937be2e2287bc14a3e6a8a3`。其父提交 `18dfbd72b7d578aff5886029304a5afadb75b8f2`（再之前为
 `d95a3fe61eaa656d0d144d307a4ab9348c048194`）
 已通过 Client release gate `33979437995` 与 PostgreSQL 16 release gate `33979438009`；当前
 `18dfbd7` 的 Client run `33981032052` 与 PostgreSQL 16 run `33981032060` 也均已通过。当前
@@ -52,6 +52,8 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 也没有把静态源码契约当作真库业务验收。
 
 `8046c78` 修复过账命令状态查询在无审计结果分支遗漏的锁后身份/权限复核，并允许已过账后独立关闭的任务继续重证原过账历史；新增撤权竞态和 posted→closed 回归测试。该提交的 Client release gate `33985935542` 与 PostgreSQL 16 release gate `33985935553` 均已通过。
+
+`c7f98cb` 将过账历史恢复回归接入正式 PostgreSQL 16 静态门禁，并补充真实 post/close 后的历史状态核验；同时为后续动态 SN 试验建立独立 replay 库位、账户和串码，先完成正式 opening establishment，再写入合法串码库存种子。Client release gate `33990582028` 与 PostgreSQL 16 release gate `33990581994` 均已通过。该证据不等同于非期初 SN、cutoff replay、多范围、尾部身份竞争或原 POST 锁序已验收。
 
 后续测试提交 `03a66ea` 曾尝试直接给串码账户写入库存以扩展非期初 SN 真库样本，PG16 真库按正式规则拒绝并返回 `inventory_opening_not_established`；该测试扩展已由 `e227696` 删除，回退后的 Client gate `33988119885` 与 PostgreSQL 16 gate `33988119864` 均已通过。结论是：非期初 SN/cutoff/multiscope 动态样本必须先复用独立 opening establishment，不能绕过期初建账。
 

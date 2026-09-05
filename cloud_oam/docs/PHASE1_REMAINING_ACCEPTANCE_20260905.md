@@ -9,6 +9,13 @@
 
 ### 2026-09-06 续验收记录
 
+提交 `c7f98cb282a99456b923a4fcbfede943d5cc6482` 已通过 Client release gate（run
+`33990582028`）和 PostgreSQL 16 release gate（run `33990581994`）。本轮将过账历史恢复回归纳入
+正式静态门禁，并以真实 post/close 后历史查询验证 posted 事实仍可重证；同时为后续动态 SN 试验
+增加独立 replay 库位、账户和串码，先完成正式 opening establishment，再写入合法串码库存种子。
+该轮只证明串码种子满足正式期初前置且恢复回归可执行，尚未把非期初 SN、cutoff replay、多范围、
+尾部身份竞争或原 POST 锁序宣称为真库已验收。
+
 准确父提交 `d95a3fe61eaa656d0d144d307a4ab9348c048194` 已通过 Client release gate
 （run `33979437995`）及 PostgreSQL 16 release gate（run `33979438009`）；静态契约提交
 `18dfbd72b7d578aff5886029304a5afadb75b8f2` 的 Client run `33981032052` 与 PostgreSQL 16

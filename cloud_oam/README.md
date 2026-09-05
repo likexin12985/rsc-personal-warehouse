@@ -10,14 +10,14 @@
 
 ## 当前开发状态
 
-2026-09-06 当前分支 HEAD 可能是文档后继，接管时须重新核验；最新已验收功能代码基线为 `8046c78`，迁移 head
+2026-09-06 当前分支 HEAD 可能是文档后继，接管时须重新核验；最新已验收功能代码基线为 `c7f98cb`，迁移 head
 仍为 `20260905_0062`。`8046c78` 在 `f482b8e` 的非期初过账命令只读状态查询基础上，补齐锁后身份/权限复核，并允许 posted→closed 后继续重证原过账历史；新增撤权竞态与关闭后历史回归测试。`f482b8e` 新增非期初过账命令只读状态查询
 `/{task_id}/post-differences-command-status`，使用精确 `X-Request-ID` 重证审计、状态转换、审批封印、
 过账完成及库存事实；未新增迁移。该修复的 Client release gate 为 run `33985935542`，PostgreSQL 16 release gate 为 run `33985935553`；前一功能的 PostgreSQL 16 gate 为 run `33982740333`，
 文档后继 `88f27d6` 的 Client gate 为 run `33985219835`，均已通过。
 此前 `18dfbd7` 的历史 cutoff/SN/多范围/锁序静态契约门禁也已通过；但当前真库样本仍是单范围、
 hard freeze、非 SN，SN、截止回放、多范围、尾部身份竞争和原 POST 锁序仍需专门真库验收。
-测试提交 `03a66ea` 直接向未完成期初建账的串码账户写入库存，被 PG16 真库以 `inventory_opening_not_established` 拒绝；回退提交 `e227696` 后 Client gate `33988119885`、PG16 gate `33988119864` 全绿。后续动态 SN 样本必须先走独立 opening establishment。
+测试提交 `03a66ea` 直接向未完成期初建账的串码账户写入库存，被 PG16 真库以 `inventory_opening_not_established` 拒绝；回退提交 `e227696` 后 Client gate `33988119885`、PG16 gate `33988119864` 全绿。随后 `c7f98cb` 为动态 SN 验收补入独立 replay 库位、库存账户和串码，并先完成该库位的正式 opening establishment；Client gate `33990582028`、PG16 gate `33990581994` 均已通过。该提交只证明串码库存种子满足正式期初前置和过账恢复回归可执行，尚未证明非期初 SN、cutoff replay 或多范围真库链路已完成。
 复核命令状态尚未实现；因 `stocktake_reviews` 缺少可重建的历史任务版本，已冻结 0063 前向迁移设计，
 见[复核状态迁移计划](docs/REVIEW_COMMAND_STATUS_MIGRATION_PLAN.md)。两端非 count 跨重启恢复、
 需求供给纵向链路及审批、分配、占用、出库、发货、物流签收、OAM 收货、RSC/个人仓入库、通知送达、
