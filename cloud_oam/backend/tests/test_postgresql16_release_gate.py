@@ -15725,6 +15725,12 @@ SELECT posting.total_quantity::text,
         api_engine, fixture=fixture, actor_user_id=actor_user_id,
         assignee_user_id=assignee_user_id,
     )
+    serial_fixture = dict(fixture)
+    serial_fixture["recount_location_id"] = fixture["concurrency_location_id"]
+    fixture["serial_opening_task_id"] = _establish_multiround_stocktake_location(
+        api_engine, fixture=serial_fixture, actor_user_id=actor_user_id,
+        assignee_user_id=assignee_user_id,
+    )
 
     with Session(api_engine, expire_on_commit=False) as session:
         isolation_started = _start_opening_stocktake_impl(
@@ -15851,6 +15857,35 @@ SELECT posting.total_quantity::text,
         session.commit()
         fixture["cutoff_ledger_cursor"] = posting.ledger_cursor
         fixture["seed_transaction_id"] = posting.transaction_id
+        serial_posting = _reveal_pg16_service_database_error(
+            api_engine,
+            lambda: post_inventory_transaction(
+                session,
+                actor=current_principal(session, actor_user_id),
+                command=InventoryPostingCommand(
+                    transaction_no="PG16-STOCKTAKE-SERIAL-INBOUND-1",
+                    movement_type="inbound",
+                    source_document_type="pg16_stocktake_release_fixture",
+                    source_document_id=str(fixture["concurrency_account_id"]),
+                    posting_key="pg16-stocktake-serial-inbound-1",
+                    effective_at=effective_at,
+                    movements=(
+                        InventoryMovementCommand(
+                            from_account_id=None,
+                            to_account_id=fixture["concurrency_account_id"],
+                            quantity=Decimal("1.000"),
+                            serial_ids=(fixture["concurrency_serial_id"],),
+                            external_boundary_code="PG16_RELEASE_FIXTURE",
+                        ),
+                    ),
+                ),
+                idempotency_key="pg16-stocktake-serial-inbound-1",
+                request_id="trace-pg16-stocktake-serial-inbound-1",
+            ),
+        )
+        session.commit()
+        fixture["serial_seed_transaction_id"] = serial_posting.transaction_id
+        fixture["cutoff_ledger_cursor"] = serial_posting.ledger_cursor
 
     return fixture
 
