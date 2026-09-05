@@ -7,7 +7,7 @@ import uuid
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event, select
+from sqlalchemy import create_engine, event, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
@@ -15,8 +15,9 @@ from app.database import Base, get_db
 from app.dependencies import get_formal_principal
 from app.formal_access import load_formal_principal
 from app.formal_services import stocktake_options as service
-from app.foundation_models import Permission, Role, RoleAssignment, RolePermission
-from app.inventory_models import CustodyAssignment
+from app.foundation_models import AuthIdentity, Organization, Permission, Person, Role, RoleAssignment, RolePermission
+from app.inventory_models import CustodyAssignment, StockLocation
+from app.models import User
 from app.routers import formal_stocktake_options
 from app.stocktake_option_schemas import StocktakeRegionOptionPageOut
 from test_stocktake_task_service import NOW, world  # noqa: F401
@@ -261,7 +262,7 @@ def _options_call(world, kind, actor):
     )
 
 
-def _option_api(world, monkeypatch, kind, actor):
+def _option_api(world, monkeypatch, kind, actor, *, extra_params=None):
     name = f"list_{kind[:-1] if kind != 'assignees' else 'assignee'}_options"
     implementation = getattr(service, name)
     called = Mock(side_effect=lambda *args, **kwargs: implementation(*args, **kwargs, now=NOW))
@@ -277,6 +278,7 @@ def _option_api(world, monkeypatch, kind, actor):
         params["region_org_id"] = str(world.region_x.id)
     if kind == "assignees":
         params["location_id"] = str(world.region_location.id)
+    params.update(extra_params or {})
     with TestClient(api) as client:
         response = client.get(f"/api/v1/stocktake-options/{kind}", params=params)
     return response, called
@@ -443,3 +445,298 @@ def test_api_cross_grant_scope_and_deny_matrix(
         assert response.status_code == 403
         assert response.json()["detail"]["code"] == "stocktake_region_forbidden"
         called.assert_called_once()
+
+
+def _ordered_directory_people(world, eligible):
+    """Low positive IDs precede every version-4 fixture UUID deterministically."""
+    people = [
+        Person(
+            id=uuid.UUID(int=index + 1), organization_id=world.region_x.id,
+            employee_no=f"DIRECTORY-{index}", name=f"Directory {index}",
+            employment_status="active", source_updated_at=NOW,
+        )
+        for index in range(len(eligible))
+    ]
+    world.db.add_all(people)
+    world.db.flush()
+    users = [
+        User(
+            id=f"d{index:035d}", person_id=person.id, account_status="active",
+            authorization_version=1, mobile=f"199{index:08d}", name=person.name,
+            password_hash="formal-password-disabled", role="provincial_manager",
+            is_active=True, require_password_change=False,
+        )
+        for index, person in enumerate(people)
+    ]
+    world.db.add_all(users)
+    world.db.flush()
+    role = world.db.scalar(select(Role).where(Role.code == "provincial_manager"))
+    for index, (user, person) in enumerate(zip(users, people, strict=True)):
+        world.db.add_all([
+            AuthIdentity(
+                id=uuid.uuid4(), user_id=user.id, identity_type="mobile",
+                provider_key="test", identifier_hash=f"{index + 1:064x}",
+                hash_version=1, verified_at=NOW - timedelta(days=1),
+                status="active", revoked_at=None,
+            ),
+            RoleAssignment(
+                id=uuid.uuid4(), user_id=user.id, role_id=role.id,
+                scope_type="organization",
+                scope_id=str(world.region_x.id if eligible[index] else world.region_y.id),
+                valid_from=NOW - timedelta(days=1), valid_to=None, status="active",
+                assigned_by=world.admin.user.id, revoked_at=None, revoked_by=None,
+                reason="controlled directory fixture",
+            ),
+        ])
+    world.db.commit()
+    return users, people
+
+
+def _assignee_page(world, *, limit, after=None):
+    return service.list_assignee_options(
+        world.db, actor=world.principals["manager_x"],
+        region_org_id=world.region_x.id, location_id=world.region_location.id,
+        limit=limit, after_person_id=after, now=NOW,
+    )
+
+
+def test_assignee_cursor_is_last_returned_authorized_person_not_raw_lookahead(world):
+    _users, people = _ordered_directory_people(world, [True, False, True])
+    page = _assignee_page(world, limit=1)
+    assert [item.person_id for item in page.items] == [people[0].id]
+    assert page.next_after_person_id == people[0].id
+    assert str(people[1].id) not in page.model_dump_json()
+    assert str(people[2].id) not in page.model_dump_json()
+
+
+def test_assignee_scan_fills_authorized_page_past_filtered_prefix(world):
+    _users, people = _ordered_directory_people(world, [False, False, True, True, True])
+    page = _assignee_page(world, limit=2)
+    assert [item.person_id for item in page.items] == [people[2].id, people[3].id]
+    assert page.next_after_person_id == people[3].id
+
+
+@pytest.mark.parametrize("limit", (1, 2, 3, 100))
+def test_assignee_authorized_pagination_has_no_duplicates_or_omissions(world, limit):
+    _ordered_directory_people(world, [True, False, True, False, True])
+    expected = [item.person_id for item in _assignee_page(world, limit=100).items]
+    observed = []
+    after = None
+    for _ in range(len(expected) + 1):
+        page = _assignee_page(world, limit=limit, after=after)
+        observed.extend(item.person_id for item in page.items)
+        if page.next_after_person_id is None:
+            break
+        assert len(page.items) == limit
+        assert page.next_after_person_id == page.items[-1].person_id
+        assert after is None or page.next_after_person_id > after
+        after = page.next_after_person_id
+    else:
+        pytest.fail("authorized pagination did not terminate")
+    assert observed == expected
+    assert len(observed) == len(set(observed))
+
+
+def test_assignee_scan_crosses_internal_batch_boundary(world):
+    _users, people = _ordered_directory_people(world, [False] * 105 + [True] * 3)
+    page = _assignee_page(world, limit=2)
+    assert [row.person_id for row in page.items] == [people[105].id, people[106].id]
+    assert page.next_after_person_id == people[106].id
+
+
+def test_assignee_scan_exact_boundary_returns_complete_terminal_page(world, monkeypatch):
+    monkeypatch.setattr(service, "_MAX_RAW_IDENTITIES_SCANNED", 4)
+    page = _assignee_page(world, limit=100)
+    assert len(page.items) == 2
+    assert page.next_after_person_id is None
+
+
+def test_assignee_scan_limit_is_1000_and_never_returns_partial_page(world):
+    assert service._MAX_RAW_IDENTITIES_SCANNED == 1000
+    _ordered_directory_people(world, [True] + [False] * 1000)
+    with pytest.raises(service.StocktakeOptionError) as captured:
+        _assignee_page(world, limit=1)
+    assert captured.value.code == "stocktake_assignee_scan_limit_exceeded"
+    assert captured.value.http_status_code == 503
+
+
+def test_assignee_scan_limit_api_is_sanitized_without_items(world, monkeypatch):
+    _ordered_directory_people(world, [True, False, False, False])
+    monkeypatch.setattr(service, "_MAX_RAW_IDENTITIES_SCANNED", 3)
+    response, called = _option_api(
+        world, monkeypatch, "assignees", world.principals["manager_x"],
+        extra_params={"limit": 1},
+    )
+    called.assert_called_once()
+    assert response.status_code == 503
+    assert response.json() == {"detail": {
+        "code": "stocktake_assignee_scan_limit_exceeded",
+        "category": "service_unavailable",
+        "message": "盘点候选人员目录超过受控扫描上限",
+    }}
+
+
+def test_assignee_authorized_cursor_api_compatibility(world, monkeypatch):
+    _users, people = _ordered_directory_people(world, [True, False, True])
+    response, _called = _option_api(
+        world, monkeypatch, "assignees", world.principals["manager_x"],
+        extra_params={"limit": 1},
+    )
+    assert response.status_code == 200
+    assert response.json()["next_after_person_id"] == response.json()["items"][-1]["person_id"]
+    assert response.json()["next_after_person_id"] == str(people[0].id)
+    assert str(people[1].id) not in response.text
+    assert str(people[2].id) not in response.text
+    assert response.headers["cache-control"] == "private, no-store, max-age=0"
+
+
+@pytest.mark.parametrize("mode", (
+    "authorization_version", "account_status", "person_name", "person_organization",
+    "count_permission", "verified_identity", "lookahead_name", "person_binding",
+))
+def test_assignee_page_revalidates_returned_and_lookahead_identity(world, monkeypatch, mode):
+    users, people = _ordered_directory_people(world, [True, True])
+    target_user = users[1].id if mode == "lookahead_name" else users[0].id
+    target_person = people[1].id if mode == "lookahead_name" else people[0].id
+    region_y_id = world.region_y.id
+    replacement_person_id = uuid.uuid4()
+    if mode == "person_binding":
+        world.db.add(Person(
+            id=replacement_person_id, organization_id=world.region_x.id,
+            employee_no="REPLACEMENT", name="Replacement identity",
+            employment_status="active", source_updated_at=NOW,
+        ))
+        world.db.commit()
+    count_permission = _role_permission(world, "provincial_manager", "count")
+    count_pk = (count_permission.role_id, count_permission.permission_id)
+    original = service._revalidate_assignee_snapshots
+
+    def changed(db, **kwargs):
+        if mode == "authorization_version":
+            db.execute(update(User).where(User.id == target_user).values(authorization_version=2))
+        elif mode == "account_status":
+            db.execute(update(User).where(User.id == target_user).values(account_status="disabled"))
+        elif mode in {"person_name", "lookahead_name"}:
+            db.execute(update(Person).where(Person.id == target_person).values(name="Changed identity"))
+        elif mode == "person_organization":
+            db.execute(update(Person).where(Person.id == target_person).values(organization_id=region_y_id))
+        elif mode == "person_binding":
+            db.execute(update(User).where(User.id == target_user).values(person_id=replacement_person_id))
+        elif mode == "count_permission":
+            db.execute(update(RolePermission).where(
+                RolePermission.role_id == count_pk[0], RolePermission.permission_id == count_pk[1],
+            ).values(effect="deny"))
+        elif mode == "verified_identity":
+            db.execute(update(AuthIdentity).where(AuthIdentity.user_id == target_user).values(
+                status="revoked", revoked_at=NOW,
+            ))
+        return original(db, **kwargs)
+
+    monkeypatch.setattr(service, "_revalidate_assignee_snapshots", changed)
+    with pytest.raises(service.StocktakeOptionError) as captured:
+        _assignee_page(world, limit=1)
+    assert captured.value.code == "stocktake_assignee_read_conflict"
+    assert captured.value.http_status_code == 503
+
+
+@pytest.mark.parametrize("mode", ("authorization_version", "global_deny", "employment_status"))
+@pytest.mark.parametrize("phase", ("scan", "candidate_revalidation"))
+def test_assignee_page_rechecks_actor_after_scan(world, monkeypatch, mode, phase):
+    actor = world.manager_x.user.id
+    person = world.manager_x.person.id
+    permission = _role_permission(world, "provincial_manager")
+    pk = permission.role_id, permission.permission_id
+    method = "_scan_assignee_snapshots" if phase == "scan" else "_revalidate_assignee_snapshots"
+    original = getattr(service, method)
+
+    def changed(db, **kwargs):
+        result = original(db, **kwargs)
+        if mode == "authorization_version":
+            db.execute(update(User).where(User.id == actor).values(authorization_version=2))
+        elif mode == "employment_status":
+            db.execute(update(Person).where(Person.id == person).values(employment_status="inactive"))
+        else:
+            db.execute(update(RolePermission).where(
+                RolePermission.role_id == pk[0], RolePermission.permission_id == pk[1],
+            ).values(effect="deny"))
+        return result
+
+    monkeypatch.setattr(service, method, changed)
+    with pytest.raises(service.StocktakeOptionError) as captured:
+        _assignee_page(world, limit=1)
+    assert captured.value.http_status_code == 403
+
+
+def test_assignee_page_read_has_no_orm_or_transaction_writes(world, monkeypatch):
+    kwargs = dict(
+        actor=world.principals["manager_x"], region_org_id=world.region_x.id,
+        location_id=world.region_location.id, limit=1, now=NOW,
+    )
+    for method in ("flush", "commit", "rollback", "add", "delete"):
+        monkeypatch.setattr(world.db, method, Mock(side_effect=AssertionError("read wrote")))
+    page = service.list_assignee_options(world.db, **kwargs)
+    assert len(page.items) == 1
+    assert page.next_after_person_id == page.items[-1].person_id
+    for method in ("flush", "commit", "rollback", "add", "delete"):
+        getattr(world.db, method).assert_not_called()
+
+
+def test_assignee_page_rechecks_location_binding_after_scan(world, monkeypatch):
+    location_id = world.region_location.id
+    original = service._scan_assignee_snapshots
+
+    def changed(db, **kwargs):
+        result = original(db, **kwargs)
+        db.execute(update(StockLocation).where(StockLocation.id == location_id).values(
+            custodian_person_id=None,
+        ))
+        return result
+
+    monkeypatch.setattr(service, "_scan_assignee_snapshots", changed)
+    with pytest.raises(service.StocktakeOptionError) as captured:
+        _assignee_page(world, limit=1)
+    assert captured.value.code == "stocktake_assignee_read_conflict"
+
+
+@pytest.mark.parametrize("mode", ("owner_inactive", "owner_moved", "parent_inactive"))
+def test_assignee_target_fresh_reads_do_not_reuse_cached_graph(world, monkeypatch, mode):
+    owner = Organization(
+        id=uuid.uuid4(), code="DIRECTORY-CHILD", name="Child region",
+        parent_id=world.region_x.id, org_type="region_company", status="active",
+    )
+    world.db.add(owner)
+    world.db.flush()
+    parent = StockLocation(
+        id=uuid.uuid4(), code="DIRECTORY-PARENT", name="Parent location",
+        location_type="region", owner_org_id=owner.id, parent_id=None,
+        custodian_person_id=None, status="active",
+    )
+    world.db.add(parent)
+    world.db.flush()
+    world.region_location.owner_org_id = owner.id
+    world.region_location.parent_id = parent.id
+    world.db.commit()
+    owner_id, parent_id, outside_id = owner.id, parent.id, world.region_y.id
+    original = service._scan_assignee_snapshots
+
+    def changed(db, **kwargs):
+        result = original(db, **kwargs)
+        if mode == "parent_inactive":
+            db.execute(update(StockLocation).where(StockLocation.id == parent_id).values(
+                status="inactive",
+            ).execution_options(synchronize_session=False))
+            assert parent.status == "active"
+        else:
+            values = {"status": "inactive"} if mode == "owner_inactive" else {"parent_id": outside_id}
+            db.execute(update(Organization).where(Organization.id == owner_id).values(
+                **values,
+            ).execution_options(synchronize_session=False))
+            assert owner.status == "active" and owner.parent_id != outside_id
+        return result
+
+    monkeypatch.setattr(service, "_scan_assignee_snapshots", changed)
+    with pytest.raises(service.StocktakeOptionError) as captured:
+        _assignee_page(world, limit=1)
+    assert captured.value.code == (
+        "stocktake_location_tree_invalid" if mode == "parent_inactive" else "stocktake_location_forbidden"
+    )

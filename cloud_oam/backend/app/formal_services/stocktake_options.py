@@ -7,6 +7,7 @@ external system, or infer a provincial manager when no such assignment exists.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import uuid
 
@@ -36,6 +37,15 @@ _HTTP_STATUS_BY_CATEGORY = {
 }
 _MANAGER_ROLES = frozenset({"admin", "provincial_manager"})
 _COUNT_ROLES = frozenset({"admin", "provincial_manager", "technician"})
+_MAX_RAW_IDENTITIES_SCANNED = 1000
+_RAW_SCAN_BATCH_SIZE = 100
+
+
+@dataclass(frozen=True)
+class _AssigneeSnapshot:
+    option: StocktakeAssigneeOptionOut
+    identity_signature: tuple[object, ...]
+    principal_signature: tuple[object, ...]
 
 
 class StocktakeOptionError(RuntimeError):
@@ -233,107 +243,45 @@ def list_assignee_options(
         after_person_id,
         "stocktake_assignee_cursor_invalid",
     )
+    fixed_now = now is not None
     effective_now = _aware(now or datetime.now(timezone.utc))
     try:
         with db.no_autoflush:
             principal = _require_current_actor(db, actor, now=effective_now)
-            _require_authorized_region(db, principal, checked_region_id)
-            location = db.get(StockLocation, checked_location_id)
-            if location is None:
-                _fail(
-                    "stocktake_location_not_found",
-                    "not_found",
-                    "盘点库位不存在",
-                )
-            owner = _location_owner_in_region(db, location, checked_region_id)
-            if owner is None or location.status != "active" or location.location_type not in {
-                "region",
-                "personal",
-            }:
-                _fail(
-                    "stocktake_location_forbidden",
-                    "forbidden",
-                    "盘点库位不在当前授权区域",
-                )
-            _validate_location_chain(db, location, checked_region_id)
-            custodian_person_id = _current_custodian(
-                db,
-                location,
-                now=effective_now,
+            _require_authorized_region(db, principal, checked_region_id, refresh=True)
+            target = _assignee_target(db, checked_region_id, checked_location_id, effective_now)
+            principal_signature = _principal_signature(principal)
+            snapshots = _scan_assignee_snapshots(
+                db, target=target[:2], after_person_id=checked_after,
+                limit=checked_limit, now=effective_now,
             )
-            if location.location_type == "personal":
-                if custodian_person_id is None:
-                    _fail(
-                        "stocktake_personal_custody_invalid",
-                        "service_unavailable",
-                        "个人仓保管责任无效",
-                    )
-                target_scope_type = "person"
-                target_scope_id = str(custodian_person_id)
-            else:
-                target_scope_type = "organization"
-                target_scope_id = str(owner.id)
-
-            statement = (
-                select(User, Person)
-                .join(Person, Person.id == User.person_id)
-                .where(
-                    User.account_status == "active",
-                    User.is_active.is_(True),
-                    Person.employment_status == "active",
-                )
-                .order_by(Person.id)
-                .execution_options(populate_existing=True)
+            final_now = effective_now if fixed_now else _aware(datetime.now(timezone.utc))
+            current = _require_current_actor(db, principal, now=final_now)
+            _require_authorized_region(db, current, checked_region_id, refresh=True)
+            if (
+                _principal_signature(current) != principal_signature
+                or _assignee_target(db, checked_region_id, checked_location_id, final_now) != target
+            ):
+                _assignee_read_conflict()
+            snapshots = _revalidate_assignee_snapshots(
+                db, snapshots=snapshots, target=target[:2], now=final_now,
             )
-            if checked_after is not None:
-                statement = statement.where(Person.id >= checked_after)
-            # The cursor advances across raw active identities. Invalid or
-            # unentitled identities are omitted rather than made selectable.
-            raw_rows = tuple(db.execute(statement.limit(checked_limit + 1)).all())
-            page_rows = raw_rows[:checked_limit]
-            items: list[StocktakeAssigneeOptionOut] = []
-            for user, person in page_rows:
-                try:
-                    candidate = load_formal_principal(db, user.id, now=effective_now)
-                except FormalAccessError:
-                    continue
-                role_codes = tuple(
-                    sorted(set(candidate.role_codes).intersection(_COUNT_ROLES))
-                )
-                if (
-                    candidate.person_id != person.id
-                    or candidate.account_status != "active"
-                    or candidate.employment_status != "active"
-                    or candidate.access_mode != "active"
-                    or not role_codes
-                ):
-                    continue
-                try:
-                    allowed = candidate.allows(
-                        db,
-                        "stocktake",
-                        "count",
-                        target_scope_type=target_scope_type,
-                        target_scope_id=target_scope_id,
-                    )
-                except FormalAccessError:
-                    allowed = False
-                if allowed:
-                    items.append(
-                        StocktakeAssigneeOptionOut(
-                            assignee_user_id=user.id,
-                            person_id=person.id,
-                            name=person.name,
-                            employee_no=person.employee_no,
-                            role_codes=role_codes,
-                        )
-                    )
+            # Candidate revalidation can itself span many reads.  Recheck the
+            # initiator and target after it, with the actual final clock.
+            final_now = effective_now if fixed_now else _aware(datetime.now(timezone.utc))
+            current = _require_current_actor(db, principal, now=final_now)
+            _require_authorized_region(db, current, checked_region_id, refresh=True)
+            if (
+                _principal_signature(current) != principal_signature
+                or _assignee_target(db, checked_region_id, checked_location_id, final_now) != target
+            ):
+                _assignee_read_conflict()
+            items = tuple(row.option for row in snapshots[:checked_limit])
             next_after_person_id = (
-                raw_rows[checked_limit][1].id
-                if len(raw_rows) > checked_limit
+                items[-1].person_id
+                if len(snapshots) > checked_limit and items
                 else None
             )
-            _require_current_actor(db, principal, now=effective_now)
             return StocktakeAssigneeOptionPageOut(
                 region_org_id=checked_region_id,
                 location_id=checked_location_id,
@@ -358,6 +306,152 @@ def list_assignee_options(
             )
         raise
     raise AssertionError("unreachable stocktake assignee options boundary")
+
+
+def _assignee_target(db: Session, region_id: uuid.UUID, location_id: uuid.UUID, now: datetime):
+    location = db.get(StockLocation, location_id, populate_existing=True)
+    if location is None:
+        _fail("stocktake_location_not_found", "not_found", "盘点库位不存在")
+    owner = _location_owner_in_region(db, location, region_id, refresh=True)
+    if owner is None or location.status != "active" or location.location_type not in {"region", "personal"}:
+        _fail("stocktake_location_forbidden", "forbidden", "盘点库位不在当前授权区域")
+    _validate_location_chain(db, location, region_id, refresh=True)
+    custodian = _current_custodian(db, location, now=now)
+    if location.location_type == "personal":
+        if custodian is None:
+            _fail("stocktake_personal_custody_invalid", "service_unavailable", "个人仓保管责任无效")
+        target = ("person", str(custodian))
+    else:
+        target = ("organization", str(owner.id))
+    return (*target, location.id, location.owner_org_id, location.parent_id,
+            location.location_type, location.status, location.custodian_person_id, custodian)
+
+
+def _scan_assignee_snapshots(
+    db: Session, *, target: tuple[str, str], after_person_id: uuid.UUID | None,
+    limit: int, now: datetime,
+) -> tuple[_AssigneeSnapshot, ...]:
+    snapshots: list[_AssigneeSnapshot] = []
+    raw_after = after_person_id
+    scanned = 0
+    while len(snapshots) < limit + 1:
+        remaining = _MAX_RAW_IDENTITIES_SCANNED - scanned
+        batch_limit = min(_RAW_SCAN_BATCH_SIZE, remaining + 1)
+        statement = (
+            select(User, Person).join(Person, Person.id == User.person_id)
+            .where(User.account_status == "active", User.is_active.is_(True),
+                   Person.employment_status == "active")
+            .order_by(Person.id, User.id).execution_options(populate_existing=True)
+        )
+        if raw_after is not None:
+            statement = statement.where(Person.id > raw_after)
+        rows = tuple(db.execute(statement.limit(batch_limit)).all())
+        if not rows:
+            break
+        if len(rows) > remaining:
+            _fail(
+                "stocktake_assignee_scan_limit_exceeded", "service_unavailable",
+                "盘点候选人员目录超过受控扫描上限",
+            )
+        _unique_assignee_rows(rows)
+        scanned += len(rows)
+        for user, person in rows:
+            snapshot = _assignee_snapshot(db, user=user, person=person, target=target, now=now)
+            if snapshot is not None:
+                snapshots.append(snapshot)
+                if len(snapshots) == limit + 1:
+                    break
+        raw_after = rows[-1][1].id
+        if len(rows) < batch_limit:
+            break
+    return tuple(snapshots)
+
+
+def _assignee_snapshot(
+    db: Session, *, user: User, person: Person, target: tuple[str, str], now: datetime,
+) -> _AssigneeSnapshot | None:
+    try:
+        candidate = load_formal_principal(db, user.id, now=now)
+    except FormalAccessError:
+        return None
+    role_codes = tuple(sorted(set(candidate.role_codes).intersection(_COUNT_ROLES)))
+    if (
+        candidate.user_id != user.id or candidate.person_id != person.id
+        or user.person_id != person.id or not user.is_active
+        or candidate.account_status != "active" or candidate.employment_status != "active"
+        or candidate.access_mode != "active" or not role_codes
+    ):
+        return None
+    try:
+        allowed = candidate.allows(
+            db, "stocktake", "count", target_scope_type=target[0], target_scope_id=target[1],
+        )
+    except FormalAccessError:
+        allowed = False
+    if not allowed:
+        return None
+    return _AssigneeSnapshot(
+        option=StocktakeAssigneeOptionOut(
+            assignee_user_id=user.id, person_id=person.id, name=person.name,
+            employee_no=person.employee_no, role_codes=role_codes,
+        ),
+        identity_signature=(
+            user.id, user.person_id, user.account_status, user.is_active,
+            user.authorization_version, person.id, person.organization_id,
+            person.name, person.employee_no, person.employment_status,
+        ),
+        principal_signature=_principal_signature(candidate),
+    )
+
+
+def _revalidate_assignee_snapshots(
+    db: Session, *, snapshots: tuple[_AssigneeSnapshot, ...], target: tuple[str, str], now: datetime,
+) -> tuple[_AssigneeSnapshot, ...]:
+    if not snapshots:
+        return ()
+    user_ids = tuple(row.option.assignee_user_id for row in snapshots)
+    rows = tuple(db.execute(
+        select(User, Person).join(Person, Person.id == User.person_id)
+        .where(User.id.in_(user_ids)).order_by(Person.id, User.id)
+        .execution_options(populate_existing=True)
+    ).all())
+    _unique_assignee_rows(rows)
+    by_user = {user.id: (user, person) for user, person in rows}
+    if set(by_user) != set(user_ids):
+        _assignee_read_conflict()
+    current = []
+    for expected in snapshots:
+        user, person = by_user[expected.option.assignee_user_id]
+        observed = _assignee_snapshot(db, user=user, person=person, target=target, now=now)
+        if observed is None or observed != expected:
+            _assignee_read_conflict()
+        current.append(observed)
+    return tuple(current)
+
+
+def _unique_assignee_rows(rows) -> None:
+    if (
+        len({user.id for user, _person in rows}) != len(rows)
+        or len({person.id for _user, person in rows}) != len(rows)
+        or any(user.person_id != person.id for user, person in rows)
+    ):
+        _assignee_read_conflict()
+
+
+def _principal_signature(principal: FormalPrincipal) -> tuple[object, ...]:
+    return (
+        principal.user_id, principal.person_id, principal.account_status,
+        principal.employment_status, principal.authorization_version, principal.access_mode,
+        tuple(sorted(principal.assignments, key=lambda row: str(row.assignment_id))),
+        tuple(sorted(principal.entitlements, key=lambda row: (
+            str(row.assignment_id), row.role_code, row.scope_type, row.scope_id,
+            row.resource, row.action, row.field_code, row.effect,
+        ))),
+    )
+
+
+def _assignee_read_conflict() -> None:
+    _fail("stocktake_assignee_read_conflict", "service_unavailable", "盘点候选人员或授权在读取期间发生变化")
 
 
 def _require_current_actor(
@@ -447,8 +541,10 @@ def _require_authorized_region(
     db: Session,
     actor: FormalPrincipal,
     region_org_id: uuid.UUID,
+    *,
+    refresh: bool = False,
 ) -> Organization:
-    region = db.get(Organization, region_org_id)
+    region = db.get(Organization, region_org_id, populate_existing=refresh)
     if (
         region is None
         or region.status != "active"
@@ -464,21 +560,25 @@ def _location_owner_in_region(
     db: Session,
     location: StockLocation,
     region_org_id: uuid.UUID,
+    *,
+    refresh: bool = False,
 ) -> Organization | None:
-    owner = db.get(Organization, location.owner_org_id)
+    owner = db.get(Organization, location.owner_org_id, populate_existing=refresh)
     if (
         owner is None
         or owner.status != "active"
         or owner.org_type != "region_company"
     ):
         return None
-    return owner if _organization_descends_from(db, owner.id, region_org_id) else None
+    return owner if _organization_descends_from(db, owner.id, region_org_id, refresh=refresh) else None
 
 
 def _validate_location_chain(
     db: Session,
     location: StockLocation,
     region_org_id: uuid.UUID,
+    *,
+    refresh: bool = False,
 ) -> None:
     current: StockLocation | None = location
     seen: set[uuid.UUID] = set()
@@ -494,6 +594,7 @@ def _validate_location_chain(
             db,
             current.owner_org_id,
             region_org_id,
+            refresh=refresh,
         ):
             _fail(
                 "stocktake_location_tree_invalid",
@@ -502,7 +603,7 @@ def _validate_location_chain(
             )
         if current.parent_id is None:
             return
-        current = db.get(StockLocation, current.parent_id)
+        current = db.get(StockLocation, current.parent_id, populate_existing=refresh)
         if current is None:
             _fail(
                 "stocktake_location_parent_missing",
@@ -566,6 +667,8 @@ def _organization_descends_from(
     db: Session,
     organization_id: uuid.UUID,
     ancestor_id: uuid.UUID,
+    *,
+    refresh: bool = False,
 ) -> bool:
     current_id: uuid.UUID | None = organization_id
     seen: set[uuid.UUID] = set()
@@ -577,7 +680,7 @@ def _organization_descends_from(
                 "组织树存在循环",
             )
         seen.add(current_id)
-        row = db.get(Organization, current_id)
+        row = db.get(Organization, current_id, populate_existing=refresh)
         if row is None or row.status != "active":
             return False
         if row.id == ancestor_id:
