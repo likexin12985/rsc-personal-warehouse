@@ -266,6 +266,7 @@ PG16_REDACTED_DATABASE_FAILURE_CODES = frozenset(
         "stocktake_count_audit_chain_unavailable",
         "stocktake_count_concurrent_conflict",
         "stocktake_count_database_unavailable",
+        "stocktake_count_command_status_evidence_invalid",
         "stocktake_count_reference_graph_invalid",
         "stocktake_concurrent_conflict",
         "stocktake_database_unavailable",
@@ -274,6 +275,8 @@ PG16_REDACTED_DATABASE_FAILURE_CODES = frozenset(
         "stocktake_difference_database_unavailable",
         "stocktake_difference_reference_graph_invalid",
         "stocktake_posting_database_guard_rejected",
+        "stocktake_recount_count_database_guard_rejected",
+        "stocktake_recount_difference_database_guard_rejected",
     }
 )
 MATERIAL_REQUEST_NEUTRAL_AXES = {
@@ -16323,10 +16326,12 @@ def _assert_nonopening_multiround_count_status(
     """
     from fastapi import Depends, FastAPI
     from fastapi.testclient import TestClient
+    from unittest.mock import patch
 
     from app.database import get_db
     from app.dependencies import get_formal_principal
     from app.formal_services import stocktake_count as initial_count
+    from app.formal_services import stocktake_count_command_status as count_status
     from app.formal_services import stocktake_difference as initial_difference
     from app.formal_services import stocktake_recount as recount
     from app.formal_services import stocktake_recount_count as recount_count
@@ -16520,7 +16525,16 @@ def _assert_nonopening_multiround_count_status(
                     assert command["caused_round_submission"] is True
         assert durable_snapshot() == before
 
-    with TestClient(api) as client:
+    original_status = count_status.stocktake_count_command_status
+
+    def status_with_diagnostics(*args, **kwargs):
+        # Observe in the actual route's worker thread, before HTTP redaction.
+        # The original service, proof checks and transaction remain unchanged.
+        return _reveal_pg16_service_database_error(
+            api_engine, lambda: original_status(*args, **kwargs),
+        )
+
+    with patch.object(count_status, "stocktake_count_command_status", status_with_diagnostics), TestClient(api) as client:
         round_id = started.initial_round_id
         for round_no in (1, 2, 3):
             key = f"round-{round_no}-count"

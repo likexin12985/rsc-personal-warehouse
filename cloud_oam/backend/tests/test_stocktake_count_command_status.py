@@ -249,6 +249,103 @@ def test_three_round_history_rejects_trace_belonging_to_another_round(recount_wo
                     trace_request_id=targets[source].trace, statuses=(503,))
 
 
+def test_recount_queries_compile_without_ungranted_postgresql_row_locks(recount_world, monkeypatch):
+    """Exercise real services, compiling their statements with the PG dialect.
+
+    SQLite execution alone drops FOR UPDATE and would hide API-role failures.
+    Only the existing reference selector chooses its PostgreSQL branch here;
+    this is a compilation regression, not a substitute for real owner/ACL CI.
+    """
+    import inspect
+    from sqlalchemy.dialects import postgresql
+    from app import database_security
+    from app.formal_services import stocktake_count
+    from app.foundation_models import DocumentAttachment
+    from app.stocktake_models import (
+        StocktakeCountLine, StocktakeCountObservation, StocktakeCountSerial,
+        StocktakeDifference, StocktakeDifferenceSetCompletion,
+        StocktakeRecountCase, StocktakeRecountScopeAssignment,
+        StocktakeRoundSubmission, StocktakeSnapshotLine,
+    )
+
+    restricted = {model.__tablename__ for model in (
+        FormalStocktakeScope, StocktakeSnapshotLine, StocktakeScopeCountCompletion,
+        StocktakeRecountCase, StocktakeRecountScopeAssignment, StockLocation,
+        DocumentAttachment, StocktakeDifference, StocktakeDifferenceSetCompletion,
+        StocktakeRoundSubmission, StocktakeCountLine, StocktakeCountSerial,
+        StocktakeCountObservation,
+    )}
+    assert restricted.isdisjoint(database_security.RUNTIME_UPDATE_TABLES)
+    assert restricted.isdisjoint(database_security.RUNTIME_UPDATE_COLUMNS)
+    original_selector = stocktake_count._select_only_reference_statement
+    pg_session = SimpleNamespace(get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="postgresql")))
+    monkeypatch.setattr(stocktake_count, "_select_only_reference_statement",
+                        lambda _db, statement: original_selector(pg_session, statement))
+    observed = set()
+    retained_locks = set()
+
+    def capture(_conn, statement, _multiparams, _params, _options):
+        if not getattr(statement, "is_select", False):
+            return
+        # Inspect the immediate service issuing SQL, not an ancestor validator.
+        # Other services keep their local dialect behavior in this SQLite test.
+        frame = inspect.currentframe()
+        try:
+            while frame is not None:
+                module = frame.f_globals.get("__name__", "")
+                if module.startswith("app.formal_services."):
+                    break
+                frame = frame.f_back
+            if frame is None or module not in {
+                "app.formal_services.stocktake_recount_count",
+                "app.formal_services.stocktake_recount_difference",
+            }:
+                return
+        finally:
+            del frame
+        tables = {getattr(table, "name", None) for table in statement.get_final_froms()}
+        selected = restricted & tables
+        observed.update(selected)
+        sql = str(statement.compile(dialect=postgresql.dialect()))
+        if selected:
+            assert "FOR UPDATE" not in sql, sorted(selected)
+        elif "FOR UPDATE" in sql:
+            retained_locks.update(tables)
+
+    engine = recount_world.db.get_bind()
+    event.listen(engine, "before_execute", capture)
+    try:
+        targets = _three_round_history(recount_world, monkeypatch, stage="third_evaluated")
+        for target in targets:
+            assert _lookup(recount_world, target, operation=target.operation).lookup_status == "confirmed"
+        # Exercise the count replay attachment-binding read as well.
+        _count_recount(
+            recount_world, recount_world.db.get(FormalStocktakeTask, targets[1].task_id),
+            recount_world.db.get(StocktakeRound, targets[1].round_id), targets[1].scope_id,
+            key="status-three-r2", counted_qty=Decimal("4.000"),
+        )
+    finally:
+        event.remove(engine, "before_execute", capture)
+    assert observed == restricted
+    assert {"stocktake_tasks", "stocktake_rounds", "inventory_freezes", "role_assignments"} <= retained_locks
+
+
+def test_recount_difference_keeps_mutable_file_row_lock():
+    """No attachment in the three-round fixture: check this separate branch."""
+    import ast
+    import inspect
+    from app.formal_services import stocktake_recount_difference
+    tree = ast.parse(inspect.getsource(stocktake_recount_difference._validate_count_and_submission_manifests))
+    file_queries = [node.args[0] for node in ast.walk(tree)
+                   if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                   and node.func.attr == "scalars" and node.args
+                   and any(isinstance(child, ast.Name) and child.id == "FileObject"
+                           for child in ast.walk(node.args[0]))]
+    assert len(file_queries) == 1
+    assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+               and node.func.attr == "with_for_update" for node in ast.walk(file_queries[0]))
+
+
 @pytest.mark.parametrize("source_round", [1, 2])
 def test_third_round_history_rejects_corrupt_recursive_source_evidence(recount_world, monkeypatch, source_round):
     targets = _three_round_history(recount_world, monkeypatch)

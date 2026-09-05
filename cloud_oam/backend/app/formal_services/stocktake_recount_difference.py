@@ -283,30 +283,34 @@ def _generate_stocktake_recount_differences(
 
     existing_differences = tuple(
         db.scalars(
-            select(StocktakeDifference)
-            .where(
-                StocktakeDifference.task_id == task.id,
-                StocktakeDifference.round_id == round_row.id,
+            count_service._select_only_reference_statement(
+                db,
+                select(StocktakeDifference)
+                .where(
+                    StocktakeDifference.task_id == task.id,
+                    StocktakeDifference.round_id == round_row.id,
             )
             .order_by(StocktakeDifference.difference_no)
-            .with_for_update()
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
     existing_completions = tuple(
         db.scalars(
-            select(StocktakeDifferenceSetCompletion)
-            .where(
-                or_(
-                    StocktakeDifferenceSetCompletion.idempotency_key_hash == key_hash,
-                    (
-                        (StocktakeDifferenceSetCompletion.task_id == task.id)
-                        & (StocktakeDifferenceSetCompletion.round_id == round_row.id)
-                    ),
-                )
+            count_service._select_only_reference_statement(
+                db,
+                select(StocktakeDifferenceSetCompletion)
+                .where(
+                    or_(
+                        StocktakeDifferenceSetCompletion.idempotency_key_hash == key_hash,
+                        (
+                            (StocktakeDifferenceSetCompletion.task_id == task.id)
+                            & (StocktakeDifferenceSetCompletion.round_id == round_row.id)
+                        ),
+                    )
             )
             .order_by(StocktakeDifferenceSetCompletion.id)
-            .with_for_update()
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -461,12 +465,16 @@ def _load_evaluation_inputs(
     round_row: StocktakeRound,
     now: datetime,
 ) -> _EvaluationInputs:
+    # Callers hold the 0032 task-local owner graph. Its immutable evidence is
+    # SELECT-only for the API role; taking FOR UPDATE again would violate ACLs.
     scopes = tuple(
         db.scalars(
-            select(FormalStocktakeScope)
-            .where(FormalStocktakeScope.task_id == task.id)
-            .order_by(FormalStocktakeScope.scope_no, FormalStocktakeScope.id)
-            .with_for_update()
+            count_service._select_only_reference_statement(
+                db,
+                select(FormalStocktakeScope)
+                .where(FormalStocktakeScope.task_id == task.id)
+                .order_by(FormalStocktakeScope.scope_no, FormalStocktakeScope.id)
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -478,13 +486,15 @@ def _load_evaluation_inputs(
     selected_scopes = graph.selected_scopes
     submissions = tuple(
         db.scalars(
-            select(StocktakeRoundSubmission)
-            .where(
-                StocktakeRoundSubmission.task_id == task.id,
-                StocktakeRoundSubmission.round_id == round_row.id,
+            count_service._select_only_reference_statement(
+                db,
+                select(StocktakeRoundSubmission)
+                .where(
+                    StocktakeRoundSubmission.task_id == task.id,
+                    StocktakeRoundSubmission.round_id == round_row.id,
             )
             .order_by(StocktakeRoundSubmission.id)
-            .with_for_update()
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -525,10 +535,12 @@ def _load_evaluation_inputs(
 
     all_snapshots = tuple(
         db.scalars(
-            select(StocktakeSnapshotLine)
-            .where(StocktakeSnapshotLine.task_id == task.id)
-            .order_by(StocktakeSnapshotLine.scope_id, StocktakeSnapshotLine.stock_account_id)
-            .with_for_update()
+            count_service._select_only_reference_statement(
+                db,
+                select(StocktakeSnapshotLine)
+                .where(StocktakeSnapshotLine.task_id == task.id)
+                .order_by(StocktakeSnapshotLine.scope_id, StocktakeSnapshotLine.stock_account_id)
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -544,47 +556,55 @@ def _load_evaluation_inputs(
     }
     count_lines = tuple(
         db.scalars(
-            select(StocktakeCountLine)
-            .where(
-                StocktakeCountLine.task_id == task.id,
-                StocktakeCountLine.round_id == round_row.id,
+            count_service._select_only_reference_statement(
+                db,
+                select(StocktakeCountLine)
+                .where(
+                    StocktakeCountLine.task_id == task.id,
+                    StocktakeCountLine.round_id == round_row.id,
             )
             .order_by(StocktakeCountLine.scope_id, StocktakeCountLine.stock_account_id)
-            .with_for_update()
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
     line_ids = tuple(row.id for row in count_lines)
     count_serials = tuple(
         db.scalars(
-            select(StocktakeCountSerial)
-            .where(StocktakeCountSerial.count_line_id.in_(line_ids))
-            .order_by(StocktakeCountSerial.count_line_id, StocktakeCountSerial.serial_id)
-            .with_for_update()
+            count_service._select_only_reference_statement(
+                db,
+                select(StocktakeCountSerial)
+                .where(StocktakeCountSerial.count_line_id.in_(line_ids))
+                .order_by(StocktakeCountSerial.count_line_id, StocktakeCountSerial.serial_id)
+            )
             .execution_options(populate_existing=True)
         ).all()
     ) if line_ids else ()
     observations = tuple(
         db.scalars(
-            select(StocktakeCountObservation)
-            .where(
-                StocktakeCountObservation.task_id == task.id,
-                StocktakeCountObservation.round_id == round_row.id,
+            count_service._select_only_reference_statement(
+                db,
+                select(StocktakeCountObservation)
+                .where(
+                    StocktakeCountObservation.task_id == task.id,
+                    StocktakeCountObservation.round_id == round_row.id,
             )
             .order_by(StocktakeCountObservation.scope_id, StocktakeCountObservation.observation_no)
-            .with_for_update()
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
     completions = tuple(
         db.scalars(
-            select(StocktakeScopeCountCompletion)
-            .where(
-                StocktakeScopeCountCompletion.task_id == task.id,
-                StocktakeScopeCountCompletion.round_id == round_row.id,
+            count_service._select_only_reference_statement(
+                db,
+                select(StocktakeScopeCountCompletion)
+                .where(
+                    StocktakeScopeCountCompletion.task_id == task.id,
+                    StocktakeScopeCountCompletion.round_id == round_row.id,
             )
             .order_by(StocktakeScopeCountCompletion.scope_id)
-            .with_for_update()
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -712,16 +732,20 @@ def _validate_count_and_submission_manifests(
     for row in count_serials:
         serials_by_line[row.count_line_id].append(row)
     completion_ids = tuple(str(row.id) for row in completions)
+    # 0057 serializes binding insertion on the task owner and old bindings are
+    # immutable. Preserve exact manifest validation and real FileObject locks.
     attachments = tuple(
         db.scalars(
-            select(DocumentAttachment)
-            .where(
-                DocumentAttachment.document_type == "stocktake_scope_count_completion",
-                DocumentAttachment.document_id.in_(completion_ids),
-                DocumentAttachment.attachment_type == "stocktake_evidence",
+            count_service._select_only_reference_statement(
+                db,
+                select(DocumentAttachment)
+                .where(
+                    DocumentAttachment.document_type == "stocktake_scope_count_completion",
+                    DocumentAttachment.document_id.in_(completion_ids),
+                    DocumentAttachment.attachment_type == "stocktake_evidence",
             )
             .order_by(DocumentAttachment.document_id, DocumentAttachment.file_id)
-            .with_for_update()
+            )
             .execution_options(populate_existing=True)
         ).all()
     ) if completion_ids else ()

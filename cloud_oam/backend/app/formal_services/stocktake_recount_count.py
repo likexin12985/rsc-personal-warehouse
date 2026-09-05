@@ -254,12 +254,16 @@ def _submit_stocktake_recount_scope_count(
         _fail("stocktake_recount_count_round_not_found", "not_found", "当前复盘轮次不存在")
     lock_nonopening_stocktake_review_graph(db, task.id, round_row.id)
 
+    # 0032 owns these task-local immutable rows on PG. A direct FOR UPDATE
+    # would still require API UPDATE privilege, even after the owner lock.
     scopes = tuple(
         db.scalars(
-            select(FormalStocktakeScope)
-            .where(FormalStocktakeScope.task_id == task.id)
-            .order_by(FormalStocktakeScope.scope_no, FormalStocktakeScope.id)
-            .with_for_update()
+            count_service._select_only_reference_statement(
+                db,
+                select(FormalStocktakeScope)
+                .where(FormalStocktakeScope.task_id == task.id)
+                .order_by(FormalStocktakeScope.scope_no, FormalStocktakeScope.id)
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -325,10 +329,12 @@ def _submit_stocktake_recount_scope_count(
 
     snapshots = tuple(
         db.scalars(
-            select(StocktakeSnapshotLine)
-            .where(StocktakeSnapshotLine.task_id == task.id)
-            .order_by(StocktakeSnapshotLine.scope_id, StocktakeSnapshotLine.stock_account_id)
-            .with_for_update()
+            count_service._select_only_reference_statement(
+                db,
+                select(StocktakeSnapshotLine)
+                .where(StocktakeSnapshotLine.task_id == task.id)
+                .order_by(StocktakeSnapshotLine.scope_id, StocktakeSnapshotLine.stock_account_id)
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -340,9 +346,11 @@ def _submit_stocktake_recount_scope_count(
     )
 
     existing = db.scalar(
-        select(StocktakeScopeCountCompletion)
-        .where(StocktakeScopeCountCompletion.idempotency_key_hash == key_hash)
-        .with_for_update()
+        count_service._select_only_reference_statement(
+            db,
+            select(StocktakeScopeCountCompletion)
+            .where(StocktakeScopeCountCompletion.idempotency_key_hash == key_hash)
+        )
         .execution_options(populate_existing=True)
     )
     if existing is not None:
@@ -887,13 +895,15 @@ def _load_and_validate_recount_assignment_graph(
             "盘点任务当前轮次不是有效复盘轮次",
         )
     case = db.scalar(
-        select(StocktakeRecountCase)
-        .where(
-            StocktakeRecountCase.id == round_row.recount_case_id,
-            StocktakeRecountCase.task_id == task.id,
-            StocktakeRecountCase.next_round_no == round_row.round_no,
+        count_service._select_only_reference_statement(
+            db,
+            select(StocktakeRecountCase)
+            .where(
+                StocktakeRecountCase.id == round_row.recount_case_id,
+                StocktakeRecountCase.task_id == task.id,
+                StocktakeRecountCase.next_round_no == round_row.round_no,
         )
-        .with_for_update()
+        )
         .execution_options(populate_existing=True)
     )
     if case is None:
@@ -922,10 +932,12 @@ def _load_and_validate_recount_assignment_graph(
     )
     assignments = tuple(
         db.scalars(
-            select(StocktakeRecountScopeAssignment)
-            .where(StocktakeRecountScopeAssignment.recount_case_id == case.id)
-            .order_by(StocktakeRecountScopeAssignment.scope_id)
-            .with_for_update()
+            count_service._select_only_reference_statement(
+                db,
+                select(StocktakeRecountScopeAssignment)
+                .where(StocktakeRecountScopeAssignment.recount_case_id == case.id)
+                .order_by(StocktakeRecountScopeAssignment.scope_id)
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
@@ -1196,12 +1208,12 @@ def _authorize_exact_recount_actor(
             "precondition_failed",
             "复盘分配所绑定的角色授权已失效",
         )
-    location = db.scalar(
-        select(StockLocation)
-        .where(StockLocation.id == scope.location_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
+    location_statement = select(StockLocation).where(StockLocation.id == scope.location_id)
+    if lock_rows:
+        location_statement = count_service._select_only_reference_statement(db, location_statement)
+    # PG location ownership was acquired by 0032; lock_rows=False must also
+    # remain SELECT-only for callers doing a final authorization reread.
+    location = db.scalar(location_statement.execution_options(populate_existing=True))
     if location is None or location.status != "active":
         _fail(
             "stocktake_recount_count_location_invalid",
@@ -1303,17 +1315,21 @@ def _validate_replay(
         or completion.count_ledger_cursor > current_ledger_cursor
     ):
         _idempotency_conflict()
+    # 0057 binds attachment insertion to the task owner; existing bindings are
+    # immutable. Recheck the exact set below and retain the separate file locks.
     attachments = tuple(
         db.scalars(
-            select(DocumentAttachment)
-            .where(
-                DocumentAttachment.document_type == "stocktake_scope_count_completion",
-                DocumentAttachment.document_id == str(completion.id),
-                DocumentAttachment.attachment_type == "stocktake_evidence",
-                DocumentAttachment.status == "active",
+            count_service._select_only_reference_statement(
+                db,
+                select(DocumentAttachment)
+                .where(
+                    DocumentAttachment.document_type == "stocktake_scope_count_completion",
+                    DocumentAttachment.document_id == str(completion.id),
+                    DocumentAttachment.attachment_type == "stocktake_evidence",
+                    DocumentAttachment.status == "active",
             )
             .order_by(DocumentAttachment.file_id)
-            .with_for_update()
+            )
             .execution_options(populate_existing=True)
         ).all()
     )
