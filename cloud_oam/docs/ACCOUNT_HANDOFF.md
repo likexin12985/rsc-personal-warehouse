@@ -38,10 +38,29 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 
 ## 4. 当前源码状态
 
-最新已验收服务端功能提交 `8cabfdecb0e8734403fb8863e90d06951383f164` 已推送：新增日常初盘/复盘
+最新已验收修正提交 `2691ab3686c139e5b3ee35140ed39cfe45d4382b` 已推送：三轮真库测试暴露
+复盘只读表重复 FOR UPDATE 权限错误与封轮时序问题，已修复 17 处锁后回读，并在 task
+仍 counting 时先 flush round、再提交 task，保持同一事务，不新增 commit。
+保留 owner 锁、可变行锁及所有校验，不改迁移/ACL、两端、边缘或部署。相关 103 项回归
+（64.32 秒）及 13 项脱敏诊断通过；本轮累计新增 13 项历史查询回归。
+修正后本地完整回归 `2939 passed, 1 skipped`（909.10 秒），退出码 0。
+准确 SHA PG16 run `33965156443` 全绿：静态 `2006 passed, 1 skipped, 1 warning`（569.04 秒），
+动态 `1 passed, 1 warning`（186.61 秒），含容器清理，job 于 `2026-09-05T12:21:41Z` 完成。
+准确 SHA 客户端 run `33965156446` 全绿：Web 776、小程序 647、类型/构建/安全/清理通过。
+测试期间后端/边缘/PG workflow 与上述 SHA 一致，迁移 head 仍为 `20260905_0061`。
+测试初候选 `976cdba` 的 run `33963127979` 静态 2002 项通过，动态失败；
+第二轮首次 GET 返回 503，容器日志确认 stocktake_recount_cases 权限不足，不计全绿。
+权限修复 `ee0d0ed` 的 run `33964225622` 静态 2004 项通过，动态在第二轮 count 封轮失败，
+0032 即时 round guard 报 P0001；其本地 2937 项通过、1 项跳过也不能计真库成功。
+新增范围、下一修复方案见 `DAILY_COUNT_HISTORY_PG16_ACCEPTANCE.md`：本次停在第三轮
+submitted，不覆盖复盘过账/关闭后恢复、附件/SN/截止回放并发。
+已确认来源重证中的 active-freeze/live-assignee 检查会阻断部分合法历史；另完整 owner
+集合及来源先读附件/锁文件的顺序尚需专用入口验收。先修历史 owner 与显式历史模式，再接客户端。
+
+此前已验收服务端功能提交 `8cabfdecb0e8734403fb8863e90d06951383f164` 已推送：新增日常初盘/复盘
 scope count 历史核验 GET，绑定当前 actor/person/授权版本、operation、task/round/scope、
 随机 trace，证明不可变 completion/manifest/audit，不返回原计数或重放许可。
-62 项新增定向回归通过；源码独立复核未发现本切片未解决的安全阻塞。
+该功能 SHA 的 62 项新增定向回归通过；后继三轮审查发现的限制以上方最新记录为准。
 首次功能 `812debc` 的 PG16 run `33957264704` 静态通过、动态失败，不能算全绿；
 已定位新查询把库存截止与冻结启动时间错误等同，按既有 0047 时序修正并补推进时钟回归。
 当前修正 SHA 的本地后端/边缘全量 `2926 passed, 1 skipped`（539.43 秒），退出码 0；
@@ -53,9 +72,9 @@ scope count 历史核验 GET，绑定当前 actor/person/授权版本、operatio
 准确 SHA 客户端 run
 [`33958198902`](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33958198902)
 已全绿（Web 776、小程序 647、类型/构建/安全/清理）。未修改迁移、ACL、客户端、边缘或部署。
-契约和限制见 `DAILY_COUNT_COMMAND_STATUS_ACCEPTANCE.md`：本次 PG 新增只覆盖初盘及其
-关闭后历史，复盘尚缺完整真库服务链；深层来源历史人员变化可能保守阻塞；两端未接入持久哨兵。
-下一切片先补隔离 PG 复盘/多轮证明，再接客户端跨进程恢复。不得因 `not_observed` 换键补写，
+契约和限制见 `DAILY_COUNT_COMMAND_STATUS_ACCEPTANCE.md`：该 SHA 的 PG 仅覆盖初盘及其
+关闭后历史，后继三轮测试见上方；深层来源历史变化可能保守阻塞；两端未接入持久哨兵。
+后续先补历史来源和 owner 锁图，再接客户端跨进程恢复。不得因 `not_observed` 换键补写，
 不得把本接口扩称为创建、下发、差异、复核、过账、关闭或整个盘点恢复完成。
 
 客户端自身最近功能提交为 `a78d5adae54024aed9f5f8cb5724b94e4ec32de1`：日常盘点分页、SKU/二维码/SN
@@ -64,8 +83,8 @@ scope count 历史核验 GET，绑定当前 actor/person/授权版本、operatio
 [`33956352741`](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33956352741)
 已回读全绿，包括冻结安装、测试、类型、构建及清理；HEAD 可以是文档后继。
 该客户端候选不改后端、迁移、ACL、边缘、部署或 PG 工作流；其后端对应下方历史基线，
-当前后端以上方 `8cabfde` 为准。客户端验收见 `DAILY_STOCKTAKE_CLIENT_ACCEPTANCE.md`。
-日常历史 GET 已由上方服务端切片交付，后续优先补复盘真库证明和跨重启恢复；不能借刷新
+当前后端以上方最新修正候选为准。客户端验收见 `DAILY_STOCKTAKE_CLIENT_ACCEPTANCE.md`。
+日常历史 GET 已由上方服务端切片交付，后续按最新历史修复前置推进跨重启恢复；不能借刷新
 或 `not_observed` 清除未知请求、换键重发，不能把现有 opening-only 查询用于日常盘点。
 OSS/CSP、审批转派、通知兼容、可信控制投影、部署及恢复演练仍未完成，生产访问仍禁止。
 
@@ -371,21 +390,27 @@ Git 仓库根目录设置在当前 `oam` 目录，但根 `.gitignore` 默认拒�
 > 请接管当前私有仓库中的 RSC 个人仓项目。先完整阅读仓库根目录 AGENTS.md、
 > docs/RSC个人仓与物资运营扩展系统_正式生产版需求与架构设计_V1.0.md 和
 > cloud_oam/README.md。后续所有代码、文档、迁移、状态和验收必须遵循这些基线。
-> 当前分支 codex/production-readiness-gates，最新已验收服务端功能提交为
-> 8cabfdecb0e8734403fb8863e90d06951383f164：日常初盘/复盘原count命令历史核验。
-> PG16 run 33958198821全绿（静态1993、真库1项通过，含容器清理）；同SHA客户端
-> run 33958198902全绿（Web776、小程序647、类型/构建/安全）。准确证据见本交接第4节。
-> 本地后端/边缘2926项通过，1项PG门禁按环境跳过，含62项新增定向回归；
-> 首次812debc的run 33957264704动态失败，已修正冻结时间核验，不得借旧结果算新候选通过。
-> 不能把合成复盘测试或初盘真库断言称作完整PG复盘验收。
+> 当前分支 codex/production-readiness-gates，最新已验收修正提交为
+> 2691ab3686c139e5b3ee35140ed39cfe45d4382b：日常三轮历史核验、只读证据权限及封轮顺序修复。
+> 修复 17 处锁后回读，先 flush round 再更新 task，保留同一事务/可变锁/全部校验；
+> 无迁移、ACL、客户端或部署变更。准确 SHA 客户端 run 33965156446 全绿（Web776、小程序647）；
+> PG16 run 33965156443 全绿（静态2006、动态1，含容器清理）。本地完整回归2939项通过、
+> 1项PG门禁按环境跳过（909.10秒）。相关103项、脱敏诊断13项通过，累计新增13项回归。
+> 初候选 976cdba 的 PG16 run 33963127979 因只读表权限失败；ee0d0ed 的 run 33964225622
+> 已越过该点，但第二轮 count 因父状态先 submitted 被0032即时guard拒绝。均不计全绿。
+> 准确最终结果与已知限制见本交接第 4 节及
+> cloud_oam/docs/DAILY_COUNT_HISTORY_PG16_ACCEPTANCE.md。
+> 真库新增链仅单范围、硬冻结、非 SN、无附件，停在第三轮提交；不代表过账/关闭后恢复。
 > 本地 HEAD 可以是其文档后继，不得强制回退。先只读检查 git status、HEAD、远端分支
 > 及准确候选的门禁，阅读 cloud_oam/docs/PHASE1_REMAINING_ACCEPTANCE_20260905.md。
 > 运行 cloud_oam/scripts/verify_repository_safety.sh，并重新检查 Alembic head 和相关测试；
 > 不得访问或写入 OAM、RSC、Workflow、飞书及任何外部生产系统。继续一期盘点、
 > 需求提报和处理的剩余发布门禁，不得把需求获批当成分配、占用、出库、发货、签收或个人仓入库。
 > 不重做已经通过的目录权限、分页和计数恢复修复；不得删除恢复哨兵绕过 not_observed。
-> 先读 cloud_oam/docs/DAILY_COUNT_COMMAND_STATUS_ACCEPTANCE.md，补隔离PG复盘/多轮证明，
-> 再接两端日常count持久哨兵和重启核验；来源旧人员/保管变化可能503，需独立历史证据模式。
+> 不重复新增三轮测试；先读上述多轮验收和 DAILY_COUNT_COMMAND_STATUS_ACCEPTANCE.md，
+> 修复递归来源的历史冻结/旧人员兼容及完整 owner 锁集合，按需新增前向迁移与 SHA 清单，
+> 不改历史迁移、不放宽写侧守卫。补过账/关闭、当前撤权、附件竞争、SN/回放真库验收后，
+> 再接两端日常 count 持久哨兵和重启核验；本轮只记录该修复方案，尚未实施。
 > 不把这个scope count GET推广成创建、下发、差异、复核、过账、关闭或人工未执行封存已完成。
 > 两端只读期初准备入口和隔离控制证据一致性校验已完成，但没有可信控制库存发布，不能启动。
 > 请读 cloud_oam/docs/INVENTORY_CONTROL_EVIDENCE_ACCEPTANCE.md 和
