@@ -15719,6 +15719,13 @@ SELECT posting.total_quantity::text,
             terminal_opening.version,
         ) == ("opening", "closed", opening_closed.task_version)
 
+    # Establish the daily-recount location before the separate SN exercise
+    # leaves another opening batch active in this region.
+    fixture["recount_opening_task_id"] = _establish_multiround_stocktake_location(
+        api_engine, fixture=fixture, actor_user_id=actor_user_id,
+        assignee_user_id=assignee_user_id,
+    )
+
     with Session(api_engine, expire_on_commit=False) as session:
         isolation_started = _start_opening_stocktake_impl(
             session,
@@ -16500,6 +16507,122 @@ def _assert_0062_history_owner_boundary(
         owner.rollback()
 
 
+def _establish_multiround_stocktake_location(
+    api_engine, *, fixture, actor_user_id, assignee_user_id,
+):
+    """Commit a real zero-opening lifecycle before the daily +1 gain test."""
+    from app.formal_access import load_formal_principal
+    from app.formal_services import opening_stocktake as opening
+    from app.formal_services import opening_stocktake_count as count
+    from app.formal_services import opening_stocktake_review as review
+    from app.formal_services import opening_stocktake_finalize as finalize
+    from app.inventory_models import (
+        InventoryLedgerHead, InventoryTransaction, InventoryMovement, StockBalance,
+    )
+    from app.stocktake_models import (
+        FormalStocktakeTask, FormalStocktakeScope, InventoryFreeze,
+        InventoryOpeningEstablishment, StocktakeDifference, StocktakeReview,
+    )
+
+    token = uuid.uuid4().hex
+
+    def inventory_rows(session):
+        return _ordered_durable_model_rows(session, (
+            InventoryLedgerHead, InventoryTransaction, InventoryMovement, StockBalance,
+        ))
+
+    def write(service, user_id, step, command):
+        with Session(api_engine, expire_on_commit=False) as session:
+            assert session.scalar(text("SELECT current_user")) == "star_oam_api"
+            actor = load_formal_principal(
+                session, user_id, now=session.scalar(select(func.clock_timestamp())),
+            )
+            result = _reveal_pg16_service_database_error(
+                api_engine, lambda: service(
+                    session, actor=actor, command=command,
+                    idempotency_key=f"pg16-recount-opening-{token}-{step}",
+                    request_id=f"trace-pg16-recount-opening-{token}-{step}",
+                ),
+            )
+            session.commit()
+            return result
+
+    with Session(api_engine) as session:
+        before = inventory_rows(session)
+        assert session.scalar(select(func.count()).select_from(InventoryOpeningEstablishment).where(
+            InventoryOpeningEstablishment.owner_org_id == fixture["region_org_id"],
+            InventoryOpeningEstablishment.location_id == fixture["recount_location_id"],
+        )) == 0
+    started = write(opening.start_opening_stocktake, assignee_user_id, "start",
+        opening.StartOpeningStocktakeCommand(
+            task_no=f"PG16-RECOUNT-OPENING-{token[:16].upper()}",
+            region_org_id=fixture["region_org_id"],
+            control_source_system_id=fixture["control_source_system_id"],
+            control_sync_run_id=fixture["control_sync_run_id"],
+            control_sync_scope_key=fixture["control_scope_key"],
+            control_lines=fixture["control_lines"],
+            scopes=(opening.OpeningStocktakeScopeInput(
+                owner_org_id=fixture["region_org_id"], location_id=fixture["recount_location_id"],
+                assignee_user_id=assignee_user_id, freeze_mode="hard",
+            ),), blind_count=True, deadline=fixture["deadline"],
+            note="PG16 real zero-opening prerequisite for daily recount gain",
+        ))
+    assert started.status == "counting" and started.snapshot_line_count == 1
+    with Session(api_engine) as session:
+        scope_id = session.scalars(select(FormalStocktakeScope.id).where(
+            FormalStocktakeScope.task_id == started.task_id,
+        )).one()
+    counted = write(count.submit_opening_stocktake_scope_count, assignee_user_id, "count",
+        count.SubmitOpeningStocktakeScopeCountCommand(
+            task_id=started.task_id, round_id=started.initial_round_id,
+            scope_id=scope_id, physical_observations=(), zero_confirmed=False,
+        ))
+    assert counted.task_status == "submitted" and counted.round_sealed is True
+    with Session(api_engine) as session:
+        assert session.scalar(select(func.count()).select_from(StocktakeDifference).where(
+            StocktakeDifference.task_id == started.task_id,
+        )) == 0
+    command = review.SubmitOpeningStocktakeReviewCommand(
+        task_id=started.task_id, round_id=started.initial_round_id,
+        decision="approve", items=(), comment="Verified empty physical stock and zero control quantity",
+    )
+    regional = write(review.submit_opening_region_review, assignee_user_id, "region", command)
+    assert regional.resulting_task_status == "hq_review"
+    headquarters = write(review.submit_opening_headquarters_review, actor_user_id, "hq", command)
+    assert headquarters.resulting_task_status == "approved"
+    with Session(api_engine) as session:
+        approved_version = session.get(FormalStocktakeTask, started.task_id).version
+    posted = write(finalize.post_approved_opening_stocktake, actor_user_id, "post",
+        finalize.PostOpeningStocktakeCommand(task_id=started.task_id, expected_version=approved_version))
+    assert posted.resulting_task_status == "posted" and posted.established_scope_count == 1
+    assert posted.total_quantity == Decimal("0.000")
+    assert posted.inventory_transaction_id is None
+    assert posted.pending_control_difference_count == 0
+    closed = write(finalize.close_posted_opening_stocktake, actor_user_id, "close",
+        finalize.CloseOpeningStocktakeCommand(task_id=started.task_id, expected_version=posted.task_version))
+    assert closed.resulting_task_status == "closed"
+    with Session(api_engine) as session:
+        establishment = session.scalars(select(InventoryOpeningEstablishment).where(
+            InventoryOpeningEstablishment.owner_org_id == fixture["region_org_id"],
+            InventoryOpeningEstablishment.location_id == fixture["recount_location_id"],
+        )).one()
+        assert establishment.task_id == started.task_id
+        assert establishment.scope_id == scope_id
+        assert establishment.posting_id == posted.posting_id
+        assert establishment.regional_review_id == regional.review_id
+        assert establishment.headquarters_review_id == headquarters.review_id
+        reviews = tuple(session.scalars(select(StocktakeReview).where(
+            StocktakeReview.task_id == started.task_id,
+        )).all())
+        assert len(reviews) == 2 and {row.review_stage for row in reviews} == {"region", "headquarters"}
+        assert session.get(FormalStocktakeTask, started.task_id).status == "closed"
+        assert session.scalar(select(func.count()).select_from(InventoryFreeze).where(
+            InventoryFreeze.task_id == started.task_id, InventoryFreeze.status == "active",
+        )) == 0
+        assert inventory_rows(session) == before
+    return started.task_id
+
+
 def _assert_nonopening_multiround_count_status(
     api_engine, *, fixture, actor_user_id, assignee_user_id,
     idempotency_hmac_secret,
@@ -16550,7 +16673,7 @@ def _assert_nonopening_multiround_count_status(
         StocktakePostingCompletion, StocktakePostingCompletionItem,
         StocktakeCloseReconciliationCompletion, StocktakeCloseReconciliationAccount,
         StocktakeCloseReconciliationSerial, StocktakeCloseCompletion,
-        StocktakeCloseTransitionAck,
+        StocktakeCloseTransitionAck, InventoryOpeningEstablishment,
     )
     from app.stocktake_task_schemas import (
         StocktakeScopeSelectionIn, StocktakeTaskCreateIn, StocktakeTaskStartIn,
@@ -16613,12 +16736,18 @@ def _assert_nonopening_multiround_count_status(
                     StocktakePostingCompletionItem, StocktakeCloseReconciliationCompletion,
                     StocktakeCloseReconciliationAccount, StocktakeCloseReconciliationSerial,
                     StocktakeCloseCompletion, StocktakeCloseTransitionAck,
-                    DocumentAttachment, FileObject,
+                    DocumentAttachment, FileObject, InventoryOpeningEstablishment,
             ))
             return inventory_snapshot(session), facts
 
     with Session(api_engine) as session:
         inventory_before = inventory_snapshot(session)
+        establishment = session.scalars(select(InventoryOpeningEstablishment).where(
+            InventoryOpeningEstablishment.owner_org_id == fixture["region_org_id"],
+            InventoryOpeningEstablishment.location_id == fixture["recount_location_id"],
+        )).one()
+        assert establishment.task_id == fixture["recount_opening_task_id"]
+        assert session.get(FormalStocktakeTask, establishment.task_id).status == "closed"
 
     # Ancestor order intentionally opposes UUID order. A historical graph
     # must acquire the union before recursively examining an ancestor subset.

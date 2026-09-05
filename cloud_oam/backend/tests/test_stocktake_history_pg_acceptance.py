@@ -222,3 +222,38 @@ def test_0062_adds_no_caller_to_0054_0055_or_0056_legacy_dependency_sets():
         gate._load_nonopening_count_guard_compatibility_migration_0056().HELPER_FUNCTION,
     ):
         assert forbidden not in owner
+
+
+@pytest.mark.parametrize("service", (
+    "opening.start_opening_stocktake", "count.submit_opening_stocktake_scope_count",
+    "review.submit_opening_region_review", "review.submit_opening_headquarters_review",
+    "finalize.post_approved_opening_stocktake", "finalize.close_posted_opening_stocktake",
+))
+def test_pg_daily_gain_prerequisite_runs_each_real_opening_service(service):
+    source = inspect.getsource(gate._establish_multiround_stocktake_location)
+    tree = ast.parse(source)
+    calls = {ast.unparse(node.args[0]) for node in ast.walk(tree)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+             and node.func.id == "write" and node.args}
+    assert service in calls
+    assert "session.commit()" in source
+    assert "physical_observations=(), zero_confirmed=False" in source
+    assert "establishment.regional_review_id == regional.review_id" in source
+    assert "establishment.headquarters_review_id == headquarters.review_id" in source
+    assert "establishment.posting_id == posted.posting_id" in source
+    assert "posted.inventory_transaction_id is None" in source
+    assert "assert inventory_rows(session) == before" in source
+    assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                   and node.func.id == "InventoryOpeningEstablishment" for node in ast.walk(tree))
+
+
+def test_pg_daily_gain_opening_precedes_other_active_opening_batch_and_is_rechecked():
+    seed = inspect.getsource(gate._seed_0047_stocktake_inventory)
+    assert seed.index("_establish_multiround_stocktake_location(") < seed.index("isolation_started =")
+    source = _history_source()
+    assert 'establishment.task_id == fixture["recount_opening_task_id"]' in source
+    assert 'posted.total_quantity == Decimal("1.000")' in source
+    assert 'posted.transaction_count == posted.movement_count == 1' in source
+    assert "InventoryOpeningEstablishment" in ast.unparse(next(
+        node for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef) and node.name == "durable_snapshot"))
