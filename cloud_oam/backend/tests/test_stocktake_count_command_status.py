@@ -21,7 +21,7 @@ from app.formal_services.audit_chain import append_audit_event
 from app.foundation_models import AuditEvent, Permission, Role, RolePermission
 from app.inventory_models import CustodyAssignment, StockLocation
 from app.stocktake_count_command_status_schemas import StocktakeCountCommandStatusOut
-from app.stocktake_models import FormalStocktakeScope, StocktakeScopeCountCompletion
+from app.stocktake_models import FormalStocktakeScope, FormalStocktakeTask, InventoryFreeze, StocktakeRound, StocktakeScopeCountCompletion
 from test_stocktake_task_service import NOW, db, world, _managed_draft  # noqa: F401
 from test_stocktake_count_service import _started
 from test_stocktake_difference_service import _submitted
@@ -260,6 +260,38 @@ def test_legitimate_audit_storage_time_may_follow_business_occurrence(world):
     result = _lookup(world, target)
     assert result.lookup_status == "confirmed"
     assert service.count._as_utc(result.command.completed_at) == service.count._as_utc(audit.occurred_at)
+
+
+@pytest.mark.parametrize("corruption", [None, "freeze_at_cutoff", "round_started_at_cutoff", "completion_before_round"])
+def test_advancing_start_clock_preserves_cutoff_then_freeze_causality(world, monkeypatch, corruption):
+    from app.formal_services import stocktake_count, stocktake_task
+    clock = [NOW]
+    def advancing_now(_db):
+        clock[0] += timedelta(milliseconds=1)
+        return clock[0]
+    monkeypatch.setattr(stocktake_task, "_database_now", advancing_now)
+    monkeypatch.setattr(stocktake_count, "_database_now", lambda _db: NOW + timedelta(minutes=1))
+    target = _initial(world, key="status-advancing-clock")
+    task = world.db.get(FormalStocktakeTask, target.task_id)
+    round_row = world.db.get(StocktakeRound, target.round_id)
+    freeze = world.db.scalar(select(InventoryFreeze).where(InventoryFreeze.stocktake_scope_id == target.scope_id))
+    assert task.cutoff_at < task.frozen_at
+    assert freeze.valid_from == task.frozen_at == round_row.started_at
+    if corruption == "freeze_at_cutoff":
+        freeze.valid_from = task.cutoff_at
+    elif corruption == "round_started_at_cutoff":
+        round_row.started_at = task.cutoff_at
+    elif corruption == "completion_before_round":
+        completion = world.db.scalar(select(StocktakeScopeCountCompletion).where(
+            StocktakeScopeCountCompletion.round_id == target.round_id,
+            StocktakeScopeCountCompletion.scope_id == target.scope_id))
+        completion.completed_at = round_row.started_at - timedelta(milliseconds=1)
+        completion.created_at = completion.completed_at
+    world.db.commit()
+    if corruption is None:
+        assert _lookup(world, target).lookup_status == "confirmed"
+    else:
+        _assert_blocked(world, target, statuses=(503,))
 
 
 @pytest.mark.parametrize("field,value", [("authorization_sha256", "0" * 64), ("evidence_manifest_sha256", "0" * 64), ("count_line_count", 99), ("serial_count", 99)])

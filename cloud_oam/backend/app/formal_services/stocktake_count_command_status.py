@@ -248,6 +248,14 @@ def _frozen_scope_plans(db, graph):
     if metadata.get("schema") != service._CREATE_COMMAND_SCHEMA or not isinstance(documents, list) or len(documents) != len(graph.scopes):
         _invalid_evidence()
     plans = []
+    initial_round = next((row for row in graph.rounds if row.round_no == 1), None)
+    # Non-opening start captures the ledger cutoff before waiting for the
+    # audit owner, then timestamps the atomic freeze/round at its later start.
+    # Fixed test clocks may coincide; production clocks normally do not.
+    if (initial_round is None
+        or count._as_utc(graph.task.cutoff_at) > count._as_utc(graph.task.frozen_at)
+        or count._as_utc(initial_round.started_at) != count._as_utc(graph.task.frozen_at)):
+        _invalid_evidence()
     for scope, document in zip(graph.scopes, documents, strict=True):
         if not isinstance(document, dict) or document.get("freeze_mode") not in {"hard", "cutoff_replay"}:
             _invalid_evidence()
@@ -264,7 +272,7 @@ def _frozen_scope_plans(db, graph):
             _invalid_evidence()
         freeze = next((row for row in graph.freezes if row.stocktake_scope_id == scope.id), None)
         if (freeze is None or freeze.scope_key != scope.scope_key or freeze.freeze_mode != plan.freeze_mode
-            or count._as_utc(freeze.valid_from) != count._as_utc(graph.task.cutoff_at)):
+            or count._as_utc(freeze.valid_from) != count._as_utc(graph.task.frozen_at)):
             _invalid_evidence()
         plans.append(plan)
     service._require_non_overlapping_plans(plans)
@@ -341,6 +349,7 @@ def _validate_counts(db, graph, round_row, completions, files, attachments, curs
             or type(completion.count_ledger_cursor) is not int
             or not graph.task.cutoff_ledger_cursor <= completion.count_ledger_cursor <= cursor
             or count._as_utc(completion.created_at) != count._as_utc(completion.completed_at)
+            or count._as_utc(completion.completed_at) < count._as_utc(round_row.started_at)
         ):
             _invalid_evidence()
         file_counts[completion.id] = len(scope_files)
