@@ -1,7 +1,7 @@
 # RSC 个人仓项目跨账号交接
 
 - 交接日期：2026-09-01
-- 最新状态核验：2026-09-05
+- 最新状态核验：2026-09-06
 - 交接方式：GitHub 私有仓库 + 新账号重新连接仓库
 - 当前边界：GitHub 私有仓库已创建，`main` 已推送至
   `https://github.com/likexin12985/rsc-personal-warehouse`；后续功能必须使用独立分支开发、验证和评审
@@ -40,8 +40,9 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 
 ### 2026-09-06 当前续开发状态
 
-当前工作分支 `codex/production-readiness-gates` 的本地与远端均为准确 SHA
-`f482b8e`。其父提交 `18dfbd72b7d578aff5886029304a5afadb75b8f2`（再之前为
+当前工作分支 `codex/production-readiness-gates` 的本地与远端 HEAD 均为准确 SHA
+`508d91553823d0bd135b8d1f41d187f4393a0b1c`（仅文档更新）；最新已验收功能代码基线为
+`f482b8eeff11a4479937be2e2287bc14a3e6a8a3`。其父提交 `18dfbd72b7d578aff5886029304a5afadb75b8f2`（再之前为
 `d95a3fe61eaa656d0d144d307a4ab9348c048194`）
 已通过 Client release gate `33979437995` 与 PostgreSQL 16 release gate `33979438009`；当前
 `18dfbd7` 的 Client run `33981032052` 与 PostgreSQL 16 run `33981032060` 也均已通过。当前
@@ -54,14 +55,15 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 多范围真库样本，再验收尾部身份竞争和原 POST 锁序；非 count 的 review/recount/disposition/
 post/close 命令状态持久证据与两端跨重启恢复仍未完成。
 
-`f482b8e` 的过账恢复切片已通过 PostgreSQL 16 release gate（run `33982740333`）；随后
+`f482b8e` 的过账恢复切片已通过 PostgreSQL 16 release gate（run `33982740333`）；当前 HEAD
+`508d915` 的 Client release gate（run `33983847280`）也已通过；随后
 文档提交 `d98c6df` 的 Client release gate（run `33982782831`）也已通过。该切片的非 opening
 盘点新增只读
 `/{task_id}/post-differences-command-status`，使用精确 `X-Request-ID` 映射并重证审计、状态转换、
 审批、过账完成及库存事实；9 项定向测试通过，未新增迁移。它只覆盖 post，不代表 review、
 recount、disposition、close 或客户端跨重启恢复已经完成。
 
-最新已验收代码为 `b57f3c33be37cca025b17d6f7ea8b7f0db48452d`，已推送；迁移 head 为0062。
+历史验收代码为 `b57f3c33be37cca025b17d6f7ea8b7f0db48452d`，已被上述后续功能基线取代；迁移 head 为0062。
 它先由6个正式服务独立提交专用库位零期初闭环，再保持原+1日常盘盈；新增7项静态回归，
 相关76项和既有期初服务2项通过；该夹具修正不修改38b35e6的业务、迁移、权限或工作流。
 完整本地回归`3045 passed, 1 skipped`（814.07秒），退出码0，测试前后后端/边缘/工作流冻结。
@@ -438,11 +440,11 @@ Git 仓库根目录设置在当前 `oam` 目录，但根 `.gitignore` 默认拒�
 > 请接管当前私有仓库中的 RSC 个人仓项目。先完整阅读仓库根目录 AGENTS.md、
 > docs/RSC个人仓与物资运营扩展系统_正式生产版需求与架构设计_V1.0.md 和
 > cloud_oam/README.md。后续所有代码、文档、迁移、状态和验收必须遵循这些基线。
-> 当前分支 codex/production-readiness-gates，最新已验收代码为
-> b57f3c33be37cca025b17d6f7ea8b7f0db48452d，迁移 head 为 20260905_0062。
+> 当前分支 codex/production-readiness-gates，当前 HEAD 为 docs-only 后继 508d915，最新已验收功能代码为
+> f482b8e，迁移 head 为 20260905_0062；f482b8e 的 PostgreSQL 16 run 为 33982740333，当前文档 Client run 为 33983847280。
 > 先读 cloud_oam/docs/DAILY_COUNT_HISTORY_TERMINAL_ACCEPTANCE.md 中最新准确 SHA 验证状态。
 > 已实施专用有界 owner、released 冻结历史证明、递归祖先审计及一次完整附件锁；不放宽写侧守卫。
-> 最新b57f3c3已补齐专用库位真实零期初6步独立提交，再保留原日常+1盘盈；新增7项静态回归、
+> 历史 b57f3c3 已补齐专用库位真实零期初6步独立提交，再保留原日常+1盘盈；新增7项静态回归、
 > 相关76项及既有期初2项通过。准确 SHA 客户端run33970055644全绿（Web776、小程序647）；
 > 本地完整回归3045项通过、1项按环境跳过（814.07秒），准确 SHA PG16 run33970055640
 > 全绿（静态2112、动态复合门禁1项），含容器清理，job完成于2026-09-05T14:09:10Z；
