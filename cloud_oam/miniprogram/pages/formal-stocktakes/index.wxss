@@ -33,3 +33,11 @@
   font-size: 23rpx;
   font-weight: 650;
 }
+
+.preparation-card { margin-top: 20rpx; padding: 24rpx; }
+.preparation-note { margin: 16rpx 0; font-size: 23rpx; line-height: 1.7; }
+.preparation-column { margin-top: 24rpx; border-top: 1rpx solid #e6e9eb; padding-top: 20rpx; }
+.preparation-picker { padding: 18rpx; margin: 12rpx 0; border: 1rpx solid #d7dde1; border-radius: 8rpx; font-size: 26rpx; }
+.preparation-actions { display: flex; gap: 16rpx; }
+.preparation-actions button { margin: 0; }
+.preparation-summary { margin-top: 22rpx; font-size: 24rpx; line-height: 1.8; }

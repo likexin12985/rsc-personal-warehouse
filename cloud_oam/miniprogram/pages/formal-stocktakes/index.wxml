@@ -11,6 +11,33 @@
       {{accessMessage}}
     </view>
 
+    <view wx:if="{{canPrepare}}" class="card preparation-card">
+      <view class="section-title">期初盘点准备（只读）</view>
+      <view class="muted preparation-note">仅核验范围与人员，尚未评估省级控制库存，不可启动。不查询数量、不选择控制同步批次、不创建任务。</view>
+      <view wx:if="{{preparation.error}}" class="status-danger preparation-note">{{preparation.error}}</view>
+      <button wx:if="{{preparation.allowed}}" size="mini" bindtap="togglePreparation">{{preparation.expanded ? '收起准备目录' : '展开准备目录'}}</button>
+      <block wx:if="{{preparation.allowed && preparation.expanded}}">
+        <view wx:for="{{preparation.columns}}" wx:key="stage" class="preparation-column">
+          <view class="field-label">{{item.label}}</view>
+          <picker mode="selector" range="{{item.pickerItems}}" range-key="display" value="{{item.pickerValue}}" disabled="{{item.loading}}"
+            bindchange="selectPreparation" data-stage="{{item.stage}}">
+            <view class="preparation-picker">{{item.loading ? '正在核验选项' : (item.selectedName || '请选择')}}</view>
+          </picker>
+          <view wx:if="{{item.empty}}" class="muted preparation-note">暂无可选项，请管理员核对正式授权及保管责任；系统不自动指定人员。</view>
+          <view class="preparation-actions">
+            <button size="mini" disabled="{{item.loading}}" bindtap="refreshPreparation" data-stage="{{item.stage}}">刷新{{item.label}}</button>
+            <button wx:if="{{item.hasMore}}" size="mini" disabled="{{item.loading}}" bindtap="morePreparation" data-stage="{{item.stage}}">加载更多</button>
+          </view>
+        </view>
+        <view wx:if="{{preparation.summary}}" class="preparation-summary">
+          <view>资产所有组织：{{preparation.summary.assetOwnerName}}</view>
+          <view>库位物理归属：{{preparation.summary.physicalOwnerName}}</view>
+          <view>保管责任人：{{preparation.summary.custodianName}}</view>
+          <view wx:if="{{preparation.summary.assigneeName}}">本次核验人员：{{preparation.summary.assigneeName}}</view>
+        </view>
+      </block>
+    </view>
+
     <view wx:if="{{accessAllowed && !tasks.length}}" class="empty">
       <text class="empty-title">当前没有可见盘点任务</text>
       <text class="empty-text">区域负责人尚未下发，或任务不在你的正式授权范围内。</text>
