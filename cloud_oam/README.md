@@ -351,8 +351,9 @@
   双会话语法/并发/死锁/TOCTOU 演练；预生产仍须使用相同工件重做迁移、备份恢复、隔离 UAT 和
   环境参数复核，全部通过前不得放行生产。
   PC 受控启动也必须等待正式
-  `SyncRun.mode=full` 的 OAM 控制投影发布链与经用户确认的快照 SLA/计划 TTL，不能复用 legacy
-  edge 镜像或让浏览器直接提交内部 UUID。
+  完整覆盖目标省份的 OAM 控制投影发布链与经用户确认的快照 SLA/计划 TTL，不能复用 legacy
+  edge 镜像或让浏览器直接提交内部 UUID。V1.0 同时支持全量和增量同步，一期是否仅允许
+  完整省级快照建账尚待用户确认；`SyncRun.mode=full` 本身不是省级完整覆盖的证明。
 - PC 与小程序现已分别接入正式 `/api/v1/material-requests`、`/api/v1/materials`、
   `/api/v1/material-request-options/work-orders`、`/api/v1/files` 和非期初
   `/api/v1/stocktakes` 契约。需求提报的工单引用不再允许两端手填内部 UUID；选择器只读取
@@ -599,6 +600,20 @@ PC 基础 `8df5447` 与页面 `d553ef5` 已保存：Web 676 项与 TypeScript/�
 运行前后相关源码及工作流与候选 SHA 无差异。后续文档更新不改变这份代码验收快照。
 完整剩余边界见
 [一期剩余验收清单](docs/PHASE1_REMAINING_ACCEPTANCE_20260905.md)。
+
+后续期初只读准备目录 `b192ccfe7186e625d7080271c3a76e2b838914ab` 的
+[PG16 run 33949950302](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33949950302)
+已全绿：静态 `1736 passed, 1 skipped, 1 warning`（771.99 秒），动态 `1 passed, 1 warning`
+（175.60 秒），于 `2026-09-05T06:46:57Z` 完成。本地冻结后端/边缘全量 `2669 passed, 1 skipped`
+（867.52 秒）。迁移/ACL 不变；四层区域→资产组织→物理库位→初盘人员只核验资格，含授权与
+保管有效期边界，不提供控制库存或启动许可。
+PC `0bbc438`、小程序后继 `762150c2d4e6ca1337b00af5b7f01409528f30d9` 已完成只读入口，后者的
+[客户端 run 33950490567](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33950490567)
+同样全绿（Web 745、小程序 631、冻结安装、类型/构建），与已验证后端源码无差异。
+身份切换、页面生命周期、刷新、分页及迟到响应均独立回归；两端始终明确“控制库存未评估，不能启动”。
+契约及独立真机/生产待验边界见[期初准备验收](docs/OPENING_START_PREPARATION_ACCEPTANCE.md)，
+正式控制来源/省级覆盖缺口见[下一投影切片](docs/OPENING_CONTROL_PROJECTION_NEXT_SLICE.md)。
+不要重复已完成的目录开发，不把全量模式或空数据单独当作省级完整性证明。
 
 以下为 `0052–0058` 已完成盘点迁移的兼容背景，不是当前 head 的发布证据。
 `20260903_0052` 的期初盘点请求证据链不支持新旧应用与数据库混合运行；

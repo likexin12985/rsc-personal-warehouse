@@ -72,13 +72,25 @@ Web 全套 676 项、TypeScript/构建通过；不把客户端通过等同于本
 初盘人员、个人仓叶子/父仓、资产 owner/物理 owner 组合须重用启动写侧资格，不能直接复用
 普通盘点目录或把两种 owner 强制相等。资产 owner 与物理 owner 分属同区域树内不同组织已有
 合法服务测试；省负责人未配置时仍保持空。数据新鲜度目标按 V1.0 4.3 为不高于 45 分钟；
-当前启动尚无这个硬门禁。批次分阶段复用策略仍需明确，不得擅自给 control_sync_run_id 加全局唯一。
+当前启动尚无新鲜度准入；硬门禁及计时锚点仍需明确，不能把目标自行解释成已批准的 TTL。
+批次分阶段复用策略仍需明确，不得擅自给 control_sync_run_id 加全局唯一。
 启动前 task_id 未产生，需独立设计 region/task_no/actor/trace 恢复锚点，不能套用 count 哨兵。
-下一最小切片拟为分层只读 `start-options`（尚未实现）：regions → asset_owners → locations →
-assignees，每层严格坐标、上限与授权游标，只公开已授权组织/位置和执行人必要标识。
+分层只读 `start-options` 后端候选已实现并提交为 `b192ccfe7186e625d7080271c3a76e2b838914ab`：
+regions → asset_owners → locations → assignees，每层严格坐标、上限与授权游标，
+只公开已授权组织/位置和执行人必要标识。本地相关 317 项通过；准确 SHA 的 PG16
+run `33949950302` 全绿：静态 `1736 passed, 1 skipped, 1 warning`（771.99 秒），动态
+`1 passed, 1 warning`（175.60 秒），于 `2026-09-05T06:46:57Z` 完成。
+这只证明本切片的隔离验收，不等于发布生产。独立契约见 `OPENING_START_PREPARATION_ACCEPTANCE.md`。
+本地冻结后端/边缘全量 `2669 passed, 1 skipped`（867.52 秒），退出码 0；不能替代真库结果。
+PC 候选 `0bbc43894d17b8d7258fdeba3b7a1c423575920f` 已接入只读准备面板，Web 全套 745 项及
+类型/构建通过，准确 SHA 的客户端 run `33950143871` 全绿；不开放启动按钮。正式控制投影的
+来源、覆盖和兼容缺口见 `OPENING_CONTROL_PROJECTION_NEXT_SLICE.md`，full-only 策略尚待用户确认。
+小程序后继 `762150c2d4e6ca1337b00af5b7f01409528f30d9` 已接入同一准备流程，631 项通过；
+准确 SHA 的客户端 run `33950490567` 全绿（Web 745、小程序 631、类型/构建通过）。
+隐藏/卸载/刷新清理与原生 picker 占位映射已回归，不扩大发布配置，不视为微信真机验收。
 所有成功响应仍明确 `start_ready=false`、`control_evidence_not_evaluated`，不返回 SyncRun、
 库存量或启动凭据。资格目录成功不代表控制库存就绪，也不开放启动按钮。
-应从期初写侧抽取不生成 scope UUID/hash、无新锁的纯资格 helper；写侧保留现有锁与最终复验。
+已从期初写侧抽取不生成 scope UUID/hash、无新锁的资格 helper；写侧保留现有锁与最终复验。
 同一 grant 必须覆盖区域/资产 owner/物理 owner，同时完整 principal 的明确 deny 仍生效。
 仅个人仓要求叶子及精确当前保管人工程师；区域仓可有个人子仓。读侧末次复验身份、父链和
 保管绑定，写时仍重新加锁检查。普通盘点目录只可借鉴分页模式，不能直接替代期初资格规则。
@@ -134,7 +146,7 @@ PC 数量/重复维度前置校验修复 `e54765a10b4d465c6073df69e3fa97296ef90f
 由 `pnpm-lock.yaml` 锁住；不能把清单的 `latest` 直接误报为每次生产构建都会自动更新依赖。
 但 Node `22-alpine`、Caddy `2.10-alpine` 为浮动镜像，未固定 patch/digest；本地本轮验证使用
 Node 24.19.0 / pnpm 11.19.0，不能据此声称 Node 22 容器工具链已经验证。
-现有唯一 PostgreSQL 工作流既不由 frontend 路径触发，也不执行 Web/小程序安装、测试或构建。
+PostgreSQL 工作流不负责 Web/小程序安装、测试或构建；客户端已有独立门禁，不能互相替代。
 
 `2e188208d892e87cd46467bf6e1a4de455eb673a` 已把 12 项直接依赖声明固定到当前锁定版本，
 并声明 `packageManager: pnpm@11.19.0`；lock 只改 specifier，所有解析版本、integrity 与包图不变。
@@ -142,10 +154,12 @@ Node 24.19.0 / pnpm 11.19.0，不能据此声称 Node 22 容器工具链已经�
 复制已跟踪前端源码配置后，Node 24.19.0 / pnpm 11.19.0 的全套 691 项测试（16.30 秒）、
 类型检查和构建通过。未复制原 node_modules、环境凭据，未访问外网；这是当前宿主架构验证，
 不是 Docker Node 22/Alpine 构建证明。
-后续统一经验证的 Node/pnpm、固定经过核验的镜像
-摘要，并增加覆盖前端和小程序路径的独立客户端门禁。不得编造镜像 digest、随意更换底层镜像或
-顺便升级全部依赖。客户端门禁至少需要冻结安装、Web 测试/类型/构建、小程序全量测试及清单漂移
-失败用例；容器复现、架构兼容与供应链检查仍需独立验收。
+`ae263fb10a149a434c04ea5cb46c2a3bd3a906b5` 已增加独立客户端门禁，准确 SHA 的 GitHub
+run `33949308200` 成功：实际 Node 24.19.0 / pnpm 11.19.0、冻结安装、Web 691 项、
+类型检查/构建、小程序 578 项全部通过。新增 62 项结构和安全边界回归；workflow/action
+权限及固定提交、无路径跳过的触发条件见 `CLIENT_RELEASE_GATE.md`。
+后续仍需固定经过核验的容器镜像摘要；不得编造 digest、随意更换底层镜像或顺便升级依赖。
+容器复现、架构兼容、供应链检查及微信真机 UAT 仍需独立验收。
 
 ### P0：隔离 UAT 和发布前置
 
