@@ -43,7 +43,8 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 当前工作分支 `codex/production-readiness-gates` 的本地与远端均为准确 SHA
 `18dfbd72b7d578aff5886029304a5afadb75b8f2`。其父提交 `d95a3fe61eaa656d0d144d307a4ab9348c048194`
 已通过 Client release gate `33979437995` 与 PostgreSQL 16 release gate `33979438009`；当前
-`18dfbd7` 的独立门禁仍以 GitHub 最新结果为准。该提交新增盘点历史 cutoff replay、SN/逐件、
+`18dfbd7` 的 Client run `33981032052` 与 PostgreSQL 16 run `33981032060` 也均已通过。该提交新增
+盘点历史 cutoff replay、SN/逐件、
 多范围、尾部身份重验及 owner-lock 顺序的静态契约预检；该提交没有新增迁移，
 也没有把静态源码契约当作真库业务验收。
 
