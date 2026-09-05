@@ -12,7 +12,7 @@
 准确父提交 `d95a3fe61eaa656d0d144d307a4ab9348c048194` 已通过 Client release gate
 （run `33979437995`）及 PostgreSQL 16 release gate（run `33979438009`）；静态契约提交
 `18dfbd72b7d578aff5886029304a5afadb75b8f2` 的 Client run `33981032052` 与 PostgreSQL 16
-run `33981032060` 均已通过。当前 HEAD 可能是文档后继，最近文档 Client release gate（run `33985348396`）已通过；已验收功能代码提交为 `f482b8e`，其 PostgreSQL 16 gate（run `33982740333`）已通过。本次仅新增
+run `33981032060` 均已通过。当前 HEAD 可能是文档后继，最近文档 Client release gate（run `33985348396`）已通过；已验收功能代码提交为 `8046c78`，其 Client gate `33985935542` 与 PostgreSQL 16 gate `33985935553` 已通过。本次修复过账命令状态查询的锁后身份复核及 posted→closed 历史重证兼容，并新增两条回归测试；前一功能基线为 `f482b8e`，其 PostgreSQL 16 gate（run `33982740333`）已通过。本次仅新增
 盘点历史 cutoff replay、SN/逐件、多范围、尾部身份重验和 owner-lock 顺序的静态契约预检，
 没有把源码存在误报为 PostgreSQL 真库场景已验收，也没有新增迁移或改变生产业务逻辑。
 当前真库样本仍是单范围、hard freeze、非 SN；下一项 P0 仍为准确 SHA 的 SN + cutoff replay
