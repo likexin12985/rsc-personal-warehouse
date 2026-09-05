@@ -23,9 +23,17 @@ from test_stocktake_close_service import (
     RECONCILED_AT,
     _close,
     _install_sqlite_close_guards,
+    close_world as _close_world_fixture,
     _reconcile,
 )
 from test_stocktake_task_service import db
+
+
+@pytest.fixture
+def closed_posting_world(posting_world):
+    # Reuse the close-service fixture setup without requiring pytest to collect
+    # that separate module when this file is run in isolation.
+    return _close_world_fixture.__wrapped__(posting_world)
 
 
 def _lookup(world, task, trace_request_id: str):
@@ -82,7 +90,7 @@ def test_unseen_trace_revalidates_actor_after_lock_graph(posting_world, monkeypa
     monkeypatch.setattr(service.query, "_load_read_context", drift_after_lock)
     with pytest.raises(service.StocktakePostingCommandStatusError) as caught:
         _lookup(posting_world, task, "trace-posting-unseen-actor-drift")
-    assert caught.value.code == "authorization_changed"
+    assert caught.value.code == "stocktake_posting_command_status_authorization_changed"
     assert caught.value.http_status_code == 412
 
 
@@ -107,13 +115,13 @@ def test_exact_trace_reconstructs_only_persisted_posting_fact(posting_world, mon
 
 
 @pytest.mark.parametrize("closed", [False, True])
-def test_history_survives_real_post_and_close(close_world, monkeypatch, closed):
-    world = close_world
+def test_history_survives_real_post_and_close(closed_posting_world, monkeypatch, closed):
+    world = closed_posting_world
     task, _ = _approve(
         world,
         monkeypatch,
         key="posting-status-terminal",
-        counted_qty=Decimal("4.000"),
+        counted_qty=Decimal("5.000"),
         decision="no_adjustment",
     )
     _post(world, task, key="posting-status-terminal-post")

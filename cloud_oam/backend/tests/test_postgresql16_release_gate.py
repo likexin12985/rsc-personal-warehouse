@@ -13505,6 +13505,46 @@ def _seed_0047_stocktake_inventory(
             session.add(recount_account)
             session.flush()
 
+            # Do not reuse the alias-race location: that fixture intentionally
+            # starts a separate, not-yet-established opening task later.
+            serial_replay_location_id = uuid.uuid4()
+            serial_replay_location = StockLocation(
+                id=serial_replay_location_id,
+                code=f"PG16-SN-REPLAY-{serial_replay_location_id.hex[:16].upper()}",
+                name="PostgreSQL 16 非期初串码回放隔离库位",
+                location_type="region", owner_org_id=region_org_id,
+                parent_id=None, custodian_person_id=manager_person.id,
+                status="active", created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
+            serial_replay_serial = InventorySerial(
+                id=uuid.uuid4(), material_id=concurrency_material.id,
+                serial_no=f"PG16-SN-REPLAY-{serial_replay_location_id.hex.upper()}",
+                qr_code=f"PG16-SN-REPLAY-QR-{serial_replay_location_id.hex.upper()}",
+                lot_id=None, lifecycle_status="active",
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
+            session.add_all((serial_replay_location, serial_replay_serial))
+            session.flush()
+            session.add(CustodyAssignment(
+                id=uuid.uuid4(), location_id=serial_replay_location_id,
+                custodian_person_id=manager_person.id,
+                valid_from=now - timedelta(days=1), valid_to=None,
+                handover_case_id=None, created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            ))
+            serial_replay_account = StockAccount(
+                id=uuid.uuid4(), owner_org_id=region_org_id,
+                custodian_person_id=None, location_id=serial_replay_location_id,
+                material_id=concurrency_material.id, condition_code="new",
+                availability_bucket="available", lot_id=None,
+                created_at=now - timedelta(days=1),
+                updated_at=now - timedelta(days=1),
+            )
+            session.add(serial_replay_account)
+            session.flush()
+
             control_sync_run_id = uuid.uuid4()
             control_scope_key = (
                 f"oam_inventory_control:region:{region_org_id}"
@@ -13676,6 +13716,9 @@ def _seed_0047_stocktake_inventory(
                 "difference_peer_location_id": difference_peer_location.id,
                 "recount_location_id": recount_location_id,
                 "recount_account_id": recount_account.id,
+                "serial_replay_location_id": serial_replay_location_id,
+                "serial_replay_account_id": serial_replay_account.id,
+                "serial_replay_serial_id": serial_replay_serial.id,
                 "location_id": location.id,
                 "material_external_object_id": material_external_object.id,
                 "material_external_version_id": material_external_version.id,
@@ -15726,7 +15769,7 @@ SELECT posting.total_quantity::text,
         assignee_user_id=assignee_user_id,
     )
     serial_fixture = dict(fixture)
-    serial_fixture["recount_location_id"] = fixture["concurrency_location_id"]
+    serial_fixture["recount_location_id"] = fixture["serial_replay_location_id"]
     fixture["serial_opening_task_id"] = _establish_multiround_stocktake_location(
         api_engine, fixture=serial_fixture, actor_user_id=actor_user_id,
         assignee_user_id=assignee_user_id,
@@ -15866,15 +15909,15 @@ SELECT posting.total_quantity::text,
                     transaction_no="PG16-STOCKTAKE-SERIAL-INBOUND-1",
                     movement_type="inbound",
                     source_document_type="pg16_stocktake_release_fixture",
-                    source_document_id=str(fixture["concurrency_account_id"]),
+                    source_document_id=str(fixture["serial_replay_account_id"]),
                     posting_key="pg16-stocktake-serial-inbound-1",
                     effective_at=effective_at,
                     movements=(
                         InventoryMovementCommand(
                             from_account_id=None,
-                            to_account_id=fixture["concurrency_account_id"],
+                            to_account_id=fixture["serial_replay_account_id"],
                             quantity=Decimal("1.000"),
-                            serial_ids=(fixture["concurrency_serial_id"],),
+                            serial_ids=(fixture["serial_replay_serial_id"],),
                             external_boundary_code="PG16_RELEASE_FIXTURE",
                         ),
                     ),

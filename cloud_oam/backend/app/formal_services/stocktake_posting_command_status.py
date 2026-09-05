@@ -28,6 +28,7 @@ from ..stocktake_posting_command_status_schemas import (
     StocktakePostingHistoricalCommandOut,
 )
 from . import inventory_posting as inventory_service
+from . import stocktake_close as close_service
 from . import stocktake_posting as posting
 from . import stocktake_query as query
 from .audit_chain import (
@@ -185,22 +186,17 @@ def stocktake_posting_command_status(
                 db, stream_key=posting.INVENTORY_STREAM_KEY
             )
             posting._verify_source_audits(db, task=task, approval=approval, proof=proof)
-            plan = posting._load_and_build_posting_plan(
+            # Reuse the close/reconciliation proof's immutable posted proxy.
+            # A closed task has advanced its current version, but the original
+            # posting completion remains anchored to its own posted version.
+            # Replaying against the live closed task would confuse later
+            # reconciliation/close increments with the posting command.
+            close_service._reprove_posting(
                 db,
                 task=task,
-                expected_task_version=completion.expected_task_version,
+                posting=completion,
                 approval=approval,
-                posted_replay=True,
-                allow_closed_history=True,
-            )
-            posting._validate_persisted_posting_completion(
-                db,
-                task=task,
-                approval=approval,
-                completion=completion,
-                plan=plan,
                 audit_proof=proof,
-                allow_closed_history=True,
             )
             _verify_posting_transition(db, task, completion)
             _verify_audit_event_with_prelocked_proof(
