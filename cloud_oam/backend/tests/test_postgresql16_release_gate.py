@@ -17110,6 +17110,51 @@ def _assert_nonopening_multiround_count_status(
             previous_round_id = round_id
 
 
+def _assert_pg16_cutoff_replay_multiscope_owner_contract() -> None:
+    """Check the production contracts needed by the next PG history sample.
+
+    The disposable PG gate already exercises the complete hard-freeze chain
+    below.  This bounded assertion keeps the cutoff-replay/multi-scope
+    prerequisites explicit without manufacturing a second set of terminal
+    facts (or bypassing the formal opening/approval guards) in the gate.
+    """
+    import inspect
+
+    from app.formal_services import stocktake_count_command_status, stocktake_difference
+
+    migration = _load_nonopening_count_history_owner_migration_0062()
+    owner_sql = migration._postgresql_lock_function_sql()
+    required_owner_fragments = (
+        "stocktake_scope_count_completions",
+        "count_ledger_cursor",
+        "stock_accounts",
+        "stocktake_snapshot_lines",
+        "from_account_id",
+        "to_account_id",
+        "stocktake_count_lines",
+        "inventory_movements",
+        "FOR UPDATE OF account",
+    )
+    assert all(fragment in owner_sql for fragment in required_owner_fragments)
+
+    replay_source = inspect.getsource(stocktake_difference._replay_scope_expected_states)
+    assert "completion_by_scope" in replay_source
+    assert "count_cursors" in replay_source
+    assert "for scope in scopes" in replay_source
+    assert "count_ledger_cursor" in replay_source
+
+    # The historical command-status endpoint is deliberately a normal
+    # transaction: it takes the owner graph locks, proves the cursor, then
+    # returns without a commit or a write hint.  A surrounding request owns
+    # rollback/close, so this assertion prevents a future read-only shortcut.
+    status_source = inspect.getsource(stocktake_count_command_status.stocktake_count_command_status)
+    assert "_lock_current_ledger_cursor" in status_source
+    assert "session.commit" not in status_source
+    assert "READ ONLY" not in status_source.upper()
+
+    assert "lock_nonopening_stocktake_count_history_graph" in status_source
+
+
 def _complete_0051_nonopening_stocktake_service_chain(
     api_engine,
     *,
@@ -19284,6 +19329,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     )
     try:
         _validate_runtime_security(api_engine)
+        _assert_pg16_cutoff_replay_multiscope_owner_contract()
         _assert_0058_review_terminal_catalog_state(
             _0058_review_terminal_catalog_state(), fixed=True
         )
