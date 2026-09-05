@@ -7038,6 +7038,7 @@ def _assert_0052_legacy_backfill_and_atomic_rejection() -> None:
 
 def _0058_review_terminal_catalog_state() -> dict[str, object]:
     migration = _load_nonopening_review_terminal_status_migration_0058()
+    history_migration = _load_nonopening_count_history_owner_migration_0062()
     signatures = (
         migration.REVIEW_GRAPH_SIGNATURE,
         migration.DIFFERENCE_REPLAY_LOCK_SIGNATURE,
@@ -7046,6 +7047,12 @@ def _0058_review_terminal_catalog_state() -> dict[str, object]:
     function_rows: dict[str, tuple[object, ...]] = {}
     with psycopg.connect(**_admin_parameters()) as connection:
         with connection.cursor() as cursor:
+            cursor.execute("SELECT version_num FROM public.alembic_version")
+            revision_rows = cursor.fetchall()
+            assert len(revision_rows) == 1
+            schema_revision = revision_rows[0][0]
+            if schema_revision == NONOPENING_COUNT_HISTORY_OWNER_REVISION:
+                signatures += (history_migration.LOCK_SIGNATURE,)
             for signature in signatures:
                 cursor.execute(
                     "SELECT function_row.oid, namespace_row.nspname, "
@@ -7100,12 +7107,16 @@ def _0058_review_terminal_catalog_state() -> dict[str, object]:
             )
             trigger_rows = tuple(cursor.fetchall())
             cursor.execute(
-                "SELECT function_row.oid, function_row.proname, "
+                "SELECT function_row.oid, namespace_row.nspname, function_row.proname, "
+                "pg_catalog.oidvectortypes(function_row.proargtypes), "
                 "(pg_catalog.length(function_row.prosrc) - "
                 "pg_catalog.length(pg_catalog.replace(function_row.prosrc, "
                 "%s, ''))) / pg_catalog.length(%s) "
                 "FROM pg_catalog.pg_proc AS function_row "
-                "WHERE pg_catalog.strpos(function_row.prosrc, %s) > 0",
+                "JOIN pg_catalog.pg_namespace AS namespace_row ON namespace_row.oid=function_row.pronamespace "
+                "WHERE pg_catalog.strpos(function_row.prosrc, %s) > 0 "
+                "ORDER BY namespace_row.nspname, function_row.proname, "
+                "pg_catalog.oidvectortypes(function_row.proargtypes), function_row.oid",
                 (
                     migration.UPSTREAM_REVIEW_LOCK_FUNCTION,
                     migration.UPSTREAM_REVIEW_LOCK_FUNCTION,
@@ -7114,10 +7125,26 @@ def _0058_review_terminal_catalog_state() -> dict[str, object]:
             )
             upstream_callers = tuple(cursor.fetchall())
     return {
+        "revision": schema_revision,
         "functions": function_rows,
         "triggers": trigger_rows,
         "upstream_callers": upstream_callers,
     }
+
+
+def _expected_0058_upstream_review_callers(schema_revision: str):
+    """Exact namespace/signature/count matrix, never inferred from presence."""
+    legacy_revisions = {
+        NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION,
+        NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
+        SUPPLY_TASK_CAUSALITY_REVISION, SUPPLY_TASK_SECURITY_REVISION,
+        SUPPLY_TASK_EVENT_KEY_REVISION,
+    }
+    assert schema_revision in legacy_revisions | {NONOPENING_COUNT_HISTORY_OWNER_REVISION}
+    rows = [("public", "rsc_lock_nonopening_stocktake_difference_replay_graph_0057", "uuid, uuid, text", 1)]
+    if schema_revision == NONOPENING_COUNT_HISTORY_OWNER_REVISION:
+        rows.append(("public", "rsc_lock_nonopening_stocktake_count_history_graph_0062", "uuid, uuid, text", 1))
+    return tuple(sorted(rows))
 
 
 def _load_supply_event_key_migration_0061():
@@ -7149,6 +7176,7 @@ def _assert_0058_review_terminal_catalog_state(
     state: dict[str, object], *, fixed: bool
 ) -> None:
     migration = _load_nonopening_review_terminal_status_migration_0058()
+    assert state["revision"] == (HEAD_REVISION if fixed else migration.down_revision)
     functions = state["functions"]
     assert isinstance(functions, dict)
     validator = functions[migration.REVIEW_GRAPH_SIGNATURE]
@@ -7186,9 +7214,30 @@ def _assert_0058_review_terminal_catalog_state(
     assert replay_lock[16] == migration.DIFFERENCE_REPLAY_LOCK_BODY_SHA256
     assert replay_lock[17].count(migration.UPSTREAM_REVIEW_LOCK_FUNCTION) == 1
     assert replay_lock[18:] == (0, True)
-    assert state["upstream_callers"] == (
-        (replay_lock[0], migration.DIFFERENCE_REPLAY_LOCK_FUNCTION, 1),
-    )
+    expected_signatures = {
+        migration.REVIEW_GRAPH_SIGNATURE, migration.DIFFERENCE_REPLAY_LOCK_SIGNATURE,
+        migration.RUNTIME_READY_SIGNATURE,
+    }
+    if state["revision"] == NONOPENING_COUNT_HISTORY_OWNER_REVISION:
+        history_migration = _load_nonopening_count_history_owner_migration_0062()
+        expected_signatures.add(history_migration.LOCK_SIGNATURE)
+        history_lock = functions[history_migration.LOCK_SIGNATURE]
+        assert history_lock[1:16] == (
+            "public", history_migration.LOCK_FUNCTION, "uuid, uuid, text",
+            "requested_task_id,requested_round_id,requested_actor_user_id",
+            "void", "f", "plpgsql", "v", False, False, "u", True,
+            migration.MIGRATION_ROLE, [migration.FIXED_SEARCH_PATH],
+            "{star_oam_migrator=X/star_oam_migrator,star_oam_api=X/star_oam_migrator}",
+        )
+        assert history_lock[16] == history_migration.LOCK_BODY_SHA256
+        assert history_lock[17].count(migration.UPSTREAM_REVIEW_LOCK_FUNCTION) == 1
+        assert history_lock[18:] == (0, True)
+    assert set(functions) == expected_signatures
+    expected_callers = []
+    for namespace, name, arguments, count in _expected_0058_upstream_review_callers(state["revision"]):
+        signature = f"{namespace}.{name}({arguments})"
+        expected_callers.append((functions[signature][0], namespace, name, arguments, count))
+    assert state["upstream_callers"] == tuple(expected_callers)
 
     readiness = functions[migration.RUNTIME_READY_SIGNATURE]
     assert readiness[1:15] == (
@@ -7216,6 +7265,25 @@ def _assert_0058_review_terminal_catalog_state(
     assert state["triggers"] == expected_triggers
 
 
+def _assert_0058_roundtrip_preserves_catalog_identity(before, after):
+    """Only the dropped/recreated 0062 capability may receive a fresh OID."""
+    _assert_0058_review_terminal_catalog_state(before, fixed=True)
+    _assert_0058_review_terminal_catalog_state(after, fixed=True)
+    migration = _load_nonopening_count_history_owner_migration_0062()
+    old = before["functions"][migration.LOCK_SIGNATURE]
+    new = after["functions"][migration.LOCK_SIGNATURE]
+    assert old[0] != new[0]
+    assert old[1:] == new[1:]
+    expected_functions = {**before["functions"], migration.LOCK_SIGNATURE: new}
+    expected_callers = tuple(
+        (new[0], *row[1:]) if row[0] == old[0] else row
+        for row in before["upstream_callers"]
+    )
+    assert after == {
+        **before, "functions": expected_functions, "upstream_callers": expected_callers,
+    }
+
+
 def _assert_0058_empty_terminal_downgrade_and_reupgrade() -> None:
     assert _current_revision() == HEAD_REVISION
     migration = _load_nonopening_review_terminal_status_migration_0058()
@@ -7239,7 +7307,9 @@ def _assert_0058_empty_terminal_downgrade_and_reupgrade() -> None:
     )
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
-    assert _0058_review_terminal_catalog_state() == head_state
+    _assert_0058_roundtrip_preserves_catalog_identity(
+        head_state, _0058_review_terminal_catalog_state(),
+    )
 
 
 def _0057_difference_replay_catalog_state() -> dict[str, object]:
