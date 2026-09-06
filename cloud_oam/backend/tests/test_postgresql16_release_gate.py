@@ -58,7 +58,14 @@ SUPPLY_TASK_CAUSALITY_REVISION = "20260905_0059"
 SUPPLY_TASK_SECURITY_REVISION = "20260905_0060"
 SUPPLY_TASK_EVENT_KEY_REVISION = "20260905_0061"
 NONOPENING_COUNT_HISTORY_OWNER_REVISION = "20260905_0062"
-HEAD_REVISION = NONOPENING_COUNT_HISTORY_OWNER_REVISION
+STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION = "20260906_0064"
+HEAD_REVISION = STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION
+HARDENED_HEAD_REVISIONS = frozenset(
+    {
+        NONOPENING_COUNT_HISTORY_OWNER_REVISION,
+        STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
+    }
+)
 OPENING_BACKFILL_DATABASE_PREFIX = f"{DATABASE_NAME}_0052_backfill_"
 RLS_BINDING_TABLE = "oam_sync_scope_bindings"
 RLS_READY_FUNCTION = "public.rsc_oam_runtime_binding_ready_0044()"
@@ -4675,6 +4682,7 @@ def _expected_0049_function_body_sha256(
             SUPPLY_TASK_SECURITY_REVISION,
             SUPPLY_TASK_EVENT_KEY_REVISION,
             NONOPENING_COUNT_HISTORY_OWNER_REVISION,
+            STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
         }
     )
     assert expected_revision in (
@@ -4710,6 +4718,7 @@ def _expected_0049_function_body_sha256(
             SUPPLY_TASK_SECURITY_REVISION,
             SUPPLY_TASK_EVENT_KEY_REVISION,
             NONOPENING_COUNT_HISTORY_OWNER_REVISION,
+            STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
         }
         and signature == migration.ROUND_ASSIGNMENT_HELPER_0021_SIGNATURE
     ):
@@ -4722,7 +4731,8 @@ def _expected_0049_function_body_sha256(
         expected_revision in {NONOPENING_REVIEW_TERMINAL_STATUS_REVISION,
                               SUPPLY_TASK_CAUSALITY_REVISION, SUPPLY_TASK_SECURITY_REVISION,
                               SUPPLY_TASK_EVENT_KEY_REVISION,
-                              NONOPENING_COUNT_HISTORY_OWNER_REVISION}
+                              NONOPENING_COUNT_HISTORY_OWNER_REVISION,
+                              STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION}
         and signature == migration.REVIEW_GRAPH_VALIDATOR_0032_SIGNATURE
     ):
         terminal_migration = (
@@ -4877,6 +4887,7 @@ def _assert_0049_recount_guard_catalog(
             SUPPLY_TASK_SECURITY_REVISION,
             SUPPLY_TASK_EVENT_KEY_REVISION,
             NONOPENING_COUNT_HISTORY_OWNER_REVISION,
+            STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
         }
     expected_function_rows = []
     for (
@@ -5444,6 +5455,7 @@ def _assert_0052_opening_terminal_catalog(
                             SUPPLY_TASK_SECURITY_REVISION,
                             SUPPLY_TASK_EVENT_KEY_REVISION,
                             NONOPENING_COUNT_HISTORY_OWNER_REVISION,
+                            STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
                         }
                         and row[0]
                         == dispatch_migration.GRAPH_CLOSURE_SIGNATURE
@@ -5461,6 +5473,7 @@ def _assert_0052_opening_terminal_catalog(
                             SUPPLY_TASK_SECURITY_REVISION,
                             SUPPLY_TASK_EVENT_KEY_REVISION,
                             NONOPENING_COUNT_HISTORY_OWNER_REVISION,
+                            STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
                         }
                         and row[0]
                         == history_migration.ROUND_SUBMISSION_SIGNATURE
@@ -7039,6 +7052,7 @@ def _assert_0052_legacy_backfill_and_atomic_rejection() -> None:
 def _0058_review_terminal_catalog_state() -> dict[str, object]:
     migration = _load_nonopening_review_terminal_status_migration_0058()
     history_migration = _load_nonopening_count_history_owner_migration_0062()
+    finalizer_migration = _load_stocktake_finalizer_organization_lock_migration_0064()
     signatures = (
         migration.REVIEW_GRAPH_SIGNATURE,
         migration.DIFFERENCE_REPLAY_LOCK_SIGNATURE,
@@ -7051,8 +7065,10 @@ def _0058_review_terminal_catalog_state() -> dict[str, object]:
             revision_rows = cursor.fetchall()
             assert len(revision_rows) == 1
             schema_revision = revision_rows[0][0]
-            if schema_revision == NONOPENING_COUNT_HISTORY_OWNER_REVISION:
+            if schema_revision in HARDENED_HEAD_REVISIONS:
                 signatures += (history_migration.LOCK_SIGNATURE,)
+            if schema_revision == STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION:
+                signatures += (finalizer_migration.LOCK_SIGNATURE,)
             for signature in signatures:
                 cursor.execute(
                     "SELECT function_row.oid, namespace_row.nspname, "
@@ -7140,9 +7156,9 @@ def _expected_0058_upstream_review_callers(schema_revision: str):
         SUPPLY_TASK_CAUSALITY_REVISION, SUPPLY_TASK_SECURITY_REVISION,
         SUPPLY_TASK_EVENT_KEY_REVISION,
     }
-    assert schema_revision in legacy_revisions | {NONOPENING_COUNT_HISTORY_OWNER_REVISION}
+    assert schema_revision in legacy_revisions | HARDENED_HEAD_REVISIONS
     rows = [("public", "rsc_lock_nonopening_stocktake_difference_replay_graph_0057", "uuid, uuid, text", 1)]
-    if schema_revision == NONOPENING_COUNT_HISTORY_OWNER_REVISION:
+    if schema_revision in HARDENED_HEAD_REVISIONS:
         rows.append(("public", "rsc_lock_nonopening_stocktake_count_history_graph_0062", "uuid, uuid, text", 1))
     return tuple(sorted(rows))
 
@@ -7163,13 +7179,26 @@ def _load_nonopening_count_history_owner_migration_0062():
     assert specification is not None and specification.loader is not None
     migration = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(migration)
-    assert migration.revision == HEAD_REVISION
+    assert migration.revision == NONOPENING_COUNT_HISTORY_OWNER_REVISION
     assert migration.down_revision == SUPPLY_TASK_EVENT_KEY_REVISION
     return migration
 
 
+def _load_stocktake_finalizer_organization_lock_migration_0064():
+    path = CLOUD_ROOT / "backend/alembic/versions/20260906_0064_stocktake_finalizer_organization_lock.py"
+    specification = importlib.util.spec_from_file_location(
+        "pg16_stocktake_finalizer_organization_lock_0064", path
+    )
+    assert specification is not None and specification.loader is not None
+    migration = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(migration)
+    assert migration.revision == STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION
+    assert migration.down_revision == NONOPENING_COUNT_HISTORY_OWNER_REVISION
+    return migration
+
+
 def _head_runtime_ready_hash() -> str:
-    return _load_nonopening_count_history_owner_migration_0062().RUNTIME_READY_BODY_SHA256_0062
+    return _load_stocktake_finalizer_organization_lock_migration_0064().RUNTIME_READY_BODY_SHA256_0064
 
 
 def _assert_0058_review_terminal_catalog_state(
@@ -7218,7 +7247,7 @@ def _assert_0058_review_terminal_catalog_state(
         migration.REVIEW_GRAPH_SIGNATURE, migration.DIFFERENCE_REPLAY_LOCK_SIGNATURE,
         migration.RUNTIME_READY_SIGNATURE,
     }
-    if state["revision"] == NONOPENING_COUNT_HISTORY_OWNER_REVISION:
+    if state["revision"] in HARDENED_HEAD_REVISIONS:
         history_migration = _load_nonopening_count_history_owner_migration_0062()
         expected_signatures.add(history_migration.LOCK_SIGNATURE)
         history_lock = functions[history_migration.LOCK_SIGNATURE]
@@ -7232,6 +7261,20 @@ def _assert_0058_review_terminal_catalog_state(
         assert history_lock[16] == history_migration.LOCK_BODY_SHA256
         assert history_lock[17].count(migration.UPSTREAM_REVIEW_LOCK_FUNCTION) == 1
         assert history_lock[18:] == (0, True)
+    if state["revision"] == STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION:
+        finalizer_migration = _load_stocktake_finalizer_organization_lock_migration_0064()
+        expected_signatures.add(finalizer_migration.LOCK_SIGNATURE)
+        finalizer_lock = functions[finalizer_migration.LOCK_SIGNATURE]
+        assert finalizer_lock[1:16] == (
+            "public", finalizer_migration.LOCK_FUNCTION, "uuid",
+            "requested_organization_id", "void", "f", "plpgsql", "v",
+            False, False, "u", True, finalizer_migration.MIGRATION_ROLE,
+            ["search_path=pg_catalog, public"],
+            "{star_oam_migrator=X/star_oam_migrator,star_oam_api=X/star_oam_migrator}",
+        )
+        assert finalizer_lock[16] == finalizer_migration.LOCK_BODY_SHA256
+        assert finalizer_lock[17].count("FOR SHARE OF organizations") == 1
+        assert finalizer_lock[18:] == (0, True)
     assert set(functions) == expected_signatures
     expected_callers = []
     for namespace, name, arguments, count in _expected_0058_upstream_review_callers(state["revision"]):
@@ -7266,17 +7309,26 @@ def _assert_0058_review_terminal_catalog_state(
 
 
 def _assert_0058_roundtrip_preserves_catalog_identity(before, after):
-    """Only the dropped/recreated 0062 capability may receive a fresh OID."""
+    """Only the dropped/recreated forward capabilities may receive fresh OIDs."""
     _assert_0058_review_terminal_catalog_state(before, fixed=True)
     _assert_0058_review_terminal_catalog_state(after, fixed=True)
-    migration = _load_nonopening_count_history_owner_migration_0062()
-    old = before["functions"][migration.LOCK_SIGNATURE]
-    new = after["functions"][migration.LOCK_SIGNATURE]
-    assert old[0] != new[0]
-    assert old[1:] == new[1:]
-    expected_functions = {**before["functions"], migration.LOCK_SIGNATURE: new}
+    history_migration = _load_nonopening_count_history_owner_migration_0062()
+    finalizer_migration = _load_stocktake_finalizer_organization_lock_migration_0064()
+    changed_signatures = (
+        history_migration.LOCK_SIGNATURE,
+        finalizer_migration.LOCK_SIGNATURE,
+    )
+    expected_functions = dict(before["functions"])
+    changed_oids = {}
+    for signature in changed_signatures:
+        old = before["functions"][signature]
+        new = after["functions"][signature]
+        assert old[0] != new[0]
+        assert old[1:] == new[1:]
+        expected_functions[signature] = new
+        changed_oids[old[0]] = new[0]
     expected_callers = tuple(
-        (new[0], *row[1:]) if row[0] == old[0] else row
+        (changed_oids[row[0]], *row[1:]) if row[0] in changed_oids else row
         for row in before["upstream_callers"]
     )
     assert after == {
@@ -17890,7 +17942,9 @@ def _assert_pg16_posting_tail_authorization_contract() -> None:
         inventory_posting._stocktake_finalizer_organization_statement
     )
     assert "populate_existing=True" in organization_statement_source
-    assert "with_for_update(read=True" in organization_statement_source
+    assert "with_for_update(read=True" not in organization_statement_source
+    assert "rsc_lock_stocktake_finalizer_organization_0064" in organization_lock_source
+    assert "CAST(:organization_id AS uuid)" in organization_lock_source
 
     # The replay/idempotent branch is also a durable completion path and must
     # retain its own authorization re-proof before validating the stored seal.
@@ -19776,6 +19830,121 @@ def _0062_history_owner_catalog():
     return (*row[:-1], body_hash), acl
 
 
+def _0064_finalizer_organization_catalog():
+    migration = _load_stocktake_finalizer_organization_lock_migration_0064()
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT owner.rolname, proc.prosecdef, proc.proconfig, proc.provolatile, "
+                "proc.proparallel, proc.proisstrict, proc.proleakproof, language.lanname, "
+                "proc.prokind, proc.proretset, proc.provariadic, proc.proargmodes, "
+                "proc.pronargdefaults, pg_get_function_identity_arguments(proc.oid), "
+                "pg_get_function_result(proc.oid), proc.prosrc "
+                "FROM pg_catalog.pg_proc AS proc "
+                "JOIN pg_catalog.pg_roles AS owner ON owner.oid=proc.proowner "
+                "JOIN pg_catalog.pg_language AS language ON language.oid=proc.prolang "
+                "WHERE proc.oid=pg_catalog.to_regprocedure(%s)",
+                (migration.LOCK_SIGNATURE,),
+            )
+            row = cursor.fetchone()
+            assert row is not None
+            body_hash = hashlib.sha256(row[-1].encode()).hexdigest()
+            cursor.execute(
+                "SELECT CASE WHEN acl.grantee=0 THEN 'PUBLIC' ELSE grantee.rolname END, "
+                "acl.privilege_type, acl.is_grantable, grantor.rolname "
+                "FROM pg_catalog.pg_proc AS proc "
+                "CROSS JOIN LATERAL pg_catalog.aclexplode(coalesce(proc.proacl, "
+                "pg_catalog.acldefault('f', proc.proowner))) AS acl "
+                "LEFT JOIN pg_catalog.pg_roles AS grantee ON grantee.oid=acl.grantee "
+                "JOIN pg_catalog.pg_roles AS grantor ON grantor.oid=acl.grantor "
+                "WHERE proc.oid=pg_catalog.to_regprocedure(%s) ORDER BY 1, 2",
+                (migration.LOCK_SIGNATURE,),
+            )
+            acl = tuple(cursor.fetchall())
+    assert row[:-1] == (
+        "star_oam_migrator", True, ["search_path=pg_catalog, public"], "v", "u",
+        False, False, "plpgsql", "f", False, 0, None, 0,
+        "requested_organization_id uuid", "void",
+    )
+    assert body_hash == migration.LOCK_BODY_SHA256
+    assert acl == (
+        ("star_oam_api", "EXECUTE", False, "star_oam_migrator"),
+        ("star_oam_migrator", "EXECUTE", False, "star_oam_migrator"),
+    )
+    return (*row[:-1], body_hash), acl
+
+
+def _assert_0064_empty_finalizer_organization_downgrade_and_reupgrade() -> None:
+    migration = _load_stocktake_finalizer_organization_lock_migration_0064()
+    before = _0064_finalizer_organization_catalog()
+    _run_alembic("downgrade", NONOPENING_COUNT_HISTORY_OWNER_REVISION)
+    assert _current_revision() == NONOPENING_COUNT_HISTORY_OWNER_REVISION
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_catalog.to_regprocedure(%s), "
+                "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+                "proc.prosrc, 'UTF8')), 'hex') "
+                "FROM pg_catalog.pg_proc AS proc "
+                "WHERE proc.oid=pg_catalog.to_regprocedure(%s)",
+                (migration.LOCK_SIGNATURE, RLS_READY_FUNCTION),
+            )
+            row = cursor.fetchone()
+            assert row == (None, migration.RUNTIME_READY_BODY_SHA256_0062)
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    assert _0064_finalizer_organization_catalog() == before
+
+
+def _assert_0064_finalizer_organization_runtime_lock() -> None:
+    """Prove the API can execute the lock capability without table UPDATE."""
+    migration = _load_stocktake_finalizer_organization_lock_migration_0064()
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id FROM public.organizations "
+                "WHERE org_type = 'headquarters' AND status = 'active' "
+                "ORDER BY id LIMIT 1"
+            )
+            row = cursor.fetchone()
+    assert row is not None, "the disposable gate must contain an active headquarters organization"
+    organization_id = row[0]
+
+    holder = psycopg.connect(
+        **_connection_parameters(
+            role="star_oam_api", password=_role_password("star_oam_api")
+        )
+    )
+    updater = psycopg.connect(**_admin_parameters())
+    try:
+        with holder.cursor() as cursor:
+            cursor.execute(
+                f"SELECT {migration.LOCK_SIGNATURE}(%s)",
+                (organization_id,),
+            )
+            assert cursor.fetchone() == (None,)
+        with updater.cursor() as cursor:
+            cursor.execute("SET LOCAL statement_timeout = '1500ms'")
+            with pytest.raises(psycopg.errors.QueryCanceled):
+                cursor.execute(
+                    "UPDATE public.organizations SET status = status WHERE id = %s",
+                    (organization_id,),
+                )
+        updater.rollback()
+        with holder.cursor() as cursor:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                cursor.execute(
+                    "UPDATE public.organizations SET status = status WHERE id = %s",
+                    (organization_id,),
+                )
+        holder.rollback()
+    finally:
+        updater.rollback()
+        updater.close()
+        holder.rollback()
+        holder.close()
+
+
 def _assert_0062_empty_history_owner_downgrade_and_reupgrade() -> None:
     migration = _load_nonopening_count_history_owner_migration_0062()
     before = _0062_history_owner_catalog()
@@ -19804,7 +19973,7 @@ def _assert_0062_empty_history_owner_downgrade_and_reupgrade() -> None:
                            (RLS_READY_FUNCTION,))
             new_ready = cursor.fetchone()
             assert new_ready[0] == ready_oid
-            assert hashlib.sha256(new_ready[1].encode()).hexdigest() == migration.RUNTIME_READY_BODY_SHA256_0062
+            assert hashlib.sha256(new_ready[1].encode()).hexdigest() == _head_runtime_ready_hash()
 
 
 def _assert_0061_empty_event_key_downgrade_and_reupgrade() -> None:
@@ -19966,6 +20135,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
+    _assert_0064_empty_finalizer_organization_downgrade_and_reupgrade()
     _assert_0062_empty_history_owner_downgrade_and_reupgrade()
     _assert_0061_empty_event_key_downgrade_and_reupgrade()
     _assert_0060_empty_hardening_downgrade_and_reupgrade()
@@ -20098,6 +20268,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     )
     try:
         _validate_runtime_security(api_engine)
+        _assert_0064_finalizer_organization_runtime_lock()
         _assert_pg16_cutoff_replay_multiscope_owner_contract()
         _assert_pg16_posting_tail_authorization_contract()
         _assert_0058_review_terminal_catalog_state(

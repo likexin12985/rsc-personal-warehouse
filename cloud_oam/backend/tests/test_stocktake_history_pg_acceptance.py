@@ -97,10 +97,11 @@ def test_pg_history_owner_probe_covers_real_acl_wait_and_ancestor_union():
     assert "_assert_0062_empty_history_owner_downgrade_and_reupgrade()" in driver
 
 
-def _synthetic_0058_catalog(*, fixed=True, history_oid=4062):
+def _synthetic_0058_catalog(*, fixed=True, history_oid=4062, finalizer_oid=4064):
     """Catalog-shaped test inputs only; no DB connection or fabricated PG pass."""
     migration = gate._load_nonopening_review_terminal_status_migration_0058()
     history = gate._load_nonopening_count_history_owner_migration_0062()
+    finalizer = gate._load_stocktake_finalizer_organization_lock_migration_0064()
     revision = gate.HEAD_REVISION if fixed else migration.down_revision
     migrator_acl = "{star_oam_migrator=X/star_oam_migrator}"
     api_acl = "{star_oam_migrator=X/star_oam_migrator,star_oam_api=X/star_oam_migrator}"
@@ -133,6 +134,13 @@ def _synthetic_0058_catalog(*, fixed=True, history_oid=4062):
         functions[history.LOCK_SIGNATURE] = (
             history_oid, "public", history.LOCK_FUNCTION, *replay[3:16],
             history.LOCK_BODY_SHA256, migration.UPSTREAM_REVIEW_LOCK_FUNCTION, 0, True,
+        )
+        functions[finalizer.LOCK_SIGNATURE] = (
+            finalizer_oid, "public", finalizer.LOCK_FUNCTION, "uuid",
+            "requested_organization_id", "void", "f", "plpgsql", "v",
+            False, False, "u", True, finalizer.MIGRATION_ROLE,
+            ["search_path=pg_catalog, public"], api_acl,
+            finalizer.LOCK_BODY_SHA256, "FOR SHARE OF organizations", 0, True,
         )
     callers = tuple((functions[f"{namespace}.{name}({arguments})"][0], namespace, name, arguments, count)
                     for namespace, name, arguments, count in gate._expected_0058_upstream_review_callers(revision))
@@ -196,12 +204,18 @@ def test_0058_new_caller_keeps_full_security_and_body_checks(index, value):
 
 
 def test_0058_roundtrip_accepts_only_new_0062_oid_and_preserves_old_oids():
-    before, after = _synthetic_0058_catalog(), _synthetic_0058_catalog(history_oid=5062)
+    before, after = _synthetic_0058_catalog(), _synthetic_0058_catalog(
+        history_oid=5062, finalizer_oid=5064
+    )
     gate._assert_0058_roundtrip_preserves_catalog_identity(before, after)
     with pytest.raises(AssertionError):
         gate._assert_0058_roundtrip_preserves_catalog_identity(before, deepcopy(before))
+    finalizer_signature = gate._load_stocktake_finalizer_organization_lock_migration_0064().LOCK_SIGNATURE
     for signature in before["functions"]:
-        if signature == gate._load_nonopening_count_history_owner_migration_0062().LOCK_SIGNATURE:
+        if signature in {
+            gate._load_nonopening_count_history_owner_migration_0062().LOCK_SIGNATURE,
+            finalizer_signature,
+        }:
             continue
         changed = deepcopy(after)
         old_row = changed["functions"][signature]

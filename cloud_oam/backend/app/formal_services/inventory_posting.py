@@ -25,7 +25,7 @@ from typing import Final, Mapping, Sequence
 import uuid
 
 from sqlalchemy import and_, or_, select, text, union_all
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from ..formal_access import (
@@ -2178,14 +2178,15 @@ def lock_current_stocktake_finalizer_organization(
     db: Session,
     actor: FormalPrincipal,
 ) -> Organization:
-    """Hold a read lock while the posting completion seal is written.
+    """Hold a migration-owned organization lock through the completion seal.
 
-    The API role intentionally has no UPDATE privilege on ``organizations``;
-    PostgreSQL ``FOR SHARE`` therefore remains inside the existing read ACL
-    while conflicting projector/migrator updates wait.  The statement is
-    still a plain refreshed read on SQLite, whose dialect ignores the lock
-    clause.  Callers use this only after the inventory batch and source-audit
-    proof, immediately before the immutable completion seal.
+    ``star_oam_api`` intentionally has no ``UPDATE`` privilege on
+    ``organizations``.  PostgreSQL therefore calls the 0064 SECURITY DEFINER
+    capability, whose owner takes the ``FOR SHARE`` lock and validates that
+    the row is an active headquarters organization.  The lock remains held
+    by this caller transaction; the refreshed plain read below only hydrates
+    the ORM object and repeats the domain predicate.  SQLite keeps its
+    validation-only path because it has no row-locking equivalent.
     """
 
     supplied = _validate_supplied_actor(actor)
@@ -2200,10 +2201,23 @@ def lock_current_stocktake_finalizer_organization(
             "forbidden",
             "盘点差异过账仅允许当前有效的总部管理员执行",
         )
-    statement = _stocktake_finalizer_organization_statement(
-        person.organization_id,
-        lock_for_share=db.get_bind().dialect.name == "postgresql",
-    )
+    if db.get_bind().dialect.name == "postgresql":
+        try:
+            db.execute(
+                text(
+                    "SELECT public.rsc_lock_stocktake_finalizer_organization_0064("
+                    "CAST(:organization_id AS uuid))"
+                ),
+                {"organization_id": str(person.organization_id)},
+            )
+        except DBAPIError as exc:
+            _fail(
+                "inventory_stocktake_finalizer_forbidden",
+                "forbidden",
+                "盘点差异过账仅允许当前有效的总部管理员执行",
+                cause=exc,
+            )
+    statement = _stocktake_finalizer_organization_statement(person.organization_id)
     organization = db.scalar(statement)
     if (
         organization is None
@@ -2220,18 +2234,14 @@ def lock_current_stocktake_finalizer_organization(
 
 def _stocktake_finalizer_organization_statement(
     organization_id: uuid.UUID,
-    *,
-    lock_for_share: bool,
 ):
-    """Build the refreshed organization read used by the posting tail."""
+    """Build the refreshed plain read used after the 0064 lock capability."""
 
     statement = (
         select(Organization)
         .where(Organization.id == organization_id)
         .execution_options(populate_existing=True)
     )
-    if lock_for_share:
-        statement = statement.with_for_update(read=True, of=Organization)
     return statement
 
 

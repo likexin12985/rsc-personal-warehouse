@@ -3078,6 +3078,12 @@ RUNTIME_EXECUTE_FUNCTIONS = {
         "plpgsql",
         ("search_path=pg_catalog, public",),
     ),
+    ("rsc_lock_stocktake_finalizer_organization_0064", "uuid"): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
     ("rsc_lock_material_request_work_order_reference_0042", "uuid"): (
         "v",
         True,
@@ -3144,6 +3150,8 @@ RUNTIME_FUNCTION_BODY_SHA256 = {
         "rsc_lock_nonopening_stocktake_count_history_graph_0062",
         "uuid, uuid, text",
     ): "53fbad62f31d9fa93103bb376ba67f0da54ff1ac937b9d6e49bc6e752580393a",
+    ("rsc_lock_stocktake_finalizer_organization_0064", "uuid"):
+        "e97ad36d80cbeafa5ea97290b8ecd131213c2f2f965178f77f99977b12051502",
     ("rsc_lock_material_request_work_order_reference_0042", "uuid"):
         "d889b397912e98e1b9c2ec1de03ada750f42df01803c87239b9d04a624221982",
 }

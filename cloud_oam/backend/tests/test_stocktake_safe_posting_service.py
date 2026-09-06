@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 import importlib.util
+import inspect
 from pathlib import Path
 import uuid
 
@@ -363,14 +364,19 @@ def test_finalizer_rejects_inactive_organization_even_with_stale_identity_map(
     assert caught.value.code == "inventory_stocktake_finalizer_forbidden"
 
 
-def test_finalizer_organization_tail_uses_postgresql_for_share_and_refresh():
+def test_finalizer_organization_tail_uses_migration_owned_lock_and_refresh():
     organization_id = uuid.UUID("10000000-0000-4000-8000-000000000001")
     statement = inventory_service._stocktake_finalizer_organization_statement(
-        organization_id, lock_for_share=True
+        organization_id
     )
     compiled = str(statement.compile(dialect=postgresql.dialect()))
-    assert "FOR SHARE OF organizations" in compiled
+    assert "FOR SHARE" not in compiled
     assert statement.get_execution_options()["populate_existing"] is True
+    source = inspect.getsource(
+        inventory_service.lock_current_stocktake_finalizer_organization
+    )
+    assert "rsc_lock_stocktake_finalizer_organization_0064" in source
+    assert "CAST(:organization_id AS uuid)" in source
 
 
 def test_accepted_loss_uses_one_union_batch_and_appends_immutable_ledger(
