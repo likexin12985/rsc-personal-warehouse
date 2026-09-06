@@ -3,6 +3,30 @@
 日期：2026-09-05。依据根 AGENTS.md、V1.0；前序已验收代码为 `2691ab3`，文档后继为 `206b60e`。
 本切片不修改客户端、边缘采集或业务状态轴，不访问任何外部生产系统。
 
+## 2026-09-06 0064 前向门禁续验收（当前准确 SHA）
+
+当前安全提交为 `27c445c030b887c935359f7458234eee6baf399f`，迁移 head 为
+`20260906_0064`。该提交的 [Client release gate run 34009213016](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34009213016)
+和 [PostgreSQL 16 release gate run 34009213014](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34009213014)
+均已通过。PG16 静态阶段为 `2133 passed, 1 skipped, 1 warning`，动态阶段为
+`1 passed, 1 warning`；warning 仍是既有 Starlette/AnyIO 弃用提示，不是跳过或失败。
+
+本轮新增的 0064 前向迁移未新增业务表：
+
+- 组织终结器锁函数：`public.rsc_lock_stocktake_finalizer_organization_0064(uuid)`；
+  `LOCK_BODY_SHA256=e97ad36d80cbeafa5ea97290b8ecd131213c2f2f965178f77f99977b12051502`。
+- readiness 0062 基线 SHA：`d019a572ad39a3570ca175479ee50a4a7987eff3a0655c5c910c5b83744ea04d`；
+  0064 head SHA：`b75bb3c37c279a2a406a36be9049a187e9cef61dfd0892a48a2db0e8aef551c0`。
+- 真库已验证 migrator owner、`SECURITY DEFINER`、固定 `search_path`、API/migrator
+  精确 EXECUTE ACL、降级/再升级目录和 API 角色锁竞争；总部组织仅为 disposable gate
+  临时夹具，验证后删除，不是生产数据。
+
+本轮同时完成小程序正式盘点恢复的 durable capability/no-replay、物理存储 key 校验、任务级
+存储故障锁存、页面隐藏证据清理及 late-result 竞态保护；Client 门禁含 Web、类型、构建和
+微信小程序全量契约测试。0063 复核命令状态迁移仍保持设计冻结，不能把本轮 0064 门禁当作
+0063 或一期供给任务验收；审批、分配、占用、出库、发货、物流签收、OAM 收货、RSC/个人仓
+入库、通知送达和对账同步仍是独立未完成状态轴。
+
 ## 当前验证状态
 
 最新已验收代码为 `b57f3c33be37cca025b17d6f7ea8b7f0db48452d`：专用库位先经真实期初启动、

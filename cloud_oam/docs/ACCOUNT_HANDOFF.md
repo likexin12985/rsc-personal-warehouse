@@ -38,6 +38,29 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 
 ## 4. 当前源码状态
 
+### 2026-09-06 当前门禁已验收（最新准确 SHA）
+
+当前分支 `codex/production-readiness-gates` 的安全提交为
+`27c445c030b887c935359f7458234eee6baf399f`，远端与本地一致。该 SHA 的
+[Client release gate run 34009213016](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34009213016)
+和 [PostgreSQL 16 release gate run 34009213014](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34009213014)
+均为 success。PG16 静态阶段 `2133 passed, 1 skipped, 1 warning`，动态阶段
+`1 passed, 1 warning`；warning 是既有 AnyIO 弃用提示。
+
+本轮完成并验收：
+
+- 0064 前向迁移 `rsc_lock_stocktake_finalizer_organization_0064(uuid)`，保留
+  migrator owner、`SECURITY DEFINER`、固定 `search_path` 和 API/migrator 精确 EXECUTE ACL；
+  0062/0064 readiness 双版本 SHA 已同步运行时安全清单。
+- 小程序正式盘点恢复的 durable capability/no-replay、物理存储 key 完整性、任务级存储故障
+  锁存、页面隐藏证据清理和 late-result 竞态保护；Client 门禁包含 Web、类型、构建和小程序契约。
+- 0064 真库动态门禁使用 disposable 总部组织夹具，锁竞争、降级/再升级和安全目录均已回读；
+  夹具已在门禁结束清理，不包含生产数据。
+
+本轮不实现 0063 复核命令状态迁移；该计划仍冻结，且 Alembic 图需先决定 0064→0063 重接或
+显式 merge，不能直接造成双 head。审批、分配、占用、出库、发货、物流签收、OAM 收货、
+RSC/个人仓入库、通知送达和对账同步仍必须分别建模和验收，当前不能宣称一期或生产放行。
+
 ### 2026-09-06 最新续开发状态
 
 当前分支 `codex/production-readiness-gates` 的安全提交为 `e5ea7fe`（远端已同步）。前向提交

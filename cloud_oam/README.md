@@ -10,6 +10,25 @@
 
 ## 当前开发状态
 
+### 2026-09-06 当前门禁已验收（最新准确 SHA）
+
+当前分支 `codex/production-readiness-gates` 的安全提交为
+`27c445c030b887c935359f7458234eee6baf399f`。Client release gate
+[34009213016](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34009213016)
+和 PostgreSQL 16 release gate
+[34009213014](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34009213014)
+均已通过；PG16 静态 `2133 passed, 1 skipped, 1 warning`，动态 `1 passed, 1 warning`。
+
+本轮完成 0064 前向迁移的组织终结器锁及 0062/0064 readiness 双版本安全清单同步，真库
+验证了 owner、`SECURITY DEFINER`、固定 `search_path`、精确 ACL、降级/再升级和锁竞争；
+同时完成小程序 durable 盘点恢复/no-replay、存储物理 key 校验、任务级存储故障锁存、页面
+隐藏证据清理与 late-result 竞态保护。0064 动态门禁中的总部组织是 disposable 临时夹具，
+已在测试结束清理，不代表生产数据。
+
+0063 复核命令状态迁移仍冻结，不能直接新增造成 Alembic 双 head；审批、分配、占用、出库、
+发货、物流签收、OAM 收货、RSC/个人仓入库、通知送达和对账同步仍保持独立状态，当前不代表
+一期、真实 UAT 或生产放行。
+
 ### 2026-09-06 最新验收进度
 
 当前分支安全提交为 `e5ea7fe`。`4c0f74a` 的 Client `33996107590` / PostgreSQL 16

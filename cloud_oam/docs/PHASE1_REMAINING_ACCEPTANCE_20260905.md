@@ -7,6 +7,21 @@
 
 ## 当前验收基线
 
+### 2026-09-06 当前续验收（已通过准确 SHA 门禁）
+
+安全提交 `27c445c030b887c935359f7458234eee6baf399f` 的 Client run
+`34009213016` 和 PostgreSQL 16 run `34009213014` 均已通过。PG16 静态为
+`2133 passed, 1 skipped, 1 warning`，动态为 `1 passed, 1 warning`。
+
+本轮补齐并验收 0064 组织终结器锁的真实 owner/ACL/SECURITY/search_path、readiness
+0062→0064 指纹、降级/再升级及锁竞争；并完成小程序 durable count recovery 的 no-replay、
+存储故障锁存、物理 key 完整性、页面卸载证据清理和 late-result 竞态保护。0064 真库使用的
+总部组织为 disposable 测试夹具，验证后删除，不计生产数据。
+
+本轮仍未开始 0063 复核命令状态迁移：其 Alembic 图关系需要先解决 0064 直接挂 0062
+造成的双头风险。需求供给纵向链路及审批、分配、占用、出库、发货、物流签收、OAM 收货、
+RSC/个人仓入库、通知送达、对账同步继续保持独立状态和未完成边界。
+
 ### 2026-09-06 最新续验收记录（`e5ea7fe`）
 
 提交 `4c0f74a` 已通过 Client release gate `33996107590` 与 PostgreSQL 16 release gate
