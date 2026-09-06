@@ -1,6 +1,7 @@
 import { api, ApiError, jsonBody } from "./api";
 import { formalMaterialCatalogQuery } from "./formalMaterialCatalog";
 import { validateMaterialRequestWorkOrderOptionQuery } from "./formalMaterialRequestOptions";
+import { validateMaterialRequestAllocationOptionPage, type MaterialRequestAllocationOptionPage } from "./formalMaterialRequestAllocationOptions";
 import { validateSupplyCreateInput, validateSupplyUpdateInput } from "./formalMaterialRequestSupply";
 import {
   MATERIAL_REQUEST_SCHEMA_VERSION,
@@ -68,6 +69,7 @@ export interface FormalMaterialRequestAdapter {
   listWorkOrderOptions(query: string, afterId: string | null): Promise<unknown>;
   workOrderOptionDetail(workOrderId: string): Promise<unknown>;
   listMaterials(query: string, afterId: string | null): Promise<unknown>;
+  listAllocationOptions(requestId: string, requestLineId: string): Promise<MaterialRequestAllocationOptionPage>;
   createDraft(intent: MaterialRequestCreateIntent): Promise<unknown>;
   mutate(intent: MaterialRequestMutationIntent): Promise<unknown>;
 }
@@ -669,6 +671,13 @@ export function createFormalMaterialRequestAdapter(
         cache: "no-store",
         headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
       });
+    },
+    listAllocationOptions(requestId: string, requestLineId: string) {
+      const path = `/v1/material-requests/${requiredUuid(requestId, "request_id")}/allocation-options?request_line_id=${encodeURIComponent(requiredUuid(requestLineId, "request_line_id"))}`;
+      return requester<unknown>(path, {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+      }).then(validateMaterialRequestAllocationOptionPage);
     },
     createDraft(intent: MaterialRequestCreateIntent) {
       const object = exactObject(intent, [
