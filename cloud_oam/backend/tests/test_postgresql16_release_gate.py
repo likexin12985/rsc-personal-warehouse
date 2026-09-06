@@ -20693,7 +20693,6 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         )
         try:
             with migrator_engine.begin() as connection:
-                supply_event_key.context.is_offline_mode = lambda: False
                 supply_event_key.op = Operations(MigrationContext.configure(connection))
                 with pytest.raises(
                     RuntimeError,
