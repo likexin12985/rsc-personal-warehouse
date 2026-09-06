@@ -23,7 +23,18 @@
 - `not_observed` 仅表示未观察到匹配 trace，不能证明未执行、清除哨兵、允许重试或换键补写。
   证据损坏、歧义或权限变化均失败关闭，不能降级成 `not_observed`。
 - 响应不包含盘点数量、标签/SN 原文、备注、附件链接、请求正文、哈希或幂等键；
-  正常和框架级错误都设置 private/no-store、no-cache、no-referrer、nosniff。
+正常和框架级错误都设置 private/no-store、no-cache、no-referrer、nosniff。
+
+## 2026-09-06 Web 客户端接线证据
+
+服务端命令状态契约已由 Web 日常盘点的初盘/复盘范围计数和区域/总部复核实际使用。
+提交 `83f2223d8fa5031718cb5b8250c3b2796d4667fd` 的
+[Client gate 34025174245](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34025174245)
+验证了 Web `795` 项、小程序 `670` 项、类型、构建和安全门禁。Web 只在发送前保存最小
+哨兵，发送后最多一次 POST；随后通过本契约 GET-only 核验，`not_observed` 继续阻塞且不
+推断未执行。该客户端提交没有改后端/迁移；后端真库证据仍以未变更后端的
+[PG16 gate 34021817686](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34021817686)
+为准。
 
 ## 数据与锁边界
 
@@ -87,7 +98,8 @@ git diff --check
 
 ## 尚未完成的边界与下一切片
 
-1. 两端仍未接入日常计数跨进程持久哨兵；本 API 不代表重启恢复完成。
+1. Web 已接入日常计数和两阶段复核的跨刷新持久哨兵；小程序的非期初计数接线及过账/复核
+   持久恢复仍需独立验收，本 API 不代表两端全部命令恢复完成。
 2. 本文功能 SHA 的 PG16 新增验证仅初盘及其终态历史；后继 `976cdba` 三轮真库测试
    范围与结果见 `DAILY_COUNT_HISTORY_PG16_ACCEPTANCE.md`。单范围硬冻结提交态不能
    替代复盘终态、多范围、附件/SN/截止回放和并发验证。
