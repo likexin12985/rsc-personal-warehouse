@@ -19899,6 +19899,7 @@ def _assert_0064_empty_finalizer_organization_downgrade_and_reupgrade() -> None:
 def _assert_0064_finalizer_organization_runtime_lock() -> None:
     """Prove the API can execute the lock capability without table UPDATE."""
     migration = _load_stocktake_finalizer_organization_lock_migration_0064()
+    temporary_organization_id = None
     with psycopg.connect(**_admin_parameters()) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -19907,8 +19908,30 @@ def _assert_0064_finalizer_organization_runtime_lock() -> None:
                 "ORDER BY id LIMIT 1"
             )
             row = cursor.fetchone()
-    assert row is not None, "the disposable gate must contain an active headquarters organization"
-    organization_id = row[0]
+            if row is None:
+                # The migration gate deliberately starts from a minimal empty
+                # catalog.  Seed one disposable business row for the function
+                # execution proof; this is not migration-owned data and is
+                # removed after both lock transactions have ended.
+                temporary_organization_id = uuid.uuid4()
+                now = datetime.now(timezone.utc)
+                cursor.execute(
+                    "INSERT INTO public.organizations "
+                    "(id, external_object_id, code, name, parent_id, org_type, "
+                    "province_code, status, created_at, updated_at) "
+                    "VALUES (%s, NULL, %s, %s, NULL, 'headquarters', NULL, "
+                    "'active', %s, %s)",
+                    (
+                        temporary_organization_id,
+                        f"PG16-0064-HQ-{temporary_organization_id.hex}",
+                        "PG16 disposable 0064 headquarters",
+                        now,
+                        now,
+                    ),
+                )
+                organization_id = temporary_organization_id
+            else:
+                organization_id = row[0]
 
     holder = psycopg.connect(
         **_connection_parameters(
@@ -19943,6 +19966,15 @@ def _assert_0064_finalizer_organization_runtime_lock() -> None:
         updater.close()
         holder.rollback()
         holder.close()
+        if temporary_organization_id is not None:
+            with psycopg.connect(
+                **_admin_parameters(), autocommit=True
+            ) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "DELETE FROM public.organizations WHERE id = %s",
+                        (temporary_organization_id,),
+                    )
 
 
 def _assert_0062_empty_history_owner_downgrade_and_reupgrade() -> None:
