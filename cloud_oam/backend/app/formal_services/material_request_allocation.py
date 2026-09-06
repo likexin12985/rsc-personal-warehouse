@@ -210,7 +210,7 @@ def allocation_command_status(
             if fact
             else None
         )
-    if fact is None or request is None:
+    if fact is None or request is None or fact.status != _ACTIVE_ALLOCATION_STATUS:
         _fail("material_request_allocation_history_invalid", "service_unavailable", "分配事实缺失")
     expected = {
         "allocation_no": fact.allocation_no,
