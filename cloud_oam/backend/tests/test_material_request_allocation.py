@@ -5,7 +5,11 @@ import pytest
 from pydantic import ValidationError
 
 from app.formal_services.material_request_allocation import AllocationCreateInput
-from app.formal_services.material_request_allocation import MaterialRequestAllocationError, create_allocation
+from app.formal_services.material_request_allocation import (
+    MaterialRequestAllocationError,
+    allocation_command_status,
+    create_allocation,
+)
 from app.formal_services import inventory_query
 from app.material_request_allocation_schemas import AllocationCreateIn
 from app.material_request_allocation_schemas import AllocationMutationOut
@@ -118,3 +122,21 @@ def test_allocation_service_maps_inventory_read_failures_to_stable_domain_errors
             trace_request_id="trace-1234",
         )
     assert caught.value.category == "service_unavailable"
+
+
+def test_allocation_command_status_returns_not_observed_without_audit_rows():
+    actor = type("Actor", (), {
+        "role_codes": ("admin",), "user_id": "u", "person_id": _id(40),
+        "authorization_version": 1, "account_status": "active",
+        "employment_status": "active", "access_mode": "active",
+    })()
+
+    class Result:
+        def all(self):
+            return []
+
+    class DB:
+        def scalars(self, _statement):
+            return Result()
+
+    assert allocation_command_status(DB(), actor=actor, trace_request_id="trace-1234") is None

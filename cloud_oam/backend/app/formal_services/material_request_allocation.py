@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from ..demand_models import MaterialRequest, MaterialRequestLine
 from ..formal_access import FormalPrincipal, lock_formal_principal_graph
-from ..foundation_models import StateTransitionEvent
+from ..foundation_models import AuditEvent, StateTransitionEvent
 from ..inventory_models import (
     InventorySerial,
     SerialCurrentPosition,
@@ -136,6 +136,81 @@ def create_allocation(
         raise MaterialRequestAllocationError(
             "material_request_allocation_database_unavailable", "service_unavailable", "分配数据库暂时不可用，本次操作未完成"
         ) from exc
+
+
+def allocation_command_status(
+    db: Session,
+    *,
+    actor: FormalPrincipal,
+    trace_request_id: str,
+) -> AllocationCommandResult | None:
+    """Resolve one allocation write from its non-sensitive request trace.
+
+    The audit event is the durable bridge because the allocation fact stores
+    no raw request coordinate.  Any incomplete or contradictory evidence is a
+    service error, never an ``not_observed`` result that could release a retry.
+    """
+    if (
+        actor.account_status != "active"
+        or actor.employment_status != "active"
+        or actor.access_mode != "active"
+        or not actor.role_codes
+        or not set(actor.role_codes).intersection({"admin", "provincial_manager"})
+    ):
+        _fail("material_request_allocation_forbidden", "forbidden", "当前账号没有货源分配权限")
+    if not isinstance(trace_request_id, str) or not trace_request_id.strip():
+        _fail("material_request_allocation_trace_invalid", "invalid_request", "请求追踪坐标无效")
+    audits = tuple(
+        db.scalars(
+            select(AuditEvent)
+            .where(
+                AuditEvent.actor_user_id == actor.user_id,
+                AuditEvent.request_id == trace_request_id,
+            )
+            .order_by(AuditEvent.id)
+        ).all()
+    )
+    if not audits:
+        return None
+    if len(audits) != 1:
+        _fail("material_request_allocation_history_invalid", "service_unavailable", "分配历史证据不完整")
+    audit = audits[0]
+    if (
+        audit.action != "material_request_allocation_created"
+        or audit.aggregate_type != "stock_allocation"
+        or not isinstance(audit.after_jsonb, Mapping)
+    ):
+        _fail("material_request_allocation_history_invalid", "service_unavailable", "分配历史证据不匹配")
+    try:
+        allocation_id = uuid.UUID(str(audit.after_jsonb["allocation_id"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise MaterialRequestAllocationError(
+            "material_request_allocation_history_invalid", "service_unavailable", "分配历史证据无效"
+        ) from exc
+    if audit.aggregate_id != str(allocation_id):
+        _fail("material_request_allocation_history_invalid", "service_unavailable", "分配审计对象不匹配")
+    fact = db.scalar(select(StockAllocation).where(StockAllocation.id == allocation_id))
+    request = db.scalar(select(MaterialRequest).where(MaterialRequest.id == fact.request_id)) if fact else None
+    if fact is None or request is None:
+        _fail("material_request_allocation_history_invalid", "service_unavailable", "分配事实缺失")
+    expected = {
+        "allocation_no": fact.allocation_no,
+        "request_id": str(fact.request_id),
+        "request_line_id": str(fact.request_line_id),
+        "source_stock_account_id": str(fact.source_stock_account_id),
+        "allocated_qty": str(fact.allocated_qty),
+        "source_balance_version": fact.source_balance_version,
+        "source_ledger_cursor": fact.source_ledger_cursor,
+    }
+    if any(audit.after_jsonb.get(key) != value for key, value in expected.items()):
+        _fail("material_request_allocation_history_invalid", "service_unavailable", "分配审计与事实不一致")
+    if (
+        fact.actor_user_id != actor.user_id
+        or fact.actor_person_id != actor.person_id
+        or fact.authorization_version != actor.authorization_version
+    ):
+        _fail("material_request_allocation_authorization_changed", "precondition_failed", "原分配授权版本已变化")
+    return _result_from_existing(fact, request=request, replayed=True)
 
 
 def _create_allocation_impl(

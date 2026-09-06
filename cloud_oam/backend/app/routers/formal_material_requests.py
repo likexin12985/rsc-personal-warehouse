@@ -76,7 +76,11 @@ from ..material_request_read_schemas import (
 from ..material_request_allocation_option_schemas import (
     MaterialRequestAllocationOptionPageOut,
 )
-from ..material_request_allocation_schemas import AllocationCreateIn, AllocationMutationOut
+from ..material_request_allocation_schemas import (
+    AllocationCommandStatusOut,
+    AllocationCreateIn,
+    AllocationMutationOut,
+)
 from ..production_adapters import create_production_material_request_contact_cipher
 
 
@@ -97,6 +101,52 @@ def _set_read_no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Referrer-Policy"] = "no-referrer"
+
+
+@command_status_router.get(
+    "/material-request-allocation-command-status",
+    response_model=AllocationCommandStatusOut,
+)
+def formal_material_request_allocation_command_status(
+    response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    checked_request_id = _required_safe_header(
+        "X-Request-ID", request_id, minimum=8, maximum=160
+    )
+    try:
+        result = allocation_service.allocation_command_status(
+            db, actor=principal, trace_request_id=checked_request_id
+        )
+        output = AllocationCommandStatusOut(
+            lookup_status="confirmed" if result is not None else "not_observed",
+            command=None
+            if result is None
+            else AllocationMutationOut(
+                request_id=result.request_id,
+                allocation_id=result.allocation_id,
+                allocation_no=result.allocation_no,
+                request_version=result.request_version,
+                revision_id=result.revision_id,
+                revision_no=result.revision_no,
+                request_line_id=result.request_line_id,
+                source_stock_account_id=result.source_stock_account_id,
+                allocated_qty=f"{result.allocated_qty:.3f}",
+                allocation_status="allocated",
+                request_status=result.request_status,
+                state_axes=dict(result.state_axes),
+                idempotency_replayed=True,
+            ),
+        )
+    except allocation_service.MaterialRequestAllocationError as exc:
+        _raise_service_error(exc)
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True)
+    _set_read_no_store(response)
+    return output
 
 
 @command_status_router.get(

@@ -290,3 +290,34 @@ def test_router_allocation_create_has_explicit_write_headers_and_no_store(monkey
     assert response.headers["Cache-Control"].startswith("no-store")
     assert response.headers["Idempotency-Replayed"] == "false"
     mocked.assert_called_once()
+
+
+def test_router_allocation_command_status_is_read_only_and_no_store(monkeypatch):
+    api = FastAPI()
+    api.include_router(formal_material_requests.command_status_router, prefix="/api")
+
+    class Principal:
+        user_id = "user-1"
+        person_id = _id(900)
+        authorization_version = 4
+        role_codes = ("admin",)
+
+        def allows(self, *_args, **_kwargs):
+            return True
+
+    class DB:
+        rollback = Mock()
+
+    api.dependency_overrides[get_formal_principal] = lambda: Principal()
+    api.dependency_overrides[get_db] = lambda: DB()
+    mocked = Mock(return_value=None)
+    monkeypatch.setattr(allocation_service, "allocation_command_status", mocked)
+    with TestClient(api) as client:
+        response = client.get(
+            "/api/v1/material-request-allocation-command-status",
+            headers={"X-Request-ID": "allocation-trace-1"},
+        )
+    assert response.status_code == 200
+    assert response.json() == {"schema_version": "1.0", "lookup_status": "not_observed", "command": None}
+    assert response.headers["Cache-Control"].startswith("no-store")
+    mocked.assert_called_once()

@@ -427,7 +427,12 @@ KMS/RAM/文件存储与部署参数、短信实际产品及接口兼容、备份
 `stock_allocation_serials` 事实表、严格幂等 POST 和 Web 端货源候选读取。分配命令锁定
 需求/身份/货源投影，校验审批版本、期初建账、余额版本、流水游标和 SN 绑定，并只推进
 需求的 `allocation_status` 轴；代码明确不创建 reservation、库存流水、出库、发货或收货事实。
-本地迁移一致性 167 项、相关后端回归 347 项通过；尚未完成 PostgreSQL 16 远端门禁、
+本轮继续补充了 `GET /v1/material-request-allocation-command-status` 只读核验端点：客户端
+用原始 `X-Request-ID` 查询当前操作者的唯一分配审计，再重读 `stock_allocations` 与需求状态，
+只有审计对象、分配事实、授权版本和状态轴全部一致才返回 `confirmed`；无审计时返回
+`not_observed`，证据缺失或矛盾直接返回服务不可用，禁止客户端据此自动重发。该端点只提供
+服务端恢复证据，尚未接入 Web/小程序分配写页面，也不替代 PostgreSQL 16 远端门禁和隔离 UAT。
+本地迁移一致性 167 项、相关后端回归 352 项通过；尚未完成 PostgreSQL 16 远端门禁、
 真实授权数据、跨客户端写页面和隔离 UAT，因此仍不能宣称生产可用。
 后继提交 `17ea988` 修正历史迁移断言后，全后端复跑 `3082 passed, 1 skipped`；
 Web `808 passed`、TypeScript 与生产构建通过（仅保留既有大包提示）。仓库安全检查通过，

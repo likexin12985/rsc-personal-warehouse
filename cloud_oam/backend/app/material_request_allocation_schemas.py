@@ -92,4 +92,18 @@ class AllocationMutationOut(BaseModel):
         return self
 
 
-__all__ = ["AllocationCreateIn", "AllocationMutationOut"]
+class AllocationCommandStatusOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1.0"] = "1.0"
+    lookup_status: Literal["not_observed", "confirmed"]
+    command: AllocationMutationOut | None
+
+    @model_validator(mode="after")
+    def validate_lookup(self):
+        if (self.lookup_status == "confirmed") != (self.command is not None):
+            raise ValueError("allocation lookup status and command disagree")
+        return self
+
+
+__all__ = ["AllocationCommandStatusOut", "AllocationCreateIn", "AllocationMutationOut"]
