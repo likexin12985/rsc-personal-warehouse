@@ -116,6 +116,7 @@ def formal_material_request_allocation_command_status(
     checked_request_id = _required_safe_header(
         "X-Request-ID", request_id, minimum=8, maximum=160
     )
+    _set_read_no_store(response)
     try:
         result = allocation_service.allocation_command_status(
             db, actor=principal, trace_request_id=checked_request_id
@@ -144,7 +145,7 @@ def formal_material_request_allocation_command_status(
             ),
         )
     except allocation_service.MaterialRequestAllocationError as exc:
-        _raise_service_error(exc)
+        _raise_service_error(exc, no_store=True)
     except ValidationError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -153,11 +154,11 @@ def formal_material_request_allocation_command_status(
                 "category": "service_unavailable",
                 "message": "分配命令状态响应无效，保持结果待核验",
             },
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
         ) from None
     except DBAPIError:
         db.rollback()
-        _raise_database_unavailable(read_only=True)
-    _set_read_no_store(response)
+        _raise_database_unavailable(read_only=True, no_store=True)
     return output
 
 

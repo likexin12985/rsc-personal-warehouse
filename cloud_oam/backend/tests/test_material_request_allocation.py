@@ -273,6 +273,16 @@ def test_real_allocation_and_recovery_bind_audit_quantity_and_historical_version
     assert recovered.current_request_version == expected_version + 1
     assert recovered.allocated_qty == Decimal("0.500")
 
+    audit.after_jsonb = {**audit.after_jsonb, "allocated_qty": "0.501"}
+    db.flush()
+    with pytest.raises(MaterialRequestAllocationError) as tampered:
+        allocation_command_status(
+            db, actor=actor, trace_request_id="allocation-real-chain-trace-0001"
+        )
+    assert tampered.value.code == "material_request_allocation_history_invalid"
+    audit.after_jsonb = {**audit.after_jsonb, "allocated_qty": "0.500"}
+    db.flush()
+
     request.version += 3
     db.flush()
     replay = create_allocation(
