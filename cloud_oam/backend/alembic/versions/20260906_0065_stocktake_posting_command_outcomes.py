@@ -29,6 +29,9 @@ SQLITE_DELETE_TRIGGER = f"{IMMUTABLE_TRIGGER}_delete"
 LATE_POST_TRIGGER = "trg_stocktake_posting_completions_block_sealed_0065"
 LATE_POST_FUNCTION = "rsc_guard_stocktake_posting_completion_sealed_0065"
 SQLITE_LATE_POST_TRIGGER = f"{LATE_POST_TRIGGER}_sqlite"
+BINDING_TRIGGER = "trg_stocktake_posting_command_outcomes_binding_0065"
+BINDING_FUNCTION = "rsc_guard_stocktake_posting_command_outcome_binding_0065"
+SQLITE_BINDING_TRIGGER = f"{BINDING_TRIGGER}_sqlite"
 DOWNGRADE_BLOCKER = "cannot downgrade 0065 while stocktake posting command outcomes exist"
 
 
@@ -137,6 +140,34 @@ def upgrade() -> None:
 
     if dialect == "postgresql":
         op.execute(f"""
+CREATE FUNCTION public.{BINDING_FUNCTION}()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+    IF NEW.disposition = 'posted' AND NOT EXISTS (
+        SELECT 1 FROM public.stocktake_posting_completions
+        WHERE id = NEW.completion_id
+          AND task_id = NEW.task_id
+          AND expected_task_version = NEW.expected_task_version
+          AND request_sha256 = NEW.request_sha256
+    ) THEN
+        RAISE EXCEPTION 'stocktake posting command outcome is not bound to its completion'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END
+$$
+""")
+        op.execute(f"REVOKE ALL ON FUNCTION public.{BINDING_FUNCTION}() FROM PUBLIC")
+        op.execute(
+            f"CREATE TRIGGER {BINDING_TRIGGER} BEFORE INSERT OR UPDATE ON public.{TABLE} "
+            f"FOR EACH ROW EXECUTE FUNCTION public.{BINDING_FUNCTION}()"
+        )
+        op.execute(f"ALTER TABLE public.{TABLE} ENABLE ALWAYS TRIGGER {BINDING_TRIGGER}")
+        op.execute(f"""
 CREATE FUNCTION public.{IMMUTABLE_FUNCTION}()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -192,6 +223,11 @@ $$
         )
     else:
         op.execute(
+            f"CREATE TRIGGER {SQLITE_BINDING_TRIGGER} BEFORE INSERT ON {TABLE} "
+            f"WHEN NEW.disposition = 'posted' AND NOT EXISTS (SELECT 1 FROM stocktake_posting_completions WHERE id = NEW.completion_id AND task_id = NEW.task_id AND expected_task_version = NEW.expected_task_version AND request_sha256 = NEW.request_sha256) "
+            "BEGIN SELECT RAISE(ABORT, 'stocktake posting command outcome is not bound to its completion'); END"
+        )
+        op.execute(
             f"CREATE TRIGGER {SQLITE_UPDATE_TRIGGER} BEFORE UPDATE ON {TABLE} "
             "BEGIN SELECT RAISE(ABORT, 'stocktake posting command outcomes are immutable'); END"
         )
@@ -216,10 +252,13 @@ def downgrade() -> None:
             f"DROP TRIGGER IF EXISTS {LATE_POST_TRIGGER} ON public.stocktake_posting_completions"
         )
         op.execute(f"DROP FUNCTION IF EXISTS public.{LATE_POST_FUNCTION}()")
+        op.execute(f"DROP TRIGGER IF EXISTS {BINDING_TRIGGER} ON public.{TABLE}")
+        op.execute(f"DROP FUNCTION IF EXISTS public.{BINDING_FUNCTION}()")
         op.execute(f"DROP TRIGGER IF EXISTS {IMMUTABLE_TRIGGER} ON public.{TABLE}")
         op.execute(f"DROP FUNCTION IF EXISTS public.{IMMUTABLE_FUNCTION}()")
     else:
         op.execute(f"DROP TRIGGER IF EXISTS {SQLITE_LATE_POST_TRIGGER}")
+        op.execute(f"DROP TRIGGER IF EXISTS {SQLITE_BINDING_TRIGGER}")
         op.execute(f"DROP TRIGGER IF EXISTS {SQLITE_UPDATE_TRIGGER}")
         op.execute(f"DROP TRIGGER IF EXISTS {SQLITE_DELETE_TRIGGER}")
     op.drop_index("ix_stocktake_posting_command_outcomes_request_0065", table_name=TABLE)
