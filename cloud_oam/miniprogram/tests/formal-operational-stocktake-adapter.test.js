@@ -49,8 +49,15 @@ function adapter(fake, identity = { person_id: PERSON, authorization_version: 7 
 test('access projection requires matching active identity and exact stocktake read/count grants', async () => {
   const fake = transport(() => access())
   const projected = await adapter(fake).loadAccess()
-  assert.deepEqual(projected, { schema_version: '1.0', person_id: PERSON, authorization_version: 7, can_read: true, can_count: true, can_manage: false, can_review_region: false, can_review_headquarters: false, can_reconcile: false, can_close: false })
+  assert.deepEqual(projected, { schema_version: '1.0', person_id: PERSON, authorization_version: 7, can_read: true, can_count: true, can_manage: false, can_review_region: false, can_review_headquarters: false, can_post: false, can_reconcile: false, can_close: false })
   await assert.rejects(adapter(fake, { person_id: PERSON, authorization_version: 8 }).loadAccess(), /授权版本/)
+})
+
+test('posting capability requires the exact national admin grant', () => {
+  const posting = adapterModule.projectAccess(headquartersAccess(['read', 'post_difference']), { person_id: PERSON, authorization_version: 7 })
+  assert.equal(posting.can_post, true)
+  const regional = adapterModule.projectAccess(access(['read', 'post_difference']), { person_id: PERSON, authorization_version: 7 })
+  assert.equal(regional.can_post, false)
 })
 
 test('terminal capabilities require one national admin assignment and stay independent', () => {

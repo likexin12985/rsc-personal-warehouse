@@ -86,7 +86,7 @@ function projectAccess(value, expected) {
   const canRead = has('read')
   const nationalHeadquartersAdminCount = assignments.filter((item) => item.role_code === 'admin' && item.scope_type === 'national' && item.scope_id === '*').length
   const isHeadquartersAdmin = roles.includes('admin') && nationalHeadquartersAdminCount === 1
-  return Object.freeze({ schema_version: contract.SCHEMA_VERSION, person_id: personId, authorization_version: version, can_read: canRead, can_count: canRead && has('count'), can_manage: canRead && has('manage'), can_review_region: canRead && has('review_region'), can_review_headquarters: canRead && has('review_headquarters'), can_reconcile: canRead && isHeadquartersAdmin && has('reconcile'), can_close: canRead && isHeadquartersAdmin && has('close') })
+  return Object.freeze({ schema_version: contract.SCHEMA_VERSION, person_id: personId, authorization_version: version, can_read: canRead, can_count: canRead && has('count'), can_manage: canRead && has('manage'), can_review_region: canRead && has('review_region'), can_review_headquarters: canRead && has('review_headquarters'), can_post: canRead && isHeadquartersAdmin && has('post_difference'), can_reconcile: canRead && isHeadquartersAdmin && has('reconcile'), can_close: canRead && isHeadquartersAdmin && has('close') })
 }
 
 function assigneeOptionPage(value, expected, regionOrgId, locationId) {
@@ -131,6 +131,7 @@ function permission(access, action) {
   if (['create_personal', 'start', 'submit_initial_count', 'submit_recount_count'].includes(action)) return access.can_count
   if (action === 'review_region') return access.can_review_region
   if (action === 'review_headquarters') return access.can_review_headquarters
+  if (action === 'post') return access.can_post
   if (action === 'reconcile') return access.can_reconcile
   if (action === 'close') return access.can_close
   return access.can_manage
