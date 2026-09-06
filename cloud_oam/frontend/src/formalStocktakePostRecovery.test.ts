@@ -93,6 +93,18 @@ function status(value: "not_observed" | "confirmed" = "not_observed") {
     : { schema_version: "1.0", task_id: TASK, actor_person_id: PERSON, actor_authorization_version: 7, trace_request_id: TRACE, operation: "post_differences", lookup_status: "confirmed", command: null };
 }
 
+function sealedStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    schema_version: "1.0", task_id: TASK, actor_person_id: PERSON, actor_authorization_version: 7,
+    trace_request_id: TRACE, operation: "post_differences", lookup_status: "sealed_not_executed",
+    command: {
+      seal_id: "70000000-0000-4000-8000-000000000001", task_id: TASK, expected_task_version: 5,
+      actor_person_id: PERSON, actor_authorization_version: 7, trace_request_id: TRACE,
+      sealed_at: "2026-09-06T08:01:00+08:00", ...overrides,
+    },
+  };
+}
+
 function recoveryAdapter(overrides: Record<string, unknown> = {}) {
   return {
     loadAccess: vi.fn(async () => access),
@@ -144,6 +156,29 @@ describe("formal daily stocktake post durable recovery", () => {
     expect(() => validateFormalStocktakePostCommandStatus({ ...confirmedStatus(), command: { ...confirmedStatus().command, transaction_count: 1, first_ledger_cursor: 20, last_ledger_cursor: 20, total_quantity: "1.000" } }, sentinel())).toThrow();
   });
 
+  it("validates sealed_not_executed with only the minimal public seal proof", () => {
+    const parsed = validateFormalStocktakePostCommandStatus(sealedStatus(), sentinel());
+    expect(parsed.lookup_status).toBe("sealed_not_executed");
+    if (parsed.lookup_status !== "sealed_not_executed") throw new Error("expected sealed status");
+    expect(Object.keys(parsed.command!).sort()).toEqual([
+      "actor_authorization_version", "actor_person_id", "expected_task_version",
+      "seal_id", "sealed_at", "task_id", "trace_request_id",
+    ]);
+    for (const tamper of [
+      { task_id: "10000000-0000-4000-8000-000000000002" },
+      { expected_task_version: 6 },
+      { actor_person_id: "01000000-0000-4000-8000-000000000002" },
+      { actor_authorization_version: 8 },
+      { trace_request_id: "web-other-trace-0001" },
+      { request_sha256: "a".repeat(64) },
+      { role_assignment_id: "80000000-0000-4000-8000-000000000001" },
+    ]) {
+      expect(() => validateFormalStocktakePostCommandStatus(sealedStatus(tamper), sentinel())).toThrow();
+    }
+    expect(() => validateFormalStocktakePostCommandStatus({ ...sealedStatus(), command: null }, sentinel())).toThrow();
+    expect(() => validateFormalStocktakePostCommandStatus({ ...sealedStatus(), lookup_status: "confirmed" }, sentinel())).toThrow();
+  });
+
   it("persists only public coordinates and keeps not_observed sticky without detail or POST replay", async () => {
     const storage = new MemoryStorage();
     const store = createFormalStocktakePostRecoveryStore({ storage, locks });
@@ -186,7 +221,9 @@ describe("formal daily stocktake post durable recovery", () => {
       postingCommandStatus: vi.fn(async () => confirmedStatus()),
       detailNoReplay: vi.fn(async () => closedDetail()),
     });
-    expect(validateFormalStocktakePostRecoveredProjection(closedDetail(), marker, validateFormalStocktakePostCommandStatus(confirmedStatus(), marker).command!)).toMatchObject({ status: "closed", version: 8 });
+    const confirmed = validateFormalStocktakePostCommandStatus(confirmedStatus(), marker);
+    if (confirmed.lookup_status !== "confirmed") throw new Error("expected confirmed status");
+    expect(validateFormalStocktakePostRecoveredProjection(closedDetail(), marker, confirmed.command)).toMatchObject({ status: "closed", version: 8 });
     await expect(store.withTaskLease(TASK, (lease) => recoverFormalStocktakePost(lease, marker, client))).resolves.toMatchObject({ detail: { status: "closed", version: 8 } });
     expect(store.read(TASK)).toEqual({ kind: "missing" });
     expect(client.execute).not.toHaveBeenCalled();

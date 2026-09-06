@@ -21,6 +21,16 @@ import {
 
 type Identity = Readonly<{ person_id: string; authorization_version: number }>;
 
+export type FormalStocktakePostingSealedCommand = Readonly<{
+  seal_id: string;
+  task_id: string;
+  expected_task_version: number;
+  actor_person_id: string;
+  actor_authorization_version: number;
+  trace_request_id: string;
+  sealed_at: string;
+}>;
+
 export type FormalStocktakePostingHistoricalCommand = Readonly<{
   completion_id: string;
   task_id: string;
@@ -48,6 +58,7 @@ export type FormalStocktakePostingCommandStatus = Readonly<{
   operation: "post_differences";
 }> & (
   | Readonly<{ lookup_status: "not_observed"; command: null }>
+  | Readonly<{ lookup_status: "sealed_not_executed"; command: FormalStocktakePostingSealedCommand }>
   | Readonly<{ lookup_status: "confirmed"; command: FormalStocktakePostingHistoricalCommand }>
 );
 
@@ -218,6 +229,29 @@ export function validateFormalStocktakePostCommandStatus(
   if (row.lookup_status === "not_observed") {
     if (row.command !== null) fail();
     return Object.freeze({ ...anchors, lookup_status: "not_observed", command: null });
+  }
+  if (row.lookup_status === "sealed_not_executed") {
+    const command = exact(row.command, [
+      "seal_id", "task_id", "expected_task_version", "actor_person_id",
+      "actor_authorization_version", "trace_request_id", "sealed_at",
+    ]);
+    const checked = {
+      seal_id: uuid(command.seal_id, "seal_id"),
+      task_id: uuid(command.task_id, "command.task_id"),
+      expected_task_version: nonNegative(command.expected_task_version, "expected_task_version"),
+      actor_person_id: uuid(command.actor_person_id, "command.actor_person_id"),
+      actor_authorization_version: positive(command.actor_authorization_version, "command.actor_authorization_version"),
+      trace_request_id: command.trace_request_id,
+      sealed_at: timestamp(command.sealed_at, "sealed_at"),
+    } as FormalStocktakePostingSealedCommand;
+    if (
+      checked.task_id !== sentinel.task_id
+      || checked.expected_task_version !== sentinel.expected_task_version
+      || checked.actor_person_id !== sentinel.actor_person_id
+      || checked.actor_authorization_version !== sentinel.actor_authorization_version
+      || checked.trace_request_id !== sentinel.trace_request_id
+    ) fail("封存命令坐标与原过账意图不一致");
+    return Object.freeze({ ...anchors, lookup_status: "sealed_not_executed", command: Object.freeze(checked) });
   }
   if (row.lookup_status !== "confirmed") fail();
   const command = exact(row.command, [
