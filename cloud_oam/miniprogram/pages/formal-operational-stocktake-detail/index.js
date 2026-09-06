@@ -1,5 +1,8 @@
 const session = require('../../utils/session')
 const { formalStocktakeAdapter, createFormalStocktakeIntentRegistry } = require('../../utils/formal-stocktake-adapter')
+const { getFormalStocktakeCountRecoveryStore } = require('../../utils/formal-stocktake-count-recovery-store')
+const { createFormalStocktakeCountRecoveryAdapterFromFormalAdapter, recoverFormalStocktakeCount } = require('../../utils/formal-stocktake-count-recovery')
+const { submitDurableFormalStocktakeCount, FormalStocktakeCountSubmissionPendingError } = require('../../utils/formal-stocktake-count-submission')
 const { fixedQuantityText, formalStocktakeLabels } = require('../../utils/formal-stocktake-contract')
 const formalFileUpload = require('../../utils/formal-file-upload')
 const { accessIdentity } = require('../../utils/formal-operational-stocktake-pagination')
@@ -107,6 +110,8 @@ Page({
     errorMessage: '',
     pendingMessage: '',
     pendingRetryable: false,
+    countRecoveryBlocked: false,
+    countRecoveryCanCheck: false,
     terminalConfirm: '',
     selectedScopeId: '',
     countAction: '',
@@ -141,7 +146,9 @@ Page({
   onLoad(options) {
     this._hidden = false
     this._taskId = String(options.task_id || '').toLowerCase()
+    this._countRecoveryContext = ''
     this._intentRegistry = createFormalStocktakeIntentRegistry()
+    this._countRecoveryStore = getFormalStocktakeCountRecoveryStore()
     this._evidenceClaims = new Map()
     this._uploadIdentity = ''
     ensureEvidenceUploads(this)
@@ -160,6 +167,8 @@ Page({
     this._scanGeneration = (this._scanGeneration || 0) + 1
     this._loadGeneration = (this._loadGeneration || 0) + 1
     this.setData({ busy: false, loading: false, accessAllowed: false, detail: null, accessMessage: '返回后须重新校验正式身份与盘点权限', terminalConfirm: '', selectedScopeId: '', countAction: '' })
+    this._countRecoveryContext = ''
+    this.setData({ countRecoveryBlocked: false, countRecoveryCanCheck: false })
     if (this._intentRegistry.current()) this.setData({ pendingMessage: '原盘点写请求结果待核实，已停止新操作；刷新不代表原请求未执行。', pendingRetryable: false })
   },
   onPullDownRefresh() { this.load().finally(() => wx.stopPullDownRefresh()) },
@@ -170,6 +179,7 @@ Page({
     if (this._evidenceClaims) this._evidenceClaims.clear()
     this._access = null
     this._detail = null
+    this._countRecoveryContext = ''
     this._uploadIdentity = ''
   },
 
@@ -207,20 +217,67 @@ Page({
       this._uploadIdentity = nextUploadIdentity
       this._access = access
       this._detail = detail
-      if (this._intentRegistry.current()) this.setData({ pendingMessage: '原盘点写请求结果待核实，已停止新操作；请按原坐标人工核验。', pendingRetryable: false })
+      this.refreshCountRecovery()
+      if (this._intentRegistry.current() && !this.data.countRecoveryBlocked) this.setData({ pendingMessage: '原盘点写请求结果待核实，已停止新操作；请按原坐标人工核验。', pendingRetryable: false })
       this.setData({ accessAllowed: true, accessMessage: `正式盘点权限已验证 · v${access.authorization_version}`, detail: viewDetail(detail, access), terminalConfirm: '' })
     } catch (error) {
       if (generation !== this._loadGeneration) return
       this._access = null; this._detail = null
       this._uploadIdentity = ''
+      this._countRecoveryContext = ''
       if (this._evidenceUploads) this._evidenceUploads.clear()
       if (this._evidenceClaims) this._evidenceClaims.clear()
-      this.setData({ accessAllowed: false, accessMessage: '身份、授权或正式响应未通过校验，已失败关闭', detail: null, terminalConfirm: '', errorMessage: error.message || '正式盘点详情读取失败' })
+      this.setData({ accessAllowed: false, accessMessage: '身份、授权或正式响应未通过校验，已失败关闭', detail: null, terminalConfirm: '', errorMessage: error.message || '正式盘点详情读取失败', selectedScopeId: '', countAction: '', accountDrafts: [], observations: [], evidenceUploadFiles: [], evidenceUploadBlocking: false, evidenceUploadCanChoose: true, hasAccountInput: false, countRecoveryBlocked: false, countRecoveryCanCheck: false })
+      // A failed fresh read must not erase a durable count marker. Re-evaluate
+      // it after dropping the in-memory identity so recovery remains the only
+      // path that can release the barrier.
+      this.refreshCountRecovery()
     } finally { if (generation === this._loadGeneration) this.setData({ loading: false }) }
+  },
+
+  refreshCountRecovery() {
+    // Test doubles and legacy adapters without the non-opening command-status
+    // capability retain their existing in-memory contract. The production
+    // adapter always exposes this capability, so storage failure is fail-closed
+    // there rather than silently falling back to a replayable write.
+    const identity = this._access ? `${this._access.person_id}:${this._access.authorization_version}` : ''
+    const context = `${this._taskId || ''}:${identity}`
+    if (this._countRecoveryContext && this._countRecoveryContext !== context) {
+      // Task or authorization changed: discard only stale UI state. Never
+      // delete the durable marker; the new context must re-evaluate it.
+      this.setData({ countRecoveryBlocked: false, countRecoveryCanCheck: false })
+    }
+    this._countRecoveryContext = context
+    if (!this._countRecoveryStore || !UUID.test(this._taskId || '')) return
+    const pending = this._countRecoveryStore.readPending(this._taskId)
+    const canRecover = typeof formalStocktakeAdapter.countCommandStatus === 'function'
+    // A compatibility/test adapter without the durable count capability keeps
+    // the legacy in-memory contract.  Only a positively observed marker (or a
+    // corrupt marker) may block it; an unavailable store cannot be confused
+    // with an existing durable command when this adapter never uses one.
+    if (!canRecover && (pending.kind === 'missing' || pending.kind === 'unavailable')) {
+      this.setData({ countRecoveryBlocked: false, countRecoveryCanCheck: false })
+      return
+    }
+    if (pending.kind === 'valid' && pending.values && pending.values.length) {
+      this.setData({ countRecoveryBlocked: true, countRecoveryCanCheck: canRecover && Boolean(this._verifiedIdentity || this._access), pendingMessage: canRecover ? '原日常盘点范围计数结果待只读核验；未发送任何新请求。' : '日常盘点恢复能力不可用，已停止新写入。' })
+    } else if (pending.kind === 'missing') {
+      this.setData({ countRecoveryBlocked: false, countRecoveryCanCheck: false })
+    } else {
+      this.setData({ countRecoveryBlocked: true, countRecoveryCanCheck: false, pendingMessage: '日常盘点恢复记录无法确认，已停止新写入。' })
+    }
   },
 
   async run(input, retryIntent = null) {
     if (!this._access || !this._detail || this.data.busy || this._writeLease || this._hidden || this.data.loading) return
+    this.refreshCountRecovery()
+    // A durable count marker blocks every business write, not only another
+    // count.  UI disabled flags are advisory; this method is the final
+    // fail-closed boundary for start, differences, reviews and terminal work.
+    if (this.data.countRecoveryBlocked) {
+      this.setData({ pendingRetryable: false, pendingMessage: '原日常盘点范围计数结果待只读核验，已停止其他写操作；未发送任何新请求。' })
+      return
+    }
     const existing = this._intentRegistry.current()
     if (existing && (retryIntent !== existing || !this.data.pendingRetryable)) {
       this.setData({ pendingMessage: '原盘点写请求结果待核实，禁止以新操作重发原请求。' })
@@ -233,10 +290,20 @@ Page({
     const access = this._access
     const current = () => !this._hidden && this._writeLease === lease && this._loadGeneration === generation && this._access === access
     let intent
+    const durableCount = (input.action === 'submit_initial_count' || input.action === 'submit_recount_count') && typeof formalStocktakeAdapter.countCommandStatus === 'function'
     try {
       intent = existing || this._intentRegistry.begin(input)
       this.setData({ busy: true, errorMessage: '', pendingMessage: '', pendingRetryable: false, terminalConfirm: '' })
-      const completed = await formalStocktakeAdapter.execute(intent)
+      const completed = durableCount
+        ? await submitDurableFormalStocktakeCount({
+          intent,
+          expectedIdentity: this._access,
+          roundNo: input.roundNo,
+          adapter: formalStocktakeAdapter,
+          store: this._countRecoveryStore,
+          canCommit: current
+        })
+        : await formalStocktakeAdapter.execute(intent)
       if (!current()) return
       this._intentRegistry.complete(intent)
       this._detail = completed.detail
@@ -245,12 +312,69 @@ Page({
     } catch (error) {
       if (!current()) return
       const uncertain = error && error.write_result_uncertain === true
+      if (durableCount && error instanceof FormalStocktakeCountSubmissionPendingError) {
+        this.refreshCountRecovery()
+        this.setData({ pendingRetryable: false, pendingMessage: '原日常盘点范围计数已进入持久待核验状态；只允许查询原追踪坐标，禁止重新提交。', errorMessage: error.message })
+        return
+      }
       if (intent && !uncertain) this._intentRegistry.complete(intent)
       const retryable = uncertain && error.stocktake_retry_state === 'retryable'
       this.setData({ errorMessage: error.message || '正式盘点写入失败', pendingRetryable: retryable, pendingMessage: uncertain ? (retryable ? '原写意图仍可复用同一路径、正文、幂等键和请求 ID 重试。' : '写结果不确定且精确回读不能确认；已停止其他写动作，请人工核验原坐标。') : '' })
     } finally {
       if (current()) this.setData({ busy: false })
       if (this._writeLease === lease) this._writeLease = null
+    }
+  },
+  async recoverCount() {
+    if (!this._countRecoveryStore || this.data.busy || this._hidden || !this._access) return
+    const pending = this._countRecoveryStore.readPending(this._taskId)
+    if (pending.kind !== 'valid' || !pending.values || !pending.values.length) { this.refreshCountRecovery(); return }
+    const sentinel = pending.values[0]
+    const lease = {}
+    this._writeLease = lease
+    const generation = this._loadGeneration
+    const live = () => !this._hidden && this._writeLease === lease && this._loadGeneration === generation
+    this.setData({ busy: true, errorMessage: '' })
+    try {
+      const result = await this._countRecoveryStore.withScopeLease(sentinel, (scopeLease) => recoverFormalStocktakeCount(scopeLease, sentinel, createFormalStocktakeCountRecoveryAdapterFromFormalAdapter(this._access, formalStocktakeAdapter), live))
+      if (!live()) return
+      this._detail = result.detail
+      const currentIntent = this._intentRegistry.current()
+      const expectedAction = sentinel.operation === 'initial_count' ? 'submit_initial_count' : 'submit_recount_count'
+      const intentMatches = Boolean(currentIntent
+        && currentIntent.action === expectedAction
+        && currentIntent.taskId === sentinel.task_id
+        && currentIntent.roundId === sentinel.round_id
+        && currentIntent.scopeId === sentinel.scope_id
+        && currentIntent.headers
+        && currentIntent.headers['X-Request-ID'] === sentinel.trace_request_id)
+      if (intentMatches) this._intentRegistry.complete(currentIntent)
+      if (this._evidenceUploads) this._evidenceUploads.clear()
+      if (this._evidenceClaims) this._evidenceClaims.clear()
+      this.refreshCountRecovery()
+      const registryBlocked = Boolean(this._intentRegistry.current())
+      const pendingAfter = this._countRecoveryStore.readPending(this._taskId)
+      const pendingMessage = registryBlocked
+        ? '仍有另一笔盘点写请求待核实，已停止新操作。'
+        : pendingAfter.kind === 'valid'
+          ? '仍有其他日常盘点范围计数待只读核验；未发送任何新请求。'
+          : ''
+      const canCheckRemaining = !registryBlocked && pendingAfter.kind === 'valid'
+        && typeof formalStocktakeAdapter.countCommandStatus === 'function'
+      this.setData({
+        detail: viewDetail(result.detail, this._access),
+        selectedScopeId: '', countAction: '', accountDrafts: [], observations: [],
+        evidenceUploadFiles: [], evidenceUploadBlocking: false, evidenceUploadCanChoose: true,
+        hasAccountInput: false, recountSelections: [], recountReason: '', recountReady: false,
+        pendingMessage, pendingRetryable: false,
+        countRecoveryBlocked: registryBlocked || pendingAfter.kind !== 'missing',
+        countRecoveryCanCheck: canCheckRemaining
+      })
+    } catch (error) {
+      if (live()) { this.refreshCountRecovery(); this.setData({ errorMessage: error.message || '历史范围计数仍待核验' }) }
+    } finally {
+      if (this._writeLease === lease) this._writeLease = null
+      if (!this._hidden) this.setData({ busy: false })
     }
   },
   retryPending() {
@@ -260,7 +384,7 @@ Page({
   startTask() { this.run({ action: 'start', taskId: this._detail.task_id, expectedTaskVersion: this._detail.version, body: { expected_version: this._detail.version } }) },
 
   openTerminalConfirm(event) {
-    if (!this._access || !this._detail || this.data.busy || this.data.pendingMessage) return
+    if (!this._access || !this._detail || this.data.busy || this.data.pendingMessage || this.data.countRecoveryBlocked) return
     const action = String(event.currentTarget.dataset.action || '')
     const permission = action === 'reconcile' ? this._access.can_reconcile : action === 'close' ? this._access.can_close : false
     if (!permission || !this._detail.allowed_actions.includes(action)) {
@@ -274,7 +398,7 @@ Page({
   },
   confirmTerminalAction() {
     const action = this.data.terminalConfirm
-    if (!this._access || !this._detail || this.data.busy || this.data.pendingMessage || !['reconcile', 'close'].includes(action)) return
+    if (!this._access || !this._detail || this.data.busy || this.data.pendingMessage || this.data.countRecoveryBlocked || !['reconcile', 'close'].includes(action)) return
     const allowed = this._detail.allowed_actions.includes(action)
     const permission = action === 'reconcile' ? this._access.can_reconcile : this._access.can_close
     const axes = this._detail.state_axes
@@ -290,7 +414,7 @@ Page({
   },
 
   chooseScope(event) {
-    if (!this._detail || !this._access || this.data.busy || this.data.pendingMessage || this._hidden) return
+    if (!this._detail || !this._access || this.data.busy || this.data.pendingMessage || this.data.countRecoveryBlocked || this._hidden) return
     const scopeId = String(event.currentTarget.dataset.id || '')
     const scope = this._detail.scopes.find((row) => row.scope_id === scopeId)
     if (!scope) return
@@ -303,17 +427,17 @@ Page({
     this._evidenceUploads.bind(`${this._uploadIdentity}:${this._detail.task_id}:${this._detail.version}:${round.round_id}:${scopeId}:${action}`)
     this.setData({ selectedScopeId: scopeId, countAction: action, accountDrafts: scope.snapshot_accounts.map((account) => Object.assign({}, account, { counted_qty: '', serial_ids_text: '' })), observations: [], materialIdentifier: '', materialIdentifierType: 'sku_code', materialScanned: false, serialNo: '', serialIdentifierType: 'serial_no', serialScanned: false, quantity: '', lotNo: '', remark: '' })
   },
-  bindAccountQty(event) { const index = Number(event.currentTarget.dataset.index); const rows = this.data.accountDrafts.slice(); rows[index].counted_qty = event.detail.value; this.setData({ accountDrafts: rows, hasAccountInput: rows.some((row) => String(row.counted_qty || '').trim()) }) },
-  bindAccountSerials(event) { const index = Number(event.currentTarget.dataset.index); const rows = this.data.accountDrafts.slice(); rows[index].serial_ids_text = event.detail.value; this.setData({ accountDrafts: rows }) },
-  bindMaterial(event) { this._scanGeneration = (this._scanGeneration || 0) + 1; this.setData({ materialIdentifier: event.detail.value, materialIdentifierType: 'sku_code', materialScanned: false }) },
-  bindQuantity(event) { this.setData({ quantity: event.detail.value }) },
-  bindLot(event) { this.setData({ lotNo: event.detail.value }) },
-  bindSerial(event) { this._scanGeneration = (this._scanGeneration || 0) + 1; this.setData({ serialNo: event.detail.value, serialIdentifierType: 'serial_no', serialScanned: false }) },
-  bindRemark(event) { this.setData({ remark: event.detail.value }) },
-  changeCondition(event) { const index = Number(event.detail.value); this.setData({ conditionIndex: index, conditionCode: this.data.conditionOptions[index].value }) },
-  changeAvailability(event) { const index = Number(event.detail.value); this.setData({ availabilityIndex: index, availabilityBucket: this.data.availabilityOptions[index].value }) },
+  bindAccountQty(event) { if (this.data.countRecoveryBlocked) return; const index = Number(event.currentTarget.dataset.index); const rows = this.data.accountDrafts.slice(); rows[index].counted_qty = event.detail.value; this.setData({ accountDrafts: rows, hasAccountInput: rows.some((row) => String(row.counted_qty || '').trim()) }) },
+  bindAccountSerials(event) { if (this.data.countRecoveryBlocked) return; const index = Number(event.currentTarget.dataset.index); const rows = this.data.accountDrafts.slice(); rows[index].serial_ids_text = event.detail.value; this.setData({ accountDrafts: rows }) },
+  bindMaterial(event) { if (this.data.countRecoveryBlocked) return; this._scanGeneration = (this._scanGeneration || 0) + 1; this.setData({ materialIdentifier: event.detail.value, materialIdentifierType: 'sku_code', materialScanned: false }) },
+  bindQuantity(event) { if (this.data.countRecoveryBlocked) return; this.setData({ quantity: event.detail.value }) },
+  bindLot(event) { if (this.data.countRecoveryBlocked) return; this.setData({ lotNo: event.detail.value }) },
+  bindSerial(event) { if (this.data.countRecoveryBlocked) return; this._scanGeneration = (this._scanGeneration || 0) + 1; this.setData({ serialNo: event.detail.value, serialIdentifierType: 'serial_no', serialScanned: false }) },
+  bindRemark(event) { if (this.data.countRecoveryBlocked) return; this.setData({ remark: event.detail.value }) },
+  changeCondition(event) { if (this.data.countRecoveryBlocked) return; const index = Number(event.detail.value); this.setData({ conditionIndex: index, conditionCode: this.data.conditionOptions[index].value }) },
+  changeAvailability(event) { if (this.data.countRecoveryBlocked) return; const index = Number(event.detail.value); this.setData({ availabilityIndex: index, availabilityBucket: this.data.availabilityOptions[index].value }) },
   scanCoordinate() {
-    if (this._hidden || this._writeLease || this.data.loading || this.data.busy || this.data.pendingMessage || !this._access || !this._access.can_count || !this._detail) return null
+    if (this._hidden || this._writeLease || this.data.loading || this.data.busy || this.data.pendingMessage || this.data.countRecoveryBlocked || !this._access || !this._access.can_count || !this._detail) return null
     const scope = this._detail.scopes.find((item) => item.scope_id === this.data.selectedScopeId)
     const round = currentRound(this._detail)
     if (!scope || !round || !scope.allowed_actions.includes(this.data.countAction)) return null
@@ -355,6 +479,7 @@ Page({
   },
   addObservation() {
     try {
+      if (this.data.countRecoveryBlocked) throw new Error('原日常盘点范围计数待核验，禁止修改计数草稿')
       if (!this.scanCoordinate()) throw new Error('当前盘点范围不可录入，请刷新')
       const identifier = this.data.materialIdentifier.trim()
       if (!identifier) throw new Error('请填写现场物料标识')
@@ -366,9 +491,9 @@ Page({
       this.setData({ observations: this.data.observations.concat([row]), materialIdentifier: '', materialIdentifierType: 'sku_code', materialScanned: false, quantity: '', lotNo: '', serialNo: '', serialIdentifierType: 'serial_no', serialScanned: false, remark: '' })
     } catch (error) { wx.showToast({ title: error.message || '观察行无效', icon: 'none' }) }
   },
-  removeObservation(event) { const index = Number(event.currentTarget.dataset.index); this.setData({ observations: this.data.observations.filter((_, rowIndex) => rowIndex !== index) }) },
+  removeObservation(event) { if (this.data.countRecoveryBlocked) return; const index = Number(event.currentTarget.dataset.index); this.setData({ observations: this.data.observations.filter((_, rowIndex) => rowIndex !== index) }) },
   async chooseCountEvidence() {
-    if (!this.data.selectedScopeId || this.data.busy || this.data.pendingMessage) return
+    if (!this._access || !this._detail || !this._access.can_count || !this.data.selectedScopeId || this.data.busy || this.data.pendingMessage || this.data.countRecoveryBlocked) return
     ensureEvidenceUploads(this)
     try {
       await this._evidenceUploads.select()
@@ -377,7 +502,7 @@ Page({
     }
   },
   async retryCountEvidence(event) {
-    if (!this.data.selectedScopeId || this.data.busy || this.data.pendingMessage) return
+    if (!this._access || !this._detail || !this._access.can_count || !this.data.selectedScopeId || this.data.busy || this.data.pendingMessage || this.data.countRecoveryBlocked) return
     ensureEvidenceUploads(this)
     try {
       await this._evidenceUploads.retry(String(event.currentTarget.dataset.key || ''))
@@ -386,7 +511,7 @@ Page({
     }
   },
   removeCountEvidence(event) {
-    if (!this.data.selectedScopeId || this.data.busy || this.data.pendingMessage) return
+    if (!this._access || !this._detail || !this._access.can_count || !this.data.selectedScopeId || this.data.busy || this.data.pendingMessage || this.data.countRecoveryBlocked) return
     ensureEvidenceUploads(this)
     try {
       this._evidenceUploads.remove(String(event.currentTarget.dataset.key || ''))
@@ -396,6 +521,7 @@ Page({
   },
   submitCount(event) {
     try {
+      if (this.data.countRecoveryBlocked) throw new Error('原日常盘点范围计数待核验，禁止重新提交')
       const zero = event.currentTarget.dataset.zero === true || event.currentTarget.dataset.zero === 'true'
       const scope = this._detail.scopes.find((row) => row.scope_id === this.data.selectedScopeId)
       const round = currentRound(this._detail)
@@ -410,7 +536,7 @@ Page({
         throw new Error('盘点证据只能绑定初盘或复盘计数意图')
       }
       const evidenceFiles = availableEvidenceFiles(this)
-      const input = { action, taskId: this._detail.task_id, roundId: round.round_id, scopeId: scope.scope_id, expectedTaskVersion: this._detail.version, body: { count_mode: countMode, account_counts: accounts, physical_observations: zero ? [] : this.data.observations, evidence_file_ids: evidenceFiles.map((file) => file.file_id), zero_confirmed: zero } }
+      const input = { action, taskId: this._detail.task_id, roundId: round.round_id, roundNo: round.round_no, scopeId: scope.scope_id, expectedTaskVersion: this._detail.version, body: { count_mode: countMode, account_counts: accounts, physical_observations: zero ? [] : this.data.observations, evidence_file_ids: evidenceFiles.map((file) => file.file_id), zero_confirmed: zero } }
       const signature = countIntentSignature(input)
       if (!this._evidenceClaims) this._evidenceClaims = new Map()
       for (const file of evidenceFiles) {
@@ -430,12 +556,14 @@ Page({
   },
 
   generateDifference(event) {
+    if (this.data.countRecoveryBlocked) return
     const round = currentRound(this._detail)
     const action = event.currentTarget.dataset.action
     if (round) this.run({ action, taskId: this._detail.task_id, roundId: round.round_id, expectedTaskVersion: this._detail.version, body: { expected_task_version: this._detail.version } })
   },
   bindReviewComment(event) { this.setData({ reviewComment: event.detail.value }) },
   submitReview(event) {
+    if (this.data.countRecoveryBlocked) return
     const stage = event.currentTarget.dataset.stage
     const decision = event.currentTarget.dataset.decision
     const round = currentRound(this._detail)
@@ -467,6 +595,7 @@ Page({
     this.setData({ recountReady: ready })
   },
   async toggleRecountScope(event) {
+    if (this.data.countRecoveryBlocked) return
     const scopeId = String(event.currentTarget.dataset.id || '')
     const selected = this.data.recountSelections.includes(scopeId)
     if (selected) {
@@ -492,6 +621,7 @@ Page({
     } finally { this.setData({ recountLoadingScopeId: '' }) }
   },
   changeRecountAssignee(event) {
+    if (this.data.countRecoveryBlocked) return
     const scopeId = String(event.currentTarget.dataset.id || '')
     const index = Number(event.detail.value)
     const scopes = this.data.detail.scopes.map((scope) => {
@@ -501,8 +631,9 @@ Page({
     this.setData({ 'detail.scopes': scopes })
     this.updateRecountReady(scopes)
   },
-  bindRecountReason(event) { const reason = event.detail.value; this.setData({ recountReason: reason }); this.updateRecountReady(undefined, undefined, reason) },
+  bindRecountReason(event) { if (this.data.countRecoveryBlocked) return; const reason = event.detail.value; this.setData({ recountReason: reason }); this.updateRecountReady(undefined, undefined, reason) },
   submitRecount() {
+    if (this.data.countRecoveryBlocked) return
     const round = currentRound(this._detail)
     if (!round || !this.data.recountReady) return
     try {

@@ -3,7 +3,7 @@
   <block wx:else>
     <view class="card access-card status-{{accessAllowed ? 'success' : 'danger'}}">{{accessMessage}}</view>
     <view wx:if="{{errorMessage}}" class="card error-card">{{errorMessage}}</view>
-    <view wx:if="{{pendingMessage}}" class="card pending-card"><text>{{pendingMessage}}</text><button wx:if="{{pendingRetryable}}" class="button button-secondary" bindtap="retryPending" loading="{{busy}}">按原坐标重试</button></view>
+    <view wx:if="{{pendingMessage}}" class="card pending-card"><text>{{pendingMessage}}</text><button wx:if="{{pendingRetryable}}" class="button button-secondary" bindtap="retryPending" loading="{{busy}}">按原坐标重试</button><button wx:if="{{countRecoveryCanCheck}}" class="button button-secondary" bindtap="recoverCount" loading="{{busy}}">只读核验原范围计数</button></view>
     <block wx:if="{{detail}}">
       <view class="card summary-card">
         <view class="row between"><text class="mono task-no">{{detail.task_no}}</text><text class="status status-info">{{detail.statusLabel}}</text></view>
@@ -53,8 +53,8 @@
             <button wx:if="{{item.canRetry}}" class="button button-secondary" disabled="{{busy || pendingMessage}}" data-key="{{item.key}}" bindtap="retryCountEvidence">按原上传坐标重试</button><button wx:if="{{item.canRemove}}" class="mini-remove" disabled="{{busy || pendingMessage}}" data-key="{{item.key}}" bindtap="removeCountEvidence">移除</button>
           </view>
         </view>
-        <button class="button button-primary" bindtap="submitCount" data-zero="false" loading="{{busy}}" disabled="{{busy || pendingMessage || evidenceUploadBlocking}}">提交并封存范围</button>
-        <button class="button button-secondary" bindtap="submitCount" data-zero="true" disabled="{{busy || observations.length || hasAccountInput || pendingMessage || evidenceUploadBlocking}}">确认本范围零库存</button>
+        <button class="button button-primary" bindtap="submitCount" data-zero="false" loading="{{busy}}" disabled="{{busy || pendingMessage || countRecoveryBlocked || evidenceUploadBlocking}}">提交并封存范围</button>
+        <button class="button button-secondary" bindtap="submitCount" data-zero="true" disabled="{{busy || observations.length || hasAccountInput || pendingMessage || countRecoveryBlocked || evidenceUploadBlocking}}">确认本范围零库存</button>
       </view>
 
       <view wx:if="{{detail.currentRound}}" class="section">

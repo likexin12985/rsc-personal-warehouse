@@ -110,6 +110,26 @@ test('permission plus detail allowed_actions are both required before a write is
   assert.equal(fake.calls.some((call) => call.method === 'POST'), false)
 })
 
+test('no-replay validates request coordinates before the durable beforeWrite hook', async () => {
+  let posts = 0
+  let persisted = 0
+  const fake = transport((path, method) => {
+    if (path === '/access/context') return access()
+    if (method === 'POST') { posts += 1; return {} }
+    return detail()
+  })
+  fake.postNoReplay = async () => { posts += 1; return {} }
+  const registry = contract.createFormalStocktakeIntentRegistry({ coordinateFactory: coordinates })
+  const original = registry.begin({ action: 'create_personal', body: { blind_count: true, freeze_mode: 'cutoff_replay', note: '' } })
+  const malformed = Object.assign({}, original, { headers: Object.assign({}, original.headers, { 'Idempotency-Key': 'bad' }) })
+  await assert.rejects(
+    adapter(fake).execute(malformed, { noReplay: true, beforeWrite: () => { persisted += 1 } }),
+    /盘点写坐标无效/
+  )
+  assert.equal(posts, 0)
+  assert.equal(persisted, 0)
+})
+
 test('legacy and opening coordinates cannot be injected into an intent', async () => {
   const fake = transport(() => access())
   const forged = { action: 'create_personal', method: 'POST', path: '/stocktakes', body: { blind_count: true, freeze_mode: 'cutoff_replay', note: '' }, headers: coordinates(), taskId: null, roundId: null, scopeId: null, expectedTaskVersion: null, signature: 'forged' }

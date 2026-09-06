@@ -195,19 +195,40 @@ function createFormalStocktakeAdapter(options = {}) {
   if (!transport || typeof transport.get !== 'function' || typeof transport.post !== 'function' || typeof expectedIdentityProvider !== 'function') fail('正式盘点 transport 配置无效', 503)
   const adapter = {
     async loadAccess() { return projectAccess(await transport.get('/access/context'), expectedIdentityProvider()) },
+    async loadIdentityNoReplay() {
+      if (typeof transport.request !== 'function') fail('正式盘点身份只读核验通道不可用', 503)
+      return transport.request('/auth/me', { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } })
+    },
+    async loadAccessNoReplay() {
+      if (typeof transport.request !== 'function') fail('正式盘点权限只读核验通道不可用', 503)
+      return projectAccess(await transport.request('/access/context', { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }), expectedIdentityProvider())
+    },
     async list(afterId = null) {
       const suffix = afterId === null ? '' : `&after_id=${uuidValue(afterId, 'after_id')}`
       return contract.validateFormalStocktakePage(await transport.get(`/v1/stocktakes?limit=50${suffix}`))
     },
     async detail(taskId) { return contract.validateFormalStocktakeDetail(await transport.get(`/v1/stocktakes/${uuidValue(taskId, 'task_id')}`)) },
+    async detailNoReplay(taskId) {
+      if (typeof transport.request !== 'function') fail('正式盘点详情只读核验通道不可用', 503)
+      return contract.validateFormalStocktakeDetail(await transport.request(`/v1/stocktakes/${uuidValue(taskId, 'task_id')}`, { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }))
+    },
+    async countCommandStatus(taskId, roundId, scopeId, operation, actorPersonId, actorAuthorizationVersion, traceRequestId) {
+      if (typeof transport.request !== 'function') fail('正式盘点历史计数查询通道不可用', 503)
+      const query = `operation=${encodeURIComponent(text(operation, 'operation'))}`
+        + `&actor_person_id=${encodeURIComponent(uuidValue(actorPersonId, 'actor_person_id'))}`
+        + `&actor_authorization_version=${positive(actorAuthorizationVersion, 'actor_authorization_version')}`
+        + `&trace_request_id=${encodeURIComponent(text(traceRequestId, 'trace_request_id'))}`
+      return transport.request(`/v1/stocktakes/${uuidValue(taskId, 'task_id')}/rounds/${uuidValue(roundId, 'round_id')}/scopes/${uuidValue(scopeId, 'scope_id')}/count-command-status?${query}`, { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } })
+    },
     async listAssignees(regionOrgId, locationId, afterPersonId = null) {
       const region = uuidValue(regionOrgId, 'region_org_id')
       const location = uuidValue(locationId, 'location_id')
       const suffix = afterPersonId === null ? '' : `&after_person_id=${uuidValue(afterPersonId, 'after_person_id')}`
       return assigneeOptionPage(await transport.get(`/v1/stocktake-options/assignees?region_org_id=${region}&location_id=${location}&limit=100${suffix}`), expectedIdentityProvider(), region, location)
     },
-    async execute(intent) {
+    async execute(intent, options = {}) {
       if (!intent || intent.method !== 'POST' || !expectedPath(intent)) fail('盘点写意图路径或动作无效')
+      if (options.noReplay && typeof transport.postNoReplay !== 'function') fail('正式盘点单次发送通道不可用，已停止写入', 503)
       const access = await adapter.loadAccess()
       if (!access.can_read || !permission(access, intent.action)) fail('当前正式权限不允许该盘点动作', 403)
       if (intent.taskId) {
@@ -215,9 +236,16 @@ function createFormalStocktakeAdapter(options = {}) {
         if (!detailAllows(before, intent)) fail('详情 allowed_actions 与当前权限未同时授权该动作')
         if (intent.action === 'open_recount') await verifyRecountAssignees(adapter, before, intent)
       }
+      // Validate immutable request coordinates before the durable caller is
+      // allowed to persist its recovery marker.  A malformed idempotency key
+      // must never create a marker for a POST that cannot be sent.
+      const write = writeOptions(intent)
+      if (typeof options.beforeWrite === 'function') await options.beforeWrite()
       let raw
       try {
-        raw = await transport.post(intent.path, intent.body, writeOptions(intent))
+        raw = options.noReplay
+          ? await transport.postNoReplay(intent.path, intent.body, write)
+          : await transport.post(intent.path, intent.body, write)
       } catch (error) {
         if (!uncertain(error)) throw error
         let state = intent.action === 'create_personal' ? 'retryable' : 'handoff_required'
