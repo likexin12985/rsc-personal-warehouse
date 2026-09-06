@@ -2,6 +2,7 @@ import { api, ApiError, jsonBody } from "./api";
 import { formalMaterialCatalogQuery } from "./formalMaterialCatalog";
 import { validateMaterialRequestWorkOrderOptionQuery } from "./formalMaterialRequestOptions";
 import { validateMaterialRequestAllocationOptionPage, type MaterialRequestAllocationOptionPage } from "./formalMaterialRequestAllocationOptions";
+import { validateMaterialRequestAllocationCommandStatus, type MaterialRequestAllocationCommandStatus } from "./formalMaterialRequestAllocationCommandStatus";
 import { validateSupplyCreateInput, validateSupplyUpdateInput } from "./formalMaterialRequestSupply";
 import {
   MATERIAL_REQUEST_SCHEMA_VERSION,
@@ -64,7 +65,7 @@ export interface FormalMaterialRequestAdapter {
   loadAccess(): Promise<unknown>;
   lifecycleCommandStatus(xRequestId: string): Promise<unknown>;
   supplyCommandStatus(xRequestId: string): Promise<unknown>;
-  allocationCommandStatus(xRequestId: string): Promise<unknown>;
+  allocationCommandStatus(xRequestId: string): Promise<MaterialRequestAllocationCommandStatus>;
   list(afterId: string | null): Promise<unknown>;
   detail(requestId: string): Promise<unknown>;
   loadDraftForEdit(requestId: string): Promise<unknown>;
@@ -632,7 +633,7 @@ export function createFormalMaterialRequestAdapter(
       if (!SAFE_COORDINATE.test(checkedRequestId)) {
         return Promise.reject(new ApiError(409, "分配命令查询坐标无效"));
       }
-      return requester("/v1/material-request-allocation-command-status", {
+      return requester<unknown>("/v1/material-request-allocation-command-status", {
         method: "GET",
         cache: "no-store",
         headers: {
@@ -640,7 +641,7 @@ export function createFormalMaterialRequestAdapter(
           "Cache-Control": "no-store",
           Pragma: "no-cache",
         },
-      });
+      }).then(validateMaterialRequestAllocationCommandStatus);
     },
     list(afterId: string | null) {
       const suffix = afterId === null
