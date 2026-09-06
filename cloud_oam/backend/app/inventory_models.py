@@ -421,6 +421,77 @@ class StockAccount(TimestampMixin, Base):
     lot_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, nullable=True)
 
 
+class StockAllocation(TimestampMixin, Base):
+    """Immutable source assignment fact, before any reservation or movement.
+
+    Allocation records capture the approved request coordinate and the exact
+    inventory projection version used for the decision.  The runtime role is
+    granted INSERT/SELECT only; release and reservation are separate future
+    facts so this table cannot be rewritten into a later state.
+    """
+
+    __tablename__ = "stock_allocations"
+    __table_args__ = (
+        UniqueConstraint("allocation_no", name="uq_stock_allocations_number"),
+        UniqueConstraint("idempotency_key_hash", name="uq_stock_allocations_idempotency"),
+        CheckConstraint("allocated_qty > 0", name="ck_stock_allocations_quantity"),
+        CheckConstraint("request_version >= 0", name="ck_stock_allocations_request_version"),
+        CheckConstraint("revision_no > 0", name="ck_stock_allocations_revision"),
+        CheckConstraint("source_balance_version >= 0", name="ck_stock_allocations_balance_version"),
+        CheckConstraint("source_ledger_cursor >= 0", name="ck_stock_allocations_ledger_cursor"),
+        CheckConstraint("authorization_version > 0", name="ck_stock_allocations_authorization_version"),
+        CheckConstraint("status = 'allocated'", name="ck_stock_allocations_status"),
+        CheckConstraint("length(idempotency_key_hash) = 64 AND length(request_hash) = 64", name="ck_stock_allocations_hashes"),
+        Index("ix_stock_allocations_request_line", "request_line_id", "status"),
+        Index("ix_stock_allocations_source_account", "source_stock_account_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    allocation_no: Mapped[str] = mapped_column(String(100))
+    request_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("material_requests.id", ondelete="RESTRICT"), index=True
+    )
+    request_line_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("material_request_lines.id", ondelete="RESTRICT"), index=True
+    )
+    revision_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    revision_no: Mapped[int] = mapped_column(Integer)
+    request_version: Mapped[int] = mapped_column(BigInteger)
+    source_stock_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT"), index=True
+    )
+    allocated_qty: Mapped[Decimal] = mapped_column(QUANTITY)
+    source_balance_version: Mapped[int] = mapped_column(BigInteger)
+    source_ledger_cursor: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(20), default="allocated", server_default="allocated")
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
+    actor_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+
+
+class StockAllocationSerial(CreatedAtMixin, Base):
+    """Optional serial evidence attached to an immutable allocation."""
+
+    __tablename__ = "stock_allocation_serials"
+    __table_args__ = (
+        PrimaryKeyConstraint("allocation_id", "serial_id", name="pk_stock_allocation_serials"),
+        UniqueConstraint("serial_id", name="uq_stock_allocation_serials_serial"),
+        ForeignKeyConstraint(
+            ["allocation_id"], ["stock_allocations.id"],
+            name="fk_stock_allocation_serials_allocation", ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["serial_id"], ["inventory_serials.id"],
+            name="fk_stock_allocation_serials_serial", ondelete="RESTRICT"
+        ),
+    )
+
+    allocation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+
+
 class InventoryTransaction(CreatedAtMixin, Base):
     __tablename__ = "inventory_transactions"
     __table_args__ = (

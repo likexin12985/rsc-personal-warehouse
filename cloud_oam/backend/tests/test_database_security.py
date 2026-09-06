@@ -543,6 +543,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "stocktake_close_transition_acks"
     }
     stocktake_start_tables = {"stocktake_start_completions"}
+    allocation_tables = {"stock_allocations", "stock_allocation_serials"}
     assert RUNTIME_READ_TABLES - set(values["API_READ_TABLES"]) == (
         safe_posting_tables
         | {
@@ -553,6 +554,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         | material_request_read_tables
         | stocktake_close_read_tables
         | stocktake_start_tables
+        | allocation_tables
     )
     assert RUNTIME_INSERT_TABLES - set(values["API_INSERT_TABLES"]) == (
         safe_posting_tables
@@ -560,6 +562,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         | material_request_insert_tables
         | stocktake_close_insert_tables
         | stocktake_start_tables
+        | allocation_tables
     )
     assert set(values["API_READ_TABLES"]) <= RUNTIME_READ_TABLES
     assert set(values["API_INSERT_TABLES"]) <= RUNTIME_INSERT_TABLES
