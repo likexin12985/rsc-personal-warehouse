@@ -125,7 +125,8 @@ def _synthetic_0058_catalog(*, fixed=True, history_oid=4062, finalizer_oid=4064)
         "sql", "s", False, False, "u", True, migration.MIGRATION_ROLE,
         ["search_path=pg_catalog"], migrator_acl,
         gate._head_runtime_ready_hash() if fixed else migration.RUNTIME_READY_BODY_SHA256_0057,
-        revision, 0, True,
+        gate.STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION if fixed else migration.down_revision,
+        0, True,
     )
     functions = {migration.REVIEW_GRAPH_SIGNATURE: validator,
                  migration.DIFFERENCE_REPLAY_LOCK_SIGNATURE: replay,
