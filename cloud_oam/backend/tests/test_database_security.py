@@ -488,6 +488,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "stocktake_effective_approval_completions",
         "stocktake_effective_approval_items",
         "stocktake_effective_approval_scopes",
+        "stocktake_posting_command_outcomes",
         "stocktake_posting_completion_items",
         "stocktake_posting_completions",
     }
