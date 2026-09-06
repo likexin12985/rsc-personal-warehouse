@@ -151,6 +151,41 @@ def test_unestablished_inventory_is_hard_blocked(monkeypatch):
     assert captured.value.http_status_code == 412
 
 
+def test_technician_inventory_read_does_not_grant_allocation_directory(monkeypatch):
+    request_id, line_id = _id(610), _id(611)
+    view = _view(request_id, line_id)
+    monkeypatch.setattr(material_request_query, "material_request_detail", lambda *a, **k: view)
+
+    class DB:
+        no_autoflush = nullcontext()
+
+    with pytest.raises(service.MaterialRequestAllocationOptionError) as captured:
+        service.list_allocation_options(
+            DB(), actor=SimpleNamespace(role_codes=("technician",)), material_request_id=request_id, request_line_id=line_id
+        )
+    assert captured.value.code == "material_request_allocation_options_forbidden"
+    assert captured.value.http_status_code == 403
+
+
+def test_stale_line_revision_is_rejected_before_inventory_read(monkeypatch):
+    request_id, line_id = _id(620), _id(621)
+    view = _view(request_id, line_id)
+    view.lines[0].revision_no = 1
+    inventory_read = Mock()
+    monkeypatch.setattr(material_request_query, "material_request_detail", lambda *a, **k: view)
+    monkeypatch.setattr(inventory_query, "_require_inventory_read", inventory_read)
+
+    class DB:
+        no_autoflush = nullcontext()
+
+    with pytest.raises(service.MaterialRequestAllocationOptionError) as captured:
+        service.list_allocation_options(
+            DB(), actor=SimpleNamespace(role_codes=("admin",)), material_request_id=request_id, request_line_id=line_id
+        )
+    assert captured.value.code == "material_request_line_revision_stale"
+    inventory_read.assert_not_called()
+
+
 def test_router_allocation_options_is_get_only_and_no_store_on_success_and_error(monkeypatch):
     api = FastAPI()
     api.include_router(formal_material_requests.router, prefix="/api")
