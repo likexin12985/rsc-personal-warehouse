@@ -80,11 +80,11 @@ class StocktakePostingCommandStatusOut(BaseModel):
             raise ValueError("sealed status requires seal evidence")
         if self.command.task_id != self.task_id:
             raise ValueError("command task does not match status task")
-        if self.command.actor_person_id != self.actor_person_id:
-            raise ValueError("command actor does not match status actor")
-        if self.command.actor_authorization_version != self.actor_authorization_version:
-            raise ValueError("command authorization version does not match status actor")
-        if self.command.trace_request_id != self.trace_request_id:
-            raise ValueError("command trace does not match status trace")
+        if isinstance(self.command, StocktakePostingSealedCommandOut):
+            if self.command.actor_person_id != self.actor_person_id:
+                raise ValueError("command actor does not match status actor")
+            if self.command.actor_authorization_version != self.actor_authorization_version:
+                raise ValueError("command authorization version does not match status actor")
+            if self.command.trace_request_id != self.trace_request_id:
+                raise ValueError("command trace does not match status trace")
         return self
-

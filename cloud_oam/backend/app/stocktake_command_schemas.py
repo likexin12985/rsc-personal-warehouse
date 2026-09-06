@@ -325,6 +325,12 @@ class StocktakeDifferencePostIn(_StrictRequestModel):
     expected_task_version: StrictInt = Field(ge=0)
 
 
+class StocktakeDifferencePostSealIn(_StrictRequestModel):
+    """Seal-first coordinate; it never carries an idempotency secret."""
+
+    expected_task_version: StrictInt = Field(ge=0)
+
+
 class StocktakeTerminalIn(_StrictRequestModel):
     """Optimistic coordinate shared by independent reconcile/close commands."""
 

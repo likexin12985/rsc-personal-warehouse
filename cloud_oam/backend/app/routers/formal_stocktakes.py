@@ -23,6 +23,7 @@ from ..formal_services import stocktake_difference as difference_service
 from ..formal_services import stocktake_query as query_service
 from ..formal_services import stocktake_posting as posting_service
 from ..formal_services import stocktake_posting_command_status as posting_status_service
+from ..formal_services import stocktake_posting_command_seal as posting_seal_service
 from ..formal_services import stocktake_close as close_service
 from ..formal_services import stocktake_recount as recount_service
 from ..formal_services import stocktake_recount_count as recount_count_service
@@ -38,6 +39,7 @@ from ..stocktake_command_schemas import (
     StocktakeDifferenceGenerateIn,
     StocktakeDifferenceGenerateOut,
     StocktakeDifferencePostIn,
+    StocktakeDifferencePostSealIn,
     StocktakeDifferencePostOut,
     StocktakeCloseOut,
     StocktakeCloseReconciliationOut,
@@ -55,6 +57,7 @@ from ..stocktake_command_schemas import (
 from ..stocktake_read_schemas import StocktakeTaskDetailOut, StocktakeTaskPageOut
 from ..stocktake_count_command_status_schemas import StocktakeCountCommandStatusOut
 from ..stocktake_posting_command_status_schemas import StocktakePostingCommandStatusOut
+from ..stocktake_posting_command_status_schemas import StocktakePostingSealedCommandOut
 from ..stocktake_review_command_status_schemas import StocktakeReviewCommandStatusOut
 from ..stocktake_task_schemas import (
     PersonalStocktakeCreateIn,
@@ -982,6 +985,50 @@ def post_formal_stocktake_differences(
         db.rollback()
         raise
     _set_write_headers(response, result.replayed)
+    return output
+
+
+@router.post(
+    "/{task_id}/post-differences/confirm-not-executed",
+    response_model=StocktakePostingSealedCommandOut,
+)
+def seal_formal_stocktake_post_command(
+    task_id: UUID,
+    payload: StocktakeDifferencePostSealIn,
+    response: Response,
+    principal: FormalPrincipal = Depends(
+        require_permission("stocktake", "post_difference")
+    ),
+    db: Session = Depends(get_db),
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> StocktakePostingSealedCommandOut:
+    if idempotency_key is not None:
+        raise HTTPException(status_code=400, detail={
+            "code": "idempotency_key_forbidden", "category": "invalid_request",
+            "message": "封存请求不得携带幂等密钥",
+        })
+    checked_request_id = _required_safe_header(
+        "X-Request-ID", request_id, minimum=8, maximum=160
+    )
+    try:
+        output = posting_seal_service.seal_nonopening_stocktake_post_command(
+            db,
+            actor=principal,
+            task_id=task_id,
+            expected_task_version=payload.expected_task_version,
+            actor_person_id=principal.person_id,
+            actor_authorization_version=principal.authorization_version,
+            trace_request_id=checked_request_id,
+        )
+        db.commit()
+    except posting_seal_service.StocktakePostingSealError as exc:
+        db.rollback()
+        _raise_service_error(exc)
+    except Exception:
+        db.rollback()
+        raise
+    _set_no_store(response)
     return output
 
 
