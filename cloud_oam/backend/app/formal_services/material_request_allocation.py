@@ -160,16 +160,22 @@ def allocation_command_status(
         _fail("material_request_allocation_forbidden", "forbidden", "当前账号没有货源分配权限")
     if not isinstance(trace_request_id, str) or not trace_request_id.strip():
         _fail("material_request_allocation_trace_invalid", "invalid_request", "请求追踪坐标无效")
-    audits = tuple(
-        db.scalars(
-            select(AuditEvent)
-            .where(
-                AuditEvent.actor_user_id == actor.user_id,
-                AuditEvent.request_id == trace_request_id,
-            )
-            .order_by(AuditEvent.id)
-        ).all()
-    )
+    # This endpoint is a recovery read.  Suppress autoflush so a dirty ORM
+    # object in the request session can never turn the lookup into a write.
+    with db.no_autoflush:
+        audits = tuple(
+            db.scalars(
+                select(AuditEvent)
+                .where(
+                    AuditEvent.stream_key == "material_request",
+                    AuditEvent.action == "material_request_allocation_created",
+                    AuditEvent.actor_user_id == actor.user_id,
+                    AuditEvent.request_id == trace_request_id,
+                )
+                .order_by(AuditEvent.id)
+                .execution_options(populate_existing=True)
+            ).all()
+        )
     if not audits:
         return None
     if len(audits) != 1:
@@ -189,8 +195,21 @@ def allocation_command_status(
         ) from exc
     if audit.aggregate_id != str(allocation_id):
         _fail("material_request_allocation_history_invalid", "service_unavailable", "分配审计对象不匹配")
-    fact = db.scalar(select(StockAllocation).where(StockAllocation.id == allocation_id))
-    request = db.scalar(select(MaterialRequest).where(MaterialRequest.id == fact.request_id)) if fact else None
+    with db.no_autoflush:
+        fact = db.scalar(
+            select(StockAllocation)
+            .where(StockAllocation.id == allocation_id)
+            .execution_options(populate_existing=True)
+        )
+        request = (
+            db.scalar(
+                select(MaterialRequest)
+                .where(MaterialRequest.id == fact.request_id)
+                .execution_options(populate_existing=True)
+            )
+            if fact
+            else None
+        )
     if fact is None or request is None:
         _fail("material_request_allocation_history_invalid", "service_unavailable", "分配事实缺失")
     expected = {
@@ -409,4 +428,10 @@ def _fail(code: str, category: str, message: str) -> None:
     raise MaterialRequestAllocationError(code, category, message)
 
 
-__all__ = ["AllocationCommandResult", "AllocationCreateInput", "MaterialRequestAllocationError", "create_allocation"]
+__all__ = [
+    "AllocationCommandResult",
+    "AllocationCreateInput",
+    "MaterialRequestAllocationError",
+    "allocation_command_status",
+    "create_allocation",
+]

@@ -136,6 +136,15 @@ def test_allocation_command_status_returns_not_observed_without_audit_rows():
             return []
 
     class DB:
+        class _NoAutoflush:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        no_autoflush = _NoAutoflush()
+
         def scalars(self, _statement):
             return Result()
 
