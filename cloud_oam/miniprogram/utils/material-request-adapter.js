@@ -729,6 +729,37 @@ function createFormalMaterialRequestAdapter(options = {}) {
         }
       ))
     },
+    async createAllocation(requestId, input, headers) {
+      const checkedRequestId = uuidValue(requestId, 'request_id')
+      const object = exactObject(input, [
+        'expected_request_version', 'request_line_id', 'source_stock_account_id', 'allocated_qty',
+        'source_balance_version', 'source_ledger_cursor', 'serial_ids'
+      ], '分配写内容')
+      const body = {
+        expected_request_version: nonnegativeVersion(object.expected_request_version, 'expected_request_version'),
+        request_line_id: uuidValue(object.request_line_id, 'request_line_id'),
+        source_stock_account_id: uuidValue(object.source_stock_account_id, 'source_stock_account_id'),
+        allocated_qty: decimalText(object.allocated_qty, 'allocated_qty', true),
+        source_balance_version: nonnegativeVersion(object.source_balance_version, 'source_balance_version'),
+        source_ledger_cursor: nonnegativeVersion(object.source_ledger_cursor, 'source_ledger_cursor'),
+        serial_ids: Array.isArray(object.serial_ids)
+          ? object.serial_ids.map((serialId) => uuidValue(serialId, 'serial_id'))
+          : (() => { throw adapterError('分配串码内容无效') })()
+      }
+      if (body.serial_ids.length > 1000 || new Set(body.serial_ids).size !== body.serial_ids.length) {
+        throw adapterError('分配串码不能重复或超出上限')
+      }
+      const options = writeOptions({
+        request_id: checkedRequestId,
+        action: 'create_allocation',
+        path: `/v1/material-requests/${checkedRequestId}/allocations`,
+        body,
+        expected_version: body.expected_request_version,
+        signature: headers && headers['Idempotency-Key'],
+        headers
+      })
+      return transport.post(`/v1/material-requests/${checkedRequestId}/allocations`, body, options)
+    },
     list(afterId) {
       const suffix = afterId === null
         ? ''

@@ -350,6 +350,49 @@ test('allocation command status uses the original request coordinate and strict 
   )
 })
 
+test('allocation POST preserves both business coordinates and validates projection input', async () => {
+  const transport = fakeTransport({ ok: true })
+  const client = adapter(transport)
+  await client.createAllocation(REQUEST_ID, {
+    expected_request_version: 3,
+    request_line_id: STEP_ID,
+    source_stock_account_id: MATERIAL_ID,
+    allocated_qty: '1.000',
+    source_balance_version: 8,
+    source_ledger_cursor: 9,
+    serial_ids: []
+  }, {
+    'X-Request-ID': `wxreq-${'f'.repeat(36)}`,
+    'Idempotency-Key': `wxidem-${'f'.repeat(36)}`
+  })
+  assert.deepEqual(transport.calls[0], {
+    method: 'POST',
+    path: `/v1/material-requests/${REQUEST_ID}/allocations`,
+    data: {
+      expected_request_version: 3, request_line_id: STEP_ID, source_stock_account_id: MATERIAL_ID,
+      allocated_qty: '1.000', source_balance_version: 8, source_ledger_cursor: 9, serial_ids: []
+    },
+    options: {
+      header: {
+        'X-Request-ID': `wxreq-${'f'.repeat(36)}`,
+        'Idempotency-Key': `wxidem-${'f'.repeat(36)}`
+      },
+      requestId: `wxreq-${'f'.repeat(36)}`,
+      idempotencyKey: `wxidem-${'f'.repeat(36)}`
+    }
+  })
+  await assert.rejects(
+    client.createAllocation(REQUEST_ID, {
+      expected_request_version: 3, request_line_id: STEP_ID, source_stock_account_id: MATERIAL_ID,
+      allocated_qty: '0.000', source_balance_version: 8, source_ledger_cursor: 9, serial_ids: []
+    }, {
+      'X-Request-ID': `wxreq-${'f'.repeat(36)}`,
+      'Idempotency-Key': `wxidem-${'f'.repeat(36)}`
+    }),
+    /必须大于零/
+  )
+})
+
 test('fresh identity or lifecycle command contract drift fails closed', async () => {
   const changedIdentity = formalIdentity()
   changedIdentity.authorization_version = 8
