@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { FormalFileUploadClient } from "../FormalFileUploadField";
 import type { FormalFilePurpose, FormalUploadFile } from "../formalFileUpload";
@@ -43,15 +43,26 @@ function detail() { return { schema_version: "1.0", task_id: TASK, task_no: "ST-
 function page() { return { schema_version: "1.0", items: [{ task_id: TASK, task_no: "ST-SELF-001", task_type: "personal", region_org_id: REGION, status: "draft", version: 0, blind_count: true, current_round_no: 0, current_round_status: null, cutoff_ledger_cursor: null, cutoff_at: null, visible_scope_count: 1, current_round_visible_completed_scope_count: 0, freeze_status: "not_started", state_axes: axes(), deadline: null, allowed_actions: ["start"] }], next_after_id: null } as any; }
 
 function adapter(canCount: boolean): FormalStocktakeAdapter {
-  return {
-    loadAccess: vi.fn(async () => ({ schema_version: "1.0" as const, person_id: PERSON, authorization_version: 7, can_read: true, can_count: canCount, can_manage: false, can_review_region: false, can_review_headquarters: false, can_post: false, can_reconcile: false, can_close: false })),
+  const access = { schema_version: "1.0" as const, person_id: PERSON, authorization_version: 7, can_read: true, can_count: canCount, can_manage: false, can_review_region: false, can_review_headquarters: false, can_post: false, can_reconcile: false, can_close: false };
+  const detailRead = vi.fn(async () => detail());
+  const client: FormalStocktakeAdapter = {
+    loadAccess: vi.fn(async () => access),
+    loadAccessNoReplay: vi.fn(async () => access),
+    loadIdentityNoReplay: vi.fn(async () => ({ person_id: PERSON, name: "工程师", employee_no: "E001", organization_code: "ORG", organization_name: "区域", account_status: "active", employment_status: "active", access_mode: "active", authorization_version: 7, role_codes: ["technician"] })),
     list: vi.fn(async () => page()),
-    detail: vi.fn(async () => detail()),
+    detail: detailRead,
+    detailNoReplay: vi.fn(async () => detailRead()),
+    countCommandStatus: vi.fn(async (_taskId, roundId, scopeId, operation, actorPersonId, actorAuthorizationVersion, traceRequestId) => ({
+      schema_version: "1.0", task_id: TASK, round_id: roundId, scope_id: scopeId,
+      actor_person_id: actorPersonId, actor_authorization_version: actorAuthorizationVersion,
+      trace_request_id: traceRequestId, operation, lookup_status: "not_observed", command: null,
+    })),
     listRegions: vi.fn(async () => ({ items: [], next_after_id: null })),
     listLocations: vi.fn(async () => ({ items: [], next_after_id: null })),
     listAssignees: vi.fn(async () => ({ items: [], next_after_person_id: null })),
     execute: vi.fn(),
   };
+  return client;
 }
 
 function postingAdapter(canPost: boolean, allowed: boolean): FormalStocktakeAdapter {
@@ -89,7 +100,18 @@ function evidenceFile(): File {
   return new File([new Uint8Array([4, 5, 6])], "盘点照片.jpg", { type: "image/jpeg" });
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // Durable count/review sentinels are intentionally sticky in production;
+  // each component test gets a fresh browser-storage boundary.
+  try { localStorage.clear(); } catch { /* jsdom storage may be unavailable */ }
+});
+
+beforeEach(() => {
+  // Production requires Web Locks for cross-tab single-writer recovery.  The
+  // jsdom fixture provides the same exclusive-lock seam explicitly.
+  Object.defineProperty(navigator, "locks", { configurable: true, value: postLocks });
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -370,6 +392,7 @@ describe("formal non-opening stocktake PC page", () => {
     fireEvent.click(firstZeroButton);
     await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
     fireEvent.click(within(count).getByRole("button", { name: "取消" }));
+    await vi.waitFor(() => expect((within(panel).getAllByRole("button", { name: "录入初盘" })[0] as HTMLButtonElement).disabled).toBe(false));
 
     fireEvent.click(within(panel).getAllByRole("button", { name: "录入初盘" })[1]);
     count = within(panel).getByLabelText("盘点计数表单");

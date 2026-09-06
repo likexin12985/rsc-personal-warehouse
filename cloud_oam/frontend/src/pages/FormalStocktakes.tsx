@@ -34,6 +34,27 @@ import {
   type FormalStocktakePostRecoveryStore,
   type FormalStocktakePostSentinel,
 } from "../formalStocktakePostRecoveryStore";
+import {
+  FormalStocktakeCountSubmissionPendingError,
+  createFormalStocktakeCountRecoveryAdapterFromFormalAdapter,
+  recoverFormalStocktakeCount,
+} from "../formalStocktakeCountRecovery";
+import { submitDurableFormalStocktakeCount } from "../formalStocktakeCountSubmission";
+import {
+  getFormalStocktakeCountRecoveryStore,
+  type FormalStocktakeCountRecoveryStore,
+  type FormalStocktakeCountSentinel,
+} from "../formalStocktakeCountRecoveryStore";
+import {
+  FormalStocktakeReviewSubmissionPendingError,
+  recoverFormalStocktakeReview,
+  submitDurableFormalStocktakeReview,
+} from "../formalStocktakeReviewRecovery";
+import {
+  getFormalStocktakeReviewRecoveryStore,
+  type FormalStocktakeReviewRecoveryStore,
+  type FormalStocktakeReviewSentinel,
+} from "../formalStocktakeReviewRecoveryStore";
 import FormalFileUploadField, {
   type AvailableFormalFile,
   type FormalFileUploadClient,
@@ -47,6 +68,10 @@ type Props = Readonly<{
   fileUploadClient?: FormalFileUploadClient;
   /** Test seam; production uses the browser-backed durable store. */
   postRecoveryStore?: FormalStocktakePostRecoveryStore;
+  /** Test seam; production uses the browser-backed durable store. */
+  countRecoveryStore?: FormalStocktakeCountRecoveryStore;
+  /** Test seam; production uses the browser-backed durable store. */
+  reviewRecoveryStore?: FormalStocktakeReviewRecoveryStore;
 }>;
 
 const AXIS_LABELS = {
@@ -230,7 +255,7 @@ function CountForm({ detail, round, scope, action, disabled, fileUploadClient, u
   </section>;
 }
 
-export default function FormalStocktakesPage({ adapter, fileUploadClient = defaultFormalFileUploadClient, postRecoveryStore }: Props) {
+export default function FormalStocktakesPage({ adapter, fileUploadClient = defaultFormalFileUploadClient, postRecoveryStore, countRecoveryStore, reviewRecoveryStore }: Props) {
   const registry = useRef(createFormalStocktakeIntentRegistry());
   const countEvidenceClaims = useRef(new Map<string, string>());
   const uploadIdentity = useRef("");
@@ -258,12 +283,38 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
     if (!postRecoveryCapable) return null;
     return postRecoveryStore ?? getFormalStocktakePostRecoveryStore();
   }, [postRecoveryCapable, postRecoveryStore]);
+  const countRecoveryCapable = typeof adapter.loadIdentityNoReplay === "function"
+    && typeof adapter.loadAccessNoReplay === "function"
+    && typeof adapter.detailNoReplay === "function"
+    && typeof adapter.countCommandStatus === "function";
+  const resolvedCountRecoveryStore = useMemo<FormalStocktakeCountRecoveryStore | null>(() => {
+    if (!countRecoveryCapable) return null;
+    return countRecoveryStore ?? getFormalStocktakeCountRecoveryStore();
+  }, [countRecoveryCapable, countRecoveryStore]);
+  const reviewRecoveryCapable = typeof adapter.loadIdentityNoReplay === "function"
+    && typeof adapter.loadAccessNoReplay === "function"
+    && typeof adapter.detailNoReplay === "function"
+    && typeof adapter.reviewCommandStatus === "function";
+  const resolvedReviewRecoveryStore = useMemo<FormalStocktakeReviewRecoveryStore | null>(() => {
+    if (!reviewRecoveryCapable) return null;
+    return reviewRecoveryStore ?? getFormalStocktakeReviewRecoveryStore();
+  }, [reviewRecoveryCapable, reviewRecoveryStore]);
   const [postRecoveryState, setPostRecoveryState] = useState<Readonly<{
     kind: "missing" | "corrupt" | "unavailable" | "valid";
     values?: readonly FormalStocktakePostSentinel[];
   }>>({ kind: "missing" });
+  const [countRecoveryState, setCountRecoveryState] = useState<Readonly<{
+    kind: "missing" | "corrupt" | "unavailable" | "valid";
+    values?: readonly FormalStocktakeCountSentinel[];
+  }>>({ kind: "missing" });
+  const [reviewRecoveryState, setReviewRecoveryState] = useState<Readonly<{
+    kind: "missing" | "corrupt" | "unavailable" | "valid";
+    values?: readonly FormalStocktakeReviewSentinel[];
+  }>>({ kind: "missing" });
   const postWriteBlocked = postRecoveryState.kind !== "missing";
-  const busy = commandBusy || loadingMore || postWriteBlocked;
+  const countWriteBlocked = countRecoveryState.kind !== "missing";
+  const reviewWriteBlocked = reviewRecoveryState.kind !== "missing";
+  const busy = commandBusy || loadingMore || postWriteBlocked || countWriteBlocked || reviewWriteBlocked;
   const [countTarget, setCountTarget] = useState<{ scope: FormalStocktakeScope; round: FormalStocktakeRound; action: "submit_initial_count" | "submit_recount_count" } | null>(null);
   const [personalBlind, setPersonalBlind] = useState(true);
   const [personalFreeze, setPersonalFreeze] = useState<"hard" | "cutoff_replay">("cutoff_replay");
@@ -300,6 +351,36 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
 
   function refreshPostRecoveryState(): void {
     setPostRecoveryState(readPostRecoverySnapshot());
+  }
+
+  function readCountRecoverySnapshot(): Readonly<{
+    kind: "missing" | "corrupt" | "unavailable" | "valid";
+    values?: readonly FormalStocktakeCountSentinel[];
+  }> {
+    if (!resolvedCountRecoveryStore) return { kind: "missing" };
+    const pending = resolvedCountRecoveryStore.readPending();
+    if (pending.kind !== "valid") return { kind: pending.kind };
+    if (!pending.values || pending.values.length === 0) return { kind: "corrupt" };
+    return { kind: "valid", values: pending.values };
+  }
+
+  function refreshCountRecoveryState(): void {
+    setCountRecoveryState(readCountRecoverySnapshot());
+  }
+
+  function readReviewRecoverySnapshot(): Readonly<{
+    kind: "missing" | "corrupt" | "unavailable" | "valid";
+    values?: readonly FormalStocktakeReviewSentinel[];
+  }> {
+    if (!resolvedReviewRecoveryStore) return { kind: "missing" };
+    const pending = resolvedReviewRecoveryStore.readPending();
+    if (pending.kind !== "valid") return { kind: pending.kind };
+    if (!pending.values || pending.values.length === 0) return { kind: "corrupt" };
+    return { kind: "valid", values: pending.values };
+  }
+
+  function refreshReviewRecoveryState(): void {
+    setReviewRecoveryState(readReviewRecoverySnapshot());
   }
 
   function sameAccess(left: FormalStocktakeAccess, right: FormalStocktakeAccess): boolean {
@@ -360,10 +441,12 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
     clearReadState(); setTaskFilter(""); setBusy(false);
     setPendingRetryable(false);
     refreshPostRecoveryState();
+    refreshCountRecoveryState();
+    refreshReviewRecoveryState();
     setPendingMessage(registry.current.current() ? "仍有原盘点请求待核实；身份上下文已重新建立，禁止新写或自动重发原请求。" : "");
     void load(false);
     return () => { lifecycleEpoch.current += 1; readEpoch.current += 1; moreLease.current = null; countEvidenceClaims.current.clear(); uploadIdentity.current = ""; };
-  }, [adapter, resolvedPostRecoveryStore]);
+  }, [adapter, resolvedPostRecoveryStore, resolvedCountRecoveryStore, resolvedReviewRecoveryStore]);
 
   async function loadMore() {
     const cursor = taskPage.current.next_after_id;
@@ -402,7 +485,7 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
     } finally { if (isCurrentRead(epoch)) setBusy(false); }
   }
 
-  async function run(input: FormalStocktakeCommandInput) {
+  async function run(input: FormalStocktakeCommandInput, countRoundNo?: number) {
     if (moreLease.current !== null || commandBusy || registry.current.current()) return;
     const livePostRecovery = readPostRecoverySnapshot();
     setPostRecoveryState(livePostRecovery);
@@ -410,18 +493,48 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
       setError("仍有原盘点过账待只读核验，已停止所有新写入");
       return;
     }
+    const liveCountRecovery = readCountRecoverySnapshot();
+    setCountRecoveryState(liveCountRecovery);
+    if (liveCountRecovery.kind !== "missing") {
+      setError("仍有原日常盘点范围计数待只读核验，已停止所有新写入");
+      return;
+    }
+    const liveReviewRecovery = readReviewRecoverySnapshot();
+    setReviewRecoveryState(liveReviewRecovery);
+    if (liveReviewRecovery.kind !== "missing") {
+      setError("仍有原盘点复核待只读核验，已停止所有新写入");
+      return;
+    }
     const lifecycle = lifecycleEpoch.current;
     const stillCurrent = () => lifecycle === lifecycleEpoch.current && activeAdapter.current === adapter;
     setBusy(true); setError(""); setPendingMessage(""); setPendingRetryable(false);
     let intent: FormalStocktakeIntent | null = null;
     let durablePost = false;
+    let durableCount = false;
+    let durableReview = false;
     try {
       intent = registry.current.begin(input);
       durablePost = input.action === "post" && postRecoveryCapable && resolvedPostRecoveryStore !== null;
+      durableCount = (input.action === "submit_initial_count" || input.action === "submit_recount_count")
+        && countRecoveryCapable && resolvedCountRecoveryStore !== null;
+      durableReview = (input.action === "review_region" || input.action === "review_headquarters")
+        && reviewRecoveryCapable && resolvedReviewRecoveryStore !== null;
       if (input.action === "post" && !durablePost) {
         throw new Error("当前浏览器或正式盘点适配器不支持安全的过账持久恢复，已停止过账");
       }
+      if ((input.action === "review_region" || input.action === "review_headquarters") && !durableReview) {
+        throw new Error("当前浏览器或正式盘点适配器不支持安全的复核持久恢复，已停止复核");
+      }
+      if ((input.action === "submit_initial_count" || input.action === "submit_recount_count") && !durableCount) {
+        throw new Error("当前浏览器或正式盘点适配器不支持安全的计数持久恢复，已停止计数");
+      }
+      if ((input.action === "submit_initial_count" || input.action === "submit_recount_count")
+        && countRoundNo === undefined) {
+        throw new Error("当前盘点轮次缺失，已停止计数");
+      }
       if (durablePost && !access) throw new Error("当前正式盘点权限上下文缺失，已停止过账");
+      if (durableCount && !access) throw new Error("当前正式盘点权限上下文缺失，已停止计数");
+      if (durableReview && !access) throw new Error("当前正式盘点权限上下文缺失，已停止复核");
       const completed = durablePost
         ? await submitDurableFormalStocktakePost({
           intent,
@@ -430,14 +543,33 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
           store: resolvedPostRecoveryStore!,
           canCommit: stillCurrent,
         })
+        : durableCount
+        ? await submitDurableFormalStocktakeCount({
+            intent,
+            expectedIdentity: { person_id: access!.person_id, authorization_version: access!.authorization_version },
+            roundNo: countRoundNo!,
+            adapter,
+            store: resolvedCountRecoveryStore!,
+            canCommit: stillCurrent,
+          })
+          : durableReview
+            ? await submitDurableFormalStocktakeReview({
+              intent,
+              expectedIdentity: { person_id: access!.person_id, authorization_version: access!.authorization_version },
+              adapter,
+              store: resolvedReviewRecoveryStore!,
+              canCommit: stillCurrent,
+            })
         : await adapter.execute(intent);
       registry.current.complete(intent);
       if (!stillCurrent()) return;
       refreshPostRecoveryState();
+      refreshCountRecoveryState();
+      refreshReviewRecoveryState();
       setDetail(completed.detail); setCountTarget(null); setPendingMessage(""); setPendingRetryable(false);
       await load(false);
     } catch (writeError) {
-      if (intent && (durablePost || !isFormalStocktakeWriteUncertain(writeError))) registry.current.complete(intent);
+      if (intent && (durablePost || durableCount || durableReview || !isFormalStocktakeWriteUncertain(writeError))) registry.current.complete(intent);
       if (!stillCurrent()) return;
       if (durablePost) {
         refreshPostRecoveryState();
@@ -445,6 +577,24 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
         setPendingMessage(writeError instanceof FormalStocktakePostSubmissionPendingError
           ? "原盘点过账已进入持久待核验状态；只允许查询原 X-Request-ID 的完成事实，禁止重新 POST。"
           : "盘点过账未发送或未能建立持久恢复坐标；已失败关闭。请刷新后检查。");
+        setError(showError(writeError));
+        return;
+      }
+      if (durableCount) {
+        refreshCountRecoveryState();
+        setPendingRetryable(false);
+        setPendingMessage(writeError instanceof FormalStocktakeCountSubmissionPendingError
+          ? "原日常盘点范围计数已进入持久待核验状态；只允许查询原追踪号的完成事实，禁止重新 POST。"
+          : "日常盘点计数未发送或未能建立持久恢复坐标；已失败关闭。请刷新后检查。");
+        setError(showError(writeError));
+        return;
+      }
+      if (durableReview) {
+        refreshReviewRecoveryState();
+        setPendingRetryable(false);
+        setPendingMessage(writeError instanceof FormalStocktakeReviewSubmissionPendingError
+          ? "原盘点复核已进入持久待核验状态；只允许查询原追踪号的完成事实，禁止重新 POST。"
+          : "盘点复核未发送或未能建立持久恢复坐标；已失败关闭。请刷新后检查。");
         setError(showError(writeError));
         return;
       }
@@ -503,6 +653,64 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
     }
   }
 
+  async function recoverPendingCount(target?: FormalStocktakeCountSentinel): Promise<void> {
+    const live = readCountRecoverySnapshot();
+    setCountRecoveryState(live);
+    const sentinel = target ?? (live.kind === "valid" ? live.values?.[0] : undefined);
+    if (!sentinel || !resolvedCountRecoveryStore || !countRecoveryCapable || commandBusy) return;
+    const lifecycle = lifecycleEpoch.current;
+    const stillCurrent = () => lifecycle === lifecycleEpoch.current && activeAdapter.current === adapter;
+    setBusy(true); setError(""); setPendingRetryable(false);
+    try {
+      const recoveryAdapter = createFormalStocktakeCountRecoveryAdapterFromFormalAdapter(
+        { person_id: sentinel.actor_person_id, authorization_version: sentinel.actor_authorization_version },
+        adapter,
+      );
+      const recovered = await resolvedCountRecoveryStore.withScopeLease(
+        sentinel,
+        (lease) => recoverFormalStocktakeCount(lease, sentinel, recoveryAdapter, stillCurrent),
+      );
+      if (!stillCurrent()) return;
+      refreshCountRecoveryState();
+      setDetail(recovered.detail); setCountTarget(null); setPendingMessage("");
+      await load(false);
+    } catch (recoveryError) {
+      if (!stillCurrent()) return;
+      refreshCountRecoveryState();
+      setPendingMessage("原日常盘点范围计数仍待只读核验；未发送任何新计数请求，恢复坐标继续保留。");
+      setError(showError(recoveryError));
+    } finally {
+      if (stillCurrent()) setBusy(false);
+    }
+  }
+
+  async function recoverPendingReview(target?: FormalStocktakeReviewSentinel): Promise<void> {
+    const live = readReviewRecoverySnapshot();
+    setReviewRecoveryState(live);
+    const sentinel = target ?? (live.kind === "valid" ? live.values?.[0] : undefined);
+    if (!sentinel || !resolvedReviewRecoveryStore || !reviewRecoveryCapable || commandBusy) return;
+    const lifecycle = lifecycleEpoch.current;
+    const stillCurrent = () => lifecycle === lifecycleEpoch.current && activeAdapter.current === adapter;
+    setBusy(true); setError(""); setPendingRetryable(false);
+    try {
+      const recovered = await resolvedReviewRecoveryStore.withTaskLease(
+        sentinel.task_id,
+        (lease) => recoverFormalStocktakeReview(lease, sentinel, adapter, stillCurrent),
+      );
+      if (!stillCurrent()) return;
+      refreshReviewRecoveryState();
+      setDetail(recovered.detail); setPendingMessage("");
+      await load(false);
+    } catch (recoveryError) {
+      if (!stillCurrent()) return;
+      refreshReviewRecoveryState();
+      setPendingMessage("原盘点复核仍待只读核验；未发送任何新复核请求，恢复坐标继续保留。");
+      setError(showError(recoveryError));
+    } finally {
+      if (stillCurrent()) setBusy(false);
+    }
+  }
+
   function submitCountWithEvidence(
     input: FormalStocktakeCommandInput,
     evidenceFiles: readonly AvailableFormalFile[],
@@ -532,6 +740,18 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
     for (const file of evidenceFiles) {
       countEvidenceClaims.current.set(`sha256:${file.sha256}`, signature);
       countEvidenceClaims.current.set(`file_id:${file.file_id}`, signature);
+    }
+    const roundNo = detail?.rounds.find((item) => item.round_id === input.roundId)?.round_no;
+    if (!roundNo) throw new Error("当前盘点轮次已变化，未发送计数请求");
+    void run(input, roundNo);
+  }
+
+  function submitReviewWithDurableRecovery(input: FormalStocktakeCommandInput): void {
+    if (input.action !== "review_region" && input.action !== "review_headquarters") {
+      throw new Error("盘点复核表单只能提交区域或总部复核意图");
+    }
+    if (!reviewRecoveryCapable || !resolvedReviewRecoveryStore) {
+      throw new Error("当前浏览器或正式盘点适配器不支持安全的复核持久恢复，已停止复核");
     }
     void run(input);
   }
@@ -665,6 +885,18 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
         : "盘点过账恢复记录损坏或浏览器持久协调不可用；所有新写已失败关闭，禁止覆盖记录。"}
       {postRecoveryState.kind === "valid" && postRecoveryState.values?.map((pending) => <Button key={`${pending.task_id}:${pending.trace_request_id}`} tone="secondary" disabled={commandBusy} onClick={() => void recoverPendingPost(pending)}>{`只读核验 ${pending.task_id}（v${pending.expected_task_version}→${pending.expected_task_version + 1}）`}</Button>)}
     </div>}
+    {countRecoveryState.kind !== "missing" && <div className="alert alert-warning" role="alert">
+      {countRecoveryState.kind === "valid" && countRecoveryState.values?.length
+        ? `有 ${countRecoveryState.values.length} 笔日常盘点范围计数待核验；所有新写已停止。`
+        : "日常盘点计数恢复记录损坏或浏览器持久协调不可用；所有新写已失败关闭，禁止覆盖记录。"}
+      {countRecoveryState.kind === "valid" && countRecoveryState.values?.map((pending) => <Button key={`${pending.task_id}:${pending.round_id}:${pending.scope_id}:${pending.operation}`} tone="secondary" disabled={commandBusy} onClick={() => void recoverPendingCount(pending)}>{`只读核验 ${pending.task_id} · 第${pending.round_no}轮 · ${pending.operation === "initial_count" ? "初盘" : "复盘"}`}</Button>)}
+    </div>}
+    {reviewRecoveryState.kind !== "missing" && <div className="alert alert-warning" role="alert">
+      {reviewRecoveryState.kind === "valid" && reviewRecoveryState.values?.length
+        ? `有 ${reviewRecoveryState.values.length} 笔盘点复核待核验；所有新写已停止。`
+        : "盘点复核恢复记录损坏或浏览器持久协调不可用；所有新写已失败关闭，禁止覆盖记录。"}
+      {reviewRecoveryState.kind === "valid" && reviewRecoveryState.values?.map((pending) => <Button key={`${pending.task_id}:${pending.round_id}:${pending.review_stage}:${pending.trace_request_id}`} tone="secondary" disabled={commandBusy} onClick={() => void recoverPendingReview(pending)}>{`只读核验 ${pending.review_stage === "region" ? "区域" : "总部"}复核 ${pending.task_id}（v${pending.expected_task_version}→${pending.expected_task_version + 1}）`}</Button>)}
+    </div>}
     {pendingMessage && <div className="alert alert-warning" role="alert">{pendingMessage}{pendingRetryable && registry.current.current() && <Button tone="secondary" disabled={busy} onClick={() => void retryPending()}>按原坐标重试</Button>}</div>}
     <div className="alert alert-info">本页只访问正式 `/v1/stocktakes`、受控 `/v1/stocktake-options` 和 `/access/context`。不会调用 legacy `/stocktakes`、`/media`、opening 路由或外部系统。差异过账是独立总部动作；`posted` 不等于 `closed`。</div>
 
@@ -742,8 +974,8 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
         </div>
         {round.visible_differences.map((difference: FormalStocktakeDifference) => <div className="formal-stocktake-difference" key={difference.difference_id}><div><strong>差异 {difference.difference_no} · {formalStocktakeLabels.difference[difference.difference_type]}</strong><span>{difference.reason_text || "未填写原因"}</span></div><div><span>账面 {difference.book_qty}</span><span>实盘 {difference.counted_qty}</span><strong>{difference.difference_qty}</strong></div></div>)}
       </section>}
-      {round && can.region && <ReviewForm stage="region" round={round} detail={detail} disabled={busy || !!registry.current.current()} onSubmit={(input) => void run(input)} />}
-      {round && can.headquarters && <ReviewForm stage="headquarters" round={round} detail={detail} disabled={busy || !!registry.current.current()} onSubmit={(input) => void run(input)} />}
+      {round && can.region && <ReviewForm stage="region" round={round} detail={detail} disabled={busy || !!registry.current.current()} onSubmit={submitReviewWithDurableRecovery} />}
+      {round && can.headquarters && <ReviewForm stage="headquarters" round={round} detail={detail} disabled={busy || !!registry.current.current()} onSubmit={submitReviewWithDurableRecovery} />}
       {round && can.recount && <section className="formal-stocktake-command-card" aria-label="选择范围开复盘">
         <h3>选择范围开复盘</h3><p>范围与人员均从当前授权下的正式目录选择；托管创建使用 person_id，复盘只使用同一选项返回的 assignee_user_id。</p>
         {detail.scopes.map((scope) => <div className="formal-stocktake-check" key={scope.scope_id}><label><input type="checkbox" checked={recountScopes.includes(scope.scope_id)} disabled={busy || recountLoadingScopeId === scope.scope_id} onChange={(event) => void toggleRecountScope(scope, event.target.checked)} />范围 {scope.scope_no} · {scope.location_id}</label>{recountScopes.includes(scope.scope_id) && <Field label={`范围 ${scope.scope_no} 复盘人员`}><select aria-label={`范围 ${scope.scope_no} 复盘人员`} value={recountAssigneeUserIds[scope.scope_id] || ""} onChange={(event) => setRecountAssigneeUserIds((current) => ({ ...current, [scope.scope_id]: event.target.value }))}>{(recountAssigneeOptions[scope.scope_id] || []).map((option) => <option key={option.assignee_user_id} value={option.assignee_user_id}>{option.employee_no} · {option.name}</option>)}</select></Field>}</div>)}

@@ -10,6 +10,8 @@ import {
   type FormalStocktakeIntent,
   type FormalStocktakePage,
 } from "./formalStocktakes";
+import type { FormalStocktakeCountOperation } from "./formalStocktakeCountRecoveryStore";
+import type { FormalStocktakeReviewStage } from "./formalStocktakeReviewRecoveryStore";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
@@ -93,6 +95,25 @@ export interface FormalStocktakeAdapter {
   /** Read-only historical lookup. It must never carry a body or idempotency key. */
   postingCommandStatus?(
     taskId: string,
+    actorPersonId: string,
+    actorAuthorizationVersion: number,
+    traceRequestId: string,
+  ): Promise<unknown>;
+  /** Read-only historical lookup for one non-opening initial/recount scope count. */
+  countCommandStatus?(
+    taskId: string,
+    roundId: string,
+    scopeId: string,
+    operation: FormalStocktakeCountOperation,
+    actorPersonId: string,
+    actorAuthorizationVersion: number,
+    traceRequestId: string,
+  ): Promise<unknown>;
+  /** Read-only historical lookup for one non-opening review command. */
+  reviewCommandStatus?(
+    taskId: string,
+    roundId: string,
+    reviewStage: FormalStocktakeReviewStage,
     actorPersonId: string,
     actorAuthorizationVersion: number,
     traceRequestId: string,
@@ -354,6 +375,38 @@ export function createFormalStocktakeAdapter(
       });
       return statusRequester(
         `/v1/stocktakes/${uuid(taskId, "task_id")}/post-differences-command-status?${query.toString()}`,
+        {
+          method: "GET",
+          cache: "no-store",
+          headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+        },
+      );
+    },
+    async countCommandStatus(taskId, roundId, scopeId, operation, actorPersonId, actorAuthorizationVersion, traceRequestId) {
+      const query = new URLSearchParams({
+        operation,
+        actor_person_id: uuid(actorPersonId, "actor_person_id"),
+        actor_authorization_version: String(positiveVersion(actorAuthorizationVersion, "actor_authorization_version")),
+        trace_request_id: text(traceRequestId, "trace_request_id"),
+      });
+      return statusRequester(
+        `/v1/stocktakes/${uuid(taskId, "task_id")}/rounds/${uuid(roundId, "round_id")}/scopes/${uuid(scopeId, "scope_id")}/count-command-status?${query.toString()}`,
+        {
+          method: "GET",
+          cache: "no-store",
+          headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+        },
+      );
+    },
+    async reviewCommandStatus(taskId, roundId, reviewStage, actorPersonId, actorAuthorizationVersion, traceRequestId) {
+      if (reviewStage !== "region" && reviewStage !== "headquarters") fail("review_stage 无效");
+      const query = new URLSearchParams({
+        actor_person_id: uuid(actorPersonId, "actor_person_id"),
+        actor_authorization_version: String(positiveVersion(actorAuthorizationVersion, "actor_authorization_version")),
+        trace_request_id: text(traceRequestId, "trace_request_id"),
+      });
+      return statusRequester(
+        `/v1/stocktakes/${uuid(taskId, "task_id")}/rounds/${uuid(roundId, "round_id")}/reviews/${reviewStage}/command-status?${query.toString()}`,
         {
           method: "GET",
           cache: "no-store",

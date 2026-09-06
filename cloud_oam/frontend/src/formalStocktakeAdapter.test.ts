@@ -109,6 +109,21 @@ describe("formal stocktake PC adapter", () => {
     expect(normal).not.toHaveBeenCalled();
   });
 
+  it("uses the exact read-only review command-status coordinates", async () => {
+    const requester = vi.fn(async (path: string) => {
+      if (path === "/access/context") return access();
+      return { schema_version: "1.0" };
+    });
+    const statusRequester = vi.fn(async () => ({ schema_version: "1.0" }));
+    const adapter = createFormalStocktakeAdapter({ person_id: PERSON, authorization_version: 7 }, requester, requester, statusRequester);
+    await adapter.reviewCommandStatus?.(TASK, ROUND, "region", PERSON, 7, `web-${"r".repeat(30)}`);
+    expect(statusRequester).toHaveBeenCalledWith(
+      `/v1/stocktakes/${TASK}/rounds/${ROUND}/reviews/region/command-status?actor_person_id=${PERSON}&actor_authorization_version=7&trace_request_id=web-${"r".repeat(30)}`,
+      { method: "GET", cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } },
+    );
+    await expect(adapter.reviewCommandStatus?.(TASK, ROUND, "invalid" as never, PERSON, 7, `web-${"r".repeat(30)}`)).rejects.toThrow(/review_stage/);
+  });
+
   it("uses no-replay preflight and readback for a durable posting execute", async () => {
     const normal = vi.fn(async () => { throw new Error("normal requester must not be used"); });
     const mutation = vi.fn(async () => postResult());
