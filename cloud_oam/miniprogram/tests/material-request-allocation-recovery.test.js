@@ -33,9 +33,10 @@ test('allocation recovery persists exact anchors and refuses replacement', () =>
 
 test('not_observed allocation history remains pending', async () => {
   const adapter = {
-    loadIdentity: async () => ({ person_id: sentinel.person_id, authorization_version: 7 }),
-    loadAccess: async () => ({ can_read: true, can_read_allocation_options: true, person_id: sentinel.person_id, authorization_version: 7 }),
-    allocationCommandStatus: async () => ({ schema_version: '1.0', lookup_status: 'not_observed', command: null })
+    loadIdentityNoReplay: async () => ({ person_id: sentinel.person_id, authorization_version: 7 }),
+    loadAccessNoReplay: async () => ({ can_read: true, can_read_allocation_options: true, person_id: sentinel.person_id, authorization_version: 7 }),
+    allocationCommandStatusNoReplay: async () => ({ schema_version: '1.0', lookup_status: 'not_observed', command: null }),
+    detailNoReplay: async () => { throw new Error('detail must not be read') }
   }
   const result = await recovery.recover(sentinel, adapter)
   assert.equal(result.status, 'pending')
@@ -44,9 +45,9 @@ test('not_observed allocation history remains pending', async () => {
 
 test('confirmed allocation with a different source projection remains blocked', async () => {
   const adapter = {
-    loadIdentity: async () => ({ person_id: sentinel.person_id, authorization_version: 7 }),
-    loadAccess: async () => ({ can_read: true, can_read_allocation_options: true, person_id: sentinel.person_id, authorization_version: 7 }),
-    allocationCommandStatus: async () => ({ schema_version: '1.0', lookup_status: 'confirmed', command: {
+    loadIdentityNoReplay: async () => ({ person_id: sentinel.person_id, authorization_version: 7 }),
+    loadAccessNoReplay: async () => ({ can_read: true, can_read_allocation_options: true, person_id: sentinel.person_id, authorization_version: 7 }),
+    allocationCommandStatusNoReplay: async () => ({ schema_version: '1.0', lookup_status: 'confirmed', command: {
       request_id: sentinel.request_id, allocation_id: '50000000-0000-4000-8000-000000000001', allocation_no: 'AL-TEST',
       request_version: 4, current_request_version: 4, revision_id: '60000000-0000-4000-8000-000000000001', revision_no: 1,
       request_line_id: sentinel.request_line_id, source_stock_account_id: sentinel.source_stock_account_id,
@@ -56,7 +57,31 @@ test('confirmed allocation with a different source projection remains blocked', 
         outbound_status: 'not_started', shipment_status: 'not_started', logistics_signature_status: 'not_signed',
         oam_receipt_status: 'not_occurred', personal_inbound_status: 'not_started', notification_status: 'not_started', reconciliation_status: 'not_started'
       }
-    } })
+    } }),
+    detailNoReplay: async () => { throw new Error('detail must not be read') }
   }
   await assert.rejects(recovery.recover(sentinel, adapter), /锚点不一致/)
+})
+
+test('recovery rejects adapters without explicit no-replay methods', async () => {
+  await assert.rejects(recovery.recover(sentinel, {
+    loadIdentity: async () => ({ person_id: sentinel.person_id, authorization_version: 7 }),
+    loadAccess: async () => ({ can_read: true, can_read_allocation_options: true }),
+    allocationCommandStatus: async () => ({ schema_version: '1.0', lookup_status: 'not_observed', command: null }),
+    detail: async () => ({})
+  }), /no-replay/)
+})
+
+test('factory sends identity, access, status and detail as noRefresh reads', async () => {
+  const calls = []
+  const transport = { request: async (path, options) => {
+    calls.push({ path, options })
+    if (path === '/auth/me') return { person_id: sentinel.person_id, authorization_version: 7 }
+    if (path === '/access/context') return { person_id: sentinel.person_id, authorization_version: 7, can_read: true, can_read_allocation_options: true }
+    return { schema_version: '1.0', lookup_status: 'not_observed', command: null }
+  } }
+  const adapter = recovery.createMaterialRequestAllocationRecoveryAdapter({ person_id: sentinel.person_id, authorization_version: 7 }, transport)
+  await adapter.loadIdentityNoReplay(); await adapter.loadAccessNoReplay(); await adapter.allocationCommandStatusNoReplay(sentinel.trace_request_id); await adapter.detailNoReplay(sentinel.request_id)
+  assert.equal(calls.length, 4)
+  for (const call of calls) assert.equal(call.options.noRefresh, true)
 })

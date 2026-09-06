@@ -80,17 +80,17 @@ export function createAllocationRecoveryStore(storage: StorageLike | undefined =
 }
 
 export async function recoverAllocationCommand(
-  adapter: FormalMaterialRequestAdapter & Required<Pick<FormalMaterialRequestAdapter, "allocationCommandStatus">>,
+  adapter: FormalMaterialRequestAdapter & Required<Pick<FormalMaterialRequestAdapter, "allocationCommandStatusNoReplay" | "loadIdentityNoReplay" | "loadAccessNoReplay" | "detailNoReplay">>,
   store: AllocationRecoveryStore,
   sentinel: AllocationSentinel,
   canCommit: () => boolean = () => true,
 ): Promise<Readonly<{ command: MaterialRequestAllocationCommand; detail: MaterialRequestDetail }>> {
   if (!valid(sentinel)) throw new Error("分配恢复记录无效");
-  const identity = validateFormalMaterialRequestFreshIdentity(await adapter.loadIdentity());
+  const identity = validateFormalMaterialRequestFreshIdentity(await adapter.loadIdentityNoReplay());
   if (identity.person_id !== sentinel.person_id || identity.authorization_version !== sentinel.authorization_version) throw new Error("登录身份或权限已变化，原分配操作继续保持待核验");
-  const access = validateFormalMaterialRequestAccess(await adapter.loadAccess());
+  const access = validateFormalMaterialRequestAccess(await adapter.loadAccessNoReplay());
   if (!access.can_read || !access.can_read_allocation_options || access.person_id !== sentinel.person_id || access.authorization_version !== sentinel.authorization_version) throw new Error("当前权限无法核验原分配操作");
-  const status = validateMaterialRequestAllocationCommandStatus(await adapter.allocationCommandStatus(sentinel.x_request_id));
+  const status = validateMaterialRequestAllocationCommandStatus(await adapter.allocationCommandStatusNoReplay(sentinel.x_request_id));
   if (status.lookup_status !== "confirmed" || !status.command) throw new Error("暂未查到分配操作的确定结果，继续保留原请求坐标；请稍后核验");
   const command = status.command;
   if (command.request_id !== sentinel.request_id || command.request_line_id !== sentinel.request_line_id
@@ -99,14 +99,14 @@ export async function recoverAllocationCommand(
       || command.source_balance_version !== sentinel.source_balance_version
       || command.source_ledger_cursor !== sentinel.source_ledger_cursor
       || command.allocated_qty !== sentinel.allocated_qty) throw new Error("分配命令与原请求锚点不一致，继续保持待核验");
-  const detail = validateMaterialRequestDetail(await adapter.detail(command.request_id));
+  const detail = validateMaterialRequestDetail(await adapter.detailNoReplay(command.request_id));
   const line = detail.lines.find((item) => item.request_line_id === command.request_line_id);
   if (!line || detail.request_id !== command.request_id || detail.request_version < command.current_request_version
       || line.revision_id !== command.revision_id || line.revision_no !== command.revision_no
       || !["approved", "partially_approved"].includes(line.status)
       || (detail.request_version === command.current_request_version && JSON.stringify(detail.states) !== JSON.stringify(command.state_axes))) throw new Error("分配命令已登记，但当前需求回读未能建立一致关系，继续保持待核验");
-  const afterIdentity = validateFormalMaterialRequestFreshIdentity(await adapter.loadIdentity());
-  const afterAccess = validateFormalMaterialRequestAccess(await adapter.loadAccess());
+  const afterIdentity = validateFormalMaterialRequestFreshIdentity(await adapter.loadIdentityNoReplay());
+  const afterAccess = validateFormalMaterialRequestAccess(await adapter.loadAccessNoReplay());
   if (afterIdentity.person_id !== sentinel.person_id || afterIdentity.authorization_version !== sentinel.authorization_version
       || !afterAccess.can_read || !afterAccess.can_read_allocation_options || afterAccess.person_id !== sentinel.person_id
       || afterAccess.authorization_version !== sentinel.authorization_version || !canCommit()) throw new Error("核验页面或权限已变化，继续保留原分配坐标");

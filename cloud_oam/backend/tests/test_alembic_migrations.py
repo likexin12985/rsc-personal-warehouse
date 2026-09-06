@@ -1502,6 +1502,24 @@ def test_initial_revision_is_explicit_and_model_independent() -> None:
     }
 
 
+def test_pg16_gate_head_matches_alembic_graph() -> None:
+    """Detect a stale dynamic-gate target without requiring a PostgreSQL run."""
+    gate = ROOT / "backend" / "tests" / "test_postgresql16_release_gate.py"
+    constants: dict[str, str] = {}
+    for node in ast.parse(gate.read_text(encoding="utf-8")).body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            constants[target.id] = node.value.value
+        elif isinstance(node.value, ast.Name) and node.value.id in constants:
+            constants[target.id] = constants[node.value.id]
+    script = ScriptDirectory.from_config(_config("sqlite+pysqlite:///:memory:"))
+    assert constants["HEAD_REVISION"] == script.get_current_head()
+
+
 def test_revision_history_has_single_integrity_hardening_head() -> None:
     script = ScriptDirectory.from_config(_config("sqlite+pysqlite:///:memory:"))
     assert script.get_heads() == [HEAD_REVISION]

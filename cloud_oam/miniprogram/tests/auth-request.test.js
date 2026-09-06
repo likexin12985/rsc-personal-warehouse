@@ -90,6 +90,25 @@ test('exact identity reads force no-store while ordinary reads keep default head
   assert.equal(requests[2].header.Pragma, undefined)
 })
 
+test('allocation POST and recovery GET keep 401 fail-closed without refresh or replay', async (context) => {
+  const requests = []
+  global.wx = {
+    getRandomValues,
+    getAccountInfoSync() { return { miniProgram: { envVersion: 'develop' } } },
+    getStorageSync() { return '' },
+    request(options) { requests.push(options); options.success({ statusCode: 401, data: { detail: 'expired' } }) }
+  }
+  global.getApp = () => ({ globalData: {} })
+  resetApiModules()
+  context.after(() => { resetApiModules(); delete global.wx; delete global.getApp })
+  const api = require('../utils/api')
+  await assert.rejects(api.post('/v1/material-requests/20000000-0000-4000-8000-000000000001/allocations', { expected_request_version: 3 }, { noRefresh: true }), (error) => error.status === 401)
+  await assert.rejects(api.request('/v1/material-request-allocation-command-status', { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }), (error) => error.status === 401)
+  assert.equal(requests.length, 2)
+  assert.equal(requests[0].method, 'POST')
+  assert.equal(requests[1].method, 'GET')
+})
+
 test('lifecycle command-status GET preserves only the supplied trace request id', async (context) => {
   const requests = []
   global.wx = {

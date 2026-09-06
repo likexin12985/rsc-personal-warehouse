@@ -580,6 +580,12 @@ function writeOptions(intent) {
   }
 }
 
+const NO_STORE = Object.freeze({
+  method: 'GET',
+  noRefresh: true,
+  header: Object.freeze({ 'Cache-Control': 'no-store', Pragma: 'no-cache' })
+})
+
 function mutationMethod(intent) {
   const object = exactObject(intent, [
     'request_id', 'action', 'path', 'body', 'expected_version', 'signature', 'headers'
@@ -694,6 +700,19 @@ function createFormalMaterialRequestAdapter(options = {}) {
         expectedIdentity
       )
     },
+    // Recovery probes must never trigger api.js 401 refresh or replay. Keep
+    // these explicit methods separate so ordinary request flows retain their
+    // existing transport behavior.
+    async loadIdentityNoReplay() {
+      const expectedIdentity = expectedIdentityProvider()
+      if (!expectedIdentity || typeof transport.request !== 'function') throw adapterError('当前登录身份不可用', 401)
+      return validateFormalIdentity(await transport.request('/auth/me', NO_STORE), expectedIdentity)
+    },
+    async loadAccessNoReplay(freshIdentity) {
+      const expectedIdentity = freshIdentity || expectedIdentityProvider()
+      if (!expectedIdentity || typeof transport.request !== 'function') throw adapterError('当前登录身份不可用', 401)
+      return projectAccessContext(await transport.request('/access/context', NO_STORE), expectedIdentity)
+    },
     async lifecycleCommandStatus(xRequestId) {
       if (typeof xRequestId !== 'string' || !SAFE_REQUEST_ID.test(xRequestId)) {
         throw adapterError('需求终止命令查询请求标识无效')
@@ -727,12 +746,20 @@ function createFormalMaterialRequestAdapter(options = {}) {
         '/v1/material-request-allocation-command-status',
         {
           method: 'GET',
+          noRefresh: true,
           header: {
             'X-Request-ID': xRequestId,
             'Cache-Control': 'no-store',
             Pragma: 'no-cache'
           }
         }
+      ))
+    },
+    async allocationCommandStatusNoReplay(xRequestId) {
+      if (typeof xRequestId !== 'string' || !SAFE_REQUEST_ID.test(xRequestId)) throw adapterError('分配命令查询请求标识无效')
+      return contract.validateMaterialRequestAllocationCommandStatus(await transport.request(
+        '/v1/material-request-allocation-command-status',
+        Object.assign({}, NO_STORE, { header: Object.freeze({ 'X-Request-ID': xRequestId, 'Cache-Control': 'no-store', Pragma: 'no-cache' }) })
       ))
     },
     async createAllocation(requestId, input, headers) {
@@ -764,6 +791,7 @@ function createFormalMaterialRequestAdapter(options = {}) {
         signature: headers && headers['Idempotency-Key'],
         headers
       })
+      options.noRefresh = true
       return contract.validateMaterialRequestAllocationMutationResult(
         await transport.post(`/v1/material-requests/${checkedRequestId}/allocations`, body, options)
       )
@@ -782,6 +810,10 @@ function createFormalMaterialRequestAdapter(options = {}) {
         method: 'GET',
         header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
       })
+    },
+    async detailNoReplay(requestId) {
+      if (typeof transport.request !== 'function') throw adapterError('正式需求详情只读核验通道不可用', 503)
+      return transport.request(`/v1/material-requests/${uuidValue(requestId, 'request_id')}`, Object.assign({}, NO_STORE))
     },
     loadDraftForEdit(requestId) {
       return transport.request(

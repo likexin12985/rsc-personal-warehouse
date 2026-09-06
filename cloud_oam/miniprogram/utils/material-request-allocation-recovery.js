@@ -1,5 +1,6 @@
 // Persist only non-sensitive allocation anchors. Never store keys or payloads.
 const contract = require('./material-request-contract')
+const api = require('./api')
 const STORAGE_KEY = 'rsc_oam_material_request_allocation_sentinel'
 const UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const FIELDS = ['v', 'kind', 'trace_request_id', 'person_id', 'authorization_version', 'request_id',
@@ -12,6 +13,37 @@ function fail(message) {
   error.status = 503
   error.responseReceived = false
   throw error
+}
+const NO_STORE = Object.freeze({ method: 'GET', noRefresh: true, header: Object.freeze({ 'Cache-Control': 'no-store', Pragma: 'no-cache' }) })
+function identity(value, expected) {
+  if (!value || typeof value !== 'object' || typeof value.person_id !== 'string' || !Number.isSafeInteger(value.authorization_version)
+    || value.person_id.toLowerCase() !== expected.person_id || value.authorization_version !== expected.authorization_version) fail('分配未决操作身份或权限已变化；保留原坐标')
+  return value
+}
+function createMaterialRequestAllocationRecoveryAdapter(expectedIdentity, transport = api) {
+  if (!expectedIdentity || typeof expectedIdentity.person_id !== 'string' || !Number.isSafeInteger(expectedIdentity.authorization_version)
+    || typeof transport?.request !== 'function') fail('分配只读核验通道不可用')
+  const expected = { person_id: expectedIdentity.person_id.toLowerCase(), authorization_version: expectedIdentity.authorization_version }
+  const readIdentity = async () => identity(await transport.request('/auth/me', NO_STORE), expected)
+  const readAccess = async () => {
+    const access = await transport.request('/access/context', NO_STORE)
+    identity(access, expected)
+    if (!access.can_read || !access.can_read_allocation_options) fail('当前正式权限不能核验分配')
+    return access
+  }
+  const adapter = {
+    loadIdentityNoReplay: readIdentity,
+    loadAccessNoReplay: readAccess,
+    allocationCommandStatusNoReplay: async (trace) => {
+      if (typeof trace !== 'string' || !/^wxreq-[a-f0-9]{36}$/.test(trace)) fail('分配命令查询请求标识无效')
+      return transport.request('/v1/material-request-allocation-command-status', Object.assign({}, NO_STORE, { header: { 'X-Request-ID': trace, 'Cache-Control': 'no-store', Pragma: 'no-cache' } }))
+    },
+    detailNoReplay: async (requestId) => {
+      if (typeof requestId !== 'string' || !UUID.test(requestId)) fail('需求详情标识无效')
+      return transport.request(`/v1/material-requests/${requestId.toLowerCase()}`, NO_STORE)
+    }
+  }
+  return Object.freeze(Object.assign(adapter, { loadIdentity: readIdentity, loadAccess: readAccess, allocationCommandStatus: adapter.allocationCommandStatusNoReplay, detail: adapter.detailNoReplay }))
 }
 function canonical(value) { return JSON.stringify(FIELDS.map((field) => value[field])) }
 function validateSentinel(value) {
@@ -57,12 +89,17 @@ function clear(expected, options = {}) {
 }
 async function recover(sentinel, adapter) {
   const checked = validateSentinel(sentinel)
-  const identity = await adapter.loadIdentity()
-  const access = await adapter.loadAccess(identity)
-  if (identity.person_id !== checked.person_id || identity.authorization_version !== checked.authorization_version
+  if (!adapter || typeof adapter.loadIdentityNoReplay !== 'function' || typeof adapter.loadAccessNoReplay !== 'function'
+    || typeof adapter.allocationCommandStatusNoReplay !== 'function' || typeof adapter.detailNoReplay !== 'function') {
+    fail('分配恢复适配器缺少明确的 no-replay 只读通道；已停止写入')
+  }
+  const expected = { person_id: checked.person_id, authorization_version: checked.authorization_version }
+  const currentIdentity = identity(await adapter.loadIdentityNoReplay(), expected)
+  const access = await adapter.loadAccessNoReplay(currentIdentity)
+  if (currentIdentity.person_id !== checked.person_id || currentIdentity.authorization_version !== checked.authorization_version
     || access.person_id !== checked.person_id || access.authorization_version !== checked.authorization_version
     || !access.can_read || !access.can_read_allocation_options) fail('分配未决操作身份或权限已变化；保留原坐标')
-  const lookup = contract.validateMaterialRequestAllocationCommandStatus(await adapter.allocationCommandStatus(checked.trace_request_id))
+  const lookup = contract.validateMaterialRequestAllocationCommandStatus(await adapter.allocationCommandStatusNoReplay(checked.trace_request_id))
   if (lookup.lookup_status !== 'confirmed') return { status: 'pending', access, detail: null }
   const command = lookup.command
   if (command.request_id !== checked.request_id || command.request_line_id !== checked.request_line_id
@@ -71,19 +108,19 @@ async function recover(sentinel, adapter) {
     || command.source_balance_version !== checked.source_balance_version
     || command.source_ledger_cursor !== checked.source_ledger_cursor
     || command.allocated_qty !== checked.allocated_qty) fail('分配历史命令与原请求锚点不一致')
-  const detail = contract.validateMaterialRequestDetail(await adapter.detail(checked.request_id))
+  const detail = contract.validateMaterialRequestDetail(await adapter.detailNoReplay(checked.request_id))
   const line = detail.lines.find((item) => item.request_line_id === checked.request_line_id)
   if (detail.request_id !== checked.request_id || detail.request_version < command.current_request_version || !line
     || line.revision_id !== command.revision_id || line.revision_no !== command.revision_no
     || !['approved', 'partially_approved'].includes(line.status)
     || (detail.request_version === command.current_request_version
       && JSON.stringify(detail.states) !== JSON.stringify(command.state_axes))) fail('分配当前详情不能验证历史命令；保持未决状态')
-  const freshIdentity = await adapter.loadIdentity()
-  const freshAccess = await adapter.loadAccess(freshIdentity)
+  const freshIdentity = identity(await adapter.loadIdentityNoReplay(), expected)
+  const freshAccess = await adapter.loadAccessNoReplay(freshIdentity)
   if (freshIdentity.person_id !== checked.person_id || freshIdentity.authorization_version !== checked.authorization_version
     || !freshAccess.can_read || !freshAccess.can_read_allocation_options
     || freshAccess.person_id !== checked.person_id || freshAccess.authorization_version !== checked.authorization_version) fail('核验期间分配身份或权限发生变化；保留原坐标')
   return { status: 'confirmed', access: freshAccess, detail, command }
 }
 
-module.exports = { STORAGE_KEY, validateSentinel, read, persist, clear, recover }
+module.exports = { STORAGE_KEY, validateSentinel, read, persist, clear, recover, createMaterialRequestAllocationRecoveryAdapter }

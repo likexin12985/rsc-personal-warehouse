@@ -338,6 +338,7 @@ test('allocation command status uses the original request coordinate and strict 
     path: '/v1/material-request-allocation-command-status',
     options: {
       method: 'GET',
+      noRefresh: true,
       header: {
         'X-Request-ID': `wxreq-${'e'.repeat(36)}`,
         'Cache-Control': 'no-store',
@@ -391,7 +392,8 @@ test('allocation POST preserves both business coordinates and validates projecti
         'Idempotency-Key': `wxidem-${'f'.repeat(36)}`
       },
       requestId: `wxreq-${'f'.repeat(36)}`,
-      idempotencyKey: `wxidem-${'f'.repeat(36)}`
+      idempotencyKey: `wxidem-${'f'.repeat(36)}`,
+      noRefresh: true
     }
   })
   await assert.rejects(
