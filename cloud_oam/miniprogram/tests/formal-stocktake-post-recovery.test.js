@@ -88,8 +88,19 @@ test('durable post persists before one no-replay POST and keeps marker on not_ob
     async detailNoReplay() { throw new Error('detail must not be queried for not_observed') },
     async execute(intent, options) { posts += 1; await options.beforeWrite(); const error = new Error('network'); error.status = 503; throw error },
   }
-  const intent = { method: 'POST', action: 'post', taskId: TASK, expectedTaskVersion: 7, body: { expected_task_version: 7 }, headers: { 'X-Request-ID': TRACE, 'Idempotency-Key': `wxidem-${'a'.repeat(36)}` } }
+  const intent = { method: 'POST', action: 'post', path: `/v1/stocktakes/${TASK}/post-differences`, taskId: TASK, expectedTaskVersion: 7, body: { expected_task_version: 7 }, headers: { 'X-Request-ID': TRACE, 'Idempotency-Key': `wxidem-${'a'.repeat(36)}` } }
   await assert.rejects(() => require('../utils/formal-stocktake-post-recovery').submitDurableFormalStocktakePost({ intent, expectedIdentity: { person_id: PERSON, authorization_version: 9 }, adapter, store }), /仍待只读核验/)
   assert.equal(posts, 1)
   assert.equal(store.read(TASK).kind, 'valid')
+})
+
+test('recovered projection accepts a later closed task only after the exact post round proof', () => {
+  const fixture = require('./helpers/formal-post-fixtures')
+  const sentinel = fixture.marker()
+  const parsed = validateFormalStocktakePostCommandStatus(fixture.confirmedStatus(), sentinel)
+  const recovery = require('../utils/formal-stocktake-post-recovery')
+  const detail = recovery.validateFormalStocktakePostRecoveredProjection(fixture.closedDetail(), sentinel, parsed.command)
+  assert.equal(detail.status, 'closed')
+  assert.equal(detail.version, 8)
+  assert.throws(() => recovery.validateFormalStocktakePostRecoveredProjection(fixture.closedDetail(), sentinel, { ...parsed.command, posted_at: '2026-09-01T10:31:00+08:00' }))
 })

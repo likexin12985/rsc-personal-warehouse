@@ -1,11 +1,11 @@
-// Read-only proof for a non-opening formal stocktake posting command.
-// This module deliberately has no write path: it only validates the historical
-// command-status payload and its exact projection in a fresh task detail.
-const { validateFormalStocktakeDetail } = require('./formal-stocktake-contract')
+// Non-opening posting: one durable coordinate, one POST at most, then only
+// historical command-status and current-detail GETs can release its marker.
+const { validateFormalStocktakeDetail, confirmFormalStocktakePostProjection } = require('./formal-stocktake-contract')
+
+const { validateFormalStocktakePostSentinel, getFormalStocktakePostRecoveryStore } = require('./formal-stocktake-post-recovery-store')
 
 const UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const TRACE = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/
-const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/
 const QUANTITY = /^(?:0|[1-9]\d{0,14})\.\d{3}$/
 
 function fail(message = '日常盘点过账仍待只读核验，继续保持待核验') {
@@ -34,28 +34,22 @@ function nonNegative(value, name) {
   if (!Number.isSafeInteger(value) || value < 0) fail(`${name}无效`)
   return value
 }
-function timestamp(value, name) {
-  if (typeof value !== 'string' || !TIMESTAMP.test(value) || !Number.isFinite(Date.parse(value))) fail(`${name}无效`)
-  return value
+// Keep UTC seconds and microseconds separate; WeChat need not support BigInt.
+function instant(value) {
+  if (typeof value !== 'string') fail('时间戳无效')
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(Z|([+-])(\d{2}):(\d{2}))$/.exec(value)
+  if (!match) fail('时间戳无效')
+  const base = Date.parse(`${match[1]}Z`)
+  const hours = Number(match[5] || 0); const minutes = Number(match[6] || 0)
+  if (!Number.isFinite(base) || new Date(base).toISOString().slice(0, 19) !== match[1] || hours > 23 || minutes > 59) fail('时间戳无效')
+  const seconds = base / 1000 - (hours * 60 + minutes) * 60 * (match[4] === '-' ? -1 : 1)
+  if (!Number.isSafeInteger(seconds)) fail('时间戳无效')
+  return [seconds, Number((match[2] || '').padEnd(6, '0'))]
 }
+function timestamp(value) { instant(value); return value }
 function sameInstant(left, right) {
-  return Date.parse(left) === Date.parse(right)
-}
-
-function validateFormalStocktakePostSentinel(value) {
-  const row = exact(value, ['v', 'kind', 'task_id', 'expected_task_version', 'actor_person_id', 'actor_authorization_version', 'trace_request_id'])
-  if (row.v !== 1 || row.kind !== 'formal_stocktake_post'
-    || !Number.isSafeInteger(row.expected_task_version) || row.expected_task_version < 0
-    || typeof row.trace_request_id !== 'string' || !TRACE.test(row.trace_request_id)) fail('过账恢复坐标无效')
-  return Object.freeze({
-    v: 1,
-    kind: 'formal_stocktake_post',
-    task_id: uuid(row.task_id, 'task_id'),
-    expected_task_version: row.expected_task_version,
-    actor_person_id: uuid(row.actor_person_id, 'actor_person_id'),
-    actor_authorization_version: positive(row.actor_authorization_version, 'actor_authorization_version'),
-    trace_request_id: row.trace_request_id,
-  })
+  const a = instant(left); const b = instant(right)
+  return a[0] === b[0] && a[1] === b[1]
 }
 
 function validateFormalStocktakePostCommandStatus(value, original) {
@@ -68,9 +62,10 @@ function validateFormalStocktakePostCommandStatus(value, original) {
     || uuid(row.actor_person_id, 'actor_person_id') !== sentinel.actor_person_id
     || positive(row.actor_authorization_version, 'actor_authorization_version') !== sentinel.actor_authorization_version
     || row.trace_request_id !== sentinel.trace_request_id || row.operation !== 'post_differences') fail()
+  const anchors = { schema_version: '1.0', task_id: sentinel.task_id, actor_person_id: sentinel.actor_person_id, actor_authorization_version: sentinel.actor_authorization_version, trace_request_id: sentinel.trace_request_id, operation: 'post_differences' }
   if (row.lookup_status === 'not_observed') {
     if (row.command !== null) fail()
-    return Object.freeze({ ...sentinel, lookup_status: 'not_observed', command: null })
+    return Object.freeze({ ...anchors, lookup_status: 'not_observed', command: null })
   }
   if (row.lookup_status !== 'confirmed') fail()
   const command = exact(row.command, [
@@ -97,7 +92,7 @@ function validateFormalStocktakePostCommandStatus(value, original) {
     posted_at: timestamp(command.posted_at, 'posted_at'),
   })
   if (checked.task_id !== sentinel.task_id || checked.resulting_task_status !== 'posted'
-    || !QUANTITY.test(checked.total_quantity)
+    || typeof checked.total_quantity !== 'string' || !QUANTITY.test(checked.total_quantity)
     || checked.accepted_difference_count + checked.no_adjustment_count !== checked.difference_count
     || checked.movement_count !== checked.accepted_difference_count
     || (checked.transaction_count === 0
@@ -106,7 +101,7 @@ function validateFormalStocktakePostCommandStatus(value, original) {
         || checked.last_ledger_cursor - checked.first_ledger_cursor + 1 !== checked.transaction_count
         || checked.movement_count <= 0 || checked.total_quantity === '0.000')
     || checked.task_version !== sentinel.expected_task_version + 1) fail('盘点过账历史命令数量或版本无效')
-  return Object.freeze({ ...sentinel, lookup_status: 'confirmed', command: checked })
+  return Object.freeze({ ...anchors, lookup_status: 'confirmed', command: checked })
 }
 
 function validateFormalStocktakePostRecoveredProjection(value, sentinelValue, commandValue) {
@@ -119,42 +114,12 @@ function validateFormalStocktakePostRecoveredProjection(value, sentinelValue, co
   const detail = validateFormalStocktakeDetail(value)
   if (detail.task_id !== sentinel.task_id || detail.version < command.task_version
     || detail.posted_at === null || !sameInstant(detail.posted_at, command.posted_at)) fail('当前盘点详情未承接原过账版本与时间')
-  const round = detail.rounds.find((item) => item.round_id === command.terminal_round_id)
-  if (!round || detail.scopes.length !== command.scope_count || detail.current_round_no !== round.round_no
-    || detail.state_axes.posting_status !== 'recorded'
-    || !['posted', 'closed'].includes(detail.status)
-    || (detail.status === 'posted' && detail.closed_at !== null)
-    || (detail.status === 'closed' && detail.closed_at === null)) fail('当前盘点详情未确认过账终态')
-  const items = round.headquarters_review?.visible_items || []
-  const differences = new Set(round.visible_differences.map((item) => item.difference_id))
-  const reviewed = new Set(items.map((item) => item.difference_id))
-  if (round.difference_completion?.visible_difference_count !== command.difference_count
-    || round.difference_completion?.covers_all_task_scopes !== true
-    || round.visible_differences.length !== command.difference_count
-    || round.region_review?.decision !== 'approve' || round.region_review?.covers_all_task_scopes !== true
-    || round.headquarters_review?.decision !== 'approve' || round.headquarters_review?.covers_all_task_scopes !== true
-    || items.length !== command.difference_count || reviewed.size !== command.difference_count
-    || [...differences].some((id) => !reviewed.has(id)) || [...reviewed].some((id) => !differences.has(id))
-    || items.filter((item) => item.decision === 'accept_for_posting').length !== command.accepted_difference_count
-    || items.filter((item) => item.decision === 'no_adjustment').length !== command.no_adjustment_count
-    || round.posting.posting_fact_count !== command.movement_count
-    || round.posting.inventory_transaction_count !== command.transaction_count
-    || round.posting.visible_total_quantity !== command.total_quantity
-    || round.posting.covers_all_task_scopes !== true
-    || (command.movement_count > 0 && round.posting.status !== 'recorded')
-    || (command.movement_count === 0 && round.posting.status !== 'not_posted')) fail('精确回读未确认独立盘点差异过账完成事实')
+  confirmFormalStocktakePostProjection(command, detail, sentinel.expected_task_version, true)
   return detail
 }
 
-module.exports = {
-  validateFormalStocktakePostSentinel,
-  validateFormalStocktakePostCommandStatus,
-  validateFormalStocktakePostRecoveredProjection,
-}
-
-
 function identity(value) {
-  if (!value || typeof value !== 'object' || typeof value.person_id !== 'string'
+  if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.person_id !== 'string'
     || !UUID.test(value.person_id) || !Number.isSafeInteger(value.authorization_version) || value.authorization_version < 1) fail('当前正式身份无效')
   return Object.freeze({ person_id: value.person_id.toLowerCase(), authorization_version: value.authorization_version })
 }
@@ -169,7 +134,14 @@ function activeIdentity(value, expected) {
   if (Object.keys(value).length !== fields.length || fields.some((field) => !Object.prototype.hasOwnProperty.call(value, field))) fail('正式身份字段不完整')
   const current = sameIdentity(value, expected)
   if (value.account_status !== 'active' || value.employment_status !== 'active' || value.access_mode !== 'active') fail('当前身份不能核验盘点过账')
-  if (!Array.isArray(value.role_codes) || !value.role_codes.some((role) => ['admin', 'provincial_manager', 'technician'].includes(role))) fail('当前身份角色不能核验盘点过账')
+  for (const [field, limit] of [['name', 160], ['employee_no', 80], ['organization_code', 120], ['organization_name', 240]]) {
+    const text = value[field]
+    if (typeof text !== 'string' || !text || text.trim() !== text || text.length > limit || /[\u0000-\u001f\u007f]/.test(text)) fail('当前身份字段无效')
+  }
+  const roles = value.role_codes
+  if (!Array.isArray(roles) || !roles.length || new Set(roles).size !== roles.length
+    || roles.some((role) => !['admin', 'provincial_manager', 'technician', 'star_headquarters_approver'].includes(role))
+    || !roles.includes('admin')) fail('当前身份角色不能核验盘点过账')
   return current
 }
 function requirePostAccess(access, expected) {
@@ -181,6 +153,7 @@ function sentinelFromIntent(intent, expected) {
     || !Number.isSafeInteger(intent.expectedTaskVersion) || intent.expectedTaskVersion < 0
     || !intent.headers || typeof intent.headers['X-Request-ID'] !== 'string' || !TRACE.test(intent.headers['X-Request-ID'])) fail('日常盘点过账意图无效')
   const body = exact(intent.body, ['expected_task_version'])
+  if (intent.path !== `/v1/stocktakes/${uuid(intent.taskId, 'task_id')}/post-differences` || !/^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/.test(intent.headers['Idempotency-Key'] || '') || (intent.roundId != null) || (intent.scopeId != null)) fail('过账写路径或坐标无效')
   if (body.expected_task_version !== intent.expectedTaskVersion) fail('过账版本坐标不一致')
   return validateFormalStocktakePostSentinel({ v: 1, kind: 'formal_stocktake_post', task_id: intent.taskId, expected_task_version: intent.expectedTaskVersion, actor_person_id: expected.person_id, actor_authorization_version: expected.authorization_version, trace_request_id: intent.headers['X-Request-ID'] })
 }
@@ -206,12 +179,11 @@ async function recoverFormalStocktakePost(lease, value, adapter, canCommit = () 
   const stored = lease.read()
   if (stored.kind !== 'valid' || JSON.stringify(stored.value) !== JSON.stringify(sentinel)) fail()
   const expected = { person_id: sentinel.actor_person_id, authorization_version: sentinel.actor_authorization_version }
-  await adapter.loadIdentity(); await adapter.loadAccess()
+  sameIdentity(await adapter.loadIdentity(), expected); requirePostAccess(await adapter.loadAccess(), expected)
   const status = validateFormalStocktakePostCommandStatus(await adapter.commandStatus(sentinel), sentinel)
   if (status.lookup_status !== 'confirmed') fail('暂未查到原盘点过账的确定结果；不能据此重新提交')
   const detail = validateFormalStocktakePostRecoveredProjection(await adapter.detail(sentinel.task_id), sentinel, status.command)
-  await adapter.loadIdentity(); await adapter.loadAccess()
-  sameIdentity({ person_id: sentinel.actor_person_id, authorization_version: sentinel.actor_authorization_version }, expected)
+  sameIdentity(await adapter.loadIdentity(), expected); requirePostAccess(await adapter.loadAccess(), expected)
   if (!canCommit()) fail('核验页面已变化，继续保留盘点过账恢复记录')
   lease.clearExact(sentinel)
   return Object.freeze({ command: status.command, detail })
@@ -225,8 +197,9 @@ class FormalStocktakePostSubmissionPendingError extends Error {
   }
 }
 async function submitDurableFormalStocktakePost(options) {
-  const { intent, expectedIdentity, adapter, store, canCommit = () => true } = options || {}
+  const { intent, expectedIdentity, adapter, store = getFormalStocktakePostRecoveryStore(), canCommit = () => true } = options || {}
   const expected = identity(expectedIdentity)
+  if (!adapter || typeof adapter.execute !== 'function') fail('盘点过账单次提交通道不可用')
   if (!store || typeof store.withTaskLease !== 'function') fail('盘点过账持久恢复存储不可用')
   const sentinel = sentinelFromIntent(intent, expected)
   const recoveryAdapter = createFormalStocktakePostRecoveryAdapterFromFormalAdapter(expected, adapter)
@@ -241,10 +214,13 @@ async function submitDurableFormalStocktakePost(options) {
     if (!canCommit()) fail('当前盘点页面已变化，未发送过账请求')
     let persisted = false
     const beforeWrite = async () => {
+      if (persisted) throw new FormalStocktakePostSubmissionPendingError(sentinel)
       await recoveryAdapter.loadIdentity(); await recoveryAdapter.loadAccess()
       if (!canCommit()) fail('当前盘点页面已变化，未发送过账请求')
       lease.persist(sentinel)
-      if (lease.read().kind !== 'valid' || !canCommit()) throw new FormalStocktakePostSubmissionPendingError(sentinel)
+      persisted = true
+      const stored = lease.read()
+      if (stored.kind !== 'valid' || JSON.stringify(stored.value) !== JSON.stringify(sentinel) || !canCommit()) throw new FormalStocktakePostSubmissionPendingError(sentinel)
       persisted = true
     }
     try { await adapter.execute(intent, { noReplay: true, beforeWrite }) } catch (error) { if (!persisted) throw error }
@@ -253,8 +229,9 @@ async function submitDurableFormalStocktakePost(options) {
   })
 }
 
-module.exports.createFormalStocktakePostRecoveryAdapterFromFormalAdapter = createFormalStocktakePostRecoveryAdapterFromFormalAdapter
-module.exports.recoverFormalStocktakePost = recoverFormalStocktakePost
-module.exports.submitDurableFormalStocktakePost = submitDurableFormalStocktakePost
-module.exports.FormalStocktakePostSubmissionPendingError = FormalStocktakePostSubmissionPendingError
-module.exports.sentinelFromIntent = sentinelFromIntent
+module.exports = {
+  validateFormalStocktakePostSentinel, validateFormalStocktakePostCommandStatus,
+  validateFormalStocktakePostRecoveredProjection, createFormalStocktakePostRecoveryAdapterFromFormalAdapter,
+  recoverFormalStocktakePost, submitDurableFormalStocktakePost, FormalStocktakePostSubmissionPendingError,
+  sentinelFromIntent
+}
