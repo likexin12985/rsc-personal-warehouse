@@ -11,6 +11,22 @@ from test_stocktake_safe_posting_service import _approve, posting_world
 from test_stocktake_review_recount_service import review_world
 from test_stocktake_difference_service import world
 from test_stocktake_task_service import db
+from test_stocktake_task_service import NOW
+import app.formal_services.stocktake_task as task_service
+import app.formal_services.stocktake_count as count_service
+import app.formal_services.stocktake_difference as difference_service
+import app.formal_services.stocktake_review as review_service
+import app.formal_services.stocktake_recount as recount_service
+from test_stocktake_review_recount_service import EVALUATED_AT, REGION_REVIEWED_AT, RECOUNT_OPENED_AT
+
+
+@pytest.fixture(autouse=True)
+def fixed_clocks(monkeypatch):
+    monkeypatch.setattr(task_service, "_database_now", lambda _db: NOW)
+    monkeypatch.setattr(count_service, "_database_now", lambda _db: NOW)
+    monkeypatch.setattr(difference_service, "_database_now", lambda _db: EVALUATED_AT)
+    monkeypatch.setattr(review_service, "_database_now", lambda _db: REGION_REVIEWED_AT)
+    monkeypatch.setattr(recount_service, "_database_now", lambda _db: RECOUNT_OPENED_AT)
 
 
 def _seal(world, task, trace):
