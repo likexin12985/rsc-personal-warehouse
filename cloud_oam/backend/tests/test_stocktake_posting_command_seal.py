@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import hashlib
 
 import pytest
 
 from app.formal_services import stocktake_posting_command_seal as seal
 from app.formal_services import stocktake_posting_command_status as status
 from app.formal_services.stocktake_posting import StocktakeDifferencePostingError
-from app.stocktake_models import StocktakePostingCommandOutcome
+from app.stocktake_models import StocktakePostingCommandOutcome, StocktakePostingCompletion
 from test_stocktake_safe_posting_service import _approve, _post, posting_world
 from test_stocktake_review_recount_service import review_world
 from test_stocktake_difference_service import world
@@ -97,3 +98,24 @@ def test_late_post_after_seal_is_rejected_without_progression(posting_world, mon
     posting_world.db.rollback()
     posting_world.db.refresh(task)
     assert task.status == "approved"
+
+
+def test_new_request_coordinate_after_seal_remains_explicitly_postable(posting_world, monkeypatch):
+    task, _ = _approve(
+        posting_world,
+        monkeypatch,
+        key="seal-new-coordinate",
+        counted_qty=Decimal("4.000"),
+        decision="no_adjustment",
+    )
+    _seal(posting_world, task, "trace-seal-old-coordinate")
+    posting_world.db.commit()
+
+    result = _post(posting_world, task, key="seal-new-coordinate-post")
+
+    assert result.resulting_task_status == "posted"
+    assert result.replayed is False
+    completion = posting_world.db.query(StocktakePostingCompletion).filter_by(task_id=task.id).one()
+    assert completion.request_reference == "stocktake-posting-request-" + hashlib.sha256(
+        b"cloud_oam.stocktake.nonopening_posting.request.v1\0trace-seal-new-coordinate-post"
+    ).hexdigest()
