@@ -20,7 +20,7 @@ function validateSentinel(value) {
     || value.v !== 1 || value.kind !== 'material_request_allocation'
     || typeof value.trace_request_id !== 'string' || !/^wxreq-[a-f0-9]{36}$/.test(value.trace_request_id)
     || !['person_id', 'request_id', 'request_line_id', 'source_stock_account_id'].every((key) => typeof value[key] === 'string' && UUID.test(value[key]))
-    || typeof value.allocated_qty !== 'string' || !/^[1-9]\d{0,14}\.\d{3}$/.test(value.allocated_qty)
+    || typeof value.allocated_qty !== 'string' || !/^(?:0\.(?:00[1-9]|0[1-9]\d|[1-9]\d{2})|[1-9]\d{0,14}\.\d{3})$/.test(value.allocated_qty)
     || !Number.isSafeInteger(value.authorization_version) || value.authorization_version < 1
     || !Number.isSafeInteger(value.request_version) || value.request_version < 0
     || !Number.isSafeInteger(value.source_balance_version) || value.source_balance_version < 0
@@ -66,13 +66,14 @@ async function recover(sentinel, adapter) {
   if (lookup.lookup_status !== 'confirmed') return { status: 'pending', access, detail: null }
   const command = lookup.command
   if (command.request_id !== checked.request_id || command.request_line_id !== checked.request_line_id
-    || command.request_version !== checked.request_version + 1 || command.source_stock_account_id !== checked.source_stock_account_id
+    || command.request_version !== checked.request_version + 1 || command.current_request_version < command.request_version
+    || command.source_stock_account_id !== checked.source_stock_account_id
     || command.source_balance_version !== checked.source_balance_version
     || command.source_ledger_cursor !== checked.source_ledger_cursor
     || command.allocated_qty !== checked.allocated_qty) fail('分配历史命令与原请求锚点不一致')
   const detail = contract.validateMaterialRequestDetail(await adapter.detail(checked.request_id))
   const line = detail.lines.find((item) => item.request_line_id === checked.request_line_id)
-  if (detail.request_id !== checked.request_id || detail.request_version < command.request_version || !line
+  if (detail.request_id !== checked.request_id || detail.request_version < command.current_request_version || !line
     || line.revision_id !== command.revision_id || line.revision_no !== command.revision_no
     || !['approved', 'partially_approved'].includes(line.status)) fail('分配当前详情不能验证历史命令；保持未决状态')
   const freshIdentity = await adapter.loadIdentity()

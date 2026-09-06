@@ -148,8 +148,8 @@ describe("formal material-request PC transport", () => {
 
   it("posts allocation with exact projection coordinates and rejects unsafe payloads before transport", async () => {
     const requester = makeRequester(async () => ({
-      schema_version: "1.0", request_id: REQUEST_ID, allocation_id: "60000000-0000-4000-8000-000000000001",
-      allocation_no: "AL-20260907-ABC", request_version: 4, revision_id: "70000000-0000-4000-8000-000000000001",
+      request_id: REQUEST_ID, allocation_id: "60000000-0000-4000-8000-000000000001",
+      allocation_no: "AL-20260907-ABC", request_version: 4, current_request_version: 4, revision_id: "70000000-0000-4000-8000-000000000001",
       revision_no: 1, request_line_id: STEP_ID, source_stock_account_id: MATERIAL_ID,
       source_balance_version: 8, source_ledger_cursor: 9, allocated_qty: "1.000",
       allocation_status: "allocated", request_status: "approved", state_axes: {

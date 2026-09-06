@@ -5,13 +5,14 @@ import {
 } from "./formalMaterialRequests";
 
 const UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const QUANTITY = /^[1-9]\d{0,14}\.\d{3}$/;
+const QUANTITY = /^(?:0\.(?:00[1-9]|0[1-9]\d|[1-9]\d{2})|[1-9]\d{0,14}\.\d{3})$/;
 
 export type MaterialRequestAllocationCommand = Readonly<{
   request_id: string;
   allocation_id: string;
   allocation_no: string;
   request_version: number;
+  current_request_version: number;
   revision_id: string;
   revision_no: number;
   request_line_id: string;
@@ -77,7 +78,7 @@ export function validateMaterialRequestAllocationCommandStatus(
   }
   if (row.lookup_status !== "confirmed" || row.command === null) return fail("分配命令状态无效");
   const command = exact(row.command, [
-    "request_id", "allocation_id", "allocation_no", "request_version", "revision_id", "revision_no",
+    "request_id", "allocation_id", "allocation_no", "request_version", "current_request_version", "revision_id", "revision_no",
     "request_line_id", "source_stock_account_id", "source_balance_version", "source_ledger_cursor", "allocated_qty", "allocation_status", "request_status",
     "state_axes", "idempotency_replayed",
   ]);
@@ -95,6 +96,7 @@ export function validateMaterialRequestAllocationCommandStatus(
       allocation_id: id(command.allocation_id, "allocation_id"),
       allocation_no: text(command.allocation_no, "allocation_no", 100),
       request_version: integer(command.request_version, "request_version"),
+      current_request_version: integer(command.current_request_version, "current_request_version"),
       revision_id: id(command.revision_id, "revision_id"),
       revision_no: integer(command.revision_no, "revision_no"),
       request_line_id: id(command.request_line_id, "request_line_id"),
@@ -113,13 +115,15 @@ export function validateMaterialRequestAllocationCommandStatus(
 export function validateMaterialRequestAllocationMutationResult(
   value: unknown,
 ): MaterialRequestAllocationMutationResult {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return fail("分配写响应必须是对象");
-  const raw = value as Record<string, unknown>;
-  if (raw.schema_version !== "1.0" || typeof raw.idempotency_replayed !== "boolean") return fail("分配写响应版本或幂等标记无效");
-  const { schema_version: _schemaVersion, ...commandRaw } = raw;
+  const raw = exact(value, [
+    "request_id", "allocation_id", "allocation_no", "request_version", "current_request_version", "revision_id", "revision_no",
+    "request_line_id", "source_stock_account_id", "source_balance_version", "source_ledger_cursor",
+    "allocated_qty", "allocation_status", "request_status", "state_axes", "idempotency_replayed",
+  ]);
+  if (typeof raw.idempotency_replayed !== "boolean") return fail("分配写响应幂等标记无效");
   const normalized = validateMaterialRequestAllocationCommandStatus({
     schema_version: "1.0", lookup_status: "confirmed",
-    command: { ...commandRaw, idempotency_replayed: true },
+    command: { ...raw, idempotency_replayed: true },
   });
   return { ...normalized.command!, idempotency_replayed: raw.idempotency_replayed };
 }

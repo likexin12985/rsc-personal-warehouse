@@ -7,7 +7,7 @@ reserve a balance, create an outbound order, or claim shipment/receipt.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
@@ -91,6 +91,9 @@ class AllocationCommandResult:
     request_status: str
     state_axes: Mapping[str, str]
     replayed: bool = False
+    # When recovering a historical command, request_version is the command's
+    # resulting version while this field reports the current aggregate version.
+    current_request_version: int | None = None
 
 
 def create_allocation(
@@ -215,14 +218,18 @@ def allocation_command_status(
     if fact is None or request is None or fact.status != _ACTIVE_ALLOCATION_STATUS:
         _fail("material_request_allocation_history_invalid", "service_unavailable", "分配事实缺失")
     expected = {
+        "allocation_id": str(fact.id),
         "allocation_no": fact.allocation_no,
         "request_id": str(fact.request_id),
         "request_line_id": str(fact.request_line_id),
         "source_stock_account_id": str(fact.source_stock_account_id),
-        "allocated_qty": str(fact.allocated_qty),
+        "allocated_qty": _quantity_text(fact.allocated_qty),
         "source_balance_version": fact.source_balance_version,
         "source_ledger_cursor": fact.source_ledger_cursor,
+        "request_version": fact.request_version,
     }
+    if not isinstance(audit.before_jsonb, Mapping) or audit.before_jsonb.get("request_version") != fact.request_version - 1:
+        _fail("material_request_allocation_history_invalid", "service_unavailable", "分配审计版本证据不一致")
     if any(audit.after_jsonb.get(key) != value for key, value in expected.items()):
         _fail("material_request_allocation_history_invalid", "service_unavailable", "分配审计与事实不一致")
     if (
@@ -264,6 +271,7 @@ def _create_allocation_impl(
     if not isinstance(secret, bytes) or len(secret) < 32:
         _fail("material_request_allocation_secret_invalid", "service_unavailable", "分配幂等密钥配置不可用")
     _validate_input(allocation)
+    allocation = replace(allocation, allocated_qty=_quantity_decimal(allocation.allocated_qty))
     path = f"/api/v1/material-requests/{request_id}/allocations"
     key_hash = hmac.new(secret, f"{actor.user_id}:POST:{path}:{idempotency_key}".encode(), hashlib.sha256).hexdigest()
     request_hash = _canonical_hash({
@@ -332,9 +340,10 @@ def _create_allocation_impl(
     now = datetime.now(timezone.utc)
     allocation_id = uuid.uuid4()
     allocation_no = f"AL-{now.strftime('%Y%m%d')}-{str(allocation_id).split('-', 1)[0].upper()}"
+    resulting_request_version = request.version + 1
     fact = StockAllocation(
         id=allocation_id, allocation_no=allocation_no, request_id=request_id, request_line_id=line.id,
-        revision_id=line.revision_id, revision_no=line.revision_no, request_version=request.version,
+        revision_id=line.revision_id, revision_no=line.revision_no, request_version=resulting_request_version,
         source_stock_account_id=account.id, source_balance_version=balance.version,
         source_ledger_cursor=balance.ledger_cursor, allocated_qty=allocation.allocated_qty,
         status=_ACTIVE_ALLOCATION_STATUS, idempotency_key_hash=key_hash, request_hash=request_hash,
@@ -350,35 +359,64 @@ def _create_allocation_impl(
     allocated_total = db.scalar(select(func.coalesce(func.sum(StockAllocation.allocated_qty), 0)).where(StockAllocation.request_id == request_id, StockAllocation.status == _ACTIVE_ALLOCATION_STATUS)) or Decimal("0")
     previous_status = request.allocation_status
     request.allocation_status = "allocated" if allocated_total >= approved_total else "partially_allocated"
-    request.version += 1
+    request.version = resulting_request_version
     request.updated_at = now
     db.add(StateTransitionEvent(
         aggregate_type="material_request", aggregate_id=str(request_id), from_status=previous_status,
         to_status=request.allocation_status, reason="material_request_allocation_created", actor_id=actor.user_id,
         idempotency_key=f"allocation-state-{key_hash}", occurred_at=now,
-        metadata_jsonb={"allocation_id": str(allocation_id), "allocated_qty": str(allocation.allocated_qty)},
+        metadata_jsonb={"allocation_id": str(allocation_id), "allocated_qty": _quantity_text(allocation.allocated_qty)},
     ))
     append_audit_event(
         db, stream_key="material_request", actor_user_id=actor.user_id, action="material_request_allocation_created",
         aggregate_type="stock_allocation", aggregate_id=str(allocation_id),
-        before_jsonb=None, after_jsonb={"allocation_no": allocation_no, "request_id": str(request_id), "request_line_id": str(line.id), "source_stock_account_id": str(account.id), "allocated_qty": str(allocation.allocated_qty), "source_balance_version": balance.version, "source_ledger_cursor": balance.ledger_cursor},
+        before_jsonb={"request_version": resulting_request_version - 1, "allocation_status": previous_status},
+        after_jsonb={"allocation_id": str(allocation_id), "allocation_no": allocation_no, "request_id": str(request_id), "request_line_id": str(line.id), "source_stock_account_id": str(account.id), "allocated_qty": _quantity_text(allocation.allocated_qty), "source_balance_version": balance.version, "source_ledger_cursor": balance.ledger_cursor, "request_version": resulting_request_version},
         request_id=trace_request_id, occurred_at=now,
     )
     db.flush()
     return AllocationCommandResult(
-        request_id=request_id, allocation_id=allocation_id, allocation_no=allocation_no, request_version=request.version,
+        request_id=request_id, allocation_id=allocation_id, allocation_no=allocation_no, request_version=resulting_request_version,
         revision_id=line.revision_id, revision_no=line.revision_no, request_line_id=line.id,
         source_stock_account_id=account.id, source_balance_version=balance.version,
         source_ledger_cursor=balance.ledger_cursor, allocated_qty=allocation.allocated_qty,
         allocation_status=fact.status, request_status=request.status, state_axes=_state_axes(request),
+        current_request_version=resulting_request_version,
     )
 
 
 def _validate_input(value: AllocationCreateInput) -> None:
-    if not isinstance(value, AllocationCreateInput) or value.allocated_qty <= 0 or value.source_balance_version < 0 or value.source_ledger_cursor < 0:
+    if not isinstance(value, AllocationCreateInput):
+        _fail("material_request_allocation_input_invalid", "invalid_request", "分配内容无效")
+    _quantity_decimal(value.allocated_qty)
+    if (
+        isinstance(value.source_balance_version, bool)
+        or not isinstance(value.source_balance_version, int)
+        or value.source_balance_version < 0
+        or isinstance(value.source_ledger_cursor, bool)
+        or not isinstance(value.source_ledger_cursor, int)
+        or value.source_ledger_cursor < 0
+    ):
         _fail("material_request_allocation_input_invalid", "invalid_request", "分配内容无效")
     if len(set(value.serial_ids)) != len(value.serial_ids):
         _fail("material_request_allocation_serials_duplicate", "invalid_request", "分配 SN 不能重复")
+
+
+def _quantity_decimal(value: Decimal) -> Decimal:
+    try:
+        quantity = Decimal(value)
+    except Exception:
+        _fail("material_request_allocation_input_invalid", "invalid_request", "分配数量格式无效")
+    if not quantity.is_finite() or quantity <= 0:
+        _fail("material_request_allocation_input_invalid", "invalid_request", "分配数量格式无效")
+    quantized = quantity.quantize(Decimal("0.001"))
+    if quantized != quantity:
+        _fail("material_request_allocation_input_invalid", "invalid_request", "分配数量最多三位小数")
+    return quantized
+
+
+def _quantity_text(value: Decimal) -> str:
+    return f"{_quantity_decimal(value):.3f}"
 
 
 def _validate_serial_binding(db: Session, account: StockAccount, tracking_mode: str, allocation: AllocationCreateInput) -> None:
@@ -404,11 +442,12 @@ def _result_from_existing(
 ) -> AllocationCommandResult:
     return AllocationCommandResult(
         request_id=fact.request_id, allocation_id=fact.id, allocation_no=fact.allocation_no,
-        request_version=request.version, revision_id=fact.revision_id, revision_no=fact.revision_no,
+        request_version=fact.request_version, revision_id=fact.revision_id, revision_no=fact.revision_no,
         request_line_id=fact.request_line_id, source_stock_account_id=fact.source_stock_account_id,
         source_balance_version=fact.source_balance_version, source_ledger_cursor=fact.source_ledger_cursor,
         allocated_qty=fact.allocated_qty, allocation_status=fact.status,
         request_status=request.status, state_axes=_state_axes(request), replayed=replayed,
+        current_request_version=request.version,
     )
 
 

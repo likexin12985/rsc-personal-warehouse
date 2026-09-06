@@ -279,7 +279,8 @@ function validateAccess(value) {
     [
       'schema_version', 'person_id', 'authorization_version', 'can_read', 'can_create',
       'can_read_material_catalog', 'can_approve_region', 'can_approve_headquarters',
-      'can_register_external', 'can_verify_external', 'can_withdraw', 'can_cancel', 'can_manage_supply'
+    'can_register_external', 'can_verify_external', 'can_withdraw', 'can_cancel', 'can_manage_supply',
+    'can_read_allocation_options'
     ],
     '正式需求访问上下文'
   )
@@ -290,6 +291,7 @@ function validateAccess(value) {
     'can_read', 'can_create', 'can_read_material_catalog', 'can_approve_region',
     'can_approve_headquarters', 'can_register_external', 'can_verify_external',
     'can_withdraw', 'can_cancel', 'can_manage_supply'
+    , 'can_read_allocation_options'
   ].some((field) => typeof object[field] !== 'boolean')) {
     throw adapterError('正式需求访问授权无效')
   }
@@ -312,7 +314,8 @@ function validateAccess(value) {
     can_verify_external: object.can_verify_external,
     can_withdraw: object.can_withdraw,
     can_cancel: object.can_cancel,
-    can_manage_supply: object.can_manage_supply
+    can_manage_supply: object.can_manage_supply,
+    can_read_allocation_options: object.can_read_allocation_options
   })
 }
 
@@ -520,7 +523,10 @@ function projectAccessContext(value, expectedIdentity) {
     can_cancel: canRead && permissionKeys.includes(
       'material_request\u0000cancel\u0000'
     ),
-    can_manage_supply: canRead && permissionKeys.includes('supply_task\u0000manage\u0000')
+    can_manage_supply: canRead && permissionKeys.includes('supply_task\u0000manage\u0000'),
+    can_read_allocation_options: canRead && roleCodes.some((role) =>
+      role === 'admin' || role === 'provincial_manager'
+    )
   })
 }
 

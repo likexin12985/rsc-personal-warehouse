@@ -1469,7 +1469,7 @@ function validateMaterialRequestAllocationCommandStatus(value) {
   if (object.command === null) return { schema_version: '1.0', lookup_status: 'not_observed', command: null }
   const raw = objectValue(object.command, '分配命令历史结果')
   exactKeys(raw, [
-    'request_id', 'allocation_id', 'allocation_no', 'request_version', 'revision_id', 'revision_no',
+    'request_id', 'allocation_id', 'allocation_no', 'request_version', 'current_request_version', 'revision_id', 'revision_no',
     'request_line_id', 'source_stock_account_id', 'source_balance_version', 'source_ledger_cursor', 'allocated_qty', 'allocation_status', 'request_status',
     'state_axes', 'idempotency_replayed'
   ], '分配命令历史结果')
@@ -1494,6 +1494,7 @@ function validateMaterialRequestAllocationCommandStatus(value) {
         return value
       })(),
       request_version: nonnegativeInteger(own(raw, 'request_version'), 'request_version'),
+      current_request_version: nonnegativeInteger(own(raw, 'current_request_version'), 'current_request_version'),
       revision_id: uuidValue(own(raw, 'revision_id'), 'revision_id'),
       revision_no: positiveInteger(own(raw, 'revision_no'), 'revision_no'),
       request_line_id: uuidValue(own(raw, 'request_line_id'), 'request_line_id'),
@@ -1512,17 +1513,16 @@ function validateMaterialRequestAllocationCommandStatus(value) {
 function validateMaterialRequestAllocationMutationResult(value) {
   const object = objectValue(value, '分配写响应')
   exactKeys(object, [
-    'schema_version', 'request_id', 'allocation_id', 'allocation_no', 'request_version', 'revision_id',
+    'request_id', 'allocation_id', 'allocation_no', 'request_version', 'current_request_version', 'revision_id',
     'revision_no', 'request_line_id', 'source_stock_account_id', 'source_balance_version', 'source_ledger_cursor', 'allocated_qty', 'allocation_status',
     'request_status', 'state_axes', 'idempotency_replayed'
   ], '分配写响应')
-  if (object.schema_version !== MATERIAL_REQUEST_SCHEMA_VERSION || typeof object.idempotency_replayed !== 'boolean') {
-    fail('material_request_contract_allocation_write_invalid', '分配写响应版本或幂等标记无效')
+  if (typeof object.idempotency_replayed !== 'boolean') {
+    fail('material_request_contract_allocation_write_invalid', '分配写响应幂等标记无效')
   }
-  const { schema_version: _schemaVersion, ...command } = object
   const checked = validateMaterialRequestAllocationCommandStatus({
     schema_version: '1.0', lookup_status: 'confirmed',
-    command: Object.assign({}, command, { idempotency_replayed: true })
+    command: Object.assign({}, object, { idempotency_replayed: true })
   })
   return Object.assign({}, checked.command, { idempotency_replayed: object.idempotency_replayed })
 }

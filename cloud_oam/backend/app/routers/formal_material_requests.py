@@ -129,6 +129,7 @@ def formal_material_request_allocation_command_status(
                 allocation_id=result.allocation_id,
                 allocation_no=result.allocation_no,
                 request_version=result.request_version,
+                current_request_version=result.current_request_version,
                 revision_id=result.revision_id,
                 revision_no=result.revision_no,
                 request_line_id=result.request_line_id,
@@ -144,6 +145,15 @@ def formal_material_request_allocation_command_status(
         )
     except allocation_service.MaterialRequestAllocationError as exc:
         _raise_service_error(exc)
+    except ValidationError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "material_request_allocation_response_invalid",
+                "category": "service_unavailable",
+                "message": "分配命令状态响应无效，保持结果待核验",
+            },
+        ) from None
     except DBAPIError:
         db.rollback()
         _raise_database_unavailable(read_only=True)
@@ -440,6 +450,7 @@ def create_formal_material_request_allocation(
             allocation_id=result.allocation_id,
             allocation_no=result.allocation_no,
             request_version=result.request_version,
+            current_request_version=result.current_request_version,
             revision_id=result.revision_id,
             revision_no=result.revision_no,
             request_line_id=result.request_line_id,

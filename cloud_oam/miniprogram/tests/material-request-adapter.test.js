@@ -255,7 +255,8 @@ test('loadAccess projects only fresh matching material-request read/create grant
     can_verify_external: true,
     can_withdraw: true,
     can_cancel: true,
-    can_manage_supply: false
+    can_manage_supply: false,
+    can_read_allocation_options: false
   })
   assert.deepEqual(transport.calls, [
     {
@@ -352,8 +353,8 @@ test('allocation command status uses the original request coordinate and strict 
 
 test('allocation POST preserves both business coordinates and validates projection input', async () => {
   const transport = fakeTransport({
-    schema_version: '1.0', request_id: REQUEST_ID, allocation_id: '80000000-0000-4000-8000-000000000001',
-    allocation_no: 'AL-20260907-ABC', request_version: 4,
+    request_id: REQUEST_ID, allocation_id: '80000000-0000-4000-8000-000000000001',
+    allocation_no: 'AL-20260907-ABC', request_version: 4, current_request_version: 4,
     revision_id: '90000000-0000-4000-8000-000000000001', revision_no: 1, request_line_id: STEP_ID,
     source_stock_account_id: MATERIAL_ID, source_balance_version: 8, source_ledger_cursor: 9,
     allocated_qty: '1.000', allocation_status: 'allocated',

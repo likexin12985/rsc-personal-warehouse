@@ -37,7 +37,7 @@ function valid(value: unknown): value is AllocationSentinel {
     && typeof row.request_id === "string" && UUID.test(row.request_id)
     && typeof row.request_line_id === "string" && UUID.test(row.request_line_id)
     && typeof row.source_stock_account_id === "string" && UUID.test(row.source_stock_account_id)
-    && typeof row.allocated_qty === "string" && /^[1-9]\d{0,14}\.\d{3}$/.test(row.allocated_qty)
+    && typeof row.allocated_qty === "string" && /^(?:0\.(?:00[1-9]|0[1-9]\d|[1-9]\d{2})|[1-9]\d{0,14}\.\d{3})$/.test(row.allocated_qty)
     && Number.isSafeInteger(row.authorization_version) && (row.authorization_version as number) > 0
     && Number.isSafeInteger(row.request_version) && (row.request_version as number) >= 0
     && Number.isSafeInteger(row.source_balance_version) && (row.source_balance_version as number) >= 0
@@ -94,16 +94,17 @@ export async function recoverAllocationCommand(
   if (status.lookup_status !== "confirmed" || !status.command) throw new Error("暂未查到分配操作的确定结果，继续保留原请求坐标；请稍后核验");
   const command = status.command;
   if (command.request_id !== sentinel.request_id || command.request_line_id !== sentinel.request_line_id
-      || command.request_version !== sentinel.request_version + 1 || command.source_stock_account_id !== sentinel.source_stock_account_id
+      || command.request_version !== sentinel.request_version + 1 || command.current_request_version < command.request_version
+      || command.source_stock_account_id !== sentinel.source_stock_account_id
       || command.source_balance_version !== sentinel.source_balance_version
       || command.source_ledger_cursor !== sentinel.source_ledger_cursor
       || command.allocated_qty !== sentinel.allocated_qty) throw new Error("分配命令与原请求锚点不一致，继续保持待核验");
   const detail = validateMaterialRequestDetail(await adapter.detail(command.request_id));
   const line = detail.lines.find((item) => item.request_line_id === command.request_line_id);
-  if (!line || detail.request_id !== command.request_id || detail.request_version < command.request_version
+  if (!line || detail.request_id !== command.request_id || detail.request_version < command.current_request_version
       || line.revision_id !== command.revision_id || line.revision_no !== command.revision_no
       || !["approved", "partially_approved"].includes(line.status)
-      || (detail.request_version === command.request_version && JSON.stringify(detail.states) !== JSON.stringify(command.state_axes))) throw new Error("分配命令已登记，但当前需求回读未能建立一致关系，继续保持待核验");
+      || (detail.request_version === command.current_request_version && JSON.stringify(detail.states) !== JSON.stringify(command.state_axes))) throw new Error("分配命令已登记，但当前需求回读未能建立一致关系，继续保持待核验");
   const afterIdentity = validateFormalMaterialRequestFreshIdentity(await adapter.loadIdentity());
   const afterAccess = validateFormalMaterialRequestAccess(await adapter.loadAccess());
   if (afterIdentity.person_id !== sentinel.person_id || afterIdentity.authorization_version !== sentinel.authorization_version

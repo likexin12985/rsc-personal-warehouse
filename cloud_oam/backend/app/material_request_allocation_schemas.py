@@ -68,6 +68,7 @@ class AllocationMutationOut(BaseModel):
     allocation_id: UUID
     allocation_no: str = Field(min_length=1, max_length=100)
     request_version: int = Field(ge=0)
+    current_request_version: int | None = Field(default=None, ge=0)
     revision_id: UUID
     revision_no: int = Field(ge=1)
     request_line_id: UUID
@@ -83,7 +84,7 @@ class AllocationMutationOut(BaseModel):
     @field_validator("allocated_qty")
     @classmethod
     def validate_output_quantity(cls, value: str) -> str:
-        if re.fullmatch(r"[1-9]\d{0,14}\.\d{3}", value) is None:
+        if re.fullmatch(r"(?:0|[1-9]\d{0,14})\.\d{3}", value) is None or Decimal(value) <= 0:
             raise ValueError("allocated_qty must be a fixed-scale positive decimal")
         return value
 

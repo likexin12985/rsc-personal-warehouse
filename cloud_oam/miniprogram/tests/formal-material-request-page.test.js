@@ -857,7 +857,8 @@ function access() {
     can_verify_external: false,
     can_withdraw: false,
     can_cancel: false,
-    can_manage_supply: false
+    can_manage_supply: false,
+    can_read_allocation_options: false
   }
 }
 

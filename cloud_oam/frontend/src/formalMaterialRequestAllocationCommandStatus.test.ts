@@ -7,7 +7,7 @@ const ID = (tail: string) => `10000000-0000-4000-8000-${tail.padStart(12, "0")}`
 function command() {
   return {
     request_id: ID("1"), allocation_id: ID("2"), allocation_no: "AL-20260907-ABC",
-    request_version: 3, revision_id: ID("3"), revision_no: 1, request_line_id: ID("4"),
+    request_version: 3, current_request_version: 3, revision_id: ID("3"), revision_no: 1, request_line_id: ID("4"),
     source_stock_account_id: ID("5"), source_balance_version: 8, source_ledger_cursor: 9,
     allocated_qty: "1.000", allocation_status: "allocated",
     request_status: "approved", state_axes: {

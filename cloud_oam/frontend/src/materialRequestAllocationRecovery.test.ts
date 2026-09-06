@@ -50,7 +50,7 @@ describe("material-request allocation recovery store", () => {
       }),
       allocationCommandStatus: async () => ({ schema_version: "1.0", lookup_status: "confirmed", command: {
         request_id: sentinel.request_id, allocation_id: "50000000-0000-4000-8000-000000000001",
-        allocation_no: "AL-TEST", request_version: 4, revision_id: "60000000-0000-4000-8000-000000000001", revision_no: 1,
+        allocation_no: "AL-TEST", request_version: 4, current_request_version: 4, revision_id: "60000000-0000-4000-8000-000000000001", revision_no: 1,
         request_line_id: sentinel.request_line_id, source_stock_account_id: sentinel.source_stock_account_id,
         source_balance_version: 99, source_ledger_cursor: 9, allocated_qty: "1.000", allocation_status: "allocated",
         request_status: "approved", idempotency_replayed: true, state_axes: {
