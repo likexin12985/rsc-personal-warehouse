@@ -402,7 +402,9 @@ export class FormalStocktakePostSubmissionPendingError extends ApiError {
 }
 
 async function requireCurrent(adapter: RecoveryAdapter, expected: Identity): Promise<void> {
-  requireAdapter(adapter);
+  if (typeof adapter.loadIdentityNoReplay !== "function" || typeof adapter.loadAccessNoReplay !== "function") {
+    fail("当前盘点客户端未提供身份与权限核验能力，已保留恢复记录");
+  }
   sameIdentity(activeIdentity(await adapter.loadIdentityNoReplay(), expected), expected);
   requirePostAccess(await adapter.loadAccessNoReplay(), expected);
 }
