@@ -321,3 +321,28 @@ def test_router_allocation_command_status_is_read_only_and_no_store(monkeypatch)
     assert response.json() == {"schema_version": "1.0", "lookup_status": "not_observed", "command": None}
     assert response.headers["Cache-Control"].startswith("no-store")
     mocked.assert_called_once()
+
+    confirmed = allocation_service.AllocationCommandResult(
+        request_id=_id(901), allocation_id=_id(902), allocation_no="AL-20260908-CONFIRM",
+        request_version=6, revision_id=_id(903), revision_no=2, request_line_id=_id(904),
+        source_stock_account_id=_id(905), allocated_qty=Decimal("1.000"),
+        allocation_status="allocated", request_status="approved",
+        state_axes={
+            "request_status": "approved", "allocation_status": "allocated",
+            "reservation_status": "not_reserved", "outbound_status": "not_started",
+            "shipment_status": "not_started", "logistics_signature_status": "not_signed",
+            "oam_receipt_status": "not_occurred", "personal_inbound_status": "not_started",
+            "notification_status": "not_started", "reconciliation_status": "not_started",
+        }, replayed=True,
+    )
+    mocked.reset_mock()
+    mocked.return_value = confirmed
+    with TestClient(api) as client:
+        confirmed_response = client.get(
+            "/api/v1/material-request-allocation-command-status",
+            headers={"X-Request-ID": "allocation-trace-confirmed"},
+        )
+    assert confirmed_response.status_code == 200
+    assert confirmed_response.json()["lookup_status"] == "confirmed"
+    assert confirmed_response.json()["command"]["allocated_qty"] == "1.000"
+    assert confirmed_response.json()["command"]["idempotency_replayed"] is True
