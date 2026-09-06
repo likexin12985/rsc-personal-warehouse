@@ -7364,7 +7364,7 @@ def _assert_0058_review_terminal_catalog_state(
         if fixed else migration.RUNTIME_READY_BODY_SHA256_0057
     )
     assert readiness[17].count(
-        HEAD_REVISION if fixed else migration.down_revision
+        STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION if fixed else migration.down_revision
     ) == 1
 
     expected_triggers = tuple(
