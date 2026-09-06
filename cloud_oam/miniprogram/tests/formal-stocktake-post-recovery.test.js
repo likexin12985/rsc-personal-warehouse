@@ -68,3 +68,28 @@ test('post status rejects extra write-side fields and cursor gaps', () => {
   assert.throws(() => validateFormalStocktakePostCommandStatus(status({ lookup_status: 'confirmed', command: command({ last_ledger_cursor: 102 }) }), sentinel()))
   assert.throws(() => validateFormalStocktakePostCommandStatus(status({ task_id: '10000000-0000-4000-8000-000000000002', lookup_status: 'confirmed', command: command() }), sentinel()))
 })
+
+test('durable post persists before one no-replay POST and keeps marker on not_observed', async () => {
+  const { createFormalStocktakePostRecoveryStore, createFormalStocktakePostCoordinator } = require('../utils/formal-stocktake-post-recovery-store')
+  const values = new Map()
+  const storage = {
+    getStorageInfoSync: () => ({ keys: [...values.keys()] }),
+    getStorageSync: (key) => values.get(key) || '',
+    setStorageSync: (key, value) => values.set(key, value),
+    removeStorageSync: (key) => values.delete(key),
+  }
+  const store = createFormalStocktakePostRecoveryStore({ storage, coordinator: createFormalStocktakePostCoordinator() })
+  let posts = 0
+  const identity = { person_id: PERSON, name: '总部', employee_no: 'E1', organization_code: 'HQ', organization_name: '总部', account_status: 'active', employment_status: 'active', access_mode: 'active', authorization_version: 9, role_codes: ['admin'] }
+  const adapter = {
+    async loadIdentityNoReplay() { return identity },
+    async loadAccessNoReplay() { return { schema_version: '1.0', person_id: PERSON, authorization_version: 9, can_read: true, can_post: true } },
+    async postingCommandStatus() { return status() },
+    async detailNoReplay() { throw new Error('detail must not be queried for not_observed') },
+    async execute(intent, options) { posts += 1; await options.beforeWrite(); const error = new Error('network'); error.status = 503; throw error },
+  }
+  const intent = { method: 'POST', action: 'post', taskId: TASK, expectedTaskVersion: 7, body: { expected_task_version: 7 }, headers: { 'X-Request-ID': TRACE, 'Idempotency-Key': `wxidem-${'a'.repeat(36)}` } }
+  await assert.rejects(() => require('../utils/formal-stocktake-post-recovery').submitDurableFormalStocktakePost({ intent, expectedIdentity: { person_id: PERSON, authorization_version: 9 }, adapter, store }), /仍待只读核验/)
+  assert.equal(posts, 1)
+  assert.equal(store.read(TASK).kind, 'valid')
+})
