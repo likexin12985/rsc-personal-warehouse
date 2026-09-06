@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from app.formal_services.material_request_allocation import AllocationCreateInput
 from app.formal_services.material_request_allocation import MaterialRequestAllocationError, create_allocation
+from app.formal_services import inventory_query
 from app.material_request_allocation_schemas import AllocationCreateIn
 from app.material_request_allocation_schemas import AllocationMutationOut
 
@@ -95,3 +96,25 @@ def test_allocation_service_rejects_technician_before_database_access():
             trace_request_id="allocation-trace",
         )
     assert caught.value.code == "material_request_allocation_forbidden"
+
+
+def test_allocation_service_maps_inventory_read_failures_to_stable_domain_errors(monkeypatch):
+    monkeypatch.setattr(
+        "app.formal_services.material_request_allocation._create_allocation_impl",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            inventory_query.InventoryReadError(
+                code="inventory_projection_invalid", status_code=503, message="库存投影无效"
+            )
+        ),
+    )
+    with pytest.raises(MaterialRequestAllocationError) as caught:
+        create_allocation(
+            None, actor=object(), material_request_id=_id(30), expected_request_version=1,
+            allocation=AllocationCreateInput(
+                request_line_id=_id(31), source_stock_account_id=_id(32),
+                allocated_qty=Decimal("1.000"), source_balance_version=1,
+                source_ledger_cursor=1,
+            ), idempotency_key="key", idempotency_hmac_secret=b"s" * 32,
+            trace_request_id="trace-1234",
+        )
+    assert caught.value.category == "service_unavailable"

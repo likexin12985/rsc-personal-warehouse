@@ -115,6 +115,15 @@ def create_allocation(
         )
     except MaterialRequestAllocationError:
         raise
+    except inventory_query.InventoryReadError as exc:
+        category = {
+            403: "forbidden",
+            409: "conflict",
+            412: "precondition_failed",
+        }.get(exc.status_code, "service_unavailable")
+        raise MaterialRequestAllocationError(
+            exc.code, category, exc.public_message
+        ) from exc
     except AuditChainError as exc:
         raise MaterialRequestAllocationError(
             "material_request_allocation_audit_unavailable", "service_unavailable", "分配审计链不可用，本次操作未完成"
