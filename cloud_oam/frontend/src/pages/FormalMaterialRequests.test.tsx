@@ -600,6 +600,9 @@ function adapter(overrides: Partial<FormalMaterialRequestAdapter> = {}): FormalM
     supplyCommandStatus: vi.fn().mockResolvedValue({
       schema_version: "1.0", lookup_status: "not_observed", command: null,
     }),
+    allocationCommandStatus: vi.fn().mockResolvedValue({
+      schema_version: "1.0", lookup_status: "not_observed", command: null,
+    }),
     list: vi.fn().mockResolvedValue(page()),
     detail: vi.fn().mockResolvedValue(detail()),
     loadDraftForEdit: vi.fn().mockResolvedValue({
@@ -628,6 +631,7 @@ function adapter(overrides: Partial<FormalMaterialRequestAdapter> = {}): FormalM
       ledger_cursor: 0,
       items: [],
     }),
+    createAllocation: vi.fn(),
     createDraft: vi.fn(),
     mutate: vi.fn(),
     ...overrides,

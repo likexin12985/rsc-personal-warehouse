@@ -75,15 +75,15 @@ export interface FormalMaterialRequestAdapter {
   loadAccess(): Promise<unknown>;
   lifecycleCommandStatus(xRequestId: string): Promise<unknown>;
   supplyCommandStatus(xRequestId: string): Promise<unknown>;
-  allocationCommandStatus?(xRequestId: string): Promise<MaterialRequestAllocationCommandStatus>;
+  allocationCommandStatus(xRequestId: string): Promise<MaterialRequestAllocationCommandStatus>;
   list(afterId: string | null): Promise<unknown>;
   detail(requestId: string): Promise<unknown>;
   loadDraftForEdit(requestId: string): Promise<unknown>;
   listWorkOrderOptions(query: string, afterId: string | null): Promise<unknown>;
   workOrderOptionDetail(workOrderId: string): Promise<unknown>;
   listMaterials(query: string, afterId: string | null): Promise<unknown>;
-  listAllocationOptions?(requestId: string, requestLineId: string): Promise<MaterialRequestAllocationOptionPage>;
-  createAllocation?(
+  listAllocationOptions(requestId: string, requestLineId: string): Promise<MaterialRequestAllocationOptionPage>;
+  createAllocation(
     requestId: string,
     input: MaterialRequestAllocationCreateInput,
     headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>,
