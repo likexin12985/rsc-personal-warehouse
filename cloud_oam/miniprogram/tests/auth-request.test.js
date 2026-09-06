@@ -535,6 +535,25 @@ test('formal v1 write retry after session refresh reuses its business coordinate
   )
 })
 
+test('explicit stocktake seal POST carries X-Request-ID without Idempotency-Key or refresh', async (context) => {
+  const requests = []
+  global.wx = {
+    getRandomValues,
+    getAccountInfoSync() { return { miniProgram: { envVersion: 'develop' } } },
+    getStorageSync() { return '' },
+    request(options) { requests.push(options); options.success({ statusCode: 200, data: { seal_id: '70000000-0000-4000-8000-000000000001' } }) },
+  }
+  global.getApp = () => ({ globalData: {} })
+  resetApiModules()
+  context.after(() => { resetApiModules(); delete global.wx; delete global.getApp })
+  const api = require('../utils/api')
+  await api.postSealNoReplay('/v1/stocktakes/10000000-0000-4000-8000-000000000001/post-differences/confirm-not-executed', { expected_task_version: 7 }, { requestId: `wxreq-${'a'.repeat(36)}` })
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].header['X-Request-ID'], `wxreq-${'a'.repeat(36)}`)
+  assert.equal(requests[0].header['Idempotency-Key'], undefined)
+  assert.equal(requests[0].method, 'POST')
+})
+
 test('concurrent unauthorized requests share one refresh request with one fixed key', async (context) => {
   const storage = new Map([
     ['rsc_oam_access_token', 'expired-access-token'],

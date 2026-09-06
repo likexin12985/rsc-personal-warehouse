@@ -174,6 +174,18 @@ function prepareAuthenticationWrite(path, method, options) {
 function prepareFormalBusinessWrite(path, method, options) {
   if (!isFormalBusinessWriteRequest(path, method)) return options
   const prepared = Object.assign({}, options)
+  // The explicit non-execution seal is a server-side tombstone keyed by the
+  // trace coordinate.  It must never receive an Idempotency-Key, because a
+  // generated key would create a second replayable write coordinate.
+  if (prepared.omitIdempotencyKey === true) {
+    const suppliedHeaderKey = headerValue(prepared.header, 'idempotency-key')
+    const suppliedOptionKey = prepared.idempotencyKey || ''
+    if (suppliedHeaderKey || suppliedOptionKey) {
+      throw apiError(400, '未执行封存请求禁止携带幂等键')
+    }
+    prepared.idempotencyKey = ''
+    return prepared
+  }
   const suppliedHeaderKey = headerValue(prepared.header, 'idempotency-key')
   const suppliedOptionKey = prepared.idempotencyKey || ''
   if (suppliedHeaderKey && suppliedOptionKey && suppliedHeaderKey !== suppliedOptionKey) {
@@ -255,11 +267,11 @@ function rawRequest(path, options = {}) {
     if (!SAFE_REQUEST_ID.test(options.requestId || '')) {
       return Promise.reject(apiError(400, '受控写请求缺少安全请求标识'))
     }
-    if (!SAFE_IDEMPOTENCY_KEY.test(options.idempotencyKey || '')) {
+    if (options.omitIdempotencyKey !== true && !SAFE_IDEMPOTENCY_KEY.test(options.idempotencyKey || '')) {
       return Promise.reject(apiError(400, '受控写请求缺少安全幂等键'))
     }
     header['X-Request-ID'] = options.requestId
-    header['Idempotency-Key'] = options.idempotencyKey
+    if (options.omitIdempotencyKey !== true) header['Idempotency-Key'] = options.idempotencyKey
     if (isAuthWriteRequest(path, method)) header['X-Auth-Client'] = 'miniprogram'
   }
   if (options.data && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
@@ -441,6 +453,15 @@ function postNoReplay(path, data = {}, options = {}) {
   return post(path, data, Object.assign({}, options, { noRefresh: true }))
 }
 
+// Dedicated write for an uncertain non-opening post.  The server records a
+// permanent sealed_not_executed outcome under X-Request-ID and intentionally
+// rejects Idempotency-Key; no refresh or automatic replay is permitted.
+function postSealNoReplay(path, data = {}, options = {}) {
+  return request(path, Object.assign({}, options, {
+    method: 'POST', data, noRefresh: true, omitIdempotencyKey: true,
+  }))
+}
+
 function put(path, data = {}, options = {}) {
   return request(path, Object.assign({}, options, { method: 'PUT', data }))
 }
@@ -531,6 +552,7 @@ module.exports = {
   get,
   post,
   postNoReplay,
+  postSealNoReplay,
   put,
   upload,
   download,

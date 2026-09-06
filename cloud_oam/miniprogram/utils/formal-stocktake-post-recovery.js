@@ -125,6 +125,35 @@ function validateFormalStocktakePostCommandStatus(value, original) {
   return Object.freeze({ ...anchors, lookup_status: 'confirmed', command: checked })
 }
 
+// The seal endpoint returns the minimal sealed command itself, rather than a
+// command-status envelope.  Keep a separate strict validator so callers cannot
+// accidentally treat a replay-shaped historical completion (or a response
+// carrying write payloads) as proof that the coordinate was sealed.
+function validateFormalStocktakePostSealResult(value, original) {
+  const sentinel = validateFormalStocktakePostSentinel(original)
+  const command = exact(value, [
+    'seal_id', 'task_id', 'expected_task_version', 'actor_person_id',
+    'actor_authorization_version', 'trace_request_id', 'sealed_at',
+  ])
+  const checked = Object.freeze({
+    seal_id: uuid(command.seal_id, 'seal_id'),
+    task_id: uuid(command.task_id, 'task_id'),
+    expected_task_version: nonNegative(command.expected_task_version, 'expected_task_version'),
+    actor_person_id: uuid(command.actor_person_id, 'actor_person_id'),
+    actor_authorization_version: positive(command.actor_authorization_version, 'actor_authorization_version'),
+    trace_request_id: command.trace_request_id,
+    sealed_at: timestamp(command.sealed_at, 'sealed_at'),
+  })
+  if (checked.task_id !== sentinel.task_id
+    || checked.expected_task_version !== sentinel.expected_task_version
+    || checked.actor_person_id !== sentinel.actor_person_id
+    || checked.actor_authorization_version !== sentinel.actor_authorization_version
+    || checked.trace_request_id !== sentinel.trace_request_id) {
+    fail('封存响应坐标与原过账意图不一致')
+  }
+  return checked
+}
+
 function validateFormalStocktakePostRecoveredProjection(value, sentinelValue, commandValue) {
   const sentinel = validateFormalStocktakePostSentinel(sentinelValue)
   const command = validateFormalStocktakePostCommandStatus({
@@ -181,7 +210,7 @@ function sentinelFromIntent(intent, expected) {
 function createFormalStocktakePostRecoveryAdapterFromFormalAdapter(expectedIdentity, adapter) {
   const expected = identity(expectedIdentity)
   if (!adapter || typeof adapter.loadIdentityNoReplay !== 'function' || typeof adapter.loadAccessNoReplay !== 'function' || typeof adapter.detailNoReplay !== 'function' || typeof adapter.postingCommandStatus !== 'function') fail('日常盘点过账只读核验通道不可用')
-  return Object.freeze({
+  const recoveryAdapter = {
     async loadIdentity() { return activeIdentity(await adapter.loadIdentityNoReplay(), expected) },
     async loadAccess() { const access = await adapter.loadAccessNoReplay(); requirePostAccess(access, expected); return access },
     async commandStatus(sentinel) {
@@ -193,7 +222,52 @@ function createFormalStocktakePostRecoveryAdapterFromFormalAdapter(expectedIdent
       if (typeof taskId !== 'string' || !UUID.test(taskId)) fail('task_id 无效')
       return adapter.detailNoReplay(taskId.toLowerCase())
     }
-  })
+  }
+  // Explicit sealing is intentionally optional: read-only recovery remains
+  // usable with older adapters, while the user-confirmed path fails closed if
+  // the deployment has not wired the dedicated endpoint.
+  if (typeof adapter.sealPostingCommand === 'function') {
+    recoveryAdapter.sealPostingCommand = async (taskId, expectedTaskVersion, actorPersonId, actorAuthorizationVersion, traceRequestId) => {
+      const checked = validateFormalStocktakePostSentinel({
+        v: 1, kind: 'formal_stocktake_post', task_id: taskId,
+        expected_task_version: expectedTaskVersion, actor_person_id: actorPersonId,
+        actor_authorization_version: actorAuthorizationVersion, trace_request_id: traceRequestId,
+      })
+      sameIdentity({ person_id: checked.actor_person_id, authorization_version: checked.actor_authorization_version }, expected)
+      return adapter.sealPostingCommand(
+        checked.task_id, checked.expected_task_version, checked.actor_person_id,
+        checked.actor_authorization_version, checked.trace_request_id,
+      )
+    }
+  }
+  return Object.freeze(recoveryAdapter)
+}
+
+// User-confirmed resolution for an unknown post result.  This is the sole
+// client write after an uncertain POST: it sends the original public
+// coordinate to the dedicated seal endpoint, validates the minimal sealed
+// response, and clears the marker only after the exact response and current
+// identity/permission checks succeed.  Any failure leaves the marker intact.
+async function sealFormalStocktakePost(lease, value, adapter, canCommit = () => true) {
+  const sentinel = validateFormalStocktakePostSentinel(value)
+  const stored = lease.read()
+  if (stored.kind !== 'valid' || JSON.stringify(stored.value) !== JSON.stringify(sentinel)) fail()
+  if (!adapter || typeof adapter.sealPostingCommand !== 'function') fail('当前盘点客户端未提供未执行封存能力，继续保留恢复记录')
+  const expected = { person_id: sentinel.actor_person_id, authorization_version: sentinel.actor_authorization_version }
+  sameIdentity(await adapter.loadIdentity(), expected)
+  requirePostAccess(await adapter.loadAccess(), expected)
+  if (!canCommit()) fail('确认页面已变化，继续保留盘点过账恢复记录')
+  const sealed = validateFormalStocktakePostSealResult(
+    await adapter.sealPostingCommand(
+      sentinel.task_id, sentinel.expected_task_version, sentinel.actor_person_id,
+      sentinel.actor_authorization_version, sentinel.trace_request_id,
+    ), sentinel,
+  )
+  sameIdentity(await adapter.loadIdentity(), expected)
+  requirePostAccess(await adapter.loadAccess(), expected)
+  if (!canCommit()) fail('确认页面已变化，继续保留盘点过账恢复记录')
+  lease.clearExact(sentinel)
+  return Object.freeze({ lookup_status: 'sealed_not_executed', command: sealed })
 }
 async function recoverFormalStocktakePost(lease, value, adapter, canCommit = () => true) {
   const sentinel = validateFormalStocktakePostSentinel(value)
@@ -252,7 +326,8 @@ async function submitDurableFormalStocktakePost(options) {
 
 module.exports = {
   validateFormalStocktakePostSentinel, validateFormalStocktakePostCommandStatus,
+  validateFormalStocktakePostSealResult,
   validateFormalStocktakePostRecoveredProjection, createFormalStocktakePostRecoveryAdapterFromFormalAdapter,
-  recoverFormalStocktakePost, submitDurableFormalStocktakePost, FormalStocktakePostSubmissionPendingError,
+  recoverFormalStocktakePost, sealFormalStocktakePost, submitDurableFormalStocktakePost, FormalStocktakePostSubmissionPendingError,
   sentinelFromIntent
 }

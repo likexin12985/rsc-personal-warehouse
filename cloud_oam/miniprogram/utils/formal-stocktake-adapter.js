@@ -243,6 +243,24 @@ function createFormalStocktakeAdapter(options = {}) {
         + `&trace_request_id=${encodeURIComponent(text(traceRequestId, 'trace_request_id'))}`
       return transport.request(`/v1/stocktakes/${uuidValue(taskId, 'task_id')}/post-differences-command-status?${query}`, { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } })
     },
+    async sealPostingCommand(taskId, expectedTaskVersion, actorPersonId, actorAuthorizationVersion, traceRequestId) {
+      if (typeof transport.postSealNoReplay !== 'function') fail('正式盘点未执行封存通道不可用', 503)
+      const id = uuidValue(taskId, 'task_id')
+      const version = Number.isSafeInteger(expectedTaskVersion) && expectedTaskVersion >= 0
+        ? expectedTaskVersion
+        : (() => { fail('expected_task_version 无效'); return 0 })()
+      const person = uuidValue(actorPersonId, 'actor_person_id')
+      const authorization = positive(actorAuthorizationVersion, 'actor_authorization_version')
+      const trace = text(traceRequestId, 'trace_request_id')
+      if (!SAFE_REQUEST_ID.test(trace)) fail('trace_request_id 无效')
+      // Deliberately pass only the request id. postSealNoReplay is the sole
+      // transport path that can omit Idempotency-Key for this endpoint.
+      return transport.postSealNoReplay(
+        `/v1/stocktakes/${id}/post-differences/confirm-not-executed`,
+        { expected_task_version: version },
+        { requestId: trace },
+      )
+    },
     async listAssignees(regionOrgId, locationId, afterPersonId = null) {
       const region = uuidValue(regionOrgId, 'region_org_id')
       const location = uuidValue(locationId, 'location_id')

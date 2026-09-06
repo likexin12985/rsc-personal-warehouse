@@ -3,6 +3,9 @@ const test = require('node:test')
 const {
   validateFormalStocktakePostSentinel,
   validateFormalStocktakePostCommandStatus,
+  validateFormalStocktakePostSealResult,
+  sealFormalStocktakePost,
+  createFormalStocktakePostRecoveryAdapterFromFormalAdapter,
 } = require('../utils/formal-stocktake-post-recovery')
 
 const TASK = '10000000-0000-4000-8000-000000000001'
@@ -70,6 +73,24 @@ test('sealed_not_executed status exposes only the minimal seal proof', () => {
   assert.throws(() => validateFormalStocktakePostCommandStatus(status({ lookup_status: 'confirmed', command: sealedCommand() }), sentinel()))
 })
 
+test('explicit seal response is strict and bound to the original public coordinate', () => {
+  const parsed = validateFormalStocktakePostSealResult(sealedCommand(), sentinel())
+  assert.equal(parsed.task_id, TASK)
+  assert.equal(parsed.expected_task_version, 7)
+  assert.deepEqual(Object.keys(parsed).sort(), [
+    'actor_authorization_version', 'actor_person_id', 'expected_task_version',
+    'seal_id', 'sealed_at', 'task_id', 'trace_request_id',
+  ])
+  for (const tamper of [
+    { task_id: '10000000-0000-4000-8000-000000000002' },
+    { expected_task_version: 8 },
+    { actor_person_id: '40000000-0000-4000-8000-000000000002' },
+    { actor_authorization_version: 10 },
+    { trace_request_id: 'wx-other-trace-0001' },
+    { idempotency_key: 'wxidem-secret' },
+  ]) assert.throws(() => validateFormalStocktakePostSealResult({ ...sealedCommand(), ...tamper }, sentinel()))
+})
+
 test('confirmed post status enforces immutable coordinates and arithmetic', () => {
   const parsed = validateFormalStocktakePostCommandStatus(status({ lookup_status: 'confirmed', command: command() }), sentinel())
   assert.equal(parsed.command.task_id, TASK)
@@ -120,6 +141,70 @@ test('durable post persists before one no-replay POST and keeps marker on not_ob
   await assert.rejects(() => require('../utils/formal-stocktake-post-recovery').submitDurableFormalStocktakePost({ intent, expectedIdentity: { person_id: PERSON, authorization_version: 9 }, adapter, store }), /仍待只读核验/)
   assert.equal(posts, 1)
   assert.equal(store.read(TASK).kind, 'valid')
+})
+
+test('explicit seal sends only the original coordinate and clears only after strict success', async () => {
+  const { createFormalStocktakePostRecoveryStore, createFormalStocktakePostCoordinator } = require('../utils/formal-stocktake-post-recovery-store')
+  const values = new Map()
+  const storage = {
+    getStorageInfoSync: () => ({ keys: [...values.keys()] }),
+    getStorageSync: (key) => values.get(key) || '',
+    setStorageSync: (key, value) => values.set(key, value),
+    removeStorageSync: (key) => values.delete(key),
+  }
+  const store = createFormalStocktakePostRecoveryStore({ storage, coordinator: createFormalStocktakePostCoordinator() })
+  const calls = []
+  const identity = { person_id: PERSON, name: '总部', employee_no: 'E1', organization_code: 'HQ', organization_name: '总部', account_status: 'active', employment_status: 'active', access_mode: 'active', authorization_version: 9, role_codes: ['admin'] }
+  const adapter = {
+    async loadIdentity() { return identity },
+    async loadAccess() { return { schema_version: '1.0', person_id: PERSON, authorization_version: 9, can_read: true, can_post: true } },
+    async sealPostingCommand(...args) { calls.push(args); return sealedCommand() },
+  }
+  await store.withTaskLease(TASK, async (lease) => { lease.persist(sentinel()); await assert.doesNotReject(() => sealFormalStocktakePost(lease, sentinel(), adapter)) })
+  assert.deepEqual(calls, [[TASK, 7, PERSON, 9, TRACE]])
+  assert.deepEqual(store.read(TASK), { kind: 'missing' })
+})
+
+test('explicit seal failures retain the sentinel and never clear it', async () => {
+  const identity = { person_id: PERSON, name: '总部', employee_no: 'E1', organization_code: 'HQ', organization_name: '总部', account_status: 'active', employment_status: 'active', access_mode: 'active', authorization_version: 9, role_codes: ['admin'] }
+  for (const mode of ['transport', 'malformed', 'changed']) {
+    const values = new Map()
+    const storage = {
+      getStorageInfoSync: () => ({ keys: [...values.keys()] }), getStorageSync: (key) => values.get(key) || '',
+      setStorageSync: (key, value) => values.set(key, value), removeStorageSync: (key) => values.delete(key),
+    }
+    const { createFormalStocktakePostRecoveryStore, createFormalStocktakePostCoordinator } = require('../utils/formal-stocktake-post-recovery-store')
+    const store = createFormalStocktakePostRecoveryStore({ storage, coordinator: createFormalStocktakePostCoordinator() })
+    const adapter = {
+      async loadIdentity() { return identity }, async loadAccess() { return { schema_version: '1.0', person_id: PERSON, authorization_version: 9, can_read: true, can_post: true } },
+      async sealPostingCommand() {
+        if (mode === 'transport') throw new Error('network')
+        if (mode === 'malformed') return { ...sealedCommand(), task_id: '10000000-0000-4000-8000-000000000002' }
+        return sealedCommand()
+      },
+    }
+    await store.withTaskLease(TASK, async (lease) => {
+      lease.persist(sentinel())
+      await assert.rejects(() => sealFormalStocktakePost(lease, sentinel(), adapter, () => mode !== 'changed'))
+      assert.equal(lease.read().kind, 'valid')
+    })
+    assert.equal(store.read(TASK).kind, 'valid')
+  }
+})
+
+test('recovery adapter keeps sealPostingCommand optional and forwards no idempotency coordinate', async () => {
+  const expected = { person_id: PERSON, authorization_version: 9 }
+  const base = {
+    async loadIdentityNoReplay() { return { person_id: PERSON, name: '总部', employee_no: 'E1', organization_code: 'HQ', organization_name: '总部', account_status: 'active', employment_status: 'active', access_mode: 'active', authorization_version: 9, role_codes: ['admin'] } },
+    async loadAccessNoReplay() { return { schema_version: '1.0', person_id: PERSON, authorization_version: 9, can_read: true, can_post: true } },
+    async detailNoReplay() { return {} }, async postingCommandStatus() { return {} },
+  }
+  const old = createFormalStocktakePostRecoveryAdapterFromFormalAdapter(expected, base)
+  assert.equal(Object.prototype.hasOwnProperty.call(old, 'sealPostingCommand'), false)
+  let forwarded
+  const modern = createFormalStocktakePostRecoveryAdapterFromFormalAdapter(expected, { ...base, async sealPostingCommand(...args) { forwarded = args; return sealedCommand() } })
+  await modern.sealPostingCommand(TASK, 7, PERSON, 9, TRACE)
+  assert.deepEqual(forwarded, [TASK, 7, PERSON, 9, TRACE])
 })
 
 test('recovered projection accepts a later closed task only after the exact post round proof', () => {
