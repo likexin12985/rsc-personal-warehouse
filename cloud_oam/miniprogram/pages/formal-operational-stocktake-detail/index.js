@@ -368,6 +368,8 @@ Page({
         const canSeal = Boolean(this._access && this._access.can_read === true && this._access.can_post === true
           && typeof formalStocktakeAdapter.sealPostingCommand === 'function'
           && sentinel.task_id === this._taskId
+          && this._detail && this._detail.task_id === sentinel.task_id
+          && this._detail.version === sentinel.expected_task_version
           && sentinel.actor_person_id === this._access.person_id
           && sentinel.actor_authorization_version === this._access.authorization_version
           && !this._hidden)
@@ -720,7 +722,9 @@ Page({
     }
     if (!confirmed || !samePostSentinel(confirmed.sentinel, sentinel)
       || confirmed.taskId !== this._taskId || confirmed.expectedTaskVersion !== sentinel.expected_task_version
-      || confirmed.detailVersion !== (this._detail && this._detail.task_id === sentinel.task_id ? this._detail.version : null)
+      || !this._detail || this._detail.task_id !== sentinel.task_id
+      || this._detail.version !== sentinel.expected_task_version
+      || confirmed.detailVersion !== this._detail.version
       || confirmed.generation !== this._loadGeneration
       || confirmed.identity !== accessIdentity(this._access)) {
       this.setData({ postRecoveryCanSeal: false, errorMessage: '确认期间原过账坐标、版本、身份或页面代次已变化，未发送封存请求；请重新核验。' })
