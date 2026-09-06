@@ -218,6 +218,10 @@ def stocktake_posting_command_status(
                 or posted_outcome.task_id != completion.task_id
                 or posted_outcome.expected_task_version != completion.expected_task_version
                 or posted_outcome.request_sha256 != completion.request_sha256
+                or (
+                    completion.request_reference is not None
+                    and completion.request_reference != request_ref
+                )
             ):
                 _evidence("盘点过账完成结果与命令坐标未绑定")
             if (

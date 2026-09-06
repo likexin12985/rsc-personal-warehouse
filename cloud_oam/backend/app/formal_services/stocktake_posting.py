@@ -1175,6 +1175,7 @@ def _persist_posting_completion(
         approval_manifest_sha256=approval.approval_manifest_sha256,
         posting_manifest_sha256=posting_manifest,
         request_sha256=request_hash,
+        request_reference=_request_reference(trace_request_id),
         idempotency_key_hash=key_hash,
         posted_by_user_id=actor.user_id,
         posted_by_person_id=actor.person_id,

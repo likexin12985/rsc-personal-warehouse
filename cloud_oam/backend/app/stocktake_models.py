@@ -2410,6 +2410,9 @@ class StocktakePostingCompletion(CreatedAtMixin, Base):
     approval_manifest_sha256: Mapped[str] = mapped_column(String(64))
     posting_manifest_sha256: Mapped[str] = mapped_column(String(64))
     request_sha256: Mapped[str] = mapped_column(String(64))
+    # Nullable for historical completions created before migration 0066.
+    # New writers must bind this to the exact client request coordinate.
+    request_reference: Mapped[str | None] = mapped_column(String(160), nullable=True)
     idempotency_key_hash: Mapped[str] = mapped_column(String(64))
     posted_by_user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="RESTRICT")
