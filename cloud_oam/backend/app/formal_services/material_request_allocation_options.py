@@ -84,6 +84,12 @@ def list_allocation_options(
             if allocatable <= Decimal("0"):
                 _fail("material_request_line_fully_cancelled", "precondition_failed", "需求单明细没有可分配数量")
 
+            # Fulfilment source selection is a headquarters/regional operation;
+            # a technician's personal inventory-read grant is not allocation
+            # authority, even when the technician can read that account.
+            if not set(actor.role_codes).intersection({"admin", "provincial_manager"}):
+                _fail("material_request_allocation_options_forbidden", "forbidden", "当前账号没有货源分配目录权限")
+
             # The inventory reader performs the formal RBAC, hierarchy, ledger
             # continuity, balance rebuild and opening-establishment proof.
             inventory_query._require_inventory_read(db, actor)

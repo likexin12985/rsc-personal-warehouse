@@ -120,7 +120,7 @@ def test_candidates_filter_scope_rows_to_positive_available_active_material(monk
         no_autoflush = nullcontext()
 
     output = service.list_allocation_options(
-        DB(), actor=SimpleNamespace(), material_request_id=request_id, request_line_id=line_id
+        DB(), actor=SimpleNamespace(role_codes=("admin",)), material_request_id=request_id, request_line_id=line_id
     )
     assert isinstance(output, MaterialRequestAllocationOptionPageOut)
     assert [item.stock_account_id for item in output.items] == [valid.account.id]
@@ -145,7 +145,7 @@ def test_unestablished_inventory_is_hard_blocked(monkeypatch):
 
     with pytest.raises(service.MaterialRequestAllocationOptionError) as captured:
         service.list_allocation_options(
-            DB(), actor=SimpleNamespace(), material_request_id=request_id, request_line_id=line_id
+            DB(), actor=SimpleNamespace(role_codes=("admin",)), material_request_id=request_id, request_line_id=line_id
         )
     assert captured.value.code == "inventory_opening_not_established"
     assert captured.value.http_status_code == 412
