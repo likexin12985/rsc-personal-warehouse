@@ -20673,7 +20673,35 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         finally:
             security_engine.dispose()
         blocked_supply = _run_alembic("downgrade", SUPPLY_TASK_SECURITY_REVISION, expect_success=False)
-        assert "cannot downgrade 0061 while supply-task facts exist" in (blocked_supply.stdout + blocked_supply.stderr)
+        # The ordinary chain reaches 0063 first because the review fact is
+        # newer and its own downgrade guard must take precedence.  Exercise
+        # 0061 independently below so its supply-task blocker is also proven
+        # without weakening migration-order safety.
+        review_status_migration = _load_stocktake_review_command_status_migration_0063()
+        assert review_status_migration.DOWNGRADE_BLOCKER in (
+            blocked_supply.stdout + blocked_supply.stderr
+        )
+        supply_event_key = _load_supply_event_key_migration_0061()
+        migrator_engine = create_engine(
+            _sqlalchemy_url(
+                role="star_oam_migrator",
+                password=_role_password("star_oam_migrator"),
+            ),
+            pool_size=1,
+            max_overflow=0,
+            pool_timeout=5,
+        )
+        try:
+            with migrator_engine.begin() as connection:
+                supply_event_key.context.is_offline_mode = lambda: False
+                supply_event_key.op = Operations(MigrationContext.configure(connection))
+                with pytest.raises(
+                    RuntimeError,
+                    match=re.escape(supply_event_key.DOWNGRADE_BLOCKER),
+                ):
+                    supply_event_key.downgrade()
+        finally:
+            migrator_engine.dispose()
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
     finally:
