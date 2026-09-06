@@ -210,6 +210,15 @@ describe("formal material-request PC transport", () => {
       can_read: false,
       can_create: false,
     });
+
+    const managerContext = accessContext();
+    managerContext.role_codes = ["provincial_manager"];
+    await expect(createFormalMaterialRequestAdapter({
+      person_id: PERSON_ID,
+      authorization_version: 7,
+    }, makeRequester(async () => managerContext)).loadAccess()).resolves.toMatchObject({
+      can_read_allocation_options: true,
+    });
   });
 
   it("fails closed on identity, authorization-version and permission-shape drift", async () => {
