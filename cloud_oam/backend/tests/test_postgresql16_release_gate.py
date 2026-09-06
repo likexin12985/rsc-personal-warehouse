@@ -20695,7 +20695,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             with migrator_engine.begin() as connection:
                 supply_event_key.op = Operations(MigrationContext.configure(connection))
                 with pytest.raises(
-                    RuntimeError,
+                    DBAPIError,
                     match=re.escape(supply_event_key.DOWNGRADE_BLOCKER),
                 ):
                     supply_event_key.downgrade()
