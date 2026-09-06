@@ -222,6 +222,20 @@ describe("formal daily stocktake post durable recovery", () => {
     expect(store.read(TASK)).toEqual({ kind: "valid", value: marker });
   });
 
+  it("does not require historical status or detail reads for explicit sealing", async () => {
+    const storage = new MemoryStorage();
+    const store = createFormalStocktakePostRecoveryStore({ storage, locks });
+    const marker = sentinel();
+    await store.withTaskLease(TASK, async (lease) => { lease.persist(marker); });
+    const minimal = {
+      loadIdentityNoReplay: vi.fn(async () => identityResponse()),
+      loadAccessNoReplay: vi.fn(async () => access),
+      sealPostingCommand: vi.fn(async () => sealResponse()),
+    } as any;
+    await expect(store.withTaskLease(TASK, (lease) => sealFormalStocktakePost(lease, marker, minimal))).resolves.toMatchObject({ command: { task_id: TASK } });
+    expect(store.read(TASK)).toEqual({ kind: "missing" });
+  });
+
   it("persists only public coordinates and keeps not_observed sticky without detail or POST replay", async () => {
     const storage = new MemoryStorage();
     const store = createFormalStocktakePostRecoveryStore({ storage, locks });
