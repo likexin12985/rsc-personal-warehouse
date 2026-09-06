@@ -16,7 +16,8 @@
 
 提交 `c457aaf` 以 0066 前向迁移修正迟到过账数据库保护：只阻断同一 `task_id + request_reference` 的已封存
 请求，新明确请求坐标不再被错误任务级触发器拦截；completion 与 `posted` outcome 也必须绑定同一请求坐标。
-迁移、封存和恢复回归 `20 passed`，迁移历史套件 `148 passed, 19 skipped`；真实 PostgreSQL 竞争和远程门禁仍待验收。
+迁移、封存和恢复回归 `20 passed`，迁移历史套件 `148 passed, 19 skipped`；提交 `0b08717` 再以 0067
+任务行锁串行化直接 SQL 封存/完成竞争。真实 PostgreSQL 竞争和远程门禁仍待验收。
 
 ## 2026-09-06 服务端封存迟到过账阻断本地候选
 
