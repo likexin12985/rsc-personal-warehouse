@@ -75,7 +75,9 @@ async function recover(sentinel, adapter) {
   const line = detail.lines.find((item) => item.request_line_id === checked.request_line_id)
   if (detail.request_id !== checked.request_id || detail.request_version < command.current_request_version || !line
     || line.revision_id !== command.revision_id || line.revision_no !== command.revision_no
-    || !['approved', 'partially_approved'].includes(line.status)) fail('分配当前详情不能验证历史命令；保持未决状态')
+    || !['approved', 'partially_approved'].includes(line.status)
+    || (detail.request_version === command.current_request_version
+      && JSON.stringify(detail.states) !== JSON.stringify(command.state_axes))) fail('分配当前详情不能验证历史命令；保持未决状态')
   const freshIdentity = await adapter.loadIdentity()
   const freshAccess = await adapter.loadAccess(freshIdentity)
   if (freshIdentity.person_id !== checked.person_id || freshIdentity.authorization_version !== checked.authorization_version
