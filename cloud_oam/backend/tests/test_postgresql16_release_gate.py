@@ -20022,12 +20022,13 @@ def _0063_review_command_status_catalog():
             function_row = cursor.fetchone()
             cursor.execute(
                 "SELECT trigger_row.tgenabled, trigger_row.tgtype, "
-                "trigger_row.tgqual IS NULL, trigger_row.tgfoid "
+                "trigger_row.tgqual IS NULL, "
+                "trigger_row.tgfoid = pg_catalog.to_regprocedure(%s) "
                 "FROM pg_catalog.pg_trigger AS trigger_row "
                 "WHERE NOT trigger_row.tgisinternal "
                 "AND trigger_row.tgrelid = 'public.stocktake_reviews'::regclass "
                 "AND trigger_row.tgname = %s",
-                (migration.TRIGGER_NAME,),
+                (migration.TRIGGER_SIGNATURE, migration.TRIGGER_NAME),
             )
             trigger_row = cursor.fetchone()
             cursor.execute(
