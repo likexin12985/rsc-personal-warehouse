@@ -72,6 +72,13 @@ type RecoveryAdapter = Pick<FormalStocktakeAdapter, "loadAccess" | "detail" | "e
     actorAuthorizationVersion: number,
     traceRequestId: string,
   ) => Promise<unknown>;
+  sealPostingCommand?: (
+    taskId: string,
+    expectedTaskVersion: number,
+    actorPersonId: string,
+    actorAuthorizationVersion: number,
+    traceRequestId: string,
+  ) => Promise<unknown>;
 };
 
 const UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -181,6 +188,20 @@ function requirePostAccess(access: FormalStocktakeAccess, expected: Identity): v
     fail("正式权限版本与原过账不一致");
   }
   if (!access.can_read || !access.can_post) fail("当前正式权限不能核验盘点过账");
+}
+
+function requireSealAdapter(adapter: RecoveryAdapter): asserts adapter is RecoveryAdapter & {
+  sealPostingCommand: (
+    taskId: string,
+    expectedTaskVersion: number,
+    actorPersonId: string,
+    actorAuthorizationVersion: number,
+    traceRequestId: string,
+  ) => Promise<unknown>;
+} {
+  if (typeof adapter.sealPostingCommand !== "function") {
+    fail("当前盘点客户端未提供未执行封存能力，已保留恢复记录");
+  }
 }
 
 function validateSentinelAgainstIntent(intent: FormalStocktakeIntent, expected: Identity): FormalStocktakePostSentinel {
@@ -295,6 +316,35 @@ export function validateFormalStocktakePostCommandStatus(
   return Object.freeze({ ...anchors, lookup_status: "confirmed", command: Object.freeze(checked) });
 }
 
+/** Validate the minimal public proof returned by the no-idempotency seal API. */
+export function validateFormalStocktakePostSealResponse(
+  value: unknown,
+  original: FormalStocktakePostSentinel,
+): FormalStocktakePostingSealedCommand {
+  const sentinel = validateFormalStocktakePostSentinel(original);
+  const row = exact(value, [
+    "seal_id", "task_id", "expected_task_version", "actor_person_id",
+    "actor_authorization_version", "trace_request_id", "sealed_at",
+  ]);
+  const command = Object.freeze({
+    seal_id: uuid(row.seal_id, "seal_id"),
+    task_id: uuid(row.task_id, "task_id"),
+    expected_task_version: nonNegative(row.expected_task_version, "expected_task_version"),
+    actor_person_id: uuid(row.actor_person_id, "actor_person_id"),
+    actor_authorization_version: positive(row.actor_authorization_version, "actor_authorization_version"),
+    trace_request_id: row.trace_request_id,
+    sealed_at: timestamp(row.sealed_at, "sealed_at"),
+  } as FormalStocktakePostingSealedCommand);
+  if (
+    command.task_id !== sentinel.task_id
+    || command.expected_task_version !== sentinel.expected_task_version
+    || command.actor_person_id !== sentinel.actor_person_id
+    || command.actor_authorization_version !== sentinel.actor_authorization_version
+    || command.trace_request_id !== sentinel.trace_request_id
+  ) fail("封存响应坐标与原过账意图不一致");
+  return command;
+}
+
 export function validateFormalStocktakePostRecoveredProjection(
   value: unknown,
   sentinel: FormalStocktakePostSentinel,
@@ -351,6 +401,43 @@ async function requireCurrent(adapter: RecoveryAdapter, expected: Identity): Pro
   sameIdentity(activeIdentity(await adapter.loadIdentityNoReplay(), expected), expected);
   requirePostAccess(await adapter.loadAccessNoReplay(), expected);
 }
+
+/**
+ * Explicitly mark the uncertain posting coordinate as permanently not
+ * executed. Any failure leaves the exact sentinel intact; only a strict
+ * matching response followed by a second identity/access check may clear it.
+ */
+export async function sealFormalStocktakePost(
+  lease: FormalStocktakePostTaskLease,
+  value: FormalStocktakePostSentinel,
+  adapter: RecoveryAdapter,
+  canCommit: () => boolean = () => true,
+): Promise<Readonly<{ command: FormalStocktakePostingSealedCommand }>> {
+  requireSealAdapter(adapter);
+  const sentinel = validateFormalStocktakePostSentinel(value);
+  const stored = lease.read();
+  if (stored.kind !== "valid" || JSON.stringify(stored.value) !== JSON.stringify(sentinel)) fail();
+  const expected = { person_id: sentinel.actor_person_id, authorization_version: sentinel.actor_authorization_version };
+  await requireCurrent(adapter, expected);
+  if (!canCommit()) fail("核验页面已变化，继续保留盘点过账恢复记录");
+  const command = validateFormalStocktakePostSealResponse(
+    await adapter.sealPostingCommand(
+      sentinel.task_id,
+      sentinel.expected_task_version,
+      sentinel.actor_person_id,
+      sentinel.actor_authorization_version,
+      sentinel.trace_request_id,
+    ),
+    sentinel,
+  );
+  await requireCurrent(adapter, expected);
+  if (!canCommit()) fail("核验页面已变化，继续保留盘点过账恢复记录");
+  lease.clearExact(sentinel);
+  return Object.freeze({ command });
+}
+
+/** Explicit alias for callers that name the operation by its command. */
+export const sealFormalStocktakePostCommand = sealFormalStocktakePost;
 
 /**
  * Read-only recovery.  This function has no POST path and never constructs a

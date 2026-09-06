@@ -109,6 +109,27 @@ describe("formal stocktake PC adapter", () => {
     expect(normal).not.toHaveBeenCalled();
   });
 
+  it("seals an uncertain posting coordinate with no idempotency key", async () => {
+    const mutation = vi.fn(async () => ({ seal_id: "70000000-0000-4000-8000-000000000001" }));
+    const adapter = createFormalStocktakeAdapter(
+      { person_id: PERSON, authorization_version: 7 },
+      vi.fn(async () => ({ schema_version: "1.0" })),
+      mutation,
+      vi.fn(async () => ({ schema_version: "1.0" })),
+    );
+    await adapter.sealPostingCommand?.(TASK, 5, PERSON, 7, `web-${"s".repeat(36)}`);
+    expect(mutation).toHaveBeenCalledWith(
+      `/v1/stocktakes/${TASK}/post-differences/confirm-not-executed`,
+      {
+        method: "POST",
+        headers: { "X-Request-ID": `web-${"s".repeat(36)}` },
+        body: JSON.stringify({ expected_task_version: 5 }),
+      },
+    );
+    const call = (mutation.mock.calls as unknown as Array<[string, RequestInit]>)[0];
+    expect(call[1]?.headers).not.toHaveProperty("Idempotency-Key");
+  });
+
   it("uses the exact read-only review command-status coordinates", async () => {
     const requester = vi.fn(async (path: string) => {
       if (path === "/access/context") return access();

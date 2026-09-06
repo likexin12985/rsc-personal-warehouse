@@ -99,6 +99,18 @@ export interface FormalStocktakeAdapter {
     actorAuthorizationVersion: number,
     traceRequestId: string,
   ): Promise<unknown>;
+  /**
+   * Explicitly seals an uncertain non-opening posting coordinate.  This
+   * endpoint intentionally forbids Idempotency-Key; the trace coordinate is
+   * the durable server-side request reference.
+   */
+  sealPostingCommand?(
+    taskId: string,
+    expectedTaskVersion: number,
+    actorPersonId: string,
+    actorAuthorizationVersion: number,
+    traceRequestId: string,
+  ): Promise<unknown>;
   /** Read-only historical lookup for one non-opening initial/recount scope count. */
   countCommandStatus?(
     taskId: string,
@@ -379,6 +391,22 @@ export function createFormalStocktakeAdapter(
           method: "GET",
           cache: "no-store",
           headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+        },
+      );
+    },
+    async sealPostingCommand(taskId, expectedTaskVersion, actorPersonId, actorAuthorizationVersion, traceRequestId) {
+      const checkedTaskId = uuid(taskId, "task_id");
+      const checkedVersion = positiveVersion(expectedTaskVersion, "expected_task_version");
+      const checkedPersonId = uuid(actorPersonId, "actor_person_id");
+      const checkedAuthorizationVersion = positiveVersion(actorAuthorizationVersion, "actor_authorization_version");
+      const checkedTrace = text(traceRequestId, "trace_request_id");
+      if (!SAFE_REQUEST_ID.test(checkedTrace)) fail("trace_request_id 无效");
+      return mutationRequester(
+        `/v1/stocktakes/${checkedTaskId}/post-differences/confirm-not-executed`,
+        {
+          method: "POST",
+          headers: { "X-Request-ID": checkedTrace },
+          ...jsonBody({ expected_task_version: checkedVersion }),
         },
       );
     },

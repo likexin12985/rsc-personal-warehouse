@@ -4,7 +4,9 @@ import { createFormalStocktakeIntentRegistry } from "./formalStocktakes";
 import {
   FormalStocktakePostSubmissionPendingError,
   recoverFormalStocktakePost,
+  sealFormalStocktakePost,
   submitDurableFormalStocktakePost,
+  validateFormalStocktakePostSealResponse,
   validateFormalStocktakePostCommandStatus,
   validateFormalStocktakePostRecoveredProjection,
 } from "./formalStocktakePostRecovery";
@@ -105,6 +107,15 @@ function sealedStatus(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function sealResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    seal_id: "70000000-0000-4000-8000-000000000001", task_id: TASK,
+    expected_task_version: 5, actor_person_id: PERSON,
+    actor_authorization_version: 7, trace_request_id: TRACE,
+    sealed_at: "2026-09-06T08:01:00+08:00", ...overrides,
+  };
+}
+
 function recoveryAdapter(overrides: Record<string, unknown> = {}) {
   return {
     loadAccess: vi.fn(async () => access),
@@ -177,6 +188,37 @@ describe("formal daily stocktake post durable recovery", () => {
     }
     expect(() => validateFormalStocktakePostCommandStatus({ ...sealedStatus(), command: null }, sentinel())).toThrow();
     expect(() => validateFormalStocktakePostCommandStatus({ ...sealedStatus(), lookup_status: "confirmed" }, sentinel())).toThrow();
+  });
+
+  it("validates the explicit seal response against the exact persisted coordinates", () => {
+    expect(validateFormalStocktakePostSealResponse(sealResponse(), sentinel())).toMatchObject({
+      seal_id: "70000000-0000-4000-8000-000000000001", task_id: TASK,
+      expected_task_version: 5, trace_request_id: TRACE,
+    });
+    for (const tamper of [
+      { task_id: "10000000-0000-4000-8000-000000000002" },
+      { expected_task_version: 6 },
+      { actor_person_id: "01000000-0000-4000-8000-000000000002" },
+      { trace_request_id: "other-trace-0001" },
+      { idempotency_key: "secret" },
+    ]) {
+      expect(() => validateFormalStocktakePostSealResponse(sealResponse(tamper), sentinel())).toThrow();
+    }
+  });
+
+  it("clears only the exact marker after a successful seal and keeps it on failure", async () => {
+    const storage = new MemoryStorage();
+    const store = createFormalStocktakePostRecoveryStore({ storage, locks });
+    const marker = sentinel();
+    await store.withTaskLease(TASK, async (lease) => { lease.persist(marker); });
+    const client = recoveryAdapter({ sealPostingCommand: vi.fn(async () => sealResponse()) });
+    await expect(store.withTaskLease(TASK, (lease) => sealFormalStocktakePost(lease, marker, client))).resolves.toMatchObject({ command: { seal_id: "70000000-0000-4000-8000-000000000001" } });
+    expect(store.read(TASK)).toEqual({ kind: "missing" });
+
+    await store.withTaskLease(TASK, async (lease) => { lease.persist(marker); });
+    const rejected = recoveryAdapter({ sealPostingCommand: vi.fn(async () => sealResponse({ task_id: "10000000-0000-4000-8000-000000000002" })) });
+    await expect(store.withTaskLease(TASK, (lease) => sealFormalStocktakePost(lease, marker, rejected))).rejects.toThrow();
+    expect(store.read(TASK)).toEqual({ kind: "valid", value: marker });
   });
 
   it("persists only public coordinates and keeps not_observed sticky without detail or POST replay", async () => {
