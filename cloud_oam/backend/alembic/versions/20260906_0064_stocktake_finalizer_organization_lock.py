@@ -226,7 +226,7 @@ BEGIN
            AND row.proowner = migrator_oid AND row.prokind = 'f'
            AND row.prorettype = 'void'::pg_catalog.regtype
            AND row.pronargs = 1 AND pg_catalog.oidvectortypes(row.proargtypes) = 'uuid'
-           AND row.proargnames = ARRAY['requested_organization_id']::name[]
+           AND row.proargnames = ARRAY['requested_organization_id']::text[]
            AND language_row.lanname = 'plpgsql' AND row.provolatile = 'v'
            AND row.prosecdef AND NOT row.proisstrict AND NOT row.proleakproof
            AND row.proparallel = 'u'
