@@ -3,6 +3,18 @@
 日期：2026-09-05。依据根 AGENTS.md、V1.0；前序已验收代码为 `2691ab3`，文档后继为 `206b60e`。
 本切片不修改客户端、边缘采集或业务状态轴，不访问任何外部生产系统。
 
+## 2026-09-06 `a00f591` 远程门禁已通过
+
+复核命令状态读端及其持久版本对、owner graph、审计链和摘要篡改 fail-closed 校验已随
+`a00f591deb894e748f45806c442ee13ff42432e0` 推送。准确 SHA 的
+[Client gate 34021817679](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34021817679)
+与 [PostgreSQL 16 gate 34021817686](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34021817686)
+均通过，PG16 静态和动态步骤均成功。历史 0047/0061 降级守卫测试已按正常链路优先级
+和直接迁移调用拆开验证。
+
+这只证明本切片的代码和门禁，不代表盘点全功能、一期供给任务或生产放行；所有履约、
+通知和对账状态轴仍须分别建模和验收。
+
 ## 2026-09-06 0063 复核证据续开发（本地，未放行）
 
 当前工作树已新增 `stocktake_reviews.expected_task_version` 与

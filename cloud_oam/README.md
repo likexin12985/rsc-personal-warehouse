@@ -10,6 +10,23 @@
 
 ## 当前开发状态
 
+### 2026-09-06 复核命令状态恢复能力已通过远程门禁
+
+当前安全提交为 `a00f591deb894e748f45806c442ee13ff42432e0`，本地与
+`origin/codex/production-readiness-gates` 一致。该提交包含只读复核命令状态
+endpoint、owner-graph/audit-chain fail-closed 校验，以及 PostgreSQL 16 历史
+降级守卫的独立调用测试。准确 SHA 的
+[Client release gate 34021817679](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34021817679)
+和
+[PostgreSQL 16 release gate 34021817686](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34021817686)
+均已通过；PG16 静态与动态步骤均成功。
+
+本轮没有访问或写入 OAM、RSC、Workflow、飞书或任何生产数据库。四个未跟踪
+deployment 目录仍属于本地保护内容，未纳入提交。盘点恢复能力已形成可验证的
+持久状态与只读恢复证据，但一期供给任务纵向链路仍未开始；审批、分配、占用、
+出库、发货、物流签收、OAM 收货、RSC/个人仓入库、通知送达和对账同步继续保持
+独立状态轴，不能由盘点状态代替。
+
 ### 2026-09-06 0063 本地收口（未远程放行）
 
 本地已完成 0063 前向迁移及非期初复核历史版本证据链，拓扑为

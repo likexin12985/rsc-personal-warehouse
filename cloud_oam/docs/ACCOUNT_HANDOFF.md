@@ -38,6 +38,19 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 
 ## 4. 当前源码状态
 
+### 2026-09-06 最新门禁证据（`a00f591`）
+
+当前分支安全提交为 `a00f591deb894e748f45806c442ee13ff42432e0`，本地与远端一致。
+准确 SHA 的 [Client release gate 34021817679](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34021817679)
+与 [PostgreSQL 16 release gate 34021817686](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34021817686)
+均为 success。复核命令状态读端已交付并通过 owner graph、审计链、审计摘要篡改和
+权限/请求轨迹 fail-closed 回归；PG16 门禁同时验证历史 0047、0061 降级守卫在
+正常 Alembic 顺序与直接迁移调用下均不被后续版本遮蔽。
+
+该提交仍不代表一期生产放行。需求供给纵向链路、真实 UAT、外部同步和以下独立状态轴
+仍需继续开发与验收：审批、分配、占用、出库、发货、物流签收、OAM 收货、RSC/个人仓
+入库、通知送达、对账同步。保护目录未提交，任何生产系统仍未访问或写入。
+
 ### 2026-09-06 0063 收口（本地工作树，尚未远程放行）
 
 本轮已在 `codex/production-readiness-gates` 工作树实现 0063 前向迁移及非期初复核历史证据
