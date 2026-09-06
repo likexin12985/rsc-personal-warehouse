@@ -340,7 +340,7 @@ def formal_material_request_allocation_options(
         _raise_service_error(exc, no_store=True)
     except DBAPIError:
         db.rollback()
-        _raise_database_unavailable(read_only=True)
+        _raise_database_unavailable(read_only=True, no_store=True)
     return output
 
 
@@ -1287,8 +1287,17 @@ def _rollback_and_raise(db: Session, exc: Exception) -> None:
     raise exc
 
 
-def _raise_database_unavailable(*, read_only: bool) -> None:
+def _raise_database_unavailable(*, read_only: bool, no_store: bool = False) -> None:
     message = "需求单查询暂时不可用" if read_only else "数据库暂时不可用，本次需求单操作未完成"
+    headers = (
+        {
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+            "Referrer-Policy": "no-referrer",
+        }
+        if no_store
+        else None
+    )
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail={
@@ -1296,6 +1305,7 @@ def _raise_database_unavailable(*, read_only: bool) -> None:
             "category": "service_unavailable",
             "message": message,
         },
+        headers=headers,
     ) from None
 
 

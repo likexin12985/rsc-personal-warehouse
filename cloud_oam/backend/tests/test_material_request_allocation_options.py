@@ -5,11 +5,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 import uuid
+from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from app.database import get_db
 from app.dependencies import get_formal_principal
@@ -158,7 +160,7 @@ def test_router_allocation_options_is_get_only_and_no_store_on_success_and_error
             return True
 
     class DB:
-        pass
+        rollback = Mock()
 
     api.dependency_overrides[get_formal_principal] = lambda: Principal()
     api.dependency_overrides[get_db] = lambda: DB()
@@ -192,3 +194,16 @@ def test_router_allocation_options_is_get_only_and_no_store_on_success_and_error
         assert response.status_code == 412
         assert "no-store" in response.headers["Cache-Control"]
         assert "sql" not in response.text.lower()
+
+        monkeypatch.setattr(
+            service,
+            "list_allocation_options",
+            Mock(side_effect=OperationalError("secret sql", {}, Exception("db"))),
+        )
+        response = client.get(
+            f"/api/v1/material-requests/{_id(700)}/allocation-options",
+            params={"request_line_id": str(_id(701))},
+        )
+        assert response.status_code == 503
+        assert "no-store" in response.headers["Cache-Control"]
+        assert "secret" not in response.text.lower()
