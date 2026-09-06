@@ -142,7 +142,5 @@ $$""")
         op.execute(f"DROP TRIGGER IF EXISTS {BINDING_TRIGGER}_sqlite")
         op.execute(f"DROP TRIGGER IF EXISTS {COMPLETION_TRIGGER}_sqlite")
         op.execute(f"DROP TRIGGER IF EXISTS {COMPLETION_TRIGGER}_required_reference_sqlite")
-        op.execute(f"DROP TRIGGER IF EXISTS {COMPLETION_TRIGGER}_required_reference_sqlite")
         op.execute(f"""CREATE TRIGGER {BINDING_TRIGGER_OLD}_sqlite BEFORE INSERT ON stocktake_posting_command_outcomes WHEN NEW.disposition = 'posted' AND (NEW.request_reference IS NULL OR length(NEW.request_reference) = 0 OR NOT EXISTS (SELECT 1 FROM stocktake_posting_completions WHERE id = NEW.completion_id AND task_id = NEW.task_id AND expected_task_version = NEW.expected_task_version AND request_sha256 = NEW.request_sha256 AND request_reference = NEW.request_reference)) BEGIN SELECT RAISE(ABORT, 'stocktake posting command outcome is not bound to its completion'); END""")
         op.execute(f"""CREATE TRIGGER {COMPLETION_TRIGGER_OLD}_sqlite BEFORE INSERT ON stocktake_posting_completions WHEN NEW.request_reference IS NULL OR length(NEW.request_reference) = 0 OR EXISTS (SELECT 1 FROM stocktake_posting_command_outcomes WHERE task_id = NEW.task_id AND request_reference = NEW.request_reference AND disposition = 'sealed_not_executed') BEGIN SELECT RAISE(ABORT, 'stocktake posting command was sealed as not executed'); END""")
-
