@@ -149,3 +149,39 @@ def test_allocation_command_status_returns_not_observed_without_audit_rows():
             return Result()
 
     assert allocation_command_status(DB(), actor=actor, trace_request_id="trace-1234") is None
+
+
+def test_allocation_command_status_fails_closed_on_mismatched_audit_object():
+    actor = type("Actor", (), {
+        "role_codes": ("admin",), "user_id": "u", "person_id": _id(41),
+        "authorization_version": 1, "account_status": "active",
+        "employment_status": "active", "access_mode": "active",
+    })()
+    audit = type("Audit", (), {
+        "action": "material_request_allocation_created",
+        "aggregate_type": "stock_allocation",
+        "aggregate_id": str(_id(99)),
+        "after_jsonb": {"allocation_id": str(_id(42))},
+    })()
+
+    class Result:
+        def all(self):
+            return [audit]
+
+    class DB:
+        class _NoAutoflush:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        no_autoflush = _NoAutoflush()
+
+        def scalars(self, _statement):
+            return Result()
+
+    with pytest.raises(MaterialRequestAllocationError) as caught:
+        allocation_command_status(DB(), actor=actor, trace_request_id="trace-1234")
+    assert caught.value.code == "material_request_allocation_history_invalid"
+    assert caught.value.category == "service_unavailable"
