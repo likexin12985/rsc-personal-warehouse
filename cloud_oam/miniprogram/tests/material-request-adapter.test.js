@@ -351,7 +351,18 @@ test('allocation command status uses the original request coordinate and strict 
 })
 
 test('allocation POST preserves both business coordinates and validates projection input', async () => {
-  const transport = fakeTransport({ ok: true })
+  const transport = fakeTransport({
+    schema_version: '1.0', request_id: REQUEST_ID, allocation_id: '80000000-0000-4000-8000-000000000001',
+    allocation_no: 'AL-20260907-ABC', request_version: 4,
+    revision_id: '90000000-0000-4000-8000-000000000001', revision_no: 1, request_line_id: STEP_ID,
+    source_stock_account_id: MATERIAL_ID, allocated_qty: '1.000', allocation_status: 'allocated',
+    request_status: 'approved', state_axes: {
+      request_status: 'approved', allocation_status: 'allocated', reservation_status: 'not_reserved',
+      outbound_status: 'not_started', shipment_status: 'not_started', logistics_signature_status: 'not_signed',
+      oam_receipt_status: 'not_occurred', personal_inbound_status: 'not_started',
+      notification_status: 'not_started', reconciliation_status: 'not_started'
+    }, idempotency_replayed: false
+  })
   const client = adapter(transport)
   await client.createAllocation(REQUEST_ID, {
     expected_request_version: 3,

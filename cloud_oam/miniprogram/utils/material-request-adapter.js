@@ -758,7 +758,9 @@ function createFormalMaterialRequestAdapter(options = {}) {
         signature: headers && headers['Idempotency-Key'],
         headers
       })
-      return transport.post(`/v1/material-requests/${checkedRequestId}/allocations`, body, options)
+      return contract.validateMaterialRequestAllocationMutationResult(
+        await transport.post(`/v1/material-requests/${checkedRequestId}/allocations`, body, options)
+      )
     },
     list(afterId) {
       const suffix = afterId === null
