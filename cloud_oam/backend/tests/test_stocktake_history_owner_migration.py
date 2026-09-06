@@ -16,7 +16,6 @@ import pytest
 from sqlalchemy import text
 
 from app.database_security import (
-    OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256,
     RUNTIME_EXECUTE_FUNCTIONS,
     RUNTIME_FUNCTION_BODY_SHA256,
     RUNTIME_FUNCTION_SHAPES,
@@ -24,7 +23,10 @@ from app.database_security import (
 from app.formal_services.postgresql_lock_graph import (
     lock_nonopening_stocktake_count_history_graph,
 )
-from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061
+from app.oam_sync_scope_security import (
+    OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061,
+    OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0062,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -209,7 +211,9 @@ def test_history_owner_readiness_forward_and_backward_hashes_are_exact() -> None
     assert hashlib.sha256(old.encode()).hexdigest() == migration.RUNTIME_READY_BODY_SHA256_0061
     assert hashlib.sha256(new.encode()).hexdigest() == migration.RUNTIME_READY_BODY_SHA256_0062
     assert migration.RUNTIME_READY_BODY_SHA256_0061 == OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061[migration.RUNTIME_READY_SIGNATURE.removeprefix("public.")][6]
-    assert migration.RUNTIME_READY_BODY_SHA256_0062 == OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256[("rsc_oam_runtime_binding_ready_0044", "")]
+    assert migration.RUNTIME_READY_BODY_SHA256_0062 == OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0062[
+        migration.RUNTIME_READY_SIGNATURE.removeprefix("public.")
+    ][6]
 
 
 def test_history_owner_catalog_pins_dependencies_acl_arguments_and_seals(monkeypatch) -> None:

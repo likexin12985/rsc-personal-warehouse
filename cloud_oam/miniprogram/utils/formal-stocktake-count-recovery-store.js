@@ -113,19 +113,25 @@ function createFormalStocktakeCountRecoveryStore(options = {}) {
 
   function readPending(taskId) {
     const id = nonzeroUuid(taskId)
-    if (!state || state.storageFaults.has(id)) return Object.freeze({ kind: 'unavailable' })
+    if (!state || [...state.storageFaults].some((fault) => fault === id || fault.startsWith(`${id}:`))) return Object.freeze({ kind: 'unavailable' })
     try {
-      if (!availableStorage(storage)) return Object.freeze({ kind: 'unavailable' })
+      if (!availableStorage(storage)) return unavailable(id)
       const values = []
       for (const key of storedKeys(storage)) {
         if (!key.startsWith(STORAGE_PREFIX)) continue
         const raw = storage.getStorageSync(key)
         let value
         try { value = validateFormalStocktakeCountSentinel(JSON.parse(raw)) } catch (_) { return Object.freeze({ kind: 'corrupt' }) }
+        if (key !== STORAGE_PREFIX + keyOf(value)) return Object.freeze({ kind: 'corrupt' })
         if (value.task_id === id) values.push(value)
       }
       return values.length ? Object.freeze({ kind: 'valid', values: Object.freeze(values) }) : Object.freeze({ kind: 'missing' })
-    } catch (_) { return Object.freeze({ kind: 'unavailable' }) }
+    } catch (_) {
+      // A task-level scan cannot distinguish a transient directory/read
+      // failure from a hidden pending marker.  Latch the fault so a later
+      // refresh cannot turn unavailable into missing and reopen writes.
+      return unavailable(id)
+    }
   }
 
   return Object.freeze({

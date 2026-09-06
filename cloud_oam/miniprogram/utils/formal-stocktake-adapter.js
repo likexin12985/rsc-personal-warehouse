@@ -194,6 +194,10 @@ function createFormalStocktakeAdapter(options = {}) {
   const expectedIdentityProvider = options.expectedIdentityProvider || session.getUser
   if (!transport || typeof transport.get !== 'function' || typeof transport.post !== 'function' || typeof expectedIdentityProvider !== 'function') fail('正式盘点 transport 配置无效', 503)
   const adapter = {
+    // The release page must never infer durability from a partial method set;
+    // this explicit brand makes a misconfigured production singleton fail
+    // closed instead of falling back to replayable count POSTs.
+    countRecoveryMode: 'durable',
     async loadAccess() { return projectAccess(await transport.get('/access/context'), expectedIdentityProvider()) },
     async loadIdentityNoReplay() {
       if (typeof transport.request !== 'function') fail('正式盘点身份只读核验通道不可用', 503)

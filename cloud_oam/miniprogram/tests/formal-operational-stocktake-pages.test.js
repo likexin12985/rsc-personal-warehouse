@@ -7,8 +7,22 @@ const contract = require('../utils/formal-stocktake-contract')
 const formalFileUpload = require('../utils/formal-file-upload')
 
 function loadPage(relativePath, stubs) {
+  // Existing page tests use intentionally small in-memory adapters.  Mark
+  // those doubles explicitly as compatibility adapters so the production
+  // page's durable-capability gate can remain fail-closed for unbranded
+  // runtime adapters.
+  const preparedStubs = Object.assign({}, stubs)
+  if (relativePath.endsWith('formal-operational-stocktake-detail/index')) {
+    const adapterModule = stubs['../utils/formal-stocktake-adapter']
+    const adapter = adapterModule && adapterModule.formalStocktakeAdapter
+    if (adapter && !adapter.countRecoveryMode) {
+      preparedStubs['../utils/formal-stocktake-adapter'] = Object.assign({}, adapterModule, {
+        formalStocktakeAdapter: Object.assign({}, adapter, { countRecoveryMode: 'legacy-test' })
+      })
+    }
+  }
   const saved = []
-  for (const [modulePath, exports] of Object.entries(stubs)) {
+  for (const [modulePath, exports] of Object.entries(preparedStubs)) {
     const resolved = require.resolve(modulePath)
     saved.push([resolved, require.cache[resolved]])
     require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports }

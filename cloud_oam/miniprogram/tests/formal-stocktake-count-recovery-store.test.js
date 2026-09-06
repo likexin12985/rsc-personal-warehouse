@@ -80,3 +80,34 @@ test('storage failure and corrupt marker stay blocking', async () => {
   assert.equal(store.read(value).kind, 'corrupt')
   await assert.rejects(() => store.withScopeLease(value, async () => {}), /不可用|不可用/)
 })
+
+test('pending scan rejects a valid sentinel stored under the wrong physical key', () => {
+  const storage = storageFixture()
+  const value = sentinel()
+  storage.values.set(`${STORAGE_PREFIX}${TASK}:${ROUND}:${SCOPE}:initial_count`, JSON.stringify(value))
+  const store = createFormalStocktakeCountRecoveryStore({ storage, coordinator: createFormalStocktakeCountCoordinator() })
+  assert.equal(store.readPending(TASK).kind, 'corrupt')
+})
+
+test('scope-specific storage failure is visible to the task-level pending scan', async () => {
+  const value = sentinel()
+  const storage = storageFixture()
+  storage.setStorageSync = () => { throw new Error('write failed') }
+  const store = createFormalStocktakeCountRecoveryStore({ storage, coordinator: createFormalStocktakeCountCoordinator() })
+  await assert.rejects(() => store.withScopeLease(value, async (lease) => lease.persist(value)), /写后核验|停止发送请求/)
+  assert.equal(store.readPending(TASK).kind, 'unavailable')
+})
+
+test('task-level scan latches a directory read failure even after storage recovers', () => {
+  const storage = storageFixture()
+  const coordinator = createFormalStocktakeCountCoordinator()
+  let failDirectory = true
+  storage.getStorageInfoSync = () => {
+    if (failDirectory) throw new Error('directory unavailable')
+    return { keys: [] }
+  }
+  const store = createFormalStocktakeCountRecoveryStore({ storage, coordinator })
+  assert.equal(store.readPending(TASK).kind, 'unavailable')
+  failDirectory = false
+  assert.equal(store.readPending(TASK).kind, 'unavailable')
+})

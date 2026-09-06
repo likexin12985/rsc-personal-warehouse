@@ -10,6 +10,19 @@ const { accessIdentity } = require('../../utils/formal-operational-stocktake-pag
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const NONZERO_UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+function hasDurableCountCapability(adapter) {
+  return Boolean(adapter && adapter.countRecoveryMode === 'durable'
+    && typeof adapter.countCommandStatus === 'function'
+    && typeof adapter.loadIdentityNoReplay === 'function'
+    && typeof adapter.loadAccessNoReplay === 'function'
+    && typeof adapter.detailNoReplay === 'function'
+    && typeof adapter.execute === 'function')
+}
+
+function isLegacyCountCompatibilityAdapter(adapter) {
+  return Boolean(adapter && adapter.countRecoveryMode === 'legacy-test')
+}
+
 function idList(value, name) {
   const rows = String(value || '').split(/[\s,，]+/).map((item) => item.trim().toLowerCase()).filter(Boolean)
   if (rows.some((item) => !UUID.test(item))) throw new Error(`${name} 必须是正式 UUID`)
@@ -166,7 +179,14 @@ Page({
     this._hidden = true
     this._scanGeneration = (this._scanGeneration || 0) + 1
     this._loadGeneration = (this._loadGeneration || 0) + 1
-    this.setData({ busy: false, loading: false, accessAllowed: false, detail: null, accessMessage: '返回后须重新校验正式身份与盘点权限', terminalConfirm: '', selectedScopeId: '', countAction: '' })
+    // Hide invalidates the active evidence binding as well as scan/load
+    // generations.  The upload controller's generation gate then discards
+    // late prepare/complete callbacks instead of repopulating a new page
+    // lifecycle with evidence chosen under the old authorization/detail.
+    if (this._evidenceUploads) this._evidenceUploads.clear()
+    if (this._evidenceClaims) this._evidenceClaims.clear()
+    this._uploadIdentity = ''
+    this.setData({ busy: false, loading: false, accessAllowed: false, detail: null, accessMessage: '返回后须重新校验正式身份与盘点权限', terminalConfirm: '', selectedScopeId: '', countAction: '', accountDrafts: [], observations: [], evidenceUploadFiles: [], evidenceUploadBlocking: false, evidenceUploadCanChoose: true, hasAccountInput: false })
     this._countRecoveryContext = ''
     this.setData({ countRecoveryBlocked: false, countRecoveryCanCheck: false })
     if (this._intentRegistry.current()) this.setData({ pendingMessage: '原盘点写请求结果待核实，已停止新操作；刷新不代表原请求未执行。', pendingRetryable: false })
@@ -236,10 +256,9 @@ Page({
   },
 
   refreshCountRecovery() {
-    // Test doubles and legacy adapters without the non-opening command-status
-    // capability retain their existing in-memory contract. The production
-    // adapter always exposes this capability, so storage failure is fail-closed
-    // there rather than silently falling back to a replayable write.
+    // The production singleton is explicitly branded durable. Only an
+    // explicitly marked test/compatibility adapter may use the old in-memory
+    // contract; a partial or unbranded production adapter fails closed.
     const identity = this._access ? `${this._access.person_id}:${this._access.authorization_version}` : ''
     const context = `${this._taskId || ''}:${identity}`
     if (this._countRecoveryContext && this._countRecoveryContext !== context) {
@@ -248,21 +267,40 @@ Page({
       this.setData({ countRecoveryBlocked: false, countRecoveryCanCheck: false })
     }
     this._countRecoveryContext = context
-    if (!this._countRecoveryStore || !UUID.test(this._taskId || '')) return
-    const pending = this._countRecoveryStore.readPending(this._taskId)
-    const canRecover = typeof formalStocktakeAdapter.countCommandStatus === 'function'
+    if (!UUID.test(this._taskId || '')) {
+      this.setData({ countRecoveryBlocked: true, countRecoveryCanCheck: false, pendingMessage: '任务恢复坐标无效，已停止所有业务写入。' })
+      return
+    }
+    if (!this._countRecoveryStore || typeof this._countRecoveryStore.readPending !== 'function') {
+      this.setData({ countRecoveryBlocked: true, countRecoveryCanCheck: false, pendingMessage: '正式盘点持久恢复存储未完整加载，已停止所有业务写入。' })
+      return
+    }
+    let pending
+    try {
+      pending = this._countRecoveryStore.readPending(this._taskId)
+    } catch (_) {
+      this.setData({ countRecoveryBlocked: true, countRecoveryCanCheck: false, pendingMessage: '正式盘点恢复记录无法读取，已停止所有业务写入。' })
+      return
+    }
+    const canRecover = hasDurableCountCapability(formalStocktakeAdapter)
+    const compatibilityAdapter = isLegacyCountCompatibilityAdapter(formalStocktakeAdapter)
+    if (!canRecover && !compatibilityAdapter) {
+      this.setData({ countRecoveryBlocked: true, countRecoveryCanCheck: false, pendingMessage: '正式盘点持久恢复能力未完整加载，已停止所有业务写入。' })
+      return
+    }
     // A compatibility/test adapter without the durable count capability keeps
     // the legacy in-memory contract.  Only a positively observed marker (or a
     // corrupt marker) may block it; an unavailable store cannot be confused
     // with an existing durable command when this adapter never uses one.
-    if (!canRecover && (pending.kind === 'missing' || pending.kind === 'unavailable')) {
+    if (!canRecover && compatibilityAdapter && (pending.kind === 'missing' || pending.kind === 'unavailable')) {
       this.setData({ countRecoveryBlocked: false, countRecoveryCanCheck: false })
       return
     }
     if (pending.kind === 'valid' && pending.values && pending.values.length) {
       this.setData({ countRecoveryBlocked: true, countRecoveryCanCheck: canRecover && Boolean(this._verifiedIdentity || this._access), pendingMessage: canRecover ? '原日常盘点范围计数结果待只读核验；未发送任何新请求。' : '日常盘点恢复能力不可用，已停止新写入。' })
     } else if (pending.kind === 'missing') {
-      this.setData({ countRecoveryBlocked: false, countRecoveryCanCheck: false })
+      const hasPendingIntent = Boolean(this._intentRegistry && this._intentRegistry.current && this._intentRegistry.current())
+      this.setData({ countRecoveryBlocked: false, countRecoveryCanCheck: false, pendingMessage: hasPendingIntent ? this.data.pendingMessage : '' })
     } else {
       this.setData({ countRecoveryBlocked: true, countRecoveryCanCheck: false, pendingMessage: '日常盘点恢复记录无法确认，已停止新写入。' })
     }
@@ -290,7 +328,7 @@ Page({
     const access = this._access
     const current = () => !this._hidden && this._writeLease === lease && this._loadGeneration === generation && this._access === access
     let intent
-    const durableCount = (input.action === 'submit_initial_count' || input.action === 'submit_recount_count') && typeof formalStocktakeAdapter.countCommandStatus === 'function'
+    const durableCount = (input.action === 'submit_initial_count' || input.action === 'submit_recount_count') && hasDurableCountCapability(formalStocktakeAdapter)
     try {
       intent = existing || this._intentRegistry.begin(input)
       this.setData({ busy: true, errorMessage: '', pendingMessage: '', pendingRetryable: false, terminalConfirm: '' })
@@ -304,8 +342,14 @@ Page({
           canCommit: current
         })
         : await formalStocktakeAdapter.execute(intent)
+      // A successful response is a fact about the original write intent even
+      // when the page became hidden while the response was in flight.  Clear
+      // the matching in-memory intent before checking page liveness; otherwise
+      // a later onShow can resurrect a generic pending blocker after the
+      // durable count marker has already been cleared.  Do not complete an
+      // intent after a newer lease owner has taken over the page.
+      if (this._writeLease === lease && this._intentRegistry.current() === intent && (durableCount || current())) this._intentRegistry.complete(intent)
       if (!current()) return
-      this._intentRegistry.complete(intent)
       this._detail = completed.detail
       if (this._evidenceUploads) this._evidenceUploads.clear()
       this.setData({ detail: viewDetail(completed.detail, this._access), selectedScopeId: '', countAction: '', accountDrafts: [], observations: [], pendingMessage: '', pendingRetryable: false, recountSelections: [], recountReason: '', recountReady: false })
@@ -326,7 +370,10 @@ Page({
     }
   },
   async recoverCount() {
-    if (!this._countRecoveryStore || this.data.busy || this._hidden || !this._access) return
+    if (!hasDurableCountCapability(formalStocktakeAdapter) || !this._countRecoveryStore || this.data.busy || this._hidden || !this._access) {
+      this.refreshCountRecovery()
+      return
+    }
     const pending = this._countRecoveryStore.readPending(this._taskId)
     if (pending.kind !== 'valid' || !pending.values || !pending.values.length) { this.refreshCountRecovery(); return }
     const sentinel = pending.values[0]
@@ -337,8 +384,6 @@ Page({
     this.setData({ busy: true, errorMessage: '' })
     try {
       const result = await this._countRecoveryStore.withScopeLease(sentinel, (scopeLease) => recoverFormalStocktakeCount(scopeLease, sentinel, createFormalStocktakeCountRecoveryAdapterFromFormalAdapter(this._access, formalStocktakeAdapter), live))
-      if (!live()) return
-      this._detail = result.detail
       const currentIntent = this._intentRegistry.current()
       const expectedAction = sentinel.operation === 'initial_count' ? 'submit_initial_count' : 'submit_recount_count'
       const intentMatches = Boolean(currentIntent
@@ -348,7 +393,13 @@ Page({
         && currentIntent.scopeId === sentinel.scope_id
         && currentIntent.headers
         && currentIntent.headers['X-Request-ID'] === sentinel.trace_request_id)
-      if (intentMatches) this._intentRegistry.complete(currentIntent)
+      // The recovery proof already cleared the durable marker.  Complete the
+      // matching in-memory intent while this lease still owns the page, even
+      // if onHide/onUnload advanced the load generation during the read-only
+      // proof.  A newer lease owner is never touched.
+      if (intentMatches && this._writeLease === lease) this._intentRegistry.complete(currentIntent)
+      if (!live()) return
+      this._detail = result.detail
       if (this._evidenceUploads) this._evidenceUploads.clear()
       if (this._evidenceClaims) this._evidenceClaims.clear()
       this.refreshCountRecovery()
@@ -360,7 +411,7 @@ Page({
           ? '仍有其他日常盘点范围计数待只读核验；未发送任何新请求。'
           : ''
       const canCheckRemaining = !registryBlocked && pendingAfter.kind === 'valid'
-        && typeof formalStocktakeAdapter.countCommandStatus === 'function'
+        && hasDurableCountCapability(formalStocktakeAdapter)
       this.setData({
         detail: viewDetail(result.detail, this._access),
         selectedScopeId: '', countAction: '', accountDrafts: [], observations: [],

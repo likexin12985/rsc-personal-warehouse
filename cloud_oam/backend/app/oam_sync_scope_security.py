@@ -518,7 +518,7 @@ OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061 = {
     ),
 }
 
-OAM_SYNC_FUNCTION_MANIFEST = {
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0062 = {
     **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061,
     "rsc_oam_runtime_binding_ready_0044()": (
         *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061[
@@ -527,6 +527,23 @@ OAM_SYNC_FUNCTION_MANIFEST = {
         "d019a572ad39a3570ca175479ee50a4a7987eff3a0655c5c910c5b83744ea04d",
     ),
 }
+
+# 0064 is a forward-only migration which advances the migration-owned
+# readiness function while installing the finalizer organization lock.  Keep
+# the historical 0062 manifest for downgrade/readback checks, but make the
+# runtime manifest describe the actual head function body; otherwise the
+# projector/edge RLS boundary proof rejects an otherwise valid 0064 catalog.
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0062,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0062[
+            "rsc_oam_runtime_binding_ready_0044()"
+        ][:6],
+        "b75bb3c37c279a2a406a36be9049a187e9cef61dfd0892a48a2db0e8aef551c0",
+    ),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST = OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064
 
 EXPECTED_TRIGGERS = (
     (
@@ -985,6 +1002,8 @@ __all__ = [
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0059",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0060",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0062",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064",
     "RLS_REVISION",
     "RLS_TABLES",
     "_RLS_BOUNDARY_SQL",

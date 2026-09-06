@@ -2,8 +2,16 @@ const assert = require('node:assert/strict')
 const test = require('node:test')
 
 function loadPage(stubs) {
+  const preparedStubs = Object.assign({}, stubs)
+  const adapterModule = stubs['../utils/formal-stocktake-adapter']
+  const adapter = adapterModule && adapterModule.formalStocktakeAdapter
+  if (adapter && !adapter.countRecoveryMode) {
+    preparedStubs['../utils/formal-stocktake-adapter'] = Object.assign({}, adapterModule, {
+      formalStocktakeAdapter: Object.assign({}, adapter, { countRecoveryMode: 'legacy-test' })
+    })
+  }
   const saved = []
-  for (const [modulePath, exports] of Object.entries(stubs)) {
+  for (const [modulePath, exports] of Object.entries(preparedStubs)) {
     const resolved = require.resolve(modulePath)
     saved.push([resolved, require.cache[resolved]])
     require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports }
@@ -63,7 +71,11 @@ test('a durable count marker blocks every other business write at run boundary',
     '../utils/session': { ensureLogin: () => true },
     '../utils/formal-stocktake-adapter': {
       formalStocktakeAdapter: {
+        countRecoveryMode: 'durable',
         countCommandStatus() {},
+        async loadIdentityNoReplay() {},
+        async loadAccessNoReplay() {},
+        async detailNoReplay() {},
         async execute() { writes += 1 }
       },
       createFormalStocktakeIntentRegistry: () => ({ current: () => null })
@@ -104,7 +116,14 @@ test('confirmed recovery releases only the matching in-memory intent and clears 
   const loaded = loadPage({
     '../utils/session': { ensureLogin: () => true },
     '../utils/formal-stocktake-adapter': {
-      formalStocktakeAdapter: { countCommandStatus() {} },
+      formalStocktakeAdapter: {
+        countRecoveryMode: 'durable',
+        countCommandStatus() {},
+        async loadIdentityNoReplay() {},
+        async loadAccessNoReplay() {},
+        async detailNoReplay() {},
+        async execute() {}
+      },
       createFormalStocktakeIntentRegistry: () => ({})
     },
     '../utils/formal-stocktake-count-recovery-store': {
@@ -175,5 +194,71 @@ test('evidence upload handlers require a fresh authorized detail and cannot bypa
     page._detail = null
     await page.chooseCountEvidence()
     assert.equal(selects, 0)
+  } finally { loaded.restore() }
+})
+
+test('an unbranded partial production adapter fails closed before any business write', async () => {
+  let writes = 0
+  const loaded = loadPage({
+    '../utils/session': { ensureLogin: () => true },
+    '../utils/formal-stocktake-adapter': {
+      formalStocktakeAdapter: {
+        countRecoveryMode: 'broken',
+        countCommandStatus() {},
+        async execute() { writes += 1 }
+      },
+      createFormalStocktakeIntentRegistry: () => ({ current: () => null })
+    },
+    '../utils/formal-stocktake-count-recovery-store': {
+      getFormalStocktakeCountRecoveryStore: () => ({ readPending: () => ({ kind: 'missing' }) })
+    }
+  })
+  try {
+    const page = instance(loaded.definition)
+    page._hidden = false
+    page._taskId = TASK
+    page._access = access()
+    page._detail = { task_id: TASK, version: 8 }
+    page._loadGeneration = 1
+    page._countRecoveryStore = { readPending: () => ({ kind: 'missing' }) }
+    page._intentRegistry = { current: () => null }
+    page.data.loading = false
+    await page.run({ action: 'start', taskId: TASK, expectedTaskVersion: 8, body: { expected_version: 8 } })
+    assert.equal(writes, 0)
+    assert.equal(page.data.countRecoveryBlocked, true)
+    assert.match(page.data.pendingMessage, /待只读核验|恢复能力未完整加载/)
+  } finally { loaded.restore() }
+})
+
+test('hiding a detail page clears evidence binding and claims before late upload callbacks return', () => {
+  const loaded = loadPage({
+    '../utils/session': { ensureLogin: () => true },
+    '../utils/formal-stocktake-adapter': {
+      formalStocktakeAdapter: { countRecoveryMode: 'legacy-test' },
+      createFormalStocktakeIntentRegistry: () => ({ current: () => null })
+    },
+    '../utils/formal-stocktake-count-recovery-store': {
+      getFormalStocktakeCountRecoveryStore: () => ({ readPending: () => ({ kind: 'missing' }) })
+    }
+  })
+  try {
+    const page = instance(loaded.definition)
+    let clears = 0
+    page._evidenceUploads = { clear() { clears += 1 } }
+    page._evidenceClaims = new Map([['sha256:x', 'intent']])
+    page._intentRegistry = { current: () => null }
+    page._uploadIdentity = 'old-person:3'
+    page.data.accountDrafts = [{ counted_qty: '1' }]
+    page.data.observations = [{ counted_qty: '1' }]
+    page.data.evidenceUploadFiles = [{ status: 'available' }]
+    page.data.hasAccountInput = true
+    page.onHide()
+    assert.equal(clears, 1)
+    assert.equal(page._evidenceClaims.size, 0)
+    assert.equal(page._uploadIdentity, '')
+    assert.deepEqual(page.data.accountDrafts, [])
+    assert.deepEqual(page.data.observations, [])
+    assert.deepEqual(page.data.evidenceUploadFiles, [])
+    assert.equal(page.data.hasAccountInput, false)
   } finally { loaded.restore() }
 })

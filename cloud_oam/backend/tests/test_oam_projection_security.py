@@ -1136,3 +1136,25 @@ def test_main_api_column_acl_query_excludes_other_isolated_principals():
     assert "pg_catalog.aclexplode(attribute_row.attacl)" in sql
     assert "role_row.rolname = current_user" in sql
     assert "column_acl.grantee IN (0, role_row.oid)" in sql
+
+
+def test_0064_forward_readiness_manifest_matches_head_migration_hash():
+    """The head RLS proof must track the 0064 forward replacement, not 0062."""
+
+    migration_root = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+    migration_0064 = runpy.run_path(
+        str(migration_root / "20260906_0064_stocktake_finalizer_organization_lock.py")
+    )
+    ready_signature = "rsc_oam_runtime_binding_ready_0044()"
+    assert (
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0062[ready_signature][6]
+        == migration_0064["RUNTIME_READY_BODY_SHA256_0062"]
+    )
+    assert (
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064[ready_signature][6]
+        == migration_0064["RUNTIME_READY_BODY_SHA256_0064"]
+    )
+    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST is scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064
+    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064[ready_signature][6] != (
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0062[ready_signature][6]
+    )
