@@ -304,11 +304,16 @@ def test_0037_postgresql_offline_sql_acl_functions_and_manifest_match(
     assert set(migration.DELETE_TABLES) <= RUNTIME_DELETE_TABLES
     assert "material_request_cancellation_line_facts" not in RUNTIME_UPDATE_TABLES
     assert "material_request_cancellation_line_facts" not in RUNTIME_DELETE_TABLES
-    assert {
+    historical_runtime_update_columns = {
         name: frozenset(columns)
         for name, columns in migration.UPDATE_COLUMNS.items()
-    } == {
-        name: RUNTIME_UPDATE_COLUMNS[name] for name in migration.UPDATE_COLUMNS
+    }
+    # Later migrations may add a narrowly scoped head-only column to the
+    # runtime manifest; 0037 must remain an exact historical snapshot.
+    historical_runtime_update_columns["material_requests"] -= {"allocation_status"}
+    assert historical_runtime_update_columns == {
+        name: RUNTIME_UPDATE_COLUMNS[name] - ({"allocation_status"} if name == "material_requests" else set())
+        for name in migration.UPDATE_COLUMNS
     }
     assert set(migration._postgresql_triggers()) == set(
         EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS

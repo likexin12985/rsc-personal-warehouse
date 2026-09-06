@@ -148,7 +148,10 @@ def test_released_freeze_requires_full_posting_source_for_seen_and_unseen_trace(
         AuditEvent.aggregate_id == str(completion.id)))
     assert freeze is not None and completion is not None and posting_event is not None and audit is not None
     if damage == "no_completion":
-        world.db.delete(completion)
+        # The close graph now correctly owns a RESTRICT FK to the posting
+        # completion, so corrupt its immutable coordinate while retaining
+        # the parent row and letting the verifier report a missing source.
+        completion.request_sha256 = "f" * 64
     elif damage == "release_reason":
         freeze.release_reason = "unverified manual release"
     elif damage == "release_actor":

@@ -61,7 +61,12 @@ def test_0063_revision_coordinates_and_readiness_manifest_are_exact() -> None:
 
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "backend/alembic"))
-    assert ScriptDirectory.from_config(config).get_heads() == [migration.revision]
+    script = ScriptDirectory.from_config(config)
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert migration.revision in {
+        revision.revision for revision in script.iterate_revisions(heads[0], "base")
+    }
 
 
 def test_0063_trigger_function_body_hash_and_security_contract_are_pinned() -> None:
