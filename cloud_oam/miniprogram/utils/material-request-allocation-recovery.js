@@ -73,8 +73,11 @@ async function recover(sentinel, adapter) {
   if (detail.request_id !== checked.request_id || detail.request_version < command.request_version || !line
     || line.revision_id !== command.revision_id || line.revision_no !== command.revision_no
     || !['approved', 'partially_approved'].includes(line.status)) fail('分配当前详情不能验证历史命令；保持未决状态')
-  const freshAccess = await adapter.loadAccess(await adapter.loadIdentity())
-  if (!freshAccess.can_read || !freshAccess.can_read_allocation_options) fail('核验期间分配权限发生变化；保留原坐标')
+  const freshIdentity = await adapter.loadIdentity()
+  const freshAccess = await adapter.loadAccess(freshIdentity)
+  if (freshIdentity.person_id !== checked.person_id || freshIdentity.authorization_version !== checked.authorization_version
+    || !freshAccess.can_read || !freshAccess.can_read_allocation_options
+    || freshAccess.person_id !== checked.person_id || freshAccess.authorization_version !== checked.authorization_version) fail('核验期间分配身份或权限发生变化；保留原坐标')
   return { status: 'confirmed', access: freshAccess, detail, command }
 }
 
