@@ -64,6 +64,7 @@ export interface FormalMaterialRequestAdapter {
   loadAccess(): Promise<unknown>;
   lifecycleCommandStatus(xRequestId: string): Promise<unknown>;
   supplyCommandStatus(xRequestId: string): Promise<unknown>;
+  allocationCommandStatus(xRequestId: string): Promise<unknown>;
   list(afterId: string | null): Promise<unknown>;
   detail(requestId: string): Promise<unknown>;
   loadDraftForEdit(requestId: string): Promise<unknown>;
@@ -624,6 +625,21 @@ export function createFormalMaterialRequestAdapter(
         method: "GET",
         cache: "no-store",
         headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+      });
+    },
+    allocationCommandStatus(xRequestId: string) {
+      const checkedRequestId = requiredText(xRequestId, "X-Request-ID");
+      if (!SAFE_COORDINATE.test(checkedRequestId)) {
+        return Promise.reject(new ApiError(409, "分配命令查询坐标无效"));
+      }
+      return requester("/v1/material-request-allocation-command-status", {
+        method: "GET",
+        cache: "no-store",
+        headers: {
+          "X-Request-ID": checkedRequestId,
+          "Cache-Control": "no-store",
+          Pragma: "no-cache",
+        },
       });
     },
     list(afterId: string | null) {

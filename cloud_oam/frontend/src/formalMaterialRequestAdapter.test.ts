@@ -131,6 +131,21 @@ describe("formal material-request PC transport", () => {
     expect(requester.mock.calls).toHaveLength(1);
   });
 
+  it("queries allocation recovery with the original request coordinate in a header", async () => {
+    const requester = makeRequester(async () => ({
+      schema_version: "1.0", lookup_status: "not_observed", command: null,
+    }));
+    const adapter = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, requester);
+    await adapter.allocationCommandStatus("web-allocation-12345678");
+    expect(requester.mock.calls).toEqual([["/v1/material-request-allocation-command-status", {
+      method: "GET", cache: "no-store", headers: {
+        "X-Request-ID": "web-allocation-12345678", "Cache-Control": "no-store", Pragma: "no-cache",
+      },
+    }]]);
+    await expect(adapter.allocationCommandStatus("bad?trace=1")).rejects.toMatchObject({ status: 409 });
+    expect(requester.mock.calls).toHaveLength(1);
+  });
+
   it("fresh-reads the exact auth identity and command status without sending an idempotency key", async () => {
     const requester = makeRequester(async (path) => (
       path === "/auth/me"
