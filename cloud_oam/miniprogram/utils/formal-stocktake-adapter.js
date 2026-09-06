@@ -116,6 +116,7 @@ function expectedPath(intent) {
   if (intent.action === 'start') return intent.path === `/v1/stocktakes/${intent.taskId}/start`
   if (intent.action === 'reconcile') return intent.path === `/v1/stocktakes/${intent.taskId}/reconcile`
   if (intent.action === 'close') return intent.path === `/v1/stocktakes/${intent.taskId}/close`
+  if (intent.action === 'post') return intent.path === `/v1/stocktakes/${intent.taskId}/post-differences`
   if (!intent.roundId) return false
   const root = `/v1/stocktakes/${intent.taskId}/rounds/${intent.roundId}`
   if (intent.action === 'submit_initial_count') return intent.scopeId && intent.path === `${root}/scopes/${intent.scopeId}/initial-count`
@@ -141,6 +142,7 @@ function detailAllows(detail, intent) {
   if (intent.action === 'create_personal') return true
   if (detail.task_id !== intent.taskId) return false
   if (intent.action === 'reconcile' || intent.action === 'close') return contract.stocktakeIntentRetryState(intent, detail) === 'retryable'
+  if (intent.action === 'post') return detail.allowed_actions.includes('post') && detail.version === intent.expectedTaskVersion
   if (detail.version !== intent.expectedTaskVersion) return false
   if (intent.action === 'start') return detail.allowed_actions.includes('start')
   if (intent.action === 'submit_initial_count' || intent.action === 'submit_recount_count') {

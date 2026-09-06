@@ -202,3 +202,22 @@ test('pre-post states reject terminal facts and closed tasks reject every residu
   assert.throws(() => contract.validateFormalStocktakeDetail(Object.assign({}, closed, { posted_at: null })), /过账状态、时间/)
   assert.throws(() => contract.validateFormalStocktakeDetail(Object.assign({}, closed, { closed_at: '2026-09-01T09:05:00+08:00', close_control: { latest_reconciliation: latest, close_completion: Object.assign({}, close, { closed_at: '2026-09-01T09:05:00+08:00' }) } })), /晚于内部对账/)
 })
+
+test('post intent uses the canonical non-opening route and strict write result', () => {
+  const registry = contract.createFormalStocktakeIntentRegistry({ coordinateFactory: coordinates })
+  const intent = registry.begin({ action: 'post', taskId: TASK, expectedTaskVersion: 7, body: { expected_task_version: 7 } })
+  assert.equal(intent.path, `/v1/stocktakes/${TASK}/post-differences`)
+  const result = contract.validateFormalStocktakeWriteResult(intent, {
+    schema_version: '1.0', completion_id: POSTING_COMPLETION, task_id: TASK, terminal_round_id: ROUND,
+    resulting_task_status: 'posted', task_version: 8, scope_count: 1, difference_count: 1,
+    accepted_difference_count: 1, no_adjustment_count: 0, transaction_count: 1, movement_count: 1,
+    total_quantity: '2.000', first_ledger_cursor: 90, last_ledger_cursor: 90, replayed: false
+  })
+  assert.equal(result.terminal_round_id, ROUND)
+  assert.throws(() => contract.validateFormalStocktakeWriteResult(intent, {
+    schema_version: '1.0', completion_id: POSTING_COMPLETION, task_id: TASK, terminal_round_id: ROUND,
+    resulting_task_status: 'posted', task_version: 8, scope_count: 1, difference_count: 1,
+    accepted_difference_count: 1, no_adjustment_count: 0, transaction_count: 0, movement_count: 1,
+    total_quantity: '2.000', first_ledger_cursor: null, last_ledger_cursor: null, replayed: false
+  }))
+})

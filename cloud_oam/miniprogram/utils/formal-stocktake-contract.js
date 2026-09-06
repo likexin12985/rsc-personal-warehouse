@@ -346,7 +346,7 @@ function commandPath(input) {
   if (input.action === 'start') return `/v1/stocktakes/${task}/start`
   if (input.action === 'reconcile') return `/v1/stocktakes/${task}/reconcile`
   if (input.action === 'close') return `/v1/stocktakes/${task}/close`
-  if (input.action === 'post') fail('小程序未开放盘点过账写入')
+  if (input.action === 'post') return `/v1/stocktakes/${task}/post-differences`
   const round = uuidValue(input.roundId, 'round_id')
   if (input.action === 'submit_initial_count') return `/v1/stocktakes/${task}/rounds/${round}/scopes/${uuidValue(input.scopeId, 'scope_id')}/initial-count`
   if (input.action === 'submit_recount_count') return `/v1/stocktakes/${task}/rounds/${round}/scopes/${uuidValue(input.scopeId, 'scope_id')}/recount-count`
@@ -368,9 +368,9 @@ function commandBody(input) {
     if (integer(row.expected_version, 'expected_version') !== input.expectedTaskVersion) fail('启动版本与写意图不一致')
     return { expected_version: row.expected_version }
   }
-  if (input.action === 'reconcile' || input.action === 'close') {
-    const row = exact(body, ['expected_task_version'], input.action === 'reconcile' ? '盘点内部对账命令' : '盘点关闭命令')
-    if (integer(row.expected_task_version, 'expected_task_version') !== input.expectedTaskVersion) fail('终态操作版本与写意图不一致')
+  if (input.action === 'reconcile' || input.action === 'close' || input.action === 'post') {
+    const row = exact(body, ['expected_task_version'], input.action === 'reconcile' ? '盘点内部对账命令' : input.action === 'close' ? '盘点关闭命令' : '盘点过账命令')
+    if (integer(row.expected_task_version, 'expected_task_version') !== input.expectedTaskVersion) fail(input.action === 'post' ? '过账版本与写意图不一致' : '终态操作版本与写意图不一致')
     return { expected_task_version: row.expected_task_version }
   }
   if (input.action === 'submit_initial_count' || input.action === 'submit_recount_count') return countBody(body)
@@ -473,7 +473,17 @@ function validateWriteResult(intent, value) {
     if (integer(row.task_version, 'task_version', 1) !== intent.expectedTaskVersion + 1) fail('盘点关闭结果版本无效')
     timestamp(row.closed_at, 'closed_at'); bool(row.replayed, 'replayed')
   } else if (intent.action === 'post') {
-    fail('小程序未开放盘点过账结果处理')
+    row = resultBase(value, ['completion_id', 'task_id', 'terminal_round_id', 'resulting_task_status', 'task_version', 'scope_count', 'difference_count', 'accepted_difference_count', 'no_adjustment_count', 'transaction_count', 'movement_count', 'total_quantity', 'first_ledger_cursor', 'last_ledger_cursor', 'replayed'], '盘点过账结果')
+    if (uuidValue(row.task_id, 'task_id') !== intent.taskId || row.resulting_task_status !== 'posted') fail('盘点过账结果锚点无效')
+    uuidValue(row.completion_id, 'completion_id'); uuidValue(row.terminal_round_id, 'terminal_round_id')
+    if (integer(row.task_version, 'task_version', 1) !== intent.expectedTaskVersion + 1) fail('盘点过账结果版本无效')
+    integer(row.scope_count, 'scope_count', 1); integer(row.difference_count, 'difference_count'); integer(row.accepted_difference_count, 'accepted_difference_count'); integer(row.no_adjustment_count, 'no_adjustment_count'); integer(row.transaction_count, 'transaction_count'); integer(row.movement_count, 'movement_count'); quantity(row.total_quantity, 'total_quantity')
+    if (row.accepted_difference_count + row.no_adjustment_count !== row.difference_count || row.movement_count !== row.accepted_difference_count) fail('盘点过账结果数量关系无效')
+    if (row.first_ledger_cursor !== null) integer(row.first_ledger_cursor, 'first_ledger_cursor')
+    if (row.last_ledger_cursor !== null) integer(row.last_ledger_cursor, 'last_ledger_cursor')
+    if (row.transaction_count === 0 && (row.first_ledger_cursor !== null || row.last_ledger_cursor !== null || row.movement_count !== 0 || row.total_quantity !== '0.000')) fail('盘点过账零流水结果无效')
+    if (row.transaction_count > 0 && (row.first_ledger_cursor === null || row.last_ledger_cursor === null || row.last_ledger_cursor - row.first_ledger_cursor + 1 !== row.transaction_count || row.movement_count <= 0 || row.total_quantity === '0.000')) fail('盘点过账流水摘要无效')
+    bool(row.replayed, 'replayed')
   } else if (intent.action === 'submit_initial_count' || intent.action === 'submit_recount_count') {
     const recount = intent.action === 'submit_recount_count'
     row = resultBase(value, ['task_id', 'round_id', 'scope_id'].concat(recount ? ['recount_case_id'] : []).concat(['task_status', 'round_status', 'task_version', 'scope_completed', 'round_submitted']).concat(recount ? ['count_ledger_cursor'] : []).concat(['evidence_file_count', 'replayed']), recount ? '复盘计数结果' : '初盘计数结果')
@@ -540,7 +550,11 @@ function confirmWrite(intent, result, detail) {
     ) fail('精确回读未确认同一盘点关闭完成坐标')
     return
   }
-  if (intent.action === 'post') fail('小程序未开放盘点过账确认')
+  if (intent.action === 'post') {
+    const terminal = detail.rounds.find((row) => row.round_id === uuidValue(result.terminal_round_id, 'terminal_round_id'))
+    if (detail.status !== 'posted' || detail.posted_at === null || detail.closed_at !== null || detail.state_axes.posting_status !== 'recorded' || !terminal || terminal.posting.posting_fact_count !== integer(result.movement_count, 'movement_count') || terminal.posting.inventory_transaction_count !== integer(result.transaction_count, 'transaction_count') || terminal.posting.visible_total_quantity !== quantity(result.total_quantity, 'total_quantity') || !terminal.posting.covers_all_task_scopes || detail.allowed_actions.includes('post')) fail('精确回读未确认独立盘点差异过账完成事实')
+    return
+  }
   const roundId = intent.action === 'start' ? uuidValue(result.initial_round_id, 'initial_round_id') : intent.roundId
   const current = detail.rounds.find((row) => row.round_id === roundId)
   if (intent.action === 'start') {
