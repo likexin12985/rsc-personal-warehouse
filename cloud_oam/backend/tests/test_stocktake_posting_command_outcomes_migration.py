@@ -26,6 +26,8 @@ def test_0065_is_linear_after_review_status_and_is_append_only() -> None:
     assert "ENABLE ALWAYS TRIGGER" in source
     assert "REVOKE UPDATE, DELETE, TRUNCATE" in source
     assert "GRANT SELECT, INSERT" in source
+    assert "trg_stocktake_posting_completions_block_sealed_0065" in source
+    assert "stocktake posting command was sealed as not executed" in source
     assert "cannot downgrade 0065 while stocktake posting command outcomes exist" in source
 
 

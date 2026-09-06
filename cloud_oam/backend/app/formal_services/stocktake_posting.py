@@ -62,6 +62,7 @@ from ..stocktake_models import (
     StocktakeEffectiveApprovalItem,
     StocktakeEffectiveApprovalScope,
     StocktakePosting,
+    StocktakePostingCommandOutcome,
     StocktakePostingCompletion,
     StocktakePostingCompletionItem,
     StocktakePostingItem,
@@ -395,6 +396,22 @@ def _post_approved_stocktake_differences(
             "not_found",
             "非期初盘点任务不存在",
         )
+    request_reference = _request_reference(trace_id)
+    sealed_outcome = db.scalar(
+        select(StocktakePostingCommandOutcome)
+        .where(
+            StocktakePostingCommandOutcome.task_id == task.id,
+            StocktakePostingCommandOutcome.request_reference == request_reference,
+            StocktakePostingCommandOutcome.disposition == "sealed_not_executed",
+        )
+        .execution_options(populate_existing=True)
+    )
+    if sealed_outcome is not None:
+        _fail(
+            "stocktake_posting_sealed_not_executed",
+            "conflict",
+            "该盘点过账请求已永久封存为未执行，禁止迟到写入",
+        )
     lock_formal_principal_graph(db, (supplied.user_id,))
     now = _database_now(db)
     current = inventory_service._require_current_stocktake_difference_finalizer(
@@ -547,7 +564,7 @@ def _post_approved_stocktake_differences(
         actor=current,
         task_id=task.id,
         entries=tuple(group.entry for group in groups),
-        request_reference=_request_reference(trace_id),
+        request_reference=request_reference,
         occurred_at=now,
         ledger_proof=ledger_proof,
     )
@@ -1171,6 +1188,24 @@ def _persist_posting_completion(
         created_at=now,
     )
     db.add(completion)
+    db.flush()
+    db.add(
+        StocktakePostingCommandOutcome(
+            id=uuid.uuid4(),
+            task_id=task.id,
+            request_reference=_request_reference(trace_request_id),
+            disposition="posted",
+            completion_id=completion.id,
+            expected_task_version=expected_task_version,
+            request_sha256=request_hash,
+            sealed_by_user_id=None,
+            sealed_by_person_id=None,
+            sealed_role_assignment_id=None,
+            authorization_version=actor.authorization_version,
+            sealed_at=None,
+            created_at=now,
+        )
+    )
     db.flush()
     for binding, document in zip(bindings, item_documents, strict=True):
         db.add(

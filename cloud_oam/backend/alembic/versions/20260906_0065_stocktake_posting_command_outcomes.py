@@ -26,6 +26,9 @@ IMMUTABLE_TRIGGER = "trg_stocktake_posting_command_outcomes_immutable_0065"
 IMMUTABLE_FUNCTION = "rsc_guard_stocktake_posting_command_outcome_immutable_0065"
 SQLITE_UPDATE_TRIGGER = f"{IMMUTABLE_TRIGGER}_update"
 SQLITE_DELETE_TRIGGER = f"{IMMUTABLE_TRIGGER}_delete"
+LATE_POST_TRIGGER = "trg_stocktake_posting_completions_block_sealed_0065"
+LATE_POST_FUNCTION = "rsc_guard_stocktake_posting_completion_sealed_0065"
+SQLITE_LATE_POST_TRIGGER = f"{LATE_POST_TRIGGER}_sqlite"
 DOWNGRADE_BLOCKER = "cannot downgrade 0065 while stocktake posting command outcomes exist"
 
 
@@ -160,6 +163,33 @@ $$
             f"REVOKE UPDATE, DELETE, TRUNCATE ON TABLE public.{TABLE} FROM star_oam_api"
         )
         op.execute(f"GRANT SELECT, INSERT ON TABLE public.{TABLE} TO star_oam_api")
+        op.execute(f"""
+CREATE FUNCTION public.{LATE_POST_FUNCTION}()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM public.{TABLE}
+        WHERE task_id = NEW.task_id AND disposition = 'sealed_not_executed'
+    ) THEN
+        RAISE EXCEPTION 'stocktake posting command was sealed as not executed'
+            USING ERRCODE = '55000';
+    END IF;
+    RETURN NEW;
+END
+$$
+""")
+        op.execute(f"REVOKE ALL ON FUNCTION public.{LATE_POST_FUNCTION}() FROM PUBLIC")
+        op.execute(
+            f"CREATE TRIGGER {LATE_POST_TRIGGER} BEFORE INSERT ON public.stocktake_posting_completions "
+            f"FOR EACH ROW EXECUTE FUNCTION public.{LATE_POST_FUNCTION}()"
+        )
+        op.execute(
+            f"ALTER TABLE public.stocktake_posting_completions ENABLE ALWAYS TRIGGER {LATE_POST_TRIGGER}"
+        )
     else:
         op.execute(
             f"CREATE TRIGGER {SQLITE_UPDATE_TRIGGER} BEFORE UPDATE ON {TABLE} "
@@ -169,6 +199,11 @@ $$
             f"CREATE TRIGGER {SQLITE_DELETE_TRIGGER} BEFORE DELETE ON {TABLE} "
             "BEGIN SELECT RAISE(ABORT, 'stocktake posting command outcomes are immutable'); END"
         )
+        op.execute(
+            f"CREATE TRIGGER {SQLITE_LATE_POST_TRIGGER} BEFORE INSERT ON stocktake_posting_completions "
+            f"WHEN EXISTS (SELECT 1 FROM {TABLE} WHERE task_id = NEW.task_id AND disposition = 'sealed_not_executed') "
+            "BEGIN SELECT RAISE(ABORT, 'stocktake posting command was sealed as not executed'); END"
+        )
 
 
 def downgrade() -> None:
@@ -177,9 +212,14 @@ def downgrade() -> None:
     if bind.execute(sa.text(f"SELECT 1 FROM {TABLE} LIMIT 1")).first() is not None:
         raise RuntimeError(DOWNGRADE_BLOCKER)
     if dialect == "postgresql":
+        op.execute(
+            f"DROP TRIGGER IF EXISTS {LATE_POST_TRIGGER} ON public.stocktake_posting_completions"
+        )
+        op.execute(f"DROP FUNCTION IF EXISTS public.{LATE_POST_FUNCTION}()")
         op.execute(f"DROP TRIGGER IF EXISTS {IMMUTABLE_TRIGGER} ON public.{TABLE}")
         op.execute(f"DROP FUNCTION IF EXISTS public.{IMMUTABLE_FUNCTION}()")
     else:
+        op.execute(f"DROP TRIGGER IF EXISTS {SQLITE_LATE_POST_TRIGGER}")
         op.execute(f"DROP TRIGGER IF EXISTS {SQLITE_UPDATE_TRIGGER}")
         op.execute(f"DROP TRIGGER IF EXISTS {SQLITE_DELETE_TRIGGER}")
     op.drop_index("ix_stocktake_posting_command_outcomes_request_0065", table_name=TABLE)

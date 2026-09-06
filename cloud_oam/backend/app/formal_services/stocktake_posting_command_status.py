@@ -127,37 +127,41 @@ def stocktake_posting_command_status(
                 _evidence("盘点过账命令封存事实不唯一")
             if outcomes:
                 outcome = outcomes[0]
-                if outcome.disposition != "sealed_not_executed":
+                if outcome.disposition == "posted":
+                    if outcome.completion_id is None:
+                        _evidence("盘点过账完成结果缺少完成事实绑定")
+                elif outcome.disposition != "sealed_not_executed":
                     _evidence("盘点过账命令封存事实类型无效")
-                if (
-                    outcome.expected_task_version < 0
-                    or outcome.sealed_by_user_id != actor.user_id
-                    or outcome.sealed_by_person_id != actor.person_id
-                    or outcome.authorization_version != actor.authorization_version
-                    or outcome.request_sha256 != seal_service._request_sha256(
-                        task_id, outcome.expected_task_version, trace_request_id
-                    )
-                    or outcome.sealed_at is None
-                    or outcome.created_at != outcome.sealed_at
-                ):
-                    _evidence("盘点过账封存事实绑定无效")
-                _reread_current_actor_or_error(db, actor=actor, initial_context=context)
-                return _result(
-                    task_id=task_id,
-                    actor_person_id=actor_person_id,
-                    actor_authorization_version=actor_authorization_version,
-                    trace_request_id=trace_request_id,
-                    command=StocktakePostingSealedCommandOut(
-                        seal_id=outcome.id,
-                        task_id=outcome.task_id,
-                        expected_task_version=outcome.expected_task_version,
-                        actor_person_id=outcome.sealed_by_person_id,
-                        actor_authorization_version=outcome.authorization_version,
+                if outcome.disposition == "sealed_not_executed":
+                    if (
+                        outcome.expected_task_version < 0
+                        or outcome.sealed_by_user_id != actor.user_id
+                        or outcome.sealed_by_person_id != actor.person_id
+                        or outcome.authorization_version != actor.authorization_version
+                        or outcome.request_sha256 != seal_service._request_sha256(
+                            task_id, outcome.expected_task_version, trace_request_id
+                        )
+                        or outcome.sealed_at is None
+                        or outcome.created_at != outcome.sealed_at
+                    ):
+                        _evidence("盘点过账封存事实绑定无效")
+                    _reread_current_actor_or_error(db, actor=actor, initial_context=context)
+                    return _result(
+                        task_id=task_id,
+                        actor_person_id=actor_person_id,
+                        actor_authorization_version=actor_authorization_version,
                         trace_request_id=trace_request_id,
-                        sealed_at=_aware(outcome.sealed_at),
-                    ),
-                    lookup_status="sealed_not_executed",
-                )
+                        command=StocktakePostingSealedCommandOut(
+                            seal_id=outcome.id,
+                            task_id=outcome.task_id,
+                            expected_task_version=outcome.expected_task_version,
+                            actor_person_id=outcome.sealed_by_person_id,
+                            actor_authorization_version=outcome.authorization_version,
+                            trace_request_id=trace_request_id,
+                            sealed_at=_aware(outcome.sealed_at),
+                        ),
+                        lookup_status="sealed_not_executed",
+                    )
             audits = tuple(
                 db.scalars(
                     select(AuditEvent)

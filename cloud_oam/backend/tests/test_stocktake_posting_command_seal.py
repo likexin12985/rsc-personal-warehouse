@@ -6,8 +6,9 @@ import pytest
 
 from app.formal_services import stocktake_posting_command_seal as seal
 from app.formal_services import stocktake_posting_command_status as status
+from app.formal_services.stocktake_posting import StocktakeDifferencePostingError
 from app.stocktake_models import StocktakePostingCommandOutcome
-from test_stocktake_safe_posting_service import _approve, posting_world
+from test_stocktake_safe_posting_service import _approve, _post, posting_world
 from test_stocktake_review_recount_service import review_world
 from test_stocktake_difference_service import world
 from test_stocktake_task_service import db
@@ -76,3 +77,23 @@ def test_same_seal_replays_but_different_version_conflicts(posting_world, monkey
             trace_request_id="trace-seal-replay",
         )
     assert caught.value.category == "precondition_failed"
+
+
+def test_late_post_after_seal_is_rejected_without_progression(posting_world, monkeypatch):
+    task, _ = _approve(
+        posting_world,
+        monkeypatch,
+        key="seal-late-post",
+        counted_qty=Decimal("4.000"),
+        decision="no_adjustment",
+    )
+    request_key = "seal-late-post-request"
+    _seal(posting_world, task, f"trace-{request_key}")
+    posting_world.db.commit()
+    with pytest.raises(StocktakeDifferencePostingError) as caught:
+        _post(posting_world, task, key=request_key)
+    assert caught.value.category == "conflict"
+    assert "封存" in caught.value.message
+    posting_world.db.rollback()
+    posting_world.db.refresh(task)
+    assert task.status == "approved"
