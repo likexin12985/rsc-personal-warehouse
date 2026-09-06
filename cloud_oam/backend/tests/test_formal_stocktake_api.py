@@ -18,6 +18,7 @@ from app.formal_services import stocktake_close as close_service
 from app.formal_services import stocktake_difference as difference_service
 from app.formal_services import stocktake_query as query_service
 from app.formal_services import stocktake_posting as posting_service
+from app.formal_services import stocktake_posting_command_seal as posting_seal_service
 from app.formal_services import stocktake_recount as recount_service
 from app.formal_services import stocktake_recount_count as recount_count_service
 from app.formal_services import (
@@ -27,6 +28,7 @@ from app.formal_services import stocktake_review as review_service
 from app.formal_services import stocktake_task as task_service
 from app.routers import formal_stocktakes
 from app.stocktake_read_schemas import StocktakeTaskPageOut
+from app.stocktake_posting_command_status_schemas import StocktakePostingSealedCommandOut
 from test_startup_security_boundary import production_settings
 
 
@@ -515,6 +517,47 @@ def test_difference_posting_requires_dedicated_permission(api_client, monkeypatc
     assert service.call_count == 0
     db.commit.assert_not_called()
     db.rollback.assert_not_called()
+
+
+def test_seal_posting_command_requires_trace_and_forbids_idempotency_key(api_client, monkeypatch):
+    client, db, principal, _settings_value = api_client
+    service = Mock(
+        return_value=StocktakePostingSealedCommandOut(
+            seal_id=COMPLETION_ID,
+            task_id=TASK_ID,
+            expected_task_version=5,
+            actor_person_id=PERSON_ID,
+            actor_authorization_version=7,
+            trace_request_id="stocktake-trace-seal-0025",
+            sealed_at="2026-09-06T12:00:00Z",
+        )
+    )
+    monkeypatch.setattr(
+        posting_seal_service,
+        "seal_nonopening_stocktake_post_command",
+        service,
+    )
+    response = client.post(
+        f"/api/v1/stocktakes/{TASK_ID}/post-differences/confirm-not-executed",
+        json={"expected_task_version": 5},
+        headers={"X-Request-ID": "stocktake-trace-seal-0025"},
+    )
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store, max-age=0"
+    assert service.call_args.kwargs["task_id"] == TASK_ID
+    assert service.call_args.kwargs["trace_request_id"] == "stocktake-trace-seal-0025"
+    db.commit.assert_called_once_with()
+
+    forbidden = client.post(
+        f"/api/v1/stocktakes/{TASK_ID}/post-differences/confirm-not-executed",
+        json={"expected_task_version": 5},
+        headers={
+            "X-Request-ID": "stocktake-trace-seal-0026",
+            "Idempotency-Key": "stocktake-key-0026",
+        },
+    )
+    assert forbidden.status_code == 400
+    assert service.call_count == 1
 
 
 def test_difference_posting_domain_error_rolls_back_without_closing(
