@@ -18,6 +18,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import threading
@@ -20055,13 +20056,17 @@ def _assert_0063_empty_review_command_downgrade_and_reupgrade() -> None:
         ("resulting_task_version", "bigint"),
     )
     assert before["constraint"] is not None
-    constraint_definition = before["constraint"].lower()
+    # PostgreSQL's deparser inserts grouping parentheses around the arithmetic
+    # expression (for example ``expected_task_version + 1`` becomes
+    # ``(expected_task_version + 1)``).  Compare the normalized expression so
+    # the release gate validates semantics rather than a formatter choice.
+    constraint_definition = re.sub(r"[()\s]", "", before["constraint"].lower())
     for required_fragment in (
-        "expected_task_version is null",
-        "resulting_task_version is null",
-        "expected_task_version is not null",
-        "resulting_task_version is not null",
-        "resulting_task_version = expected_task_version + 1",
+        "expected_task_versionisnull",
+        "resulting_task_versionisnull",
+        "expected_task_versionisnotnull",
+        "resulting_task_versionisnotnull",
+        "resulting_task_version=expected_task_version+1",
     ):
         assert required_fragment in constraint_definition
     assert before["function"] is not None

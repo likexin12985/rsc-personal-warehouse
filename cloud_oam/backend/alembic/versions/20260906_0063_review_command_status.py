@@ -287,6 +287,7 @@ DO $rsc_0063_catalog$
 DECLARE
     function_oid oid := pg_catalog.to_regprocedure('{TRIGGER_SIGNATURE}');
     migrator_oid oid := pg_catalog.to_regrole('{MIGRATION_ROLE}');
+    constraint_definition text;
 BEGIN
     IF current_user <> '{MIGRATION_ROLE}' OR session_user <> '{MIGRATION_ROLE}'
        OR migrator_oid IS NULL
@@ -312,26 +313,30 @@ BEGIN
        )) THEN
         RAISE EXCEPTION '{CATALOG_ERROR}: identity or column mismatch';
     END IF;
-    IF ({expected} AND NOT EXISTS (
-        SELECT 1 FROM pg_catalog.pg_constraint AS constraint_row
-         WHERE constraint_row.conrelid = pg_catalog.to_regclass('public.stocktake_reviews')
-           AND constraint_row.conname = '{CHECK_CONSTRAINT}'
-           AND constraint_row.contype = 'c'
-           AND pg_catalog.lower(pg_catalog.pg_get_constraintdef(constraint_row.oid))
-               LIKE '%expected_task_version is null%'
-           AND pg_catalog.lower(pg_catalog.pg_get_constraintdef(constraint_row.oid))
-               LIKE '%resulting_task_version is null%'
-           AND pg_catalog.lower(pg_catalog.pg_get_constraintdef(constraint_row.oid))
-               LIKE '%expected_task_version is not null%'
-           AND pg_catalog.lower(pg_catalog.pg_get_constraintdef(constraint_row.oid))
-               LIKE '%resulting_task_version is not null%'
-           AND pg_catalog.lower(pg_catalog.pg_get_constraintdef(constraint_row.oid))
-               LIKE '%resulting_task_version = expected_task_version + 1%'
-    )) OR (NOT {expected} AND EXISTS (
-        SELECT 1 FROM pg_catalog.pg_constraint AS constraint_row
-         WHERE constraint_row.conrelid = pg_catalog.to_regclass('public.stocktake_reviews')
-           AND constraint_row.conname = '{CHECK_CONSTRAINT}'
-    )) THEN
+    SELECT pg_catalog.replace(
+               pg_catalog.replace(
+                   pg_catalog.regexp_replace(
+                       pg_catalog.lower(pg_catalog.pg_get_constraintdef(constraint_row.oid)),
+                       '[[:space:]]', '', 'g'
+                   ),
+                   '(', ''
+               ),
+               ')', ''
+           )
+      INTO constraint_definition
+      FROM pg_catalog.pg_constraint AS constraint_row
+     WHERE constraint_row.conrelid = pg_catalog.to_regclass('public.stocktake_reviews')
+       AND constraint_row.conname = '{CHECK_CONSTRAINT}'
+       AND constraint_row.contype = 'c'
+     LIMIT 1;
+    IF ({expected} AND (
+        constraint_definition IS NULL
+        OR constraint_definition NOT LIKE '%expected_task_versionisnull%'
+        OR constraint_definition NOT LIKE '%resulting_task_versionisnull%'
+        OR constraint_definition NOT LIKE '%expected_task_versionisnotnull%'
+        OR constraint_definition NOT LIKE '%resulting_task_versionisnotnull%'
+        OR constraint_definition NOT LIKE '%resulting_task_version=expected_task_version+1%'
+    )) OR (NOT {expected} AND constraint_definition IS NOT NULL) THEN
         RAISE EXCEPTION '{CATALOG_ERROR}: continuity constraint missing';
     END IF;
     IF {expected} AND NOT EXISTS (
