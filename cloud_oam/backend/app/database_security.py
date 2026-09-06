@@ -342,6 +342,7 @@ RUNTIME_UPDATE_COLUMNS = {
             "decided_at",
             "withdrawn_at",
             "cancelled_at",
+            "allocation_status",
             "version",
             "updated_at",
         }

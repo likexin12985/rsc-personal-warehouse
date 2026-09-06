@@ -91,6 +91,9 @@ def upgrade() -> None:
             op.execute(f"ALTER TABLE public.{table} OWNER TO {MIGRATION_ROLE}")
             op.execute(f"REVOKE ALL ON TABLE public.{table} FROM PUBLIC")
             op.execute(f"GRANT SELECT, INSERT ON TABLE public.{table} TO {PRODUCTION_API_ROLE}")
+        op.execute(
+            f"GRANT UPDATE (allocation_status) ON TABLE public.material_requests TO {PRODUCTION_API_ROLE}"
+        )
 
 
 def downgrade() -> None:
@@ -101,6 +104,9 @@ def downgrade() -> None:
             raise RuntimeError("cannot downgrade 0068 while allocation facts exist")
     if dialect == "postgresql":
         op.execute("LOCK TABLE public.stock_allocation_serials, public.stock_allocations IN ACCESS EXCLUSIVE MODE")
+        op.execute(
+            f"REVOKE UPDATE (allocation_status) ON TABLE public.material_requests FROM {PRODUCTION_API_ROLE}"
+        )
     op.drop_table("stock_allocation_serials")
     op.drop_index("ix_stock_allocations_source_account", table_name="stock_allocations")
     op.drop_index("ix_stock_allocations_request_line", table_name="stock_allocations")

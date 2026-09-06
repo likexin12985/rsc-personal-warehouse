@@ -44,6 +44,7 @@ from ..demand_schemas import (
 from ..dependencies import get_formal_principal, require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import material_request_approval as approval_service
+from ..formal_services import material_request_allocation as allocation_service
 from ..formal_services import material_request_allocation_options as allocation_options_service
 from ..formal_services import material_request_command_status as command_status_service
 from ..formal_services import material_request_draft as draft_service
@@ -75,6 +76,7 @@ from ..material_request_read_schemas import (
 from ..material_request_allocation_option_schemas import (
     MaterialRequestAllocationOptionPageOut,
 )
+from ..material_request_allocation_schemas import AllocationCreateIn, AllocationMutationOut
 from ..production_adapters import create_production_material_request_contact_cipher
 
 
@@ -341,6 +343,66 @@ def formal_material_request_allocation_options(
     except DBAPIError:
         db.rollback()
         _raise_database_unavailable(read_only=True, no_store=True)
+    return output
+
+
+@router.post(
+    "/{material_request_id}/allocations",
+    response_model=AllocationMutationOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_formal_material_request_allocation(
+    material_request_id: UUID,
+    payload: AllocationCreateIn,
+    response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+    runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    checked_key, checked_request_id = _required_write_headers(
+        idempotency_key=idempotency_key, request_id=request_id,
+    )
+    try:
+        secret = _require_lifecycle_write_runtime(runtime_settings)
+        result = allocation_service.create_allocation(
+            db,
+            actor=principal,
+            material_request_id=material_request_id,
+            expected_request_version=payload.expected_request_version,
+            allocation=allocation_service.AllocationCreateInput(
+                request_line_id=payload.request_line_id,
+                source_stock_account_id=payload.source_stock_account_id,
+                allocated_qty=payload.allocated_qty,
+                source_balance_version=payload.source_balance_version,
+                source_ledger_cursor=payload.source_ledger_cursor,
+                serial_ids=payload.serial_ids,
+            ),
+            idempotency_key=checked_key,
+            idempotency_hmac_secret=secret,
+            trace_request_id=checked_request_id,
+        )
+        output = AllocationMutationOut(
+            request_id=result.request_id,
+            allocation_id=result.allocation_id,
+            allocation_no=result.allocation_no,
+            request_version=result.request_version,
+            revision_id=result.revision_id,
+            revision_no=result.revision_no,
+            request_line_id=result.request_line_id,
+            source_stock_account_id=result.source_stock_account_id,
+            allocated_qty=f"{result.allocated_qty:.3f}",
+            allocation_status="allocated",
+            request_status=result.request_status,
+            state_axes=dict(result.state_axes),
+            idempotency_replayed=result.replayed,
+        )
+        db.commit()
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+    _set_read_no_store(response)
+    _set_replay_header(response, output.idempotency_replayed)
     return output
 
 
@@ -1258,6 +1320,7 @@ def _rollback_and_raise(db: Session, exc: Exception) -> None:
             draft_service.MaterialRequestDraftError,
             edit_service.MaterialRequestEditableDraftError,
             approval_service.MaterialRequestApprovalError,
+            allocation_service.MaterialRequestAllocationError,
             lifecycle_service.MaterialRequestLifecycleError,
             supply_service.MaterialRequestSupplyError,
             _MaterialRequestAdapterError,

@@ -449,16 +449,16 @@ class StockAllocation(TimestampMixin, Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
     allocation_no: Mapped[str] = mapped_column(String(100))
     request_id: Mapped[uuid.UUID] = mapped_column(
-        UUID_TYPE, ForeignKey("material_requests.id", ondelete="RESTRICT"), index=True
+        UUID_TYPE, ForeignKey("material_requests.id", ondelete="RESTRICT")
     )
     request_line_id: Mapped[uuid.UUID] = mapped_column(
-        UUID_TYPE, ForeignKey("material_request_lines.id", ondelete="RESTRICT"), index=True
+        UUID_TYPE, ForeignKey("material_request_lines.id", ondelete="RESTRICT")
     )
     revision_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
     revision_no: Mapped[int] = mapped_column(Integer)
     request_version: Mapped[int] = mapped_column(BigInteger)
     source_stock_account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT"), index=True
+        UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT")
     )
     allocated_qty: Mapped[Decimal] = mapped_column(QUANTITY)
     source_balance_version: Mapped[int] = mapped_column(BigInteger)

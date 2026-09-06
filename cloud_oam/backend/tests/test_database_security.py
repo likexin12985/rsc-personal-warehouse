@@ -682,6 +682,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
             "decided_at",
             "withdrawn_at",
             "cancelled_at",
+            "allocation_status",
             "version",
             "updated_at",
         },

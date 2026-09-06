@@ -16,6 +16,7 @@ from sqlalchemy.exc import OperationalError
 from app.database import get_db
 from app.dependencies import get_formal_principal
 from app.formal_services import material_request_allocation_options as service
+from app.formal_services import material_request_allocation as allocation_service
 from app.formal_services import inventory_query, material_request_query
 from app.material_request_allocation_option_schemas import (
     MaterialRequestAllocationOptionPageOut,
@@ -242,3 +243,50 @@ def test_router_allocation_options_is_get_only_and_no_store_on_success_and_error
         assert response.status_code == 503
         assert "no-store" in response.headers["Cache-Control"]
         assert "secret" not in response.text.lower()
+
+
+def test_router_allocation_create_has_explicit_write_headers_and_no_store(monkeypatch):
+    api = FastAPI()
+    api.include_router(formal_material_requests.router, prefix="/api")
+
+    class Principal:
+        user_id = "user-1"
+        person_id = _id(800)
+        authorization_version = 4
+        role_codes = ("admin",)
+
+        def allows(self, *_args, **_kwargs):
+            return True
+
+    class DB:
+        commit = Mock()
+        rollback = Mock()
+
+    api.dependency_overrides[get_formal_principal] = lambda: Principal()
+    api.dependency_overrides[get_db] = lambda: DB()
+    monkeypatch.setattr(formal_material_requests, "_require_lifecycle_write_runtime", lambda *_args, **_kwargs: "s" * 40)
+    result = allocation_service.AllocationCommandResult(
+        request_id=_id(801), allocation_id=_id(802), allocation_no="AL-20260908-ABCDEF12",
+        request_version=5, revision_id=_id(803), revision_no=2, request_line_id=_id(804),
+        source_stock_account_id=_id(805), allocated_qty=Decimal("1.000"),
+        allocation_status="allocated", request_status="approved",
+        state_axes={
+            "request_status": "approved", "allocation_status": "allocated",
+            "reservation_status": "not_reserved", "outbound_status": "not_started",
+            "shipment_status": "not_started", "logistics_signature_status": "not_signed",
+            "oam_receipt_status": "not_occurred", "personal_inbound_status": "not_started",
+            "notification_status": "not_started", "reconciliation_status": "not_started",
+        },
+    )
+    mocked = Mock(return_value=result)
+    monkeypatch.setattr(allocation_service, "create_allocation", mocked)
+    with TestClient(api) as client:
+        response = client.post(
+            f"/api/v1/material-requests/{_id(801)}/allocations",
+            json={"expected_request_version": 4, "request_line_id": str(_id(804)), "source_stock_account_id": str(_id(805)), "allocated_qty": "1.000", "source_balance_version": 7, "source_ledger_cursor": 9},
+            headers={"Idempotency-Key": "allocation-key-123456", "X-Request-ID": "allocation-trace-1"},
+        )
+    assert response.status_code == 201
+    assert response.headers["Cache-Control"].startswith("no-store")
+    assert response.headers["Idempotency-Replayed"] == "false"
+    mocked.assert_called_once()
