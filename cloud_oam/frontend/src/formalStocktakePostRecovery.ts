@@ -265,6 +265,7 @@ export function validateFormalStocktakePostCommandStatus(
       trace_request_id: command.trace_request_id,
       sealed_at: timestamp(command.sealed_at, "sealed_at"),
     } as FormalStocktakePostingSealedCommand;
+    instant(checked.sealed_at);
     if (
       checked.task_id !== sentinel.task_id
       || checked.expected_task_version !== sentinel.expected_task_version
@@ -335,6 +336,7 @@ export function validateFormalStocktakePostSealResponse(
     trace_request_id: row.trace_request_id,
     sealed_at: timestamp(row.sealed_at, "sealed_at"),
   } as FormalStocktakePostingSealedCommand);
+  instant(command.sealed_at);
   if (
     command.task_id !== sentinel.task_id
     || command.expected_task_version !== sentinel.expected_task_version
