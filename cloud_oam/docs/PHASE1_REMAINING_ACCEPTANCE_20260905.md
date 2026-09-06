@@ -62,8 +62,8 @@ SN/cutoff replay 多范围及通知/履约状态轴仍按下文保持未完成�
 提交 `316c340` 将 `sealed_not_executed` 结果接入正式过账服务：相同请求坐标的迟到 POST
 在业务锁图内失败关闭，成功过账写入 `posted` 结果坐标；0065 迁移新增 PostgreSQL
 `ENABLE ALWAYS` 与 SQLite 触发器，直接插入过账完成事实也会被已封存任务拒绝。新增
-封存后迟到 POST、posted 状态恢复和迁移契约回归。相关后端定向 `17 passed`，正式盘点 API、
-任务策略、数据库安全和全量迁移回归 `455 passed, 19 skipped`。
+封存后迟到 POST、posted 状态恢复和迁移契约回归。相关后端定向 `19 passed`，正式盘点 API、
+任务策略、数据库安全、迁移及封存回归 `476 passed, 19 skipped`。
 
 这仍是本地候选：尚未取得该准确 SHA 的远程 Client/PG16 门禁，直接 SQL 的真实 PostgreSQL
 竞争样本、真机生命周期和一期 UAT 仍待完成；OAM/RSC 入库、通知送达和对账继续保持独立状态轴。

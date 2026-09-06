@@ -8,7 +8,7 @@
 提交 `316c340` 已将非期初过账的 `sealed_not_executed` 结果接入服务端写路径：封存后相同
 请求坐标的迟到 POST 在锁图内失败关闭，成功过账写入 `posted` 结果；0065 迁移增加
 PostgreSQL `ENABLE ALWAYS` 和 SQLite 触发器，直接插入过账完成事实也会被封存事实阻断。
-后端定向回归 `17 passed`，正式盘点 API、任务策略、数据库安全和迁移回归 `455 passed,
+后端定向回归 `19 passed`，正式盘点 API、任务策略、数据库安全、迁移及封存回归 `476 passed,
 19 skipped`。该准确 SHA 尚未取得远程 Client/PG16 门禁，真库竞争、真机生命周期和一期 UAT
 仍未完成。
 
