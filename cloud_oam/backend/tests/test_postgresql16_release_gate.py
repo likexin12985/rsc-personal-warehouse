@@ -19942,7 +19942,7 @@ def _assert_0064_finalizer_organization_runtime_lock() -> None:
     try:
         with holder.cursor() as cursor:
             cursor.execute(
-                f"SELECT {migration.LOCK_SIGNATURE}(%s)",
+                f"SELECT public.{migration.LOCK_FUNCTION}(%s)",
                 (organization_id,),
             )
             assert cursor.fetchone() == (None,)
