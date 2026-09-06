@@ -51,6 +51,10 @@ function quantity(value: unknown, name: string, scale: number | null = null): st
   if (typeof value !== "string" || !DECIMAL.test(value) || (scaled !== null && !scaled.test(value))) return fail(`${name}无效`);
   return value;
 }
+function quantityUnits(value: string): bigint {
+  const [whole, fraction = ""] = value.split(".");
+  return BigInt(`${whole}${fraction.padEnd(3, "0")}`);
+}
 function option(value: unknown): MaterialRequestAllocationOption {
   const row = object(value, [
     "stock_account_id", "owner_org_id", "owner_org_code", "owner_org_name", "location_owner_org_id",
@@ -83,8 +87,18 @@ export function validateMaterialRequestAllocationOptionPage(value: unknown): Mat
   if (row.schema_version !== "1.0" || row.projection_status !== "ready" || row.opening_balance_status !== "established") return fail("货源候选响应状态无效");
   if (!Array.isArray(row.items) || row.items.length > 1000) return fail("货源候选响应明细无效");
   if (row.projected_at !== null && (typeof row.projected_at !== "string" || !TIMESTAMP.test(row.projected_at))) return fail("货源候选时间无效");
+  const finalApprovedQty = quantity(row.final_approved_qty, "final_approved_qty");
+  const cancelledQty = quantity(row.cancelled_qty, "cancelled_qty");
+  const allocatableQty = quantity(row.allocatable_qty, "allocatable_qty");
+  if (quantityUnits(finalApprovedQty) - quantityUnits(cancelledQty) !== quantityUnits(allocatableQty)) {
+    return fail("货源候选批准余量关系无效");
+  }
+  const items = row.items.map(option);
+  if (items.some((item) => item.material_id !== uuid(row.material_id, "material_id") || quantityUnits(item.quantity) <= 0n)) {
+    return fail("货源候选物料或数量关系无效");
+  }
   return Object.freeze({
     schema_version: "1.0", request_id: uuid(row.request_id, "request_id"), request_line_id: uuid(row.request_line_id, "request_line_id"), request_version: nonnegative(row.request_version, "request_version"), current_revision_id: uuid(row.current_revision_id, "current_revision_id"), current_revision_no: nonnegative(row.current_revision_no, "current_revision_no"), material_id: uuid(row.material_id, "material_id"),
-    final_approved_qty: quantity(row.final_approved_qty, "final_approved_qty"), cancelled_qty: quantity(row.cancelled_qty, "cancelled_qty"), allocatable_qty: quantity(row.allocatable_qty, "allocatable_qty"), projection_status: "ready", opening_balance_status: "established", projected_at: row.projected_at as string | null, ledger_cursor: nonnegative(row.ledger_cursor, "ledger_cursor"), items: Object.freeze(row.items.map(option)),
+    final_approved_qty: finalApprovedQty, cancelled_qty: cancelledQty, allocatable_qty: allocatableQty, projection_status: "ready", opening_balance_status: "established", projected_at: row.projected_at as string | null, ledger_cursor: nonnegative(row.ledger_cursor, "ledger_cursor"), items: Object.freeze(items),
   });
 }

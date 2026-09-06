@@ -39,6 +39,7 @@ describe("formal material-request allocation options", () => {
   it("rejects unknown fields and non-ready projections", () => {
     expect(() => validateMaterialRequestAllocationOptionPage({ ...page(), extra: true })).toThrow(ApiError);
     expect(() => validateMaterialRequestAllocationOptionPage({ ...page(), projection_status: "stale" })).toThrow(ApiError);
+    expect(() => validateMaterialRequestAllocationOptionPage({ ...page(), allocatable_qty: "1.000" })).toThrow(ApiError);
   });
 
   it("uses the exact read-only endpoint and no-store cache policy", async () => {
