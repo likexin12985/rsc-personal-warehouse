@@ -7,6 +7,7 @@ const UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-
 const TRACE = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/
 const FIELDS = ['v', 'kind', 'task_id', 'expected_task_version', 'actor_person_id', 'actor_authorization_version', 'trace_request_id']
 const COORDINATORS = new WeakMap()
+const ALL_TASKS = '__all__'
 
 function invalid(message = '盘点过账恢复记录无效，已停止写入') {
   const error = new Error(message)
@@ -71,57 +72,75 @@ function createFormalStocktakePostRecoveryStore(options = {}) {
     if (state) state.storageFaults.add(id)
     return Object.freeze({ kind: 'unavailable' })
   }
+  function corrupt(id) {
+    if (state) state.storageFaults.add(id)
+    return Object.freeze({ kind: 'corrupt' })
+  }
+  function faulted(id) {
+    return !state || state.storageFaults.has(ALL_TASKS) || state.storageFaults.has(id)
+  }
+  function directory() {
+    try {
+      if (!availableStorage(storage)) invalid()
+      return storedKeys(storage)
+    } catch (error) {
+      unavailable(ALL_TASKS)
+      throw error
+    }
+  }
   function read(value) {
     let id
     try { id = keyOf(value) } catch (_) { return Object.freeze({ kind: 'corrupt' }) }
-    if (!state || state.storageFaults.has(id)) return unavailable(id)
+    if (faulted(id)) return unavailable(id)
     try {
-      if (!availableStorage(storage)) return unavailable(id)
       const key = STORAGE_PREFIX + id
-      const keys = storedKeys(storage)
+      const keys = directory()
       const present = keys.has(key)
       const raw = storage.getStorageSync(key)
-      if (storedKeys(storage).has(key) !== present) return unavailable(id)
-      if (!present) return raw === '' ? Object.freeze({ kind: 'missing' }) : unavailable(id)
-      if (typeof raw !== 'string') return Object.freeze({ kind: 'corrupt' })
+      if (directory().has(key) !== present) return unavailable(ALL_TASKS)
+      if (!present) return raw === '' ? Object.freeze({ kind: 'missing' }) : unavailable(ALL_TASKS)
+      if (typeof raw !== 'string') return corrupt(id)
       try {
         const checked = validateFormalStocktakePostSentinel(JSON.parse(raw))
-        return checked.task_id === id ? Object.freeze({ kind: 'valid', value: checked }) : Object.freeze({ kind: 'corrupt' })
-      } catch (_) { return Object.freeze({ kind: 'corrupt' }) }
+        return checked.task_id === id ? Object.freeze({ kind: 'valid', value: checked }) : corrupt(id)
+      } catch (_) { return corrupt(id) }
     } catch (_) { return unavailable(id) }
   }
   function readPending(taskIdValue) {
     let filter = null
     try { filter = taskIdValue === undefined ? null : taskId(taskIdValue) } catch (_) { return Object.freeze({ kind: 'corrupt' }) }
-    if (!state || (filter && state.storageFaults.has(filter))) return Object.freeze({ kind: 'unavailable' })
+    if (faulted(filter) || (!filter && state.storageFaults.size)) return Object.freeze({ kind: 'unavailable' })
     try {
-      if (!availableStorage(storage)) return unavailable('__all__')
       const values = []
-      for (const key of storedKeys(storage)) {
-        if (!key.startsWith(STORAGE_PREFIX)) continue
+      const before = new Set([...directory()].filter((key) => key.startsWith(STORAGE_PREFIX)))
+      for (const key of before) {
         const id = key.slice(STORAGE_PREFIX.length)
-        if (!UUID.test(id) || id !== id.toLowerCase()) return Object.freeze({ kind: 'corrupt' })
+        if (!UUID.test(id) || id !== id.toLowerCase()) return corrupt(ALL_TASKS)
         const result = read(id)
         if (result.kind === 'unavailable' || result.kind === 'corrupt') return Object.freeze({ kind: result.kind })
+        // A key observed at the start must not vanish before it is read.
+        if (result.kind !== 'valid') return unavailable(ALL_TASKS)
         if (result.kind === 'valid' && (!filter || result.value.task_id === filter)) values.push(result.value)
       }
+      const after = new Set([...directory()].filter((key) => key.startsWith(STORAGE_PREFIX)))
+      if (before.size !== after.size || [...before].some((key) => !after.has(key))) return unavailable(ALL_TASKS)
       return values.length ? Object.freeze({ kind: 'valid', values: Object.freeze(values) }) : Object.freeze({ kind: 'missing' })
-    } catch (_) { return unavailable('__all__') }
+    } catch (_) { return unavailable(ALL_TASKS) }
   }
   return Object.freeze({
     read,
     readPending,
     async withTaskLease(value, work) {
       const id = keyOf(value)
-      if (!state || !availableStorage(storage)) invalid('盘点过账持久恢复或页面协调不可用，已停止写入')
+      if (faulted(id) || !availableStorage(storage)) invalid('盘点过账持久恢复或页面协调不可用，已停止写入')
       if (typeof work !== 'function') invalid('盘点过账协调回调无效')
-      if (state.storageFaults.has(id) || state.active.has(id)) invalid('同一盘点过账正在核验，请勿重复提交')
+      if (state.active.has(id)) invalid('同一盘点过账正在核验，请勿重复提交')
       const token = Object.freeze({})
       state.active.set(id, token)
       let live = true
       let persistedByThisLease = null
       const requireLease = () => {
-        if (!live || state.active.get(id) !== token || state.storageFaults.has(id)) invalid('盘点过账协调已结束或存储异常，禁止写入')
+        if (!live || state.active.get(id) !== token || faulted(id)) invalid('盘点过账协调已结束或存储异常，禁止写入')
       }
       const expected = (input) => {
         requireLease()
