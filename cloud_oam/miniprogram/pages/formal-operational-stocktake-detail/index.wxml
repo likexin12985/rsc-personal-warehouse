@@ -3,7 +3,7 @@
   <block wx:else>
     <view class="card access-card status-{{accessAllowed ? 'success' : 'danger'}}">{{accessMessage}}</view>
     <view wx:if="{{errorMessage}}" class="card error-card">{{errorMessage}}</view>
-    <view wx:if="{{pendingMessage}}" class="card pending-card"><text>{{pendingMessage}}</text><button wx:if="{{pendingRetryable}}" class="button button-secondary" bindtap="retryPending" loading="{{busy}}">按原坐标重试</button><button wx:if="{{countRecoveryCanCheck}}" class="button button-secondary" bindtap="recoverCount" loading="{{busy}}">只读核验原范围计数</button><button wx:if="{{reviewRecoveryCanCheck}}" class="button button-secondary" bindtap="recoverReview" loading="{{busy}}">只读核验原盘点复核</button></view>
+    <view wx:if="{{pendingMessage}}" class="card pending-card"><text>{{pendingMessage}}</text><button wx:if="{{pendingRetryable}}" class="button button-secondary" bindtap="retryPending" loading="{{busy}}">按原坐标重试</button><button wx:if="{{countRecoveryCanCheck}}" class="button button-secondary" bindtap="recoverCount" loading="{{busy}}">只读核验原范围计数</button><button wx:if="{{reviewRecoveryCanCheck}}" class="button button-secondary" bindtap="recoverReview" loading="{{busy}}">只读核验原盘点复核</button><button wx:if="{{postRecoveryCanCheck}}" class="button button-secondary" bindtap="recoverPost" loading="{{busy}}">只读核验原盘点过账</button></view>
     <block wx:if="{{detail}}">
       <view class="card summary-card">
         <view class="row between"><text class="mono task-no">{{detail.task_no}}</text><text class="status status-info">{{detail.statusLabel}}</text></view>
@@ -79,6 +79,16 @@
         </view>
         <textarea class="textarea" value="{{recountReason}}" bindinput="bindRecountReason" placeholder="复盘原因" />
         <button class="button button-primary" bindtap="submitRecount" loading="{{busy}}" disabled="{{busy || pendingMessage || recountLoadingScopeId || !recountReady}}">按所选范围开复盘</button>
+      </view>
+      <view wx:if="{{detail.canPost}}" class="card review-card">
+        <text class="section-title">盘点差异过账</text>
+        <text class="small muted">区域和总部复核均已通过。过账将按已批准差异生成不可变库存流水，之后仍需单独完成内部对账和关闭。</text>
+        <button class="button button-primary action-button" bindtap="openPostConfirm" disabled="{{busy || pendingMessage || countRecoveryBlocked || reviewRecoveryBlocked || postRecoveryBlocked}}">确认盘点差异过账</button>
+      </view>
+      <view wx:if="{{postConfirm}}" class="card warning-card">
+        <text class="section-title">确认将已批准差异记入库存？</text>
+        <text class="small">本次将处理任务 v{{detail.version}} 的已批准差异。提交后如结果不确定，保留本次记录并只读核验，不可重复提交。过账完成不代表任务已关闭。</text>
+        <view class="review-actions"><button class="button button-secondary" bindtap="cancelPostConfirm" disabled="{{busy}}">取消</button><button class="button button-primary" bindtap="confirmPost" loading="{{busy}}" disabled="{{busy || pendingMessage || countRecoveryBlocked || reviewRecoveryBlocked || postRecoveryBlocked}}">确认过账</button></view>
       </view>
       <view wx:if="{{detail.status === 'posted'}}" class="card warning-card">该任务已过账，但尚未关闭。内部对账和关闭必须分别执行、分别确认完成坐标。</view>
       <view wx:if="{{detail.canReconcile || detail.canClose}}" class="card review-card">
