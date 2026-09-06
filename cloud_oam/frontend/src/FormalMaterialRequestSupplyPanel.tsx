@@ -13,6 +13,7 @@ import {
   isDefinitiveSupplyPostRejection, supplyMutationMatchesDetail, validateSupplyCreateInput,
   validateSupplyMutationResult, validateSupplyUpdateInput,
 } from "./formalMaterialRequestSupply";
+import type { MaterialRequestAllocationOptionPage } from "./formalMaterialRequestAllocationOptions";
 import { type SupplyRecoveryStore, type SupplySentinel, recoverSupplyCommand } from "./materialRequestSupplyRecovery";
 import { Button, Field, Modal, showError } from "./ui";
 
@@ -58,11 +59,28 @@ export default function FormalMaterialRequestSupplyPanel({
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [allocationOptions, setAllocationOptions] = useState<{ lineId: string; page: MaterialRequestAllocationOptionPage } | null>(null);
+  const [allocationLoading, setAllocationLoading] = useState(false);
   const generation = useRef(0);
   const inFlight = useRef(false);
   const read = store.read();
   const blocked = read.kind !== "missing";
   const canCreate = Boolean(detail?.allowed_actions.includes("create_supply_task"));
+  const canReadAllocationOptions = Boolean(access?.can_approve_region || access?.can_approve_headquarters);
+
+  async function showAllocationOptions(lineId: string) {
+    if (!detail || !canReadAllocationOptions || allocationLoading) return;
+    setAllocationLoading(true);
+    setError("");
+    try {
+      const page = await adapter.listAllocationOptions(detail.request_id, lineId);
+      setAllocationOptions({ lineId, page });
+    } catch (caught) {
+      setError(`货源候选读取失败：${showError(caught)}`);
+    } finally {
+      setAllocationLoading(false);
+    }
+  }
 
   async function recover() {
     if (inFlight.current) return;
@@ -260,6 +278,22 @@ export default function FormalMaterialRequestSupplyPanel({
           {task.allowed_actions.includes("cancel_supply_task") && <Button tone="secondary" disabled={otherWriteBusy || running || blocked} onClick={() => open("cancel_supply_task", task)}>取消计划</Button>}
         </td></tr>)}</tbody>
     </table></div> : <p>{detail ? "暂无供给计划" : "选择需求查看供给计划"}</p>}
+    {detail && canReadAllocationOptions && <section aria-label="货源候选" className="opening-detail-subsection">
+      <header><div><h4>可用货源候选</h4><p>只读展示当前批准明细的可用库存；查看不会创建分配、占用或履约记录。</p></div></header>
+      <div className="table-wrap"><table><thead><tr><th>明细</th><th>物料</th><th>批准余量</th><th>操作</th></tr></thead><tbody>
+        {detail.lines.filter((line) => ["approved", "partially_approved"].includes(line.status)).map((line) => <tr key={line.request_line_id}>
+          <td>{line.line_no}</td><td>{line.material_id}</td><td>{line.final_approved_qty}</td><td>
+            <Button tone="secondary" disabled={allocationLoading} onClick={() => void showAllocationOptions(line.request_line_id)}>{allocationLoading ? "正在读取" : "查看可用货源"}</Button>
+          </td>
+        </tr>)}
+      </tbody></table></div>
+    </section>}
+    {allocationOptions && <Modal title="可用货源候选（只读）" wide onClose={() => { if (!allocationLoading) setAllocationOptions(null); }}>
+      <p>明细 {detail?.lines.find((line) => line.request_line_id === allocationOptions.lineId)?.line_no} · 账面游标 {allocationOptions.page.ledger_cursor} · 投影时间 {allocationOptions.page.projected_at || "—"}</p>
+      {allocationOptions.page.items.length ? <div className="table-wrap"><table><thead><tr><th>库位</th><th>货主</th><th>状态</th><th>数量</th><th>余额版本</th><th>流水游标</th></tr></thead><tbody>
+        {allocationOptions.page.items.map((item) => <tr key={item.stock_account_id}><td>{item.location_name}（{item.location_code}）</td><td>{item.owner_org_name}</td><td>{item.condition_code} · {item.availability_bucket}</td><td>{item.quantity} {item.base_unit}</td><td>{item.balance_version}</td><td>{item.ledger_cursor}</td></tr>)}
+      </tbody></table></div> : <p>当前没有满足条件的可用正余额货源。</p>}
+    </Modal>}
     {form && <Modal title={form.action === "create_supply_task" ? "新建供给计划" : form.action === "cancel_supply_task" ? "取消供给计划" : "更新供给计划"}
       onClose={() => { if (!running && !blocked) setForm(null); }}>
       <div className="form-stack">
