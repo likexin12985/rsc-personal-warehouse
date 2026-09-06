@@ -40,6 +40,20 @@ class StocktakePostingHistoricalCommandOut(BaseModel):
         return self
 
 
+class StocktakePostingSealedCommandOut(BaseModel):
+    """Minimal public proof that a post command was sealed before execution."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    seal_id: UUID
+    task_id: UUID
+    expected_task_version: int = Field(strict=True, ge=0)
+    actor_person_id: UUID
+    actor_authorization_version: int = Field(strict=True, ge=1)
+    trace_request_id: str = Field(strict=True, min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
+    sealed_at: datetime
+
+
 class StocktakePostingCommandStatusOut(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -49,12 +63,28 @@ class StocktakePostingCommandStatusOut(BaseModel):
     actor_authorization_version: int = Field(strict=True, ge=1)
     trace_request_id: str = Field(strict=True, min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
     operation: Literal["post_differences"]
-    lookup_status: Literal["confirmed", "not_observed"]
-    command: StocktakePostingHistoricalCommandOut | None
+    lookup_status: Literal["confirmed", "sealed_not_executed", "not_observed"]
+    command: StocktakePostingHistoricalCommandOut | StocktakePostingSealedCommandOut | None
 
     @model_validator(mode="after")
     def exact_status_shape(self):
-        if (self.lookup_status == "confirmed") != (self.command is not None):
-            raise ValueError("historical evidence does not match lookup status")
+        if self.lookup_status == "not_observed":
+            if self.command is not None:
+                raise ValueError("not-observed status must not contain command evidence")
+            return self
+        if self.command is None:
+            raise ValueError("terminal status must contain command evidence")
+        if self.lookup_status == "confirmed" and not isinstance(self.command, StocktakePostingHistoricalCommandOut):
+            raise ValueError("confirmed status requires posting completion evidence")
+        if self.lookup_status == "sealed_not_executed" and not isinstance(self.command, StocktakePostingSealedCommandOut):
+            raise ValueError("sealed status requires seal evidence")
+        if self.command.task_id != self.task_id:
+            raise ValueError("command task does not match status task")
+        if self.command.actor_person_id != self.actor_person_id:
+            raise ValueError("command actor does not match status actor")
+        if self.command.actor_authorization_version != self.actor_authorization_version:
+            raise ValueError("command authorization version does not match status actor")
+        if self.command.trace_request_id != self.trace_request_id:
+            raise ValueError("command trace does not match status trace")
         return self
 

@@ -35,11 +35,39 @@ function command(overrides = {}) {
   }, overrides)
 }
 
+function sealedCommand(overrides = {}) {
+  return Object.assign({
+    seal_id: '70000000-0000-4000-8000-000000000001', task_id: TASK,
+    expected_task_version: 7, actor_person_id: PERSON,
+    actor_authorization_version: 9, trace_request_id: TRACE,
+    sealed_at: '2026-09-06T08:01:00+08:00',
+  }, overrides)
+}
+
 test('post recovery keeps an unobserved command sticky', () => {
   const parsed = validateFormalStocktakePostCommandStatus(status(), sentinel())
   assert.equal(parsed.lookup_status, 'not_observed')
   assert.equal(parsed.command, null)
   assert.throws(() => validateFormalStocktakePostCommandStatus(status({ command: {} }), sentinel()))
+})
+
+test('sealed_not_executed status exposes only the minimal seal proof', () => {
+  const parsed = validateFormalStocktakePostCommandStatus(status({ lookup_status: 'sealed_not_executed', command: sealedCommand() }), sentinel())
+  assert.equal(parsed.lookup_status, 'sealed_not_executed')
+  assert.deepEqual(Object.keys(parsed.command).sort(), ['actor_authorization_version', 'actor_person_id', 'expected_task_version', 'seal_id', 'sealed_at', 'task_id', 'trace_request_id'])
+  for (const tamper of [
+    { task_id: '10000000-0000-4000-8000-000000000002' },
+    { expected_task_version: 8 },
+    { actor_person_id: '40000000-0000-4000-8000-000000000002' },
+    { actor_authorization_version: 10 },
+    { trace_request_id: 'wx-other-trace-0001' },
+    { request_sha256: 'a'.repeat(64) },
+    { role_assignment_id: '80000000-0000-4000-8000-000000000001' },
+  ]) {
+    assert.throws(() => validateFormalStocktakePostCommandStatus(status({ lookup_status: 'sealed_not_executed', command: sealedCommand(tamper) }), sentinel()))
+  }
+  assert.throws(() => validateFormalStocktakePostCommandStatus(status({ lookup_status: 'sealed_not_executed', command: null }), sentinel()))
+  assert.throws(() => validateFormalStocktakePostCommandStatus(status({ lookup_status: 'confirmed', command: sealedCommand() }), sentinel()))
 })
 
 test('confirmed post status enforces immutable coordinates and arithmetic', () => {
