@@ -201,6 +201,7 @@ describe("formal daily stocktake post durable recovery", () => {
       { actor_person_id: "01000000-0000-4000-8000-000000000002" },
       { trace_request_id: "other-trace-0001" },
       { idempotency_key: "secret" },
+      { sealed_at: "2026-02-30T08:01:00+08:00" },
     ]) {
       expect(() => validateFormalStocktakePostSealResponse(sealResponse(tamper), sentinel())).toThrow();
     }
