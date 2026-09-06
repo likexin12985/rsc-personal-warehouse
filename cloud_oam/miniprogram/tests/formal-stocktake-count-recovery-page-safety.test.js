@@ -3,13 +3,6 @@ const test = require('node:test')
 
 function loadPage(stubs) {
   const preparedStubs = Object.assign({}, stubs)
-  const adapterModule = stubs['../utils/formal-stocktake-adapter']
-  const adapter = adapterModule && adapterModule.formalStocktakeAdapter
-  if (adapter && !adapter.countRecoveryMode) {
-    preparedStubs['../utils/formal-stocktake-adapter'] = Object.assign({}, adapterModule, {
-      formalStocktakeAdapter: Object.assign({}, adapter, { countRecoveryMode: 'legacy-test' })
-    })
-  }
   const saved = []
   for (const [modulePath, exports] of Object.entries(preparedStubs)) {
     const resolved = require.resolve(modulePath)
@@ -227,6 +220,40 @@ test('an unbranded partial production adapter fails closed before any business w
     assert.equal(writes, 0)
     assert.equal(page.data.countRecoveryBlocked, true)
     assert.match(page.data.pendingMessage, /待只读核验|恢复能力未完整加载/)
+  } finally { loaded.restore() }
+})
+
+test('an unmarked adapter stub is not silently promoted to the legacy compatibility mode', async () => {
+  let writes = 0
+  const loaded = loadPage({
+    '../utils/session': { ensureLogin: () => true },
+    '../utils/formal-stocktake-adapter': {
+      formalStocktakeAdapter: {
+        countCommandStatus() {},
+        async execute() { writes += 1 }
+      },
+      createFormalStocktakeIntentRegistry: () => ({ current: () => null })
+    },
+    '../utils/formal-stocktake-count-recovery-store': {
+      getFormalStocktakeCountRecoveryStore: () => ({ readPending: () => ({ kind: 'missing' }) })
+    }
+  })
+  try {
+    const page = instance(loaded.definition)
+    page._hidden = false
+    page._taskId = TASK
+    page._access = access()
+    page._detail = { task_id: TASK, version: 8 }
+    page._loadGeneration = 1
+    page._countRecoveryStore = { readPending: () => ({ kind: 'missing' }) }
+    page._intentRegistry = { current: () => null }
+    page.data.loading = false
+    page.refreshCountRecovery()
+    assert.match(page.data.pendingMessage, /持久恢复能力未完整加载/)
+    await page.run({ action: 'start', taskId: TASK, expectedTaskVersion: 8, body: { expected_version: 8 } })
+    assert.equal(writes, 0)
+    assert.equal(page.data.countRecoveryBlocked, true)
+    assert.match(page.data.pendingMessage, /待只读核验|停止其他写操作/)
   } finally { loaded.restore() }
 })
 

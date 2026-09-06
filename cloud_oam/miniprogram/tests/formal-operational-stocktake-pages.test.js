@@ -7,20 +7,7 @@ const contract = require('../utils/formal-stocktake-contract')
 const formalFileUpload = require('../utils/formal-file-upload')
 
 function loadPage(relativePath, stubs) {
-  // Existing page tests use intentionally small in-memory adapters.  Mark
-  // those doubles explicitly as compatibility adapters so the production
-  // page's durable-capability gate can remain fail-closed for unbranded
-  // runtime adapters.
   const preparedStubs = Object.assign({}, stubs)
-  if (relativePath.endsWith('formal-operational-stocktake-detail/index')) {
-    const adapterModule = stubs['../utils/formal-stocktake-adapter']
-    const adapter = adapterModule && adapterModule.formalStocktakeAdapter
-    if (adapter && !adapter.countRecoveryMode) {
-      preparedStubs['../utils/formal-stocktake-adapter'] = Object.assign({}, adapterModule, {
-        formalStocktakeAdapter: Object.assign({}, adapter, { countRecoveryMode: 'legacy-test' })
-      })
-    }
-  }
   const saved = []
   for (const [modulePath, exports] of Object.entries(preparedStubs)) {
     const resolved = require.resolve(modulePath)
@@ -33,6 +20,21 @@ function loadPage(relativePath, stubs) {
   global.Page = (value) => { definition = value }
   require(resolvedPage)
   return { definition, restore() { delete require.cache[resolvedPage]; saved.forEach(([resolved, entry]) => { if (entry) require.cache[resolved] = entry; else delete require.cache[resolved] }); delete global.Page } }
+}
+
+// Compatibility doubles must opt in at the call site.  The production page
+// intentionally fails closed for an unbranded adapter; keeping this helper
+// separate makes the test-only escape hatch explicit and reviewable.
+function loadDetailPage(relativePath, stubs) {
+  const preparedStubs = Object.assign({}, stubs)
+  const adapterModule = stubs['../utils/formal-stocktake-adapter']
+  const adapter = adapterModule && adapterModule.formalStocktakeAdapter
+  if (adapter && !adapter.countRecoveryMode) {
+    preparedStubs['../utils/formal-stocktake-adapter'] = Object.assign({}, adapterModule, {
+      formalStocktakeAdapter: Object.assign({}, adapter, { countRecoveryMode: 'legacy-test' })
+    })
+  }
+  return loadPage(relativePath, preparedStubs)
 }
 
 function instance(definition) {
@@ -186,7 +188,7 @@ test('list page mounts personal create with one memory-only intent and opens the
 })
 
 test('detail page start action forwards the exact visible task version only', () => {
-  const loaded = loadPage('../pages/formal-operational-stocktake-detail/index', {
+  const loaded = loadDetailPage('../pages/formal-operational-stocktake-detail/index', {
     '../utils/session': { ensureLogin: () => true },
     '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {}, createFormalStocktakeIntentRegistry: () => ({ current: () => null }) }
   })
@@ -202,7 +204,7 @@ test('detail page start action forwards the exact visible task version only', ()
 
 test('detail recount picker submits only the option assignee_user_id for selected scopes', async () => {
   const adapter = { async listAssignees() { return { items: [{ assignee_user_id: ASSIGNEE_USER, person_id: REGION, name: '工程师', employee_no: 'E001', role_codes: ['technician'] }], next_after_person_id: null } } }
-  const loaded = loadPage('../pages/formal-operational-stocktake-detail/index', {
+  const loaded = loadDetailPage('../pages/formal-operational-stocktake-detail/index', {
     '../utils/session': { ensureLogin: () => true },
     '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: adapter, createFormalStocktakeIntentRegistry: () => ({ current: () => null }) }
   })
@@ -229,7 +231,7 @@ test('detail binds only an available stocktake_evidence upload to the selected i
     async detail() { return counting },
     async execute(intent) { intents.push(intent); return { result: {}, detail: counting } }
   }
-  const loaded = loadPage('../pages/formal-operational-stocktake-detail/index', {
+  const loaded = loadDetailPage('../pages/formal-operational-stocktake-detail/index', {
     '../utils/session': { ensureLogin: () => true },
     '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: adapter, createFormalStocktakeIntentRegistry: () => contract.createFormalStocktakeIntentRegistry({ coordinateFactory() { return { 'Idempotency-Key': `wxidem-${'a'.repeat(36)}`, 'X-Request-ID': `wxreq-${'b'.repeat(36)}` } } }) },
     '../utils/formal-file-upload': uploads.module
@@ -268,7 +270,7 @@ test('one stocktake file hash cannot be claimed by a second scope count intent',
     async detail() { return counting },
     async execute(intent) { intents.push(intent); throw new Error('明确拒绝测试') }
   }
-  const loaded = loadPage('../pages/formal-operational-stocktake-detail/index', {
+  const loaded = loadDetailPage('../pages/formal-operational-stocktake-detail/index', {
     '../utils/session': { ensureLogin: () => true },
     '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: adapter, createFormalStocktakeIntentRegistry: () => contract.createFormalStocktakeIntentRegistry({ coordinateFactory() { return { 'Idempotency-Key': `wxidem-${'a'.repeat(36)}`, 'X-Request-ID': `wxreq-${'b'.repeat(36)}` } } }) },
     '../utils/formal-file-upload': uploads.module
@@ -299,7 +301,7 @@ test('detail shows eight independent axes and confirms reconcile and close as se
   let source = terminalDetail('reconcile')
   const access = { person_id: REGION, authorization_version: 7, can_read: true, can_count: false, can_manage: false, can_review_region: false, can_review_headquarters: false, can_reconcile: true, can_close: true }
   const adapter = { async loadAccess() { return access }, async detail() { return source } }
-  const loaded = loadPage('../pages/formal-operational-stocktake-detail/index', {
+  const loaded = loadDetailPage('../pages/formal-operational-stocktake-detail/index', {
     '../utils/session': { ensureLogin: () => true },
     '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: adapter, createFormalStocktakeIntentRegistry: () => ({ current: () => null }) }
   })
@@ -329,7 +331,7 @@ test('detail shows eight independent axes and confirms reconcile and close as se
 })
 
 test('terminal buttons fail closed without the independent HQ permission even if allowed_actions contains the action', () => {
-  const loaded = loadPage('../pages/formal-operational-stocktake-detail/index', {
+  const loaded = loadDetailPage('../pages/formal-operational-stocktake-detail/index', {
     '../utils/session': { ensureLogin: () => true },
     '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {}, createFormalStocktakeIntentRegistry: () => ({ current: () => null }) }
   })
@@ -479,7 +481,7 @@ async function scanHarness() {
   let source = countingDetail(2)
   let access = listAccess()
   let scan
-  const loaded = loadPage('../pages/formal-operational-stocktake-detail/index', {
+  const loaded = loadDetailPage('../pages/formal-operational-stocktake-detail/index', {
     '../utils/session': { ensureLogin: () => true },
     '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {
       loadAccess: async () => access,
@@ -669,7 +671,7 @@ test('detail run and retry ignore late success or failure across hide/unload and
         let completions = 0
         let reads = 0
         let navigations = 0
-        const loaded = loadPage('../pages/formal-operational-stocktake-detail/index', {
+        const loaded = loadDetailPage('../pages/formal-operational-stocktake-detail/index', {
           '../utils/session': { ensureLogin: () => true },
           '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {
             loadAccess: async () => listAccess(),
@@ -705,7 +707,7 @@ test('detail old finally cannot reset another write owner busy state', async () 
   const pending = deferred()
   const intent = { original: true }
   let registered = null
-  const loaded = loadPage('../pages/formal-operational-stocktake-detail/index', {
+  const loaded = loadDetailPage('../pages/formal-operational-stocktake-detail/index', {
     '../utils/session': { ensureLogin: () => true },
     '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {
       loadAccess: async () => listAccess(), detail: async () => countingDetail(),
@@ -755,7 +757,7 @@ test('returning while detail write is pending hides old authorization until an e
   let accessReads = 0
   let writes = 0
   let completions = 0
-  const loaded = loadPage('../pages/formal-operational-stocktake-detail/index', {
+  const loaded = loadDetailPage('../pages/formal-operational-stocktake-detail/index', {
     '../utils/session': { ensureLogin: () => true },
     '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {
       async loadAccess() { accessReads += 1; return listAccess() },
@@ -836,7 +838,8 @@ test('only the dedicated same-page retry action can replay an explicitly retryab
     const intent = { original: true }
     let registered = null
     let writes = 0
-    const loaded = loadPage(isDetail ? '../pages/formal-operational-stocktake-detail/index' : '../pages/formal-operational-stocktakes/index', {
+    const load = isDetail ? loadDetailPage : loadPage
+    const loaded = load(isDetail ? '../pages/formal-operational-stocktake-detail/index' : '../pages/formal-operational-stocktakes/index', {
       '../utils/session': { ensureLogin: () => true },
       '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: {
         loadAccess: async () => listAccess(),
