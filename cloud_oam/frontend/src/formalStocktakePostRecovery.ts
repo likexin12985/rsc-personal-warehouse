@@ -345,6 +345,9 @@ export function validateFormalStocktakePostSealResponse(
   return command;
 }
 
+/** Compatibility name shared with the mini-program recovery module. */
+export const validateFormalStocktakePostSealResult = validateFormalStocktakePostSealResponse;
+
 export function validateFormalStocktakePostRecoveredProjection(
   value: unknown,
   sentinel: FormalStocktakePostSentinel,
