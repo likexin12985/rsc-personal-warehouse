@@ -75,15 +75,15 @@ export interface FormalMaterialRequestAdapter {
   loadAccess(): Promise<unknown>;
   lifecycleCommandStatus(xRequestId: string): Promise<unknown>;
   supplyCommandStatus(xRequestId: string): Promise<unknown>;
-  allocationCommandStatus(xRequestId: string): Promise<MaterialRequestAllocationCommandStatus>;
+  allocationCommandStatus?(xRequestId: string): Promise<MaterialRequestAllocationCommandStatus>;
   list(afterId: string | null): Promise<unknown>;
   detail(requestId: string): Promise<unknown>;
   loadDraftForEdit(requestId: string): Promise<unknown>;
   listWorkOrderOptions(query: string, afterId: string | null): Promise<unknown>;
   workOrderOptionDetail(workOrderId: string): Promise<unknown>;
   listMaterials(query: string, afterId: string | null): Promise<unknown>;
-  listAllocationOptions(requestId: string, requestLineId: string): Promise<MaterialRequestAllocationOptionPage>;
-  createAllocation(
+  listAllocationOptions?(requestId: string, requestLineId: string): Promise<MaterialRequestAllocationOptionPage>;
+  createAllocation?(
     requestId: string,
     input: MaterialRequestAllocationCreateInput,
     headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>,
@@ -714,7 +714,7 @@ export function createFormalMaterialRequestAdapter(
         headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
       }).then(validateMaterialRequestAllocationOptionPage);
     },
-    createAllocation(requestId: string, input: MaterialRequestAllocationCreateInput, headers) {
+    createAllocation(requestId: string, input: MaterialRequestAllocationCreateInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
       const checkedRequestId = requiredUuid(requestId, "request_id");
       const body = exactObject(input, [
         "expected_request_version", "request_line_id", "source_stock_account_id", "allocated_qty",

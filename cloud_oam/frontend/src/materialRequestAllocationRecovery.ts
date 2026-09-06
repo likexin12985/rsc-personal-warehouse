@@ -80,7 +80,7 @@ export function createAllocationRecoveryStore(storage: StorageLike | undefined =
 }
 
 export async function recoverAllocationCommand(
-  adapter: FormalMaterialRequestAdapter,
+  adapter: FormalMaterialRequestAdapter & Required<Pick<FormalMaterialRequestAdapter, "allocationCommandStatus">>,
   store: AllocationRecoveryStore,
   sentinel: AllocationSentinel,
   canCommit: () => boolean = () => true,
