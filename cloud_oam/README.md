@@ -19,9 +19,9 @@
 版本对会 fail-closed。SQLite/静态回归已覆盖双向半空、错位及降级阻断，PG16 门禁脚本已加入
 相同断言，但本机未提供 disposable PostgreSQL 16，尚未形成新的真库发布证据。
 
-本轮关键定向回归全部通过；最终后端静态套件为 `3046 passed, 1 skipped`（543.93 秒），
-动态 PG16 按环境跳过。当前本地提交为 `2b2531e888b2b9f9a4be99e2488cec2c966d9f95`，
-尚未推送；四个未跟踪 deployment 目录不属于本轮提交。独立 review command-status endpoint 的完整 owner-graph + audit-chain
+本轮已核实的定向回归为 `67 passed`；静态回归套件为 `718 passed`（168.02 秒），
+PG16 动态门禁为 `1 skipped`（本机未提供 disposable PostgreSQL 16），因此没有新的真库发布证据。
+当前本地提交链尚未推送；四个未跟踪 deployment 目录不属于本轮提交。独立 review command-status endpoint 的完整 owner-graph + audit-chain
 读端仍未交付；审批、分配、占用、出库、发运、签收、OAM 收货、RSC/个人仓入库、通知送达和
 对账同步仍保持独立未完成状态，当前不能宣称一期 UAT 或生产放行。
 
