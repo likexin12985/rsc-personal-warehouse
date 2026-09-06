@@ -1,6 +1,8 @@
 # 复核命令状态持久证据迁移计划
 
-状态：设计冻结，尚未实现。本文不是生产放行证据，也不授权访问 OAM、RSC、Workflow、飞书或生产数据库。
+状态：0063 前向迁移与应用侧最小证据链已在本地工作树实现，尚未取得本次提交的
+PostgreSQL 16 真库发布门禁或生产放行。本文不是生产放行证据，也不授权访问 OAM、
+RSC、Workflow、飞书或生产数据库。
 
 ## 目标
 
@@ -57,7 +59,9 @@
 
 - `expected_task_version BIGINT`；
 - `resulting_task_version BIGINT`；
-- PostgreSQL 检查 `resulting_task_version = expected_task_version + 1`，并拒绝负值。
+- PostgreSQL 检查明确要求“两个字段同时 NULL，或两个字段同时 NOT NULL 且
+  `resulting_task_version = expected_task_version + 1`”，并拒绝负值及任一半空对；
+  不能依赖 PostgreSQL CHECK 的三值逻辑隐式拒绝 NULL。
 
 为兼容既有历史行，旧行允许保持 NULL；迁移不得猜测或回填历史版本。0063 后新写入的非期初复核由数据库触发器强制两个字段非空且连续，历史 NULL 行在恢复查询中一律 `service_unavailable`/阻塞。
 
@@ -66,7 +70,13 @@
 
 ## 应用与证据链改动
 
-`stocktake_review._write_review` 必须在任务版本递增前捕获 expected，在同一事务内写入 resulting；StateTransitionEvent metadata、review audit `after_jsonb`、幂等重放校验和安全触发器必须同时包含并核对两个值。任何一个载荷缺失、与任务版本不一致、审计摘要不一致或复核 item/manifest 不完整，都必须 fail-closed。
+当前 `stocktake_review._write_review` 已在任务版本递增前捕获 expected，并在同一事务内写入
+resulting；StateTransitionEvent metadata、review audit `after_jsonb`、幂等重放校验和安全
+触发器同时包含并核对两个值。`stocktake_query` 现对非期初任务的历史复核重新加载状态迁移与
+审计摘要，校验 stage、decision、操作人、差异集、manifest、schema v2 和版本对；缺失或篡改
+fail-closed。该查询改动是 payload-level 的历史证据复核，不宣称已交付独立 review
+command-status endpoint 的完整 owner-graph + audit-chain 读端；审计链哈希证明仍由写入/重放
+服务负责，后续独立读端仍是未完成项。
 
 后续只读 endpoint 才能返回历史版本；它仍需先锁既有 review owner graph、当前 actor/principal 和 audit chain，精确按 `X-Request-ID` 查找，拒绝 body、Idempotency-Key 和重复/错阶段审计，且绝不提交、重放或补写。
 
@@ -79,4 +89,17 @@
 
 ## 依赖与验收
 
-必须先通过准确 SHA 的 PostgreSQL 16 migration gate，再实现 review/recount/disposition/close 的状态查询和 Web/小程序跨重启恢复。该迁移完成前，当前已交付的过账状态查询仍是唯一新增的非期初命令恢复切片；审批、分配、占用、出库、发货、物流签收、OAM 收货、RSC/个人仓入库、通知送达、对账同步仍分别建模、分别验收。
+必须先通过准确 SHA 的 PostgreSQL 16 migration gate，再实现独立 review/recount/disposition/close
+的状态查询和 Web/小程序跨重启恢复。本地门禁尚未替代远程 PG16 真库证据；审批、分配、占用、
+出库、发货、物流签收、OAM 收货、RSC/个人仓入库、通知送达、对账同步仍分别建模、分别验收。
+
+## 2026-09-06 本地实现边界（提交前）
+
+- Alembic 拓扑为 `0062 → 0064 → 0063`，最终唯一 head 为 `20260906_0063`；未改写历史
+  0047/0058/0064 迁移。
+- 0063 SQLite/静态回归覆盖双 NULL、双非空连续、双向半空、错位和安全降级阻断；PG16
+  门禁脚本已加入双向半空真库断言，并将 0047 启动事实的旧降级阻断与 0063 复核事实隔离。
+- 当前 generic `stocktake_query` 只适用于 `TASK_TYPES` 非期初任务；没有新增或宣称独立
+  review command-status 路由。
+- 本节记录的是工作树实现状态；完整静态套件、提交 SHA、远端状态和 PG16 GitHub run 必须
+  重新读取后再补入交接文档，不能引用旧 run 代替。

@@ -1624,6 +1624,15 @@ class StocktakeReview(CreatedAtMixin, Base):
             name="ck_stocktake_reviews_authorization_version",
         ),
         CheckConstraint(
+            "((expected_task_version IS NULL AND resulting_task_version IS NULL) "
+            "OR (expected_task_version IS NOT NULL "
+            "AND resulting_task_version IS NOT NULL "
+            "AND expected_task_version >= 0 "
+            "AND resulting_task_version >= 0 "
+            "AND resulting_task_version = expected_task_version + 1))",
+            name="ck_stocktake_reviews_task_version_pair_0063",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
             "length(decision_manifest_sha256) = 64 AND "
             "length(idempotency_key_hash) = 64",
             name="ck_stocktake_reviews_hashes",
@@ -1647,6 +1656,16 @@ class StocktakeReview(CreatedAtMixin, Base):
         UUID_TYPE, ForeignKey("role_assignments.id", ondelete="RESTRICT")
     )
     authorization_version: Mapped[int] = mapped_column(BigInteger)
+    # Non-opening review commands persist both sides of the optimistic
+    # concurrency coordinate.  Opening reviews share this table for historical
+    # compatibility and intentionally keep these fields NULL until a later
+    # opening-specific migration defines their own coordinate semantics.
+    expected_task_version: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    resulting_task_version: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
     decision: Mapped[str] = mapped_column(String(20))
     comment: Mapped[str] = mapped_column(Text, default="")
     decision_manifest_sha256: Mapped[str] = mapped_column(String(64))

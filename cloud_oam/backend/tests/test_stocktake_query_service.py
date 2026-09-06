@@ -24,10 +24,12 @@ from app.formal_services.stocktake_query import (
 )
 from app.formal_services.stocktake_task import create_personal_stocktake_draft
 from app.foundation_models import (
+    AuditEvent,
     Permission,
     Role,
     RoleAssignment,
     RolePermission,
+    StateTransitionEvent,
 )
 from app.stocktake_models import (
     FormalStocktakeScope,
@@ -52,6 +54,7 @@ from app.stocktake_task_schemas import (
     StocktakeScopeSelectionIn,
     StocktakeTaskCreateIn,
 )
+from app.formal_services.audit_chain import append_audit_event
 from test_stocktake_task_service import (  # noqa: F401
     NOW,
     SECRET,
@@ -279,6 +282,69 @@ def _seal_difference_facts(
     read_world.db.add(completion)
     read_world.db.flush()
     return completion, tuple(rows)
+
+
+def _attach_review_history_evidence(
+    read_world, *, task, round_row, review, completion, differences
+):
+    del round_row
+    differences = tuple(differences)
+    metadata = {
+        "decision": review.decision,
+        "decision_manifest_sha256": review.decision_manifest_sha256,
+        "difference_completion_id": str(completion.id),
+        "difference_manifest_sha256": completion.difference_manifest_sha256,
+        "expected_task_version": review.expected_task_version,
+        "item_count": len(differences),
+        "pending_verification_count": sum(
+            row.reason_code == "stocktake_pending_verification" for row in differences
+        ),
+        "review_id": str(review.id),
+        "round_id": str(review.round_id),
+        "resulting_task_version": review.resulting_task_version,
+        "schema": "cloud_oam.stocktake.nonopening_review_event.v2",
+        "stage": review.review_stage,
+    }
+    resulting_status = (
+        "recount_required"
+        if review.decision != "approve"
+        else ("hq_review" if review.review_stage == "region" else "approved")
+    )
+    previous_status = "submitted" if review.review_stage == "region" else "hq_review"
+    read_world.db.add(
+        StateTransitionEvent(
+            aggregate_type="stocktake_task",
+            aggregate_id=str(task.id),
+            from_status=previous_status,
+            to_status=resulting_status,
+            reason=f"nonopening_{review.review_stage}_review_{review.decision}",
+            actor_id=review.reviewer_user_id,
+            idempotency_key=f"stocktake-nonopening-review:state:{review.id}",
+            occurred_at=review.reviewed_at,
+            metadata_jsonb=metadata,
+            created_at=review.created_at,
+        )
+    )
+    read_world.db.flush()
+    append_audit_event(
+        read_world.db,
+        stream_key="inventory",
+        actor_user_id=review.reviewer_user_id,
+        action=f"stocktake.nonopening.{review.review_stage}_reviewed",
+        aggregate_type="stocktake_review",
+        aggregate_id=str(review.id),
+        before_jsonb=None,
+        after_jsonb={
+            **metadata,
+            "authorization_version": review.authorization_version,
+            "reviewer_person_id": str(review.reviewer_person_id),
+            "reviewer_role_assignment_id": str(review.reviewer_role_assignment_id),
+            "reviewer_user_id": review.reviewer_user_id,
+        },
+        request_id=f"test-review:{review.id}",
+        occurred_at=review.reviewed_at,
+    )
+    read_world.db.flush()
 
 
 def _forbidden_keys(value) -> set[str]:
@@ -794,7 +860,7 @@ def test_count_difference_reviews_and_posting_remain_independent_facts(read_worl
         counted_qty="4.000",
         key="axes-count",
     )
-    _seal_difference_facts(
+    difference_completion, differences = _seal_difference_facts(
         read_world,
         task,
         round_row,
@@ -822,6 +888,8 @@ def test_count_difference_reviews_and_posting_remain_independent_facts(read_worl
         reviewer_person_id=read_world.manager_x.person.id,
         reviewer_role_assignment_id=manager_assignment.id,
         authorization_version=read_world.principals["manager_x"].authorization_version,
+        expected_task_version=task.version,
+        resulting_task_version=task.version + 1,
         decision="approve",
         comment="区域复核事实",
         decision_manifest_sha256="a" * 64,
@@ -862,6 +930,14 @@ def test_count_difference_reviews_and_posting_remain_independent_facts(read_worl
     )
     read_world.db.add_all([review, *postings])
     read_world.db.flush()
+    _attach_review_history_evidence(
+        read_world,
+        task=task,
+        round_row=round_row,
+        review=review,
+        completion=difference_completion,
+        differences=differences,
+    )
 
     detail = stocktake_task_detail(
         read_world.db,
@@ -887,6 +963,50 @@ def test_count_difference_reviews_and_posting_remain_independent_facts(read_worl
         row.id for row in postings
     }
     assert detail.rounds[0].posting.inventory_transaction_count == 0
+
+    state_event = read_world.db.scalar(
+        select(StateTransitionEvent).where(
+            StateTransitionEvent.idempotency_key
+            == f"stocktake-nonopening-review:state:{review.id}"
+        )
+    )
+    audit_event = read_world.db.scalar(
+        select(AuditEvent).where(
+            AuditEvent.aggregate_type == "stocktake_review",
+            AuditEvent.aggregate_id == str(review.id),
+        )
+    )
+    assert state_event is not None and audit_event is not None
+    state_metadata = dict(state_event.metadata_jsonb)
+    state_event.metadata_jsonb = {
+        **state_metadata,
+        "resulting_task_version": review.resulting_task_version + 1,
+    }
+    read_world.db.flush()
+    with pytest.raises(StocktakeReadError) as state_failure:
+        stocktake_task_detail(
+            read_world.db,
+            actor=read_world.principals["manager_x"],
+            task_id=task.id,
+            now=READ_AT,
+        )
+    assert state_failure.value.code == "stocktake_read_projection_invalid"
+
+    state_event.metadata_jsonb = state_metadata
+    audit_after = dict(audit_event.after_jsonb)
+    audit_event.after_jsonb = {
+        **audit_after,
+        "expected_task_version": review.expected_task_version + 1,
+    }
+    read_world.db.flush()
+    with pytest.raises(StocktakeReadError) as audit_failure:
+        stocktake_task_detail(
+            read_world.db,
+            actor=read_world.principals["manager_x"],
+            task_id=task.id,
+            now=READ_AT,
+        )
+    assert audit_failure.value.code == "stocktake_read_projection_invalid"
 
 
 def test_legacy_null_count_cursor_is_visible_but_never_actionable(read_world):
@@ -1124,6 +1244,8 @@ def test_blind_recount_exposes_causality_and_assignment_but_hides_reason_and_dif
         reviewer_person_id=read_world.manager_x.person.id,
         reviewer_role_assignment_id=manager_assignment.id,
         authorization_version=read_world.principals["manager_x"].authorization_version,
+        expected_task_version=task.version,
+        resulting_task_version=task.version + 1,
         decision="recount",
         comment="差异需要复盘",
         decision_manifest_sha256="1" * 64,
@@ -1133,6 +1255,21 @@ def test_blind_recount_exposes_causality_and_assignment_but_hides_reason_and_dif
     )
     read_world.db.add(review)
     read_world.db.flush()
+    _attach_review_history_evidence(
+        read_world,
+        task=task,
+        round_row=round_row,
+        review=review,
+        completion=difference_completion,
+        differences=tuple(
+            read_world.db.scalars(
+                select(StocktakeDifference).where(
+                    StocktakeDifference.task_id == task.id,
+                    StocktakeDifference.round_id == round_row.id,
+                )
+            ).all()
+        ),
+    )
     recount_case = StocktakeRecountCase(
         id=uuid.uuid4(),
         task_id=task.id,

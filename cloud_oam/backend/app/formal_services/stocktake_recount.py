@@ -595,6 +595,13 @@ def _validate_terminal_review_graph(
         )
 
     for review in reviews:
+        if (
+            type(review.expected_task_version) is not int
+            or type(review.resulting_task_version) is not int
+            or review.expected_task_version < 0
+            or review.resulting_task_version != review.expected_task_version + 1
+        ):
+            _evidence_invalid("复盘来源复核缺少连续任务版本证据")
         items = tuple(
             db.scalars(
                 select(StocktakeReviewItem)
@@ -605,7 +612,7 @@ def _validate_terminal_review_graph(
         command = review_service.SubmitStocktakeReviewCommand(
             task_id=evidence.task.id,
             round_id=evidence.round_row.id,
-            expected_task_version=0,
+            expected_task_version=review.expected_task_version,
             decision=review.decision,
             comment=review.comment,
             items=tuple(

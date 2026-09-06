@@ -450,7 +450,14 @@ MATERIAL_REQUEST_SUPPLY_EVENT_KEY_REVISION = (
     / "versions"
     / "20260905_0061_material_request_supply_event_key_expression.py"
 )
-HEAD_REVISION = "20260906_0064"
+REVIEW_COMMAND_STATUS_REVISION = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260906_0063_review_command_status.py"
+)
+HEAD_REVISION = "20260906_0063"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -1495,7 +1502,8 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == "20260905_0062"
+    assert head.down_revision == "20260906_0064"
+    assert REVIEW_COMMAND_STATUS_REVISION.exists()
     supply_event_key_head = script.get_revision(
         MATERIAL_REQUEST_SUPPLY_EVENT_KEY_REVISION_ID
     )

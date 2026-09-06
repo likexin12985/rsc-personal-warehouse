@@ -38,6 +38,28 @@ V1.0 是产品、状态、权限、数据表、迁移和验收的唯一设计基
 
 ## 4. 当前源码状态
 
+### 2026-09-06 0063 收口（本地工作树，尚未远程放行）
+
+本轮已在 `codex/production-readiness-gates` 工作树实现 0063 前向迁移及非期初复核历史证据
+复核，尚未把本轮改动推送或宣称通过新的 PostgreSQL 16 真库门禁。拓扑为
+`20260905_0062 → 20260906_0064 → 20260906_0063`，最终唯一 head 为 `20260906_0063`；
+没有改写 0047、0058 或 0064 历史迁移。
+
+- `stocktake_reviews` 新增 expected/resulting 任务版本对；PG CHECK 明确要求双 NULL，或
+  双非空且 resulting=expected+1，SQLite 触发器和 PG16 门禁脚本均覆盖双向半空、错位和降级
+  阻断；本机未提供 disposable PostgreSQL 16，因此尚未形成新的真库执行证据。
+- 复核写入、幂等重放、重算来源和 generic 非期初查询都不再猜测历史版本；状态迁移与审计
+  摘要缺失/篡改会 fail-closed。generic `stocktake_query` 只做 payload-level 历史重证，尚未
+  交付独立 review command-status endpoint 的完整 owner-graph + audit-chain 读端。
+- 已完成本轮定向回归：`67 passed`（0063 迁移、复核/重算、generic 查询、API 和过账计划）；
+  完整后端静态套件（不含动态 PG16）为 `718 passed in 168.02s`。本机 PG16 动态用例按环境
+  `1 skipped`，不构成真库发布证据。本轮已形成本地提交但尚未推送；本地分支领先远端 4 个
+  提交，四个未跟踪 deployment 目录未纳入本轮范围。准确提交 SHA、工作树和远端一致性仍须
+  在接管时用 `git status`、`git rev-parse` 和远端读取重新核验。
+
+审批、分配、占用、出库、发货、物流签收、OAM 收货、RSC/个人仓入库、通知送达和对账同步仍
+是独立状态轴，不能由盘点或复核状态代替。
+
 ### 2026-09-06 当前门禁已验收（最新准确 SHA）
 
 当前分支 `codex/production-readiness-gates` 的安全提交为

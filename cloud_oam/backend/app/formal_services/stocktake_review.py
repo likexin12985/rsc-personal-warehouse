@@ -170,6 +170,8 @@ class StocktakeReviewResult:
     review_stage: str
     decision: str
     resulting_task_status: str
+    expected_task_version: int
+    resulting_task_version: int
     task_version: int
     item_count: int
     pending_verification_count: int
@@ -356,6 +358,8 @@ def _submit_review(
         db, task=task, round_row=round_row, now=now
     )
     existing_reviews = _load_reviews(db, task.id, round_row.id)
+    for prior_review in existing_reviews:
+        _require_review_version_coordinates(prior_review)
     existing_by_key = db.scalar(
         select(StocktakeReview)
         .where(StocktakeReview.idempotency_key_hash == key_hash)
@@ -472,6 +476,14 @@ def _write_review(
     del grant
     task = evidence.task
     round_row = evidence.round_row
+    expected_task_version = command.expected_task_version
+    resulting_task_version = expected_task_version + 1
+    if task.version != expected_task_version:
+        _fail(
+            "stocktake_review_version_conflict",
+            "conflict",
+            "盘点任务版本已变化，请重新读取后提交",
+        )
     review = StocktakeReview(
         id=uuid.uuid4(),
         task_id=task.id,
@@ -481,6 +493,8 @@ def _write_review(
         reviewer_person_id=actor.person_id,
         reviewer_role_assignment_id=assignment.id,
         authorization_version=actor.authorization_version,
+        expected_task_version=expected_task_version,
+        resulting_task_version=resulting_task_version,
         decision=command.decision,
         comment=command.comment,
         decision_manifest_sha256=manifest,
@@ -524,12 +538,19 @@ def _write_review(
     resulting_status = _resulting_status(stage, command.decision)
     task.status = resulting_status
     task.version += 1
+    if task.version != resulting_task_version:
+        _fail(
+            "stocktake_review_version_integrity_error",
+            "service_unavailable",
+            "盘点复核任务版本证据不连续",
+        )
     task.updated_at = now
     metadata = {
         "decision": command.decision,
         "decision_manifest_sha256": manifest,
         "difference_completion_id": str(evidence.completion.id),
         "difference_manifest_sha256": evidence.completion.difference_manifest_sha256,
+        "expected_task_version": expected_task_version,
         "item_count": len(evidence.differences),
         "pending_verification_count": sum(
             1
@@ -538,7 +559,8 @@ def _write_review(
         ),
         "review_id": str(review.id),
         "round_id": str(round_row.id),
-        "schema": "cloud_oam.stocktake.nonopening_review_event.v1",
+        "resulting_task_version": resulting_task_version,
+        "schema": "cloud_oam.stocktake.nonopening_review_event.v2",
         "stage": stage,
     }
     if effective_completion is not None:
@@ -1750,6 +1772,8 @@ def _validate_review_replay(
         row.difference_id: (row.decision, row.comment) for row in items
     }
     expected_status = _resulting_status(stage, command.decision)
+    expected_task_version = command.expected_task_version
+    resulting_task_version = expected_task_version + 1
     state_rows = tuple(
         db.scalars(
             select(StateTransitionEvent).where(
@@ -1766,6 +1790,8 @@ def _validate_review_replay(
         or review.reviewer_user_id != actor.user_id
         or review.reviewer_person_id != actor.person_id
         or review.authorization_version != actor.authorization_version
+        or review.expected_task_version != expected_task_version
+        or review.resulting_task_version != resulting_task_version
         or review.decision != command.decision
         or review.comment != command.comment
         or review.decision_manifest_sha256 != manifest
@@ -1774,6 +1800,11 @@ def _validate_review_replay(
         or any(_as_utc(row.created_at) != _as_utc(review.reviewed_at) for row in items)
         or len(state_rows) != 1
         or state_rows[0].to_status != expected_status
+        or not isinstance(state_rows[0].metadata_jsonb, dict)
+        or state_rows[0].metadata_jsonb.get("expected_task_version")
+        != expected_task_version
+        or state_rows[0].metadata_jsonb.get("resulting_task_version")
+        != resulting_task_version
     ):
         _fail(
             "stocktake_review_idempotency_conflict",
@@ -1863,6 +1894,7 @@ def _validate_effective_approval_replay(
                 str(value) for value in sorted(supplied_scope_ids, key=str)
             ],
             "review_manifest_sha256": review_manifest,
+            "expected_task_version": command.expected_task_version,
             "schema": "cloud_oam.stocktake.effective_approval_request.v1",
         }
     )
@@ -1933,8 +1965,10 @@ def _review_manifest(
                 }
                 for row in evidence.differences
             ],
+            "expected_task_version": command.expected_task_version,
             "round_id": str(evidence.round_row.id),
-            "schema": "cloud_oam.stocktake.nonopening_review.v1",
+            "resulting_task_version": command.expected_task_version + 1,
+            "schema": "cloud_oam.stocktake.nonopening_review.v2",
             "stage": stage,
             "task_id": str(evidence.task.id),
         }
@@ -1994,6 +2028,8 @@ def _verify_review_audit(db: Session, review: StocktakeReview, proof: object) ->
         or after.get("decision_manifest_sha256")
         != review.decision_manifest_sha256
         or after.get("review_id") != str(review.id)
+        or after.get("expected_task_version") != review.expected_task_version
+        or after.get("resulting_task_version") != review.resulting_task_version
     ):
         _evidence_invalid("盘点复核审计摘要与复核事实不一致")
 
@@ -2016,6 +2052,24 @@ def _load_reviews(
     if stages not in ([], [REGION_STAGE], [REGION_STAGE, HEADQUARTERS_STAGE]):
         _evidence_invalid("盘点复核层级链不完整或顺序无效")
     return rows
+
+
+def _require_review_version_coordinates(review: StocktakeReview) -> None:
+    """Reject legacy NULL coordinates instead of guessing historical state."""
+
+    expected = review.expected_task_version
+    resulting = review.resulting_task_version
+    if (
+        type(expected) is not int
+        or expected < 0
+        or type(resulting) is not int
+        or resulting != expected + 1
+    ):
+        _fail(
+            "stocktake_review_version_history_unavailable",
+            "service_unavailable",
+            "历史盘点复核缺少连续任务版本证据",
+        )
 
 
 def _task_principal_user_ids(
@@ -2059,7 +2113,7 @@ def _task_principal_user_ids(
 def _result(
     review: StocktakeReview,
     differences: Sequence[StocktakeDifference],
-    task_version: int,
+    task_version: int | None = None,
     *,
     effective_approval_completion_id: uuid.UUID | None = None,
 ) -> StocktakeReviewResult:
@@ -2069,6 +2123,13 @@ def _result(
         if row.reason_code == "stocktake_pending_verification"
     )
     status = _resulting_status(review.review_stage, review.decision)
+    if review.expected_task_version is None or review.resulting_task_version is None:
+        _fail(
+            "stocktake_review_version_history_unavailable",
+            "service_unavailable",
+            "盘点复核缺少连续任务版本证据",
+        )
+    _require_review_version_coordinates(review)
     return StocktakeReviewResult(
         review_id=review.id,
         task_id=review.task_id,
@@ -2076,7 +2137,9 @@ def _result(
         review_stage=review.review_stage,
         decision=review.decision,
         resulting_task_status=status,
-        task_version=task_version,
+        expected_task_version=review.expected_task_version,
+        resulting_task_version=review.resulting_task_version,
+        task_version=review.resulting_task_version,
         item_count=len(differences),
         pending_verification_count=pending,
         ready_for_posting=(

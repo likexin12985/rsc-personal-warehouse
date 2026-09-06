@@ -27,7 +27,7 @@ from ..formal_access import (
     ScopeGrant,
     load_formal_principal,
 )
-from ..foundation_models import Organization, Person
+from ..foundation_models import AuditEvent, Organization, Person, StateTransitionEvent
 from ..inventory_models import InventoryLedgerHead, StockAccount, StockLocation
 from ..models import User
 from ..stocktake_models import (
@@ -208,6 +208,8 @@ class _TaskGraph:
     differences: tuple[StocktakeDifference, ...]
     reviews: tuple[StocktakeReview, ...]
     review_items: tuple[StocktakeReviewItem, ...]
+    review_audit_events: tuple[AuditEvent, ...]
+    state_transition_events: tuple[StateTransitionEvent, ...]
     effective_approval_completions: tuple[
         StocktakeEffectiveApprovalCompletion, ...
     ]
@@ -661,6 +663,36 @@ def _load_task_graphs(
             .execution_options(populate_existing=True)
         ).all()
     )
+    review_ids = tuple(row.id for row in reviews)
+    review_audit_events = tuple(
+        db.scalars(
+            select(AuditEvent)
+            .where(
+                AuditEvent.stream_key == "inventory",
+                AuditEvent.aggregate_type == "stocktake_review",
+                AuditEvent.aggregate_id.in_(tuple(str(value) for value in review_ids)),
+            )
+            .order_by(AuditEvent.aggregate_id, AuditEvent.occurred_at, AuditEvent.id)
+            .execution_options(populate_existing=True)
+        ).all()
+    )
+    state_transition_events = tuple(
+        db.scalars(
+            select(StateTransitionEvent)
+            .where(
+                StateTransitionEvent.aggregate_type == "stocktake_task",
+                StateTransitionEvent.aggregate_id.in_(
+                    tuple(str(value) for value in task_ids)
+                ),
+            )
+            .order_by(
+                StateTransitionEvent.aggregate_id,
+                StateTransitionEvent.occurred_at,
+                StateTransitionEvent.id,
+            )
+            .execution_options(populate_existing=True)
+        ).all()
+    )
     review_items = tuple(
         db.scalars(
             select(StocktakeReviewItem)
@@ -841,6 +873,9 @@ def _load_task_graphs(
         "difference_completions": _group(difference_completions, lambda row: row.task_id),
         "differences": _group(differences, lambda row: row.task_id),
         "reviews": _group(reviews, lambda row: row.task_id),
+        "state_transition_events": _group(
+            state_transition_events, lambda row: row.aggregate_id
+        ),
         "effective_approval_completions": _group(
             effective_approval_completions, lambda row: row.task_id
         ),
@@ -878,6 +913,16 @@ def _load_task_graphs(
             _projection_invalid()
         count_serials_by_task[task_id].append(row)
     review_task = {row.id: row.task_id for row in reviews}
+    review_audit_by_task: dict[uuid.UUID, list[AuditEvent]] = defaultdict(list)
+    for row in review_audit_events:
+        try:
+            review_id = uuid.UUID(row.aggregate_id)
+        except (TypeError, ValueError):
+            _projection_invalid()
+        task_id = review_task.get(review_id)
+        if task_id is None:
+            _projection_invalid()
+        review_audit_by_task[task_id].append(row)
     review_items_by_task: dict[uuid.UUID, list[StocktakeReviewItem]] = defaultdict(list)
     for row in review_items:
         task_id = review_task.get(row.review_id)
@@ -916,6 +961,10 @@ def _load_task_graphs(
             differences=by_task["differences"].get(task.id, ()),
             reviews=by_task["reviews"].get(task.id, ()),
             review_items=tuple(review_items_by_task.get(task.id, ())),
+            review_audit_events=tuple(review_audit_by_task.get(task.id, ())),
+            state_transition_events=tuple(
+                by_task["state_transition_events"].get(str(task.id), ())
+            ),
             effective_approval_completions=by_task[
                 "effective_approval_completions"
             ].get(task.id, ()),
@@ -1018,6 +1067,20 @@ def _validate_graph(graph: _TaskGraph) -> None:
             _projection_invalid()
     difference_ids = {row.id for row in graph.differences}
     review_ids = {row.id for row in graph.reviews}
+    # Non-opening review history is recoverable only when the command's
+    # optimistic-concurrency coordinates were persisted as one continuous
+    # pair.  NULL legacy rows are deliberately fail-closed; guessing from the
+    # current task version would turn a current read into a false historical
+    # fact.
+    if any(
+        type(row.expected_task_version) is not int
+        or row.expected_task_version < 0
+        or type(row.resulting_task_version) is not int
+        or row.resulting_task_version != row.expected_task_version + 1
+        for row in graph.reviews
+    ):
+        _projection_invalid()
+    _validate_review_history_evidence(graph)
     if any(
         row.review_id not in review_ids or row.difference_id not in difference_ids
         for row in graph.review_items
@@ -1049,6 +1112,113 @@ def _validate_graph(graph: _TaskGraph) -> None:
     _unique_by(graph.reviews, lambda row: (row.round_id, row.review_stage))
     _unique_by(graph.recount_cases, lambda row: row.next_round_no)
     _unique_by(graph.dispositions, lambda row: row.observation_id)
+
+
+def _validate_review_history_evidence(graph: _TaskGraph) -> None:
+    """Reprove persisted non-opening review facts before exposing history.
+
+    The review row is only one projection of a command.  A query must not
+    return it as historical truth when the corresponding state transition or
+    immutable audit payload is missing or carries a different version pair.
+    This is deliberately a payload check only; callers that need the complete
+    audit-chain proof use the write/replay services' prelocked verifier.
+    """
+
+    if not graph.reviews:
+        return
+    differences_by_round: dict[uuid.UUID, tuple[StocktakeDifference, ...]] = {}
+    for round_row in graph.rounds:
+        differences_by_round[round_row.id] = tuple(
+            row for row in graph.differences if row.round_id == round_row.id
+        )
+    completion_by_round = {
+        row.round_id: row for row in graph.difference_completions
+    }
+    review_audits = tuple(graph.review_audit_events)
+    state_events = tuple(graph.state_transition_events)
+    for review in graph.reviews:
+        if review.review_stage not in {"region", "headquarters"}:
+            _projection_invalid()
+        differences = differences_by_round.get(review.round_id)
+        completion = completion_by_round.get(review.round_id)
+        if differences is None or completion is None:
+            _projection_invalid()
+        assert differences is not None and completion is not None
+        expected_status = (
+            "recount_required"
+            if review.decision != "approve"
+            else ("hq_review" if review.review_stage == "region" else "approved")
+        )
+        previous_status = (
+            "submitted" if review.review_stage == "region" else "hq_review"
+        )
+        expected_metadata = {
+            "decision": review.decision,
+            "decision_manifest_sha256": review.decision_manifest_sha256,
+            "difference_completion_id": str(completion.id),
+            "difference_manifest_sha256": completion.difference_manifest_sha256,
+            "expected_task_version": review.expected_task_version,
+            "item_count": len(differences),
+            "pending_verification_count": sum(
+                row.reason_code == "stocktake_pending_verification"
+                for row in differences
+            ),
+            "review_id": str(review.id),
+            "round_id": str(review.round_id),
+            "resulting_task_version": review.resulting_task_version,
+            "schema": "cloud_oam.stocktake.nonopening_review_event.v2",
+            "stage": review.review_stage,
+        }
+        state_rows = tuple(
+            row
+            for row in state_events
+            if row.idempotency_key
+            == f"stocktake-nonopening-review:state:{review.id}"
+        )
+        if len(state_rows) != 1:
+            _projection_invalid()
+        state = state_rows[0]
+        state_metadata = state.metadata_jsonb
+        if (
+            state.aggregate_type != "stocktake_task"
+            or state.aggregate_id != str(graph.task.id)
+            or state.from_status != previous_status
+            or state.to_status != expected_status
+            or state.reason
+            != f"nonopening_{review.review_stage}_review_{review.decision}"
+            or state.actor_id != review.reviewer_user_id
+            or _aware(state.occurred_at) != _aware(review.reviewed_at)
+            or not isinstance(state_metadata, dict)
+            or any(state_metadata.get(key) != value for key, value in expected_metadata.items())
+        ):
+            _projection_invalid()
+
+        audit_rows = tuple(
+            row
+            for row in review_audits
+            if row.aggregate_id == str(review.id)
+            and row.action
+            == f"stocktake.nonopening.{review.review_stage}_reviewed"
+        )
+        if len(audit_rows) != 1:
+            _projection_invalid()
+        audit = audit_rows[0]
+        after = audit.after_jsonb
+        if (
+            audit.stream_key != "inventory"
+            or audit.aggregate_type != "stocktake_review"
+            or audit.actor_user_id != review.reviewer_user_id
+            or audit.before_jsonb is not None
+            or _aware(audit.occurred_at) != _aware(review.reviewed_at)
+            or not isinstance(after, dict)
+            or any(after.get(key) != value for key, value in expected_metadata.items())
+            or after.get("authorization_version") != review.authorization_version
+            or after.get("reviewer_person_id") != str(review.reviewer_person_id)
+            or after.get("reviewer_role_assignment_id")
+            != str(review.reviewer_role_assignment_id)
+            or after.get("reviewer_user_id") != review.reviewer_user_id
+        ):
+            _projection_invalid()
 
 
 def _validate_effective_approval_projection(
@@ -2107,6 +2277,8 @@ def _review_output(
             "review_id": review.id,
             "review_stage": review.review_stage,
             "decision": review.decision,
+            "expected_task_version": review.expected_task_version,
+            "resulting_task_version": review.resulting_task_version,
             "comment": review.comment if covers_all else None,
             "comment_visible": covers_all,
             "reviewer_person_id": review.reviewer_person_id,

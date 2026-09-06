@@ -59,11 +59,19 @@ SUPPLY_TASK_SECURITY_REVISION = "20260905_0060"
 SUPPLY_TASK_EVENT_KEY_REVISION = "20260905_0061"
 NONOPENING_COUNT_HISTORY_OWNER_REVISION = "20260905_0062"
 STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION = "20260906_0064"
-HEAD_REVISION = STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION
+STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION = "20260906_0063"
+HEAD_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 HARDENED_HEAD_REVISIONS = frozenset(
     {
         NONOPENING_COUNT_HISTORY_OWNER_REVISION,
         STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
+        STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION,
+    }
+)
+FINALIZER_LOCK_REVISIONS = frozenset(
+    {
+        STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
+        STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION,
     }
 )
 OPENING_BACKFILL_DATABASE_PREFIX = f"{DATABASE_NAME}_0052_backfill_"
@@ -4543,6 +4551,23 @@ def _load_stocktake_recount_guard_security_migration_0049() -> object:
     return migration
 
 
+def _load_nonopening_stocktake_start_causality_migration_0047() -> object:
+    path = (
+        CLOUD_ROOT
+        / "backend/alembic/versions/20260903_0047_nonopening_stocktake_start_causality.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "rsc_pg16_gate_migration_0047_nonopening_stocktake_start_causality",
+        path,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    assert migration.revision == "20260903_0047"
+    assert migration.down_revision == CONTENT_CAUSALITY_REVISION
+    return migration
+
+
 def _load_stocktake_observation_scope_mode_migration_0050() -> object:
     spec = importlib.util.spec_from_file_location(
         "rsc_pg16_gate_migration_0050_observation_scope_mode_manifest",
@@ -4683,6 +4708,7 @@ def _expected_0049_function_body_sha256(
             SUPPLY_TASK_EVENT_KEY_REVISION,
             NONOPENING_COUNT_HISTORY_OWNER_REVISION,
             STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
+            STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION,
         }
     )
     assert expected_revision in (
@@ -4719,6 +4745,7 @@ def _expected_0049_function_body_sha256(
             SUPPLY_TASK_EVENT_KEY_REVISION,
             NONOPENING_COUNT_HISTORY_OWNER_REVISION,
             STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
+            STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION,
         }
         and signature == migration.ROUND_ASSIGNMENT_HELPER_0021_SIGNATURE
     ):
@@ -4732,7 +4759,8 @@ def _expected_0049_function_body_sha256(
                               SUPPLY_TASK_CAUSALITY_REVISION, SUPPLY_TASK_SECURITY_REVISION,
                               SUPPLY_TASK_EVENT_KEY_REVISION,
                               NONOPENING_COUNT_HISTORY_OWNER_REVISION,
-                              STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION}
+                              STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
+                              STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION}
         and signature == migration.REVIEW_GRAPH_VALIDATOR_0032_SIGNATURE
     ):
         terminal_migration = (
@@ -4888,6 +4916,7 @@ def _assert_0049_recount_guard_catalog(
             SUPPLY_TASK_EVENT_KEY_REVISION,
             NONOPENING_COUNT_HISTORY_OWNER_REVISION,
             STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
+            STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION,
         }
     expected_function_rows = []
     for (
@@ -5456,6 +5485,7 @@ def _assert_0052_opening_terminal_catalog(
                             SUPPLY_TASK_EVENT_KEY_REVISION,
                             NONOPENING_COUNT_HISTORY_OWNER_REVISION,
                             STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
+                            STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION,
                         }
                         and row[0]
                         == dispatch_migration.GRAPH_CLOSURE_SIGNATURE
@@ -5474,6 +5504,7 @@ def _assert_0052_opening_terminal_catalog(
                             SUPPLY_TASK_EVENT_KEY_REVISION,
                             NONOPENING_COUNT_HISTORY_OWNER_REVISION,
                             STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
+                            STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION,
                         }
                         and row[0]
                         == history_migration.ROUND_SUBMISSION_SIGNATURE
@@ -7067,7 +7098,7 @@ def _0058_review_terminal_catalog_state() -> dict[str, object]:
             schema_revision = revision_rows[0][0]
             if schema_revision in HARDENED_HEAD_REVISIONS:
                 signatures += (history_migration.LOCK_SIGNATURE,)
-            if schema_revision == STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION:
+            if schema_revision in FINALIZER_LOCK_REVISIONS:
                 signatures += (finalizer_migration.LOCK_SIGNATURE,)
             for signature in signatures:
                 cursor.execute(
@@ -7197,8 +7228,21 @@ def _load_stocktake_finalizer_organization_lock_migration_0064():
     return migration
 
 
+def _load_stocktake_review_command_status_migration_0063():
+    path = CLOUD_ROOT / "backend/alembic/versions/20260906_0063_review_command_status.py"
+    specification = importlib.util.spec_from_file_location(
+        "pg16_stocktake_review_command_status_0063", path
+    )
+    assert specification is not None and specification.loader is not None
+    migration = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(migration)
+    assert migration.revision == STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
+    assert migration.down_revision == STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION
+    return migration
+
+
 def _head_runtime_ready_hash() -> str:
-    return _load_stocktake_finalizer_organization_lock_migration_0064().RUNTIME_READY_BODY_SHA256_0064
+    return _load_stocktake_review_command_status_migration_0063().RUNTIME_READY_BODY_SHA256_0063
 
 
 def _assert_0058_review_terminal_catalog_state(
@@ -7261,7 +7305,7 @@ def _assert_0058_review_terminal_catalog_state(
         assert history_lock[16] == history_migration.LOCK_BODY_SHA256
         assert history_lock[17].count(migration.UPSTREAM_REVIEW_LOCK_FUNCTION) == 1
         assert history_lock[18:] == (0, True)
-    if state["revision"] == STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION:
+    if state["revision"] in FINALIZER_LOCK_REVISIONS:
         finalizer_migration = _load_stocktake_finalizer_organization_lock_migration_0064()
         expected_signatures.add(finalizer_migration.LOCK_SIGNATURE)
         finalizer_lock = functions[finalizer_migration.LOCK_SIGNATURE]
@@ -17880,6 +17924,13 @@ def _assert_pg16_cutoff_replay_multiscope_owner_contract() -> None:
         assert fragment in dynamic_source
     entry_source = inspect.getsource(_assert_0047_real_api_stocktake_start)
     assert "_assert_dynamic_sn_cutoff_replay_multiscope" in entry_source
+    start_blocker_position = entry_source.index(
+        "_assert_0047_rejects_nonempty_start_downgrade("
+    )
+    lifecycle_position = entry_source.index(
+        "_complete_0051_nonopening_stocktake_service_chain("
+    )
+    assert start_blocker_position < lifecycle_position
 
 
 def _assert_pg16_posting_tail_authorization_contract() -> None:
@@ -19467,6 +19518,15 @@ def _assert_0047_real_api_stocktake_start(
                 StocktakeSnapshotLine.task_id == task_id
             )
         ).one() == snapshot_before
+    # Exercise the historical 0047 downgrade blocker while this task has only
+    # its sealed start graph.  Once review coordinates exist, the new 0063
+    # blocker must intentionally take precedence and would hide this older
+    # migration's independent safety proof.
+    _assert_0047_rejects_nonempty_start_downgrade(
+        api_engine,
+        task_id=task_id,
+        expected_task_version=started.version,
+    )
     terminal_version = _complete_0051_nonopening_stocktake_service_chain(
         api_engine,
         task_id=task_id,
@@ -19519,7 +19579,7 @@ def _assert_0047_rejects_nonempty_start_downgrade(
     from app.stocktake_models import FormalStocktakeTask, StocktakeStartCompletion
 
     assert _current_revision() == HEAD_REVISION
-    migration = _load_nonopening_review_terminal_status_migration_0058()
+    migration = _load_nonopening_stocktake_start_causality_migration_0047()
     blocked = _run_alembic(
         "downgrade",
         CONTENT_CAUSALITY_REVISION,
@@ -19527,32 +19587,13 @@ def _assert_0047_rejects_nonempty_start_downgrade(
     )
     assert migration.DOWNGRADE_BLOCKER in (blocked.stdout + blocked.stderr)
     assert _current_revision() == HEAD_REVISION
-    _assert_0058_review_terminal_catalog_state(
-        _0058_review_terminal_catalog_state(), fixed=True
-    )
-    _assert_0052_opening_terminal_catalog(
-        hardened=True,
-        expected_revision=HEAD_REVISION,
-    )
-    _assert_0051_difference_completion_catalog(
-        repaired=True,
-        expected_revision=HEAD_REVISION,
-    )
-    _assert_0051_api_direct_execute_denied()
-    _assert_0048_scope_guard_catalog(
-        security_definer=True,
-        expected_revision=HEAD_REVISION,
-    )
-    _assert_0049_recount_guard_catalog(
-        callers_security_definer=True,
-        expected_revision=HEAD_REVISION,
-    )
+    _assert_0047_start_catalog(installed=True)
     with Session(api_engine) as session:
         task = session.get(FormalStocktakeTask, task_id)
         assert task is not None
         assert (task.task_type, task.status, task.version) == (
             "sample",
-            "closed",
+            "counting",
             expected_task_version,
         )
         completion = session.scalar(
@@ -19562,6 +19603,75 @@ def _assert_0047_rejects_nonempty_start_downgrade(
         )
         assert completion is not None
         assert len(completion.graph_manifest_sha256) == 64
+
+
+def _assert_0063_nonopening_review_version_trigger(task_id: uuid.UUID) -> None:
+    """A real non-opening review cannot lose its optimistic coordinates."""
+    migration = _load_stocktake_review_command_status_migration_0063()
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT review.id, review.expected_task_version, "
+                "review.resulting_task_version "
+                "FROM public.stocktake_reviews AS review "
+                "JOIN public.stocktake_tasks AS task ON task.id = review.task_id "
+                "WHERE review.task_id = %s "
+                "AND task.task_type IN ('full','sample','ad_hoc','personal','termination') "
+                "ORDER BY review.created_at, review.id LIMIT 1",
+                (task_id,),
+            )
+            row = cursor.fetchone()
+            assert row is not None
+            review_id, expected_version, resulting_version = row
+            assert expected_version is not None
+            assert resulting_version == expected_version + 1
+
+    # Exercise the trigger and the explicit two-sided CHECK against all
+    # malformed representations.  PostgreSQL CHECK expressions use three-
+    # valued logic, so each half-empty pair must be rejected explicitly rather
+    # than relying on ``>= 0`` to turn UNKNOWN into FALSE.
+    for malformed_pair in (
+        (None, None),
+        (None, resulting_version),
+        (expected_version, None),
+        (expected_version, expected_version + 2),
+    ):
+        with psycopg.connect(**_admin_parameters()) as connection:
+            with connection.cursor() as cursor:
+                with pytest.raises(
+                    psycopg.errors.CheckViolation,
+                    match="non-opening stocktake review version pair is required",
+                ):
+                    cursor.execute(
+                        "UPDATE public.stocktake_reviews "
+                        "SET expected_task_version = %s, resulting_task_version = %s "
+                        "WHERE id = %s",
+                        (*malformed_pair, review_id),
+                    )
+            connection.rollback()
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT expected_task_version, resulting_task_version "
+                "FROM public.stocktake_reviews WHERE id = %s",
+                (review_id,),
+            )
+            assert cursor.fetchone() == (expected_version, resulting_version)
+    assert migration.TRIGGER_BODY_SHA256
+
+
+def _assert_0063_rejects_nonempty_review_downgrade() -> None:
+    """A persisted 0063 review fact must block only the 0063 downgrade."""
+
+    migration = _load_stocktake_review_command_status_migration_0063()
+    assert _current_revision() == HEAD_REVISION
+    blocked = _run_alembic(
+        "downgrade",
+        STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
+        expect_success=False,
+    )
+    assert migration.DOWNGRADE_BLOCKER in (blocked.stdout + blocked.stderr)
+    assert _current_revision() == HEAD_REVISION
 
 
 def _wait_for_backend_lock(backend_pid: int) -> None:
@@ -19874,6 +19984,112 @@ def _0064_finalizer_organization_catalog():
     return (*row[:-1], body_hash), acl
 
 
+def _0063_review_command_status_catalog():
+    migration = _load_stocktake_review_command_status_migration_0063()
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT attribute.attname, pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) "
+                "FROM pg_catalog.pg_attribute AS attribute "
+                "WHERE attribute.attrelid = 'public.stocktake_reviews'::regclass "
+                "AND attribute.attname = ANY(%s) AND attribute.attnum > 0 "
+                "AND NOT attribute.attisdropped ORDER BY attribute.attname",
+                (["expected_task_version", "resulting_task_version"],),
+            )
+            columns = tuple(cursor.fetchall())
+            cursor.execute(
+                "SELECT pg_catalog.pg_get_constraintdef(constraint_row.oid) "
+                "FROM pg_catalog.pg_constraint AS constraint_row "
+                "WHERE constraint_row.conrelid = 'public.stocktake_reviews'::regclass "
+                "AND constraint_row.conname = %s",
+                (migration.CHECK_CONSTRAINT,),
+            )
+            constraint_row = cursor.fetchone()
+            cursor.execute(
+                "SELECT owner.rolname, proc.prosecdef, proc.proconfig, "
+                "proc.provolatile, proc.proparallel, proc.proisstrict, "
+                "proc.proleakproof, language.lanname, proc.prokind, "
+                "pg_catalog.pg_get_function_result(proc.oid), proc.proacl::text, "
+                "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+                "proc.prosrc, 'UTF8')), 'hex') "
+                "FROM pg_catalog.pg_proc AS proc "
+                "JOIN pg_catalog.pg_roles AS owner ON owner.oid = proc.proowner "
+                "JOIN pg_catalog.pg_language AS language ON language.oid = proc.prolang "
+                "WHERE proc.oid = pg_catalog.to_regprocedure(%s)",
+                (migration.TRIGGER_SIGNATURE,),
+            )
+            function_row = cursor.fetchone()
+            cursor.execute(
+                "SELECT trigger_row.tgenabled, trigger_row.tgtype, "
+                "trigger_row.tgqual IS NULL, trigger_row.tgfoid "
+                "FROM pg_catalog.pg_trigger AS trigger_row "
+                "WHERE NOT trigger_row.tgisinternal "
+                "AND trigger_row.tgrelid = 'public.stocktake_reviews'::regclass "
+                "AND trigger_row.tgname = %s",
+                (migration.TRIGGER_NAME,),
+            )
+            trigger_row = cursor.fetchone()
+            cursor.execute(
+                "SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+                "proc.prosrc, 'UTF8')), 'hex') "
+                "FROM pg_catalog.pg_proc AS proc "
+                "WHERE proc.oid = pg_catalog.to_regprocedure(%s)",
+                (migration.RUNTIME_READY_SIGNATURE,),
+            )
+            readiness_row = cursor.fetchone()
+    return {
+        "columns": columns,
+        "constraint": None if constraint_row is None else constraint_row[0],
+        "function": function_row,
+        "trigger": trigger_row,
+        "readiness_hash": None if readiness_row is None else readiness_row[0],
+    }
+
+
+def _assert_0063_empty_review_command_downgrade_and_reupgrade() -> None:
+    migration = _load_stocktake_review_command_status_migration_0063()
+    assert _current_revision() == HEAD_REVISION
+    before = _0063_review_command_status_catalog()
+    assert before["columns"] == (
+        ("expected_task_version", "bigint"),
+        ("resulting_task_version", "bigint"),
+    )
+    assert before["constraint"] is not None
+    constraint_definition = before["constraint"].lower()
+    for required_fragment in (
+        "expected_task_version is null",
+        "resulting_task_version is null",
+        "expected_task_version is not null",
+        "resulting_task_version is not null",
+        "resulting_task_version = expected_task_version + 1",
+    ):
+        assert required_fragment in constraint_definition
+    assert before["function"] is not None
+    assert before["function"][0:10] == (
+        "star_oam_migrator", True, ["search_path=pg_catalog, public"],
+        "v", "u", False, False, "plpgsql", "f", "trigger",
+    )
+    assert before["function"][10] == (
+        "{star_oam_migrator=X/star_oam_migrator}"
+    )
+    assert before["function"][11] == migration.TRIGGER_BODY_SHA256
+    assert before["trigger"][0:3] == ("A", 23, True)
+    assert before["readiness_hash"] == migration.RUNTIME_READY_BODY_SHA256_0063
+
+    _run_alembic("downgrade", STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION)
+    assert _current_revision() == STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION
+    after_downgrade = _0063_review_command_status_catalog()
+    assert after_downgrade["columns"] == ()
+    assert after_downgrade["constraint"] is None
+    assert after_downgrade["function"] is None
+    assert after_downgrade["trigger"] is None
+    assert after_downgrade["readiness_hash"] == migration.RUNTIME_READY_BODY_SHA256_0064
+
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+    assert _0063_review_command_status_catalog() == before
+
+
 def _assert_0064_empty_finalizer_organization_downgrade_and_reupgrade() -> None:
     migration = _load_stocktake_finalizer_organization_lock_migration_0064()
     before = _0064_finalizer_organization_catalog()
@@ -20169,6 +20385,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
+    _assert_0063_empty_review_command_downgrade_and_reupgrade()
     _assert_0064_empty_finalizer_organization_downgrade_and_reupgrade()
     _assert_0062_empty_history_owner_downgrade_and_reupgrade()
     _assert_0061_empty_event_key_downgrade_and_reupgrade()
@@ -20391,21 +20608,21 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         )
         (
             stocktake_task_id,
-            stocktake_task_version,
+            _stocktake_task_version,
         ) = _assert_0047_real_api_stocktake_start(
             api_engine,
             actor_user_id=admin_user_id,
             assignee_user_id=manager_user_id,
             material_request_id=request_id,
         )
+        # Create and verify the 0063 review fact only after all older
+        # downgrade blockers have been exercised.  The 0047 start blocker is
+        # tested inside the start helper before it creates review facts.
+        _assert_0063_nonopening_review_version_trigger(stocktake_task_id)
+        _assert_0063_rejects_nonempty_review_downgrade()
         _assert_0049_recount_guard_catalog(
             callers_security_definer=True,
             expected_revision=HEAD_REVISION,
-        )
-        _assert_0047_rejects_nonempty_start_downgrade(
-            api_engine,
-            task_id=stocktake_task_id,
-            expected_task_version=stocktake_task_version,
         )
         # Run new supply facts after all historical nonempty downgrade probes,
         # so the 0059 blocker cannot mask a lower revision's independent gate.

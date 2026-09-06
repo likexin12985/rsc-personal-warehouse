@@ -543,7 +543,20 @@ OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064 = {
     ),
 }
 
-OAM_SYNC_FUNCTION_MANIFEST = OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064
+# 0063 is intentionally a linear child of the already released 0064
+# migration.  Preserve the 0064 manifest for downgrade/readback checks while
+# making the generic runtime manifest describe the actual 0063 head.
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0063 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064[
+            "rsc_oam_runtime_binding_ready_0044()"
+        ][:6],
+        "dd43dabe3a816b44b888b4cda1fdcbc84eeefef8b659323b031fb80a55c82cc4",
+    ),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST = OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0063
 
 EXPECTED_TRIGGERS = (
     (
@@ -1004,6 +1017,7 @@ __all__ = [
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0062",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0063",
     "RLS_REVISION",
     "RLS_TABLES",
     "_RLS_BOUNDARY_SQL",

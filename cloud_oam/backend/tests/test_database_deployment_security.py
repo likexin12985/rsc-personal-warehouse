@@ -227,8 +227,12 @@ def test_postgresql16_0049_catalog_uses_head_guard_hashes_by_revision() -> None:
     assert migration_0062.revision == gate.NONOPENING_COUNT_HISTORY_OWNER_REVISION
     assert migration_0062.down_revision == gate.SUPPLY_TASK_EVENT_KEY_REVISION
     migration_0064 = gate._load_stocktake_finalizer_organization_lock_migration_0064()
-    assert migration_0064.revision == gate.HEAD_REVISION
+    assert migration_0064.revision == gate.STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION
     assert migration_0064.down_revision == migration_0062.revision
+    migration_0063 = gate._load_stocktake_review_command_status_migration_0063()
+    assert migration_0063.revision == gate.HEAD_REVISION
+    assert migration_0063.down_revision == migration_0064.revision
+    assert hasattr(gate, "_assert_0063_empty_review_command_downgrade_and_reupgrade")
     migration_0061 = gate._load_supply_event_key_migration_0061()
     assert migration_0061.revision == gate.SUPPLY_TASK_EVENT_KEY_REVISION
     assert migration_0061.down_revision == gate.SUPPLY_TASK_SECURITY_REVISION

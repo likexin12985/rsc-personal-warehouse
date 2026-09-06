@@ -1138,8 +1138,8 @@ def test_main_api_column_acl_query_excludes_other_isolated_principals():
     assert "column_acl.grantee IN (0, role_row.oid)" in sql
 
 
-def test_0064_forward_readiness_manifest_matches_head_migration_hash():
-    """The head RLS proof must track the 0064 forward replacement, not 0062."""
+def test_0064_and_0063_forward_readiness_manifests_match_head_hashes():
+    """The linear 0064 -> 0063 chain keeps both exact readiness hashes."""
 
     migration_root = Path(__file__).resolve().parents[1] / "alembic" / "versions"
     migration_0064 = runpy.run_path(
@@ -1154,7 +1154,14 @@ def test_0064_forward_readiness_manifest_matches_head_migration_hash():
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064[ready_signature][6]
         == migration_0064["RUNTIME_READY_BODY_SHA256_0064"]
     )
-    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST is scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064
+    migration_0063 = runpy.run_path(
+        str(migration_root / "20260906_0063_review_command_status.py")
+    )
+    assert (
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0063[ready_signature][6]
+        == migration_0063["RUNTIME_READY_BODY_SHA256_0063"]
+    )
+    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST is scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0063
     assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064[ready_signature][6] != (
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0062[ready_signature][6]
     )

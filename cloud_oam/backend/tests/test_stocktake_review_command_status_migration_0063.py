@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import inspect
 from pathlib import Path
 
 from alembic.migration import MigrationContext
@@ -75,7 +76,13 @@ def test_0063_trigger_function_body_hash_and_security_contract_are_pinned() -> N
     assert "task_kind IN ('full', 'sample', 'ad_hoc', 'personal', 'termination')" in sql
     assert "NEW.expected_task_version IS NULL" in sql
     assert "NEW.resulting_task_version <> NEW.expected_task_version + 1" in sql
+    assert "NEW.expected_task_version < 0" in sql
+    assert "NEW.resulting_task_version IS NULL" in sql
     assert "RAISE EXCEPTION 'non-opening stocktake review version pair is required'" in sql
+
+    migration_source = MIGRATION.read_text(encoding="utf-8")
+    assert "expected_task_version IS NULL AND resulting_task_version IS NULL" in migration_source
+    assert "expected_task_version IS NOT NULL AND resulting_task_version IS NOT NULL" in migration_source
 
     # The migration-owned trigger has no caller-controlled bind parameters or
     # write statements beyond the trigger's NEW-row validation contract.
@@ -87,8 +94,23 @@ def test_0063_trigger_function_body_hash_and_security_contract_are_pinned() -> N
     parser.parse_plpgsql_json(sql)
 
 
-def test_0063_sqlite_upgrade_validates_review_version_pair_and_downgrades() -> None:
+def test_0063_orm_declares_postgresql_pair_check_without_changing_sqlite_snapshot() -> None:
+    from app.stocktake_models import StocktakeReview
+
+    source = inspect.getsource(StocktakeReview)
+    assert "ck_stocktake_reviews_task_version_pair_0063" in source
+    assert '.ddl_if(dialect="postgresql")' in source
+
+
+def test_0063_sqlite_upgrade_validates_review_version_pair_and_downgrades(
+    monkeypatch,
+) -> None:
     migration = _migration_module()
+    # This test invokes the revision functions directly with Alembic's
+    # Operations facade.  There is no EnvironmentContext proxy in that mode;
+    # explicitly model the online path so the production downgrade guard is
+    # exercised instead of failing in Alembic's test-only proxy.
+    monkeypatch.setattr(migration.context, "is_offline_mode", lambda: False)
     engine = sa.create_engine("sqlite+pysqlite:///:memory:")
     metadata = sa.MetaData()
     sa.Table(
@@ -144,6 +166,20 @@ def test_0063_sqlite_upgrade_validates_review_version_pair_and_downgrades() -> N
                 "INSERT INTO stocktake_reviews(id, task_id) VALUES (?, ?)",
                 ("invalid-review", "full-task"),
             )
+        with pytest.raises(sa.exc.IntegrityError, match="version pair is required"):
+            connection.exec_driver_sql(
+                "INSERT INTO stocktake_reviews"
+                "(id, task_id, expected_task_version, resulting_task_version) "
+                "VALUES (?, ?, ?, ?)",
+                ("half-empty-left", "full-task", None, 1),
+            )
+        with pytest.raises(sa.exc.IntegrityError, match="version pair is required"):
+            connection.exec_driver_sql(
+                "INSERT INTO stocktake_reviews"
+                "(id, task_id, expected_task_version, resulting_task_version) "
+                "VALUES (?, ?, ?, ?)",
+                ("half-empty-right", "full-task", 1, None),
+            )
         connection.exec_driver_sql(
             "INSERT INTO stocktake_reviews"
             "(id, task_id, expected_task_version, resulting_task_version) "
@@ -180,3 +216,14 @@ def test_0063_sqlite_upgrade_validates_review_version_pair_and_downgrades() -> N
             "AND name IN (?, ?)",
             (migration.SQLITE_INSERT_TRIGGER, migration.SQLITE_UPDATE_TRIGGER),
         ).scalar_one() == 0
+
+
+def test_0063_offline_downgrade_fails_before_catalog_mutation(monkeypatch) -> None:
+    migration = _migration_module()
+    monkeypatch.setattr(migration, "_is_offline_mode", lambda: True)
+
+    with pytest.raises(
+        RuntimeError,
+        match="0063 downgrade requires online catalog and readiness checks",
+    ):
+        migration.downgrade()

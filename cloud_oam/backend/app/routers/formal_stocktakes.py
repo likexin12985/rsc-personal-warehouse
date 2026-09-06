@@ -832,6 +832,12 @@ def _submit_review(
             review_stage=result.review_stage,
             decision=result.decision,
             resulting_task_status=result.resulting_task_status,
+            expected_task_version=getattr(
+                result, "expected_task_version", command.expected_task_version
+            ),
+            resulting_task_version=getattr(
+                result, "resulting_task_version", result.task_version
+            ),
             task_version=result.task_version,
             item_count=result.item_count,
             pending_verification_count=result.pending_verification_count,

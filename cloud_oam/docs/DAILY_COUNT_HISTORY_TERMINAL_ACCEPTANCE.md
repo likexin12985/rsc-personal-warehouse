@@ -3,7 +3,22 @@
 日期：2026-09-05。依据根 AGENTS.md、V1.0；前序已验收代码为 `2691ab3`，文档后继为 `206b60e`。
 本切片不修改客户端、边缘采集或业务状态轴，不访问任何外部生产系统。
 
-## 2026-09-06 0064 前向门禁续验收（当前准确 SHA）
+## 2026-09-06 0063 复核证据续开发（本地，未放行）
+
+当前工作树已新增 `stocktake_reviews.expected_task_version` 与
+`resulting_task_version` 前向迁移（`0062 → 0064 → 0063`），并在非期初复核写入、幂等重放、
+重算来源和 generic 查询中重证连续版本对。PG CHECK 明确拒绝任一半空；SQLite 与 PG16 门禁
+脚本覆盖双向半空、错位、触发器安全属性及 0063 降级阻断（本机未提供 disposable PostgreSQL 16，
+尚未形成新的真库执行证据）。旧 0047 启动事实的降级断言在产生
+复核事实前单独执行，避免被 0063 blocker 遮蔽。
+
+查询侧目前只提供非期初 generic `stocktake_query` 的状态迁移/审计 payload fail-closed 重证；
+尚未交付独立 review command-status endpoint 的完整 owner-graph + audit-chain 读端，也尚未形成
+新的远程 PostgreSQL 16 发布门禁证据。定向回归为 `67 passed`；完整后端静态套件（不含动态 PG16）为
+`718 passed in 168.02s`，本机动态 PG16 按环境 `1 skipped`。本轮已形成本地提交但尚未推送；
+远端状态及新 GitHub run 尚未形成新的发布证据。
+
+## 2026-09-06 0064 前向门禁续验收（0063 之前的历史基线）
 
 当前安全提交为 `27c445c030b887c935359f7458234eee6baf399f`，迁移 head 为
 `20260906_0064`。该提交的 [Client release gate run 34009213016](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34009213016)
@@ -25,7 +40,8 @@
 存储故障锁存、页面隐藏证据清理及 late-result 竞态保护；Client 门禁含 Web、类型、构建和
 微信小程序全量契约测试。0063 复核命令状态迁移仍保持设计冻结，不能把本轮 0064 门禁当作
 0063 或一期供给任务验收；审批、分配、占用、出库、发货、物流签收、OAM 收货、RSC/个人仓
-入库、通知送达和对账同步仍是独立未完成状态轴。
+入库、通知送达和对账同步仍是独立未完成状态轴。其后新增的 0063 本地工作树状态见本文首节，
+不能用本节旧 SHA 或旧迁移 head 代替。
 
 ## 当前验证状态
 

@@ -317,6 +317,8 @@ class StocktakeReviewFactOut(_StrictOutputModel):
     review_id: UUID
     review_stage: Literal["region", "headquarters"]
     decision: Literal["approve", "recount", "reject"]
+    expected_task_version: int = Field(ge=0)
+    resulting_task_version: int = Field(ge=1)
     comment: StrictStr | None
     comment_visible: bool
     reviewer_person_id: UUID

@@ -277,6 +277,8 @@ def test_region_then_headquarters_approve_are_independent_and_inventory_free(
         key="approve-chain-region",
     )
     assert region.resulting_task_status == "hq_review"
+    assert region.resulting_task_version == region.expected_task_version + 1
+    assert region.task_version == region.resulting_task_version
     assert region.ready_for_posting is False
     assert task.status == "hq_review"
     hq = _hq(
@@ -301,8 +303,22 @@ def test_region_then_headquarters_approve_are_independent_and_inventory_free(
     )
     assert [row.review_stage for row in reviews] == ["region", "headquarters"]
     assert reviews[0].reviewer_person_id != reviews[1].reviewer_person_id
+    assert (
+        reviews[0].expected_task_version,
+        reviews[0].resulting_task_version,
+        reviews[1].expected_task_version,
+        reviews[1].resulting_task_version,
+    ) == (
+        region.expected_task_version,
+        region.resulting_task_version,
+        hq.expected_task_version,
+        hq.resulting_task_version,
+    )
     assert region.review_id != hq.review_id
     assert hq.resulting_task_status == "approved"
+    assert hq.expected_task_version == region.resulting_task_version
+    assert hq.resulting_task_version == hq.expected_task_version + 1
+    assert hq.task_version == hq.resulting_task_version
     assert hq.ready_for_posting is True
     assert task.status == "approved"
     assert _write_counts(review_world) == writes_before

@@ -419,6 +419,8 @@ class StocktakeReviewOut(_StrictOutputModel):
     review_stage: Literal["region", "headquarters"]
     decision: Literal["approve", "recount", "reject"]
     resulting_task_status: StrictStr
+    expected_task_version: int = Field(ge=0)
+    resulting_task_version: int = Field(ge=1)
     task_version: int = Field(ge=0)
     item_count: int = Field(ge=0)
     pending_verification_count: int = Field(ge=0)

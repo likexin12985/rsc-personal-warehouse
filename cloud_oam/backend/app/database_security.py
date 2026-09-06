@@ -1073,6 +1073,15 @@ EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS = {
         True,
         True,
     ),
+    "trg_nonopening_review_version_0063": (
+        "stocktake_reviews",
+        "rsc_validate_nonopening_stocktake_review_version_0063",
+        "A",
+        23,
+        False,
+        False,
+        False,
+    ),
     "trg_stocktake_recount_cases_review_path_0032": (
         "stocktake_recount_cases",
         "rsc_validate_stocktake_recount_case_0032",
@@ -3477,6 +3486,12 @@ FORMAL_FILE_INTERNAL_FUNCTIONS = {
         "plpgsql",
         ("search_path=pg_catalog, public",),
     ),
+    ("rsc_validate_nonopening_stocktake_review_version_0063", ""): (
+        "v",
+        True,
+        "plpgsql",
+        ("search_path=pg_catalog, public",),
+    ),
 }
 FORMAL_FILE_INTERNAL_FUNCTION_SHAPES = {
     coordinate: (
@@ -3648,6 +3663,8 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
         "82537a53254a6493eea33f07795b8b47d941ecc6bd25ed8dcab8c35bcf18d3f8",
     ("rsc_dispatch_nonopening_stocktake_start_causality_0047", ""):
         "7ae3cda26d356cabf5529bae88eb33e0f85bcab538e8ab9b8bb256eebf54ac40",
+    ("rsc_validate_nonopening_stocktake_review_version_0063", ""):
+        "e7b996ad8f85b6ffc099bc88adb622dc71e56fc239a737ff8475b980b99e4744",
 }
 
 
