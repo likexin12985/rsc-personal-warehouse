@@ -246,7 +246,7 @@ function createFormalStocktakeAdapter(options = {}) {
     async sealPostingCommand(taskId, expectedTaskVersion, actorPersonId, actorAuthorizationVersion, traceRequestId) {
       if (typeof transport.postSealNoReplay !== 'function') fail('正式盘点未执行封存通道不可用', 503)
       const id = uuidValue(taskId, 'task_id')
-      const version = Number.isSafeInteger(expectedTaskVersion) && expectedTaskVersion >= 0
+      const version = Number.isSafeInteger(expectedTaskVersion) && expectedTaskVersion >= 1
         ? expectedTaskVersion
         : (() => { fail('expected_task_version 无效'); return 0 })()
       const person = uuidValue(actorPersonId, 'actor_person_id')
