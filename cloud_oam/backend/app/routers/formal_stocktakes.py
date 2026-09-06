@@ -30,6 +30,9 @@ from ..formal_services import (
     stocktake_recount_difference as recount_difference_service,
 )
 from ..formal_services import stocktake_review as review_service
+from ..formal_services import (
+    stocktake_review_command_status as review_status_service,
+)
 from ..formal_services import stocktake_task as task_service
 from ..stocktake_command_schemas import (
     StocktakeDifferenceGenerateIn,
@@ -52,6 +55,7 @@ from ..stocktake_command_schemas import (
 from ..stocktake_read_schemas import StocktakeTaskDetailOut, StocktakeTaskPageOut
 from ..stocktake_count_command_status_schemas import StocktakeCountCommandStatusOut
 from ..stocktake_posting_command_status_schemas import StocktakePostingCommandStatusOut
+from ..stocktake_review_command_status_schemas import StocktakeReviewCommandStatusOut
 from ..stocktake_task_schemas import (
     PersonalStocktakeCreateIn,
     StocktakeTaskCreateIn,
@@ -183,6 +187,66 @@ def formal_stocktake_posting_command_status(
         )
     except posting_status_service.StocktakePostingCommandStatusError as exc:
         raise HTTPException(status_code=exc.http_status_code, detail=exc.as_detail(), headers=headers) from None
+
+
+@router.get(
+    "/{task_id}/rounds/{round_id}/reviews/{review_stage}/command-status",
+    response_model=StocktakeReviewCommandStatusOut,
+)
+def formal_stocktake_review_command_status(
+    task_id: UUID,
+    round_id: UUID,
+    review_stage: str,
+    request: Request,
+    response: Response,
+    actor_person_id: Annotated[UUID, Query()],
+    actor_authorization_version: Annotated[int, Query(ge=1)],
+    trace_request_id: Annotated[
+        str,
+        Query(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$"),
+    ],
+    principal: FormalPrincipal = Depends(require_permission("stocktake", "read")),
+    db: Session = Depends(get_db),
+):
+    headers = {
+        "Cache-Control": "private, no-store, max-age=0",
+        "Pragma": "no-cache",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+    }
+    response.headers.update(headers)
+    try:
+        allowed = {
+            "actor_person_id",
+            "actor_authorization_version",
+            "trace_request_id",
+        }
+        if (
+            set(request.query_params) != allowed
+            or any(len(request.query_params.getlist(key)) != 1 for key in allowed)
+            or "idempotency-key" in request.headers
+            or request.headers.get("content-length", "0") != "0"
+            or "transfer-encoding" in request.headers
+        ):
+            review_status_service._error(
+                "input_invalid", "invalid_request", "盘点复核查询请求形状无效"
+            )
+        return review_status_service.stocktake_review_command_status(
+            db,
+            actor=principal,
+            task_id=task_id,
+            round_id=round_id,
+            review_stage=review_stage,
+            actor_person_id=actor_person_id,
+            actor_authorization_version=actor_authorization_version,
+            trace_request_id=trace_request_id,
+        )
+    except review_status_service.StocktakeReviewCommandStatusError as exc:
+        raise HTTPException(
+            status_code=exc.http_status_code,
+            detail=exc.as_detail(),
+            headers=headers,
+        ) from None
 
 
 @router.post("", response_model=StocktakeTaskCreateOut, status_code=201)

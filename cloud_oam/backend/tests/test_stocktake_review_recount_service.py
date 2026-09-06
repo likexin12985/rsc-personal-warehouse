@@ -14,6 +14,7 @@ import app.formal_services.stocktake_count as count_service
 import app.formal_services.stocktake_difference as difference_service
 import app.formal_services.stocktake_recount as recount_service
 import app.formal_services.stocktake_review as review_service
+import app.formal_services.stocktake_review_command_status as review_status_service
 import app.formal_services.stocktake_task as task_service
 from app.formal_access import load_formal_principal
 from app.formal_services.stocktake_count import (
@@ -246,6 +247,151 @@ def _hq(world, task, round_row, command, monkeypatch, *, key="hq-review"):
         idempotency_hmac_secret=SECRET,
         trace_request_id=f"trace-{key}",
     )
+
+
+def _review_status(world, task, round_row, *, stage, actor, trace_request_id):
+    read_permission = world.db.scalar(
+        select(Permission).where(
+            Permission.resource == "stocktake",
+            Permission.action == "read",
+            Permission.field_code == "",
+        )
+    )
+    if read_permission is None:
+        read_permission = Permission(
+            id=uuid.uuid4(),
+            resource="stocktake",
+            action="read",
+            field_code="",
+            description="read",
+        )
+        world.db.add(read_permission)
+        world.db.flush()
+    role_code = "admin" if stage == "headquarters" else "provincial_manager"
+    role = world.db.scalar(select(Role).where(Role.code == role_code))
+    assert role is not None
+    grant = world.db.scalar(
+        select(RolePermission).where(
+            RolePermission.role_id == role.id,
+            RolePermission.permission_id == read_permission.id,
+        )
+    )
+    if grant is None:
+        world.db.add(
+            RolePermission(
+                role_id=role.id,
+                permission_id=read_permission.id,
+                effect="allow",
+            )
+        )
+        world.db.flush()
+    return review_status_service.stocktake_review_command_status(
+        world.db,
+        actor=actor,
+        task_id=task.id,
+        round_id=round_row.id,
+        review_stage=stage,
+        actor_person_id=actor.person_id,
+        actor_authorization_version=actor.authorization_version,
+        trace_request_id=trace_request_id,
+    )
+
+
+def test_review_command_status_reconstructs_region_fact_without_replay(
+    review_world, monkeypatch
+):
+    task, round_row = _prepare(review_world, key="review-status-region")
+    command = _command(
+        review_world,
+        task,
+        round_row,
+        decision="approve",
+        item_decision="accept_for_posting",
+    )
+    result = _region(
+        review_world,
+        task,
+        round_row,
+        command,
+        key="review-status-region-write",
+    )
+    review_world.db.commit()
+    before_review_count = review_world.db.scalar(
+        select(func.count()).select_from(StocktakeReview)
+    )
+    status = _review_status(
+        review_world,
+        task,
+        round_row,
+        stage="region",
+        actor=review_world.principals["manager_x"],
+        trace_request_id="trace-review-status-region-write",
+    )
+    assert status.lookup_status == "confirmed"
+    assert status.command is not None
+    assert status.command.review_id == result.review_id
+    assert status.command.resulting_task_version == result.resulting_task_version
+    assert review_world.db.scalar(
+        select(func.count()).select_from(StocktakeReview)
+    ) == before_review_count
+
+    unseen = _review_status(
+        review_world,
+        task,
+        round_row,
+        stage="region",
+        actor=review_world.principals["manager_x"],
+        trace_request_id="trace-review-status-region-never-seen",
+    )
+    assert unseen.lookup_status == "not_observed"
+    assert unseen.command is None
+
+
+def test_review_command_status_reconstructs_headquarters_approval(
+    review_world, monkeypatch
+):
+    task, round_row = _prepare(review_world, key="review-status-hq")
+    _region(
+        review_world,
+        task,
+        round_row,
+        _command(
+            review_world,
+            task,
+            round_row,
+            decision="approve",
+            item_decision="accept_for_posting",
+        ),
+        key="review-status-hq-region",
+    )
+    hq = _hq(
+        review_world,
+        task,
+        round_row,
+        _command(
+            review_world,
+            task,
+            round_row,
+            decision="approve",
+            item_decision="accept_for_posting",
+        ),
+        monkeypatch,
+        key="review-status-hq-write",
+    )
+    review_world.db.commit()
+    status = _review_status(
+        review_world,
+        task,
+        round_row,
+        stage="headquarters",
+        actor=review_world.principals["admin"],
+        trace_request_id="trace-review-status-hq-write",
+    )
+    assert status.lookup_status == "confirmed"
+    assert status.command is not None
+    assert status.command.review_id == hq.review_id
+    assert status.command.resulting_task_status == "approved"
+    assert status.command.ready_for_posting is True
 
 
 def _write_counts(world):
@@ -984,3 +1130,50 @@ def test_historical_source_round_and_difference_tampering_fail_closed(
             key="tamper-review-region",
         )
     assert failure.value.code == "stocktake_review_source_evidence_invalid"
+
+
+def test_review_command_status_fails_closed_for_tampered_audit_manifest(
+    review_world,
+):
+    task, round_row = _prepare(review_world, key="tamper-review-status-audit")
+    result = _region(
+        review_world,
+        task,
+        round_row,
+        _command(
+            review_world,
+            task,
+            round_row,
+            decision="approve",
+            item_decision="accept_for_posting",
+        ),
+        key="tamper-review-status-audit-write",
+    )
+    review_world.db.commit()
+    # The audit aggregate id is the review id, while the review row itself is
+    # queried separately; locate the immutable event by its action instead of
+    # assuming shared primary keys.
+    audit = review_world.db.scalar(
+        select(AuditEvent)
+        .where(
+            AuditEvent.aggregate_type == "stocktake_review",
+            AuditEvent.aggregate_id == str(result.review_id),
+            AuditEvent.action == "stocktake.nonopening.region_reviewed",
+        )
+    )
+    assert audit is not None and isinstance(audit.after_jsonb, dict)
+    audit.after_jsonb = {
+        **audit.after_jsonb,
+        "decision_manifest_sha256": "0" * 64,
+    }
+    review_world.db.flush()
+    with pytest.raises(review_status_service.StocktakeReviewCommandStatusError) as failure:
+        _review_status(
+            review_world,
+            task,
+            round_row,
+            stage="region",
+            actor=review_world.principals["manager_x"],
+            trace_request_id="trace-tamper-review-status-audit-write",
+        )
+    assert failure.value.category == "service_unavailable"

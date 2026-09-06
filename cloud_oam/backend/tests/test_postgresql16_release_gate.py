@@ -28,6 +28,8 @@ import uuid
 import psycopg
 from psycopg import sql
 import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from sqlalchemy import URL, create_engine, event, func, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
@@ -19581,12 +19583,39 @@ def _assert_0047_rejects_nonempty_start_downgrade(
 
     assert _current_revision() == HEAD_REVISION
     migration = _load_nonopening_stocktake_start_causality_migration_0047()
+
+    # A normal Alembic downgrade walks newer revisions first.  0055 owns a
+    # later audit-order guard over the same start graph, so it must block the
+    # chain before 0047 is reached.  Keep that ordering proof explicit.
+    audit_order = _load_nonopening_start_audit_order_migration_0055()
     blocked = _run_alembic(
         "downgrade",
         CONTENT_CAUSALITY_REVISION,
         expect_success=False,
     )
-    assert migration.DOWNGRADE_BLOCKER in (blocked.stdout + blocked.stderr)
+    assert audit_order.DOWNGRADE_BLOCKER in (blocked.stdout + blocked.stderr)
+
+    # Exercise 0047's own downgrade contract against the same disposable
+    # PostgreSQL database without traversing newer revisions.  Calling the
+    # migration through Operations is intentional: an EnvironmentContext
+    # proxy would invoke Alembic's chain and mask 0047's guard with 0055.
+    migrator_engine = create_engine(
+        _sqlalchemy_url(
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+        ),
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=5,
+    )
+    try:
+        with migrator_engine.begin() as connection:
+            migration.context.is_offline_mode = lambda: False
+            migration.op = Operations(MigrationContext.configure(connection))
+            with pytest.raises(RuntimeError, match=re.escape(migration.DOWNGRADE_BLOCKER)):
+                migration.downgrade()
+    finally:
+        migrator_engine.dispose()
     assert _current_revision() == HEAD_REVISION
     _assert_0047_start_catalog(installed=True)
     with Session(api_engine) as session:
