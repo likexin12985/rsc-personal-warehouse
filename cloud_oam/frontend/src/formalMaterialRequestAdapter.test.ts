@@ -122,7 +122,7 @@ describe("formal material-request PC transport", () => {
 
   it("queries supply recovery without sending a key, contact or request body", async () => {
     const requester = makeRequester(async () => ({ schema_version: "1.0", lookup_status: "not_observed", command: null }));
-    const adapter = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, requester);
+    const adapter = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, requester, requester);
     await adapter.supplyCommandStatus("web-supply-12345678");
     expect(requester.mock.calls).toEqual([["/v1/material-request-supply-command-status?trace_request_id=web-supply-12345678", {
       method: "GET", cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
@@ -159,7 +159,7 @@ describe("formal material-request PC transport", () => {
         notification_status: "not_started", reconciliation_status: "not_started",
       }, idempotency_replayed: false,
     }));
-    const adapter = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, requester);
+    const adapter = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, requester, requester);
     await adapter.createAllocation(REQUEST_ID, {
       expected_request_version: 3,
       request_line_id: STEP_ID,

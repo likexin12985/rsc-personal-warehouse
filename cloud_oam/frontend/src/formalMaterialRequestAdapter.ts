@@ -602,8 +602,13 @@ function mutationMethod(intent: MaterialRequestMutationIntent): "PUT" | "POST" {
 export function createFormalMaterialRequestAdapter(
   expectedIdentity: FormalMaterialRequestExpectedIdentity,
   requester: FormalMaterialRequestRequester = api,
+  noReplayRequesterOverride?: FormalMaterialRequestRequester,
 ): FormalMaterialRequestAdapter {
-  const noReplayRequester: FormalMaterialRequestRequester = requester === api ? apiNoReplay : requester;
+  const noReplayRequester = noReplayRequesterOverride ?? (requester === api ? apiNoReplay : undefined);
+  const requireNoReplayRequester = (): FormalMaterialRequestRequester => {
+    if (!noReplayRequester) throw new ApiError(503, "分配只读核验通道不可用");
+    return noReplayRequester;
+  };
   const frozenIdentity = Object.freeze({
     person_id: requiredUuid(expectedIdentity.person_id, "expected_person_id"),
     authorization_version: version(
@@ -619,7 +624,8 @@ export function createFormalMaterialRequestAdapter(
       }), frozenIdentity);
     },
     async loadIdentityNoReplay() {
-      return projectFreshIdentity(await noReplayRequester<unknown>("/auth/me", {
+      const read = requireNoReplayRequester();
+      return projectFreshIdentity(await read<unknown>("/auth/me", {
         cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
       }), frozenIdentity);
     },
@@ -630,7 +636,8 @@ export function createFormalMaterialRequestAdapter(
       }), frozenIdentity);
     },
     async loadAccessNoReplay() {
-      return projectAccessContext(await noReplayRequester<unknown>("/access/context", {
+      const read = requireNoReplayRequester();
+      return projectAccessContext(await read<unknown>("/access/context", {
         cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
       }), frozenIdentity);
     },
@@ -677,7 +684,8 @@ export function createFormalMaterialRequestAdapter(
     allocationCommandStatusNoReplay(xRequestId: string) {
       const checkedRequestId = requiredText(xRequestId, "X-Request-ID");
       if (!SAFE_COORDINATE.test(checkedRequestId)) return Promise.reject(new ApiError(409, "分配命令查询坐标无效"));
-      return noReplayRequester<unknown>("/v1/material-request-allocation-command-status", {
+      const read = requireNoReplayRequester();
+      return read<unknown>("/v1/material-request-allocation-command-status", {
         method: "GET", cache: "no-store", headers: {
           "X-Request-ID": checkedRequestId, "Cache-Control": "no-store", Pragma: "no-cache",
         },
@@ -699,7 +707,8 @@ export function createFormalMaterialRequestAdapter(
       });
     },
     detailNoReplay(requestId: string) {
-      return noReplayRequester(`/v1/material-requests/${requiredUuid(requestId, "request_id")}`, {
+      const read = requireNoReplayRequester();
+      return read(`/v1/material-requests/${requiredUuid(requestId, "request_id")}`, {
         cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
       }).then(validateMaterialRequestDetail);
     },
@@ -772,7 +781,8 @@ export function createFormalMaterialRequestAdapter(
         return Promise.reject(new ApiError(409, "分配串码不能重复"));
       }
       const checkedHeaders = validateWriteHeaders(headers, headers["Idempotency-Key"]);
-      return noReplayRequester<unknown>(`/v1/material-requests/${checkedRequestId}/allocations`, {
+      const write = requireNoReplayRequester();
+      return write<unknown>(`/v1/material-requests/${checkedRequestId}/allocations`, {
         method: "POST",
         headers: checkedHeaders,
         ...jsonBody({
