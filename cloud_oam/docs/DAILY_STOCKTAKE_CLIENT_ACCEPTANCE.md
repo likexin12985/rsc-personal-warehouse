@@ -81,11 +81,12 @@ PG16 动态门禁仍为 `1 skipped`；尚无该准确 SHA 的远程门禁。
 页面只在 `approved`、`allowed_actions=post`、总部 `can_post`、区域与总部复核均通过且未过账时展示确认入口；
 过账不走通用 `run/retry`，持久坐标写入并回读后最多发送一次 POST，未知结果只允许只读核验。
 隐藏/卸载会撤销页面租约但保留哨兵，身份或版本漂移会取消确认并保持阻断。小程序全量回归为
-`705 passed`，页面/恢复定向回归 `52 passed`，`git diff --check` 通过；这仍是本地候选，未取得准确 SHA
+`706 passed`，页面/恢复定向回归 `53 passed`，Web 全套 `796 passed`，TypeScript/Vite 构建通过，`git diff --check` 通过；这仍是本地候选，未取得准确 SHA
 的客户端/PG16 门禁，也不代表服务端已具备“确认未执行并永久封存”。
 
 服务端已落地前向数据基础：`stocktake_posting_command_outcomes` 只追加结果表及 ACL/不可变保护，
 迁移提交为 `edd8946`、`ade2676`、`7ff69da`、`5f406db`，迁移头注册和静态回归为 `c99c842`。
+前后端 command-status 已能严格识别 `sealed_not_executed` 的最小公开封存投影（前端提交 `1f8fde3`）。
 该表目前只提供证据存储约束，封存 API、原 POST 共享提交锁和直接 SQL 迟到阻断仍待后续切片。
 
 使用仓库现有 Node 24.19.0 工具链、冻结依赖，未升级依赖：
