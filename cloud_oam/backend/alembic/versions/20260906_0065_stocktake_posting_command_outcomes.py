@@ -105,6 +105,10 @@ def upgrade() -> None:
             name="ck_stocktake_posting_command_outcomes_versions_0065",
         ),
         sa.CheckConstraint(
+            "length(request_reference) > 0",
+            name="ck_stocktake_posting_command_outcomes_request_reference_0065",
+        ),
+        sa.CheckConstraint(
             "length(request_sha256) = 64",
             name="ck_stocktake_posting_command_outcomes_request_hash_0065",
         ),
@@ -118,7 +122,7 @@ def upgrade() -> None:
             name="ck_stocktake_posting_command_outcomes_binding_0065",
         ),
         sa.CheckConstraint(
-            "created_at = COALESCE(sealed_at, created_at)",
+            "sealed_at IS NULL OR sealed_at = created_at",
             name="ck_stocktake_posting_command_outcomes_chronology_0065",
         ),
     )
