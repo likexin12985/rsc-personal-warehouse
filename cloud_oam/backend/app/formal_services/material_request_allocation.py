@@ -84,6 +84,8 @@ class AllocationCommandResult:
     revision_no: int
     request_line_id: uuid.UUID
     source_stock_account_id: uuid.UUID
+    source_balance_version: int
+    source_ledger_cursor: int
     allocated_qty: Decimal
     allocation_status: str
     request_status: str
@@ -333,8 +335,8 @@ def _create_allocation_impl(
     fact = StockAllocation(
         id=allocation_id, allocation_no=allocation_no, request_id=request_id, request_line_id=line.id,
         revision_id=line.revision_id, revision_no=line.revision_no, request_version=request.version,
-        source_stock_account_id=account.id, allocated_qty=allocation.allocated_qty,
-        source_balance_version=balance.version, source_ledger_cursor=balance.ledger_cursor,
+        source_stock_account_id=account.id, source_balance_version=balance.version,
+        source_ledger_cursor=balance.ledger_cursor, allocated_qty=allocation.allocated_qty,
         status=_ACTIVE_ALLOCATION_STATUS, idempotency_key_hash=key_hash, request_hash=request_hash,
         actor_user_id=actor.user_id, actor_person_id=actor.person_id,
         authorization_version=actor.authorization_version, created_at=now, updated_at=now,
@@ -366,7 +368,8 @@ def _create_allocation_impl(
     return AllocationCommandResult(
         request_id=request_id, allocation_id=allocation_id, allocation_no=allocation_no, request_version=request.version,
         revision_id=line.revision_id, revision_no=line.revision_no, request_line_id=line.id,
-        source_stock_account_id=account.id, allocated_qty=allocation.allocated_qty,
+        source_stock_account_id=account.id, source_balance_version=balance.version,
+        source_ledger_cursor=balance.ledger_cursor, allocated_qty=allocation.allocated_qty,
         allocation_status=fact.status, request_status=request.status, state_axes=_state_axes(request),
     )
 
@@ -403,6 +406,7 @@ def _result_from_existing(
         request_id=fact.request_id, allocation_id=fact.id, allocation_no=fact.allocation_no,
         request_version=request.version, revision_id=fact.revision_id, revision_no=fact.revision_no,
         request_line_id=fact.request_line_id, source_stock_account_id=fact.source_stock_account_id,
+        source_balance_version=fact.source_balance_version, source_ledger_cursor=fact.source_ledger_cursor,
         allocated_qty=fact.allocated_qty, allocation_status=fact.status,
         request_status=request.status, state_axes=_state_axes(request), replayed=replayed,
     )

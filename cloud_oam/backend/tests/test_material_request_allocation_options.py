@@ -268,7 +268,7 @@ def test_router_allocation_create_has_explicit_write_headers_and_no_store(monkey
     result = allocation_service.AllocationCommandResult(
         request_id=_id(801), allocation_id=_id(802), allocation_no="AL-20260908-ABCDEF12",
         request_version=5, revision_id=_id(803), revision_no=2, request_line_id=_id(804),
-        source_stock_account_id=_id(805), allocated_qty=Decimal("1.000"),
+        source_stock_account_id=_id(805), source_balance_version=7, source_ledger_cursor=9, allocated_qty=Decimal("1.000"),
         allocation_status="allocated", request_status="approved",
         state_axes={
             "request_status": "approved", "allocation_status": "allocated",
@@ -325,7 +325,7 @@ def test_router_allocation_command_status_is_read_only_and_no_store(monkeypatch)
     confirmed = allocation_service.AllocationCommandResult(
         request_id=_id(901), allocation_id=_id(902), allocation_no="AL-20260908-CONFIRM",
         request_version=6, revision_id=_id(903), revision_no=2, request_line_id=_id(904),
-        source_stock_account_id=_id(905), allocated_qty=Decimal("1.000"),
+        source_stock_account_id=_id(905), source_balance_version=7, source_ledger_cursor=9, allocated_qty=Decimal("1.000"),
         allocation_status="allocated", request_status="approved",
         state_axes={
             "request_status": "approved", "allocation_status": "allocated",

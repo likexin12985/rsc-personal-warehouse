@@ -72,6 +72,8 @@ class AllocationMutationOut(BaseModel):
     revision_no: int = Field(ge=1)
     request_line_id: UUID
     source_stock_account_id: UUID
+    source_balance_version: int = Field(ge=0)
+    source_ledger_cursor: int = Field(ge=0)
     allocated_qty: str = Field(min_length=1, max_length=32)
     allocation_status: Literal["allocated"]
     request_status: str = Field(min_length=1, max_length=32)

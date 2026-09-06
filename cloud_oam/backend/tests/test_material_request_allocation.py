@@ -69,6 +69,7 @@ def test_allocation_response_keeps_fixed_quantity_and_state_anchor():
         "request_id": _id(10), "allocation_id": _id(11), "allocation_no": "AL-1",
         "request_version": 2, "revision_id": _id(12), "revision_no": 1,
         "request_line_id": _id(13), "source_stock_account_id": _id(14),
+        "source_balance_version": 7, "source_ledger_cursor": 9,
         "allocation_status": "allocated", "request_status": "approved", "state_axes": axes,
     }
     assert AllocationMutationOut(**common, allocated_qty="1.000").allocated_qty == "1.000"

@@ -16,6 +16,8 @@ export type MaterialRequestAllocationCommand = Readonly<{
   revision_no: number;
   request_line_id: string;
   source_stock_account_id: string;
+  source_balance_version: number;
+  source_ledger_cursor: number;
   allocated_qty: string;
   allocation_status: "allocated";
   request_status: MaterialRequestStateAxes["request_status"];
@@ -76,7 +78,7 @@ export function validateMaterialRequestAllocationCommandStatus(
   if (row.lookup_status !== "confirmed" || row.command === null) return fail("分配命令状态无效");
   const command = exact(row.command, [
     "request_id", "allocation_id", "allocation_no", "request_version", "revision_id", "revision_no",
-    "request_line_id", "source_stock_account_id", "allocated_qty", "allocation_status", "request_status",
+    "request_line_id", "source_stock_account_id", "source_balance_version", "source_ledger_cursor", "allocated_qty", "allocation_status", "request_status",
     "state_axes", "idempotency_replayed",
   ]);
   const states = validateMaterialRequestStateAxes(command.state_axes);
@@ -97,6 +99,8 @@ export function validateMaterialRequestAllocationCommandStatus(
       revision_no: integer(command.revision_no, "revision_no"),
       request_line_id: id(command.request_line_id, "request_line_id"),
       source_stock_account_id: id(command.source_stock_account_id, "source_stock_account_id"),
+      source_balance_version: integer(command.source_balance_version, "source_balance_version"),
+      source_ledger_cursor: integer(command.source_ledger_cursor, "source_ledger_cursor"),
       allocated_qty: command.allocated_qty,
       allocation_status: "allocated",
       request_status: command.request_status as MaterialRequestStateAxes["request_status"],
