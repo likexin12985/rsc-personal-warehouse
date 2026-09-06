@@ -508,6 +508,7 @@ function access(canCreate = true) {
     can_withdraw: false,
     can_cancel: false,
     can_read_material_catalog: true,
+    can_read_allocation_options: false,
     can_approve_region: false,
     can_approve_headquarters: false,
     can_register_external: false,

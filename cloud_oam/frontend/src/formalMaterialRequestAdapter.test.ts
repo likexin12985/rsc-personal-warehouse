@@ -189,6 +189,7 @@ describe("formal material-request PC transport", () => {
       can_withdraw: true,
       can_cancel: true,
       can_read_material_catalog: true,
+      can_read_allocation_options: false,
       can_approve_region: true,
       can_approve_headquarters: true,
       can_register_external: true,

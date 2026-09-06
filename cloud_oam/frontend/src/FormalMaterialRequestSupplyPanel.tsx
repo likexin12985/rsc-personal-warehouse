@@ -66,7 +66,7 @@ export default function FormalMaterialRequestSupplyPanel({
   const read = store.read();
   const blocked = read.kind !== "missing";
   const canCreate = Boolean(detail?.allowed_actions.includes("create_supply_task"));
-  const canReadAllocationOptions = Boolean(access?.can_approve_region || access?.can_approve_headquarters);
+  const canReadAllocationOptions = Boolean(access?.can_read_allocation_options);
 
   async function showAllocationOptions(lineId: string) {
     if (!detail || !canReadAllocationOptions || allocationLoading) return;

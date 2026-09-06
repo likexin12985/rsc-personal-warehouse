@@ -45,6 +45,7 @@ export type FormalMaterialRequestAccess = Readonly<{
   can_withdraw: boolean;
   can_cancel: boolean;
   can_read_material_catalog: boolean;
+  can_read_allocation_options: boolean;
   can_approve_region: boolean;
   can_approve_headquarters: boolean;
   can_register_external: boolean;
@@ -409,6 +410,7 @@ function projectAccessContext(
     can_withdraw: canRead && permissionKeys.includes("material_request\u0000withdraw\u0000"),
     can_cancel: canRead && permissionKeys.includes("material_request\u0000cancel\u0000"),
     can_read_material_catalog: permissionKeys.includes("inventory\u0000read\u0000"),
+    can_read_allocation_options: roleCodes.some((role) => role === "admin" || role === "provincial_manager"),
     can_approve_region: permissionKeys.includes("material_request\u0000approve_region\u0000approval_decision"),
     can_approve_headquarters: permissionKeys.includes("material_request\u0000approve_headquarters\u0000approval_decision"),
     can_register_external: permissionKeys.includes("material_request\u0000register_external\u0000approval_evidence"),
@@ -422,7 +424,7 @@ export function validateFormalMaterialRequestAccess(value: unknown): FormalMater
     [
       "schema_version", "person_id", "authorization_version", "can_read", "can_create",
       "can_withdraw", "can_cancel",
-      "can_read_material_catalog", "can_approve_region", "can_approve_headquarters",
+      "can_read_material_catalog", "can_read_allocation_options", "can_approve_region", "can_approve_headquarters",
       "can_register_external", "can_verify_external",
     ],
     "正式需求访问上下文",
@@ -431,7 +433,7 @@ export function validateFormalMaterialRequestAccess(value: unknown): FormalMater
     return adapterError("正式需求访问上下文版本不受支持");
   }
   const capabilityFields = [
-    "can_read", "can_create", "can_withdraw", "can_cancel", "can_read_material_catalog", "can_approve_region",
+    "can_read", "can_create", "can_withdraw", "can_cancel", "can_read_material_catalog", "can_read_allocation_options", "can_approve_region",
     "can_approve_headquarters", "can_register_external", "can_verify_external",
   ] as const;
   if (capabilityFields.some((field) => typeof object[field] !== "boolean")) {
@@ -449,6 +451,7 @@ export function validateFormalMaterialRequestAccess(value: unknown): FormalMater
     can_withdraw: object.can_withdraw as boolean,
     can_cancel: object.can_cancel as boolean,
     can_read_material_catalog: object.can_read_material_catalog as boolean,
+    can_read_allocation_options: object.can_read_allocation_options as boolean,
     can_approve_region: object.can_approve_region as boolean,
     can_approve_headquarters: object.can_approve_headquarters as boolean,
     can_register_external: object.can_register_external as boolean,

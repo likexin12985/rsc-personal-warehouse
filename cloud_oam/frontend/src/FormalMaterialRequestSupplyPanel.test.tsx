@@ -30,7 +30,7 @@ describe("material request source candidate panel", () => {
     const mutate = vi.fn();
     const adapter = { listAllocationOptions, mutate, loadIdentity: vi.fn(), loadAccess: vi.fn(), lifecycleCommandStatus: vi.fn(), supplyCommandStatus: vi.fn(), list: vi.fn(), detail: vi.fn(), loadDraftForEdit: vi.fn(), listWorkOrderOptions: vi.fn(), workOrderOptionDetail: vi.fn(), listMaterials: vi.fn(), createDraft: vi.fn() } as any;
     const store = { read: () => ({ kind: "missing" }), persist: vi.fn(), clear: vi.fn() } as any;
-    render(<FormalMaterialRequestSupplyPanel adapter={adapter} access={{ can_approve_region: true, can_approve_headquarters: false } as any} detail={detail()} store={store} registry={{ get: () => undefined } as any} otherWriteBusy={false} onBlocking={vi.fn()} onDetail={vi.fn()} />);
+    render(<FormalMaterialRequestSupplyPanel adapter={adapter} access={{ can_read_allocation_options: true } as any} detail={detail()} store={store} registry={{ get: () => undefined } as any} otherWriteBusy={false} onBlocking={vi.fn()} onDetail={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "查看可用货源" }));
     await waitFor(() => expect(listAllocationOptions).toHaveBeenCalledWith(REQUEST_ID, LINE_ID));
     expect(await screen.findByText("当前没有满足条件的可用正余额货源。")).toBeTruthy();
