@@ -3,7 +3,7 @@
   <block wx:else>
     <view class="card access-card status-{{accessAllowed ? 'success' : 'danger'}}">{{accessMessage}}</view>
     <view wx:if="{{errorMessage}}" class="card error-card">{{errorMessage}}</view>
-    <view wx:if="{{pendingMessage}}" class="card pending-card"><text>{{pendingMessage}}</text><button wx:if="{{pendingRetryable}}" class="button button-secondary" bindtap="retryPending" loading="{{busy}}">按原坐标重试</button><button wx:if="{{countRecoveryCanCheck}}" class="button button-secondary" bindtap="recoverCount" loading="{{busy}}">只读核验原范围计数</button></view>
+    <view wx:if="{{pendingMessage}}" class="card pending-card"><text>{{pendingMessage}}</text><button wx:if="{{pendingRetryable}}" class="button button-secondary" bindtap="retryPending" loading="{{busy}}">按原坐标重试</button><button wx:if="{{countRecoveryCanCheck}}" class="button button-secondary" bindtap="recoverCount" loading="{{busy}}">只读核验原范围计数</button><button wx:if="{{reviewRecoveryCanCheck}}" class="button button-secondary" bindtap="recoverReview" loading="{{busy}}">只读核验原盘点复核</button></view>
     <block wx:if="{{detail}}">
       <view class="card summary-card">
         <view class="row between"><text class="mono task-no">{{detail.task_no}}</text><text class="status status-info">{{detail.statusLabel}}</text></view>

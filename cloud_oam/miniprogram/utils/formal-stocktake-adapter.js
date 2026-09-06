@@ -224,6 +224,22 @@ function createFormalStocktakeAdapter(options = {}) {
         + `&trace_request_id=${encodeURIComponent(text(traceRequestId, 'trace_request_id'))}`
       return transport.request(`/v1/stocktakes/${uuidValue(taskId, 'task_id')}/rounds/${uuidValue(roundId, 'round_id')}/scopes/${uuidValue(scopeId, 'scope_id')}/count-command-status?${query}`, { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } })
     },
+    async reviewCommandStatus(taskId, roundId, reviewStage, actorPersonId, actorAuthorizationVersion, traceRequestId) {
+      if (typeof transport.request !== 'function') fail('正式盘点历史复核查询通道不可用', 503)
+      const stage = text(reviewStage, 'review_stage')
+      if (!['region', 'headquarters'].includes(stage)) fail('review_stage 无效')
+      const query = `actor_person_id=${encodeURIComponent(uuidValue(actorPersonId, 'actor_person_id'))}`
+        + `&actor_authorization_version=${positive(actorAuthorizationVersion, 'actor_authorization_version')}`
+        + `&trace_request_id=${encodeURIComponent(text(traceRequestId, 'trace_request_id'))}`
+      return transport.request(`/v1/stocktakes/${uuidValue(taskId, 'task_id')}/rounds/${uuidValue(roundId, 'round_id')}/reviews/${stage}/command-status?${query}`, { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } })
+    },
+    async postingCommandStatus(taskId, actorPersonId, actorAuthorizationVersion, traceRequestId) {
+      if (typeof transport.request !== 'function') fail('正式盘点历史过账查询通道不可用', 503)
+      const query = `actor_person_id=${encodeURIComponent(uuidValue(actorPersonId, 'actor_person_id'))}`
+        + `&actor_authorization_version=${positive(actorAuthorizationVersion, 'actor_authorization_version')}`
+        + `&trace_request_id=${encodeURIComponent(text(traceRequestId, 'trace_request_id'))}`
+      return transport.request(`/v1/stocktakes/${uuidValue(taskId, 'task_id')}/post-differences-command-status?${query}`, { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } })
+    },
     async listAssignees(regionOrgId, locationId, afterPersonId = null) {
       const region = uuidValue(regionOrgId, 'region_org_id')
       const location = uuidValue(locationId, 'location_id')

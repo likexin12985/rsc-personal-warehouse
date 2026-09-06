@@ -3,6 +3,9 @@ const { formalStocktakeAdapter, createFormalStocktakeIntentRegistry } = require(
 const { getFormalStocktakeCountRecoveryStore } = require('../../utils/formal-stocktake-count-recovery-store')
 const { createFormalStocktakeCountRecoveryAdapterFromFormalAdapter, recoverFormalStocktakeCount } = require('../../utils/formal-stocktake-count-recovery')
 const { submitDurableFormalStocktakeCount, FormalStocktakeCountSubmissionPendingError } = require('../../utils/formal-stocktake-count-submission')
+const { getFormalStocktakeReviewRecoveryStore } = require('../../utils/formal-stocktake-review-recovery-store')
+const { createFormalStocktakeReviewRecoveryAdapterFromFormalAdapter, recoverFormalStocktakeReview } = require('../../utils/formal-stocktake-review-recovery')
+const { submitDurableFormalStocktakeReview, FormalStocktakeReviewSubmissionPendingError } = require('../../utils/formal-stocktake-review-submission')
 const { fixedQuantityText, formalStocktakeLabels } = require('../../utils/formal-stocktake-contract')
 const formalFileUpload = require('../../utils/formal-file-upload')
 const { accessIdentity } = require('../../utils/formal-operational-stocktake-pagination')
@@ -20,6 +23,19 @@ function hasDurableCountCapability(adapter) {
 }
 
 function isLegacyCountCompatibilityAdapter(adapter) {
+  return Boolean(adapter && adapter.countRecoveryMode === 'legacy-test')
+}
+
+function hasDurableReviewCapability(adapter) {
+  return Boolean(adapter
+    && typeof adapter.loadIdentityNoReplay === 'function'
+    && typeof adapter.loadAccessNoReplay === 'function'
+    && typeof adapter.detailNoReplay === 'function'
+    && typeof adapter.reviewCommandStatus === 'function'
+    && typeof adapter.execute === 'function')
+}
+
+function isLegacyReviewCompatibilityAdapter(adapter) {
   return Boolean(adapter && adapter.countRecoveryMode === 'legacy-test')
 }
 
@@ -125,6 +141,8 @@ Page({
     pendingRetryable: false,
     countRecoveryBlocked: false,
     countRecoveryCanCheck: false,
+    reviewRecoveryBlocked: false,
+    reviewRecoveryCanCheck: false,
     terminalConfirm: '',
     selectedScopeId: '',
     countAction: '',
@@ -160,8 +178,10 @@ Page({
     this._hidden = false
     this._taskId = String(options.task_id || '').toLowerCase()
     this._countRecoveryContext = ''
+    this._reviewRecoveryContext = ''
     this._intentRegistry = createFormalStocktakeIntentRegistry()
     this._countRecoveryStore = getFormalStocktakeCountRecoveryStore()
+    this._reviewRecoveryStore = getFormalStocktakeReviewRecoveryStore()
     this._evidenceClaims = new Map()
     this._uploadIdentity = ''
     ensureEvidenceUploads(this)
@@ -188,7 +208,8 @@ Page({
     this._uploadIdentity = ''
     this.setData({ busy: false, loading: false, accessAllowed: false, detail: null, accessMessage: '返回后须重新校验正式身份与盘点权限', terminalConfirm: '', selectedScopeId: '', countAction: '', accountDrafts: [], observations: [], evidenceUploadFiles: [], evidenceUploadBlocking: false, evidenceUploadCanChoose: true, hasAccountInput: false })
     this._countRecoveryContext = ''
-    this.setData({ countRecoveryBlocked: false, countRecoveryCanCheck: false })
+    this._reviewRecoveryContext = ''
+    this.setData({ countRecoveryBlocked: false, countRecoveryCanCheck: false, reviewRecoveryBlocked: false, reviewRecoveryCanCheck: false })
     if (this._intentRegistry.current()) this.setData({ pendingMessage: '原盘点写请求结果待核实，已停止新操作；刷新不代表原请求未执行。', pendingRetryable: false })
   },
   onPullDownRefresh() { this.load().finally(() => wx.stopPullDownRefresh()) },
@@ -200,6 +221,7 @@ Page({
     this._access = null
     this._detail = null
     this._countRecoveryContext = ''
+    this._reviewRecoveryContext = ''
     this._uploadIdentity = ''
   },
 
@@ -238,6 +260,7 @@ Page({
       this._access = access
       this._detail = detail
       this.refreshCountRecovery()
+      this.refreshReviewRecovery()
       if (this._intentRegistry.current() && !this.data.countRecoveryBlocked) this.setData({ pendingMessage: '原盘点写请求结果待核实，已停止新操作；请按原坐标人工核验。', pendingRetryable: false })
       this.setData({ accessAllowed: true, accessMessage: `正式盘点权限已验证 · v${access.authorization_version}`, detail: viewDetail(detail, access), terminalConfirm: '' })
     } catch (error) {
@@ -247,11 +270,12 @@ Page({
       this._countRecoveryContext = ''
       if (this._evidenceUploads) this._evidenceUploads.clear()
       if (this._evidenceClaims) this._evidenceClaims.clear()
-      this.setData({ accessAllowed: false, accessMessage: '身份、授权或正式响应未通过校验，已失败关闭', detail: null, terminalConfirm: '', errorMessage: error.message || '正式盘点详情读取失败', selectedScopeId: '', countAction: '', accountDrafts: [], observations: [], evidenceUploadFiles: [], evidenceUploadBlocking: false, evidenceUploadCanChoose: true, hasAccountInput: false, countRecoveryBlocked: false, countRecoveryCanCheck: false })
+      this.setData({ accessAllowed: false, accessMessage: '身份、授权或正式响应未通过校验，已失败关闭', detail: null, terminalConfirm: '', errorMessage: error.message || '正式盘点详情读取失败', selectedScopeId: '', countAction: '', accountDrafts: [], observations: [], evidenceUploadFiles: [], evidenceUploadBlocking: false, evidenceUploadCanChoose: true, hasAccountInput: false, countRecoveryBlocked: false, countRecoveryCanCheck: false, reviewRecoveryBlocked: false, reviewRecoveryCanCheck: false })
       // A failed fresh read must not erase a durable count marker. Re-evaluate
       // it after dropping the in-memory identity so recovery remains the only
       // path that can release the barrier.
       this.refreshCountRecovery()
+      this.refreshReviewRecovery()
     } finally { if (generation === this._loadGeneration) this.setData({ loading: false }) }
   },
 
@@ -306,14 +330,59 @@ Page({
     }
   },
 
+  refreshReviewRecovery() {
+    // Review recovery is a separate state axis. A valid review marker blocks
+    // every business write just like a count marker, but it is resolved only
+    // with the exact stage/task/round command-status GET and detail proof.
+    const identity = this._access ? `${this._access.person_id}:${this._access.authorization_version}` : ''
+    const context = `${this._taskId || ''}:${identity}`
+    if (this._reviewRecoveryContext && this._reviewRecoveryContext !== context) {
+      this.setData({ reviewRecoveryBlocked: false, reviewRecoveryCanCheck: false })
+    }
+    this._reviewRecoveryContext = context
+    if (!UUID.test(this._taskId || '')) {
+      this.setData({ reviewRecoveryBlocked: true, reviewRecoveryCanCheck: false, pendingMessage: '任务恢复坐标无效，已停止所有业务写入。' })
+      return
+    }
+    if (!this._reviewRecoveryStore || typeof this._reviewRecoveryStore.readPending !== 'function') {
+      this.setData({ reviewRecoveryBlocked: true, reviewRecoveryCanCheck: false, pendingMessage: '正式盘点复核持久恢复存储未完整加载，已停止所有业务写入。' })
+      return
+    }
+    let pending
+    try { pending = this._reviewRecoveryStore.readPending(this._taskId) } catch (_) {
+      this.setData({ reviewRecoveryBlocked: true, reviewRecoveryCanCheck: false, pendingMessage: '正式盘点复核恢复记录无法读取，已停止所有业务写入。' })
+      return
+    }
+    const canRecover = hasDurableReviewCapability(formalStocktakeAdapter)
+    const compatibilityAdapter = isLegacyReviewCompatibilityAdapter(formalStocktakeAdapter)
+    if (!canRecover && !compatibilityAdapter) {
+      this.setData({ reviewRecoveryBlocked: true, reviewRecoveryCanCheck: false, pendingMessage: '正式盘点复核持久恢复能力未完整加载，已停止所有业务写入。' })
+      return
+    }
+    if (!canRecover && compatibilityAdapter && (pending.kind === 'missing' || pending.kind === 'unavailable')) {
+      this.setData({ reviewRecoveryBlocked: false, reviewRecoveryCanCheck: false })
+      return
+    }
+    if (pending.kind === 'valid' && pending.values && pending.values.length) {
+      this.setData({ reviewRecoveryBlocked: true, reviewRecoveryCanCheck: canRecover && Boolean(this._access), pendingMessage: canRecover ? '原日常盘点复核结果待只读核验；未发送任何新请求。' : '日常盘点复核恢复能力不可用，已停止新写入。' })
+    } else if (pending.kind === 'missing') {
+      const hasPendingIntent = Boolean(this._intentRegistry && this._intentRegistry.current && this._intentRegistry.current())
+      if (!this.data.countRecoveryBlocked) this.setData({ reviewRecoveryBlocked: false, reviewRecoveryCanCheck: false, pendingMessage: hasPendingIntent ? this.data.pendingMessage : '' })
+      else this.setData({ reviewRecoveryBlocked: false, reviewRecoveryCanCheck: false })
+    } else {
+      this.setData({ reviewRecoveryBlocked: true, reviewRecoveryCanCheck: false, pendingMessage: '日常盘点复核恢复记录无法确认，已停止新写入。' })
+    }
+  },
+
   async run(input, retryIntent = null) {
     if (!this._access || !this._detail || this.data.busy || this._writeLease || this._hidden || this.data.loading) return
     this.refreshCountRecovery()
+    this.refreshReviewRecovery()
     // A durable count marker blocks every business write, not only another
     // count.  UI disabled flags are advisory; this method is the final
     // fail-closed boundary for start, differences, reviews and terminal work.
-    if (this.data.countRecoveryBlocked) {
-      this.setData({ pendingRetryable: false, pendingMessage: '原日常盘点范围计数结果待只读核验，已停止其他写操作；未发送任何新请求。' })
+    if (this.data.countRecoveryBlocked || this.data.reviewRecoveryBlocked) {
+      this.setData({ pendingRetryable: false, pendingMessage: this.data.countRecoveryBlocked ? '原日常盘点范围计数结果待只读核验，已停止其他写操作；未发送任何新请求。' : '原日常盘点复核结果待只读核验，已停止其他写操作；未发送任何新请求。' })
       return
     }
     const existing = this._intentRegistry.current()
@@ -329,8 +398,12 @@ Page({
     const current = () => !this._hidden && this._writeLease === lease && this._loadGeneration === generation && this._access === access
     let intent
     const durableCount = (input.action === 'submit_initial_count' || input.action === 'submit_recount_count') && hasDurableCountCapability(formalStocktakeAdapter)
+    const durableReview = (input.action === 'review_region' || input.action === 'review_headquarters') && hasDurableReviewCapability(formalStocktakeAdapter)
+    const compatibilityAdapter = isLegacyCountCompatibilityAdapter(formalStocktakeAdapter) || isLegacyReviewCompatibilityAdapter(formalStocktakeAdapter)
     try {
       intent = existing || this._intentRegistry.begin(input)
+      if ((input.action === 'review_region' || input.action === 'review_headquarters') && !durableReview && !compatibilityAdapter) throw new Error('当前小程序不支持安全的复核持久恢复，已停止复核')
+      if ((input.action === 'submit_initial_count' || input.action === 'submit_recount_count') && !durableCount && !compatibilityAdapter) throw new Error('当前小程序不支持安全的计数持久恢复，已停止计数')
       this.setData({ busy: true, errorMessage: '', pendingMessage: '', pendingRetryable: false, terminalConfirm: '' })
       const completed = durableCount
         ? await submitDurableFormalStocktakeCount({
@@ -341,7 +414,15 @@ Page({
           store: this._countRecoveryStore,
           canCommit: current
         })
-        : await formalStocktakeAdapter.execute(intent)
+        : durableReview
+          ? await submitDurableFormalStocktakeReview({
+            intent,
+            expectedIdentity: this._access,
+            adapter: formalStocktakeAdapter,
+            store: this._reviewRecoveryStore,
+            canCommit: current
+          })
+          : await formalStocktakeAdapter.execute(intent)
       // A successful response is a fact about the original write intent even
       // when the page became hidden while the response was in flight.  Clear
       // the matching in-memory intent before checking page liveness; otherwise
@@ -359,6 +440,11 @@ Page({
       if (durableCount && error instanceof FormalStocktakeCountSubmissionPendingError) {
         this.refreshCountRecovery()
         this.setData({ pendingRetryable: false, pendingMessage: '原日常盘点范围计数已进入持久待核验状态；只允许查询原追踪坐标，禁止重新提交。', errorMessage: error.message })
+        return
+      }
+      if (durableReview && error instanceof FormalStocktakeReviewSubmissionPendingError) {
+        this.refreshReviewRecovery()
+        this.setData({ pendingRetryable: false, pendingMessage: '原日常盘点复核结果已进入持久待核验状态；只允许查询原追踪坐标，禁止重新提交。', errorMessage: error.message })
         return
       }
       if (intent && !uncertain) this._intentRegistry.complete(intent)
@@ -423,6 +509,44 @@ Page({
       })
     } catch (error) {
       if (live()) { this.refreshCountRecovery(); this.setData({ errorMessage: error.message || '历史范围计数仍待核验' }) }
+    } finally {
+      if (this._writeLease === lease) this._writeLease = null
+      if (!this._hidden) this.setData({ busy: false })
+    }
+  },
+  async recoverReview() {
+    if (!hasDurableReviewCapability(formalStocktakeAdapter) || !this._reviewRecoveryStore || this.data.busy || this._hidden || !this._access) {
+      this.refreshReviewRecovery()
+      return
+    }
+    const pending = this._reviewRecoveryStore.readPending(this._taskId)
+    if (pending.kind !== 'valid' || !pending.values || !pending.values.length) { this.refreshReviewRecovery(); return }
+    const sentinel = pending.values[0]
+    const lease = {}
+    this._writeLease = lease
+    const generation = this._loadGeneration
+    const live = () => !this._hidden && this._writeLease === lease && this._loadGeneration === generation
+    this.setData({ busy: true, errorMessage: '' })
+    try {
+      const result = await this._reviewRecoveryStore.withTaskLease(sentinel, (reviewLease) => recoverFormalStocktakeReview(reviewLease, sentinel, createFormalStocktakeReviewRecoveryAdapterFromFormalAdapter(this._access, formalStocktakeAdapter), live))
+      const currentIntent = this._intentRegistry.current()
+      const expectedAction = sentinel.review_stage === 'region' ? 'review_region' : 'review_headquarters'
+      const intentMatches = Boolean(currentIntent
+        && currentIntent.action === expectedAction
+        && currentIntent.taskId === sentinel.task_id
+        && currentIntent.roundId === sentinel.round_id
+        && currentIntent.expectedTaskVersion === sentinel.expected_task_version
+        && currentIntent.headers
+        && currentIntent.headers['X-Request-ID'] === sentinel.trace_request_id)
+      if (intentMatches && this._writeLease === lease) this._intentRegistry.complete(currentIntent)
+      if (!live()) return
+      this._detail = result.detail
+      this.refreshReviewRecovery()
+      const pendingAfter = this._reviewRecoveryStore.readPending(this._taskId)
+      const registryBlocked = Boolean(this._intentRegistry.current())
+      this.setData({ detail: viewDetail(result.detail, this._access), pendingMessage: registryBlocked ? '仍有另一笔盘点写请求待核实，已停止新操作。' : pendingAfter.kind === 'valid' ? '仍有其他日常盘点复核待只读核验；未发送任何新请求。' : '', pendingRetryable: false, reviewRecoveryBlocked: registryBlocked || pendingAfter.kind !== 'missing', reviewRecoveryCanCheck: !registryBlocked && pendingAfter.kind === 'valid' })
+    } catch (error) {
+      if (live()) { this.refreshReviewRecovery(); this.setData({ errorMessage: error.message || '历史盘点复核仍待核验' }) }
     } finally {
       if (this._writeLease === lease) this._writeLease = null
       if (!this._hidden) this.setData({ busy: false })
@@ -612,9 +736,9 @@ Page({
     const action = event.currentTarget.dataset.action
     if (round) this.run({ action, taskId: this._detail.task_id, roundId: round.round_id, expectedTaskVersion: this._detail.version, body: { expected_task_version: this._detail.version } })
   },
-  bindReviewComment(event) { this.setData({ reviewComment: event.detail.value }) },
+  bindReviewComment(event) { if (this.data.reviewRecoveryBlocked) return; this.setData({ reviewComment: event.detail.value }) },
   submitReview(event) {
-    if (this.data.countRecoveryBlocked) return
+    if (this.data.countRecoveryBlocked || this.data.reviewRecoveryBlocked) return
     const stage = event.currentTarget.dataset.stage
     const decision = event.currentTarget.dataset.decision
     const round = currentRound(this._detail)
@@ -622,6 +746,10 @@ Page({
     const comment = this.data.reviewComment.trim()
     if (decision !== 'approve' && !comment) { wx.showToast({ title: '要求复盘或驳回必须填写意见', icon: 'none' }); return }
     const action = stage === 'region' ? 'review_region' : 'review_headquarters'
+    if (!hasDurableReviewCapability(formalStocktakeAdapter) && !isLegacyReviewCompatibilityAdapter(formalStocktakeAdapter)) {
+      wx.showToast({ title: '当前小程序不支持安全的复核持久恢复，已停止复核', icon: 'none' })
+      return
+    }
     this.run({ action, taskId: this._detail.task_id, roundId: round.round_id, expectedTaskVersion: this._detail.version, body: { expected_task_version: this._detail.version, decision, items: round.visible_differences.map((difference) => ({ difference_id: difference.difference_id, decision: decision === 'approve' ? (difference.posting_blocked_by_pending_verification ? 'pending_verification' : 'accept_for_posting') : decision === 'recount' ? 'recount' : 'reject', comment })), comment } })
   },
   async loadAllAssignees(regionOrgId, locationId) {
