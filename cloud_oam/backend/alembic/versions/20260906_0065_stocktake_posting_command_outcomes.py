@@ -66,9 +66,6 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name="pk_stocktake_posting_command_outcomes_0065"),
         sa.UniqueConstraint(
-            "task_id", name="uq_stocktake_posting_command_outcomes_task_0065"
-        ),
-        sa.UniqueConstraint(
             "task_id",
             "request_reference",
             name="uq_stocktake_posting_command_outcomes_request_0065",
@@ -183,4 +180,3 @@ def downgrade() -> None:
         op.execute(f"DROP TRIGGER IF EXISTS {SQLITE_DELETE_TRIGGER}")
     op.drop_index("ix_stocktake_posting_command_outcomes_request_0065", table_name=TABLE)
     op.drop_table(TABLE)
-

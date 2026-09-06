@@ -2522,9 +2522,6 @@ class StocktakePostingCommandOutcome(CreatedAtMixin, Base):
     __table_args__ = (
         PrimaryKeyConstraint("id", name="pk_stocktake_posting_command_outcomes_0065"),
         UniqueConstraint(
-            "task_id", name="uq_stocktake_posting_command_outcomes_task_0065"
-        ),
-        UniqueConstraint(
             "task_id",
             "request_reference",
             name="uq_stocktake_posting_command_outcomes_request_0065",
