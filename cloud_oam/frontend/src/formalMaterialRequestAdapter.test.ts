@@ -146,6 +146,28 @@ describe("formal material-request PC transport", () => {
     expect(requester.mock.calls).toHaveLength(1);
   });
 
+  it("posts allocation with exact projection coordinates and rejects unsafe payloads before transport", async () => {
+    const requester = makeRequester(async () => ({ ok: true }));
+    const adapter = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, requester);
+    await adapter.createAllocation(REQUEST_ID, {
+      expected_request_version: 3,
+      request_line_id: STEP_ID,
+      source_stock_account_id: MATERIAL_ID,
+      allocated_qty: "1.000",
+      source_balance_version: 8,
+      source_ledger_cursor: 9,
+      serial_ids: [],
+    }, { "X-Request-ID": "web-allocation-12345678", "Idempotency-Key": "web-idempotency-12345678" });
+    expect(requester.mock.calls[0]).toEqual([`/v1/material-requests/${REQUEST_ID}/allocations`, {
+      method: "POST",
+      headers: { "X-Request-ID": "web-allocation-12345678", "Idempotency-Key": "web-idempotency-12345678" },
+      body: JSON.stringify({
+        expected_request_version: 3, request_line_id: STEP_ID, source_stock_account_id: MATERIAL_ID,
+        allocated_qty: "1.000", source_balance_version: 8, source_ledger_cursor: 9, serial_ids: [],
+      }),
+    }]);
+  });
+
   it("fresh-reads the exact auth identity and command status without sending an idempotency key", async () => {
     const requester = makeRequester(async (path) => (
       path === "/auth/me"

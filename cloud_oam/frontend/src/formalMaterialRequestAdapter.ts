@@ -60,6 +60,16 @@ export type FormalMaterialRequestEditableDraft = Readonly<{
   draft: MaterialRequestDraftInput;
 }>;
 
+export type MaterialRequestAllocationCreateInput = Readonly<{
+  expected_request_version: number;
+  request_line_id: string;
+  source_stock_account_id: string;
+  allocated_qty: string;
+  source_balance_version: number;
+  source_ledger_cursor: number;
+  serial_ids: readonly string[];
+}>;
+
 export interface FormalMaterialRequestAdapter {
   loadIdentity(): Promise<unknown>;
   loadAccess(): Promise<unknown>;
@@ -73,6 +83,11 @@ export interface FormalMaterialRequestAdapter {
   workOrderOptionDetail(workOrderId: string): Promise<unknown>;
   listMaterials(query: string, afterId: string | null): Promise<unknown>;
   listAllocationOptions(requestId: string, requestLineId: string): Promise<MaterialRequestAllocationOptionPage>;
+  createAllocation(
+    requestId: string,
+    input: MaterialRequestAllocationCreateInput,
+    headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>,
+  ): Promise<unknown>;
   createDraft(intent: MaterialRequestCreateIntent): Promise<unknown>;
   mutate(intent: MaterialRequestMutationIntent): Promise<unknown>;
 }
@@ -698,6 +713,48 @@ export function createFormalMaterialRequestAdapter(
         cache: "no-store",
         headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
       }).then(validateMaterialRequestAllocationOptionPage);
+    },
+    createAllocation(requestId: string, input: MaterialRequestAllocationCreateInput, headers) {
+      const checkedRequestId = requiredUuid(requestId, "request_id");
+      const body = exactObject(input, [
+        "expected_request_version", "request_line_id", "source_stock_account_id", "allocated_qty",
+        "source_balance_version", "source_ledger_cursor", "serial_ids",
+      ], "分配写内容");
+      if (!Number.isSafeInteger(body.expected_request_version) || (body.expected_request_version as number) < 0) {
+        return Promise.reject(new ApiError(409, "分配需求版本无效"));
+      }
+      requiredUuid(body.request_line_id, "request_line_id");
+      requiredUuid(body.source_stock_account_id, "source_stock_account_id");
+      if (typeof body.allocated_qty !== "string" || !DECIMAL.test(body.allocated_qty)
+          || /^0(?:\.0{1,3})?$/.test(body.allocated_qty)) {
+        return Promise.reject(new ApiError(409, "分配数量无效"));
+      }
+      for (const field of ["source_balance_version", "source_ledger_cursor"] as const) {
+        if (!Number.isSafeInteger(body[field]) || (body[field] as number) < 0) {
+          return Promise.reject(new ApiError(409, "货源投影坐标无效"));
+        }
+      }
+      if (!Array.isArray(body.serial_ids) || body.serial_ids.length > 1000) {
+        return Promise.reject(new ApiError(409, "分配串码内容无效"));
+      }
+      const serialIds = body.serial_ids.map((serialId) => requiredUuid(serialId, "serial_id"));
+      if (new Set(serialIds).size !== serialIds.length) {
+        return Promise.reject(new ApiError(409, "分配串码不能重复"));
+      }
+      const checkedHeaders = validateWriteHeaders(headers, headers["Idempotency-Key"]);
+      return requester(`/v1/material-requests/${checkedRequestId}/allocations`, {
+        method: "POST",
+        headers: checkedHeaders,
+        ...jsonBody({
+          expected_request_version: body.expected_request_version,
+          request_line_id: requiredUuid(body.request_line_id, "request_line_id"),
+          source_stock_account_id: requiredUuid(body.source_stock_account_id, "source_stock_account_id"),
+          allocated_qty: body.allocated_qty,
+          source_balance_version: body.source_balance_version,
+          source_ledger_cursor: body.source_ledger_cursor,
+          serial_ids: serialIds,
+        }),
+      });
     },
     createDraft(intent: MaterialRequestCreateIntent) {
       const object = exactObject(intent, [
