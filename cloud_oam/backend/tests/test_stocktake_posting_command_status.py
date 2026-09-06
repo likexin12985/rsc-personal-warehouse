@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 
 from app.database import get_db
 from app.dependencies import get_formal_principal
@@ -15,6 +16,7 @@ from app.routers import formal_stocktakes
 
 from app.formal_services import stocktake_posting_command_status as service
 from app.stocktake_posting_command_status_schemas import StocktakePostingCommandStatusOut
+from app.stocktake_models import StocktakePostingCommandOutcome
 from test_stocktake_difference_service import world
 from test_stocktake_review_recount_service import _fixed_clocks, review_world
 from test_stocktake_safe_posting_service import _approve, _post, posting_world
@@ -112,6 +114,26 @@ def test_exact_trace_reconstructs_only_persisted_posting_fact(posting_world, mon
     assert result.command.transaction_count == 0
     assert result.command.total_quantity == "0.000"
     assert "idempotency_key" not in result.model_dump_json()
+
+
+def test_posted_outcome_must_match_recovered_completion(posting_world, monkeypatch):
+    task, _ = _approve(
+        posting_world,
+        monkeypatch,
+        key="posting-status-outcome-binding",
+        counted_qty=Decimal("4.000"),
+        decision="no_adjustment",
+    )
+    _post(posting_world, task, key="posting-status-outcome-binding-post")
+    posting_world.db.execute(
+        update(StocktakePostingCommandOutcome)
+        .where(StocktakePostingCommandOutcome.task_id == task.id)
+        .values(request_sha256="0" * 64)
+    )
+    posting_world.db.commit()
+    with pytest.raises(service.StocktakePostingCommandStatusError) as caught:
+        _lookup(posting_world, task, "trace-posting-status-outcome-binding-post")
+    assert caught.value.code == "stocktake_posting_command_status_evidence_invalid"
 
 
 @pytest.mark.parametrize("closed", [False, True])

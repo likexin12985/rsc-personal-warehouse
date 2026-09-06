@@ -123,6 +123,7 @@ def stocktake_posting_command_status(
                 )
                 .execution_options(populate_existing=True)
             ).all())
+            posted_outcome = None
             if len(outcomes) > 1:
                 _evidence("盘点过账命令封存事实不唯一")
             if outcomes:
@@ -130,6 +131,7 @@ def stocktake_posting_command_status(
                 if outcome.disposition == "posted":
                     if outcome.completion_id is None:
                         _evidence("盘点过账完成结果缺少完成事实绑定")
+                    posted_outcome = outcome
                 elif outcome.disposition != "sealed_not_executed":
                     _evidence("盘点过账命令封存事实类型无效")
                 if outcome.disposition == "sealed_not_executed":
@@ -211,6 +213,13 @@ def stocktake_posting_command_status(
             if len(completion_rows) != 1:
                 _evidence("盘点过账完成事实无法唯一核验")
             completion = completion_rows[0]
+            if posted_outcome is not None and (
+                posted_outcome.completion_id != completion.id
+                or posted_outcome.task_id != completion.task_id
+                or posted_outcome.expected_task_version != completion.expected_task_version
+                or posted_outcome.request_sha256 != completion.request_sha256
+            ):
+                _evidence("盘点过账完成结果与命令坐标未绑定")
             if (
                 completion.posted_by_user_id != actor.user_id
                 or completion.posted_by_person_id != actor.person_id
