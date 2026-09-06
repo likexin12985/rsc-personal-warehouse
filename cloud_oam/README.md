@@ -13,7 +13,7 @@
 ### 2026-09-07 分配恢复与双端传输层本地候选
 
 分配首片已补齐服务端只读 command-status 重证、Web/小程序严格响应校验、安全 POST 传输层和
-Web 持久恢复哨兵；本轮收口结果为后端全量 `3086 passed, 1 skipped`，Web `814 passed`，小程序 `718 passed`，
+Web 持久恢复哨兵；本轮收口结果为后端全量 `3086 passed, 1 skipped`，Web `814 passed`，小程序 `720 passed`，
 TypeScript、Vite 构建和仓库安全检查通过。该候选仍未接入分配写页面，也没有 PostgreSQL 16
 远端门禁、隔离 UAT 或真实授权数据证据，不能宣称一期或生产放行。
 
