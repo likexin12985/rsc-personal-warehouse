@@ -27,6 +27,7 @@ import {
 import {
   FormalStocktakePostSubmissionPendingError,
   recoverFormalStocktakePost,
+  sealFormalStocktakePost,
   submitDurableFormalStocktakePost,
 } from "../formalStocktakePostRecovery";
 import {
@@ -279,6 +280,7 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
     && typeof adapter.loadAccessNoReplay === "function"
     && typeof adapter.detailNoReplay === "function"
     && typeof adapter.postingCommandStatus === "function";
+  const postSealCapable = postRecoveryCapable && typeof adapter.sealPostingCommand === "function";
   const resolvedPostRecoveryStore = useMemo<FormalStocktakePostRecoveryStore | null>(() => {
     if (!postRecoveryCapable) return null;
     return postRecoveryStore ?? getFormalStocktakePostRecoveryStore();
@@ -653,6 +655,41 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
     }
   }
 
+  async function sealPendingPost(target: FormalStocktakePostSentinel): Promise<void> {
+    const live = readPostRecoverySnapshot();
+    setPostRecoveryState(live);
+    const sentinel = live.kind === "valid"
+      ? live.values?.find((value) => value.task_id === target.task_id
+        && value.trace_request_id === target.trace_request_id)
+      : undefined;
+    if (!sentinel || !resolvedPostRecoveryStore || !postSealCapable || commandBusy) return;
+    if (!access || access.schema_version !== "1.0" || !access.can_post
+      || access.person_id !== sentinel.actor_person_id
+      || access.authorization_version !== sentinel.actor_authorization_version) {
+      setError("当前正式权限或身份与原过账不一致，不能封存；恢复坐标继续保留");
+      return;
+    }
+    if (!window.confirm("确认原盘点过账未执行并永久封存该坐标？封存只记录不可变的未执行事实，不会重发过账、改变库存或关闭任务。")) return;
+    const lifecycle = lifecycleEpoch.current;
+    const stillCurrent = () => lifecycle === lifecycleEpoch.current && activeAdapter.current === adapter;
+    setBusy(true); setError(""); setPendingRetryable(false);
+    try {
+      await resolvedPostRecoveryStore.withTaskLease(sentinel.task_id, (lease) =>
+        sealFormalStocktakePost(lease, sentinel, adapter, stillCurrent));
+      if (!stillCurrent()) return;
+      refreshPostRecoveryState();
+      setPendingMessage("");
+      await load(false);
+    } catch (sealError) {
+      if (!stillCurrent()) return;
+      refreshPostRecoveryState();
+      setPendingMessage("原盘点过账未能确认永久封存；未发送新的过账请求，恢复坐标继续保留。");
+      setError(showError(sealError));
+    } finally {
+      if (stillCurrent()) setBusy(false);
+    }
+  }
+
   async function recoverPendingCount(target?: FormalStocktakeCountSentinel): Promise<void> {
     const live = readCountRecoverySnapshot();
     setCountRecoveryState(live);
@@ -884,6 +921,13 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
         ? `有 ${postRecoveryState.values.length} 笔盘点过账待核验；所有新写已停止。`
         : "盘点过账恢复记录损坏或浏览器持久协调不可用；所有新写已失败关闭，禁止覆盖记录。"}
       {postRecoveryState.kind === "valid" && postRecoveryState.values?.map((pending) => <Button key={`${pending.task_id}:${pending.trace_request_id}`} tone="secondary" disabled={commandBusy} onClick={() => void recoverPendingPost(pending)}>{`只读核验 ${pending.task_id}（v${pending.expected_task_version}→${pending.expected_task_version + 1}）`}</Button>)}
+      {postRecoveryState.kind === "valid" && postRecoveryState.values?.map((pending) => postSealCapable
+        && access?.schema_version === "1.0"
+        && access.can_post
+        && access.person_id === pending.actor_person_id
+        && access.authorization_version === pending.actor_authorization_version
+        ? <Button key={`seal:${pending.task_id}:${pending.trace_request_id}`} tone="secondary" disabled={commandBusy} onClick={() => void sealPendingPost(pending)}>确认未执行并永久封存</Button>
+        : null)}
     </div>}
     {countRecoveryState.kind !== "missing" && <div className="alert alert-warning" role="alert">
       {countRecoveryState.kind === "valid" && countRecoveryState.values?.length

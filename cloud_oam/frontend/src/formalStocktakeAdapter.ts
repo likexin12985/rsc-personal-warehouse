@@ -401,6 +401,9 @@ export function createFormalStocktakeAdapter(
       const checkedAuthorizationVersion = positiveVersion(actorAuthorizationVersion, "actor_authorization_version");
       const checkedTrace = text(traceRequestId, "trace_request_id");
       if (!SAFE_REQUEST_ID.test(checkedTrace)) fail("trace_request_id 无效");
+      if (checkedPersonId !== expected.person_id || checkedAuthorizationVersion !== expected.authorization_version) {
+        fail("封存身份或授权版本与当前正式上下文不一致");
+      }
       return mutationRequester(
         `/v1/stocktakes/${checkedTaskId}/post-differences/confirm-not-executed`,
         {

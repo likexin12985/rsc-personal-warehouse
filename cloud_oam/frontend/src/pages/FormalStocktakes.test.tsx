@@ -79,6 +79,41 @@ function postingAdapter(canPost: boolean, allowed: boolean): FormalStocktakeAdap
   };
 }
 
+function pendingPostSentinel() {
+  return {
+    v: 1 as const,
+    kind: "formal_stocktake_post" as const,
+    task_id: TASK,
+    expected_task_version: 5,
+    actor_person_id: PERSON,
+    actor_authorization_version: 7,
+    trace_request_id: `web-${"p".repeat(36)}`,
+  };
+}
+
+function sealResponse() {
+  return {
+    seal_id: "a1000000-0000-4000-8000-000000000001",
+    task_id: TASK,
+    expected_task_version: 5,
+    actor_person_id: PERSON,
+    actor_authorization_version: 7,
+    trace_request_id: `web-${"p".repeat(36)}`,
+    sealed_at: "2026-09-06T10:00:00+08:00",
+  };
+}
+
+function pendingPostAdapter(): FormalStocktakeAdapter {
+  const client = postingAdapter(true, true);
+  const access = { schema_version: "1.0" as const, person_id: PERSON, authorization_version: 7, can_read: true, can_count: false, can_manage: false, can_review_region: false, can_review_headquarters: false, can_post: true, can_reconcile: false, can_close: false };
+  client.loadAccess = vi.fn(async () => access);
+  client.loadAccessNoReplay = vi.fn(async () => access);
+  client.loadIdentityNoReplay = vi.fn(async () => ({ person_id: PERSON, name: "总部管理员", employee_no: "HQ001", organization_code: "HQ", organization_name: "蔚来总部", account_status: "active", employment_status: "active", access_mode: "active", authorization_version: 7, role_codes: ["admin"] }));
+  client.detailNoReplay = vi.fn(async () => client.detail(TASK));
+  client.postingCommandStatus = vi.fn(async (_taskId, actorPersonId, actorAuthorizationVersion, traceRequestId) => ({ schema_version: "1.0", task_id: TASK, actor_person_id: actorPersonId, actor_authorization_version: actorAuthorizationVersion, trace_request_id: traceRequestId, operation: "post_differences", lookup_status: "not_observed", command: null }));
+  return client;
+}
+
 function countDetail(scopeCount = 1) {
   const first = { ...detail().scopes[0], snapshot_visibility: "hidden", allowed_actions: ["submit_initial_count"] };
   const scopes = scopeCount === 1 ? [first] : [first, { ...first, scope_id: SCOPE_2, scope_no: 2, location_id: LOCATION_2 }];
@@ -448,6 +483,56 @@ describe("formal non-opening stocktake PC page", () => {
     render(<FormalStocktakesPage adapter={postingAdapter(true, false)} />);
     fireEvent.click(await screen.findByRole("button", { name: "查看" }));
     expect(within(await screen.findByLabelText("日常盘点详情")).queryByRole("button", { name: "确认差异过账" })).toBeNull();
+  });
+
+  it("offers permanent sealing only for a matching pending coordinate and clears it after strict success", async () => {
+    const sentinel = pendingPostSentinel();
+    const store = createFormalStocktakePostRecoveryStore({ storage: new PostMemoryStorage(), locks: postLocks });
+    await store.withTaskLease(TASK, async (lease) => { lease.persist(sentinel); });
+    const client = pendingPostAdapter();
+    const seal = vi.fn(async () => sealResponse());
+    client.sealPostingCommand = seal;
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<FormalStocktakesPage adapter={client} postRecoveryStore={store} />);
+    const button = await screen.findByRole("button", { name: "确认未执行并永久封存" });
+    fireEvent.click(button);
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/未执行并永久封存.*不会重发过账.*改变库存.*关闭任务/));
+    expect(seal).not.toHaveBeenCalled();
+    confirm.mockReturnValue(true);
+    fireEvent.click(button);
+    await vi.waitFor(() => expect(seal).toHaveBeenCalledTimes(1));
+    expect(seal).toHaveBeenCalledWith(TASK, 5, PERSON, 7, sentinel.trace_request_id);
+    await vi.waitFor(() => expect(store.read(TASK)).toEqual({ kind: "missing" }));
+    expect(screen.queryByRole("button", { name: "确认未执行并永久封存" })).toBeNull();
+    confirm.mockRestore();
+  });
+
+  it("keeps the seal button, sentinel, and write barrier when permanent sealing fails", async () => {
+    const sentinel = pendingPostSentinel();
+    const store = createFormalStocktakePostRecoveryStore({ storage: new PostMemoryStorage(), locks: postLocks });
+    await store.withTaskLease(TASK, async (lease) => { lease.persist(sentinel); });
+    const client = pendingPostAdapter();
+    client.sealPostingCommand = vi.fn(async () => { throw new Error("封存服务暂不可用"); });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<FormalStocktakesPage adapter={client} postRecoveryStore={store} />);
+    const button = await screen.findByRole("button", { name: "确认未执行并永久封存" });
+    fireEvent.click(button);
+    await vi.waitFor(() => expect(screen.getByText("封存服务暂不可用")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "确认未执行并永久封存" })).toBeTruthy();
+    expect(store.read(TASK)).toEqual({ kind: "valid", value: sentinel });
+    confirm.mockRestore();
+  });
+
+  it("does not expose permanent sealing when the current formal post permission does not match", async () => {
+    const sentinel = pendingPostSentinel();
+    const store = createFormalStocktakePostRecoveryStore({ storage: new PostMemoryStorage(), locks: postLocks });
+    await store.withTaskLease(TASK, async (lease) => { lease.persist(sentinel); });
+    const client = pendingPostAdapter();
+    client.loadAccess = vi.fn(async () => ({ ...(await client.loadAccessNoReplay!()), can_post: false }));
+    client.sealPostingCommand = vi.fn(async () => sealResponse());
+    render(<FormalStocktakesPage adapter={client} postRecoveryStore={store} />);
+    expect(await screen.findByText(/所有新写已停止/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "确认未执行并永久封存" })).toBeNull();
   });
 
   it("keeps internal reconciliation and close as independently confirmed HQ actions", async () => {
