@@ -2509,6 +2509,94 @@ class StocktakePostingCompletionItem(CreatedAtMixin, Base):
     item_manifest_sha256: Mapped[str] = mapped_column(String(64))
 
 
+class StocktakePostingCommandOutcome(CreatedAtMixin, Base):
+    """Immutable terminal outcome for one durable non-opening post command.
+
+    ``posted`` binds to the existing posting completion.  ``sealed_not_executed``
+    is the seal-first tombstone which makes a later replay fail closed.  The
+    table intentionally records public coordinates and authorization evidence;
+    request bodies, quantities and idempotency secrets never belong here.
+    """
+
+    __tablename__ = "stocktake_posting_command_outcomes"
+    __table_args__ = (
+        PrimaryKeyConstraint("id", name="pk_stocktake_posting_command_outcomes_0065"),
+        UniqueConstraint(
+            "task_id", name="uq_stocktake_posting_command_outcomes_task_0065"
+        ),
+        UniqueConstraint(
+            "task_id",
+            "request_reference",
+            name="uq_stocktake_posting_command_outcomes_request_0065",
+        ),
+        ForeignKeyConstraint(
+            ["completion_id", "task_id"],
+            [
+                "stocktake_posting_completions.id",
+                "stocktake_posting_completions.task_id",
+            ],
+            name="fk_stocktake_posting_command_outcomes_completion_0065",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "disposition IN ('posted', 'sealed_not_executed')",
+            name="ck_stocktake_posting_command_outcomes_disposition_0065",
+        ),
+        CheckConstraint(
+            "expected_task_version >= 0 AND authorization_version > 0",
+            name="ck_stocktake_posting_command_outcomes_versions_0065",
+        ),
+        CheckConstraint(
+            "length(request_sha256) = 64",
+            name="ck_stocktake_posting_command_outcomes_request_hash_0065",
+        ),
+        CheckConstraint(
+            "((disposition = 'posted' AND completion_id IS NOT NULL AND "
+            "sealed_by_user_id IS NULL AND sealed_by_person_id IS NULL AND "
+            "sealed_role_assignment_id IS NULL AND sealed_at IS NULL) OR "
+            "(disposition = 'sealed_not_executed' AND completion_id IS NULL AND "
+            "sealed_by_user_id IS NOT NULL AND sealed_by_person_id IS NOT NULL AND "
+            "sealed_role_assignment_id IS NOT NULL AND sealed_at IS NOT NULL))",
+            name="ck_stocktake_posting_command_outcomes_binding_0065",
+        ),
+        CheckConstraint(
+            "created_at = COALESCE(sealed_at, created_at)",
+            name="ck_stocktake_posting_command_outcomes_chronology_0065",
+        ),
+        Index(
+            "ix_stocktake_posting_command_outcomes_request_0065",
+            "request_reference",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, default=uuid4_value)
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stocktake_tasks.id", ondelete="RESTRICT")
+    )
+    request_reference: Mapped[str] = mapped_column(String(160))
+    disposition: Mapped[str] = mapped_column(String(24))
+    completion_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID_TYPE, nullable=True
+    )
+    expected_task_version: Mapped[int] = mapped_column(BigInteger)
+    request_sha256: Mapped[str] = mapped_column(String(64))
+    sealed_by_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    sealed_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"), nullable=True
+    )
+    sealed_role_assignment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("role_assignments.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    sealed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class StocktakeCloseTransitionAck(CreatedAtMixin, Base):
     """Internal commit acknowledgement written only by the task trigger.
 
