@@ -44,6 +44,7 @@ from ..demand_schemas import (
 from ..dependencies import get_formal_principal, require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import material_request_approval as approval_service
+from ..formal_services import material_request_allocation_options as allocation_options_service
 from ..formal_services import material_request_command_status as command_status_service
 from ..formal_services import material_request_draft as draft_service
 from ..formal_services import material_request_edit as edit_service
@@ -70,6 +71,9 @@ from ..material_request_read_schemas import (
     MaterialRequestSupplyTaskMutationOut,
     MaterialRequestSupplyCommandOut,
     MaterialRequestSupplyCommandStatusOut,
+)
+from ..material_request_allocation_option_schemas import (
+    MaterialRequestAllocationOptionPageOut,
 )
 from ..production_adapters import create_production_material_request_contact_cipher
 
@@ -305,6 +309,38 @@ def list_formal_material_requests(
         db.rollback()
         _raise_database_unavailable(read_only=True)
     _set_read_no_store(response)
+    return output
+
+
+@router.get(
+    "/{material_request_id}/allocation-options",
+    response_model=MaterialRequestAllocationOptionPageOut,
+)
+def formal_material_request_allocation_options(
+    material_request_id: UUID,
+    response: Response,
+    request_line_id: Annotated[UUID, Query(...)],
+    principal: FormalPrincipal = Depends(
+        require_permission("material_request", "read")
+    ),
+    db: Session = Depends(get_db),
+):
+    """Return source stock candidates without creating allocation facts."""
+
+    # Set before service evaluation so fail-closed errors are non-cacheable too.
+    _set_read_no_store(response)
+    try:
+        output = allocation_options_service.list_allocation_options(
+            db,
+            actor=principal,
+            material_request_id=material_request_id,
+            request_line_id=request_line_id,
+        )
+    except allocation_options_service.MaterialRequestAllocationOptionError as exc:
+        _raise_service_error(exc, no_store=True)
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True)
     return output
 
 
@@ -1263,10 +1299,18 @@ def _raise_database_unavailable(*, read_only: bool) -> None:
     ) from None
 
 
-def _raise_service_error(exc: Any) -> None:
+def _raise_service_error(exc: Any, *, no_store: bool = False) -> None:
+    headers = None
+    if no_store:
+        headers = {
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+            "Referrer-Policy": "no-referrer",
+        }
     raise HTTPException(
         status_code=exc.http_status_code,
         detail=exc.as_detail(),
+        headers=headers,
     ) from None
 
 
