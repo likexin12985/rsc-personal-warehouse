@@ -17060,6 +17060,176 @@ def _assert_dynamic_sn_cutoff_replay_multiscope(
             comment="PG16 动态串码截止回放总部复核通过",
         ),
     )
+
+    # Hold the inventory audit head so the real API posting transaction is
+    # provably waiting at its final shared lock.  While it waits, a separate
+    # migrator/admin transaction deactivates the actor's headquarters.  The
+    # tail authorization re-proof must then abort the whole posting transaction
+    # (including its batch writes) with 412; no completion or ledger fact may
+    # survive the rollback.  This uses backend lock evidence, never a sleep.
+    from app.formal_services.stocktake_posting import (
+        PostApprovedStocktakeDifferencesCommand,
+        StocktakeDifferencePostingError,
+    )
+
+    with Session(api_engine) as session:
+        actor_organization_id = session.scalar(
+            text(
+                "SELECT person.organization_id "
+                "FROM public.users AS app_user "
+                "JOIN public.people AS person ON person.id = app_user.person_id "
+                "WHERE app_user.id = :actor_user_id"
+            ),
+            {"actor_user_id": actor_user_id},
+        )
+        assert actor_organization_id is not None
+        before_race = session.execute(
+            text(
+                "SELECT task.status, task.version, task.posted_at, "
+                "head.next_cursor, "
+                "(SELECT count(*) FROM public.inventory_transactions), "
+                "(SELECT count(*) FROM public.inventory_movements), "
+                "(SELECT count(*) FROM public.stocktake_posting_completions) "
+                "FROM public.stocktake_tasks AS task "
+                "JOIN public.inventory_ledger_heads AS head "
+                "ON head.stream_key = 'inventory' "
+                "WHERE task.id = :task_id"
+            ),
+            {"task_id": created.task_id},
+        ).one()
+
+    holder = psycopg.connect(**_admin_parameters())
+    holder_pid: int | None = None
+    posting_pid: list[int] = []
+    posting_started = threading.Event()
+    posting_result: list[object] = []
+    posting_error: list[BaseException] = []
+    organization_deactivated = False
+
+    def post_while_audit_head_is_held() -> None:
+        try:
+            with Session(api_engine, expire_on_commit=False) as session:
+                session.execute(text("SET LOCAL statement_timeout = '20s'"))
+                posting_pid.append(session.scalar(text("SELECT pg_backend_pid()")))
+                posting_started.set()
+                try:
+                    result = stocktake_posting.post_approved_stocktake_differences(
+                        session,
+                        actor=principal(session, actor_user_id),
+                        command=PostApprovedStocktakeDifferencesCommand(
+                            task_id=created.task_id,
+                            expected_task_version=approved.task_version,
+                        ),
+                        idempotency_key=f"pg16-dynamic-replay-{token}-post-org-race",
+                        idempotency_hmac_secret=secret,
+                        trace_request_id=f"trace-pg16-dynamic-replay-{token}-post-org-race",
+                    )
+                    session.commit()
+                    posting_result.append(result)
+                except BaseException as exc:  # surfaced below with exact code
+                    session.rollback()
+                    posting_error.append(exc)
+        except BaseException as exc:  # pragma: no cover - CI failure evidence
+            posting_error.append(exc)
+            posting_started.set()
+
+    def lock_state(backend_pid: int) -> tuple[str | None, list[int], bool]:
+        with psycopg.connect(**_admin_parameters()) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT activity.wait_event_type, "
+                    "pg_catalog.pg_blocking_pids(activity.pid), "
+                    "EXISTS (SELECT 1 FROM pg_catalog.pg_locks AS lock_row "
+                    "WHERE lock_row.pid = activity.pid "
+                    "AND NOT lock_row.granted) "
+                    "FROM pg_catalog.pg_stat_activity AS activity "
+                    "WHERE activity.pid = %s",
+                    (backend_pid,),
+                )
+                row = cursor.fetchone()
+        assert row is not None
+        return row
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    post_future = None
+    try:
+        with holder.cursor() as cursor:
+            cursor.execute("SELECT pg_backend_pid()")
+            holder_pid = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT id FROM public.audit_chain_heads "
+                "WHERE stream_key = 'inventory' FOR UPDATE"
+            )
+            assert cursor.fetchone() is not None
+
+        post_future = executor.submit(post_while_audit_head_is_held)
+        assert posting_started.wait(timeout=20)
+        assert posting_pid
+        assert holder_pid is not None
+        deadline = time.monotonic() + 20
+        waiting_state = None
+        while time.monotonic() < deadline:
+            state = lock_state(posting_pid[0])
+            if state[0] == "Lock" and holder_pid in state[1] and state[2]:
+                waiting_state = state
+                break
+            # Event.wait provides a bounded yield without introducing an
+            # unbounded/sleep-based race assumption.
+            threading.Event().wait(0.02)
+        assert waiting_state is not None
+
+        with psycopg.connect(**_admin_parameters()) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE public.organizations SET status = 'inactive' "
+                    "WHERE id = %s AND org_type = 'headquarters'",
+                    (actor_organization_id,),
+                )
+                assert cursor.rowcount == 1
+            connection.commit()
+        organization_deactivated = True
+        holder.rollback()
+        holder.close()
+        post_future.result(timeout=30)
+    finally:
+        if post_future is not None and not post_future.done():
+            post_future.cancel()
+        if holder is not None and not holder.closed:
+            holder.rollback()
+            holder.close()
+        executor.shutdown(wait=True, cancel_futures=True)
+        if organization_deactivated:
+            with psycopg.connect(**_admin_parameters()) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE public.organizations SET status = 'active' "
+                        "WHERE id = %s",
+                        (actor_organization_id,),
+                    )
+                connection.commit()
+
+    assert posting_result == []
+    assert len(posting_error) == 1
+    assert isinstance(posting_error[0], StocktakeDifferencePostingError)
+    assert posting_error[0].code == "stocktake_posting_authorization_changed"
+    assert posting_error[0].http_status_code == 412
+    with Session(api_engine) as session:
+        after_race = session.execute(
+            text(
+                "SELECT task.status, task.version, task.posted_at, "
+                "head.next_cursor, "
+                "(SELECT count(*) FROM public.inventory_transactions), "
+                "(SELECT count(*) FROM public.inventory_movements), "
+                "(SELECT count(*) FROM public.stocktake_posting_completions) "
+                "FROM public.stocktake_tasks AS task "
+                "JOIN public.inventory_ledger_heads AS head "
+                "ON head.stream_key = 'inventory' "
+                "WHERE task.id = :task_id"
+            ),
+            {"task_id": created.task_id},
+        ).one()
+    assert after_race == before_race
+
     posted = write(
         stocktake_posting.post_approved_stocktake_differences,
         actor_user_id,
@@ -17672,7 +17842,7 @@ def _assert_pg16_posting_tail_authorization_contract() -> None:
     """
     import inspect
 
-    from app.formal_services import stocktake_posting
+    from app.formal_services import inventory_posting, stocktake_posting
 
     source = inspect.getsource(stocktake_posting._post_approved_stocktake_differences)
     required = (
@@ -17694,9 +17864,33 @@ def _assert_pg16_posting_tail_authorization_contract() -> None:
         post_batch_audit_position,
     )
     seal_position = positions[4]
-    assert batch_position < post_batch_audit_position < tail_reproof_position < seal_position, (
+    assert (
+        batch_position
+        < post_batch_audit_position
+        < tail_reproof_position
+        < seal_position
+    ), (
         "posting must retain ledger -> task/principal -> batch/audit -> tail re-proof -> seal order"
     )
+    tail_reproof_source = inspect.getsource(
+        stocktake_posting._reprove_posting_authorization
+    )
+    organization_tail_lock_position = tail_reproof_source.index(
+        "lock_current_stocktake_finalizer_organization("
+    )
+    current_assignment_position = tail_reproof_source.index(
+        "current_assignment = _current_admin_assignment("
+    )
+    assert organization_tail_lock_position < current_assignment_position
+    organization_lock_source = inspect.getsource(
+        inventory_posting.lock_current_stocktake_finalizer_organization
+    )
+    assert "populate_existing=True" in organization_lock_source
+    organization_statement_source = inspect.getsource(
+        inventory_posting._stocktake_finalizer_organization_statement
+    )
+    assert "populate_existing=True" in organization_statement_source
+    assert "with_for_update(read=True" in organization_statement_source
 
     # The replay/idempotent branch is also a durable completion path and must
     # retain its own authorization re-proof before validating the stored seal.
@@ -17713,6 +17907,17 @@ def _assert_pg16_posting_tail_authorization_contract() -> None:
         "FOR UPDATE NOWAIT",
     ):
         assert fragment in race_source
+    organization_race_source = inspect.getsource(
+        _assert_dynamic_sn_cutoff_replay_multiscope
+    )
+    for fragment in (
+        "SET LOCAL statement_timeout",
+        "pg_catalog.pg_blocking_pids",
+        "audit_chain_heads",
+        "stocktake_posting_authorization_changed",
+    ):
+        assert fragment in organization_race_source
+    assert "time.sleep" not in organization_race_source
 
 
 def _complete_0051_nonopening_stocktake_service_chain(

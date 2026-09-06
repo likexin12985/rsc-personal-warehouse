@@ -2976,6 +2976,13 @@ def _reprove_posting_authorization(
         current = inventory_service._require_current_stocktake_difference_finalizer(
             db, actor
         )
+        # Keep the actor's HQ organization locked through the completion seal.
+        # This closes the window in which a projector/migrator could commit an
+        # organization deactivation after the final authorization reread but
+        # before the immutable posting completion is inserted.
+        inventory_service.lock_current_stocktake_finalizer_organization(
+            db, current
+        )
         current_assignment = _current_admin_assignment(db, current)
     except (inventory_service.InventoryPostingError, StocktakeDifferencePostingError) as exc:
         _fail(

@@ -2115,11 +2115,34 @@ def _require_current_stocktake_difference_finalizer(
         if len(grants) == 1
         else None
     )
-    role = db.get(Role, assignment.role_id) if assignment is not None else None
-    user = db.get(User, current.user_id)
-    person = db.get(Person, current.person_id)
+    # This is the low-level finalizer boundary immediately before a stocktake
+    # batch can mutate balances.  Do not trust ORM identity-map values here:
+    # a concurrent organization/status update must be visible to this proof.
+    role = (
+        db.scalar(
+            select(Role)
+            .where(Role.id == assignment.role_id)
+            .execution_options(populate_existing=True)
+        )
+        if assignment is not None
+        else None
+    )
+    user = db.scalar(
+        select(User)
+        .where(User.id == current.user_id)
+        .execution_options(populate_existing=True)
+    )
+    person = db.scalar(
+        select(Person)
+        .where(Person.id == current.person_id)
+        .execution_options(populate_existing=True)
+    )
     organization = (
-        db.get(Organization, person.organization_id)
+        db.scalar(
+            select(Organization)
+            .where(Organization.id == person.organization_id)
+            .execution_options(populate_existing=True)
+        )
         if person is not None
         else None
     )
@@ -2149,6 +2172,67 @@ def _require_current_stocktake_difference_finalizer(
             "盘点差异过账仅允许当前有效的总部管理员执行",
         )
     return current
+
+
+def lock_current_stocktake_finalizer_organization(
+    db: Session,
+    actor: FormalPrincipal,
+) -> Organization:
+    """Hold a read lock while the posting completion seal is written.
+
+    The API role intentionally has no UPDATE privilege on ``organizations``;
+    PostgreSQL ``FOR SHARE`` therefore remains inside the existing read ACL
+    while conflicting projector/migrator updates wait.  The statement is
+    still a plain refreshed read on SQLite, whose dialect ignores the lock
+    clause.  Callers use this only after the inventory batch and source-audit
+    proof, immediately before the immutable completion seal.
+    """
+
+    supplied = _validate_supplied_actor(actor)
+    person = db.scalar(
+        select(Person)
+        .where(Person.id == supplied.person_id)
+        .execution_options(populate_existing=True)
+    )
+    if person is None:
+        _fail(
+            "inventory_stocktake_finalizer_forbidden",
+            "forbidden",
+            "盘点差异过账仅允许当前有效的总部管理员执行",
+        )
+    statement = _stocktake_finalizer_organization_statement(
+        person.organization_id,
+        lock_for_share=db.get_bind().dialect.name == "postgresql",
+    )
+    organization = db.scalar(statement)
+    if (
+        organization is None
+        or organization.org_type != "headquarters"
+        or organization.status != "active"
+    ):
+        _fail(
+            "inventory_stocktake_finalizer_forbidden",
+            "forbidden",
+            "盘点差异过账仅允许当前有效的总部管理员执行",
+        )
+    return organization
+
+
+def _stocktake_finalizer_organization_statement(
+    organization_id: uuid.UUID,
+    *,
+    lock_for_share: bool,
+):
+    """Build the refreshed organization read used by the posting tail."""
+
+    statement = (
+        select(Organization)
+        .where(Organization.id == organization_id)
+        .execution_options(populate_existing=True)
+    )
+    if lock_for_share:
+        statement = statement.with_for_update(read=True, of=Organization)
+    return statement
 
 
 def _validate_posting_command(command: InventoryPostingCommand) -> InventoryPostingCommand:

@@ -8,7 +8,8 @@ from pathlib import Path
 import uuid
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.dialects import postgresql
 
 import app.formal_services.inventory_posting as inventory_service
 import app.formal_services.stocktake_posting as posting_service
@@ -20,6 +21,8 @@ from app.formal_services.stocktake_posting import (
     post_approved_stocktake_differences,
 )
 from app.foundation_models import (
+    Organization,
+    Person,
     OutboxEvent,
     Permission,
     Role,
@@ -330,6 +333,44 @@ def test_posting_tail_authorization_reproof_fails_closed(posting_world, monkeypa
     assert caught.value.code == "stocktake_posting_authorization_changed"
     assert caught.value.category == "precondition_failed"
     assert caught.value.http_status_code == 412
+
+
+def test_finalizer_rejects_inactive_organization_even_with_stale_identity_map(
+    posting_world, monkeypatch
+):
+    actor = posting_world.principals["admin"]
+    person = posting_world.db.get(Person, actor.person_id)
+    assert person is not None
+    organization = posting_world.db.get(Organization, person.organization_id)
+    assert organization is not None and organization.status == "active"
+    monkeypatch.setattr(
+        inventory_service,
+        "_require_current_actor",
+        lambda _db, _supplied: actor,
+    )
+    # Keep the active Organization instance in the identity map, then mutate
+    # through SQL to model a committed projector/migrator status change.
+    posting_world.db.execute(
+        update(Organization)
+        .where(Organization.id == organization.id)
+        .values(status="inactive")
+        .execution_options(synchronize_session=False)
+    )
+    with pytest.raises(inventory_service.InventoryPostingError) as caught:
+        inventory_service._require_current_stocktake_difference_finalizer(
+            posting_world.db, actor
+        )
+    assert caught.value.code == "inventory_stocktake_finalizer_forbidden"
+
+
+def test_finalizer_organization_tail_uses_postgresql_for_share_and_refresh():
+    organization_id = uuid.UUID("10000000-0000-4000-8000-000000000001")
+    statement = inventory_service._stocktake_finalizer_organization_statement(
+        organization_id, lock_for_share=True
+    )
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+    assert "FOR SHARE OF organizations" in compiled
+    assert statement.get_execution_options()["populate_existing"] is True
 
 
 def test_accepted_loss_uses_one_union_batch_and_appends_immutable_ledger(

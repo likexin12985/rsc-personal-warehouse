@@ -404,5 +404,6 @@ def test_nonopening_posting_reproves_authorization_after_batch_audit() -> None:
 
     helper_source = inspect.getsource(posting_service._reprove_posting_authorization)
     assert "_require_current_stocktake_difference_finalizer" in helper_source
+    assert "lock_current_stocktake_finalizer_organization" in helper_source
     assert "_current_admin_assignment" in helper_source
     assert "stocktake_posting_authorization_changed" in helper_source
