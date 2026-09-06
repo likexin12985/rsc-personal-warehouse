@@ -713,6 +713,22 @@ function createFormalMaterialRequestAdapter(options = {}) {
         { method: 'GET', header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
       ))
     },
+    async allocationCommandStatus(xRequestId) {
+      if (typeof xRequestId !== 'string' || !SAFE_REQUEST_ID.test(xRequestId)) {
+        throw adapterError('分配命令查询请求标识无效')
+      }
+      return contract.validateMaterialRequestAllocationCommandStatus(await transport.request(
+        '/v1/material-request-allocation-command-status',
+        {
+          method: 'GET',
+          header: {
+            'X-Request-ID': xRequestId,
+            'Cache-Control': 'no-store',
+            Pragma: 'no-cache'
+          }
+        }
+      ))
+    },
     list(afterId) {
       const suffix = afterId === null
         ? ''

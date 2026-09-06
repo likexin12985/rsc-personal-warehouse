@@ -321,6 +321,35 @@ test('fresh identity and lifecycle command status use exact no-store contracts',
   )
 })
 
+test('allocation command status uses the original request coordinate and strict read contract', async () => {
+  const transport = fakeTransport((path) => ({
+    '/v1/material-request-allocation-command-status': {
+      schema_version: '1.0', lookup_status: 'not_observed', command: null
+    }
+  })[path])
+  const client = adapter(transport)
+  assert.deepEqual(
+    await client.allocationCommandStatus(`wxreq-${'e'.repeat(36)}`),
+    { schema_version: '1.0', lookup_status: 'not_observed', command: null }
+  )
+  assert.deepEqual(transport.calls, [{
+    method: 'GET',
+    path: '/v1/material-request-allocation-command-status',
+    options: {
+      method: 'GET',
+      header: {
+        'X-Request-ID': `wxreq-${'e'.repeat(36)}`,
+        'Cache-Control': 'no-store',
+        Pragma: 'no-cache'
+      }
+    }
+  }])
+  await assert.rejects(
+    client.allocationCommandStatus('bad'),
+    (error) => error.status === 409
+  )
+})
+
 test('fresh identity or lifecycle command contract drift fails closed', async () => {
   const changedIdentity = formalIdentity()
   changedIdentity.authorization_version = 8

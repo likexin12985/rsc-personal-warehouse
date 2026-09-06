@@ -1458,6 +1458,51 @@ function validateMaterialRequestSupplyCommandStatus(value) {
     command: Object.assign(result, { occurred_at: occurredAt }) }
 }
 
+function validateMaterialRequestAllocationCommandStatus(value) {
+  const object = objectValue(value, '分配命令查询')
+  exactKeys(object, ['schema_version', 'lookup_status', 'command'], '分配命令查询')
+  if (object.schema_version !== MATERIAL_REQUEST_SCHEMA_VERSION
+    || !['not_observed', 'confirmed'].includes(object.lookup_status)
+    || (object.lookup_status === 'confirmed') !== (object.command !== null)) {
+    fail('material_request_contract_allocation_lookup_invalid', '分配命令查询状态不一致')
+  }
+  if (object.command === null) return { schema_version: '1.0', lookup_status: 'not_observed', command: null }
+  const raw = objectValue(object.command, '分配命令历史结果')
+  exactKeys(raw, [
+    'request_id', 'allocation_id', 'allocation_no', 'request_version', 'revision_id', 'revision_no',
+    'request_line_id', 'source_stock_account_id', 'allocated_qty', 'allocation_status', 'request_status',
+    'state_axes', 'idempotency_replayed'
+  ], '分配命令历史结果')
+  const requestId = uuidValue(own(raw, 'request_id'), 'request_id')
+  const states = validateMaterialRequestStateAxes(own(raw, 'state_axes'))
+  if (own(raw, 'allocation_status') !== 'allocated'
+    || own(raw, 'idempotency_replayed') !== true
+    || states.request_status !== own(raw, 'request_status')) {
+    fail('material_request_contract_allocation_state_invalid', '分配命令状态轴不一致')
+  }
+  const allocatedQty = own(raw, 'allocated_qty')
+  if (typeof allocatedQty !== 'string' || !DECIMAL_18_3.test(allocatedQty) || allocatedQty === '0.000') {
+    fail('material_request_contract_allocation_quantity_invalid', '分配数量无效')
+  }
+  return {
+    schema_version: '1.0', lookup_status: 'confirmed', command: {
+      request_id: requestId,
+      allocation_id: uuidValue(own(raw, 'allocation_id'), 'allocation_id'),
+      allocation_no: boundedText(own(raw, 'allocation_no'), 'allocation_no', 100, false),
+      request_version: nonnegativeInteger(own(raw, 'request_version'), 'request_version'),
+      revision_id: uuidValue(own(raw, 'revision_id'), 'revision_id'),
+      revision_no: positiveInteger(own(raw, 'revision_no'), 'revision_no'),
+      request_line_id: uuidValue(own(raw, 'request_line_id'), 'request_line_id'),
+      source_stock_account_id: uuidValue(own(raw, 'source_stock_account_id'), 'source_stock_account_id'),
+      allocated_qty: allocatedQty,
+      allocation_status: 'allocated',
+      request_status: enumValue(own(raw, 'request_status'), MATERIAL_REQUEST_STATUSES, '申请状态'),
+      state_axes: states,
+      idempotency_replayed: true
+    }
+  }
+}
+
 function validateMaterialRequestCreateResult(value) {
   const object = objectValue(value, '正式需求创建响应')
   exactKeys(object, [
@@ -1764,6 +1809,7 @@ module.exports = {
   validateMaterialRequestMutationResult,
   validateMaterialRequestSupplyTaskMutationResult,
   validateMaterialRequestSupplyCommandStatus,
+  validateMaterialRequestAllocationCommandStatus,
   validateMaterialRequestCreateResult,
   createMaterialRequestWriteHeaders,
   createMaterialRequestCreateIntentRegistry,
