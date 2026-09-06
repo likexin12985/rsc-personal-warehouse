@@ -19945,7 +19945,9 @@ def _assert_0064_finalizer_organization_runtime_lock() -> None:
                 f"SELECT public.{migration.LOCK_FUNCTION}(%s)",
                 (organization_id,),
             )
-            assert cursor.fetchone() == (None,)
+            # PostgreSQL exposes a successful ``void`` SELECT as an empty
+            # string through psycopg, not SQL NULL.
+            assert cursor.fetchone() == ("",)
         with updater.cursor() as cursor:
             cursor.execute("SET LOCAL statement_timeout = '1500ms'")
             with pytest.raises(psycopg.errors.QueryCanceled):
