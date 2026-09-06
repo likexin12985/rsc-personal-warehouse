@@ -7,7 +7,7 @@ const { getFormalStocktakeReviewRecoveryStore } = require('../../utils/formal-st
 const { createFormalStocktakeReviewRecoveryAdapterFromFormalAdapter, recoverFormalStocktakeReview } = require('../../utils/formal-stocktake-review-recovery')
 const { submitDurableFormalStocktakeReview, FormalStocktakeReviewSubmissionPendingError } = require('../../utils/formal-stocktake-review-submission')
 const { getFormalStocktakePostRecoveryStore } = require('../../utils/formal-stocktake-post-recovery-store')
-const { createFormalStocktakePostRecoveryAdapterFromFormalAdapter, recoverFormalStocktakePost, submitDurableFormalStocktakePost, FormalStocktakePostSubmissionPendingError } = require('../../utils/formal-stocktake-post-recovery')
+const { createFormalStocktakePostRecoveryAdapterFromFormalAdapter, recoverFormalStocktakePost, sealFormalStocktakePost, submitDurableFormalStocktakePost, FormalStocktakePostSubmissionPendingError } = require('../../utils/formal-stocktake-post-recovery')
 const { fixedQuantityText, formalStocktakeLabels } = require('../../utils/formal-stocktake-contract')
 const formalFileUpload = require('../../utils/formal-file-upload')
 const { accessIdentity } = require('../../utils/formal-operational-stocktake-pagination')
@@ -167,6 +167,7 @@ Page({
     reviewRecoveryCanCheck: false,
     postRecoveryBlocked: false,
     postRecoveryCanCheck: false,
+    postRecoveryCanSeal: false,
     countRecoveryMessage: '',
     reviewRecoveryMessage: '',
     postRecoveryMessage: '',
@@ -240,7 +241,7 @@ Page({
     this.setData({ busy: false, loading: false, accessAllowed: false, detail: null, accessMessage: '返回后须重新校验正式身份与盘点权限', terminalConfirm: '', postConfirm: false, selectedScopeId: '', countAction: '', accountDrafts: [], observations: [], evidenceUploadFiles: [], evidenceUploadBlocking: false, evidenceUploadCanChoose: true, hasAccountInput: false })
     this._countRecoveryContext = ''
     this._reviewRecoveryContext = ''
-    this.setData({ countRecoveryCanCheck: false, reviewRecoveryCanCheck: false, postRecoveryCanCheck: false })
+    this.setData({ countRecoveryCanCheck: false, reviewRecoveryCanCheck: false, postRecoveryCanCheck: false, postRecoveryCanSeal: false })
     if (this._intentRegistry.current()) this.setData({ pendingMessage: '原盘点写请求结果待核实，已停止新操作；刷新不代表原请求未执行。', pendingRetryable: false })
   },
   onPullDownRefresh() { this.load().finally(() => wx.stopPullDownRefresh()) },
@@ -333,7 +334,9 @@ Page({
       : axis === 'review' ? hasDurableReviewCapability(formalStocktakeAdapter) : hasDurablePostCapability(formalStocktakeAdapter)
     const legacy = formalStocktakeAdapter && formalStocktakeAdapter.countRecoveryMode === 'legacy-test'
     const set = (blocked, canCheck, message = '') => {
-      this.setData({ [`${axis}RecoveryBlocked`]: blocked, [`${axis}RecoveryCanCheck`]: canCheck, [`${axis}RecoveryMessage`]: message })
+      const patch = { [`${axis}RecoveryBlocked`]: blocked, [`${axis}RecoveryCanCheck`]: canCheck, [`${axis}RecoveryMessage`]: message }
+      if (axis === 'post') patch.postRecoveryCanSeal = false
+      this.setData(patch)
       this.refreshRecoveryMessages()
     }
     if (!UUID.test(this._taskId || '')) { set(true, false, '任务恢复坐标无效，已停止所有业务写入。'); return }
@@ -346,6 +349,16 @@ Page({
     if (!canRecover) { set(true, false, `正式盘点${axis === 'count' ? '' : axis === 'review' ? '复核' : '过账'}持久恢复能力未完整加载，已停止所有业务写入，待只读核验。`); return }
     if (pending.kind === 'valid' && Array.isArray(pending.values) && pending.values.length) {
       set(true, Boolean(this._access) && !this._hidden, `原${name}结果待只读核验；已停止其他写操作，未发送任何新请求。`)
+      if (axis === 'post' && pending.values.length === 1) {
+        const sentinel = pending.values[0]
+        const canSeal = Boolean(this._access && this._access.can_read === true && this._access.can_post === true
+          && typeof formalStocktakeAdapter.sealPostingCommand === 'function'
+          && sentinel.task_id === this._taskId
+          && sentinel.actor_person_id === this._access.person_id
+          && sentinel.actor_authorization_version === this._access.authorization_version
+          && !this._hidden)
+        this.setData({ postRecoveryCanSeal: canSeal })
+      }
     } else if (pending.kind === 'missing') set(false, false)
     else set(true, false, `${name}恢复记录无法确认，已停止所有业务写入。`)
   },
@@ -625,6 +638,60 @@ Page({
       if (current()) this.setData({ busy: false })
       if (this._postPageLease === lease) this._postPageLease = null
       if (this._writeLease === lease) this._writeLease = null
+    }
+  },
+  openPostSealConfirm() {
+    this.refreshPostRecovery()
+    if (!this.data.postRecoveryCanSeal || this.data.busy || this._hidden || this._writeLease) return
+    if (typeof wx === 'undefined' || typeof wx.showModal !== 'function') {
+      this.setData({ errorMessage: '当前客户端不支持永久封存确认，恢复记录继续保留。' })
+      return
+    }
+    wx.showModal({
+      title: '确认永久封存',
+      content: '这只确认原过账请求未执行，并永久封存该坐标。封存后不能再次过账，也不会改变任务库存或关闭状态。',
+      confirmText: '确认封存',
+      confirmColor: '#b83d16',
+      success: (result) => { if (result && result.confirm) this.confirmPostSeal() }
+    })
+  },
+  async confirmPostSeal() {
+    this.refreshPostRecovery()
+    if (!this.data.postRecoveryCanSeal || this.data.busy || this._hidden || this._writeLease || !this._access) return
+    const pending = this._postRecoveryStore && this._postRecoveryStore.readPending(this._taskId)
+    if (!pending || pending.kind !== 'valid' || !Array.isArray(pending.values) || pending.values.length !== 1) {
+      this.refreshPostRecovery()
+      return
+    }
+    const sentinel = pending.values[0]
+    const access = this._access
+    const identity = accessIdentity(access)
+    const generation = this._loadGeneration
+    const lease = {}
+    this._writeLease = lease
+    this._postPageLease = lease
+    const current = () => !this._hidden && this._postPageLease === lease && this._writeLease === lease
+      && this._loadGeneration === generation && this._access === access && accessIdentity(this._access) === identity
+      && this._taskId === sentinel.task_id
+    let refreshAfterSeal = false
+    this.setData({ busy: true, errorMessage: '', pendingRetryable: false })
+    try {
+      await this._postRecoveryStore.withTaskLease(sentinel.task_id, (taskLease) => sealFormalStocktakePost(
+        taskLease, sentinel, createFormalStocktakePostRecoveryAdapterFromFormalAdapter(access, formalStocktakeAdapter), current,
+      ))
+      if (!current()) return
+      refreshAfterSeal = true
+      this.setData({ postRecoveryBlocked: false, postRecoveryCanCheck: false, postRecoveryCanSeal: false, postRecoveryMessage: '', pendingMessage: '', pendingRetryable: false })
+    } catch (error) {
+      if (current()) {
+        this.refreshPostRecovery()
+        this.setData({ errorMessage: error.message || '永久封存未完成，恢复记录继续保留。' })
+      }
+    } finally {
+      if (current()) this.setData({ busy: false })
+      if (this._postPageLease === lease) this._postPageLease = null
+      if (this._writeLease === lease) this._writeLease = null
+      if (refreshAfterSeal && !this._hidden) this.load()
     }
   },
   retryPending() {

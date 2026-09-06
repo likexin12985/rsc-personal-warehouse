@@ -16,3 +16,43 @@ function baseStubs(extra={}){return Object.assign({'../utils/session':{ensureLog
 test('real post button requires approved task and starts independent confirmation',()=>{const l=loadPage(baseStubs());try{const p=instance(l.definition);p._taskId=TASK;p._access=Object.assign({can_read:true,can_post:true},identity);p._detail=detail();p._intentRegistry={current:()=>null,begin(i){return i},complete(){}};p._postRecoveryStore={readPending:()=>({kind:'missing'})};p._countRecoveryStore={readPending:()=>({kind:'missing'})};p._reviewRecoveryStore={readPending:()=>({kind:'missing'})};p._hidden=false;p._writeLease=null;p.data.loading=false;p.openPostConfirm();assert.equal(p.data.postConfirm,true,p.data.errorMessage);assert.equal(p.data.terminalConfirm,'')}finally{l.restore()}})
 test('persistent post marker blocks other writes and exposes read-only recovery',()=>{const marker={v:1,kind:'formal_stocktake_post',task_id:TASK,expected_task_version:7,actor_person_id:PERSON,actor_authorization_version:9,trace_request_id:'wx-post-page-0001'};const l=loadPage(baseStubs({'../utils/formal-stocktake-post-recovery-store':{getFormalStocktakePostRecoveryStore:()=>({readPending:()=>({kind:'valid',values:[marker]})})}}));try{const p=instance(l.definition);p._taskId=TASK;p._access=Object.assign({can_read:true,can_post:true},identity);p._detail=detail();p._intentRegistry={current:()=>null,begin(i){return i},complete(){}};p._postRecoveryStore={readPending:()=>({kind:'valid',values:[marker]})};p._countRecoveryStore={readPending:()=>({kind:'missing'})};p._reviewRecoveryStore={readPending:()=>({kind:'missing'})};p.data.loading=false;p.refreshPostRecovery();assert.equal(p.data.postRecoveryBlocked,true);assert.equal(p.data.postRecoveryCanCheck,true);let writes=0;p._writeLease=null;p.startTask();assert.equal(writes,0);p.onHide();assert.equal(p.data.postRecoveryBlocked,true);p._hidden=false;p.onUnload();assert.equal(p.data.postRecoveryBlocked,true)}finally{l.restore()}})
 test('post confirmation cancels on identity drift before durable submission',async()=>{let submitted=0;const l=loadPage(baseStubs({'../utils/formal-stocktake-post-recovery':{submitDurableFormalStocktakePost:async()=>{submitted++;return {detail:detail()}},FormalStocktakePostSubmissionPendingError:class extends Error{}}}));try{const p=instance(l.definition);p._taskId=TASK;p._access=Object.assign({can_read:true,can_post:true},identity);p._detail=detail();p._intentRegistry={current:()=>null,begin(i){return i},complete(){}};p._postRecoveryStore={readPending:()=>({kind:'missing'})};p._countRecoveryStore={readPending:()=>({kind:'missing'})};p._reviewRecoveryStore={readPending:()=>({kind:'missing'})};p._hidden=false;p._writeLease=null;p.data.loading=false;p.openPostConfirm();p._access=Object.assign({can_read:true,can_post:true},{person_id:PERSON,authorization_version:10});await p.confirmPost();assert.equal(submitted,0);assert.match(p.data.errorMessage,/变化/)}finally{l.restore()}})
+
+function postSealMarker() { return { v: 1, kind: 'formal_stocktake_post', task_id: TASK, expected_task_version: 7, actor_person_id: PERSON, actor_authorization_version: 9, trace_request_id: 'wx-post-page-0001' } }
+
+test('permanent seal is exposed only for one durable marker bound to current posting authority',()=>{
+  const marker = postSealMarker()
+  const l = loadPage(baseStubs({
+    '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: Object.assign(adapter(), { sealPostingCommand: async () => ({}) }), createFormalStocktakeIntentRegistry: () => ({ current: () => null }) },
+    '../utils/formal-stocktake-post-recovery-store': { getFormalStocktakePostRecoveryStore: () => ({ readPending: () => ({ kind: 'valid', values: [marker] }) }) }
+  }))
+  try {
+    const p = instance(l.definition); p._taskId = TASK; p._access = Object.assign({ can_read: true, can_post: true }, identity); p._detail = detail(); p._postRecoveryStore = { readPending: () => ({ kind: 'valid', values: [marker] }) }; p._countRecoveryStore = { readPending: () => ({ kind: 'missing' }) }; p._reviewRecoveryStore = { readPending: () => ({ kind: 'missing' }) }; p._hidden = false; p.data.loading = false
+    p.refreshPostRecovery(); assert.equal(p.data.postRecoveryCanSeal, true)
+    p._access = Object.assign({ can_read: true, can_post: false }, identity); p.refreshPostRecovery(); assert.equal(p.data.postRecoveryCanSeal, false)
+  } finally { l.restore() }
+})
+
+test('permanent seal clears the exact marker and refreshes after strict success',async()=>{
+  const marker = postSealMarker(); let clearCount = 0; let refreshed = 0
+  const l = loadPage(baseStubs({
+    '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: Object.assign(adapter(), { sealPostingCommand: async () => ({}) }), createFormalStocktakeIntentRegistry: () => ({ current: () => null }) },
+    '../utils/formal-stocktake-post-recovery': { createFormalStocktakePostRecoveryAdapterFromFormalAdapter: () => ({}), sealFormalStocktakePost: async (lease, sentinel) => { assert.deepEqual(sentinel, marker); lease.clearExact(sentinel); return {} }, submitDurableFormalStocktakePost: async () => ({ detail: detail() }), FormalStocktakePostSubmissionPendingError: class extends Error {} },
+    '../utils/formal-stocktake-post-recovery-store': { getFormalStocktakePostRecoveryStore: () => ({ readPending: () => ({ kind: 'valid', values: [marker] }), withTaskLease: async (taskId, work) => work({ read: () => ({ kind: 'valid', value: marker }), clearExact: (value) => { assert.deepEqual(value, marker); clearCount += 1 } }) }) }
+  }))
+  try {
+    const p = instance(l.definition); p._taskId = TASK; p._access = Object.assign({ can_read: true, can_post: true }, identity); p._detail = detail(); p._postRecoveryStore = { readPending: () => ({ kind: 'valid', values: [marker] }), withTaskLease: async (taskId, work) => work({ read: () => ({ kind: 'valid', value: marker }), clearExact: (value) => { assert.deepEqual(value, marker); clearCount += 1 } }) }; p._countRecoveryStore = { readPending: () => ({ kind: 'missing' }) }; p._reviewRecoveryStore = { readPending: () => ({ kind: 'missing' }) }; p._hidden = false; p.data.loading = false; p.load = async () => { refreshed += 1 }; p.refreshPostRecovery(); assert.equal(p.data.postRecoveryCanSeal, true)
+    await p.confirmPostSeal(); assert.equal(clearCount, 1); assert.equal(refreshed, 1); assert.equal(p.data.postRecoveryCanSeal, false); assert.equal(p.data.postRecoveryBlocked, false)
+  } finally { l.restore() }
+})
+
+test('permanent seal failure preserves marker and recovery blocker',async()=>{
+  const marker = postSealMarker()
+  const l = loadPage(baseStubs({
+    '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: Object.assign(adapter(), { sealPostingCommand: async () => ({}) }), createFormalStocktakeIntentRegistry: () => ({ current: () => null }) },
+    '../utils/formal-stocktake-post-recovery': { createFormalStocktakePostRecoveryAdapterFromFormalAdapter: () => ({}), sealFormalStocktakePost: async () => { throw new Error('封存接口失败') }, submitDurableFormalStocktakePost: async () => ({ detail: detail() }), FormalStocktakePostSubmissionPendingError: class extends Error {} },
+    '../utils/formal-stocktake-post-recovery-store': { getFormalStocktakePostRecoveryStore: () => ({ readPending: () => ({ kind: 'valid', values: [marker] }) }) }
+  }))
+  try {
+    const p = instance(l.definition); p._taskId = TASK; p._access = Object.assign({ can_read: true, can_post: true }, identity); p._detail = detail(); p._postRecoveryStore = { readPending: () => ({ kind: 'valid', values: [marker] }), withTaskLease: async (taskId, work) => work({ read: () => ({ kind: 'valid', value: marker }), clearExact: () => { throw new Error('must preserve marker') } }) }; p._countRecoveryStore = { readPending: () => ({ kind: 'missing' }) }; p._reviewRecoveryStore = { readPending: () => ({ kind: 'missing' }) }; p._hidden = false; p.data.loading = false; p.refreshPostRecovery(); await p.confirmPostSeal(); assert.equal(p.data.postRecoveryBlocked, true); assert.equal(p.data.postRecoveryCanSeal, true); assert.match(p.data.errorMessage, /封存接口失败/)
+  } finally { l.restore() }
+})
