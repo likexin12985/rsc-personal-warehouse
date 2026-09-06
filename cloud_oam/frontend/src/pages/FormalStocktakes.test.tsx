@@ -523,6 +523,28 @@ describe("formal non-opening stocktake PC page", () => {
     confirm.mockRestore();
   });
 
+  it("does not send a seal when the modal confirmation observes a replaced coordinate", async () => {
+    const sentinel = pendingPostSentinel();
+    let current = sentinel;
+    const seal = vi.fn(async () => sealResponse());
+    const client = pendingPostAdapter();
+    client.sealPostingCommand = seal;
+    const store: any = {
+      readPending: () => ({ kind: "valid", values: [current] }),
+      withTaskLease: async (_taskId: string, work: (lease: any) => unknown) => work({ read: () => ({ kind: "valid", value: current }), clearExact: vi.fn() }),
+    };
+    const confirm = vi.spyOn(window, "confirm").mockImplementation(() => {
+      current = { ...sentinel, expected_task_version: sentinel.expected_task_version + 1 };
+      return true;
+    });
+    render(<FormalStocktakesPage adapter={client} postRecoveryStore={store} />);
+    fireEvent.click(await screen.findByRole("button", { name: "确认未执行并永久封存" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(seal).not.toHaveBeenCalled();
+    expect(screen.getByText(/坐标、身份或页面代次已变化/)).toBeTruthy();
+    confirm.mockRestore();
+  });
+
   it("does not expose permanent sealing when the current formal post permission does not match", async () => {
     const sentinel = pendingPostSentinel();
     const store = createFormalStocktakePostRecoveryStore({ storage: new PostMemoryStorage(), locks: postLocks });

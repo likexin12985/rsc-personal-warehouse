@@ -56,3 +56,36 @@ test('permanent seal failure preserves marker and recovery blocker',async()=>{
     const p = instance(l.definition); p._taskId = TASK; p._access = Object.assign({ can_read: true, can_post: true }, identity); p._detail = detail(); p._postRecoveryStore = { readPending: () => ({ kind: 'valid', values: [marker] }), withTaskLease: async (taskId, work) => work({ read: () => ({ kind: 'valid', value: marker }), clearExact: () => { throw new Error('must preserve marker') } }) }; p._countRecoveryStore = { readPending: () => ({ kind: 'missing' }) }; p._reviewRecoveryStore = { readPending: () => ({ kind: 'missing' }) }; p._hidden = false; p.data.loading = false; p.refreshPostRecovery(); await p.confirmPostSeal(); assert.equal(p.data.postRecoveryBlocked, true); assert.equal(p.data.postRecoveryCanSeal, true); assert.match(p.data.errorMessage, /封存接口失败/)
   } finally { l.restore() }
 })
+
+test('seal modal binds the exact marker and refuses replacement or identity drift', async () => {
+  const marker = postSealMarker(); let currentMarker = marker; let modal; let calls = 0; const oldWx = global.wx
+  global.wx = { showModal(options) { modal = options } }
+  const l = loadPage(baseStubs({
+    '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: Object.assign(adapter(), { sealPostingCommand: async () => ({}) }), createFormalStocktakeIntentRegistry: () => ({ current: () => null }) },
+    '../utils/formal-stocktake-post-recovery': { createFormalStocktakePostRecoveryAdapterFromFormalAdapter: () => ({}), sealFormalStocktakePost: async () => { calls += 1 }, submitDurableFormalStocktakePost: async () => ({ detail: detail() }), FormalStocktakePostSubmissionPendingError: class extends Error {} },
+    '../utils/formal-stocktake-post-recovery-store': { getFormalStocktakePostRecoveryStore: () => ({ readPending: () => ({ kind: 'valid', values: [currentMarker] }) }) }
+  }))
+  try {
+    const p = instance(l.definition); p._taskId = TASK; p._access = Object.assign({ can_read: true, can_post: true }, identity); p._detail = detail(); p._postRecoveryStore = { readPending: () => ({ kind: 'valid', values: [currentMarker] }), withTaskLease: async (taskId, work) => work({ read: () => ({ kind: 'valid', value: currentMarker }), clearExact() {} }) }; p._countRecoveryStore = { readPending: () => ({ kind: 'missing' }) }; p._reviewRecoveryStore = { readPending: () => ({ kind: 'missing' }) }; p._hidden = false; p.data.loading = false
+    p.refreshPostRecovery(); p.openPostSealConfirm(); assert.equal(typeof modal.success, 'function')
+    currentMarker = { ...marker, expected_task_version: marker.expected_task_version + 1 }
+    modal.success({ confirm: true }); await new Promise((resolve) => setImmediate(resolve)); assert.equal(calls, 0)
+    currentMarker = marker; p._access = Object.assign({ can_read: true, can_post: true }, identity, { authorization_version: identity.authorization_version + 1 }); p.refreshPostRecovery(); p.openPostSealConfirm(); modal.success({ confirm: true }); await new Promise((resolve) => setImmediate(resolve)); assert.equal(calls, 0)
+  } finally { global.wx = oldWx; l.restore() }
+})
+
+test('seal modal cancellation sends nothing and success completes only the matching post intent', async () => {
+  const marker = postSealMarker(); let modal; let calls = 0; let completed = 0; const oldWx = global.wx
+  global.wx = { showModal(options) { modal = options } }
+  const intent = { action: 'post', taskId: TASK, expectedTaskVersion: marker.expected_task_version, headers: { 'X-Request-ID': marker.trace_request_id } }
+  const l = loadPage(baseStubs({
+    '../utils/formal-stocktake-adapter': { formalStocktakeAdapter: Object.assign(adapter(), { sealPostingCommand: async () => ({}) }), createFormalStocktakeIntentRegistry: () => ({ current: () => intent, complete(value) { assert.equal(value, intent); completed += 1 } }) },
+    '../utils/formal-stocktake-post-recovery': { createFormalStocktakePostRecoveryAdapterFromFormalAdapter: () => ({}), sealFormalStocktakePost: async (lease, sentinel) => { calls += 1; lease.clearExact(sentinel) }, submitDurableFormalStocktakePost: async () => ({ detail: detail() }), FormalStocktakePostSubmissionPendingError: class extends Error {} },
+    '../utils/formal-stocktake-post-recovery-store': { getFormalStocktakePostRecoveryStore: () => ({ readPending: () => ({ kind: 'valid', values: [marker] }) }) }
+  }))
+  try {
+    const p = instance(l.definition); p._taskId = TASK; p._access = Object.assign({ can_read: true, can_post: true }, identity); p._detail = detail(); p._intentRegistry = { current: () => intent, complete(value) { assert.equal(value, intent); completed += 1 } }; p._postRecoveryStore = { readPending: () => ({ kind: 'valid', values: [marker] }), withTaskLease: async (taskId, work) => work({ read: () => ({ kind: 'valid', value: marker }), clearExact() {} }) }; p._countRecoveryStore = { readPending: () => ({ kind: 'missing' }) }; p._reviewRecoveryStore = { readPending: () => ({ kind: 'missing' }) }; p._hidden = false; p.data.loading = false
+    p.refreshPostRecovery(); p.openPostSealConfirm(); modal.success({ confirm: false }); assert.equal(calls, 0)
+    p.openPostSealConfirm(); assert.equal(p.data.postRecoveryCanSeal, true); modal.success({ confirm: true }); await new Promise((resolve) => setImmediate(resolve)); assert.equal(calls, 1); assert.equal(completed, 1)
+  } finally { global.wx = oldWx; l.restore() }
+})

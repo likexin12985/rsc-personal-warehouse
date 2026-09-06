@@ -151,6 +151,18 @@ function countIntentSignature(input) {
   })
 }
 
+const POST_SENTINEL_FIELDS = ['v', 'kind', 'task_id', 'expected_task_version', 'actor_person_id', 'actor_authorization_version', 'trace_request_id']
+function samePostSentinel(left, right) {
+  return Boolean(left && right) && POST_SENTINEL_FIELDS.every((field) => left[field] === right[field])
+}
+function matchesPostIntent(intent, sentinel) {
+  return Boolean(intent && sentinel && intent.action === 'post'
+    && intent.taskId === sentinel.task_id
+    && intent.expectedTaskVersion === sentinel.expected_task_version
+    && intent.headers
+    && intent.headers['X-Request-ID'] === sentinel.trace_request_id)
+}
+
 Page({
   data: {
     loading: true,
@@ -212,6 +224,7 @@ Page({
     this._countRecoveryStore = getFormalStocktakeCountRecoveryStore()
     this._reviewRecoveryStore = getFormalStocktakeReviewRecoveryStore()
     this._postRecoveryStore = getFormalStocktakePostRecoveryStore()
+    this._postSealConfirmation = null
     this._evidenceClaims = new Map()
     this._uploadIdentity = ''
     ensureEvidenceUploads(this)
@@ -229,6 +242,7 @@ Page({
     this._hidden = true
     this._postPageLease = null
     this._postConfirmation = null
+    this._postSealConfirmation = null
     this._scanGeneration = (this._scanGeneration || 0) + 1
     this._loadGeneration = (this._loadGeneration || 0) + 1
     // Hide invalidates the active evidence binding as well as scan/load
@@ -643,19 +657,46 @@ Page({
   openPostSealConfirm() {
     this.refreshPostRecovery()
     if (!this.data.postRecoveryCanSeal || this.data.busy || this._hidden || this._writeLease) return
+    const pending = this._postRecoveryStore && this._postRecoveryStore.readPending(this._taskId)
+    if (!pending || pending.kind !== 'valid' || !Array.isArray(pending.values) || pending.values.length !== 1) {
+      this.refreshPostRecovery()
+      return
+    }
+    const sentinel = Object.freeze({ ...pending.values[0] })
+    const access = this._access
+    const detail = this._detail
+    const confirmation = Object.freeze({
+      sentinel,
+      taskId: sentinel.task_id,
+      expectedTaskVersion: sentinel.expected_task_version,
+      detailVersion: detail && detail.task_id === sentinel.task_id ? detail.version : null,
+      identity: accessIdentity(access),
+      generation: this._loadGeneration,
+    })
+    this._postSealConfirmation = confirmation
     if (typeof wx === 'undefined' || typeof wx.showModal !== 'function') {
+      this._postSealConfirmation = null
       this.setData({ errorMessage: '当前客户端不支持永久封存确认，恢复记录继续保留。' })
       return
     }
     wx.showModal({
       title: '确认永久封存',
-      content: '这只确认原过账请求未执行，并永久封存该坐标。封存后不能再次过账，也不会改变任务库存或关闭状态。',
+      content: '这只确认原过账请求未执行，并永久封存该请求坐标；不会重发这一个请求，也不会改变任务库存或关闭状态。后续如需处理，请重新核验并发起新的明确操作。',
       confirmText: '确认封存',
       confirmColor: '#b83d16',
-      success: (result) => { if (result && result.confirm) this.confirmPostSeal() }
+      success: (result) => {
+        if (result && result.confirm) this.confirmPostSeal(confirmation)
+        else if (this._postSealConfirmation === confirmation) this._postSealConfirmation = null
+      }
     })
   },
-  async confirmPostSeal() {
+  async confirmPostSeal(confirmed = this._postSealConfirmation) {
+    const boundConfirmation = Boolean(confirmed && this._postSealConfirmation === confirmed)
+    if (confirmed && !boundConfirmation && this._postSealConfirmation !== null) {
+      this.setData({ postRecoveryCanSeal: false, errorMessage: '封存确认已被新的页面确认替换，未发送封存请求；请重新核验。' })
+      return
+    }
+    if (boundConfirmation) this._postSealConfirmation = null
     this.refreshPostRecovery()
     if (!this.data.postRecoveryCanSeal || this.data.busy || this._hidden || this._writeLease || !this._access) return
     const pending = this._postRecoveryStore && this._postRecoveryStore.readPending(this._taskId)
@@ -664,6 +705,27 @@ Page({
       return
     }
     const sentinel = pending.values[0]
+    // Keep direct programmatic callers (legacy test seams) fail-closed by
+    // taking an immediate exact snapshot.  The user-facing modal always
+    // supplies its frozen snapshot from openPostSealConfirm above.
+    if (!confirmed) {
+      confirmed = Object.freeze({
+        sentinel: Object.freeze({ ...sentinel }),
+        taskId: sentinel.task_id,
+        expectedTaskVersion: sentinel.expected_task_version,
+        detailVersion: this._detail && this._detail.task_id === sentinel.task_id ? this._detail.version : null,
+        identity: accessIdentity(this._access),
+        generation: this._loadGeneration,
+      })
+    }
+    if (!confirmed || !samePostSentinel(confirmed.sentinel, sentinel)
+      || confirmed.taskId !== this._taskId || confirmed.expectedTaskVersion !== sentinel.expected_task_version
+      || confirmed.detailVersion !== (this._detail && this._detail.task_id === sentinel.task_id ? this._detail.version : null)
+      || confirmed.generation !== this._loadGeneration
+      || confirmed.identity !== accessIdentity(this._access)) {
+      this.setData({ postRecoveryCanSeal: false, errorMessage: '确认期间原过账坐标、版本、身份或页面代次已变化，未发送封存请求；请重新核验。' })
+      return
+    }
     const access = this._access
     const identity = accessIdentity(access)
     const generation = this._loadGeneration
@@ -680,6 +742,8 @@ Page({
         taskLease, sentinel, createFormalStocktakePostRecoveryAdapterFromFormalAdapter(access, formalStocktakeAdapter), current,
       ))
       if (!current()) return
+      const currentIntent = this._intentRegistry && typeof this._intentRegistry.current === 'function' ? this._intentRegistry.current() : null
+      if (matchesPostIntent(currentIntent, sentinel) && typeof this._intentRegistry.complete === 'function') this._intentRegistry.complete(currentIntent)
       refreshAfterSeal = true
       this.setData({ postRecoveryBlocked: false, postRecoveryCanCheck: false, postRecoveryCanSeal: false, postRecoveryMessage: '', pendingMessage: '', pendingRetryable: false })
     } catch (error) {

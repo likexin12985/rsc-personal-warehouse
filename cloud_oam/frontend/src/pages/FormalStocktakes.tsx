@@ -95,6 +95,21 @@ const VALUE_LABELS: Record<string, string> = {
   open: "未关闭", closed: "已关闭",
 };
 
+const POST_SENTINEL_FIELDS = [
+  "v", "kind", "task_id", "expected_task_version", "actor_person_id",
+  "actor_authorization_version", "trace_request_id",
+] as const;
+
+function samePostSentinel(left: FormalStocktakePostSentinel | undefined, right: FormalStocktakePostSentinel | undefined): boolean {
+  return !!left && !!right && POST_SENTINEL_FIELDS.every((field) => left[field] === right[field]);
+}
+
+function matchesPostIntent(intent: FormalStocktakeIntent | null, sentinel: FormalStocktakePostSentinel): boolean {
+  return !!intent && intent.action === "post" && intent.taskId === sentinel.task_id
+    && intent.expectedTaskVersion === sentinel.expected_task_version
+    && intent.headers["X-Request-ID"] === sentinel.trace_request_id;
+}
+
 function currentRound(detail: FormalStocktakeDetail): FormalStocktakeRound | null {
   return detail.rounds.find((round) => round.round_no === detail.current_round_no) ?? null;
 }
@@ -659,8 +674,7 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
     const live = readPostRecoverySnapshot();
     setPostRecoveryState(live);
     const sentinel = live.kind === "valid"
-      ? live.values?.find((value) => value.task_id === target.task_id
-        && value.trace_request_id === target.trace_request_id)
+      ? live.values?.find((value) => samePostSentinel(value, target))
       : undefined;
     if (!sentinel || !resolvedPostRecoveryStore || !postSealCapable || commandBusy) return;
     if (!access || access.schema_version !== "1.0" || !access.can_post
@@ -669,14 +683,27 @@ export default function FormalStocktakesPage({ adapter, fileUploadClient = defau
       setError("当前正式权限或身份与原过账不一致，不能封存；恢复坐标继续保留");
       return;
     }
-    if (!window.confirm("确认原盘点过账未执行并永久封存该坐标？封存只记录不可变的未执行事实，不会重发过账、改变库存或关闭任务。")) return;
     const lifecycle = lifecycleEpoch.current;
-    const stillCurrent = () => lifecycle === lifecycleEpoch.current && activeAdapter.current === adapter;
+    const confirmation = Object.freeze({ ...sentinel });
+    if (!window.confirm("确认原盘点过账请求未执行并永久封存该请求坐标？封存只记录这一坐标的不可变未执行事实，不会重发过账、改变库存或关闭任务；后续新意图仍需重新明确发起。")) return;
+    const afterConfirm = readPostRecoverySnapshot();
+    const currentSentinel = afterConfirm.kind === "valid"
+      ? afterConfirm.values?.find((value) => samePostSentinel(value, confirmation))
+      : undefined;
+    if (!currentSentinel || !samePostSentinel(currentSentinel, confirmation)
+      || lifecycle !== lifecycleEpoch.current || activeAdapter.current !== adapter) {
+      setPostRecoveryState(afterConfirm);
+      setError("确认期间原过账坐标、身份或页面代次已变化，未发送封存请求；请重新核验");
+      return;
+    }
     setBusy(true); setError(""); setPendingRetryable(false);
+    const stillCurrent = () => lifecycle === lifecycleEpoch.current && activeAdapter.current === adapter;
     try {
-      await resolvedPostRecoveryStore.withTaskLease(sentinel.task_id, (lease) =>
-        sealFormalStocktakePost(lease, sentinel, adapter, stillCurrent));
+      await resolvedPostRecoveryStore.withTaskLease(confirmation.task_id, (lease) =>
+        sealFormalStocktakePost(lease, confirmation, adapter, stillCurrent));
       if (!stillCurrent()) return;
+      const currentIntent = registry.current.current();
+      if (currentIntent && matchesPostIntent(currentIntent, confirmation)) registry.current.complete(currentIntent);
       refreshPostRecoveryState();
       setPendingMessage("");
       await load(false);
