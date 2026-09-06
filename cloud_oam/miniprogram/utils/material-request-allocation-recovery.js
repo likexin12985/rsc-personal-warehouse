@@ -67,6 +67,8 @@ async function recover(sentinel, adapter) {
   const command = lookup.command
   if (command.request_id !== checked.request_id || command.request_line_id !== checked.request_line_id
     || command.request_version !== checked.request_version + 1 || command.source_stock_account_id !== checked.source_stock_account_id
+    || command.source_balance_version !== checked.source_balance_version
+    || command.source_ledger_cursor !== checked.source_ledger_cursor
     || command.allocated_qty !== checked.allocated_qty) fail('分配历史命令与原请求锚点不一致')
   const detail = contract.validateMaterialRequestDetail(await adapter.detail(checked.request_id))
   const line = detail.lines.find((item) => item.request_line_id === checked.request_line_id)

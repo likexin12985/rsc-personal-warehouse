@@ -95,6 +95,8 @@ export async function recoverAllocationCommand(
   const command = status.command;
   if (command.request_id !== sentinel.request_id || command.request_line_id !== sentinel.request_line_id
       || command.request_version !== sentinel.request_version + 1 || command.source_stock_account_id !== sentinel.source_stock_account_id
+      || command.source_balance_version !== sentinel.source_balance_version
+      || command.source_ledger_cursor !== sentinel.source_ledger_cursor
       || command.allocated_qty !== sentinel.allocated_qty) throw new Error("分配命令与原请求锚点不一致，继续保持待核验");
   const detail = validateMaterialRequestDetail(await adapter.detail(command.request_id));
   const line = detail.lines.find((item) => item.request_line_id === command.request_line_id);
