@@ -23,6 +23,10 @@ export type MaterialRequestAllocationCommand = Readonly<{
   idempotency_replayed: true;
 }>;
 
+export type MaterialRequestAllocationMutationResult = Omit<MaterialRequestAllocationCommand, "idempotency_replayed"> & Readonly<{
+  idempotency_replayed: boolean;
+}>;
+
 export type MaterialRequestAllocationCommandStatus = Readonly<{
   schema_version: "1.0";
   lookup_status: "confirmed" | "not_observed";
@@ -100,4 +104,18 @@ export function validateMaterialRequestAllocationCommandStatus(
       idempotency_replayed: true,
     },
   };
+}
+
+export function validateMaterialRequestAllocationMutationResult(
+  value: unknown,
+): MaterialRequestAllocationMutationResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fail("分配写响应必须是对象");
+  const raw = value as Record<string, unknown>;
+  if (raw.schema_version !== "1.0" || typeof raw.idempotency_replayed !== "boolean") return fail("分配写响应版本或幂等标记无效");
+  const { schema_version: _schemaVersion, ...commandRaw } = raw;
+  const normalized = validateMaterialRequestAllocationCommandStatus({
+    schema_version: "1.0", lookup_status: "confirmed",
+    command: { ...commandRaw, idempotency_replayed: true },
+  });
+  return { ...normalized.command!, idempotency_replayed: raw.idempotency_replayed };
 }

@@ -2,7 +2,7 @@ import { api, ApiError, jsonBody } from "./api";
 import { formalMaterialCatalogQuery } from "./formalMaterialCatalog";
 import { validateMaterialRequestWorkOrderOptionQuery } from "./formalMaterialRequestOptions";
 import { validateMaterialRequestAllocationOptionPage, type MaterialRequestAllocationOptionPage } from "./formalMaterialRequestAllocationOptions";
-import { validateMaterialRequestAllocationCommandStatus, type MaterialRequestAllocationCommandStatus } from "./formalMaterialRequestAllocationCommandStatus";
+import { validateMaterialRequestAllocationCommandStatus, validateMaterialRequestAllocationMutationResult, type MaterialRequestAllocationCommandStatus, type MaterialRequestAllocationMutationResult } from "./formalMaterialRequestAllocationCommandStatus";
 import { validateSupplyCreateInput, validateSupplyUpdateInput } from "./formalMaterialRequestSupply";
 import {
   MATERIAL_REQUEST_SCHEMA_VERSION,
@@ -87,7 +87,7 @@ export interface FormalMaterialRequestAdapter {
     requestId: string,
     input: MaterialRequestAllocationCreateInput,
     headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>,
-  ): Promise<unknown>;
+  ): Promise<MaterialRequestAllocationMutationResult>;
   createDraft(intent: MaterialRequestCreateIntent): Promise<unknown>;
   mutate(intent: MaterialRequestMutationIntent): Promise<unknown>;
 }
@@ -742,7 +742,7 @@ export function createFormalMaterialRequestAdapter(
         return Promise.reject(new ApiError(409, "分配串码不能重复"));
       }
       const checkedHeaders = validateWriteHeaders(headers, headers["Idempotency-Key"]);
-      return requester(`/v1/material-requests/${checkedRequestId}/allocations`, {
+      return requester<unknown>(`/v1/material-requests/${checkedRequestId}/allocations`, {
         method: "POST",
         headers: checkedHeaders,
         ...jsonBody({
@@ -754,7 +754,7 @@ export function createFormalMaterialRequestAdapter(
           source_ledger_cursor: body.source_ledger_cursor,
           serial_ids: serialIds,
         }),
-      });
+      }).then(validateMaterialRequestAllocationMutationResult);
     },
     createDraft(intent: MaterialRequestCreateIntent) {
       const object = exactObject(intent, [
