@@ -152,6 +152,7 @@ jobs:
             backend/tests/test_stocktake_count_history_context.py \
             backend/tests/test_stocktake_posting_command_seal.py \
             backend/tests/test_stocktake_posting_command_outcomes_migration.py \
+            backend/tests/test_stocktake_posting_request_coordinate_migration.py \
             backend/tests/test_stocktake_posting_command_status.py \
             backend/tests/test_stocktake_history_pg_acceptance.py \
             backend/tests/test_stocktake_history_owner_migration.py \
