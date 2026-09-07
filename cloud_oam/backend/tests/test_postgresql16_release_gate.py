@@ -7301,6 +7301,19 @@ def _load_stocktake_review_command_status_migration_0063():
     return migration
 
 
+def _load_stocktake_posting_command_outcomes_migration_0065():
+    path = CLOUD_ROOT / "backend/alembic/versions/20260906_0065_stocktake_posting_command_outcomes.py"
+    specification = importlib.util.spec_from_file_location(
+        "pg16_stocktake_posting_command_outcomes_0065", path
+    )
+    assert specification is not None and specification.loader is not None
+    migration = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(migration)
+    assert migration.revision == STOCKTAKE_POSTING_COMMAND_OUTCOMES_REVISION
+    assert migration.down_revision == STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
+    return migration
+
+
 def _load_stock_allocations_migration_0068():
     path = CLOUD_ROOT / "backend/alembic/versions/20260908_0068_stock_allocations.py"
     specification = importlib.util.spec_from_file_location(
@@ -20774,12 +20787,14 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         finally:
             security_engine.dispose()
         blocked_supply = _run_alembic("downgrade", SUPPLY_TASK_SECURITY_REVISION, expect_success=False)
-        # The ordinary chain reaches 0063 first because the review fact is
-        # newer and its own downgrade guard must take precedence.  Exercise
-        # 0061 independently below so its supply-task blocker is also proven
-        # without weakening migration-order safety.
-        review_status_migration = _load_stocktake_review_command_status_migration_0063()
-        assert review_status_migration.DOWNGRADE_BLOCKER in (
+        # The normal chain must stop at the first newer non-empty migration.
+        # This fixture contains both the 0063 review fact and the 0065
+        # seal-first posting outcome created by the opening-stocktake proof,
+        # so 0065 is the expected first blocker.  0063 was already exercised
+        # directly above; keeping the two assertions separate proves each
+        # migration's own guard without weakening Alembic ordering.
+        posting_outcome_migration = _load_stocktake_posting_command_outcomes_migration_0065()
+        assert posting_outcome_migration.DOWNGRADE_BLOCKER in (
             blocked_supply.stdout + blocked_supply.stderr
         )
         supply_event_key = _load_supply_event_key_migration_0061()
