@@ -68,6 +68,25 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 HEAD_REVISION = STOCK_ALLOCATIONS_REVISION
+RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
+RUNTIME_READY_STABLE_REVISIONS = frozenset(
+    {
+        STOCKTAKE_POSTING_COMMAND_OUTCOMES_REVISION,
+        STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
+        STOCKTAKE_POSTING_SEAL_RACE_REVISION,
+        STOCK_ALLOCATIONS_REVISION,
+    }
+)
+
+
+def _runtime_ready_revision(revision: str) -> str:
+    """Return the revision embedded in readiness at a schema state."""
+
+    if revision in RUNTIME_READY_STABLE_REVISIONS:
+        return RUNTIME_READY_REVISION
+    return revision
+
+
 HARDENED_HEAD_REVISIONS = frozenset(
     {
         NONOPENING_COUNT_HISTORY_OWNER_REVISION,
@@ -4944,6 +4963,10 @@ def _assert_0049_recount_guard_catalog(
             NONOPENING_COUNT_HISTORY_OWNER_REVISION,
             STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
             STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION,
+            STOCKTAKE_POSTING_COMMAND_OUTCOMES_REVISION,
+            STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
+            STOCKTAKE_POSTING_SEAL_RACE_REVISION,
+            STOCK_ALLOCATIONS_REVISION,
         }
     expected_function_rows = []
     for (
@@ -5072,7 +5095,7 @@ def _assert_0049_recount_guard_catalog(
 
     assert readiness_row is not None
     assert (
-        f"pg_catalog.min(version_num) = '{expected_revision}'"
+        f"pg_catalog.min(version_num) = '{_runtime_ready_revision(expected_revision)}'"
         in readiness_row[0]
     )
 
@@ -5310,7 +5333,7 @@ def _assert_0051_difference_completion_catalog(
     assert " WHEN " not in trigger_definition
     assert readiness_row is not None
     assert (
-        f"pg_catalog.min(version_num) = '{expected_revision}'"
+        f"pg_catalog.min(version_num) = '{_runtime_ready_revision(expected_revision)}'"
         in readiness_row[0]
     )
 
@@ -5513,6 +5536,10 @@ def _assert_0052_opening_terminal_catalog(
                             NONOPENING_COUNT_HISTORY_OWNER_REVISION,
                             STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
                             STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION,
+                            STOCKTAKE_POSTING_COMMAND_OUTCOMES_REVISION,
+                            STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
+                            STOCKTAKE_POSTING_SEAL_RACE_REVISION,
+                            STOCK_ALLOCATIONS_REVISION,
                         }
                         and row[0]
                         == dispatch_migration.GRAPH_CLOSURE_SIGNATURE
@@ -5532,6 +5559,10 @@ def _assert_0052_opening_terminal_catalog(
                             NONOPENING_COUNT_HISTORY_OWNER_REVISION,
                             STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
                             STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION,
+                            STOCKTAKE_POSTING_COMMAND_OUTCOMES_REVISION,
+                            STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
+                            STOCKTAKE_POSTING_SEAL_RACE_REVISION,
+                            STOCK_ALLOCATIONS_REVISION,
                         }
                         and row[0]
                         == history_migration.ROUND_SUBMISSION_SIGNATURE
@@ -5847,7 +5878,7 @@ def _assert_0052_opening_terminal_catalog(
 
     assert readiness_row is not None
     assert (
-        f"pg_catalog.min(version_num) = '{expected_revision}'"
+        f"pg_catalog.min(version_num) = '{_runtime_ready_revision(expected_revision)}'"
         in readiness_row[0]
     )
 
@@ -6229,7 +6260,7 @@ def _assert_0048_scope_guard_catalog(
     assert " WHEN " not in trigger_definition
     assert readiness_row is not None
     assert (
-        f"pg_catalog.min(version_num) = '{expected_revision}'"
+        f"pg_catalog.min(version_num) = '{_runtime_ready_revision(expected_revision)}'"
         in readiness_row[0]
     )
 
@@ -7680,7 +7711,7 @@ def _assert_0057_difference_replay_catalog_state(
     )
     readiness = state["readiness"]
     assert readiness[0] == expected_readiness_hash
-    assert readiness[1].count(expected_revision) == 1
+    assert readiness[1].count(_runtime_ready_revision(expected_revision)) == 1
 
 
 def _assert_0057_absent_at_0056() -> None:
@@ -7958,8 +7989,10 @@ def _assert_0056_count_guard_catalog_state(
         if fixed
         else migration.RUNTIME_READY_BODY_SHA256_0055
     )
-    expected_revision = expected_ready_revision or (
-        migration.revision if fixed else migration.down_revision
+    expected_revision = _runtime_ready_revision(
+        expected_ready_revision or (
+            migration.revision if fixed else migration.down_revision
+        )
     )
     forbidden_revision = migration.down_revision if fixed else migration.revision
     assert readiness_row[16] == expected_ready_hash
