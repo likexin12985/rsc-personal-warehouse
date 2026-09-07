@@ -7715,7 +7715,7 @@ def _assert_0057_empty_graph_downgrade_and_reupgrade() -> None:
     _assert_0057_difference_replay_catalog_state(
         head_state,
         expected_readiness_hash=_head_runtime_ready_hash(),
-        expected_revision=HEAD_REVISION,
+        expected_revision=STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION,
     )
 
     _run_alembic("downgrade", NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION)
@@ -7764,7 +7764,7 @@ def _assert_0057_empty_graph_downgrade_and_reupgrade() -> None:
     _assert_0057_difference_replay_catalog_state(
         final_state,
         expected_readiness_hash=_head_runtime_ready_hash(),
-        expected_revision=HEAD_REVISION,
+        expected_revision=STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION,
     )
     assert final_state["functions"] == reupgraded["functions"]
     assert final_state["acls"] == reupgraded["acls"]
