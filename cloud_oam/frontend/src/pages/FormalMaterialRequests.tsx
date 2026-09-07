@@ -49,6 +49,7 @@ import FormalFileUploadField, {
 } from "../FormalFileUploadField";
 import FormalMaterialRequestSupplyPanel from "../FormalMaterialRequestSupplyPanel";
 import { createSupplyRecoveryStore, supplyRecoveryBlocked, type SupplyRecoveryStore } from "../materialRequestSupplyRecovery";
+import { createAllocationRecoveryStore, type AllocationRecoveryStore } from "../materialRequestAllocationRecovery";
 import { Button, Empty, Field, Loading, Modal, SectionHeader, showError } from "../ui";
 
 const REQUEST_STATUS_LABELS: Record<string, string> = {
@@ -1017,11 +1018,13 @@ export default function FormalMaterialRequestsPage({
   fileUploadClient = defaultFormalFileUploadClient,
   lifecycleRecoveryStore,
   supplyRecoveryStore,
+  allocationRecoveryStore,
 }: {
   adapter: FormalMaterialRequestAdapter;
   fileUploadClient?: FormalFileUploadClient;
   lifecycleRecoveryStore?: MaterialRequestLifecycleRecoveryStore;
   supplyRecoveryStore?: SupplyRecoveryStore;
+  allocationRecoveryStore?: AllocationRecoveryStore;
 }) {
   const recoveryStore = useRef(
     lifecycleRecoveryStore ?? createMaterialRequestLifecycleRecoveryStore(),
@@ -1029,12 +1032,16 @@ export default function FormalMaterialRequestsPage({
   const initialRecoveryRead = useRef(recoveryStore.current.read());
   const supplyStore = useRef(supplyRecoveryStore ?? createSupplyRecoveryStore());
   const [supplyBlocked, setSupplyBlocked] = useState(() => supplyRecoveryBlocked(supplyStore.current.read()));
+  const allocationStore = useRef(allocationRecoveryStore ?? createAllocationRecoveryStore());
+  const [allocationBlocked, setAllocationBlocked] = useState(
+    () => allocationStore.current.read().kind !== "missing",
+  );
   const [access, setAccess] = useState<FormalMaterialRequestAccess | null>(null);
   const [items, setItems] = useState<MaterialRequestSummary[]>([]);
   const [nextAfterId, setNextAfterId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [baseBusy, setBusy] = useState(false);
-  const busy = baseBusy || supplyBlocked;
+  const busy = baseBusy || supplyBlocked || allocationBlocked;
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [detail, setDetail] = useState<MaterialRequestDetail | null>(null);
@@ -1068,7 +1075,7 @@ export default function FormalMaterialRequestsPage({
   }> | null>(null);
 
   const lifecycleWritesBlocked = lifecycleRecovery.phase === "checking"
-    || lifecycleRecovery.phase === "blocked" || supplyBlocked;
+    || lifecycleRecovery.phase === "blocked" || supplyBlocked || allocationBlocked;
   const draftWritePending = Boolean(
     formMode?.kind === "create"
       ? createRegistry.current.get()
@@ -1583,7 +1590,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   async function startEdit(): Promise<void> {
-    if (supplyBlocked) return;
+    if (supplyBlocked || allocationBlocked) return;
     if (!detail || !["draft", "returned"].includes(detail.states.request_status)
         || !detail.allowed_actions.includes("update")) return;
     const currentEditGeneration = ++editRecoveryGeneration.current;
@@ -1645,7 +1652,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   async function saveDraft(): Promise<void> {
-    if (supplyBlocked) return;
+    if (supplyBlocked || allocationBlocked) return;
     if (!formMode) return;
     if (form.workOrderUnavailable) {
       setFormError("原关联工单当前不可选；必须明确清除或从正式列表重新选择后才能保存");
@@ -1730,7 +1737,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   async function submitRequest(): Promise<void> {
-    if (supplyBlocked) return;
+    if (supplyBlocked || allocationBlocked) return;
     if (!detail || !["draft", "returned"].includes(detail.states.request_status)
         || !detail.allowed_actions.includes("submit")) return;
     const before = detail;
@@ -1998,7 +2005,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   function startApprovalProcess(kind: ApprovalProcessState["kind"]): void {
-    if (supplyBlocked) return;
+    if (supplyBlocked || allocationBlocked) return;
     if (!detail || !access) return;
     const step = currentApprovalStep(detail);
     if (!step) {
@@ -2072,7 +2079,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   async function submitApprovalProcess(): Promise<void> {
-    if (supplyBlocked) return;
+    if (supplyBlocked || allocationBlocked) return;
     if (!detail || !approvalProcess || !access) return;
     const before = detail;
     const process = approvalProcess;
@@ -2262,11 +2269,13 @@ export default function FormalMaterialRequestsPage({
 
     {!detail && <FormalMaterialRequestSupplyPanel
       adapter={adapter} access={access} detail={null} store={supplyStore.current}
-      registry={mutationRegistry.current} otherWriteBusy={baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-      onBlocking={setSupplyBlocked} onDetail={setDetail}
+      registry={mutationRegistry.current}
+      allocationRecoveryStore={allocationStore.current}
+      otherWriteBusy={baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking" || allocationBlocked}
+      onBlocking={setSupplyBlocked} onAllocationBlocking={setAllocationBlocked} onDetail={setDetail}
     />}
     {detail && access && <Modal title="正式需求详情" wide onClose={() => {
-      if (!approvalProcess && !lifecycleProcess && !supplyBlocked) {
+      if (!approvalProcess && !lifecycleProcess && !supplyBlocked && !allocationBlocked) {
         editRecoveryGeneration.current += 1;
         setBusy(false);
         setDetail(null);
@@ -2275,8 +2284,10 @@ export default function FormalMaterialRequestsPage({
       <DetailPanel detail={detail} access={access} busy={busy} lifecycleBlocked={lifecycleWritesBlocked} onEdit={() => void startEdit()} onSubmit={() => setSubmitConfirm(true)} onProcess={startApprovalProcess} onLifecycle={startLifecycleProcess} />
       <FormalMaterialRequestSupplyPanel
         adapter={adapter} access={access} detail={detail} store={supplyStore.current}
-        registry={mutationRegistry.current} otherWriteBusy={baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-        onBlocking={setSupplyBlocked} onDetail={setDetail}
+        registry={mutationRegistry.current}
+        allocationRecoveryStore={allocationStore.current}
+        otherWriteBusy={baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking" || allocationBlocked}
+        onBlocking={setSupplyBlocked} onAllocationBlocking={setAllocationBlocked} onDetail={setDetail}
       />
     </Modal>}
 
