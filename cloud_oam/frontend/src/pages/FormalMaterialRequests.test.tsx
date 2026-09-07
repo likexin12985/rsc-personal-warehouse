@@ -17,6 +17,10 @@ import {
   createMaterialRequestLifecycleRecoveryStore,
   type MaterialRequestLifecycleRecoveryStore,
 } from "../materialRequestLifecycleRecovery";
+import {
+  createAllocationRecoveryStore,
+  type AllocationRecoveryStore,
+} from "../materialRequestAllocationRecovery";
 import FormalMaterialRequestsPage from "./FormalMaterialRequests";
 
 const REQUEST_ID = "10000000-0000-4000-8000-000000000001";
@@ -441,6 +445,39 @@ function supplyRecoveryFixture() {
   return { pending, store, before, after, client, confirmed };
 }
 
+function allocationRecoveryFixture(): { store: AllocationRecoveryStore; client: FormalMaterialRequestAdapter } {
+  const before = supplyReadyDetail();
+  const store = createAllocationRecoveryStore(sessionStorage);
+  store.persist({
+    v: 1,
+    kind: "material_request_allocation",
+    x_request_id: "allocation-recovery-1234",
+    person_id: PERSON_ID,
+    authorization_version: 1,
+    request_id: REQUEST_ID,
+    request_line_id: LINE_ID,
+    request_version: before.request_version,
+    source_stock_account_id: MATERIAL_2_ID,
+    allocated_qty: "1.000",
+    source_balance_version: 3,
+    source_ledger_cursor: 8,
+  });
+  const client = adapter({
+    loadAccess: vi.fn().mockResolvedValue({ ...access(), can_read_allocation_options: true }),
+    list: vi.fn().mockResolvedValue(page(before)),
+    detail: vi.fn().mockResolvedValue(before),
+    loadIdentityNoReplay: vi.fn().mockResolvedValue({
+      schema_version: "1.0", person_id: PERSON_ID, authorization_version: 1,
+    }),
+    loadAccessNoReplay: vi.fn().mockResolvedValue({ ...access(), can_read_allocation_options: true }),
+    detailNoReplay: vi.fn().mockResolvedValue(before),
+    allocationCommandStatusNoReplay: vi.fn().mockResolvedValue({
+      schema_version: "1.0", lookup_status: "not_observed", command: null,
+    }),
+  });
+  return { store, client };
+}
+
 function confirmedLifecycleStatus(action: "withdraw" | "cancel", value: any) {
   return {
     schema_version: "1.0",
@@ -725,6 +762,17 @@ afterEach(() => {
 });
 
 describe("formal material request PC vertical slice", () => {
+  it("keeps the page write gate closed while an allocation sentinel is not observed", async () => {
+    const { store, client } = allocationRecoveryFixture();
+    await renderReady(client);
+
+    expect(await screen.findByText(/暂未查到分配操作的确定结果/)).toBeTruthy();
+    expect(client.allocationCommandStatusNoReplay).toHaveBeenCalledWith("allocation-recovery-1234");
+    expect(store.read().kind).toBe("valid");
+    expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(client.createDraft).not.toHaveBeenCalled();
+  });
+
   it("renders only masked list/detail projections and keeps approval/fulfillment axes separate", async () => {
     const client = adapter();
     await renderReady(client);
