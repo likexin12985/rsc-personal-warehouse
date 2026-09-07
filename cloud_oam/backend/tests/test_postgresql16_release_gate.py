@@ -19770,12 +19770,33 @@ def _assert_0063_rejects_nonempty_review_downgrade() -> None:
 
     migration = _load_stocktake_review_command_status_migration_0063()
     assert _current_revision() == HEAD_REVISION
-    blocked = _run_alembic(
-        "downgrade",
-        STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION,
-        expect_success=False,
+    # The database is intentionally at the 0068 head here.  A normal Alembic
+    # downgrade walks 0068 -> 0067 -> 0066 -> 0065 -> 0064 before it can call
+    # 0063, and the real stocktake fixture also contains 0065 posting outcome
+    # facts.  Those newer migrations must keep their own non-empty blockers;
+    # traversing the chain would therefore mask the 0063 contract we are
+    # trying to prove.  Invoke the reviewed 0063 downgrade primitive directly
+    # against the disposable migrator connection, as the 0047 gate does for
+    # the same reason.  This does not mutate Alembic's revision marker.
+    migrator_engine = create_engine(
+        _sqlalchemy_url(
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+        ),
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=5,
     )
-    assert migration.DOWNGRADE_BLOCKER in (blocked.stdout + blocked.stderr)
+    try:
+        with migrator_engine.begin() as connection:
+            migration.context.is_offline_mode = lambda: False
+            migration.op = Operations(MigrationContext.configure(connection))
+            with pytest.raises(
+                RuntimeError, match=re.escape(migration.DOWNGRADE_BLOCKER)
+            ):
+                migration.downgrade()
+    finally:
+        migrator_engine.dispose()
     assert _current_revision() == HEAD_REVISION
 
 
