@@ -53,6 +53,7 @@ from ..formal_services import material_request_lifecycle as lifecycle_service
 from ..formal_services import material_request_query as query_service
 from ..formal_services import material_request_supply as supply_service
 from ..formal_services import material_request_supply_command_status as supply_status_service
+from ..formal_services import material_request_reservation as reservation_service
 from ..formal_services.material_request_contact import (
     MaterialRequestContactCipher,
     MaterialRequestContactProtectionError,
@@ -80,6 +81,11 @@ from ..material_request_allocation_schemas import (
     AllocationCommandStatusOut,
     AllocationCreateIn,
     AllocationMutationOut,
+)
+from ..material_request_reservation_schemas import (
+    ReservationCommandStatusOut,
+    ReservationCreateIn,
+    ReservationMutationOut,
 )
 from ..production_adapters import create_production_material_request_contact_cipher
 
@@ -153,6 +159,71 @@ def formal_material_request_allocation_command_status(
                 "code": "material_request_allocation_response_invalid",
                 "category": "service_unavailable",
                 "message": "分配命令状态响应无效，保持结果待核验",
+            },
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        ) from None
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+    return output
+
+
+@command_status_router.get(
+    "/material-request-reservation-command-status",
+    response_model=ReservationCommandStatusOut,
+)
+def formal_material_request_reservation_command_status(
+    response: Response,
+    principal: FormalPrincipal = Depends(
+        require_permission("material_request", "read")
+    ),
+    db: Session = Depends(get_db),
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    checked_request_id = _required_safe_header(
+        "X-Request-ID", request_id, minimum=8, maximum=160
+    )
+    _set_read_no_store(response)
+    try:
+        result = reservation_service.reservation_command_status(
+            db, actor=principal, trace_request_id=checked_request_id
+        )
+        output = ReservationCommandStatusOut(
+            lookup_status="confirmed" if result is not None else "not_observed",
+            command=(
+                None
+                if result is None
+                else ReservationMutationOut(
+                    request_id=result.request_id,
+                    reservation_id=result.reservation_id,
+                    reservation_no=result.reservation_no,
+                    request_version=result.request_version,
+                    current_request_version=result.current_request_version,
+                    revision_id=result.revision_id,
+                    revision_no=result.revision_no,
+                    request_line_id=result.request_line_id,
+                    allocation_id=result.allocation_id,
+                    source_stock_account_id=result.source_stock_account_id,
+                    stock_account_id=result.stock_account_id,
+                    reserve_transaction_id=result.reserve_transaction_id,
+                    reserve_transaction_no=result.reserve_transaction_no,
+                    reserved_qty=f"{result.reserved_qty:.3f}",
+                    reservation_status="reserved",
+                    request_status=result.request_status,
+                    state_axes=dict(result.state_axes),
+                    idempotency_replayed=True,
+                )
+            ),
+        )
+    except reservation_service.MaterialRequestReservationError as exc:
+        _raise_service_error(exc, no_store=True)
+    except ValidationError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "material_request_reservation_response_invalid",
+                "category": "service_unavailable",
+                "message": "预约命令状态响应无效，保持结果待核验",
             },
             headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
         ) from None
@@ -460,6 +531,73 @@ def create_formal_material_request_allocation(
             source_ledger_cursor=result.source_ledger_cursor,
             allocated_qty=f"{result.allocated_qty:.3f}",
             allocation_status="allocated",
+            request_status=result.request_status,
+            state_axes=dict(result.state_axes),
+            idempotency_replayed=result.replayed,
+        )
+        db.commit()
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+    _set_read_no_store(response)
+    _set_replay_header(response, output.idempotency_replayed)
+    return output
+
+
+@router.post(
+    "/{material_request_id}/reservations",
+    response_model=ReservationMutationOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_formal_material_request_reservation(
+    material_request_id: UUID,
+    payload: ReservationCreateIn,
+    response: Response,
+    principal: FormalPrincipal = Depends(
+        require_permission("material_request", "read")
+    ),
+    db: Session = Depends(get_db),
+    runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    checked_key, checked_request_id = _required_write_headers(
+        idempotency_key=idempotency_key, request_id=request_id
+    )
+    try:
+        secret = _require_lifecycle_write_runtime(runtime_settings)
+        result = reservation_service.create_reservation(
+            db,
+            actor=principal,
+            material_request_id=material_request_id,
+            expected_request_version=payload.expected_request_version,
+            reservation=reservation_service.ReservationCreateInput(
+                request_line_id=payload.request_line_id,
+                allocation_id=payload.allocation_id,
+                reserved_qty=payload.reserved_qty,
+                source_balance_version=payload.source_balance_version,
+                source_ledger_cursor=payload.source_ledger_cursor,
+                serial_ids=payload.serial_ids,
+            ),
+            idempotency_key=checked_key,
+            idempotency_hmac_secret=secret,
+            trace_request_id=checked_request_id,
+        )
+        output = ReservationMutationOut(
+            request_id=result.request_id,
+            reservation_id=result.reservation_id,
+            reservation_no=result.reservation_no,
+            request_version=result.request_version,
+            current_request_version=result.current_request_version,
+            revision_id=result.revision_id,
+            revision_no=result.revision_no,
+            request_line_id=result.request_line_id,
+            allocation_id=result.allocation_id,
+            source_stock_account_id=result.source_stock_account_id,
+            stock_account_id=result.stock_account_id,
+            reserve_transaction_id=result.reserve_transaction_id,
+            reserve_transaction_no=result.reserve_transaction_no,
+            reserved_qty=f"{result.reserved_qty:.3f}",
+            reservation_status="reserved",
             request_status=result.request_status,
             state_axes=dict(result.state_axes),
             idempotency_replayed=result.replayed,
@@ -1387,6 +1525,7 @@ def _rollback_and_raise(db: Session, exc: Exception) -> None:
             edit_service.MaterialRequestEditableDraftError,
             approval_service.MaterialRequestApprovalError,
             allocation_service.MaterialRequestAllocationError,
+            reservation_service.MaterialRequestReservationError,
             lifecycle_service.MaterialRequestLifecycleError,
             supply_service.MaterialRequestSupplyError,
             _MaterialRequestAdapterError,

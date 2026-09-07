@@ -1168,10 +1168,23 @@ def test_forward_readiness_manifests_match_head_hashes():
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0068[ready_signature][6]
         == migration_0068["RUNTIME_READY_BODY_SHA256_0068"]
     )
-    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST is scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0068
+    migration_0069 = runpy.run_path(
+        str(migration_root / "20260909_0069_stock_reservations.py")
+    )
+    assert (
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0069[ready_signature][6]
+        == migration_0069["RUNTIME_READY_BODY_SHA256_0069"]
+    )
+    assert (
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST
+        is scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0069
+    )
     assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064[ready_signature][6] != (
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0062[ready_signature][6]
     )
     assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0068[ready_signature][6] != (
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0063[ready_signature][6]
+    )
+    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0069[ready_signature][6] != (
+        scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0068[ready_signature][6]
     )

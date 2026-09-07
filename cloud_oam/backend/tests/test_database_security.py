@@ -543,7 +543,12 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "stocktake_close_transition_acks"
     }
     stocktake_start_tables = {"stocktake_start_completions"}
-    allocation_tables = {"stock_allocations", "stock_allocation_serials"}
+    allocation_tables = {
+        "stock_allocations",
+        "stock_allocation_serials",
+        "stock_reservations",
+        "stock_reservation_serials",
+    }
     assert RUNTIME_READ_TABLES - set(values["API_READ_TABLES"]) == (
         safe_posting_tables
         | {
@@ -683,6 +688,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
             "withdrawn_at",
             "cancelled_at",
             "allocation_status",
+            "reservation_status",
             "version",
             "updated_at",
         },

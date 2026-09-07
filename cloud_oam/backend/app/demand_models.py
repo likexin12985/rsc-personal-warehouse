@@ -982,7 +982,8 @@ class MaterialRequestCommand(CreatedAtMixin, Base):
             "'headquarters_decide', 'register_external', 'verify_external', "
             "'withdraw', 'cancel', 'propose_substitution', "
             "'confirm_substitution', 'reject_substitution', "
-            "'create_supply_task', 'update_supply_task', 'cancel_supply_task')",
+            "'create_supply_task', 'update_supply_task', 'cancel_supply_task', "
+            "'allocate', 'reserve', 'release')",
             name="ck_material_request_commands_operation",
         ),
         CheckConstraint(

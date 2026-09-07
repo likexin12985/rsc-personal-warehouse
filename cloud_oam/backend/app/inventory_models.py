@@ -492,6 +492,181 @@ class StockAllocationSerial(CreatedAtMixin, Base):
     serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
 
 
+class StockReservation(TimestampMixin, Base):
+    """Immutable reservation fact linked to one source allocation.
+
+    Allocation and reservation are deliberately separate facts.  A reservation
+    records the inventory account and ledger transaction that made a quantity
+    unavailable for later picking; it never rewrites the allocation row.  The
+    first reservation slice only appends rows (the API role has no UPDATE or
+    DELETE privilege); release/fulfilment transitions are represented by a
+    later, explicitly reviewed command boundary.
+    """
+
+    __tablename__ = "stock_reservations"
+    __table_args__ = (
+        UniqueConstraint("reservation_no", name="uq_stock_reservations_number"),
+        UniqueConstraint(
+            "idempotency_key_hash", name="uq_stock_reservations_idempotency"
+        ),
+        # The child serial table uses this pair to prove that a serial belongs
+        # to the same allocation as its reservation.
+        UniqueConstraint(
+            "id", "allocation_id", name="uq_stock_reservations_id_allocation"
+        ),
+        CheckConstraint(
+            "reserved_qty > 0", name="ck_stock_reservations_quantity"
+        ),
+        CheckConstraint(
+            "released_qty >= 0 AND released_qty <= reserved_qty",
+            name="ck_stock_reservations_released_quantity",
+        ),
+        CheckConstraint(
+            "request_version >= 0", name="ck_stock_reservations_request_version"
+        ),
+        CheckConstraint(
+            "revision_no > 0", name="ck_stock_reservations_revision"
+        ),
+        CheckConstraint(
+            "authorization_version > 0",
+            name="ck_stock_reservations_authorization_version",
+        ),
+        CheckConstraint(
+            "source_stock_account_id <> stock_account_id",
+            name="ck_stock_reservations_distinct_accounts",
+        ),
+        CheckConstraint(
+            "status IN ('reserved', 'released', 'fulfilled')",
+            name="ck_stock_reservations_status",
+        ),
+        CheckConstraint(
+            "length(idempotency_key_hash) = 64 AND length(request_hash) = 64",
+            name="ck_stock_reservations_hashes",
+        ),
+        CheckConstraint(
+            "reserve_transaction_id IS NOT NULL",
+            name="ck_stock_reservations_reserve_transaction",
+        ),
+        CheckConstraint(
+            "reserve_transaction_id <> release_transaction_id OR "
+            "release_transaction_id IS NULL",
+            name="ck_stock_reservations_distinct_transactions",
+        ),
+        CheckConstraint(
+            "(status = 'released' AND release_transaction_id IS NOT NULL "
+            "AND released_qty = reserved_qty) OR "
+            "(status = 'reserved' AND release_transaction_id IS NULL "
+            "AND released_qty = 0) OR "
+            "(status = 'fulfilled' AND release_transaction_id IS NULL "
+            "AND released_qty = 0)",
+            name="ck_stock_reservations_status_projection",
+        ),
+        ForeignKeyConstraint(
+            ["request_line_id", "request_id", "revision_id"],
+            [
+                "material_request_lines.id",
+                "material_request_lines.request_id",
+                "material_request_lines.revision_id",
+            ],
+            name="fk_stock_reservations_request_line",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_stock_reservations_request_line_status",
+            "request_line_id",
+            "status",
+        ),
+        Index(
+            "ix_stock_reservations_allocation_status", "allocation_id", "status"
+        ),
+        Index(
+            "ix_stock_reservations_stock_account_status",
+            "stock_account_id",
+            "status",
+        ),
+        Index("ix_stock_reservations_request", "request_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, default=uuid4_value
+    )
+    reservation_no: Mapped[str] = mapped_column(String(100))
+    request_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("material_requests.id", ondelete="RESTRICT")
+    )
+    request_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    revision_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    revision_no: Mapped[int] = mapped_column(Integer)
+    allocation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stock_allocations.id", ondelete="RESTRICT")
+    )
+    source_stock_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT")
+    )
+    stock_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT")
+    )
+    reserved_qty: Mapped[Decimal] = mapped_column(QUANTITY)
+    released_qty: Mapped[Decimal] = mapped_column(
+        QUANTITY, default=Decimal("0.000"), server_default=text("0")
+    )
+    reserve_transaction_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("inventory_transactions.id", ondelete="RESTRICT"),
+    )
+    release_transaction_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("inventory_transactions.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default="reserved", server_default="reserved"
+    )
+    request_version: Mapped[int] = mapped_column(BigInteger)
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    actor_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    actor_person_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT")
+    )
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+
+
+class StockReservationSerial(CreatedAtMixin, Base):
+    """SN evidence for a reservation, bound to its allocation serial set."""
+
+    __tablename__ = "stock_reservation_serials"
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "reservation_id",
+            "allocation_id",
+            "serial_id",
+            name="pk_stock_reservation_serials",
+        ),
+        ForeignKeyConstraint(
+            ["reservation_id", "allocation_id"],
+            ["stock_reservations.id", "stock_reservations.allocation_id"],
+            name="fk_stock_reservation_serials_reservation",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["allocation_id", "serial_id"],
+            ["stock_allocation_serials.allocation_id", "stock_allocation_serials.serial_id"],
+            name="fk_stock_reservation_serials_allocation_serial",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_stock_reservation_serials_serial", "serial_id"
+        ),
+    )
+
+    reservation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    allocation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+
+
 class InventoryTransaction(CreatedAtMixin, Base):
     __tablename__ = "inventory_transactions"
     __table_args__ = (

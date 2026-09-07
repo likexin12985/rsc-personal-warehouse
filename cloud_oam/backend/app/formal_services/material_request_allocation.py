@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
-from ..demand_models import MaterialRequest, MaterialRequestLine
+from ..demand_models import MaterialRequest, MaterialRequestCommand, MaterialRequestLine
 from ..formal_access import FormalPrincipal, lock_formal_principal_graph
 from ..foundation_models import AuditEvent, StateTransitionEvent
 from ..inventory_models import (
@@ -358,14 +358,86 @@ def _create_allocation_impl(
     approved_total = db.scalar(select(func.coalesce(func.sum(MaterialRequestLine.final_approved_qty - MaterialRequestLine.cancelled_qty), 0)).where(MaterialRequestLine.request_id == request_id, MaterialRequestLine.revision_no == request.revision_no, MaterialRequestLine.status.in_(("approved", "partially_approved")))) or Decimal("0")
     allocated_total = db.scalar(select(func.coalesce(func.sum(StockAllocation.allocated_qty), 0)).where(StockAllocation.request_id == request_id, StockAllocation.status == _ACTIVE_ALLOCATION_STATUS)) or Decimal("0")
     previous_status = request.allocation_status
-    request.allocation_status = "allocated" if allocated_total >= approved_total else "partially_allocated"
+    next_allocation_status = "allocated" if allocated_total >= approved_total else "partially_allocated"
+    # The 0069 request guard is a BEFORE UPDATE trigger and requires the
+    # matching command fact to exist before the aggregate projection changes.
+    # Build the result against the next axis value, insert the command first,
+    # then apply the request projection in the same transaction.
+    next_state_axes = _state_axes(request)
+    next_state_axes["allocation_status"] = next_allocation_status
+    # Allocation advances the material-request aggregate version just like
+    # every other post-approval command.  Keep an immutable command fact in
+    # the same transaction so the 0045 projection validator can account for
+    # the version and a later recovery read can distinguish a committed
+    # allocation from an interrupted transport.
+    allocation_result_document = {
+        "kind": "allocation",
+        "schema_version": "1.0",
+        "request_id": str(request_id),
+        "request_no": request.request_no,
+        "request_version": resulting_request_version,
+        "revision_id": str(line.revision_id),
+        "revision_no": line.revision_no,
+        "request_line_id": str(line.id),
+        "allocation_id": str(allocation_id),
+        "allocation_no": allocation_no,
+        "source_stock_account_id": str(account.id),
+        "allocated_qty": _quantity_text(allocation.allocated_qty),
+        "allocation_status": fact.status,
+        "state_axes": {
+            key: value
+            for key, value in next_state_axes.items()
+            if key != "request_status"
+        },
+    }
+    allocation_command = MaterialRequestCommand(
+        id=uuid.uuid4(),
+        operation="allocate",
+        request_id=request_id,
+        target_version=resulting_request_version,
+        idempotency_key_hash=key_hash,
+        request_reference=path,
+        request_hash=request_hash,
+        result_hash=_canonical_hash(allocation_result_document),
+        request_jsonb={
+            "schema": "rsc.material_request_allocation_command.v1",
+            "operation": "allocate",
+            "request_id": str(request_id),
+            "revision_id": str(line.revision_id),
+            "revision_no": line.revision_no,
+            "request_line_id": str(line.id),
+            "allocation_id": str(allocation_id),
+            "target_version": resulting_request_version,
+            "payload_sha256": request_hash,
+            "comment_sha256": hashlib.sha256(b"").hexdigest(),
+            "sensitive_fields": "excluded",
+        },
+        result_jsonb=allocation_result_document,
+        actor_user_id=actor.user_id,
+        actor_person_id=actor.person_id,
+        actor_role_assignment_id=_allocation_actor_assignment_id(actor),
+        authorization_version=actor.authorization_version,
+        occurred_at=now,
+        created_at=now,
+    )
+    db.add(allocation_command)
+    db.flush()
+    request.allocation_status = next_allocation_status
     request.version = resulting_request_version
     request.updated_at = now
+    db.flush()
     db.add(StateTransitionEvent(
         aggregate_type="material_request", aggregate_id=str(request_id), from_status=previous_status,
         to_status=request.allocation_status, reason="material_request_allocation_created", actor_id=actor.user_id,
         idempotency_key=f"allocation-state-{key_hash}", occurred_at=now,
-        metadata_jsonb={"allocation_id": str(allocation_id), "allocated_qty": _quantity_text(allocation.allocated_qty)},
+        metadata_jsonb={
+            "allocation_id": str(allocation_id),
+            "allocated_qty": _quantity_text(allocation.allocated_qty),
+            "command_id": str(allocation_command.id),
+            "idempotency_key_hash": key_hash,
+            "request_version": resulting_request_version,
+        },
+        created_at=now,
     ))
     append_audit_event(
         db, stream_key="material_request", actor_user_id=actor.user_id, action="material_request_allocation_created",
@@ -455,6 +527,36 @@ def _state_axes(request: MaterialRequest) -> dict[str, str]:
     axes = {"request_status": request.status}
     axes.update({name: getattr(request, name) for name in ("allocation_status", "reservation_status", "outbound_status", "shipment_status", "logistics_signature_status", "oam_receipt_status", "personal_inbound_status", "notification_status", "reconciliation_status")})
     return axes
+
+
+def _allocation_actor_assignment_id(actor: FormalPrincipal) -> uuid.UUID:
+    """Choose a stable active grant for the post-approval command fact.
+
+    Allocation authorization is evaluated by the route and the service
+    against the current principal.  The command table still requires the
+    exact role-assignment coordinate so the database can bind the immutable
+    version fact to an auditable authorization graph.  A principal may carry
+    more than one valid allocation grant; ordering by UUID keeps the result
+    deterministic without inventing a broader scope.
+    """
+
+    candidates = tuple(
+        sorted(
+            (
+                grant.assignment_id
+                for grant in actor.assignments
+                if grant.role_code in {"admin", "provincial_manager"}
+            ),
+            key=str,
+        )
+    )
+    if not candidates:
+        _fail(
+            "material_request_allocation_authorization_missing",
+            "forbidden",
+            "当前账号没有可记录分配命令的授权坐标",
+        )
+    return candidates[0]
 
 
 def _uuid(value: object, name: str) -> uuid.UUID:

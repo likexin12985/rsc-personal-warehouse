@@ -67,9 +67,10 @@ STOCKTAKE_POSTING_COMMAND_OUTCOMES_REVISION = "20260906_0065"
 STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
-HEAD_REVISION = STOCK_ALLOCATIONS_REVISION
+STOCK_RESERVATIONS_REVISION = "20260909_0069"
+HEAD_REVISION = STOCK_RESERVATIONS_REVISION
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
-RUNTIME_READY_HEAD_REVISION = STOCK_ALLOCATIONS_REVISION
+RUNTIME_READY_HEAD_REVISION = STOCK_RESERVATIONS_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
     {
         STOCKTAKE_POSTING_COMMAND_OUTCOMES_REVISION,
@@ -84,6 +85,8 @@ def _runtime_ready_revision(revision: str) -> str:
 
     if revision == RUNTIME_READY_HEAD_REVISION:
         return RUNTIME_READY_HEAD_REVISION
+    if revision == STOCK_ALLOCATIONS_REVISION:
+        return STOCK_ALLOCATIONS_REVISION
     if revision in RUNTIME_READY_STABLE_REVISIONS:
         return RUNTIME_READY_REVISION
     return revision
@@ -98,6 +101,7 @@ HARDENED_HEAD_REVISIONS = frozenset(
         STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
         STOCKTAKE_POSTING_SEAL_RACE_REVISION,
         STOCK_ALLOCATIONS_REVISION,
+        STOCK_RESERVATIONS_REVISION,
     }
 )
 FINALIZER_LOCK_REVISIONS = frozenset(
@@ -108,6 +112,7 @@ FINALIZER_LOCK_REVISIONS = frozenset(
         STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
         STOCKTAKE_POSTING_SEAL_RACE_REVISION,
         STOCK_ALLOCATIONS_REVISION,
+        STOCK_RESERVATIONS_REVISION,
     }
 )
 OPENING_BACKFILL_DATABASE_PREFIX = f"{DATABASE_NAME}_0052_backfill_"
@@ -264,6 +269,20 @@ NONOPENING_REVIEW_TERMINAL_STATUS_MIGRATION_0058 = (
     / "alembic"
     / "versions"
     / "20260905_0058_nonopening_review_terminal_status.py"
+)
+STOCK_ALLOCATIONS_MIGRATION_0068 = (
+    CLOUD_ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260908_0068_stock_allocations.py"
+)
+STOCK_RESERVATIONS_MIGRATION_0069 = (
+    CLOUD_ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260909_0069_stock_reservations.py"
 )
 STOCKTAKE_OBSERVATION_BODY_SHA256_0050 = (
     "06cf2fafa1d90f120fe4bba21cc1dc55dba70bd63f649671b4333a6159af06bb"
@@ -4749,6 +4768,7 @@ def _expected_0049_function_body_sha256(
                 STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
                 STOCKTAKE_POSTING_SEAL_RACE_REVISION,
                 STOCK_ALLOCATIONS_REVISION,
+                STOCK_RESERVATIONS_REVISION,
             }
         )
     assert expected_revision in (
@@ -4790,6 +4810,7 @@ def _expected_0049_function_body_sha256(
             STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
             STOCKTAKE_POSTING_SEAL_RACE_REVISION,
             STOCK_ALLOCATIONS_REVISION,
+            STOCK_RESERVATIONS_REVISION,
         }
         and signature == migration.ROUND_ASSIGNMENT_HELPER_0021_SIGNATURE
     ):
@@ -4808,7 +4829,8 @@ def _expected_0049_function_body_sha256(
                               STOCKTAKE_POSTING_COMMAND_OUTCOMES_REVISION,
                               STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
                               STOCKTAKE_POSTING_SEAL_RACE_REVISION,
-                              STOCK_ALLOCATIONS_REVISION}
+                              STOCK_ALLOCATIONS_REVISION,
+                              STOCK_RESERVATIONS_REVISION}
         and signature == migration.REVIEW_GRAPH_VALIDATOR_0032_SIGNATURE
     ):
         terminal_migration = (
@@ -4969,6 +4991,7 @@ def _assert_0049_recount_guard_catalog(
             STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
             STOCKTAKE_POSTING_SEAL_RACE_REVISION,
             STOCK_ALLOCATIONS_REVISION,
+            STOCK_RESERVATIONS_REVISION,
         }
     expected_function_rows = []
     for (
@@ -5542,6 +5565,7 @@ def _assert_0052_opening_terminal_catalog(
                             STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
                             STOCKTAKE_POSTING_SEAL_RACE_REVISION,
                             STOCK_ALLOCATIONS_REVISION,
+                            STOCK_RESERVATIONS_REVISION,
                         }
                         and row[0]
                         == dispatch_migration.GRAPH_CLOSURE_SIGNATURE
@@ -5565,6 +5589,7 @@ def _assert_0052_opening_terminal_catalog(
                             STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
                             STOCKTAKE_POSTING_SEAL_RACE_REVISION,
                             STOCK_ALLOCATIONS_REVISION,
+                            STOCK_RESERVATIONS_REVISION,
                         }
                         and row[0]
                         == history_migration.ROUND_SUBMISSION_SIGNATURE
@@ -7315,9 +7340,8 @@ def _load_stocktake_posting_command_outcomes_migration_0065():
 
 
 def _load_stock_allocations_migration_0068():
-    path = CLOUD_ROOT / "backend/alembic/versions/20260908_0068_stock_allocations.py"
     specification = importlib.util.spec_from_file_location(
-        "pg16_stock_allocations_0068", path
+        "pg16_stock_allocations_0068", STOCK_ALLOCATIONS_MIGRATION_0068
     )
     assert specification is not None and specification.loader is not None
     migration = importlib.util.module_from_spec(specification)
@@ -7327,8 +7351,20 @@ def _load_stock_allocations_migration_0068():
     return migration
 
 
+def _load_stock_reservations_migration_0069():
+    specification = importlib.util.spec_from_file_location(
+        "pg16_stock_reservations_0069", STOCK_RESERVATIONS_MIGRATION_0069
+    )
+    assert specification is not None and specification.loader is not None
+    migration = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(migration)
+    assert migration.revision == STOCK_RESERVATIONS_REVISION
+    assert migration.down_revision == STOCK_ALLOCATIONS_REVISION
+    return migration
+
+
 def _head_runtime_ready_hash() -> str:
-    return _load_stock_allocations_migration_0068().RUNTIME_READY_BODY_SHA256_0068
+    return _load_stock_reservations_migration_0069().RUNTIME_READY_BODY_SHA256_0069
 
 
 def _assert_0058_review_terminal_catalog_state(

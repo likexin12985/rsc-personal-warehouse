@@ -569,7 +569,20 @@ OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0068 = {
     ),
 }
 
-OAM_SYNC_FUNCTION_MANIFEST = OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0068
+# 0069 adds reservation facts and advances the migration-owned readiness
+# marker.  The OAM sync function itself is unchanged; only its exact source
+# revision coordinate moves forward.
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0069 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0068,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0068[
+            "rsc_oam_runtime_binding_ready_0044()"
+        ][:6],
+        "eee63dbc90cfe728d461f43c0ef824840fa20078723cf58776debb4750373e36",
+    ),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST = OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0069
 
 EXPECTED_TRIGGERS = (
     (
@@ -1032,6 +1045,7 @@ __all__ = [
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0063",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0068",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0069",
     "RLS_REVISION",
     "RLS_TABLES",
     "_RLS_BOUNDARY_SQL",

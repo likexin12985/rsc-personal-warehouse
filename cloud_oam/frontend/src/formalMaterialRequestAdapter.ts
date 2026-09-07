@@ -3,6 +3,7 @@ import { formalMaterialCatalogQuery } from "./formalMaterialCatalog";
 import { validateMaterialRequestWorkOrderOptionQuery } from "./formalMaterialRequestOptions";
 import { validateMaterialRequestAllocationOptionPage, type MaterialRequestAllocationOptionPage } from "./formalMaterialRequestAllocationOptions";
 import { validateMaterialRequestAllocationCommandStatus, validateMaterialRequestAllocationMutationResult, type MaterialRequestAllocationCommandStatus, type MaterialRequestAllocationMutationResult } from "./formalMaterialRequestAllocationCommandStatus";
+import { validateMaterialRequestReservationCommandStatus, validateMaterialRequestReservationMutationResult, type MaterialRequestReservationCommandStatus, type MaterialRequestReservationMutationResult } from "./formalMaterialRequestReservationCommandStatus";
 import { validateSupplyCreateInput, validateSupplyUpdateInput } from "./formalMaterialRequestSupply";
 import {
   MATERIAL_REQUEST_SCHEMA_VERSION,
@@ -71,6 +72,16 @@ export type MaterialRequestAllocationCreateInput = Readonly<{
   serial_ids: readonly string[];
 }>;
 
+export type MaterialRequestReservationCreateInput = Readonly<{
+  expected_request_version: number;
+  request_line_id: string;
+  allocation_id: string;
+  reserved_qty: string;
+  source_balance_version: number;
+  source_ledger_cursor: number;
+  serial_ids: readonly string[];
+}>;
+
 export interface FormalMaterialRequestAdapter {
   loadIdentity(): Promise<unknown>;
   loadAccess(): Promise<unknown>;
@@ -78,6 +89,8 @@ export interface FormalMaterialRequestAdapter {
   supplyCommandStatus(xRequestId: string): Promise<unknown>;
   allocationCommandStatus(xRequestId: string): Promise<MaterialRequestAllocationCommandStatus>;
   allocationCommandStatusNoReplay?(xRequestId: string): Promise<MaterialRequestAllocationCommandStatus>;
+  reservationCommandStatus?(xRequestId: string): Promise<MaterialRequestReservationCommandStatus>;
+  reservationCommandStatusNoReplay?(xRequestId: string): Promise<MaterialRequestReservationCommandStatus>;
   loadIdentityNoReplay?(): Promise<unknown>;
   loadAccessNoReplay?(): Promise<unknown>;
   detailNoReplay?(requestId: string): Promise<unknown>;
@@ -93,6 +106,11 @@ export interface FormalMaterialRequestAdapter {
     input: MaterialRequestAllocationCreateInput,
     headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>,
   ): Promise<MaterialRequestAllocationMutationResult>;
+  createReservation?(
+    requestId: string,
+    input: MaterialRequestReservationCreateInput,
+    headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>,
+  ): Promise<MaterialRequestReservationMutationResult>;
   createDraft(intent: MaterialRequestCreateIntent): Promise<unknown>;
   mutate(intent: MaterialRequestMutationIntent): Promise<unknown>;
 }
@@ -691,6 +709,21 @@ export function createFormalMaterialRequestAdapter(
         },
       }).then(validateMaterialRequestAllocationCommandStatus);
     },
+    reservationCommandStatus(xRequestId: string) {
+      const checked = requiredText(xRequestId, "X-Request-ID");
+      if (!SAFE_COORDINATE.test(checked)) return Promise.reject(new ApiError(409, "预约命令查询坐标无效"));
+      return requester<unknown>("/v1/material-request-reservation-command-status", {
+        method: "GET", cache: "no-store", headers: { "X-Request-ID": checked, "Cache-Control": "no-store", Pragma: "no-cache" },
+      }).then(validateMaterialRequestReservationCommandStatus);
+    },
+    reservationCommandStatusNoReplay(xRequestId: string) {
+      const checked = requiredText(xRequestId, "X-Request-ID");
+      if (!SAFE_COORDINATE.test(checked)) return Promise.reject(new ApiError(409, "预约命令查询坐标无效"));
+      const read = requireNoReplayRequester();
+      return read<unknown>("/v1/material-request-reservation-command-status", {
+        method: "GET", cache: "no-store", headers: { "X-Request-ID": checked, "Cache-Control": "no-store", Pragma: "no-cache" },
+      }).then(validateMaterialRequestReservationCommandStatus);
+    },
     list(afterId: string | null) {
       const suffix = afterId === null
         ? ""
@@ -795,6 +828,20 @@ export function createFormalMaterialRequestAdapter(
           serial_ids: serialIds,
         }),
       }).then(validateMaterialRequestAllocationMutationResult);
+    },
+    createReservation(requestId: string, input: MaterialRequestReservationCreateInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
+      const checkedRequestId = requiredUuid(requestId, "request_id");
+      const body = exactObject(input, ["expected_request_version", "request_line_id", "allocation_id", "reserved_qty", "source_balance_version", "source_ledger_cursor", "serial_ids"], "预约写内容");
+      if (!Number.isSafeInteger(body.expected_request_version) || (body.expected_request_version as number) < 0) return Promise.reject(new ApiError(409, "预约需求版本无效"));
+      requiredUuid(body.request_line_id, "request_line_id"); requiredUuid(body.allocation_id, "allocation_id");
+      if (typeof body.reserved_qty !== "string" || !DECIMAL.test(body.reserved_qty) || /^0(?:\.0{1,3})?$/.test(body.reserved_qty)) return Promise.reject(new ApiError(409, "预约数量无效"));
+      for (const field of ["source_balance_version", "source_ledger_cursor"] as const) if (!Number.isSafeInteger(body[field]) || (body[field] as number) < 0) return Promise.reject(new ApiError(409, "货源投影坐标无效"));
+      if (!Array.isArray(body.serial_ids) || body.serial_ids.length > 1000) return Promise.reject(new ApiError(409, "预约串码内容无效"));
+      const serialIds = body.serial_ids.map((serialId) => requiredUuid(serialId, "serial_id"));
+      if (new Set(serialIds).size !== serialIds.length) return Promise.reject(new ApiError(409, "预约串码不能重复"));
+      const checkedHeaders = validateWriteHeaders(headers, headers["Idempotency-Key"]);
+      const write = requireNoReplayRequester();
+      return write<unknown>(`/v1/material-requests/${checkedRequestId}/reservations`, { method: "POST", headers: checkedHeaders, ...jsonBody({ expected_request_version: body.expected_request_version, request_line_id: requiredUuid(body.request_line_id, "request_line_id"), allocation_id: requiredUuid(body.allocation_id, "allocation_id"), reserved_qty: body.reserved_qty, source_balance_version: body.source_balance_version, source_ledger_cursor: body.source_ledger_cursor, serial_ids: serialIds }) }).then(validateMaterialRequestReservationMutationResult);
     },
     createDraft(intent: MaterialRequestCreateIntent) {
       const object = exactObject(intent, [
