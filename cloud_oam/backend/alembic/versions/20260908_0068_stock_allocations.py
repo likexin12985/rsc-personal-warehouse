@@ -20,6 +20,18 @@ depends_on: str | None = None
 MIGRATION_ROLE = "star_oam_migrator"
 PRODUCTION_API_ROLE = "star_oam_api"
 TABLES = ("stock_allocations", "stock_allocation_serials")
+RUNTIME_READY_SIGNATURE = "public.rsc_oam_runtime_binding_ready_0044()"
+RUNTIME_READY_PREVIOUS_REVISION = "20260906_0063"
+RUNTIME_READY_BODY_SHA256_0063 = (
+    "dd43dabe3a816b44b888b4cda1fdcbc84eeefef8b659323b031fb80a55c82cc4"
+)
+# This is the SHA256 of pg_proc.prosrc after the single, exact revision
+# replacement 20260906_0063 -> 20260908_0068.  Keep it beside the catalog
+# verifier so a readiness edit cannot silently drift in production.
+RUNTIME_READY_BODY_SHA256_0068 = (
+    "b248454938a77c33684cc39652d8d709abfb3408d4a96d19036010fb0730292f"
+)
+CATALOG_ERROR = "0068 stock allocation catalog mismatch"
 
 
 def _dialect_name() -> str:
@@ -32,10 +44,8 @@ def _dialect_name() -> str:
 def upgrade() -> None:
     dialect = _dialect_name()
     if dialect == "postgresql":
-        op.execute(
-            "LOCK TABLE public.material_requests, public.material_request_lines, "
-            "public.stock_accounts, public.inventory_serials IN SHARE MODE"
-        )
+        _lock_postgresql_upgrade_boundary()
+        _verify_runtime_ready(RUNTIME_READY_BODY_SHA256_0063)
     op.create_table(
         "stock_allocations",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -94,16 +104,32 @@ def upgrade() -> None:
         op.execute(
             f"GRANT UPDATE (allocation_status) ON TABLE public.material_requests TO {PRODUCTION_API_ROLE}"
         )
+        _replace_runtime_ready(
+            expected_hash=RUNTIME_READY_BODY_SHA256_0063,
+            replacement_hash=RUNTIME_READY_BODY_SHA256_0068,
+            old_revision=RUNTIME_READY_PREVIOUS_REVISION,
+            new_revision=revision,
+        )
+        _verify_runtime_ready(RUNTIME_READY_BODY_SHA256_0068)
 
 
 def downgrade() -> None:
     dialect = _dialect_name()
     if not context.is_offline_mode():
+        if dialect == "postgresql":
+            _lock_postgresql_downgrade_boundary()
         bind = op.get_bind()
         if any(bind.execute(sa.text(f"SELECT EXISTS (SELECT 1 FROM {table})" )).scalar() for table in TABLES):
             raise RuntimeError("cannot downgrade 0068 while allocation facts exist")
     if dialect == "postgresql":
-        op.execute("LOCK TABLE public.stock_allocation_serials, public.stock_allocations IN ACCESS EXCLUSIVE MODE")
+        _verify_runtime_ready(RUNTIME_READY_BODY_SHA256_0068)
+        _replace_runtime_ready(
+            expected_hash=RUNTIME_READY_BODY_SHA256_0068,
+            replacement_hash=RUNTIME_READY_BODY_SHA256_0063,
+            old_revision=revision,
+            new_revision=RUNTIME_READY_PREVIOUS_REVISION,
+        )
+        _verify_runtime_ready(RUNTIME_READY_BODY_SHA256_0063)
         op.execute(
             f"REVOKE UPDATE (allocation_status) ON TABLE public.material_requests FROM {PRODUCTION_API_ROLE}"
         )
@@ -111,3 +137,146 @@ def downgrade() -> None:
     op.drop_index("ix_stock_allocations_source_account", table_name="stock_allocations")
     op.drop_index("ix_stock_allocations_request_line", table_name="stock_allocations")
     op.drop_table("stock_allocations")
+
+
+def _lock_postgresql_upgrade_boundary() -> None:
+    op.execute(
+        "LOCK TABLE public.alembic_version, public.material_requests, "
+        "public.material_request_lines, public.stock_accounts, "
+        "public.inventory_serials IN ACCESS EXCLUSIVE MODE"
+    )
+
+
+def _lock_postgresql_downgrade_boundary() -> None:
+    op.execute(
+        "LOCK TABLE public.alembic_version, public.stock_allocation_serials, "
+        "public.stock_allocations IN ACCESS EXCLUSIVE MODE"
+    )
+
+
+def _verify_runtime_ready(expected_hash: str) -> None:
+    if expected_hash not in {
+        RUNTIME_READY_BODY_SHA256_0063,
+        RUNTIME_READY_BODY_SHA256_0068,
+    }:
+        raise ValueError("unsupported 0068 readiness hash")
+    op.execute(
+        f"""
+DO $rsc_0068_readiness$
+DECLARE
+    function_oid oid := pg_catalog.to_regprocedure('{RUNTIME_READY_SIGNATURE}');
+    migrator_oid oid := pg_catalog.to_regrole('{MIGRATION_ROLE}');
+BEGIN
+    IF current_user <> '{MIGRATION_ROLE}' OR session_user <> '{MIGRATION_ROLE}'
+       OR function_oid IS NULL OR migrator_oid IS NULL
+       OR NOT EXISTS (
+           SELECT 1 FROM pg_catalog.pg_proc AS function_row
+            WHERE function_row.oid = function_oid
+              AND function_row.proowner = migrator_oid
+              AND function_row.prokind = 'f'
+              AND function_row.pronargs = 0
+              AND function_row.prorettype = 'boolean'::pg_catalog.regtype
+              AND function_row.proretset = false
+              AND function_row.proargmodes IS NULL
+              AND function_row.pronargdefaults = 0
+              AND function_row.provariadic = 0
+              AND function_row.proparallel = 'u'
+              AND function_row.provolatile = 's'
+              AND function_row.prosecdef
+              AND NOT function_row.proisstrict
+              AND NOT function_row.proleakproof
+              AND EXISTS (
+                  SELECT 1 FROM pg_catalog.pg_language AS language_row
+                   WHERE language_row.oid = function_row.prolang
+                     AND language_row.lanname = 'sql'
+              )
+              AND function_row.proconfig = ARRAY['search_path=pg_catalog']::text[]
+       )
+       OR (SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+               function_row.prosrc, 'UTF8')), 'hex')
+             FROM pg_catalog.pg_proc AS function_row
+            WHERE function_row.oid = function_oid)
+          IS DISTINCT FROM '{expected_hash}' THEN
+        RAISE EXCEPTION '{CATALOG_ERROR}: readiness function identity or hash mismatch';
+    END IF;
+END
+$rsc_0068_readiness$
+"""
+    )
+
+
+def _replace_runtime_ready(
+    *, expected_hash: str, replacement_hash: str,
+    old_revision: str, new_revision: str,
+) -> None:
+    if (expected_hash, replacement_hash, old_revision, new_revision) not in {
+        (
+            RUNTIME_READY_BODY_SHA256_0063,
+            RUNTIME_READY_BODY_SHA256_0068,
+            RUNTIME_READY_PREVIOUS_REVISION,
+            revision,
+        ),
+        (
+            RUNTIME_READY_BODY_SHA256_0068,
+            RUNTIME_READY_BODY_SHA256_0063,
+            revision,
+            RUNTIME_READY_PREVIOUS_REVISION,
+        ),
+    }:
+        raise ValueError("unsupported 0068 readiness replacement")
+    op.execute(
+        f"""
+DO $rsc_0068_replace_readiness$
+DECLARE
+    function_oid oid := pg_catalog.to_regprocedure('{RUNTIME_READY_SIGNATURE}');
+    original_owner oid;
+    original_acl aclitem[];
+    original_security boolean;
+    original_config text[];
+    function_source text;
+    function_definition text;
+BEGIN
+    SELECT function_row.proowner, function_row.proacl, function_row.prosecdef,
+           function_row.proconfig, function_row.prosrc,
+           pg_catalog.pg_get_functiondef(function_row.oid)
+      INTO original_owner, original_acl, original_security, original_config,
+           function_source, function_definition
+      FROM pg_catalog.pg_proc AS function_row
+     WHERE function_row.oid = function_oid
+       AND pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+             function_row.prosrc, 'UTF8')), 'hex') = '{expected_hash}';
+    IF current_user <> '{MIGRATION_ROLE}' OR session_user <> '{MIGRATION_ROLE}'
+       OR function_source IS NULL
+       OR (pg_catalog.length(function_source) - pg_catalog.length(
+           pg_catalog.replace(function_source, '{old_revision}', ''))) /
+           pg_catalog.length('{old_revision}') <> 1
+       OR pg_catalog.strpos(function_source, '{new_revision}') <> 0 THEN
+        RAISE EXCEPTION '{CATALOG_ERROR}: readiness source mismatch';
+    END IF;
+    EXECUTE pg_catalog.replace(function_definition, '{old_revision}', '{new_revision}');
+    IF pg_catalog.to_regprocedure('{RUNTIME_READY_SIGNATURE}') IS DISTINCT FROM function_oid
+       OR (SELECT function_row.proowner IS DISTINCT FROM original_owner
+                  OR function_row.proacl IS DISTINCT FROM original_acl
+                  OR function_row.prosecdef IS DISTINCT FROM original_security
+                  OR function_row.proconfig IS DISTINCT FROM original_config
+                  OR pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+                         function_row.prosrc, 'UTF8')), 'hex')
+                     IS DISTINCT FROM '{replacement_hash}'
+             FROM pg_catalog.pg_proc AS function_row
+            WHERE function_row.oid = function_oid) THEN
+        RAISE EXCEPTION '{CATALOG_ERROR}: readiness replacement drift';
+    END IF;
+END
+$rsc_0068_replace_readiness$
+"""
+    )
+
+
+__all__ = [
+    "CATALOG_ERROR",
+    "RUNTIME_READY_BODY_SHA256_0063",
+    "RUNTIME_READY_BODY_SHA256_0068",
+    "RUNTIME_READY_PREVIOUS_REVISION",
+    "RUNTIME_READY_SIGNATURE",
+    "TABLES",
+]

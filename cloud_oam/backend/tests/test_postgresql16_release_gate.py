@@ -69,12 +69,12 @@ STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 HEAD_REVISION = STOCK_ALLOCATIONS_REVISION
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
+RUNTIME_READY_HEAD_REVISION = STOCK_ALLOCATIONS_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
     {
         STOCKTAKE_POSTING_COMMAND_OUTCOMES_REVISION,
         STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
         STOCKTAKE_POSTING_SEAL_RACE_REVISION,
-        STOCK_ALLOCATIONS_REVISION,
     }
 )
 
@@ -82,6 +82,8 @@ RUNTIME_READY_STABLE_REVISIONS = frozenset(
 def _runtime_ready_revision(revision: str) -> str:
     """Return the revision embedded in readiness at a schema state."""
 
+    if revision == RUNTIME_READY_HEAD_REVISION:
+        return RUNTIME_READY_HEAD_REVISION
     if revision in RUNTIME_READY_STABLE_REVISIONS:
         return RUNTIME_READY_REVISION
     return revision
@@ -7299,8 +7301,21 @@ def _load_stocktake_review_command_status_migration_0063():
     return migration
 
 
+def _load_stock_allocations_migration_0068():
+    path = CLOUD_ROOT / "backend/alembic/versions/20260908_0068_stock_allocations.py"
+    specification = importlib.util.spec_from_file_location(
+        "pg16_stock_allocations_0068", path
+    )
+    assert specification is not None and specification.loader is not None
+    migration = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(migration)
+    assert migration.revision == STOCK_ALLOCATIONS_REVISION
+    assert migration.down_revision == STOCKTAKE_POSTING_SEAL_RACE_REVISION
+    return migration
+
+
 def _head_runtime_ready_hash() -> str:
-    return _load_stocktake_review_command_status_migration_0063().RUNTIME_READY_BODY_SHA256_0063
+    return _load_stock_allocations_migration_0068().RUNTIME_READY_BODY_SHA256_0068
 
 
 def _assert_0058_review_terminal_catalog_state(
@@ -7394,9 +7409,12 @@ def _assert_0058_review_terminal_catalog_state(
         _head_runtime_ready_hash()
         if fixed else migration.RUNTIME_READY_BODY_SHA256_0057
     )
-    assert readiness[17].count(
-        STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION if fixed else migration.down_revision
-    ) == 1
+    expected_readiness_revision = (
+        _runtime_ready_revision(str(state["revision"]))
+        if fixed
+        else migration.down_revision
+    )
+    assert readiness[17].count(expected_readiness_revision) == 1
 
     expected_triggers = tuple(
         (
@@ -7746,7 +7764,7 @@ def _assert_0057_empty_graph_downgrade_and_reupgrade() -> None:
     _assert_0057_difference_replay_catalog_state(
         head_state,
         expected_readiness_hash=_head_runtime_ready_hash(),
-        expected_revision=STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION,
+        expected_revision=HEAD_REVISION,
     )
 
     _run_alembic("downgrade", NONOPENING_DIFFERENCE_REPLAY_LOCK_REVISION)
@@ -7795,7 +7813,7 @@ def _assert_0057_empty_graph_downgrade_and_reupgrade() -> None:
     _assert_0057_difference_replay_catalog_state(
         final_state,
         expected_readiness_hash=_head_runtime_ready_hash(),
-        expected_revision=STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION,
+        expected_revision=HEAD_REVISION,
     )
     assert final_state["functions"] == reupgraded["functions"]
     assert final_state["acls"] == reupgraded["acls"]
@@ -20166,7 +20184,7 @@ def _assert_0063_empty_review_command_downgrade_and_reupgrade() -> None:
     )
     assert before["function"][11] == migration.TRIGGER_BODY_SHA256
     assert before["trigger"][0:3] == ("A", 23, True)
-    assert before["readiness_hash"] == migration.RUNTIME_READY_BODY_SHA256_0063
+    assert before["readiness_hash"] == _head_runtime_ready_hash()
 
     _run_alembic("downgrade", STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION)
     assert _current_revision() == STOCKTAKE_FINALIZER_ORGANIZATION_LOCK_REVISION

@@ -556,7 +556,20 @@ OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0063 = {
     ),
 }
 
-OAM_SYNC_FUNCTION_MANIFEST = OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0063
+# 0065-0067 add append-only stocktake capabilities without changing the
+# readiness function.  0068 creates the first allocation facts and advances
+# the migration-owned readiness marker atomically with those tables.
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0068 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0063,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0063[
+            "rsc_oam_runtime_binding_ready_0044()"
+        ][:6],
+        "b248454938a77c33684cc39652d8d709abfb3408d4a96d19036010fb0730292f",
+    ),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST = OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0068
 
 EXPECTED_TRIGGERS = (
     (
@@ -1018,6 +1031,7 @@ __all__ = [
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0062",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0063",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0068",
     "RLS_REVISION",
     "RLS_TABLES",
     "_RLS_BOUNDARY_SQL",
