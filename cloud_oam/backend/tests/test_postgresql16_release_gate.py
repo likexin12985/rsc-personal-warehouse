@@ -19791,8 +19791,13 @@ def _assert_0063_rejects_nonempty_review_downgrade() -> None:
         with migrator_engine.begin() as connection:
             migration.context.is_offline_mode = lambda: False
             migration.op = Operations(MigrationContext.configure(connection))
+            # Alembic wraps a PL/pgSQL RAISE in SQLAlchemy's DBAPI error
+            # hierarchy when the reviewed primitive is invoked directly.
+            # Keep accepting the plain RuntimeError used by the SQLite
+            # implementation while asserting the exact blocker text.
             with pytest.raises(
-                RuntimeError, match=re.escape(migration.DOWNGRADE_BLOCKER)
+                (RuntimeError, DBAPIError),
+                match=re.escape(migration.DOWNGRADE_BLOCKER),
             ):
                 migration.downgrade()
     finally:
