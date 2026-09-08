@@ -4,6 +4,7 @@ import uuid
 from sqlalchemy import select
 from ..demand_models import MaterialRequest
 from ..inventory_models import InboundOrder, Receipt, Shipment, ShipmentLine, OutboundPosting, StockAccount
+from .inventory_posting import InventoryMovementCommand, InventoryPostingCommand
 from .audit_chain import append_audit_event
 
 class InboundError(Exception):
@@ -50,3 +51,21 @@ def resolve_personal_target_account(db, *, receipt_id, target_location_id, targe
     ).limit(2)).all())
     if len(rows) != 1: _fail("personal_target_missing", "precondition_failed", "个人仓目标账户不存在或不唯一")
     return rows[0]
+
+def build_inbound_posting_command(db, *, inbound_order, receipt_line_id, target_account):
+    """Build, but do not post, one accepted receipt line as an inbound movement."""
+    from ..inventory_models import ReceiptLine, ReceiptSerial
+    line = db.get(ReceiptLine, receipt_line_id)
+    if line is None: _fail("receipt_line_not_found", "not_found", "收货明细不存在")
+    if line.receipt_id != inbound_order.receipt_id or line.accepted_qty <= 0:
+        _fail("receipt_line_invalid", "precondition_failed", "收货明细未形成可入账数量")
+    shipment_line = db.get(ShipmentLine, line.shipment_line_id)
+    posting = db.get(OutboundPosting, shipment_line.outbound_posting_id) if shipment_line else None
+    if posting is None: _fail("shipment_line_invalid", "conflict", "收货明细缺少原发运事实")
+    serial_ids = tuple(db.scalars(select(ReceiptSerial.serial_id).where(ReceiptSerial.receipt_line_id == line.id, ReceiptSerial.accepted.is_(True))).all())
+    return InventoryPostingCommand(
+        transaction_no=f"INV-IN-{inbound_order.id.hex[:16].upper()}", movement_type="inbound",
+        source_document_type="personal_inbound", source_document_id=str(inbound_order.id),
+        posting_key=f"personal-inbound:{inbound_order.id}:{line.id}", effective_at=inbound_order.created_at,
+        movements=(InventoryMovementCommand(from_account_id=posting.target_stock_account_id, to_account_id=target_account.id, quantity=line.accepted_qty, serial_ids=serial_ids, external_boundary_code=None),),
+    )
