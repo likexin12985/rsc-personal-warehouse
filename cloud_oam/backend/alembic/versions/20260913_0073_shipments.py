@@ -21,6 +21,7 @@ def _immutable_trigger(table, dialect):
     op.execute(f"""CREATE OR REPLACE FUNCTION public.rsc_guard_{table}_immutable_0073() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 BEGIN RAISE EXCEPTION '0073 shipment facts are append-only' USING ERRCODE='55000'; END $$""")
+    op.execute(f"REVOKE ALL ON FUNCTION public.rsc_guard_{table}_immutable_0073() FROM PUBLIC, star_oam_api")
     op.execute(f"CREATE TRIGGER {name} BEFORE UPDATE OR DELETE ON public.{table} FOR EACH ROW EXECUTE FUNCTION public.rsc_guard_{table}_immutable_0073()")
     op.execute(f"ALTER TABLE public.{table} ENABLE ALWAYS TRIGGER {name}")
 
