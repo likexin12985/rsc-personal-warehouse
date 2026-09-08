@@ -4,7 +4,7 @@ from decimal import Decimal
 import hashlib, hmac, json, uuid
 from sqlalchemy import func, select
 from ..demand_models import MaterialRequest
-from ..inventory_models import Shipment, ShipmentLine, ShipmentSerial, OutboundPosting, Receipt, ReceiptLine, ReceiptSerial
+from ..inventory_models import Shipment, ShipmentLine, ShipmentSerial, OutboundPosting, Receipt, ReceiptLine, ReceiptSerial, ReceiptException
 from .audit_chain import append_audit_event
 from . import material_request_outbound as outbound
 
@@ -49,7 +49,10 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
     receipt = Receipt(id=uuid.uuid4(), receipt_no=f"RCT-{now:%Y%m%d}-{uuid.uuid4().hex[:12].upper()}", shipment_id=shipment_id, status="accepted" if all(Decimal(x.accepted_qty) > 0 and Decimal(x.rejected_qty) == 0 for _, x, _, _ in checked) else "exception", received_at=when, receiver_person_id=receiver_person_id, request_hash=payload_hash, idempotency_key_hash=key_hash, created_at=now)
     db.add(receipt); db.flush(); output = []
     for shipment_line, line, total, serials in checked:
-        row = ReceiptLine(id=uuid.uuid4(), receipt_id=receipt.id, shipment_line_id=shipment_line.id, accepted_qty=line.accepted_qty, rejected_qty=line.rejected_qty, condition=line.condition, created_at=now); db.add(row); db.flush(); db.add_all(ReceiptSerial(receipt_line_id=row.id, serial_id=s, accepted=s in serials) for s in serials); output.append({"receipt_line_id": row.id, "shipment_line_id": row.shipment_line_id, "accepted_qty": _qty(row.accepted_qty), "rejected_qty": _qty(row.rejected_qty), "serial_ids": tuple(serials)})
+        row = ReceiptLine(id=uuid.uuid4(), receipt_id=receipt.id, shipment_line_id=shipment_line.id, accepted_qty=line.accepted_qty, rejected_qty=line.rejected_qty, condition=line.condition, created_at=now); db.add(row); db.flush(); db.add_all(ReceiptSerial(receipt_line_id=row.id, serial_id=s, accepted=s in serials) for s in serials)
+        if Decimal(line.rejected_qty) > 0 or line.condition != "normal":
+            db.add(ReceiptException(id=uuid.uuid4(), receipt_id=receipt.id, receipt_line_id=row.id, exception_type=line.condition, detail=f"验收条件={line.condition};拒收数量={_qty(line.rejected_qty)}", evidence_file_id=None, created_at=now))
+        output.append({"receipt_line_id": row.id, "shipment_line_id": row.shipment_line_id, "accepted_qty": _qty(row.accepted_qty), "rejected_qty": _qty(row.rejected_qty), "serial_ids": tuple(serials)})
     append_audit_event(db, stream_key="material_request", actor_user_id=actor.user_id, action="receipt_registered", aggregate_type="receipt", aggregate_id=str(receipt.id), before_jsonb={}, after_jsonb={"request_id": str(request_id), "receipt_no": receipt.receipt_no}, request_id=trace_request_id, occurred_at=now, created_at=now)
     return _result(db, receipt, replayed=False, lines=output)
 
