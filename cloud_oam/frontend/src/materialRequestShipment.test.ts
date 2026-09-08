@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateShipmentInput, validateShipmentResult, validateInboundOrderResult, validateInboundPostingResult, validateLogisticsEventResult } from "./materialRequestShipment";
+import { validateShipmentInput, validateShipmentResult, validateInboundOrderResult, validateInboundPostingResult, validateLogisticsEventResult, validateReceiptInput, validateReceiptResult } from "./materialRequestShipment";
 const id=(n:number)=>`11111111-1111-1111-1111-${n.toString().padStart(12,"0")}`;
 describe("shipment contract",()=>{
  it("accepts strict package input",()=>{const x=validateShipmentInput({expected_request_version:3,target_location_id:id(1),target_person_id:null,carrier:"人工承运",tracking_no:"SF-1",shipped_at:"2026-09-09T10:00:00+08:00",lines:[{outbound_posting_id:id(2),shipped_qty:"1.000",serial_ids:[]}]});expect(x.lines[0].shipped_qty).toBe("1.000")});
@@ -12,4 +12,8 @@ describe("personal inbound contract",()=>{
 describe("logistics event contract",()=>{
  it("accepts a signed event and preserves nullable evidence",()=>{const x=validateLogisticsEventResult({schema_version:"1.0",event_id:id(8),shipment_id:id(9),event_type:"signed",event_at:"2026-09-09T10:00:00Z",source:"carrier",evidence_file_id:null,external_ref:"SF-1",idempotency_replayed:false});expect(x.event_type).toBe("signed");expect(x.evidence_file_id).toBeNull()});
  it("rejects unsupported event types",()=>{expect(()=>validateLogisticsEventResult({schema_version:"1.0",event_id:id(8),shipment_id:id(9),event_type:"received",event_at:"2026-09-09T10:00:00Z",source:"carrier",evidence_file_id:null,external_ref:null,idempotency_replayed:false})).toThrow()});
+});
+describe("receipt contract",()=>{
+ it("accepts strict receipt input and response",()=>{const x=validateReceiptInput({expected_request_version:2,receiver_person_id:id(10),received_at:"2026-09-09T10:00:00Z",lines:[{shipment_line_id:id(11),accepted_qty:"1.000",rejected_qty:"0.000",condition:"normal",serial_ids:[]}]});expect(x.lines[0].condition).toBe("normal");const y=validateReceiptResult({schema_version:"1.0",receipt_id:id(12),receipt_no:"RCT-1",shipment_id:id(13),status:"accepted",lines:[],idempotency_replayed:false});expect(y.status).toBe("accepted")});
+ it("rejects receipt response extras",()=>{expect(()=>validateReceiptResult({schema_version:"1.0",receipt_id:id(12),receipt_no:"RCT-1",shipment_id:id(13),status:"accepted",lines:[],idempotency_replayed:false,extra:true})).toThrow()});
 });

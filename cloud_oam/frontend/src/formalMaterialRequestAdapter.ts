@@ -5,7 +5,7 @@ import { validateMaterialRequestAllocationOptionPage, type MaterialRequestAlloca
 import { validateMaterialRequestAllocationCommandStatus, validateMaterialRequestAllocationMutationResult, type MaterialRequestAllocationCommandStatus, type MaterialRequestAllocationMutationResult } from "./formalMaterialRequestAllocationCommandStatus";
 import { validateMaterialRequestReservationCommandStatus, validateMaterialRequestReservationMutationResult, type MaterialRequestReservationCommandStatus, type MaterialRequestReservationMutationResult } from "./formalMaterialRequestReservationCommandStatus";
 import { type PickInput, type PickPage, type PickResult, validatePickInput, validatePickPage, validatePickResult, validatePickStatus } from "./materialRequestReservationPick";
-import { type ShipmentInput, type ShipmentResult, type ShipmentOptions, type InboundOrderInput, type InboundOrderResult, type InboundPostingResult, type LogisticsEventResult, type LogisticsEventInput, validateShipmentInput, validateShipmentResult, validateShipmentOptions, validateInboundOrderResult, validateInboundPostingResult, validateLogisticsEventResult, validateLogisticsEventInput } from "./materialRequestShipment";
+import { type ShipmentInput, type ShipmentResult, type ShipmentOptions, type InboundOrderInput, type InboundOrderResult, type InboundPostingResult, type LogisticsEventResult, type LogisticsEventInput, type ReceiptInput, type ReceiptResult, validateShipmentInput, validateShipmentResult, validateShipmentOptions, validateInboundOrderResult, validateInboundPostingResult, validateLogisticsEventResult, validateLogisticsEventInput, validateReceiptInput, validateReceiptResult } from "./materialRequestShipment";
 import { type OutboundInput, type OutboundPage, type OutboundResult, validateOutboundInput, validateOutboundPage, validateOutboundResult, validateOutboundStatus } from "./materialRequestOutbound";
 import { type ReleaseInput, type ReleasePage, type ReleaseResult, validateReleaseInput, validateReleasePage, validateReleaseResult, validateReleaseStatus } from "./materialRequestReservationRelease";
 import { validateMaterialRequestReservationOptionPage, type MaterialRequestReservationOptionPage } from "./formalMaterialRequestReservationOptions";
@@ -107,6 +107,7 @@ export interface FormalMaterialRequestAdapter {
   listShipments?(requestId: string): Promise<readonly ShipmentResult[]>;
   listLogisticsEvents?(requestId: string, shipmentId: string): Promise<readonly LogisticsEventResult[]>;
   createLogisticsEvent?(requestId: string, shipmentId: string, input: LogisticsEventInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<LogisticsEventResult>;
+  createReceipt?(requestId: string, input: ReceiptInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ReceiptResult>;
   listShipmentOptions?(requestId: string): Promise<ShipmentOptions>;
   createShipment?(requestId: string, input: ShipmentInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ShipmentResult>;
   createInboundOrder?(requestId: string, input: InboundOrderInput, headers: Readonly<{ "X-Request-ID": string }>): Promise<InboundOrderResult>;
@@ -901,6 +902,10 @@ export function createFormalMaterialRequestAdapter(
     createLogisticsEvent(requestId: string, shipmentId: string, input: LogisticsEventInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
       const body = validateLogisticsEventInput(input); const checked = validateWriteHeaders(headers, headers["Idempotency-Key"]);
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipments/${requiredUuid(shipmentId, "shipment_id")}/logistics-events`, { method: "POST", headers: checked, ...jsonBody(body) }).then(validateLogisticsEventResult);
+    },
+    createReceipt(requestId: string, input: ReceiptInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
+      const body = validateReceiptInput(input); const checked = validateWriteHeaders(headers, headers["Idempotency-Key"]);
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/receipts`, { method: "POST", headers: checked, ...jsonBody(body) }).then(validateReceiptResult);
     },
     listShipmentOptions(requestId: string) {
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipment-options`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(validateShipmentOptions);
