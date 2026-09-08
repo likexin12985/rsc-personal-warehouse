@@ -9,6 +9,7 @@ class ReceiptLineIn(BaseModel):
     rejected_qty: Decimal = Field(ge=0)
     condition: str = Field(min_length=1, max_length=32)
     serial_ids: tuple[UUID, ...] = Field(default=(), max_length=1000)
+    exception_evidence_file_id: UUID | None = None
     @field_validator("accepted_qty", "rejected_qty", mode="before")
     @classmethod
     def quantity(cls, value):

@@ -22,7 +22,7 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
     if len({x.shipment_line_id for x in lines}) != len(lines): _fail("duplicate_line", "invalid_request", "收货明细重复")
     path = f"/api/v1/material-requests/{request_id}/receipts"
     key_hash = hmac.new(secret, f"{actor.user_id}:POST:{path}:{idempotency_key}".encode(), hashlib.sha256).hexdigest()
-    payload_hash = hashlib.sha256(json.dumps({"request_id": str(request_id), "version": expected_version, "receiver": str(receiver_person_id), "at": received_at, "lines": [{"id": str(x.shipment_line_id), "a": _qty(x.accepted_qty), "r": _qty(x.rejected_qty), "condition": x.condition, "serials": sorted(str(s) for s in x.serial_ids)} for x in lines]}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    payload_hash = hashlib.sha256(json.dumps({"request_id": str(request_id), "version": expected_version, "receiver": str(receiver_person_id), "at": received_at, "lines": [{"id": str(x.shipment_line_id), "a": _qty(x.accepted_qty), "r": _qty(x.rejected_qty), "condition": x.condition, "serials": sorted(str(s) for s in x.serial_ids), "evidence": str(x.exception_evidence_file_id) if x.exception_evidence_file_id else None} for x in lines]}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     request = db.scalar(select(MaterialRequest).where(MaterialRequest.id == request_id).with_for_update())
     if request is None: _fail("not_found", "not_found", "需求单不存在")
     if request.version != expected_version: _fail("version_conflict", "conflict", "需求版本已变化，请重新读取")
@@ -51,7 +51,7 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
     for shipment_line, line, total, serials in checked:
         row = ReceiptLine(id=uuid.uuid4(), receipt_id=receipt.id, shipment_line_id=shipment_line.id, accepted_qty=line.accepted_qty, rejected_qty=line.rejected_qty, condition=line.condition, created_at=now); db.add(row); db.flush(); db.add_all(ReceiptSerial(receipt_line_id=row.id, serial_id=s, accepted=s in serials) for s in serials)
         if Decimal(line.rejected_qty) > 0 or line.condition != "normal":
-            db.add(ReceiptException(id=uuid.uuid4(), receipt_id=receipt.id, receipt_line_id=row.id, exception_type=line.condition, detail=f"验收条件={line.condition};拒收数量={_qty(line.rejected_qty)}", evidence_file_id=None, created_at=now))
+            db.add(ReceiptException(id=uuid.uuid4(), receipt_id=receipt.id, receipt_line_id=row.id, exception_type=line.condition, detail=f"验收条件={line.condition};拒收数量={_qty(line.rejected_qty)}", evidence_file_id=line.exception_evidence_file_id, created_at=now))
         output.append({"receipt_line_id": row.id, "shipment_line_id": row.shipment_line_id, "accepted_qty": _qty(row.accepted_qty), "rejected_qty": _qty(row.rejected_qty), "serial_ids": tuple(serials)})
     append_audit_event(db, stream_key="material_request", actor_user_id=actor.user_id, action="receipt_registered", aggregate_type="receipt", aggregate_id=str(receipt.id), before_jsonb={}, after_jsonb={"request_id": str(request_id), "receipt_no": receipt.receipt_no}, request_id=trace_request_id, occurred_at=now, created_at=now)
     return _result(db, receipt, replayed=False, lines=output)
