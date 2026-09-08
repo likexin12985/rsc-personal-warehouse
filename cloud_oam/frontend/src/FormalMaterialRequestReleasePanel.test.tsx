@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import FormalMaterialRequestReleasePanel from "./FormalMaterialRequestReleasePanel";
 import { createReleaseStore } from "./materialRequestReservationRelease";
@@ -55,4 +55,19 @@ it("does not POST if saving the recovery trace fails", async () => {
   const p = props(); p.store = { read: () => ({ kind: "missing" }), persist() { throw new Error("disk unavailable"); }, clear: vi.fn() };
   render(<FormalMaterialRequestReleasePanel {...p} />); await select(); fireEvent.click(screen.getByRole("button", { name: "确认释放" }));
   await waitFor(() => expect(screen.getAllByText(/disk unavailable/).length).toBeGreaterThan(0)); expect(p.adapter.createRelease).not.toHaveBeenCalled();
+});
+
+it("keeps the original trace when the same request advances before a late POST response", async () => {
+  const p = props(); let resolve!: (value: unknown) => void;
+  p.adapter.createRelease.mockImplementation(() => new Promise(done => { resolve = done; }));
+  const view = render(<FormalMaterialRequestReleasePanel {...p} />);
+  await select(); fireEvent.click(screen.getByRole("button", { name: "确认释放" }));
+  await waitFor(() => expect(p.adapter.createRelease).toHaveBeenCalledTimes(1));
+  const saved = p.store.read();
+  view.rerender(<FormalMaterialRequestReleasePanel {...p} detail={{ ...afterRelease(), request_version: 6 }} />);
+  await act(async () => { resolve(releaseResult()); });
+  expect(p.onDetail).not.toHaveBeenCalled();
+  expect(p.store.read()).toEqual(saved);
+  expect(p.adapter.releaseCommandStatusNoReplay).not.toHaveBeenCalled();
+  expect(p.adapter.createRelease).toHaveBeenCalledTimes(1);
 });

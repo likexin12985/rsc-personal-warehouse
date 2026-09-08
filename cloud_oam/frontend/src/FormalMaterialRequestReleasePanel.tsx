@@ -21,9 +21,10 @@ export default function FormalMaterialRequestReleasePanel({ adapter, access, det
   const [page, setPage] = useState<ReleasePage | null>(null), [selection, setSelection] = useState<Selection | null>(null);
   const [running, setRunning] = useState(false), [loading, setLoading] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState("");
   const active = useRef(false), generation = useRef(0);
-  const context = useRef({ adapter, access, store, requestId: detail?.request_id });
-  if (context.current.adapter !== adapter || context.current.store !== store || !same(context.current.access, access) || context.current.requestId !== detail?.request_id) {
-    generation.current += 1; context.current = { adapter, access, store, requestId: detail?.request_id };
+  const context = useRef({ adapter, access, store, requestId: detail?.request_id, requestVersion: detail?.request_version });
+  if (context.current.adapter !== adapter || context.current.store !== store || !same(context.current.access, access)
+      || context.current.requestId !== detail?.request_id || context.current.requestVersion !== detail?.request_version) {
+    generation.current += 1; context.current = { adapter, access, store, requestId: detail?.request_id, requestVersion: detail?.request_version };
   }
   const stored = store.read(), blocked = stored.kind !== "missing";
   const otherBlocked = () => otherWriteBusy || otherWriteBlocked();
@@ -49,7 +50,7 @@ export default function FormalMaterialRequestReleasePanel({ adapter, access, det
     return () => { generation.current += 1; onBlocking(store.read().kind !== "missing"); };
     // Recovery is always read-only and remains anchored to the original context.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adapter, store, accessSignature, detail?.request_id]);
+  }, [adapter, store, accessSignature, detail?.request_id, detail?.request_version]);
   async function load(lineId: string) {
     if (!detail || !access?.can_read_allocation_options || !adapter.listReleaseOptions || !canWrite || active.current || loading || blocked || otherBlocked()) return;
     const turn = generation.current; setLoading(true); setError("");
