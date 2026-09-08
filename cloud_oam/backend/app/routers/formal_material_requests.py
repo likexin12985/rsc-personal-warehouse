@@ -59,7 +59,7 @@ from ..formal_services import material_request_outbound as outbound_service
 from ..formal_services import material_request_outbound_options as outbound_options_service
 from ..formal_services import material_request_shipment as shipment_service
 from ..material_request_outbound_schemas import OutboundOptionsOut, OutboundIn, OutboundOut, OutboundStatusOut
-from ..material_request_shipment_schemas import ShipmentIn, ShipmentOut
+from ..material_request_shipment_schemas import ShipmentIn, ShipmentOut, ShipmentOptionsOut
 from ..formal_services import material_request_picking as picking_service
 from ..formal_services import material_request_picking_options as picking_options_service
 from ..material_request_picking_schemas import PickOptionsOut
@@ -891,6 +891,18 @@ def list_formal_material_request_shipments(
     _set_read_no_store(response)
     try:
         return [ShipmentOut(**row) for row in shipment_service.list_shipments(db, actor=principal, request_id=material_request_id)]
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+
+@router.get("/{material_request_id}/shipment-options", response_model=ShipmentOptionsOut)
+def list_formal_material_request_shipment_options(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    try:
+        return shipment_service.list_shipment_options(db, actor=principal, request_id=material_request_id)
     except Exception as exc:
         _rollback_and_raise(db, exc)
 

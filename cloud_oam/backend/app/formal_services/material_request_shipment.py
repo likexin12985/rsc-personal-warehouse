@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, DBAPIError
 from ..demand_models import MaterialRequest
 from ..foundation_models import OutboxEvent
-from ..inventory_models import OutboundPosting, OutboundPostingSerial, Shipment, ShipmentLine, ShipmentSerial, StockAccount
+from ..inventory_models import OutboundPosting, OutboundPostingSerial, Shipment, ShipmentLine, ShipmentSerial, StockAccount, InventorySerial
 from . import material_request_outbound as outbound
 from . import material_request_reservation as reserve
 from .audit_chain import append_audit_event, AuditChainError
@@ -95,3 +95,27 @@ def list_shipments(db, *, actor, request_id):
             if bound is not None:
                 outbound._authorize_account_ids(db, actor, (bound,), action='read', resource='inventory', lock_rows=False)
     return tuple(_result(db, row, request, replayed=False) for row in rows)
+
+def list_shipment_options(db, *, actor, request_id):
+    """Read each immutable outbound posting with its remaining shippable quantity."""
+    request = db.get(MaterialRequest, request_id)
+    if request is None: _fail('not_found','not_found','需求单不存在')
+    postings = tuple(db.scalars(select(OutboundPosting).where(OutboundPosting.request_id == request_id).order_by(OutboundPosting.created_at, OutboundPosting.id)).all())
+    items = []
+    for fact in postings:
+        outbound.verified_outbound_history(db, fact=fact, request=request)
+        used = Decimal(db.scalar(select(func.coalesce(func.sum(ShipmentLine.shipped_qty), 0)).where(ShipmentLine.outbound_posting_id == fact.id)) or 0)
+        remaining = fact.outbound_qty - used
+        if remaining <= 0: continue
+        source = db.get(StockAccount, fact.source_stock_account_id)
+        if source is None: _fail('source_missing','conflict','出库来源账户不存在')
+        outbound._authorize_account_ids(db, actor, (source.id,), action='read', resource='inventory', lock_rows=False)
+        bound = tuple(db.scalars(select(OutboundPostingSerial.serial_id).where(OutboundPostingSerial.posting_id == fact.id)).all())
+        already = set(db.scalars(select(ShipmentSerial.serial_id).join(ShipmentLine).where(ShipmentLine.outbound_posting_id == fact.id)).all())
+        serials = tuple(s for s in bound if s not in already)
+        names = {s.id: s.serial_no for s in db.scalars(select(InventorySerial).where(InventorySerial.id.in_(serials))).all()} if serials else {}
+        items.append({'posting_id': fact.id, 'posting_no': fact.posting_no, 'outbound_line_id': fact.outbound_line_id,
+                      'pick_id': fact.pick_id, 'posted_qty': _text(fact.outbound_qty), 'shipped_qty': _text(used),
+                      'shippable_qty': _text(remaining), 'serial_ids': tuple(serials),
+                      'serials': tuple({'serial_id': s, 'serial_no': names.get(s, str(s))} for s in serials)})
+    return {'request_id': request.id, 'request_version': request.version, 'items': tuple(items)}
