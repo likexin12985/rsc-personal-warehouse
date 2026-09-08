@@ -4,20 +4,32 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class WorkOrderMaterialLineIn(BaseModel):
+class StrictInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class SerialVerificationIn(StrictInput):
+    serial_id: UUID
+    sku_code: str = Field(min_length=1, max_length=80)
+    serial_no: str = Field(min_length=1, max_length=200)
+    qr_code: str = Field(min_length=1, max_length=250)
+
+
+class WorkOrderMaterialLineIn(StrictInput):
     material_id: UUID
     stock_account_id: UUID
-    quantity: Decimal = Field(gt=0)
-    serial_ids: tuple[UUID, ...] = ()
-    condition_before: str = "new"
+    quantity: Decimal = Field(gt=0, max_digits=18, decimal_places=3, allow_inf_nan=False)
+    serial_ids: tuple[UUID, ...] = Field(default=(), max_length=1000)
+    condition_before: Literal["new", "used", "damaged", "scrapped"] = "new"
+    serial_verifications: tuple[SerialVerificationIn, ...] = Field(default=(), max_length=1000)
 
 
-class WorkOrderMaterialPreflightIn(BaseModel):
+class WorkOrderMaterialPreflightIn(StrictInput):
     operator_person_id: UUID
-    lines: tuple[WorkOrderMaterialLineIn, ...] = Field(min_length=1)
+    lines: tuple[WorkOrderMaterialLineIn, ...] = Field(min_length=1, max_length=100)
 
 
 class WorkOrderMaterialPreflightOut(BaseModel):
@@ -25,7 +37,7 @@ class WorkOrderMaterialPreflightOut(BaseModel):
     work_order_id: UUID
     operator_person_id: UUID
     line_count: int
-    status: str = "ready_for_posting"
+    status: Literal["coordinates_validated"] = "coordinates_validated"
 
 
 class WorkOrderMaterialOperationIn(WorkOrderMaterialPreflightIn):
@@ -35,7 +47,7 @@ class WorkOrderMaterialOperationIn(WorkOrderMaterialPreflightIn):
     replacement_pairs: tuple["WorkOrderReplacementPairIn", ...] = ()
 
 
-class WorkOrderReplacementPairIn(BaseModel):
+class WorkOrderReplacementPairIn(StrictInput):
     installed_serial_id: UUID
     removed_serial_id: UUID
 
