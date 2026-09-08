@@ -19,7 +19,10 @@ from ..demand_models import (
     OamWorkOrder, WorkOrderMaterialLine, WorkOrderMaterialOperation,
     WorkOrderMaterialSerial, WorkOrderReplacementPair,
 )
-from ..inventory_models import FormalMaterial, InventoryTransaction, StockAccount
+from ..inventory_models import (
+    FormalMaterial, InventorySerial, InventoryTransaction, SerialCurrentPosition,
+    StockAccount,
+)
 
 
 class WorkOrderMaterialPreflightError(ValueError):
@@ -135,6 +138,15 @@ def preflight_work_order_material_batch(
             raise WorkOrderMaterialPreflightError("stock_account_unavailable", "库存账户当前不可用于工单操作")
         if account.condition_code != line.condition_before:
             raise WorkOrderMaterialPreflightError("condition_mismatch", "物料状态与库存账户不一致")
+        for serial_id in line.serial_ids:
+            serial = db.get(InventorySerial, serial_id)
+            if serial is None or serial.material_id != line.material_id:
+                raise WorkOrderMaterialPreflightError("serial_material_mismatch", "SN 与物料不匹配")
+            if serial.lifecycle_status != "active":
+                raise WorkOrderMaterialPreflightError("serial_not_active", "SN 当前不可操作")
+            position = db.get(SerialCurrentPosition, serial_id)
+            if position is None or position.stock_account_id != line.stock_account_id:
+                raise WorkOrderMaterialPreflightError("serial_account_mismatch", "SN 不在指定库存账户")
     return WorkOrderMaterialPreflight(work_order_id, operator_person_id, lines)
 
 
