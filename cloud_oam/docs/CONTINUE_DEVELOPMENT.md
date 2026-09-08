@@ -137,7 +137,7 @@ git diff --name-only 4a6ec83b27f76f84d1d8fe2a9ded699c9b166349 HEAD
 
 ## 7.1 物流事件 Web 接入（当前增量）
 
-最新实际 HEAD：`6650259`（`feat: emit inbound order outbox fact`）。
+最新实际 HEAD：`9498b39`（`fix: authorize logistics history reads`）。
 0074 已建的 `logistics_events` 现在具备正式写入 API、按发运单读取 API、Web 适配器严格响应/输入校验，
 以及发运面板中的事件历史展示和 `pickup / transit / signed / exception` 登记入口；
 收货验收面板已接入收货人、发运明细、合格/拒收数量、验收条件和 SN 输入；
@@ -147,6 +147,8 @@ git diff --name-only 4a6ec83b27f76f84d1d8fe2a9ded699c9b166349 HEAD
 物流事件登记只追加签收/运输事实，不改变收货验收状态、库存或个人仓入账状态。
 
 待入账单创建现在在同一事务写入幂等 `personal_inbound_order_created` Outbox 事实，供待办与通知处理；库存过账仍由统一库存过账服务产生独立库存事件。
+
+物流事件写入与历史读取均复核发运事实的来源库存账户范围；本批履约后端定向回归 17 项、Web 发运/收货/入账契约 10 项通过。
 
 本批本地验证：正式 Web 测试 53 个文件/1019 个用例通过，TypeScript 检查和 Vite production build 通过，后端完整测试 3353 passed、2 skipped，仓库安全检查通过；
 已推送 `origin/codex/production-readiness-gates`。下一步仍需补正式收货验收录入页面、异常证据处理、
