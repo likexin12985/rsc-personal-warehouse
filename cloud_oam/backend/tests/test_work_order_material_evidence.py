@@ -16,7 +16,7 @@ from sqlalchemy.pool import StaticPool
 
 from test_inventory_posting import world, NOW, make_account
 from app.demand_models import OamWorkOrder, WorkOrderMaterialOperation, WorkOrderMaterialSerial
-from app.foundation_models import AuditChainHead, ExternalObject
+from app.foundation_models import AuditChainHead, AuditEvent, ExternalObject, OutboxEvent
 from app.inventory_models import (InventoryTransaction, InventoryMovement, InventoryMovementSerial,
                                   InventorySerial, StockLocation)
 from app.formal_services import work_order_material as service
@@ -265,6 +265,29 @@ def test_http_successful_scan_and_replay(db, evidence):
     assert second.json() == first.json()
     assert history.json()["items"] == [first.json()]
     assert count_operations(db) == 1
+
+
+def test_posted_operation_appends_audit_and_outbox_once(db, evidence):
+    first = record(db, evidence)
+    db.commit()
+    audit_rows = db.scalars(select(AuditEvent).where(
+        AuditEvent.aggregate_type == "work_order_material_operation",
+        AuditEvent.aggregate_id == str(first.id),
+    )).all()
+    outbox_rows = db.scalars(select(OutboxEvent).where(
+        OutboxEvent.aggregate_type == "work_order_material_operation",
+        OutboxEvent.aggregate_id == str(first.id),
+    )).all()
+    assert len(audit_rows) == 1
+    assert audit_rows[0].action == "work_order_material.consume"
+    assert audit_rows[0].after_jsonb["posting_transaction_id"] == str(evidence.transaction.id)
+    assert len(outbox_rows) == 1
+    assert outbox_rows[0].event_type == "work_order_material_operation_posted"
+    replay = record(db, evidence)
+    db.commit()
+    assert replay.id == first.id
+    assert db.scalar(select(func.count()).select_from(AuditEvent)) == 1
+    assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 1
 
 
 def test_http_late_database_failure_rolls_back_operation_fact(db, evidence, monkeypatch):
