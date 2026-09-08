@@ -20867,10 +20867,13 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             _admin_sqlalchemy_url(), pool_size=1, max_overflow=0, pool_timeout=5,
         )
         try:
-            assert_reservation_gate(
-                api_engine, security_engine=security_engine,
-                source_request_id=request_id, manager_user_id=manager_user_id,
-                admin_user_id=admin_user_id, inventory_fixture=inventory_fixture,
+            _reveal_pg16_service_database_error(
+                api_engine,
+                lambda: assert_reservation_gate(
+                    api_engine, security_engine=security_engine,
+                    source_request_id=request_id, manager_user_id=manager_user_id,
+                    admin_user_id=admin_user_id, inventory_fixture=inventory_fixture,
+                ),
             )
         finally:
             security_engine.dispose()

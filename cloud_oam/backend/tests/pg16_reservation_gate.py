@@ -21,6 +21,50 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 
+def _assert_reservation_catalog(api_engine, security_engine):
+    from app.database_security import (
+        DatabaseSecurityBoundaryError, EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS,
+        validate_production_database_security,
+    )
+
+    def validate():
+        validate_production_database_security(
+            api_engine, expected_runtime_role="star_oam_api",
+            expected_migration_role="star_oam_migrator",
+        )
+
+    def rejected(mutation, restoration):
+        with security_engine.begin() as connection:
+            connection.execute(text(mutation))
+        try:
+            with pytest.raises(DatabaseSecurityBoundaryError):
+                validate()
+        finally:
+            with security_engine.begin() as connection:
+                connection.execute(text(restoration))
+        validate()
+
+    # Real catalogs, with restoration even when a negative unexpectedly passes.
+    for name, binding in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items():
+        if name.endswith("_0069"):
+            rejected(f"ALTER TABLE public.{binding[0]} DISABLE TRIGGER {name}",
+                     f"ALTER TABLE public.{binding[0]} ENABLE ALWAYS TRIGGER {name}")
+    for name in ("rsc_guard_stock_reservation_0069",
+                 "rsc_guard_stock_reservation_serials_binding_0069"):
+        signature = f"public.{name}()"
+        rejected(f"ALTER FUNCTION {signature} SECURITY INVOKER",
+                 f"ALTER FUNCTION {signature} SECURITY DEFINER")
+        rejected(f"GRANT EXECUTE ON FUNCTION {signature} TO PUBLIC",
+                 f"REVOKE EXECUTE ON FUNCTION {signature} FROM PUBLIC")
+        with security_engine.connect() as connection:
+            original_definition = connection.scalar(text(
+                "SELECT pg_get_functiondef(to_regprocedure(:signature))"
+            ), {"signature": signature})
+        rejected(f"CREATE OR REPLACE FUNCTION {signature} RETURNS trigger LANGUAGE plpgsql "
+                 "SECURITY DEFINER SET search_path = pg_catalog, public "
+                 "AS $$ BEGIN RETURN NEW; END $$", original_definition)
+
+
 def _approved_request(api_engine, *, source_request_id, material_id, manager_user_id,
                       admin_user_id, token):
     from app.demand_models import (
@@ -124,6 +168,8 @@ def assert_reservation_gate(api_engine, *, security_engine, source_request_id,
     from app.routers import formal_material_requests
     from test_material_request_approval_service import _principal
     from test_material_request_draft_service import SECRET
+
+    _assert_reservation_catalog(api_engine, security_engine)
 
     def api_db():
         with Session(api_engine) as db:
@@ -288,8 +334,28 @@ def assert_reservation_gate(api_engine, *, security_engine, source_request_id,
             assert failed.json()["detail"]["code"] == "material_request_reservation_audit_unavailable"
             assert snapshot() == before
 
-            created = client.post(f"/api/v1/material-requests/{request_id}/reservations",
-                                  json=payload, headers=headers)
+            if serial_mode:
+                serial_barrier = Barrier(2)
+
+                def reserve_same_serials(index):
+                    race_headers = {
+                        "Idempotency-Key": f"{token}-http-race-{index}",
+                        "X-Request-ID": f"trace-{token}-http-race-{index}",
+                    }
+                    serial_barrier.wait(timeout=15)
+                    return client.post(f"/api/v1/material-requests/{request_id}/reservations",
+                                       json=payload, headers=race_headers), race_headers
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    futures = [pool.submit(reserve_same_serials, index) for index in range(2)]
+                    responses = [future.result(timeout=45) for future in futures]
+                assert sorted(response.status_code for response, _ in responses) == [201, 409], [
+                    response.text for response, _ in responses
+                ]
+                created, headers = next(pair for pair in responses if pair[0].status_code == 201)
+            else:
+                created = client.post(f"/api/v1/material-requests/{request_id}/reservations",
+                                      json=payload, headers=headers)
             assert created.status_code == 201, created.text
             first = created.json()
             assert first["serial_ids"] == payload["serial_ids"]
