@@ -93,3 +93,11 @@ def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idem
     result = post_inventory_transaction(db, actor=actor, command=command, idempotency_key=idempotency_key, request_id=request_id)
     db.add(InboundPosting(id=uuid.uuid4(), inbound_order_id=order.id, inventory_transaction_id=result.transaction_id, created_at=datetime.now(timezone.utc)))
     return {"inbound_order_id": order.id, "inventory_transaction_id": result.transaction_id, "replayed": result.replayed}
+
+def list_inbound_orders(db, *, actor, request_id):
+    request = db.get(MaterialRequest, request_id)
+    if request is None: _fail("not_found", "not_found", "需求单不存在")
+    shipment_ids = select(Shipment.id).join(ShipmentLine, ShipmentLine.shipment_id == Shipment.id).join(OutboundPosting, OutboundPosting.id == ShipmentLine.outbound_posting_id).where(OutboundPosting.request_id == request_id)
+    receipt_ids = select(Receipt.id).where(Receipt.shipment_id.in_(shipment_ids))
+    rows = tuple(db.scalars(select(InboundOrder).where(InboundOrder.receipt_id.in_(receipt_ids)).order_by(InboundOrder.created_at, InboundOrder.id)).all())
+    return tuple({"schema_version":"1.0", "inbound_order_id": row.id, "inbound_no": row.inbound_no, "receipt_id": row.receipt_id, "target_location_id": row.target_location_id, "target_person_id": row.target_person_id, "status": row.status} for row in rows)

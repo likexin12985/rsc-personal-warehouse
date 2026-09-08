@@ -109,6 +109,7 @@ export interface FormalMaterialRequestAdapter {
   createLogisticsEvent?(requestId: string, shipmentId: string, input: LogisticsEventInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<LogisticsEventResult>;
   createReceipt?(requestId: string, input: ReceiptInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ReceiptResult>;
   listReceipts?(requestId: string): Promise<readonly ReceiptResult[]>;
+  listInboundOrders?(requestId: string): Promise<readonly InboundOrderResult[]>;
   listShipmentOptions?(requestId: string): Promise<ShipmentOptions>;
   createShipment?(requestId: string, input: ShipmentInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ShipmentResult>;
   createInboundOrder?(requestId: string, input: InboundOrderInput, headers: Readonly<{ "X-Request-ID": string }>): Promise<InboundOrderResult>;
@@ -910,6 +911,9 @@ export function createFormalMaterialRequestAdapter(
     },
     listReceipts(requestId: string) {
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/receipts`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(value => { if (!Array.isArray(value)) throw new ApiError(502, "收货查询响应无效"); return value.map(validateReceiptResult); });
+    },
+    listInboundOrders(requestId: string) {
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/inbound-orders`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(value => { if (!Array.isArray(value)) throw new ApiError(502, "入账查询响应无效"); return value.map(validateInboundOrderResult); });
     },
     listShipmentOptions(requestId: string) {
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipment-options`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(validateShipmentOptions);

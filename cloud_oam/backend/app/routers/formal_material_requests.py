@@ -990,6 +990,18 @@ def create_formal_material_request_inbound_order(
     except Exception as exc:
         _rollback_and_raise(db, exc)
 
+@router.get("/{material_request_id}/inbound-orders", response_model=list[InboundOrderOut])
+def list_formal_material_request_inbound_orders(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    try:
+        return [InboundOrderOut(**row) for row in inbound_service.list_inbound_orders(db, actor=principal, request_id=material_request_id)]
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+
 @router.post("/{material_request_id}/inbound-orders/{inbound_order_id}/post", response_model=InboundPostingOut)
 def post_formal_material_request_inbound_order(
     material_request_id: UUID, inbound_order_id: UUID, response: Response,
