@@ -236,3 +236,7 @@ git diff --name-only 4a6ec83b27f76f84d1d8fe2a9ded699c9b166349 HEAD
 本批继续增加 `record_posted_operation`：它要求调用方先取得状态为 `posted` 的统一库存事务，
 再追加工单操作、明细和 SN 校验事实；重复幂等键且请求指纹一致时只返回原事实，指纹或库存事务
 不一致时阻断。该函数本身不改库存余额。
+
+新增正式路由 `POST /api/v1/work-orders/{work_order_id}/material-preflight`，只提供当前登录人员
+的只读预检结果；路由要求 `work_order_material:operate` 权限，并拒绝伪造操作人。它不会创建操作
+事实或改变库存，后续写入命令仍须在统一库存过账成功后调用事实写入服务。
