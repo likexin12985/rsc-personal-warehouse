@@ -19819,8 +19819,8 @@ def _assert_0063_rejects_nonempty_review_downgrade() -> None:
 
     migration = _load_stocktake_review_command_status_migration_0063()
     assert _current_revision() == HEAD_REVISION
-    # The database is intentionally at the 0068 head here.  A normal Alembic
-    # downgrade walks 0068 -> 0067 -> 0066 -> 0065 -> 0064 before it can call
+    # The database is intentionally at the 0069 head here.  A normal Alembic
+    # downgrade walks 0069 -> 0068 -> 0067 -> 0066 -> 0065 -> 0064 before it can call
     # 0063, and the real stocktake fixture also contains 0065 posting outcome
     # facts.  Those newer migrations must keep their own non-empty blockers;
     # traversing the chain would therefore mask the 0063 contract we are
@@ -20413,6 +20413,7 @@ def _assert_0062_empty_history_owner_downgrade_and_reupgrade() -> None:
 
 def _assert_0061_empty_event_key_downgrade_and_reupgrade() -> None:
     migration = _load_supply_event_key_migration_0061()
+    reservation_migration = _load_stock_reservations_migration_0069()
     signatures = (
         "public.rsc_validate_material_request_supply_causality_0059(uuid, bigint)",
         RLS_READY_FUNCTION,
@@ -20453,17 +20454,19 @@ def _assert_0061_empty_event_key_downgrade_and_reupgrade() -> None:
 
     before, bindings = catalog()
     assert all(row[1] == "star_oam_migrator" and row[2] for row in before)
-    assert before[0][-1] == migration.FIXED_VALIDATOR_BODY_SHA256
+    assert before[0][-1] == reservation_migration.SUPPLY_VALIDATE_BODY_SHA256_0069
     assert before[1][-1] == _head_runtime_ready_hash()
+    assert before[4][-1] == reservation_migration.SUPPLY_DISPATCH_BODY_SHA256_0069
     _run_alembic("downgrade", SUPPLY_TASK_SECURITY_REVISION)
     assert _current_revision() == SUPPLY_TASK_SECURITY_REVISION
     legacy, legacy_bindings = catalog()
     assert legacy[0][-1] == migration.PRIOR_VALIDATOR_BODY_SHA256
     assert legacy[1][-1] == migration.RUNTIME_READY_BODY_SHA256_0060
+    assert legacy[4][-1] == reservation_migration.SUPPLY_DISPATCH_BODY_SHA256_0060
     assert legacy_bindings == bindings
     for index, (fixed, old) in enumerate(zip(before, legacy, strict=True)):
         assert fixed[:-1] == old[:-1]
-        if index < 2:
+        if index in (0, 1, 4):
             assert fixed[-1] != old[-1]
         else:
             assert fixed == old

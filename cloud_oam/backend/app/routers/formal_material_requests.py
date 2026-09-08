@@ -54,6 +54,7 @@ from ..formal_services import material_request_query as query_service
 from ..formal_services import material_request_supply as supply_service
 from ..formal_services import material_request_supply_command_status as supply_status_service
 from ..formal_services import material_request_reservation as reservation_service
+from ..formal_services import material_request_reservation_options as reservation_options_service
 from ..formal_services.material_request_contact import (
     MaterialRequestContactCipher,
     MaterialRequestContactProtectionError,
@@ -87,6 +88,7 @@ from ..material_request_reservation_schemas import (
     ReservationCreateIn,
     ReservationMutationOut,
 )
+from ..material_request_reservation_option_schemas import MaterialRequestReservationOptionPageOut
 from ..production_adapters import create_production_material_request_contact_cipher
 
 
@@ -207,6 +209,9 @@ def formal_material_request_reservation_command_status(
                     stock_account_id=result.stock_account_id,
                     reserve_transaction_id=result.reserve_transaction_id,
                     reserve_transaction_no=result.reserve_transaction_no,
+                    source_balance_version=result.source_balance_version,
+                    source_ledger_cursor=result.source_ledger_cursor,
+                    serial_ids=result.serial_ids,
                     reserved_qty=f"{result.reserved_qty:.3f}",
                     reservation_status="reserved",
                     request_status=result.request_status,
@@ -480,6 +485,31 @@ def formal_material_request_allocation_options(
     return output
 
 
+@router.get(
+    "/{material_request_id}/reservation-options",
+    response_model=MaterialRequestReservationOptionPageOut,
+)
+def formal_material_request_reservation_options(
+    material_request_id: UUID,
+    response: Response,
+    request_line_id: Annotated[UUID, Query(...)],
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    """Return actual allocation candidates without creating inventory facts."""
+    _set_read_no_store(response)
+    try:
+        return reservation_options_service.list_reservation_options(
+            db, actor=principal, material_request_id=material_request_id,
+            request_line_id=request_line_id,
+        )
+    except reservation_options_service.MaterialRequestReservationOptionError as exc:
+        _raise_service_error(exc, no_store=True)
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
 @router.post(
     "/{material_request_id}/allocations",
     response_model=AllocationMutationOut,
@@ -596,6 +626,9 @@ def create_formal_material_request_reservation(
             stock_account_id=result.stock_account_id,
             reserve_transaction_id=result.reserve_transaction_id,
             reserve_transaction_no=result.reserve_transaction_no,
+            source_balance_version=result.source_balance_version,
+            source_ledger_cursor=result.source_ledger_cursor,
+            serial_ids=result.serial_ids,
             reserved_qty=f"{result.reserved_qty:.3f}",
             reservation_status="reserved",
             request_status=result.request_status,

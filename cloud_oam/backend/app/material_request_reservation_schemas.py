@@ -86,7 +86,18 @@ class ReservationMutationOut(BaseModel):
     reservation_status: Literal["reserved"]
     request_status: str = Field(min_length=1, max_length=32)
     state_axes: MaterialRequestStateAxesOut
+    source_balance_version: StrictInt = Field(ge=0)
+    source_ledger_cursor: StrictInt = Field(ge=0)
+    serial_ids: tuple[UUID, ...] = Field(max_length=1000)
     idempotency_replayed: bool = False
+
+    @field_validator("serial_ids")
+    @classmethod
+    def validate_serials(cls, value: tuple[UUID, ...]) -> tuple[UUID, ...]:
+        checked = tuple(_uuid(item, "serial_id") for item in value)
+        if len(set(checked)) != len(checked):
+            raise ValueError("serial_ids cannot contain duplicates")
+        return checked
 
     @field_validator("reserved_qty")
     @classmethod
@@ -97,6 +108,8 @@ class ReservationMutationOut(BaseModel):
 
     @model_validator(mode="after")
     def validate_state_anchor(self):
+        if self.serial_ids and Decimal(self.reserved_qty) != Decimal(len(self.serial_ids)):
+            raise ValueError("serial_ids must cover the exact reserved quantity")
         if self.request_status != self.state_axes.request_status:
             raise ValueError("request_status must match state_axes.request_status")
         # One reservation fact can cover only part of the approved demand.

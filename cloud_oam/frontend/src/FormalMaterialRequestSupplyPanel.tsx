@@ -122,11 +122,12 @@ function allocationRecoveryAvailable(adapter: FormalMaterialRequestAdapter): boo
 }
 
 export default function FormalMaterialRequestSupplyPanel({
-  adapter, access, detail, store, registry, otherWriteBusy, onBlocking, onDetail,
+  adapter, access, detail, store, registry, otherWriteBusy, otherWriteBlocked, onBlocking, onDetail,
   allocationRecoveryStore, onAllocationBlocking = () => {},
 }: {
   adapter: FormalMaterialRequestAdapter; access: FormalMaterialRequestAccess | null; detail: MaterialRequestDetail | null;
   store: SupplyRecoveryStore; registry: MaterialRequestIntentRegistry; otherWriteBusy: boolean;
+  otherWriteBlocked?: () => boolean;
   onBlocking: (blocked: boolean) => void; onDetail: (detail: MaterialRequestDetail) => void;
   allocationRecoveryStore?: AllocationRecoveryStore;
   onAllocationBlocking?: (blocked: boolean) => void;
@@ -227,7 +228,7 @@ export default function FormalMaterialRequestSupplyPanel({
   function chooseAllocation(option: MaterialRequestAllocationOption) {
     const current = allocationOptions;
     const currentStore = allocationStore.read();
-    if (!detail || !access || !current || blocked || allocationRunning || otherWriteBusy
+    if (!detail || !access || !current || blocked || allocationRunning || otherWriteBusy || otherWriteBlocked?.()
         || currentStore.kind !== "missing" || registry.get(detail.request_id)) {
       setAllocationError("当前需求存在待核验操作，请先完成结果核验");
       onAllocationBlocking?.(currentStore.kind !== "missing");
@@ -261,7 +262,7 @@ export default function FormalMaterialRequestSupplyPanel({
 
   async function submitAllocation() {
     if (!allocationForm || !access || allocationRunning || allocationInFlight.current
-        || blocked || otherWriteBusy || allocationStore.read().kind !== "missing") return;
+        || blocked || otherWriteBusy || otherWriteBlocked?.() || allocationStore.read().kind !== "missing") return;
     const currentGeneration = allocationGeneration.current;
     const before = allocationForm.before;
     const originalPage = allocationForm.page;
@@ -323,7 +324,7 @@ export default function FormalMaterialRequestSupplyPanel({
           || allocatedUnits > decimalUnits(freshPage.allocatable_qty)) {
         throw new Error("货源余额、投影游标或批准余量已变化，请重新选择货源");
       }
-      if (currentGeneration !== allocationGeneration.current) return;
+      if (currentGeneration !== allocationGeneration.current || otherWriteBlocked?.()) return;
       const generated = new Headers(mutationHeaders("material-request-allocation").headers);
       const xRequestId = generated.get("X-Request-ID") || "";
       const idempotencyKey = generated.get("Idempotency-Key") || "";
@@ -459,7 +460,7 @@ export default function FormalMaterialRequestSupplyPanel({
   }, [adapter, store, access?.person_id, access?.authorization_version]);
 
   function open(action: SupplyAction, task: MaterialRequestSupplyTask | null = null) {
-    if (!detail || !access || otherWriteBusy || blocked || running || registry.get(detail.request_id)) {
+    if (!detail || !access || otherWriteBusy || otherWriteBlocked?.() || blocked || running || registry.get(detail.request_id)) {
       setError("当前需求存在待核验操作，请先完成结果核验");
       return;
     }
@@ -475,7 +476,7 @@ export default function FormalMaterialRequestSupplyPanel({
   }
 
   async function submit() {
-    if (!form || !access || running || blocked || otherWriteBusy || inFlight.current) return;
+    if (!form || !access || running || blocked || otherWriteBusy || otherWriteBlocked?.() || inFlight.current) return;
     const currentGeneration = generation.current;
     const before = form.before;
     let persisted = false;
@@ -512,7 +513,7 @@ export default function FormalMaterialRequestSupplyPanel({
             : freshTask?.version !== form.task!.version || !freshTask.allowed_actions.includes(form.action))) {
         throw new Error("需求或供给任务已变化，请返回详情重新检查");
       }
-      if (currentGeneration !== generation.current) return;
+      if (currentGeneration !== generation.current || otherWriteBlocked?.()) return;
       const intent = registry.begin({ requestId: before.request_id, action: form.action,
         path: `/v1/material-requests/${before.request_id}/supply-tasks${form.task ? `/${form.task.id}` : ""}`,
         expectedVersion: before.request_version, body });
@@ -625,7 +626,7 @@ export default function FormalMaterialRequestSupplyPanel({
       <div className="table-wrap"><table><thead><tr><th>明细</th><th>物料</th><th>批准余量</th><th>操作</th></tr></thead><tbody>
         {detail.lines.filter((line) => ["approved", "partially_approved"].includes(line.status)).map((line) => <tr key={line.request_line_id}>
           <td>{line.line_no}</td><td>{line.material_id}</td><td>{line.final_approved_qty}</td><td>
-            <Button tone="secondary" disabled={allocationLoading || allocationRunning || blocked || allocationBlocked || otherWriteBusy} onClick={() => void showAllocationOptions(line.request_line_id)}>{allocationLoading ? "正在读取" : "查看可用货源"}</Button>
+            <Button tone="secondary" disabled={allocationLoading || allocationRunning || blocked || allocationBlocked || otherWriteBusy || otherWriteBlocked?.()} onClick={() => void showAllocationOptions(line.request_line_id)}>{allocationLoading ? "正在读取" : "查看可用货源"}</Button>
           </td>
         </tr>)}
       </tbody></table></div>
@@ -634,7 +635,7 @@ export default function FormalMaterialRequestSupplyPanel({
       <p>明细 {detail?.lines.find((line) => line.request_line_id === allocationOptions.lineId)?.line_no} · 账面游标 {allocationOptions.page.ledger_cursor} · 投影时间 {allocationOptions.page.projected_at || "—"}</p>
       {allocationOptions.page.items.length ? <div className="table-wrap"><table><thead><tr><th>库位</th><th>货主</th><th>状态</th><th>数量</th><th>余额版本</th><th>流水游标</th><th>操作</th></tr></thead><tbody>
         {allocationOptions.page.items.map((item) => <tr key={`${item.stock_account_id}:${item.balance_version}:${item.ledger_cursor}`}><td>{item.location_name}（{item.location_code}）</td><td>{item.owner_org_name}</td><td>{item.condition_code} · {item.availability_bucket}</td><td>{item.quantity} {item.base_unit}</td><td>{item.balance_version}</td><td>{item.ledger_cursor}</td><td>
-          <Button disabled={allocationRunning || blocked || allocationBlocked || otherWriteBusy} onClick={() => chooseAllocation(item)}>选择并分配</Button>
+          <Button disabled={allocationRunning || blocked || allocationBlocked || otherWriteBusy || otherWriteBlocked?.()} onClick={() => chooseAllocation(item)}>选择并分配</Button>
         </td></tr>)}
       </tbody></table></div> : <p>当前没有满足条件的可用正余额货源。</p>}
     </Modal>}
@@ -648,7 +649,7 @@ export default function FormalMaterialRequestSupplyPanel({
         <div className="alert alert-warning">提交后只建立分配事实。占用、拣货、出库、发运、物流签收、OAM 收货、RSC/个人仓入库、通知和对账继续分别处理。</div>
         <div className="form-actions">
           <Button tone="secondary" disabled={allocationRunning || allocationBlocked} onClick={() => setAllocationForm(null)}>返回检查</Button>
-          <Button disabled={allocationRunning || allocationBlocked || blocked || otherWriteBusy} onClick={() => void submitAllocation()}>{allocationRunning ? "正在精确回读" : "确认分配"}</Button>
+          <Button disabled={allocationRunning || allocationBlocked || blocked || otherWriteBusy || otherWriteBlocked?.()} onClick={() => void submitAllocation()}>{allocationRunning ? "正在精确回读" : "确认分配"}</Button>
           {allocationBlocked && <Button disabled={allocationRunning} onClick={() => void recoverAllocation()}>核验原分配操作</Button>}
         </div>
       </div>
@@ -675,7 +676,7 @@ export default function FormalMaterialRequestSupplyPanel({
         </select></Field>}
         <Field label={form.action === "create_supply_task" ? "计划备注" : "处理原因"}><textarea aria-label="供给处理说明" maxLength={4000} disabled={running || blocked || allocationBlocked} value={form.comment} onChange={(event) => field("comment", event.target.value)} /></Field>
         <div className="form-actions"><Button tone="secondary" disabled={running || blocked || allocationBlocked} onClick={() => setForm(null)}>返回检查</Button>
-          <Button disabled={running || blocked || allocationBlocked || otherWriteBusy} onClick={() => void submit()}>{running ? "正在核验" : "确认保存供给计划"}</Button>
+          <Button disabled={running || blocked || allocationBlocked || otherWriteBusy || otherWriteBlocked?.()} onClick={() => void submit()}>{running ? "正在核验" : "确认保存供给计划"}</Button>
           {blocked && <Button disabled={running} onClick={() => void recover()}>核验原供给操作</Button>}
         </div>
       </div>

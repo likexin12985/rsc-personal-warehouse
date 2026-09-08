@@ -21,6 +21,8 @@ import {
   createAllocationRecoveryStore,
   type AllocationRecoveryStore,
 } from "../materialRequestAllocationRecovery";
+import { createReservationRecoveryStore } from "../materialRequestReservationRecovery";
+import { reservationSentinel } from "../materialRequestReservationTestFixtures";
 import FormalMaterialRequestsPage from "./FormalMaterialRequests";
 
 const REQUEST_ID = "10000000-0000-4000-8000-000000000001";
@@ -2506,4 +2508,25 @@ describe("formal material request PC vertical slice", () => {
     expect(store.read()).toEqual({ kind: "missing" });
     expect(current.mutate).not.toHaveBeenCalled();
   });
+  it.each(["corrupt", "unavailable"] as const)("blocks all page writes for %s reservation recovery storage", async (kind) => {
+    const store = { read: () => ({ kind }), persist: vi.fn(), clear: vi.fn() };
+    const client = adapter();
+    render(<FormalMaterialRequestsPage adapter={client} reservationRecoveryStore={store} />);
+    await waitFor(() => expect(client.list).toHaveBeenCalled());
+    expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(await screen.findByText(/预留操作结果待核验/)).toBeTruthy();
+    expect(client.createDraft).not.toHaveBeenCalled(); expect(client.mutate).not.toHaveBeenCalled(); expect(store.clear).not.toHaveBeenCalled();
+  });
+  it("consults the durable reservation coordinate synchronously before opening a new write", async () => {
+    const store = createReservationRecoveryStore(); const client = adapter();
+    render(<FormalMaterialRequestsPage adapter={client} reservationRecoveryStore={store} />);
+    const button = await screen.findByRole("button", { name: "新建需求" });
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    store.persist(reservationSentinel());
+    fireEvent.click(button);
+    expect(screen.queryByRole("dialog", { name: "新建需求草稿" })).toBeNull();
+    expect(client.createDraft).not.toHaveBeenCalled(); expect(client.mutate).not.toHaveBeenCalled();
+    expect(store.read().kind).toBe("valid");
+  });
+
 });

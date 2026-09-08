@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { reservationPage } from "./materialRequestReservationTestFixtures";
 import type { api } from "./api";
 import {
   createFormalMaterialRequestAdapter,
@@ -93,6 +94,21 @@ function makeRequester(
 }
 
 describe("formal material-request PC transport", () => {
+  it("loads strict reservation candidates only through the no-replay read channel", async () => {
+    const ordinary = makeRequester(async () => { throw new Error("ordinary read forbidden"); });
+    let response: unknown = reservationPage();
+    const noReplay = makeRequester(async () => response);
+    const client = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, ordinary, noReplay);
+    const page = reservationPage();
+    await expect(client.listReservationOptions!(page.request_id, page.request_line_id)).resolves.toEqual(page);
+    expect(ordinary).not.toHaveBeenCalled();
+    expect(noReplay.mock.calls[0][0]).toBe(`/v1/material-requests/${page.request_id}/reservation-options?request_line_id=${page.request_line_id}`);
+    expect(noReplay.mock.calls[0][1]?.method).toBeUndefined();
+    expect(noReplay.mock.calls[0][1]?.cache).toBe("no-store");
+    response = { ...page, unknown_field: true };
+    await expect(client.listReservationOptions!(page.request_id, page.request_line_id)).rejects.toThrow();
+  });
+
   it("uses only the mounted supply paths and preserves uncertain-write coordinates", async () => {
     const requester = makeRequester(async () => { throw new Error("network uncertain"); });
     const adapter = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, requester);

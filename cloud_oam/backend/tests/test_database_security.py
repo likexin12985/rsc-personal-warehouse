@@ -354,6 +354,13 @@ MATERIAL_REQUEST_SUPPLY_EVENT_KEY_MIGRATION_0061 = (
     / "versions"
     / "20260905_0061_material_request_supply_event_key_expression.py"
 )
+STOCK_RESERVATIONS_MIGRATION_0069 = (
+    ROOT
+    / "backend"
+    / "alembic"
+    / "versions"
+    / "20260909_0069_stock_reservations.py"
+)
 PERSONAL_LOCATION_MIGRATION_0019 = (
     ROOT
     / "backend"
@@ -1022,6 +1029,41 @@ def _load_material_request_supply_event_key_migration_0061() -> object:
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
     return migration
+
+
+def _load_stock_reservations_migration_0069() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0069_stock_reservations_security_manifest",
+        STOCK_RESERVATIONS_MIGRATION_0069,
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _assert_0069_function_body_matches_runtime_manifest(
+    *,
+    coordinate: tuple[str, str],
+    historical_body: str,
+    historical_hash: str,
+    current_hash: str,
+    replacements: tuple[tuple[str, str], ...],
+) -> None:
+    assert hashlib.sha256(historical_body.encode()).hexdigest() == historical_hash
+    current_body = historical_body
+    for old, new in replacements:
+        assert current_body.count(old) == 1
+        assert new not in current_body
+        current_body = current_body.replace(old, new)
+    assert hashlib.sha256(current_body.encode()).hexdigest() == current_hash
+    assert MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate] == current_hash
+    assert current_hash != historical_hash
+    for old, new in reversed(replacements):
+        assert current_body.count(new) == 1
+        assert old not in current_body
+        current_body = current_body.replace(new, old)
+    assert current_body == historical_body
 
 
 def _load_stocktake_difference_evaluator_migration_0031() -> object:
@@ -7530,6 +7572,7 @@ def test_0046_material_request_content_function_bodies_match_manifest() -> None:
 def test_0059_supply_guard_bodies_triggers_and_runtime_acl_match_manifest() -> None:
     migration_0045 = _load_material_request_approval_activation_migration_0045()
     migration = _load_material_request_supply_causality_migration_0059()
+    migration_0069 = _load_stock_reservations_migration_0069()
 
     function_sql = {
         (migration.OWNER_GUARD_FUNCTION, ""): migration._owner_guard_sql(),
@@ -7587,9 +7630,17 @@ def test_0059_supply_guard_bodies_triggers_and_runtime_acl_match_manifest() -> N
         projection_sql = projection_sql.replace(legacy, fixed)
     projection_body = projection_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
     assert hashlib.sha256(projection_body.encode("utf-8")).hexdigest() == (
-        MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[
-            (migration.PROJECTION_FUNCTION, "uuid")
-        ]
+        migration.PROJECTION_BODY_SHA256_0059
+    )
+    _assert_0069_function_body_matches_runtime_manifest(
+        coordinate=(migration.PROJECTION_FUNCTION, "uuid"),
+        historical_body=projection_body,
+        historical_hash=migration_0069.APPROVAL_PROJECTION_BODY_SHA256_0059,
+        current_hash=migration_0069.APPROVAL_PROJECTION_BODY_SHA256_0069,
+        replacements=((
+            migration_0069.APPROVAL_PROJECTION_APPROVED_OLD,
+            migration_0069.APPROVAL_PROJECTION_APPROVED_NEW,
+        ),),
     )
 
     expected_bindings = {
@@ -7635,6 +7686,7 @@ def test_0059_supply_guard_bodies_triggers_and_runtime_acl_match_manifest() -> N
 def test_0060_supply_security_hashes_and_triggers_match_historical_body() -> None:
     old = _load_material_request_supply_causality_migration_0059()
     migration = _load_material_request_supply_security_migration_0060()
+    migration_0069 = _load_stock_reservations_migration_0069()
 
     guard_body = migration._write_guard_sql().split("AS $$", 1)[1].rsplit(
         "$$", 1
@@ -7667,9 +7719,17 @@ def test_0060_supply_security_hashes_and_triggers_match_historical_body() -> Non
         migration._dispatcher_body_0059(), migration._dispatcher_body_0060()
     )
     assert hashlib.sha256(dispatcher.encode()).hexdigest() == (
-        MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[
-            (migration.DISPATCHER_FUNCTION, "")
-        ]
+        migration.DISPATCHER_BODY_SHA256_0060
+    )
+    _assert_0069_function_body_matches_runtime_manifest(
+        coordinate=(migration.DISPATCHER_FUNCTION, ""),
+        historical_body=dispatcher,
+        historical_hash=migration_0069.SUPPLY_DISPATCH_BODY_SHA256_0060,
+        current_hash=migration_0069.SUPPLY_DISPATCH_BODY_SHA256_0069,
+        replacements=((
+            migration_0069._dispatcher_body_0060(),
+            migration_0069._dispatcher_body_0069(),
+        ),),
     )
     assert (migration.WRITE_GUARD_FUNCTION, "") in (
         MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
@@ -7686,10 +7746,11 @@ def test_0060_supply_security_hashes_and_triggers_match_historical_body() -> Non
     )
 
 
-def test_0061_supply_event_key_hashes_match_current_security_manifests() -> None:
+def test_0061_supply_event_key_history_and_0069_runtime_manifest() -> None:
     migration_0059 = _load_material_request_supply_causality_migration_0059()
     migration_0060 = _load_material_request_supply_security_migration_0060()
     migration = _load_material_request_supply_event_key_migration_0061()
+    migration_0069 = _load_stock_reservations_migration_0069()
 
     validator = migration_0059._supply_validator_sql().split(
         "AS $$", 1
@@ -7732,9 +7793,18 @@ def test_0061_supply_event_key_hashes_match_current_security_manifests() -> None
         migration.FIXED_VALIDATOR_BODY_SHA256
     )
     assert migration.FIXED_VALIDATOR_BODY_SHA256 == (
-        MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[
-            ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint")
-        ]
+        migration_0069.SUPPLY_VALIDATE_BODY_SHA256_0061
+    )
+    _assert_0069_function_body_matches_runtime_manifest(
+        coordinate=("rsc_validate_material_request_supply_causality_0059", "uuid, bigint"),
+        historical_body=validator,
+        historical_hash=migration_0069.SUPPLY_VALIDATE_BODY_SHA256_0061,
+        current_hash=migration_0069.SUPPLY_VALIDATE_BODY_SHA256_0069,
+        replacements=(
+            (migration_0069.SUPPLY_VALIDATE_CEILING_OLD, migration_0069.SUPPLY_VALIDATE_CEILING_NEW),
+            (migration_0069.SUPPLY_VALIDATE_NEUTRAL_OLD, migration_0069.SUPPLY_VALIDATE_NEUTRAL_NEW),
+            (migration_0069.SUPPLY_VALIDATE_STATE_AXES_OLD, migration_0069.SUPPLY_VALIDATE_STATE_AXES_NEW),
+        ),
     )
     from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061
 
@@ -7742,6 +7812,37 @@ def test_0061_supply_event_key_hashes_match_current_security_manifests() -> None
         OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061[
             "rsc_oam_runtime_binding_ready_0044()"
         ][6]
+    )
+
+
+def test_0069_request_guard_body_matches_runtime_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "rsc_migration_0029_request_guard_security_manifest",
+        STOCK_RESERVATIONS_MIGRATION_0069.parent
+        / "20260831_0029_material_request_approval_domain.py",
+    )
+    assert spec is not None and spec.loader is not None
+    migration_0029 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration_0029)
+    migration_0069 = _load_stock_reservations_migration_0069()
+    statements: list[str] = []
+    monkeypatch.setattr(migration_0029.op, "execute", statements.append)
+    migration_0029._create_postgresql_guards()
+    request_guard_sql = next(
+        sql for sql in statements
+        if f"CREATE FUNCTION {migration_0069.REQUEST_GUARD_SIGNATURE}" in sql
+    )
+    _assert_0069_function_body_matches_runtime_manifest(
+        coordinate=(migration_0069.REQUEST_GUARD_FUNCTION, ""),
+        historical_body=request_guard_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0],
+        historical_hash=migration_0069.REQUEST_GUARD_BODY_SHA256_0029,
+        current_hash=migration_0069.REQUEST_GUARD_BODY_SHA256_0069,
+        replacements=((
+            migration_0069.REQUEST_GUARD_AXIS_OLD,
+            migration_0069.REQUEST_GUARD_AXIS_NEW,
+        ),),
     )
 
 

@@ -47,6 +47,8 @@ import FormalFileUploadField, {
   type FormalFileUploadClient,
   defaultFormalFileUploadClient,
 } from "../FormalFileUploadField";
+import FormalMaterialRequestReservationPanel from "../FormalMaterialRequestReservationPanel";
+import { createReservationRecoveryStore, type ReservationRecoveryStore } from "../materialRequestReservationRecovery";
 import FormalMaterialRequestSupplyPanel from "../FormalMaterialRequestSupplyPanel";
 import { createSupplyRecoveryStore, supplyRecoveryBlocked, type SupplyRecoveryStore } from "../materialRequestSupplyRecovery";
 import { createAllocationRecoveryStore, type AllocationRecoveryStore } from "../materialRequestAllocationRecovery";
@@ -1019,12 +1021,14 @@ export default function FormalMaterialRequestsPage({
   lifecycleRecoveryStore,
   supplyRecoveryStore,
   allocationRecoveryStore,
+  reservationRecoveryStore,
 }: {
   adapter: FormalMaterialRequestAdapter;
   fileUploadClient?: FormalFileUploadClient;
   lifecycleRecoveryStore?: MaterialRequestLifecycleRecoveryStore;
   supplyRecoveryStore?: SupplyRecoveryStore;
   allocationRecoveryStore?: AllocationRecoveryStore;
+  reservationRecoveryStore?: ReservationRecoveryStore;
 }) {
   const recoveryStore = useRef(
     lifecycleRecoveryStore ?? createMaterialRequestLifecycleRecoveryStore(),
@@ -1036,12 +1040,23 @@ export default function FormalMaterialRequestsPage({
   const [allocationBlocked, setAllocationBlocked] = useState(
     () => allocationStore.current.read().kind !== "missing",
   );
+  const reservationStore = useRef(reservationRecoveryStore ?? createReservationRecoveryStore());
+  const [reservationBlocked, setReservationBlocked] = useState(() => reservationStore.current.read().kind !== "missing");
+  const reservationBlockingRef = useRef(reservationBlocked);
+  const supplyBlockingRef = useRef(supplyBlocked);
+  const allocationBlockingRef = useRef(allocationBlocked);
+  function onReservationBlocking(value: boolean) { reservationBlockingRef.current = value; setReservationBlocked(value); }
+  function onSupplyBlocking(value: boolean) { supplyBlockingRef.current = value; setSupplyBlocked(value); }
+  function onAllocationBlocking(value: boolean) { allocationBlockingRef.current = value; setAllocationBlocked(value); }
+  function reservationWriteBlocked() { return reservationBlockingRef.current || reservationStore.current.read().kind !== "missing"; }
   const [access, setAccess] = useState<FormalMaterialRequestAccess | null>(null);
   const [items, setItems] = useState<MaterialRequestSummary[]>([]);
   const [nextAfterId, setNextAfterId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [baseBusy, setBusy] = useState(false);
-  const busy = baseBusy || supplyBlocked || allocationBlocked;
+  const [baseBusy, setBaseBusy] = useState(false);
+  const baseBusyRef = useRef(false);
+  function setBusy(value: boolean) { baseBusyRef.current = value; setBaseBusy(value); }
+  const busy = baseBusy || supplyBlocked || allocationBlocked || reservationBlocked;
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [detail, setDetail] = useState<MaterialRequestDetail | null>(null);
@@ -1075,7 +1090,7 @@ export default function FormalMaterialRequestsPage({
   }> | null>(null);
 
   const lifecycleWritesBlocked = lifecycleRecovery.phase === "checking"
-    || lifecycleRecovery.phase === "blocked" || supplyBlocked || allocationBlocked;
+    || lifecycleRecovery.phase === "blocked" || supplyBlocked || allocationBlocked || reservationBlocked;
   const draftWritePending = Boolean(
     formMode?.kind === "create"
       ? createRegistry.current.get()
@@ -1279,7 +1294,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   function startCreate(): void {
-    if (busy) {
+    if (busy || reservationWriteBlocked()) {
       setError("当前读取或写入尚未结束，不能开始新的需求草稿");
       return;
     }
@@ -1590,7 +1605,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   async function startEdit(): Promise<void> {
-    if (supplyBlocked || allocationBlocked) return;
+    if (supplyBlockingRef.current || allocationBlockingRef.current || reservationWriteBlocked()) return;
     if (!detail || !["draft", "returned"].includes(detail.states.request_status)
         || !detail.allowed_actions.includes("update")) return;
     const currentEditGeneration = ++editRecoveryGeneration.current;
@@ -1652,7 +1667,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   async function saveDraft(): Promise<void> {
-    if (supplyBlocked || allocationBlocked) return;
+    if (supplyBlockingRef.current || allocationBlockingRef.current || reservationWriteBlocked()) return;
     if (!formMode) return;
     if (form.workOrderUnavailable) {
       setFormError("原关联工单当前不可选；必须明确清除或从正式列表重新选择后才能保存");
@@ -1737,7 +1752,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   async function submitRequest(): Promise<void> {
-    if (supplyBlocked || allocationBlocked) return;
+    if (supplyBlockingRef.current || allocationBlockingRef.current || reservationWriteBlocked()) return;
     if (!detail || !["draft", "returned"].includes(detail.states.request_status)
         || !detail.allowed_actions.includes("submit")) return;
     const before = detail;
@@ -1780,7 +1795,7 @@ export default function FormalMaterialRequestsPage({
 
   function startLifecycleProcess(kind: LifecycleProcessState["kind"]): void {
     if (!detail || !access) return;
-    if (lifecycleWritesBlocked) {
+    if (lifecycleWritesBlocked || reservationWriteBlocked()) {
       setError("已有生命周期命令待核验或恢复存储不可用，禁止生成新的撤回/取消请求坐标");
       return;
     }
@@ -1836,6 +1851,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   async function submitLifecycleProcess(): Promise<void> {
+    if (reservationWriteBlocked()) return;
     if (!detail || !access || !lifecycleProcess) return;
     const before = detail;
     const process = lifecycleProcess;
@@ -2005,7 +2021,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   function startApprovalProcess(kind: ApprovalProcessState["kind"]): void {
-    if (supplyBlocked || allocationBlocked) return;
+    if (supplyBlockingRef.current || allocationBlockingRef.current || reservationWriteBlocked()) return;
     if (!detail || !access) return;
     const step = currentApprovalStep(detail);
     if (!step) {
@@ -2079,7 +2095,7 @@ export default function FormalMaterialRequestsPage({
   }
 
   async function submitApprovalProcess(): Promise<void> {
-    if (supplyBlocked || allocationBlocked) return;
+    if (supplyBlockingRef.current || allocationBlockingRef.current || reservationWriteBlocked()) return;
     if (!detail || !approvalProcess || !access) return;
     const before = detail;
     const process = approvalProcess;
@@ -2271,23 +2287,37 @@ export default function FormalMaterialRequestsPage({
       adapter={adapter} access={access} detail={null} store={supplyStore.current}
       registry={mutationRegistry.current}
       allocationRecoveryStore={allocationStore.current}
-      otherWriteBusy={baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking" || allocationBlocked}
-      onBlocking={setSupplyBlocked} onAllocationBlocking={setAllocationBlocked} onDetail={setDetail}
+      otherWriteBusy={baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking" || allocationBlocked || reservationBlocked}
+      otherWriteBlocked={() => reservationWriteBlocked()}
+      onBlocking={onSupplyBlocking} onAllocationBlocking={onAllocationBlocking} onDetail={setDetail}
+    />}
+    {!detail && <FormalMaterialRequestReservationPanel
+      adapter={adapter} access={access} detail={null} store={reservationStore.current}
+      otherWriteBusy={baseBusy || supplyBlocked || allocationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+      otherWriteBlocked={() => baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
+      onBlocking={onReservationBlocking} onDetail={setDetail}
     />}
     {detail && access && <Modal title="正式需求详情" wide onClose={() => {
-      if (!approvalProcess && !lifecycleProcess && !supplyBlocked && !allocationBlocked) {
+      if (!approvalProcess && !lifecycleProcess && !supplyBlocked && !allocationBlocked && !reservationWriteBlocked()) {
         editRecoveryGeneration.current += 1;
         setBusy(false);
         setDetail(null);
       }
     }}>
+      <FormalMaterialRequestReservationPanel
+        adapter={adapter} access={access} detail={detail} store={reservationStore.current}
+        otherWriteBusy={baseBusy || supplyBlocked || allocationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
+        onBlocking={onReservationBlocking} onDetail={setDetail}
+      />
       <DetailPanel detail={detail} access={access} busy={busy} lifecycleBlocked={lifecycleWritesBlocked} onEdit={() => void startEdit()} onSubmit={() => setSubmitConfirm(true)} onProcess={startApprovalProcess} onLifecycle={startLifecycleProcess} />
       <FormalMaterialRequestSupplyPanel
         adapter={adapter} access={access} detail={detail} store={supplyStore.current}
         registry={mutationRegistry.current}
         allocationRecoveryStore={allocationStore.current}
-        otherWriteBusy={baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking" || allocationBlocked}
-        onBlocking={setSupplyBlocked} onAllocationBlocking={setAllocationBlocked} onDetail={setDetail}
+        otherWriteBusy={baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking" || allocationBlocked || reservationBlocked}
+        otherWriteBlocked={() => reservationWriteBlocked()}
+        onBlocking={onSupplyBlocking} onAllocationBlocking={onAllocationBlocking} onDetail={setDetail}
       />
     </Modal>}
 

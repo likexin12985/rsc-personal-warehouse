@@ -55,7 +55,7 @@ function quantityUnits(value: string): bigint {
   const [whole, fraction = ""] = value.split(".");
   return BigInt(`${whole}${fraction.padEnd(3, "0")}`);
 }
-function option(value: unknown): MaterialRequestAllocationOption {
+export function validateMaterialRequestAllocationOption(value: unknown): MaterialRequestAllocationOption {
   const row = object(value, [
     "stock_account_id", "owner_org_id", "owner_org_code", "owner_org_name", "location_owner_org_id",
     "location_owner_org_code", "location_owner_org_name", "location_id", "location_code", "location_name",
@@ -93,7 +93,7 @@ export function validateMaterialRequestAllocationOptionPage(value: unknown): Mat
   if (quantityUnits(finalApprovedQty) - quantityUnits(cancelledQty) !== quantityUnits(allocatableQty)) {
     return fail("货源候选批准余量关系无效");
   }
-  const items = row.items.map(option);
+  const items = row.items.map(validateMaterialRequestAllocationOption);
   if (items.some((item) => item.material_id !== uuid(row.material_id, "material_id") || quantityUnits(item.quantity) <= 0n)) {
     return fail("货源候选物料或数量关系无效");
   }

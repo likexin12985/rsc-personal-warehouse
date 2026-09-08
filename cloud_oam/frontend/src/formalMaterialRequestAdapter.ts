@@ -4,6 +4,7 @@ import { validateMaterialRequestWorkOrderOptionQuery } from "./formalMaterialReq
 import { validateMaterialRequestAllocationOptionPage, type MaterialRequestAllocationOptionPage } from "./formalMaterialRequestAllocationOptions";
 import { validateMaterialRequestAllocationCommandStatus, validateMaterialRequestAllocationMutationResult, type MaterialRequestAllocationCommandStatus, type MaterialRequestAllocationMutationResult } from "./formalMaterialRequestAllocationCommandStatus";
 import { validateMaterialRequestReservationCommandStatus, validateMaterialRequestReservationMutationResult, type MaterialRequestReservationCommandStatus, type MaterialRequestReservationMutationResult } from "./formalMaterialRequestReservationCommandStatus";
+import { validateMaterialRequestReservationOptionPage, type MaterialRequestReservationOptionPage } from "./formalMaterialRequestReservationOptions";
 import { validateSupplyCreateInput, validateSupplyUpdateInput } from "./formalMaterialRequestSupply";
 import {
   MATERIAL_REQUEST_SCHEMA_VERSION,
@@ -106,6 +107,7 @@ export interface FormalMaterialRequestAdapter {
     input: MaterialRequestAllocationCreateInput,
     headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>,
   ): Promise<MaterialRequestAllocationMutationResult>;
+  listReservationOptions?(requestId: string, requestLineId: string): Promise<MaterialRequestReservationOptionPage>;
   createReservation?(
     requestId: string,
     input: MaterialRequestReservationCreateInput,
@@ -828,6 +830,12 @@ export function createFormalMaterialRequestAdapter(
           serial_ids: serialIds,
         }),
       }).then(validateMaterialRequestAllocationMutationResult);
+    },
+    listReservationOptions(requestId: string, requestLineId: string) {
+      const path = `/v1/material-requests/${requiredUuid(requestId, "request_id")}/reservation-options?request_line_id=${encodeURIComponent(requiredUuid(requestLineId, "request_line_id"))}`;
+      const read = requireNoReplayRequester();
+      return read<unknown>(path, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } })
+        .then(validateMaterialRequestReservationOptionPage);
     },
     createReservation(requestId: string, input: MaterialRequestReservationCreateInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
       const checkedRequestId = requiredUuid(requestId, "request_id");

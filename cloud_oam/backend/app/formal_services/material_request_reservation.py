@@ -43,12 +43,14 @@ from ..inventory_models import (
 )
 from ..models import User
 from . import inventory_query
-from .audit_chain import AuditChainError, append_audit_event
+from .audit_chain import AuditChainError, append_audit_event, verify_audit_event_in_stream
 from .inventory_posting import (
     InventoryMovementCommand,
     InventoryPostingCommand,
     InventoryPostingError,
     post_inventory_transaction,
+    _posting_document,
+    _storage_hash,
 )
 
 
@@ -121,6 +123,9 @@ class ReservationCommandResult:
     reservation_status: str
     request_status: str
     state_axes: Mapping[str, str]
+    source_balance_version: int
+    source_ledger_cursor: int
+    serial_ids: tuple[uuid.UUID, ...]
     replayed: bool = False
     current_request_version: int | None = None
 
@@ -198,7 +203,7 @@ def reservation_command_status(
     """Read the durable result of a possibly interrupted reservation write."""
 
     _require_actor(actor)
-    if not isinstance(trace_request_id, str) or not trace_request_id.strip():
+    if not isinstance(trace_request_id, str) or not 8 <= len(trace_request_id) <= 160 or not _PRINTABLE.fullmatch(trace_request_id):
         _fail(
             "material_request_reservation_trace_invalid",
             "invalid_request",
@@ -215,6 +220,7 @@ def reservation_command_status(
                     AuditEvent.request_id == trace_request_id,
                 )
                 .order_by(AuditEvent.id)
+                .limit(2)
                 .execution_options(populate_existing=True)
             ).all()
         )
@@ -266,33 +272,12 @@ def reservation_command_status(
             if fact is not None
             else None
         )
-        command = (
-            db.scalar(
-                select(MaterialRequestCommand)
-                .where(
-                    MaterialRequestCommand.request_id == fact.request_id,
-                    MaterialRequestCommand.operation == "reserve",
-                    MaterialRequestCommand.target_version == fact.request_version,
-                )
-                .execution_options(populate_existing=True)
-            )
-            if fact is not None
-            else None
-        )
-        transaction = (
-            db.get(InventoryTransaction, fact.reserve_transaction_id)
-            if fact is not None
-            else None
-        )
-    if fact is None or request is None or command is None or transaction is None:
+    if fact is None or request is None:
         _fail(
             "material_request_reservation_history_invalid",
             "service_unavailable",
             "预约事实或命令证据缺失",
         )
-    _verify_persisted_reservation_evidence(
-        fact=fact, request=request, command=command, audit=audit, transaction=transaction
-    )
     if (
         fact.actor_user_id != actor.user_id
         or fact.actor_person_id != actor.person_id
@@ -303,9 +288,11 @@ def reservation_command_status(
             "precondition_failed",
             "原预约授权版本已变化",
         )
+    command, transaction = _verified_history(db, fact=fact, request=request)
     return _result_from_existing(
         fact,
         request=request,
+        command=command,
         replayed=True,
         reserve_transaction_no=transaction.transaction_no,
     )
@@ -334,7 +321,7 @@ def _create_reservation_impl(
             "invalid_request",
             "需求版本无效",
         )
-    if not isinstance(trace_request_id, str) or not trace_request_id.strip() or not _PRINTABLE.fullmatch(trace_request_id):
+    if not isinstance(trace_request_id, str) or not 8 <= len(trace_request_id) <= 160 or not _PRINTABLE.fullmatch(trace_request_id):
         _fail(
             "material_request_reservation_trace_invalid",
             "invalid_request",
@@ -411,7 +398,7 @@ def _create_reservation_impl(
     existing = db.scalar(
         select(StockReservation)
         .where(StockReservation.idempotency_key_hash == key_hash)
-        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if existing is not None:
         if existing.request_hash != request_hash or existing.request_id != request_id:
@@ -420,16 +407,11 @@ def _create_reservation_impl(
                 "conflict",
                 "幂等键已绑定其他预约内容",
             )
-        transaction = db.get(InventoryTransaction, existing.reserve_transaction_id)
-        if transaction is None or transaction.status != "posted":
-            _fail(
-                "material_request_reservation_history_invalid",
-                "service_unavailable",
-                "预约库存交易证据缺失",
-            )
+        command, transaction = _verified_history(db, fact=existing, request=request)
         return _result_from_existing(
             existing,
             request=request,
+            command=command,
             replayed=True,
             reserve_transaction_no=transaction.transaction_no,
         )
@@ -484,7 +466,7 @@ def _create_reservation_impl(
             StockAllocation.revision_id == line.revision_id,
             StockAllocation.status == "allocated",
         )
-        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if allocation is None:
         _fail(
@@ -502,7 +484,6 @@ def _create_reservation_impl(
     prior_reserved = db.scalar(
         select(func.coalesce(func.sum(StockReservation.reserved_qty), 0)).where(
             StockReservation.allocation_id == allocation.id,
-            StockReservation.status == _RESERVATION_STATUS,
         )
     ) or _ZERO
     if prior_reserved + reservation.reserved_qty > allocation.allocated_qty:
@@ -692,6 +673,9 @@ def _create_reservation_impl(
         "source_stock_account_id": str(source.id),
         "stock_account_id": str(target.id),
         "reserved_qty": _quantity_text(reservation.reserved_qty),
+        "source_balance_version": reservation.source_balance_version,
+        "source_ledger_cursor": reservation.source_ledger_cursor,
+        "serial_ids": [str(value) for value in reservation.serial_ids],
         "reservation_id": str(reservation_id),
         "reservation_no": reservation_no,
         "reserve_transaction_id": str(posting_result.transaction_id),
@@ -724,6 +708,7 @@ def _create_reservation_impl(
             "reserve_transaction_id": str(posting_result.transaction_id),
             "source_balance_version": reservation.source_balance_version,
             "source_ledger_cursor": reservation.source_ledger_cursor,
+            "serial_ids": [str(value) for value in reservation.serial_ids],
             "payload_sha256": request_hash,
             "comment_sha256": hashlib.sha256(b"").hexdigest(),
             "sensitive_fields": "excluded",
@@ -774,6 +759,9 @@ def _create_reservation_impl(
             "reservation_status": previous_status,
         },
         after_jsonb={
+            "command_id": str(command.id),
+            "request_hash": command.request_hash,
+            "result_hash": command.result_hash,
             "reservation_id": str(reservation_id),
             "reservation_no": reservation_no,
             "request_id": str(request_id),
@@ -809,6 +797,9 @@ def _create_reservation_impl(
         reservation_status=_RESERVATION_STATUS,
         request_status=request.status,
         state_axes=state_axes,
+        source_balance_version=reservation.source_balance_version,
+        source_ledger_cursor=reservation.source_ledger_cursor,
+        serial_ids=reservation.serial_ids,
     )
 
 
@@ -897,31 +888,228 @@ def _validate_serial_binding(
         )
 
 
-def _verify_persisted_reservation_evidence(
-    *,
-    fact: StockReservation,
-    request: MaterialRequest,
-    command: MaterialRequestCommand,
-    audit: AuditEvent,
-    transaction: InventoryTransaction,
-) -> None:
-    if fact.status != _RESERVATION_STATUS or transaction.status != "posted" or transaction.movement_type != "reserve":
-        _fail("material_request_reservation_history_invalid", "service_unavailable", "预约事实状态异常")
-    if command.idempotency_key_hash != fact.idempotency_key_hash or command.result_hash != _canonical_hash(command.result_jsonb):
-        _fail("material_request_reservation_history_invalid", "service_unavailable", "预约命令摘要无效")
-    if not isinstance(command.result_jsonb, Mapping) or command.result_jsonb.get("reservation_id") != str(fact.id):
-        _fail("material_request_reservation_history_invalid", "service_unavailable", "预约命令与事实不一致")
-    expected_after = audit.after_jsonb
-    if not isinstance(expected_after, Mapping) or expected_after.get("reservation_id") != str(fact.id) or expected_after.get("reserved_qty") != _quantity_text(fact.reserved_qty) or expected_after.get("request_version") != fact.request_version:
-        _fail("material_request_reservation_history_invalid", "service_unavailable", "预约审计与事实不一致")
-    if request.version < fact.request_version or transaction.id != fact.reserve_transaction_id or transaction.source_document_id != str(fact.id):
-        _fail("material_request_reservation_history_invalid", "service_unavailable", "预约交易与需求坐标不一致")
+def _history_invalid() -> None:
+    _fail(
+        "material_request_reservation_history_invalid",
+        "service_unavailable",
+        "预约命令、库存流水或审计证据无法精确核对，保持结果待核验",
+    )
+
+
+def _historical_utc(value: datetime) -> datetime:
+    if not isinstance(value, datetime):
+        _history_invalid()
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def _verified_history(
+    db: Session, *, fact: StockReservation, request: MaterialRequest
+) -> tuple[MaterialRequestCommand, InventoryTransaction]:
+    """Prove the original command using immutable facts, never live candidates.
+
+    Both recovery and idempotent replay use this path. Mutable balances and SN
+    locations may have advanced; they cannot prove what this command posted.
+    Every evidence collection is bounded and duplicate evidence fails closed.
+    """
+    with db.no_autoflush:
+        commands = tuple(db.scalars(
+            select(MaterialRequestCommand).where(
+                MaterialRequestCommand.request_id == fact.request_id,
+                MaterialRequestCommand.operation == "reserve",
+                MaterialRequestCommand.target_version == fact.request_version,
+            ).limit(2).execution_options(populate_existing=True)
+        ).all())
+        audits = tuple(db.scalars(
+            select(AuditEvent).where(
+                AuditEvent.stream_key == _AUDIT_STREAM,
+                AuditEvent.action == _AUDIT_ACTION,
+                AuditEvent.aggregate_type == _AUDIT_AGGREGATE,
+                AuditEvent.aggregate_id == str(fact.id),
+            ).limit(2).execution_options(populate_existing=True)
+        ).all())
+        transaction = db.scalar(
+            select(InventoryTransaction).where(
+                InventoryTransaction.id == fact.reserve_transaction_id
+            ).execution_options(populate_existing=True)
+        )
+        movements = tuple(db.scalars(
+            select(InventoryMovement).where(
+                InventoryMovement.transaction_id == fact.reserve_transaction_id
+            ).limit(2).execution_options(populate_existing=True)
+        ).all())
+        serials = tuple(db.scalars(
+            select(StockReservationSerial).where(
+                StockReservationSerial.reservation_id == fact.id
+            ).limit(1001).execution_options(populate_existing=True)
+        ).all())
+        movement_serials = tuple(db.scalars(
+            select(InventoryMovementSerial).where(
+                InventoryMovementSerial.transaction_id == fact.reserve_transaction_id
+            ).limit(1001).execution_options(populate_existing=True)
+        ).all())
+        events = tuple(db.scalars(
+            select(StateTransitionEvent).where(
+                StateTransitionEvent.idempotency_key == f"reservation-state-{fact.idempotency_key_hash}"
+            ).limit(2).execution_options(populate_existing=True)
+        ).all())
+    if (
+        len(commands) != 1 or len(audits) != 1 or transaction is None
+        or len(movements) != 1 or len(events) != 1
+        or len(serials) > 1000 or len(movement_serials) > 1000
+    ):
+        _history_invalid()
+    command, audit, movement, event = commands[0], audits[0], movements[0], events[0]
+    result, document = command.result_jsonb, command.request_jsonb
+    if not isinstance(result, dict) or not isinstance(document, dict):
+        _history_invalid()
+    balance_version = result.get("source_balance_version")
+    ledger_cursor = result.get("source_ledger_cursor")
+    raw_serial_ids = result.get("serial_ids")
+    axes = result.get("state_axes")
+    if (
+        type(balance_version) is not int or balance_version < 0
+        or type(ledger_cursor) is not int or ledger_cursor < 0
+        or not isinstance(raw_serial_ids, list) or len(raw_serial_ids) > 1000
+        or not isinstance(axes, dict) or set(axes) != set(_state_axes(request))
+        or any(type(value) is not str for value in axes.values())
+        or axes.get("request_status") not in {"approved", "partially_approved"}
+        or axes.get("reservation_status") not in {"pending", "reserved"}
+    ):
+        _history_invalid()
+    try:
+        serial_ids = tuple(uuid.UUID(value) for value in raw_serial_ids)
+    except (ValueError, TypeError, AttributeError):
+        _history_invalid()
+    if (
+        len(set(serial_ids)) != len(serial_ids) or any(value.int == 0 for value in serial_ids)
+        or [str(value) for value in serial_ids] != raw_serial_ids
+    ):
+        _history_invalid()
+    quantity = _quantity_text(fact.reserved_qty)
+    # SQLite's timestamp adapter loses UTC offsets; production timestamptz
+    # preserves them. Both represent the original UTC instant.
+    effective_at = _historical_utc(fact.created_at)
+    inventory_hash = _canonical_hash({
+        "operation": "post",
+        "actor": {
+            "user_id": fact.actor_user_id, "person_id": str(fact.actor_person_id),
+            "authorization_version": fact.authorization_version,
+        },
+        "command": _posting_document(InventoryPostingCommand(
+            transaction_no=transaction.transaction_no, movement_type="reserve",
+            source_document_type="material_request_reservation", source_document_id=str(fact.id),
+            posting_key=f"material-request-reservation:{fact.id}", effective_at=effective_at,
+            movements=(InventoryMovementCommand(
+                from_account_id=fact.source_stock_account_id, to_account_id=fact.stock_account_id,
+                quantity=fact.reserved_qty, serial_ids=tuple(sorted(serial_ids, key=str)),
+                external_boundary_code=None,
+            ),),
+        )),
+    })
+    expected_result = {
+        "kind": "reservation", "schema_version": _RESULT_SCHEMA_VERSION,
+        "request_id": str(fact.request_id), "request_no": request.request_no,
+        "request_version": fact.request_version,
+        "revision_id": str(fact.revision_id), "revision_no": fact.revision_no,
+        "request_line_id": str(fact.request_line_id), "allocation_id": str(fact.allocation_id),
+        "source_stock_account_id": str(fact.source_stock_account_id),
+        "stock_account_id": str(fact.stock_account_id), "reserved_qty": quantity,
+        "source_balance_version": balance_version, "source_ledger_cursor": ledger_cursor,
+        "serial_ids": raw_serial_ids,
+        "reservation_id": str(fact.id), "reservation_no": fact.reservation_no,
+        "reserve_transaction_id": str(fact.reserve_transaction_id),
+        "reserve_transaction_no": transaction.transaction_no,
+        "reservation_status": _RESERVATION_STATUS,
+        "request_status": axes["request_status"], "state_axes": axes,
+    }
+    payload_hash = _canonical_hash({
+        "request_id": str(fact.request_id), "expected_request_version": fact.request_version - 1,
+        "request_line_id": str(fact.request_line_id), "allocation_id": str(fact.allocation_id),
+        "reserved_qty": quantity, "source_balance_version": balance_version,
+        "source_ledger_cursor": ledger_cursor, "serial_ids": raw_serial_ids,
+        "actor_user_id": fact.actor_user_id, "actor_person_id": str(fact.actor_person_id),
+        "authorization_version": fact.authorization_version,
+    })
+    expected_document = {
+        "schema": _COMMAND_SCHEMA, "operation": "reserve", "request_id": str(fact.request_id),
+        "revision_id": str(fact.revision_id), "revision_no": fact.revision_no,
+        "request_line_id": str(fact.request_line_id), "allocation_id": str(fact.allocation_id),
+        "target_version": fact.request_version, "reserved_qty": quantity,
+        "source_stock_account_id": str(fact.source_stock_account_id),
+        "stock_account_id": str(fact.stock_account_id),
+        "reserve_transaction_id": str(fact.reserve_transaction_id),
+        "source_balance_version": balance_version, "source_ledger_cursor": ledger_cursor,
+        "serial_ids": raw_serial_ids, "payload_sha256": payload_hash,
+        "comment_sha256": hashlib.sha256(b"").hexdigest(), "sensitive_fields": "excluded",
+    }
+    expected_after = {
+        "command_id": str(command.id), "request_hash": command.request_hash,
+        "result_hash": command.result_hash,
+        "reservation_id": str(fact.id), "reservation_no": fact.reservation_no,
+        "request_id": str(fact.request_id), "request_line_id": str(fact.request_line_id),
+        "allocation_id": str(fact.allocation_id),
+        "source_stock_account_id": str(fact.source_stock_account_id),
+        "stock_account_id": str(fact.stock_account_id), "reserved_qty": quantity,
+        "reserve_transaction_id": str(fact.reserve_transaction_id),
+        "request_version": fact.request_version, "reservation_status": axes["reservation_status"],
+    }
+    if (
+        fact.status != _RESERVATION_STATUS or fact.released_qty != _ZERO
+        or fact.release_transaction_id is not None or request.id != fact.request_id
+        or request.version < fact.request_version
+        or (request.version == fact.request_version and _state_axes(request) != axes)
+        or command.idempotency_key_hash != fact.idempotency_key_hash
+        or command.request_hash != fact.request_hash or fact.request_hash != payload_hash
+        or command.request_reference != f"/api/v1/material-requests/{fact.request_id}/reservations"
+        or command.actor_user_id != fact.actor_user_id or command.actor_person_id != fact.actor_person_id
+        or command.authorization_version != fact.authorization_version
+        or _historical_utc(command.occurred_at) != effective_at
+        or _historical_utc(audit.occurred_at) != effective_at
+        or result != expected_result or document != expected_document
+        or command.result_hash != _canonical_hash(expected_result)
+        or audit.actor_user_id != fact.actor_user_id or audit.after_jsonb != expected_after
+        or audit.before_jsonb != {"request_version": fact.request_version - 1, "reservation_status": event.from_status}
+        or event.aggregate_type != "material_request" or event.aggregate_id != str(fact.request_id)
+        or event.reason != _AUDIT_ACTION or event.actor_id != fact.actor_user_id
+        or event.to_status != axes["reservation_status"]
+        or event.metadata_jsonb != {
+            "reservation_id": str(fact.id), "reserved_qty": quantity,
+            "command_id": str(command.id), "idempotency_key_hash": fact.idempotency_key_hash,
+            "request_version": fact.request_version,
+        }
+        or transaction.status != "posted" or transaction.movement_type != "reserve"
+        or transaction.source_document_type != "material_request_reservation"
+        or transaction.source_document_id != str(fact.id)
+        or transaction.posting_key != f"material-request-reservation:{fact.id}"
+        or transaction.actor_user_id != fact.actor_user_id or transaction.posted_at is None
+        or _historical_utc(transaction.effective_at) != effective_at
+        or transaction.request_hash != inventory_hash
+        or transaction.idempotency_key_hash != _storage_hash(f"mr-reservation-{fact.idempotency_key_hash}")
+        or transaction.reversed_transaction_id is not None
+        or transaction.ledger_cursor is None or transaction.ledger_cursor <= ledger_cursor
+        or movement.line_no != 1 or movement.from_account_id != fact.source_stock_account_id
+        or movement.to_account_id != fact.stock_account_id or movement.quantity != fact.reserved_qty
+        or movement.external_boundary_code is not None
+        or any(row.allocation_id != fact.allocation_id for row in serials)
+        or {row.serial_id for row in serials} != set(serial_ids)
+        or len(serials) != len(serial_ids) or len(movement_serials) != len(serial_ids)
+        or any(row.movement_id != movement.id for row in movement_serials)
+        or {row.serial_id for row in movement_serials} != set(serial_ids)
+        or (serial_ids and fact.reserved_qty != Decimal(len(serial_ids)))
+    ):
+        _history_invalid()
+    try:
+        verify_audit_event_in_stream(db, stream_key=_AUDIT_STREAM, event_id=audit.id)
+    except AuditChainError:
+        _history_invalid()
+    return command, transaction
 
 
 def _result_from_existing(
     fact: StockReservation,
     *,
     request: MaterialRequest,
+    command: MaterialRequestCommand,
     replayed: bool,
     reserve_transaction_no: str = "",
 ) -> ReservationCommandResult:
@@ -941,8 +1129,11 @@ def _result_from_existing(
         reserve_transaction_no=reserve_transaction_no,
         reserved_qty=fact.reserved_qty,
         reservation_status=fact.status,
-        request_status=request.status,
-        state_axes=_state_axes(request),
+        request_status=command.result_jsonb["request_status"],
+        state_axes=dict(command.result_jsonb["state_axes"]),
+        source_balance_version=command.result_jsonb["source_balance_version"],
+        source_ledger_cursor=command.result_jsonb["source_ledger_cursor"],
+        serial_ids=tuple(uuid.UUID(value) for value in command.result_jsonb["serial_ids"]),
         replayed=replayed,
     )
 

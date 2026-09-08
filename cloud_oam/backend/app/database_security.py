@@ -2269,7 +2269,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_guard_material_request_original_line_0029", ""):
         "d00a8775d26e1b48e2a72798595354eedff873e2b83a7508c9c2961eb7d5d672",
     ("rsc_guard_material_request_identity_0029", ""):
-        "ee818b78ed22f77eb272676d0b6d31d22bda0d250718c714bb3d1fc06ef353de",
+        "b9f243b9f57c03cacb2f7f78ecda1308a250e625e141ee07629d065b18a928c1",
     ("rsc_guard_material_request_revision_0029", ""):
         "ea718216fbf47320670b171a4aca22019fdbf4540533742aac6ac7573b31ab83",
     ("rsc_guard_material_request_approval_instance_0029", ""):
@@ -2319,7 +2319,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_validate_material_request_external_causality_0045", "uuid"):
         "0f5bd6658edcb46dac6282109b71a109c14003862c89b3f5700d89f1ac13fa26",
     ("rsc_validate_material_request_approval_projection_0045", "uuid"):
-        "b51b11c63f1ec0e5659a9a1b1d1cdce03b32c5c9b604b5c1cdf669781c9b6ca4",
+        "c4c7373e69992d651be7d7ad0d8fd88bdd73d241b4ff6fe824c37f9da0af42eb",
     ("rsc_dispatch_material_request_approval_projection_0045", ""):
         "244d188e126e66fd4b020da01c076a3018f2c8841230bd255da45b7913776d54",
     ("rsc_guard_material_request_supply_task_0059", ""):
@@ -2327,9 +2327,9 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_guard_material_request_supply_write_0060", ""):
         "0fe289826a8aa4d14e2ecd48a9900484bf8929a054dbfa52340fa27786453f26",
     ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint"):
-        "f5803e9a3e0c931228692260c04c9bd4e544eb147aea45192277e57c7b969403",
+        "ffe14766ed4569ddfca748f5ec5d8c639b8b4edace208b668fd65412e2ef37dd",
     ("rsc_dispatch_material_request_supply_causality_0059", ""):
-        "935be3c5144f0bb9d5dad8652bb8284bc7116caaefc9ccb5d177e922b41530c5",
+        "4228949da83f59ea1b46a8badd7c0fe8c58e188b7a88eac318ac032acd339e92",
     ("rsc_guard_material_request_content_write_0046", ""):
         "a1dac8272cf64272d782f02f6270aab5fe285334fb13f88c11aaafc6d1d0364c",
     ("rsc_validate_material_request_content_causality_0046", "uuid"):
