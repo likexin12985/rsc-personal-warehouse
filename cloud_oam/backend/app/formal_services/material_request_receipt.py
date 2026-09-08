@@ -43,6 +43,10 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
     for line in lines:
         shipment_line = db.get(ShipmentLine, line.shipment_line_id)
         if shipment_line is None: _fail("shipment_line_not_found", "not_found", "发运明细不存在")
+        posting = db.get(OutboundPosting, shipment_line.outbound_posting_id)
+        if posting is None or posting.request_id != request_id:
+            _fail("posting_not_found", "conflict", "发运明细缺少当前需求的出库事实")
+        outbound._authorize_account_ids(db, actor, (posting.source_stock_account_id,), action="read", resource="inventory", lock_rows=False)
         shipment = db.get(Shipment, shipment_line.shipment_id)
         if shipment is None: _fail("shipment_not_found", "not_found", "发运单不存在")
         if shipment_id is None: shipment_id = shipment.id
