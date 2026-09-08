@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import uuid
 from sqlalchemy import select
+from ..foundation_models import OutboxEvent
 from ..demand_models import MaterialRequest
 from ..inventory_models import InboundOrder, InboundPosting, Receipt, ReceiptLine, Shipment, ShipmentLine, OutboundPosting, StockAccount
 from .inventory_posting import InventoryMovementCommand, InventoryPostingCommand, post_inventory_transaction
@@ -41,6 +42,7 @@ def create_inbound_order(db, *, actor, request_id, expected_version, receipt_id,
     row = InboundOrder(id=uuid.uuid4(), inbound_no=f"INB-{now:%Y%m%d}-{uuid.uuid4().hex[:12].upper()}", receipt_id=receipt.id, target_location_id=target_location_id, target_person_id=target_person_id, status="pending", posting_transaction_id=None, created_at=now)
     db.add(row); db.flush()
     append_audit_event(db, stream_key="material_request", actor_user_id=actor.user_id, action="personal_inbound_order_created", aggregate_type="inbound_order", aggregate_id=str(row.id), before_jsonb={}, after_jsonb={"request_id": str(request_id), "receipt_id": str(receipt.id), "status": row.status}, request_id=trace_request_id, occurred_at=now, created_at=now)
+    db.add(OutboxEvent(event_type="personal_inbound_order_created", aggregate_type="inbound_order", aggregate_id=str(row.id), payload_jsonb={"request_id": str(request_id), "receipt_id": str(receipt.id), "inbound_no": row.inbound_no}, status="pending", attempts=0, idempotency_key=f"inbound-order:{row.id}", available_at=now))
     return _result(row)
 
 def _result(row):
