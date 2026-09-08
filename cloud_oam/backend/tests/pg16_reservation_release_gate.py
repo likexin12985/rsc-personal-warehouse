@@ -275,8 +275,8 @@ def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory
     with security_engine.connect() as connection:
         transaction = connection.begin()
         try:
-            connection.execute(text("SET LOCAL ROLE star_oam_migrator"))
             connection.execute(text("SET LOCAL session_replication_role = replica"))
+            connection.execute(text("SET LOCAL ROLE star_oam_migrator"))
             with pytest.raises(DBAPIError, match="append-only"):
                 connection.execute(text("UPDATE public.stock_reservation_releases SET reason = 'rewrite forbidden'"))
         finally:
