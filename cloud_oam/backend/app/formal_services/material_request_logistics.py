@@ -13,6 +13,10 @@ class LogisticsEventError(Exception):
 
 def _fail(code, category, message): raise LogisticsEventError(code, category, message)
 
+def _ensure_after_shipping(shipped_at, event_at):
+    if shipped_at is not None and event_at < shipped_at:
+        _fail("time_invalid", "precondition_failed", "物流事件时间不能早于交运时间")
+
 def create_event(db, *, actor, request_id, shipment_id, event_type, event_at, source, evidence_file_id, external_ref, idempotency_key, secret, trace_request_id):
     if not isinstance(secret, bytes): secret = secret.encode()
     if len(secret) < 32: _fail("secret_invalid", "service_unavailable", "物流事件幂等配置不可用")
@@ -23,8 +27,7 @@ def create_event(db, *, actor, request_id, shipment_id, event_type, event_at, so
     if request is None: _fail("not_found", "not_found", "需求单不存在")
     shipment = db.get(Shipment, shipment_id)
     if shipment is None: _fail("shipment_not_found", "not_found", "发运单不存在")
-    if shipment.shipped_at is not None and when < shipment.shipped_at:
-        _fail("time_invalid", "precondition_failed", "物流事件时间不能早于交运时间")
+    _ensure_after_shipping(shipment.shipped_at, when)
     belongs = db.scalar(select(OutboundPosting.request_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).where(ShipmentLine.shipment_id == shipment_id))
     if belongs != request_id: _fail("shipment_request_mismatch", "conflict", "发运单不属于当前需求")
     source_ids = tuple(db.scalars(select(OutboundPosting.source_stock_account_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).where(ShipmentLine.shipment_id == shipment_id)).all())
