@@ -40,6 +40,16 @@ def validate_serial_quantity(quantity: Decimal, serial_ids: tuple[UUID, ...]) ->
         )
 
 
+def expected_posting_movement_type(operation_type: str) -> str:
+    value = {
+        "occupy": "reserve", "release": "release", "consume": "consume",
+        "recover": "return", "reverse": "reversal",
+    }.get(operation_type)
+    if value is None:
+        raise WorkOrderMaterialPreflightError("operation_type_invalid", "工单物料操作类型不合法")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class WorkOrderMaterialLineInput:
     material_id: UUID
@@ -184,6 +194,11 @@ def record_posted_operation(
     transaction = db.get(InventoryTransaction, posting_transaction_id)
     if transaction is None or transaction.status != "posted":
         raise WorkOrderMaterialPreflightError("posting_transaction_missing", "库存事务尚未成功过账")
+    expected_movement_type = expected_posting_movement_type(operation_type)
+    if transaction.movement_type != expected_movement_type:
+        raise WorkOrderMaterialPreflightError(
+            "posting_type_mismatch", "库存事务类型与工单操作类型不匹配"
+        )
     request_hash = operation_request_hash(
         operation_type=operation_type, work_order_id=work_order_id,
         operator_person_id=operator_person_id, lines=lines,

@@ -10,6 +10,7 @@ from app.formal_services.work_order_material import (
     operation_request_hash,
     WorkOrderReplacementPairInput,
     validate_serial_quantity,
+    expected_posting_movement_type,
 )
 
 
@@ -83,3 +84,10 @@ def test_serial_quantity_must_match_physical_units():
     with pytest.raises(WorkOrderMaterialPreflightError, match="SN 数量"):
         validate_serial_quantity(Decimal("2"), (uuid4(),))
     validate_serial_quantity(Decimal("2"), (uuid4(), uuid4()))
+
+
+def test_operation_type_maps_to_matching_inventory_movement():
+    assert expected_posting_movement_type("consume") == "consume"
+    assert expected_posting_movement_type("recover") == "return"
+    with pytest.raises(WorkOrderMaterialPreflightError, match="操作类型"):
+        expected_posting_movement_type("ship")
