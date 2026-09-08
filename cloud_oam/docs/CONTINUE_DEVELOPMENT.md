@@ -257,6 +257,7 @@ PostgreSQL URL，未用占位数据库绕过门禁。
 
 新增只读历史接口 `GET /api/v1/work-orders/{work_order_id}/material-operations`，按正式工单返回
 不可变操作事实，供履约页面刷新和断线恢复；该接口不推断库存状态，也不修改任何事实。
+历史接口现在先核验正式工单存在，不会把不存在的工单伪装成空历史，缺失对象明确返回 404。
 
 事实写入还会校验操作类型与库存事务类型严格对应：占用/释放/消耗/回收/冲销分别只能绑定
 `reserve`/`release`/`consume`/`return`/`reversal` 事务，跨类型绑定直接冲突。

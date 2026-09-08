@@ -10,7 +10,7 @@ from ..database import get_db
 from ..dependencies import require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import work_order_material as service
-from ..demand_models import WorkOrderMaterialOperation
+from ..demand_models import OamWorkOrder, WorkOrderMaterialOperation
 from ..work_order_material_schemas import (
     WorkOrderMaterialLineIn, WorkOrderMaterialPreflightIn,
     WorkOrderMaterialPreflightOut, WorkOrderMaterialOperationIn,
@@ -55,6 +55,8 @@ def list_material_operations(
     principal: FormalPrincipal = Depends(require_permission("work_order_material", "read")),
     db: Session = Depends(get_db),
 ):
+    if db.get(OamWorkOrder, work_order_id) is None:
+        raise HTTPException(status_code=404, detail={"code": "work_order_not_found", "message": "工单不存在"})
     rows = tuple(db.scalars(
         select(WorkOrderMaterialOperation)
         .where(WorkOrderMaterialOperation.oam_work_order_id == work_order_id)
