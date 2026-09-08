@@ -457,7 +457,7 @@ REVIEW_COMMAND_STATUS_REVISION = (
     / "versions"
     / "20260906_0063_review_command_status.py"
 )
-HEAD_REVISION = "20260914_0074"
+HEAD_REVISION = "20260915_0075"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -721,6 +721,7 @@ EXPECTED_TABLES = (
         "outbound_postings", "outbound_posting_serials",
         "shipments", "shipment_lines", "shipment_serials",
         "logistics_events", "receipts", "receipt_lines", "receipt_serials", "receipt_exceptions", "inbound_orders",
+        "inbound_postings",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
     }
