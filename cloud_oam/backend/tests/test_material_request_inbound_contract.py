@@ -3,6 +3,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 import pytest
 import app.formal_services.material_request_inbound as inbound_service
+from app.formal_services.material_request_inbound import InboundError, _validate_inbound_target
 from app.material_request_inbound_schemas import InboundOrderIn, InboundOrderOut, InboundPostingOut
 
 ID = UUID("11111111-1111-1111-1111-111111111111")
@@ -25,6 +26,11 @@ def test_inbound_outputs_keep_schema_version():
 def test_inbound_history_allows_derived_posted_status():
     order = InboundOrderOut(inbound_order_id=ID, inbound_no="INB-1", receipt_id=ID, target_location_id=ID, target_person_id=ID, status="posted")
     assert order.status == "posted"
+
+def test_inbound_target_must_match_shipment_destination():
+    shipment = SimpleNamespace(target_location_id=ID, target_person_id=ID)
+    with pytest.raises(InboundError, match="发运事实"):
+        _validate_inbound_target(shipment, UUID("22222222-2222-2222-2222-222222222222"), ID)
 
 
 def test_inbound_posting_skips_rejected_only_receipt_lines(monkeypatch):

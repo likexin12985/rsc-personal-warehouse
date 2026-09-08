@@ -13,6 +13,13 @@ class InboundError(Exception):
     def __init__(self, code, category, message): self.code, self.category, self.message = code, category, message
 def _fail(c, k, m): raise InboundError(c, k, m)
 
+def _validate_inbound_target(shipment, target_location_id, target_person_id):
+    """The inbound target must remain the immutable shipment destination."""
+    if (shipment.target_location_id != target_location_id
+            or shipment.target_person_id != target_person_id
+            or target_person_id is None):
+        _fail("target_mismatch", "conflict", "个人仓入账目标必须与发运事实一致")
+
 def create_inbound_order(db, *, actor, request_id, expected_version, receipt_id, target_location_id, target_person_id, trace_request_id):
     request = db.scalar(select(MaterialRequest).where(MaterialRequest.id == request_id).with_for_update())
     if request is None: _fail("not_found", "not_found", "需求单不存在")
@@ -21,6 +28,7 @@ def create_inbound_order(db, *, actor, request_id, expected_version, receipt_id,
     if receipt is None: _fail("receipt_not_found", "not_found", "收货单不存在")
     shipment = db.get(Shipment, receipt.shipment_id)
     if shipment is None: _fail("shipment_not_found", "conflict", "收货关联发运不存在")
+    _validate_inbound_target(shipment, target_location_id, target_person_id)
     belongs = db.scalar(select(OutboundPosting.request_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).where(ShipmentLine.shipment_id == shipment.id))
     if belongs != request_id: _fail("receipt_request_mismatch", "conflict", "收货单不属于当前需求")
     if receipt.status not in {"accepted", "exception"}: _fail("receipt_not_final", "precondition_failed", "收货尚未完成验收")
