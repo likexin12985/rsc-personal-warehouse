@@ -17,6 +17,7 @@ from ..work_order_material_schemas import (
     WorkOrderMaterialPreflightOut, WorkOrderMaterialOperationIn,
     WorkOrderMaterialOperationOut,
     WorkOrderMaterialConsumeIn,
+    WorkOrderMaterialReleaseIn,
     WorkOrderMaterialOperationHistoryOut,
 )
 
@@ -60,6 +61,37 @@ def execute_material_consume(
     except service.InventoryPostingError as exc:
         db.rollback()
         _raise(exc)
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=503, detail={"code": "work_order_storage_unavailable", "message": "写入未确认，请回读原操作"}) from None
+    return output
+
+
+@router.post("/{work_order_id}/material-operations/release", response_model=WorkOrderMaterialOperationOut)
+def execute_material_release(
+    work_order_id: UUID, payload: WorkOrderMaterialReleaseIn,
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")),
+    db: Session = Depends(get_db), request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    values = tuple(service.WorkOrderMaterialLineInput(
+        material_id=row.material_id, stock_account_id=row.stock_account_id,
+        target_stock_account_id=row.target_stock_account_id, quantity=row.quantity,
+        serial_ids=row.serial_ids, condition_before=row.condition_before,
+        serial_verifications=tuple(service.SerialVerificationInput(**v.model_dump()) for v in row.serial_verifications),
+    ) for row in payload.lines)
+    try:
+        operation, _posted = service.execute_release_operation(
+            db, actor=principal, work_order_id=work_order_id, lines=values,
+            idempotency_key=payload.idempotency_key, request_id=request_id or payload.request_id,
+        )
+        output = WorkOrderMaterialOperationOut(
+            operation_id=operation.id, operation_no=operation.operation_no,
+            work_order_id=operation.oam_work_order_id, posting_transaction_id=operation.posting_transaction_id,
+            operation_type=operation.operation_type, status=operation.status,
+        )
+        db.commit()
+    except service.InventoryPostingError as exc:
+        db.rollback(); _raise(exc)
     except SQLAlchemyError:
         db.rollback()
         raise HTTPException(status_code=503, detail={"code": "work_order_storage_unavailable", "message": "写入未确认，请回读原操作"}) from None

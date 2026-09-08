@@ -67,6 +67,17 @@ class WorkOrderMaterialConsumeIn(WorkOrderMaterialPreflightIn):
     request_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class WorkOrderMaterialReleaseLineIn(WorkOrderMaterialLineIn):
+    target_stock_account_id: UUID
+
+
+class WorkOrderMaterialReleaseIn(StrictInput):
+    operator_person_id: UUID
+    lines: tuple[WorkOrderMaterialReleaseLineIn, ...] = Field(min_length=1, max_length=100)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    request_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
 class WorkOrderMaterialOperationHistoryOut(BaseModel):
     schema_version: str = "1.0"
     items: tuple[WorkOrderMaterialOperationOut, ...]

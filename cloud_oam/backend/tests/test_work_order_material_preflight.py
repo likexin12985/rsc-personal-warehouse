@@ -1,4 +1,5 @@
 from decimal import Decimal
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
@@ -130,3 +131,11 @@ def test_equivalent_decimal_text_has_same_idempotency_fingerprint():
     args = dict(operation_type="consume", work_order_id=uuid4(), operator_person_id=uuid4())
     assert operation_request_hash(**args, lines=(value,)) == operation_request_hash(
         **args, lines=(replace(value, quantity=Decimal("1.000")),))
+
+
+def test_release_target_account_is_part_of_idempotency_fingerprint():
+    value = line(target_stock_account_id=uuid4())
+    other = replace(value, target_stock_account_id=uuid4())
+    args = dict(operation_type="release", work_order_id=uuid4(), operator_person_id=uuid4())
+    assert operation_request_hash(**args, lines=(value,)) != operation_request_hash(
+        **args, lines=(other,))

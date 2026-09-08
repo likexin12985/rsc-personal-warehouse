@@ -70,6 +70,7 @@ class WorkOrderMaterialLineInput:
     serial_ids: tuple[UUID, ...] = ()
     condition_before: str = "new"
     serial_verifications: tuple[SerialVerificationInput, ...] = ()
+    target_stock_account_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +114,9 @@ def operation_request_hash(*, operation_type: str, work_order_id: UUID,
              "serial_verifications": [
                  {"serial_id": str(v.serial_id), "sku_code": v.sku_code,
                   "serial_no": v.serial_no, "qr_code": v.qr_code}
-                 for v in sorted(row.serial_verifications, key=lambda v: str(v.serial_id))]}
+                 for v in sorted(row.serial_verifications, key=lambda v: str(v.serial_id))],
+             "target_stock_account_id": (str(row.target_stock_account_id)
+                                          if row.target_stock_account_id else None)}
             for row in lines
         ],
         "replacement_pairs": [
@@ -377,5 +380,51 @@ def execute_consume_operation(
         operator_person_id=current.person_id, lines=lines,
         posting_transaction_id=posted.transaction_id,
         idempotency_key=idempotency_key,
+    )
+    return operation, posted
+
+
+def execute_release_operation(
+    db: Session, *, actor: FormalPrincipal, work_order_id: UUID,
+    lines: tuple[WorkOrderMaterialLineInput, ...], idempotency_key: str,
+    request_id: str,
+) -> tuple[WorkOrderMaterialOperation, object]:
+    """Release occupied personal stock back to the exact available account."""
+    order, current = authorize_work_order(db, actor=actor, work_order_id=work_order_id,
+                                          action="operate", lock_rows=True)
+    validate_batch(lines)
+    if not idempotency_key.strip():
+        raise WorkOrderMaterialPreflightError("idempotency_key_missing", "缺少幂等键", "precondition_failed")
+    for line in lines:
+        if line.target_stock_account_id is None:
+            raise WorkOrderMaterialPreflightError("release_target_missing", "释放必须指定可用目标账户", "invalid_request")
+        target = db.get(StockAccount, line.target_stock_account_id, populate_existing=True)
+        location = db.get(StockLocation, target.location_id, populate_existing=True) if target else None
+        if (target is None or target.material_id != line.material_id
+                or target.custodian_person_id != current.person_id
+                or target.availability_bucket != "available"
+                or location is None or location.location_type != "personal"
+                or location.custodian_person_id != current.person_id):
+            raise WorkOrderMaterialPreflightError("release_target_invalid", "释放目标不是当前人员的可用个人仓账户", "conflict")
+    key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
+    command = InventoryPostingCommand(
+        transaction_no=f"INV-WO-RELEASE-{key_hash[:20].upper()}",
+        movement_type="release", source_document_type="work_order_material",
+        source_document_id=str(work_order_id),
+        posting_key=f"work-order-material:release:{work_order_id}:{key_hash}",
+        effective_at=datetime.now(timezone.utc),
+        movements=tuple(InventoryMovementCommand(
+            from_account_id=line.stock_account_id, to_account_id=line.target_stock_account_id,
+            quantity=line.quantity, serial_ids=line.serial_ids,
+        ) for line in lines),
+    )
+    posted = post_inventory_transaction(
+        db, actor=current, command=command,
+        idempotency_key=f"work-order-material:release:{idempotency_key}", request_id=request_id,
+    )
+    operation = record_posted_operation(
+        db, actor=current, operation_type="release", work_order_id=work_order_id,
+        operator_person_id=current.person_id, lines=lines,
+        posting_transaction_id=posted.transaction_id, idempotency_key=idempotency_key,
     )
     return operation, posted
