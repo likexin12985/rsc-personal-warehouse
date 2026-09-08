@@ -50,6 +50,8 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
         outbound._authorize_account_ids(db, actor, (posting.source_stock_account_id,), action="read", resource="inventory", lock_rows=False)
         shipment = db.get(Shipment, shipment_line.shipment_id)
         if shipment is None: _fail("shipment_not_found", "not_found", "发运单不存在")
+        if shipment.shipped_at is not None and when < shipment.shipped_at:
+            _fail("time_invalid", "precondition_failed", "收货时间不能早于交运时间")
         if shipment_id is None: shipment_id = shipment.id
         elif shipment_id != shipment.id: _fail("shipment_mismatch", "invalid_request", "一次收货只能对应一个发运单")
         total = Decimal(line.accepted_qty) + Decimal(line.rejected_qty)
