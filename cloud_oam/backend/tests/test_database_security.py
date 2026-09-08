@@ -552,6 +552,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
     stocktake_start_tables = {"stocktake_start_completions"}
     allocation_tables = {
         "outbound_postings", "outbound_posting_serials",
+        "shipments", "shipment_lines", "shipment_serials",
         "outbound_orders", "outbound_lines", "stock_reservation_picks", "stock_reservation_pick_serials",
         "stock_allocations",
         "stock_allocation_serials",
@@ -7121,7 +7122,7 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 122
+    assert len(triggers) == 125
     assert len(functions) == 50
     _assert_material_request_approval_guards(
         triggers=triggers,

@@ -5,6 +5,7 @@ import { validateMaterialRequestAllocationOptionPage, type MaterialRequestAlloca
 import { validateMaterialRequestAllocationCommandStatus, validateMaterialRequestAllocationMutationResult, type MaterialRequestAllocationCommandStatus, type MaterialRequestAllocationMutationResult } from "./formalMaterialRequestAllocationCommandStatus";
 import { validateMaterialRequestReservationCommandStatus, validateMaterialRequestReservationMutationResult, type MaterialRequestReservationCommandStatus, type MaterialRequestReservationMutationResult } from "./formalMaterialRequestReservationCommandStatus";
 import { type PickInput, type PickPage, type PickResult, validatePickInput, validatePickPage, validatePickResult, validatePickStatus } from "./materialRequestReservationPick";
+import { type ShipmentInput, type ShipmentResult, validateShipmentInput, validateShipmentResult } from "./materialRequestShipment";
 import { type OutboundInput, type OutboundPage, type OutboundResult, validateOutboundInput, validateOutboundPage, validateOutboundResult, validateOutboundStatus } from "./materialRequestOutbound";
 import { type ReleaseInput, type ReleasePage, type ReleaseResult, validateReleaseInput, validateReleasePage, validateReleaseResult, validateReleaseStatus } from "./materialRequestReservationRelease";
 import { validateMaterialRequestReservationOptionPage, type MaterialRequestReservationOptionPage } from "./formalMaterialRequestReservationOptions";
@@ -103,6 +104,8 @@ export interface FormalMaterialRequestAdapter {
   pickCommandStatusNoReplay?(xRequestId: string): Promise<PickResult | null>;
   outboundCommandStatusNoReplay?(xRequestId: string): Promise<OutboundResult | null>;
   listOutboundOptions?(requestId: string, requestLineId: string): Promise<OutboundPage>;
+  listShipments?(requestId: string): Promise<readonly ShipmentResult[]>;
+  createShipment?(requestId: string, input: ShipmentInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ShipmentResult>;
   createOutbound?(requestId: string, input: OutboundInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<OutboundResult>;
   listPickOptions?(requestId: string, requestLineId: string): Promise<PickPage>;
   createPick?(requestId: string, input: PickInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<PickResult>;
@@ -883,6 +886,14 @@ export function createFormalMaterialRequestAdapter(
     listOutboundOptions(requestId: string, requestLineId: string) {
       const path = `/v1/material-requests/${requiredUuid(requestId, "request_id")}/outbound-options?request_line_id=${encodeURIComponent(requiredUuid(requestLineId, "request_line_id"))}`;
       return requireNoReplayRequester()<unknown>(path, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(validateOutboundPage);
+    },
+    listShipments(requestId: string) {
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipments`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(value => { if (!Array.isArray(value)) throw new ApiError(502, "发运查询响应无效"); return value.map(validateShipmentResult); });
+    },
+    createShipment(requestId: string, input: ShipmentInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
+      const body = validateShipmentInput(input);
+      const checked = validateWriteHeaders(headers, headers["Idempotency-Key"]);
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipments`, { method: "POST", headers: checked, ...jsonBody(body) }).then(validateShipmentResult);
     },
     createOutbound(requestId: string, input: OutboundInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
       const body = validateOutboundInput(input);

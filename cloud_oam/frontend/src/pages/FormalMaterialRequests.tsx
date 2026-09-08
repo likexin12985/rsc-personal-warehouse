@@ -49,6 +49,7 @@ import FormalFileUploadField, {
 } from "../FormalFileUploadField";
 import FormalMaterialRequestReservationPanel from "../FormalMaterialRequestReservationPanel";
 import FormalMaterialRequestOutboundPanel from "../FormalMaterialRequestOutboundPanel";
+import FormalMaterialRequestShipmentPanel from "../FormalMaterialRequestShipmentPanel";
 import { createOutboundStore, type OutboundStore } from "../materialRequestOutbound";
 import FormalMaterialRequestPickPanel from "../FormalMaterialRequestPickPanel";
 import { createPickStore, type PickStore } from "../materialRequestReservationPick";
@@ -2358,6 +2359,7 @@ export default function FormalMaterialRequestsPage({
       otherWriteBusy={baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
       otherWriteBlocked={() => pickBlockingRef.current || pickStore.current.read().kind !== "missing" || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || releaseStore.current.read().kind !== "missing" || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
       onBlocking={onOutboundBlocking} onDetail={setDetail} />
+      <FormalMaterialRequestShipmentPanel adapter={adapter} access={access} detail={detail} />
       <FormalMaterialRequestPickPanel adapter={adapter} access={access} detail={detail} store={pickStore.current}
       otherWriteBusy={outboundBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
       otherWriteBlocked={() => outboundWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || releaseStore.current.read().kind !== "missing" || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}

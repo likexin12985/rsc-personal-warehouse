@@ -98,6 +98,7 @@ RUNTIME_READ_TABLES = frozenset(
         "stock_reservation_serials",
         "outbound_orders", "outbound_lines", "stock_reservation_picks", "stock_reservation_pick_serials",
         "outbound_postings", "outbound_posting_serials",
+        "shipments", "shipment_lines", "shipment_serials",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
         "stock_balances",
@@ -188,6 +189,7 @@ RUNTIME_INSERT_TABLES = frozenset(
         "stock_reservation_serials",
         "outbound_orders", "outbound_lines", "stock_reservation_picks", "stock_reservation_pick_serials",
         "outbound_postings", "outbound_posting_serials",
+        "shipments", "shipment_lines", "shipment_serials",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
         "stock_balances",
@@ -1882,6 +1884,10 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
     "approval_actions",
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
+    **{
+        f"trg_{table}_immutable_0073": (table, f"rsc_guard_{table}_immutable_0073", "A", 27, False, False, False)
+        for table in ("shipments", "shipment_lines", "shipment_serials")
+    },
     **{
         f"trg_{table}_outbound_graph_0072": (table, "rsc_dispatch_outbound_graph_0072", "A", 21, True, True, True)
         for table in ("outbound_postings", "outbound_posting_serials", "stock_reservation_picks",

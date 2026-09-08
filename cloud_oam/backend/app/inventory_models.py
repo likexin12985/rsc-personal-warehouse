@@ -1118,3 +1118,50 @@ class SerialCurrentPosition(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )
+
+class Shipment(CreatedAtMixin, Base):
+    """A carrier handover/package fact; it does not move inventory."""
+    __tablename__ = "shipments"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending_handover','shipped','in_transit','exception')", name="ck_shipments_status"),
+        CheckConstraint("source_location_id <> target_location_id", name="ck_shipments_locations"),
+        UniqueConstraint("shipment_no", name="uq_shipments_number"),
+        UniqueConstraint("idempotency_key_hash", name="uq_shipments_key"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    shipment_no: Mapped[str] = mapped_column(String(100))
+    source_location_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    target_location_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    target_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    carrier: Mapped[str] = mapped_column(String(100))
+    tracking_no: Mapped[str] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(32), default="pending_handover")
+    shipped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    actor_user_id: Mapped[str] = mapped_column(String(36))
+    actor_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+
+
+class ShipmentLine(CreatedAtMixin, Base):
+    __tablename__ = "shipment_lines"
+    __table_args__ = (
+        UniqueConstraint("shipment_id", "outbound_posting_id", name="uq_shipment_lines_posting"),
+        CheckConstraint("shipped_qty > 0", name="ck_shipment_lines_qty"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    shipment_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("shipments.id", ondelete="RESTRICT"))
+    outbound_posting_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("outbound_postings.id", ondelete="RESTRICT"))
+    outbound_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("outbound_lines.id", ondelete="RESTRICT"))
+    shipped_qty: Mapped[Decimal] = mapped_column(QUANTITY)
+
+
+class ShipmentSerial(CreatedAtMixin, Base):
+    __tablename__ = "shipment_serials"
+    __table_args__ = (
+        PrimaryKeyConstraint("shipment_line_id", "serial_id", name="pk_shipment_serials"),
+        UniqueConstraint("serial_id", name="uq_shipment_serial_once"),
+    )
+    shipment_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("shipment_lines.id", ondelete="RESTRICT"))
+    serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)

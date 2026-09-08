@@ -57,7 +57,9 @@ from ..formal_services import material_request_reservation as reservation_servic
 from ..formal_services import material_request_reservation_release as release_service
 from ..formal_services import material_request_outbound as outbound_service
 from ..formal_services import material_request_outbound_options as outbound_options_service
+from ..formal_services import material_request_shipment as shipment_service
 from ..material_request_outbound_schemas import OutboundOptionsOut, OutboundIn, OutboundOut, OutboundStatusOut
+from ..material_request_shipment_schemas import ShipmentIn, ShipmentOut
 from ..formal_services import material_request_picking as picking_service
 from ..formal_services import material_request_picking_options as picking_options_service
 from ..material_request_picking_schemas import PickOptionsOut
@@ -854,6 +856,43 @@ def formal_material_request_outbound_status(
         db.rollback()
         _raise_database_unavailable(read_only=True, no_store=True)
 
+
+
+@router.post("/{material_request_id}/shipments", response_model=ShipmentOut, status_code=201)
+def create_formal_material_request_shipment(
+    material_request_id: UUID, payload: ShipmentIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
+    try:
+        secret = _require_lifecycle_write_runtime(runtime_settings)
+        result = shipment_service.create_shipment(db, actor=principal, request_id=material_request_id,
+            expected_version=payload.expected_request_version, target_location_id=payload.target_location_id,
+            target_person_id=payload.target_person_id, carrier=payload.carrier, tracking_no=payload.tracking_no,
+            shipped_at=payload.shipped_at, lines=payload.lines, idempotency_key=key, secret=secret,
+            trace_request_id=trace)
+        output = ShipmentOut(**result)
+        db.commit()
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+    _set_read_no_store(response)
+    _set_replay_header(response, output.idempotency_replayed)
+    return output
+
+@router.get("/{material_request_id}/shipments", response_model=list[ShipmentOut])
+def list_formal_material_request_shipments(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    try:
+        return [ShipmentOut(**row) for row in shipment_service.list_shipments(db, actor=principal, request_id=material_request_id)]
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
 
 @router.get("/{material_request_id}", response_model=MaterialRequestDetailOut)
 def formal_material_request_detail(
