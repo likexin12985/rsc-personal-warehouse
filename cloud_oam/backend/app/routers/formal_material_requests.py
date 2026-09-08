@@ -933,6 +933,18 @@ def create_formal_material_request_logistics_event(
     _set_read_no_store(response); _set_replay_header(response, output.idempotency_replayed)
     return output
 
+@router.get("/{material_request_id}/shipments/{shipment_id}/logistics-events", response_model=list[LogisticsEventOut])
+def list_formal_material_request_logistics_events(
+    material_request_id: UUID, shipment_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    try:
+        return [LogisticsEventOut(**row) for row in logistics_service.list_events(db, actor=principal, request_id=material_request_id, shipment_id=shipment_id)]
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+
 @router.post("/{material_request_id}/receipts", response_model=ReceiptOut, status_code=201)
 def create_formal_material_request_receipt(
     material_request_id: UUID, payload: ReceiptIn, response: Response,

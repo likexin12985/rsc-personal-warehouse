@@ -38,3 +38,13 @@ def create_event(db, *, actor, request_id, shipment_id, event_type, event_at, so
 
 def _result(row, replayed):
     return {"schema_version": "1.0", "event_id": row.id, "shipment_id": row.shipment_id, "event_type": row.event_type, "event_at": row.event_at.isoformat(), "source": row.source, "evidence_file_id": row.evidence_file_id, "external_ref": row.external_ref, "idempotency_replayed": replayed}
+
+def list_events(db, *, actor, request_id, shipment_id):
+    request = db.get(MaterialRequest, request_id)
+    if request is None: _fail("not_found", "not_found", "需求单不存在")
+    shipment = db.get(Shipment, shipment_id)
+    if shipment is None: _fail("shipment_not_found", "not_found", "发运单不存在")
+    belongs = db.scalar(select(OutboundPosting.request_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).where(ShipmentLine.shipment_id == shipment_id))
+    if belongs != request_id: _fail("shipment_request_mismatch", "conflict", "发运单不属于当前需求")
+    rows = tuple(db.scalars(select(LogisticsEvent).where(LogisticsEvent.shipment_id == shipment_id).order_by(LogisticsEvent.event_at, LogisticsEvent.created_at, LogisticsEvent.id)).all())
+    return tuple(_result(row, False) for row in rows)
