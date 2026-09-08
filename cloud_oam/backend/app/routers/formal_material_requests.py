@@ -59,9 +59,11 @@ from ..formal_services import material_request_outbound as outbound_service
 from ..formal_services import material_request_outbound_options as outbound_options_service
 from ..formal_services import material_request_shipment as shipment_service
 from ..formal_services import material_request_receipt as receipt_service
+from ..formal_services import material_request_inbound as inbound_service
 from ..material_request_outbound_schemas import OutboundOptionsOut, OutboundIn, OutboundOut, OutboundStatusOut
 from ..material_request_shipment_schemas import ShipmentIn, ShipmentOut, ShipmentOptionsOut
 from ..material_request_receipt_schemas import ReceiptIn, ReceiptOut
+from ..material_request_inbound_schemas import InboundOrderIn, InboundOrderOut
 from ..formal_services import material_request_picking as picking_service
 from ..formal_services import material_request_picking_options as picking_options_service
 from ..material_request_picking_schemas import PickOptionsOut
@@ -928,6 +930,18 @@ def create_formal_material_request_receipt(
         _rollback_and_raise(db, exc)
     _set_read_no_store(response); _set_replay_header(response, output.idempotency_replayed)
     return output
+
+@router.post("/{material_request_id}/inbound-orders", response_model=InboundOrderOut, status_code=201)
+def create_formal_material_request_inbound_order(
+    material_request_id: UUID, payload: InboundOrderIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    trace = _required_safe_header("X-Request-ID", request_id, minimum=8, maximum=160)
+    try:
+        output = InboundOrderOut(**inbound_service.create_inbound_order(db, actor=principal, request_id=material_request_id, expected_version=payload.expected_request_version, receipt_id=payload.receipt_id, target_location_id=payload.target_location_id, target_person_id=payload.target_person_id, trace_request_id=trace)); db.commit(); _set_read_no_store(response); return output
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
 
 @router.get("/{material_request_id}", response_model=MaterialRequestDetailOut)
 def formal_material_request_detail(
