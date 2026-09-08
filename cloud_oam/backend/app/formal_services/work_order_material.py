@@ -15,8 +15,11 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..demand_models import OamWorkOrder
-from ..inventory_models import FormalMaterial, StockAccount
+from ..demand_models import (
+    OamWorkOrder, WorkOrderMaterialLine, WorkOrderMaterialOperation,
+    WorkOrderMaterialSerial,
+)
+from ..inventory_models import FormalMaterial, InventoryTransaction, StockAccount
 
 
 class WorkOrderMaterialPreflightError(ValueError):
@@ -112,3 +115,64 @@ def preflight_work_order_material_batch(
         if account.condition_code != line.condition_before:
             raise WorkOrderMaterialPreflightError("condition_mismatch", "物料状态与库存账户不一致")
     return WorkOrderMaterialPreflight(work_order_id, operator_person_id, lines)
+
+
+def record_posted_operation(
+    db: Session,
+    *,
+    operation_type: str,
+    work_order_id: UUID,
+    operator_person_id: UUID,
+    lines: tuple[WorkOrderMaterialLineInput, ...],
+    posting_transaction_id: UUID,
+    idempotency_key: str,
+) -> WorkOrderMaterialOperation:
+    """Append a work-order fact only after the inventory transaction exists.
+
+    The caller must invoke the unified inventory posting service first and pass
+    its committed transaction coordinate.  This function never changes stock.
+    """
+    preflight_work_order_material_batch(
+        db, work_order_id=work_order_id, operator_person_id=operator_person_id,
+        lines=lines,
+    )
+    if not idempotency_key.strip():
+        raise WorkOrderMaterialPreflightError("idempotency_key_missing", "缺少幂等键")
+    transaction = db.get(InventoryTransaction, posting_transaction_id)
+    if transaction is None or transaction.status != "posted":
+        raise WorkOrderMaterialPreflightError("posting_transaction_missing", "库存事务尚未成功过账")
+    request_hash = operation_request_hash(
+        operation_type=operation_type, work_order_id=work_order_id,
+        operator_person_id=operator_person_id, lines=lines,
+    )
+    key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
+    existing = db.scalar(select(WorkOrderMaterialOperation).where(
+        WorkOrderMaterialOperation.idempotency_key_hash == key_hash
+    ))
+    if existing is not None:
+        if existing.request_hash != request_hash or existing.posting_transaction_id != posting_transaction_id:
+            raise WorkOrderMaterialPreflightError("idempotency_conflict", "幂等键已绑定其他工单操作")
+        return existing
+    operation = WorkOrderMaterialOperation(
+        operation_no=f"WOM-{UUID(int=work_order_id.int).hex[:12].upper()}-{key_hash[:12].upper()}",
+        oam_work_order_id=work_order_id, operator_person_id=operator_person_id,
+        operation_type=operation_type, status="posted",
+        posting_transaction_id=posting_transaction_id,
+        idempotency_key_hash=key_hash, request_hash=request_hash,
+    )
+    db.add(operation)
+    db.flush()
+    for index, value in enumerate(lines, 1):
+        line = WorkOrderMaterialLine(
+            operation_id=operation.id, line_no=index, material_id=value.material_id,
+            stock_account_id=value.stock_account_id, quantity=value.quantity,
+            condition_before=value.condition_before, condition_after=None,
+        )
+        db.add(line)
+        db.flush()
+        for serial_id in value.serial_ids:
+            db.add(WorkOrderMaterialSerial(
+                operation_line_id=line.id, serial_id=serial_id,
+                sku_verified=True, qr_verified=True,
+            ))
+    return operation
