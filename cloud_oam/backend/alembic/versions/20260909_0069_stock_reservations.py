@@ -189,11 +189,17 @@ REQUEST_GUARD_AXIS_NEW = """    IF NEW.outbound_status <> 'not_started'
 
 # Supply validator only needs its fulfilment-axis comparison relaxed.  Supply
 # still owns its three planning axes and remains strict for outbound and later
-# states.  The top-level neutral check is replaced separately.
-SUPPLY_VALIDATE_NEUTRAL_OLD = """       OR request_row.allocation_status <> 'not_allocated'
+# states.  Anchor the neutral check at the request-status condition: without
+# it, the replacement is a suffix of the old fragment and the required
+# "new source must not already exist" preflight rejects the published body.
+SUPPLY_VALIDATE_NEUTRAL_OLD = """    IF NOT FOUND OR request_row.status NOT IN (
+           'approved','partially_approved','cancelled')
+       OR request_row.allocation_status <> 'not_allocated'
        OR request_row.reservation_status <> 'not_reserved'
        OR request_row.outbound_status <> 'not_started'"""
-SUPPLY_VALIDATE_NEUTRAL_NEW = """       OR request_row.outbound_status <> 'not_started'"""
+SUPPLY_VALIDATE_NEUTRAL_NEW = """    IF NOT FOUND OR request_row.status NOT IN (
+           'approved','partially_approved','cancelled')
+       OR request_row.outbound_status <> 'not_started'"""
 SUPPLY_VALIDATE_STATE_AXES_OLD = """           OR command_row.result_jsonb->'state_axes' <>
                pg_catalog.jsonb_build_object(
                    'allocation_status', request_row.allocation_status,
