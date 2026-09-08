@@ -6,6 +6,7 @@ from ..demand_models import MaterialRequest
 from ..inventory_models import InboundOrder, InboundPosting, Receipt, ReceiptLine, Shipment, ShipmentLine, OutboundPosting, StockAccount
 from .inventory_posting import InventoryMovementCommand, InventoryPostingCommand, post_inventory_transaction
 from .audit_chain import append_audit_event
+from . import material_request_outbound as outbound
 
 class InboundError(Exception):
     def __init__(self, code, category, message): self.code, self.category, self.message = code, category, message
@@ -100,4 +101,8 @@ def list_inbound_orders(db, *, actor, request_id):
     shipment_ids = select(Shipment.id).join(ShipmentLine, ShipmentLine.shipment_id == Shipment.id).join(OutboundPosting, OutboundPosting.id == ShipmentLine.outbound_posting_id).where(OutboundPosting.request_id == request_id)
     receipt_ids = select(Receipt.id).where(Receipt.shipment_id.in_(shipment_ids))
     rows = tuple(db.scalars(select(InboundOrder).where(InboundOrder.receipt_id.in_(receipt_ids)).order_by(InboundOrder.created_at, InboundOrder.id)).all())
+    for row in rows:
+        source_ids = tuple(db.scalars(select(OutboundPosting.source_stock_account_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).join(Receipt, Receipt.shipment_id == ShipmentLine.shipment_id).where(Receipt.id == row.receipt_id)).all())
+        if source_ids:
+            outbound._authorize_account_ids(db, actor, source_ids, action="read", resource="inventory", lock_rows=False)
     return tuple({"schema_version":"1.0", "inbound_order_id": row.id, "inbound_no": row.inbound_no, "receipt_id": row.receipt_id, "target_location_id": row.target_location_id, "target_person_id": row.target_person_id, "status": row.status} for row in rows)
