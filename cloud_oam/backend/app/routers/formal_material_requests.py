@@ -56,6 +56,8 @@ from ..formal_services import material_request_supply_command_status as supply_s
 from ..formal_services import material_request_reservation as reservation_service
 from ..formal_services import material_request_reservation_release as release_service
 from ..formal_services import material_request_reservation_release_options as release_options_service
+from ..formal_services import material_request_fulfillment_preparation as preparation_service
+from ..material_request_fulfillment_preparation_schemas import FulfillmentPreparationOut
 from ..material_request_reservation_release_schemas import (
     ReservationReleaseIn, ReservationReleaseOut, ReservationReleaseStatusOut,
     ReservationReleaseOptionsOut,
@@ -679,6 +681,23 @@ def formal_material_request_release_options(
         return release_options_service.list_release_options(db, actor=principal,
             material_request_id=material_request_id, request_line_id=request_line_id)
     except reservation_service.MaterialRequestReservationError as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.get("/{material_request_id}/fulfillment-preparation", response_model=FulfillmentPreparationOut)
+def formal_material_request_fulfillment_preparation(
+    material_request_id: UUID, request_line_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    try:
+        return preparation_service.list_fulfillment_preparation(db, actor=principal,
+            material_request_id=material_request_id, request_line_id=request_line_id)
+    except (reservation_service.MaterialRequestReservationError, query_service.MaterialRequestReadError) as exc:
         _raise_service_error(exc, no_store=True)
     except (DBAPIError, ValidationError):
         db.rollback()

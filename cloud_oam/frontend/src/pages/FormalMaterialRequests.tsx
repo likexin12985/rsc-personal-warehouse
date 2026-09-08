@@ -49,6 +49,7 @@ import FormalFileUploadField, {
 } from "../FormalFileUploadField";
 import FormalMaterialRequestReservationPanel from "../FormalMaterialRequestReservationPanel";
 import FormalMaterialRequestReleasePanel from "../FormalMaterialRequestReleasePanel";
+import FormalMaterialRequestFulfillmentPreparationPanel from "../FormalMaterialRequestFulfillmentPreparationPanel";
 import { createReleaseStore, type ReleaseStore } from "../materialRequestReservationRelease";
 import { createReservationRecoveryStore, type ReservationRecoveryStore } from "../materialRequestReservationRecovery";
 import FormalMaterialRequestSupplyPanel from "../FormalMaterialRequestSupplyPanel";
@@ -2328,6 +2329,9 @@ export default function FormalMaterialRequestsPage({
         otherWriteBlocked={() => baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
         onBlocking={onReleaseBlocking} onDetail={setDetail} />
       <DetailPanel detail={detail} access={access} busy={busy} lifecycleBlocked={lifecycleWritesBlocked} onEdit={() => void startEdit()} onSubmit={() => setSubmitConfirm(true)} onProcess={startApprovalProcess} onLifecycle={startLifecycleProcess} />
+      <FormalMaterialRequestFulfillmentPreparationPanel adapter={adapter} access={access} detail={detail}
+        otherWriteBusy={baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationWriteBlocked() || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"} />
       <FormalMaterialRequestSupplyPanel
         adapter={adapter} access={access} detail={detail} store={supplyStore.current}
         registry={mutationRegistry.current}

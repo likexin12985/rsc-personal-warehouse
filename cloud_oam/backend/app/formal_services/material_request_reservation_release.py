@@ -11,6 +11,7 @@ from decimal import Decimal
 import hashlib
 import hmac
 from typing import Mapping
+from types import SimpleNamespace
 import uuid
 
 from sqlalchemy import func, select
@@ -346,6 +347,17 @@ def _recover(db, *, actor, fact, request):
     if (fact.actor_user_id, fact.actor_person_id, fact.authorization_version) != (actor.user_id, actor.person_id, actor.authorization_version):
         _fail("authorization_changed", "precondition_failed", "原释放授权已变化")
     authorize_release_accounts(db, actor, fact.source_stock_account_id, fact.target_stock_account_id)
+    return verified_release_history(db, fact=fact, request=request)
+
+
+def verified_release_history(db, *, fact, request):
+    """Prove immutable release evidence after the caller authorizes its read.
+
+    Hashes bind the historical actor. Current readers need not be that actor;
+    command recovery still requires the original identity and live grants.
+    """
+    actor = SimpleNamespace(user_id=fact.actor_user_id, person_id=fact.actor_person_id,
+        authorization_version=fact.authorization_version)
     def rows(model, *criteria, limit=2):
         return tuple(db.scalars(select(model).where(*criteria).limit(limit).execution_options(populate_existing=True)).all())
     commands = rows(MaterialRequestCommand, MaterialRequestCommand.request_id == fact.request_id,

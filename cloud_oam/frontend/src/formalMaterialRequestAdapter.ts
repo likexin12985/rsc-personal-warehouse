@@ -6,6 +6,7 @@ import { validateMaterialRequestAllocationCommandStatus, validateMaterialRequest
 import { validateMaterialRequestReservationCommandStatus, validateMaterialRequestReservationMutationResult, type MaterialRequestReservationCommandStatus, type MaterialRequestReservationMutationResult } from "./formalMaterialRequestReservationCommandStatus";
 import { type ReleaseInput, type ReleasePage, type ReleaseResult, validateReleaseInput, validateReleasePage, validateReleaseResult, validateReleaseStatus } from "./materialRequestReservationRelease";
 import { validateMaterialRequestReservationOptionPage, type MaterialRequestReservationOptionPage } from "./formalMaterialRequestReservationOptions";
+import { validateFulfillmentPreparation, type FulfillmentPreparation } from "./materialRequestFulfillmentPreparation";
 import { validateSupplyCreateInput, validateSupplyUpdateInput } from "./formalMaterialRequestSupply";
 import {
   MATERIAL_REQUEST_SCHEMA_VERSION,
@@ -95,6 +96,7 @@ export interface FormalMaterialRequestAdapter {
   reservationCommandStatusNoReplay?(xRequestId: string): Promise<MaterialRequestReservationCommandStatus>;
   releaseCommandStatusNoReplay?(xRequestId: string): Promise<ReleaseResult | null>;
   listReleaseOptions?(requestId: string, requestLineId: string): Promise<ReleasePage>;
+  listFulfillmentPreparation?(requestId: string, requestLineId: string): Promise<FulfillmentPreparation>;
   createRelease?(requestId: string, input: ReleaseInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ReleaseResult>;
   loadIdentityNoReplay?(): Promise<unknown>;
   loadAccessNoReplay?(): Promise<unknown>;
@@ -851,6 +853,10 @@ export function createFormalMaterialRequestAdapter(
     listReleaseOptions(requestId: string, requestLineId: string) {
       const path = `/v1/material-requests/${requiredUuid(requestId, "request_id")}/reservation-release-options?request_line_id=${encodeURIComponent(requiredUuid(requestLineId, "request_line_id"))}`;
       return requireNoReplayRequester()<unknown>(path, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(validateReleasePage);
+    },
+    listFulfillmentPreparation(requestId: string, requestLineId: string) {
+      const path = `/v1/material-requests/${requiredUuid(requestId, "request_id")}/fulfillment-preparation?request_line_id=${encodeURIComponent(requiredUuid(requestLineId, "request_line_id"))}`;
+      return requireNoReplayRequester()<unknown>(path, { method: "GET", cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(validateFulfillmentPreparation);
     },
     createRelease(requestId: string, input: ReleaseInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
       const body = validateReleaseInput(input);

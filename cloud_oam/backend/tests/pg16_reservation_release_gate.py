@@ -110,6 +110,25 @@ def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory
             released_qty=qty, reason="PG16 释放验收", source_balance_version=row["source_balance_version"],
             source_ledger_cursor=row["source_ledger_cursor"], serial_ids=[str(s) for s in serial_ids])
 
+    def preparation(fact, remaining, serial_ids=()):
+        before = snapshot()
+        with TestClient(app) as client:
+            response = client.get(f"/api/v1/material-requests/{fact.request_id}/fulfillment-preparation",
+                params={"request_line_id": str(fact.request_line_id)})
+        assert response.status_code == 200, response.text
+        assert response.headers["cache-control"].startswith("no-store")
+        page = response.json()
+        row = next(item for item in page["items"] if item["reservation_id"] == str(fact.id))
+        assert row["allocation_id"] == str(fact.allocation_id)
+        assert row["source_stock_account_id"] == str(fact.stock_account_id)
+        assert Decimal(row["remaining_reserved_qty"]) == remaining
+        assert Decimal(row["verified_held_qty"]) == remaining
+        assert Decimal(row["released_qty"]) + remaining == fact.reserved_qty
+        assert row["preparation_status"] == ("released" if remaining == 0 else "ready_for_review")
+        assert not row["blockers"] and {s["serial_id"] for s in row["serials"]} == {str(s) for s in serial_ids}
+        assert page["state_axes"]["outbound_status"] == page["state_axes"]["shipment_status"] == "not_started"
+        assert snapshot() == before
+
     def post(fact, body, token):
         headers = {"Idempotency-Key": f"pg16-release-key-{token}", "X-Request-ID": f"pg16-release-trace-{token}"}
         with TestClient(app) as client:
@@ -163,6 +182,7 @@ def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory
             serials = tuple(db.scalars(select(StockReservationSerial.serial_id).where(
                 StockReservationSerial.reservation_id == fact.id).order_by(StockReservationSerial.serial_id)).all())
         partial_qty = Decimal("1.000") if serials else fact.reserved_qty / 2
+        preparation(fact, fact.reserved_qty, serials)
         body = payload(fact, format(partial_qty, ".3f"), serials[:1])
         before = snapshot()
         over, _ = post(fact, {**body, "released_qty": format(fact.reserved_qty + 1, ".3f")}, f"over-{index}")
@@ -174,6 +194,7 @@ def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory
         assert failed.status_code == 503 and snapshot() == before
         first, first_headers = successful(fact, body, f"partial-{index}")
         assert first["state_axes"]["reservation_status"] == "partially_released"
+        preparation(fact, fact.reserved_qty - partial_qty, serials[1:])
         replay, _ = post(fact, body, f"partial-{index}")
         assert replay.status_code == 201 and replay.json()["release_id"] == first["release_id"]
         rest = payload(fact, format(fact.reserved_qty - partial_qty, ".3f"), serials[1:])
@@ -211,10 +232,12 @@ def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory
         assert history["current_request_version"] == winner["request_version"]
         assert history["state_axes"]["reservation_status"] == "partially_released"
         assert all(row["reservation_id"] != str(fact.id) for row in options(fact)["items"])
+        preparation(fact, Decimal("0.000"))
         with Session(api_engine) as db:
             assert all(db.get(SerialCurrentPosition, s).stock_account_id == fact.source_stock_account_id for s in serials)
     with Session(api_engine) as db:
         assert db.scalar(select(func.count()).select_from(NotificationEvent)) == notification_count
+    print("PG16 fulfillment preparation: exact original quantities/SNs, partial/full releases and read-only snapshots verified")
     # Release part of the first slice, then consume only the allocation's
     # never-reserved remainder. A release never restores allocation capacity.
     # Stock returns from previous facts; no fixture balance is overwritten.
