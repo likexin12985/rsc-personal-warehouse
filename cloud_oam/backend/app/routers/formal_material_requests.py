@@ -865,7 +865,7 @@ def formal_material_request_outbound_status(
 @router.post("/{material_request_id}/shipments", response_model=ShipmentOut, status_code=201)
 def create_formal_material_request_shipment(
     material_request_id: UUID, payload: ShipmentIn, response: Response,
-    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    principal: FormalPrincipal = Depends(require_permission("material_request", "fulfill")),
     db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
@@ -913,7 +913,7 @@ def list_formal_material_request_shipment_options(
 @router.post("/{material_request_id}/receipts", response_model=ReceiptOut, status_code=201)
 def create_formal_material_request_receipt(
     material_request_id: UUID, payload: ReceiptIn, response: Response,
-    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    principal: FormalPrincipal = Depends(require_permission("material_request", "fulfill")),
     db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
@@ -934,7 +934,7 @@ def create_formal_material_request_receipt(
 @router.post("/{material_request_id}/inbound-orders", response_model=InboundOrderOut, status_code=201)
 def create_formal_material_request_inbound_order(
     material_request_id: UUID, payload: InboundOrderIn, response: Response,
-    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    principal: FormalPrincipal = Depends(require_permission("material_request", "fulfill")),
     db: Session = Depends(get_db), request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
     trace = _required_safe_header("X-Request-ID", request_id, minimum=8, maximum=160)
@@ -946,7 +946,7 @@ def create_formal_material_request_inbound_order(
 @router.post("/{material_request_id}/inbound-orders/{inbound_order_id}/post", response_model=InboundPostingOut)
 def post_formal_material_request_inbound_order(
     material_request_id: UUID, inbound_order_id: UUID, response: Response,
-    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    principal: FormalPrincipal = Depends(require_permission("material_request", "fulfill")),
     db: Session = Depends(get_db),
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,

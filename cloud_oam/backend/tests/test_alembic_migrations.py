@@ -457,7 +457,7 @@ REVIEW_COMMAND_STATUS_REVISION = (
     / "versions"
     / "20260906_0063_review_command_status.py"
 )
-HEAD_REVISION = "20260915_0075"
+HEAD_REVISION = "20260916_0076"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -743,6 +743,7 @@ EXPECTED_PERMISSIONS = [
     ("material_request", "cancel"),
     ("material_request", "confirm_substitution"),
     ("material_request", "create"),
+        ("material_request", "fulfill"),
     ("material_request", "propose_substitution"),
     ("material_request", "read"),
     ("material_request", "read_star_approval"),
@@ -790,6 +791,7 @@ EXPECTED_ROLE_PERMISSIONS = {
         ("auth_session", "manage"),
         ("material_request", "approve_headquarters"),
         ("material_request", "propose_substitution"),
+            ("material_request", "fulfill"),
         ("material_request", "read"),
         ("material_request", "register_external"),
         ("material_request", "verify_external"),
@@ -820,6 +822,7 @@ EXPECTED_ROLE_PERMISSIONS = {
         ("legacy_transfer_history", "read"),
         ("material_request", "approve_region"),
         ("material_request", "propose_substitution"),
+            ("material_request", "fulfill"),
         ("material_request", "read"),
         ("material_request_approval", "decide_level_1"),
         ("reconciliation", "read"),
@@ -840,6 +843,7 @@ EXPECTED_ROLE_PERMISSIONS = {
         ("material_request", "cancel"),
         ("material_request", "confirm_substitution"),
         ("material_request", "create"),
+        ("material_request", "fulfill"),
         ("material_request", "read"),
         ("material_request", "submit"),
         ("material_request", "update_draft"),
@@ -10378,7 +10382,7 @@ def test_upgrade_head_matches_current_orm_and_downgrades(
                 "JOIN roles ON roles.id = role_permissions.role_id "
                 "JOIN permissions ON permissions.id = role_permissions.permission_id"
             ).all()
-            assert len(role_permission_rows) == 70
+            assert len(role_permission_rows) == 73
             assert {row[3] for row in role_permission_rows} == {"allow"}
             actual_role_permissions = {
                 role_code: {
