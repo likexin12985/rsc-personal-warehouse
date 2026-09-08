@@ -94,6 +94,7 @@ def assert_picking_gate(api_engine, *, security_engine, admin_user_id, inventory
             ), idempotency_key=fixture_key, request_id=fixture_key)
         db.commit()
 
+    outbound_worlds = []
     for serial_mode, source_id, serials in (
         (False, inventory_fixture["account_id"], ()),
         (True, inventory_fixture["serial_replay_account_id"], pick_serials),
@@ -233,3 +234,6 @@ def assert_picking_gate(api_engine, *, security_engine, admin_user_id, inventory
                 db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
             db.rollback()
         assert snapshot() == stable
+        outbound_worlds.append(dict(request_id=request_id, line_id=line_id, serial_mode=serial_mode,
+            first_pick=first, final_pick=final, pick_trace=headers["X-Request-ID"], serials=serials))
+    return outbound_worlds

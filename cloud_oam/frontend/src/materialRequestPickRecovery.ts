@@ -40,7 +40,7 @@ export async function recoverPick(adapter: PickRecoveryAdapter, store: PickStore
       || detail.current_revision_no !== sentinel.revision_no || !detail.lines.some(line => line.request_line_id === sentinel.request_line_id && line.revision_id === sentinel.revision_id)
       || !axesExceptPickingMatch(detail.states, command.state_axes)
       || (detail.request_version === command.request_version && !same(detail.states, command.state_axes))
-      || !["pending_pick", "picked"].includes(detail.states.outbound_status)) throw new Error("拣货历史与当前需求状态未匹配，继续保留原请求核验");
+      || !["pending_pick", "picked", "outbound"].includes(detail.states.outbound_status)) throw new Error("拣货历史与当前需求状态未匹配，继续保留原请求核验");
   const afterIdentity = validateFormalMaterialRequestFreshIdentity(await adapter.loadIdentityNoReplay());
   const afterAccess = validateFormalMaterialRequestAccess(await adapter.loadAccessNoReplay());
   if (!same(identity, afterIdentity) || !same(access, afterAccess) || !canCommit()) throw new Error("核验期间身份、权限或页面已变化，保留原拣货坐标");

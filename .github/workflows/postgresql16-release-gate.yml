@@ -143,6 +143,8 @@ jobs:
             backend/tests/test_material_request_reservation_release.py \
             backend/tests/test_material_request_picking.py \
             backend/tests/test_reservation_picking_migration.py \
+            backend/tests/test_material_request_outbound.py \
+            backend/tests/test_outbound_postings_migration.py \
             backend/tests/test_material_request_fulfillment_preparation.py \
             backend/tests/test_stock_reservation_releases_migration.py \
             backend/tests/test_formal_material_request_api.py \

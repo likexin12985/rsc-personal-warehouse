@@ -48,6 +48,17 @@ it("keeps an earlier partial-pick result when later pick advances the request", 
   const outcome = await recoverPick(recoveryAdapter({ pickCommandStatusNoReplay: vi.fn().mockResolvedValue(result), detailNoReplay: vi.fn().mockResolvedValue(detail) }), store, original);
   expect(outcome.command.request_version).toBe(5); expect(outcome.detail.request_version).toBe(6);
 });
+it("recovers the original picking command after independent physical outbound", async () => {
+  const store = createPickStore(), original = pickSentinel(); store.persist(original);
+  const result = { ...pickResult(), current_request_version: 6, idempotency_replayed: true };
+  const detail = { ...afterPick(), request_version: 6, states: { ...afterPick().states, outbound_status: "outbound" } };
+  const adapter = recoveryAdapter({ pickCommandStatusNoReplay: vi.fn().mockResolvedValue(result), detailNoReplay: vi.fn().mockResolvedValue(detail) });
+  const outcome = await recoverPick(adapter, store, original);
+  expect(outcome.command.state_axes.outbound_status).toBe("picked");
+  expect(outcome.detail.states.outbound_status).toBe("outbound");
+  expect(store.read().kind).toBe("missing");
+  expect(adapter.createPick).not.toHaveBeenCalled();
+});
 it.each(["missing", "identity", "permission", "quantity", "account", "serial", "axis", "route"])("retains the original trace on %s mismatch", async kind => {
   const store = createPickStore(), original = pickSentinel(); store.persist(original);
   const adapter = recoveryAdapter();

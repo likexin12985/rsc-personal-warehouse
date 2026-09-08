@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20260911_0071"
+HEAD_REVISION = "20260912_0072"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7415,8 +7415,8 @@ def _load_stock_reservations_migration_0069():
 def _head_runtime_ready_hash() -> str:
     import runpy
     return runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20260911_0071_reservation_picking.py"
-    )))["RUNTIME_READY_BODY_SHA256_0071"]
+        "20260912_0072_outbound_postings.py"
+    )))["RUNTIME_READY_BODY_SHA256_0072"]
 
 
 def _assert_0058_review_terminal_catalog_state(
@@ -20957,7 +20957,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         from pg16_picking_gate import assert_picking_gate
         security_engine = create_engine(_admin_sqlalchemy_url(), pool_size=1, max_overflow=0, pool_timeout=5)
         try:
-            _reveal_pg16_service_database_error(api_engine, lambda: assert_picking_gate(
+            outbound_worlds = _reveal_pg16_service_database_error(api_engine, lambda: assert_picking_gate(
                 api_engine, security_engine=security_engine, admin_user_id=admin_user_id,
                 inventory_fixture=inventory_fixture, source_request_id=request_id, manager_user_id=manager_user_id,
             ))
@@ -20965,6 +20965,18 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             security_engine.dispose()
         blocked_pick = _run_alembic("downgrade", "20260910_0070", expect_success=False)
         assert "cannot downgrade 0071" in blocked_pick.stdout + blocked_pick.stderr
+        assert _current_revision() == HEAD_REVISION
+        _validate_runtime_security(api_engine)
+        from pg16_outbound_gate import assert_outbound_gate
+        security_engine = create_engine(_admin_sqlalchemy_url(), pool_size=1, max_overflow=0, pool_timeout=5)
+        try:
+            _reveal_pg16_service_database_error(api_engine, lambda: assert_outbound_gate(
+                api_engine, security_engine=security_engine, admin_user_id=admin_user_id, worlds=outbound_worlds,
+            ))
+        finally:
+            security_engine.dispose()
+        blocked_outbound = _run_alembic("downgrade", "20260911_0071", expect_success=False)
+        assert "cannot downgrade 0072" in blocked_outbound.stdout + blocked_outbound.stderr
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
     finally:

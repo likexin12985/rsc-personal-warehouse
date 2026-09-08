@@ -97,6 +97,7 @@ RUNTIME_READ_TABLES = frozenset(
         "stock_reservations",
         "stock_reservation_serials",
         "outbound_orders", "outbound_lines", "stock_reservation_picks", "stock_reservation_pick_serials",
+        "outbound_postings", "outbound_posting_serials",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
         "stock_balances",
@@ -186,6 +187,7 @@ RUNTIME_INSERT_TABLES = frozenset(
         "stock_reservations",
         "stock_reservation_serials",
         "outbound_orders", "outbound_lines", "stock_reservation_picks", "stock_reservation_pick_serials",
+        "outbound_postings", "outbound_posting_serials",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
         "stock_balances",
@@ -1881,6 +1883,17 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
     **{
+        f"trg_{table}_outbound_graph_0072": (table, "rsc_dispatch_outbound_graph_0072", "A", 21, True, True, True)
+        for table in ("outbound_postings", "outbound_posting_serials", "stock_reservation_picks",
+                      "material_requests", "material_request_commands", "inventory_transactions")
+    },
+    **{
+        f"trg_{table}_{suffix}_0072": (table, "rsc_guard_reservation_release_immutable_0070", "A", kind, False, False, False)
+        for table in ("outbound_postings", "outbound_posting_serials")
+        for suffix, kind in (("immutable", 27), ("no_truncate", 34))
+    },
+    "trg_outbound_postings_binding_0072": ("outbound_postings", "rsc_guard_outbound_binding_0072", "A", 7, False, False, False),
+    **{
         f"trg_{table}_picking_graph_0071": (table, "rsc_dispatch_picking_graph_0071", "A", 21, True, True, True)
         for table in ("outbound_orders", "outbound_lines", "stock_reservation_picks", "stock_reservation_pick_serials",
                       "stock_reservation_releases", "stock_reservation_release_serials",
@@ -2313,9 +2326,13 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
+    ('rsc_material_request_outbound_state_0072', 'uuid, bigint'): "a89e922b7d9fbd19d46b4207fb3b36fffe1a063668073f59b1cf94db400a97ce",
+    ('rsc_guard_outbound_binding_0072', ''): "9a5fcfd28a0af565202008beb20c33bf55a31ef64e7cae63ae73a01eb52a79ea",
+    ('rsc_validate_outbound_graph_0072', 'uuid'): "be4206fc41fe8ea96e4b19423b25ea4d04df783b9bc25b03d626651d27424054",
+    ('rsc_dispatch_outbound_graph_0072', ''): "d5309a548e6cd2644ffd8d2d789c0bd256aa530a25fb598d0793b9578770e5f8",
     ("rsc_material_request_picking_state_0071", "uuid, bigint"): "a239056dc39f5406fcac9a920660b597d86f21d53b101568f9380639f722b57f",
     ("rsc_guard_picking_binding_0071", ""): "b2a91c42311e5fb59882292550d1335d73c4f51f9349103c77b0a180518fa271",
-    ("rsc_validate_picking_graph_0071", "uuid"): "0944c7c92b87b738047acf04c0a1658585f21b3ee50636d7a182fbd1ac2e0d75",
+    ("rsc_validate_picking_graph_0071", "uuid"): "5a97fd00534fca9523b96f330b3ed09208435c76b1afa9d884a231d5cf7a108d",
     ("rsc_dispatch_picking_graph_0071", ""): "37850e337166eb0391a4cc42dc977cc48546dc534c4cc38e0dec67a980ab7a01",
     ("rsc_material_request_reservation_state_0070", "uuid, bigint"):
         "6e0db6d66c96e7eaf106abc26ba89be98def947beac1117d693acf2c844503ea",
@@ -2336,7 +2353,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_guard_material_request_original_line_0029", ""):
         "d00a8775d26e1b48e2a72798595354eedff873e2b83a7508c9c2961eb7d5d672",
     ("rsc_guard_material_request_identity_0029", ""):
-        "0c6ce152e38c27d8069b4a5732405703d51473a30407a50d1cc4c066fcd5b9ad",
+        "5392ed5737789b4974096e630ed77927952d44b8231c66f59e65d6c88f9603d9",
     ("rsc_guard_material_request_revision_0029", ""):
         "ea718216fbf47320670b171a4aca22019fdbf4540533742aac6ac7573b31ab83",
     ("rsc_guard_material_request_approval_instance_0029", ""):
@@ -2386,7 +2403,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_validate_material_request_external_causality_0045", "uuid"):
         "0f5bd6658edcb46dac6282109b71a109c14003862c89b3f5700d89f1ac13fa26",
     ("rsc_validate_material_request_approval_projection_0045", "uuid"):
-        "a82b909450e908ab3bece5cc7c834c03b5f999546d8fc6a0ed3a6d2ced395fa3",
+        "b5d39b3c6287e98657aa7802c628e2d67e3c2a541c1b4c5d99930b15c8cd4110",
     ("rsc_dispatch_material_request_approval_projection_0045", ""):
         "244d188e126e66fd4b020da01c076a3018f2c8841230bd255da45b7913776d54",
     ("rsc_guard_material_request_supply_task_0059", ""):
@@ -2394,7 +2411,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_guard_material_request_supply_write_0060", ""):
         "0fe289826a8aa4d14e2ecd48a9900484bf8929a054dbfa52340fa27786453f26",
     ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint"):
-        "c4d83a251d3e0e9f32b74f174f56563196a7550b80cfc52659f38c1410c73f11",
+        "f2da8696a99dfa4a0a10432f016a9347c3f53f4d066474105eb5390e6f5a16a2",
     ("rsc_dispatch_material_request_supply_causality_0059", ""):
         "4228949da83f59ea1b46a8badd7c0fe8c58e188b7a88eac318ac032acd339e92",
     ("rsc_guard_material_request_content_write_0046", ""):
@@ -2406,6 +2423,10 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ('rsc_material_request_outbound_state_0072', 'uuid, bigint'),
+        ('rsc_guard_outbound_binding_0072', ''),
+        ('rsc_validate_outbound_graph_0072', 'uuid'),
+        ('rsc_dispatch_outbound_graph_0072', ''),
         ("rsc_material_request_picking_state_0071", "uuid, bigint"),
         ("rsc_guard_picking_binding_0071", ""),
         ("rsc_validate_picking_graph_0071", "uuid"),
@@ -2438,6 +2459,7 @@ MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
 )
 MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS = frozenset(
     {
+        ("rsc_validate_outbound_graph_0072", "uuid"),
         ("rsc_validate_picking_graph_0071", "uuid"),
         ("rsc_validate_reservation_graph_0070", "uuid"),
         ("rsc_validate_approval_instance_causality_0030", "uuid"),
@@ -4793,7 +4815,7 @@ JOIN pg_namespace AS function_schema
   ON function_schema.oid = function_row.pronamespace
 WHERE table_schema.nspname = 'public'
   AND (
-      trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060|0069|0070|0071)$'
+      trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060|0069|0070|0071|0072)$'
       OR function_row.proname IN (
           {_MATERIAL_REQUEST_APPROVAL_TRIGGER_FUNCTION_LITERALS}
       )
@@ -5868,7 +5890,7 @@ def _select_material_request_approval_functions(
         for row in rows
         if isinstance(row.get("function_name"), str)
         and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071")
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072")
         )
     ]
 
@@ -7333,7 +7355,7 @@ def _assert_material_request_approval_guards(
         expected_values = {
             "function_kind": "f",
             "result_type": (
-                "text" if coordinate in {("rsc_material_request_reservation_state_0070", "uuid, bigint"), ("rsc_material_request_picking_state_0071", "uuid, bigint")} else
+                "text" if coordinate in {("rsc_material_request_reservation_state_0070", "uuid, bigint"), ("rsc_material_request_picking_state_0071", "uuid, bigint"), ("rsc_material_request_outbound_state_0072", "uuid, bigint")} else
                 "void"
                 if coordinate in MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS
                 else "trigger"

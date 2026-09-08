@@ -5,6 +5,7 @@ import { validateMaterialRequestAllocationOptionPage, type MaterialRequestAlloca
 import { validateMaterialRequestAllocationCommandStatus, validateMaterialRequestAllocationMutationResult, type MaterialRequestAllocationCommandStatus, type MaterialRequestAllocationMutationResult } from "./formalMaterialRequestAllocationCommandStatus";
 import { validateMaterialRequestReservationCommandStatus, validateMaterialRequestReservationMutationResult, type MaterialRequestReservationCommandStatus, type MaterialRequestReservationMutationResult } from "./formalMaterialRequestReservationCommandStatus";
 import { type PickInput, type PickPage, type PickResult, validatePickInput, validatePickPage, validatePickResult, validatePickStatus } from "./materialRequestReservationPick";
+import { type OutboundInput, type OutboundPage, type OutboundResult, validateOutboundInput, validateOutboundPage, validateOutboundResult, validateOutboundStatus } from "./materialRequestOutbound";
 import { type ReleaseInput, type ReleasePage, type ReleaseResult, validateReleaseInput, validateReleasePage, validateReleaseResult, validateReleaseStatus } from "./materialRequestReservationRelease";
 import { validateMaterialRequestReservationOptionPage, type MaterialRequestReservationOptionPage } from "./formalMaterialRequestReservationOptions";
 import { validateFulfillmentPreparation, type FulfillmentPreparation } from "./materialRequestFulfillmentPreparation";
@@ -100,6 +101,9 @@ export interface FormalMaterialRequestAdapter {
   listFulfillmentPreparation?(requestId: string, requestLineId: string): Promise<FulfillmentPreparation>;
   createRelease?(requestId: string, input: ReleaseInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ReleaseResult>;
   pickCommandStatusNoReplay?(xRequestId: string): Promise<PickResult | null>;
+  outboundCommandStatusNoReplay?(xRequestId: string): Promise<OutboundResult | null>;
+  listOutboundOptions?(requestId: string, requestLineId: string): Promise<OutboundPage>;
+  createOutbound?(requestId: string, input: OutboundInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<OutboundResult>;
   listPickOptions?(requestId: string, requestLineId: string): Promise<PickPage>;
   createPick?(requestId: string, input: PickInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<PickResult>;
   loadIdentityNoReplay?(): Promise<unknown>;
@@ -868,6 +872,24 @@ export function createFormalMaterialRequestAdapter(
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/reservation-releases`, {
         method: "POST", headers: checked, ...jsonBody(body),
       }).then(validateReleaseResult);
+    },
+    outboundCommandStatusNoReplay(xRequestId: string) {
+      const trace = requiredText(xRequestId, "X-Request-ID");
+      if (!SAFE_COORDINATE.test(trace)) return Promise.reject(new ApiError(409, "出库核验坐标无效"));
+      return requireNoReplayRequester()<unknown>("/v1/material-request-outbound-command-status", {
+        method: "GET", cache: "no-store", headers: { "X-Request-ID": trace, "Cache-Control": "no-store", Pragma: "no-cache" },
+      }).then(validateOutboundStatus);
+    },
+    listOutboundOptions(requestId: string, requestLineId: string) {
+      const path = `/v1/material-requests/${requiredUuid(requestId, "request_id")}/outbound-options?request_line_id=${encodeURIComponent(requiredUuid(requestLineId, "request_line_id"))}`;
+      return requireNoReplayRequester()<unknown>(path, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(validateOutboundPage);
+    },
+    createOutbound(requestId: string, input: OutboundInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
+      const body = validateOutboundInput(input);
+      const checked = validateWriteHeaders(headers, headers["Idempotency-Key"]);
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/outbounds`, {
+        method: "POST", headers: checked, ...jsonBody(body),
+      }).then(validateOutboundResult);
     },
     pickCommandStatusNoReplay(xRequestId: string) {
       const trace = requiredText(xRequestId, "X-Request-ID");

@@ -846,6 +846,77 @@ class StockReservationPickSerial(CreatedAtMixin, Base):
     serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
 
 
+class OutboundPosting(CreatedAtMixin, Base):
+    """One immutable physical outbound slice of an original picking document."""
+
+    __tablename__ = "outbound_postings"
+    __table_args__ = (
+        UniqueConstraint("posting_no", name="uq_outbound_postings_number"),
+        UniqueConstraint("idempotency_key_hash", name="uq_outbound_postings_key"),
+        UniqueConstraint("outbound_transaction_id", name="uq_outbound_postings_transaction"),
+        UniqueConstraint("id", "pick_id", name="uq_outbound_postings_binding"),
+        ForeignKeyConstraint(
+            ["reservation_id", "allocation_id"],
+            ["stock_reservations.id", "stock_reservations.allocation_id"],
+            name="fk_outbound_postings_reservation", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["request_line_id", "request_id", "revision_id"],
+            ["material_request_lines.id", "material_request_lines.request_id", "material_request_lines.revision_id"],
+            name="fk_outbound_postings_line", ondelete="RESTRICT",
+        ),
+        CheckConstraint("outbound_qty > 0", name="ck_outbound_postings_qty"),
+        CheckConstraint("length(trim(reason)) BETWEEN 1 AND 500", name="ck_outbound_postings_reason"),
+        CheckConstraint("request_version > 0 AND revision_no > 0 AND authorization_version > 0", name="ck_outbound_postings_versions"),
+        CheckConstraint("source_balance_version >= 0 AND source_ledger_cursor >= 0", name="ck_outbound_postings_coordinate"),
+        CheckConstraint("source_stock_account_id <> target_stock_account_id", name="ck_outbound_postings_accounts"),
+        CheckConstraint("length(idempotency_key_hash) = 64 AND length(request_hash) = 64", name="ck_outbound_postings_hashes"),
+        Index("ix_outbound_postings_request", "request_id", "request_version"),
+        Index("ix_outbound_postings_reservation", "reservation_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    outbound_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("outbound_lines.id", ondelete="RESTRICT"))
+    pick_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_reservation_picks.id", ondelete="RESTRICT"), index=True)
+    posting_no: Mapped[str] = mapped_column(String(100))
+    reservation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    allocation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    request_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    revision_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    revision_no: Mapped[int] = mapped_column(Integer)
+    request_version: Mapped[int] = mapped_column(BigInteger)
+    outbound_qty: Mapped[Decimal] = mapped_column(QUANTITY)
+    reason: Mapped[str] = mapped_column(String(500))
+    source_stock_account_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT"))
+    target_stock_account_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT"))
+    source_balance_version: Mapped[int] = mapped_column(BigInteger)
+    source_ledger_cursor: Mapped[int] = mapped_column(BigInteger)
+    outbound_transaction_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("inventory_transactions.id", ondelete="RESTRICT"))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
+    actor_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+
+
+class OutboundPostingSerial(CreatedAtMixin, Base):
+    __tablename__ = "outbound_posting_serials"
+    __table_args__ = (
+        PrimaryKeyConstraint("posting_id", "serial_id", name="pk_outbound_posting_serials"),
+        UniqueConstraint("pick_id", "serial_id", name="uq_outbound_posting_serial_once"),
+        ForeignKeyConstraint(["posting_id", "pick_id"],
+            ["outbound_postings.id", "outbound_postings.pick_id"],
+            name="fk_outbound_posting_serials_posting", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["pick_id", "serial_id"],
+            ["stock_reservation_pick_serials.pick_id", "stock_reservation_pick_serials.serial_id"],
+            name="fk_outbound_posting_serials_original", ondelete="RESTRICT"),
+    )
+    posting_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    pick_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+
+
 class InventoryTransaction(CreatedAtMixin, Base):
     __tablename__ = "inventory_transactions"
     __table_args__ = (
