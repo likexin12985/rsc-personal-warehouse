@@ -135,6 +135,17 @@ git diff --name-only 4a6ec83b27f76f84d1d8fe2a9ded699c9b166349 HEAD
 没有代替用户更改选择器。轻量页面可用 Medium，疑难事务可专项复核；不常驻 Max/Ultra，
 不以切换模型证明服务容量、代码状态或业务验收已恢复。
 
+## 7.1 物流事件 Web 接入（当前增量）
+
+最新实际 HEAD：`760932f`（`feat: register logistics events from shipment panel`）。
+0074 已建的 `logistics_events` 现在具备正式写入 API、按发运单读取 API、Web 适配器严格响应/输入校验，
+以及发运面板中的事件历史展示和 `pickup / transit / signed / exception` 登记入口。
+物流事件登记只追加签收/运输事实，不改变收货验收状态、库存或个人仓入账状态。
+
+本批本地验证：前端物流契约测试 6 项通过，TypeScript 检查通过，仓库安全检查通过；
+已推送 `origin/codex/production-readiness-gates`。下一步仍需补正式收货验收录入页面、异常证据处理、
+收货/入账历史读取和端到端 PostgreSQL 16 门禁；云端门禁结果仍受账号额度与网络可用性影响。
+
 ## 8. 新账号可直接粘贴的提示词
 
 > 在 ~/Documents/Codex/2026-06-11/oam 主仓库继续 RSC 个人仓开发。
