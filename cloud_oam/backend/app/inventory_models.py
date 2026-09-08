@@ -1165,3 +1165,33 @@ class ShipmentSerial(CreatedAtMixin, Base):
     )
     shipment_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("shipment_lines.id", ondelete="RESTRICT"))
     serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+
+class LogisticsEvent(CreatedAtMixin, Base):
+    __tablename__ = "logistics_events"
+    __table_args__ = (UniqueConstraint("idempotency_key_hash", name="uq_logistics_events_key"), CheckConstraint("event_type IN ('pickup','transit','signed','exception')", name="ck_logistics_events_type"))
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True)
+    shipment_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("shipments.id", ondelete="RESTRICT"))
+    event_type: Mapped[str] = mapped_column(String(32)); event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True)); source: Mapped[str] = mapped_column(String(32)); evidence_file_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE); external_ref: Mapped[str | None] = mapped_column(String(200)); idempotency_key_hash: Mapped[str] = mapped_column(String(64)); actor_user_id: Mapped[str] = mapped_column(String(36))
+
+class Receipt(CreatedAtMixin, Base):
+    __tablename__ = "receipts"
+    __table_args__ = (UniqueConstraint("receipt_no", name="uq_receipts_number"), UniqueConstraint("idempotency_key_hash", name="uq_receipts_key"), CheckConstraint("status IN ('draft','partially_accepted','accepted','exception','rejected')", name="ck_receipts_status"))
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True); receipt_no: Mapped[str] = mapped_column(String(100)); shipment_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("shipments.id", ondelete="RESTRICT")); status: Mapped[str] = mapped_column(String(32)); received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True)); receiver_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE); request_hash: Mapped[str] = mapped_column(String(64)); idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+
+class ReceiptLine(CreatedAtMixin, Base):
+    __tablename__ = "receipt_lines"
+    __table_args__ = (UniqueConstraint("receipt_id", "shipment_line_id", name="uq_receipt_lines_shipment"), CheckConstraint("accepted_qty >= 0 AND rejected_qty >= 0 AND accepted_qty + rejected_qty > 0", name="ck_receipt_lines_qty"), CheckConstraint("condition IN ('normal','shortage','damaged','wrong_material','wrong_serial','rejected')", name="ck_receipt_lines_condition"))
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True); receipt_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("receipts.id", ondelete="RESTRICT")); shipment_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("shipment_lines.id", ondelete="RESTRICT")); accepted_qty: Mapped[Decimal] = mapped_column(QUANTITY); rejected_qty: Mapped[Decimal] = mapped_column(QUANTITY); condition: Mapped[str] = mapped_column(String(32))
+
+class ReceiptSerial(CreatedAtMixin, Base):
+    __tablename__ = "receipt_serials"
+    receipt_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("receipt_lines.id", ondelete="RESTRICT"), primary_key=True); serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True); accepted: Mapped[bool] = mapped_column(Boolean)
+
+class ReceiptException(CreatedAtMixin, Base):
+    __tablename__ = "receipt_exceptions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True); receipt_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("receipts.id", ondelete="RESTRICT")); receipt_line_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("receipt_lines.id", ondelete="RESTRICT")); exception_type: Mapped[str] = mapped_column(String(32)); detail: Mapped[str] = mapped_column(String(1000)); evidence_file_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE)
+
+class InboundOrder(CreatedAtMixin, Base):
+    __tablename__ = "inbound_orders"
+    __table_args__ = (UniqueConstraint("inbound_no", name="uq_inbound_orders_number"), CheckConstraint("status IN ('pending','posted','exception')", name="ck_inbound_orders_status"))
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True); inbound_no: Mapped[str] = mapped_column(String(100)); receipt_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("receipts.id", ondelete="RESTRICT")); target_location_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE); target_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE); status: Mapped[str] = mapped_column(String(32)); posting_transaction_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("inventory_transactions.id", ondelete="RESTRICT"))
