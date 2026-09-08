@@ -742,6 +742,110 @@ class StockReservationReleaseSerial(CreatedAtMixin, Base):
     serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
 
 
+class OutboundOrder(CreatedAtMixin, Base):
+    """Picking document; physical outbound needs its own later posting fact."""
+
+    __tablename__ = "outbound_orders"
+    __table_args__ = (
+        CheckConstraint("status = 'picked' AND outbound_at IS NULL", name="ck_outbound_orders_pick_only"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    outbound_no: Mapped[str] = mapped_column(String(100), unique=True)
+    source_location_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_locations.id", ondelete="RESTRICT"))
+    status: Mapped[str] = mapped_column(String(30))
+    picked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    outbound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OutboundLine(CreatedAtMixin, Base):
+    __tablename__ = "outbound_lines"
+    __table_args__ = (
+        CheckConstraint("planned_qty > 0 AND picked_qty = planned_qty AND outbound_qty = 0", name="ck_outbound_lines_pick_only"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    outbound_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("outbound_orders.id", ondelete="RESTRICT"), index=True)
+    allocation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_allocations.id", ondelete="RESTRICT"))
+    planned_qty: Mapped[Decimal] = mapped_column(QUANTITY)
+    picked_qty: Mapped[Decimal] = mapped_column(QUANTITY)
+    outbound_qty: Mapped[Decimal] = mapped_column(QUANTITY)
+
+
+class StockReservationPick(CreatedAtMixin, Base):
+    """One immutable picking slice; the original reservation stays intact."""
+
+    __tablename__ = "stock_reservation_picks"
+    __table_args__ = (
+        UniqueConstraint("pick_no", name="uq_stock_reservation_picks_number"),
+        UniqueConstraint("idempotency_key_hash", name="uq_stock_reservation_picks_key"),
+        UniqueConstraint("pick_transaction_id", name="uq_stock_reservation_picks_transaction"),
+        UniqueConstraint("id", "reservation_id", "allocation_id", name="uq_stock_reservation_picks_binding"),
+        ForeignKeyConstraint(
+            ["reservation_id", "allocation_id"],
+            ["stock_reservations.id", "stock_reservations.allocation_id"],
+            name="fk_stock_reservation_picks_reservation", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["request_line_id", "request_id", "revision_id"],
+            ["material_request_lines.id", "material_request_lines.request_id", "material_request_lines.revision_id"],
+            name="fk_stock_reservation_picks_line", ondelete="RESTRICT",
+        ),
+        CheckConstraint("picked_qty > 0", name="ck_stock_reservation_picks_qty"),
+        CheckConstraint("length(trim(reason)) BETWEEN 1 AND 500", name="ck_stock_reservation_picks_reason"),
+        CheckConstraint("request_version > 0 AND revision_no > 0 AND authorization_version > 0", name="ck_stock_reservation_picks_versions"),
+        CheckConstraint("source_balance_version >= 0 AND source_ledger_cursor >= 0", name="ck_stock_reservation_picks_coordinate"),
+        CheckConstraint("source_stock_account_id <> target_stock_account_id", name="ck_stock_reservation_picks_accounts"),
+        CheckConstraint("length(idempotency_key_hash) = 64 AND length(request_hash) = 64", name="ck_stock_reservation_picks_hashes"),
+        Index("ix_stock_reservation_picks_request", "request_id", "request_version"),
+        Index("ix_stock_reservation_picks_reservation", "reservation_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    outbound_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("outbound_lines.id", ondelete="RESTRICT"), unique=True)
+    pick_no: Mapped[str] = mapped_column(String(100))
+    reservation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    allocation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    request_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    revision_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    revision_no: Mapped[int] = mapped_column(Integer)
+    request_version: Mapped[int] = mapped_column(BigInteger)
+    picked_qty: Mapped[Decimal] = mapped_column(QUANTITY)
+    reason: Mapped[str] = mapped_column(String(500))
+    source_stock_account_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT"))
+    target_stock_account_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT"))
+    source_balance_version: Mapped[int] = mapped_column(BigInteger)
+    source_ledger_cursor: Mapped[int] = mapped_column(BigInteger)
+    pick_transaction_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("inventory_transactions.id", ondelete="RESTRICT"))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
+    actor_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+
+
+class StockReservationPickSerial(CreatedAtMixin, Base):
+    __tablename__ = "stock_reservation_pick_serials"
+    __table_args__ = (
+        PrimaryKeyConstraint("pick_id", "serial_id", name="pk_stock_reservation_pick_serials"),
+        UniqueConstraint("reservation_id", "serial_id", name="uq_stock_reservation_pick_serial_once"),
+        ForeignKeyConstraint(
+            ["pick_id", "reservation_id", "allocation_id"],
+            ["stock_reservation_picks.id", "stock_reservation_picks.reservation_id", "stock_reservation_picks.allocation_id"],
+            name="fk_stock_reservation_pick_serials_release", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["reservation_id", "allocation_id", "serial_id"],
+            ["stock_reservation_serials.reservation_id", "stock_reservation_serials.allocation_id", "stock_reservation_serials.serial_id"],
+            name="fk_stock_reservation_pick_serials_original", ondelete="RESTRICT",
+        ),
+    )
+
+    pick_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    reservation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    allocation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+
+
 class InventoryTransaction(CreatedAtMixin, Base):
     __tablename__ = "inventory_transactions"
     __table_args__ = (

@@ -48,6 +48,8 @@ import FormalFileUploadField, {
   defaultFormalFileUploadClient,
 } from "../FormalFileUploadField";
 import FormalMaterialRequestReservationPanel from "../FormalMaterialRequestReservationPanel";
+import FormalMaterialRequestPickPanel from "../FormalMaterialRequestPickPanel";
+import { createPickStore, type PickStore } from "../materialRequestReservationPick";
 import FormalMaterialRequestReleasePanel from "../FormalMaterialRequestReleasePanel";
 import FormalMaterialRequestFulfillmentPreparationPanel from "../FormalMaterialRequestFulfillmentPreparationPanel";
 import { createReleaseStore, type ReleaseStore } from "../materialRequestReservationRelease";
@@ -1026,6 +1028,7 @@ export default function FormalMaterialRequestsPage({
   allocationRecoveryStore,
   reservationRecoveryStore,
   releaseRecoveryStore,
+  pickRecoveryStore,
 }: {
   adapter: FormalMaterialRequestAdapter;
   fileUploadClient?: FormalFileUploadClient;
@@ -1034,6 +1037,7 @@ export default function FormalMaterialRequestsPage({
   allocationRecoveryStore?: AllocationRecoveryStore;
   reservationRecoveryStore?: ReservationRecoveryStore;
   releaseRecoveryStore?: ReleaseStore;
+  pickRecoveryStore?: PickStore;
 }) {
   const recoveryStore = useRef(
     lifecycleRecoveryStore ?? createMaterialRequestLifecycleRecoveryStore(),
@@ -1048,11 +1052,16 @@ export default function FormalMaterialRequestsPage({
   const reservationStore = useRef(reservationRecoveryStore ?? createReservationRecoveryStore());
   const [reservationBlocked, setReservationBlocked] = useState(() => reservationStore.current.read().kind !== "missing");
   const reservationBlockingRef = useRef(reservationBlocked);
+  const pickStore = useRef(pickRecoveryStore ?? createPickStore());
+  const [pickBlocked, setPickBlocked] = useState(() => pickStore.current.read().kind !== "missing");
+  const pickBlockingRef = useRef(pickBlocked);
+  function onPickBlocking(value: boolean) { pickBlockingRef.current = value; setPickBlocked(value); }
+  function pickWriteBlocked() { return pickBlockingRef.current || pickStore.current.read().kind !== "missing"; }
   const releaseStore = useRef(releaseRecoveryStore ?? createReleaseStore());
   const [releaseBlocked, setReleaseBlocked] = useState(() => releaseStore.current.read().kind !== "missing");
   const releaseBlockingRef = useRef(releaseBlocked);
   function onReleaseBlocking(value: boolean) { releaseBlockingRef.current = value; setReleaseBlocked(value); }
-  function releaseWriteBlocked() { return releaseBlockingRef.current || releaseStore.current.read().kind !== "missing"; }
+  function releaseWriteBlocked() { return pickWriteBlocked() || releaseBlockingRef.current || releaseStore.current.read().kind !== "missing"; }
   const supplyBlockingRef = useRef(supplyBlocked);
   const allocationBlockingRef = useRef(allocationBlocked);
   function onReservationBlocking(value: boolean) { reservationBlockingRef.current = value; setReservationBlocked(value); }
@@ -1066,7 +1075,7 @@ export default function FormalMaterialRequestsPage({
   const [baseBusy, setBaseBusy] = useState(false);
   const baseBusyRef = useRef(false);
   function setBusy(value: boolean) { baseBusyRef.current = value; setBaseBusy(value); }
-  const busy = baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked;
+  const busy = baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked;
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [detail, setDetail] = useState<MaterialRequestDetail | null>(null);
@@ -1100,7 +1109,7 @@ export default function FormalMaterialRequestsPage({
   }> | null>(null);
 
   const lifecycleWritesBlocked = lifecycleRecovery.phase === "checking"
-    || lifecycleRecovery.phase === "blocked" || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked;
+    || lifecycleRecovery.phase === "blocked" || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked;
   const draftWritePending = Boolean(
     formMode?.kind === "create"
       ? createRegistry.current.get()
@@ -2297,20 +2306,24 @@ export default function FormalMaterialRequestsPage({
       adapter={adapter} access={access} detail={null} store={supplyStore.current}
       registry={mutationRegistry.current}
       allocationRecoveryStore={allocationStore.current}
-      otherWriteBusy={baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking" || allocationBlocked || reservationBlocked}
+      otherWriteBusy={pickBlocked || baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking" || allocationBlocked || reservationBlocked}
       otherWriteBlocked={() => reservationWriteBlocked()}
       onBlocking={onSupplyBlocking} onAllocationBlocking={onAllocationBlocking} onDetail={setDetail}
     />}
     {!detail && <FormalMaterialRequestReservationPanel
       adapter={adapter} access={access} detail={null} store={reservationStore.current}
-      otherWriteBusy={releaseBlocked || baseBusy || supplyBlocked || allocationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+      otherWriteBusy={pickBlocked || releaseBlocked || baseBusy || supplyBlocked || allocationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
       otherWriteBlocked={() => releaseWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
       onBlocking={onReservationBlocking} onDetail={setDetail}
     />}
     {!detail && <FormalMaterialRequestReleasePanel adapter={adapter} access={access} detail={null} store={releaseStore.current}
-      otherWriteBusy={baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-      otherWriteBlocked={() => baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
+      otherWriteBusy={pickBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+      otherWriteBlocked={() => pickWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
       onBlocking={onReleaseBlocking} onDetail={setDetail} />}
+    {!detail && <FormalMaterialRequestPickPanel adapter={adapter} access={access} detail={null} store={pickStore.current}
+      otherWriteBusy={baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+      otherWriteBlocked={() => baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || releaseStore.current.read().kind !== "missing" || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
+      onBlocking={onPickBlocking} onDetail={setDetail} />}
     {detail && access && <Modal title="正式需求详情" wide onClose={() => {
       if (!approvalProcess && !lifecycleProcess && !supplyBlocked && !allocationBlocked && !reservationWriteBlocked()) {
         editRecoveryGeneration.current += 1;
@@ -2320,23 +2333,27 @@ export default function FormalMaterialRequestsPage({
     }}>
       <FormalMaterialRequestReservationPanel
         adapter={adapter} access={access} detail={detail} store={reservationStore.current}
-        otherWriteBusy={releaseBlocked || baseBusy || supplyBlocked || allocationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBusy={pickBlocked || releaseBlocked || baseBusy || supplyBlocked || allocationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
         otherWriteBlocked={() => releaseWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
         onBlocking={onReservationBlocking} onDetail={setDetail}
       />
       <FormalMaterialRequestReleasePanel adapter={adapter} access={access} detail={detail} store={releaseStore.current}
-        otherWriteBusy={baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-        otherWriteBlocked={() => baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
+        otherWriteBusy={pickBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => pickWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
         onBlocking={onReleaseBlocking} onDetail={setDetail} />
+      <FormalMaterialRequestPickPanel adapter={adapter} access={access} detail={detail} store={pickStore.current}
+      otherWriteBusy={baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+      otherWriteBlocked={() => baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || releaseStore.current.read().kind !== "missing" || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
+      onBlocking={onPickBlocking} onDetail={setDetail} />
       <DetailPanel detail={detail} access={access} busy={busy} lifecycleBlocked={lifecycleWritesBlocked} onEdit={() => void startEdit()} onSubmit={() => setSubmitConfirm(true)} onProcess={startApprovalProcess} onLifecycle={startLifecycleProcess} />
       <FormalMaterialRequestFulfillmentPreparationPanel adapter={adapter} access={access} detail={detail}
-        otherWriteBusy={baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-        otherWriteBlocked={() => baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationWriteBlocked() || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"} />
+        otherWriteBusy={pickBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => pickWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationWriteBlocked() || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"} />
       <FormalMaterialRequestSupplyPanel
         adapter={adapter} access={access} detail={detail} store={supplyStore.current}
         registry={mutationRegistry.current}
         allocationRecoveryStore={allocationStore.current}
-        otherWriteBusy={baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking" || allocationBlocked || reservationBlocked}
+        otherWriteBusy={pickBlocked || baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking" || allocationBlocked || reservationBlocked}
         otherWriteBlocked={() => reservationWriteBlocked()}
         onBlocking={onSupplyBlocking} onAllocationBlocking={onAllocationBlocking} onDetail={setDetail}
       />

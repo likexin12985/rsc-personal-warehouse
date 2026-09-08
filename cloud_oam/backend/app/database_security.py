@@ -96,6 +96,7 @@ RUNTIME_READ_TABLES = frozenset(
         "stock_allocation_serials",
         "stock_reservations",
         "stock_reservation_serials",
+        "outbound_orders", "outbound_lines", "stock_reservation_picks", "stock_reservation_pick_serials",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
         "stock_balances",
@@ -184,6 +185,7 @@ RUNTIME_INSERT_TABLES = frozenset(
         "stock_allocation_serials",
         "stock_reservations",
         "stock_reservation_serials",
+        "outbound_orders", "outbound_lines", "stock_reservation_picks", "stock_reservation_pick_serials",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
         "stock_balances",
@@ -1878,6 +1880,19 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
     **{
+        f"trg_{table}_picking_graph_0071": (table, "rsc_dispatch_picking_graph_0071", "A", 21, True, True, True)
+        for table in ("outbound_orders", "outbound_lines", "stock_reservation_picks", "stock_reservation_pick_serials",
+                      "stock_reservation_releases", "stock_reservation_release_serials",
+                      "material_requests", "material_request_commands", "inventory_transactions")
+    },
+    **{
+        f"trg_{table}_{suffix}_0071": (table, "rsc_guard_reservation_release_immutable_0070", "A", kind, False, False, False)
+        for table in ("outbound_orders", "outbound_lines", "stock_reservation_picks", "stock_reservation_pick_serials")
+        for suffix, kind in (("immutable", 27), ("no_truncate", 34))
+    },
+    "trg_stock_reservation_picks_binding_0071": ("stock_reservation_picks", "rsc_guard_picking_binding_0071", "A", 7, False, False, False),
+
+    **{
         f"trg_{table}_reservation_graph_0070": (
             table, "rsc_dispatch_reservation_graph_0070", "A", 21, True, True, True,
         )
@@ -2297,6 +2312,10 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
+    ("rsc_material_request_picking_state_0071", "uuid, bigint"): "a239056dc39f5406fcac9a920660b597d86f21d53b101568f9380639f722b57f",
+    ("rsc_guard_picking_binding_0071", ""): "b2a91c42311e5fb59882292550d1335d73c4f51f9349103c77b0a180518fa271",
+    ("rsc_validate_picking_graph_0071", "uuid"): "0944c7c92b87b738047acf04c0a1658585f21b3ee50636d7a182fbd1ac2e0d75",
+    ("rsc_dispatch_picking_graph_0071", ""): "37850e337166eb0391a4cc42dc977cc48546dc534c4cc38e0dec67a980ab7a01",
     ("rsc_material_request_reservation_state_0070", "uuid, bigint"):
         "6e0db6d66c96e7eaf106abc26ba89be98def947beac1117d693acf2c844503ea",
     ("rsc_guard_reservation_release_immutable_0070", ""):
@@ -2316,7 +2335,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_guard_material_request_original_line_0029", ""):
         "d00a8775d26e1b48e2a72798595354eedff873e2b83a7508c9c2961eb7d5d672",
     ("rsc_guard_material_request_identity_0029", ""):
-        "9f51943cbc18db67cd12070c9f95f950377d808389def9ab09bc0472fadac9ba",
+        "0c6ce152e38c27d8069b4a5732405703d51473a30407a50d1cc4c066fcd5b9ad",
     ("rsc_guard_material_request_revision_0029", ""):
         "ea718216fbf47320670b171a4aca22019fdbf4540533742aac6ac7573b31ab83",
     ("rsc_guard_material_request_approval_instance_0029", ""):
@@ -2366,7 +2385,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_validate_material_request_external_causality_0045", "uuid"):
         "0f5bd6658edcb46dac6282109b71a109c14003862c89b3f5700d89f1ac13fa26",
     ("rsc_validate_material_request_approval_projection_0045", "uuid"):
-        "7f536d685eba41c23290864d39d4ef28ed135f497ca2bfdb268348f31f0f9c11",
+        "a82b909450e908ab3bece5cc7c834c03b5f999546d8fc6a0ed3a6d2ced395fa3",
     ("rsc_dispatch_material_request_approval_projection_0045", ""):
         "244d188e126e66fd4b020da01c076a3018f2c8841230bd255da45b7913776d54",
     ("rsc_guard_material_request_supply_task_0059", ""):
@@ -2374,7 +2393,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_guard_material_request_supply_write_0060", ""):
         "0fe289826a8aa4d14e2ecd48a9900484bf8929a054dbfa52340fa27786453f26",
     ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint"):
-        "41463ee6f0e4645fcbf056e69b0f7389f084c045e6379f9f82ab69b509415105",
+        "c4d83a251d3e0e9f32b74f174f56563196a7550b80cfc52659f38c1410c73f11",
     ("rsc_dispatch_material_request_supply_causality_0059", ""):
         "4228949da83f59ea1b46a8badd7c0fe8c58e188b7a88eac318ac032acd339e92",
     ("rsc_guard_material_request_content_write_0046", ""):
@@ -2386,6 +2405,10 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ("rsc_material_request_picking_state_0071", "uuid, bigint"),
+        ("rsc_guard_picking_binding_0071", ""),
+        ("rsc_validate_picking_graph_0071", "uuid"),
+        ("rsc_dispatch_picking_graph_0071", ""),
         ("rsc_material_request_reservation_state_0070", "uuid, bigint"),
         ("rsc_guard_reservation_release_immutable_0070", ""),
         ("rsc_guard_reservation_release_binding_0070", ""),
@@ -2414,6 +2437,7 @@ MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
 )
 MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS = frozenset(
     {
+        ("rsc_validate_picking_graph_0071", "uuid"),
         ("rsc_validate_reservation_graph_0070", "uuid"),
         ("rsc_validate_approval_instance_causality_0030", "uuid"),
         (
@@ -4768,7 +4792,7 @@ JOIN pg_namespace AS function_schema
   ON function_schema.oid = function_row.pronamespace
 WHERE table_schema.nspname = 'public'
   AND (
-      trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060|0069|0070)$'
+      trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060|0069|0070|0071)$'
       OR function_row.proname IN (
           {_MATERIAL_REQUEST_APPROVAL_TRIGGER_FUNCTION_LITERALS}
       )
@@ -5843,7 +5867,7 @@ def _select_material_request_approval_functions(
         for row in rows
         if isinstance(row.get("function_name"), str)
         and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070")
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071")
         )
     ]
 
@@ -7308,7 +7332,7 @@ def _assert_material_request_approval_guards(
         expected_values = {
             "function_kind": "f",
             "result_type": (
-                "text" if coordinate == ("rsc_material_request_reservation_state_0070", "uuid, bigint") else
+                "text" if coordinate in {("rsc_material_request_reservation_state_0070", "uuid, bigint"), ("rsc_material_request_picking_state_0071", "uuid, bigint")} else
                 "void"
                 if coordinate in MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS
                 else "trigger"

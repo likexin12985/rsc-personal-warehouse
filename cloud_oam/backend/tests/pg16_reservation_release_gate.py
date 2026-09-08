@@ -13,7 +13,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 
-def _assert_release_catalog(api_engine, security_engine):
+def _assert_release_catalog(api_engine, security_engine, revision_suffix="_0070"):
     from app.database_security import (
         DatabaseSecurityBoundaryError, EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS,
         MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256, validate_production_database_security,
@@ -34,11 +34,11 @@ def _assert_release_catalog(api_engine, security_engine):
         validate()
 
     for name, binding in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items():
-        if name.endswith("_0070"):
+        if name.endswith(revision_suffix):
             rejected(f"ALTER TABLE public.{binding[0]} DISABLE TRIGGER {name}",
                      f"ALTER TABLE public.{binding[0]} ENABLE ALWAYS TRIGGER {name}")
     for name, arguments in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256:
-        if not name.endswith("_0070"): continue
+        if not name.endswith(revision_suffix): continue
         signature = f"public.{name}({arguments})"
         rejected(f"ALTER FUNCTION {signature} SECURITY INVOKER", f"ALTER FUNCTION {signature} SECURITY DEFINER")
         rejected(f"GRANT EXECUTE ON FUNCTION {signature} TO PUBLIC", f"REVOKE EXECUTE ON FUNCTION {signature} FROM PUBLIC")

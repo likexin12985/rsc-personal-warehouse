@@ -4,6 +4,7 @@ import { validateMaterialRequestWorkOrderOptionQuery } from "./formalMaterialReq
 import { validateMaterialRequestAllocationOptionPage, type MaterialRequestAllocationOptionPage } from "./formalMaterialRequestAllocationOptions";
 import { validateMaterialRequestAllocationCommandStatus, validateMaterialRequestAllocationMutationResult, type MaterialRequestAllocationCommandStatus, type MaterialRequestAllocationMutationResult } from "./formalMaterialRequestAllocationCommandStatus";
 import { validateMaterialRequestReservationCommandStatus, validateMaterialRequestReservationMutationResult, type MaterialRequestReservationCommandStatus, type MaterialRequestReservationMutationResult } from "./formalMaterialRequestReservationCommandStatus";
+import { type PickInput, type PickPage, type PickResult, validatePickInput, validatePickPage, validatePickResult, validatePickStatus } from "./materialRequestReservationPick";
 import { type ReleaseInput, type ReleasePage, type ReleaseResult, validateReleaseInput, validateReleasePage, validateReleaseResult, validateReleaseStatus } from "./materialRequestReservationRelease";
 import { validateMaterialRequestReservationOptionPage, type MaterialRequestReservationOptionPage } from "./formalMaterialRequestReservationOptions";
 import { validateFulfillmentPreparation, type FulfillmentPreparation } from "./materialRequestFulfillmentPreparation";
@@ -98,6 +99,9 @@ export interface FormalMaterialRequestAdapter {
   listReleaseOptions?(requestId: string, requestLineId: string): Promise<ReleasePage>;
   listFulfillmentPreparation?(requestId: string, requestLineId: string): Promise<FulfillmentPreparation>;
   createRelease?(requestId: string, input: ReleaseInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ReleaseResult>;
+  pickCommandStatusNoReplay?(xRequestId: string): Promise<PickResult | null>;
+  listPickOptions?(requestId: string, requestLineId: string): Promise<PickPage>;
+  createPick?(requestId: string, input: PickInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<PickResult>;
   loadIdentityNoReplay?(): Promise<unknown>;
   loadAccessNoReplay?(): Promise<unknown>;
   detailNoReplay?(requestId: string): Promise<unknown>;
@@ -864,6 +868,24 @@ export function createFormalMaterialRequestAdapter(
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/reservation-releases`, {
         method: "POST", headers: checked, ...jsonBody(body),
       }).then(validateReleaseResult);
+    },
+    pickCommandStatusNoReplay(xRequestId: string) {
+      const trace = requiredText(xRequestId, "X-Request-ID");
+      if (!SAFE_COORDINATE.test(trace)) return Promise.reject(new ApiError(409, "拣货核验坐标无效"));
+      return requireNoReplayRequester()<unknown>("/v1/material-request-reservation-pick-command-status", {
+        method: "GET", cache: "no-store", headers: { "X-Request-ID": trace, "Cache-Control": "no-store", Pragma: "no-cache" },
+      }).then(validatePickStatus);
+    },
+    listPickOptions(requestId: string, requestLineId: string) {
+      const path = `/v1/material-requests/${requiredUuid(requestId, "request_id")}/reservation-pick-options?request_line_id=${encodeURIComponent(requiredUuid(requestLineId, "request_line_id"))}`;
+      return requireNoReplayRequester()<unknown>(path, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(validatePickPage);
+    },
+    createPick(requestId: string, input: PickInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
+      const body = validatePickInput(input);
+      const checked = validateWriteHeaders(headers, headers["Idempotency-Key"]);
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/reservation-picks`, {
+        method: "POST", headers: checked, ...jsonBody(body),
+      }).then(validatePickResult);
     },
     createReservation(requestId: string, input: MaterialRequestReservationCreateInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
       const checkedRequestId = requiredUuid(requestId, "request_id");

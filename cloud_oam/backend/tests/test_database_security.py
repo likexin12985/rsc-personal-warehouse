@@ -551,6 +551,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
     }
     stocktake_start_tables = {"stocktake_start_completions"}
     allocation_tables = {
+        "outbound_orders", "outbound_lines", "stock_reservation_picks", "stock_reservation_pick_serials",
         "stock_allocations",
         "stock_allocation_serials",
         "stock_reservations",
@@ -1063,6 +1064,10 @@ def _assert_0069_function_body_matches_runtime_manifest(
     next_migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20260910_0070_stock_reservation_releases.py")))
     latest_body = current_body
     for old, new in next_migration["source_changes"]().get(coordinate, ()):
+        assert latest_body.count(old) == 1 and new not in latest_body
+        latest_body = latest_body.replace(old, new)
+    picking = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20260911_0071_reservation_picking.py")))
+    for old, new in picking["source_changes"]().get(coordinate, ()):
         assert latest_body.count(old) == 1 and new not in latest_body
         latest_body = latest_body.replace(old, new)
     assert MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate] == hashlib.sha256(latest_body.encode()).hexdigest()
@@ -6978,7 +6983,7 @@ def _valid_material_request_approval_function_rows(
                 "argument_types": argument_types,
                 "function_kind": "f",
                 "result_type": (
-                    "text" if coordinate == ("rsc_material_request_reservation_state_0070", "uuid, bigint") else
+                    "text" if coordinate in {("rsc_material_request_reservation_state_0070", "uuid, bigint"), ("rsc_material_request_picking_state_0071", "uuid, bigint")} else
                     "void"
                     if coordinate in MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS
                     else "trigger"
@@ -7110,8 +7115,8 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 93
-    assert len(functions) == 42
+    assert len(triggers) == 111
+    assert len(functions) == 46
     _assert_material_request_approval_guards(
         triggers=triggers,
         functions=functions,
@@ -7338,7 +7343,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
 ) -> None:
     query = " ".join(str(_MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL).split())
 
-    assert "trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060|0069|0070)$'" in query
+    assert "trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060|0069|0070|0071)$'" in query
     assert "function_row.proname IN" in query
     assert "AND NOT trigger_row.tgisinternal" in query
     assert "trigger_row.tgname IN" not in query
@@ -7361,7 +7366,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
     assert {
         coordinate[0].rsplit("_", 1)[-1]
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
-    } == {"0029", "0030", "0045", "0046", "0059", "0060", "0069", "0070"}
+    } == {"0029", "0030", "0045", "0046", "0059", "0060", "0069", "0070", "0071"}
 
 
 def test_0069_reservation_guard_bodies_match_runtime_manifest(monkeypatch):
@@ -7494,7 +7499,7 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         ): migration._projection_dispatcher_sql(),
     }
 
-    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 42
+    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 46
     assert set(function_sql) == {
         coordinate
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
