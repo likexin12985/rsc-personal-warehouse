@@ -83,7 +83,7 @@ RUNTIME_READY_STABLE_REVISIONS = frozenset(
 def _runtime_ready_revision(revision: str) -> str:
     """Return the revision embedded in readiness at a schema state."""
 
-    if revision == RUNTIME_READY_HEAD_REVISION:
+    if revision in {RUNTIME_READY_HEAD_REVISION, HEAD_REVISION}:
         return RUNTIME_READY_HEAD_REVISION
     if revision == STOCK_ALLOCATIONS_REVISION:
         return STOCK_ALLOCATIONS_REVISION
