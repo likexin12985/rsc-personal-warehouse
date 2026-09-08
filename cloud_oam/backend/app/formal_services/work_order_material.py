@@ -32,6 +32,14 @@ class WorkOrderMaterialPreflightError(ValueError):
         self.message = message
 
 
+def validate_serial_quantity(quantity: Decimal, serial_ids: tuple[UUID, ...]) -> None:
+    """Serial-tracked lines must carry one SN for each physical unit."""
+    if serial_ids and quantity != Decimal(len(serial_ids)):
+        raise WorkOrderMaterialPreflightError(
+            "serial_quantity_mismatch", "SN 数量必须与物料数量一致"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class WorkOrderMaterialLineInput:
     material_id: UUID
@@ -100,6 +108,7 @@ def validate_batch(lines: tuple[WorkOrderMaterialLineInput, ...]) -> None:
             raise WorkOrderMaterialPreflightError("quantity_invalid", "物料数量必须大于零")
         if line.condition_before not in {"new", "used", "damaged", "scrapped"}:
             raise WorkOrderMaterialPreflightError("condition_invalid", "物料状态不合法")
+        validate_serial_quantity(line.quantity, line.serial_ids)
         if line.material_id in seen_materials:
             raise WorkOrderMaterialPreflightError("duplicate_material", "同一批次不得重复提交物料")
         seen_materials.add(line.material_id)

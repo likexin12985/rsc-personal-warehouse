@@ -9,6 +9,7 @@ from app.formal_services.work_order_material import (
     validate_batch,
     operation_request_hash,
     WorkOrderReplacementPairInput,
+    validate_serial_quantity,
 )
 
 
@@ -76,3 +77,9 @@ def test_replacement_pairs_are_unique_and_part_of_fingerprint():
     assert first != operation_request_hash(
         operation_type="recover", work_order_id=uuid4(), operator_person_id=uuid4(), lines=(value,)
     )
+
+
+def test_serial_quantity_must_match_physical_units():
+    with pytest.raises(WorkOrderMaterialPreflightError, match="SN 数量"):
+        validate_serial_quantity(Decimal("2"), (uuid4(),))
+    validate_serial_quantity(Decimal("2"), (uuid4(), uuid4()))
