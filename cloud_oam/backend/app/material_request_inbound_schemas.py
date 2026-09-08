@@ -17,3 +17,10 @@ class InboundOrderOut(BaseModel):
     target_location_id: UUID
     target_person_id: UUID
     status: str
+
+class InboundPostingOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: str = "1.0"
+    inbound_order_id: UUID
+    inventory_transaction_id: UUID
+    replayed: bool = False

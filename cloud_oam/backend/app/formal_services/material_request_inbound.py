@@ -70,14 +70,18 @@ def build_inbound_posting_command(db, *, inbound_order, receipt_line_id, target_
         movements=(InventoryMovementCommand(from_account_id=posting.target_stock_account_id, to_account_id=target_account.id, quantity=line.accepted_qty, serial_ids=serial_ids, external_boundary_code=None),),
     )
 
-def post_inbound_order(db, *, actor, inbound_order_id, idempotency_key, request_id):
+def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idempotency_key, request_id):
     order = db.get(InboundOrder, inbound_order_id)
     if order is None: _fail("inbound_not_found", "not_found", "个人仓入账单不存在")
+    request = db.get(MaterialRequest, material_request_id)
+    if request is None: _fail("not_found", "not_found", "需求单不存在")
     existing = db.scalar(select(InboundPosting).where(InboundPosting.inbound_order_id == order.id))
     if existing is not None:
         return {"inbound_order_id": order.id, "inventory_transaction_id": existing.inventory_transaction_id, "replayed": True}
     receipt = db.get(Receipt, order.receipt_id)
     if receipt is None or receipt.status not in {"accepted", "exception"}: _fail("receipt_not_final", "precondition_failed", "收货尚未完成验收")
+    bound_request = db.scalar(select(OutboundPosting.request_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).where(ShipmentLine.shipment_id == receipt.shipment_id))
+    if bound_request != material_request_id: _fail("request_mismatch", "conflict", "入账单不属于当前需求")
     lines = tuple(db.scalars(select(ReceiptLine).where(ReceiptLine.receipt_id == receipt.id).order_by(ReceiptLine.id)).all())
     if not lines: _fail("receipt_empty", "precondition_failed", "收货没有可入账明细")
     movements = []

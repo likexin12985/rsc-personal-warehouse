@@ -63,7 +63,7 @@ from ..formal_services import material_request_inbound as inbound_service
 from ..material_request_outbound_schemas import OutboundOptionsOut, OutboundIn, OutboundOut, OutboundStatusOut
 from ..material_request_shipment_schemas import ShipmentIn, ShipmentOut, ShipmentOptionsOut
 from ..material_request_receipt_schemas import ReceiptIn, ReceiptOut
-from ..material_request_inbound_schemas import InboundOrderIn, InboundOrderOut
+from ..material_request_inbound_schemas import InboundOrderIn, InboundOrderOut, InboundPostingOut
 from ..formal_services import material_request_picking as picking_service
 from ..formal_services import material_request_picking_options as picking_options_service
 from ..material_request_picking_schemas import PickOptionsOut
@@ -940,6 +940,21 @@ def create_formal_material_request_inbound_order(
     trace = _required_safe_header("X-Request-ID", request_id, minimum=8, maximum=160)
     try:
         output = InboundOrderOut(**inbound_service.create_inbound_order(db, actor=principal, request_id=material_request_id, expected_version=payload.expected_request_version, receipt_id=payload.receipt_id, target_location_id=payload.target_location_id, target_person_id=payload.target_person_id, trace_request_id=trace)); db.commit(); _set_read_no_store(response); return output
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+
+@router.post("/{material_request_id}/inbound-orders/{inbound_order_id}/post", response_model=InboundPostingOut)
+def post_formal_material_request_inbound_order(
+    material_request_id: UUID, inbound_order_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
+    try:
+        result = inbound_service.post_inbound_order(db, actor=principal, inbound_order_id=inbound_order_id, material_request_id=material_request_id, idempotency_key=key, request_id=trace)
+        output = InboundPostingOut(**result); db.commit(); _set_read_no_store(response); _set_replay_header(response, output.replayed); return output
     except Exception as exc:
         _rollback_and_raise(db, exc)
 
