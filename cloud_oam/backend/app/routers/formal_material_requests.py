@@ -60,6 +60,7 @@ from ..formal_services import material_request_outbound_options as outbound_opti
 from ..formal_services import material_request_shipment as shipment_service
 from ..formal_services import material_request_receipt as receipt_service
 from ..formal_services import material_request_inbound as inbound_service
+from ..formal_services.inventory_posting import InventoryPostingError
 from ..formal_services import material_request_logistics as logistics_service
 from ..material_request_outbound_schemas import OutboundOptionsOut, OutboundIn, OutboundOut, OutboundStatusOut
 from ..material_request_shipment_schemas import ShipmentIn, ShipmentOut, ShipmentOptionsOut
@@ -1935,6 +1936,7 @@ def _rollback_and_raise(db: Session, exc: Exception) -> None:
             reservation_service.MaterialRequestReservationError,
             lifecycle_service.MaterialRequestLifecycleError,
             supply_service.MaterialRequestSupplyError,
+            InventoryPostingError,
             _MaterialRequestAdapterError,
         ),
     ):

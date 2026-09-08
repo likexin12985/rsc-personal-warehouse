@@ -49,12 +49,14 @@ def test_inbound_posting_skips_rejected_only_receipt_lines(monkeypatch):
             if model is inbound_service.InboundOrder: return order
             if model is inbound_service.Receipt: return receipt
             if model is inbound_service.MaterialRequest: return SimpleNamespace(id=ID)
+            if model is inbound_service.Shipment: return SimpleNamespace(target_location_id=ID, target_person_id=ID)
             return None
         def scalar(self, statement):
-            # Existing posting lookup and request binding are both empty/non-null
-            return None if "inbound_postings" in str(statement) else ID
+            if "FROM inbound_orders" in str(statement): return order
+            if "FROM material_requests" in str(statement): return SimpleNamespace(id=ID)
+            return None
         def scalars(self, statement):
-            return SimpleNamespace(all=lambda: [accepted, rejected])
+            return SimpleNamespace(all=lambda: [ID] if "FROM outbound_postings" in str(statement) else [accepted, rejected])
         def add(self, value): self.added.append(value)
 
     db = FakeDb()
@@ -77,9 +79,13 @@ def test_inbound_posting_rejects_receipt_with_no_accepted_quantity(monkeypatch):
             if model is inbound_service.InboundOrder: return order
             if model is inbound_service.Receipt: return receipt
             if model is inbound_service.MaterialRequest: return SimpleNamespace(id=ID)
+            if model is inbound_service.Shipment: return SimpleNamespace(target_location_id=ID, target_person_id=ID)
             return None
-        def scalar(self, statement): return None if "inbound_postings" in str(statement) else ID
-        def scalars(self, statement): return SimpleNamespace(all=lambda: [rejected])
+        def scalar(self, statement):
+            if "FROM inbound_orders" in str(statement): return order
+            if "FROM material_requests" in str(statement): return SimpleNamespace(id=ID)
+            return None
+        def scalars(self, statement): return SimpleNamespace(all=lambda: [ID] if "FROM outbound_postings" in str(statement) else [rejected])
 
     with pytest.raises(inbound_service.InboundError, match="合格数量"):
         inbound_service.post_inbound_order(FakeDb(), actor=SimpleNamespace(user_id=ID), inbound_order_id=ID, material_request_id=ID, idempotency_key="idem", request_id="trace")
