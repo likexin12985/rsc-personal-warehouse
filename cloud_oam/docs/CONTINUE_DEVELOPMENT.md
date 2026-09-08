@@ -148,6 +148,12 @@ git diff --name-only 4a6ec83b27f76f84d1d8fe2a9ded699c9b166349 HEAD
 已推送 `origin/codex/production-readiness-gates`。下一步仍需补正式收货验收录入页面、异常证据处理、
 收货/入账历史读取和端到端 PostgreSQL 16 门禁；云端门禁结果仍受账号额度与网络可用性影响。
 
+## 7.2 远端门禁现状
+
+截至本次核验，最新 Client 工作流 `34276684676` 对应 HEAD `4a23049`，job 在启动约 3 秒后失败，
+`steps: []`，没有执行任何测试步骤；更早的 PostgreSQL 16 工作流 `34275459633` 也呈现同样的快速失败形态。
+这属于 GitHub 账号额度/运行环境阻断，不能作为代码失败证据，也不重复触发无效重跑。
+
 ## 8. 新账号可直接粘贴的提示词
 
 > 在 ~/Documents/Codex/2026-06-11/oam 主仓库继续 RSC 个人仓开发。
