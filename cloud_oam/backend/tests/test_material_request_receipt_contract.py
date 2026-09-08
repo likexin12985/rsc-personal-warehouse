@@ -18,6 +18,10 @@ def test_receipt_output_preserves_exception_facts():
     assert value.schema_version == "1.0"
     assert value.exceptions[0]["exception_type"] == "damaged"
 
+def test_receipt_condition_is_an_explicit_code():
+    with pytest.raises(Exception):
+        ReceiptIn(expected_request_version=2, receiver_person_id=ID, received_at="2026-09-09T10:00:00Z", lines=[{"shipment_line_id": ID, "accepted_qty": "1.000", "rejected_qty": "0.000", "condition": "free_text"}])
+
 def test_serial_receipt_quantity_must_be_whole_physical_units():
     with pytest.raises(ReceiptError, match="SN"):
         _validate_serial_receipt_quantity(Decimal("1.500"), {ID}, {ID, UUID("22222222-2222-2222-2222-222222222222")}, set())

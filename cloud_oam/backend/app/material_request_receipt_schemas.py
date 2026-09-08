@@ -2,6 +2,8 @@ from decimal import Decimal
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
+RECEIPT_CONDITIONS = frozenset({"normal", "shortage", "damaged", "wrong_material", "wrong_serial", "rejected"})
+
 class ReceiptLineIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     shipment_line_id: UUID
@@ -10,6 +12,12 @@ class ReceiptLineIn(BaseModel):
     condition: str = Field(min_length=1, max_length=32)
     serial_ids: tuple[UUID, ...] = Field(default=(), max_length=1000)
     exception_evidence_file_id: UUID | None = None
+    @field_validator("condition")
+    @classmethod
+    def condition_code(cls, value):
+        if value not in RECEIPT_CONDITIONS:
+            raise ValueError("收货条件无效")
+        return value
     @field_validator("accepted_qty", "rejected_qty", mode="before")
     @classmethod
     def quantity(cls, value):
