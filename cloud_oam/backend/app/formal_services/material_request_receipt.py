@@ -58,7 +58,8 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
 
 def _result(db, receipt, replayed, lines=None):
     if lines is None: lines = tuple({"receipt_line_id": x.id, "shipment_line_id": x.shipment_line_id, "accepted_qty": _qty(x.accepted_qty), "rejected_qty": _qty(x.rejected_qty), "serial_ids": tuple(db.scalars(select(ReceiptSerial.serial_id).where(ReceiptSerial.receipt_line_id == x.id)).all())} for x in db.scalars(select(ReceiptLine).where(ReceiptLine.receipt_id == receipt.id)).all())
-    return {"schema_version": "1.0", "receipt_id": receipt.id, "receipt_no": receipt.receipt_no, "shipment_id": receipt.shipment_id, "status": receipt.status, "lines": tuple(lines), "idempotency_replayed": replayed}
+    exceptions = tuple({"exception_id": x.id, "receipt_line_id": x.receipt_line_id, "exception_type": x.exception_type, "detail": x.detail, "evidence_file_id": x.evidence_file_id} for x in db.scalars(select(ReceiptException).where(ReceiptException.receipt_id == receipt.id).order_by(ReceiptException.created_at, ReceiptException.id)).all())
+    return {"schema_version": "1.0", "receipt_id": receipt.id, "receipt_no": receipt.receipt_no, "shipment_id": receipt.shipment_id, "status": receipt.status, "lines": tuple(lines), "exceptions": exceptions, "idempotency_replayed": replayed}
 
 def list_receipts(db, *, actor, request_id):
     request = db.get(MaterialRequest, request_id)

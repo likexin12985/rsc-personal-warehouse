@@ -31,4 +31,5 @@ class ReceiptOut(BaseModel):
     shipment_id: UUID
     status: str
     lines: tuple[dict, ...]
+    exceptions: tuple[dict, ...] = ()
     idempotency_replayed: bool = False
