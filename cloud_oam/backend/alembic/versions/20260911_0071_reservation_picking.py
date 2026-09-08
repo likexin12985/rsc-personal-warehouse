@@ -453,6 +453,7 @@ def upgrade():
             op.execute(f"ALTER TABLE public.{table} OWNER TO star_oam_migrator")
             op.execute(f"REVOKE ALL ON TABLE public.{table} FROM PUBLIC, star_oam_api")
             op.execute(f"GRANT SELECT, INSERT ON TABLE public.{table} TO star_oam_api")
+        op.execute("GRANT UPDATE (outbound_status) ON TABLE public.material_requests TO star_oam_api")
     elif dialect == "sqlite":
         _sqlite_guards(upgrade=True)
     else:
@@ -466,6 +467,7 @@ def downgrade():
     if not context.is_offline_mode() and any(op.get_bind().execute(sa.text(f"SELECT EXISTS (SELECT 1 FROM {t})")).scalar() for t in TABLES):
         raise RuntimeError(DOWNGRADE_BLOCKER)
     if dialect == "postgresql":
+        op.execute("REVOKE UPDATE (outbound_status) ON TABLE public.material_requests FROM star_oam_api")
         _replace_functions(upgrade=False)
         for table in GRAPH_TABLES:
             op.execute(f"DROP TRIGGER trg_{table}_picking_graph_0071 ON public.{table}")

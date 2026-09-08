@@ -354,6 +354,7 @@ RUNTIME_UPDATE_COLUMNS = {
             "cancelled_at",
             "allocation_status",
             "reservation_status",
+            "outbound_status",
             "version",
             "updated_at",
         }

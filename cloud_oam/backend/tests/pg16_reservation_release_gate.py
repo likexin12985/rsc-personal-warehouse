@@ -33,6 +33,11 @@ def _assert_release_catalog(api_engine, security_engine, revision_suffix="_0070"
                 connection.execute(text(restoration))
         validate()
 
+    if revision_suffix == "_0071":
+        rejected("REVOKE UPDATE (outbound_status) ON TABLE public.material_requests FROM star_oam_api",
+                 "GRANT UPDATE (outbound_status) ON TABLE public.material_requests TO star_oam_api")
+        rejected("GRANT UPDATE (shipment_status) ON TABLE public.material_requests TO star_oam_api",
+                 "REVOKE UPDATE (shipment_status) ON TABLE public.material_requests FROM star_oam_api")
     for name, binding in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items():
         if name.endswith(revision_suffix):
             rejected(f"ALTER TABLE public.{binding[0]} DISABLE TRIGGER {name}",
