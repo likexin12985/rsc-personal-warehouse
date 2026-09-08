@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from decimal import Decimal
+from datetime import datetime, timezone
 from unittest.mock import patch
 from uuid import uuid4, UUID
 import pytest
@@ -18,7 +19,7 @@ def assert_picking_gate(api_engine, *, security_engine, admin_user_id, inventory
     from app.dependencies import get_formal_principal
     from app.demand_models import MaterialRequest
     from app.inventory_models import (StockAccount, StockBalance, StockReservation, StockReservationPick,
-        OutboundOrder, OutboundLine, SerialCurrentPosition, InventoryTransaction, InventoryMovement)
+        OutboundOrder, OutboundLine, SerialCurrentPosition, InventoryTransaction, InventoryMovement, InventorySerial)
     from app.foundation_models import AuditEvent, OutboxEvent, NotificationEvent
     from app.formal_services import material_request_picking as pick
     from app.formal_services import material_request_reservation_release as release
@@ -61,10 +62,41 @@ def assert_picking_gate(api_engine, *, security_engine, admin_user_id, inventory
                     (StockReservationPick, OutboundOrder, OutboundLine, InventoryTransaction, InventoryMovement, AuditEvent, OutboxEvent, NotificationEvent)),
             )
 
+    # Previously allocated SNs remain bound to immutable allocation history
+    # after release. Seed distinct synthetic serials through a real inbound
+    # transaction in this disposable gate; never overwrite a stock balance or
+    # weaken the existing global allocation-serial uniqueness constraint.
+    pick_serials = (uuid4(), uuid4())
+    with Session(security_engine) as db:
+        db.execute(text("SET LOCAL ROLE star_oam_migrator"))
+        serial_source = db.get(StockAccount, inventory_fixture["serial_replay_account_id"])
+        now = datetime.now(timezone.utc)
+        db.add_all(InventorySerial(
+            id=serial_id, material_id=serial_source.material_id, lot_id=serial_source.lot_id,
+            serial_no=f"PG16-PICK-{serial_id.hex.upper()}", qr_code=f"PG16-PICK-QR-{serial_id.hex.upper()}",
+            lifecycle_status="active", created_at=now, updated_at=now,
+        ) for serial_id in pick_serials)
+        db.commit()
+    from app.formal_services.inventory_posting import (
+        InventoryPostingCommand, InventoryMovementCommand, post_inventory_transaction,
+    )
+    with Session(api_engine) as db:
+        fixture_key = f"pg16-picking-fixture-{uuid4()}"
+        post_inventory_transaction(db, actor=_principal(db, admin_user_id),
+            command=InventoryPostingCommand(
+                transaction_no=fixture_key, movement_type="inbound",
+                source_document_type="pg16_picking_fixture", source_document_id=fixture_key,
+                posting_key=fixture_key, effective_at=datetime.now(timezone.utc),
+                movements=(InventoryMovementCommand(
+                    from_account_id=None, to_account_id=inventory_fixture["serial_replay_account_id"],
+                    quantity=Decimal("2.000"), serial_ids=pick_serials, external_boundary_code="PG16_PICKING_FIXTURE",
+                ),),
+            ), idempotency_key=fixture_key, request_id=fixture_key)
+        db.commit()
+
     for serial_mode, source_id, serials in (
         (False, inventory_fixture["account_id"], ()),
-        (True, inventory_fixture["serial_replay_account_id"],
-            (inventory_fixture["serial_replay_extra_serial_id"], inventory_fixture["serial_replay_serial_id"])),
+        (True, inventory_fixture["serial_replay_account_id"], pick_serials),
     ):
         token = f"pg16-picking-{'serial' if serial_mode else 'quantity'}"
         with Session(security_engine) as db:
