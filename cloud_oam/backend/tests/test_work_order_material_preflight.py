@@ -7,6 +7,7 @@ from app.formal_services.work_order_material import (
     WorkOrderMaterialLineInput,
     WorkOrderMaterialPreflightError,
     validate_batch,
+    operation_request_hash,
 )
 
 
@@ -37,3 +38,23 @@ def test_batch_rejects_duplicate_material_and_serial():
 
 def test_batch_accepts_distinct_lines():
     validate_batch((line(), line()))
+
+
+def test_operation_request_hash_is_stable_and_type_is_strict():
+    work_order_id = uuid4()
+    operator_id = uuid4()
+    value = line()
+    first = operation_request_hash(
+        operation_type="consume", work_order_id=work_order_id,
+        operator_person_id=operator_id, lines=(value,)
+    )
+    second = operation_request_hash(
+        operation_type="consume", work_order_id=work_order_id,
+        operator_person_id=operator_id, lines=(value,)
+    )
+    assert first == second
+    with pytest.raises(WorkOrderMaterialPreflightError, match="操作类型"):
+        operation_request_hash(
+            operation_type="ship", work_order_id=work_order_id,
+            operator_person_id=operator_id, lines=(value,)
+        )

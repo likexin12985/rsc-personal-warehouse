@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+import hashlib
+import json
 from uuid import UUID
 
 from sqlalchemy import select
@@ -38,6 +40,27 @@ class WorkOrderMaterialPreflight:
     work_order_id: UUID
     operator_person_id: UUID
     lines: tuple[WorkOrderMaterialLineInput, ...]
+
+
+def operation_request_hash(*, operation_type: str, work_order_id: UUID,
+                           operator_person_id: UUID,
+                           lines: tuple[WorkOrderMaterialLineInput, ...]) -> str:
+    """Return a stable request fingerprint for the append-only operation fact."""
+    if operation_type not in {"occupy", "release", "consume", "recover", "reverse"}:
+        raise WorkOrderMaterialPreflightError("operation_type_invalid", "工单物料操作类型不合法")
+    validate_batch(lines)
+    payload = {
+        "operation_type": operation_type,
+        "work_order_id": str(work_order_id),
+        "operator_person_id": str(operator_person_id),
+        "lines": [
+            {"material_id": str(row.material_id), "stock_account_id": str(row.stock_account_id),
+             "quantity": str(row.quantity), "condition_before": row.condition_before,
+             "serial_ids": [str(value) for value in row.serial_ids]}
+            for row in lines
+        ],
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def validate_batch(lines: tuple[WorkOrderMaterialLineInput, ...]) -> None:
