@@ -196,6 +196,37 @@ def test_release_options_follow_exact_remaining_reservation(release_world, monke
     if serials: assert {s.serial_id for s in after.items[0].serials} == set(serials[1:])
 
 
+@pytest.mark.parametrize("resource,action", [("inventory", "read"), ("inventory_transaction", "post")])
+def test_release_recovery_rechecks_current_account_grants(release_world, resource, action):
+    db, actor, request, original, serials, calls = release_world
+    _create(release_world, _input(db, original, "1.000" if serials else "0.125", serials[:1]))
+    permission = db.scalar(select(Permission).where(Permission.resource == resource, Permission.action == action))
+    grant = db.scalar(select(RolePermission).where(RolePermission.permission_id == permission.id))
+    grant.effect = "deny"
+    db.flush()
+    actor = _principal(db, actor.user_id)
+    with pytest.raises(release.MaterialRequestReservationReleaseError) as caught:
+        release.release_command_status(db, actor=actor, trace_request_id="trace-release-test-command-0001")
+    assert caught.value.http_status_code == 403
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("release_world", [False], indirect=True)
+def test_partial_release_does_not_reopen_consumed_allocation(release_world, monkeypatch):
+    from app.formal_services import material_request_reservation as reserve
+    db, actor, request, original, serials, calls = release_world
+    _create(release_world, _input(db, original, "0.125"))
+    monkeypatch.setattr(reserve, "post_inventory_transaction", release.post_inventory_transaction)
+    balance = db.get(StockBalance, original.source_stock_account_id)
+    remaining = reserve.ReservationCreateInput(original.request_line_id, original.allocation_id, Decimal("0.125"), balance.version, balance.ledger_cursor)
+    with pytest.raises(reserve.MaterialRequestReservationError) as caught:
+        reserve.create_reservation(db, actor=actor, material_request_id=request.id, expected_request_version=request.version,
+            reservation=remaining, idempotency_key="no-reopened-allocation-quota",
+            idempotency_hmac_secret=SECRET, trace_request_id="no-reopened-allocation-quota-trace")
+    assert caught.value.code == "material_request_reservation_quantity_exceeded"
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize("quantity", ["1e0", 1, True, "0", "0.0001", "NaN"])
 def test_release_http_schema_rejects_noncanonical_quantity(quantity):
     with pytest.raises(ValidationError):

@@ -4,6 +4,7 @@ import { validateMaterialRequestWorkOrderOptionQuery } from "./formalMaterialReq
 import { validateMaterialRequestAllocationOptionPage, type MaterialRequestAllocationOptionPage } from "./formalMaterialRequestAllocationOptions";
 import { validateMaterialRequestAllocationCommandStatus, validateMaterialRequestAllocationMutationResult, type MaterialRequestAllocationCommandStatus, type MaterialRequestAllocationMutationResult } from "./formalMaterialRequestAllocationCommandStatus";
 import { validateMaterialRequestReservationCommandStatus, validateMaterialRequestReservationMutationResult, type MaterialRequestReservationCommandStatus, type MaterialRequestReservationMutationResult } from "./formalMaterialRequestReservationCommandStatus";
+import { type ReleaseInput, type ReleasePage, type ReleaseResult, validateReleaseInput, validateReleasePage, validateReleaseResult, validateReleaseStatus } from "./materialRequestReservationRelease";
 import { validateMaterialRequestReservationOptionPage, type MaterialRequestReservationOptionPage } from "./formalMaterialRequestReservationOptions";
 import { validateSupplyCreateInput, validateSupplyUpdateInput } from "./formalMaterialRequestSupply";
 import {
@@ -92,6 +93,9 @@ export interface FormalMaterialRequestAdapter {
   allocationCommandStatusNoReplay?(xRequestId: string): Promise<MaterialRequestAllocationCommandStatus>;
   reservationCommandStatus?(xRequestId: string): Promise<MaterialRequestReservationCommandStatus>;
   reservationCommandStatusNoReplay?(xRequestId: string): Promise<MaterialRequestReservationCommandStatus>;
+  releaseCommandStatusNoReplay?(xRequestId: string): Promise<ReleaseResult | null>;
+  listReleaseOptions?(requestId: string, requestLineId: string): Promise<ReleasePage>;
+  createRelease?(requestId: string, input: ReleaseInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ReleaseResult>;
   loadIdentityNoReplay?(): Promise<unknown>;
   loadAccessNoReplay?(): Promise<unknown>;
   detailNoReplay?(requestId: string): Promise<unknown>;
@@ -836,6 +840,24 @@ export function createFormalMaterialRequestAdapter(
       const read = requireNoReplayRequester();
       return read<unknown>(path, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } })
         .then(validateMaterialRequestReservationOptionPage);
+    },
+    releaseCommandStatusNoReplay(xRequestId: string) {
+      const trace = requiredText(xRequestId, "X-Request-ID");
+      if (!SAFE_COORDINATE.test(trace)) return Promise.reject(new ApiError(409, "释放核验坐标无效"));
+      return requireNoReplayRequester()<unknown>("/v1/material-request-reservation-release-command-status", {
+        method: "GET", cache: "no-store", headers: { "X-Request-ID": trace, "Cache-Control": "no-store", Pragma: "no-cache" },
+      }).then(validateReleaseStatus);
+    },
+    listReleaseOptions(requestId: string, requestLineId: string) {
+      const path = `/v1/material-requests/${requiredUuid(requestId, "request_id")}/reservation-release-options?request_line_id=${encodeURIComponent(requiredUuid(requestLineId, "request_line_id"))}`;
+      return requireNoReplayRequester()<unknown>(path, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(validateReleasePage);
+    },
+    createRelease(requestId: string, input: ReleaseInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
+      const body = validateReleaseInput(input);
+      const checked = validateWriteHeaders(headers, headers["Idempotency-Key"]);
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/reservation-releases`, {
+        method: "POST", headers: checked, ...jsonBody(body),
+      }).then(validateReleaseResult);
     },
     createReservation(requestId: string, input: MaterialRequestReservationCreateInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
       const checkedRequestId = requiredUuid(requestId, "request_id");

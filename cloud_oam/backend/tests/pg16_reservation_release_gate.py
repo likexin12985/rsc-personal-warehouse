@@ -13,7 +13,43 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 
-def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory_fixture):
+def _assert_release_catalog(api_engine, security_engine):
+    from app.database_security import (
+        DatabaseSecurityBoundaryError, EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS,
+        MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256, validate_production_database_security,
+    )
+
+    def validate():
+        validate_production_database_security(api_engine, expected_runtime_role="star_oam_api",
+            expected_migration_role="star_oam_migrator")
+
+    def rejected(mutation, restoration):
+        with security_engine.begin() as connection:
+            connection.execute(text(mutation))
+        try:
+            with pytest.raises(DatabaseSecurityBoundaryError): validate()
+        finally:
+            with security_engine.begin() as connection:
+                connection.execute(text(restoration))
+        validate()
+
+    for name, binding in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items():
+        if name.endswith("_0070"):
+            rejected(f"ALTER TABLE public.{binding[0]} DISABLE TRIGGER {name}",
+                     f"ALTER TABLE public.{binding[0]} ENABLE ALWAYS TRIGGER {name}")
+    for name, arguments in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256:
+        if not name.endswith("_0070"): continue
+        signature = f"public.{name}({arguments})"
+        rejected(f"ALTER FUNCTION {signature} SECURITY INVOKER", f"ALTER FUNCTION {signature} SECURITY DEFINER")
+        rejected(f"GRANT EXECUTE ON FUNCTION {signature} TO PUBLIC", f"REVOKE EXECUTE ON FUNCTION {signature} FROM PUBLIC")
+        with security_engine.connect() as connection:
+            original = connection.scalar(text("SELECT pg_get_functiondef(to_regprocedure(:signature))"), {"signature": signature})
+        assert "BEGIN" in original
+        rejected(original.replace("BEGIN", "BEGIN\n-- PG16 deliberate body hash drift", 1), original)
+
+
+def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory_fixture,
+                        source_request_id, manager_user_id):
     from app.config import Settings, get_settings
     from app.database import get_db
     from app.demand_models import MaterialRequest
@@ -28,6 +64,8 @@ def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory
     from app.routers import formal_material_requests
     from test_material_request_approval_service import _principal
     from test_material_request_draft_service import SECRET
+
+    _assert_release_catalog(api_engine, security_engine)
 
     def api_db():
         with Session(api_engine) as db: yield db
@@ -105,6 +143,19 @@ def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory
         ).order_by(StockReservation.source_stock_account_id, StockReservation.request_version)).all())
         assert len(facts) == 3
         notification_count = db.scalar(select(func.count()).select_from(NotificationEvent))
+    # The API can append facts but cannot attach a second reservation to an
+    # already posted transaction. The deferred graph must reject it at commit.
+    with Session(api_engine) as db:
+        with pytest.raises(DBAPIError, match="0070 reservation"):
+            db.execute(text("""
+                INSERT INTO public.stock_reservations
+                SELECT (jsonb_populate_record(NULL::public.stock_reservations,
+                    to_jsonb(r) || jsonb_build_object('id', CAST(:new_id AS text),
+                        'reservation_no', 'PG16-REUSED-RESERVE', 'idempotency_key_hash', :key))).*
+                  FROM public.stock_reservations r WHERE r.id = :original_id
+            """), {"new_id": str(uuid.uuid4()), "original_id": facts[0].id, "key": "d" * 64})
+            db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        db.rollback()
     for index, fact in enumerate(facts):
         with Session(api_engine) as db:
             serials = tuple(db.scalars(select(StockReservationSerial.serial_id).where(
@@ -134,7 +185,21 @@ def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory
             return post(fact, rest, f"concurrent-{index}-{worker_id}")[0]
         with ThreadPoolExecutor(max_workers=2) as pool:
             outcomes = tuple(pool.map(worker, range(2)))
-        assert sorted(r.status_code for r in outcomes) == [201, 409]
+        if all(r.status_code != 201 for r in outcomes):
+            # Surface a deterministic commit-constraint failure through the
+            # sanitized outer diagnostics. This transaction always rolls back.
+            with Session(api_engine) as db:
+                release.create_release(db, actor=_principal(db, admin_user_id), material_request_id=fact.request_id,
+                    expected_request_version=rest["expected_request_version"],
+                    release=release.ReservationReleaseInput(fact.id, Decimal(rest["released_qty"]), rest["reason"],
+                        rest["source_balance_version"], rest["source_ledger_cursor"], tuple(uuid.UUID(s) for s in rest["serial_ids"])),
+                    idempotency_key=f"pg16-release-diagnostic-{index}", idempotency_hmac_secret=SECRET,
+                    trace_request_id=f"pg16-release-diagnostic-trace-{index}")
+                db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+                db.rollback()
+        assert sorted(r.status_code for r in outcomes) == [201, 409], [
+            (index, r.status_code, r.json().get("detail")) for r in outcomes
+        ]
         winner = next(r.json() for r in outcomes if r.status_code == 201)
         with TestClient(app) as client:
             recovered = client.get("/api/v1/material-request-reservation-release-command-status", headers=first_headers)
@@ -148,6 +213,37 @@ def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory
             assert all(db.get(SerialCurrentPosition, s).stock_account_id == fact.source_stock_account_id for s in serials)
     with Session(api_engine) as db:
         assert db.scalar(select(func.count()).select_from(NotificationEvent)) == notification_count
+    # One ordinary reservation of 2.000, then 0.500 + 1.500 compensation.
+    # Stock returns from previous facts; no fixture balance is overwritten.
+    from pg16_reservation_gate import _approved_request
+    from app.formal_services.material_request_allocation import AllocationCreateInput, create_allocation
+    from app.formal_services.material_request_reservation import ReservationCreateInput, create_reservation
+    from app.inventory_models import StockAccount
+    with Session(api_engine) as db:
+        material_id = db.get(StockAccount, inventory_fixture["account_id"]).material_id
+    request_id, line_id, version, _ = _approved_request(api_engine, source_request_id=source_request_id,
+        material_id=material_id, manager_user_id=manager_user_id, admin_user_id=admin_user_id, token="pg16-release-two")
+    with Session(api_engine) as db:
+        balance = db.get(StockBalance, inventory_fixture["account_id"])
+        allocation = create_allocation(db, actor=_principal(db, admin_user_id), material_request_id=request_id,
+            expected_request_version=version, allocation=AllocationCreateInput(line_id, balance.stock_account_id,
+                Decimal("2.000"), balance.version, balance.ledger_cursor), idempotency_key="pg16-release-new-allocation",
+            idempotency_hmac_secret=SECRET, trace_request_id="pg16-release-new-allocation-trace")
+        db.commit()
+    with Session(api_engine) as db:
+        balance = db.get(StockBalance, inventory_fixture["account_id"])
+        reserved = create_reservation(db, actor=_principal(db, admin_user_id), material_request_id=request_id,
+            expected_request_version=allocation.request_version, reservation=ReservationCreateInput(line_id,
+                allocation.allocation_id, Decimal("2.000"), balance.version, balance.ledger_cursor),
+            idempotency_key="pg16-release-new-reservation", idempotency_hmac_secret=SECRET,
+            trace_request_id="pg16-release-new-reservation-trace")
+        db.commit()
+        fact = db.get(StockReservation, reserved.reservation_id)
+        db.expunge(fact)
+    half, _ = successful(fact, payload(fact, "0.500"), "ordinary-two-partial")
+    assert half["state_axes"]["reservation_status"] == "partially_released"
+    full, _ = successful(fact, payload(fact, "1.500"), "ordinary-two-full")
+    assert full["state_axes"]["reservation_status"] == "released"
     with security_engine.connect() as connection:
         transaction = connection.begin()
         try:

@@ -94,7 +94,7 @@ function normalizeCommand(value: unknown): MaterialRequestReservationCommand {
     return fail("预留命令状态轴无效");
   }
   if (states.request_status !== command.request_status) return fail("预留命令申请状态与状态轴不一致");
-  if (states.reservation_status !== "pending" && states.reservation_status !== "reserved") {
+  if (!["pending", "reserved", "partially_released"].includes(states.reservation_status)) {
     return fail("预留命令占用状态轴无效");
   }
   if (typeof command.reserved_qty !== "string" || !QUANTITY.test(command.reserved_qty) || command.reserved_qty === "0.000") {
@@ -159,4 +159,3 @@ export function validateMaterialRequestReservationMutationResult(
   });
   return { ...normalized.command!, idempotency_replayed: raw.idempotency_replayed };
 }
-
