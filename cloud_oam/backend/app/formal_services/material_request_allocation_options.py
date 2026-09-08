@@ -94,7 +94,12 @@ def list_allocation_options(
             # continuity, balance rebuild and opening-establishment proof.
             inventory_query._require_inventory_read(db, actor)
             snapshot = inventory_query._projection_snapshot(db)
-            rows = inventory_query._authorized_account_rows(db, actor=actor)
+            rows = [
+                row for row in inventory_query._authorized_account_rows(db, actor=actor)
+                if row.account.material_id == line.material_id
+                and row.account.availability_bucket == "available"
+                and row.location.status == "active" and row.material.status == "active"
+            ]
             inventory_query._validate_current_projection_integrity(
                 db, snapshot=snapshot, account_ids={row.account.id for row in rows}
             )
@@ -103,10 +108,17 @@ def list_allocation_options(
                 actor=actor,
                 snapshot=snapshot,
                 required_pairs={(row.account.owner_org_id, row.account.location_id) for row in rows},
-                discover_authorized_zero_scopes=True,
+                discover_authorized_zero_scopes=not rows,
             )
             if not evidence.complete:
-                _fail("inventory_opening_not_established", "precondition_failed", "库存期初建账尚未完成")
+                # A partially established directory can still expose the
+                # exact proven sources. Missing opening pointers never supply
+                # quantities and do not invalidate another warehouse's proof.
+                rows = [row for row in rows if (
+                    row.account.owner_org_id, row.account.location_id
+                ) in evidence.by_scope]
+                if not rows:
+                    _fail("inventory_opening_not_established", "precondition_failed", "库存期初建账尚未完成")
 
             candidates: list[MaterialRequestAllocationOptionOut] = []
             for row in rows:

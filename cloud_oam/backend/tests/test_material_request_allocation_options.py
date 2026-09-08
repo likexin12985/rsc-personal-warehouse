@@ -94,7 +94,8 @@ def test_schema_rejects_extra_fields_and_keeps_fixed_scale_contract():
         service._fixed_quantity(Decimal("2.501"), 0)
 
 
-def test_candidates_filter_scope_rows_to_positive_available_active_material(monkeypatch):
+@pytest.mark.parametrize("partial_opening", [False, True])
+def test_candidates_filter_scope_rows_to_positive_available_active_material(monkeypatch, partial_opening):
     request_id, line_id, material_id = _id(500), _id(501), _id(1)
     view = _view(request_id, line_id)
     valid = _row(1, material_id=material_id)
@@ -106,14 +107,20 @@ def test_candidates_filter_scope_rows_to_positive_available_active_material(monk
         _row(5, material_id=material_id, location_status="inactive"),
         _row(6, material_id=material_id, material_status="inactive"),
         _row(7, material_id=_id(99)),
+        _row(8, material_id=material_id),
     ]
     snapshot = SimpleNamespace(ledger_cursor=3, projected_at=NOW)
     monkeypatch.setattr(material_request_query, "material_request_detail", lambda *a, **k: view)
     monkeypatch.setattr(inventory_query, "_require_inventory_read", lambda *a, **k: None)
     monkeypatch.setattr(inventory_query, "_projection_snapshot", lambda *a, **k: snapshot)
     monkeypatch.setattr(inventory_query, "_authorized_account_rows", lambda *a, **k: rows)
-    monkeypatch.setattr(inventory_query, "_validate_current_projection_integrity", lambda *a, **k: None)
-    monkeypatch.setattr(inventory_query, "_validated_opening_evidence", lambda *a, **k: SimpleNamespace(complete=True))
+    proof = Mock()
+    opening = Mock(return_value=SimpleNamespace(
+        complete=not partial_opening,
+        by_scope={(valid.account.owner_org_id, valid.account.location_id): object()},
+    ))
+    monkeypatch.setattr(inventory_query, "_validate_current_projection_integrity", proof)
+    monkeypatch.setattr(inventory_query, "_validated_opening_evidence", opening)
     monkeypatch.setattr(inventory_query, "_ensure_balance_at_snapshot", lambda *a, **k: None)
     monkeypatch.setattr(inventory_query, "_effective_policy", lambda *a, **k: SimpleNamespace(quantity_scale=3))
 
@@ -124,7 +131,14 @@ def test_candidates_filter_scope_rows_to_positive_available_active_material(monk
         DB(), actor=SimpleNamespace(role_codes=("admin",)), material_request_id=request_id, request_line_id=line_id
     )
     assert isinstance(output, MaterialRequestAllocationOptionPageOut)
-    assert [item.stock_account_id for item in output.items] == [valid.account.id]
+    assert [item.stock_account_id for item in output.items] == (
+        [valid.account.id] if partial_opening else [valid.account.id, rows[-1].account.id]
+    )
+    assert proof.call_args.kwargs["account_ids"] == {rows[index].account.id for index in (0, 3, 7)}
+    assert opening.call_args.kwargs["required_pairs"] == {
+        (rows[index].account.owner_org_id, rows[index].account.location_id) for index in (0, 3, 7)
+    }
+    assert opening.call_args.kwargs["discover_authorized_zero_scopes"] is False
     assert output.items[0].quantity == "2.500"
     assert output.items[0].balance_version == 7
     assert output.items[0].ledger_cursor == 3

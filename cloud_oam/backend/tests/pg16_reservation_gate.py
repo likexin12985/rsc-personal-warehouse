@@ -226,6 +226,11 @@ def assert_reservation_gate(api_engine, *, security_engine, source_request_id,
             api_engine, source_request_id=source_request_id, material_id=material_id,
             manager_user_id=manager_user_id, admin_user_id=admin_user_id, token=token,
         )
+        with TestClient(app) as client:
+            sources = client.get(f"/api/v1/material-requests/{request_id}/allocation-options",
+                                 params={"request_line_id": str(line_id)})
+            assert sources.status_code == 200, sources.text
+            assert str(source_id) in {item["stock_account_id"] for item in sources.json()["items"]}
         with Session(api_engine) as db:
             source_balance = db.get(StockBalance, source_id)
             source_quantity = source_balance.quantity
@@ -248,7 +253,8 @@ def assert_reservation_gate(api_engine, *, security_engine, source_request_id,
             assert db.scalar(select(func.count()).select_from(InventoryTransaction)) == inventory_count
             assert db.get(StockBalance, source_id).quantity == source_quantity
             request = db.get(MaterialRequest, request_id)
-            unchanged_axes = {key: getattr(request, key) for key in allocation.state_axes
+            unchanged_axes = {key: getattr(request, "status" if key == "request_status" else key)
+                              for key in allocation.state_axes
                               if key != "reservation_status"}
             assert request.reservation_status == "not_reserved"
 
@@ -324,12 +330,41 @@ def assert_reservation_gate(api_engine, *, security_engine, source_request_id,
                     db.rollback()
                 assert snapshot() == before
 
+            for resource, action in (("material_request", "read"), ("inventory_transaction", "post")):
+                # Edit an entitlement only inside this disposable transaction,
+                # then execute the real service as the restricted API role.
+                with Session(security_engine) as db:
+                    db.execute(text("SET LOCAL ROLE star_oam_migrator"))
+                    changed = db.execute(text(
+                        "UPDATE public.role_permissions AS binding SET effect = 'deny' "
+                        "FROM public.roles AS role, public.permissions AS permission "
+                        "WHERE binding.role_id = role.id AND binding.permission_id = permission.id "
+                        "AND role.code = 'admin' AND permission.resource = :resource "
+                        "AND permission.action = :action AND permission.field_code = '' "
+                        "RETURNING binding.role_id"
+                    ), {"resource": resource, "action": action}).all()
+                    assert len(changed) == 1
+                    db.execute(text("SET LOCAL ROLE star_oam_api"))
+                    with pytest.raises(MaterialRequestReservationError) as denied:
+                        create(db, key=f"{token}-{resource}-explicit-deny")
+                    assert denied.value.http_status_code == 403
+                    db.rollback()
+                assert snapshot() == before
+
             # Fail after real posting has succeeded. The public route must roll
             # back the ledger, projections, serial positions and all side effects.
             with patch("app.formal_services.material_request_reservation.append_audit_event",
                        side_effect=AuditChainError("isolated reservation audit failure")):
                 failed = client.post(f"/api/v1/material-requests/{request_id}/reservations",
                                      json=payload, headers=headers)
+            if (failed.status_code != 503 or failed.json().get("detail", {}).get("code")
+                    != "material_request_reservation_audit_unavailable"):
+                # An unexpected database failure may be hidden by the route's
+                # public error contract. Reproduce inside a rollback-only
+                # session so the caller's sanitized diagnostic boundary can
+                # report its constraint/SQLSTATE without exposing SQL values.
+                with Session(api_engine) as db:
+                    create(db, key=f"{token}-diagnose-rolled-back-http")
             assert failed.status_code == 503, failed.text
             assert failed.json()["detail"]["code"] == "material_request_reservation_audit_unavailable"
             assert snapshot() == before
@@ -415,7 +450,8 @@ def assert_reservation_gate(api_engine, *, security_engine, source_request_id,
         with Session(api_engine) as db:
             request = db.get(MaterialRequest, request_id)
             assert request.reservation_status == "reserved"
-            assert {key: getattr(request, key) for key in unchanged_axes} == unchanged_axes
+            assert {key: getattr(request, "status" if key == "request_status" else key)
+                    for key in unchanged_axes} == unchanged_axes
             assert db.get(StockBalance, source_id).quantity == source_quantity - Decimal("2.000")
             assert db.get(StockBalance, target_id).quantity == Decimal("2.000")
             assert db.scalar(select(func.count()).select_from(NotificationEvent)) == notification_count
