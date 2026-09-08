@@ -966,6 +966,18 @@ def create_formal_material_request_receipt(
     _set_read_no_store(response); _set_replay_header(response, output.idempotency_replayed)
     return output
 
+@router.get("/{material_request_id}/receipts", response_model=list[ReceiptOut])
+def list_formal_material_request_receipts(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    try:
+        return [ReceiptOut(**row) for row in receipt_service.list_receipts(db, actor=principal, request_id=material_request_id)]
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+
 @router.post("/{material_request_id}/inbound-orders", response_model=InboundOrderOut, status_code=201)
 def create_formal_material_request_inbound_order(
     material_request_id: UUID, payload: InboundOrderIn, response: Response,

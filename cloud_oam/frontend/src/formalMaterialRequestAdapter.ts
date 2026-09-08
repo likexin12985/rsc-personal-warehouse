@@ -108,6 +108,7 @@ export interface FormalMaterialRequestAdapter {
   listLogisticsEvents?(requestId: string, shipmentId: string): Promise<readonly LogisticsEventResult[]>;
   createLogisticsEvent?(requestId: string, shipmentId: string, input: LogisticsEventInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<LogisticsEventResult>;
   createReceipt?(requestId: string, input: ReceiptInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ReceiptResult>;
+  listReceipts?(requestId: string): Promise<readonly ReceiptResult[]>;
   listShipmentOptions?(requestId: string): Promise<ShipmentOptions>;
   createShipment?(requestId: string, input: ShipmentInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ShipmentResult>;
   createInboundOrder?(requestId: string, input: InboundOrderInput, headers: Readonly<{ "X-Request-ID": string }>): Promise<InboundOrderResult>;
@@ -906,6 +907,9 @@ export function createFormalMaterialRequestAdapter(
     createReceipt(requestId: string, input: ReceiptInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
       const body = validateReceiptInput(input); const checked = validateWriteHeaders(headers, headers["Idempotency-Key"]);
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/receipts`, { method: "POST", headers: checked, ...jsonBody(body) }).then(validateReceiptResult);
+    },
+    listReceipts(requestId: string) {
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/receipts`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(value => { if (!Array.isArray(value)) throw new ApiError(502, "收货查询响应无效"); return value.map(validateReceiptResult); });
     },
     listShipmentOptions(requestId: string) {
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipment-options`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(validateShipmentOptions);

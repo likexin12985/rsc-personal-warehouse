@@ -4,7 +4,7 @@ from decimal import Decimal
 import hashlib, hmac, json, uuid
 from sqlalchemy import func, select
 from ..demand_models import MaterialRequest
-from ..inventory_models import Shipment, ShipmentLine, ShipmentSerial, Receipt, ReceiptLine, ReceiptSerial
+from ..inventory_models import Shipment, ShipmentLine, ShipmentSerial, OutboundPosting, Receipt, ReceiptLine, ReceiptSerial
 from .audit_chain import append_audit_event
 
 class ReceiptError(Exception):
@@ -55,3 +55,10 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
 def _result(db, receipt, replayed, lines=None):
     if lines is None: lines = tuple({"receipt_line_id": x.id, "shipment_line_id": x.shipment_line_id, "accepted_qty": _qty(x.accepted_qty), "rejected_qty": _qty(x.rejected_qty), "serial_ids": tuple(db.scalars(select(ReceiptSerial.serial_id).where(ReceiptSerial.receipt_line_id == x.id)).all())} for x in db.scalars(select(ReceiptLine).where(ReceiptLine.receipt_id == receipt.id)).all())
     return {"schema_version": "1.0", "receipt_id": receipt.id, "receipt_no": receipt.receipt_no, "shipment_id": receipt.shipment_id, "status": receipt.status, "lines": tuple(lines), "idempotency_replayed": replayed}
+
+def list_receipts(db, *, actor, request_id):
+    request = db.get(MaterialRequest, request_id)
+    if request is None: _fail("not_found", "not_found", "需求单不存在")
+    shipment_ids = select(Shipment.id).join(ShipmentLine, ShipmentLine.shipment_id == Shipment.id).join(OutboundPosting, OutboundPosting.id == ShipmentLine.outbound_posting_id).where(OutboundPosting.request_id == request_id)
+    rows = tuple(db.scalars(select(Receipt).where(Receipt.shipment_id.in_(shipment_ids)).order_by(Receipt.created_at, Receipt.id)).all())
+    return tuple(_result(db, row, replayed=False) for row in rows)
