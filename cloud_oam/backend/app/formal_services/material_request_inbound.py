@@ -105,4 +105,4 @@ def list_inbound_orders(db, *, actor, request_id):
         source_ids = tuple(db.scalars(select(OutboundPosting.source_stock_account_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).join(Receipt, Receipt.shipment_id == ShipmentLine.shipment_id).where(Receipt.id == row.receipt_id)).all())
         if source_ids:
             outbound._authorize_account_ids(db, actor, source_ids, action="read", resource="inventory", lock_rows=False)
-    return tuple({"schema_version":"1.0", "inbound_order_id": row.id, "inbound_no": row.inbound_no, "receipt_id": row.receipt_id, "target_location_id": row.target_location_id, "target_person_id": row.target_person_id, "status": row.status} for row in rows)
+    return tuple({"schema_version":"1.0", "inbound_order_id": row.id, "inbound_no": row.inbound_no, "receipt_id": row.receipt_id, "target_location_id": row.target_location_id, "target_person_id": row.target_person_id, "status": "posted" if db.scalar(select(InboundPosting.id).where(InboundPosting.inbound_order_id == row.id)) is not None else row.status} for row in rows)
