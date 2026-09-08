@@ -8,6 +8,7 @@ from app.formal_services.work_order_material import (
     WorkOrderMaterialPreflightError,
     validate_batch,
     operation_request_hash,
+    WorkOrderReplacementPairInput,
 )
 
 
@@ -58,3 +59,20 @@ def test_operation_request_hash_is_stable_and_type_is_strict():
             operation_type="ship", work_order_id=work_order_id,
             operator_person_id=operator_id, lines=(value,)
         )
+
+
+def test_replacement_pairs_are_unique_and_part_of_fingerprint():
+    value = line()
+    pair = WorkOrderReplacementPairInput(uuid4(), uuid4())
+    first = operation_request_hash(
+        operation_type="recover", work_order_id=uuid4(), operator_person_id=uuid4(),
+        lines=(value,), replacement_pairs=(pair,),
+    )
+    with pytest.raises(WorkOrderMaterialPreflightError, match="不能相同"):
+        operation_request_hash(
+            operation_type="recover", work_order_id=uuid4(), operator_person_id=uuid4(),
+            lines=(value,), replacement_pairs=(WorkOrderReplacementPairInput(pair.installed_serial_id, pair.installed_serial_id),),
+        )
+    assert first != operation_request_hash(
+        operation_type="recover", work_order_id=uuid4(), operator_person_id=uuid4(), lines=(value,)
+    )

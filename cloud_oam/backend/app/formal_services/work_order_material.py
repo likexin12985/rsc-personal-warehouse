@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..demand_models import (
     OamWorkOrder, WorkOrderMaterialLine, WorkOrderMaterialOperation,
-    WorkOrderMaterialSerial,
+    WorkOrderMaterialSerial, WorkOrderReplacementPair,
 )
 from ..inventory_models import FormalMaterial, InventoryTransaction, StockAccount
 
@@ -45,13 +45,29 @@ class WorkOrderMaterialPreflight:
     lines: tuple[WorkOrderMaterialLineInput, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class WorkOrderReplacementPairInput:
+    installed_serial_id: UUID
+    removed_serial_id: UUID
+
+
 def operation_request_hash(*, operation_type: str, work_order_id: UUID,
                            operator_person_id: UUID,
-                           lines: tuple[WorkOrderMaterialLineInput, ...]) -> str:
+                           lines: tuple[WorkOrderMaterialLineInput, ...],
+                           replacement_pairs: tuple[WorkOrderReplacementPairInput, ...] = ()) -> str:
     """Return a stable request fingerprint for the append-only operation fact."""
     if operation_type not in {"occupy", "release", "consume", "recover", "reverse"}:
         raise WorkOrderMaterialPreflightError("operation_type_invalid", "工单物料操作类型不合法")
     validate_batch(lines)
+    seen_installed: set[UUID] = set()
+    seen_removed: set[UUID] = set()
+    for pair in replacement_pairs:
+        if pair.installed_serial_id == pair.removed_serial_id:
+            raise WorkOrderMaterialPreflightError("replacement_pair_invalid", "新旧 SN 不能相同")
+        if pair.installed_serial_id in seen_installed or pair.removed_serial_id in seen_removed:
+            raise WorkOrderMaterialPreflightError("replacement_pair_duplicate", "新旧 SN 不得重复配对")
+        seen_installed.add(pair.installed_serial_id)
+        seen_removed.add(pair.removed_serial_id)
     payload = {
         "operation_type": operation_type,
         "work_order_id": str(work_order_id),
@@ -61,6 +77,11 @@ def operation_request_hash(*, operation_type: str, work_order_id: UUID,
              "quantity": str(row.quantity), "condition_before": row.condition_before,
              "serial_ids": [str(value) for value in row.serial_ids]}
             for row in lines
+        ],
+        "replacement_pairs": [
+            {"installed_serial_id": str(row.installed_serial_id),
+             "removed_serial_id": str(row.removed_serial_id)}
+            for row in replacement_pairs
         ],
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -126,6 +147,7 @@ def record_posted_operation(
     lines: tuple[WorkOrderMaterialLineInput, ...],
     posting_transaction_id: UUID,
     idempotency_key: str,
+    replacement_pairs: tuple[WorkOrderReplacementPairInput, ...] = (),
 ) -> WorkOrderMaterialOperation:
     """Append a work-order fact only after the inventory transaction exists.
 
@@ -144,6 +166,7 @@ def record_posted_operation(
     request_hash = operation_request_hash(
         operation_type=operation_type, work_order_id=work_order_id,
         operator_person_id=operator_person_id, lines=lines,
+        replacement_pairs=replacement_pairs,
     )
     key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
     existing = db.scalar(select(WorkOrderMaterialOperation).where(
@@ -175,4 +198,10 @@ def record_posted_operation(
                 operation_line_id=line.id, serial_id=serial_id,
                 sku_verified=True, qr_verified=True,
             ))
+    for pair in replacement_pairs:
+        db.add(WorkOrderReplacementPair(
+            operation_id=operation.id,
+            installed_serial_id=pair.installed_serial_id,
+            removed_serial_id=pair.removed_serial_id,
+        ))
     return operation

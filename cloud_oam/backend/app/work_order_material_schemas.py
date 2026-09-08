@@ -31,6 +31,12 @@ class WorkOrderMaterialOperationIn(WorkOrderMaterialPreflightIn):
     operation_type: str
     posting_transaction_id: UUID
     idempotency_key: str = Field(min_length=1, max_length=200)
+    replacement_pairs: tuple["WorkOrderReplacementPairIn", ...] = ()
+
+
+class WorkOrderReplacementPairIn(BaseModel):
+    installed_serial_id: UUID
+    removed_serial_id: UUID
 
 
 class WorkOrderMaterialOperationOut(BaseModel):

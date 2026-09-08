@@ -56,12 +56,14 @@ def post_material_operation(
     if payload.operator_person_id != principal.person_id:
         raise HTTPException(status_code=403, detail={"code": "operator_mismatch", "message": "操作人必须是当前登录人员"})
     values = tuple(service.WorkOrderMaterialLineInput(**row.model_dump()) for row in payload.lines)
+    pairs = tuple(service.WorkOrderReplacementPairInput(**row.model_dump()) for row in payload.replacement_pairs)
     try:
         operation = service.record_posted_operation(
             db, operation_type=payload.operation_type, work_order_id=work_order_id,
             operator_person_id=principal.person_id, lines=values,
             posting_transaction_id=payload.posting_transaction_id,
             idempotency_key=payload.idempotency_key,
+            replacement_pairs=pairs,
         )
         db.commit()
     except service.WorkOrderMaterialPreflightError as exc:
