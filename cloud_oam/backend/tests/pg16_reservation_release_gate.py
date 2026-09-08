@@ -213,7 +213,8 @@ def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory
             assert all(db.get(SerialCurrentPosition, s).stock_account_id == fact.source_stock_account_id for s in serials)
     with Session(api_engine) as db:
         assert db.scalar(select(func.count()).select_from(NotificationEvent)) == notification_count
-    # One ordinary reservation of 2.000, then 0.500 + 1.500 compensation.
+    # Release part of the first slice, then consume only the allocation's
+    # never-reserved remainder. A release never restores allocation capacity.
     # Stock returns from previous facts; no fixture balance is overwritten.
     from pg16_reservation_gate import _approved_request
     from app.formal_services.material_request_allocation import AllocationCreateInput, create_allocation
@@ -234,15 +235,39 @@ def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory
         balance = db.get(StockBalance, inventory_fixture["account_id"])
         reserved = create_reservation(db, actor=_principal(db, admin_user_id), material_request_id=request_id,
             expected_request_version=allocation.request_version, reservation=ReservationCreateInput(line_id,
-                allocation.allocation_id, Decimal("2.000"), balance.version, balance.ledger_cursor),
+                allocation.allocation_id, Decimal("0.500"), balance.version, balance.ledger_cursor),
             idempotency_key="pg16-release-new-reservation", idempotency_hmac_secret=SECRET,
             trace_request_id="pg16-release-new-reservation-trace")
         db.commit()
         fact = db.get(StockReservation, reserved.reservation_id)
         db.expunge(fact)
-    half, _ = successful(fact, payload(fact, "0.500"), "ordinary-two-partial")
+    half, _ = successful(fact, payload(fact, "0.125"), "ordinary-two-partial")
     assert half["state_axes"]["reservation_status"] == "partially_released"
-    full, _ = successful(fact, payload(fact, "1.500"), "ordinary-two-full")
+    from app.formal_services.material_request_reservation import reservation_command_status, MaterialRequestReservationError
+    with Session(api_engine) as db:
+        balance = db.get(StockBalance, inventory_fixture["account_id"])
+        next_reserved = create_reservation(db, actor=_principal(db, admin_user_id), material_request_id=request_id,
+            expected_request_version=half["request_version"], reservation=ReservationCreateInput(line_id,
+                allocation.allocation_id, Decimal("1.500"), balance.version, balance.ledger_cursor),
+            idempotency_key="pg16-reserve-after-release", idempotency_hmac_secret=SECRET,
+            trace_request_id="pg16-reserve-after-release-trace")
+        db.commit()
+        recovered = reservation_command_status(db, actor=_principal(db, admin_user_id), trace_request_id="pg16-reserve-after-release-trace")
+        assert recovered.state_axes["reservation_status"] == "partially_released"
+        next_fact = db.get(StockReservation, next_reserved.reservation_id)
+        db.expunge(next_fact)
+    with Session(api_engine) as db:
+        balance = db.get(StockBalance, inventory_fixture["account_id"])
+        with pytest.raises(MaterialRequestReservationError, match="超过") as caught:
+            create_reservation(db, actor=_principal(db, admin_user_id), material_request_id=request_id,
+                expected_request_version=next_reserved.request_version, reservation=ReservationCreateInput(line_id,
+                    allocation.allocation_id, Decimal("0.125"), balance.version, balance.ledger_cursor),
+                idempotency_key="pg16-no-reused-allocation", idempotency_hmac_secret=SECRET,
+                trace_request_id="pg16-no-reused-allocation-trace")
+        assert caught.value.http_status_code == 412
+        db.rollback()
+    successful(fact, payload(fact, "0.375"), "ordinary-two-remainder")
+    full, _ = successful(next_fact, payload(next_fact, "1.500"), "ordinary-two-full")
     assert full["state_axes"]["reservation_status"] == "released"
     with security_engine.connect() as connection:
         transaction = connection.begin()

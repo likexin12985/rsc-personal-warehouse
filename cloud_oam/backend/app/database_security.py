@@ -2304,7 +2304,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_guard_reservation_release_binding_0070", ""):
         "824782566f5c4e3101e21ccbb11e920af90ecee6277e48529378ae3395fb159c",
     ("rsc_validate_reservation_graph_0070", "uuid"):
-        "ba451f2e102f9fce7bb39ad0c75d34e8879f073cb9e20b6aa930b9f10b1cb864",
+        "e291af80827bff6d42f377a7b27d9ca70999fef23e52dc9b50e9c97e905e38e1",
     ("rsc_dispatch_reservation_graph_0070", ""):
         "73eafea5e22b4f239921e0917be4367c06b98815671654107d289c700f927d93",
     ("rsc_guard_stock_reservation_0069", ""):

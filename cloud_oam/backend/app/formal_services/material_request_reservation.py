@@ -719,10 +719,7 @@ def _create_reservation_impl(
     db.flush()
     db.add(
         StateTransitionEvent(
-            aggregate_type="material_request",
-            aggregate_id=str(request_id),
-            from_status=previous_status,
-            to_status=aggregate_status,
+            **_reservation_event_identity(reservation_id, request_id, "reserve", previous_status, aggregate_status),
             reason=_AUDIT_ACTION,
             actor_id=actor.user_id,
             idempotency_key=f"reservation-state-{key_hash}",
@@ -892,6 +889,16 @@ def _historical_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
+def _reservation_event_identity(fact_id, request_id, operation, before, after):
+    # A command can append another fact without changing the request's axis.
+    # Record that fact's creation; do not invent a same-state transition.
+    if before == after:
+        return dict(aggregate_type="stock_reservation" if operation == "reserve" else "stock_reservation_release",
+                    aggregate_id=str(fact_id), from_status=None,
+                    to_status="reserved" if operation == "reserve" else "released")
+    return dict(aggregate_type="material_request", aggregate_id=str(request_id), from_status=before, to_status=after)
+
+
 def _verified_history(
     db: Session, *, fact: StockReservation, request: MaterialRequest
 ) -> tuple[MaterialRequestCommand, InventoryTransaction]:
@@ -1058,10 +1065,12 @@ def _verified_history(
         or result != expected_result or document != expected_document
         or command.result_hash != _canonical_hash(expected_result)
         or audit.actor_user_id != fact.actor_user_id or audit.after_jsonb != expected_after
-        or audit.before_jsonb != {"request_version": fact.request_version - 1, "reservation_status": event.from_status}
-        or event.aggregate_type != "material_request" or event.aggregate_id != str(fact.request_id)
+        or not isinstance(audit.before_jsonb, dict)
+        or audit.before_jsonb.get("reservation_status") not in {"not_reserved", "pending", "reserved", "partially_released", "released"}
+        or audit.before_jsonb != {"request_version": fact.request_version - 1, "reservation_status": audit.before_jsonb.get("reservation_status")}
+        or any(getattr(event, name) != value for name, value in _reservation_event_identity(
+            fact.id, fact.request_id, "reserve", audit.before_jsonb.get("reservation_status"), axes["reservation_status"]).items())
         or event.reason != _AUDIT_ACTION or event.actor_id != fact.actor_user_id
-        or event.to_status != axes["reservation_status"]
         or event.metadata_jsonb != {
             "reservation_id": str(fact.id), "reserved_qty": quantity,
             "command_id": str(command.id), "idempotency_key_hash": fact.idempotency_key_hash,

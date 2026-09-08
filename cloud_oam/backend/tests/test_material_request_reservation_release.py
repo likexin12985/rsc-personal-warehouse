@@ -232,3 +232,18 @@ def test_release_http_schema_rejects_noncanonical_quantity(quantity):
     with pytest.raises(ValidationError):
         ReservationReleaseIn(expected_request_version=1, reservation_id=uuid4(), released_qty=quantity,
             reason="调整需求", source_balance_version=1, source_ledger_cursor=1)
+
+
+@pytest.mark.parametrize("release_world", [False], indirect=True)
+def test_repeated_partial_release_records_fact_without_same_state_transition(release_world):
+    from app.foundation_models import StateTransitionEvent
+    db, actor, request, original, _, calls = release_world
+    first = _create(release_world, _input(db, original, "0.125"))
+    second = _create(release_world, _input(db, original, "0.125"), key="release-second-partial")
+    assert first["state_axes"] == second["state_axes"]
+    event = db.scalar(select(StateTransitionEvent).where(StateTransitionEvent.aggregate_id == second["release_id"]))
+    assert event.aggregate_type == "stock_reservation_release"
+    assert event.from_status is None and event.to_status == "released"
+    history = release.release_command_status(db, actor=actor, trace_request_id="trace-release-second-partial")
+    assert history["release_id"] == second["release_id"] and history["idempotency_replayed"]
+    assert len(calls) == 2

@@ -206,11 +206,21 @@ BEGIN
                 AND a.after_jsonb->>'command_id' = command_row.id::text
                 AND a.after_jsonb->>'request_hash' = command_row.request_hash
                 AND a.after_jsonb->>'result_hash' = command_row.result_hash) <> 1
-           OR (SELECT count(*) FROM public.state_transition_events s WHERE s.aggregate_type = 'material_request'
-                AND s.aggregate_id = checked_request_id::text AND s.reason = f.action AND s.actor_id = f.actor_user_id
+           OR (SELECT count(*) FROM public.state_transition_events s WHERE s.reason = f.action AND s.actor_id = f.actor_user_id
                 AND s.metadata_jsonb->>'command_id' = command_row.id::text
                 AND s.metadata_jsonb->>'request_version' = f.request_version::text
-                AND s.to_status = command_row.result_jsonb->'state_axes'->>'reservation_status') <> 1
+                AND s.occurred_at = f.created_at
+                AND (
+                    (public.rsc_material_request_reservation_state_0070(checked_request_id, f.request_version - 1)
+                        IS DISTINCT FROM command_row.result_jsonb->'state_axes'->>'reservation_status'
+                     AND s.aggregate_type = 'material_request' AND s.aggregate_id = checked_request_id::text
+                     AND s.from_status = public.rsc_material_request_reservation_state_0070(checked_request_id, f.request_version - 1)
+                     AND s.to_status = command_row.result_jsonb->'state_axes'->>'reservation_status')
+                    OR (public.rsc_material_request_reservation_state_0070(checked_request_id, f.request_version - 1)
+                        = command_row.result_jsonb->'state_axes'->>'reservation_status'
+                     AND s.aggregate_type = f.aggregate_type AND s.aggregate_id = f.id::text
+                     AND s.from_status IS NULL AND s.to_status = CASE f.operation WHEN 'reserve' THEN 'reserved' ELSE 'released' END)
+                )) <> 1
         THEN RAISE EXCEPTION '0070 reservation command graph invalid' USING ERRCODE = '23514'; END IF;
         IF f.operation = 'reserve' THEN
             SELECT count(*) INTO serial_count FROM public.stock_reservation_serials WHERE reservation_id = f.id;

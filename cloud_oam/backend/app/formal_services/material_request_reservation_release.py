@@ -291,8 +291,8 @@ def _create(db, *, actor, request_id, expected_version, value, key, secret, trac
     request.updated_at = now
     db.flush()
     db.add(StateTransitionEvent(
-        aggregate_type="material_request", aggregate_id=str(request_id), from_status=before_status,
-        to_status=axes["reservation_status"], reason=ACTION, actor_id=actor.user_id,
+        **reserve._reservation_event_identity(fact.id, request_id, "release", before_status, axes["reservation_status"]),
+        reason=ACTION, actor_id=actor.user_id,
         idempotency_key=f"reservation-release-state-{key_hash}", occurred_at=now,
         metadata_jsonb=_event_metadata(fact, command), created_at=now,
     ))
@@ -392,9 +392,12 @@ def _recover(db, *, actor, fact, request):
         or command.authorization_version != fact.authorization_version
         or command.request_jsonb != _document(fact, serial_ids) or result != expected_result
         or audit.actor_user_id != fact.actor_user_id or audit.after_jsonb != _audit_after(fact, command)
-        or audit.before_jsonb != {"request_version": fact.request_version - 1, "reservation_status": event.from_status}
-        or event.aggregate_type != "material_request" or event.aggregate_id != str(request.id)
-        or event.reason != ACTION or event.actor_id != fact.actor_user_id or event.to_status != axes["reservation_status"]
+        or not isinstance(audit.before_jsonb, dict)
+        or audit.before_jsonb.get("reservation_status") not in {"pending", "reserved", "partially_released"}
+        or audit.before_jsonb != {"request_version": fact.request_version - 1, "reservation_status": audit.before_jsonb.get("reservation_status")}
+        or any(getattr(event, name) != value for name, value in reserve._reservation_event_identity(
+            fact.id, fact.request_id, "release", audit.before_jsonb.get("reservation_status"), axes["reservation_status"]).items())
+        or event.reason != ACTION or event.actor_id != fact.actor_user_id
         or event.metadata_jsonb != _event_metadata(fact, command)
         or any(reserve._historical_utc(row.occurred_at) != reserve._historical_utc(fact.created_at) for row in (command, audit, event))
         or tx.status != "posted" or tx.movement_type != "release" or tx.posted_at is None
