@@ -18,3 +18,7 @@ def test_inbound_outputs_keep_schema_version():
     order = InboundOrderOut(inbound_order_id=ID, inbound_no="INB-1", receipt_id=ID, target_location_id=ID, target_person_id=ID, status="pending")
     posted = InboundPostingOut(inbound_order_id=ID, inventory_transaction_id=ID)
     assert order.schema_version == posted.schema_version == "1.0"
+
+def test_inbound_history_allows_derived_posted_status():
+    order = InboundOrderOut(inbound_order_id=ID, inbound_no="INB-1", receipt_id=ID, target_location_id=ID, target_person_id=ID, status="posted")
+    assert order.status == "posted"
