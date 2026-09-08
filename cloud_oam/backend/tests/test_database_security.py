@@ -553,7 +553,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
     allocation_tables = {
         "outbound_postings", "outbound_posting_serials",
         "shipments", "shipment_lines", "shipment_serials",
-            "logistics_events", "receipts", "receipt_lines", "receipt_serials", "receipt_exceptions", "inbound_orders",
+            "logistics_events", "receipts", "receipt_lines", "receipt_serials", "receipt_exceptions", "inbound_orders", "inbound_postings",
         "outbound_orders", "outbound_lines", "stock_reservation_picks", "stock_reservation_pick_serials",
         "stock_allocations",
         "stock_allocation_serials",
