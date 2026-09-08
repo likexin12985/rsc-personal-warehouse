@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 import hashlib, hmac, json, uuid
 from sqlalchemy import select
+from ..foundation_models import OutboxEvent
 from ..demand_models import MaterialRequest
 from ..inventory_models import LogisticsEvent, Shipment, ShipmentLine, OutboundPosting
 from .audit_chain import append_audit_event
@@ -34,6 +35,7 @@ def create_event(db, *, actor, request_id, shipment_id, event_type, event_at, so
     row = LogisticsEvent(id=uuid.uuid4(), shipment_id=shipment_id, event_type=event_type, event_at=when, source=source.strip(), evidence_file_id=evidence_file_id, external_ref=external_ref.strip() if external_ref else None, idempotency_key_hash=key_hash, actor_user_id=actor.user_id, created_at=now)
     db.add(row); db.flush()
     append_audit_event(db, stream_key="material_request", actor_user_id=actor.user_id, action="logistics_event_registered", aggregate_type="logistics_event", aggregate_id=str(row.id), before_jsonb={}, after_jsonb={"request_id": str(request_id), "shipment_id": str(shipment_id), "event_type": event_type}, request_id=trace_request_id, occurred_at=now, created_at=now)
+    db.add(OutboxEvent(event_type="logistics_event_registered", aggregate_type="logistics_event", aggregate_id=str(row.id), payload_jsonb={"request_id": str(request_id), "shipment_id": str(shipment_id), "event_type": event_type, "event_at": when.isoformat()}, status="pending", attempts=0, idempotency_key=f"logistics-event:{row.id}", available_at=now))
     return _result(row, False)
 
 def _result(row, replayed):
