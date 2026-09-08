@@ -6,6 +6,7 @@ from ..foundation_models import OutboxEvent
 from ..demand_models import MaterialRequest
 from ..inventory_models import LogisticsEvent, Shipment, ShipmentLine, OutboundPosting
 from .audit_chain import append_audit_event
+from . import material_request_outbound as outbound
 
 class LogisticsEventError(Exception):
     def __init__(self, code, category, message): self.code, self.category, self.message = code, category, message
@@ -24,6 +25,9 @@ def create_event(db, *, actor, request_id, shipment_id, event_type, event_at, so
     if shipment is None: _fail("shipment_not_found", "not_found", "发运单不存在")
     belongs = db.scalar(select(OutboundPosting.request_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).where(ShipmentLine.shipment_id == shipment_id))
     if belongs != request_id: _fail("shipment_request_mismatch", "conflict", "发运单不属于当前需求")
+    source_ids = tuple(db.scalars(select(OutboundPosting.source_stock_account_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).where(ShipmentLine.shipment_id == shipment_id)).all())
+    if not source_ids: _fail("source_missing", "conflict", "发运缺少来源库存账户")
+    outbound._authorize_account_ids(db, actor, source_ids, action="read", resource="inventory", lock_rows=False)
     path = f"/api/v1/material-requests/{request_id}/shipments/{shipment_id}/logistics-events"
     key_hash = hmac.new(secret, f"{actor.user_id}:POST:{path}:{idempotency_key}".encode(), hashlib.sha256).hexdigest()
     payload_hash = hashlib.sha256(json.dumps({"request_id": str(request_id), "shipment_id": str(shipment_id), "event_type": event_type, "event_at": event_at, "source": source, "evidence_file_id": str(evidence_file_id) if evidence_file_id else None, "external_ref": external_ref}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
