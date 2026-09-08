@@ -4,15 +4,18 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from ..database import get_db
 from ..dependencies import require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import work_order_material as service
+from ..demand_models import WorkOrderMaterialOperation
 from ..work_order_material_schemas import (
     WorkOrderMaterialLineIn, WorkOrderMaterialPreflightIn,
     WorkOrderMaterialPreflightOut, WorkOrderMaterialOperationIn,
     WorkOrderMaterialOperationOut,
+    WorkOrderMaterialOperationHistoryOut,
 )
 
 router = APIRouter(prefix="/v1/work-orders", tags=["formal-work-order-material"])
@@ -44,6 +47,27 @@ def preflight_material_operation(
 
 
 __all__ = ["router"]
+
+
+@router.get("/{work_order_id}/material-operations", response_model=WorkOrderMaterialOperationHistoryOut)
+def list_material_operations(
+    work_order_id: UUID,
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "read")),
+    db: Session = Depends(get_db),
+):
+    rows = tuple(db.scalars(
+        select(WorkOrderMaterialOperation)
+        .where(WorkOrderMaterialOperation.oam_work_order_id == work_order_id)
+        .order_by(WorkOrderMaterialOperation.created_at, WorkOrderMaterialOperation.operation_no)
+    ).all())
+    return WorkOrderMaterialOperationHistoryOut(items=tuple(
+        WorkOrderMaterialOperationOut(
+            operation_id=row.id, operation_no=row.operation_no,
+            work_order_id=row.oam_work_order_id,
+            posting_transaction_id=row.posting_transaction_id,
+            operation_type=row.operation_type, status=row.status,
+        ) for row in rows
+    ))
 
 
 @router.post("/{work_order_id}/material-operations", response_model=WorkOrderMaterialOperationOut)

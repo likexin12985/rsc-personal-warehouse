@@ -47,3 +47,8 @@ class WorkOrderMaterialOperationOut(BaseModel):
     posting_transaction_id: UUID
     operation_type: str
     status: str
+
+
+class WorkOrderMaterialOperationHistoryOut(BaseModel):
+    schema_version: str = "1.0"
+    items: tuple[WorkOrderMaterialOperationOut, ...]
