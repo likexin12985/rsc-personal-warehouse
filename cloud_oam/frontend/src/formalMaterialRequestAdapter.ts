@@ -5,7 +5,7 @@ import { validateMaterialRequestAllocationOptionPage, type MaterialRequestAlloca
 import { validateMaterialRequestAllocationCommandStatus, validateMaterialRequestAllocationMutationResult, type MaterialRequestAllocationCommandStatus, type MaterialRequestAllocationMutationResult } from "./formalMaterialRequestAllocationCommandStatus";
 import { validateMaterialRequestReservationCommandStatus, validateMaterialRequestReservationMutationResult, type MaterialRequestReservationCommandStatus, type MaterialRequestReservationMutationResult } from "./formalMaterialRequestReservationCommandStatus";
 import { type PickInput, type PickPage, type PickResult, validatePickInput, validatePickPage, validatePickResult, validatePickStatus } from "./materialRequestReservationPick";
-import { type ShipmentInput, type ShipmentResult, type ShipmentOptions, type InboundOrderInput, type InboundOrderResult, type InboundPostingResult, validateShipmentInput, validateShipmentResult, validateShipmentOptions, validateInboundOrderResult, validateInboundPostingResult } from "./materialRequestShipment";
+import { type ShipmentInput, type ShipmentResult, type ShipmentOptions, type InboundOrderInput, type InboundOrderResult, type InboundPostingResult, type LogisticsEventResult, validateShipmentInput, validateShipmentResult, validateShipmentOptions, validateInboundOrderResult, validateInboundPostingResult, validateLogisticsEventResult } from "./materialRequestShipment";
 import { type OutboundInput, type OutboundPage, type OutboundResult, validateOutboundInput, validateOutboundPage, validateOutboundResult, validateOutboundStatus } from "./materialRequestOutbound";
 import { type ReleaseInput, type ReleasePage, type ReleaseResult, validateReleaseInput, validateReleasePage, validateReleaseResult, validateReleaseStatus } from "./materialRequestReservationRelease";
 import { validateMaterialRequestReservationOptionPage, type MaterialRequestReservationOptionPage } from "./formalMaterialRequestReservationOptions";
@@ -105,6 +105,7 @@ export interface FormalMaterialRequestAdapter {
   outboundCommandStatusNoReplay?(xRequestId: string): Promise<OutboundResult | null>;
   listOutboundOptions?(requestId: string, requestLineId: string): Promise<OutboundPage>;
   listShipments?(requestId: string): Promise<readonly ShipmentResult[]>;
+  listLogisticsEvents?(requestId: string, shipmentId: string): Promise<readonly LogisticsEventResult[]>;
   listShipmentOptions?(requestId: string): Promise<ShipmentOptions>;
   createShipment?(requestId: string, input: ShipmentInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ShipmentResult>;
   createInboundOrder?(requestId: string, input: InboundOrderInput, headers: Readonly<{ "X-Request-ID": string }>): Promise<InboundOrderResult>;
@@ -892,6 +893,9 @@ export function createFormalMaterialRequestAdapter(
     },
     listShipments(requestId: string) {
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipments`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(value => { if (!Array.isArray(value)) throw new ApiError(502, "发运查询响应无效"); return value.map(validateShipmentResult); });
+    },
+    listLogisticsEvents(requestId: string, shipmentId: string) {
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipments/${requiredUuid(shipmentId, "shipment_id")}/logistics-events`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(value => { if (!Array.isArray(value)) throw new ApiError(502, "物流事件查询响应无效"); return value.map(validateLogisticsEventResult); });
     },
     listShipmentOptions(requestId: string) {
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipment-options`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(validateShipmentOptions);

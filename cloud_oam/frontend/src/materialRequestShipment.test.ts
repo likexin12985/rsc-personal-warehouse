@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateShipmentInput, validateShipmentResult, validateInboundOrderResult, validateInboundPostingResult } from "./materialRequestShipment";
+import { validateShipmentInput, validateShipmentResult, validateInboundOrderResult, validateInboundPostingResult, validateLogisticsEventResult } from "./materialRequestShipment";
 const id=(n:number)=>`11111111-1111-1111-1111-${n.toString().padStart(12,"0")}`;
 describe("shipment contract",()=>{
  it("accepts strict package input",()=>{const x=validateShipmentInput({expected_request_version:3,target_location_id:id(1),target_person_id:null,carrier:"人工承运",tracking_no:"SF-1",shipped_at:"2026-09-09T10:00:00+08:00",lines:[{outbound_posting_id:id(2),shipped_qty:"1.000",serial_ids:[]}]});expect(x.lines[0].shipped_qty).toBe("1.000")});
@@ -8,4 +8,8 @@ describe("shipment contract",()=>{
 describe("personal inbound contract",()=>{
  it("accepts pending order and posting result",()=>{const order=validateInboundOrderResult({schema_version:"1.0",inbound_order_id:id(3),inbound_no:"INB-1",receipt_id:id(4),target_location_id:id(5),target_person_id:id(6),status:"pending"});expect(order.status).toBe("pending");const posted=validateInboundPostingResult({schema_version:"1.0",inbound_order_id:id(3),inventory_transaction_id:id(7),replayed:false});expect(posted.inventory_transaction_id).toBe(id(7))});
  it("rejects unknown fields and invalid replay flag",()=>{expect(()=>validateInboundOrderResult({schema_version:"1.0",inbound_order_id:id(3),inbound_no:"INB-1",receipt_id:id(4),target_location_id:id(5),target_person_id:id(6),status:"pending",extra:true})).toThrow();expect(()=>validateInboundPostingResult({schema_version:"1.0",inbound_order_id:id(3),inventory_transaction_id:id(7),replayed:"false"})).toThrow()});
+});
+describe("logistics event contract",()=>{
+ it("accepts a signed event and preserves nullable evidence",()=>{const x=validateLogisticsEventResult({schema_version:"1.0",event_id:id(8),shipment_id:id(9),event_type:"signed",event_at:"2026-09-09T10:00:00Z",source:"carrier",evidence_file_id:null,external_ref:"SF-1",idempotency_replayed:false});expect(x.event_type).toBe("signed");expect(x.evidence_file_id).toBeNull()});
+ it("rejects unsupported event types",()=>{expect(()=>validateLogisticsEventResult({schema_version:"1.0",event_id:id(8),shipment_id:id(9),event_type:"received",event_at:"2026-09-09T10:00:00Z",source:"carrier",evidence_file_id:null,external_ref:null,idempotency_replayed:false})).toThrow()});
 });
