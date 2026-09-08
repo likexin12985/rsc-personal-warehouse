@@ -137,7 +137,7 @@ git diff --name-only 4a6ec83b27f76f84d1d8fe2a9ded699c9b166349 HEAD
 
 ## 7.1 物流事件 Web 接入（当前增量）
 
-最新实际 HEAD：`9498b39`（`fix: authorize logistics history reads`）。
+最新实际 HEAD：`8c811cc`（`docs: record logistics scope authorization`）。
 0074 已建的 `logistics_events` 现在具备正式写入 API、按发运单读取 API、Web 适配器严格响应/输入校验，
 以及发运面板中的事件历史展示和 `pickup / transit / signed / exception` 登记入口；
 收货验收面板已接入收货人、发运明细、合格/拒收数量、验收条件和 SN 输入；
