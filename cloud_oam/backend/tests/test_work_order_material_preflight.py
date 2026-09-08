@@ -12,6 +12,7 @@ from app.formal_services.work_order_material import (
     validate_serial_quantity,
     expected_posting_movement_type,
 )
+from app.work_order_material_schemas import WorkOrderMaterialOperationIn
 
 
 def line(**kwargs):
@@ -91,3 +92,11 @@ def test_operation_type_maps_to_matching_inventory_movement():
     assert expected_posting_movement_type("recover") == "return"
     with pytest.raises(WorkOrderMaterialPreflightError, match="操作类型"):
         expected_posting_movement_type("ship")
+
+
+def test_operation_dto_rejects_unknown_operation_type():
+    with pytest.raises(Exception):
+        WorkOrderMaterialOperationIn(
+            operator_person_id=uuid4(), lines=(line(),), operation_type="ship",
+            posting_transaction_id=uuid4(), idempotency_key="k",
+        )

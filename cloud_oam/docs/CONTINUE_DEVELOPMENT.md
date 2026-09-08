@@ -260,3 +260,6 @@ PostgreSQL URL，未用占位数据库绕过门禁。
 
 事实写入还会校验操作类型与库存事务类型严格对应：占用/释放/消耗/回收/冲销分别只能绑定
 `reserve`/`release`/`consume`/`return`/`reversal` 事务，跨类型绑定直接冲突。
+
+操作写入 DTO 现在在 HTTP 边界使用枚举约束，只允许 `occupy`、`release`、`consume`、`recover`、
+`reverse` 五类正式操作，未知类型在进入服务前即被拒绝。

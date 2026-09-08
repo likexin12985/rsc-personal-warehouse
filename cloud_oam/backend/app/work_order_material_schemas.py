@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -28,7 +29,7 @@ class WorkOrderMaterialPreflightOut(BaseModel):
 
 
 class WorkOrderMaterialOperationIn(WorkOrderMaterialPreflightIn):
-    operation_type: str
+    operation_type: Literal["occupy", "release", "consume", "recover", "reverse"]
     posting_transaction_id: UUID
     idempotency_key: str = Field(min_length=1, max_length=200)
     replacement_pairs: tuple["WorkOrderReplacementPairIn", ...] = ()
