@@ -3,8 +3,8 @@ from datetime import datetime, timezone
 import uuid
 from sqlalchemy import select
 from ..demand_models import MaterialRequest
-from ..inventory_models import InboundOrder, Receipt, Shipment, ShipmentLine, OutboundPosting, StockAccount
-from .inventory_posting import InventoryMovementCommand, InventoryPostingCommand
+from ..inventory_models import InboundOrder, InboundPosting, Receipt, ReceiptLine, Shipment, ShipmentLine, OutboundPosting, StockAccount
+from .inventory_posting import InventoryMovementCommand, InventoryPostingCommand, post_inventory_transaction
 from .audit_chain import append_audit_event
 
 class InboundError(Exception):
@@ -69,3 +69,23 @@ def build_inbound_posting_command(db, *, inbound_order, receipt_line_id, target_
         posting_key=f"personal-inbound:{inbound_order.id}:{line.id}", effective_at=inbound_order.created_at,
         movements=(InventoryMovementCommand(from_account_id=posting.target_stock_account_id, to_account_id=target_account.id, quantity=line.accepted_qty, serial_ids=serial_ids, external_boundary_code=None),),
     )
+
+def post_inbound_order(db, *, actor, inbound_order_id, idempotency_key, request_id):
+    order = db.get(InboundOrder, inbound_order_id)
+    if order is None: _fail("inbound_not_found", "not_found", "个人仓入账单不存在")
+    existing = db.scalar(select(InboundPosting).where(InboundPosting.inbound_order_id == order.id))
+    if existing is not None:
+        return {"inbound_order_id": order.id, "inventory_transaction_id": existing.inventory_transaction_id, "replayed": True}
+    receipt = db.get(Receipt, order.receipt_id)
+    if receipt is None or receipt.status not in {"accepted", "exception"}: _fail("receipt_not_final", "precondition_failed", "收货尚未完成验收")
+    lines = tuple(db.scalars(select(ReceiptLine).where(ReceiptLine.receipt_id == receipt.id).order_by(ReceiptLine.id)).all())
+    if not lines: _fail("receipt_empty", "precondition_failed", "收货没有可入账明细")
+    movements = []
+    for line in lines:
+        target = resolve_personal_target_account(db, receipt_id=receipt.id, target_location_id=order.target_location_id, target_person_id=order.target_person_id, shipment_line_id=line.shipment_line_id)
+        command = build_inbound_posting_command(db, inbound_order=order, receipt_line_id=line.id, target_account=target)
+        movements.extend(command.movements)
+    command = InventoryPostingCommand(transaction_no=f"INV-IN-{order.id.hex[:16].upper()}", movement_type="inbound", source_document_type="personal_inbound", source_document_id=str(order.id), posting_key=f"personal-inbound:{order.id}", effective_at=order.created_at, movements=tuple(movements))
+    result = post_inventory_transaction(db, actor=actor, command=command, idempotency_key=idempotency_key, request_id=request_id)
+    db.add(InboundPosting(id=uuid.uuid4(), inbound_order_id=order.id, inventory_transaction_id=result.transaction_id, created_at=datetime.now(timezone.utc)))
+    return {"inbound_order_id": order.id, "inventory_transaction_id": result.transaction_id, "replayed": result.replayed}
