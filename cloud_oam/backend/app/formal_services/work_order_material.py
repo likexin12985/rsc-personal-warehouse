@@ -346,8 +346,10 @@ def execute_consume_operation(
     """
     order, current = authorize_work_order(db, actor=actor, work_order_id=work_order_id,
                                           action="operate", lock_rows=True)
-    if order.status != "active":
-        raise WorkOrderMaterialPreflightError("work_order_inactive", "工单当前不可执行新物料操作", "precondition_failed")
+    # Do not reject an idempotent replay merely because the immutable OAM
+    # projection has since closed. ``record_posted_operation`` rejects a new
+    # fact after checking the existing key, while the unified posting service
+    # similarly returns the original transaction on replay.
     validate_batch(lines)
     if not idempotency_key.strip():
         raise WorkOrderMaterialPreflightError("idempotency_key_missing", "缺少幂等键", "precondition_failed")
