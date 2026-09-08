@@ -137,11 +137,12 @@ git diff --name-only 4a6ec83b27f76f84d1d8fe2a9ded699c9b166349 HEAD
 
 ## 7.1 物流事件 Web 接入（当前增量）
 
-最新实际 HEAD：`b8147d0`（`fix: refresh inbound status after posting`）。
+最新实际 HEAD：`a8ea2da`（`fix: derive posted inbound history`）。
 0074 已建的 `logistics_events` 现在具备正式写入 API、按发运单读取 API、Web 适配器严格响应/输入校验，
 以及发运面板中的事件历史展示和 `pickup / transit / signed / exception` 登记入口；
 收货验收面板已接入收货人、发运明细、合格/拒收数量、验收条件和 SN 输入；
 异常事实已写入 `receipt_exceptions` 并在收货响应、历史页面展示。
+个人仓入账历史根据不可变 `inbound_postings` 绑定派生 `posted`，不改写原始入账单事实。
 物流事件登记只追加签收/运输事实，不改变收货验收状态、库存或个人仓入账状态。
 
 本批本地验证：正式 Web 测试 53 个文件/1017 个用例通过，TypeScript 检查和 Vite production build 通过，后端完整测试 3353 passed、2 skipped，仓库安全检查通过；
