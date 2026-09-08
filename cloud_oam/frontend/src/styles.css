@@ -324,6 +324,13 @@ tbody tr:hover { background: #fbfcfc; }
 .form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .field { display: grid; gap: 6px; min-width: 0; }
+.reservation-serial-options { display: grid; gap: 12px; min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
+.reservation-serial-options legend { padding: 0 4px; font-size: 13px; font-weight: 650; }
+.reservation-serial-option { display: flex; align-items: center; gap: 10px; min-width: 0; cursor: pointer; }
+.reservation-serial-option > input[type="checkbox"] { flex: 0 0 18px; width: 18px; height: 18px; min-height: 18px; margin: 0; padding: 0; accent-color: var(--teal); }
+.reservation-serial-option > span { min-width: 0; overflow-wrap: anywhere; }
+.reservation-serial-options:disabled .reservation-serial-option { cursor: not-allowed; }
+
 .field-label { font-size: 13px; font-weight: 650; color: #4f5a60; }
 .field small { color: var(--muted); line-height: 1.45; }
 .form-error { padding: 10px 12px; color: #a63232; background: #fbeaea; border-left: 3px solid var(--red); border-radius: 4px; line-height: 1.45; }

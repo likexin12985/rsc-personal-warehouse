@@ -61,6 +61,21 @@ describe("formal reservation panel", () => {
     await waitFor(() => expect(p.onDetail).toHaveBeenCalled());
     expect(p.adapter.createReservation.mock.calls[0][1].serial_ids).toEqual([SERIAL_ID, SERIAL_2_ID]);
   });
+  it("binds each SN checkbox and its readable label to the scoped row layout", async () => {
+    const p = props({ adapter: adapter({ listReservationOptions: vi.fn().mockResolvedValue(reservationPage(true)) }) });
+    render(<FormalMaterialRequestReservationPanel {...p} />); await select();
+    const group = screen.getByRole("group", { name: "选择预留 SN（须与数量一致）" });
+    expect(group.classList.contains("reservation-serial-options")).toBe(true);
+    for (const [sn, qr] of [["SN-A", "QR-A"], ["SN-B", "QR-B"]]) {
+      const checkbox = screen.getByRole("checkbox", { name: `预留 SN ${sn}` }) as HTMLInputElement;
+      const label = checkbox.closest("label")!;
+      expect(label.classList.contains("reservation-serial-option")).toBe(true);
+      expect(label.querySelector(":scope > span")?.textContent).toBe(`${sn} · ${qr}`);
+      fireEvent.click(label.querySelector(":scope > span")!);
+      expect(checkbox.checked).toBe(true);
+    }
+    expect(screen.getByRole("textbox", { name: "预留数量" }).closest(".reservation-serial-options")).toBeNull();
+  });
   it.each(["0", "3", "1.0001"])("blocks invalid or excessive quantity %s before POST", async (value) => {
     const p = props(); render(<FormalMaterialRequestReservationPanel {...p} />); await select();
     fireEvent.change(screen.getByRole("textbox", { name: "预留数量" }), { target: { value } });

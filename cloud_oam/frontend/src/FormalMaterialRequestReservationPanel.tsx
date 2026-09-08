@@ -142,7 +142,7 @@ export default function FormalMaterialRequestReservationPanel({ adapter, access,
       const current = store.read();
       if (current.kind !== "valid" || !same(current.value, sentinel)) throw new Error("预留原请求坐标已变化，禁止清理");
       store.clear(trace); onBlocking(false); setSelection(null); onDetail(reread);
-      setMessage(`预留单 ${result.reservation_no} 已保存并精确回读，数量 ${reservedQty}；库存流水 ${result.reserve_transaction_no}。`);
+      setMessage(`预留单 ${result.reservation_no} 已保存并核验，数量 ${reservedQty}；库存流水 ${result.reserve_transaction_no}。`);
     } catch (caught) { if (turn === generation.current) setError(`${showError(caught)}${persisted ? "。结果核验完成前，请勿再次提交。" : ""}`); }
     finally {
       active.current = false;
@@ -151,7 +151,7 @@ export default function FormalMaterialRequestReservationPanel({ adapter, access,
   }
   const disabled = running || blocked || otherWriteBusy;
   return <section className="opening-detail-section" aria-label="库存预留">
-    <header><div><h3>库存预留 / 占用</h3><p>从已分配货源选择可用库存；确认后生成独立占用事实和库存流水。</p></div></header>
+    <header><div><h3>库存预留 / 占用</h3><p>从已分配货源选择可用库存；确认后生成占用记录和库存流水。</p></div></header>
     {error && <div className="alert alert-error">{error}</div>}
     {message && <div className="alert alert-info" role="status">{message}</div>}
     {blocked && <div className="alert alert-warning">预留操作结果待核验，当前页面暂停其他写入。
@@ -163,7 +163,7 @@ export default function FormalMaterialRequestReservationPanel({ adapter, access,
         {detail.lines.filter((line) => ["approved", "partially_approved"].includes(line.status)).map((line) => <tr key={line.request_line_id}><td>{line.line_no}</td><td>{line.final_approved_qty}</td><td><Button disabled={disabled || loading} onClick={() => void loadOptions(line.request_line_id)}>查看可预留库存</Button></td></tr>)}
       </tbody></table></div>}
     {page && <Modal title="可预留库存候选" wide onClose={() => { if (!running) setPage(null); }}>
-      <p>库存流水游标 {page.ledger_cursor} · 投影时间 {page.projected_at || "—"}</p>
+      <p>库存更新时间 {page.projected_at || "—"}</p>
       {page.items.length ? <div className="table-wrap"><table><thead><tr><th>分配单</th><th>货源</th><th>物料 / 批次</th><th>分配 / 已预留</th><th>可预留</th><th>操作</th></tr></thead><tbody>
         {page.items.map((item) => <tr key={item.allocation_id}><td>{item.allocation_no}</td><td>{item.owner_org_name} / {item.location_name}</td><td>{item.sku_code} · {item.material_name} / {item.lot_no || "无批次"}</td><td>{item.allocated_qty} / {item.reserved_qty}</td><td>{item.reservable_qty} {item.base_unit}</td><td><Button disabled={disabled} onClick={() => choose(item)}>选择并预留</Button></td></tr>)}
       </tbody></table></div> : <p>当前没有满足条件的已分配可预留库存。</p>}
@@ -173,11 +173,11 @@ export default function FormalMaterialRequestReservationPanel({ adapter, access,
         <p>当前可预留 {selection.option.reservable_qty} {selection.option.base_unit}</p>
         {error && <div className="alert alert-error">{error}</div>}
         <Field label="预留数量"><input aria-label="预留数量" inputMode="decimal" disabled={disabled} value={selection.quantity} onChange={(event) => setSelection({ ...selection, quantity: event.target.value })} /></Field>
-        {reservationUsesSerials(selection.option) && <fieldset disabled={disabled}><legend>选择预留 SN（须与数量一致）</legend>{selection.option.serial_options.map((serial) => <label key={serial.serial_id}>
-          <input type="checkbox" aria-label={`预留 SN ${serial.serial_no}`} checked={selection.serialIds.includes(serial.serial_id)} onChange={(event) => setSelection({ ...selection, serialIds: event.target.checked ? [...selection.serialIds, serial.serial_id] : selection.serialIds.filter((id) => id !== serial.serial_id) })} />{serial.serial_no} · {serial.qr_code}
+        {reservationUsesSerials(selection.option) && <fieldset className="reservation-serial-options" disabled={disabled}><legend>选择预留 SN（须与数量一致）</legend>{selection.option.serial_options.map((serial) => <label className="reservation-serial-option" key={serial.serial_id}>
+          <input type="checkbox" aria-label={`预留 SN ${serial.serial_no}`} checked={selection.serialIds.includes(serial.serial_id)} onChange={(event) => setSelection({ ...selection, serialIds: event.target.checked ? [...selection.serialIds, serial.serial_id] : selection.serialIds.filter((id) => id !== serial.serial_id) })} /><span>{serial.serial_no} · {serial.qr_code}</span>
         </label>)}</fieldset>}
         <div className="alert alert-warning">本次只确认库存占用；出库、发运、签收、收货和个人仓入库继续分别处理。</div>
-        <div className="form-actions"><Button tone="secondary" disabled={disabled} onClick={() => setSelection(null)}>返回检查</Button><Button disabled={disabled} onClick={() => void submit()}>{running ? "正在精确回读" : "确认预留"}</Button></div>
+        <div className="form-actions"><Button tone="secondary" disabled={disabled} onClick={() => setSelection(null)}>返回检查</Button><Button disabled={disabled} onClick={() => void submit()}>{running ? "正在核验结果" : "确认预留"}</Button></div>
       </div>
     </Modal>}
   </section>;
