@@ -6,6 +6,7 @@ commands must use the unified posting service in the same caller transaction.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
 import json
@@ -23,7 +24,10 @@ from ..inventory_models import (
     StockAccount, StockLocation, InventoryMovement, InventoryMovementSerial,
 )
 from ..formal_access import FormalPrincipal, lock_formal_principal_graph
-from .inventory_posting import InventoryPostingError, _require_current_actor
+from .inventory_posting import (
+    InventoryMovementCommand, InventoryPostingCommand, InventoryPostingError,
+    _require_current_actor, post_inventory_transaction,
+)
 from .postgresql_lock_graph import lock_material_request_work_order
 
 
@@ -324,3 +328,52 @@ def record_posted_operation(
                 sku_verified=True, qr_verified=True,
             ))
     return operation
+
+
+def execute_consume_operation(
+    db: Session,
+    *,
+    actor: FormalPrincipal,
+    work_order_id: UUID,
+    lines: tuple[WorkOrderMaterialLineInput, ...],
+    idempotency_key: str,
+    request_id: str,
+) -> tuple[WorkOrderMaterialOperation, object]:
+    """Atomically post a work-order consume movement and its fact.
+
+    No commit occurs here. The router commits both the inventory transaction
+    and operation fact together, or rolls both back on any failure.
+    """
+    order, current = authorize_work_order(db, actor=actor, work_order_id=work_order_id,
+                                          action="operate", lock_rows=True)
+    if order.status != "active":
+        raise WorkOrderMaterialPreflightError("work_order_inactive", "工单当前不可执行新物料操作", "precondition_failed")
+    validate_batch(lines)
+    if not idempotency_key.strip():
+        raise WorkOrderMaterialPreflightError("idempotency_key_missing", "缺少幂等键", "precondition_failed")
+    key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
+    now = datetime.now(timezone.utc)
+    command = InventoryPostingCommand(
+        transaction_no=f"INV-WO-CONSUME-{key_hash[:20].upper()}",
+        movement_type="consume", source_document_type="work_order_material",
+        source_document_id=str(work_order_id),
+        posting_key=f"work-order-material:consume:{work_order_id}:{key_hash}",
+        effective_at=now,
+        movements=tuple(InventoryMovementCommand(
+            from_account_id=line.stock_account_id, to_account_id=None,
+            quantity=line.quantity, serial_ids=line.serial_ids,
+            external_boundary_code="work_order_material_consume",
+        ) for line in lines),
+    )
+    posted = post_inventory_transaction(
+        db, actor=current, command=command,
+        idempotency_key=f"work-order-material:consume:{idempotency_key}",
+        request_id=request_id,
+    )
+    operation = record_posted_operation(
+        db, actor=current, operation_type="consume", work_order_id=work_order_id,
+        operator_person_id=current.person_id, lines=lines,
+        posting_transaction_id=posted.transaction_id,
+        idempotency_key=idempotency_key,
+    )
+    return operation, posted

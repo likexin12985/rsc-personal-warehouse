@@ -51,6 +51,7 @@ def evidence(db, world):
     db.flush()
     location.parent_id = parent.id
     location.location_type = "personal"
+    db.flush()
     external = ExternalObject(id=uuid4(), source_system_id=world.source.id,
                               entity_type="work_order", external_id=str(uuid4()))
     db.add(external)
@@ -63,7 +64,7 @@ def evidence(db, world):
         id=uuid4(), transaction_no=str(uuid4()), movement_type="consume",
         source_document_type="work_order_material", source_document_id=str(order.id),
         posting_key=str(uuid4()), idempotency_key_hash="e" * 64, request_hash="d" * 64,
-        status="posted", effective_at=NOW, posted_at=NOW, ledger_cursor=1,
+        status="posted", effective_at=NOW, posted_at=NOW, ledger_cursor=100,
         actor_user_id=world.user.id)
     db.add(transaction)
     db.flush()
@@ -286,3 +287,25 @@ def test_revoked_or_stale_actor_cannot_replay_existing_evidence(db, evidence):
         record(db, evidence, actor=actor)
     assert exc.value.code == "actor_principal_stale"
     assert count_operations(db) == 1
+
+
+def test_atomic_consume_composes_posting_and_fact_in_one_session(db, evidence, monkeypatch):
+    calls = []
+    posted = SimpleNamespace(transaction_id=uuid4())
+    operation = SimpleNamespace(id=uuid4())
+    def fake_post(db, **kwargs):
+        calls.append(("inventory", kwargs["command"]))
+        return posted
+    def fake_record(db, **kwargs):
+        calls.append(("fact", kwargs["posting_transaction_id"]))
+        assert kwargs["posting_transaction_id"] == posted.transaction_id
+        return operation
+    monkeypatch.setattr(service, "post_inventory_transaction", fake_post)
+    monkeypatch.setattr(service, "record_posted_operation", fake_record)
+    result, transaction = service.execute_consume_operation(
+        db, actor=evidence.world.current_principal, work_order_id=evidence.order.id,
+        lines=(evidence.line,), idempotency_key="atomic-consume-1", request_id="consume-request-1",
+    )
+    assert result is operation and transaction is posted
+    assert calls[0][1].movement_type == "consume"
+    assert calls == [("inventory", calls[0][1]), ("fact", posted.transaction_id)]
