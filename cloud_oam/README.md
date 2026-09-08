@@ -8,6 +8,9 @@
 [私有仓库交接说明](docs/ACCOUNT_HANDOFF.md)，并从仓库根目录运行
 `./cloud_oam/scripts/verify_repository_safety.sh`。该检查失败时禁止提交或推送。
 
+本次切换账号直接使用[续开发入口](docs/CONTINUE_DEVELOPMENT.md)：包含主工作目录、
+准确代码和 CI、旧工作树、剩余范围及可直接粘贴的“发运与分包”接续提示词。
+
 ## 当前开发状态
 
 ### 2026-09-08 实物出库过账

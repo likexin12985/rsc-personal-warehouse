@@ -1,10 +1,16 @@
 # RSC 个人仓项目跨账号交接
 
+本次切换账号先读[续开发入口](CONTINUE_DEVELOPMENT.md)。主工作目录为
+`~/Documents/Codex/2026-06-11/oam`，使用 `codex/production-readiness-gates`；
+不要在 `06f6` 旧工作树或落后的 `main` 上重做。本文件保留历史核验记录，
+当前 HEAD、准确门禁、未完成范围与下一批“发运与分包”以续开发入口的接手复核为准。
+
 - 交接日期：2026-09-01
 - 最新状态核验：2026-09-08
 - 交接方式：GitHub 私有仓库 + 新账号重新连接仓库
-- 当前边界：GitHub 私有仓库已创建，`main` 已推送至
-  `https://github.com/likexin12985/rsc-personal-warehouse`；后续功能必须使用独立分支开发、验证和评审
+- 当前边界：代码已保存在 GitHub 私有仓库
+  `https://github.com/likexin12985/rsc-personal-warehouse` 的 `codex/production-readiness-gates` 分支；
+  `main` 是较早基线。后续功能继续使用既有开发分支验证和评审。
 
 ## 1. 接管前必须按顺序阅读
 
@@ -457,7 +463,7 @@ GitHub run `33949308200`（`2026-09-05T06:16:26Z` 完成）：冻结安装、Web
 
 ## 6. 当前验收基线
 
-最新后端及客户端准确 SHA / run 见第 4 节与 `OPENING_START_PREPARATION_ACCEPTANCE.md`；
+最新后端及客户端准确 SHA / run 见 `CONTINUE_DEVELOPMENT.md` 与 `OUTBOUND_POSTING_ACCEPTANCE.md`；
 下方为 `0061` 首次验收及更早历史记录，不是重新选择旧提交继续开发的指示。
 
 `0061` 首次数据库验收基线为 `2677546f5ef6041ecb92acee75d1af868c9d80ff`：
@@ -578,7 +584,7 @@ Git 仓库根目录设置在当前 `oam` 目录，但根 `.gitignore` 默认拒�
 3. 运行仓库安全检查和本地验证；不得直接沿用旧聊天中的“已通过”结论。
 4. 仅配置开发/测试所需的占位或隔离环境。生产密钥必须由部署方通过正式密钥管理系统另行配置，
    不进入仓库。
-5. 从 `cloud_oam/README.md` 的“后续开发顺序”继续，保留所有既有发布门禁。
+5. 从 `cloud_oam/docs/CONTINUE_DEVELOPMENT.md` 的“下一批交付：发运与分包”继续，保留所有既有发布门禁。
 
 建议新账号的第一条提示词：
 
