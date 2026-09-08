@@ -1,6 +1,8 @@
+from decimal import Decimal
 from uuid import UUID
 import pytest
 from app.material_request_receipt_schemas import ReceiptIn, ReceiptOut
+from app.formal_services.material_request_receipt import ReceiptError, _validate_serial_receipt_quantity
 
 ID = UUID("11111111-1111-1111-1111-111111111111")
 
@@ -15,3 +17,7 @@ def test_receipt_output_preserves_exception_facts():
     value = ReceiptOut(receipt_id=ID, receipt_no="RCT-1", shipment_id=ID, status="exception", lines=(), exceptions=({"exception_type": "damaged", "detail": "破损"},))
     assert value.schema_version == "1.0"
     assert value.exceptions[0]["exception_type"] == "damaged"
+
+def test_serial_receipt_quantity_must_be_whole_physical_units():
+    with pytest.raises(ReceiptError, match="SN"):
+        _validate_serial_receipt_quantity(Decimal("1.500"), {ID}, {ID, UUID("22222222-2222-2222-2222-222222222222")}, set())

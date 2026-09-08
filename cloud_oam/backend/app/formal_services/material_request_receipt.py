@@ -13,6 +13,11 @@ class ReceiptError(Exception):
 def _fail(code, category, message): raise ReceiptError(code, category, message)
 def _qty(v): return format(Decimal(v), ".3f")
 
+def _validate_serial_receipt_quantity(total, given, bound, used):
+    """SN-tracked receipt quantities are whole physical units."""
+    if total != total.to_integral_value() or len(given) != int(total) or not given <= bound - used:
+        _fail("serial_mismatch", "precondition_failed", "收货 SN 与发运事实不一致")
+
 def create_receipt(db, *, actor, request_id, expected_version, receiver_person_id, received_at, lines, idempotency_key, secret, trace_request_id):
     if not isinstance(secret, bytes): secret = secret.encode()
     if len(secret) < 32: _fail("secret_invalid", "service_unavailable", "收货幂等配置不可用")
@@ -43,7 +48,8 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
         if total <= 0 or received + total > shipment_line.shipped_qty: _fail("quantity_exceeded", "precondition_failed", "累计收货超过已发运数量")
         bound = set(db.scalars(select(ShipmentSerial.serial_id).where(ShipmentSerial.shipment_line_id == shipment_line.id)).all())
         given = set(line.serial_ids); used = set(db.scalars(select(ReceiptSerial.serial_id).join(ReceiptLine).where(ReceiptLine.shipment_line_id == shipment_line.id)).all())
-        if bound and (len(given) != int(total) or not given <= bound - used): _fail("serial_mismatch", "precondition_failed", "收货 SN 与发运事实不一致")
+        if bound:
+            _validate_serial_receipt_quantity(total, given, bound, used)
         if not bound and given: _fail("serial_mismatch", "invalid_request", "非 SN 物料不得提交 SN")
         checked.append((shipment_line, line, total, given))
     receipt = Receipt(id=uuid.uuid4(), receipt_no=f"RCT-{now:%Y%m%d}-{uuid.uuid4().hex[:12].upper()}", shipment_id=shipment_id, status="accepted" if all(Decimal(x.accepted_qty) > 0 and Decimal(x.rejected_qty) == 0 for _, x, _, _ in checked) else "exception", received_at=when, receiver_person_id=receiver_person_id, request_hash=payload_hash, idempotency_key_hash=key_hash, created_at=now)
