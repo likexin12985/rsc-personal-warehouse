@@ -137,7 +137,7 @@ git diff --name-only 4a6ec83b27f76f84d1d8fe2a9ded699c9b166349 HEAD
 
 ## 7.1 物流事件 Web 接入（当前增量）
 
-最新实际 HEAD：`e7e0163`（`test: cover frontend receipt evidence`）。
+最新实际 HEAD：`3e7a786`（`fix: post only accepted receipt quantities`）。
 0074 已建的 `logistics_events` 现在具备正式写入 API、按发运单读取 API、Web 适配器严格响应/输入校验，
 以及发运面板中的事件历史展示和 `pickup / transit / signed / exception` 登记入口；
 收货验收面板已接入收货人、发运明细、合格/拒收数量、验收条件和 SN 输入；
@@ -149,6 +149,12 @@ git diff --name-only 4a6ec83b27f76f84d1d8fe2a9ded699c9b166349 HEAD
 本批本地验证：正式 Web 测试 53 个文件/1018 个用例通过，TypeScript 检查和 Vite production build 通过，后端完整测试 3353 passed、2 skipped，仓库安全检查通过；
 已推送 `origin/codex/production-readiness-gates`。下一步仍需补正式收货验收录入页面、异常证据处理、
 收货/入账历史读取和端到端 PostgreSQL 16 门禁；云端门禁结果仍受账号额度与网络可用性影响。
+
+## 7.3 收货异常与个人仓入账边界修正
+
+提交 `3e7a786` 修正了收货异常与个人仓入账之间的数量边界：混合收货中的拒收/破损行继续只保留为收货异常事实，个人仓过账只读取合格数量；整张收货单没有任何合格数量时明确阻断，不生成空库存交易。新增两项服务回归，收货/入账仍保持独立状态轴，未改变既有库存过账入口或迁移。
+
+本次定向验证：`tests/test_material_request_inbound_contract.py` 为 6 passed；提交前后仓库安全检查均通过，准确 SHA 已推送到既有开发分支。该修正尚未取得新的 PostgreSQL 16 真库门禁，不替代端到端收货、SN 和并发验收。
 
 ## 7.2 远端门禁现状
 
