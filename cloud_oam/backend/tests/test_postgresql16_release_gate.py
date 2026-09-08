@@ -715,7 +715,11 @@ def _assert_migration_waits_for_version_maintenance_before_writing() -> None:
             with psycopg.connect(**_admin_parameters(), autocommit=True) as observer:
                 while time.monotonic() < deadline:
                     rows = observer.execute(
-                        "SELECT activity.backend_xid FROM pg_locks AS lock_row "
+                        "SELECT activity.query, ARRAY(SELECT DISTINCT held.mode "
+                        "FROM pg_locks AS held WHERE held.pid = activity.pid "
+                        "AND held.locktype = 'relation' AND held.granted "
+                        "AND held.mode <> 'AccessShareLock' ORDER BY held.mode) "
+                        "FROM pg_locks AS lock_row "
                         "JOIN pg_stat_activity AS activity USING (pid) "
                         "WHERE lock_row.relation = 'public.alembic_version'::regclass "
                         "AND lock_row.mode = 'AccessExclusiveLock' "
@@ -724,7 +728,13 @@ def _assert_migration_waits_for_version_maintenance_before_writing() -> None:
                         "AND activity.datname = current_database()"
                     ).fetchall()
                     if rows:
-                        assert rows == [(None,)], "migration wrote before obtaining its lock"
+                        # AccessExclusiveLock preparation itself assigns an
+                        # XID for standby WAL logging. Inspect granted relation
+                        # locks instead: any earlier DML would retain its
+                        # RowExclusiveLock while this statement is waiting.
+                        assert rows == [(
+                            "LOCK TABLE public.alembic_version IN ACCESS EXCLUSIVE MODE", []
+                        )], "migration acquired write locks before the version lock"
                         break
                     if future.done():
                         future.result()
