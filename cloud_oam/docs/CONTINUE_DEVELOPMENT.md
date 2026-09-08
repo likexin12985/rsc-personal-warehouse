@@ -137,13 +137,14 @@ git diff --name-only 4a6ec83b27f76f84d1d8fe2a9ded699c9b166349 HEAD
 
 ## 7.1 物流事件 Web 接入（当前增量）
 
-最新实际 HEAD：`6cc0e4e`（`feat: add receipt acceptance panel`）。
+最新实际 HEAD：`c91c0e2`（`feat: expose receipt exceptions`）。
 0074 已建的 `logistics_events` 现在具备正式写入 API、按发运单读取 API、Web 适配器严格响应/输入校验，
 以及发运面板中的事件历史展示和 `pickup / transit / signed / exception` 登记入口；
-收货验收面板已接入收货人、发运明细、合格/拒收数量、验收条件和 SN 输入。
+收货验收面板已接入收货人、发运明细、合格/拒收数量、验收条件和 SN 输入；
+异常事实已写入 `receipt_exceptions` 并在收货响应、历史页面展示。
 物流事件登记只追加签收/运输事实，不改变收货验收状态、库存或个人仓入账状态。
 
-本批本地验证：正式 Web 测试 53 个文件/1017 个用例通过，TypeScript 检查通过，仓库安全检查通过；
+本批本地验证：正式 Web 测试 53 个文件/1017 个用例通过，TypeScript 检查通过，后端履约/安全回归 304 项通过，仓库安全检查通过；
 已推送 `origin/codex/production-readiness-gates`。下一步仍需补正式收货验收录入页面、异常证据处理、
 收货/入账历史读取和端到端 PostgreSQL 16 门禁；云端门禁结果仍受账号额度与网络可用性影响。
 
