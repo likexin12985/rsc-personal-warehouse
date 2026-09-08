@@ -107,7 +107,7 @@ PG16 使用 GitHub Actions 的一次性隔离数据库，本机没有可用 Dock
 
 当前分支已完成从发运到个人仓入账的后端主链：0074 新增物流事件、收货、收货异常、待入账事实；0075 新增不可变 `inbound_postings` 事务绑定；0076 新增独立 `material_request.fulfill` 写权限。收货接口执行数量/SN累计校验，入账确认调用统一 `post_inventory_transaction`，不直接更新库存表。详情页已提供创建待入账单和确认过账入口。
 
-最近提交：`28496f6`（fulfillment 权限门禁）。本地验证：前端正式 Web 测试 53 个文件/1013 个用例通过，TypeScript 与 Vite production build 通过；迁移与 ORM 对照通过，数据库安全/PG16 相关测试 303 passed、1 skipped；仓库安全脚本通过。Vite 仅提示主 chunk 体积偏大，未影响构建。GitHub 门禁仍需以账号额度恢复后的真实运行结果为准。
+最近提交：`4ade78e`（fulfillment 权限回归）。本地验证：前端正式 Web 测试 53 个文件/1013 个用例通过，TypeScript 与 Vite production build 通过；迁移与 ORM 对照通过，数据库安全/PG16 相关测试 303 passed、1 skipped；仓库安全脚本通过。Vite 仅提示主 chunk 体积偏大，未影响构建。GitHub 门禁仍需以账号额度恢复后的真实运行结果为准。
 
 ## 7. 接手续检及运行环境
 
