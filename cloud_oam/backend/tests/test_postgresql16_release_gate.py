@@ -701,6 +701,45 @@ def _run_alembic(
     return completed
 
 
+def _assert_migration_waits_for_version_maintenance_before_writing() -> None:
+    """An autovacuum-compatible lock must delay migration before its first DML."""
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    with psycopg.connect(**_admin_parameters()) as maintenance:
+        try:
+            maintenance.execute(
+                "LOCK TABLE public.alembic_version IN SHARE UPDATE EXCLUSIVE MODE"
+            )
+            future = executor.submit(_run_alembic, "upgrade", "head")
+            deadline = time.monotonic() + 20
+            with psycopg.connect(**_admin_parameters(), autocommit=True) as observer:
+                while time.monotonic() < deadline:
+                    rows = observer.execute(
+                        "SELECT activity.backend_xid FROM pg_locks AS lock_row "
+                        "JOIN pg_stat_activity AS activity USING (pid) "
+                        "WHERE lock_row.relation = 'public.alembic_version'::regclass "
+                        "AND lock_row.mode = 'AccessExclusiveLock' "
+                        "AND NOT lock_row.granted "
+                        "AND activity.usename = 'star_oam_migrator' "
+                        "AND activity.datname = current_database()"
+                    ).fetchall()
+                    if rows:
+                        assert rows == [(None,)], "migration wrote before obtaining its lock"
+                        break
+                    if future.done():
+                        future.result()
+                        pytest.fail("migration bypassed the version maintenance lock")
+                    time.sleep(0.05)
+                else:
+                    pytest.fail("migration did not wait for version maintenance")
+            maintenance.rollback()
+            future.result(timeout=30)
+            assert _current_revision() == HEAD_REVISION
+        finally:
+            maintenance.rollback()
+            executor.shutdown(wait=True)
+
+
 def _run_deployment_sql(
     script_name: str,
     *,
@@ -20579,6 +20618,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
+    _assert_migration_waits_for_version_maintenance_before_writing()
     _assert_0063_empty_review_command_downgrade_and_reupgrade()
     _assert_0064_empty_finalizer_organization_downgrade_and_reupgrade()
     _assert_0062_empty_history_owner_downgrade_and_reupgrade()

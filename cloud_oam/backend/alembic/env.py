@@ -204,6 +204,16 @@ def run_migrations_online() -> None:
                     raise RuntimeError(
                         "production Alembic database role boundary is not satisfied"
                     )
+            if connection.dialect.name == "postgresql" and connection.scalar(
+                text("SELECT to_regclass('public.alembic_version')")
+            ) is not None:
+                # Acquire the strongest version-table lock before Alembic's
+                # first UPDATE. Upgrading that lock later in a revision can
+                # deadlock with autovacuum waiting for the UPDATE transaction.
+                # A fresh table is already exclusively locked by its creation.
+                connection.execute(
+                    text("LOCK TABLE public.alembic_version IN ACCESS EXCLUSIVE MODE")
+                )
             context.run_migrations()
 
 
