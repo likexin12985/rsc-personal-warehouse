@@ -60,10 +60,12 @@ from ..formal_services import material_request_outbound_options as outbound_opti
 from ..formal_services import material_request_shipment as shipment_service
 from ..formal_services import material_request_receipt as receipt_service
 from ..formal_services import material_request_inbound as inbound_service
+from ..formal_services import material_request_logistics as logistics_service
 from ..material_request_outbound_schemas import OutboundOptionsOut, OutboundIn, OutboundOut, OutboundStatusOut
 from ..material_request_shipment_schemas import ShipmentIn, ShipmentOut, ShipmentOptionsOut
 from ..material_request_receipt_schemas import ReceiptIn, ReceiptOut
 from ..material_request_inbound_schemas import InboundOrderIn, InboundOrderOut, InboundPostingOut
+from ..material_request_logistics_schemas import LogisticsEventIn, LogisticsEventOut
 from ..formal_services import material_request_picking as picking_service
 from ..formal_services import material_request_picking_options as picking_options_service
 from ..material_request_picking_schemas import PickOptionsOut
@@ -909,6 +911,27 @@ def list_formal_material_request_shipment_options(
         return shipment_service.list_shipment_options(db, actor=principal, request_id=material_request_id)
     except Exception as exc:
         _rollback_and_raise(db, exc)
+
+@router.post("/{material_request_id}/shipments/{shipment_id}/logistics-events", response_model=LogisticsEventOut, status_code=201)
+def create_formal_material_request_logistics_event(
+    material_request_id: UUID, shipment_id: UUID, payload: LogisticsEventIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "fulfill")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
+    try:
+        secret = _require_lifecycle_write_runtime(runtime_settings)
+        result = logistics_service.create_event(db, actor=principal, request_id=material_request_id,
+            shipment_id=shipment_id, event_type=payload.event_type, event_at=payload.event_at,
+            source=payload.source, evidence_file_id=payload.evidence_file_id, external_ref=payload.external_ref,
+            idempotency_key=key, secret=secret, trace_request_id=trace)
+        output = LogisticsEventOut(**result); db.commit()
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+    _set_read_no_store(response); _set_replay_header(response, output.idempotency_replayed)
+    return output
 
 @router.post("/{material_request_id}/receipts", response_model=ReceiptOut, status_code=201)
 def create_formal_material_request_receipt(
