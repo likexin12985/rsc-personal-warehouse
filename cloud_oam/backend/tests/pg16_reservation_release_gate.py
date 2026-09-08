@@ -66,6 +66,7 @@ def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory
     from test_material_request_draft_service import SECRET
 
     _assert_release_catalog(api_engine, security_engine)
+    print("PG16 release: catalog rejection/restoration verified")
 
     def api_db():
         with Session(api_engine) as db: yield db
@@ -151,12 +152,13 @@ def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory
                 INSERT INTO public.stock_reservations
                 SELECT (jsonb_populate_record(NULL::public.stock_reservations,
                     to_jsonb(r) || jsonb_build_object('id', CAST(:new_id AS text),
-                        'reservation_no', 'PG16-REUSED-RESERVE', 'idempotency_key_hash', :key))).*
+                        'reservation_no', 'PG16-REUSED-RESERVE', 'idempotency_key_hash', CAST(:key AS text)))).*
                   FROM public.stock_reservations r WHERE r.id = :original_id
             """), {"new_id": str(uuid.uuid4()), "original_id": facts[0].id, "key": "d" * 64})
             db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         db.rollback()
     for index, fact in enumerate(facts):
+        print(f"PG16 release: original slice {index}")
         with Session(api_engine) as db:
             serials = tuple(db.scalars(select(StockReservationSerial.serial_id).where(
                 StockReservationSerial.reservation_id == fact.id).order_by(StockReservationSerial.serial_id)).all())
@@ -217,6 +219,7 @@ def assert_release_gate(api_engine, *, security_engine, admin_user_id, inventory
     # never-reserved remainder. A release never restores allocation capacity.
     # Stock returns from previous facts; no fixture balance is overwritten.
     from pg16_reservation_gate import _approved_request
+    print("PG16 release: reservation after partial release")
     from app.formal_services.material_request_allocation import AllocationCreateInput, create_allocation
     from app.formal_services.material_request_reservation import ReservationCreateInput, create_reservation
     from app.inventory_models import StockAccount
