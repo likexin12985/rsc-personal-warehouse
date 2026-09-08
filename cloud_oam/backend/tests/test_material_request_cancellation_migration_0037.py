@@ -308,11 +308,12 @@ def test_0037_postgresql_offline_sql_acl_functions_and_manifest_match(
         name: frozenset(columns)
         for name, columns in migration.UPDATE_COLUMNS.items()
     }
-    # Later migrations may add a narrowly scoped head-only column to the
-    # runtime manifest; 0037 must remain an exact historical snapshot.
-    historical_runtime_update_columns["material_requests"] -= {"allocation_status"}
+    # Later migrations may add narrowly scoped head-only state-axis columns to
+    # the runtime manifest; 0037 must remain an exact historical snapshot.
+    later_head_only_columns = {"allocation_status", "reservation_status", "outbound_status"}
+    historical_runtime_update_columns["material_requests"] -= later_head_only_columns
     assert historical_runtime_update_columns == {
-        name: RUNTIME_UPDATE_COLUMNS[name] - ({"allocation_status"} if name == "material_requests" else set())
+        name: RUNTIME_UPDATE_COLUMNS[name] - (later_head_only_columns if name == "material_requests" else set())
         for name in migration.UPDATE_COLUMNS
     }
     assert set(migration._postgresql_triggers()) == set(
