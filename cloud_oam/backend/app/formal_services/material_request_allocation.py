@@ -33,7 +33,8 @@ from ..inventory_models import (
 )
 from ..models import User
 from .audit_chain import AuditChainError, append_audit_event
-from . import inventory_query
+from . import inventory_query, material_request_query
+from .postgresql_lock_graph import lock_inventory_reference_graph
 
 
 _HTTP_STATUS_BY_CATEGORY = {
@@ -201,6 +202,7 @@ def allocation_command_status(
     if audit.aggregate_id != str(allocation_id):
         _fail("material_request_allocation_history_invalid", "service_unavailable", "分配审计对象不匹配")
     with db.no_autoflush:
+        read_context = _request_read_context(db, actor)
         fact = db.scalar(
             select(StockAllocation)
             .where(StockAllocation.id == allocation_id)
@@ -209,7 +211,10 @@ def allocation_command_status(
         request = (
             db.scalar(
                 select(MaterialRequest)
-                .where(MaterialRequest.id == fact.request_id)
+                .where(
+                    MaterialRequest.id == fact.request_id,
+                    material_request_query._visible_request_predicate(read_context),
+                )
                 .execution_options(populate_existing=True)
             )
             if fact
@@ -286,13 +291,17 @@ def _create_allocation_impl(
     user = db.scalar(select(User).where(User.id == actor.user_id).with_for_update())
     if user is None or user.person_id != actor.person_id or user.authorization_version != actor.authorization_version:
         _fail("material_request_allocation_actor_changed", "forbidden", "分配期间身份或授权版本已变化")
-    request = db.scalar(select(MaterialRequest).where(MaterialRequest.id == request_id).with_for_update())
+    read_context = _request_read_context(db, actor)
+    request = db.scalar(select(MaterialRequest).where(
+        MaterialRequest.id == request_id,
+        material_request_query._visible_request_predicate(read_context),
+    ).with_for_update())
     if request is None:
         _fail("material_request_not_found", "not_found", "需求单不存在")
     existing = db.scalar(
         select(StockAllocation)
         .where(StockAllocation.idempotency_key_hash == key_hash)
-        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if existing is not None:
         if existing.request_hash != request_hash:
@@ -319,14 +328,27 @@ def _create_allocation_impl(
     inventory_query._require_inventory_read(db, actor)
     snapshot = inventory_query._projection_snapshot(db)
     rows = inventory_query._authorized_account_rows(db, actor=actor)
-    inventory_query._validate_current_projection_integrity(db, snapshot=snapshot, account_ids={row.account.id for row in rows})
-    evidence = inventory_query._validated_opening_evidence(db, actor=actor, snapshot=snapshot, required_pairs={(row.account.owner_org_id, row.account.location_id) for row in rows}, discover_authorized_zero_scopes=True)
-    if not evidence.complete:
-        _fail("inventory_opening_not_established", "precondition_failed", "库存期初建账尚未完成")
     source_row = next((row for row in rows if row.account.id == allocation.source_stock_account_id), None)
     if source_row is None:
         _fail("material_request_allocation_source_forbidden", "forbidden", "货源不在当前账号授权范围内")
-    account = db.scalar(select(StockAccount).where(StockAccount.id == allocation.source_stock_account_id).with_for_update())
+    # Only the selected source is this command's business object. An unrelated
+    # warehouse with an unfinished opening must not block an established one.
+    inventory_query._validate_current_projection_integrity(
+        db, snapshot=snapshot, account_ids={source_row.account.id},
+    )
+    evidence = inventory_query._validated_opening_evidence(
+        db, actor=actor, snapshot=snapshot,
+        required_pairs={(source_row.account.owner_org_id, source_row.account.location_id)},
+        discover_authorized_zero_scopes=False,
+    )
+    if not evidence.complete:
+        _fail("inventory_opening_not_established", "precondition_failed", "库存期初建账尚未完成")
+    # API has SELECT/INSERT on accounts and allocation facts. The reviewed
+    # owner helper locks account references without expanding table privileges.
+    lock_inventory_reference_graph(db, (allocation.source_stock_account_id,), datetime.now(timezone.utc))
+    account = db.scalar(select(StockAccount).where(
+        StockAccount.id == allocation.source_stock_account_id,
+    ).execution_options(populate_existing=True))
     balance = db.scalar(select(StockBalance).where(StockBalance.stock_account_id == allocation.source_stock_account_id).with_for_update())
     if account is None or balance is None or account.availability_bucket != "available" or account.material_id != line.material_id:
         _fail("material_request_allocation_source_invalid", "conflict", "货源已变化或与需求物料不匹配")
@@ -507,6 +529,19 @@ def _validate_serial_binding(db: Session, account: StockAccount, tracking_mode: 
 def _current_revision_id(db: Session, request_id: uuid.UUID, revision_no: int) -> uuid.UUID | None:
     from ..demand_models import MaterialRequestRevision
     return db.scalar(select(MaterialRequestRevision.id).where(MaterialRequestRevision.request_id == request_id, MaterialRequestRevision.revision_no == revision_no))
+
+
+def _request_read_context(db: Session, actor: FormalPrincipal):
+    try:
+        context = material_request_query._load_read_context(db, actor=actor, now=None)
+    except material_request_query.MaterialRequestReadError as exc:
+        raise MaterialRequestAllocationError(exc.code, exc.category, exc.message) from exc
+    current = context.principal
+    if (current != actor or current.account_status != "active"
+        or current.employment_status != "active" or current.access_mode != "active"
+        or not set(current.role_codes).intersection({"admin", "provincial_manager"})):
+        _fail("material_request_allocation_authorization_changed", "forbidden", "分配授权范围已变化，请重新读取")
+    return context
 
 
 def _result_from_existing(

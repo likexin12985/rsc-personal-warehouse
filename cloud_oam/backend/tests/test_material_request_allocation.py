@@ -2,11 +2,12 @@ from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import UUID
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import event, select
+from sqlalchemy.dialects import postgresql
 
 from app.formal_services.material_request_allocation import AllocationCreateInput
 from app.formal_services.material_request_allocation import (
@@ -23,6 +24,7 @@ from app.foundation_models import AuditEvent
 from test_material_request_approval_service import _principal, approval_db
 from test_material_request_lifecycle_service import _approved_request
 from test_material_request_draft_service import NOW, SECRET
+from test_material_request_query_service import _grant
 
 
 def _id(value: int) -> UUID:
@@ -198,13 +200,15 @@ def test_allocation_command_status_fails_closed_on_mismatched_audit_object():
     assert caught.value.category == "service_unavailable"
 
 
+@pytest.mark.parametrize("deny_scope", [None, "global", "organization"])
 def test_real_allocation_and_recovery_bind_audit_quantity_and_historical_version(
-    approval_db, monkeypatch
+    approval_db, monkeypatch, deny_scope
 ):
     db = approval_db
     world, request, line, expected_version = _approved_request(
         db, key="allocation-real-chain"
     )
+    _grant(db, world, action="read", roles=("admin", "provincial_manager"))
     actor = _principal(db, world.admin_users[0].id)
     location = StockLocation(
         id=_id(1000), code="HQ-SOURCE-1000", name="总部货源库",
@@ -236,9 +240,20 @@ def test_real_allocation_and_recovery_bind_audit_quantity_and_historical_version
     snapshot = SimpleNamespace(ledger_cursor=9, projected_at=NOW)
     monkeypatch.setattr(inventory_query, "_require_inventory_read", lambda *a, **k: None)
     monkeypatch.setattr(inventory_query, "_projection_snapshot", lambda *a, **k: snapshot)
-    monkeypatch.setattr(inventory_query, "_authorized_account_rows", lambda *a, **k: [source_row])
-    monkeypatch.setattr(inventory_query, "_validate_current_projection_integrity", lambda *a, **k: None)
-    monkeypatch.setattr(inventory_query, "_validated_opening_evidence", lambda *a, **k: SimpleNamespace(complete=True))
+    unrelated = SimpleNamespace(account=SimpleNamespace(
+        id=_id(1020), owner_org_id=_id(1021), location_id=_id(1022),
+    ))
+    monkeypatch.setattr(inventory_query, "_authorized_account_rows", lambda *a, **k: [source_row, unrelated])
+    projection_proof = Mock()
+    opening_proof = Mock(return_value=SimpleNamespace(complete=True))
+    monkeypatch.setattr(inventory_query, "_validate_current_projection_integrity", projection_proof)
+    monkeypatch.setattr(inventory_query, "_validated_opening_evidence", opening_proof)
+
+    selects = []
+    def capture_select(orm_state):
+        if orm_state.is_select:
+            selects.append(str(orm_state.statement.compile(dialect=postgresql.dialect())))
+    event.listen(db, "do_orm_execute", capture_select)
 
     allocation = AllocationCreateInput(
         request_line_id=line.id, source_stock_account_id=account.id,
@@ -251,6 +266,13 @@ def test_real_allocation_and_recovery_bind_audit_quantity_and_historical_version
         idempotency_key="allocation-real-chain-key-0001", idempotency_hmac_secret=SECRET,
         trace_request_id="allocation-real-chain-trace-0001",
     )
+    event.remove(db, "do_orm_execute", capture_select)
+    assert any("FROM stock_allocations" in sql for sql in selects)
+    assert not any("FOR UPDATE" in sql for sql in selects
+                   if "FROM stock_allocations" in sql or "FROM stock_accounts" in sql)
+    assert projection_proof.call_args.kwargs["account_ids"] == {account.id}
+    assert opening_proof.call_args.kwargs["required_pairs"] == {(account.owner_org_id, account.location_id)}
+    assert opening_proof.call_args.kwargs["discover_authorized_zero_scopes"] is False
     assert result.allocated_qty == Decimal("0.500")
     assert result.request_version == expected_version + 1
     audit = db.scalar(
@@ -272,6 +294,25 @@ def test_real_allocation_and_recovery_bind_audit_quantity_and_historical_version
     assert recovered.request_version == expected_version + 1
     assert recovered.current_request_version == expected_version + 1
     assert recovered.allocated_qty == Decimal("0.500")
+
+    if deny_scope:
+        from test_material_request_reservation import _deny_request_read
+        _deny_request_read(db, world, actor, scoped=deny_scope == "organization")
+        changed_actor = _principal(db, actor.user_id)
+        with pytest.raises(MaterialRequestAllocationError):
+            allocation_command_status(db, actor=changed_actor,
+                                      trace_request_id="allocation-real-chain-trace-0001")
+        for key in ("allocation-real-chain-key-0001", "allocation-after-scope-denied"):
+            with pytest.raises(MaterialRequestAllocationError) as denied:
+                create_allocation(
+                    db, actor=changed_actor, material_request_id=request.id,
+                    expected_request_version=result.request_version, allocation=allocation,
+                    idempotency_key=key, idempotency_hmac_secret=SECRET,
+                    trace_request_id="allocation-after-scope-denied-trace",
+                )
+            assert denied.value.http_status_code in {403, 404}
+        assert request.version == result.request_version
+        return
 
     audit.after_jsonb = {**audit.after_jsonb, "allocated_qty": "0.501"}
     db.flush()
