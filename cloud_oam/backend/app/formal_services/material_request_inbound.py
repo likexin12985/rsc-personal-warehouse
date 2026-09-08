@@ -1,5 +1,6 @@
 """Create a personal-inbound order as a separate, pending fact."""
 from datetime import datetime, timezone
+from decimal import Decimal
 import uuid
 from sqlalchemy import select
 from ..demand_models import MaterialRequest
@@ -87,9 +88,17 @@ def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idem
     if not lines: _fail("receipt_empty", "precondition_failed", "收货没有可入账明细")
     movements = []
     for line in lines:
+        # Rejected-only receipt lines remain receipt/exception facts and must
+        # never become personal-warehouse inventory.  A receipt may contain
+        # both accepted and rejected lines; only the accepted quantity is an
+        # inventory movement.
+        if Decimal(line.accepted_qty) <= 0:
+            continue
         target = resolve_personal_target_account(db, receipt_id=receipt.id, target_location_id=order.target_location_id, target_person_id=order.target_person_id, shipment_line_id=line.shipment_line_id)
         command = build_inbound_posting_command(db, inbound_order=order, receipt_line_id=line.id, target_account=target)
         movements.extend(command.movements)
+    if not movements:
+        _fail("receipt_empty", "precondition_failed", "收货没有可入账的合格数量")
     command = InventoryPostingCommand(transaction_no=f"INV-IN-{order.id.hex[:16].upper()}", movement_type="inbound", source_document_type="personal_inbound", source_document_id=str(order.id), posting_key=f"personal-inbound:{order.id}", effective_at=order.created_at, movements=tuple(movements))
     result = post_inventory_transaction(db, actor=actor, command=command, idempotency_key=idempotency_key, request_id=request_id)
     db.add(InboundPosting(id=uuid.uuid4(), inbound_order_id=order.id, inventory_transaction_id=result.transaction_id, created_at=datetime.now(timezone.utc)))
