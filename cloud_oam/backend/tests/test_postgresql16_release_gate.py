@@ -20457,7 +20457,10 @@ def _assert_0061_empty_event_key_downgrade_and_reupgrade() -> None:
 
     before, bindings = catalog()
     assert all(row[1] == "star_oam_migrator" and row[2] for row in before)
-    assert before[0][-1] == reservation_migration.SUPPLY_VALIDATE_BODY_SHA256_0069
+    from app.database_security import MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
+    assert before[0][-1] == MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[
+        ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint")
+    ]
     assert before[1][-1] == _head_runtime_ready_hash()
     assert before[4][-1] == reservation_migration.SUPPLY_DISPATCH_BODY_SHA256_0069
     _run_alembic("downgrade", SUPPLY_TASK_SECURITY_REVISION)
