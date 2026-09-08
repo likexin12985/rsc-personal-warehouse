@@ -119,6 +119,8 @@ def test_same_command_replay_returns_same_transaction_without_duplicate_binding(
     result = post(world)
     assert result["inventory_transaction_id"] == world.first["inventory_transaction_id"]
     assert result["replayed"] is True
+    assert world.order.status == "posted"
+    assert world.request.personal_inbound_status == "posted"
     assert snapshot(world) == before
 
 

@@ -125,6 +125,12 @@ def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idem
             _fail("posting_mismatch", "conflict", "入账事实与库存事务不一致")
     else:
         db.add(InboundPosting(id=uuid.uuid4(), inbound_order_id=order.id, inventory_transaction_id=result.transaction_id, created_at=datetime.now(timezone.utc)))
+    # Keep the orchestration projection aligned with the immutable posting
+    # fact.  The inventory transaction remains the source of truth; this
+    # status is only the request-facing read model and is safe to repeat on a
+    # replay of the same bound transaction.
+    order.status = "posted"
+    request.personal_inbound_status = "posted"
     return {"inbound_order_id": order.id, "inventory_transaction_id": result.transaction_id, "replayed": result.replayed}
 
 def list_inbound_orders(db, *, actor, request_id):
