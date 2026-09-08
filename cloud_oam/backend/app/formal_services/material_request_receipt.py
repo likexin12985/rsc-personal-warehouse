@@ -18,6 +18,10 @@ def _validate_serial_receipt_quantity(total, given, bound, used):
     if total != total.to_integral_value() or len(given) != int(total) or not given <= bound - used:
         _fail("serial_mismatch", "precondition_failed", "收货 SN 与发运事实不一致")
 
+def _receipt_status(checked):
+    """Any non-normal condition remains an exception even with zero shortage."""
+    return "accepted" if all(Decimal(x.rejected_qty) == 0 and x.condition == "normal" for _, x, _, _ in checked) else "exception"
+
 def create_receipt(db, *, actor, request_id, expected_version, receiver_person_id, received_at, lines, idempotency_key, secret, trace_request_id):
     if not isinstance(secret, bytes): secret = secret.encode()
     if len(secret) < 32: _fail("secret_invalid", "service_unavailable", "收货幂等配置不可用")
@@ -52,7 +56,7 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
             _validate_serial_receipt_quantity(total, given, bound, used)
         if not bound and given: _fail("serial_mismatch", "invalid_request", "非 SN 物料不得提交 SN")
         checked.append((shipment_line, line, total, given))
-    receipt = Receipt(id=uuid.uuid4(), receipt_no=f"RCT-{now:%Y%m%d}-{uuid.uuid4().hex[:12].upper()}", shipment_id=shipment_id, status="accepted" if all(Decimal(x.accepted_qty) > 0 and Decimal(x.rejected_qty) == 0 for _, x, _, _ in checked) else "exception", received_at=when, receiver_person_id=receiver_person_id, request_hash=payload_hash, idempotency_key_hash=key_hash, created_at=now)
+    receipt = Receipt(id=uuid.uuid4(), receipt_no=f"RCT-{now:%Y%m%d}-{uuid.uuid4().hex[:12].upper()}", shipment_id=shipment_id, status=_receipt_status(checked), received_at=when, receiver_person_id=receiver_person_id, request_hash=payload_hash, idempotency_key_hash=key_hash, created_at=now)
     db.add(receipt); db.flush(); output = []
     for shipment_line, line, total, serials in checked:
         row = ReceiptLine(id=uuid.uuid4(), receipt_id=receipt.id, shipment_line_id=shipment_line.id, accepted_qty=line.accepted_qty, rejected_qty=line.rejected_qty, condition=line.condition, created_at=now); db.add(row); db.flush(); db.add_all(ReceiptSerial(receipt_line_id=row.id, serial_id=s, accepted=s in serials) for s in serials)
