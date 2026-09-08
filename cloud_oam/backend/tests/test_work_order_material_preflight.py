@@ -100,3 +100,16 @@ def test_operation_dto_rejects_unknown_operation_type():
             operator_person_id=uuid4(), lines=(line(),), operation_type="ship",
             posting_transaction_id=uuid4(), idempotency_key="k",
         )
+
+
+def test_operation_dto_parses_replacement_pairs():
+    from app.work_order_material_schemas import WorkOrderMaterialLineIn
+    from decimal import Decimal
+    material_id, account_id = uuid4(), uuid4()
+    value = WorkOrderMaterialOperationIn(
+        operator_person_id=uuid4(),
+        lines=(WorkOrderMaterialLineIn(material_id=material_id, stock_account_id=account_id, quantity=Decimal("1")),),
+        operation_type="recover", posting_transaction_id=uuid4(), idempotency_key="key-1",
+        replacement_pairs=({"installed_serial_id": str(uuid4()), "removed_serial_id": str(uuid4())},),
+    )
+    assert len(value.replacement_pairs) == 1
