@@ -561,6 +561,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "stock_reservation_serials",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
+        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs",
     }
     assert RUNTIME_READ_TABLES - set(values["API_READ_TABLES"]) == (
         safe_posting_tables

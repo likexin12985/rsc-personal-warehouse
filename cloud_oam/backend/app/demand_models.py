@@ -15,6 +15,7 @@ import uuid
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -25,6 +26,7 @@ from sqlalchemy import (
     Integer,
     JSON,
     Numeric,
+    PrimaryKeyConstraint,
     String,
     Text,
     UniqueConstraint,
@@ -102,6 +104,103 @@ class OamWorkOrder(TimestampMixin, Base):
     )
     status: Mapped[str] = mapped_column(String(24), index=True)
     source_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class WorkOrderMaterialOperation(CreatedAtMixin, Base):
+    """Immutable formal work-order material operation header.
+
+    The operation is a business fact; its inventory transaction is supplied by
+    the formal posting service and is never inferred from the old prototype
+    ``work_order_materials`` table.
+    """
+
+    __tablename__ = "work_order_material_operations"
+    __table_args__ = (
+        UniqueConstraint("operation_no", name="uq_work_order_material_operations_no"),
+        UniqueConstraint("idempotency_key_hash", name="uq_work_order_material_operations_key"),
+        CheckConstraint(
+            "operation_type IN ('occupy','release','consume','recover','reverse')",
+            name="ck_work_order_material_operations_type",
+        ),
+        CheckConstraint(
+            "status IN ('posted','cancelled','reversed')",
+            name="ck_work_order_material_operations_status",
+        ),
+        Index("ix_work_order_material_operations_work_order", "oam_work_order_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    operation_no: Mapped[str] = mapped_column(String(100))
+    oam_work_order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("oam_work_orders.id", ondelete="RESTRICT")
+    )
+    operator_person_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT")
+    )
+    operation_type: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(24))
+    posting_transaction_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID_TYPE, ForeignKey("inventory_transactions.id", ondelete="RESTRICT"), nullable=True
+    )
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+
+
+class WorkOrderMaterialLine(CreatedAtMixin, Base):
+    """Immutable material dimension of one formal work-order operation."""
+
+    __tablename__ = "work_order_material_lines"
+    __table_args__ = (
+        UniqueConstraint("operation_id", "line_no", name="uq_work_order_material_lines_no"),
+        CheckConstraint("quantity > 0", name="ck_work_order_material_lines_positive"),
+        Index("ix_work_order_material_lines_material", "material_id", "stock_account_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    operation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("work_order_material_operations.id", ondelete="RESTRICT")
+    )
+    line_no: Mapped[int] = mapped_column(BigInteger)
+    material_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("materials.id", ondelete="RESTRICT")
+    )
+    stock_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT")
+    )
+    quantity: Mapped[Decimal] = mapped_column(QUANTITY)
+    condition_before: Mapped[str] = mapped_column(String(24))
+    condition_after: Mapped[str | None] = mapped_column(String(24), nullable=True)
+
+
+class WorkOrderMaterialSerial(CreatedAtMixin, Base):
+    """Per-SN evidence for SKU and QR verification."""
+
+    __tablename__ = "work_order_material_serials"
+    __table_args__ = (PrimaryKeyConstraint("operation_line_id", "serial_id", name="pk_work_order_material_serials"),)
+
+    operation_line_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("work_order_material_lines.id", ondelete="RESTRICT")
+    )
+    serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    sku_verified: Mapped[bool] = mapped_column(Boolean)
+    qr_verified: Mapped[bool] = mapped_column(Boolean)
+
+
+class WorkOrderReplacementPair(CreatedAtMixin, Base):
+    """Immutable installed/removed SN pairing for replacement work."""
+
+    __tablename__ = "work_order_replacement_pairs"
+    __table_args__ = (
+        UniqueConstraint("operation_id", "installed_serial_id", name="uq_work_order_replacement_installed"),
+        UniqueConstraint("operation_id", "removed_serial_id", name="uq_work_order_replacement_removed"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    operation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("work_order_material_operations.id", ondelete="RESTRICT")
+    )
+    installed_serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    removed_serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
 
 
 class MaterialSubstitution(TimestampMixin, Base):

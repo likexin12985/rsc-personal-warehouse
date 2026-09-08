@@ -209,3 +209,15 @@ git diff --name-only 4a6ec83b27f76f84d1d8fe2a9ded699c9b166349 HEAD
 写请求结果未知时暂停重提交，只有只读 GET 核验按钮可解除状态。前端新增 2 项恢复契约，
 全量回归为 54 个文件、1023 个用例，TypeScript 构建通过。该页面恢复不改变后端事实，
 也不把 GET 回读当成库存过账完成。
+
+## 7.7 正式工单物料事实表基础
+
+基于 `7f21ed8` 新增迁移 `20260917_0077`：`work_order_material_operations`、
+`work_order_material_lines`、`work_order_material_serials` 和
+`work_order_replacement_pairs`。四张表均为只追加事实，分别保存 OAM 工单绑定、操作类型、
+个人仓库存账户、数量/成色、SN 的 SKU/二维码校验，以及以换代修新旧件配对；没有复用旧
+`work_order_materials` 原型表，也没有自动猜测 OAM 工单或人员。
+
+本批只建立正式数据边界和迁移/ACL 基础，尚未宣称投料、消耗、释放、回收服务完成；下一批
+将实现逐工单权限预检、批量整批校验和统一库存过账命令。0077 的 PostgreSQL 16 真库门禁
+仍未取得。
