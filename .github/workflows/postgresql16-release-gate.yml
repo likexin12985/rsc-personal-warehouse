@@ -107,6 +107,13 @@ jobs:
           psql --version | grep -E ' 16[.]'
           zsh --version
 
+      # Surface migration and production-role failures before the longer static
+      # suite. Both steps remain mandatory for this job to succeed.
+      - name: Run isolated PostgreSQL 16 migration and concurrency gate
+        working-directory: cloud_oam/backend
+        run: |
+          python -m pytest -q tests/test_postgresql16_release_gate.py
+
       - name: Run projector and edge static safety gates
         working-directory: cloud_oam
         run: |
@@ -168,8 +175,3 @@ jobs:
             backend/tests/test_legacy_oam_work_order_redaction_artifact.py \
             edge_sync/test_oam_edge_sync.py \
             edge_sync/test_oam_read_client_security.py
-
-      - name: Run isolated PostgreSQL 16 migration and concurrency gate
-        working-directory: cloud_oam/backend
-        run: |
-          python -m pytest -q tests/test_postgresql16_release_gate.py

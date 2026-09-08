@@ -42,7 +42,7 @@ from ..inventory_models import (
     StockReservationSerial,
 )
 from ..models import User
-from . import inventory_query
+from . import inventory_query, material_request_query
 from .audit_chain import AuditChainError, append_audit_event, verify_audit_event_in_stream
 from .inventory_posting import (
     InventoryMovementCommand,
@@ -257,6 +257,7 @@ def reservation_command_status(
             "service_unavailable",
             "预约审计对象不匹配",
         )
+    read_context = _request_read_context(db, actor)
     with db.no_autoflush:
         fact = db.scalar(
             select(StockReservation)
@@ -266,13 +267,18 @@ def reservation_command_status(
         request = (
             db.scalar(
                 select(MaterialRequest)
-                .where(MaterialRequest.id == fact.request_id)
+                .where(
+                    MaterialRequest.id == fact.request_id,
+                    material_request_query._visible_request_predicate(read_context),
+                )
                 .execution_options(populate_existing=True)
             )
             if fact is not None
             else None
         )
-    if fact is None or request is None:
+    if fact is not None and request is None:
+        _fail("material_request_not_found", "not_found", "需求单不存在")
+    if fact is None:
         _fail(
             "material_request_reservation_history_invalid",
             "service_unavailable",
@@ -389,8 +395,12 @@ def _create_reservation_impl(
             "forbidden",
             "预约期间身份或授权版本已变化",
         )
+    read_context = _request_read_context(db, actor)
     request = db.scalar(
-        select(MaterialRequest).where(MaterialRequest.id == request_id).with_for_update()
+        select(MaterialRequest).where(
+            MaterialRequest.id == request_id,
+            material_request_query._visible_request_predicate(read_context),
+        ).with_for_update()
     )
     if request is None:
         _fail("material_request_not_found", "not_found", "需求单不存在")
@@ -1177,6 +1187,21 @@ def _validate_input(value: ReservationCreateInput) -> None:
         _fail("material_request_reservation_serials_duplicate", "invalid_request", "预约 SN 不能重复")
     for serial_id in value.serial_ids:
         _uuid(serial_id, "serial_id")
+
+
+def _request_read_context(db: Session, actor: FormalPrincipal):
+    try:
+        context = material_request_query._load_read_context(db, actor=actor, now=None)
+    except material_request_query.MaterialRequestReadError as exc:
+        raise MaterialRequestReservationError(exc.code, exc.category, exc.message) from exc
+    _require_actor(context.principal)
+    if context.principal != actor:
+        _fail(
+            "material_request_reservation_authorization_changed",
+            "precondition_failed",
+            "需求或库存预约授权范围已变化，请重新读取",
+        )
+    return context
 
 
 def _require_actor(actor: FormalPrincipal) -> None:

@@ -4,6 +4,7 @@ from decimal import Decimal
 import hashlib
 import json
 from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import UUID
 
 import pytest
@@ -14,6 +15,7 @@ from sqlalchemy.dialects import postgresql
 from app.formal_services import inventory_query
 from app.formal_services.inventory_posting import (
     InventoryPostingResult,
+    _authorize_account_ids,
     _posting_request_hash,
     _storage_hash,
     _validate_posting_command,
@@ -28,7 +30,7 @@ from app.formal_services.material_request_reservation import (
     create_reservation,
     reservation_command_status,
 )
-from app.foundation_models import AuditEvent, StateTransitionEvent
+from app.foundation_models import AuditEvent, Permission, RolePermission, StateTransitionEvent
 from app.inventory_models import (
     InventoryMovement,
     InventoryMovementSerial,
@@ -49,8 +51,9 @@ from app.material_request_reservation_schemas import (
 )
 from app.demand_models import MaterialRequestCommand
 from test_material_request_approval_service import _principal, approval_db
-from test_material_request_draft_service import NOW, SECRET
+from test_material_request_draft_service import NOW, SECRET, _assignment, _organization, _person, _user
 from test_material_request_lifecycle_service import _approved_request
+from test_material_request_query_service import _grant
 
 
 def _id(value: int) -> UUID:
@@ -164,6 +167,8 @@ _COMMON_HISTORY_CASES = (
     "state_event_metadata",
     "audit_contents",
     "audit_hash",
+    "permission_deny_after_success",
+    "scoped_deny_after_success",
 )
 _SERIAL_HISTORY_CASES = (
     "missing_reservation_serial",
@@ -176,7 +181,8 @@ _SERIAL_HISTORY_CASES = (
 @pytest.mark.parametrize(
     ("serial_mode", "tamper"),
     [(serial_mode, tamper) for serial_mode in (False, True) for tamper in _COMMON_HISTORY_CASES]
-    + [(True, tamper) for tamper in _SERIAL_HISTORY_CASES],
+    + [(True, tamper) for tamper in _SERIAL_HISTORY_CASES]
+    + [(False, tamper) for tamper in ("create_cross_scope", "create_deny", "create_scoped_deny")],
 )
 def test_reservation_posts_inventory_and_recovers_exact_command(
     approval_db, monkeypatch, serial_mode, tamper
@@ -185,6 +191,7 @@ def test_reservation_posts_inventory_and_recovers_exact_command(
     world, request, line, expected_version = _approved_request(
         db, key="reservation-real-chain"
     )
+    _grant(db, world, action="read", roles=("admin", "provincial_manager"))
     actor = _principal(db, world.admin_users[0].id)
     location = StockLocation(
         id=_id(1000),
@@ -369,9 +376,10 @@ def test_reservation_posts_inventory_and_recovers_exact_command(
             ledger_cursor=10,
         )
 
+    posting = Mock(side_effect=post_inventory)
     monkeypatch.setattr(
         "app.formal_services.material_request_reservation.post_inventory_transaction",
-        post_inventory,
+        posting,
     )
     reservation_input = ReservationCreateInput(
         request_line_id=line.id,
@@ -381,6 +389,43 @@ def test_reservation_posts_inventory_and_recovers_exact_command(
         source_ledger_cursor=9,
         serial_ids=serial_ids,
     )
+    if tamper in {"create_cross_scope", "create_deny", "create_scoped_deny"}:
+        denied_actor = actor
+        if tamper == "create_cross_scope":
+            other_region = _organization(db, "RESERVATION-OTHER-REGION", "region_company", parent=world.headquarters)
+            other_person = _person(db, other_region, "其他区域负责人")
+            other_user = _user(db, other_person)
+            _assignment(db, other_user, world.roles["provincial_manager"], scope_type="organization", scope_id=str(other_region.id), assigned_by=actor.user_id)
+            _grant(db, world, resource="inventory_transaction", action="post", roles=("provincial_manager",))
+            location.owner_org_id = source.owner_org_id = target.owner_org_id = other_region.id
+            db.flush()
+            denied_actor = _principal(db, other_user.id)
+            assert denied_actor.allows(db, "material_request", "read")
+            assert set(_authorize_account_ids(
+                db, denied_actor, (source.id, target.id), action="post", lock_rows=False,
+            )) == {source.id, target.id}
+            expected_code = "material_request_not_found"
+        else:
+            scoped = tamper == "create_scoped_deny"
+            _deny_request_read(db, world, actor, scoped=scoped)
+            if scoped:
+                denied_actor = _principal(db, actor.user_id)
+            expected_code = "material_request_not_found" if scoped else "material_request_read_forbidden"
+        with pytest.raises(MaterialRequestReservationError) as denied:
+            create_reservation(
+                db, actor=denied_actor, material_request_id=request.id,
+                expected_request_version=allocation.request_version, reservation=reservation_input,
+                idempotency_key="reservation-cross-scope-create", idempotency_hmac_secret=SECRET,
+                trace_request_id="reservation-cross-scope-create-trace",
+            )
+        assert denied.value.code == expected_code
+        assert denied.value.http_status_code == (404 if expected_code == "material_request_not_found" else 403)
+        posting.assert_not_called()
+        assert not db.scalars(select(StockReservation)).all()
+        assert not db.scalars(select(MaterialRequestCommand).where(MaterialRequestCommand.operation == "reserve")).all()
+        assert source_balance.version == 7
+        assert target_balance.quantity == Decimal("0.000")
+        return
     executed_selects = []
     def capture_select(orm_execute_state):
         if orm_execute_state.is_select:
@@ -494,6 +539,8 @@ def test_reservation_posts_inventory_and_recovers_exact_command(
         StateTransitionEvent.idempotency_key == f"reservation-state-{fact.idempotency_key_hash}"
     ))
     replay_input = reservation_input
+    verification_actor = actor
+    expected_error = "material_request_reservation_history_invalid"
     if tamper == "movement_quantity":
         movement.quantity += Decimal("0.001")
     elif tamper == "movement_source":
@@ -538,6 +585,18 @@ def test_reservation_posts_inventory_and_recovers_exact_command(
         original_contents = dict(audit.after_jsonb)
         audit.event_hash = "e" * 64
         assert audit.after_jsonb == original_contents
+    elif tamper in {"permission_deny_after_success", "scoped_deny_after_success"}:
+        scoped = tamper == "scoped_deny_after_success"
+        _deny_request_read(db, world, actor, scoped=scoped)
+        if scoped:
+            with pytest.raises(MaterialRequestReservationError) as stale_actor:
+                reservation_command_status(
+                    db, actor=actor, trace_request_id="reservation-real-chain-trace-0001"
+                )
+            assert stale_actor.value.code == "material_request_reservation_authorization_changed"
+            assert stale_actor.value.http_status_code == 412
+            verification_actor = _principal(db, actor.user_id)
+        expected_error = "material_request_not_found" if scoped else "material_request_read_forbidden"
     elif tamper in _SERIAL_HISTORY_CASES:
         if "reservation_serial" in tamper:
             evidence = db.get(StockReservationSerial, (result.reservation_id, allocation.allocation_id, serial_ids[0]))
@@ -567,17 +626,38 @@ def test_reservation_posts_inventory_and_recovers_exact_command(
     db.flush()
     with pytest.raises(MaterialRequestReservationError) as tampered:
         reservation_command_status(
-            db, actor=actor, trace_request_id="reservation-real-chain-trace-0001"
+            db, actor=verification_actor, trace_request_id="reservation-real-chain-trace-0001"
         )
-    assert tampered.value.code == "material_request_reservation_history_invalid"
+    assert tampered.value.code == expected_error
     with pytest.raises(MaterialRequestReservationError) as tampered_replay:
         create_reservation(
-            db, actor=actor, material_request_id=request.id,
+            db, actor=verification_actor, material_request_id=request.id,
             expected_request_version=allocation.request_version, reservation=replay_input,
             idempotency_key="reservation-real-chain-key-0001", idempotency_hmac_secret=SECRET,
             trace_request_id="reservation-tampered-replay-trace",
         )
-    assert tampered_replay.value.code == "material_request_reservation_history_invalid"
+    assert tampered_replay.value.code == expected_error
+    # Neither historical rejection path may post again, including when the
+    # caller still holds an old principal loaded before an explicit deny.
+    assert posting.call_count == 1
+
+
+def _deny_request_read(db, world, actor, *, scoped: bool):
+    role_code = "provincial_manager" if scoped else "admin"
+    if scoped:
+        _assignment(
+            db, world.admin_users[0], world.roles[role_code], scope_type="organization",
+            scope_id=str(world.region.id), assigned_by=actor.user_id,
+        )
+    permission = db.scalar(select(Permission).where(
+        Permission.resource == "material_request", Permission.action == "read", Permission.field_code == "",
+    ))
+    binding = db.scalar(select(RolePermission).where(
+        RolePermission.role_id == world.roles[role_code].id,
+        RolePermission.permission_id == permission.id,
+    ))
+    binding.effect = "deny"
+    db.flush()
 
 
 def _json_hash(value):
