@@ -240,3 +240,8 @@ git diff --name-only 4a6ec83b27f76f84d1d8fe2a9ded699c9b166349 HEAD
 新增正式路由 `POST /api/v1/work-orders/{work_order_id}/material-preflight`，只提供当前登录人员
 的只读预检结果；路由要求 `work_order_material:operate` 权限，并拒绝伪造操作人。它不会创建操作
 事实或改变库存，后续写入命令仍须在统一库存过账成功后调用事实写入服务。
+
+本批新增 `POST /api/v1/work-orders/{work_order_id}/material-operations`，接收操作类型、幂等键、
+整批明细和统一库存事务 ID，只接受已经 `posted` 的库存事务，再追加正式工单操作事实；同一幂等
+键可安全重放，绑定不同请求或不同库存事务时返回冲突。生产 App 导入仍由配置层要求真实
+PostgreSQL URL，未用占位数据库绕过门禁。
