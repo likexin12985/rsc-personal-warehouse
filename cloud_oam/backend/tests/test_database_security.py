@@ -7018,7 +7018,7 @@ def test_runtime_approval_function_selector_covers_every_manifest_family(
     _assert_valid_material_request_approval_catalog(monkeypatch, functions=selected)
 
 
-@pytest.mark.parametrize("suffix", ["0059", "0060"])
+@pytest.mark.parametrize("suffix", ["0059", "0060", "0069"])
 def test_runtime_approval_function_selector_does_not_hide_unknown_supply_function(
     monkeypatch: pytest.MonkeyPatch,
     suffix: str,
@@ -7101,8 +7101,8 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 77
-    assert len(functions) == 35
+    assert len(triggers) == 81
+    assert len(functions) == 37
     _assert_material_request_approval_guards(
         triggers=triggers,
         functions=functions,
@@ -7329,7 +7329,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
 ) -> None:
     query = " ".join(str(_MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL).split())
 
-    assert "trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060)$'" in query
+    assert "trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060|0069)$'" in query
     assert "function_row.proname IN" in query
     assert "AND NOT trigger_row.tgisinternal" in query
     assert "trigger_row.tgname IN" not in query
@@ -7343,6 +7343,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
         "trigger_row.tgattr",
     ):
         assert required_field in query
+
     for function_name in {
         expected[1]
         for expected in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.values()
@@ -7351,7 +7352,46 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
     assert {
         coordinate[0].rsplit("_", 1)[-1]
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
-    } == {"0029", "0030", "0045", "0046", "0059", "0060"}
+    } == {"0029", "0030", "0045", "0046", "0059", "0060", "0069"}
+
+
+def test_0069_reservation_guard_bodies_match_runtime_manifest(monkeypatch):
+    migration = _load_stock_reservations_migration_0069()
+    statements = []
+    monkeypatch.setattr(migration.op, "execute", statements.append)
+    migration._create_postgresql_reservation_guards()
+    functions = {}
+    for sql in statements:
+        if "CREATE FUNCTION public." in sql:
+            name = sql.split("CREATE FUNCTION public.", 1)[1].split("(", 1)[0]
+            body = sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+            functions[(name, "")] = hashlib.sha256(body.encode()).hexdigest()
+    assert functions == {
+        coordinate: body_hash
+        for coordinate, body_hash in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256.items()
+        if coordinate[0].endswith("_0069")
+    }
+    assert len(functions) == 2
+    assert set(functions) <= MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
+
+
+@pytest.mark.parametrize("name", [
+    "rsc_guard_stock_reservation_0069",
+    "rsc_guard_stock_reservation_serials_binding_0069",
+])
+@pytest.mark.parametrize(("field", "value"), [
+    ("source_body", "tampered reservation guard"),
+    ("is_security_definer", False),
+    ("owner_name", "star_oam_api"),
+    ("can_execute", True),
+    ("public_can_execute", True),
+    ("configuration", ["search_path=public"]),
+])
+def test_0069_reservation_catalog_rejects_drift(monkeypatch, name, field, value):
+    functions = _valid_material_request_approval_function_rows(monkeypatch)
+    next(row for row in functions if row["function_name"] == name)[field] = value
+    with pytest.raises(DatabaseSecurityBoundaryError, match=name):
+        _assert_valid_material_request_approval_catalog(monkeypatch, functions=functions)
 
 
 def test_0045_material_request_approval_migration_bindings_match_manifest(
@@ -7445,7 +7485,7 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         ): migration._projection_dispatcher_sql(),
     }
 
-    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 35
+    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 37
     assert set(function_sql) == {
         coordinate
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256

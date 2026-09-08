@@ -19048,7 +19048,7 @@ def _assert_0047_real_api_stocktake_start(
     actor_user_id: str,
     assignee_user_id: str,
     material_request_id: uuid.UUID,
-) -> tuple[uuid.UUID, int]:
+) -> tuple[uuid.UUID, int, dict[str, object]]:
     """Prove start guards, then finish only this stocktake's formal lifecycle."""
 
     from app.demand_models import MaterialRequest
@@ -19694,7 +19694,7 @@ def _assert_0047_real_api_stocktake_start(
         api_engine, fixture=fixture, actor_user_id=actor_user_id,
         assignee_user_id=assignee_user_id, idempotency_hmac_secret=secret,
     )
-    return task_id, terminal_version
+    return task_id, terminal_version, fixture
 
 
 def _assert_0047_rejects_nonempty_start_downgrade(
@@ -20797,6 +20797,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         (
             stocktake_task_id,
             _stocktake_task_version,
+            inventory_fixture,
         ) = _assert_0047_real_api_stocktake_start(
             api_engine,
             actor_user_id=admin_user_id,
@@ -20856,6 +20857,29 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
                     supply_event_key.downgrade()
         finally:
             migrator_engine.dispose()
+        assert _current_revision() == HEAD_REVISION
+        _validate_runtime_security(api_engine)
+        # Reservation facts must be created after historical downgrade probes,
+        # otherwise their 0069 blocker masks the older independent guards.
+        from pg16_reservation_gate import assert_reservation_gate
+
+        security_engine = create_engine(
+            _admin_sqlalchemy_url(), pool_size=1, max_overflow=0, pool_timeout=5,
+        )
+        try:
+            assert_reservation_gate(
+                api_engine, security_engine=security_engine,
+                source_request_id=request_id, manager_user_id=manager_user_id,
+                admin_user_id=admin_user_id, inventory_fixture=inventory_fixture,
+            )
+        finally:
+            security_engine.dispose()
+        blocked_reservation = _run_alembic(
+            "downgrade", "20260908_0068", expect_success=False,
+        )
+        assert "cannot downgrade 0069" in (
+            blocked_reservation.stdout + blocked_reservation.stderr
+        )
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
     finally:

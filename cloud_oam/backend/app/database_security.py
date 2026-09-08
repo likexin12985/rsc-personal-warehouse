@@ -1874,6 +1874,16 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
     **{
+        f"trg_{table_name}_{purpose}_0069": (
+            table_name, function_name, "A", trigger_type, False, False, False,
+        )
+        for table_name, function_name in (
+            ("stock_reservations", "rsc_guard_stock_reservation_0069"),
+            ("stock_reservation_serials", "rsc_guard_stock_reservation_serials_binding_0069"),
+        )
+        for purpose, trigger_type in (("binding", 7), ("immutable", 27))
+    },
+    **{
         f"trg_{table_name}_immutable_0029": (
             table_name,
             "rsc_guard_material_request_fact_immutable_0029",
@@ -2264,6 +2274,10 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
+    ("rsc_guard_stock_reservation_0069", ""):
+        "2907a15a3bd47c0a736a30cb6e26ebf844a070f1bec655d8068e27c61f32f631",
+    ("rsc_guard_stock_reservation_serials_binding_0069", ""):
+        "617c93f38efeec117c5f416ffc4108053d9a409450876419553d1b08db7920b0",
     ("rsc_guard_material_request_fact_immutable_0029", ""):
         "af27608187df58d0652ba6d425e06ef27b74fe8c9683a48a8033fc4695f1502b",
     ("rsc_guard_material_request_original_line_0029", ""):
@@ -2339,6 +2353,8 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ("rsc_guard_stock_reservation_0069", ""),
+        ("rsc_guard_stock_reservation_serials_binding_0069", ""),
         ("rsc_guard_material_request_file_0029", ""),
         ("rsc_dispatch_approval_causality_0030", ""),
         (
@@ -4713,7 +4729,7 @@ JOIN pg_namespace AS function_schema
   ON function_schema.oid = function_row.pronamespace
 WHERE table_schema.nspname = 'public'
   AND (
-      trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060)$'
+      trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060|0069)$'
       OR function_row.proname IN (
           {_MATERIAL_REQUEST_APPROVAL_TRIGGER_FUNCTION_LITERALS}
       )
@@ -5788,7 +5804,7 @@ def _select_material_request_approval_functions(
         for row in rows
         if isinstance(row.get("function_name"), str)
         and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060")
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069")
         )
     ]
 
