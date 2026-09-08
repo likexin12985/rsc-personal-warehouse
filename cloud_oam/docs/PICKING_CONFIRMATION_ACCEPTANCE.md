@@ -32,16 +32,23 @@ POST 必须携带需求版本、原占用、数量、源余额版本与流水游
 
 ## 验证
 
-当前代码提交：`c76ed4edbee304409bac58735cdc7a944a5a32c0`。
-[Client 门禁 34205609779](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34205609779)
+当前代码提交：`24a65cc1c90f70a302fc68b14a8d3ca0c5be7366`。
+[Client 门禁 34207781014](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34207781014)
 已通过：Web `976 passed`，小程序及门禁契约 `724 passed`，类型、构建和仓库安全检查通过。
-[PG16 门禁 34205609743](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34205609743)
-迁移锁竞争与历史迁移回归通过后，在正式拣货阶段发现 `outbound_status` 缺少列级更新授权。
+[PG16 门禁 34207780991](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/34207780991)
+完整通过，包含真实 PG16 迁移/权限/并发测试和后端与边缘安全回归。
+真库动态测试 `1 passed`（411.67 秒），后端/边缘回归 `2375 passed, 2 skipped`
+（964.75 秒）。真实数量及 SN 拣货、权限漂移、版本锁竞争、并发、恢复、回滚和非空降级
+检查均已执行通过；此证据只对应上述代码提交，不替代预生产或生产验收。
+
+验证中发现并修复的问题：`c76ed4e` 在迁移锁竞争与历史迁移回归通过后，
+于正式拣货阶段发现 `outbound_status` 缺少列级更新授权。
 已补齐 0071 的单列授权及空图降级撤权，并将权限加入精确运行时清单；真库同时验证缺权
-和越权授权 `shipment_status` 均拒绝启动。修复提交的完整 PG16 结果待重新执行后补录。
+和越权授权 `shipment_status` 均拒绝启动。该修复关联的本地回归 `334 passed`。
 `3406262` 随后通过普通数量拣货全链，但 SN 测试复用了已分配过的历史串码，触发既有
 全局分配唯一约束。测试改为在隔离 PG16 中创建独立合成 SN，并经真实库存内核入库后
 进行分配/占用/拣货；不改写历史分配、余额或 SN 投影，不放宽唯一约束。
+SN 夹具修正后，本地拣货及 0071 专项 `34 passed`。
 
 本地迁移、数据库安全目录、API 和拣货回归曾完成 `553 passed`；
 网页全量 `976 passed`（含拣货 32 项），类型和生产构建通过。
