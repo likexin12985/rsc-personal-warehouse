@@ -256,6 +256,7 @@ def _create_postgresql_guards():
 
 def source_changes():
     previous = _previous()
+    approval = previous["source_changes"]()[("rsc_validate_material_request_approval_projection_0045", "uuid")][0][1]
     old = previous["REQUEST_OUTBOUND_NEW"]
     new = old.replace("OLD.outbound_status NOT IN ('not_started', 'pending_pick')",
         "OLD.outbound_status NOT IN ('not_started', 'pending_pick', 'picked')").replace(
@@ -265,7 +266,7 @@ def source_changes():
     return {
         ("rsc_guard_material_request_identity_0029", ""): ((old, new),),
         ("rsc_validate_material_request_approval_projection_0045", "uuid"): (
-            ("'reserve', 'release', 'pick'", "'reserve', 'release', 'pick', 'outbound'"),),
+            (approval, approval.replace("'reserve', 'release', 'pick'", "'reserve', 'release', 'pick', 'outbound'")),),
         ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint"): (
             ("OR request_row.outbound_status NOT IN ('not_started', 'pending_pick', 'picked')",
              "OR request_row.outbound_status NOT IN ('not_started', 'pending_pick', 'picked', 'outbound')"),

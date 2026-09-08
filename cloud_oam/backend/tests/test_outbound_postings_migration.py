@@ -29,6 +29,19 @@ def test_outbound_guard_sources_match_runtime_and_parse(monkeypatch):
             parser.parse_plpgsql_json(statement)
 
 
+def test_outbound_source_replacements_are_unambiguous_in_both_directions():
+    migration = runpy.run_path(str(MIGRATION))
+    # The real source CAS rejects an already-present replacement. A prefix
+    # replacement can upgrade but cannot downgrade: the old fragment remains
+    # inside the new one. Keep complete statements in both directions.
+    for coordinate, pairs in migration["source_changes"]().items():
+        for before, after in pairs:
+            assert before not in after and after not in before, coordinate
+            upgraded = before.replace(before, after)
+            assert before not in upgraded
+            assert upgraded.replace(after, before) == before
+
+
 def test_outbound_table_metadata_matches_forward_migration(monkeypatch):
     from app.inventory_models import OutboundPosting, OutboundPostingSerial
     migration = runpy.run_path(str(MIGRATION))
