@@ -225,6 +225,7 @@ def _verify_posted_lines(db, *, transaction, operation_type, operator_person_id,
         location = db.get(StockLocation, account.location_id, populate_existing=True) if account else None
         if (account is None or account.material_id != line.material_id
                 or account.custodian_person_id != operator_person_id
+                or account.availability_bucket != {"occupy": "available", "consume": "reserved", "release": "reserved"}.get(operation_type, account.availability_bucket)
                 or account.condition_code != line.condition_before
                 or location is None or location.location_type != "personal"
                 or location.custodian_person_id != operator_person_id):
@@ -381,6 +382,45 @@ def execute_consume_operation(
         posting_transaction_id=posted.transaction_id,
         idempotency_key=idempotency_key,
     )
+    return operation, posted
+
+
+def execute_occupy_operation(
+    db: Session, *, actor: FormalPrincipal, work_order_id: UUID,
+    lines: tuple[WorkOrderMaterialLineInput, ...], idempotency_key: str,
+    request_id: str,
+) -> tuple[WorkOrderMaterialOperation, object]:
+    """Move exact personal-available stock into reserved stock."""
+    order, current = authorize_work_order(db, actor=actor, work_order_id=work_order_id,
+                                          action="operate", lock_rows=True)
+    if order.status != "active":
+        raise WorkOrderMaterialPreflightError("work_order_inactive", "工单当前不可执行新物料操作", "precondition_failed")
+    validate_batch(lines)
+    for line in lines:
+        if line.target_stock_account_id is None:
+            raise WorkOrderMaterialPreflightError("occupy_target_missing", "占用必须指定 reserved 目标账户", "invalid_request")
+        target = db.get(StockAccount, line.target_stock_account_id, populate_existing=True)
+        if (target is None or target.material_id != line.material_id
+                or target.custodian_person_id != current.person_id
+                or target.availability_bucket != "reserved"):
+            raise WorkOrderMaterialPreflightError("occupy_target_invalid", "占用目标不是当前人员的 reserved 账户", "conflict")
+    key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
+    command = InventoryPostingCommand(
+        transaction_no=f"INV-WO-OCCUPY-{key_hash[:20].upper()}", movement_type="reserve",
+        source_document_type="work_order_material", source_document_id=str(work_order_id),
+        posting_key=f"work-order-material:occupy:{work_order_id}:{key_hash}",
+        effective_at=datetime.now(timezone.utc),
+        movements=tuple(InventoryMovementCommand(
+            from_account_id=line.stock_account_id, to_account_id=line.target_stock_account_id,
+            quantity=line.quantity, serial_ids=line.serial_ids,
+        ) for line in lines),
+    )
+    posted = post_inventory_transaction(db, actor=current, command=command,
+        idempotency_key=f"work-order-material:occupy:{idempotency_key}", request_id=request_id)
+    operation = record_posted_operation(
+        db, actor=current, operation_type="occupy", work_order_id=work_order_id,
+        operator_person_id=current.person_id, lines=lines,
+        posting_transaction_id=posted.transaction_id, idempotency_key=idempotency_key)
     return operation, posted
 
 

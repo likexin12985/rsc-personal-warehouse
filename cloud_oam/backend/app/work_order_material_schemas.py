@@ -78,6 +78,10 @@ class WorkOrderMaterialReleaseIn(StrictInput):
     request_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class WorkOrderMaterialOccupyIn(WorkOrderMaterialReleaseIn):
+    pass
+
+
 class WorkOrderMaterialOperationHistoryOut(BaseModel):
     schema_version: str = "1.0"
     items: tuple[WorkOrderMaterialOperationOut, ...]

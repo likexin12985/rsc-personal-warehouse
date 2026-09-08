@@ -44,6 +44,7 @@ def evidence(db, world):
         for action in ("read", "operate")))
     account = make_account(db, organization=world.organization, material=world.material,
                            custodian=world.person, established=False)
+    account.availability_bucket = "reserved"
     location = db.get(StockLocation, account.location_id)
     parent = StockLocation(id=uuid4(), code=str(uuid4()), name="区域仓",
                            location_type="region", owner_org_id=world.organization.id, status="active")
