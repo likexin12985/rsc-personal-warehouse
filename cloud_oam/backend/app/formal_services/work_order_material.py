@@ -19,6 +19,7 @@ from ..demand_models import (
     OamWorkOrder, WorkOrderMaterialLine, WorkOrderMaterialOperation,
     WorkOrderMaterialSerial,
 )
+from ..foundation_models import OutboxEvent
 from ..inventory_models import (
     FormalMaterial, InventorySerial, InventoryTransaction, SerialCurrentPosition,
     StockAccount, StockLocation, InventoryMovement, InventoryMovementSerial,
@@ -29,6 +30,7 @@ from .inventory_posting import (
     _require_current_actor, post_inventory_transaction,
 )
 from .postgresql_lock_graph import lock_material_request_work_order
+from .audit_chain import append_audit_event
 
 
 class WorkOrderMaterialPreflightError(InventoryPostingError):
@@ -331,6 +333,22 @@ def record_posted_operation(
                 operation_line_id=line.id, serial_id=serial_id,
                 sku_verified=True, qr_verified=True,
             ))
+    occurred_at = datetime.now(timezone.utc)
+    append_audit_event(
+        db, stream_key="material_request", actor_user_id=current.user_id,
+        action=f"work_order_material.{operation_type}", aggregate_type="work_order_material_operation",
+        aggregate_id=str(operation.id), before_jsonb={},
+        after_jsonb={"work_order_id": str(work_order_id), "operation_type": operation_type,
+                     "posting_transaction_id": str(posting_transaction_id), "line_count": len(lines)},
+        request_id=f"work-order-material:{key_hash}", occurred_at=occurred_at, created_at=occurred_at,
+    )
+    db.add(OutboxEvent(
+        event_type="work_order_material_operation_posted", aggregate_type="work_order_material_operation",
+        aggregate_id=str(operation.id), payload_jsonb={"work_order_id": str(work_order_id),
+            "operation_type": operation_type, "operation_no": operation.operation_no,
+            "posting_transaction_id": str(posting_transaction_id)}, status="pending", attempts=0,
+        idempotency_key=f"work-order-material-operation:{operation.id}", available_at=occurred_at,
+    ))
     return operation
 
 

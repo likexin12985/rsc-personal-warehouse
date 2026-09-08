@@ -16,7 +16,7 @@ from sqlalchemy.pool import StaticPool
 
 from test_inventory_posting import world, NOW, make_account
 from app.demand_models import OamWorkOrder, WorkOrderMaterialOperation, WorkOrderMaterialSerial
-from app.foundation_models import ExternalObject
+from app.foundation_models import AuditChainHead, ExternalObject
 from app.inventory_models import (InventoryTransaction, InventoryMovement, InventoryMovementSerial,
                                   InventorySerial, StockLocation)
 from app.formal_services import work_order_material as service
@@ -42,6 +42,9 @@ def evidence(db, world):
     world.current_principal = replace(world.principal, entitlements=world.principal.entitlements + tuple(
         replace(world.principal.entitlements[0], resource="work_order_material", action=action)
         for action in ("read", "operate")))
+    db.add(AuditChainHead(id=uuid4(), stream_key="material_request",
+                          last_event_id=None, last_hash=None, version=0))
+    db.flush()
     account = make_account(db, organization=world.organization, material=world.material,
                            custodian=world.person, established=False)
     account.availability_bucket = "reserved"
