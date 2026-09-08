@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from ..demand_models import MaterialRequest
 from ..inventory_models import Shipment, ShipmentLine, ShipmentSerial, OutboundPosting, Receipt, ReceiptLine, ReceiptSerial
 from .audit_chain import append_audit_event
+from . import material_request_outbound as outbound
 
 class ReceiptError(Exception):
     def __init__(self, code, category, message): self.code, self.category, self.message = code, category, message
@@ -61,4 +62,8 @@ def list_receipts(db, *, actor, request_id):
     if request is None: _fail("not_found", "not_found", "需求单不存在")
     shipment_ids = select(Shipment.id).join(ShipmentLine, ShipmentLine.shipment_id == Shipment.id).join(OutboundPosting, OutboundPosting.id == ShipmentLine.outbound_posting_id).where(OutboundPosting.request_id == request_id)
     rows = tuple(db.scalars(select(Receipt).where(Receipt.shipment_id.in_(shipment_ids)).order_by(Receipt.created_at, Receipt.id)).all())
+    for row in rows:
+        source_ids = tuple(db.scalars(select(OutboundPosting.source_stock_account_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).where(ShipmentLine.shipment_id == row.shipment_id)).all())
+        if source_ids:
+            outbound._authorize_account_ids(db, actor, source_ids, action="read", resource="inventory", lock_rows=False)
     return tuple(_result(db, row, replayed=False) for row in rows)
