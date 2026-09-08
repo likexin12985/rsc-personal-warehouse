@@ -52,5 +52,8 @@ def list_events(db, *, actor, request_id, shipment_id):
     if shipment is None: _fail("shipment_not_found", "not_found", "发运单不存在")
     belongs = db.scalar(select(OutboundPosting.request_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).where(ShipmentLine.shipment_id == shipment_id))
     if belongs != request_id: _fail("shipment_request_mismatch", "conflict", "发运单不属于当前需求")
+    source_ids = tuple(db.scalars(select(OutboundPosting.source_stock_account_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).where(ShipmentLine.shipment_id == shipment_id)).all())
+    if not source_ids: _fail("source_missing", "conflict", "发运缺少来源库存账户")
+    outbound._authorize_account_ids(db, actor, source_ids, action="read", resource="inventory", lock_rows=False)
     rows = tuple(db.scalars(select(LogisticsEvent).where(LogisticsEvent.shipment_id == shipment_id).order_by(LogisticsEvent.event_at, LogisticsEvent.created_at, LogisticsEvent.id)).all())
     return tuple(_result(row, False) for row in rows)
