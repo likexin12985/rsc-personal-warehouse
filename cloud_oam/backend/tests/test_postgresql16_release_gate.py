@@ -68,9 +68,9 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = STOCK_RESERVATIONS_REVISION
+HEAD_REVISION = "20260910_0070"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
-RUNTIME_READY_HEAD_REVISION = STOCK_RESERVATIONS_REVISION
+RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
     {
         STOCKTAKE_POSTING_COMMAND_OUTCOMES_REVISION,
@@ -101,7 +101,7 @@ HARDENED_HEAD_REVISIONS = frozenset(
         STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
         STOCKTAKE_POSTING_SEAL_RACE_REVISION,
         STOCK_ALLOCATIONS_REVISION,
-        STOCK_RESERVATIONS_REVISION,
+        STOCK_RESERVATIONS_REVISION, HEAD_REVISION,
     }
 )
 FINALIZER_LOCK_REVISIONS = frozenset(
@@ -112,7 +112,7 @@ FINALIZER_LOCK_REVISIONS = frozenset(
         STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
         STOCKTAKE_POSTING_SEAL_RACE_REVISION,
         STOCK_ALLOCATIONS_REVISION,
-        STOCK_RESERVATIONS_REVISION,
+        STOCK_RESERVATIONS_REVISION, HEAD_REVISION,
     }
 )
 OPENING_BACKFILL_DATABASE_PREFIX = f"{DATABASE_NAME}_0052_backfill_"
@@ -4768,7 +4768,7 @@ def _expected_0049_function_body_sha256(
                 STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
                 STOCKTAKE_POSTING_SEAL_RACE_REVISION,
                 STOCK_ALLOCATIONS_REVISION,
-                STOCK_RESERVATIONS_REVISION,
+                STOCK_RESERVATIONS_REVISION, HEAD_REVISION,
             }
         )
     assert expected_revision in (
@@ -4810,7 +4810,7 @@ def _expected_0049_function_body_sha256(
             STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
             STOCKTAKE_POSTING_SEAL_RACE_REVISION,
             STOCK_ALLOCATIONS_REVISION,
-            STOCK_RESERVATIONS_REVISION,
+            STOCK_RESERVATIONS_REVISION, HEAD_REVISION,
         }
         and signature == migration.ROUND_ASSIGNMENT_HELPER_0021_SIGNATURE
     ):
@@ -4830,7 +4830,7 @@ def _expected_0049_function_body_sha256(
                               STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
                               STOCKTAKE_POSTING_SEAL_RACE_REVISION,
                               STOCK_ALLOCATIONS_REVISION,
-                              STOCK_RESERVATIONS_REVISION}
+                              STOCK_RESERVATIONS_REVISION, HEAD_REVISION}
         and signature == migration.REVIEW_GRAPH_VALIDATOR_0032_SIGNATURE
     ):
         terminal_migration = (
@@ -4991,7 +4991,7 @@ def _assert_0049_recount_guard_catalog(
             STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
             STOCKTAKE_POSTING_SEAL_RACE_REVISION,
             STOCK_ALLOCATIONS_REVISION,
-            STOCK_RESERVATIONS_REVISION,
+            STOCK_RESERVATIONS_REVISION, HEAD_REVISION,
         }
     expected_function_rows = []
     for (
@@ -5565,7 +5565,7 @@ def _assert_0052_opening_terminal_catalog(
                             STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
                             STOCKTAKE_POSTING_SEAL_RACE_REVISION,
                             STOCK_ALLOCATIONS_REVISION,
-                            STOCK_RESERVATIONS_REVISION,
+                            STOCK_RESERVATIONS_REVISION, HEAD_REVISION,
                         }
                         and row[0]
                         == dispatch_migration.GRAPH_CLOSURE_SIGNATURE
@@ -5589,7 +5589,7 @@ def _assert_0052_opening_terminal_catalog(
                             STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION,
                             STOCKTAKE_POSTING_SEAL_RACE_REVISION,
                             STOCK_ALLOCATIONS_REVISION,
-                            STOCK_RESERVATIONS_REVISION,
+                            STOCK_RESERVATIONS_REVISION, HEAD_REVISION,
                         }
                         and row[0]
                         == history_migration.ROUND_SUBMISSION_SIGNATURE
@@ -7364,7 +7364,10 @@ def _load_stock_reservations_migration_0069():
 
 
 def _head_runtime_ready_hash() -> str:
-    return _load_stock_reservations_migration_0069().RUNTIME_READY_BODY_SHA256_0069
+    import runpy
+    return runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
+        "20260910_0070_stock_reservation_releases.py"
+    )))["RUNTIME_READY_BODY_SHA256_0070"]
 
 
 def _assert_0058_review_terminal_catalog_state(
@@ -20883,6 +20886,19 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         assert "cannot downgrade 0069" in (
             blocked_reservation.stdout + blocked_reservation.stderr
         )
+        assert _current_revision() == HEAD_REVISION
+        _validate_runtime_security(api_engine)
+        from pg16_reservation_release_gate import assert_release_gate
+        security_engine = create_engine(_admin_sqlalchemy_url(), pool_size=1, max_overflow=0, pool_timeout=5)
+        try:
+            _reveal_pg16_service_database_error(api_engine, lambda: assert_release_gate(
+                api_engine, security_engine=security_engine, admin_user_id=admin_user_id,
+                inventory_fixture=inventory_fixture,
+            ))
+        finally:
+            security_engine.dispose()
+        blocked_release = _run_alembic("downgrade", STOCK_RESERVATIONS_REVISION, expect_success=False)
+        assert "cannot downgrade 0070" in blocked_release.stdout + blocked_release.stderr
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
     finally:

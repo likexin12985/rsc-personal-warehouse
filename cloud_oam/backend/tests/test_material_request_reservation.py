@@ -33,6 +33,7 @@ from app.formal_services.material_request_reservation import (
 from app.foundation_models import AuditEvent, Permission, RolePermission, StateTransitionEvent
 from app.inventory_models import (
     InventoryMovement,
+    InventoryLedgerHead,
     InventoryMovementSerial,
     InventorySerial,
     InventoryTransaction,
@@ -188,6 +189,8 @@ def test_reservation_posts_inventory_and_recovers_exact_command(
     approval_db, monkeypatch, serial_mode, tamper
 ):
     db = approval_db
+    from app.formal_services.inventory_posting import INVENTORY_LEDGER_HEAD_ID
+    db.add(InventoryLedgerHead(id=INVENTORY_LEDGER_HEAD_ID, stream_key="inventory", next_cursor=10))
     world, request, line, expected_version = _approved_request(
         db, key="reservation-real-chain"
     )

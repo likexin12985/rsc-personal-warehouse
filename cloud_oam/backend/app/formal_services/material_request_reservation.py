@@ -51,6 +51,7 @@ from .inventory_posting import (
     post_inventory_transaction,
     _posting_document,
     _storage_hash,
+    _lock_inventory_ledger_head_for_atomic_batch,
 )
 
 
@@ -380,9 +381,9 @@ def _create_reservation_impl(
         }
     )
 
-    # The request row and principal graph are the business serialization
-    # points.  Inventory posting later takes the global ledger/account locks in
-    # its prescribed order; we do not pre-lock an account on PostgreSQL.
+    # Keep the ledger -> principal -> request order shared with release and
+    # stocktake. No immutable fact or SELECT-only account is row-locked here.
+    _lock_inventory_ledger_head_for_atomic_batch(db)
     lock_formal_principal_graph(db, (actor.user_id,))
     user = db.scalar(select(User).where(User.id == actor.user_id).with_for_update())
     if (
@@ -641,30 +642,9 @@ def _create_reservation_impl(
         )
     db.flush()
 
-    approved_total = db.scalar(
-        select(
-            func.coalesce(
-                func.sum(MaterialRequestLine.final_approved_qty - MaterialRequestLine.cancelled_qty),
-                0,
-            )
-        ).where(
-            MaterialRequestLine.request_id == request_id,
-            MaterialRequestLine.revision_no == request.revision_no,
-            MaterialRequestLine.status.in_(("approved", "partially_approved")),
-        )
-    ) or _ZERO
-    reserved_total = db.scalar(
-        select(func.coalesce(func.sum(StockReservation.reserved_qty), 0)).where(
-            StockReservation.request_id == request_id,
-            StockReservation.status == _RESERVATION_STATUS,
-        )
-    ) or _ZERO
+    from .material_request_reservation_release import reservation_state
     previous_status = request.reservation_status
-    aggregate_status = (
-        "reserved"
-        if reserved_total >= approved_total and approved_total > 0
-        else "pending"
-    )
+    aggregate_status = reservation_state(db, request)
     # 0069's request guard is a BEFORE UPDATE trigger.  Insert the immutable
     # command first so the subsequent aggregate update can prove its exact
     # target version and reservation fact without a trigger bypass.
@@ -983,7 +963,7 @@ def _verified_history(
         or not isinstance(axes, dict) or set(axes) != set(_state_axes(request))
         or any(type(value) is not str for value in axes.values())
         or axes.get("request_status") not in {"approved", "partially_approved"}
-        or axes.get("reservation_status") not in {"pending", "reserved"}
+        or axes.get("reservation_status") not in {"pending", "reserved", "partially_released"}
     ):
         _history_invalid()
     try:

@@ -54,6 +54,12 @@ from ..formal_services import material_request_query as query_service
 from ..formal_services import material_request_supply as supply_service
 from ..formal_services import material_request_supply_command_status as supply_status_service
 from ..formal_services import material_request_reservation as reservation_service
+from ..formal_services import material_request_reservation_release as release_service
+from ..formal_services import material_request_reservation_release_options as release_options_service
+from ..material_request_reservation_release_schemas import (
+    ReservationReleaseIn, ReservationReleaseOut, ReservationReleaseStatusOut,
+    ReservationReleaseOptionsOut,
+)
 from ..formal_services import material_request_reservation_options as reservation_options_service
 from ..formal_services.material_request_contact import (
     MaterialRequestContactCipher,
@@ -635,6 +641,66 @@ def create_formal_material_request_reservation(
             state_axes=dict(result.state_axes),
             idempotency_replayed=result.replayed,
         )
+        db.commit()
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+    _set_read_no_store(response)
+    _set_replay_header(response, output.idempotency_replayed)
+    return output
+
+
+@command_status_router.get("/material-request-reservation-release-command-status", response_model=ReservationReleaseStatusOut)
+def formal_material_request_release_status(
+    response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    trace = _required_safe_header("X-Request-ID", request_id, minimum=8, maximum=160)
+    _set_read_no_store(response)
+    try:
+        result = release_service.release_command_status(db, actor=principal, trace_request_id=trace)
+        return ReservationReleaseStatusOut(lookup_status="confirmed" if result else "not_observed", command=result)
+    except reservation_service.MaterialRequestReservationError as exc:
+        _raise_service_error(exc, no_store=True)
+    except (ValidationError, DBAPIError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.get("/{material_request_id}/reservation-release-options", response_model=ReservationReleaseOptionsOut)
+def formal_material_request_release_options(
+    material_request_id: UUID, request_line_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    try:
+        return release_options_service.list_release_options(db, actor=principal,
+            material_request_id=material_request_id, request_line_id=request_line_id)
+    except reservation_service.MaterialRequestReservationError as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.post("/{material_request_id}/reservation-releases", response_model=ReservationReleaseOut, status_code=201)
+def create_formal_material_request_release(
+    material_request_id: UUID, payload: ReservationReleaseIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
+    try:
+        secret = _require_lifecycle_write_runtime(runtime_settings)
+        result = release_service.create_release(db, actor=principal, material_request_id=material_request_id,
+            expected_request_version=payload.expected_request_version,
+            release=release_service.ReservationReleaseInput(**payload.model_dump(exclude={"expected_request_version"})),
+            idempotency_key=key, idempotency_hmac_secret=secret, trace_request_id=trace)
+        output = ReservationReleaseOut(**result)
         db.commit()
     except Exception as exc:
         _rollback_and_raise(db, exc)

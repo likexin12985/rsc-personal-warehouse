@@ -115,8 +115,8 @@ class ReservationMutationOut(BaseModel):
         # One reservation fact can cover only part of the approved demand.
         # The fact itself is always ``reserved``; the aggregate axis remains
         # ``pending`` until every current approved line is covered.
-        if self.state_axes.reservation_status not in {"pending", "reserved"}:
-            raise ValueError("reservation state axis must be pending or reserved")
+        if self.state_axes.reservation_status not in {"pending", "reserved", "partially_released"}:
+            raise ValueError("reservation state axis must match current reservation and release facts")
         return self
 
 
