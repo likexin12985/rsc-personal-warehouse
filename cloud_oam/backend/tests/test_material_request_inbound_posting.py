@@ -120,6 +120,7 @@ def test_same_command_replay_returns_same_transaction_without_duplicate_binding(
     result = post(world)
     assert result["inventory_transaction_id"] == world.first["inventory_transaction_id"]
     assert result["replayed"] is True
+    assert world.order.posting_transaction_id == world.first["inventory_transaction_id"]
     assert world.order.status == "posted"
     assert world.request.personal_inbound_status == "posted"
     assert world.db.scalar(select(func.count()).select_from(AuditEvent).where(
@@ -127,6 +128,49 @@ def test_same_command_replay_returns_same_transaction_without_duplicate_binding(
     assert world.db.scalar(select(func.count()).select_from(OutboxEvent).where(
         OutboxEvent.event_type == "personal_inbound_posted")) == 1
     assert snapshot(world) == before
+
+
+def test_first_post_binds_order_to_inventory_transaction(inbound_world):
+    world = inbound_world
+
+    assert world.order.status == "posted"
+    assert world.order.posting_transaction_id == world.first["inventory_transaction_id"]
+
+
+def test_failed_first_post_rolls_back_order_transaction_binding(inbound_world, monkeypatch):
+    world = inbound_world
+    existing = world.db.scalar(
+        select(InboundPosting).where(InboundPosting.inbound_order_id == world.order.id)
+    )
+    world.db.delete(existing)
+    world.order.status = "pending"
+    world.order.posting_transaction_id = None
+    world.db.flush()
+
+    transaction_id = uuid4()
+    monkeypatch.setattr(
+        inbound,
+        "post_inventory_transaction",
+        lambda *args, **kwargs: SimpleNamespace(transaction_id=transaction_id, replayed=False),
+    )
+
+    def fail_audit(*args, **kwargs):
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr(inbound, "append_audit_event", fail_audit)
+    savepoint = world.db.begin_nested()
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        post(world, idempotency_key="inbound-first-failure-0002")
+    savepoint.rollback()
+    world.db.expire_all()
+    refreshed = world.db.get(InboundOrder, world.order.id)
+    assert refreshed.posting_transaction_id is None
+    assert refreshed.status == "pending"
+    assert world.db.scalar(
+        select(func.count()).select_from(InboundPosting).where(
+            InboundPosting.inbound_order_id == world.order.id
+        )
+    ) == 0
 
 
 def test_posted_order_cannot_be_replayed_through_another_existing_request(inbound_world):

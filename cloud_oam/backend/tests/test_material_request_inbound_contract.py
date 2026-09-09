@@ -34,7 +34,7 @@ def test_inbound_target_must_match_shipment_destination():
 
 
 def test_inbound_posting_skips_rejected_only_receipt_lines(monkeypatch):
-    order = SimpleNamespace(id=ID, receipt_id=ID, target_location_id=ID, target_person_id=ID, created_at=None)
+    order = SimpleNamespace(id=ID, receipt_id=ID, target_location_id=ID, target_person_id=ID, posting_transaction_id=None, created_at=None)
     receipt = SimpleNamespace(id=ID, shipment_id=ID, status="exception")
     accepted = SimpleNamespace(id=UUID("22222222-2222-2222-2222-222222222222"), shipment_line_id=ID, accepted_qty=Decimal("2.000"))
     rejected = SimpleNamespace(id=UUID("33333333-3333-3333-3333-333333333333"), shipment_line_id=UUID("44444444-4444-4444-4444-444444444444"), accepted_qty=Decimal("0.000"))
@@ -72,7 +72,7 @@ def test_inbound_posting_skips_rejected_only_receipt_lines(monkeypatch):
 
 
 def test_inbound_posting_rejects_receipt_with_no_accepted_quantity(monkeypatch):
-    order = SimpleNamespace(id=ID, receipt_id=ID, target_location_id=ID, target_person_id=ID, created_at=None)
+    order = SimpleNamespace(id=ID, receipt_id=ID, target_location_id=ID, target_person_id=ID, posting_transaction_id=None, created_at=None)
     receipt = SimpleNamespace(id=ID, shipment_id=ID, status="exception")
     rejected = SimpleNamespace(id=UUID("33333333-3333-3333-3333-333333333333"), shipment_line_id=ID, accepted_qty=Decimal("0.000"))
 

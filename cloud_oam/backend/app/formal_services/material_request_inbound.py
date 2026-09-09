@@ -123,7 +123,17 @@ def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idem
     if existing is not None:
         if existing.inventory_transaction_id != result.transaction_id:
             _fail("posting_mismatch", "conflict", "入账事实与库存事务不一致")
-    else:
+    if (
+        order.posting_transaction_id is not None
+        and order.posting_transaction_id != result.transaction_id
+    ):
+        _fail("posting_mismatch", "conflict", "入账单绑定的库存事务不一致")
+    # Keep the mutable read projection bound to the same immutable inventory
+    # transaction as InboundPosting.  This assignment is part of the caller's
+    # transaction, so a later audit/outbox failure rolls it back together with
+    # the posting binding.  Replays assign the same UUID and remain idempotent.
+    order.posting_transaction_id = result.transaction_id
+    if existing is None:
         db.add(InboundPosting(id=uuid.uuid4(), inbound_order_id=order.id, inventory_transaction_id=result.transaction_id, created_at=datetime.now(timezone.utc)))
         now = datetime.now(timezone.utc)
         append_audit_event(
