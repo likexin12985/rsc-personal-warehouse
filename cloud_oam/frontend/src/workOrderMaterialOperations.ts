@@ -3,6 +3,8 @@ import { apiNoReplay, ApiError, jsonBody } from "./api";
 const UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const COORDINATE = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/;
 const DECIMAL = /^(?:0|[1-9]\d{0,14})(?:\.\d{1,3})?$/;
+const OPERATION_TYPES = new Set(["consume", "release", "occupy", "recover"]);
+const OPERATION_STATUSES = new Set(["posted", "replayed"]);
 
 export type WorkOrderMaterialOperation = "consume" | "release" | "occupy" | "recover";
 export type SerialVerification = Readonly<{ serial_id: string; sku_code: string; serial_no: string; qr_code: string }>;
@@ -62,7 +64,10 @@ export function validateWorkOrderMaterialOperationInput(value: unknown, operatio
 export function validateWorkOrderMaterialOperationResult(value: unknown): WorkOrderMaterialOperationResult {
   const object = exact(value, ["operation_id", "operation_no", "work_order_id", "posting_transaction_id", "operation_type", "status", "schema_version"]);
   if (object.schema_version !== "1.0") return fail("工单物料响应版本无效");
-  return { schema_version: "1.0", operation_id: id(object.operation_id, "operation_id"), operation_no: text(object.operation_no, "operation_no", 80), work_order_id: id(object.work_order_id, "work_order_id"), posting_transaction_id: id(object.posting_transaction_id, "posting_transaction_id"), operation_type: text(object.operation_type, "operation_type", 32), status: text(object.status, "status", 32) };
+  const operationType = text(object.operation_type, "operation_type", 32);
+  const status = text(object.status, "status", 32);
+  if (!OPERATION_TYPES.has(operationType) || !OPERATION_STATUSES.has(status)) return fail("工单物料响应状态无效");
+  return { schema_version: "1.0", operation_id: id(object.operation_id, "operation_id"), operation_no: text(object.operation_no, "operation_no", 80), work_order_id: id(object.work_order_id, "work_order_id"), posting_transaction_id: id(object.posting_transaction_id, "posting_transaction_id"), operation_type: operationType, status };
 }
 
 export function validateWorkOrderMaterialOperationHistory(value: unknown): WorkOrderMaterialOperationHistory {
