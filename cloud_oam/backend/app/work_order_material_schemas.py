@@ -40,8 +40,11 @@ class WorkOrderMaterialPreflightOut(BaseModel):
     status: Literal["coordinates_validated"] = "coordinates_validated"
 
 
+WorkOrderMaterialOperationType = Literal["occupy", "release", "consume", "recover", "reverse"]
+
+
 class WorkOrderMaterialOperationIn(WorkOrderMaterialPreflightIn):
-    operation_type: Literal["occupy", "release", "consume", "recover", "reverse"]
+    operation_type: WorkOrderMaterialOperationType
     posting_transaction_id: UUID
     idempotency_key: str = Field(min_length=1, max_length=200)
     replacement_pairs: tuple["WorkOrderReplacementPairIn", ...] = ()
@@ -58,7 +61,7 @@ class WorkOrderMaterialOperationOut(BaseModel):
     operation_no: str
     work_order_id: UUID
     posting_transaction_id: UUID
-    operation_type: Literal["occupy", "release", "consume", "recover", "reverse"]
+    operation_type: WorkOrderMaterialOperationType
     status: Literal["posted"]
 
 
