@@ -406,3 +406,15 @@ Web 工单详情新增“物料履约”页签，使用正式工单物料历史�
 
 本批前端页面回归为 `55 files / 1029 tests passed`，后端工单路由与预检回归为 `31 passed`，生产构建和
 仓库安全检查通过；仍不替代 PostgreSQL 16 真库门禁。
+
+## 7.19 PG16 readiness head 修复（2026-09-09）
+
+GitHub 付款方式更新后，Client gate 已在真实 runner 通过；PG16 gate 首次实际执行暴露出
+`rsc_oam_runtime_binding_ready_0044()` 仍固定检查 `20260912_0072`，而 Alembic head 已到
+`20260918_0078`，导致 `edge_inbox` 与 `star_oam_projector` 的绑定就绪检查错误失败。
+新增 `20260919_0079` 只推进该 readiness marker，保留函数 OID、owner、ACL、SECURITY DEFINER、
+search_path 和精确 prosrc SHA 校验；降级直接恢复稳定的 0072 marker，以保证继续回退到历史
+0072 migration 时仍可验证。运行时安全 manifest 和 PG16/Alembic head 常量已同步到 0079。
+
+本批本地验证：readiness 专项 `3 passed、1 skipped`；迁移与 OAM 投影安全回归 `182 passed`。
+真实 PostgreSQL 16 并发 gate 已具备重跑条件，尚未把云端重跑结果写成通过证据。
