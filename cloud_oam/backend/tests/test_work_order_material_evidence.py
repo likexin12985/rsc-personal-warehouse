@@ -352,8 +352,12 @@ def test_atomic_recover_posts_external_to_personal_available(db, evidence, monke
     calls = []
     monkeypatch.setattr(service, "post_inventory_transaction",
                         lambda db, **kwargs: (calls.append(kwargs["command"]) or posted))
-    monkeypatch.setattr(service, "record_posted_operation",
-                        lambda db, **kwargs: (calls.append(kwargs["operation_type"]) or operation))
+    def fake_record(db, **kwargs):
+        calls.append(kwargs["operation_type"])
+        assert kwargs["lines"][0].stock_account_id == target.id
+        assert kwargs["lines"][0].target_stock_account_id is None
+        return operation
+    monkeypatch.setattr(service, "record_posted_operation", fake_record)
     line = replace(evidence.line, target_stock_account_id=target.id)
     result, transaction = service.execute_recover_operation(
         db, actor=evidence.world.current_principal, work_order_id=evidence.order.id,

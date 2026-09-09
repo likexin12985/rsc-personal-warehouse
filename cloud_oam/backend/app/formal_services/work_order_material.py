@@ -5,7 +5,7 @@ commands must use the unified posting service in the same caller transaction.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
@@ -526,9 +526,14 @@ def execute_recover_operation(
         db, actor=current, command=command,
         idempotency_key=f"work-order-material:recover:{idempotency_key}", request_id=request_id,
     )
+    # Historical recover facts bind their stock account to the inventory
+    # movement's destination. Keep the transport target in the command input,
+    # then record the canonical destination account in the immutable fact.
+    recorded_lines = tuple(replace(line, stock_account_id=line.target_stock_account_id,
+                                    target_stock_account_id=None) for line in lines)
     operation = record_posted_operation(
         db, actor=current, operation_type="recover", work_order_id=work_order_id,
-        operator_person_id=current.person_id, lines=lines,
+        operator_person_id=current.person_id, lines=recorded_lines,
         posting_transaction_id=posted.transaction_id, idempotency_key=idempotency_key,
     )
     return operation, posted
