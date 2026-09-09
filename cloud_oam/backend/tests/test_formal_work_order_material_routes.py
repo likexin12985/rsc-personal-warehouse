@@ -104,6 +104,13 @@ def test_openapi_binds_release_and_recover_to_their_own_models(http):
         assert schema["$ref"] == f"#/components/schemas/{model}"
 
 
+def test_openapi_constrains_operation_response_enums(http):
+    output = http.app.openapi()["components"]["schemas"]["WorkOrderMaterialOperationOut"]
+    assert output["properties"]["operation_type"]["enum"] == ["occupy", "release", "consume", "recover", "reverse"]
+    status = output["properties"]["status"]
+    assert status.get("enum", [status.get("const")]) == ["posted"]
+
+
 def test_recover_database_failure_rolls_back_without_success_response(http, monkeypatch):
     monkeypatch.setattr(api.service, "execute_recover_operation", Mock(side_effect=SQLAlchemyError("private detail")))
     response = http.client.post(path_for(http, "recover"), json=payload_for(http, "recover"))
