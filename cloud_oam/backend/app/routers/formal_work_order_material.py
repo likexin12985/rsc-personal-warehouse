@@ -19,6 +19,7 @@ from ..work_order_material_schemas import (
     WorkOrderMaterialConsumeIn,
     WorkOrderMaterialReleaseIn,
     WorkOrderMaterialOccupyIn,
+    WorkOrderMaterialRecoverIn,
     WorkOrderMaterialOperationHistoryOut,
 )
 
@@ -70,7 +71,7 @@ def execute_material_consume(
 
 @router.post("/{work_order_id}/material-operations/release", response_model=WorkOrderMaterialOperationOut)
 def execute_material_release(
-    work_order_id: UUID, payload: WorkOrderMaterialReleaseIn,
+    work_order_id: UUID, payload: WorkOrderMaterialRecoverIn,
     principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")),
     db: Session = Depends(get_db), request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):

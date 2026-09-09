@@ -82,6 +82,11 @@ class WorkOrderMaterialOccupyIn(WorkOrderMaterialReleaseIn):
     pass
 
 
+class WorkOrderMaterialRecoverIn(WorkOrderMaterialReleaseIn):
+    """Recover input keeps the destination explicit until service canonicalization."""
+    pass
+
+
 class WorkOrderMaterialOperationHistoryOut(BaseModel):
     schema_version: str = "1.0"
     items: tuple[WorkOrderMaterialOperationOut, ...]
