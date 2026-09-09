@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { formatOamDate, normalizeWorkOrderDetail, workItemText } from "./WorkOrders";
+import { formatOamDate, materialOperationLabel, normalizeWorkOrderDetail, workItemText } from "./WorkOrders";
 
 
 describe("workItemText", () => {
+  it("labels every formal material operation", () => {
+    expect(materialOperationLabel("consume")).toBe("消耗");
+    expect(materialOperationLabel("reverse")).toBe("冲销");
+    expect(materialOperationLabel("future_operation")).toBe("future_operation");
+  });
   it("keeps OAM yes/no semantics explicit", () => {
     expect(workItemText({ columnType: "1", result: "Y" })).toBe("是");
     expect(workItemText({ columnType: "1", result: "N" })).toBe("否");
