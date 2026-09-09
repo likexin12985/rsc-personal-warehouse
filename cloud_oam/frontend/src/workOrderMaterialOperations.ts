@@ -30,6 +30,7 @@ export type WorkOrderMaterialOperationResult = Readonly<{
   operation_type: string;
   status: string;
 }>;
+export type WorkOrderMaterialOperationHistory = Readonly<{ items: readonly WorkOrderMaterialOperationResult[] }>;
 
 function fail(message: string): never { throw new ApiError(409, message); }
 function id(value: unknown, field: string): string { if (typeof value !== "string" || !UUID.test(value)) return fail(`${field}无效`); return value; }
@@ -62,6 +63,18 @@ export function validateWorkOrderMaterialOperationResult(value: unknown): WorkOr
   const object = exact(value, ["operation_id", "operation_no", "work_order_id", "posting_transaction_id", "operation_type", "status", "schema_version"]);
   if (object.schema_version !== "1.0") return fail("工单物料响应版本无效");
   return { schema_version: "1.0", operation_id: id(object.operation_id, "operation_id"), operation_no: text(object.operation_no, "operation_no", 80), work_order_id: id(object.work_order_id, "work_order_id"), posting_transaction_id: id(object.posting_transaction_id, "posting_transaction_id"), operation_type: text(object.operation_type, "operation_type", 32), status: text(object.status, "status", 32) };
+}
+
+export function validateWorkOrderMaterialOperationHistory(value: unknown): WorkOrderMaterialOperationHistory {
+  const object = exact(value, ["items"]);
+  if (!Array.isArray(object.items)) return fail("工单物料历史响应无效");
+  return { items: Object.freeze(object.items.map(validateWorkOrderMaterialOperationResult)) };
+}
+
+export function listWorkOrderMaterialOperations(workOrderId: string): Promise<WorkOrderMaterialOperationHistory> {
+  return apiNoReplay<unknown>(`/v1/work-orders/${id(workOrderId, "work_order_id")}/material-operations`, {
+    method: "GET", cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+  }).then(validateWorkOrderMaterialOperationHistory);
 }
 
 export function executeWorkOrderMaterialOperation(workOrderId: string, operation: WorkOrderMaterialOperation, input: WorkOrderMaterialOperationInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<WorkOrderMaterialOperationResult> {
