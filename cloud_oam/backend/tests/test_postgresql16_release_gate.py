@@ -70,7 +70,7 @@ STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
 HEAD_REVISION = "20260920_0080"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
-RUNTIME_READY_HEAD_REVISION = "20260919_0079"
+RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
     {
         STOCKTAKE_POSTING_COMMAND_OUTCOMES_REVISION,
@@ -7415,8 +7415,8 @@ def _load_stock_reservations_migration_0069():
 def _head_runtime_ready_hash() -> str:
     import runpy
     return runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20260919_0079_runtime_readiness_head.py"
-    )))["RUNTIME_READY_BODY_SHA256_0079"]
+        "20260920_0080_inbound_posting_acl.py"
+    )))["RUNTIME_READY_BODY_SHA256_0080"]
 
 
 def _assert_0058_review_terminal_catalog_state(

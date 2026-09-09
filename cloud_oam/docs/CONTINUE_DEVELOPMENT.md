@@ -418,4 +418,5 @@ search_path 和精确 prosrc SHA 校验；降级直接恢复稳定的 0072 marke
 
 本批本地验证：readiness 专项 `3 passed、1 skipped`；迁移与 OAM 投影安全回归 `182 passed`。
 真实 PostgreSQL 16 并发 gate 已具备重跑条件；首次真实执行继续暴露出 `inbound_postings`
-缺少 `star_oam_api` 的 `SELECT/INSERT` ACL，已由后续 0080 迁移修复，尚未把云端重跑结果写成通过证据。
+缺少 `star_oam_api` 的 `SELECT/INSERT` ACL，已由后续 0080 迁移修复；0080 同时把 readiness
+marker 原子推进到当前 head，尚未把云端重跑结果写成通过证据。

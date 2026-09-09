@@ -18,7 +18,14 @@ def test_inbound_posting_acl_is_forward_and_reversible(monkeypatch):
     migration["upgrade"]()
     migration["downgrade"]()
     assert migration["down_revision"] == "20260919_0079"
-    assert statements == [
-        "GRANT SELECT, INSERT ON TABLE public.inbound_postings TO star_oam_api",
-        "REVOKE SELECT, INSERT ON TABLE public.inbound_postings FROM star_oam_api",
-    ]
+    assert statements[0] == "LOCK TABLE public.alembic_version IN ACCESS EXCLUSIVE MODE"
+    assert any(
+        statement
+        == "GRANT SELECT, INSERT ON TABLE public.inbound_postings TO star_oam_api"
+        for statement in statements
+    )
+    assert any(
+        statement
+        == "REVOKE SELECT, INSERT ON TABLE public.inbound_postings FROM star_oam_api"
+        for statement in statements
+    )
