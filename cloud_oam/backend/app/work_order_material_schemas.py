@@ -58,8 +58,8 @@ class WorkOrderMaterialOperationOut(BaseModel):
     operation_no: str
     work_order_id: UUID
     posting_transaction_id: UUID
-    operation_type: str
-    status: str
+    operation_type: Literal["occupy", "release", "consume", "recover"]
+    status: Literal["posted"]
 
 
 class WorkOrderMaterialConsumeIn(WorkOrderMaterialPreflightIn):
