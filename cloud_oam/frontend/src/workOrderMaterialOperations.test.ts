@@ -32,7 +32,7 @@ describe("work order material operations", () => {
 
   it("validates response coordinates", () => {
     expect(() => validateWorkOrderMaterialOperationResult({ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "consume", status: "posted", extra: true })).toThrow(ApiError);
-    expect(() => validateWorkOrderMaterialOperationResult({ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "reverse", status: "posted" })).toThrow(ApiError);
+    expect(validateWorkOrderMaterialOperationResult({ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "reverse", status: "posted" }).operation_type).toBe("reverse");
     expect(() => validateWorkOrderMaterialOperationResult({ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "consume", status: "pending" })).toThrow(ApiError);
   });
 

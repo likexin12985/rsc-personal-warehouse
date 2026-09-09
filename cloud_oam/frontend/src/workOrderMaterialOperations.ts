@@ -3,7 +3,7 @@ import { apiNoReplay, ApiError, jsonBody } from "./api";
 const UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const COORDINATE = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/;
 const DECIMAL = /^(?:0|[1-9]\d{0,14})(?:\.\d{1,3})?$/;
-const OPERATION_TYPES = new Set(["consume", "release", "occupy", "recover"]);
+const OPERATION_TYPES = new Set(["consume", "release", "occupy", "recover", "reverse"]);
 const OPERATION_STATUSES = new Set(["posted", "replayed"]);
 
 export type WorkOrderMaterialOperation = "consume" | "release" | "occupy" | "recover";
