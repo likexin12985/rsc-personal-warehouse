@@ -17,6 +17,7 @@ class InboundOrderOut(BaseModel):
     target_location_id: UUID
     target_person_id: UUID
     status: str
+    posting_transaction_id: UUID | None = None
 
 class InboundPostingOut(BaseModel):
     model_config = ConfigDict(extra="forbid")

@@ -6,7 +6,7 @@ import FormalMaterialRequestInboundPanel from "./FormalMaterialRequestInboundPan
 afterEach(() => cleanup());
 const ID = (n:number) => `11111111-1111-4111-8111-${String(n).padStart(12,"0")}`;
 const receipt = { schema_version:"1.0", receipt_id:ID(1), receipt_no:"RCT-1", shipment_id:ID(2), status:"accepted", lines:[], exceptions:[], idempotency_replayed:false } as const;
-const pending = { schema_version:"1.0", inbound_order_id:ID(3), inbound_no:"INB-1", receipt_id:ID(1), target_location_id:ID(4), target_person_id:ID(5), status:"pending" } as const;
+const pending = { schema_version:"1.0", inbound_order_id:ID(3), inbound_no:"INB-1", receipt_id:ID(1), target_location_id:ID(4), target_person_id:ID(5), status:"pending", posting_transaction_id:null } as const;
 const detail = { request_id:ID(6), request_version:2 } as any;
 function props(overrides:any = {}) { return { detail, adapter: { listReceipts:vi.fn().mockResolvedValue([receipt]), listInboundOrders:vi.fn().mockResolvedValue([pending]), createInboundOrder:vi.fn().mockResolvedValue(pending), postInboundOrder:vi.fn(), ...overrides } as any }; }
 
