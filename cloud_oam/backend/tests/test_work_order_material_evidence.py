@@ -488,7 +488,7 @@ def replay_command(db, evidence, monkeypatch, request):
     line = replace(evidence.line, condition_before=account.condition_code,
                    target_stock_account_id=target.id if target else None)
     execute = getattr(service, f"execute_{operation_type}_operation")
-    def seeded_post(db, *, actor, command, idempotency_key, request_id):
+    def seeded_post(db, *, actor, command, idempotency_key, request_id, **kwargs):
         command = inventory._validate_posting_command(command)
         row = evidence.transaction
         row.transaction_no = command.transaction_no
@@ -549,14 +549,24 @@ def test_real_ledger_replay_still_rejects_changed_quantity(db, replay_command):
     assert count_operations(db) == 1
 
 
-def test_real_ledger_replay_rechecks_inventory_permission(db, replay_command):
+def test_real_ledger_replay_rechecks_work_order_permission(db, replay_command):
     world = replay_command.evidence.world
     world.current_principal = replace(world.current_principal, entitlements=tuple(
-        entry for entry in world.current_principal.entitlements if entry.resource != "inventory_transaction"))
+        entry for entry in world.current_principal.entitlements if entry.resource != "work_order_material"))
     with pytest.raises(service.InventoryPostingError) as error:
         run_replay(db, replay_command)
     assert error.value.http_status_code == 403
     assert count_operations(db) == 1
+
+
+def test_work_order_replay_does_not_require_broad_inventory_post_permission(db, replay_command):
+    world = replay_command.evidence.world
+    world.current_principal = replace(world.current_principal, entitlements=tuple(
+        entry for entry in world.current_principal.entitlements
+        if not (entry.resource == "inventory_transaction" and entry.action == "post")))
+    fact, posting = run_replay(db, replay_command)
+    assert fact.id == replay_command.first.id
+    assert posting.replayed is True
 
 
 def test_closed_work_order_cannot_start_a_new_key(db, replay_command, monkeypatch):

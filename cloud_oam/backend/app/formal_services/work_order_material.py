@@ -412,6 +412,7 @@ def execute_consume_operation(
         db, actor=current, command=command,
         idempotency_key=f"work-order-material:consume:{idempotency_key}",
         request_id=request_id,
+        permission_action="operate", permission_resource="work_order_material",
     )
     operation = record_posted_operation(
         db, actor=current, operation_type="consume", work_order_id=work_order_id,
@@ -454,7 +455,8 @@ def execute_occupy_operation(
         ) for line in lines),
     )
     posted = post_inventory_transaction(db, actor=current, command=command,
-        idempotency_key=f"work-order-material:occupy:{idempotency_key}", request_id=request_id)
+        idempotency_key=f"work-order-material:occupy:{idempotency_key}", request_id=request_id,
+        permission_action="operate", permission_resource="work_order_material")
     operation = record_posted_operation(
         db, actor=current, operation_type="occupy", work_order_id=work_order_id,
         operator_person_id=current.person_id, lines=lines,
@@ -500,6 +502,7 @@ def execute_release_operation(
     posted = post_inventory_transaction(
         db, actor=current, command=command,
         idempotency_key=f"work-order-material:release:{idempotency_key}", request_id=request_id,
+        permission_action="operate", permission_resource="work_order_material",
     )
     operation = record_posted_operation(
         db, actor=current, operation_type="release", work_order_id=work_order_id,
@@ -551,6 +554,7 @@ def execute_recover_operation(
     posted = post_inventory_transaction(
         db, actor=current, command=command,
         idempotency_key=f"work-order-material:recover:{idempotency_key}", request_id=request_id,
+        permission_action="operate", permission_resource="work_order_material",
     )
     # Historical recover facts bind their stock account to the inventory
     # movement's destination. Keep the transport target in the command input,

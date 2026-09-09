@@ -1015,6 +1015,8 @@ def post_inventory_transaction(
     command: InventoryPostingCommand,
     idempotency_key: str,
     request_id: str,
+    permission_action: str = "post",
+    permission_resource: str = "inventory_transaction",
 ) -> InventoryPostingResult:
     """Append one formal inventory transaction without committing it."""
 
@@ -1046,8 +1048,9 @@ def post_inventory_transaction(
             db,
             current_actor,
             _command_account_ids(checked_command),
-            action="post",
+            action=permission_action,
             lock_rows=False,
+            resource=permission_resource,
         )
         return replace(replay, replayed=True)
     _require_unused_business_keys(db, checked_command)
@@ -1060,7 +1063,8 @@ def post_inventory_transaction(
             idempotency_key_hash=storage_key,
             request_hash=request_hash,
             request_reference=_request_reference(checked_request_id),
-            permission_action="post",
+            permission_action=permission_action,
+            permission_resource=permission_resource,
             reversed_transaction_id=None,
             event_suffix="posted",
         ).result
