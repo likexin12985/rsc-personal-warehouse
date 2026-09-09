@@ -457,7 +457,7 @@ REVIEW_COMMAND_STATUS_REVISION = (
     / "versions"
     / "20260906_0063_review_command_status.py"
 )
-HEAD_REVISION = "20260917_0077"
+HEAD_REVISION = "20260918_0078"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -775,6 +775,8 @@ EXPECTED_PERMISSIONS = [
     ("supply_task", "manage"),
     ("supply_task", "read"),
     ("system_settings", "read"),
+    ("work_order_material", "operate"),
+    ("work_order_material", "read"),
 ]
 
 EXPECTED_ROLE_PERMISSIONS = {
@@ -812,6 +814,8 @@ EXPECTED_ROLE_PERMISSIONS = {
         ("stocktake", "post_opening"),
         ("supply_task", "manage"),
         ("supply_task", "read"),
+        ("work_order_material", "read"),
+        ("work_order_material", "operate"),
     },
     "provincial_manager": {
         ("account", "read_self"),
@@ -833,6 +837,8 @@ EXPECTED_ROLE_PERMISSIONS = {
         ("stocktake", "manage"),
         ("stocktake", "review_region"),
         ("supply_task", "read"),
+        ("work_order_material", "read"),
+        ("work_order_material", "operate"),
     },
     "technician": {
         ("account", "read_self"),
@@ -851,6 +857,8 @@ EXPECTED_ROLE_PERMISSIONS = {
         ("material_request", "withdraw"),
         ("stocktake", "read"),
         ("stocktake", "count"),
+        ("work_order_material", "read"),
+        ("work_order_material", "operate"),
     },
     "star_headquarters_approver": {
         ("account", "read_self"),
@@ -1542,7 +1550,7 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == "20260916_0076"
+    assert head.down_revision == "20260917_0077"
     assert REVIEW_COMMAND_STATUS_REVISION.exists()
     supply_event_key_head = script.get_revision(
         MATERIAL_REQUEST_SUPPLY_EVENT_KEY_REVISION_ID
@@ -10383,7 +10391,7 @@ def test_upgrade_head_matches_current_orm_and_downgrades(
                 "JOIN roles ON roles.id = role_permissions.role_id "
                 "JOIN permissions ON permissions.id = role_permissions.permission_id"
             ).all()
-            assert len(role_permission_rows) == 73
+            assert len(role_permission_rows) == 79
             assert {row[3] for row in role_permission_rows} == {"allow"}
             actual_role_permissions = {
                 role_code: {
