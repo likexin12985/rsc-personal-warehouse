@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import func, select
 
-from app.demand_models import MaterialRequest
+from app.demand_models import MaterialRequest, MaterialRequestLine
 from app.foundation_models import AuditEvent, OutboxEvent
 from app.foundation_models import Permission, RolePermission
 from app.models import User
@@ -17,6 +17,7 @@ from app.inventory_models import (
     StockAccount, StockBalance, StockLocation,
 )
 from app.formal_services import material_request_inbound as inbound
+from app.formal_services.material_request_inbound_state import refresh_personal_inbound_status
 from app.formal_services import inventory_posting as inventory
 from test_material_request_outbound import outbound_world, _create as create_outbound
 from test_material_request_picking import pick_world
@@ -122,7 +123,9 @@ def test_same_command_replay_returns_same_transaction_without_duplicate_binding(
     assert result["replayed"] is True
     assert world.order.posting_transaction_id == world.first["inventory_transaction_id"]
     assert world.order.status == "posted"
-    assert world.request.personal_inbound_status == "posted"
+    # The fixture ships/receives one line while the approved request has a
+    # larger net quantity; one posted slice must remain partial.
+    assert world.request.personal_inbound_status == "partially_accepted"
     assert world.db.scalar(select(func.count()).select_from(AuditEvent).where(
         AuditEvent.action == "personal_inbound_posted")) == 1
     assert world.db.scalar(select(func.count()).select_from(OutboxEvent).where(
@@ -135,6 +138,44 @@ def test_first_post_binds_order_to_inventory_transaction(inbound_world):
 
     assert world.order.status == "posted"
     assert world.order.posting_transaction_id == world.first["inventory_transaction_id"]
+
+
+def test_full_approved_line_reaches_posted_state(inbound_world):
+    world = inbound_world
+    posting = world.db.scalar(
+        select(OutboundPosting).where(OutboundPosting.request_id == world.request.id)
+    )
+    line = world.db.get(MaterialRequestLine, posting.request_line_id)
+    receipt_line = world.db.scalar(select(ReceiptLine).where(ReceiptLine.receipt_id == world.receipt.id))
+    line.final_approved_qty = receipt_line.accepted_qty
+    line.cancelled_qty = Decimal("0.000")
+    world.db.flush()
+
+    refresh_personal_inbound_status(world.db, world.request)
+
+    assert world.request.personal_inbound_status == "posted"
+
+
+def test_unposted_accepted_quantity_is_accepted_state(inbound_world):
+    world = inbound_world
+    posting = world.db.scalar(
+        select(OutboundPosting).where(OutboundPosting.request_id == world.request.id)
+    )
+    line = world.db.get(MaterialRequestLine, posting.request_line_id)
+    receipt_line = world.db.scalar(select(ReceiptLine).where(ReceiptLine.receipt_id == world.receipt.id))
+    line.final_approved_qty = receipt_line.accepted_qty
+    line.cancelled_qty = Decimal("0.000")
+    inbound_posting = world.db.scalar(
+        select(InboundPosting).where(InboundPosting.inbound_order_id == world.order.id)
+    )
+    world.db.delete(inbound_posting)
+    world.order.status = "pending"
+    world.order.posting_transaction_id = None
+    world.db.flush()
+
+    refresh_personal_inbound_status(world.db, world.request)
+
+    assert world.request.personal_inbound_status == "accepted"
 
 
 def test_failed_first_post_rolls_back_order_transaction_binding(inbound_world, monkeypatch):

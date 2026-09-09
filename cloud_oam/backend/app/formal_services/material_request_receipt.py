@@ -35,11 +35,11 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
     payload_hash = hashlib.sha256(json.dumps({"request_id": str(request_id), "version": expected_version, "receiver": str(receiver_person_id), "at": received_at, "lines": [{"id": str(x.shipment_line_id), "a": _qty(x.accepted_qty), "r": _qty(x.rejected_qty), "condition": x.condition, "serials": sorted(str(s) for s in x.serial_ids), "evidence": str(x.exception_evidence_file_id) if x.exception_evidence_file_id else None} for x in lines]}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     request = db.scalar(select(MaterialRequest).where(MaterialRequest.id == request_id).with_for_update())
     if request is None: _fail("not_found", "not_found", "需求单不存在")
-    if request.version != expected_version: _fail("version_conflict", "conflict", "需求版本已变化，请重新读取")
     old = db.scalar(select(Receipt).where(Receipt.idempotency_key_hash == key_hash))
     if old is not None:
         if old.request_hash != payload_hash: _fail("key_reused", "conflict", "幂等键已绑定其他收货内容")
         return _result(db, old, replayed=True)
+    if request.version != expected_version: _fail("version_conflict", "conflict", "需求版本已变化，请重新读取")
     now = datetime.now(timezone.utc); checked = []; shipment_id = None
     for line in lines:
         shipment_line = db.get(ShipmentLine, line.shipment_line_id)
@@ -72,6 +72,9 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
         output.append({"receipt_line_id": row.id, "shipment_line_id": row.shipment_line_id, "accepted_qty": _qty(row.accepted_qty), "rejected_qty": _qty(row.rejected_qty), "serial_ids": tuple(serials)})
     append_audit_event(db, stream_key="material_request", actor_user_id=actor.user_id, action="receipt_registered", aggregate_type="receipt", aggregate_id=str(receipt.id), before_jsonb={}, after_jsonb={"request_id": str(request_id), "receipt_no": receipt.receipt_no}, request_id=trace_request_id, occurred_at=now, created_at=now)
     db.add(OutboxEvent(event_type="receipt_registered", aggregate_type="receipt", aggregate_id=str(receipt.id), payload_jsonb={"request_id": str(request_id), "receipt_no": receipt.receipt_no, "shipment_id": str(receipt.shipment_id)}, status="pending", attempts=0, idempotency_key=f"receipt:{receipt.id}", available_at=now))
+    db.flush()
+    from .material_request_inbound_state import refresh_personal_inbound_status
+    refresh_personal_inbound_status(db, request)
     return _result(db, receipt, replayed=False, lines=output)
 
 def _result(db, receipt, replayed, lines=None):

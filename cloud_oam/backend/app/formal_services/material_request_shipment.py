@@ -36,11 +36,11 @@ def create_shipment(db, *, actor, request_id, expected_version, target_location_
         "lines":[{"posting_id":str(x.outbound_posting_id),"qty":_text(x.shipped_qty),"serial_ids":sorted(str(s) for s in x.serial_ids)} for x in lines]}, sort_keys=True, separators=(',',':')))
     request=db.scalar(select(MaterialRequest).where(MaterialRequest.id==request_id).with_for_update())
     if request is None: _fail('not_found','not_found','需求单不存在')
-    if request.version != expected_version: _fail('version_conflict','conflict','需求版本已变化，请重新读取')
     existing=db.scalar(select(Shipment).where(Shipment.idempotency_key_hash==key_hash))
     if existing is not None:
         if existing.request_hash != payload_hash: _fail('key_reused','conflict','幂等键已绑定其他发运内容')
         return _result(db, existing, request, replayed=True)
+    if request.version != expected_version: _fail('version_conflict','conflict','需求版本已变化，请重新读取')
     facts=[]; source_location=None; now=datetime.now(timezone.utc)
     serial_claims=set()
     for line in lines:
@@ -73,6 +73,9 @@ def create_shipment(db, *, actor, request_id, expected_version, target_location_
         output_lines.append({'shipment_line_id':sl.id,'outbound_posting_id':fact.id,'shipped_qty':_text(qty),'serial_ids':sids})
     db.add(OutboxEvent(event_type='shipment_handover_registered',aggregate_type='shipment',aggregate_id=str(shipment.id),payload_jsonb={'request_id':str(request_id),'shipment_no':shipment.shipment_no,'tracking_no':shipment.tracking_no},status='pending',attempts=0,idempotency_key=f'shipment:{shipment.id}',available_at=now))
     append_audit_event(db,stream_key='material_request',actor_user_id=actor.user_id,action='shipment_handover_registered',aggregate_type='shipment',aggregate_id=str(shipment.id),before_jsonb={},after_jsonb={'request_id':str(request_id),'shipment_no':shipment.shipment_no,'lines':[str(x['shipment_line_id']) for x in output_lines]},request_id=trace_request_id,occurred_at=now,created_at=now)
+    db.flush()
+    from .material_request_inbound_state import refresh_personal_inbound_status
+    refresh_personal_inbound_status(db, request)
     return _result(db,shipment,request,replayed=False,lines=output_lines)
 
 def _result(db, shipment, request, replayed, lines=None):

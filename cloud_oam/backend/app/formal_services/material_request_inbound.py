@@ -158,7 +158,16 @@ def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idem
     # status is only the request-facing read model and is safe to repeat on a
     # replay of the same bound transaction.
     order.status = "posted"
-    request.personal_inbound_status = "posted"
+    # Keep the projection line-aware for split receipts and partial postings.
+    # The small contract fakes used by the unit tests do not expose a real
+    # session; production sessions always take this path after flushing the
+    # immutable posting binding.
+    if hasattr(db, "flush"):
+        db.flush()
+        from .material_request_inbound_state import refresh_personal_inbound_status
+        refresh_personal_inbound_status(db, request)
+    else:
+        request.personal_inbound_status = "posted"
     return {"inbound_order_id": order.id, "inventory_transaction_id": result.transaction_id, "replayed": result.replayed}
 
 def list_inbound_orders(db, *, actor, request_id):

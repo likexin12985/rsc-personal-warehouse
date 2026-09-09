@@ -420,3 +420,20 @@ search_path 和精确 prosrc SHA 校验；降级直接恢复稳定的 0072 marke
 真实 PostgreSQL 16 并发 gate 已具备重跑条件；首次真实执行继续暴露出 `inbound_postings`
 缺少 `star_oam_api` 的 `SELECT/INSERT` ACL，已由后续 0080 迁移修复；0080 同时把 readiness
 marker 原子推进到当前 head，尚未把云端重跑结果写成通过证据。
+
+## 7.20 分批收货与个人仓入账状态聚合（2026-09-09）
+
+个人仓状态现在按当前修订的每条最终批准明细分别聚合：`pending_acceptance` 表示已经发运但还没有
+合格验收，`partially_accepted` 表示仅有部分合格数量，`accepted` 表示全部合格数量已收货但仍有
+数量未过账，`posted` 只有在每条正净批准明细都已由独立 `inbound_postings` 绑定已过账库存事务时
+才成立。拒收数量不计入个人仓，取消数量从应入账量扣除；不同物料不会互相抵消，已取消的空需求不会
+因真空聚合被误标为已过账。
+
+该读模型在发运、收货和个人仓过账事实提交后刷新；状态变化同步推进需求版本，避免旧出库事实在当前
+版本仍被误判为同版本历史。相同收货幂等键在版本变化后先回读既有事实再返回，分批写入不会重复增加
+版本或审计/Outbox 事实。个人仓入账单的 `posting_transaction_id` 与 `inbound_postings` 绑定同一
+库存事务，后续审计或 Outbox 失败时随事务回滚。
+
+本批本地定向回归：收货、发运、入账与状态聚合 `41 passed`；此前已取得准确 SHA 的最新提交
+`3047344` 的 Client gate 与 PostgreSQL 16 release gate 均通过。状态聚合新增代码仍需随本批准确
+提交 SHA 重新通过两条云端门禁后，才能作为发布证据。
