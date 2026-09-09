@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.demand_models import MaterialRequest
+from app.foundation_models import AuditEvent, OutboxEvent
 from app.foundation_models import Permission, RolePermission
 from app.models import User
 from app.inventory_models import (
@@ -121,6 +122,10 @@ def test_same_command_replay_returns_same_transaction_without_duplicate_binding(
     assert result["replayed"] is True
     assert world.order.status == "posted"
     assert world.request.personal_inbound_status == "posted"
+    assert world.db.scalar(select(func.count()).select_from(AuditEvent).where(
+        AuditEvent.action == "personal_inbound_posted")) == 1
+    assert world.db.scalar(select(func.count()).select_from(OutboxEvent).where(
+        OutboxEvent.event_type == "personal_inbound_posted")) == 1
     assert snapshot(world) == before
 
 

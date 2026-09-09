@@ -125,6 +125,24 @@ def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idem
             _fail("posting_mismatch", "conflict", "入账事实与库存事务不一致")
     else:
         db.add(InboundPosting(id=uuid.uuid4(), inbound_order_id=order.id, inventory_transaction_id=result.transaction_id, created_at=datetime.now(timezone.utc)))
+        now = datetime.now(timezone.utc)
+        append_audit_event(
+            db, stream_key="material_request", actor_user_id=actor.user_id,
+            action="personal_inbound_posted", aggregate_type="inbound_order",
+            aggregate_id=str(order.id), before_jsonb={"status": "pending"},
+            after_jsonb={"status": "posted", "request_id": str(material_request_id),
+                         "inventory_transaction_id": str(result.transaction_id)},
+            request_id=request_id, occurred_at=now, created_at=now,
+        )
+        db.add(OutboxEvent(
+            event_type="personal_inbound_posted", aggregate_type="inbound_order",
+            aggregate_id=str(order.id), payload_jsonb={
+                "request_id": str(material_request_id),
+                "inbound_order_id": str(order.id),
+                "inventory_transaction_id": str(result.transaction_id),
+            }, status="pending", attempts=0,
+            idempotency_key=f"inbound-posted:{order.id}", available_at=now,
+        ))
     # Keep the orchestration projection aligned with the immutable posting
     # fact.  The inventory transaction remains the source of truth; this
     # status is only the request-facing read model and is safe to repeat on a
