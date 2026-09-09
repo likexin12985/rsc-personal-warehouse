@@ -38,6 +38,11 @@ def _raise(exc):
     raise HTTPException(status_code=exc.http_status_code, detail=exc.as_detail()) from None
 
 
+def _require_operator(payload, principal):
+    if payload.operator_person_id != principal.person_id:
+        raise HTTPException(status_code=403, detail={"code": "operator_mismatch", "message": "操作人必须是当前登录人员"})
+
+
 @router.post("/{work_order_id}/material-operations/consume", response_model=WorkOrderMaterialOperationOut)
 def execute_material_consume(
     work_order_id: UUID,
@@ -46,6 +51,7 @@ def execute_material_consume(
     db: Session = Depends(get_db),
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
+    _require_operator(payload, principal)
     trace = request_id or payload.request_id
     values = _lines(payload)
     try:
@@ -71,10 +77,11 @@ def execute_material_consume(
 
 @router.post("/{work_order_id}/material-operations/release", response_model=WorkOrderMaterialOperationOut)
 def execute_material_release(
-    work_order_id: UUID, payload: WorkOrderMaterialRecoverIn,
+    work_order_id: UUID, payload: WorkOrderMaterialReleaseIn,
     principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")),
     db: Session = Depends(get_db), request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
+    _require_operator(payload, principal)
     values = tuple(service.WorkOrderMaterialLineInput(
         material_id=row.material_id, stock_account_id=row.stock_account_id,
         target_stock_account_id=row.target_stock_account_id, quantity=row.quantity,
@@ -106,6 +113,7 @@ def execute_material_occupy(
     principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")),
     db: Session = Depends(get_db), request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
+    _require_operator(payload, principal)
     values = tuple(service.WorkOrderMaterialLineInput(
         material_id=row.material_id, stock_account_id=row.stock_account_id,
         target_stock_account_id=row.target_stock_account_id, quantity=row.quantity,
@@ -131,12 +139,13 @@ def execute_material_occupy(
 
 @router.post("/{work_order_id}/material-operations/recover", response_model=WorkOrderMaterialOperationOut)
 def execute_material_recover(
-    work_order_id: UUID, payload: WorkOrderMaterialReleaseIn,
+    work_order_id: UUID, payload: WorkOrderMaterialRecoverIn,
     principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")),
     db: Session = Depends(get_db), request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
+    _require_operator(payload, principal)
     values = tuple(service.WorkOrderMaterialLineInput(
-        material_id=row.material_id, stock_account_id=row.stock_account_id,
+        material_id=row.material_id, stock_account_id=row.target_stock_account_id,
         target_stock_account_id=row.target_stock_account_id, quantity=row.quantity,
         serial_ids=row.serial_ids, condition_before=row.condition_before,
         serial_verifications=tuple(service.SerialVerificationInput(**v.model_dump()) for v in row.serial_verifications),

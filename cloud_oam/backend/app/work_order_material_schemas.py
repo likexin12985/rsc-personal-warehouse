@@ -82,9 +82,21 @@ class WorkOrderMaterialOccupyIn(WorkOrderMaterialReleaseIn):
     pass
 
 
-class WorkOrderMaterialRecoverIn(WorkOrderMaterialReleaseIn):
-    """Recover input keeps the destination explicit until service canonicalization."""
-    pass
+class WorkOrderMaterialRecoverLineIn(StrictInput):
+    """Removed parts have one destination and an explicit used/damaged condition."""
+    material_id: UUID
+    target_stock_account_id: UUID
+    quantity: Decimal = Field(gt=0, max_digits=18, decimal_places=3, allow_inf_nan=False)
+    condition_before: Literal["used", "damaged"]
+    serial_ids: tuple[UUID, ...] = Field(default=(), max_length=1000)
+    serial_verifications: tuple[SerialVerificationIn, ...] = Field(default=(), max_length=1000)
+
+
+class WorkOrderMaterialRecoverIn(StrictInput):
+    operator_person_id: UUID
+    lines: tuple[WorkOrderMaterialRecoverLineIn, ...] = Field(min_length=1, max_length=100)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    request_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
 class WorkOrderMaterialOperationHistoryOut(BaseModel):

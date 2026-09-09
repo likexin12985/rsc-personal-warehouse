@@ -92,7 +92,7 @@ def test_serial_quantity_must_match_physical_units():
 
 def test_operation_type_maps_to_matching_inventory_movement():
     assert expected_posting_movement_type("consume") == "consume"
-    assert expected_posting_movement_type("recover") == "return"
+    assert expected_posting_movement_type("recover") == "inbound"
     with pytest.raises(WorkOrderMaterialPreflightError, match="操作类型"):
         expected_posting_movement_type("ship")
 

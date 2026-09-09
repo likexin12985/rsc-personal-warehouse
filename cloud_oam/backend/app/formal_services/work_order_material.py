@@ -49,7 +49,7 @@ def validate_serial_quantity(quantity: Decimal, serial_ids: tuple[UUID, ...]) ->
 def expected_posting_movement_type(operation_type: str) -> str:
     value = {
         "occupy": "reserve", "release": "release", "consume": "consume",
-        "recover": "return", "reverse": "reversal",
+        "recover": "inbound", "reverse": "reversal",
     }.get(operation_type)
     if value is None:
         raise WorkOrderMaterialPreflightError("operation_type_invalid", "工单物料操作类型不合法")
@@ -223,11 +223,13 @@ def _verify_posted_lines(db, *, transaction, operation_type, operator_person_id,
         line = remaining.pop(account_id, None)
         if line is None or movement.quantity != line.quantity:
             raise WorkOrderMaterialPreflightError("posting_lines_mismatch", "库存账户或数量与原流水不一致")
+        if operation_type == "recover" and line.condition_before not in {"used", "damaged"}:
+            raise WorkOrderMaterialPreflightError("recover_condition_invalid", "拆回件必须登记为旧件或坏件", "invalid_request")
         account = db.get(StockAccount, account_id, populate_existing=True)
         location = db.get(StockLocation, account.location_id, populate_existing=True) if account else None
         if (account is None or account.material_id != line.material_id
                 or account.custodian_person_id != operator_person_id
-                or account.availability_bucket != {"occupy": "available", "consume": "reserved", "release": "reserved"}.get(operation_type, account.availability_bucket)
+                or account.availability_bucket != {"occupy": "available", "consume": "reserved", "release": "reserved", "recover": "available"}.get(operation_type, account.availability_bucket)
                 or account.condition_code != line.condition_before
                 or location is None or location.location_type != "personal"
                 or location.custodian_person_id != operator_person_id):
@@ -352,6 +354,23 @@ def record_posted_operation(
     return operation
 
 
+def _command_effective_at(db: Session, *, order: OamWorkOrder, posting_key: str) -> datetime:
+    """Reuse only the original server timestamp; the ledger rechecks the request.
+
+    The caller already owns the work-order lock. The unified posting service
+    still hashes the current actor and movements and checks scopes on replay.
+    Reusing an entire stored command here would hide changed caller input.
+    """
+    effective_at = db.scalar(select(InventoryTransaction.effective_at).where(
+        InventoryTransaction.posting_key == posting_key))
+    if effective_at is not None:
+        # SQLite drops tzinfo on read; production timestamptz retains it.
+        return effective_at if effective_at.tzinfo else effective_at.replace(tzinfo=timezone.utc)
+    if order.status != "active":
+        raise WorkOrderMaterialPreflightError("work_order_inactive", "工单当前不可执行新物料操作", "precondition_failed")
+    return datetime.now(timezone.utc)
+
+
 def execute_consume_operation(
     db: Session,
     *,
@@ -376,13 +395,13 @@ def execute_consume_operation(
     if not idempotency_key.strip():
         raise WorkOrderMaterialPreflightError("idempotency_key_missing", "缺少幂等键", "precondition_failed")
     key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
-    now = datetime.now(timezone.utc)
+    posting_key = f"work-order-material:consume:{work_order_id}:{key_hash}"
     command = InventoryPostingCommand(
         transaction_no=f"INV-WO-CONSUME-{key_hash[:20].upper()}",
         movement_type="consume", source_document_type="work_order_material",
         source_document_id=str(work_order_id),
-        posting_key=f"work-order-material:consume:{work_order_id}:{key_hash}",
-        effective_at=now,
+        posting_key=posting_key,
+        effective_at=_command_effective_at(db, order=order, posting_key=posting_key),
         movements=tuple(InventoryMovementCommand(
             from_account_id=line.stock_account_id, to_account_id=None,
             quantity=line.quantity, serial_ids=line.serial_ids,
@@ -411,9 +430,9 @@ def execute_occupy_operation(
     """Move exact personal-available stock into reserved stock."""
     order, current = authorize_work_order(db, actor=actor, work_order_id=work_order_id,
                                           action="operate", lock_rows=True)
-    if order.status != "active":
-        raise WorkOrderMaterialPreflightError("work_order_inactive", "工单当前不可执行新物料操作", "precondition_failed")
     validate_batch(lines)
+    if not idempotency_key.strip():
+        raise WorkOrderMaterialPreflightError("idempotency_key_missing", "缺少幂等键", "precondition_failed")
     for line in lines:
         if line.target_stock_account_id is None:
             raise WorkOrderMaterialPreflightError("occupy_target_missing", "占用必须指定 reserved 目标账户", "invalid_request")
@@ -423,11 +442,12 @@ def execute_occupy_operation(
                 or target.availability_bucket != "reserved"):
             raise WorkOrderMaterialPreflightError("occupy_target_invalid", "占用目标不是当前人员的 reserved 账户", "conflict")
     key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
+    posting_key = f"work-order-material:occupy:{work_order_id}:{key_hash}"
     command = InventoryPostingCommand(
         transaction_no=f"INV-WO-OCCUPY-{key_hash[:20].upper()}", movement_type="reserve",
         source_document_type="work_order_material", source_document_id=str(work_order_id),
-        posting_key=f"work-order-material:occupy:{work_order_id}:{key_hash}",
-        effective_at=datetime.now(timezone.utc),
+        posting_key=posting_key,
+        effective_at=_command_effective_at(db, order=order, posting_key=posting_key),
         movements=tuple(InventoryMovementCommand(
             from_account_id=line.stock_account_id, to_account_id=line.target_stock_account_id,
             quantity=line.quantity, serial_ids=line.serial_ids,
@@ -465,12 +485,13 @@ def execute_release_operation(
                 or location.custodian_person_id != current.person_id):
             raise WorkOrderMaterialPreflightError("release_target_invalid", "释放目标不是当前人员的可用个人仓账户", "conflict")
     key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
+    posting_key = f"work-order-material:release:{work_order_id}:{key_hash}"
     command = InventoryPostingCommand(
         transaction_no=f"INV-WO-RELEASE-{key_hash[:20].upper()}",
         movement_type="release", source_document_type="work_order_material",
         source_document_id=str(work_order_id),
-        posting_key=f"work-order-material:release:{work_order_id}:{key_hash}",
-        effective_at=datetime.now(timezone.utc),
+        posting_key=posting_key,
+        effective_at=_command_effective_at(db, order=order, posting_key=posting_key),
         movements=tuple(InventoryMovementCommand(
             from_account_id=line.stock_account_id, to_account_id=line.target_stock_account_id,
             quantity=line.quantity, serial_ids=line.serial_ids,
@@ -502,20 +523,25 @@ def execute_recover_operation(
     for line in lines:
         if line.target_stock_account_id is None:
             raise WorkOrderMaterialPreflightError("recover_target_missing", "回收必须指定可用目标账户", "invalid_request")
+        if line.condition_before not in {"used", "damaged"}:
+            raise WorkOrderMaterialPreflightError("recover_condition_invalid", "拆回件必须登记为旧件或坏件", "invalid_request")
         target = db.get(StockAccount, line.target_stock_account_id, populate_existing=True)
         location = db.get(StockLocation, target.location_id, populate_existing=True) if target else None
         if (target is None or target.material_id != line.material_id
                 or target.custodian_person_id != current.person_id
                 or target.availability_bucket != "available"
+                or target.condition_code != line.condition_before
                 or location is None or location.location_type != "personal"
+                or location.status != "active"
                 or location.custodian_person_id != current.person_id):
             raise WorkOrderMaterialPreflightError("recover_target_invalid", "回收目标不是当前人员的可用个人仓账户", "conflict")
     key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
+    posting_key = f"work-order-material:recover:{work_order_id}:{key_hash}"
     command = InventoryPostingCommand(
-        transaction_no=f"INV-WO-RECOVER-{key_hash[:20].upper()}", movement_type="return",
+        transaction_no=f"INV-WO-RECOVER-{key_hash[:20].upper()}", movement_type="inbound",
         source_document_type="work_order_material", source_document_id=str(work_order_id),
-        posting_key=f"work-order-material:recover:{work_order_id}:{key_hash}",
-        effective_at=datetime.now(timezone.utc),
+        posting_key=posting_key,
+        effective_at=_command_effective_at(db, order=order, posting_key=posting_key),
         movements=tuple(InventoryMovementCommand(
             from_account_id=None, to_account_id=line.target_stock_account_id,
             quantity=line.quantity, serial_ids=line.serial_ids,

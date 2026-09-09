@@ -341,9 +341,9 @@ def test_atomic_consume_composes_posting_and_fact_in_one_session(db, evidence, m
 def test_atomic_recover_posts_external_to_personal_available(db, evidence, monkeypatch):
     target = SimpleNamespace(id=uuid4(), material_id=evidence.world.material.id,
                              custodian_person_id=evidence.world.person.id,
-                             availability_bucket="available", location_id=uuid4())
+                             availability_bucket="available", condition_code="used", location_id=uuid4())
     location = SimpleNamespace(id=target.location_id, location_type="personal",
-                               custodian_person_id=evidence.world.person.id)
+                               custodian_person_id=evidence.world.person.id, status="active")
     monkeypatch.setattr(service, "authorize_work_order",
                         lambda *args, **kwargs: (evidence.order, evidence.world.current_principal))
     monkeypatch.setattr(db, "get", lambda model, key, **kwargs: target if model.__name__ == "StockAccount" else location)
@@ -358,12 +358,278 @@ def test_atomic_recover_posts_external_to_personal_available(db, evidence, monke
         assert kwargs["lines"][0].target_stock_account_id is None
         return operation
     monkeypatch.setattr(service, "record_posted_operation", fake_record)
-    line = replace(evidence.line, target_stock_account_id=target.id)
+    line = replace(evidence.line, target_stock_account_id=target.id, condition_before="used")
     result, transaction = service.execute_recover_operation(
         db, actor=evidence.world.current_principal, work_order_id=evidence.order.id,
         lines=(line,), idempotency_key="atomic-recover-1", request_id="recover-request-1")
     assert result is operation and transaction is posted
-    assert calls[0].movement_type == "return"
+    assert calls[0].movement_type == "inbound"
     assert calls[0].movements[0].from_account_id is None
     assert calls[0].movements[0].to_account_id == target.id
     assert calls[1] == "recover"
+
+
+@pytest.mark.parametrize("case,code", [
+    ("new", "recover_condition_invalid"),
+    ("scrapped", "recover_condition_invalid"),
+    ("mismatched_condition", "recover_target_invalid"),
+    ("inactive_location", "recover_target_invalid"),
+    ("another_custodian", "recover_target_invalid"),
+    ("reserved_target", "recover_target_invalid"),
+])
+def test_recover_rejects_invalid_destination_before_posting(db, evidence, monkeypatch, case, code):
+    evidence.account.condition_code = "used"
+    evidence.account.availability_bucket = "available"
+    condition = "used"
+    if case in {"new", "scrapped"}:
+        condition = case
+    elif case == "mismatched_condition":
+        evidence.account.condition_code = "damaged"
+    elif case == "inactive_location":
+        evidence.location.status = "inactive"
+    elif case == "another_custodian":
+        evidence.account.custodian_person_id = None
+    else:
+        evidence.account.availability_bucket = "reserved"
+    db.flush()
+    def must_not_post(*args, **kwargs):
+        pytest.fail("invalid return destination reached inventory posting")
+    monkeypatch.setattr(service, "post_inventory_transaction", must_not_post)
+    line = replace(evidence.line, condition_before=condition,
+                   target_stock_account_id=evidence.account.id)
+    with pytest.raises(service.WorkOrderMaterialPreflightError) as error:
+        service.execute_recover_operation(
+            db, actor=evidence.world.current_principal, work_order_id=evidence.order.id,
+            lines=(line,), idempotency_key="invalid-recover", request_id="invalid-recover-trace")
+    assert error.value.code == code
+    assert count_operations(db) == 0
+
+
+@pytest.mark.parametrize("condition", ["used", "damaged"])
+def test_http_recover_binds_real_fact_to_seeded_return_evidence(db, evidence, monkeypatch, condition):
+    # Only inventory posting is stubbed with persisted evidence. Authorization,
+    # account validation, fact recording, audit/outbox and HTTP commit are real.
+    evidence.account.condition_code = condition
+    evidence.account.availability_bucket = "available"
+    evidence.transaction.movement_type = "inbound"
+    evidence.movement.from_account_id = None
+    evidence.movement.to_account_id = evidence.account.id
+    db.commit()
+    def seeded_post(db, **kwargs):
+        command = kwargs["command"]
+        assert command.movement_type == "inbound"
+        assert command.movements[0].from_account_id is None
+        assert command.movements[0].to_account_id == evidence.account.id
+        return SimpleNamespace(transaction_id=evidence.transaction.id)
+    monkeypatch.setattr(service, "post_inventory_transaction", seeded_post)
+    payload = {
+        "operator_person_id": str(evidence.world.person.id),
+        "idempotency_key": "recover-http-fact", "request_id": "recover-http-fact-trace",
+        "lines": [{"material_id": str(evidence.world.material.id),
+                   "target_stock_account_id": str(evidence.account.id),
+                   "quantity": "1", "condition_before": condition}],
+    }
+    with client_for(db, evidence) as client:
+        path = f"/api/v1/work-orders/{evidence.order.id}/material-operations/recover"
+        first = client.post(path, json=payload)
+        replay = client.post(path, json=payload)
+        history = client.get(f"/api/v1/work-orders/{evidence.order.id}/material-operations")
+    assert first.status_code == 200, first.text
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == first.json()
+    assert history.json()["items"] == [first.json()]
+    assert first.json()["operation_type"] == "recover"
+    assert first.json()["posting_transaction_id"] == str(evidence.transaction.id)
+    assert count_operations(db) == 1
+    assert db.scalar(select(func.count()).select_from(AuditEvent).where(
+        AuditEvent.action == "work_order_material.recover")) == 1
+    assert db.scalar(select(func.count()).select_from(OutboxEvent).where(
+        OutboxEvent.event_type == "work_order_material_operation_posted")) == 1
+
+
+def test_generic_evidence_endpoint_cannot_bypass_recover_condition(db, evidence):
+    evidence.transaction.movement_type = "inbound"
+    evidence.movement.from_account_id = None
+    evidence.movement.to_account_id = evidence.account.id
+    evidence.account.availability_bucket = "available"
+    db.commit()
+    payload = payload_for(evidence)
+    payload["operation_type"] = "recover"
+    payload["lines"][0]["condition_before"] = "new"
+    with client_for(db, evidence) as client:
+        response = client.post(f"/api/v1/work-orders/{evidence.order.id}/material-operations", json=payload)
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "recover_condition_invalid"
+    assert count_operations(db) == 0
+
+
+@pytest.fixture(params=["consume", "occupy", "release", "recover"])
+def replay_command(db, evidence, monkeypatch, request):
+    """Seed the first ledger result; every subsequent replay uses the real ledger service."""
+    from app.formal_services import inventory_posting as inventory
+    from app.inventory_models import StockAccount
+
+    operation_type = request.param
+    account = evidence.account
+    account.availability_bucket = "available" if operation_type in {"occupy", "recover"} else "reserved"
+    account.condition_code = "used" if operation_type == "recover" else "new"
+    target = None
+    if operation_type in {"occupy", "release"}:
+        target = StockAccount(
+            id=uuid4(), owner_org_id=account.owner_org_id, location_id=account.location_id,
+            custodian_person_id=account.custodian_person_id, material_id=account.material_id,
+            condition_code=account.condition_code, lot_id=account.lot_id,
+            availability_bucket="reserved" if operation_type == "occupy" else "available",
+        )
+        db.add(target)
+    elif operation_type == "recover":
+        target = account
+    db.flush()
+    line = replace(evidence.line, condition_before=account.condition_code,
+                   target_stock_account_id=target.id if target else None)
+    execute = getattr(service, f"execute_{operation_type}_operation")
+    def seeded_post(db, *, actor, command, idempotency_key, request_id):
+        command = inventory._validate_posting_command(command)
+        row = evidence.transaction
+        row.transaction_no = command.transaction_no
+        row.movement_type = command.movement_type
+        row.posting_key = command.posting_key
+        row.idempotency_key_hash = inventory._storage_hash(idempotency_key)
+        row.request_hash = inventory._posting_request_hash(actor, command)
+        row.effective_at = command.effective_at
+        movement = command.movements[0]
+        evidence.movement.from_account_id = movement.from_account_id
+        evidence.movement.to_account_id = movement.to_account_id
+        evidence.movement.external_boundary_code = movement.external_boundary_code
+        db.flush()
+        return inventory.InventoryPostingResult(transaction_id=row.id,
+            transaction_no=row.transaction_no, ledger_cursor=row.ledger_cursor)
+    monkeypatch.setattr(service, "post_inventory_transaction", seeded_post)
+    key = f"ledger-replay-{operation_type}"
+    first, _ = execute(db, actor=evidence.world.current_principal, work_order_id=evidence.order.id,
+                       lines=(line,), idempotency_key=key, request_id="ledger-first-request")
+    db.commit()
+    monkeypatch.setattr(service, "post_inventory_transaction", inventory.post_inventory_transaction)
+    return SimpleNamespace(execute=execute, line=line, key=key, first=first,
+                           evidence=evidence, operation_type=operation_type)
+
+
+def run_replay(db, value, **overrides):
+    params = dict(actor=value.evidence.world.current_principal, work_order_id=value.evidence.order.id,
+                  lines=(value.line,), idempotency_key=value.key, request_id="ledger-replay-request")
+    params.update(overrides)
+    return value.execute(db, **params)
+
+
+def test_real_ledger_replay_uses_original_time_even_after_work_order_closes(db, replay_command, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    value = replay_command
+    original_time = value.evidence.transaction.effective_at
+    value.evidence.order.status = "closed"
+    db.commit()
+    class LaterClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return (original_time.replace(tzinfo=timezone.utc) + timedelta(days=1)).astimezone(tz)
+    monkeypatch.setattr(service, "datetime", LaterClock)
+    fact, posting = run_replay(db, value)
+    assert fact.id == value.first.id
+    assert posting.replayed is True
+    assert posting.transaction_id == value.evidence.transaction.id
+    assert count_operations(db) == 1
+    assert db.scalar(select(func.count()).select_from(AuditEvent)) == 1
+    assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 1
+
+
+def test_real_ledger_replay_still_rejects_changed_quantity(db, replay_command):
+    changed = replace(replay_command.line, quantity=Decimal("2"))
+    with pytest.raises(service.InventoryPostingError) as error:
+        run_replay(db, replay_command, lines=(changed,))
+    assert error.value.code == "idempotency_key_conflict"
+    assert count_operations(db) == 1
+
+
+def test_real_ledger_replay_rechecks_inventory_permission(db, replay_command):
+    world = replay_command.evidence.world
+    world.current_principal = replace(world.current_principal, entitlements=tuple(
+        entry for entry in world.current_principal.entitlements if entry.resource != "inventory_transaction"))
+    with pytest.raises(service.InventoryPostingError) as error:
+        run_replay(db, replay_command)
+    assert error.value.http_status_code == 403
+    assert count_operations(db) == 1
+
+
+def test_closed_work_order_cannot_start_a_new_key(db, replay_command, monkeypatch):
+    replay_command.evidence.order.status = "closed"
+    db.commit()
+    def must_not_post(*args, **kwargs):
+        pytest.fail("new command on closed work order reached inventory posting")
+    monkeypatch.setattr(service, "post_inventory_transaction", must_not_post)
+    with pytest.raises(service.WorkOrderMaterialPreflightError) as error:
+        run_replay(db, replay_command, idempotency_key="closed-order-new-key")
+    assert error.value.code == "work_order_inactive"
+    assert count_operations(db) == 1
+
+
+@pytest.mark.parametrize("condition", ["used", "damaged"])
+def test_recover_real_ledger_updates_balance_and_replays(db, world, monkeypatch, condition):
+    """Real SQLite inventory posting from a reviewed opening graph, without posting stubs."""
+    from app.inventory_models import StockBalance
+    from test_formal_inventory_established_read import _make_personal_account
+    from test_inventory_posting import establish_account_for_posting
+
+    account, location, _ = _make_personal_account(db, world, established=False)
+    account.condition_code = condition
+    db.flush()
+    establish_account_for_posting(db, world, account)
+    world.current_principal = replace(world.principal, entitlements=world.principal.entitlements + tuple(
+        replace(world.principal.entitlements[0], resource="work_order_material", action=action)
+        for action in ("read", "operate")))
+    db.add(AuditChainHead(id=uuid4(), stream_key="material_request",
+                         last_event_id=None, last_hash=None, version=0))
+    external = ExternalObject(id=uuid4(), source_system_id=world.source.id,
+                              entity_type="work_order", external_id=str(uuid4()))
+    db.add(external)
+    db.flush()
+    order = OamWorkOrder(id=uuid4(), external_object_id=external.id, work_order_no=str(uuid4()),
+                         organization_id=world.organization.id, engineer_person_id=world.person.id,
+                         status="active", source_updated_at=NOW)
+    db.add(order)
+    db.commit()
+    args = dict(actor=world.current_principal, work_order_id=order.id,
+                lines=(service.WorkOrderMaterialLineInput(
+                    material_id=world.material.id, stock_account_id=account.id,
+                    target_stock_account_id=account.id, condition_before=condition, quantity=Decimal("1")),),
+                idempotency_key="real-recover-key", request_id="real-recover-trace")
+    first, first_post = service.execute_recover_operation(db, **args)
+    db.commit()
+    assert db.get(StockBalance, account.id).quantity == Decimal("1")
+    assert db.get(InventoryTransaction, first_post.transaction_id).movement_type == "inbound"
+    replay, replay_post = service.execute_recover_operation(db, **args)
+    db.commit()
+    assert replay.id == first.id
+    assert replay_post.transaction_id == first_post.transaction_id
+    assert replay_post.replayed is True
+    assert db.get(StockBalance, account.id).quantity == Decimal("1")
+    assert count_operations(db) == 1
+
+    # A late business-audit failure occurs AFTER real inventory posting; the
+    # HTTP transaction must roll back the ledger, balance and all events.
+    from sqlalchemy.exc import SQLAlchemyError
+    counts_before = tuple(db.scalar(select(func.count()).select_from(model))
+                          for model in (InventoryTransaction, InventoryMovement, AuditEvent, OutboxEvent))
+    def fail_business_audit(*args, **kwargs):
+        raise SQLAlchemyError("injected after inventory posting")
+    monkeypatch.setattr(service, "append_audit_event", fail_business_audit)
+    with client_for(db, SimpleNamespace(world=world)) as client:
+        response = client.post(f"/api/v1/work-orders/{order.id}/material-operations/recover", json={
+            "operator_person_id": str(world.person.id),
+            "idempotency_key": "second-recover-key", "request_id": "second-recover-trace",
+            "lines": [{"material_id": str(world.material.id), "target_stock_account_id": str(account.id),
+                       "quantity": "1", "condition_before": condition}],
+        })
+    assert response.status_code == 503, response.text
+    assert db.get(StockBalance, account.id).quantity == Decimal("1")
+    assert count_operations(db) == 1
+    assert tuple(db.scalar(select(func.count()).select_from(model))
+                 for model in (InventoryTransaction, InventoryMovement, AuditEvent, OutboxEvent)) == counts_before
