@@ -4,7 +4,7 @@ const UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-
 const COORDINATE = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/;
 const DECIMAL = /^(?:0|[1-9]\d{0,14})(?:\.\d{1,3})?$/;
 const OPERATION_TYPES = new Set(["consume", "release", "occupy", "recover", "reverse"]);
-const OPERATION_STATUSES = new Set(["posted", "replayed"]);
+const OPERATION_STATUSES = new Set(["posted"]);
 
 export type WorkOrderMaterialOperation = "consume" | "release" | "occupy" | "recover";
 export type SerialVerification = Readonly<{ serial_id: string; sku_code: string; serial_no: string; qr_code: string }>;
