@@ -434,6 +434,6 @@ marker 原子推进到当前 head，尚未把云端重跑结果写成通过证�
 版本或审计/Outbox 事实。个人仓入账单的 `posting_transaction_id` 与 `inbound_postings` 绑定同一
 库存事务，后续审计或 Outbox 失败时随事务回滚。
 
-本批本地定向回归：收货、发运、入账与状态聚合 `41 passed`；此前已取得准确 SHA 的最新提交
+本批本地定向回归：收货、发运、入账与状态聚合 `48 passed`；此前已取得准确 SHA 的最新提交
 `3047344` 的 Client gate 与 PostgreSQL 16 release gate 均通过。状态聚合新增代码仍需随本批准确
 提交 SHA 重新通过两条云端门禁后，才能作为发布证据。

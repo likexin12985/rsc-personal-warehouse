@@ -5,7 +5,7 @@ request line so different materials can never cancel one another out.
 """
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import String, case, cast, exists, func, select
 
 from ..demand_models import MaterialRequest, MaterialRequestLine
 from ..inventory_models import (
@@ -22,8 +22,31 @@ _ZERO = Decimal("0.000")
 
 
 def _accepted_total(db, *, request_id, request_line_id, posted_only=False):
+    quantity = ReceiptLine.accepted_qty
+    if posted_only:
+        posted_receipt = exists(
+            select(1)
+            .select_from(InboundOrder)
+            .join(InboundPosting, InboundPosting.inbound_order_id == InboundOrder.id)
+            .join(
+                InventoryTransaction,
+                InventoryTransaction.id == InboundPosting.inventory_transaction_id,
+            )
+            .where(
+                InboundOrder.receipt_id == ReceiptLine.receipt_id,
+                InventoryTransaction.status == "posted",
+                InventoryTransaction.movement_type == "transfer",
+                InventoryTransaction.source_document_type == "personal_inbound",
+                func.replace(cast(InboundOrder.id, String), "-", "")
+                == func.replace(InventoryTransaction.source_document_id, "-", ""),
+            )
+        )
+        # EXISTS preserves one receipt-line quantity even if a malformed
+        # historical receipt has multiple order/posting bindings.
+        quantity = case((posted_receipt, quantity), else_=0)
     query = (
-        select(func.coalesce(func.sum(ReceiptLine.accepted_qty), 0))
+        select(func.coalesce(func.sum(quantity), 0))
+        .select_from(ReceiptLine)
         .join(Receipt, Receipt.id == ReceiptLine.receipt_id)
         .join(ShipmentLine, ShipmentLine.id == ReceiptLine.shipment_line_id)
         .join(OutboundPosting, OutboundPosting.id == ShipmentLine.outbound_posting_id)
@@ -33,19 +56,6 @@ def _accepted_total(db, *, request_id, request_line_id, posted_only=False):
             Receipt.status.in_(("accepted", "exception")),
         )
     )
-    if posted_only:
-        query = query.join(
-            InboundOrder, InboundOrder.receipt_id == Receipt.id
-        ).join(
-            InboundPosting, InboundPosting.inbound_order_id == InboundOrder.id
-        ).join(
-            InventoryTransaction,
-            InventoryTransaction.id == InboundPosting.inventory_transaction_id,
-        ).where(
-            InventoryTransaction.status == "posted",
-            InventoryTransaction.movement_type == "transfer",
-            InventoryTransaction.source_document_type == "personal_inbound",
-        )
     return Decimal(db.scalar(query) or _ZERO)
 
 
@@ -70,21 +80,17 @@ def personal_inbound_state(db, request: MaterialRequest) -> str:
     if not lines:
         return "not_started"
 
-    expected = _ZERO
-    accepted = _ZERO
-    posted = _ZERO
+    line_totals = []
     shipped = False
     for line in lines:
         net = Decimal(line.final_approved_qty) - Decimal(line.cancelled_qty)
-        expected += net
         accepted_line = _accepted_total(
             db, request_id=request.id, request_line_id=line.id
         )
         posted_line = _accepted_total(
             db, request_id=request.id, request_line_id=line.id, posted_only=True
         )
-        accepted += accepted_line
-        posted += posted_line
+        line_totals.append((net, accepted_line, posted_line))
         if db.scalar(
             select(ShipmentLine.id)
             .join(OutboundPosting, OutboundPosting.id == ShipmentLine.outbound_posting_id)
@@ -97,13 +103,11 @@ def personal_inbound_state(db, request: MaterialRequest) -> str:
         ) is not None:
             shipped = True
 
-    if expected <= _ZERO:
-        return "not_started"
-    if posted == expected:
+    if all(posted_line >= net for net, _, posted_line in line_totals):
         return "posted"
-    if accepted == expected:
+    if all(accepted_line >= net for net, accepted_line, _ in line_totals):
         return "accepted"
-    if accepted > _ZERO:
+    if any(accepted_line > _ZERO for _, accepted_line, _ in line_totals):
         return "partially_accepted"
     return "pending_acceptance" if shipped else "not_started"
 

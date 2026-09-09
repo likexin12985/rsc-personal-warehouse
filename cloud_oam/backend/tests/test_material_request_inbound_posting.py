@@ -17,7 +17,10 @@ from app.inventory_models import (
     StockAccount, StockBalance, StockLocation,
 )
 from app.formal_services import material_request_inbound as inbound
-from app.formal_services.material_request_inbound_state import refresh_personal_inbound_status
+from app.formal_services.material_request_inbound_state import (
+    _accepted_total,
+    refresh_personal_inbound_status,
+)
 from app.formal_services import inventory_posting as inventory
 from test_material_request_outbound import outbound_world, _create as create_outbound
 from test_material_request_picking import pick_world
@@ -176,6 +179,45 @@ def test_unposted_accepted_quantity_is_accepted_state(inbound_world):
     refresh_personal_inbound_status(world.db, world.request)
 
     assert world.request.personal_inbound_status == "accepted"
+
+
+def test_posted_state_uses_exists_and_does_not_multiply_receipt_line(inbound_world):
+    world = inbound_world
+    now = datetime.now(timezone.utc)
+    duplicate_order = InboundOrder(
+        id=uuid4(), inbound_no="INB-DUPLICATE", receipt_id=world.receipt.id,
+        target_location_id=world.order.target_location_id,
+        target_person_id=world.order.target_person_id, status="posted",
+        posting_transaction_id=None, created_at=now,
+    )
+    world.db.add(duplicate_order)
+    world.db.flush()
+    duplicate_transaction = InventoryTransaction(
+        id=uuid4(), transaction_no="INV-IN-DUPLICATE", movement_type="transfer",
+        source_document_type="personal_inbound", source_document_id=str(duplicate_order.id),
+        posting_key="personal-inbound-duplicate", idempotency_key_hash="e" * 64,
+        request_hash="f" * 64, status="posted", effective_at=now, posted_at=now,
+        ledger_cursor=10001, actor_user_id=world.actor.user_id,
+    )
+    world.db.add(duplicate_transaction)
+    world.db.flush()
+    world.db.add(InboundPosting(
+        id=uuid4(), inbound_order_id=duplicate_order.id,
+        inventory_transaction_id=duplicate_transaction.id, created_at=now,
+    ))
+    world.db.flush()
+    posting = world.db.scalar(
+        select(OutboundPosting).where(OutboundPosting.request_id == world.request.id)
+    )
+    receipt_line = world.db.scalar(select(ReceiptLine).where(ReceiptLine.receipt_id == world.receipt.id))
+
+    assert _accepted_total(
+        world.db, request_id=world.request.id, request_line_id=posting.request_line_id
+    ) == receipt_line.accepted_qty
+    assert _accepted_total(
+        world.db, request_id=world.request.id, request_line_id=posting.request_line_id,
+        posted_only=True,
+    ) == receipt_line.accepted_qty
 
 
 def test_failed_first_post_rolls_back_order_transaction_binding(inbound_world, monkeypatch):
