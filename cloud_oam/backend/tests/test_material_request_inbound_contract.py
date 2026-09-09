@@ -63,10 +63,12 @@ def test_inbound_posting_skips_rejected_only_receipt_lines(monkeypatch):
     monkeypatch.setattr(inbound_service, "resolve_personal_target_account", lambda db, **kwargs: SimpleNamespace(id=ID))
     monkeypatch.setattr(inbound_service, "build_inbound_posting_command", lambda db, **kwargs: SimpleNamespace(movements=(SimpleNamespace(quantity=Decimal("2.000")),)))
     monkeypatch.setattr(inbound_service, "post_inventory_transaction", lambda *args, **kwargs: SimpleNamespace(transaction_id=ID, replayed=False))
+    monkeypatch.setattr(inbound_service, "append_audit_event", lambda *args, **kwargs: None)
 
     result = inbound_service.post_inbound_order(db, actor=SimpleNamespace(user_id=ID), inbound_order_id=ID, material_request_id=ID, idempotency_key="idem", request_id="trace")
     assert result["inventory_transaction_id"] == ID
-    assert len(db.added) == 1
+    assert len(db.added) == 2
+    assert db.added[1].event_type == "personal_inbound_posted"
 
 
 def test_inbound_posting_rejects_receipt_with_no_accepted_quantity(monkeypatch):
