@@ -486,3 +486,49 @@ def execute_release_operation(
         posting_transaction_id=posted.transaction_id, idempotency_key=idempotency_key,
     )
     return operation, posted
+
+
+def execute_recover_operation(
+    db: Session, *, actor: FormalPrincipal, work_order_id: UUID,
+    lines: tuple[WorkOrderMaterialLineInput, ...], idempotency_key: str,
+    request_id: str,
+) -> tuple[WorkOrderMaterialOperation, object]:
+    """Receive returned material into the operator's available personal account."""
+    order, current = authorize_work_order(db, actor=actor, work_order_id=work_order_id,
+                                          action="operate", lock_rows=True)
+    validate_batch(lines)
+    if not idempotency_key.strip():
+        raise WorkOrderMaterialPreflightError("idempotency_key_missing", "缺少幂等键", "precondition_failed")
+    for line in lines:
+        if line.target_stock_account_id is None:
+            raise WorkOrderMaterialPreflightError("recover_target_missing", "回收必须指定可用目标账户", "invalid_request")
+        target = db.get(StockAccount, line.target_stock_account_id, populate_existing=True)
+        location = db.get(StockLocation, target.location_id, populate_existing=True) if target else None
+        if (target is None or target.material_id != line.material_id
+                or target.custodian_person_id != current.person_id
+                or target.availability_bucket != "available"
+                or location is None or location.location_type != "personal"
+                or location.custodian_person_id != current.person_id):
+            raise WorkOrderMaterialPreflightError("recover_target_invalid", "回收目标不是当前人员的可用个人仓账户", "conflict")
+    key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
+    command = InventoryPostingCommand(
+        transaction_no=f"INV-WO-RECOVER-{key_hash[:20].upper()}", movement_type="return",
+        source_document_type="work_order_material", source_document_id=str(work_order_id),
+        posting_key=f"work-order-material:recover:{work_order_id}:{key_hash}",
+        effective_at=datetime.now(timezone.utc),
+        movements=tuple(InventoryMovementCommand(
+            from_account_id=None, to_account_id=line.target_stock_account_id,
+            quantity=line.quantity, serial_ids=line.serial_ids,
+            external_boundary_code="work_order_material_recover",
+        ) for line in lines),
+    )
+    posted = post_inventory_transaction(
+        db, actor=current, command=command,
+        idempotency_key=f"work-order-material:recover:{idempotency_key}", request_id=request_id,
+    )
+    operation = record_posted_operation(
+        db, actor=current, operation_type="recover", work_order_id=work_order_id,
+        operator_person_id=current.person_id, lines=lines,
+        posting_transaction_id=posted.transaction_id, idempotency_key=idempotency_key,
+    )
+    return operation, posted

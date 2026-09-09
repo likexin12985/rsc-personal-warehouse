@@ -336,3 +336,30 @@ def test_atomic_consume_composes_posting_and_fact_in_one_session(db, evidence, m
     assert result is operation and transaction is posted
     assert calls[0][1].movement_type == "consume"
     assert calls == [("inventory", calls[0][1]), ("fact", posted.transaction_id)]
+
+
+def test_atomic_recover_posts_external_to_personal_available(db, evidence, monkeypatch):
+    target = SimpleNamespace(id=uuid4(), material_id=evidence.world.material.id,
+                             custodian_person_id=evidence.world.person.id,
+                             availability_bucket="available", location_id=uuid4())
+    location = SimpleNamespace(id=target.location_id, location_type="personal",
+                               custodian_person_id=evidence.world.person.id)
+    monkeypatch.setattr(service, "authorize_work_order",
+                        lambda *args, **kwargs: (evidence.order, evidence.world.current_principal))
+    monkeypatch.setattr(db, "get", lambda model, key, **kwargs: target if model.__name__ == "StockAccount" else location)
+    posted = SimpleNamespace(transaction_id=uuid4())
+    operation = SimpleNamespace(id=uuid4())
+    calls = []
+    monkeypatch.setattr(service, "post_inventory_transaction",
+                        lambda db, **kwargs: (calls.append(kwargs["command"]) or posted))
+    monkeypatch.setattr(service, "record_posted_operation",
+                        lambda db, **kwargs: (calls.append(kwargs["operation_type"]) or operation))
+    line = replace(evidence.line, target_stock_account_id=target.id)
+    result, transaction = service.execute_recover_operation(
+        db, actor=evidence.world.current_principal, work_order_id=evidence.order.id,
+        lines=(line,), idempotency_key="atomic-recover-1", request_id="recover-request-1")
+    assert result is operation and transaction is posted
+    assert calls[0].movement_type == "return"
+    assert calls[0].movements[0].from_account_id is None
+    assert calls[0].movements[0].to_account_id == target.id
+    assert calls[1] == "recover"
