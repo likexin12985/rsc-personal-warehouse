@@ -19,6 +19,7 @@ import type {
   WorkOrderListRow,
 } from "../types";
 import { Button, Empty, Field, Loading, Modal, SectionHeader, showError } from "../ui";
+import { listWorkOrderMaterialOperations, type WorkOrderMaterialOperationHistory } from "../workOrderMaterialOperations";
 
 const PAGE_SIZE = 50;
 const STATUS_LABELS: Record<string, string> = {
@@ -54,7 +55,7 @@ const COLUMN_TYPE_LABELS: Record<string, string> = {
 };
 const TERMINAL_STATUSES = new Set(["end", "stopped", "closed", "rejected"]);
 
-type DetailTab = "basic" | "work-items" | "cost" | "timeline";
+type DetailTab = "basic" | "work-items" | "cost" | "timeline" | "material-operations";
 
 export function formatOamDate(value?: string | null): string {
   if (!value) return "-";
@@ -258,13 +259,34 @@ function WorkOrderDetailModal({ row, onClose }: { row: WorkOrderListRow; onClose
         <button className={tab === "work-items" ? "active" : ""} onClick={() => setTab("work-items")}>工作项<span>{detail.counts.checkItems || 0}</span></button>
         <button className={tab === "cost" ? "active" : ""} onClick={() => setTab("cost")}>费用 / 报价<span>{detail.counts.quotations || 0}</span></button>
         <button className={tab === "timeline" ? "active" : ""} onClick={() => setTab("timeline")}>操作日志<span>{detail.counts.timeline || 0}</span></button>
+        <button className={tab === "material-operations" ? "active" : ""} onClick={() => setTab("material-operations")}>物料履约</button>
       </div>
       {tab === "basic" && <BasicTab detail={detail} />}
       {tab === "work-items" && <WorkItemsTab detail={detail} />}
       {tab === "cost" && <CostTab detail={detail} />}
       {tab === "timeline" && <TimelineTab detail={detail} />}
+      {tab === "material-operations" && <MaterialOperationsTab workOrderId={detail.summary.id} />}
     </>}
   </Modal>;
+}
+
+function MaterialOperationsTab({ workOrderId }: { workOrderId: string }) {
+  const [history, setHistory] = useState<WorkOrderMaterialOperationHistory | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    setLoading(true); setError("");
+    listWorkOrderMaterialOperations(workOrderId)
+      .then((value) => { if (active) setHistory(value); })
+      .catch((err) => { if (active) setError(showError(err)); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [workOrderId]);
+  if (loading) return <Loading label="正在读取工单物料履约记录" />;
+  if (error) return <div className="work-order-detail-blocked"><FileClock size={32} /><strong>物料履约记录暂不可用</strong><p>{error}</p></div>;
+  if (!history?.items.length) return <Empty title="暂无正式物料履约记录" detail="分配、占用、消耗、释放或收回完成后会显示在这里" />;
+  return <div className="work-order-tab-panel"><div className="table-wrap"><table><thead><tr><th>操作号</th><th>操作类型</th><th>过账事务</th><th>状态</th></tr></thead><tbody>{history.items.map((item) => <tr key={item.operation_id}><td className="mono">{item.operation_no}</td><td>{({ consume: "消耗", release: "释放", occupy: "占用", recover: "收回" } as Record<string, string>)[item.operation_type] || item.operation_type}</td><td className="mono">{item.posting_transaction_id}</td><td>{item.status}</td></tr>)}</tbody></table></div></div>;
 }
 
 function BasicTab({ detail }: { detail: WorkOrderDetail }) {
