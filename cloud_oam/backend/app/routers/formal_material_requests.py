@@ -63,7 +63,7 @@ from ..formal_services import material_request_inbound as inbound_service
 from ..formal_services.inventory_posting import InventoryPostingError
 from ..formal_services import material_request_logistics as logistics_service
 from ..material_request_outbound_schemas import OutboundOptionsOut, OutboundIn, OutboundOut, OutboundStatusOut
-from ..material_request_shipment_schemas import ShipmentIn, ShipmentOut, ShipmentOptionsOut
+from ..material_request_shipment_schemas import ShipmentIn, ShipmentOut, ShipmentOptionsOut, ShipmentCommandStatusOut
 from ..material_request_receipt_schemas import ReceiptIn, ReceiptOut
 from ..material_request_inbound_schemas import InboundOrderIn, InboundOrderOut, InboundPostingOut
 from ..material_request_logistics_schemas import LogisticsEventIn, LogisticsEventOut
@@ -910,6 +910,35 @@ def list_formal_material_request_shipment_options(
     _set_read_no_store(response)
     try:
         return shipment_service.list_shipment_options(db, actor=principal, request_id=material_request_id)
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+
+@router.get("/{material_request_id}/shipment-command-status", response_model=ShipmentCommandStatusOut)
+def shipment_command_status(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+):
+    """Read-only recovery probe for a timed-out shipment submission."""
+    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128)
+    _set_read_no_store(response)
+    try:
+        secret = _require_lifecycle_idempotency_secret(runtime_settings)
+        result = shipment_service.shipment_command_status(
+            db, actor=principal, request_id=material_request_id,
+            idempotency_key=key, secret=secret,
+        )
+        return ShipmentCommandStatusOut(
+            lookup_status="confirmed" if result is not None else "not_observed",
+            request_hash=None if result is None else result["request_hash"],
+            command=None if result is None else ShipmentOut(**result["command"]),
+        )
+    except (shipment_service.ShipmentError, query_service.MaterialRequestReadError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
     except Exception as exc:
         _rollback_and_raise(db, exc)
 
@@ -1846,6 +1875,12 @@ def _require_lifecycle_write_runtime(settings: Settings) -> str:
             "正式需求单写功能尚未启用",
             status.HTTP_503_SERVICE_UNAVAILABLE,
         )
+    return _require_lifecycle_idempotency_secret(settings)
+
+
+def _require_lifecycle_idempotency_secret(settings: Settings) -> str:
+    """Read the shipment/lifecycle idempotency secret without enabling writes."""
+
     secret = settings.material_request_idempotency_hmac_secret.strip()
     if not _configured_secret(secret):
         raise _MaterialRequestAdapterError(

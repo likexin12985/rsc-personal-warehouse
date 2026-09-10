@@ -10,6 +10,7 @@ from ..foundation_models import OutboxEvent
 from ..inventory_models import OutboundPosting, OutboundPostingSerial, Shipment, ShipmentLine, ShipmentSerial, StockAccount, InventorySerial
 from . import material_request_outbound as outbound
 from . import material_request_reservation as reserve
+from . import material_request_query
 from .audit_chain import append_audit_event, AuditChainError
 
 class ShipmentError(Exception):
@@ -82,6 +83,50 @@ def _result(db, shipment, request, replayed, lines=None):
     if lines is None:
         lines=[{'shipment_line_id':x.id,'outbound_posting_id':x.outbound_posting_id,'shipped_qty':_text(x.shipped_qty),'serial_ids':tuple(db.scalars(select(ShipmentSerial.serial_id).where(ShipmentSerial.shipment_line_id==x.id)).all())} for x in db.scalars(select(ShipmentLine).where(ShipmentLine.shipment_id==shipment.id)).all()]
     return {'schema_version':'1.0','shipment_id':shipment.id,'shipment_no':shipment.shipment_no,'request_id':request.id,'status':shipment.status,'target_location_id':shipment.target_location_id,'target_person_id':shipment.target_person_id,'carrier':shipment.carrier,'tracking_no':shipment.tracking_no,'shipped_at':shipment.shipped_at.isoformat(),'lines':tuple(lines),'idempotency_replayed':replayed}
+
+def shipment_command_status(db, *, actor, request_id, idempotency_key, secret):
+    """Recover the result of a possibly timed-out shipment POST.
+
+    ``not_observed`` is deliberately not a negative acknowledgement: a command
+    may still be committing outside this read transaction.  A found shipment
+    is returned only after the current actor, request visibility, authorization
+    version, and every bound source account have been revalidated.
+    """
+    if not isinstance(secret, bytes):
+        secret = secret.encode()
+    if len(secret) < 32:
+        _fail('secret_invalid', 'service_unavailable', '发运幂等配置不可用')
+    if not isinstance(idempotency_key, str) or not 16 <= len(idempotency_key) <= 128:
+        _fail('idempotency_key_invalid', 'invalid_request', '幂等键无效')
+    context = material_request_query._load_read_context(db, actor=actor, now=None)
+    request = db.scalar(select(MaterialRequest).where(
+        MaterialRequest.id == request_id,
+        material_request_query._visible_request_predicate(context),
+    ))
+    if request is None:
+        _fail('not_found', 'not_found', '需求单不存在')
+    path = f'/api/v1/material-requests/{request_id}/shipments'
+    key_hash = hmac.new(secret, f'{actor.user_id}:POST:{path}:{idempotency_key}'.encode(), hashlib.sha256).hexdigest()
+    shipment = db.scalar(select(Shipment).where(Shipment.idempotency_key_hash == key_hash))
+    if shipment is None:
+        return None
+    if shipment.actor_user_id != actor.user_id or shipment.actor_person_id != actor.person_id or shipment.authorization_version != actor.authorization_version:
+        _fail('authorization_changed', 'precondition_failed', '原发运授权已变化')
+    if not isinstance(shipment.request_hash, str) or len(shipment.request_hash) != 64 or any(c not in '0123456789abcdef' for c in shipment.request_hash):
+        _fail('history_invalid', 'service_unavailable', '发运历史证据不完整，保留原请求继续核验')
+    lines = tuple(db.scalars(select(ShipmentLine).where(ShipmentLine.shipment_id == shipment.id)).all())
+    if not lines:
+        _fail('history_invalid', 'service_unavailable', '发运历史证据不完整，保留原请求继续核验')
+    for line in lines:
+        fact = db.get(OutboundPosting, line.outbound_posting_id)
+        if fact is None or fact.request_id != request_id:
+            _fail('history_invalid', 'service_unavailable', '发运历史证据不完整，保留原请求继续核验')
+        outbound.verified_outbound_history(db, fact=fact, request=request)
+        source = db.get(StockAccount, fact.source_stock_account_id)
+        if source is None:
+            _fail('history_invalid', 'service_unavailable', '发运来源账户不存在')
+        outbound._authorize_account_ids(db, actor, (source.id,), action='read', resource='inventory', lock_rows=False)
+    return {'request_hash': shipment.request_hash, 'command': _result(db, shipment, request, replayed=True)}
 
 def list_shipments(db, *, actor, request_id):
     request = db.get(MaterialRequest, request_id)

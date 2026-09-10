@@ -1,4 +1,5 @@
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
@@ -59,3 +60,10 @@ class ShipmentOptionsOut(BaseModel):
     request_id: UUID
     request_version: int
     items: tuple[dict, ...]
+
+class ShipmentCommandStatusOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: str = "1.0"
+    lookup_status: Literal["confirmed", "not_observed"]
+    request_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    command: ShipmentOut | None

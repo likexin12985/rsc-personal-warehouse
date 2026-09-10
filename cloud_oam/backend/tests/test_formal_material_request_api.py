@@ -25,6 +25,7 @@ from app.formal_services import material_request_edit as edit_service
 from app.formal_services import material_request_lifecycle as lifecycle_service
 from app.formal_services import material_request_query as query_service
 from app.formal_services import material_request_supply as supply_service
+from app.formal_services import material_request_shipment as shipment_service
 from app.formal_services.material_request_policy import ApprovalLineDecision
 from app.material_request_read_schemas import MaterialRequestPageOut
 from app.routers import formal_material_requests
@@ -1338,3 +1339,36 @@ def test_supply_command_recovery_cannot_downgrade_broken_evidence_to_not_observe
     assert "not_observed" not in response.text
     db.commit.assert_not_called()
     db.rollback.assert_not_called()
+
+
+def test_shipment_command_status_is_readable_when_writes_are_disabled(api_client, monkeypatch):
+    client, db, principal_box, _cipher, settings = api_client
+    settings.material_request_writes_enabled = False
+    service = Mock(return_value=None)
+    monkeypatch.setattr(formal_material_requests.shipment_service, "shipment_command_status", service)
+    response = client.get(
+        f"/api/v1/material-requests/{REQUEST_ID}/shipment-command-status",
+        headers={"Idempotency-Key": "shipment-command-status-http-001"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema_version": "1.0", "lookup_status": "not_observed",
+        "request_hash": None, "command": None,
+    }
+    assert "no-store" in response.headers["Cache-Control"]
+    service.assert_called_once()
+    assert service.call_args.kwargs["actor"] is principal_box["value"]
+    db.commit.assert_not_called()
+
+
+def test_shipment_command_status_rejects_missing_or_short_idempotency_key(api_client, monkeypatch):
+    client, _db, _principal, _cipher, _settings = api_client
+    service = Mock(return_value=None)
+    monkeypatch.setattr(formal_material_requests.shipment_service, "shipment_command_status", service)
+    missing = client.get(f"/api/v1/material-requests/{REQUEST_ID}/shipment-command-status")
+    short = client.get(
+        f"/api/v1/material-requests/{REQUEST_ID}/shipment-command-status",
+        headers={"Idempotency-Key": "too-short"},
+    )
+    assert missing.status_code == 400 and short.status_code == 400
+    service.assert_not_called()
