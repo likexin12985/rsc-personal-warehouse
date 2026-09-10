@@ -46,6 +46,8 @@ class ShipmentOut(BaseModel):
     shipment_no: str
     request_id: UUID
     status: str
+    target_location_id: UUID
+    target_person_id: UUID | None
     carrier: str
     tracking_no: str
     shipped_at: str

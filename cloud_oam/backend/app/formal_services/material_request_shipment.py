@@ -81,7 +81,7 @@ def create_shipment(db, *, actor, request_id, expected_version, target_location_
 def _result(db, shipment, request, replayed, lines=None):
     if lines is None:
         lines=[{'shipment_line_id':x.id,'outbound_posting_id':x.outbound_posting_id,'shipped_qty':_text(x.shipped_qty),'serial_ids':tuple(db.scalars(select(ShipmentSerial.serial_id).where(ShipmentSerial.shipment_line_id==x.id)).all())} for x in db.scalars(select(ShipmentLine).where(ShipmentLine.shipment_id==shipment.id)).all()]
-    return {'schema_version':'1.0','shipment_id':shipment.id,'shipment_no':shipment.shipment_no,'request_id':request.id,'status':shipment.status,'carrier':shipment.carrier,'tracking_no':shipment.tracking_no,'shipped_at':shipment.shipped_at.isoformat(),'lines':tuple(lines),'idempotency_replayed':replayed}
+    return {'schema_version':'1.0','shipment_id':shipment.id,'shipment_no':shipment.shipment_no,'request_id':request.id,'status':shipment.status,'target_location_id':shipment.target_location_id,'target_person_id':shipment.target_person_id,'carrier':shipment.carrier,'tracking_no':shipment.tracking_no,'shipped_at':shipment.shipped_at.isoformat(),'lines':tuple(lines),'idempotency_replayed':replayed}
 
 def list_shipments(db, *, actor, request_id):
     request = db.get(MaterialRequest, request_id)
