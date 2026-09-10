@@ -40,5 +40,5 @@ it("derives the inbound destination from the bound shipment", async () => {
   fireEvent.change(await screen.findByRole("combobox", {name:"收货单"}), {target:{value:ID(1)}});
   expect((screen.getByRole("textbox", {name:"目标位置 ID"}) as HTMLInputElement).value).toBe(ID(7));
   expect((screen.getByRole("textbox", {name:"目标人员 ID"}) as HTMLInputElement).value).toBe(ID(8));
-  expect(screen.getByRole("textbox", {name:"目标位置 ID"})).toHaveAttribute("readonly");
+  expect((screen.getByRole("textbox", {name:"目标位置 ID"}) as HTMLInputElement).readOnly).toBe(true);
 });
