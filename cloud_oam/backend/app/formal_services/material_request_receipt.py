@@ -4,7 +4,7 @@ from decimal import Decimal
 import hashlib, hmac, json, uuid
 from sqlalchemy import func, select
 from ..demand_models import MaterialRequest
-from ..foundation_models import OutboxEvent
+from ..foundation_models import FileObject, OutboxEvent
 from ..inventory_models import Shipment, ShipmentLine, ShipmentSerial, OutboundPosting, Receipt, ReceiptLine, ReceiptSerial, ReceiptException
 from .audit_chain import append_audit_event
 from . import material_request_outbound as outbound
@@ -22,6 +22,13 @@ def _validate_serial_receipt_quantity(total, given, bound, used):
 def _receipt_status(checked):
     """Any non-normal condition remains an exception even with zero shortage."""
     return "accepted" if all(Decimal(x.rejected_qty) == 0 and x.condition == "normal" for _, x, _, _ in checked) else "exception"
+
+def _validate_evidence_file(db, file_id):
+    if file_id is None:
+        return
+    row = db.get(FileObject, file_id)
+    if row is None or row.status != "available":
+        _fail("evidence_file_unavailable", "precondition_failed", "异常证据文件不存在或尚未完成上传")
 
 def create_receipt(db, *, actor, request_id, expected_version, receiver_person_id, received_at, lines, idempotency_key, secret, trace_request_id):
     if not isinstance(secret, bytes): secret = secret.encode()
@@ -42,6 +49,7 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
     if request.version != expected_version: _fail("version_conflict", "conflict", "需求版本已变化，请重新读取")
     now = datetime.now(timezone.utc); checked = []; shipment_id = None
     for line in lines:
+        _validate_evidence_file(db, line.exception_evidence_file_id)
         shipment_line = db.get(ShipmentLine, line.shipment_line_id)
         if shipment_line is None: _fail("shipment_line_not_found", "not_found", "发运明细不存在")
         posting = db.get(OutboundPosting, shipment_line.outbound_posting_id)

@@ -2,7 +2,7 @@ from decimal import Decimal
 from uuid import UUID
 import pytest
 from app.material_request_receipt_schemas import ReceiptIn, ReceiptOut
-from app.formal_services.material_request_receipt import ReceiptError, _receipt_status, _validate_serial_receipt_quantity
+from app.formal_services.material_request_receipt import ReceiptError, _receipt_status, _validate_evidence_file, _validate_serial_receipt_quantity
 
 ID = UUID("11111111-1111-1111-1111-111111111111")
 
@@ -29,3 +29,11 @@ def test_serial_receipt_quantity_must_be_whole_physical_units():
 def test_non_normal_condition_is_exception_even_when_quantity_is_accepted():
     line = type("Line", (), {"accepted_qty": Decimal("1.000"), "rejected_qty": Decimal("0.000"), "condition": "damaged"})()
     assert _receipt_status([(None, line, Decimal("1.000"), set())]) == "exception"
+
+def test_receipt_evidence_must_be_an_available_file():
+    class Db:
+        def get(self, model, key):
+            return None
+
+    with pytest.raises(ReceiptError, match="证据文件"):
+        _validate_evidence_file(Db(), ID)
