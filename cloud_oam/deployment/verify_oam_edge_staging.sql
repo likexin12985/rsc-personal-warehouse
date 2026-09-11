@@ -85,7 +85,9 @@ projector_read_tables(table_name) AS (
         'sync_conflicts',
         'organizations',
         'people',
-        'oam_work_orders'
+        'oam_work_orders',
+        'shipments',
+        'oam_receipt_evidence'
     ]::text[])
 ),
 projector_write_tables(table_name) AS (
@@ -220,7 +222,15 @@ expected_projector_insert_columns(table_name, column_name) AS (
         ('oam_work_orders', 'status'),
         ('oam_work_orders', 'source_updated_at'),
         ('oam_work_orders', 'created_at'),
-        ('oam_work_orders', 'updated_at')
+        ('oam_work_orders', 'updated_at'),
+        ('oam_receipt_evidence', 'id'),
+        ('oam_receipt_evidence', 'external_object_id'),
+        ('oam_receipt_evidence', 'shipment_id'),
+        ('oam_receipt_evidence', 'status'),
+        ('oam_receipt_evidence', 'source_time'),
+        ('oam_receipt_evidence', 'source_version'),
+        ('oam_receipt_evidence', 'payload_sha256'),
+        ('oam_receipt_evidence', 'created_at')
 ),
 expected_projector_update_columns(table_name, column_name) AS (
     VALUES
