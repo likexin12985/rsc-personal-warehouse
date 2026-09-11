@@ -317,7 +317,11 @@ def upgrade() -> None:
     op.execute(_RECEIPT_RLS_CHECK_SQL)
     op.execute(
         "REVOKE ALL ON FUNCTION public.rsc_oam_receipt_rls_check_0082(text,text,text,jsonb) "
-        "FROM PUBLIC, star_oam_api, star_oam_projector"
+        "FROM PUBLIC, star_oam_api"
+    )
+    op.execute(
+        "GRANT EXECUTE ON FUNCTION public.rsc_oam_receipt_rls_check_0082(text,text,text,jsonb) "
+        "TO star_oam_projector, star_oam_migrator"
     )
     for table in RECEIPT_TABLES:
         op.execute(f"ALTER TABLE public.{table} ENABLE ROW LEVEL SECURITY")

@@ -98,8 +98,14 @@ _FUNCTION_SQL = text(
                      COALESCE(function_row.proacl, pg_catalog.acldefault('f', function_row.proowner))
                  ) acl
                 WHERE acl.grantee = 0
-                   OR acl.grantee = projector_role.oid
-           ) AS public_or_projector_acl
+           ) AS public_acl,
+           EXISTS (
+               SELECT 1
+                 FROM pg_catalog.aclexplode(
+                     COALESCE(function_row.proacl, pg_catalog.acldefault('f', function_row.proowner))
+                 ) acl
+                WHERE acl.grantee = projector_role.oid
+           ) AS projector_acl
       FROM pg_catalog.pg_proc function_row
       JOIN pg_catalog.pg_namespace namespace_row
         ON namespace_row.oid = function_row.pronamespace
@@ -231,10 +237,12 @@ def verify_oam_receipt_projection_database_boundary(
         for field in ("owned_by_migration", "security_definer"):
             if not _bool(function, field):
                 failures.append(f"function.rsc_oam_receipt_rls_check_0082.{field}")
-        if _bool(function, "projector_can_execute") or _bool(
-            function, "public_or_projector_acl"
+        if not _bool(function, "projector_can_execute") or not _bool(
+            function, "projector_acl"
         ):
-            failures.append("function.rsc_oam_receipt_rls_check_0082.execute_excess")
+            failures.append("function.rsc_oam_receipt_rls_check_0082.projector_execute_missing")
+        if _bool(function, "public_acl"):
+            failures.append("function.rsc_oam_receipt_rls_check_0082.public_execute_excess")
     if binding is None:
         failures.append("bindings.table.missing")
     else:
