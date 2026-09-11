@@ -221,6 +221,10 @@ def publish_completed_oam_receipt_snapshot(
         manifest.source_system != snapshot.source_system
         or manifest.snapshot_id != snapshot.snapshot_id
         or manifest.scope_key != snapshot.scope_key
+        or manifest.sync_mode != snapshot.sync_mode
+        or manifest.company_id != snapshot.company_id
+        or manifest.org_code != snapshot.org_code
+        or _aware(manifest.snapshot_at) != _aware(snapshot.snapshot_at)
         or {entity.entity_type for entity in manifest.entities} != {OAM_RECEIPT_ENTITY}
     ):
         _fail("oam_receipt_manifest_mismatch", "OAM收货完成清单范围不一致")
