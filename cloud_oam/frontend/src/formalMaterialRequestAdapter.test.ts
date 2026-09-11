@@ -616,4 +616,18 @@ describe("formal material-request PC transport", () => {
       method: "GET", cache: "no-store", headers: { "Idempotency-Key": "web-logistics-key-123456", "Cache-Control": "no-store", Pragma: "no-cache" },
     }]);
   });
+
+  it("loads OAM receipt evidence through a no-store read", async () => {
+    const requester = makeRequester(async () => [{
+      schema_version: "1.0", evidence_id: "11111111-1111-4111-8111-000000000001",
+      external_object_id: "11111111-1111-4111-8111-000000000002",
+      shipment_id: "11111111-1111-4111-8111-000000000003", status: "synced",
+      source_time: "2026-09-11T08:00:00Z", source_version: "oam-receipt-v1", payload_sha256: "a".repeat(64),
+    }]);
+    const adapter = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, requester, requester);
+    await expect(adapter.listOamReceiptEvidence!(REQUEST_ID)).resolves.toHaveLength(1);
+    expect(requester.mock.calls[0]).toEqual([`/v1/material-requests/${REQUEST_ID}/oam-receipt-evidence`, {
+      cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+    }]);
+  });
 });

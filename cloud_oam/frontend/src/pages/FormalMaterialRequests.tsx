@@ -53,6 +53,7 @@ import FormalMaterialRequestOutboundPanel from "../FormalMaterialRequestOutbound
 import FormalMaterialRequestShipmentPanel from "../FormalMaterialRequestShipmentPanel";
 import FormalMaterialRequestInboundPanel from "../FormalMaterialRequestInboundPanel";
 import FormalMaterialRequestReceiptPanel from "../FormalMaterialRequestReceiptPanel";
+import FormalMaterialRequestOamReceiptPanel from "../FormalMaterialRequestOamReceiptPanel";
 import { createOutboundStore, type OutboundStore } from "../materialRequestOutbound";
 import FormalMaterialRequestPickPanel from "../FormalMaterialRequestPickPanel";
 import { createPickStore, type PickStore } from "../materialRequestReservationPick";
@@ -2379,6 +2380,7 @@ export default function FormalMaterialRequestsPage({
         onBlocking={onShipmentBlocking} onDetail={setDetail} />
       <fieldset disabled={shipmentBlocked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         <FormalMaterialRequestReceiptPanel adapter={adapter} detail={detail} />
+        <FormalMaterialRequestOamReceiptPanel adapter={adapter} detail={detail} />
         <FormalMaterialRequestInboundPanel adapter={adapter} detail={detail} />
       </fieldset>
       <FormalMaterialRequestPickPanel adapter={adapter} access={access} detail={detail} store={pickStore.current}

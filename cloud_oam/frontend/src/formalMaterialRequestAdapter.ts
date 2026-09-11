@@ -9,6 +9,7 @@ import { validateMaterialRequestAllocationCommandStatus, validateMaterialRequest
 import { validateMaterialRequestReservationCommandStatus, validateMaterialRequestReservationMutationResult, type MaterialRequestReservationCommandStatus, type MaterialRequestReservationMutationResult } from "./formalMaterialRequestReservationCommandStatus";
 import { type PickInput, type PickPage, type PickResult, validatePickInput, validatePickPage, validatePickResult, validatePickStatus } from "./materialRequestReservationPick";
 import { type ShipmentInput, type ShipmentResult, type ShipmentOptions, type InboundOrderInput, type InboundOrderResult, type InboundPostingResult, type LogisticsEventResult, type LogisticsEventInput, type ReceiptInput, type ReceiptResult, validateShipmentInput, validateShipmentResult, validateShipmentOptions, validateInboundOrderInput, validateInboundOrderResult, validateInboundPostingResult, validateLogisticsEventResult, validateLogisticsEventInput, validateReceiptInput, validateReceiptResult } from "./materialRequestShipment";
+import { type OamReceiptEvidenceResult, validateOamReceiptEvidence } from "./materialRequestOamReceipt";
 import { type OutboundInput, type OutboundPage, type OutboundResult, validateOutboundInput, validateOutboundPage, validateOutboundResult, validateOutboundStatus } from "./materialRequestOutbound";
 import { type ReleaseInput, type ReleasePage, type ReleaseResult, validateReleaseInput, validateReleasePage, validateReleaseResult, validateReleaseStatus } from "./materialRequestReservationRelease";
 import { validateMaterialRequestReservationOptionPage, type MaterialRequestReservationOptionPage } from "./formalMaterialRequestReservationOptions";
@@ -115,6 +116,7 @@ export interface FormalMaterialRequestAdapter {
   createLogisticsEvent?(requestId: string, shipmentId: string, input: LogisticsEventInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<LogisticsEventResult>;
   createReceipt?(requestId: string, input: ReceiptInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ReceiptResult>;
   listReceipts?(requestId: string): Promise<readonly ReceiptResult[]>;
+  listOamReceiptEvidence?(requestId: string): Promise<readonly OamReceiptEvidenceResult[]>;
   listInboundOrders?(requestId: string): Promise<readonly InboundOrderResult[]>;
   listShipmentOptions?(requestId: string): Promise<ShipmentOptions>;
   createShipment?(requestId: string, input: ShipmentInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ShipmentResult>;
@@ -935,6 +937,9 @@ export function createFormalMaterialRequestAdapter(
     },
     listReceipts(requestId: string) {
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/receipts`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(value => { if (!Array.isArray(value)) throw new ApiError(502, "收货查询响应无效"); return value.map(validateReceiptResult); });
+    },
+    listOamReceiptEvidence(requestId: string) {
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/oam-receipt-evidence`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(value => { if (!Array.isArray(value)) throw new ApiError(502, "OAM收货证据查询响应无效"); return value.map(validateOamReceiptEvidence); });
     },
     listInboundOrders(requestId: string) {
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/inbound-orders`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(value => { if (!Array.isArray(value)) throw new ApiError(502, "入账查询响应无效"); return value.map(validateInboundOrderResult); });
