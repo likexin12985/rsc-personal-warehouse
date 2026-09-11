@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import FormalMaterialRequestInboundPanel from "./FormalMaterialRequestInboundPanel";
+import { identity } from "./materialRequestReservationTestFixtures";
 
 afterEach(() => cleanup());
 const ID = (n:number) => `11111111-1111-4111-8111-${String(n).padStart(12,"0")}`;
@@ -9,7 +10,7 @@ const receipt = { schema_version:"1.0", receipt_id:ID(1), receipt_no:"RCT-1", sh
 const shipment = { schema_version:"1.0", shipment_id:ID(2), shipment_no:"SHP-1", request_id:ID(6), status:"shipped", target_location_id:ID(7), target_person_id:ID(8), carrier:"人工承运", tracking_no:"TRK-1", shipped_at:"2026-09-09T10:00:00Z", lines:[], idempotency_replayed:false } as const;
 const pending = { schema_version:"1.0", inbound_order_id:ID(3), inbound_no:"INB-1", receipt_id:ID(1), target_location_id:ID(4), target_person_id:ID(5), status:"pending", posting_transaction_id:null } as const;
 const detail = { request_id:ID(6), request_version:2 } as any;
-function props(overrides:any = {}) { return { detail, adapter: { listReceipts:vi.fn().mockResolvedValue([receipt]), listInboundOrders:vi.fn().mockResolvedValue([pending]), createInboundOrder:vi.fn().mockResolvedValue(pending), postInboundOrder:vi.fn(), ...overrides } as any }; }
+function props(overrides:any = {}) { return { detail, adapter: { listReceipts:vi.fn().mockResolvedValue([receipt]), listInboundOrders:vi.fn().mockResolvedValue([pending]), createInboundOrder:vi.fn().mockResolvedValue(pending), postInboundOrder:vi.fn(), loadIdentity:vi.fn().mockResolvedValue(identity()), ...overrides } as any }; }
 
 it("reloads a pending order and continues it without recreating the order", async () => {
   const p = props(); render(<FormalMaterialRequestInboundPanel {...p} />);
