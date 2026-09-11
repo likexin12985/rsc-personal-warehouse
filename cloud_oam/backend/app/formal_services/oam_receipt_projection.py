@@ -349,6 +349,24 @@ def next_unpublished_oam_receipt_snapshot_id(db: Session) -> str | None:
     return None
 
 
+def oam_receipt_snapshot_lock_coordinates(
+    db: Session,
+    *,
+    snapshot_id: str,
+) -> tuple[str, str] | None:
+    """Read the immutable edge scope before a worker opens its RR transaction."""
+
+    row = db.execute(
+        select(
+            ExternalSyncSnapshot.source_instance,
+            ExternalSyncSnapshot.scope_key,
+        ).where(ExternalSyncSnapshot.id == snapshot_id)
+    ).one_or_none()
+    if row is None:
+        return None
+    return str(row.source_instance), str(row.scope_key)
+
+
 def record_failed_oam_receipt_snapshot(
     db: Session,
     *,
@@ -416,6 +434,7 @@ __all__ = [
     "OamReceiptProjectionResult",
     "OamReceiptSnapshotProjectionResult",
     "next_unpublished_oam_receipt_snapshot_id",
+    "oam_receipt_snapshot_lock_coordinates",
     "project_oam_receipt_record",
     "publish_completed_oam_receipt_snapshot",
     "record_failed_oam_receipt_snapshot",
