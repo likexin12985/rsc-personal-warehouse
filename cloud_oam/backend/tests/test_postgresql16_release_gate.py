@@ -7415,8 +7415,8 @@ def _load_stock_reservations_migration_0069():
 def _head_runtime_ready_hash() -> str:
     import runpy
     return runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20260921_0081_oam_receipt_evidence.py"
-    )))["RUNTIME_READY_BODY_SHA256_0081"]
+        "20260922_0082_oam_receipt_projector_boundary.py"
+    )))["RUNTIME_READY_BODY_SHA256_0082"]
 
 
 def _assert_0058_review_terminal_catalog_state(
