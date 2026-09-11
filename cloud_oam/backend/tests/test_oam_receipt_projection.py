@@ -14,9 +14,10 @@ from app.foundation_models import ExternalObject, ExternalObjectMapping, SourceS
 from app.formal_services.oam_receipt_projection import (
     OamReceiptProjectionError,
     project_oam_receipt_record,
+    publish_completed_oam_receipt_snapshot,
 )
 from app.inventory_models import OamReceiptEvidence, Shipment
-from app.models import ExternalSyncCurrentRecord, User
+from app.models import ExternalSyncCurrentRecord, ExternalSyncSnapshot, User
 from app.routers.integrations import _validate_snapshot_entity_boundary, _validate_snapshot_manifest_boundary
 from app.schemas import EdgeSyncEntityManifestIn, EdgeSyncSnapshotBatchIn, EdgeSyncSnapshotCompleteIn
 
@@ -135,3 +136,49 @@ def test_receipt_snapshot_scope_is_separate_from_other_entities():
         entities=[EdgeSyncEntityManifestIn(entity_type="oam_receipt", final_record_count=0, final_sha256="a" * 64, delta_record_count=0, delta_sha256="b" * 64, batch_count=0)],
     )
     _validate_snapshot_manifest_boundary(manifest)
+
+
+def test_completed_snapshot_projects_current_mirror_and_replays(db):
+    source, shipment, row = _setup(db)
+    snapshot = ExternalSyncSnapshot(
+        id="snapshot-1",
+        source_system="starcharge_oam",
+        source_instance=row.source_instance,
+        snapshot_id="snapshot-1",
+        scope_key=row.scope_key,
+        sync_mode="incremental",
+        company_id="company-1",
+        org_code="org-1",
+        snapshot_at=SOURCE_TIME,
+        status="complete",
+        manifest_json="",
+        manifest_sha256="",
+        received_at=SOURCE_TIME,
+        completed_at=SOURCE_TIME,
+    )
+    db.add(snapshot)
+    db.flush()
+    wire = [{
+        "business_key": row.business_key,
+        "source_updated_at": SOURCE_TIME.isoformat(),
+        "data": json.loads(row.payload_json),
+    }]
+    manifest = EdgeSyncSnapshotCompleteIn(
+        snapshot_id="snapshot-1",
+        scope_key=row.scope_key,
+        sync_mode="incremental",
+        company_id="company-1",
+        org_code="org-1",
+        snapshot_at=SOURCE_TIME,
+        entities=[EdgeSyncEntityManifestIn(entity_type="oam_receipt", final_record_count=1, final_sha256=hashlib.sha256(_canonical(wire).encode()).hexdigest(), delta_record_count=1, delta_sha256="b" * 64, batch_count=1)],
+    )
+    snapshot.manifest_json = _canonical(manifest.model_dump(mode="json"))
+    snapshot.manifest_sha256 = hashlib.sha256(snapshot.manifest_json.encode()).hexdigest()
+    db.flush()
+    first = publish_completed_oam_receipt_snapshot(db, snapshot_id=snapshot.id, source=source)
+    replay = publish_completed_oam_receipt_snapshot(db, snapshot_id=snapshot.id, source=source)
+    assert first.projected_records == replay.projected_records == 1
+    assert first.duplicate_records == 0
+    assert replay.duplicate_records == 1
+    evidence = db.scalar(select(OamReceiptEvidence).where(OamReceiptEvidence.shipment_id == shipment.id))
+    assert evidence is not None
