@@ -129,7 +129,11 @@ def shipment_command_status(db, *, actor, request_id, idempotency_key, secret):
     return {'request_hash': shipment.request_hash, 'command': _result(db, shipment, request, replayed=True)}
 
 def list_shipments(db, *, actor, request_id):
-    request = db.get(MaterialRequest, request_id)
+    context = material_request_query._load_read_context(db, actor=actor, now=None)
+    request = db.scalar(select(MaterialRequest).where(
+        MaterialRequest.id == request_id,
+        material_request_query._visible_request_predicate(context),
+    ))
     if request is None: _fail('not_found','not_found','需求单不存在')
     rows = tuple(db.scalars(select(Shipment).where(
         Shipment.id.in_(select(ShipmentLine.shipment_id).join(OutboundPosting,
@@ -146,7 +150,11 @@ def list_shipments(db, *, actor, request_id):
 
 def list_shipment_options(db, *, actor, request_id):
     """Read each immutable outbound posting with its remaining shippable quantity."""
-    request = db.get(MaterialRequest, request_id)
+    context = material_request_query._load_read_context(db, actor=actor, now=None)
+    request = db.scalar(select(MaterialRequest).where(
+        MaterialRequest.id == request_id,
+        material_request_query._visible_request_predicate(context),
+    ))
     if request is None: _fail('not_found','not_found','需求单不存在')
     postings = tuple(db.scalars(select(OutboundPosting).where(OutboundPosting.request_id == request_id).order_by(OutboundPosting.created_at, OutboundPosting.id)).all())
     items = []
