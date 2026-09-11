@@ -271,8 +271,17 @@ _POLICY_VALUES = ",\n        ".join(
     "(" + ", ".join(_sql_nullable_literal(value) for value in policy) + ")"
     for policy in EXPECTED_POLICIES
 )
-_POLICY_NAMES_VALUES = ", ".join(
-    _sql_literal(policy[1]) for policy in EXPECTED_POLICIES
+_RECEIPT_POLICY_NAMES_VALUES = ", ".join(
+    _sql_literal(name)
+    for name in (
+        "external_sync_snapshots_projector_select_receipt_0082",
+        "external_sync_current_records_projector_select_receipt_0082",
+        "source_systems_projector_select_receipt_0082",
+        "sync_runs_projector_select_receipt_0082",
+        "sync_runs_projector_insert_receipt_0082",
+        "external_objects_projector_select_receipt_0082",
+        "external_object_mappings_projector_select_receipt_0082",
+    )
 )
 _TABLE_VALUES = ",\n        ".join(
     f"({_sql_literal(table_name)})" for table_name in RLS_TABLES
@@ -747,7 +756,7 @@ actual_policies AS (
         ON schema_row.oid = table_row.relnamespace
      WHERE schema_row.nspname = 'public'
        AND table_row.relname IN (SELECT table_name FROM required_tables)
-       AND policy.polname IN ({_POLICY_NAMES_VALUES})
+       AND policy.polname NOT IN ({_RECEIPT_POLICY_NAMES_VALUES})
 ),
 expected_functions(
     signature,

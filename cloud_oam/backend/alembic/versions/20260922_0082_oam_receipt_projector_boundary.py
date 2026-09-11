@@ -339,7 +339,7 @@ def upgrade() -> None:
         "ON public.oam_receipt_sync_scope_bindings AS PERMISSIVE FOR ALL "
         "TO star_oam_migrator USING (true) WITH CHECK (true)"
     )
-    for table in RECEIPT_TABLES:
+    for table in ("shipments", "oam_receipt_evidence"):
         op.execute(
             f"CREATE POLICY {table}_migrator_receipt_0082 ON public.{table} "
             "AS PERMISSIVE FOR ALL TO star_oam_migrator USING (true) WITH CHECK (true)"
