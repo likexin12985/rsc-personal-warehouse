@@ -1,5 +1,6 @@
 from decimal import Decimal
 from uuid import UUID
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 RECEIPT_CONDITIONS = frozenset({"normal", "shortage", "damaged", "wrong_material", "wrong_serial", "rejected"})
@@ -42,3 +43,10 @@ class ReceiptOut(BaseModel):
     lines: tuple[dict, ...]
     exceptions: tuple[dict, ...] = ()
     idempotency_replayed: bool = False
+
+class ReceiptCommandStatusOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: str = "1.0"
+    lookup_status: Literal["confirmed", "not_observed"]
+    request_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    command: ReceiptOut | None = None

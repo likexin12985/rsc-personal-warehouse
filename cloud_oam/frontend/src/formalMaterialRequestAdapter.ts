@@ -1,4 +1,5 @@
 import { type ShipmentCommandStatus, validateShipmentCommandStatus } from "./materialRequestShipmentRecovery";
+import { type ReceiptCommandStatus, validateReceiptCommandStatus } from "./materialRequestReceiptRecovery";
 import { api, apiNoReplay, ApiError, jsonBody } from "./api";
 import { formalMaterialCatalogQuery } from "./formalMaterialCatalog";
 import { validateMaterialRequestWorkOrderOptionQuery } from "./formalMaterialRequestOptions";
@@ -106,6 +107,7 @@ export interface FormalMaterialRequestAdapter {
   outboundCommandStatusNoReplay?(xRequestId: string): Promise<OutboundResult | null>;
   listOutboundOptions?(requestId: string, requestLineId: string): Promise<OutboundPage>;
   shipmentCommandStatusNoReplay?(requestId: string, key: string): Promise<ShipmentCommandStatus>;
+  receiptCommandStatusNoReplay?(requestId: string, key: string): Promise<ReceiptCommandStatus>;
   listShipments?(requestId: string): Promise<readonly ShipmentResult[]>;
   listLogisticsEvents?(requestId: string, shipmentId: string): Promise<readonly LogisticsEventResult[]>;
   createLogisticsEvent?(requestId: string, shipmentId: string, input: LogisticsEventInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<LogisticsEventResult>;
@@ -902,6 +904,12 @@ export function createFormalMaterialRequestAdapter(
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipment-command-status`, {
         cache: "no-store", headers: { "Idempotency-Key": key, "Cache-Control": "no-store", Pragma: "no-cache" },
       }).then(validateShipmentCommandStatus);
+    },
+    receiptCommandStatusNoReplay(requestId: string, key: string) {
+      if (!SAFE_COORDINATE.test(key) || key.length < 16 || key.length > 128) throw new ApiError(400, "收货核验坐标无效");
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/receipt-command-status`, {
+        cache: "no-store", headers: { "Idempotency-Key": key, "Cache-Control": "no-store", Pragma: "no-cache" },
+      }).then(validateReceiptCommandStatus);
     },
     listShipments(requestId: string) {
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipments`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(value => { if (!Array.isArray(value)) throw new ApiError(502, "发运查询响应无效"); return value.map(validateShipmentResult); });

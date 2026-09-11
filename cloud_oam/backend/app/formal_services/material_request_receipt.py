@@ -5,9 +5,10 @@ import hashlib, hmac, json, uuid
 from sqlalchemy import func, select
 from ..demand_models import MaterialRequest
 from ..foundation_models import FileObject, OutboxEvent
-from ..inventory_models import Shipment, ShipmentLine, ShipmentSerial, OutboundPosting, Receipt, ReceiptLine, ReceiptSerial, ReceiptException
+from ..inventory_models import Shipment, ShipmentLine, ShipmentSerial, OutboundPosting, Receipt, ReceiptLine, ReceiptSerial, ReceiptException, StockAccount
 from .audit_chain import append_audit_event
 from . import material_request_outbound as outbound
+from . import material_request_query
 
 class ReceiptError(Exception):
     def __init__(self, code, category, message): self.code, self.category, self.message = code, category, message
@@ -58,7 +59,13 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
         outbound._authorize_account_ids(db, actor, (posting.source_stock_account_id,), action="read", resource="inventory", lock_rows=False)
         shipment = db.get(Shipment, shipment_line.shipment_id)
         if shipment is None: _fail("shipment_not_found", "not_found", "发运单不存在")
-        if shipment.shipped_at is not None and when < shipment.shipped_at:
+        shipped_at = shipment.shipped_at
+        # SQLite test sessions return timezone-aware columns as naive values;
+        # persisted production timestamps are UTC, so normalize that read
+        # representation before enforcing the ordering invariant.
+        if shipped_at is not None and shipped_at.tzinfo is None:
+            shipped_at = shipped_at.replace(tzinfo=timezone.utc)
+        if shipped_at is not None and when < shipped_at:
             _fail("time_invalid", "precondition_failed", "收货时间不能早于交运时间")
         if shipment_id is None: shipment_id = shipment.id
         elif shipment_id != shipment.id: _fail("shipment_mismatch", "invalid_request", "一次收货只能对应一个发运单")
@@ -89,6 +96,65 @@ def _result(db, receipt, replayed, lines=None):
     if lines is None: lines = tuple({"receipt_line_id": x.id, "shipment_line_id": x.shipment_line_id, "accepted_qty": _qty(x.accepted_qty), "rejected_qty": _qty(x.rejected_qty), "serial_ids": tuple(db.scalars(select(ReceiptSerial.serial_id).where(ReceiptSerial.receipt_line_id == x.id)).all())} for x in db.scalars(select(ReceiptLine).where(ReceiptLine.receipt_id == receipt.id)).all())
     exceptions = tuple({"exception_id": x.id, "receipt_line_id": x.receipt_line_id, "exception_type": x.exception_type, "detail": x.detail, "evidence_file_id": x.evidence_file_id} for x in db.scalars(select(ReceiptException).where(ReceiptException.receipt_id == receipt.id).order_by(ReceiptException.created_at, ReceiptException.id)).all())
     return {"schema_version": "1.0", "receipt_id": receipt.id, "receipt_no": receipt.receipt_no, "shipment_id": receipt.shipment_id, "status": receipt.status, "lines": tuple(lines), "exceptions": exceptions, "idempotency_replayed": replayed}
+
+
+def receipt_command_status(db, *, actor, request_id, idempotency_key, secret):
+    """Recover a receipt POST after an uncertain transport result.
+
+    A missing row is deliberately returned as ``None``: the original write may
+    still be committing outside this read transaction.  A found row is exposed
+    only after the request visibility, receipt-line scope, immutable outbound
+    history, and current inventory read authorization have all been rechecked.
+    """
+    if not isinstance(secret, bytes):
+        secret = secret.encode()
+    if len(secret) < 32:
+        _fail("secret_invalid", "service_unavailable", "收货幂等配置不可用")
+    if not isinstance(idempotency_key, str) or not 16 <= len(idempotency_key) <= 128:
+        _fail("idempotency_key_invalid", "invalid_request", "幂等键无效")
+
+    context = material_request_query._load_read_context(db, actor=actor, now=None)
+    request = db.scalar(select(MaterialRequest).where(
+        MaterialRequest.id == request_id,
+        material_request_query._visible_request_predicate(context),
+    ))
+    if request is None:
+        _fail("not_found", "not_found", "需求单不存在")
+
+    path = f"/api/v1/material-requests/{request_id}/receipts"
+    key_hash = hmac.new(
+        secret,
+        f"{actor.user_id}:POST:{path}:{idempotency_key}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    receipt = db.scalar(select(Receipt).where(Receipt.idempotency_key_hash == key_hash))
+    if receipt is None:
+        return None
+    if not isinstance(receipt.request_hash, str) or len(receipt.request_hash) != 64 \
+            or any(c not in "0123456789abcdef" for c in receipt.request_hash):
+        _fail("history_invalid", "service_unavailable", "收货历史证据不完整，保留原请求继续核验")
+
+    shipment = db.get(Shipment, receipt.shipment_id)
+    if shipment is None:
+        _fail("history_invalid", "service_unavailable", "收货关联发运不存在")
+    lines = tuple(db.scalars(select(ReceiptLine).where(ReceiptLine.receipt_id == receipt.id)).all())
+    if not lines:
+        _fail("history_invalid", "service_unavailable", "收货历史证据不完整，保留原请求继续核验")
+    for line in lines:
+        shipment_line = db.get(ShipmentLine, line.shipment_line_id)
+        if shipment_line is None or shipment_line.shipment_id != shipment.id:
+            _fail("history_invalid", "service_unavailable", "收货明细与发运事实不一致")
+        fact = db.get(OutboundPosting, shipment_line.outbound_posting_id)
+        if fact is None or fact.request_id != request_id:
+            _fail("history_invalid", "service_unavailable", "收货明细不属于当前需求")
+        outbound.verified_outbound_history(db, fact=fact, request=request)
+        source = db.get(StockAccount, fact.source_stock_account_id)
+        if source is None:
+            _fail("history_invalid", "service_unavailable", "发运来源账户不存在")
+        outbound._authorize_account_ids(
+            db, actor, (source.id,), action="read", resource="inventory", lock_rows=False,
+        )
+    return {"request_hash": receipt.request_hash, "command": _result(db, receipt, replayed=True)}
 
 def list_receipts(db, *, actor, request_id):
     request = db.get(MaterialRequest, request_id)

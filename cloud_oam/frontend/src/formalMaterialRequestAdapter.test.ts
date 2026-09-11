@@ -598,4 +598,13 @@ describe("formal material-request PC transport", () => {
     expect(parsed.draft.contact.mobile).toBe("138 0000 0000");
     expect(Object.isFrozen(parsed.draft)).toBe(true);
   });
+
+  it("queries receipt recovery through the read-only no-replay channel", async () => {
+    const requester = makeRequester(async () => ({ schema_version: "1.0", lookup_status: "not_observed", request_hash: null, command: null }));
+    const adapter = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, requester, requester);
+    await expect(adapter.receiptCommandStatusNoReplay!(REQUEST_ID, "web-receipt-key-123456")).resolves.toMatchObject({ lookup_status: "not_observed" });
+    expect(requester.mock.calls).toEqual([[`/v1/material-requests/${REQUEST_ID}/receipt-command-status`, {
+      cache: "no-store", headers: { "Idempotency-Key": "web-receipt-key-123456", "Cache-Control": "no-store", Pragma: "no-cache" },
+    }]]);
+  });
 });
