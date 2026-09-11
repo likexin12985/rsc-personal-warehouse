@@ -44,6 +44,8 @@ OAM_WORK_ORDER_SCOPE_PREFIX = "oam-work-order-scope:%"
 SYNC_FRESHNESS_SECONDS = 45 * 60
 WORK_ORDER_SCOPE_PREFIX = "work-orders:recent-"
 WORK_ORDER_ENTITY = "work_order"
+OAM_RECEIPT_SCOPE_PREFIX = "oam-receipts:"
+OAM_RECEIPT_ENTITY = "oam_receipt"
 RETIRED_PLAINTEXT_WORK_ORDER_ENTITIES = frozenset(
     {"work_order_detail", "work_order_relation"}
 )
@@ -146,6 +148,12 @@ def _validate_snapshot_entity_boundary(
             status_code=status.HTTP_409_CONFLICT,
             detail="工单实体与专用同步范围不一致",
         )
+    is_oam_receipt_scope = payload.scope_key.startswith(OAM_RECEIPT_SCOPE_PREFIX)
+    if is_oam_receipt_scope != (payload.entity_type == OAM_RECEIPT_ENTITY):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="OAM收货实体与专用同步范围不一致",
+        )
     if not is_work_order_scope:
         return
     for record in payload.records:
@@ -187,6 +195,17 @@ def _validate_snapshot_manifest_boundary(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="工单实体与专用同步范围不一致",
+        )
+    is_oam_receipt_scope = payload.scope_key.startswith(OAM_RECEIPT_SCOPE_PREFIX)
+    if is_oam_receipt_scope and entity_types != {OAM_RECEIPT_ENTITY}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="OAM收货完成清单只能包含收货实体",
+        )
+    if not is_oam_receipt_scope and OAM_RECEIPT_ENTITY in entity_types:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="OAM收货实体与专用同步范围不一致",
         )
 
 

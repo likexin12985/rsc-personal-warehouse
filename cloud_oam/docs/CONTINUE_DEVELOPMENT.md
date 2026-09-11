@@ -1,5 +1,15 @@
 # 切换账号后的续开发入口
 
+## 2026-09-12 OAM 收货快照投影契约
+
+本批把 OAM 收货纳入边缘只读快照协议：专用范围前缀为 `oam-receipts:`，实体为
+`oam_receipt`，载荷严格限定为外部编号、`synced/exception` 状态、带时区来源时间和来源版本。
+正式投影只消费已经完成的云端镜像，不访问 OAM；必须先存在唯一的
+`ExternalObject(entity_type=oam_receipt)` 和唯一 `approved` 的
+`ExternalObjectMapping(local_object_type=shipment)`，且目标发运单真实存在，否则整条记录阻断。
+重复的相同载荷幂等回读，冲突不覆盖既有证据。该边界只写不可变
+`oam_receipt_evidence` 证据，不推进本地收货、个人仓入账、通知或对账状态。
+
 核验日期：2026-09-08。此文件是当前交接摘要；旧聊天和旧日期段落只作追溯。
 产品规则仍以根目录 `AGENTS.md` 和 V1.0 正式需求全文为准。
 

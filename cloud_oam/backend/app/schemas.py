@@ -445,6 +445,7 @@ class EdgeSyncSnapshotBatchIn(BaseModel):
         "work_order",
         "work_order_detail",
         "work_order_relation",
+        "oam_receipt",
     ]
     snapshot_at: datetime
     sequence: int = Field(ge=1, le=10000)
@@ -471,6 +472,7 @@ class EdgeSyncEntityManifestIn(BaseModel):
         "work_order",
         "work_order_detail",
         "work_order_relation",
+        "oam_receipt",
     ]
     final_record_count: int = Field(ge=0)
     final_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
