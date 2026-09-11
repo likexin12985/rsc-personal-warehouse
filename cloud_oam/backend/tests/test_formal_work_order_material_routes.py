@@ -140,7 +140,7 @@ def test_history_returns_immutable_material_and_serial_coordinates(http, monkeyp
         SimpleNamespace(all=lambda: [operation]),
         SimpleNamespace(all=lambda: [line]),
     ]
-    http.db.execute.return_value.all.return_value = [(serial_id, line_id)]
+    http.db.execute.return_value.all.return_value = [(serial_id, line_id, True, False)]
     response = http.client.get(f"/api/v1/work-orders/{http.order_id}/material-operations")
     assert response.status_code == 200, response.text
     item = response.json()["items"][0]
@@ -152,6 +152,7 @@ def test_history_returns_immutable_material_and_serial_coordinates(http, monkeyp
         "condition_before": "new",
         "condition_after": "used",
         "serial_ids": [str(serial_id)],
+        "serials": [{"serial_id": str(serial_id), "sku_verified": True, "qr_verified": False}],
     }]
     http.db.commit.assert_not_called()
 

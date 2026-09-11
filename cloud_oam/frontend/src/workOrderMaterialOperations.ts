@@ -40,6 +40,12 @@ export type WorkOrderMaterialHistoryLine = Readonly<{
   condition_before: "new" | "used" | "damaged" | "scrapped";
   condition_after: string | null;
   serial_ids: readonly string[];
+  serials: readonly WorkOrderMaterialHistorySerial[];
+}>;
+export type WorkOrderMaterialHistorySerial = Readonly<{
+  serial_id: string;
+  sku_verified: boolean;
+  qr_verified: boolean;
 }>;
 export type WorkOrderMaterialOperationHistoryItem = WorkOrderMaterialOperationResult & Readonly<{
   lines: readonly WorkOrderMaterialHistoryLine[];
@@ -98,7 +104,7 @@ export function validateWorkOrderMaterialOperationHistory(value: unknown): WorkO
     });
     if (!Array.isArray(item.lines) || item.lines.length > 100) return fail("工单物料历史明细无效");
     const lines = item.lines.map((rawLine) => {
-      const line = exact(rawLine, ["condition_after", "condition_before", "line_no", "material_id", "quantity", "serial_ids", "stock_account_id"]);
+      const line = exact(rawLine, ["condition_after", "condition_before", "line_no", "material_id", "quantity", "serial_ids", "serials", "stock_account_id"]);
       const lineNo = typeof line.line_no === "number" ? line.line_no : Number.NaN;
       if (!Number.isSafeInteger(lineNo) || lineNo < 1) return fail("工单物料行号无效");
       const materialId = id(line.material_id, "material_id");
@@ -108,7 +114,14 @@ export function validateWorkOrderMaterialOperationHistory(value: unknown): WorkO
       if (line.condition_after !== null && typeof line.condition_after !== "string") return fail("工单物料结果成色无效");
       if (!Array.isArray(line.serial_ids) || line.serial_ids.length > 1000) return fail("工单物料历史串码无效");
       const serialIds = line.serial_ids.map((serial) => id(serial, "serial_id"));
-      return { line_no: lineNo, material_id: materialId, stock_account_id: stockAccountId, quantity: line.quantity, condition_before: line.condition_before as WorkOrderMaterialHistoryLine["condition_before"], condition_after: line.condition_after as string | null, serial_ids: Object.freeze(serialIds) };
+      if (!Array.isArray(line.serials) || line.serials.length !== serialIds.length) return fail("工单物料历史串码证据无效");
+      const serials = line.serials.map((rawSerial) => {
+        const serial = exact(rawSerial, ["qr_verified", "serial_id", "sku_verified"]);
+        if (typeof serial.sku_verified !== "boolean" || typeof serial.qr_verified !== "boolean") return fail("工单物料串码核验状态无效");
+        return { serial_id: id(serial.serial_id, "serial_id"), sku_verified: serial.sku_verified, qr_verified: serial.qr_verified };
+      });
+      if (serials.some((serial, index) => serial.serial_id !== serialIds[index])) return fail("工单物料串码证据顺序不一致");
+      return { line_no: lineNo, material_id: materialId, stock_account_id: stockAccountId, quantity: line.quantity, condition_before: line.condition_before as WorkOrderMaterialHistoryLine["condition_before"], condition_after: line.condition_after as string | null, serial_ids: Object.freeze(serialIds), serials: Object.freeze(serials) };
     });
     return { ...base, lines: Object.freeze(lines) };
   })) };

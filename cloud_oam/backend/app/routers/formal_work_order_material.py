@@ -229,14 +229,21 @@ def list_material_operations(
         ).all():
             lines_by_operation[line.operation_id].append(line)
     line_ids = tuple(line.id for lines in lines_by_operation.values() for line in lines)
-    serials_by_line: dict[UUID, list[UUID]] = {line_id: [] for line_id in line_ids}
+    serials_by_line: dict[UUID, list[tuple[UUID, bool, bool]]] = {
+        line_id: [] for line_id in line_ids
+    }
     if line_ids:
-        for serial_id, line_id in db.execute(
-            select(WorkOrderMaterialSerial.serial_id, WorkOrderMaterialSerial.operation_line_id)
+        for serial_id, line_id, sku_verified, qr_verified in db.execute(
+            select(
+                WorkOrderMaterialSerial.serial_id,
+                WorkOrderMaterialSerial.operation_line_id,
+                WorkOrderMaterialSerial.sku_verified,
+                WorkOrderMaterialSerial.qr_verified,
+            )
             .where(WorkOrderMaterialSerial.operation_line_id.in_(line_ids))
             .order_by(WorkOrderMaterialSerial.operation_line_id, WorkOrderMaterialSerial.serial_id)
         ).all():
-            serials_by_line[line_id].append(serial_id)
+            serials_by_line[line_id].append((serial_id, sku_verified, qr_verified))
     return WorkOrderMaterialOperationHistoryOut(items=tuple(
         WorkOrderMaterialOperationHistoryItemOut(
             operation_id=row.id, operation_no=row.operation_no,
@@ -251,7 +258,15 @@ def list_material_operations(
                     "quantity": line.quantity,
                     "condition_before": line.condition_before,
                     "condition_after": line.condition_after,
-                    "serial_ids": tuple(serials_by_line[line.id]),
+                    "serial_ids": tuple(serial_id for serial_id, _, _ in serials_by_line[line.id]),
+                    "serials": tuple(
+                        {
+                            "serial_id": serial_id,
+                            "sku_verified": sku_verified,
+                            "qr_verified": qr_verified,
+                        }
+                        for serial_id, sku_verified, qr_verified in serials_by_line[line.id]
+                    ),
                 }
                 for line in lines_by_operation[row.id]
             ),

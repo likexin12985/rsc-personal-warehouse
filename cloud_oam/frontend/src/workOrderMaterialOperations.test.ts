@@ -45,8 +45,8 @@ describe("work order material operations", () => {
   });
 
   it("validates immutable material and serial coordinates in history", () => {
-    const result = validateWorkOrderMaterialOperationHistory({ items: [{ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "consume", status: "posted", lines: [{ line_no: 1, material_id: id, stock_account_id: target, quantity: "2.000", condition_before: "new", condition_after: "used", serial_ids: [id] }] }] });
+    const result = validateWorkOrderMaterialOperationHistory({ items: [{ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "consume", status: "posted", lines: [{ line_no: 1, material_id: id, stock_account_id: target, quantity: "2.000", condition_before: "new", condition_after: "used", serial_ids: [id], serials: [{ serial_id: id, sku_verified: true, qr_verified: false }] }] }] });
     expect(result.items[0].lines[0].serial_ids).toEqual([id]);
-    expect(() => validateWorkOrderMaterialOperationHistory({ items: [{ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "consume", status: "posted", lines: [{ line_no: 1, material_id: id, stock_account_id: target, quantity: "0", condition_before: "new", condition_after: null, serial_ids: [] }] }] })).toThrow(ApiError);
+    expect(() => validateWorkOrderMaterialOperationHistory({ items: [{ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "consume", status: "posted", lines: [{ line_no: 1, material_id: id, stock_account_id: target, quantity: "0", condition_before: "new", condition_after: null, serial_ids: [], serials: [] }] }] })).toThrow(ApiError);
   });
 });

@@ -102,6 +102,12 @@ class WorkOrderMaterialRecoverIn(StrictInput):
     request_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class WorkOrderMaterialHistorySerialOut(BaseModel):
+    serial_id: UUID
+    sku_verified: bool
+    qr_verified: bool
+
+
 class WorkOrderMaterialHistoryLineOut(BaseModel):
     line_no: int
     material_id: UUID
@@ -110,6 +116,7 @@ class WorkOrderMaterialHistoryLineOut(BaseModel):
     condition_before: Literal["new", "used", "damaged", "scrapped"]
     condition_after: str | None
     serial_ids: tuple[UUID, ...]
+    serials: tuple[WorkOrderMaterialHistorySerialOut, ...]
 
 
 class WorkOrderMaterialOperationHistoryItemOut(WorkOrderMaterialOperationOut):
