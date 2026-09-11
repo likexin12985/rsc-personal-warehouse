@@ -1191,6 +1191,22 @@ class ReceiptException(CreatedAtMixin, Base):
     __tablename__ = "receipt_exceptions"
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True); receipt_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("receipts.id", ondelete="RESTRICT")); receipt_line_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("receipt_lines.id", ondelete="RESTRICT")); exception_type: Mapped[str] = mapped_column(String(32)); detail: Mapped[str] = mapped_column(String(1000)); evidence_file_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE)
 
+class OamReceiptEvidence(CreatedAtMixin, Base):
+    """Immutable read-only evidence mirrored from OAM; never drives local inbound."""
+    __tablename__ = "oam_receipt_evidence"
+    __table_args__ = (
+        UniqueConstraint("external_object_id", name="uq_oam_receipt_evidence_external"),
+        CheckConstraint("status IN ('synced','exception')", name="ck_oam_receipt_evidence_status"),
+        Index("ix_oam_receipt_evidence_shipment", "shipment_id", "source_time"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    external_object_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("external_objects.id", ondelete="RESTRICT"))
+    shipment_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("shipments.id", ondelete="RESTRICT"))
+    status: Mapped[str] = mapped_column(String(24))
+    source_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source_version: Mapped[str] = mapped_column(String(160))
+    payload_sha256: Mapped[str] = mapped_column(String(64))
+
 class InboundOrder(CreatedAtMixin, Base):
     __tablename__ = "inbound_orders"
     __table_args__ = (UniqueConstraint("inbound_no", name="uq_inbound_orders_number"), CheckConstraint("status IN ('pending','posted','exception')", name="ck_inbound_orders_status"))

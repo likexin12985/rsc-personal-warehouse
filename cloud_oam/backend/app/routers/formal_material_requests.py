@@ -62,11 +62,13 @@ from ..formal_services import material_request_receipt as receipt_service
 from ..formal_services import material_request_inbound as inbound_service
 from ..formal_services.inventory_posting import InventoryPostingError
 from ..formal_services import material_request_logistics as logistics_service
+from ..formal_services import material_request_oam_receipt as oam_receipt_service
 from ..material_request_outbound_schemas import OutboundOptionsOut, OutboundIn, OutboundOut, OutboundStatusOut
 from ..material_request_shipment_schemas import ShipmentIn, ShipmentOut, ShipmentOptionsOut, ShipmentCommandStatusOut
 from ..material_request_receipt_schemas import ReceiptIn, ReceiptOut, ReceiptCommandStatusOut
 from ..material_request_inbound_schemas import InboundOrderIn, InboundOrderOut, InboundPostingOut
 from ..material_request_logistics_schemas import LogisticsEventIn, LogisticsEventOut, LogisticsEventCommandStatusOut
+from ..material_request_oam_receipt_schemas import OamReceiptEvidenceOut
 from ..formal_services import material_request_picking as picking_service
 from ..formal_services import material_request_picking_options as picking_options_service
 from ..material_request_picking_schemas import PickOptionsOut
@@ -994,6 +996,26 @@ def logistics_command_status(
             command=None if result is None else LogisticsEventOut(**result),
         )
     except (logistics_service.LogisticsEventError, query_service.MaterialRequestReadError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+
+@router.get("/{material_request_id}/oam-receipt-evidence", response_model=list[OamReceiptEvidenceOut])
+def list_formal_material_request_oam_receipt_evidence(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    """Read-only OAM receipt evidence; it never changes local receipt or inbound state."""
+    _set_read_no_store(response)
+    try:
+        return [OamReceiptEvidenceOut(**row) for row in oam_receipt_service.list_oam_receipt_evidence(
+            db, actor=principal, request_id=material_request_id,
+        )]
+    except (oam_receipt_service.OamReceiptEvidenceError, query_service.MaterialRequestReadError) as exc:
         _raise_service_error(exc, no_store=True)
     except DBAPIError:
         db.rollback()
