@@ -20,7 +20,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..foundation_models import ExternalObject, ExternalObjectMapping, SourceSystem
+from ..foundation_models import ExternalObject, ExternalObjectMapping, SourceSystem, SyncRun
 from ..inventory_models import Shipment
 from ..models import ExternalSyncCurrentRecord, ExternalSyncSnapshot
 from ..schemas import EdgeSyncSnapshotCompleteIn
@@ -60,6 +60,11 @@ class OamReceiptSnapshotProjectionResult:
     snapshot_id: str
     projected_records: int
     duplicate_records: int
+    sync_run_id: uuid.UUID | None = None
+    duplicate: bool = False
+
+
+OAM_RECEIPT_RUN_PREFIX = "oam-receipt:"
 
 
 def _fail(code: str, message: str) -> None:
@@ -74,6 +79,11 @@ def _aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _validate_source(source: SourceSystem) -> None:
+    if source.code != "starcharge_oam" or source.mode != "read_only" or source.enabled is not True:
+        _fail("oam_receipt_source_invalid", "OAM来源系统未处于只读启用状态")
 
 
 def _source_time(value: object) -> datetime:
@@ -130,8 +140,7 @@ def project_oam_receipt_record(
 ) -> OamReceiptProjectionResult:
     """Project one current mirror row after exact approved mapping checks."""
 
-    if source.code != "starcharge_oam" or source.mode != "read_only" or source.enabled is not True:
-        _fail("oam_receipt_source_invalid", "OAM来源系统未处于只读启用状态")
+    _validate_source(source)
     if not record.scope_key.startswith(OAM_RECEIPT_SCOPE_PREFIX):
         _fail("oam_receipt_scope_invalid", "OAM收货记录不在专用同步范围")
     if record.source_system != source.code:
@@ -202,8 +211,9 @@ def publish_completed_oam_receipt_snapshot(
     snapshot_id: str,
     source: SourceSystem,
 ) -> OamReceiptSnapshotProjectionResult:
-    """Publish one complete receipt mirror without changing local fulfillment."""
+    """Publish or explicitly retry an exact snapshot in the caller transaction."""
 
+    _validate_source(source)
     snapshot = db.scalar(
         select(ExternalSyncSnapshot).where(ExternalSyncSnapshot.id == snapshot_id)
     )
@@ -251,23 +261,162 @@ def publish_completed_oam_receipt_snapshot(
     final_hash = hashlib.sha256(_canonical(final_wire).encode("utf-8")).hexdigest()
     if final_hash != entity.final_sha256:
         _fail("oam_receipt_final_hash_mismatch", "OAM收货最终镜像哈希校验失败")
+    run_key = f"{OAM_RECEIPT_RUN_PREFIX}{snapshot.id}"
+    run = db.scalar(select(SyncRun).where(SyncRun.run_key == run_key))
+    if run is not None:
+        if (
+            run.source_system_id != source.id
+            or run.scope_key != snapshot.scope_key
+            or run.mode != snapshot.sync_mode
+            or run.watermark_to != _aware(snapshot.snapshot_at).isoformat()
+            or run.manifest_sha256 != snapshot.manifest_sha256
+        ):
+            _fail("oam_receipt_sync_run_mismatch", "OAM收货同步运行坐标冲突")
+        if run.status == "completed":
+            return OamReceiptSnapshotProjectionResult(
+                snapshot_id=snapshot.snapshot_id,
+                projected_records=entity.final_record_count,
+                duplicate_records=entity.final_record_count,
+                sync_run_id=run.id,
+                duplicate=True,
+            )
+    else:
+        run = SyncRun(
+            source_system_id=source.id,
+            run_key=run_key,
+            scope_key=snapshot.scope_key,
+            mode=snapshot.sync_mode,
+            watermark_from=None,
+            watermark_to=_aware(snapshot.snapshot_at).isoformat(),
+            status="validating",
+            manifest_sha256=snapshot.manifest_sha256,
+            started_at=datetime.now(timezone.utc),
+            completed_at=None,
+            failure_code=None,
+            failure_detail=None,
+        )
+        db.add(run)
+        db.flush()
     projected = 0
     duplicates = 0
+    # A failed run is deliberately absent from the idle queue.  Reaching this
+    # function with its exact snapshot id is the explicit operator retry path;
+    # clear the quarantine only after all immutable staging checks above pass.
+    run.status = "validating"
+    run.completed_at = None
+    run.failure_code = None
+    run.failure_detail = None
     for row in rows:
         result = project_oam_receipt_record(db, source=source, record=row)
         projected += 1
         duplicates += int(result.duplicate)
+    run.status = "completed"
+    run.completed_at = datetime.now(timezone.utc)
+    run.failure_code = None
+    run.failure_detail = None
     return OamReceiptSnapshotProjectionResult(
         snapshot_id=snapshot.snapshot_id,
         projected_records=projected,
         duplicate_records=duplicates,
+        sync_run_id=run.id,
     )
+
+
+def next_unpublished_oam_receipt_snapshot_id(db: Session) -> str | None:
+    """Return the oldest completed receipt snapshot without a run ledger row."""
+
+    statement = (
+        select(ExternalSyncSnapshot)
+        .where(
+            ExternalSyncSnapshot.status == "complete",
+            ExternalSyncSnapshot.source_system == "starcharge_oam",
+            ExternalSyncSnapshot.scope_key.like(f"{OAM_RECEIPT_SCOPE_PREFIX}%"),
+        )
+        .order_by(
+            ExternalSyncSnapshot.snapshot_at,
+            ExternalSyncSnapshot.completed_at,
+            ExternalSyncSnapshot.id,
+        )
+    )
+    for snapshot in db.scalars(statement):
+        run = db.scalar(
+            select(SyncRun).where(
+                SyncRun.run_key == f"{OAM_RECEIPT_RUN_PREFIX}{snapshot.id}"
+            )
+        )
+        if run is None:
+            return snapshot.id
+    return None
+
+
+def record_failed_oam_receipt_snapshot(
+    db: Session,
+    *,
+    snapshot_id: str,
+    failure_code: str,
+) -> uuid.UUID | None:
+    """Quarantine a deterministic receipt snapshot failure without payload data."""
+
+    if not isinstance(failure_code, str) or not failure_code.strip():
+        return None
+    snapshot = db.scalar(
+        select(ExternalSyncSnapshot).where(
+            ExternalSyncSnapshot.id == snapshot_id,
+            ExternalSyncSnapshot.status == "complete",
+            ExternalSyncSnapshot.source_system == "starcharge_oam",
+            ExternalSyncSnapshot.scope_key.like(f"{OAM_RECEIPT_SCOPE_PREFIX}%"),
+        )
+    )
+    if snapshot is None:
+        return None
+    source = db.scalar(
+        select(SourceSystem).where(SourceSystem.code == snapshot.source_system)
+    )
+    if source is None:
+        return None
+    run_key = f"{OAM_RECEIPT_RUN_PREFIX}{snapshot.id}"
+    run = db.scalar(select(SyncRun).where(SyncRun.run_key == run_key))
+    if run is not None:
+        if run.status == "completed":
+            return None
+        if (
+            run.source_system_id != source.id
+            or run.scope_key != snapshot.scope_key
+            or run.mode != snapshot.sync_mode
+            or run.watermark_to != _aware(snapshot.snapshot_at).isoformat()
+            or run.manifest_sha256 != snapshot.manifest_sha256
+        ):
+            return None
+        run.status = "failed"
+        run.failure_code = failure_code[:80]
+        run.failure_detail = None
+        run.completed_at = datetime.now(timezone.utc)
+        return run.id
+    run = SyncRun(
+        source_system_id=source.id,
+        run_key=run_key,
+        scope_key=snapshot.scope_key,
+        mode=snapshot.sync_mode,
+        watermark_from=None,
+        watermark_to=_aware(snapshot.snapshot_at).isoformat(),
+        status="failed",
+        manifest_sha256=snapshot.manifest_sha256,
+        started_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
+        failure_code=failure_code[:80],
+        failure_detail=None,
+    )
+    db.add(run)
+    db.flush()
+    return run.id
 
 
 __all__ = [
     "OamReceiptProjectionError",
     "OamReceiptProjectionResult",
     "OamReceiptSnapshotProjectionResult",
+    "next_unpublished_oam_receipt_snapshot_id",
     "project_oam_receipt_record",
     "publish_completed_oam_receipt_snapshot",
+    "record_failed_oam_receipt_snapshot",
 ]

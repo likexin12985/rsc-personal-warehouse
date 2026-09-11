@@ -10,11 +10,13 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.database import Base
-from app.foundation_models import ExternalObject, ExternalObjectMapping, SourceSystem
+from app.foundation_models import ExternalObject, ExternalObjectMapping, SourceSystem, SyncRun
 from app.formal_services.oam_receipt_projection import (
     OamReceiptProjectionError,
+    next_unpublished_oam_receipt_snapshot_id,
     project_oam_receipt_record,
     publish_completed_oam_receipt_snapshot,
+    record_failed_oam_receipt_snapshot,
 )
 from app.inventory_models import OamReceiptEvidence, Shipment
 from app.models import ExternalSyncCurrentRecord, ExternalSyncSnapshot, User
@@ -138,13 +140,13 @@ def test_receipt_snapshot_scope_is_separate_from_other_entities():
     _validate_snapshot_manifest_boundary(manifest)
 
 
-def test_completed_snapshot_projects_current_mirror_and_replays(db):
-    source, shipment, row = _setup(db)
+def _stage_completed_snapshot(db, row, *, snapshot_id="snapshot-1"):
+    row.last_snapshot_id = snapshot_id
     snapshot = ExternalSyncSnapshot(
-        id="snapshot-1",
+        id=snapshot_id,
         source_system="starcharge_oam",
         source_instance=row.source_instance,
-        snapshot_id="snapshot-1",
+        snapshot_id=snapshot_id,
         scope_key=row.scope_key,
         sync_mode="incremental",
         company_id="company-1",
@@ -164,7 +166,7 @@ def test_completed_snapshot_projects_current_mirror_and_replays(db):
         "data": json.loads(row.payload_json),
     }]
     manifest = EdgeSyncSnapshotCompleteIn(
-        snapshot_id="snapshot-1",
+        snapshot_id=snapshot_id,
         scope_key=row.scope_key,
         sync_mode="incremental",
         company_id="company-1",
@@ -175,6 +177,12 @@ def test_completed_snapshot_projects_current_mirror_and_replays(db):
     snapshot.manifest_json = _canonical(manifest.model_dump(mode="json"))
     snapshot.manifest_sha256 = hashlib.sha256(snapshot.manifest_json.encode()).hexdigest()
     db.flush()
+    return snapshot
+
+
+def test_completed_snapshot_projects_current_mirror_and_replays(db):
+    source, shipment, row = _setup(db)
+    snapshot = _stage_completed_snapshot(db, row)
     first = publish_completed_oam_receipt_snapshot(db, snapshot_id=snapshot.id, source=source)
     replay = publish_completed_oam_receipt_snapshot(db, snapshot_id=snapshot.id, source=source)
     assert first.projected_records == replay.projected_records == 1
@@ -182,3 +190,106 @@ def test_completed_snapshot_projects_current_mirror_and_replays(db):
     assert replay.duplicate_records == 1
     evidence = db.scalar(select(OamReceiptEvidence).where(OamReceiptEvidence.shipment_id == shipment.id))
     assert evidence is not None
+
+
+def test_failed_snapshot_is_quarantined_and_exact_retry_can_resume(db):
+    source, shipment, row = _setup(db, with_mapping=False)
+    snapshot = _stage_completed_snapshot(db, row)
+    db.commit()
+
+    assert next_unpublished_oam_receipt_snapshot_id(db) == snapshot.id
+    with pytest.raises(OamReceiptProjectionError) as error:
+        publish_completed_oam_receipt_snapshot(db, snapshot_id=snapshot.id, source=source)
+    db.rollback()
+    failed_run_id = record_failed_oam_receipt_snapshot(
+        db, snapshot_id=snapshot.id, failure_code=error.value.code
+    )
+    db.commit()
+    assert failed_run_id is not None
+    failed_run = db.get(SyncRun, failed_run_id)
+    assert failed_run is not None
+    assert failed_run.status == "failed"
+    assert failed_run.failure_code == "oam_receipt_shipment_mapping_ambiguous"
+    assert next_unpublished_oam_receipt_snapshot_id(db) is None
+
+    external = db.scalar(select(ExternalObject).where(ExternalObject.external_id == "oam-receipt-001"))
+    user = db.scalar(select(User).where(User.name == "映射审批人"))
+    assert external is not None
+    assert user is not None
+    db.add(ExternalObjectMapping(
+        external_object_id=external.id,
+        local_object_type="shipment",
+        local_object_id=str(shipment.id),
+        status="approved",
+        approved_by=user.id,
+        approved_at=SOURCE_TIME,
+        reason="修复后显式重试",
+        created_at=SOURCE_TIME,
+        updated_at=SOURCE_TIME,
+    ))
+    db.commit()
+    retried = publish_completed_oam_receipt_snapshot(db, snapshot_id=snapshot.id, source=source)
+    assert retried.projected_records == 1
+    assert retried.duplicate is False
+    assert db.get(SyncRun, failed_run_id).status == "completed"
+
+
+def test_poisoned_snapshot_does_not_starve_later_snapshot(db):
+    source, _, row = _setup(db)
+    poisoned = _stage_completed_snapshot(db, row)
+    poisoned.manifest_json = "{"
+    healthy = _stage_completed_snapshot(db, row, snapshot_id="snapshot-2")
+    db.commit()
+
+    assert next_unpublished_oam_receipt_snapshot_id(db) == poisoned.id
+    with pytest.raises(OamReceiptProjectionError) as error:
+        publish_completed_oam_receipt_snapshot(db, snapshot_id=poisoned.id, source=source)
+    assert error.value.code == "oam_receipt_manifest_invalid"
+    db.rollback()
+    failed_id = record_failed_oam_receipt_snapshot(
+        db, snapshot_id=poisoned.id, failure_code=error.value.code
+    )
+    db.commit()
+    assert failed_id is not None
+    assert next_unpublished_oam_receipt_snapshot_id(db) == healthy.id
+    result = publish_completed_oam_receipt_snapshot(db, snapshot_id=healthy.id, source=source)
+    db.commit()
+    assert result.projected_records == 1
+    assert db.get(SyncRun, failed_id).status == "failed"
+    assert next_unpublished_oam_receipt_snapshot_id(db) is None
+
+
+def test_quarantine_cannot_rewrite_completed_run(db):
+    source, _, row = _setup(db)
+    snapshot = _stage_completed_snapshot(db, row)
+    result = publish_completed_oam_receipt_snapshot(db, snapshot_id=snapshot.id, source=source)
+    db.commit()
+    assert record_failed_oam_receipt_snapshot(
+        db, snapshot_id=snapshot.id, failure_code="oam_receipt_manifest_invalid"
+    ) is None
+    run = db.get(SyncRun, result.sync_run_id)
+    assert run.status == "completed"
+    assert run.failure_code is None
+
+
+def test_existing_run_must_match_snapshot_watermark(db):
+    source, _, row = _setup(db)
+    snapshot = _stage_completed_snapshot(db, row)
+    result = publish_completed_oam_receipt_snapshot(db, snapshot_id=snapshot.id, source=source)
+    run = db.get(SyncRun, result.sync_run_id)
+    run.watermark_to = "2026-09-13T02:00:00+00:00"
+    db.flush()
+    with pytest.raises(OamReceiptProjectionError) as error:
+        publish_completed_oam_receipt_snapshot(db, snapshot_id=snapshot.id, source=source)
+    assert error.value.code == "oam_receipt_sync_run_mismatch"
+
+
+def test_disabled_source_cannot_create_snapshot_run(db):
+    source, _, row = _setup(db)
+    snapshot = _stage_completed_snapshot(db, row)
+    source.enabled = False
+    with pytest.raises(OamReceiptProjectionError) as error:
+        publish_completed_oam_receipt_snapshot(db, snapshot_id=snapshot.id, source=source)
+    assert error.value.code == "oam_receipt_source_invalid"
+    assert db.scalar(select(SyncRun)) is None
+    assert db.scalar(select(OamReceiptEvidence)) is None
