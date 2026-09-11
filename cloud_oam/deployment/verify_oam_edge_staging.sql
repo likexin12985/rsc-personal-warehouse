@@ -45,12 +45,16 @@ role_names(role_kind, role_name) AS (
 runtime_functions(function_signature) AS (
     VALUES
         ('public.rsc_oam_rls_check_0044(text,text,jsonb)'::text),
-        ('public.rsc_oam_runtime_binding_ready_0044()'::text)
+        ('public.rsc_oam_runtime_binding_ready_0044()'::text),
+        ('public.rsc_oam_receipt_rls_check_0082(text,text,text,jsonb)'::text)
 ),
 expected_function_acl(role_kind, function_signature) AS (
     SELECT role_name.role_kind, runtime_function.function_signature
     FROM role_names AS role_name
     CROSS JOIN runtime_functions AS runtime_function
+    WHERE runtime_function.function_signature
+              <> 'public.rsc_oam_receipt_rls_check_0082(text,text,text,jsonb)'
+       OR role_name.role_kind = 'projector'
 ),
 edge_table_acl(
     table_name,

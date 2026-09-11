@@ -967,6 +967,9 @@ runtime_execute_boundary AS (
                ),
                pg_catalog.to_regprocedure(
                    'public.rsc_oam_runtime_binding_ready_0044()'
+               ),
+               pg_catalog.to_regprocedure(
+                   'public.rsc_oam_receipt_rls_check_0082(text,text,text,jsonb)'
                )
            )
     ) AS passed

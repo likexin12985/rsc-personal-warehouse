@@ -477,7 +477,8 @@ SELECT
            )
            AND function_row.oid NOT IN (
                'public.rsc_oam_rls_check_0044(text,text,jsonb)'::regprocedure,
-               'public.rsc_oam_runtime_binding_ready_0044()'::regprocedure
+               'public.rsc_oam_runtime_binding_ready_0044()'::regprocedure,
+               'public.rsc_oam_receipt_rls_check_0082(text,text,text,jsonb)'::regprocedure
            )
     ) AS executable_function_count,
     (

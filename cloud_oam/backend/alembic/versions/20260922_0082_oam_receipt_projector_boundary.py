@@ -94,7 +94,15 @@ BEGIN
     IF p_table_name = 'source_systems' THEN
         RETURN (p_row->>'code') = 'starcharge_oam'
            AND (p_row->>'mode') = 'read_only'
-           AND (p_row->>'enabled') = 'true';
+           AND (p_row->>'enabled') = 'true'
+           AND EXISTS (
+               SELECT 1 FROM public.oam_receipt_sync_scope_bindings binding
+                WHERE binding.enabled
+                  AND binding.principal_name = session_user::text
+                  AND binding.capability = p_required_capability
+                  AND binding.source_system = p_row->>'code'
+                  AND binding.entity_type = 'oam_receipt'
+           );
     END IF;
 
     IF p_table_name = 'external_sync_snapshots' THEN
