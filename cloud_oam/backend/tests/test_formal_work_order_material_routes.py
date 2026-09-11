@@ -111,6 +111,51 @@ def test_openapi_constrains_operation_response_enums(http):
     assert status.get("enum", [status.get("const")]) == ["posted"]
 
 
+def test_history_returns_immutable_material_and_serial_coordinates(http, monkeypatch):
+    monkeypatch.setattr(api.service, "authorize_work_order", Mock())
+    operation_id = uuid4()
+    line_id = uuid4()
+    material_id = uuid4()
+    account_id = uuid4()
+    serial_id = uuid4()
+    operation = SimpleNamespace(
+        id=operation_id,
+        operation_no="WO-OP-1",
+        oam_work_order_id=http.order_id,
+        posting_transaction_id=uuid4(),
+        operation_type="consume",
+        status="posted",
+    )
+    line = SimpleNamespace(
+        id=line_id,
+        operation_id=operation_id,
+        line_no=1,
+        material_id=material_id,
+        stock_account_id=account_id,
+        quantity="2.000",
+        condition_before="new",
+        condition_after="used",
+    )
+    http.db.scalars.side_effect = [
+        SimpleNamespace(all=lambda: [operation]),
+        SimpleNamespace(all=lambda: [line]),
+    ]
+    http.db.execute.return_value.all.return_value = [(serial_id, line_id)]
+    response = http.client.get(f"/api/v1/work-orders/{http.order_id}/material-operations")
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["lines"] == [{
+        "line_no": 1,
+        "material_id": str(material_id),
+        "stock_account_id": str(account_id),
+        "quantity": "2.000",
+        "condition_before": "new",
+        "condition_after": "used",
+        "serial_ids": [str(serial_id)],
+    }]
+    http.db.commit.assert_not_called()
+
+
 def test_recover_database_failure_rolls_back_without_success_response(http, monkeypatch):
     monkeypatch.setattr(api.service, "execute_recover_operation", Mock(side_effect=SQLAlchemyError("private detail")))
     response = http.client.post(path_for(http, "recover"), json=payload_for(http, "recover"))

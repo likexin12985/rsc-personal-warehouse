@@ -266,6 +266,9 @@ tbody tr:hover { background: #fbfcfc; }
 .work-order-detail-tabs { margin: 0; }
 .work-order-detail-tabs button { min-width: 110px; }
 .work-order-tab-panel { min-height: 300px; }
+.work-order-material-history-lines { display: grid; gap: 0.35rem; min-width: 18rem; }
+.work-order-material-history-lines > div { display: grid; gap: 0.12rem; }
+.work-order-material-history-lines small { color: var(--muted); }
 .work-order-basic-grid { padding-top: 8px; }
 .work-order-basic-grid .detail-field-wide { grid-column: span 2; }
 .work-order-subsection { margin-top: 18px; border-top: 1px solid var(--line); }

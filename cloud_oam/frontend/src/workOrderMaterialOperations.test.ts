@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
-import { executeWorkOrderMaterialOperation, listWorkOrderMaterialOperations, validateWorkOrderMaterialOperationInput, validateWorkOrderMaterialOperationResult } from "./workOrderMaterialOperations";
+import { executeWorkOrderMaterialOperation, listWorkOrderMaterialOperations, validateWorkOrderMaterialOperationHistory, validateWorkOrderMaterialOperationInput, validateWorkOrderMaterialOperationResult } from "./workOrderMaterialOperations";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const target = "22222222-2222-4222-8222-222222222222";
@@ -42,5 +42,11 @@ describe("work order material operations", () => {
     expect((await listWorkOrderMaterialOperations(workOrder)).items).toHaveLength(0);
     expect(new Headers(fetcher.mock.calls[0][1]?.headers).has("Idempotency-Key")).toBe(false);
     fetcher.mockRestore();
+  });
+
+  it("validates immutable material and serial coordinates in history", () => {
+    const result = validateWorkOrderMaterialOperationHistory({ items: [{ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "consume", status: "posted", lines: [{ line_no: 1, material_id: id, stock_account_id: target, quantity: "2.000", condition_before: "new", condition_after: "used", serial_ids: [id] }] }] });
+    expect(result.items[0].lines[0].serial_ids).toEqual([id]);
+    expect(() => validateWorkOrderMaterialOperationHistory({ items: [{ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "consume", status: "posted", lines: [{ line_no: 1, material_id: id, stock_account_id: target, quantity: "0", condition_before: "new", condition_after: null, serial_ids: [] }] }] })).toThrow(ApiError);
   });
 });

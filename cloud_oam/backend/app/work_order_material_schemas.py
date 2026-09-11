@@ -102,6 +102,20 @@ class WorkOrderMaterialRecoverIn(StrictInput):
     request_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class WorkOrderMaterialHistoryLineOut(BaseModel):
+    line_no: int
+    material_id: UUID
+    stock_account_id: UUID
+    quantity: Decimal
+    condition_before: Literal["new", "used", "damaged", "scrapped"]
+    condition_after: str | None
+    serial_ids: tuple[UUID, ...]
+
+
+class WorkOrderMaterialOperationHistoryItemOut(WorkOrderMaterialOperationOut):
+    lines: tuple[WorkOrderMaterialHistoryLineOut, ...]
+
+
 class WorkOrderMaterialOperationHistoryOut(BaseModel):
     schema_version: str = "1.0"
-    items: tuple[WorkOrderMaterialOperationOut, ...]
+    items: tuple[WorkOrderMaterialOperationHistoryItemOut, ...]

@@ -250,6 +250,10 @@ def payload_for(evidence):
     }
 
 
+def assert_history_head_matches(history_item, operation):
+    assert {key: value for key, value in history_item.items() if key != "lines"} == operation
+
+
 def test_http_successful_scan_and_replay(db, evidence):
     serial, line = serial_evidence(db, evidence)
     payload = payload_for(evidence)
@@ -263,7 +267,10 @@ def test_http_successful_scan_and_replay(db, evidence):
         history = client.get(path)
     assert first.status_code == 200, first.text
     assert second.json() == first.json()
-    assert history.json()["items"] == [first.json()]
+    history_item = history.json()["items"][0]
+    assert_history_head_matches(history_item, first.json())
+    assert history_item["lines"][0]["material_id"] == str(evidence.world.material.id)
+    assert history_item["lines"][0]["serial_ids"] == [str(serial.id)]
     assert count_operations(db) == 1
 
 
@@ -437,7 +444,9 @@ def test_http_recover_binds_real_fact_to_seeded_return_evidence(db, evidence, mo
     assert first.status_code == 200, first.text
     assert replay.status_code == 200, replay.text
     assert replay.json() == first.json()
-    assert history.json()["items"] == [first.json()]
+    history_item = history.json()["items"][0]
+    assert_history_head_matches(history_item, first.json())
+    assert history_item["lines"][0]["condition_before"] == condition
     assert first.json()["operation_type"] == "recover"
     assert first.json()["posting_transaction_id"] == str(evidence.transaction.id)
     assert count_operations(db) == 1

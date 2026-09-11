@@ -32,7 +32,19 @@ export type WorkOrderMaterialOperationResult = Readonly<{
   operation_type: string;
   status: string;
 }>;
-export type WorkOrderMaterialOperationHistory = Readonly<{ items: readonly WorkOrderMaterialOperationResult[] }>;
+export type WorkOrderMaterialHistoryLine = Readonly<{
+  line_no: number;
+  material_id: string;
+  stock_account_id: string;
+  quantity: string;
+  condition_before: "new" | "used" | "damaged" | "scrapped";
+  condition_after: string | null;
+  serial_ids: readonly string[];
+}>;
+export type WorkOrderMaterialOperationHistoryItem = WorkOrderMaterialOperationResult & Readonly<{
+  lines: readonly WorkOrderMaterialHistoryLine[];
+}>;
+export type WorkOrderMaterialOperationHistory = Readonly<{ items: readonly WorkOrderMaterialOperationHistoryItem[] }>;
 
 function fail(message: string): never { throw new ApiError(409, message); }
 function id(value: unknown, field: string): string { if (typeof value !== "string" || !UUID.test(value)) return fail(`${field}无效`); return value; }
@@ -73,7 +85,33 @@ export function validateWorkOrderMaterialOperationResult(value: unknown): WorkOr
 export function validateWorkOrderMaterialOperationHistory(value: unknown): WorkOrderMaterialOperationHistory {
   const object = exact(value, ["items"]);
   if (!Array.isArray(object.items)) return fail("工单物料历史响应无效");
-  return { items: Object.freeze(object.items.map(validateWorkOrderMaterialOperationResult)) };
+  return { items: Object.freeze(object.items.map((raw) => {
+    const item = exact(raw, ["lines", "operation_id", "operation_no", "work_order_id", "posting_transaction_id", "operation_type", "status", "schema_version"]);
+    const base = validateWorkOrderMaterialOperationResult({
+      schema_version: item.schema_version,
+      operation_id: item.operation_id,
+      operation_no: item.operation_no,
+      work_order_id: item.work_order_id,
+      posting_transaction_id: item.posting_transaction_id,
+      operation_type: item.operation_type,
+      status: item.status,
+    });
+    if (!Array.isArray(item.lines) || item.lines.length > 100) return fail("工单物料历史明细无效");
+    const lines = item.lines.map((rawLine) => {
+      const line = exact(rawLine, ["condition_after", "condition_before", "line_no", "material_id", "quantity", "serial_ids", "stock_account_id"]);
+      const lineNo = typeof line.line_no === "number" ? line.line_no : Number.NaN;
+      if (!Number.isSafeInteger(lineNo) || lineNo < 1) return fail("工单物料行号无效");
+      const materialId = id(line.material_id, "material_id");
+      const stockAccountId = id(line.stock_account_id, "stock_account_id");
+      if (typeof line.quantity !== "string" || !DECIMAL.test(line.quantity) || Number(line.quantity) <= 0) return fail("工单物料历史数量无效");
+      if (!(["new", "used", "damaged", "scrapped"] as const).includes(line.condition_before as never)) return fail("工单物料历史成色无效");
+      if (line.condition_after !== null && typeof line.condition_after !== "string") return fail("工单物料结果成色无效");
+      if (!Array.isArray(line.serial_ids) || line.serial_ids.length > 1000) return fail("工单物料历史串码无效");
+      const serialIds = line.serial_ids.map((serial) => id(serial, "serial_id"));
+      return { line_no: lineNo, material_id: materialId, stock_account_id: stockAccountId, quantity: line.quantity, condition_before: line.condition_before as WorkOrderMaterialHistoryLine["condition_before"], condition_after: line.condition_after as string | null, serial_ids: Object.freeze(serialIds) };
+    });
+    return { ...base, lines: Object.freeze(lines) };
+  })) };
 }
 
 export function listWorkOrderMaterialOperations(workOrderId: string): Promise<WorkOrderMaterialOperationHistory> {

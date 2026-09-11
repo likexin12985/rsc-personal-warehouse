@@ -11,7 +11,11 @@ from ..database import get_db
 from ..dependencies import require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import work_order_material as service
-from ..demand_models import WorkOrderMaterialOperation
+from ..demand_models import (
+    WorkOrderMaterialLine,
+    WorkOrderMaterialOperation,
+    WorkOrderMaterialSerial,
+)
 from ..work_order_material_schemas import (
     WorkOrderMaterialPreflightIn,
     WorkOrderMaterialPreflightOut, WorkOrderMaterialOperationIn,
@@ -20,6 +24,7 @@ from ..work_order_material_schemas import (
     WorkOrderMaterialReleaseIn,
     WorkOrderMaterialOccupyIn,
     WorkOrderMaterialRecoverIn,
+    WorkOrderMaterialOperationHistoryItemOut,
     WorkOrderMaterialOperationHistoryOut,
 )
 
@@ -212,13 +217,46 @@ def list_material_operations(
         .where(WorkOrderMaterialOperation.oam_work_order_id == work_order_id)
         .order_by(WorkOrderMaterialOperation.created_at, WorkOrderMaterialOperation.operation_no)
     ).all())
+    operation_ids = tuple(row.id for row in rows)
+    lines_by_operation: dict[UUID, list[WorkOrderMaterialLine]] = {
+        operation_id: [] for operation_id in operation_ids
+    }
+    if operation_ids:
+        for line in db.scalars(
+            select(WorkOrderMaterialLine)
+            .where(WorkOrderMaterialLine.operation_id.in_(operation_ids))
+            .order_by(WorkOrderMaterialLine.operation_id, WorkOrderMaterialLine.line_no)
+        ).all():
+            lines_by_operation[line.operation_id].append(line)
+    line_ids = tuple(line.id for lines in lines_by_operation.values() for line in lines)
+    serials_by_line: dict[UUID, list[UUID]] = {line_id: [] for line_id in line_ids}
+    if line_ids:
+        for serial_id, line_id in db.execute(
+            select(WorkOrderMaterialSerial.serial_id, WorkOrderMaterialSerial.operation_line_id)
+            .where(WorkOrderMaterialSerial.operation_line_id.in_(line_ids))
+            .order_by(WorkOrderMaterialSerial.operation_line_id, WorkOrderMaterialSerial.serial_id)
+        ).all():
+            serials_by_line[line_id].append(serial_id)
     return WorkOrderMaterialOperationHistoryOut(items=tuple(
-        WorkOrderMaterialOperationOut(
+        WorkOrderMaterialOperationHistoryItemOut(
             operation_id=row.id, operation_no=row.operation_no,
             work_order_id=row.oam_work_order_id,
             posting_transaction_id=row.posting_transaction_id,
             operation_type=row.operation_type, status=row.status,
-        ) for row in rows
+            lines=tuple(
+                {
+                    "line_no": line.line_no,
+                    "material_id": line.material_id,
+                    "stock_account_id": line.stock_account_id,
+                    "quantity": line.quantity,
+                    "condition_before": line.condition_before,
+                    "condition_after": line.condition_after,
+                    "serial_ids": tuple(serials_by_line[line.id]),
+                }
+                for line in lines_by_operation[row.id]
+            ),
+        )
+        for row in rows
     ))
 
 
