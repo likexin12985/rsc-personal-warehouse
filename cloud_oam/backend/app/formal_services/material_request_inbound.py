@@ -9,6 +9,7 @@ from ..inventory_models import InboundOrder, InboundPosting, Receipt, ReceiptLin
 from .inventory_posting import InventoryMovementCommand, InventoryPostingCommand, InventoryPostingError, post_inventory_transaction
 from .audit_chain import append_audit_event
 from . import material_request_outbound as outbound
+from . import material_request_query
 
 class InboundError(InventoryPostingError):
     """Stable inbound failure using the inventory HTTP error contract."""
@@ -171,7 +172,11 @@ def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idem
     return {"inbound_order_id": order.id, "inventory_transaction_id": result.transaction_id, "replayed": result.replayed}
 
 def list_inbound_orders(db, *, actor, request_id):
-    request = db.get(MaterialRequest, request_id)
+    context = material_request_query._load_read_context(db, actor=actor, now=None)
+    request = db.scalar(select(MaterialRequest).where(
+        MaterialRequest.id == request_id,
+        material_request_query._visible_request_predicate(context),
+    ))
     if request is None: _fail("not_found", "not_found", "需求单不存在")
     shipment_ids = select(Shipment.id).join(ShipmentLine, ShipmentLine.shipment_id == Shipment.id).join(OutboundPosting, OutboundPosting.id == ShipmentLine.outbound_posting_id).where(OutboundPosting.request_id == request_id)
     receipt_ids = select(Receipt.id).where(Receipt.shipment_id.in_(shipment_ids))

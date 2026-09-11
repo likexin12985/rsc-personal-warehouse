@@ -101,7 +101,11 @@ def logistics_command_status(db, *, actor, request_id, shipment_id, idempotency_
     return _result(event, True)
 
 def list_events(db, *, actor, request_id, shipment_id):
-    request = db.get(MaterialRequest, request_id)
+    context = material_request_query._load_read_context(db, actor=actor, now=None)
+    request = db.scalar(select(MaterialRequest).where(
+        MaterialRequest.id == request_id,
+        material_request_query._visible_request_predicate(context),
+    ))
     if request is None: _fail("not_found", "not_found", "需求单不存在")
     shipment = db.get(Shipment, shipment_id)
     if shipment is None: _fail("shipment_not_found", "not_found", "发运单不存在")

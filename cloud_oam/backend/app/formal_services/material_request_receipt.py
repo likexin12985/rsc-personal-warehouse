@@ -157,7 +157,11 @@ def receipt_command_status(db, *, actor, request_id, idempotency_key, secret):
     return {"request_hash": receipt.request_hash, "command": _result(db, receipt, replayed=True)}
 
 def list_receipts(db, *, actor, request_id):
-    request = db.get(MaterialRequest, request_id)
+    context = material_request_query._load_read_context(db, actor=actor, now=None)
+    request = db.scalar(select(MaterialRequest).where(
+        MaterialRequest.id == request_id,
+        material_request_query._visible_request_predicate(context),
+    ))
     if request is None: _fail("not_found", "not_found", "需求单不存在")
     shipment_ids = select(Shipment.id).join(ShipmentLine, ShipmentLine.shipment_id == Shipment.id).join(OutboundPosting, OutboundPosting.id == ShipmentLine.outbound_posting_id).where(OutboundPosting.request_id == request_id)
     rows = tuple(db.scalars(select(Receipt).where(Receipt.shipment_id.in_(shipment_ids)).order_by(Receipt.created_at, Receipt.id)).all())
