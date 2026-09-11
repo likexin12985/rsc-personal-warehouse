@@ -33,6 +33,8 @@ PROJECTOR_READ_TABLES = frozenset(
         "organizations",
         "people",
         "oam_work_orders",
+        "shipments",
+        "oam_receipt_evidence",
     }
 )
 PROJECTOR_INSERT_COLUMNS = {
@@ -143,6 +145,18 @@ PROJECTOR_INSERT_COLUMNS = {
             "source_updated_at",
             "created_at",
             "updated_at",
+        }
+    ),
+    "oam_receipt_evidence": frozenset(
+        {
+            "id",
+            "external_object_id",
+            "shipment_id",
+            "status",
+            "source_time",
+            "source_version",
+            "payload_sha256",
+            "created_at",
         }
     ),
 }

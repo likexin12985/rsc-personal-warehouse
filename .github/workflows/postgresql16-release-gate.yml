@@ -121,6 +121,7 @@ jobs:
             backend/tests/test_oam_work_order_projection.py \
             backend/tests/test_oam_receipt_projection.py \
             backend/tests/test_oam_receipt_projector.py \
+            backend/tests/test_oam_receipt_projection_security.py \
             backend/tests/test_oam_projection_security.py \
             backend/tests/test_edge_database_security.py \
             backend/tests/test_edge_sync_safety.py \

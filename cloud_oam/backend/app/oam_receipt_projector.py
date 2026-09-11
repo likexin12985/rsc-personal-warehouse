@@ -30,9 +30,9 @@ from .formal_services.oam_receipt_projection import (
     publish_completed_oam_receipt_snapshot,
     record_failed_oam_receipt_snapshot,
 )
-from .oam_projection_security import (
-    PROJECTOR_ROLE,
-    verify_oam_projection_database_boundary,
+from .oam_projection_security import PROJECTOR_ROLE
+from .oam_receipt_projection_security import (
+    verify_oam_receipt_projection_database_boundary,
 )
 
 
@@ -171,15 +171,11 @@ def _production_boundary_error() -> dict[str, Any] | None:
             "message": "生产OAM收货投影器必须使用独立数据库角色",
         }
     try:
-        # The existing work-order boundary is necessary but not sufficient.
-        # Receipt-specific RLS/ACL must be added before this worker can run in
-        # production; fail closed until that proof is available.
-        verify_oam_projection_database_boundary(
+        verify_oam_receipt_projection_database_boundary(
             engine,
             expected_role=settings.database_expected_runtime_role,
             expected_migration_role=settings.database_expected_migration_role,
         )
-        raise RuntimeError("receipt-specific RLS/ACL boundary is not installed")
     except Exception:
         return {
             "ok": False,

@@ -149,8 +149,10 @@ def test_worker_production_boundary_fails_closed_before_queue(monkeypatch):
     )
     monkeypatch.setattr(
         projector,
-        "verify_oam_projection_database_boundary",
-        lambda *_args, **_kwargs: None,
+        "verify_oam_receipt_projection_database_boundary",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("receipt boundary missing")
+        ),
     )
     monkeypatch.setattr(
         projector,

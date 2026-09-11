@@ -271,6 +271,9 @@ _POLICY_VALUES = ",\n        ".join(
     "(" + ", ".join(_sql_nullable_literal(value) for value in policy) + ")"
     for policy in EXPECTED_POLICIES
 )
+_POLICY_NAMES_VALUES = ", ".join(
+    _sql_literal(policy[1]) for policy in EXPECTED_POLICIES
+)
 _TABLE_VALUES = ",\n        ".join(
     f"({_sql_literal(table_name)})" for table_name in RLS_TABLES
 )
@@ -744,6 +747,7 @@ actual_policies AS (
         ON schema_row.oid = table_row.relnamespace
      WHERE schema_row.nspname = 'public'
        AND table_row.relname IN (SELECT table_name FROM required_tables)
+       AND policy.polname IN ({_POLICY_NAMES_VALUES})
 ),
 expected_functions(
     signature,
