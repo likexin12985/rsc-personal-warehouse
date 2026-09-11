@@ -131,7 +131,7 @@ export default function FormalMaterialRequestShipmentPanel({ adapter, access, de
   }
   async function registerEvent(shipmentId: string) {
     if (!detail || !adapter.createLogisticsEvent || !hasLogisticsRecovery(adapter) || active.current || blocked || logisticsBlocked || otherBlocked()) return;
-    const turn = generation.current; active.current = true; setRunning(true); onBlocking(true); setError("");
+    const turn = generation.current; active.current = true; setRunning(true); setError("");
     try {
       const h = new Headers(mutationHeaders("material-request-logistics-event").headers);
       const input = { event_type: eventType, event_at: new Date().toISOString(), source: eventSource, evidence_file_id: evidenceFile || null, external_ref: externalRef || null } as const;
@@ -145,7 +145,7 @@ export default function FormalMaterialRequestShipmentPanel({ adapter, access, de
       logisticsStore.clear(trace);
       if (turn === generation.current) { setEvents(prev => ({ ...prev, [shipmentId]: [...(prev[shipmentId] || []), x] })); setMessage(`已登记物流事件：${labels[eventType]}`); }
     } catch (e) { if (turn === generation.current) setError(showError(e)); }
-    finally { active.current = false; if (turn === generation.current) { setRunning(false); onBlocking(store.read().kind !== "missing"); } }
+    finally { active.current = false; if (turn === generation.current) setRunning(false); }
   }
   return <section className="opening-detail-section" aria-label="发运与分包">
     <header><div><h3>发运与分包</h3><p>按实际包裹填写数量、SN 和运单；未发完的出库余量可继续分包。登记发运不再次扣库存。</p></div></header>
