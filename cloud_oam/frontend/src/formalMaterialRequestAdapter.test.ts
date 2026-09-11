@@ -607,4 +607,13 @@ describe("formal material-request PC transport", () => {
       cache: "no-store", headers: { "Idempotency-Key": "web-receipt-key-123456", "Cache-Control": "no-store", Pragma: "no-cache" },
     }]]);
   });
+
+  it("queries logistics recovery with the original shipment and key coordinates", async () => {
+    const requester = makeRequester(async () => ({ schema_version: "1.0", lookup_status: "not_observed", command: null }));
+    const adapter = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, requester, requester);
+    await expect(adapter.logisticsCommandStatusNoReplay!(REQUEST_ID, STEP_ID, "web-logistics-key-123456")).resolves.toMatchObject({ lookup_status: "not_observed" });
+    expect(requester.mock.calls[0]).toEqual([`/v1/material-requests/${REQUEST_ID}/shipments/${STEP_ID}/logistics-command-status`, {
+      method: "GET", cache: "no-store", headers: { "Idempotency-Key": "web-logistics-key-123456", "Cache-Control": "no-store", Pragma: "no-cache" },
+    }]);
+  });
 });

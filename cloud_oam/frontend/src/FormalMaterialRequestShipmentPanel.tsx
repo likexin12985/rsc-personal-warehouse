@@ -5,10 +5,11 @@ import { type MaterialRequestDetail, validateMaterialRequestDetail } from "./for
 import { reservationSnapshotsMatch as same } from "./materialRequestReservationRecovery";
 import { type ShipmentOption, type ShipmentInput, type ShipmentResult, type ShipmentOptions, type LogisticsEventResult, shipmentLineSelection, validateShipmentInput, validateShipmentOptions, validateShipmentResult } from "./materialRequestShipment";
 import { type ShipmentStore, type ShipmentSentinel, hasShipmentRecovery, recoverShipment, matchShipmentResult, shipmentRequestHash } from "./materialRequestShipmentRecovery";
+import { createLogisticsStore, hasLogisticsRecovery, recoverLogistics, type LogisticsStore } from "./materialRequestLogisticsRecovery";
 import { Button, Field, showError } from "./ui";
 
 type Props = { adapter: FormalMaterialRequestAdapter; access: FormalMaterialRequestAccess | null; detail: MaterialRequestDetail | null;
-  store: ShipmentStore; otherWriteBusy: boolean; otherWriteBlocked: () => boolean; onBlocking: (blocked: boolean) => void; onDetail: (detail: MaterialRequestDetail) => void };
+  store: ShipmentStore; logisticsStore?: LogisticsStore; otherWriteBusy: boolean; otherWriteBlocked: () => boolean; onBlocking: (blocked: boolean) => void; onDetail: (detail: MaterialRequestDetail) => void };
 type Draft = { quantity: string; serialIds: string[] };
 const labels = { pickup: "揽收", transit: "运输中", signed: "物流签收", exception: "物流异常" };
 function boundPage(raw: unknown, detail: MaterialRequestDetail) {
@@ -16,10 +17,12 @@ function boundPage(raw: unknown, detail: MaterialRequestDetail) {
   if (page.request_id !== detail.request_id || page.request_version !== detail.request_version) throw new Error("发运候选与需求版本不一致，请刷新详情");
   return page;
 }
-export default function FormalMaterialRequestShipmentPanel({ adapter, access, detail, store, otherWriteBusy, otherWriteBlocked, onBlocking, onDetail }: Props) {
+export default function FormalMaterialRequestShipmentPanel({ adapter, access, detail, store, logisticsStore: providedLogisticsStore, otherWriteBusy, otherWriteBlocked, onBlocking, onDetail }: Props) {
+  const [logisticsStore] = useState<LogisticsStore>(() => providedLogisticsStore ?? createLogisticsStore());
   const [page, setPage] = useState<ShipmentOptions | null>(null), [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [shipments, setShipments] = useState<ShipmentResult[]>([]), [events, setEvents] = useState<Record<string, LogisticsEventResult[]>>({});
   const [eventType, setEventType] = useState<keyof typeof labels>("signed"), [eventSource, setEventSource] = useState("carrier");
+  const [evidenceFile, setEvidenceFile] = useState(""), [externalRef, setExternalRef] = useState("");
   const [carrier, setCarrier] = useState(""), [tracking, setTracking] = useState(""), [target, setTarget] = useState(""), [person, setPerson] = useState("");
   const [running, setRunning] = useState(false), [loading, setLoading] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState("");
   const [, redraw] = useState(0);
@@ -29,7 +32,7 @@ export default function FormalMaterialRequestShipmentPanel({ adapter, access, de
     generation.current += 1;
     context.current = { adapter, access, store, requestId: detail?.request_id, version: detail?.request_version };
   }
-  const saved = store.read(), blocked = saved.kind !== "missing";
+  const saved = store.read(), blocked = saved.kind !== "missing", logisticsSaved = logisticsStore.read(), logisticsBlocked = logisticsSaved.kind !== "missing";
   const capable = hasShipmentRecovery(adapter) && !!adapter.createShipment && !!adapter.listShipmentOptions && !!adapter.listShipments;
   const otherBlocked = () => otherWriteBusy || otherWriteBlocked();
   const disabled = running || blocked || otherWriteBusy || !capable;
@@ -63,6 +66,15 @@ export default function FormalMaterialRequestShipmentPanel({ adapter, access, de
     // All writes preserve the original context; changed props invalidate late responses.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adapter, store, accessSignature, detail?.request_id, detail?.request_version]);
+  useEffect(() => {
+    let live = true;
+    const pending = logisticsStore.read();
+    if (!detail || pending.kind !== "valid" || pending.value.request_id !== detail.request_id.toLowerCase() || !hasLogisticsRecovery(adapter)) return () => { live = false; };
+    recoverLogistics(adapter, logisticsStore, pending.value).then(({ event }) => {
+      if (live) { setEvents(prev => ({ ...prev, [event.shipment_id]: [...(prev[event.shipment_id] || []).filter(row => row.event_id !== event.event_id), event] })); setMessage(`已通过只读回读确认物流事件：${labels[event.event_type as keyof typeof labels] ?? event.event_type}`); redraw(v => v + 1); }
+    }).catch(e => { if (live) setError("物流事件结果待核验，已禁止再次提交。" + showError(e)); });
+    return () => { live = false; };
+  }, [adapter, detail?.request_id, logisticsStore]);
   useEffect(() => {
     const changed = () => { redraw(v => v + 1); onBlocking(active.current || store.read().kind !== "missing"); };
     window.addEventListener("storage", changed);
@@ -118,12 +130,19 @@ export default function FormalMaterialRequestShipmentPanel({ adapter, access, de
     finally { active.current = false; if (turn === generation.current) { setRunning(false); onBlocking(store.read().kind !== "missing"); } }
   }
   async function registerEvent(shipmentId: string) {
-    if (!detail || !adapter.createLogisticsEvent || active.current || blocked || otherBlocked()) return;
+    if (!detail || !adapter.createLogisticsEvent || !hasLogisticsRecovery(adapter) || active.current || blocked || logisticsBlocked || otherBlocked()) return;
     const turn = generation.current; active.current = true; setRunning(true); onBlocking(true); setError("");
     try {
       const h = new Headers(mutationHeaders("material-request-logistics-event").headers);
-      const x = await adapter.createLogisticsEvent(detail.request_id, shipmentId, { event_type: eventType, event_at: new Date().toISOString(), source: eventSource, evidence_file_id: null, external_ref: null }, { "X-Request-ID": h.get("X-Request-ID")!, "Idempotency-Key": h.get("Idempotency-Key")! });
+      const input = { event_type: eventType, event_at: new Date().toISOString(), source: eventSource, evidence_file_id: evidenceFile || null, external_ref: externalRef || null } as const;
+      const identity = validateFormalMaterialRequestFreshIdentity(await adapter.loadIdentityNoReplay());
+      const freshAccess = validateFormalMaterialRequestAccess(await adapter.loadAccessNoReplay());
+      if (identity.person_id !== access?.person_id || identity.authorization_version !== access?.authorization_version || !same(freshAccess, access)) throw new Error("登录身份或物流事件授权已变化，请重新进入页面");
+      const trace = h.get("X-Request-ID")!, key = h.get("Idempotency-Key")!;
+      logisticsStore.persist({ v: 1, kind: "logistics-event", trace, key, person_id: identity.person_id, authorization_version: identity.authorization_version, request_id: detail.request_id, shipment_id: shipmentId, input });
+      const x = await adapter.createLogisticsEvent(detail.request_id, shipmentId, input, { "X-Request-ID": trace, "Idempotency-Key": key });
       if (x.shipment_id !== shipmentId) throw new Error("物流事件包裹绑定不一致");
+      logisticsStore.clear(trace);
       if (turn === generation.current) { setEvents(prev => ({ ...prev, [shipmentId]: [...(prev[shipmentId] || []), x] })); setMessage(`已登记物流事件：${labels[eventType]}`); }
     } catch (e) { if (turn === generation.current) setError(showError(e)); }
     finally { active.current = false; if (turn === generation.current) { setRunning(false); onBlocking(store.read().kind !== "missing"); } }
@@ -150,9 +169,9 @@ export default function FormalMaterialRequestShipmentPanel({ adapter, access, de
         </tr>; })}
       </tbody></table></div>)}
       {shipments.length > 0 && <div className="table-wrap"><h4>已登记包裹</h4><table><thead><tr><th>发运单</th><th>承运商 / 运单</th><th>数量</th><th>交运时间</th></tr></thead><tbody>{shipments.map(s => <tr key={s.shipment_id}><td>{s.shipment_no}</td><td>{s.carrier} / {s.tracking_no}</td><td>{s.lines.map(l => l.shipped_qty).join(" / ")}</td><td>{s.shipped_at}</td></tr>)}</tbody></table>
-        <h4>物流事件历史</h4><fieldset className="form-grid" disabled={disabled}><Field label="事件类型"><select aria-label="事件类型" value={eventType} onChange={e => setEventType(e.target.value as keyof typeof labels)}>{Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field><Field label="事件来源"><input aria-label="事件来源" value={eventSource} onChange={e => setEventSource(e.target.value)} /></Field></fieldset>
+        <h4>物流事件历史</h4><fieldset className="form-grid" disabled={disabled || logisticsBlocked}><Field label="事件类型"><select aria-label="事件类型" value={eventType} onChange={e => setEventType(e.target.value as keyof typeof labels)}>{Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field><Field label="事件来源"><input aria-label="事件来源" value={eventSource} onChange={e => setEventSource(e.target.value)} /></Field><Field label="证据文件 ID（可选）"><input aria-label="证据文件 ID（可选）" value={evidenceFile} onChange={e => setEvidenceFile(e.target.value)} /></Field><Field label="外部引用（可选）"><input aria-label="外部引用（可选）" value={externalRef} onChange={e => setExternalRef(e.target.value)} /></Field></fieldset>
         <table><thead><tr><th>发运单</th><th>事件</th><th>时间</th><th>来源</th></tr></thead><tbody>{shipments.flatMap(s => (events[s.shipment_id] ?? []).map(e => <tr key={e.event_id}><td>{s.shipment_no}</td><td>{labels[e.event_type as keyof typeof labels] ?? e.event_type}</td><td>{e.event_at}</td><td>{e.source}</td></tr>))}</tbody></table>
-        {shipments.map(s => adapter.createLogisticsEvent && <Button key={s.shipment_id} disabled={disabled || !eventSource} onClick={() => void registerEvent(s.shipment_id)}>登记 {s.shipment_no} 物流事件</Button>)}
+        {logisticsBlocked && <div className="alert alert-warning">物流事件结果待核验，已禁止再次提交；刷新后只读核验原事件。</div>}{shipments.map(s => adapter.createLogisticsEvent && <Button key={s.shipment_id} disabled={disabled || logisticsBlocked || !eventSource || !hasLogisticsRecovery(adapter)} onClick={() => void registerEvent(s.shipment_id)}>登记 {s.shipment_no} 物流事件</Button>)}
       </div>}
     </>}
   </section>;

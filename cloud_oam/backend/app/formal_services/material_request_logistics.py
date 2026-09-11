@@ -1,20 +1,24 @@
 """Append-only carrier tracking facts; never imply receipt or inventory inbound."""
 from datetime import datetime, timezone
-import hashlib, hmac, json, uuid
+import hashlib, hmac, re, uuid
 from sqlalchemy import select
 from ..foundation_models import FileObject, OutboxEvent
 from ..demand_models import MaterialRequest
 from ..inventory_models import LogisticsEvent, Shipment, ShipmentLine, OutboundPosting
 from .audit_chain import append_audit_event
 from . import material_request_outbound as outbound
+from . import material_request_query
 
 class LogisticsEventError(Exception):
     def __init__(self, code, category, message): self.code, self.category, self.message = code, category, message
 
 def _fail(code, category, message): raise LogisticsEventError(code, category, message)
 
+def _utc(value):
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
 def _ensure_after_shipping(shipped_at, event_at):
-    if shipped_at is not None and event_at < shipped_at:
+    if shipped_at is not None and event_at < _utc(shipped_at):
         _fail("time_invalid", "precondition_failed", "物流事件时间不能早于交运时间")
 
 def _validate_evidence_file(db, file_id):
@@ -43,10 +47,13 @@ def create_event(db, *, actor, request_id, shipment_id, event_type, event_at, so
     outbound._authorize_account_ids(db, actor, source_ids, action="read", resource="inventory", lock_rows=False)
     path = f"/api/v1/material-requests/{request_id}/shipments/{shipment_id}/logistics-events"
     key_hash = hmac.new(secret, f"{actor.user_id}:POST:{path}:{idempotency_key}".encode(), hashlib.sha256).hexdigest()
-    payload_hash = hashlib.sha256(json.dumps({"request_id": str(request_id), "shipment_id": str(shipment_id), "event_type": event_type, "event_at": event_at, "source": source, "evidence_file_id": str(evidence_file_id) if evidence_file_id else None, "external_ref": external_ref}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     existing = db.scalar(select(LogisticsEvent).where(LogisticsEvent.idempotency_key_hash == key_hash))
     if existing is not None:
-        if existing.external_ref != external_ref or existing.event_type != event_type or existing.event_at != when: _fail("key_reused", "conflict", "幂等键已绑定其他物流事件")
+        if (existing.shipment_id != shipment_id or existing.actor_user_id != actor.user_id
+                or existing.external_ref != (external_ref.strip() if external_ref else None)
+                or existing.source != source.strip() or existing.evidence_file_id != evidence_file_id
+                or existing.event_type != event_type or _utc(existing.event_at) != when):
+            _fail("key_reused", "conflict", "幂等键已绑定其他物流事件")
         return _result(existing, True)
     now = datetime.now(timezone.utc)
     row = LogisticsEvent(id=uuid.uuid4(), shipment_id=shipment_id, event_type=event_type, event_at=when, source=source.strip(), evidence_file_id=evidence_file_id, external_ref=external_ref.strip() if external_ref else None, idempotency_key_hash=key_hash, actor_user_id=actor.user_id, created_at=now)
@@ -56,7 +63,42 @@ def create_event(db, *, actor, request_id, shipment_id, event_type, event_at, so
     return _result(row, False)
 
 def _result(row, replayed):
-    return {"schema_version": "1.0", "event_id": row.id, "shipment_id": row.shipment_id, "event_type": row.event_type, "event_at": row.event_at.isoformat(), "source": row.source, "evidence_file_id": row.evidence_file_id, "external_ref": row.external_ref, "idempotency_replayed": replayed}
+    return {"schema_version": "1.0", "event_id": row.id, "shipment_id": row.shipment_id, "event_type": row.event_type, "event_at": _utc(row.event_at).isoformat(), "source": row.source, "evidence_file_id": row.evidence_file_id, "external_ref": row.external_ref, "idempotency_replayed": replayed}
+
+def logistics_command_status(db, *, actor, request_id, shipment_id, idempotency_key, secret):
+    """Read only the original actor/path/key-bound event; absence permits no replay."""
+    if not isinstance(secret, bytes):
+        secret = secret.encode()
+    if len(secret) < 32:
+        _fail("secret_invalid", "service_unavailable", "物流事件幂等配置不可用")
+    if not isinstance(idempotency_key, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{15,127}", idempotency_key):
+        _fail("idempotency_key_invalid", "invalid_request", "幂等键无效")
+    context = material_request_query._load_read_context(db, actor=actor, now=None)
+    request = db.scalar(select(MaterialRequest).where(
+        MaterialRequest.id == request_id, material_request_query._visible_request_predicate(context),
+    ))
+    if request is None:
+        _fail("not_found", "not_found", "需求单不存在")
+    shipment = db.get(Shipment, shipment_id)
+    if shipment is None:
+        _fail("shipment_not_found", "not_found", "发运单不存在")
+    lines = tuple(db.scalars(select(ShipmentLine).where(ShipmentLine.shipment_id == shipment_id)).all())
+    if not lines:
+        _fail("history_invalid", "service_unavailable", "物流事件缺少原发运事实")
+    for line in lines:
+        fact = db.get(OutboundPosting, line.outbound_posting_id)
+        if fact is None or fact.request_id != request_id:
+            _fail("shipment_request_mismatch", "conflict", "发运单不属于当前需求")
+        outbound._authorize_account_ids(db, actor, (fact.source_stock_account_id,), action="read", resource="inventory", lock_rows=False)
+        outbound.verified_outbound_history(db, fact=fact, request=request)
+    path = f"/api/v1/material-requests/{request_id}/shipments/{shipment_id}/logistics-events"
+    key_hash = hmac.new(secret, f"{actor.user_id}:POST:{path}:{idempotency_key}".encode(), hashlib.sha256).hexdigest()
+    event = db.scalar(select(LogisticsEvent).where(LogisticsEvent.idempotency_key_hash == key_hash))
+    if event is None:
+        return None
+    if event.shipment_id != shipment_id or event.actor_user_id != actor.user_id:
+        _fail("history_invalid", "service_unavailable", "物流事件与原请求绑定不一致")
+    return _result(event, True)
 
 def list_events(db, *, actor, request_id, shipment_id):
     request = db.get(MaterialRequest, request_id)

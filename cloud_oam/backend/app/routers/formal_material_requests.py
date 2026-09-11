@@ -66,7 +66,7 @@ from ..material_request_outbound_schemas import OutboundOptionsOut, OutboundIn, 
 from ..material_request_shipment_schemas import ShipmentIn, ShipmentOut, ShipmentOptionsOut, ShipmentCommandStatusOut
 from ..material_request_receipt_schemas import ReceiptIn, ReceiptOut, ReceiptCommandStatusOut
 from ..material_request_inbound_schemas import InboundOrderIn, InboundOrderOut, InboundPostingOut
-from ..material_request_logistics_schemas import LogisticsEventIn, LogisticsEventOut
+from ..material_request_logistics_schemas import LogisticsEventIn, LogisticsEventOut, LogisticsEventCommandStatusOut
 from ..formal_services import material_request_picking as picking_service
 from ..formal_services import material_request_picking_options as picking_options_service
 from ..material_request_picking_schemas import PickOptionsOut
@@ -972,6 +972,32 @@ def list_formal_material_request_logistics_events(
     _set_read_no_store(response)
     try:
         return [LogisticsEventOut(**row) for row in logistics_service.list_events(db, actor=principal, request_id=material_request_id, shipment_id=shipment_id)]
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+
+@router.get("/{material_request_id}/shipments/{shipment_id}/logistics-command-status", response_model=LogisticsEventCommandStatusOut)
+def logistics_command_status(
+    material_request_id: UUID, shipment_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+):
+    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128)
+    _set_read_no_store(response)
+    try:
+        result = logistics_service.logistics_command_status(
+            db, actor=principal, request_id=material_request_id, shipment_id=shipment_id,
+            idempotency_key=key, secret=_require_lifecycle_idempotency_secret(runtime_settings),
+        )
+        return LogisticsEventCommandStatusOut(
+            lookup_status="confirmed" if result is not None else "not_observed",
+            command=None if result is None else LogisticsEventOut(**result),
+        )
+    except (logistics_service.LogisticsEventError, query_service.MaterialRequestReadError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
     except Exception as exc:
         _rollback_and_raise(db, exc)
 

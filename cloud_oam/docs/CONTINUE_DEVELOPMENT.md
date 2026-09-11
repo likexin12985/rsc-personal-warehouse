@@ -3,6 +3,17 @@
 核验日期：2026-09-08。此文件是当前交接摘要；旧聊天和旧日期段落只作追溯。
 产品规则仍以根目录 `AGENTS.md` 和 V1.0 正式需求全文为准。
 
+## 2026-09-11 物流签收与异常证据恢复
+
+本批从 `f2d7c216` 接续，仍在 `codex/production-readiness-gates` 分支，目标是把物流事件作为独立事实接入原请求恢复链。
+
+- 新增只读 `GET /api/v1/material-requests/{request_id}/shipments/{shipment_id}/logistics-command-status`。查询按当前需求可见性、包裹与原出库事实、库存读取权限、当前身份和原 `Idempotency-Key` 绑定；`not_observed` 不代表未执行，也不允许自动重发。
+- 物流事件页面提交前持久保存原包裹、事件类型、带时区时间、来源、证据文件 ID、外部引用和授权版本。结果未知时刷新继续阻断，只通过原键回读；只有事件字段、包裹、身份和页面上下文全部一致才清除哨兵。
+- 页面补充证据文件 ID 与外部引用输入，签收、运输、揽收、异常仍保持独立事件，不推进收货或个人仓入账状态。
+- 本地验证：Web `60 files / 1062 passed`，物流/发运/收货/入账/正式 API 后端定向 `121 passed`，TypeScript 与 Vite production build 通过。提交后需再取得准确 SHA 的 Client/PG16 门禁。
+
+本批未执行真实 OAM、物流平台或生产写入；证据文件上传本身、通知送达、OAM 收货证据、对账和真机/UAT仍是后续独立交付项。
+
 ## 2026-09-11 收货与个人仓入账持久恢复
 
 本批从 `e26039c` 接续，继续保持 `codex/production-readiness-gates` 分支；本批提交后以实际 SHA 和云端门禁结果为准。

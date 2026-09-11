@@ -1,4 +1,5 @@
 from uuid import UUID
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 class LogisticsEventIn(BaseModel):
@@ -20,3 +21,9 @@ class LogisticsEventOut(BaseModel):
     evidence_file_id: UUID | None = None
     external_ref: str | None = None
     idempotency_replayed: bool = False
+
+class LogisticsEventCommandStatusOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["1.0"] = "1.0"
+    lookup_status: Literal["confirmed", "not_observed"]
+    command: LogisticsEventOut | None

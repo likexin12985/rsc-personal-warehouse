@@ -1,5 +1,6 @@
 import { type ShipmentCommandStatus, validateShipmentCommandStatus } from "./materialRequestShipmentRecovery";
 import { type ReceiptCommandStatus, validateReceiptCommandStatus } from "./materialRequestReceiptRecovery";
+import { type LogisticsCommandStatus, validateLogisticsCommandStatus } from "./materialRequestLogisticsRecovery";
 import { api, apiNoReplay, ApiError, jsonBody } from "./api";
 import { formalMaterialCatalogQuery } from "./formalMaterialCatalog";
 import { validateMaterialRequestWorkOrderOptionQuery } from "./formalMaterialRequestOptions";
@@ -108,6 +109,7 @@ export interface FormalMaterialRequestAdapter {
   listOutboundOptions?(requestId: string, requestLineId: string): Promise<OutboundPage>;
   shipmentCommandStatusNoReplay?(requestId: string, key: string): Promise<ShipmentCommandStatus>;
   receiptCommandStatusNoReplay?(requestId: string, key: string): Promise<ReceiptCommandStatus>;
+  logisticsCommandStatusNoReplay?(requestId: string, shipmentId: string, key: string): Promise<LogisticsCommandStatus>;
   listShipments?(requestId: string): Promise<readonly ShipmentResult[]>;
   listLogisticsEvents?(requestId: string, shipmentId: string): Promise<readonly LogisticsEventResult[]>;
   createLogisticsEvent?(requestId: string, shipmentId: string, input: LogisticsEventInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<LogisticsEventResult>;
@@ -916,6 +918,12 @@ export function createFormalMaterialRequestAdapter(
     },
     listLogisticsEvents(requestId: string, shipmentId: string) {
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipments/${requiredUuid(shipmentId, "shipment_id")}/logistics-events`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(value => { if (!Array.isArray(value)) throw new ApiError(502, "物流事件查询响应无效"); return value.map(validateLogisticsEventResult); });
+    },
+    logisticsCommandStatusNoReplay(requestId: string, shipmentId: string, key: string) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/.test(key)) throw new ApiError(400, "物流核验坐标无效");
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipments/${requiredUuid(shipmentId, "shipment_id")}/logistics-command-status`, {
+        method: "GET", cache: "no-store", headers: { "Idempotency-Key": key, "Cache-Control": "no-store", Pragma: "no-cache" },
+      }).then(validateLogisticsCommandStatus);
     },
     createLogisticsEvent(requestId: string, shipmentId: string, input: LogisticsEventInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
       const body = validateLogisticsEventInput(input); const checked = validateWriteHeaders(headers, headers["Idempotency-Key"]);
