@@ -259,6 +259,7 @@ test('release navigation registers only reviewed formal workbench, personal ware
   assert.deepEqual(appConfig.pages, [
     'pages/login/index',
     'pages/home/index',
+    'pages/formal-work-orders/index',
     'pages/formal-personal-warehouse/index',
     'pages/formal-my-receiving/index',
     'pages/formal-my-inbound/index',

@@ -37,6 +37,15 @@
       <text class="module-link-arrow">进入 ›</text>
     </navigator>
 
+    <navigator wx:if="{{workOrderAccessAllowed}}" class="card module-link" url="/pages/formal-work-orders/index">
+      <view>
+        <text class="module-link-kicker">工单物料</text>
+        <text class="module-link-title">查看本人工单物料</text>
+        <text class="module-link-detail">查看 OAM 工单、本人可用库存和本工单剩余占用。</text>
+      </view>
+      <text class="module-link-arrow">进入 ›</text>
+    </navigator>
+
     <navigator wx:if="{{materialRequestAccessAllowed}}" class="card module-link" open-type="switchTab" url="/pages/formal-material-requests/index">
       <view>
         <text class="module-link-kicker">需求中心</text>

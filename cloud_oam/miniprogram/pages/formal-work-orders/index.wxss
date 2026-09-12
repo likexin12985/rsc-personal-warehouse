@@ -1,0 +1,8 @@
+.search-row { display: flex; align-items: center; gap: 16rpx; }
+.search-row input { flex: 1; min-width: 0; }
+.order-no { font-size: 30rpx; font-weight: 600; overflow-wrap: anywhere; }
+.order-card .muted, .material-card .muted { margin-top: 12rpx; }
+.detail-link { color: #e65318; margin-top: 20rpx; }
+.quantity { margin-top: 20rpx; font-size: 28rpx; font-weight: 600; }
+.serial { margin-top: 12rpx; color: #52606d; overflow-wrap: anywhere; }
+.pager { margin: 24rpx 0; }

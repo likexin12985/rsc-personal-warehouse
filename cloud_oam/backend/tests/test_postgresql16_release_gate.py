@@ -21207,6 +21207,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
             assert_work_order_replacements_gate(api_engine, replacement_fixture_engine)
+            from pg16_work_order_query_gate import assert_work_order_query_gate
+            assert_work_order_query_gate(api_engine, replacement_fixture_engine)
         finally:
             replacement_fixture_engine.dispose()
         blocked_replacement = _run_alembic("downgrade", "20261002_0092", expect_success=False)

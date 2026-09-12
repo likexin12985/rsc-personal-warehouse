@@ -2,6 +2,7 @@ const api = require('../../utils/api')
 const session = require('../../utils/session')
 const {
   formalRoleCodes,
+  hasFormalPermission,
   inventoryAccessDecision,
   roleLabel
 } = require('../../utils/production-guard')
@@ -25,6 +26,7 @@ Page({
     inventoryAccessMessage: '正式访问上下文尚未校验',
     inventoryStatusTone: 'neutral',
     personalWarehouse: null,
+    workOrderAccessAllowed: false,
     personalItems: [],
     personalLocationName: '未读取',
     personalLedgerCursor: '未读取',
@@ -52,6 +54,7 @@ Page({
       organizationName: '',
       authorizationText: '未验证',
       personalWarehouse: null,
+      workOrderAccessAllowed: false,
       personalItems: [],
       inventoryStatus: '正在校验',
       inventoryStatusTone: 'neutral',
@@ -80,6 +83,7 @@ Page({
           ? `v${access.authorization_version}`
           : '未验证',
         inventoryStatus: decision.allowed ? '正在读取' : '不可访问',
+        workOrderAccessAllowed: decision.allowed && hasFormalPermission(access, 'work_order_material', 'read'),
         inventoryStatusTone: decision.allowed ? 'neutral' : 'danger',
         inventoryAccessMessage: decision.allowed ? '库存权限已验证，正在读取正式个人仓。' : decision.message
       })
@@ -128,6 +132,7 @@ Page({
         inventoryStatusTone: 'danger',
         inventoryAccessMessage: '无法确认正式身份、授权或个人仓响应契约，未展示任何库存数据。',
         personalWarehouse: null,
+        workOrderAccessAllowed: false,
         personalItems: [],
         personalLocationName: '未读取',
         personalLedgerCursor: '未读取'

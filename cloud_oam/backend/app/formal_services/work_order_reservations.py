@@ -2,10 +2,13 @@
 
 A personal reserved account can contain stock for several work orders. Its
 balance is never evidence that a particular order can consume or release it.
-Callers own the ledger lock before reading this history and before posting.
+Write callers own the ledger lock. Read callers bound the history cursor and
+recheck the inventory snapshot after reading, without taking a write lock.
 """
 from collections import defaultdict
+from dataclasses import dataclass
 from decimal import Decimal
+from uuid import UUID
 
 from sqlalchemy import or_, select
 
@@ -13,8 +16,16 @@ from ..inventory_models import InventoryMovement, InventoryMovementSerial, Inven
 from .inventory_posting import InventoryPostingError
 
 
-def require_work_order_reservations(db, *, work_order_id, lines, before_cursor=None):
-    account_ids = {line.stock_account_id for line in lines}
+@dataclass(frozen=True)
+class WorkOrderReservation:
+    quantity: Decimal
+    serial_ids: frozenset[UUID]
+
+
+def read_work_order_reservations(db, *, work_order_id, account_ids, before_cursor=None):
+    account_ids = frozenset(account_ids)
+    if not account_ids:
+        return {}
     statement = (
         select(InventoryTransaction, InventoryMovement)
         .join(InventoryMovement, InventoryMovement.transaction_id == InventoryTransaction.id)
@@ -55,6 +66,16 @@ def require_work_order_reservations(db, *, work_order_id, lines, before_cursor=N
             reserved_serials[account_id].update(movement_serials)
         else:
             reserved_serials[account_id].difference_update(movement_serials)
+    return {identifier: WorkOrderReservation(quantities[identifier], frozenset(reserved_serials[identifier]))
+            for identifier in account_ids}
+
+
+def require_work_order_reservations(db, *, work_order_id, lines, before_cursor=None):
+    lines = tuple(lines)
+    remaining = read_work_order_reservations(db, work_order_id=work_order_id,
+        account_ids={line.stock_account_id for line in lines}, before_cursor=before_cursor)
+    quantities = {identifier: row.quantity for identifier, row in remaining.items()}
+    reserved_serials = {identifier: set(row.serial_ids) for identifier, row in remaining.items()}
     for line in lines:
         if quantities[line.stock_account_id] < line.quantity:
             raise InventoryPostingError("work_order_reservation_insufficient", "conflict",

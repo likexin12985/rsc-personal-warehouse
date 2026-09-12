@@ -1,0 +1,42 @@
+<view class="page">
+  <view class="page-title">我的工单物料</view>
+  <view class="page-subtitle">{{message}}</view>
+  <view wx:if="{{loading}}" class="loading">正在读取</view>
+  <button wx:if="{{state === 'error'}}" class="button" bindtap="refresh">重新读取</button>
+  <block wx:if="{{state === 'ready' && !workOrder}}">
+    <view class="card search-row">
+      <input placeholder="搜索工单编号" value="{{search}}" maxlength="100" bindinput="onSearchInput" bindconfirm="search" />
+      <button size="mini" bindtap="search">搜索</button>
+    </view>
+    <view wx:for="{{orders}}" wx:key="work_order_id" class="card order-card" data-id="{{item.work_order_id}}" bindtap="openOrder">
+      <view class="row between"><text class="order-no">{{item.work_order_no}}</text><text>{{item.statusLabel}}</text></view>
+      <view class="muted">{{item.freshnessLabel}}</view>
+      <view class="muted">来源更新：{{item.source_updated_at}}</view>
+      <view class="muted">最近同步：{{item.synced_at}}</view>
+      <view class="detail-link">查看工单物料 ›</view>
+    </view>
+    <view class="row between pager">
+      <button size="mini" disabled="{{!hasPrevious}}" bindtap="previousPage">上一页</button>
+      <text>第 {{pageNumber}} 页</text>
+      <button size="mini" disabled="{{!hasNext}}" bindtap="nextPage">下一页</button>
+    </view>
+  </block>
+  <block wx:if="{{state === 'ready' && workOrder}}">
+    <button size="mini" bindtap="backToOrders">选择其他工单</button>
+    <view class="card">
+      <view class="order-no">{{workOrder.work_order_no}}</view>
+      <view>{{workOrder.statusLabel}} · {{workOrder.freshnessLabel}}</view>
+      <view class="muted">{{locationName}}</view>
+      <view class="muted">来源更新：{{workOrder.source_updated_at}}</view>
+      <view class="muted">最近同步：{{workOrder.synced_at}}</view>
+    </view>
+    <view wx:if="{{!items.length}}" class="card">暂无可展示的可用物料或本工单剩余占用。</view>
+    <view wx:for="{{items}}" wx:key="stock_account_id" class="card material-card">
+      <view class="order-no">{{item.material_name}}</view>
+      <view>{{item.sku_code}} · {{item.conditionLabel}}</view>
+      <view wx:if="{{item.lot_no}}" class="muted">批次：{{item.lot_no}}</view>
+      <view class="quantity">{{item.quantityLabel}}：{{item.selectable_quantity}} {{item.base_unit}}</view>
+      <view wx:for="{{item.serials}}" wx:for-item="serial" wx:key="serial_id" class="serial">SN：{{serial.serial_no}}</view>
+    </view>
+  </block>
+</view>
