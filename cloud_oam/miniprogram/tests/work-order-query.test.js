@@ -258,6 +258,49 @@ async function pendingStore(pending = true) {
   if (pending) await store.withLease(marker, lease => lease.persist(marker))
   return { store, marker, storage, records }
 }
+async function pairedPendingStore() {
+  const value = await pendingStore(false)
+  value.marker = { ...value.marker, kind: 'work_order_replacement', operation_type: 'replace' }
+  await value.store.withLease(value.marker, lease => lease.persist(value.marker))
+  return value
+}
+function pairedRecovered(marker) {
+  return { schema_version: '1.0', replacement_id: OTHER, replacement_no: 'WR-TEST', work_order_id: marker.work_order_id,
+    consume_operation_id: ORDER, recover_operation_id: NEXT, consume_transaction_id: ACCOUNT, recover_transaction_id: LOCATION,
+    status: 'posted', operator_person_id: marker.person_id, request_id: marker.trace_request_id, request_hash: marker.request_hash }
+}
+test('paired original request is visible outside current orders and only its parent can confirm recovery', async () => {
+  const { store, marker } = await pairedPendingStore()
+  const { page, state } = harness({ store, list: () => list(NEXT), recovery: () => pairedRecovered(marker),
+    access: () => ({ ...access(), permissions: access().permissions.concat({ resource: 'work_order_material', action: 'operate', field_code: '' }) }) })
+  await page.onShow()
+  assert.match(page.data.pendingRequests[0].label, /成对消耗与回收/)
+  assert.equal(page.data.pendingRequests[0].sealable, false)
+  await page.sealPendingRequest(event(ORDER)); assert.equal(state.calls.filter(call => call.endpoint.includes('/by-request/')).length, 0)
+  await page.recoverPendingRequest(event(ORDER))
+  assert.equal(store.read(marker).kind, 'missing'); assert.match(page.data.recoveryMessage, /WR-TEST/)
+  assert.equal(page.data.pendingRequests.length, 0)
+  assert.ok(state.calls.every(call => call.method === 'GET'))
+  assert.equal(state.calls.find(call => call.endpoint.includes('/by-request/')).endpoint,
+    `/v1/work-orders/${ORDER}/material-replacements/by-request/${marker.trace_request_id}`)
+})
+test('pending paired request disables ordinary drafts and retains evidence on unknown, child or hidden responses', async () => {
+  for (const mode of ['unknown', 'child', 'hidden']) {
+    const { store, marker } = await pairedPendingStore(), waiting = deferred()
+    const { page, state } = await openDraft({ store, recovery: () => {
+      if (mode === 'hidden') return waiting.promise
+      if (mode === 'child') return recovered({ ...marker, operation_type: 'consume' })
+      throw new Error('404')
+    } })
+    assert.equal(page.data.canDraft, false)
+    const work = page.recoverPendingRequest(event(ORDER))
+    if (mode === 'hidden') { await tick(); page.onHide(); waiting.resolve(pairedRecovered(marker)) }
+    await work
+    assert.equal(store.read(marker).kind, 'valid')
+    assert.doesNotMatch(page.data.recoveryMessage, /原操作已确认/)
+    assert.ok(state.calls.every(call => call.method === 'GET'))
+  }
+})
 function recovered(marker) {
   return { schema_version: '1.0', lookup_status: 'confirmed', command: { schema_version: '1.0', work_order_id: ORDER, operator_person_id: PERSON,
     operation_type: marker.operation_type, request_id: marker.trace_request_id, request_hash: marker.request_hash, status: 'posted',

@@ -108,9 +108,10 @@ Page({
   refreshPendingRequests() {
     const snapshot = this._store.listPending(this._recoveryPerson)
     this._pendingMarkers = new Map(snapshot.items.map(marker => [marker.work_order_id, marker]))
-    const labels = { occupy: '投入占用', consume: '实际消耗', release: '释放未用物料' }
+    const labels = { occupy: '投入占用', consume: '实际消耗', release: '释放未用物料', replace: '成对消耗与回收' }
     this.setData({ pendingRequests: snapshot.items.map((marker, index) => ({
-      id: marker.work_order_id, label: `待确认请求 ${index + 1} · ${labels[marker.operation_type]}`
+      id: marker.work_order_id, label: `待确认请求 ${index + 1} · ${labels[marker.operation_type]}`,
+      sealable: marker.kind === 'work_order_material'
     })), pendingMessage: snapshot.kind === 'ready' ? '' : '部分恢复记录暂不可读取。请保留本机记录，已列出的本人请求仍可分别核验。' })
   },
   eraseDraft() { this._drafts = {}; this._scans = {}; this._draftRevision = (this._draftRevision || 0) + 1 },
@@ -313,7 +314,8 @@ Page({
   },
   async sealPendingRequest(event) {
     const id = event.currentTarget.dataset.id
-    if (!this.data.canSeal || !this._pendingMarkers || !this._pendingMarkers.has(id)) return
+    if (!this.data.canSeal || !this._pendingMarkers || !this._pendingMarkers.has(id)
+      || this._pendingMarkers.get(id).kind !== 'work_order_material') return
     return this.recoverRequest(id, true)
   },
   async recoverRequest(order, seal = false) {
@@ -335,7 +337,8 @@ Page({
       if (result.status === 'confirmed' || result.status === 'sealed') {
         this.refreshPendingRequests()
         this.setData({ canRecover: this._selected === order ? false : this.data.canRecover,
-          recoveryMessage: result.status === 'sealed' ? '原请求已关闭且未执行。请刷新工单后重新准备物料。' : `原操作已确认：${result.command.operation_no}。请刷新库存后继续。` })
+          recoveryMessage: result.status === 'sealed' ? '原请求已关闭且未执行。请刷新工单后重新准备物料。'
+            : `原操作已确认：${result.command.replacement_no || result.command.operation_no}。请刷新库存后继续。` })
       }
       else if (result.status === 'cancelled') this.setData({ recoveryMessage: '原请求仍保留，可继续读取原结果。' })
       else this.setData({ recoveryMessage: '暂未读取到已提交的原结果，仍保留恢复记录；请稍后继续核验。' })

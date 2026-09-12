@@ -3,6 +3,7 @@ const test = require('node:test')
 const command = require('../utils/work-order-command')
 const storageModule = require('../utils/work-order-recovery-store')
 const { recoverPending, sealPending } = require('../utils/work-order-recovery')
+const { submitDraft } = require('../utils/work-order-submit')
 const PERSON = '10000000-0000-4000-8000-000000000001'
 const ORDER = '20000000-0000-4000-8000-000000000001'
 const OTHER_ORDER = '20000000-0000-4000-8000-000000000002'
@@ -28,6 +29,80 @@ function storage() {
 function storeFor(backing = storage()) { return storageModule.createStore({ storage: backing, state: { active: new Set(), faults: new Set() } }) }
 const anchor = { work_order_id: ORDER }
 async function persisted(backing = storage()) { const store = storeFor(backing); await store.withLease(anchor, lease => lease.persist(marker())); return { store, backing } }
+
+function pairedMarker() { return storageModule.validateMarker({ ...marker(), kind: 'work_order_replacement', operation_type: 'replace' }) }
+function pairedResult(value = pairedMarker()) {
+  return { schema_version: '1.0', replacement_id: OPERATION, replacement_no: 'WR-TEST', work_order_id: value.work_order_id,
+    consume_operation_id: ORDER, recover_operation_id: OTHER_ORDER, consume_transaction_id: ACCOUNT, recover_transaction_id: MATERIAL,
+    status: 'posted', operator_person_id: value.person_id, request_id: value.trace_request_id, request_hash: value.request_hash }
+}
+async function pairedPersisted() {
+  const backing = storage(), store = storeFor(backing)
+  await store.withLease(anchor, lease => lease.persist(pairedMarker()))
+  return { backing, store }
+}
+
+test('ordinary and paired requests use the same per-order durable marker and cannot overwrite each other', async () => {
+  const { store, backing } = await pairedPersisted()
+  assert.deepEqual(storeFor(backing).listPending(PERSON).items, [pairedMarker()])
+  assert.deepEqual(storeFor(backing).listPending(ACCOUNT).items, [])
+  assert.equal(backing.data.size, 1)
+  assert.equal(JSON.parse(backing.getStorageSync(storageModule.PREFIX + ORDER)).operation_type, 'replace')
+  for (const forbidden of ['qr_code', 'serial_no', 'quantity', 'material_id', 'idempotency_key', 'token']) {
+    assert.equal(backing.getStorageSync(storageModule.PREFIX + ORDER).includes(forbidden), false)
+  }
+  let calls = 0
+  await assert.rejects(submitDraft({ api: {}, store, workOrderId: ORDER, personId: PERSON, authorizationVersion: 7,
+    kind: 'consume', drafts: {}, authorize: async () => { calls++; return 'same' }, confirm: async () => { calls++; return true } }))
+  assert.equal(calls, 0); assert.deepEqual(store.read(anchor).value, pairedMarker())
+  await assert.rejects(store.withLease(anchor, lease => lease.persist(marker())))
+  const ordinary = await persisted()
+  await assert.rejects(ordinary.store.withLease(anchor, lease => lease.persist(pairedMarker())))
+  await store.withLease({ work_order_id: OTHER_ORDER }, lease => lease.persist({ ...marker(), work_order_id: OTHER_ORDER }))
+  assert.equal(backing.data.size, 2)
+  for (const value of [{ ...pairedMarker(), operation_type: 'consume' }, { ...marker(), operation_type: 'replace' },
+    { ...pairedMarker(), kind: 'unknown' }, { ...pairedMarker(), qr_code: 'forbidden' }]) assert.throws(() => storageModule.validateMarker(value))
+})
+test('paired recovery after restart reads only exact parent GET and clears only its full proof', async () => {
+  const { backing } = await pairedPersisted(), store = storeFor(backing), calls = []
+  const result = await recoverPending({ store, workOrderId: ORDER, personId: PERSON, authorize: async () => 'current-version',
+    api: { async request(path, options) { calls.push({ path, ...options }); return pairedResult() } } })
+  assert.equal(result.status, 'confirmed'); assert.equal(result.command.replacement_no, 'WR-TEST')
+  assert.equal(store.read(anchor).kind, 'missing')
+  assert.deepEqual(calls, [{ path: `/v1/work-orders/${ORDER}/material-replacements/by-request/${TRACE}`, method: 'GET', noRefresh: true,
+    header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }])
+})
+test('paired 404, timeout, wrong digest, partial results and lost permission all preserve the original request', async () => {
+  for (const mode of ['404', 'timeout', 'hash', 'child', 'post_only', 'authority', 'foreign', 'clear_fault']) {
+    const { store, backing } = await pairedPersisted(); let reads = 0, permissions = 0
+    if (mode === 'clear_fault') backing.removeStorageSync = () => {}
+    await assert.rejects(recoverPending({ store, workOrderId: ORDER, personId: mode === 'foreign' ? ACCOUNT : PERSON,
+      authorize: async () => mode === 'authority' ? String(++permissions) : 'same', api: { async request(_, options) {
+        reads++; assert.equal(options.method, 'GET')
+        if (mode === '404' || mode === 'timeout') throw new Error(mode)
+        if (mode === 'child') return confirmed()
+        const raw = pairedResult()
+        if (mode === 'hash') raw.request_hash = 'b'.repeat(64)
+        if (mode === 'post_only') { delete raw.operator_person_id; delete raw.request_id; delete raw.request_hash }
+        return raw
+      } } }))
+    assert.equal(reads, mode === 'foreign' ? 0 : 1)
+    assert.equal(store.read(anchor).kind, mode === 'clear_fault' ? 'unavailable' : 'valid')
+    assert.ok(backing.data.has(storageModule.PREFIX + ORDER))
+  }
+})
+test('paired recovery holds the same order lease and cannot be sealed through an ordinary child endpoint', async () => {
+  const { store } = await pairedPersisted(); let resolve, queries = 0
+  const pending = recoverPending({ store, workOrderId: ORDER, personId: PERSON, authorize: async () => 'same',
+    api: { request: async () => { queries++; return new Promise(done => { resolve = done }) } } })
+  await new Promise(done => setImmediate(done))
+  await assert.rejects(store.withLease(anchor, () => {}))
+  assert.equal(queries, 1); resolve(pairedResult()); await pending
+  const again = await pairedPersisted(); let calls = 0
+  await assert.rejects(sealPending({ store: again.store, workOrderId: ORDER, personId: PERSON, api: {},
+    authorize: async () => { calls++; return 'same' }, confirm: async () => { calls++; return true } }))
+  assert.equal(calls, 0); assert.equal(again.store.read(anchor).kind, 'valid')
+})
 
 test('canonical command fingerprint matches Python for Unicode and server-derived occupy target', () => {
   // Computed independently by the backend client_request_hash helper.

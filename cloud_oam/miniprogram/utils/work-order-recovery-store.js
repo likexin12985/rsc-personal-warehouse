@@ -9,7 +9,8 @@ function fail(message = '工单恢复存储不可用，请保留原记录，暂�
 function keyOf(value) { return uuid(value.work_order_id) }
 function validateMarker(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join('|') !== FIELDS.slice().sort().join('|')
-    || value.v !== 1 || value.kind !== 'work_order_material' || !KINDS.includes(value.operation_type)
+    || value.v !== 1 || !(value.kind === 'work_order_material' && KINDS.includes(value.operation_type)
+      || value.kind === 'work_order_replacement' && value.operation_type === 'replace')
     || !Number.isSafeInteger(value.authorization_version) || value.authorization_version < 1
     || typeof value.trace_request_id !== 'string' || !/^wxreq-[a-f0-9]{36}$/.test(value.trace_request_id)
     || typeof value.request_hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.request_hash)) fail()

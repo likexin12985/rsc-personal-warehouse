@@ -1,6 +1,11 @@
 """Quantity/SN scan and batch preview agree with actual paired HTTP posting."""
 from contextlib import nullcontext
 from dataclasses import replace
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
@@ -19,6 +24,16 @@ from app.routers import formal_work_order_query, formal_work_order_material
 from pg16_work_order_material_gate import _checkpoint
 from pg16_work_order_replacements_gate import replacement_snapshot
 from pg16_work_order_query_gate import query_worlds
+
+
+def _mini_contract(fixture):
+    node=shutil.which("node")
+    assert node,"Node is required for the paired replacement client contract"
+    script=Path(__file__).resolve().parents[2]/"miniprogram/tests/fixtures/work-order-replacement-pg16.cjs"
+    result=subprocess.run([node,str(script)],input=json.dumps(fixture),text=True,capture_output=True,
+        timeout=30,env={"PATH":os.environ.get("PATH","")})
+    assert result.returncode==0,result.stderr
+    return json.loads(result.stdout)
 
 
 def assert_replacement_preview_gate(api_engine, fixture_engine):
@@ -46,6 +61,13 @@ def assert_replacement_preview_gate(api_engine, fixture_engine):
             scan={"operator_person_id":str(actor.person_id),"basis_stock_account_id":str(reserved),
                 "sku_code":sku.sku_code,"condition_before":"damaged",
                 "serial_no":removed.serial_no if removed else None,"qr_code":removed.qr_code if removed else None}
+            mini_fixture={"input":{"workOrderId":str(orders[0]),"personId":str(actor.person_id),
+                "consumeLines":body["consume_lines"],"recoverLines":body["recover_lines"],"pairs":body["replacement_pairs"]},
+                "scan":scan,"expectedHash":replacements._hash(command)}
+            built=_mini_contract({**mini_fixture,"mode":"build"})
+            assert built["body"]==body and built["scan"]=={**scan,"lot_no":None}
+            # Submit the body constructed by the actual mini-program code.
+            body=built["body"];scan=built["scan"]
             app=FastAPI()
             app.dependency_overrides[get_db]=lambda:db
             for router in (formal_work_order_query.router,formal_work_order_material.router):
@@ -71,7 +93,7 @@ def assert_replacement_preview_gate(api_engine, fixture_engine):
                     assert client.post(path+"/removed-part",json={**scan,"qr_code":"WRONG"}).status_code==412
                 assert replacement_snapshot(local)==before_preview
                 assert not db.new and not db.dirty and not db.deleted
-                trace="pg16-preview-"+uuid4().hex
+                trace="wxreq-"+uuid4().hex+uuid4().hex[:4]
                 with patch.object(db,"commit",side_effect=lambda:_checkpoint(db)):
                     posted=client.post(path,json={**body,"idempotency_key":uuid4().hex,"request_id":trace},headers={"X-Request-ID":trace})
                 assert posted.status_code==200,posted.text
@@ -79,6 +101,10 @@ def assert_replacement_preview_gate(api_engine, fixture_engine):
                 original=client.get(path+"/by-request/"+trace)
                 assert original.status_code==200,original.text
                 assert original.json()["request_hash"]==preview.json()["request_hash"]
+                assert _mini_contract({**mini_fixture,"mode":"validate","scan":scan,
+                    "context":{"authorizationVersion":actor.authorization_version,
+                        "sourceVersion":preview.json()["source_version"],"ledgerCursor":scanned.json()["ledger_cursor"]},
+                    "preview":preview.json(),"removed":scanned.json(),"result":original.json(),"trace":trace})=={"validated":True}
             db.rollback()
         assert replacement_snapshot(api_engine)==baseline
-        print(f"PG16 {kind} exact removed scan, no-write preview, paired HTTP post/hash and full rollback PASS",flush=True)
+        print(f"PG16 {kind} mini parent hash/scan/preview/recovery, paired HTTP post and full rollback PASS",flush=True)
