@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20260922_0082"
+HEAD_REVISION = "20260923_0083"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -20994,7 +20994,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         from pg16_outbound_gate import assert_outbound_gate
         security_engine = create_engine(_admin_sqlalchemy_url(), pool_size=1, max_overflow=0, pool_timeout=5)
         try:
-            _reveal_pg16_service_database_error(api_engine, lambda: assert_outbound_gate(
+            recipient_receipt_worlds = _reveal_pg16_service_database_error(api_engine, lambda: assert_outbound_gate(
                 api_engine, security_engine=security_engine, admin_user_id=admin_user_id, worlds=outbound_worlds,
             ))
         finally:
@@ -21015,6 +21015,19 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             receipt_backup_engine.dispose()
         blocked_receipt = _run_alembic("downgrade", "20260921_0081", expect_success=False)
         assert "0082 downgrade blocked" in blocked_receipt.stdout + blocked_receipt.stderr
+        assert _current_revision() == HEAD_REVISION
+        from pg16_my_receipt_gate import assert_my_receipt_gate
+        security_engine = create_engine(_admin_sqlalchemy_url(), pool_size=1, max_overflow=0, pool_timeout=5)
+        try:
+            for receiving_request_id, receiving_posting_id in recipient_receipt_worlds:
+                _reveal_pg16_service_database_error(api_engine, lambda: assert_my_receipt_gate(
+                    api_engine, security_engine, request_id=receiving_request_id,
+                    posting_id=receiving_posting_id, admin_user_id=admin_user_id,
+                ))
+        finally:
+            security_engine.dispose()
+        blocked_my_receipt = _run_alembic("downgrade", "20260922_0082", expect_success=False)
+        assert "0083 downgrade blocked" in blocked_my_receipt.stdout + blocked_my_receipt.stderr
         assert _current_revision() == HEAD_REVISION
     finally:
         edge_engine.dispose()

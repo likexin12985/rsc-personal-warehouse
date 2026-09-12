@@ -457,7 +457,7 @@ REVIEW_COMMAND_STATUS_REVISION = (
     / "versions"
     / "20260906_0063_review_command_status.py"
 )
-HEAD_REVISION = "20260922_0082"
+HEAD_REVISION = "20260923_0083"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -748,6 +748,7 @@ EXPECTED_PERMISSIONS = [
     ("material_request", "propose_substitution"),
     ("material_request", "read"),
     ("material_request", "read_star_approval"),
+    ("material_request", "receive"),
     ("material_request", "register_external"),
     ("material_request", "submit"),
     ("material_request", "update_draft"),
@@ -850,7 +851,7 @@ EXPECTED_ROLE_PERMISSIONS = {
         ("material_request", "cancel"),
         ("material_request", "confirm_substitution"),
         ("material_request", "create"),
-        ("material_request", "fulfill"),
+        ("material_request", "receive"),
         ("material_request", "read"),
         ("material_request", "submit"),
         ("material_request", "update_draft"),
@@ -1550,7 +1551,7 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == "20260921_0081"
+    assert head.down_revision == "20260922_0082"
     assert REVIEW_COMMAND_STATUS_REVISION.exists()
     supply_event_key_head = script.get_revision(
         MATERIAL_REQUEST_SUPPLY_EVENT_KEY_REVISION_ID

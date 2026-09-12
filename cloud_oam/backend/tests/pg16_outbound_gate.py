@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 
 def assert_outbound_gate(api_engine, *, security_engine, admin_user_id, worlds):
+    receipt_worlds = []
     from app.config import Settings, get_settings
     from app.database import get_db
     from app.dependencies import get_formal_principal
@@ -187,3 +188,5 @@ def assert_outbound_gate(api_engine, *, security_engine, admin_user_id, worlds):
                 db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
             db.rollback()
         assert snapshot() == stable
+        receipt_worlds.append((request_id, UUID(first["posting_id"])))
+    return receipt_worlds

@@ -69,6 +69,8 @@ from ..material_request_receipt_schemas import ReceiptIn, ReceiptOut, ReceiptCom
 from ..material_request_inbound_schemas import InboundOrderIn, InboundOrderOut, InboundPostingOut
 from ..formal_services import material_request_my_receiving as my_receiving_service
 from ..material_request_my_receiving_schemas import MyReceivingOut
+from ..formal_services import material_request_my_receipt as my_receipt_service
+from ..material_request_my_receipt_schemas import MyReceiptIn, MyReceiptOut, MyReceiptCommandStatusOut
 from ..material_request_logistics_schemas import LogisticsEventIn, LogisticsEventOut, LogisticsEventCommandStatusOut
 from ..material_request_oam_receipt_schemas import OamReceiptEvidenceOut
 from ..formal_services import material_request_picking as picking_service
@@ -1040,6 +1042,55 @@ def list_formal_material_request_my_receiving(
         )
     except query_service.MaterialRequestReadError as exc:
         _raise_service_error(exc, no_store=True)
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.post("/{material_request_id}/my-receipts", response_model=MyReceiptOut, status_code=201)
+def create_my_material_request_receipt(
+    material_request_id: UUID, payload: MyReceiptIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "receive")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
+    _set_read_no_store(response)
+    try:
+        secret = _require_lifecycle_write_runtime(runtime_settings)
+        result = my_receipt_service.create_my_receipt(db, actor=principal, request_id=material_request_id,
+            payload=payload, idempotency_key=key, secret=secret, trace_request_id=trace)
+        output = MyReceiptOut.model_validate(result)
+        db.commit()
+    except query_service.MaterialRequestReadError as exc:
+        db.rollback()
+        _raise_service_error(exc, no_store=True)
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+    _set_replay_header(response, output.idempotency_replayed)
+    return output
+
+
+@router.get("/{material_request_id}/my-receipts/command-status", response_model=MyReceiptCommandStatusOut)
+def my_material_request_receipt_command_status(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+):
+    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128)
+    _set_read_no_store(response)
+    try:
+        result = my_receipt_service.my_receipt_command_status(db, actor=principal, request_id=material_request_id,
+            idempotency_key=key, secret=_require_lifecycle_idempotency_secret(runtime_settings))
+        return MyReceiptCommandStatusOut(lookup_status="confirmed" if result is not None else "not_observed", command=result)
+    except query_service.MaterialRequestReadError as exc:
+        _raise_service_error(exc, no_store=True)
+    except ValidationError:
+        _raise_service_error(query_service.MaterialRequestReadError(
+            "my_receipt_history_invalid", "service_unavailable", "原验收结果证据不完整，请保留原请求继续核验",
+        ), no_store=True)
     except DBAPIError:
         db.rollback()
         _raise_database_unavailable(read_only=True, no_store=True)
