@@ -63,6 +63,7 @@ from ..inventory_models import (
     StockLocation,
 )
 from ..models import User
+from .serial_ledger import SerialLedgerError, rebuild_serial_states
 from ..stocktake_models import (
     FormalStocktakeScope,
     FormalStocktakeTask,
@@ -1489,6 +1490,9 @@ def _post_new_transaction(
 
     for line_no, movement_command in enumerate(command.movements, start=1):
         for serial_id in movement_command.serial_ids:
+            if command.movement_type == "consume":
+                serials[serial_id].lifecycle_status = "consumed"
+                serials[serial_id].updated_at = now
             position = positions.get(serial_id)
             if position is None:
                 position = SerialCurrentPosition(
@@ -6932,6 +6936,7 @@ def _lock_and_validate_serials(
         db,
         serial_ids=serial_ids,
         positions=positions,
+        serials=serials,
     )
 
     for movement in command.movements:
@@ -6949,11 +6954,16 @@ def _lock_and_validate_serials(
                     "precondition_failed",
                     "只有 active 生命周期的 SN 可参与库存过账",
                 )
-            if command.movement_type in {"consume", "scrap"}:
+            if command.movement_type == "scrap" or (
+                command.movement_type == "consume" and (
+                    command.source_document_type != "work_order_material"
+                    or movement.external_boundary_code != "work_order_material_consume"
+                )
+            ):
                 _fail(
                     "serial_lifecycle_projection_unavailable",
                     "precondition_failed",
-                    "当前账本尚不能安全记录 SN 消耗或报废生命周期，禁止该过账",
+                    "SN 消耗必须绑定原工单，报废须完成受控库存作业",
                 )
             if serial.material_id != account.material_id:
                 _fail(
@@ -6998,48 +7008,32 @@ def _validate_locked_serial_projections(
     *,
     serial_ids: tuple[uuid.UUID, ...],
     positions: Mapping[uuid.UUID, SerialCurrentPosition],
+    serials: Mapping[uuid.UUID, InventorySerial],
 ) -> None:
-    """Re-prove each locked SN position from its latest posted movement."""
-
-    rows = db.execute(
-        select(
-            InventoryMovementSerial.serial_id,
-            InventoryMovement,
-            InventoryTransaction,
+    """Re-prove each locked SN lifecycle and position from posted history."""
+    try:
+        states = rebuild_serial_states(db, serial_ids)
+    except SerialLedgerError:
+        _fail(
+            "inventory_serial_history_invalid", "service_unavailable",
+            "SN 库存流水不连续，禁止继续过账",
         )
-        .join(
-            InventoryMovement,
-            InventoryMovement.id == InventoryMovementSerial.movement_id,
-        )
-        .join(
-            InventoryTransaction,
-            InventoryTransaction.id == InventoryMovement.transaction_id,
-        )
-        .where(
-            InventoryMovementSerial.serial_id.in_(serial_ids),
-            InventoryTransaction.status == "posted",
-        )
-        .order_by(
-            InventoryMovementSerial.serial_id,
-            InventoryTransaction.ledger_cursor,
-            InventoryMovement.line_no,
-            InventoryMovement.id,
-        )
-    ).all()
-    latest: dict[uuid.UUID, InventoryMovement] = {}
-    for serial_id, movement, _transaction in rows:
-        latest[serial_id] = movement
 
     for serial_id in serial_ids:
-        movement = latest.get(serial_id)
+        state = states[serial_id]
+        if serials[serial_id].lifecycle_status != state.lifecycle_status:
+            _fail(
+                "inventory_serial_lifecycle_projection_drift", "service_unavailable",
+                "SN 生命周期与不可变流水不一致，禁止继续过账",
+            )
         position = positions.get(serial_id)
-        if movement is None:
+        if state.last_movement_id is None:
             valid = position is None
         else:
             valid = bool(
                 position is not None
-                and position.last_movement_id == movement.id
-                and position.stock_account_id == movement.to_account_id
+                and position.last_movement_id == state.last_movement_id
+                and position.stock_account_id == state.stock_account_id
             )
         if not valid:
             _fail(

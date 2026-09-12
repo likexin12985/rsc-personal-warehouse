@@ -62,15 +62,22 @@ describe("work order material operations", () => {
   });
 
   it("reads operation history without replay headers", async () => {
-    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } }));
+    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ schema_version: "1.0", items: [] }), { status: 200, headers: { "content-type": "application/json" } }));
     expect((await listWorkOrderMaterialOperations(workOrder)).items).toHaveLength(0);
     expect(new Headers(fetcher.mock.calls[0][1]?.headers).has("Idempotency-Key")).toBe(false);
     fetcher.mockRestore();
   });
 
   it("validates immutable material and serial coordinates in history", () => {
-    const result = validateWorkOrderMaterialOperationHistory({ items: [{ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "consume", status: "posted", lines: [{ line_no: 1, material_id: id, stock_account_id: target, quantity: "2.000", condition_before: "new", condition_after: "used", serial_ids: [id], serials: [{ serial_id: id, sku_verified: true, qr_verified: false }] }] }] });
+    const result = validateWorkOrderMaterialOperationHistory({ schema_version: "1.0", items: [{ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "consume", status: "posted", lines: [{ line_no: 1, material_id: id, stock_account_id: target, quantity: "2.000", condition_before: "new", condition_after: "used", serial_ids: [id], serials: [{ serial_id: id, sku_verified: true, qr_verified: false }] }] }] });
     expect(result.items[0].lines[0].serial_ids).toEqual([id]);
-    expect(() => validateWorkOrderMaterialOperationHistory({ items: [{ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "consume", status: "posted", lines: [{ line_no: 1, material_id: id, stock_account_id: target, quantity: "0", condition_before: "new", condition_after: null, serial_ids: [], serials: [] }] }] })).toThrow(ApiError);
+    expect(() => validateWorkOrderMaterialOperationHistory({ schema_version: "1.0", items: [{ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "consume", status: "posted", lines: [{ line_no: 1, material_id: id, stock_account_id: target, quantity: "0", condition_before: "new", condition_after: null, serial_ids: [], serials: [] }] }] })).toThrow(ApiError);
+  });
+
+  it("requires the backend history envelope version even when there are no operations", () => {
+    expect(validateWorkOrderMaterialOperationHistory({ schema_version: "1.0", items: [] })).toEqual({ schema_version: "1.0", items: [] });
+    for (const response of [{ items: [] }, { schema_version: "2.0", items: [] }, { schema_version: null, items: [] }, { schema_version: "1.0", items: [], extra: true }]) {
+      expect(() => validateWorkOrderMaterialOperationHistory(response)).toThrow(ApiError);
+    }
   });
 });

@@ -7,7 +7,7 @@ import pytest
 import sqlalchemy as sa
 
 from app.database_security import FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256
-from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST
+from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0091
 
 MIGRATION = Path(__file__).parents[1] / "alembic/versions/20261001_0091_work_order_account_admission.py"
 
@@ -21,7 +21,7 @@ def test_account_admission_preserves_existing_opening_and_receipt_branches():
     assert hashlib.sha256(old.encode()).hexdigest() == migration["ACCOUNT_OLD_HASH"]
     assert hashlib.sha256(new.encode()).hexdigest() == migration["ACCOUNT_NEW_HASH"]
     assert FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[("rsc_require_opening_observation_account_0023", "")] == migration["ACCOUNT_NEW_HASH"]
-    assert OAM_SYNC_FUNCTION_MANIFEST["rsc_oam_runtime_binding_ready_0044()"][6] == migration["NEW_HASH"]
+    assert OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0091["rsc_oam_runtime_binding_ready_0044()"][6] == migration["NEW_HASH"]
 
 
 @pytest.mark.parametrize("operation", ["upgrade", "downgrade"])

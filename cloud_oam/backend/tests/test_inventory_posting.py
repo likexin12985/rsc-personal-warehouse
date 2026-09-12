@@ -5548,7 +5548,7 @@ def test_serial_count_and_current_position_are_strict(
                 ),
             ),
         )
-    assert lifecycle_error.value.code == "serial_lifecycle_inactive"
+    assert lifecycle_error.value.code == "inventory_serial_lifecycle_projection_drift"
     db.rollback()
 
     serial = db.get(InventorySerial, serial.id)

@@ -50,7 +50,7 @@ export type WorkOrderMaterialHistorySerial = Readonly<{
 export type WorkOrderMaterialOperationHistoryItem = WorkOrderMaterialOperationResult & Readonly<{
   lines: readonly WorkOrderMaterialHistoryLine[];
 }>;
-export type WorkOrderMaterialOperationHistory = Readonly<{ items: readonly WorkOrderMaterialOperationHistoryItem[] }>;
+export type WorkOrderMaterialOperationHistory = Readonly<{ schema_version: "1.0"; items: readonly WorkOrderMaterialOperationHistoryItem[] }>;
 
 function fail(message: string): never { throw new ApiError(409, message); }
 function id(value: unknown, field: string): string { if (typeof value !== "string" || !UUID.test(value)) return fail(`${field}无效`); return value; }
@@ -95,9 +95,10 @@ export function validateWorkOrderMaterialOperationResult(value: unknown): WorkOr
 }
 
 export function validateWorkOrderMaterialOperationHistory(value: unknown): WorkOrderMaterialOperationHistory {
-  const object = exact(value, ["items"]);
+  const object = exact(value, ["schema_version", "items"]);
+  if (object.schema_version !== "1.0") return fail("工单物料历史响应版本无效");
   if (!Array.isArray(object.items)) return fail("工单物料历史响应无效");
-  return { items: Object.freeze(object.items.map((raw) => {
+  return { schema_version: "1.0", items: Object.freeze(object.items.map((raw) => {
     const item = exact(raw, ["lines", "operation_id", "operation_no", "work_order_id", "posting_transaction_id", "operation_type", "status", "schema_version"]);
     const base = validateWorkOrderMaterialOperationResult({
       schema_version: item.schema_version,

@@ -109,9 +109,10 @@ def _snapshot(engine):
                           "audit_events", "outbox_events"))
         balances = c.execute(text("SELECT stock_account_id, quantity, ledger_cursor, version FROM stock_balances ORDER BY stock_account_id")).all()
         serials = c.execute(text("SELECT serial_id, stock_account_id, last_movement_id FROM serial_current_positions ORDER BY serial_id")).all()
+        lifecycles = c.execute(text("SELECT id, lifecycle_status, updated_at FROM inventory_serials ORDER BY id")).all()
         ledger = c.execute(text("SELECT id, next_cursor FROM inventory_ledger_heads ORDER BY id")).all()
         audit = c.execute(text("SELECT stream_key, version, last_event_id, last_hash FROM audit_chain_heads ORDER BY stream_key")).all()
-        return counts, balances, serials, ledger, audit
+        return counts, balances, serials, lifecycles, ledger, audit
 
 
 def _db_denies(callback, engine, message):

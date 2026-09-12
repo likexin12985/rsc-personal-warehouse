@@ -885,9 +885,11 @@ def test_transaction_detail_fails_closed_when_balance_projection_is_tampered(
     assert captured.value.status_code == 503
 
 
+@pytest.mark.parametrize("movement_type", ["consume", "stocktake_loss"])
 def test_external_outbound_null_position_and_serial_projection_integrity(
     posting_db: Session,
     posting_world,
+    movement_type,
 ):
     serial_material = posting_fixtures.make_material(
         posting_db,
@@ -930,8 +932,8 @@ def test_external_outbound_null_position_and_serial_projection_integrity(
     outbound_transaction = InventoryTransaction(
         id=uuid.uuid4(),
         transaction_no=f"TX-{uuid.uuid4().hex}",
-        movement_type="consume",
-        source_document_type="test_case",
+        movement_type=movement_type,
+        source_document_type="work_order_material" if movement_type == "consume" else "test_case",
         source_document_id=f"DOC-{uuid.uuid4().hex}",
         posting_key=f"inventory:test:{uuid.uuid4().hex}",
         idempotency_key_hash="a" * 64,
@@ -953,7 +955,7 @@ def test_external_outbound_null_position_and_serial_projection_integrity(
         line_no=1,
         from_account_id=account.id,
         to_account_id=None,
-        external_boundary_code="external-recipient",
+        external_boundary_code="work_order_material_consume" if movement_type == "consume" else "external-recipient",
         quantity=Decimal("1.000"),
         created_at=posting_fixtures.NOW,
     )
@@ -977,6 +979,9 @@ def test_external_outbound_null_position_and_serial_projection_integrity(
     position.stock_account_id = None
     position.last_movement_id = outbound_movement.id
     position.updated_at = posting_fixtures.NOW
+    if movement_type == "consume":
+        serial.lifecycle_status = "consumed"
+        serial.updated_at = posting_fixtures.NOW
     posting_db.commit()
     actor = _reader(posting_world)
     position = posting_db.get(SerialCurrentPosition, serial.id)
@@ -993,6 +998,16 @@ def test_external_outbound_null_position_and_serial_projection_integrity(
         transaction_id=outbound_transaction.id,
     )
     assert detail.movements[0].to_account_id is None
+
+    expected_lifecycle = serial.lifecycle_status
+    serial.lifecycle_status = "active" if expected_lifecycle == "consumed" else "consumed"
+    posting_db.flush()
+    with pytest.raises(InventoryReadError) as lifecycle_drift:
+        list_inventory_accounts(posting_db, actor=actor, limit=100)
+    assert lifecycle_drift.value.code == "inventory_projection_integrity_invalid"
+    assert lifecycle_drift.value.status_code == 503
+    serial.lifecycle_status = expected_lifecycle
+    posting_db.flush()
 
     position.last_movement_id = opening.movement.id
     posting_db.flush()

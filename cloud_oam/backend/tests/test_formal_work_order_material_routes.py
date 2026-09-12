@@ -156,6 +156,7 @@ def test_history_returns_immutable_material_and_serial_coordinates(http, monkeyp
     http.db.execute.return_value.all.return_value = [(serial_id, line_id, True, False)]
     response = http.client.get(f"/api/v1/work-orders/{http.order_id}/material-operations")
     assert response.status_code == 200, response.text
+    assert response.json()["schema_version"] == "1.0"
     item = response.json()["items"][0]
     assert item["lines"] == [{
         "line_no": 1,

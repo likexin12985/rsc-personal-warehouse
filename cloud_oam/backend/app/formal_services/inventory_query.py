@@ -46,6 +46,7 @@ from ..inventory_schemas import (
 from ..models import User
 from ..stocktake_models import InventoryOpeningEstablishment
 from .inventory_posting import InventoryPostingError
+from .serial_ledger import SerialLedgerError, rebuild_serial_states
 from . import opening_stocktake_finalize as finalize_service
 from . import opening_control_reconciliation as reconciliation_service
 from .audit_chain import AuditChainError, _lock_audit_chain_head_with_proof
@@ -906,46 +907,27 @@ def _validate_current_projection_integrity(
         uuid.UUID, tuple[uuid.UUID | None, uuid.UUID]
     ] = {}
     for batch in _projection_batches(related_serial_ids):
-        ranked_history = (
-            select(
-                InventoryMovementSerial.serial_id.label("serial_id"),
-                InventoryMovement.to_account_id.label("stock_account_id"),
-                InventoryMovement.id.label("movement_id"),
-                func.row_number()
-                .over(
-                    partition_by=InventoryMovementSerial.serial_id,
-                    order_by=(
-                        InventoryTransaction.ledger_cursor.desc(),
-                        InventoryMovement.line_no.desc(),
-                        InventoryMovement.id.desc(),
-                    ),
+        try:
+            states = rebuild_serial_states(
+                db, batch, through_cursor=snapshot.ledger_cursor,
+            )
+        except SerialLedgerError:
+            projection_invalid = True
+            states = {}
+        for serial_id, state in states.items():
+            if state.last_movement_id is not None:
+                expected_positions[serial_id] = (
+                    state.stock_account_id, state.last_movement_id,
                 )
-                .label("position_rank"),
-            )
-            .join(
-                InventoryMovement,
-                InventoryMovement.id == InventoryMovementSerial.movement_id,
-            )
-            .join(
-                InventoryTransaction,
-                InventoryTransaction.id
-                == InventoryMovementSerial.transaction_id,
-            )
-            .where(
-                InventoryMovementSerial.serial_id.in_(batch),
-                InventoryTransaction.status == "posted",
-                InventoryTransaction.ledger_cursor <= snapshot.ledger_cursor,
-            )
-            .subquery()
-        )
-        for serial_id, stock_account_id, movement_id in db.execute(
-            select(
-                ranked_history.c.serial_id,
-                ranked_history.c.stock_account_id,
-                ranked_history.c.movement_id,
-            ).where(ranked_history.c.position_rank == 1)
+        current_lifecycles = dict(db.execute(
+            select(InventorySerial.id, InventorySerial.lifecycle_status)
+            .where(InventorySerial.id.in_(batch))
+        ).all())
+        if any(
+            current_lifecycles.get(serial_id) != state.lifecycle_status
+            for serial_id, state in states.items()
         ):
-            expected_positions[serial_id] = (stock_account_id, movement_id)
+            projection_invalid = True
 
         for serial_id, stock_account_id, last_movement_id in db.execute(
             select(

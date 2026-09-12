@@ -1,5 +1,7 @@
+import base64
+import json
 import os
-import stat
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,23 +24,35 @@ if str(WORK) not in sys.path:
 from inventory_query_portal import oam_read_client
 
 
-def test_oam_token_is_not_exposed_in_curl_process_arguments():
+def _edge_response(payload, *, status=200):
+    return SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({
+            "status": status,
+            "headers": {"content-type": "application/json"},
+            "bodyBase64": base64.b64encode(json.dumps(payload).encode()).decode(),
+        }).encode(),
+        stderr=b"",
+    )
+
+
+def test_oam_token_is_not_exposed_in_edge_process_arguments():
     token = "sensitive-oam-token-for-test"
     captured: dict[str, object] = {}
 
     def fake_run(command, **kwargs):
         captured["command"] = list(command)
-        header_argument = command[command.index("--header") + 1]
-        header_path = Path(header_argument.removeprefix("@"))
-        captured["header_path"] = header_path
-        captured["header_mode"] = stat.S_IMODE(header_path.stat().st_mode)
-        captured["headers"] = header_path.read_text(encoding="utf-8")
-        assert kwargs["input"] == b'{"page": 1}'
-        return SimpleNamespace(
-            returncode=0,
-            stdout=b'{"success":true,"model":{}}\n__OAM_HTTP_CODE__:200',
-            stderr=b"",
-        )
+        # Exercise the real shared Python adapter up to its subprocess boundary;
+        # never start Node or send a business request from this contract test.
+        assert len(command) == 2 and Path(command[0]).name == "node"
+        assert Path(command[1]) == Path.home() / "Library/Application Support/CodexLocalEdge/edge_http.mjs"
+        request = json.loads(kwargs["input"])
+        assert request["method"] == "POST"
+        assert request["url"] == oam_read_client.BASE_URL + "/readonly"
+        assert base64.b64decode(request["bodyBase64"]) == b'{"page": 1}'
+        captured["headers"] = request["headers"]
+        assert token not in json.dumps(kwargs.get("env", {}))
+        return _edge_response({"success": True, "model": {}})
 
     with (
         patch.object(oam_read_client, "get_oam_token", return_value=token),
@@ -48,9 +62,7 @@ def test_oam_token_is_not_exposed_in_curl_process_arguments():
 
     assert response["success"] is True
     assert token not in " ".join(captured["command"])
-    assert captured["header_mode"] == 0o600
-    assert f"Oam-Token: {token}" in captured["headers"]
-    assert not captured["header_path"].exists()
+    assert captured["headers"]["Oam-Token"] == token
 
 
 def test_oam_application_failure_is_not_blindly_retried():
@@ -59,15 +71,7 @@ def test_oam_application_failure_is_not_blindly_retried():
     def rejected(*_args, **_kwargs):
         nonlocal calls
         calls += 1
-        return SimpleNamespace(
-            returncode=0,
-            stdout=(
-                b'{"success":false,"code":"auth_required",'
-                b'"message":"session invalid"}'
-                b"\n__OAM_HTTP_CODE__:200"
-            ),
-            stderr=b"",
-        )
+        return _edge_response({"success": False, "code": "auth_required", "message": "session invalid"})
 
     with (
         patch.object(oam_read_client, "get_oam_token", return_value="test-token"),
@@ -78,4 +82,16 @@ def test_oam_application_failure_is_not_blindly_retried():
         oam_read_client.post_json("/readonly", {}, retries=3)
 
     assert calls == 1
+    sleep.assert_not_called()
+
+
+def test_edge_timeout_is_not_replayed_or_sent_through_another_transport():
+    with (
+        patch.object(oam_read_client, "get_oam_token", return_value="test-token"),
+        patch.object(oam_read_client.subprocess, "run", side_effect=subprocess.TimeoutExpired("edge-adapter", 90)) as run,
+        patch.object(oam_read_client.time, "sleep") as sleep,
+        pytest.raises(RuntimeError, match="outcome unknown"),
+    ):
+        oam_read_client.post_json("/readonly", {}, retries=3)
+    run.assert_called_once()
     sleep.assert_not_called()

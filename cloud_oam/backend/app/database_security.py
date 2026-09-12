@@ -248,6 +248,7 @@ RUNTIME_DELETE_TABLES = frozenset(
     }
 )
 RUNTIME_UPDATE_COLUMNS = {
+    "inventory_serials": frozenset({"lifecycle_status", "updated_at"}),
     "login_challenges": frozenset(
         {
             "attempts",
@@ -1892,6 +1893,12 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
     "approval_actions",
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
+    'trg_inventory_serials_lifecycle_0092': ('inventory_serials', 'rsc_dispatch_serial_lifecycle_0092', 'A', 21, True, True, True),
+    'trg_serial_current_positions_lifecycle_0092': ('serial_current_positions', 'rsc_dispatch_serial_lifecycle_0092', 'A', 29, True, True, True),
+    'trg_inventory_movement_serials_lifecycle_0092': ('inventory_movement_serials', 'rsc_dispatch_serial_lifecycle_0092', 'A', 5, True, True, True),
+    'trg_inventory_serials_identity_0092': ('inventory_serials', 'rsc_guard_serial_identity_0092', 'A', 27, False, False, False),
+    'trg_inventory_serials_no_truncate_0092': ('inventory_serials', 'rsc_guard_serial_identity_0092', 'A', 34, False, False, False),
+    'trg_serial_current_positions_no_truncate_0092': ('serial_current_positions', 'rsc_guard_serial_identity_0092', 'A', 34, False, False, False),
     'trg_inventory_transactions_proof_0090': ('inventory_transactions', 'rsc_dispatch_work_order_material_0090', 'A', 5, True, True, True),
     'trg_inventory_movements_proof_0090': ('inventory_movements', 'rsc_dispatch_work_order_material_0090', 'A', 5, True, True, True),
     'trg_inventory_movement_serials_proof_0090': ('inventory_movement_serials', 'rsc_dispatch_work_order_material_0090', 'A', 5, True, True, True),
@@ -2359,6 +2366,9 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
+    ('rsc_check_serial_lifecycle_0092', 'uuid'): '78d403c658fdc4205a1db26daf512927eb55765f85c82c2aed984a3a3233bcdb',
+    ('rsc_dispatch_serial_lifecycle_0092', ''): '612fc9726be5b13325f809b8dbf10185681f4073802b81c3771adceb83869135',
+    ('rsc_guard_serial_identity_0092', ''): 'ead9491447496e5dab54787909a3cd9d0b9912a6ff007eef6394f5b99c1dd4bd',
     ('rsc_lock_work_order_material_0090', ''): '3020ff345109d942e1287ab48d8a2f53c5d722ff0fda403850649a0602c1f2a7',
     ('rsc_check_work_order_material_transaction_0090', 'uuid'): '380da467dee2b7b976ea78970ec8ddd4e7f28007c77be6d5ef196506e9754707',
     ('rsc_dispatch_work_order_material_0090', ''): 'ea3172e2be65bc40e2832953d5698e67c0246aefd2eae5063061a19ac811d0ca',
@@ -2466,6 +2476,9 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ('rsc_check_serial_lifecycle_0092', 'uuid'),
+        ('rsc_dispatch_serial_lifecycle_0092', ''),
+        ('rsc_guard_serial_identity_0092', ''),
         ('rsc_lock_work_order_material_0090', ''),
         ('rsc_check_work_order_material_transaction_0090', 'uuid'),
         ('rsc_dispatch_work_order_material_0090', ''),
@@ -2512,6 +2525,7 @@ MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
 )
 MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS = frozenset(
     {
+        ("rsc_check_serial_lifecycle_0092", "uuid"),
         ("rsc_check_work_order_material_transaction_0090", "uuid"),
         ("rsc_validate_outbound_graph_0072", "uuid"),
         ("rsc_validate_picking_graph_0071", "uuid"),
@@ -5952,7 +5966,7 @@ def _select_material_request_approval_functions(
         for row in rows
         if isinstance(row.get("function_name"), str)
         and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090")
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092")
         )
     ]
 
