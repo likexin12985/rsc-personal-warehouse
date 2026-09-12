@@ -8,7 +8,7 @@ import pytest
 import sqlalchemy as sa
 
 from app import database_security as security
-from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST
+from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0093
 
 MIGRATION = Path(__file__).parents[1] / "alembic/versions/20261003_0093_work_order_replacements.py"
 
@@ -29,7 +29,7 @@ def test_replacement_security_pins_match_sources_and_preserve_minimum_privileges
         assert security.EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[name] == (table,function,"A",kind,deferred,deferred,deferred)
     assert "work_order_replacements" in security.RUNTIME_READ_TABLES & security.RUNTIME_INSERT_TABLES
     assert "work_order_replacements" not in security.RUNTIME_UPDATE_TABLES | security.RUNTIME_DELETE_TABLES
-    assert OAM_SYNC_FUNCTION_MANIFEST["rsc_oam_runtime_binding_ready_0044()"][6] == m["NEW_HASH"]
+    assert OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0093["rsc_oam_runtime_binding_ready_0044()"][6] == m["NEW_HASH"]
 
 
 @pytest.mark.parametrize("operation", ["upgrade","downgrade"])

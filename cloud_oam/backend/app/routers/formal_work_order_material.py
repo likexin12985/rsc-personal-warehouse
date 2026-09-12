@@ -14,7 +14,7 @@ from ..formal_access import FormalPrincipal
 from ..formal_services import work_order_material as service
 from ..formal_services import work_order_replacements as replacements
 from ..formal_services.work_order_replacement_read import replacement_result
-from ..formal_services.work_order_operation_read import lookup_operation
+from ..formal_services.work_order_command_seal import lookup_command_result as lookup_operation, seal_command
 from ..demand_models import (
     WorkOrderMaterialLine,
     WorkOrderMaterialOperation,
@@ -26,6 +26,7 @@ from ..work_order_material_schemas import (
     WorkOrderMaterialPreflightOut, WorkOrderMaterialOperationIn,
     WorkOrderMaterialOperationOut,
     WorkOrderMaterialLookupOut,
+    WorkOrderMaterialSealedLookupOut, WorkOrderMaterialSealIn,
     WorkOrderMaterialConsumeIn,
     WorkOrderMaterialReleaseIn,
     WorkOrderMaterialOccupyIn,
@@ -62,7 +63,7 @@ def _command_trace(payload, request_id):
     return payload.request_id
 
 
-@router.get("/{work_order_id}/material-operations/{operation_type}/by-request/{request_id}", response_model=WorkOrderMaterialLookupOut)
+@router.get("/{work_order_id}/material-operations/{operation_type}/by-request/{request_id}", response_model=WorkOrderMaterialLookupOut | WorkOrderMaterialSealedLookupOut)
 def read_original_material_operation(
     work_order_id: UUID, operation_type: Literal["occupy", "consume", "release"], response: Response,
     request_id: str = Path(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$"),
@@ -76,6 +77,31 @@ def read_original_material_operation(
         _raise(exc)
     except SQLAlchemyError:
         raise HTTPException(status_code=503, detail={"code": "work_order_recovery_unavailable", "message": "原工单请求暂时无法核验，请保留恢复记录稍后查询"}) from None
+
+
+@router.post("/{work_order_id}/material-operations/{operation_type}/by-request/{request_id}/seal", response_model=WorkOrderMaterialLookupOut | WorkOrderMaterialSealedLookupOut)
+def seal_original_material_operation(
+    work_order_id: UUID, operation_type: Literal["occupy", "consume", "release"],
+    payload: WorkOrderMaterialSealIn, response: Response,
+    request_id: str = Path(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$"),
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")),
+    db: Session = Depends(get_db), trace: str | None = Header(default=None, alias="X-Request-ID"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    response.headers["Cache-Control"] = "private, no-store"
+    _require_operator(payload, principal)
+    if (trace is not None and trace != request_id) or idempotency_key is not None:
+        raise HTTPException(status_code=400, detail={"code": "work_order_seal_coordinate_invalid", "message": "封存使用原请求坐标，不接受其他请求头或幂等键"})
+    try:
+        result = seal_command(db, actor=principal, work_order_id=work_order_id,
+            operation_type=operation_type, request_id=request_id, request_hash=payload.request_hash)
+        db.commit()
+        return result
+    except service.InventoryPostingError as exc:
+        db.rollback(); _raise(exc)
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=503, detail={"code": "work_order_seal_unavailable", "message": "原请求封存结果未确认，请保留记录并按原请求读取"}) from None
 
 
 @router.post("/{work_order_id}/material-replacements", response_model=WorkOrderReplacementOut)

@@ -3,10 +3,10 @@ const session = require('../../utils/session')
 const { inventoryAccessDecision, hasFormalPermission } = require('../../utils/production-guard')
 const { uuid, validateMyWorkOrders, validateMaterialOptions } = require('../../utils/work-order-query-contract')
 const recoveryStore = require('../../utils/work-order-recovery-store')
-const { recoverPending } = require('../../utils/work-order-recovery')
+const { recoverPending, sealPending } = require('../../utils/work-order-recovery')
 const draft = require('../../utils/work-order-draft')
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
-function empty() { return { state: 'idle', loading: false, busy: false, search: '', orders: [], items: [], workOrder: null, locationName: '', message: '', hasNext: false, hasPrevious: false, pageNumber: 1, canRecover: false, recoveryMessage: '', pendingRequests: [], pendingMessage: '', canDraft: false, operationKind: 'occupy', draftRows: [], previewMessage: '' } }
+function empty() { return { state: 'idle', loading: false, busy: false, search: '', orders: [], items: [], workOrder: null, locationName: '', message: '', hasNext: false, hasPrevious: false, pageNumber: 1, canRecover: false, recoveryMessage: '', pendingRequests: [], pendingMessage: '', canSeal: false, canDraft: false, operationKind: 'occupy', draftRows: [], previewMessage: '' } }
 
 Page({
   data: empty(),
@@ -80,6 +80,7 @@ Page({
       this._sessionMatches = sameSession
       this._recoveryPerson = person
       this.refreshPendingRequests()
+      this.setData({ canSeal: hasFormalPermission(JSON.parse(before).access, 'work_order_material', 'operate') })
       if (queryFailed) {
         this.setData({ loading: false, state: 'error', message: '工单或物料暂时无法读取；仍可核验下方本人待确认的原请求。' })
         return
@@ -232,20 +233,29 @@ Page({
     if (!this._pendingMarkers || !this._pendingMarkers.has(id)) return
     return this.recoverRequest(id)
   },
-  async recoverRequest(order) {
+  async sealPendingRequest(event) {
+    const id = event.currentTarget.dataset.id
+    if (!this.data.canSeal || !this._pendingMarkers || !this._pendingMarkers.has(id)) return
+    return this.recoverRequest(id, true)
+  },
+  async recoverRequest(order, seal = false) {
     if (!this._visible || this.data.loading || this.data.busy || !this._recoveryContext || !this._recoveryPerson) return
     const generation = this._generation, context = this._recoveryContext, matches = this._sessionMatches
     const current = () => this._visible && generation === this._generation
     this.setData({ busy: true })
     try {
-      const result = await recoverPending({ api, store: this._store, workOrderId: order,
-        personId: this._recoveryPerson, authorize: context })
+      const result = await (seal ? sealPending : recoverPending)({ api, store: this._store, workOrderId: order,
+        personId: this._recoveryPerson, authorize: context, confirm: () => new Promise((resolve, reject) => wx.showModal({
+          title: '结束未执行请求', content: '系统将先核验原操作。若已执行，将返回原结果；若尚未执行，将永久关闭此请求，之后可重新准备物料。',
+          confirmText: '确认核验', cancelText: '暂不处理', success: value => resolve(value.confirm === true), fail: reject
+        })) })
       if (!current()) return
-      if (result.status === 'confirmed') {
+      if (result.status === 'confirmed' || result.status === 'sealed') {
         this.refreshPendingRequests()
         this.setData({ canRecover: this._selected === order ? false : this.data.canRecover,
-          recoveryMessage: `原操作已确认：${result.command.operation_no}。请刷新库存后继续。` })
+          recoveryMessage: result.status === 'sealed' ? '原请求已关闭且未执行。请刷新工单后重新准备物料。' : `原操作已确认：${result.command.operation_no}。请刷新库存后继续。` })
       }
+      else if (result.status === 'cancelled') this.setData({ recoveryMessage: '原请求仍保留，可继续读取原结果。' })
       else this.setData({ recoveryMessage: '暂未读取到已提交的原结果，仍保留恢复记录；请稍后继续核验。' })
     } catch (error) {
       if (current()) {

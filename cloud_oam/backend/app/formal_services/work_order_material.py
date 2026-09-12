@@ -435,6 +435,9 @@ def execute_consume_operation(
     # projection has since closed. ``record_posted_operation`` rejects a new
     # fact after checking the existing key, while the unified posting service
     # similarly returns the original transaction on replay.
+    from .work_order_command_seal import require_unsealed_request
+    if _replacement_id is None:
+        require_unsealed_request(db, actor=current, work_order_id=work_order_id, operation_type="consume", request_id=request_id)
     validate_batch(lines)
     if not idempotency_key.strip():
         raise WorkOrderMaterialPreflightError("idempotency_key_missing", "缺少幂等键", "precondition_failed")
@@ -481,6 +484,8 @@ def execute_occupy_operation(
     _lock_inventory_ledger_head_for_atomic_batch(db)
     order, current = authorize_work_order(db, actor=actor, work_order_id=work_order_id,
                                           action="operate", lock_rows=True)
+    from .work_order_command_seal import require_unsealed_request
+    require_unsealed_request(db, actor=current, work_order_id=work_order_id, operation_type="occupy", request_id=request_id)
     validate_batch(lines)
     if not idempotency_key.strip():
         raise WorkOrderMaterialPreflightError("idempotency_key_missing", "缺少幂等键", "precondition_failed")
@@ -518,6 +523,8 @@ def execute_release_operation(
     _lock_inventory_ledger_head_for_atomic_batch(db)
     order, current = authorize_work_order(db, actor=actor, work_order_id=work_order_id,
                                           action="operate", lock_rows=True)
+    from .work_order_command_seal import require_unsealed_request
+    require_unsealed_request(db, actor=current, work_order_id=work_order_id, operation_type="release", request_id=request_id)
     validate_batch(lines)
     if not idempotency_key.strip():
         raise WorkOrderMaterialPreflightError("idempotency_key_missing", "缺少幂等键", "precondition_failed")

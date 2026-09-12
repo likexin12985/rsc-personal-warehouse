@@ -2,7 +2,7 @@ const assert = require('node:assert/strict')
 const test = require('node:test')
 const command = require('../utils/work-order-command')
 const storageModule = require('../utils/work-order-recovery-store')
-const { recoverPending } = require('../utils/work-order-recovery')
+const { recoverPending, sealPending } = require('../utils/work-order-recovery')
 const PERSON = '10000000-0000-4000-8000-000000000001'
 const ORDER = '20000000-0000-4000-8000-000000000001'
 const OTHER_ORDER = '20000000-0000-4000-8000-000000000002'
@@ -168,4 +168,68 @@ test('a noncanonical storage alias blocks that exact order without hiding unrela
   assert.equal(store.read(aliased).kind, 'unavailable')
   await assert.rejects(store.withLease(aliased, lease => lease.persist(aliased)))
   assert.equal(backing.data.size, 2)
+})
+
+function sealed() {
+  return { schema_version:'1.0', lookup_status:'sealed_not_executed', command:null, seal:{
+    seal_id:OPERATION, work_order_id:ORDER, operator_person_id:PERSON, operation_type:'occupy',
+    request_id:TRACE, request_hash:marker().request_hash, sealed_at:'2026-09-12T08:00:00Z'
+  } }
+}
+
+test('sealed result must match the complete original coordinate before recovery clears it', async () => {
+  for (const field of ['work_order_id','operator_person_id','operation_type','request_id','request_hash','sealed_at','command']) {
+    const { store } = await persisted(), value = sealed()
+    if (field === 'command') value.command = confirmed().command
+    else value.seal[field] = 'invalid'
+    await assert.rejects(recoverPending({ api:{ request:async()=>value }, store, workOrderId:ORDER, personId:PERSON, authorize:async()=>'same' }))
+    assert.equal(store.read(anchor).kind, 'valid')
+  }
+  const { store } = await persisted()
+  const result = await recoverPending({ api:{ request:async()=>sealed() }, store, workOrderId:ORDER, personId:PERSON, authorize:async()=>'same' })
+  assert.equal(result.status,'sealed'); assert.equal(store.read(anchor).kind,'missing')
+})
+
+test('seal reads first then sends one confirmed no-replay request and proves its result with GET', async () => {
+  const { store } = await persisted(), calls = []
+  let reads = 0
+  const api = {
+    async request(path, options) { calls.push({path,...options}); return ++reads === 1 ? {schema_version:'1.0',lookup_status:'not_observed',command:null} : sealed() },
+    async postSealNoReplay(path, data, options) { calls.push({path,data,...options}); return {} }
+  }
+  const result = await sealPending({api,store,workOrderId:ORDER,personId:PERSON,authorize:async()=>'same',confirm:async()=>true})
+  assert.equal(result.status,'sealed'); assert.equal(store.read(anchor).kind,'missing')
+  assert.equal(calls.length,3); assert.equal(calls[0].method,'GET'); assert.equal(calls[2].method,'GET')
+  assert.equal(calls[1].path,calls[0].path+'/seal'); assert.equal(calls[1].requestId,TRACE)
+  assert.deepEqual(calls[1].data,{operator_person_id:PERSON,request_hash:marker().request_hash})
+  assert.equal('idempotency_key' in calls[1].data,false)
+})
+
+test('original proof bypasses seal confirmation and a posting race returns confirmed stock', async () => {
+  for (const mode of ['already','race']) {
+    const { store } = await persisted(); let posts=0, confirms=0, reads=0
+    const result = await sealPending({store,workOrderId:ORDER,personId:PERSON,authorize:async()=>'same',confirm:async()=>{confirms++;return true},api:{
+      async request(){return mode==='race' && ++reads===1 ? {schema_version:'1.0',lookup_status:'not_observed',command:null} : confirmed()},
+      async postSealNoReplay(){posts++;return confirmed()}
+    }})
+    assert.equal(result.status,'confirmed'); assert.equal(posts,mode==='race'?1:0); assert.equal(confirms,posts)
+    assert.equal(store.read(anchor).kind,'missing')
+  }
+})
+
+test('cancelled confirmation, permission drift, timeout and absent final proof retain the request', async () => {
+  for (const mode of ['cancel','authority','timeout','not_observed','post_authority']) {
+    const { store } = await persisted(); let posts=0, auth=0
+    const work=sealPending({store,workOrderId:ORDER,personId:PERSON,
+      authorize:async()=> ++auth >= (mode==='post_authority'?4:3) && ['authority','post_authority'].includes(mode)?'changed':'same',
+      confirm:async()=>mode!=='cancel',api:{
+        async request(){return {schema_version:'1.0',lookup_status:'not_observed',command:null}},
+        async postSealNoReplay(){posts++;if(mode==='timeout')throw new Error('timeout');return sealed()}
+      }})
+    if(mode==='cancel')assert.equal((await work).status,'cancelled')
+    else if(mode==='not_observed')assert.equal((await work).status,'pending')
+    else await assert.rejects(work)
+    assert.equal(posts,['cancel','authority'].includes(mode)?0:1)
+    assert.equal(store.read(anchor).kind,'valid')
+  }
 })

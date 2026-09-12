@@ -195,3 +195,25 @@ class WorkOrderMaterialOperationHistoryItemOut(WorkOrderMaterialOperationOut):
 class WorkOrderMaterialOperationHistoryOut(BaseModel):
     schema_version: str = "1.0"
     items: tuple[WorkOrderMaterialOperationHistoryItemOut, ...]
+
+
+class WorkOrderMaterialSealIn(StrictInput):
+    operator_person_id: UUID
+    request_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+
+
+class WorkOrderMaterialSealOut(BaseModel):
+    seal_id: UUID
+    work_order_id: UUID
+    operator_person_id: UUID
+    operation_type: Literal["occupy", "consume", "release"]
+    request_id: str
+    request_hash: str
+    sealed_at: datetime
+
+
+class WorkOrderMaterialSealedLookupOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    lookup_status: Literal["sealed_not_executed"] = "sealed_not_executed"
+    command: None = None
+    seal: WorkOrderMaterialSealOut

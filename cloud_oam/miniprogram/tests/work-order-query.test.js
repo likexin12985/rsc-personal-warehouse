@@ -26,10 +26,12 @@ const tick = () => new Promise(resolve => setImmediate(resolve))
 function harness(settings = {}) {
   let definition, count = 0
   const state = { user: user(), token: 'fixture-session', calls: [] }
-  const context = { Page(value) { definition = value }, wx: { stopPullDownRefresh() {}, scanCode: options => settings.scan(options) }, require(name) {
+  const context = { Page(value) { definition = value }, wx: { stopPullDownRefresh() {}, scanCode: options => settings.scan(options), showModal: options => settings.confirm(options) }, require(name) {
     if (name === '../../utils/work-order-recovery-store' && settings.store) return { getStore: () => settings.store }
     if (name === '../../utils/session') return { getUser: () => state.user, getToken: () => state.token, ensureLogin: () => !!state.token }
-    if (name === '../../utils/api') return { async request(endpoint, request) {
+    if (name === '../../utils/api') return { async postSealNoReplay(endpoint, data, options) {
+      state.calls.push({endpoint,method:'POST',data,...clone(options)}); return settings.seal(data, state)
+    }, async request(endpoint, request) {
       state.calls.push({ endpoint, ...clone(request) })
       if (endpoint === '/auth/me') return settings.identity ? settings.identity(state) : user()
       if (endpoint === '/access/context') return settings.access ? settings.access(++count) : access()
@@ -345,4 +347,35 @@ test('read permission alone cannot expose the draft editor and late camera callb
   page.onHide(); camera.success({ result: 'late-private-qr' }); await scan
   assert.equal(Object.keys(page._scans).length, 0); assert.equal(Object.keys(page._drafts).length, 0)
   assert.equal(JSON.stringify(page.data).includes('late-private-qr'), false)
+})
+
+test('seal action is permission gated and only closes after original GET proof', async () => {
+  const { store, marker } = await pendingStore(); let sealed = false, prompts = 0
+  const result = {schema_version:'1.0',lookup_status:'sealed_not_executed',command:null,seal:{
+    seal_id:OTHER,work_order_id:ORDER,operator_person_id:PERSON,operation_type:marker.operation_type,
+    request_id:marker.trace_request_id,request_hash:marker.request_hash,sealed_at:'2026-09-12T08:00:00Z'
+  }}
+  const { page, state } = harness({store,access:()=>({...access(),permissions:access().permissions.concat({resource:'work_order_material',action:'operate',field_code:''})}),
+    recovery:()=>sealed?result:{schema_version:'1.0',lookup_status:'not_observed',command:null},
+    seal:()=>{sealed=true;return result},confirm:options=>{prompts++;options.success({confirm:true})}})
+  await page.onShow(); assert.equal(page.data.canSeal,true)
+  await page.sealPendingRequest(event(ORDER))
+  assert.equal(prompts,1); assert.equal(state.calls.filter(row=>row.method==='POST').length,1)
+  assert.equal(page.data.pendingRequests.length,0); assert.match(page.data.recoveryMessage,/已关闭且未执行/)
+  assert.equal(store.read(marker).kind,'missing')
+  const readonly = harness({store}); await readonly.page.onShow()
+  assert.equal(readonly.page.data.canSeal,false)
+  await readonly.page.sealPendingRequest(event(ORDER))
+  assert.ok(readonly.state.calls.every(row=>row.method==='GET'))
+})
+
+test('leaving during seal confirmation stops the write and preserves original recovery', async () => {
+  const { store, marker } = await pendingStore(); let modal
+  const { page, state } = harness({store,access:()=>({...access(),permissions:access().permissions.concat({resource:'work_order_material',action:'operate',field_code:''})}),
+    recovery:()=>({schema_version:'1.0',lookup_status:'not_observed',command:null}),confirm:options=>{modal=options}})
+  await page.onShow(); const work=page.sealPendingRequest(event(ORDER)); await tick()
+  page.onHide(); const count=state.calls.length
+  modal.success({confirm:true}); await work
+  assert.equal(state.calls.length,count); assert.ok(state.calls.every(row=>row.method==='GET'))
+  assert.equal(store.read(marker).kind,'valid'); assert.equal(page.data.pendingRequests.length,0)
 })

@@ -193,6 +193,27 @@ class WorkOrderMaterialSerial(CreatedAtMixin, Base):
     qr_verified: Mapped[bool] = mapped_column(Boolean)
 
 
+class WorkOrderCommandSeal(CreatedAtMixin, Base):
+    """Permanent non-execution proof for one ordinary request coordinate."""
+
+    __tablename__ = "work_order_command_seals"
+    __table_args__ = (
+        UniqueConstraint("actor_user_id", "oam_work_order_id", "operation_type", "request_id", name="uq_work_order_command_seals_request"),
+        CheckConstraint("operation_type IN ('occupy', 'consume', 'release')", name="ck_work_order_command_seals_operation"),
+        CheckConstraint("authorization_version > 0", name="ck_work_order_command_seals_version"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    oam_work_order_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("oam_work_orders.id", ondelete="RESTRICT"))
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
+    operator_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"))
+    authorization_version: Mapped[int] = mapped_column(Integer)
+    operation_type: Mapped[str] = mapped_column(String(20))
+    request_id: Mapped[str] = mapped_column(String(160))
+    request_reference: Mapped[str] = mapped_column(String(82))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    sealed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class WorkOrderReplacement(CreatedAtMixin, Base):
     """One atomic replacement command linking consume and recovery stock facts."""
 
@@ -1843,6 +1864,7 @@ class SupplyTask(TimestampMixin, Base):
 
 
 __all__ = [
+    "WorkOrderCommandSeal",
     "ApprovalAction",
     "ApprovalExternalRegistration",
     "ApprovalExternalRegistrationLine",

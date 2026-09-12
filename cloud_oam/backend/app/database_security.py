@@ -73,7 +73,7 @@ RUNTIME_READ_TABLES = frozenset(
         "materials",
         "notification_events",
         "oam_work_orders",
-        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements",
+        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements", "work_order_command_seals",
         "opening_control_reconciliation_items",
         "opening_control_reconciliation_command_consumptions",
         "opening_control_reconciliation_runs",
@@ -195,7 +195,7 @@ RUNTIME_INSERT_TABLES = frozenset(
         "logistics_events", "receipts", "receipt_lines", "receipt_serials", "receipt_exceptions", "inbound_orders", "inbound_postings",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
-        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements",
+        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements", "work_order_command_seals",
         "stock_balances",
         "stocktake_control_snapshot_lines",
         "stocktake_count_lines",
@@ -1893,6 +1893,11 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
     "approval_actions",
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
+    'trg_work_order_seals_proof_0094': ('work_order_command_seals', 'rsc_guard_work_order_command_seal_0094', 'A', 5, True, True, True),
+    'trg_work_order_operations_seal_0094': ('work_order_material_operations', 'rsc_guard_work_order_command_seal_0094', 'A', 5, True, True, True),
+    'trg_work_order_seals_immutable_0094': ('work_order_command_seals', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+    'trg_work_order_seals_no_truncate_0094': ('work_order_command_seals', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+
     'trg_work_order_replacements_proof_0093': ('work_order_replacements', 'rsc_dispatch_work_order_replacement_0093', 'A', 5, True, True, True),
     'trg_work_order_operations_replacement_0093': ('work_order_material_operations', 'rsc_dispatch_work_order_replacement_0093', 'A', 5, True, True, True),
     'trg_work_order_pairs_replacement_0093': ('work_order_replacement_pairs', 'rsc_dispatch_work_order_replacement_0093', 'A', 5, True, True, True),
@@ -2372,6 +2377,8 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
+    ('rsc_guard_work_order_command_seal_0094', ''): '4f8b97af1362ce7796aacd73fdcfa612017426f9e81556c31a06f9a2aded029b',
+
     ('rsc_check_work_order_replacement_0093', 'uuid'): 'd725c7c3a13482a8c4ddc8254e9ec819606ad0b6f0e5d3a5ec8cad1bbdc6606d',
     ('rsc_dispatch_work_order_replacement_0093', ''): 'e77457b79adfd9cf84e375916c05336812d23e788728e053e0a3f4062c2f779d',
 
@@ -2485,6 +2492,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ("rsc_guard_work_order_command_seal_0094", ""),
         ('rsc_check_work_order_replacement_0093', 'uuid'),
         ('rsc_dispatch_work_order_replacement_0093', ''),
 
@@ -5979,7 +5987,7 @@ def _select_material_request_approval_functions(
         for row in rows
         if isinstance(row.get("function_name"), str)
         and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093")
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094")
         )
     ]
 

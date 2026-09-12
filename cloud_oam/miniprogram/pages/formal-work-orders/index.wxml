@@ -10,6 +10,7 @@
     <view wx:for="{{pendingRequests}}" wx:for-item="pending" wx:key="id" class="draft-row">
       <view>{{pending.label}}</view>
       <button size="mini" disabled="{{busy || loading}}" loading="{{busy}}" data-id="{{pending.id}}" bindtap="recoverPendingRequest">读取原请求结果</button>
+      <button wx:if="{{canSeal}}" size="mini" disabled="{{busy || loading}}" data-id="{{pending.id}}" bindtap="sealPendingRequest">结束未执行请求</button>
     </view>
     <view wx:if="{{recoveryMessage}}">{{recoveryMessage}}</view>
   </view>

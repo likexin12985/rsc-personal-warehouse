@@ -69,6 +69,16 @@ function validateResult(raw, marker) {
   return raw
 }
 function validateLookup(raw, marker) {
+  if (raw && raw.lookup_status === 'sealed_not_executed') {
+    exact(raw, ['schema_version', 'lookup_status', 'command', 'seal'])
+    exact(raw.seal, ['seal_id', 'work_order_id', 'operator_person_id', 'operation_type', 'request_id', 'request_hash', 'sealed_at'])
+    const seal = raw.seal
+    if (raw.schema_version !== '1.0' || raw.command !== null || !KINDS.includes(marker.operation_type)
+      || uuid(seal.work_order_id) !== marker.work_order_id || uuid(seal.operator_person_id) !== marker.person_id
+      || seal.operation_type !== marker.operation_type || seal.request_id !== marker.trace_request_id || seal.request_hash !== marker.request_hash) fail()
+    uuid(seal.seal_id); time(seal.sealed_at)
+    return { lookup_status: 'sealed_not_executed', seal }
+  }
   exact(raw, ['schema_version', 'lookup_status', 'command'])
   if (raw.schema_version !== '1.0') fail()
   if (raw.lookup_status === 'not_observed' && raw.command === null) return null
