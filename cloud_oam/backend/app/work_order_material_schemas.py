@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -63,6 +64,19 @@ class WorkOrderMaterialOperationOut(BaseModel):
     posting_transaction_id: UUID
     operation_type: WorkOrderMaterialOperationType
     status: Literal["posted"]
+
+
+class WorkOrderMaterialRecoveredOut(WorkOrderMaterialOperationOut):
+    operator_person_id: UUID
+    request_id: str
+    request_hash: str
+    posted_at: datetime
+
+
+class WorkOrderMaterialLookupOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    lookup_status: Literal["confirmed", "not_observed"]
+    command: WorkOrderMaterialRecoveredOut | None
 
 
 class WorkOrderMaterialConsumeIn(WorkOrderMaterialPreflightIn):

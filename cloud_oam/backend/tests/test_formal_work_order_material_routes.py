@@ -56,6 +56,17 @@ def test_operator_mismatch_is_rejected_before_command_dispatch(http, monkeypatch
 
 
 @pytest.mark.parametrize("operation", ["consume", "release", "occupy", "recover"])
+def test_header_and_body_request_ids_must_agree_before_any_command(http, monkeypatch, operation):
+    command = Mock(side_effect=AssertionError("conflicting trace reached stock posting"))
+    monkeypatch.setattr(api.service, f"execute_{operation}_operation", command)
+    response = http.client.post(path_for(http, operation), json=payload_for(http, operation),
+                                headers={"X-Request-ID":"different-request"})
+    assert response.status_code==400 and response.json()["detail"]["code"]=="request_id_mismatch"
+    command.assert_not_called()
+    http.db.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("operation", ["consume", "release", "occupy", "recover"])
 def test_http_dispatch_preserves_target_and_returns_operation(http, monkeypatch, operation):
     fact = SimpleNamespace(id=uuid4(), operation_no="WO-TEST", oam_work_order_id=http.order_id,
                            posting_transaction_id=uuid4(), operation_type=operation, status="posted")

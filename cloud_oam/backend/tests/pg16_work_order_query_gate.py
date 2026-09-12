@@ -19,7 +19,7 @@ from pg16_work_order_material_gate import _checkpoint, _snapshot
 from test_work_order_material_options import add_order
 
 
-def assert_work_order_query_gate(api_engine, fixture_engine):
+def query_worlds(fixture_engine):
     worlds = {}
     with Session(fixture_engine, expire_on_commit=False) as db:
         source = db.scalar(select(SourceSystem).where(SourceSystem.code == projection.SOURCE_SYSTEM_CODE))
@@ -48,6 +48,11 @@ def assert_work_order_query_gate(api_engine, fixture_engine):
                           for row in serials[:1])))
         db.commit()
     assert set(worlds)=={"quantity", "serial"}
+    return worlds
+
+
+def assert_work_order_query_gate(api_engine, fixture_engine):
+    worlds = query_worlds(fixture_engine)
     for kind, (account_id, user_id, orders, line) in worlds.items():
         baseline = _snapshot(api_engine)
         with Session(api_engine) as db:

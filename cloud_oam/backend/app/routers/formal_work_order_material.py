@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from uuid import UUID
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, Path
 from sqlalchemy.exc import SQLAlchemyError
@@ -13,6 +14,7 @@ from ..formal_access import FormalPrincipal
 from ..formal_services import work_order_material as service
 from ..formal_services import work_order_replacements as replacements
 from ..formal_services.work_order_replacement_read import replacement_result
+from ..formal_services.work_order_operation_read import lookup_operation
 from ..demand_models import (
     WorkOrderMaterialLine,
     WorkOrderMaterialOperation,
@@ -23,6 +25,7 @@ from ..work_order_material_schemas import (
     WorkOrderMaterialPreflightIn,
     WorkOrderMaterialPreflightOut, WorkOrderMaterialOperationIn,
     WorkOrderMaterialOperationOut,
+    WorkOrderMaterialLookupOut,
     WorkOrderMaterialConsumeIn,
     WorkOrderMaterialReleaseIn,
     WorkOrderMaterialOccupyIn,
@@ -51,6 +54,28 @@ def _raise(exc):
 def _require_operator(payload, principal):
     if payload.operator_person_id != principal.person_id:
         raise HTTPException(status_code=403, detail={"code": "operator_mismatch", "message": "操作人必须是当前登录人员"})
+
+
+def _command_trace(payload, request_id):
+    if request_id is not None and request_id != payload.request_id:
+        raise HTTPException(status_code=400, detail={"code": "request_id_mismatch", "message": "请求头与原请求标识不一致"})
+    return payload.request_id
+
+
+@router.get("/{work_order_id}/material-operations/{operation_type}/by-request/{request_id}", response_model=WorkOrderMaterialLookupOut)
+def read_original_material_operation(
+    work_order_id: UUID, operation_type: Literal["occupy", "consume", "release"], response: Response,
+    request_id: str = Path(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$"),
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "read")),
+    db: Session = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        return lookup_operation(db, actor=principal, work_order_id=work_order_id, operation_type=operation_type, request_id=request_id)
+    except service.InventoryPostingError as exc:
+        _raise(exc)
+    except SQLAlchemyError:
+        raise HTTPException(status_code=503, detail={"code": "work_order_recovery_unavailable", "message": "原工单请求暂时无法核验，请保留恢复记录稍后查询"}) from None
 
 
 @router.post("/{work_order_id}/material-replacements", response_model=WorkOrderReplacementOut)
@@ -120,7 +145,7 @@ def execute_material_consume(
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
     _require_operator(payload, principal)
-    trace = request_id or payload.request_id
+    trace = _command_trace(payload, request_id)
     values = _lines(payload)
     try:
         operation, _posted = service.execute_consume_operation(
@@ -150,6 +175,7 @@ def execute_material_release(
     db: Session = Depends(get_db), request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
     _require_operator(payload, principal)
+    trace = _command_trace(payload, request_id)
     values = tuple(service.WorkOrderMaterialLineInput(
         material_id=row.material_id, stock_account_id=row.stock_account_id,
         target_stock_account_id=row.target_stock_account_id, quantity=row.quantity,
@@ -159,7 +185,7 @@ def execute_material_release(
     try:
         operation, _posted = service.execute_release_operation(
             db, actor=principal, work_order_id=work_order_id, lines=values,
-            idempotency_key=payload.idempotency_key, request_id=request_id or payload.request_id,
+            idempotency_key=payload.idempotency_key, request_id=trace,
         )
         output = WorkOrderMaterialOperationOut(
             operation_id=operation.id, operation_no=operation.operation_no,
@@ -182,6 +208,7 @@ def execute_material_occupy(
     db: Session = Depends(get_db), request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
     _require_operator(payload, principal)
+    trace = _command_trace(payload, request_id)
     values = tuple(service.WorkOrderMaterialLineInput(
         material_id=row.material_id, stock_account_id=row.stock_account_id,
         target_stock_account_id=row.target_stock_account_id, quantity=row.quantity,
@@ -191,7 +218,7 @@ def execute_material_occupy(
     try:
         operation, _posted = service.execute_occupy_operation(
             db, actor=principal, work_order_id=work_order_id, lines=values,
-            idempotency_key=payload.idempotency_key, request_id=request_id or payload.request_id)
+            idempotency_key=payload.idempotency_key, request_id=trace)
         output = WorkOrderMaterialOperationOut(
             operation_id=operation.id, operation_no=operation.operation_no,
             work_order_id=operation.oam_work_order_id, posting_transaction_id=operation.posting_transaction_id,
@@ -212,6 +239,7 @@ def execute_material_recover(
     db: Session = Depends(get_db), request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
     _require_operator(payload, principal)
+    trace = _command_trace(payload, request_id)
     values = tuple(service.WorkOrderMaterialLineInput(
         material_id=row.material_id, stock_account_id=row.target_stock_account_id,
         target_stock_account_id=row.target_stock_account_id, quantity=row.quantity,
@@ -221,7 +249,7 @@ def execute_material_recover(
     try:
         operation, _posted = service.execute_recover_operation(
             db, actor=principal, work_order_id=work_order_id, lines=values,
-            idempotency_key=payload.idempotency_key, request_id=request_id or payload.request_id)
+            idempotency_key=payload.idempotency_key, request_id=trace)
         output = WorkOrderMaterialOperationOut(
             operation_id=operation.id, operation_no=operation.operation_no,
             work_order_id=operation.oam_work_order_id, posting_transaction_id=operation.posting_transaction_id,

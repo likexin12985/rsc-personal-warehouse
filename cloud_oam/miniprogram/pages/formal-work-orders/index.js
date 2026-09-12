@@ -2,17 +2,20 @@ const api = require('../../utils/api')
 const session = require('../../utils/session')
 const { inventoryAccessDecision, hasFormalPermission } = require('../../utils/production-guard')
 const { uuid, validateMyWorkOrders, validateMaterialOptions } = require('../../utils/work-order-query-contract')
+const recoveryStore = require('../../utils/work-order-recovery-store')
+const { recoverPending } = require('../../utils/work-order-recovery')
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
-function empty() { return { state: 'idle', loading: false, search: '', orders: [], items: [], workOrder: null, locationName: '', message: '', hasNext: false, hasPrevious: false, pageNumber: 1 } }
+function empty() { return { state: 'idle', loading: false, busy: false, search: '', orders: [], items: [], workOrder: null, locationName: '', message: '', hasNext: false, hasPrevious: false, pageNumber: 1, canRecover: false, recoveryMessage: '' } }
 
 Page({
   data: empty(),
-  onShow() { this._visible = true; this._selected = null; this._cursors = [null]; return this.load() },
+  onShow() { this._visible = true; this._selected = null; this._cursors = [null]; this._store = recoveryStore.getStore(); return this.load() },
   onHide() { this.clearView() },
   onUnload() { this.clearView() },
   clearView() {
     this._visible = false; this._generation = (this._generation || 0) + 1
     this._selected = null; this._next = null; this._cursors = [null]
+    this._recoveryContext = null
     this.setData(empty())
   },
   onPullDownRefresh() { this._cursors = [null]; return this.load().finally(() => wx.stopPullDownRefresh()) },
@@ -37,6 +40,7 @@ Page({
     const active = () => this._visible && generation === this._generation
     const selected = this._selected, search = this.data.search
     this._next = null
+    this._recoveryContext = null
     this.setData(Object.assign(empty(), { loading: true, state: 'loading', search, message: '正在读取本人工单。' }))
     if (!session.ensureLogin()) { this.setData({ loading: false, state: 'error', message: '请先登录。' }); return }
     try {
@@ -44,6 +48,7 @@ Page({
       const person = uuid(stored.person_id), version = stored.authorization_version
       const sameSession = () => session.getToken() === token && session.getUser() && uuid(session.getUser().person_id) === person && session.getUser().authorization_version === version
       const context = async () => {
+        if (!active() || !sameSession()) throw new Error('session changed')
         const user = await api.request('/auth/me', READ)
         if (!active() || !sameSession()) throw new Error('session changed')
         const access = await api.request('/access/context', READ)
@@ -58,7 +63,11 @@ Page({
       const result = selected ? validateMaterialOptions(raw, person, version, selected) : validateMyWorkOrders(raw, person, version, after)
       if (await context() !== before || !active() || !sameSession()) throw new Error('access changed')
       if (selected) {
+        const stored = this._store.read({ work_order_id: selected })
+        const canRecover = stored.kind === 'valid' && stored.value.person_id === person
+        this._recoveryContext = context
         this.setData({ loading: false, state: 'ready', workOrder: result.workOrder, items: result.items, locationName: result.locationName || '尚未配置个人仓',
+          canRecover, recoveryMessage: canRecover ? '该工单有待确认的原请求，请先读取原结果。' : stored.kind !== 'missing' ? '本地恢复记录暂不可用或属于其他人员，暂勿提交新操作。' : '',
           message: !result.openingEstablished ? '个人仓期初尚未建立，暂不展示数量。' : result.workOrder.can_operate ? '按物料查看本人可用库存和本工单剩余占用。' : '工单当前不可操作；以下为已核验的库存与占用记录。' })
       } else {
         this._next = result.next
@@ -68,5 +77,20 @@ Page({
     } catch (_) {
       if (active()) this.setData(Object.assign(empty(), { state: 'error', search, message: '工单或物料暂时无法读取，请确认权限后刷新。' }))
     }
+  },
+  async recover() {
+    if (!this._visible || !this._selected || !this.data.canRecover || this.data.loading || this.data.busy || !this._recoveryContext) return
+    const generation = this._generation, selected = this._selected, context = this._recoveryContext
+    const current = () => this._visible && generation === this._generation && this._selected === selected
+    this.setData({ busy: true })
+    try {
+      const result = await recoverPending({ api, store: this._store, workOrderId: selected,
+        personId: this.data.workOrder.engineer_person_id, authorize: context })
+      if (!current()) return
+      if (result.status === 'confirmed') this.setData({ canRecover: false, recoveryMessage: `原操作已确认：${result.command.operation_no}。请刷新库存后继续。` })
+      else this.setData({ recoveryMessage: '暂未读取到已提交的原结果，仍保留恢复记录；请稍后继续核验。' })
+    } catch (_) {
+      if (current()) this.setData({ recoveryMessage: '原请求暂未完成核验，恢复记录仍保留，请稍后重试读取。' })
+    } finally { if (current()) this.setData({ busy: false }) }
   }
 })

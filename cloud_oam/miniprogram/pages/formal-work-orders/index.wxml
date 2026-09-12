@@ -22,6 +22,10 @@
     </view>
   </block>
   <block wx:if="{{state === 'ready' && workOrder}}">
+    <view wx:if="{{recoveryMessage}}" class="card">
+      <text>{{recoveryMessage}}</text>
+      <button wx:if="{{canRecover}}" size="mini" disabled="{{busy}}" loading="{{busy}}" bindtap="recover">读取原请求结果</button>
+    </view>
     <button size="mini" bindtap="backToOrders">选择其他工单</button>
     <view class="card">
       <view class="order-no">{{workOrder.work_order_no}}</view>
