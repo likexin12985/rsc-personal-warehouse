@@ -151,6 +151,7 @@ jobs:
             backend/tests/test_material_request_receipt_contract.py \
             backend/tests/test_material_request_my_receiving.py \
             backend/tests/test_material_request_my_receipt.py \
+            backend/tests/test_material_request_my_receipt_candidates.py \
             backend/tests/test_material_request_inbound_contract.py \
             backend/tests/test_material_request_inbound_posting.py \
             backend/tests/test_material_request_inbound_state.py \

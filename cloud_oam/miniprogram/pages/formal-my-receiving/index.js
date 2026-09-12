@@ -85,6 +85,12 @@ Page({
     this._cursors.push(this._next)
     return this.load()
   },
+  openCandidates(event) {
+    if (!this._visible || this.data.loading || this.data.state !== 'ready') return
+    const shipmentId = event.currentTarget.dataset.shipmentId
+    if (!this.data.packages.some(item => item.shipment_id === shipmentId)) return
+    wx.navigateTo({ url: `/pages/formal-my-receipt/index?request_id=${this._requestId}&shipment_id=${shipmentId}` })
+  },
   previousPage() {
     if (this.data.loading || this._cursors.length <= 1) return
     this._cursors.pop()

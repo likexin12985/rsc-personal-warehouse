@@ -71,6 +71,8 @@ from ..formal_services import material_request_my_receiving as my_receiving_serv
 from ..material_request_my_receiving_schemas import MyReceivingOut
 from ..formal_services import material_request_my_receipt as my_receipt_service
 from ..material_request_my_receipt_schemas import MyReceiptIn, MyReceiptOut, MyReceiptCommandStatusOut
+from ..formal_services import material_request_my_receipt_candidates as my_receipt_candidates_service
+from ..material_request_my_receipt_candidate_schemas import MyReceiptCandidateOut
 from ..material_request_logistics_schemas import LogisticsEventIn, LogisticsEventOut, LogisticsEventCommandStatusOut
 from ..material_request_oam_receipt_schemas import OamReceiptEvidenceOut
 from ..formal_services import material_request_picking as picking_service
@@ -1039,6 +1041,24 @@ def list_formal_material_request_my_receiving(
     try:
         return my_receiving_service.list_my_receiving(
             db, actor=principal, request_id=material_request_id, limit=limit, after_id=after_id,
+        )
+    except query_service.MaterialRequestReadError as exc:
+        _raise_service_error(exc, no_store=True)
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.get("/{material_request_id}/my-receiving/{shipment_id}/candidates", response_model=MyReceiptCandidateOut)
+def read_my_receipt_candidates(
+    material_request_id: UUID, shipment_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    try:
+        return my_receipt_candidates_service.my_receipt_candidates(
+            db, actor=principal, request_id=material_request_id, shipment_id=shipment_id,
         )
     except query_service.MaterialRequestReadError as exc:
         _raise_service_error(exc, no_store=True)

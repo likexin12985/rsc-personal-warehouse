@@ -1,0 +1,4 @@
+@import "../formal-my-receiving/index.wxss";
+.serial-row { display: flex; justify-content: space-between; gap: 20rpx; padding: 18rpx 0; border-bottom: 1rpx solid #e7ebed; font-size: 24rpx; word-break: break-all; }
+.scan-state { min-width: 140rpx; text-align: right; color: #68717a; }
+.button-primary { margin: 24rpx 0 12rpx; }

@@ -11,6 +11,7 @@
       <view class="package-fact">运单：<text selectable>{{package.tracking_no}}</text></view>
       <view class="package-fact">交运时间：{{package.shipped_at}}</view>
       <view class="package-fact">目的地：{{package.target_location_name}}</view>
+      <button class="button button-secondary button-small" data-shipment-id="{{package.shipment_id}}" bindtap="openCandidates">查看待验收明细 / 扫码核对</button>
       <view wx:for="{{package.lines}}" wx:key="shipment_line_id" wx:for-item="line" class="receipt-line">
         <view class="material-name">{{line.material_name}}</view><view class="small muted">{{line.sku_code}}</view>
         <view class="quantity-grid">

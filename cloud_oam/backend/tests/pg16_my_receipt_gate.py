@@ -21,6 +21,7 @@ def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_i
     from app.models import User
     from app.formal_services import material_request_shipment as shipping
     from app.formal_services import material_request_my_receipt as service
+    from app.formal_services.material_request_my_receipt_candidates import my_receipt_candidates
     from app.formal_services.material_request_query import MaterialRequestReadError
     from app.material_request_my_receipt_schemas import MyReceiptIn
     from test_material_request_draft_service import SECRET
@@ -58,6 +59,12 @@ def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_i
         db.commit()
 
     print("PG16 recipient: API shipment committed", flush=True)
+    with Session(api_engine) as db:
+        db.execute(text("SET TRANSACTION READ ONLY"))
+        candidate = my_receipt_candidates(db, actor=load_formal_principal(db, recipient_user_id), request_id=request_id, shipment_id=value.shipment_id)
+        assert candidate.can_receive and candidate.request_version == value.expected_request_version
+        assert {s.serial_id for line in candidate.lines for s in line.remaining_serials} == set(serial_ids)
+        assert Decimal(candidate.lines[0].unconfirmed_qty) == value.lines[0].accepted_qty
     with Session(api_engine) as db:
         assert db.scalar(text("SELECT has_column_privilege(current_user, 'public.material_requests', 'personal_inbound_status', 'UPDATE')"))
         assert not db.scalar(text("SELECT has_table_privilege(current_user, 'public.material_requests', 'UPDATE')"))
@@ -110,8 +117,12 @@ def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_i
     assert submit(key).receipt_id == result.receipt_id
     assert snapshot() == (before[0], before[1], before[2] + 1)
     with Session(api_engine) as db:
+        db.execute(text("SET TRANSACTION READ ONLY"))
         recovered = service.my_receipt_command_status(db, actor=load_formal_principal(db, recipient_user_id), request_id=request_id, idempotency_key=key, secret=SECRET)
         assert recovered.receipt_id == result.receipt_id and recovered.idempotency_replayed
         assert service.my_receipt_command_status(db, actor=load_formal_principal(db, recipient_user_id), request_id=request_id, idempotency_key=f"unseen-my-receipt-{posting_id}", secret=SECRET) is None
         assert db.scalar(select(func.count()).select_from(AuditEvent).where(AuditEvent.action == "my_receipt_registered", AuditEvent.aggregate_id == str(result.receipt_id))) == 1
+        candidate = my_receipt_candidates(db, actor=load_formal_principal(db, recipient_user_id), request_id=request_id, shipment_id=value.shipment_id)
+        assert not candidate.can_receive and candidate.blocked_reason == "complete"
+        assert all(line.unconfirmed_qty == "0.000" and not line.remaining_serials for line in candidate.lines)
     print("PG16 recipient: concurrency, replay and recovery verified", flush=True)

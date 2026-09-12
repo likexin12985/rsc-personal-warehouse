@@ -1,0 +1,36 @@
+<view class="page">
+  <view class="row between">
+    <view><view class="page-title">包裹验收核对</view><view class="page-subtitle">{{state === 'ready' ? shipmentNo : '本人包裹'}}</view></view>
+    <button class="button button-secondary button-small" bindtap="refresh" disabled="{{loading || scanning}}" loading="{{loading}}">刷新</button>
+  </view>
+  <view class="card receiving-note">{{message}}</view>
+  <block wx:if="{{state === 'ready'}}">
+    <view class="card package">
+      <view class="package-fact">需求：{{requestNo}}</view>
+      <view class="package-fact">目的地：{{targetLocationName}}</view>
+      <view class="small muted">查询时间：{{checkedAt}}</view>
+      <view wx:if="{{blockedMessage}}" class="exception-note">{{blockedMessage}}</view>
+      <block wx:if="{{canScan}}">
+        <button class="button button-primary" bindtap="scan" loading="{{scanning}}" disabled="{{scanning || loading}}">扫描 SN / 物料二维码</button>
+        <view class="small muted">本次已核对 {{matchedCount}} 件；刷新或离开后重新核对。</view>
+      </block>
+    </view>
+    <view wx:for="{{lines}}" wx:key="shipment_line_id" wx:for-item="line" class="card package">
+      <view class="material-name">{{line.material_name}}</view><view class="small muted">{{line.sku_code}}</view>
+      <view wx:if="{{line.lot_no}}" class="package-fact">批次：{{line.lot_no}}</view>
+      <view class="quantity-grid">
+        <view><text>未验收</text><text>{{line.unconfirmed_qty}} {{line.base_unit}}</text></view>
+        <view><text>已合格 / 拒收</text><text>{{line.accepted_qty}} / {{line.rejected_qty}} {{line.base_unit}}</text></view>
+      </view>
+      <view wx:if="{{!line.tracked}}" class="package-fact">按数量验收；{{line.allow_fraction ? '支持小数，最多 ' + line.quantity_scale + ' 位' : '仅支持整数数量'}}。</view>
+      <block wx:else>
+        <view class="package-fact">待验收 SN：{{line.totalSerials}} 件</view>
+        <view wx:for="{{line.shownSerials}}" wx:key="serial_id" wx:for-item="serial" class="serial-row">
+          <text selectable>{{serial.serial_no}}</text><text class="scan-state">{{serial.checked ? '本次已核对' : '待核对'}}</text>
+        </view>
+        <button wx:if="{{line.hasMore}}" class="button button-secondary button-small" data-line-id="{{line.shipment_line_id}}" bindtap="showMore">显示更多 SN</button>
+      </block>
+      <view wx:if="{{line.has_exception}}" class="exception-note">已有异常验收记录，仍需跟进处理。</view>
+    </view>
+  </block>
+</view>
