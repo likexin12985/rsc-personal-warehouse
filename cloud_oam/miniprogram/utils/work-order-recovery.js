@@ -62,4 +62,4 @@ async function sealPending({ api, store, workOrderId, personId, authorize, confi
   })
 }
 
-module.exports = { recoverPending, sealPending }
+module.exports = { recoverPending, sealPending, originalResult }

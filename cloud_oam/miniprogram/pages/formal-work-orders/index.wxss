@@ -12,3 +12,6 @@
 .quantity-input { margin: 18rpx 0; padding: 16rpx; border: 1rpx solid #cbd5e1; border-radius: 8rpx; }
 .confirmation-card { border: 2rpx solid #e65318; }
 .confirmation-card > button { margin-top: 20rpx; }
+
+.removed-row { padding: 24rpx 16rpx; background: #f8fafc; margin: 16rpx 0; border-radius: 8rpx; }
+.pair-picker { border: 1rpx solid #cbd5e1; border-radius: 8rpx; padding: 20rpx; margin-top: 16rpx; overflow-wrap: anywhere; }

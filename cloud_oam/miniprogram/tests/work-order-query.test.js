@@ -41,6 +41,7 @@ function harness(settings = {}) {
       if (endpoint === '/auth/me') return settings.identity ? settings.identity(state) : user()
       if (endpoint === '/access/context') return settings.access ? settings.access(++count) : access()
       if (endpoint.includes('/by-request/')) return settings.recovery(state)
+      if (endpoint.endsWith('/removed-part')) return settings.removed(request.data, state)
       if (endpoint.endsWith('/preview')) return settings.preview(endpoint, request.data, state)
       if (endpoint.endsWith('/material-options')) return settings.options ? settings.options(state) : options()
       return settings.list ? settings.list(endpoint, state) : list()
@@ -628,5 +629,286 @@ test('every batch line appears in review and a later insufficient line rejects t
     }
     assert.equal(store.read({work_order_id:ORDER}).kind,'missing')
     assert.equal(state.calls.filter(row => row.method==='POST' && !row.endpoint.endsWith('/preview')).length,0)
+  }
+})
+
+const pairedCommand = require('../utils/work-order-replacement-command')
+const SN1 = '60000000-0000-4000-8000-000000000001'
+const SN2 = '60000000-0000-4000-8000-000000000002'
+const OLD1 = '70000000-0000-4000-8000-000000000001'
+const OLD2 = '70000000-0000-4000-8000-000000000002'
+const pairedWrites = state => state.calls.filter(call => call.method === 'POST' && call.endpoint.endsWith('/material-replacements'))
+function pairedOptions(serial = false) {
+  const raw = options()
+  if (serial) Object.assign(raw.items[0], { tracking_mode: 'serial', selectable_quantity: '2.000',
+    serials: [{ serial_id: SN1, serial_no: 'NEW-1' }, { serial_id: SN2, serial_no: 'NEW-2' }] })
+  return raw
+}
+function removedResult(scan) {
+  return { schema_version: '1.0', work_order_id: ORDER, operator_person_id: PERSON, authorization_version: 7,
+    source_version: order().source_version, ledger_cursor: 2, checked_at: '2026-09-13T00:00:00Z',
+    basis_stock_account_id: scan.basis_stock_account_id, material_id: LOCATION, sku_code: scan.sku_code,
+    material_name: '拆回的另一种配件', base_unit: '件', condition_before: scan.condition_before,
+    tracking_mode: scan.serial_no ? 'serial' : scan.lot_no ? 'lot' : 'none', quantity_scale: scan.serial_no ? 0 : 3,
+    allow_fraction: !scan.serial_no, lot_id: scan.lot_no ? LOCATION : null, lot_no: scan.lot_no,
+    serial_id: scan.serial_no ? scan.serial_no === 'OLD-1' ? OLD1 : OLD2 : null, serial_no: scan.serial_no }
+}
+function pairedPreview(body) {
+  return { schema_version: '1.0', status: 'batch_validated', work_order_id: ORDER, operator_person_id: PERSON,
+    authorization_version: 7, source_version: order().source_version, ledger_cursor: 2, checked_at: '2026-09-13T00:00:00Z',
+    consume_line_count: body.consume_lines.length, recover_line_count: body.recover_lines.length, pair_count: body.replacement_pairs.length,
+    request_hash: pairedCommand.requestHash({ workOrderId: ORDER, personId: PERSON,
+      consumeLines: body.consume_lines, recoverLines: body.recover_lines, pairs: body.replacement_pairs }) }
+}
+async function pairedPage(settings = {}, serial = false) {
+  const scans = []
+  const result = await openDraft({ options: () => pairedOptions(serial), removed: removedResult,
+    preview: (_, body) => pairedPreview(body), scan: options => options.success({ result: scans.shift() }), ...settings })
+  result.page.chooseOperation(event(null, { kind: 'replace' })); result.page.addMaterial(event(ACCOUNT))
+  if (serial) {
+    for (const number of ['NEW-1', 'NEW-2']) {
+      scans.push('SKU-TEST', number, `QR-private-${number}`)
+      for (const code of ['sku_code', 'serial_no', 'qr_code']) await result.page.scanMaterialCode(event(ACCOUNT, { code }))
+      result.page.collectScanned(event(ACCOUNT))
+    }
+  } else result.page.editQuantity({ ...event(ACCOUNT), detail: { value: '1.125' } })
+  return { ...result, scans }
+}
+async function addRemovedRow(context, number = null, lot = '', basis = ACCOUNT, sku = 'REMOVED-SKU') {
+  const { page, scans } = context
+  page.addRemoved(event(basis))
+  const id = page.data.removedRows.at(-1).id
+  page.editRemoved(event(id, { field: 'condition', value: 'damaged' }))
+  scans.push(sku); await page.scanRemoved(event(id, { code: 'sku_code' }))
+  if (number) {
+    scans.push(number, `QR-private-${number}`)
+    for (const code of ['serial_no', 'qr_code']) await page.scanRemoved(event(id, { code }))
+  }
+  if (lot) page.editRemoved({ ...event(id, { field: 'lot_no' }), detail: { value: lot } })
+  await page.inspectRemoved(event(id))
+  if (!number) page.editRemoved({ ...event(id, { field: 'quantity' }), detail: { value: '0.125' } })
+  return id
+}
+
+test('paired quantity page refreshes scans, reviews both sides and posts one parent only after durable marker', async () => {
+  const { store, records } = await pendingStore(false); let marker
+  const context = await pairedPage({ store, post: (endpoint, body, options) => {
+    marker = store.read({ work_order_id: ORDER }).value
+    assert.equal(marker.kind, 'work_order_replacement'); assert.equal(marker.operation_type, 'replace')
+    assert.equal(marker.request_hash, pairedPreview(body).request_hash)
+    assert.equal(marker.trace_request_id, body.request_id); assert.equal(options.requestId, body.request_id)
+    assert.equal(options.idempotencyKey, body.idempotency_key)
+    assert.equal(body.consume_lines[0].quantity, '1.125'); assert.equal(body.recover_lines[0].quantity, '0.125')
+    assert.equal(body.recover_lines[0].material_id, LOCATION); assert.equal(body.recover_lines[0].lot_id, LOCATION)
+    assert.equal(body.recover_lines[0].basis_stock_account_id, ACCOUNT); assert.deepEqual(body.replacement_pairs, [])
+    for (const field of ['material_id', 'quantity', 'idempotency_key', 'sku_code', 'qr_code']) assert.equal([...records.values()].join().includes(field), false)
+    return { noProof: true }
+  }, recovery: () => pairedRecovered(marker) })
+  const { page, state } = context
+  await addRemovedRow(context, null, 'LOT-X')
+  await page.previewMaterials()
+  assert.match(page.data.previewMessage, /投入 1 行、拆回 1 行、SN 配对 0 对/)
+  assert.equal(pairedWrites(state).length, 0); assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+  const work = page.submitMaterials(); await tick()
+  assert.equal(page.data.confirming, true); assert.equal(page.data.reviewRows.length, 2)
+  assert.equal(page.data.reviewRows[0].side, '投入消耗'); assert.equal(page.data.reviewRows[1].side, '拆回入库')
+  assert.equal(page.data.reviewRows[1].basisLineNo, 1); assert.equal(page.data.reviewRows[1].lot, 'LOT-X')
+  assert.equal(page.data.reviewRows[1].sku, 'REMOVED-SKU')
+  await page.submitMaterials(); page.confirmSubmission(); page.confirmSubmission(); await work
+  assert.equal(pairedWrites(state).length, 1); assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+  assert.match(page.data.recoveryMessage, /WR-TEST/); assert.equal(page._removedDrafts.length, 0)
+  assert.equal(page.data.removedRows.length, 0)
+  assert.equal(state.calls.filter(call => call.endpoint.endsWith('/removed-part')).length, 3)
+  assert.equal(state.calls.filter(call => call.endpoint.includes('/by-request/')).length, 1)
+})
+
+test('multiple removed SNs merge into one target with explicitly selected reverse pairs and no displayed QR', async () => {
+  const { store, records } = await pendingStore(false); let marker
+  const context = await pairedPage({ store, post: (_, body) => {
+    marker = store.read({ work_order_id: ORDER }).value
+    assert.equal(body.consume_lines.length, 1); assert.equal(body.recover_lines.length, 1)
+    assert.equal(body.recover_lines[0].quantity, '2.000')
+    assert.deepEqual(body.recover_lines[0].serial_ids, [OLD1, OLD2])
+    assert.deepEqual(body.replacement_pairs, [{ installed_serial_id: SN1, removed_serial_id: OLD2 }, { installed_serial_id: SN2, removed_serial_id: OLD1 }])
+    assert.equal(body.recover_lines[0].serial_verifications[0].qr_code, 'QR-private-OLD-1')
+    assert.equal([...records.values()].join().includes('QR-private'), false)
+    return {}
+  }, recovery: () => pairedRecovered(marker) }, true)
+  const { page, state } = context
+  const first = await addRemovedRow(context, 'OLD-1'), second = await addRemovedRow(context, 'OLD-2')
+  assert.equal(page.data.removedRows[0].pairIndex, 0)
+  await page.submitMaterials(); assert.equal(page.data.confirming, false); assert.match(page.data.previewMessage, /明确选择/)
+  page.chooseInstalled({ ...event(first), detail: { value: '2' } })
+  page.chooseInstalled({ ...event(second), detail: { value: '1' } })
+  const work = page.submitMaterials(); await tick()
+  assert.equal(page.data.confirming, true); assert.equal(page.data.reviewRows.length, 2)
+  assert.deepEqual(page.data.reviewRows[1].serialNumbers, ['OLD-1', 'OLD-2'])
+  assert.deepEqual(page.data.reviewPairs, [{ pairNo: 1, installed: 'NEW-2', removed: 'OLD-1' }, { pairNo: 2, installed: 'NEW-1', removed: 'OLD-2' }])
+  assert.equal(JSON.stringify(page.data).includes('QR-private'), false)
+  page.confirmSubmission(); await work
+  assert.equal(pairedWrites(state).length, 1); assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+  assert.equal(page._removedDrafts.length, 0); assert.equal(page.data.reviewPairs.length, 0)
+})
+
+test('removed quantity precision, duplicated targets, missing basis rows and duplicated SN pairs block the whole batch', async () => {
+  for (const mode of ['precision', 'duplicate_quantity', 'missing_row', 'duplicate_pair']) {
+    const context = await pairedPage({}, mode === 'duplicate_pair'), { page, state, store } = context
+    if (mode === 'duplicate_pair') {
+      const first = await addRemovedRow(context, 'OLD-1'), second = await addRemovedRow(context, 'OLD-2')
+      for (const id of [first, second]) page.chooseInstalled({ ...event(id), detail: { value: '1' } })
+    } else if (mode !== 'missing_row') {
+      const id = await addRemovedRow(context)
+      if (mode === 'precision') page.editRemoved({ ...event(id, { field: 'quantity' }), detail: { value: '0.0001' } })
+      if (mode === 'duplicate_quantity') await addRemovedRow(context)
+    }
+    await page.submitMaterials()
+    assert.equal(page.data.confirming, false); assert.equal(pairedWrites(state).length, 0)
+    assert.equal(state.calls.some(call => call.endpoint.endsWith('/preview')), false)
+    assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+  }
+})
+
+test('changed removed identity, policy, stock, source or preview digest prevents confirmation', async () => {
+  for (const mode of ['identity', 'policy', 'stock', 'source', 'digest']) {
+    let changed = false
+    const context = await pairedPage({ options: () => { const raw = options(); if (changed && mode === 'stock') raw.items[0].selectable_quantity = '0.001'; return raw },
+      removed: scan => { const raw = removedResult(scan); if (changed) { if (mode === 'identity') raw.material_id = NEXT; if (mode === 'policy') raw.quantity_scale = 0; if (mode === 'source') raw.source_version = 'different' }; return raw },
+      preview: (_, body) => { const raw = pairedPreview(body); if (mode === 'digest') raw.request_hash = 'a'.repeat(64); return raw } })
+    await addRemovedRow(context); changed = true
+    await context.page.submitMaterials()
+    assert.equal(context.page.data.confirming, false); assert.equal(pairedWrites(context.state).length, 0)
+    assert.equal(context.store.read({ work_order_id: ORDER }).kind, 'missing')
+  }
+})
+
+test('unknown removed SN remains blocked and condition or physical proof changes invalidate identification and pairing', async () => {
+  let unknown = true
+  const context = await pairedPage({ removed: scan => {
+    if (unknown) throw Object.assign(new Error('not registered'), { code: 'removed_serial_not_found' })
+    return removedResult(scan)
+  } }, true)
+  const { page } = context, id = await addRemovedRow(context, 'OLD-1')
+  assert.equal(page.data.removedRows[0].identified, false); assert.match(page.data.previewMessage, /受控登记/)
+  unknown = false; await page.inspectRemoved(event(id)); page.chooseInstalled({ ...event(id), detail: { value: '1' } })
+  assert.equal(page.data.removedRows[0].pairIndex, 1)
+  page.editRemoved(event(id, { field: 'condition', value: 'used' }))
+  assert.equal(page.data.removedRows[0].identified, false); assert.equal(page.data.removedRows[0].pairIndex, 0)
+  await page.inspectRemoved(event(id)); page.chooseInstalled({ ...event(id), detail: { value: '1' } })
+  page.removeScanned(event(ACCOUNT, { serial: SN1 })); assert.equal(page.data.removedRows[0].pairIndex, 0)
+  page.removeMaterial(event(ACCOUNT)); assert.equal(page._removedDrafts.length, 0); assert.equal(page.data.removedRows.length, 0)
+})
+
+test('cancel, navigation and account switch during paired review never create a marker or post stock', async () => {
+  for (const mode of ['cancel', 'hide', 'account', 'mode']) {
+    const context = await pairedPage(); await addRemovedRow(context)
+    const { page, state, store } = context
+    if (mode === 'mode') { page.chooseOperation(event(null, { kind: 'consume' })); assert.equal(page._removedDrafts.length, 0); assert.equal(page.data.removedRows.length, 0); continue }
+    const work = page.submitMaterials(); await tick(); assert.equal(page.data.confirming, true)
+    if (mode === 'cancel') page.cancelSubmission()
+    else if (mode === 'hide') page.onHide()
+    else { state.token = 'other'; page.confirmSubmission() }
+    await work
+    assert.equal(pairedWrites(state).length, 0); assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+    assert.equal(page.data.reviewPairs.length, 0); assert.equal(page.data.reviewRows.length, 0)
+    assert.equal(page._removedDrafts.length, mode === 'cancel' ? 1 : 0)
+  }
+})
+
+test('paired timeout, 401, exact missing result, ordinary child or mismatched digest retains one original marker', async () => {
+  for (const mode of ['timeout', '401', 'missing', 'child', 'digest']) {
+    let marker
+    const context = await pairedPage({ post: () => {
+      marker = context.store.read({ work_order_id: ORDER }).value
+      if (mode === 'timeout' || mode === '401') throw Object.assign(new Error('unknown'), { status: mode === '401' ? 401 : 0 })
+      return {}
+    }, recovery: () => {
+      if (mode === 'missing') throw Object.assign(new Error('missing'), { responseReceived: true, status: 404, code: 'replacement_not_found' })
+      if (mode === 'child') return recovered({ ...marker, operation_type: 'consume' })
+      return { ...pairedRecovered(marker), request_hash: 'f'.repeat(64) }
+    } })
+    await addRemovedRow(context)
+    const { page, state, store } = context, work = page.submitMaterials(); await tick(); page.confirmSubmission(); await work
+    assert.equal(store.read({ work_order_id: ORDER }).kind, 'valid'); assert.equal(page.data.canDraft, false)
+    assert.equal(page.data.pendingRequests.length, 1); assert.equal(page.data.canRecover, true)
+    assert.doesNotMatch(page.data.recoveryMessage, /已确认/); assert.equal(page._removedDrafts.length, 0)
+    await page.submitMaterials(); assert.equal(pairedWrites(state).length, 1)
+  }
+})
+
+test('storage readback, secure entropy and late permission failures block paired stock transport', async () => {
+  for (const mode of ['storage', 'entropy', 'permission']) {
+    const { store, storage } = await pendingStore(false); let revoke = false
+    const context = await pairedPage({ store,
+      randomFailure: mode === 'entropy' ? () => { throw new Error('no entropy') } : null,
+      access: () => ({ ...access(), permissions: revoke ? access().permissions : access().permissions.concat({ resource: 'work_order_material', action: 'operate', field_code: '' }) }) })
+    await addRemovedRow(context)
+    const work = context.page.submitMaterials(); await tick(); assert.equal(context.page.data.confirming, true)
+    if (mode === 'storage') storage.setStorageSync = () => {}
+    if (mode === 'permission') revoke = true
+    context.page.confirmSubmission(); await work
+    assert.equal(pairedWrites(context.state).length, 0)
+    assert.equal(store.read({ work_order_id: ORDER }).kind, mode === 'storage' ? 'unavailable' : 'missing')
+  }
+})
+
+test('hiding during removed scan lookup, batch preview, stock POST or original GET stops dependent calls', async () => {
+  for (const phase of ['removed', 'preview', 'post', 'recovery']) {
+    const pending = deferred(); let wait = false, marker, body
+    const context = await pairedPage({ removed: scan => wait && phase === 'removed' ? pending.promise : removedResult(scan),
+      preview: (_, value) => { body = value; return wait && phase === 'preview' ? pending.promise : pairedPreview(value) },
+      post: () => { marker = context.store.read({ work_order_id: ORDER }).value; return phase === 'post' ? pending.promise : {} },
+      recovery: () => pending.promise })
+    const id = await addRemovedRow(context); wait = true
+    const { page, state, store } = context
+    const work = phase === 'removed' ? page.inspectRemoved(event(id)) : page.submitMaterials()
+    await tick()
+    if (phase === 'post' || phase === 'recovery') { assert.equal(page.data.confirming, true); page.confirmSubmission(); await tick() }
+    page.onHide(); const calls = state.calls.length
+    pending.resolve(phase === 'removed' ? removedResult({ basis_stock_account_id: ACCOUNT, sku_code: 'REMOVED-SKU', condition_before: 'damaged', lot_no: null, serial_no: null })
+      : phase === 'preview' ? pairedPreview(body) : phase === 'post' ? {} : pairedRecovered(marker))
+    await work
+    assert.equal(state.calls.length, calls); assert.equal(page._removedDrafts.length, 0)
+    assert.equal(page.data.removedRows.length, 0); assert.equal(page.data.reviewPairs.length, 0)
+    assert.equal(store.read({ work_order_id: ORDER }).kind, phase === 'post' || phase === 'recovery' ? 'valid' : 'missing')
+  }
+})
+
+
+test('paired review includes every independent basis and invalid later recovery prevents the entire review', async () => {
+  for (const invalid of [false, true]) {
+    const context = await pairedPage({ options: () => {
+      const raw = options(), second = clone(raw.items[0]); second.stock_account_id = NEXT; second.material_id = NEXT
+      second.sku_code = 'SECOND-SKU'; second.material_name = '第二条投入'; raw.items.push(second); return raw
+    }, removed: scan => { const raw = removedResult(scan); if (scan.basis_stock_account_id === NEXT) raw.material_id = NEXT; return raw } })
+    const { page, state, store } = context
+    page.addMaterial(event(NEXT)); page.editQuantity({ ...event(NEXT), detail: { value: '1' } })
+    await addRemovedRow(context)
+    const id = await addRemovedRow(context, null, '', NEXT, 'SECOND-REMOVED')
+    if (invalid) page.editRemoved({ ...event(id, { field: 'quantity' }), detail: { value: '0' } })
+    const work = page.submitMaterials(); await tick()
+    if (invalid) {
+      assert.equal(page.data.confirming, false); assert.equal(state.calls.some(call => call.endpoint.endsWith('/preview')), false)
+    } else {
+      assert.equal(page.data.reviewRows.length, 4)
+      assert.deepEqual(page.data.reviewRows.map(row => row.basisLineNo), [1, 2, 1, 2])
+      assert.deepEqual(page.data.reviewRows.map(row => row.sku), ['SKU-TEST', 'SECOND-SKU', 'REMOVED-SKU', 'SECOND-REMOVED'])
+      page.cancelSubmission()
+    }
+    await work; assert.equal(pairedWrites(state).length, 0); assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+  }
+})
+
+test('late removed camera results are discarded after hide or account switch without exposing the QR', async () => {
+  for (const mode of ['hide', 'account']) {
+    let camera
+    const context = await pairedPage({ scan: options => { camera = options } })
+    const { page, state } = context
+    page.addRemoved(event(ACCOUNT)); const id = page.data.removedRows[0].id
+    const scan = page.scanRemoved(event(id, { code: 'qr_code' }))
+    if (mode === 'hide') page.onHide(); else state.token = 'changed-session'
+    camera.success({ result: 'PRIVATE-LATE-QR' }); await scan
+    assert.equal(page._removedDrafts.length, 0); assert.equal(page.data.removedRows.length, 0)
+    assert.equal(JSON.stringify(page.data).includes('PRIVATE-LATE-QR'), false)
+    assert.equal(state.calls.some(call => call.method === 'POST'), false)
   }
 })

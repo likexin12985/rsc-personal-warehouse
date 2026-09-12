@@ -6,10 +6,13 @@ const recoveryStore = require('../../utils/work-order-recovery-store')
 const { recoverPending, sealPending } = require('../../utils/work-order-recovery')
 const draft = require('../../utils/work-order-draft')
 const { submitDraft } = require('../../utils/work-order-submit')
+const { submitReplacement } = require('../../utils/work-order-replacement-submit')
+const replacementPage = require('./replacement')({ api, session, scanCode: options => wx.scanCode(options) })
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
-function empty() { return { state: 'idle', loading: false, busy: false, search: '', orders: [], items: [], workOrder: null, locationName: '', message: '', hasNext: false, hasPrevious: false, pageNumber: 1, canRecover: false, recoveryMessage: '', pendingRequests: [], pendingMessage: '', canSeal: false, canDraft: false, operationKind: 'occupy', draftRows: [], previewMessage: '', confirming: false, reviewRows: [], reviewTitle: '', reviewWorkOrderNo: '' } }
+function empty() { return { state: 'idle', loading: false, busy: false, search: '', orders: [], items: [], workOrder: null, locationName: '', message: '', hasNext: false, hasPrevious: false, pageNumber: 1, canRecover: false, recoveryMessage: '', pendingRequests: [], pendingMessage: '', canSeal: false, canDraft: false, operationKind: 'occupy', draftRows: [], previewMessage: '', confirming: false, reviewRows: [], reviewTitle: '', reviewWorkOrderNo: '', reviewPairs: [], removedRows: [] } }
 
 Page({
+  ...replacementPage,
   data: empty(),
   onShow() { this._visible = true; this._selected = null; this._cursors = [null]; this._store = recoveryStore.getStore(); return this.load() },
   onHide() { this.clearView() },
@@ -114,13 +117,13 @@ Page({
       sealable: ['work_order_material', 'work_order_replacement'].includes(marker.kind)
     })), pendingMessage: snapshot.kind === 'ready' ? '' : '部分恢复记录暂不可读取。请保留本机记录，已列出的本人请求仍可分别核验。' })
   },
-  eraseDraft() { this._drafts = {}; this._scans = {}; this._draftRevision = (this._draftRevision || 0) + 1 },
+  eraseDraft() { this._drafts = {}; this._scans = {}; this._removedDrafts = []; this.setData({ removedRows: [] }); this._draftRevision = (this._draftRevision || 0) + 1 },
   resetDraft() { this.finishReview(false); this.eraseDraft(); this._sessionMatches = null },
   finishReview(confirmed) {
     const finish = this._confirmFinish
     this._confirmFinish = null
     if (finish) finish(confirmed)
-    this.setData({ confirming: false, reviewRows: [], reviewTitle: '', reviewWorkOrderNo: '' })
+    this.setData({ confirming: false, reviewRows: [], reviewTitle: '', reviewWorkOrderNo: '', reviewPairs: [] })
   },
   confirmSubmission() {
     if (!this._visible || !this.data.confirming || !this._confirmFinish || !this._sessionMatches || !this._sessionMatches()) return this.finishReview(false)
@@ -137,12 +140,12 @@ Page({
         unit: item.base_unit, quantity: value.quantity, tracked: draft.tracked(item), serials: value.serial_verifications.map(proof => ({ id: proof.serial_id, number: proof.serial_no })),
         skuCaptured: !!codes.sku_code, snCaptured: !!codes.serial_no, qrCaptured: !!codes.qr_code }
     })
-    this.setData({ draftRows: rows, previewMessage: '' })
+    this.setData({ draftRows: rows, previewMessage: '' }); this.renderRemovedDraft()
   },
   chooseOperation(event) {
     const kind = event.currentTarget.dataset.kind
-    if (!this.draftReady() || !['occupy', 'consume', 'release'].includes(kind) || kind === this.data.operationKind) return
-    this._drafts = {}; this._scans = {}
+    if (!this.draftReady() || !['occupy', 'consume', 'release', 'replace'].includes(kind) || kind === this.data.operationKind) return
+    this.eraseDraft()
     this.setData({ operationKind: kind }); this.renderDraft()
   },
   addMaterial(event) {
@@ -202,6 +205,7 @@ Page({
     this.renderDraft()
   },
   async previewMaterials() {
+    if (this.data.operationKind === 'replace') return this.previewReplacement()
     if (!this.draftReady() || !this._recoveryContext) return
     const generation = this._generation, revision = this._draftRevision, order = this._selected
     const context = this._recoveryContext, kind = this.data.operationKind, person = this.data.workOrder.engineer_person_id
@@ -252,9 +256,9 @@ Page({
     const current = () => active() && matches() && revision === this._draftRevision
     this.setData({ busy: true, previewMessage: '正在刷新工单与物料，核验整批后请确认。' })
     try {
-      draft.buildDraft({ workOrder: this.data.workOrder, items: this.data.items, personId: person, kind, drafts: this._drafts })
-      const result = await submitDraft({ api, store: this._store, workOrderId: order, personId: person,
-        authorizationVersion: version, kind, drafts: this._drafts,
+      draft.buildDraft({ workOrder: this.data.workOrder, items: this.data.items, personId: person, kind: kind === 'replace' ? 'consume' : kind, drafts: this._drafts })
+      const result = await (kind === 'replace' ? submitReplacement : submitDraft)({ api, store: this._store, workOrderId: order, personId: person,
+        authorizationVersion: version, kind, drafts: this._drafts, removedDrafts: this._removedDrafts,
         authorize: async () => {
           if (!current()) throw new Error('session changed')
           const result = await context()
@@ -267,7 +271,7 @@ Page({
           return new Promise(resolve => {
             this._confirmFinish = resolve
             this.setData({ confirming: true, reviewTitle: review.title, reviewWorkOrderNo: review.workOrderNo,
-              reviewRows: review.rows, previewMessage: '' })
+              reviewRows: review.rows, reviewPairs: review.pairs || [], previewMessage: '' })
           })
         }
       })
@@ -280,7 +284,7 @@ Page({
       this.eraseDraft(); this.refreshPendingRequests()
       const stored = this._store.read({ work_order_id: order })
       const message = result.status === 'confirmed'
-        ? `${{ occupy: '投入占用', consume: '实际消耗', release: '释放未用物料' }[kind]}已确认：${result.command.operation_no}。请刷新库存后继续。`
+        ? `${{ occupy: '投入占用', consume: '实际消耗', release: '释放未用物料', replace: '成对消耗与回收' }[kind]}已确认：${result.command.replacement_no || result.command.operation_no}。请刷新库存后继续。`
         : result.status === 'sealed' ? '原请求已关闭且未执行。请刷新后重新准备物料。'
           : '本次结果尚未确认，已保留原请求。请先读取原结果，不要重新提交。'
       this.setData({ canDraft: false, canRecover: stored.kind === 'valid' && stored.value.person_id === person,

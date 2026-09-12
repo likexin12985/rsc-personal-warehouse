@@ -44,12 +44,16 @@
     <view wx:if="{{confirming}}" class="card confirmation-card">
       <view class="order-no">{{reviewTitle}}</view>
       <view>工单：{{reviewWorkOrderNo}}</view>
-      <view class="muted">{{operationKind === 'occupy' ? '确认后，本批物料将转为此工单占用。' : operationKind === 'consume' ? '请确认已实际使用，本次将扣减工单占用和个人仓实物库存。' : '确认后，此工单的未用物料将转回本人可用库存。'}}</view>
+      <view class="muted">{{operationKind === 'replace' ? '确认后将整批登记实际消耗、拆回入库和新旧 SN 配对。请逐行核对两侧物料。' : operationKind === 'occupy' ? '确认后，本批物料将转为此工单占用。' : operationKind === 'consume' ? '请确认已实际使用，本次将扣减工单占用和个人仓实物库存。' : '确认后，此工单的未用物料将转回本人可用库存。'}}</view>
       <view wx:for="{{reviewRows}}" wx:for-item="row" wx:key="lineNo" class="draft-row">
+        <view wx:if="{{row.side}}" class="order-no">{{row.side}} · 对应投入第 {{row.basisLineNo}} 行</view>
         <view>{{row.materialName}} · {{row.sku}}</view>
         <view>{{row.condition}}<text wx:if="{{row.lot}}"> · 批次 {{row.lot}}</text></view>
         <view class="quantity">本次数量：{{row.quantity}} {{row.unit}}</view>
         <view wx:for="{{row.serialNumbers}}" wx:for-item="sn" wx:key="*this" class="serial">SN：{{sn}}</view>
+      </view>
+      <view wx:for="{{reviewPairs}}" wx:for-item="pair" wx:key="pairNo" class="draft-row">
+        <view>配对 {{pair.pairNo}}</view><view class="serial">投入 SN：{{pair.installed}}</view><view class="serial">拆回 SN：{{pair.removed}}</view>
       </view>
       <button type="primary" bindtap="confirmSubmission">{{reviewTitle}}</button>
       <button bindtap="cancelSubmission">返回修改</button>
@@ -61,6 +65,7 @@
         <button size="mini" type="{{operationKind === 'occupy' ? 'primary' : 'default'}}" disabled="{{busy}}" data-kind="occupy" bindtap="chooseOperation">投入占用</button>
         <button size="mini" type="{{operationKind === 'consume' ? 'primary' : 'default'}}" disabled="{{busy}}" data-kind="consume" bindtap="chooseOperation">实际消耗</button>
         <button size="mini" type="{{operationKind === 'release' ? 'primary' : 'default'}}" disabled="{{busy}}" data-kind="release" bindtap="chooseOperation">释放未用物料</button>
+        <button size="mini" type="{{operationKind === 'replace' ? 'primary' : 'default'}}" disabled="{{busy}}" data-kind="replace" bindtap="chooseOperation">成对消耗与回收</button>
       </view>
     </view>
     <view wx:if="{{!items.length && !confirming}}" class="card">暂无可展示的可用物料或本工单剩余占用。</view>
@@ -74,7 +79,7 @@
     </view>
     <view wx:if="{{canDraft && draftRows.length && !confirming}}" class="card">
       <view class="order-no">本次物料草稿</view>
-      <view class="muted">{{operationKind === 'occupy' ? '投入占用' : operationKind === 'consume' ? '实际消耗' : '释放未用物料'}} · 离开页面后扫码草稿清空</view>
+      <view class="muted">{{operationKind === 'replace' ? '成对消耗与回收' : operationKind === 'occupy' ? '投入占用' : operationKind === 'consume' ? '实际消耗' : '释放未用物料'}} · 离开页面后扫码草稿清空</view>
       <view wx:for="{{draftRows}}" wx:for-item="row" wx:key="id" class="draft-row">
         <view>{{row.materialName}} · {{row.sku}}</view>
         <view class="muted">本次最多 {{row.maximum}} {{row.unit}}</view>
@@ -91,10 +96,41 @@
             <text>{{sn.number}}</text><button size="mini" disabled="{{busy}}" data-id="{{row.id}}" data-serial="{{sn.id}}" bindtap="removeScanned">移除此件</button>
           </view>
         </block>
+        <button wx:if="{{operationKind === 'replace'}}" size="mini" disabled="{{busy}}" data-id="{{row.id}}" bindtap="addRemoved">登记对应的拆回件</button>
         <button size="mini" disabled="{{busy}}" data-id="{{row.id}}" bindtap="removeMaterial">移除该物料</button>
       </view>
+      <block wx:if="{{operationKind === 'replace'}}">
+        <view class="order-no">本次拆回件</view>
+        <view class="muted">每条投入都须登记拆回件。数量件填写实际数量；有 SN 的拆回件逐件登记，选择对应的投入 SN。</view>
+        <view wx:for="{{removedRows}}" wx:for-item="removed" wx:key="id" class="draft-row removed-row">
+          <view>对应投入第 {{removed.basisLineNo}} 行：{{removed.basisName}} · {{removed.basisSku}}</view>
+          <view class="scan-buttons">
+            <button size="mini" disabled="{{busy}}" type="{{removed.condition === 'used' ? 'primary' : 'default'}}" data-id="{{removed.id}}" data-field="condition" data-value="used" bindtap="editRemoved">旧件</button>
+            <button size="mini" disabled="{{busy}}" type="{{removed.condition === 'damaged' ? 'primary' : 'default'}}" data-id="{{removed.id}}" data-field="condition" data-value="damaged" bindtap="editRemoved">坏件</button>
+          </view>
+          <view class="scan-buttons">
+            <button size="mini" disabled="{{busy}}" data-id="{{removed.id}}" data-code="sku_code" bindtap="scanRemoved">{{removed.skuCaptured ? '重扫拆回 SKU' : '扫描拆回 SKU'}}</button>
+            <button size="mini" disabled="{{busy}}" data-id="{{removed.id}}" data-code="serial_no" bindtap="scanRemoved">{{removed.snCaptured ? '重扫拆回 SN' : '有 SN：扫描 SN'}}</button>
+            <button size="mini" disabled="{{busy}}" data-id="{{removed.id}}" data-code="qr_code" bindtap="scanRemoved">{{removed.qrCaptured ? '重扫拆回二维码' : '有 SN：扫描二维码'}}</button>
+          </view>
+          <input class="quantity-input" disabled="{{busy}}" value="{{removed.lot}}" maxlength="160" placeholder="批次物料填写批次号；已登记 SN 可识别批次" data-id="{{removed.id}}" data-field="lot_no" bindinput="editRemoved" />
+          <button size="mini" disabled="{{busy || !removed.condition || !removed.skuCaptured}}" data-id="{{removed.id}}" bindtap="inspectRemoved">识别并核验拆回件</button>
+          <block wx:if="{{removed.identified}}">
+            <view>{{removed.materialName}} · {{removed.sku}}</view>
+            <view wx:if="{{removed.identifiedLot}}">批次：{{removed.identifiedLot}}</view>
+            <block wx:if="{{removed.tracked}}">
+              <view class="serial">拆回 SN：{{removed.serialNo}} · 1 {{removed.unit}}</view>
+              <picker disabled="{{busy}}" range="{{removed.pairChoices}}" value="{{removed.pairIndex}}" data-id="{{removed.id}}" bindchange="chooseInstalled">
+                <view class="pair-picker">{{removed.pairChoices[removed.pairIndex]}} ▾</view>
+              </picker>
+            </block>
+            <input wx:else class="quantity-input" disabled="{{busy}}" type="digit" value="{{removed.quantity}}" maxlength="19" placeholder="填写实际拆回数量" data-id="{{removed.id}}" data-field="quantity" bindinput="editRemoved" />
+          </block>
+          <button size="mini" disabled="{{busy}}" data-id="{{removed.id}}" bindtap="removeRemoved">移除这条拆回件</button>
+        </view>
+      </block>
       <button disabled="{{busy}}" loading="{{busy}}" bindtap="previewMaterials">核验整批物料</button>
-      <button type="primary" disabled="{{busy}}" loading="{{busy}}" bindtap="submitMaterials">{{operationKind === 'occupy' ? '投入占用' : operationKind === 'consume' ? '实际消耗' : '释放未用物料'}}：核验并确认</button>
+      <button type="primary" disabled="{{busy}}" loading="{{busy}}" bindtap="submitMaterials">{{operationKind === 'replace' ? '成对消耗与回收' : operationKind === 'occupy' ? '投入占用' : operationKind === 'consume' ? '实际消耗' : '释放未用物料'}}：核验并确认</button>
     </view>
     <view wx:if="{{previewMessage}}" class="card">{{previewMessage}}</view>
   </block>

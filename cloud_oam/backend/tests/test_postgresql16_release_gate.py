@@ -21213,6 +21213,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_replacement_history_gate(api_engine)
             from pg16_work_order_replacement_preview_gate import assert_replacement_preview_gate
             assert_replacement_preview_gate(api_engine, replacement_fixture_engine)
+            from pg16_work_order_replacement_submit_gate import assert_replacement_submit_gate
+            assert_replacement_submit_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_replacement_seals_gate import assert_replacement_seal_atomic_gate
             assert_replacement_seal_atomic_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_query_gate import assert_work_order_query_gate
