@@ -1175,10 +1175,13 @@ def test_forward_readiness_manifests_match_head_hashes():
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0069[ready_signature][6]
         == migration_0069["RUNTIME_READY_BODY_SHA256_0069"]
     )
-    assert (
-        scope_security.OAM_SYNC_FUNCTION_MANIFEST
-        is scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0097
-    )
+    # Compare the active readiness pin with the actual migration head. A
+    # hard-coded historical manifest identity survives unnoticed when each
+    # individual migration's hash remains correct but the head advances.
+    from alembic.script import ScriptDirectory
+    scripts = ScriptDirectory(str(migration_root.parent))
+    head = scripts.get_revision(scripts.get_current_head())
+    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6] == head.module.NEW_HASH
     migration_0070 = runpy.run_path(str(migration_root / "20260910_0070_stock_reservation_releases.py"))
     assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0070[ready_signature][6] == migration_0070["RUNTIME_READY_BODY_SHA256_0070"]
     migration_0071 = runpy.run_path(str(migration_root / "20260911_0071_reservation_picking.py"))
