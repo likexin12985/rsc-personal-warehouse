@@ -18,7 +18,7 @@ from ..work_order_material_schemas import (WorkOrderRemovedScanIn, WorkOrderRemo
     WorkOrderRemovedRegistrationPreviewOut, WorkOrderRemovedRegistrationOut, WorkOrderRemovedRegistrationSealedOut)
 from ..formal_services.inventory_query import InventoryReadError
 from ..work_order_reversal_schemas import (WorkOrderReversalPreviewIn, WorkOrderReversalPreviewOut,
-    WorkOrderReversalIn, WorkOrderReversalOut, WorkOrderReversalSealedOut)
+    WorkOrderReversalIn, WorkOrderReversalOut, WorkOrderReversalSealedOut, WorkOrderReversalOriginalsOut)
 from ..formal_services.work_order_reversal_write import execute_reversal
 from ..formal_services.work_order_reversal_seal import lookup_reversal, seal_reversal
 from ..formal_services.work_order_replacement_read import replacement_result
@@ -48,6 +48,21 @@ from ..work_order_material_schemas import (
 )
 
 router = APIRouter(prefix="/v1/work-orders", tags=["formal-work-order-material"])
+
+
+@router.get("/{work_order_id}/material-reversals/originals", response_model=WorkOrderReversalOriginalsOut)
+def read_reversal_originals(work_order_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "read")), db: Session = Depends(get_db)):
+    from ..formal_services.work_order_reversal_originals import list_originals
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        return list_originals(db, actor=principal, work_order_id=work_order_id)
+    except service.InventoryPostingError as exc: _raise(exc)
+    except InventoryReadError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.message}) from None
+    except SQLAlchemyError:
+        raise HTTPException(status_code=503, detail={"code": "work_order_reversal_history_unavailable",
+            "message": "原工单记录暂时无法核验，请重新读取"}) from None
 
 
 @router.post("/{work_order_id}/material-reversals", response_model=WorkOrderReversalOut)
@@ -87,7 +102,7 @@ def read_material_reversal(
     try:
         result = lookup_reversal(db, actor=principal, work_order_id=work_order_id, request_id=request_id)
         if result is None:
-            raise HTTPException(status_code=404, detail={"code": "work_order_reversal_not_observed",
+            raise HTTPException(status_code=404, headers={"Cache-Control": "private, no-store"}, detail={"code": "work_order_reversal_not_observed",
                 "message": "暂未查到原冲销结果，不代表未执行；请保留原请求查询或封存"})
         return result
     except service.InventoryPostingError as exc:

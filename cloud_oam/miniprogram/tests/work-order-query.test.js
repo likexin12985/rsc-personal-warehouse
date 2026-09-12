@@ -44,6 +44,7 @@ function harness(settings = {}) {
       if (endpoint.endsWith('/removed-part')) return settings.removed(request.data, state)
       if (endpoint.endsWith('/preview')) return settings.preview(endpoint, request.data, state)
       if (endpoint.endsWith('/material-options')) return settings.options ? settings.options(state) : options()
+      if (endpoint.endsWith('/material-reversals/originals')) return settings.originals(state)
       if (endpoint.endsWith('/material-completion-check')) return settings.completion(state)
       return settings.list ? settings.list(endpoint, state) : list()
     } }
@@ -1175,4 +1176,86 @@ test('a new material submission retires an earlier completion observation', asyn
   const work = page.submitMaterials(); await tick()
   assert.equal(page.data.completion, null); assert.equal(page.data.completionMessage, '')
   page.cancelSubmission(); await work
+})
+
+const reversalFixture = require('./fixtures/work-order-reversal-data.cjs')
+async function reversalPage(settings = {}) {
+  const local = await pendingStore(false)
+  const value = { ...reversalFixture.input(true), workOrderId: ORDER, personId: PERSON }
+  const plan = reversalFixture.preview(value, 'replace', true)
+  const context = harness({ store: local.store,
+    access: () => ({ ...access(), permissions: access().permissions.concat({ resource: 'work_order_material', action: 'operate', field_code: '' }) }),
+    options: () => ({ ...options(), ledger_cursor: 8 }), originals: () => reversalFixture.originals(value),
+    preview: () => clone(plan), post: () => ({}),
+    recovery: () => reversalFixture.result(value, plan, local.store.read({ work_order_id: ORDER }).value), ...settings })
+  const { page } = context
+  await page.onShow(); await page.openOrder(event(ORDER)); await page.loadReversalOriginals()
+  const selectionId = page.data.reversalOriginals[0] && page.data.reversalOriginals[0].id
+  page.chooseReversalOriginal(event(selectionId)); page.editReversalReason({ detail: { value: value.reason } })
+  return { ...context, ...local, value, plan, selectionId }
+}
+const reversalWrites = state => state.calls.filter(row => row.endpoint.endsWith('/material-reversals') && row.method === 'POST')
+test('reversal page selects one verified pair and shows inverse effects and both SNs before one confirmed write', async () => {
+  const { page, state, store, records } = await reversalPage()
+  assert.equal(page.data.operationKind, 'reverse'); assert.equal(page.data.draftRows.length, 0)
+  await page.previewReversal(); assert.match(page.data.previewMessage, /2 笔原操作/)
+  assert.equal(reversalWrites(state).length, 0)
+  const work = page.submitMaterials(); await tick()
+  assert.equal(page.data.confirming, true); assert.equal(page.data.reviewTitle, '确认整笔冲销')
+  assert.equal(page.data.reviewRows.length, 2); assert.equal(page.data.reviewPairs.length, 1)
+  assert.match(page.data.reviewRows[0].effect, /回收责任/); assert.match(page.data.reviewRows[1].effect, /恢复/)
+  assert.equal(records.size, 0)
+  await page.submitMaterials(); page.confirmSubmission(); page.confirmSubmission(); await work
+  assert.equal(reversalWrites(state).length, 1); assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+  assert.match(page.data.recoveryMessage, /工单冲销已确认：WOR-TEST/)
+  assert.equal(page.data.reversalReason, ''); assert.equal(page._reversalSelection, null); assert.equal(page.data.reversalOriginals.length, 0)
+})
+test('reversal review cancels on hide, refresh or account change before any submission', async () => {
+  for (const phase of ['cancel', 'hide', 'refresh', 'account']) {
+    const { page, state, records } = await reversalPage(), work = page.submitMaterials(); await tick()
+    assert.equal(page.data.confirming, true)
+    if (phase === 'cancel') page.cancelSubmission()
+    else if (phase === 'hide') page.onHide()
+    else if (phase === 'refresh') await page.refresh()
+    else { state.token = 'other'; page.confirmSubmission() }
+    await work
+    assert.equal(reversalWrites(state).length, 0); assert.equal(records.size, 0); assert.equal(page.data.confirming, false)
+    if (phase !== 'cancel') assert.equal(page.data.reversalReason, '')
+  }
+})
+test('reversal timeout erases physical draft, exposes recoverable inbox and forbids another POST', async () => {
+  const { page, state, store, records } = await reversalPage({ post: () => { throw new Error('timeout') } })
+  const work = page.submitMaterials(); await tick(); page.confirmSubmission(); await work
+  assert.equal(reversalWrites(state).length, 1); assert.equal(page.data.canDraft, false)
+  assert.equal(page.data.reversalReason, ''); assert.equal(page._reversalSelection, null)
+  assert.equal(store.read({ work_order_id: ORDER }).kind, 'valid'); assert.equal(records.size, 1)
+  assert.match(page.data.pendingRequests[0].label, /工单冲销/); assert.equal(page.data.pendingRequests[0].sealable, true)
+  await page.submitMaterials(); assert.equal(reversalWrites(state).length, 1)
+})
+test('read-only history cannot select a write, and stale or forged original selection never reaches preview', async () => {
+  const readonly = await reversalPage({ access: () => access() })
+  assert.equal(readonly.page.data.reversalLoaded, true); assert.equal(readonly.page._reversalSelection, null)
+  await readonly.page.previewReversal(); await readonly.page.submitMaterials(); assert.equal(reversalWrites(readonly.state).length, 0)
+  const context = await reversalPage(); context.page.cancelReversal()
+  context.page.chooseReversalOriginal(event('operation:' + NEXT))
+  assert.equal(context.page._reversalSelection, null)
+  await context.page.loadReversalOriginals()
+  assert.equal(context.page._reversalSelection, null); assert.equal(context.page.data.reversalReason, '')
+})
+test('late original history and preview responses after leaving the page cannot recreate the draft', async () => {
+  for (const phase of ['history', 'preview']) {
+    const pending = deferred(), context = await reversalPage()
+    if (phase === 'history') {
+      // Delay transport without replacing the module or its identity boundary.
+      const next = harness({ store: context.store, options: () => ({ ...options(), ledger_cursor: 8 }), originals: () => pending.promise })
+      await next.page.onShow(); await next.page.openOrder(event(ORDER))
+      const work = next.page.loadReversalOriginals(); await tick(); next.page.onHide()
+      pending.resolve(reversalFixture.originals(context.value)); await work
+      assert.equal(next.page.data.reversalOriginals.length, 0); assert.equal(next.page._reversalSelection, null)
+    } else {
+      const next = await reversalPage({ preview: () => pending.promise }), work = next.page.previewReversal(); await tick(); next.page.onHide()
+      pending.resolve(clone(next.plan)); await work
+      assert.equal(next.page.data.confirming, false); assert.equal(next.page.data.reversalReason, ''); assert.equal(reversalWrites(next.state).length, 0)
+    }
+  }
 })

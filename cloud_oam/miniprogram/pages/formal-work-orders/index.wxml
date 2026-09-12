@@ -60,6 +60,25 @@
         </view>
       </block>
     </view>
+    <view wx:if="{{!confirming}}" class="card">
+      <view class="order-no">原操作与冲销</view>
+      <view class="muted">核对已入账原记录，按整笔冲销。成对更换须整组处理，实物退回仍需单独交接。</view>
+      <button size="mini" disabled="{{busy || loading}}" bindtap="loadReversalOriginals">读取原操作</button>
+      <view wx:if="{{reversalLoaded && !reversalOriginals.length}}">暂无原操作记录。</view>
+      <view wx:for="{{reversalOriginals}}" wx:for-item="original" wx:key="id" class="draft-row">
+        <view class="order-no">{{original.label}} · {{original.original_no}}</view>
+        <view>{{original.materialSummary}} · {{original.line_count}} 行</view>
+        <view class="muted">{{original.posted_at}}</view>
+        <view wx:if="{{!original.selectable}}">已整笔冲销</view>
+        <button wx:elif="{{canDraft}}" size="mini" type="{{reversalSelectedId === original.id ? 'primary' : 'default'}}" disabled="{{busy || loading}}" data-id="{{original.id}}" bindtap="chooseReversalOriginal">{{reversalSelectedId === original.id ? '已选择' : '选择整笔冲销'}}</button>
+      </view>
+      <block wx:if="{{operationKind === 'reverse' && canDraft}}">
+        <textarea wx:if="{{reversalSelectedId}}" value="{{reversalReason}}" maxlength="1000" disabled="{{busy}}" placeholder="请填写冲销原因（最多 500 字）" bindinput="editReversalReason" />
+        <button wx:if="{{reversalSelectedId}}" size="mini" disabled="{{busy}}" bindtap="previewReversal">核验整笔冲销</button>
+        <button wx:if="{{reversalSelectedId}}" type="primary" disabled="{{busy || !reversalReason}}" loading="{{busy}}" bindtap="submitMaterials">核验并确认冲销</button>
+        <button size="mini" disabled="{{busy}}" bindtap="cancelReversal">返回准备物料</button>
+      </block>
+    </view>
     <view wx:if="{{confirming}}" class="card confirmation-card">
       <view class="order-no">{{reviewTitle}}</view>
       <view>工单：{{reviewWorkOrderNo}}</view>
@@ -71,6 +90,8 @@
         <view>{{row.materialName}} · {{row.sku}}</view>
         <view>{{row.condition}}<text wx:if="{{row.lot}}"> · 批次 {{row.lot}}</text></view>
         <view class="quantity">本次数量：{{row.quantity}} {{row.unit}}</view>
+        <view wx:if="{{row.effect}}">{{row.effect}}</view>
+        <view wx:for="{{row.serialEffects}}" wx:for-item="effect" wx:key="*this">{{effect}}</view>
         <view wx:for="{{row.serialNumbers}}" wx:for-item="sn" wx:key="*this" class="serial">SN：{{sn}}</view>
       </view>
       <view wx:for="{{reviewPairs}}" wx:for-item="pair" wx:key="pairNo" class="draft-row">
@@ -79,7 +100,7 @@
       <button type="primary" bindtap="confirmSubmission">{{reviewTitle}}</button>
       <button bindtap="cancelSubmission">返回修改</button>
     </view>
-    <view wx:if="{{canDraft && !confirming}}" class="card">
+    <view wx:if="{{canDraft && !confirming && operationKind !== 'reverse'}}" class="card">
       <view class="order-no">准备本次工单物料</view>
       <view class="muted">选择操作和物料后核验整批。预检通过时库存尚未变动。</view>
       <view class="operation-choices">
@@ -96,7 +117,7 @@
       <view wx:if="{{item.lot_no}}" class="muted">批次：{{item.lot_no}}</view>
       <view class="quantity">{{item.quantityLabel}}：{{item.selectable_quantity}} {{item.base_unit}}</view>
       <view wx:for="{{item.serials}}" wx:for-item="serial" wx:key="serial_id" class="serial">SN：{{serial.serial_no}}</view>
-      <button wx:if="{{canDraft && ((operationKind === 'occupy' && item.availability_bucket === 'available') || (operationKind !== 'occupy' && item.availability_bucket === 'reserved'))}}" size="mini" disabled="{{busy}}" data-id="{{item.stock_account_id}}" bindtap="addMaterial">加入本次物料</button>
+      <button wx:if="{{canDraft && operationKind !== 'reverse' && ((operationKind === 'occupy' && item.availability_bucket === 'available') || (operationKind !== 'occupy' && item.availability_bucket === 'reserved'))}}" size="mini" disabled="{{busy}}" data-id="{{item.stock_account_id}}" bindtap="addMaterial">加入本次物料</button>
     </view>
     <view wx:if="{{canDraft && draftRows.length && !confirming}}" class="card">
       <view class="order-no">本次物料草稿</view>

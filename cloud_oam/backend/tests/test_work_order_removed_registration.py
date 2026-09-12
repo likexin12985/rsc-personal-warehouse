@@ -276,3 +276,14 @@ def test_projection_failure_returns_stable_http_error_without_identity_write(db,
             response=client.post(path+suffix,json=body)
             assert response.status_code==503 and response.json()['detail']['code']=='inventory_projection_integrity_invalid'
     assert counts(db)==before
+
+
+def test_original_registration_serializes_identically_in_an_offset_database_session(db, stock):
+    from datetime import timedelta, timezone
+    from sqlalchemy.orm.attributes import set_committed_value
+    result = create(db, stock); db.commit()
+    row = db.get(WorkOrderRemovedSerialRegistration, result.registration_id)
+    set_committed_value(row, 'registered_at', result.registered_at.astimezone(timezone(timedelta(hours=8))))
+    read = registration.verified_registration(db, actor=stock.actor, row=row)
+    assert read.model_dump(mode='json') == result.model_dump(mode='json')
+    assert not db.dirty

@@ -110,7 +110,8 @@ def assert_removed_registration_atomic_gate(api_engine,fixture_engine):
             assert response.status_code==200,response.text
             assert response.json()['request_hash']==prepared.json()['request_hash'] and 'qr_code' not in response.text
             read=client.get(path+'/by-request/'+args['request_id'])
-            assert read.status_code==200 and read.json()==response.json()
+            assert read.status_code==200, read.text
+            assert read.json()==response.json(), (read.json(), response.json())
             assert read.headers['cache-control']=='private, no-store'
         result=registration.register_removed_serial(db,**args);_checkpoint(db)
         assert _counts(db)==tuple(value+1 for value in counts)

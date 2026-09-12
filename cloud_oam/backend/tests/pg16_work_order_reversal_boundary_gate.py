@@ -141,6 +141,8 @@ def assert_reversal_migration_rejects_detached_history(api_engine, fixture_engin
 
     migration = runpy.run_path(str(Path(__file__).parents[1] /
         "alembic/versions/20261007_0097_work_order_reversal_boundary.py"))
+    successors = [runpy.run_path(str(Path(__file__).parents[1] / "alembic/versions" / filename))
+        for filename in ("20261009_0099_work_order_reversal_seals.py", "20261008_0098_work_order_reversals.py")]
     def catalog():
         with fixture_engine.connect() as connection:
             return connection.execute(text("""SELECT oid,prosrc,proowner,proacl,prosecdef,proconfig FROM pg_proc
@@ -151,6 +153,11 @@ def assert_reversal_migration_rejects_detached_history(api_engine, fixture_engin
         transaction = connection.begin()
         try:
             with Operations.context(MigrationContext.configure(connection)):
+                # Recreate the actual 0097 catalog in this rollback-only
+                # transaction before testing its legacy-history rejection.
+                # This stage precedes permanent 0098/0099 fixture facts.
+                for successor in successors:
+                    successor["downgrade"]()
                 migration["downgrade"]()
                 original = connection.execute(text("""SELECT id,actor_user_id FROM inventory_transactions
                     WHERE source_document_type='work_order_material' ORDER BY ledger_cursor LIMIT 1""")).one_or_none()

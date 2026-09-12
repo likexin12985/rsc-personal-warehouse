@@ -168,7 +168,7 @@ def assert_serial_consumption_gate(api_engine, fixture_engine):
             raise AssertionError("consumed another work order's serial")
         with patch.object(service, "require_work_order_reservations", return_value=None):
             _run(db, world, "consume", serials=world.serial_ids[1:2])
-    _db_denies(wrong_serial, api_engine, "0090 serial is not reserved by this work order")
+    _db_denies(wrong_serial, api_engine, "0098 serial reservation does not belong to this work order")
 
     # Real commits only after every rollback proof; retain the second SN.
     with Session(api_engine) as db:

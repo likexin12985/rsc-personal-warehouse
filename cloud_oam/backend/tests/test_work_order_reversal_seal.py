@@ -134,3 +134,24 @@ def test_paired_reversal_recovery_requires_both_inverse_transactions(db, stock):
     assert len({item.inverse_transaction_id for item in result.items}) == 2
     db.rollback(); db.execute(text("PRAGMA query_only=ON"))
     assert lookup(db, args) == result
+
+
+@pytest.mark.parametrize('kind', ['post', 'seal'])
+def test_original_result_time_is_stable_across_database_session_offsets(db, stock, kind):
+    from datetime import timedelta, timezone
+    from sqlalchemy.orm.attributes import set_committed_value
+    from app.formal_services.work_order_reversal_read import reversal_result
+    from app.formal_services.work_order_command_seal import _verified_seal
+    value, args = prepare(db, stock)
+    if kind == 'post':
+        result = execute_reversal(db, actor=stock.actor, work_order_id=args['work_order_id'], request=value); db.commit()
+        row = db.get(WorkOrderReversal, result.reversal_id)
+        set_committed_value(row, 'created_at', result.posted_at.astimezone(timezone(timedelta(hours=8))))
+        read = reversal_result(db, actor=stock.actor, parent=row)
+    else:
+        result = recovery.seal_reversal(db, **args); db.commit()
+        row = db.get(WorkOrderCommandSeal, result.seal.seal_id)
+        set_committed_value(row, 'sealed_at', result.seal.sealed_at.astimezone(timezone(timedelta(hours=8))))
+        read = _verified_seal(db, actor=stock.actor, row=row)
+    assert read.model_dump(mode='json') == result.model_dump(mode='json')
+    assert not db.dirty

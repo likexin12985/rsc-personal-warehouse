@@ -93,6 +93,7 @@ def test_missing_lookup_is_provisional_without_replaying_or_committing(http,monk
     command=Mock();monkeypatch.setattr(api,"execute_reversal",command)
     response=http.client.get(path(http)+"/by-request/original-reversal")
     assert response.status_code==404 and response.json()["detail"]["code"]=="work_order_reversal_not_observed"
+    assert response.headers["cache-control"] == "private, no-store"
     command.assert_not_called();http.db.commit.assert_not_called()
 
 

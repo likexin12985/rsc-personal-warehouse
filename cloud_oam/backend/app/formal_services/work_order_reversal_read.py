@@ -169,7 +169,7 @@ def _result(db, *, actor, parent):
     return WorkOrderReversalOut(reversal_id=parent.id, reversal_no=parent.reversal_no, work_order_id=parent.oam_work_order_id,
         operator_person_id=parent.operator_person_id, request_id=parent.request_id, request_hash=parent.request_hash,
         original_operation_id=parent.original_operation_id, original_replacement_id=parent.original_replacement_id, reason=parent.reason,
-        plan_hash=parent.plan_hash, posted_at=_utc(parent.created_at), items=tuple(result))
+        plan_hash=parent.plan_hash, posted_at=_utc(parent.created_at).astimezone(timezone.utc), items=tuple(result))
 
 
 def reversal_result(db, *, actor, parent):

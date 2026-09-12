@@ -21237,6 +21237,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             from pg16_work_order_reversal_seals_gate import assert_reversal_seal_atomic_gate, assert_reversal_http_gate, assert_reversal_seal_commit_gate
             assert_reversal_seal_atomic_gate(api_engine, replacement_fixture_engine)
             assert_reversal_http_gate(api_engine, replacement_fixture_engine)
+            from pg16_work_order_reversal_submit_gate import assert_reversal_submit_gate
+            assert_reversal_submit_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_reversal_write_gate import assert_reversal_concurrent_commit_gate
             from pg16_work_order_replacement_seals_gate import assert_replacement_seal_atomic_gate
             assert_replacement_seal_atomic_gate(api_engine, replacement_fixture_engine)

@@ -80,7 +80,7 @@ def _verified_seal(db, *, actor, row):
     return output(seal=seal_type(
         seal_id=row.id, work_order_id=row.oam_work_order_id, operator_person_id=row.operator_person_id,
         operation_type=row.operation_type, request_id=row.request_id, request_hash=row.request_hash,
-        sealed_at=row.sealed_at if row.sealed_at.tzinfo else row.sealed_at.replace(tzinfo=timezone.utc)))
+        sealed_at=_utc(row.sealed_at).astimezone(timezone.utc)))
 
 
 def lookup_command_result(db, *, actor, work_order_id, operation_type, request_id):

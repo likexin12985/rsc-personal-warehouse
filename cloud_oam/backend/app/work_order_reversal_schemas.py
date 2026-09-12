@@ -127,3 +127,25 @@ class WorkOrderReversalSealOut(WorkOrderMaterialSealOut):
 
 class WorkOrderReversalSealedOut(WorkOrderMaterialSealedLookupOut):
     seal: WorkOrderReversalSealOut
+
+
+class WorkOrderReversalOriginalOut(BaseModel):
+    original_operation_id: UUID | None
+    original_replacement_id: UUID | None
+    original_no: str
+    original_type: Literal["occupy", "release", "consume", "recover", "replace"]
+    posted_at: datetime
+    operation_count: int
+    line_count: int
+    material_names: tuple[str, ...]
+    reversal_id: UUID | None
+
+
+class WorkOrderReversalOriginalsOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    person_id: UUID
+    authorization_version: int
+    work_order: MyWorkOrderOut
+    queried_at: datetime
+    ledger_cursor: int
+    items: tuple[WorkOrderReversalOriginalOut, ...]

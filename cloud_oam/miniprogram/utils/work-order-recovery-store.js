@@ -1,4 +1,4 @@
-// Persist only recovery coordinates and a digest, never an auth token,
+// Persist only recovery coordinates and digests, never an auth token,
 // idempotency key, full command, quantity, material details or scanned codes.
 const { uuid } = require('./work-order-query-contract')
 const { canonical, KINDS } = require('./work-order-command')
@@ -8,16 +8,20 @@ const DEFAULT_STATE = { active: new Set(), faults: new Set() }
 function fail(message = '工单恢复存储不可用，请保留原记录，暂勿再次提交。') { throw new Error(message) }
 function keyOf(value) { return uuid(value.work_order_id) }
 function validateMarker(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join('|') !== FIELDS.slice().sort().join('|')
+  const reversing = value && value.kind === 'work_order_reversal'
+  const fields = reversing ? FIELDS.concat('plan_hash') : FIELDS
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join('|') !== fields.slice().sort().join('|')
     || value.v !== 1 || !(value.kind === 'work_order_material' && KINDS.includes(value.operation_type)
       || value.kind === 'work_order_replacement' && value.operation_type === 'replace'
-      || value.kind === 'work_order_removed_registration' && value.operation_type === 'register_removed')
+      || value.kind === 'work_order_removed_registration' && value.operation_type === 'register_removed'
+      || reversing && value.operation_type === 'reverse')
     || !Number.isSafeInteger(value.authorization_version) || value.authorization_version < 1
     || typeof value.trace_request_id !== 'string' || !/^wxreq-[a-f0-9]{36}$/.test(value.trace_request_id)
-    || typeof value.request_hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.request_hash)) fail()
+    || typeof value.request_hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.request_hash)
+    || (reversing && (typeof value.plan_hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.plan_hash)))) fail()
   return Object.freeze({ v: 1, kind: value.kind, work_order_id: uuid(value.work_order_id), person_id: uuid(value.person_id),
     authorization_version: value.authorization_version, operation_type: value.operation_type,
-    trace_request_id: value.trace_request_id, request_hash: value.request_hash })
+    trace_request_id: value.trace_request_id, request_hash: value.request_hash, ...(reversing ? { plan_hash: value.plan_hash } : {}) })
 }
 function createStore(options = {}) {
   const storage = options.storage === undefined ? (typeof wx === 'undefined' ? null : wx) : options.storage

@@ -124,7 +124,7 @@ def verified_registration(db, *, actor, row):
     return WorkOrderRemovedRegistrationOut(registration_id=row.id,registration_no=row.registration_no,
         work_order_id=row.oam_work_order_id,operator_person_id=row.operator_person_id,serial_id=row.serial_id,
         material_id=row.material_id,lot_id=row.lot_id,basis_stock_account_id=row.basis_stock_account_id,
-        request_id=row.request_id,request_hash=row.request_hash,registered_at=seals._utc(row.registered_at))
+        request_id=row.request_id,request_hash=row.request_hash,registered_at=seals._utc(row.registered_at).astimezone(timezone.utc))
 
 
 def lookup_registration(db, *, actor, work_order_id, request_id):
