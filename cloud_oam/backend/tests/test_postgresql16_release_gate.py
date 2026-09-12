@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20260930_0090"
+HEAD_REVISION = "20261001_0091"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7416,13 +7416,13 @@ def _load_stock_reservations_migration_0069():
 
 def _head_account_admission_hash() -> str:
     import runpy
-    return runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20260928_0088_receipt_account_admission.py")))["ACCOUNT_NEW_HASH"]
+    return runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20261001_0091_work_order_account_admission.py")))["ACCOUNT_NEW_HASH"]
 
 
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20260930_0090_work_order_reservation_causality.py"
+        "20261001_0091_work_order_account_admission.py"
     )))
     assert migration["revision"] == HEAD_REVISION
     return migration["NEW_HASH"]
@@ -20745,6 +20745,33 @@ def _assert_0090_work_order_migration_roundtrip():
     assert readiness() == before and _current_revision() == HEAD_REVISION
 
 
+def _assert_0091_work_order_account_migration_roundtrip():
+    signatures = ["public.rsc_require_opening_observation_account_0023()", "public.rsc_oam_runtime_binding_ready_0044()"]
+    parameters = _connection_parameters(role="star_oam_migrator", password=_role_password("star_oam_migrator"))
+    def catalog():
+        with psycopg.connect(**parameters) as connection:
+            return connection.execute("SELECT oid, proowner, proacl, prosecdef, proconfig, prosrc FROM pg_proc "
+                "WHERE oid = ANY(ARRAY[CAST(%s AS regprocedure), CAST(%s AS regprocedure)]) ORDER BY oid", signatures).fetchall()
+    before = catalog()
+    _run_alembic("downgrade", "20260930_0090")
+    previous = catalog()
+    assert previous != before and [row[:5] for row in before] == [row[:5] for row in previous]
+    with psycopg.connect(**parameters) as connection:
+        definition = connection.execute("SELECT pg_get_functiondef(CAST(%s AS regprocedure))", (signatures[1],)).fetchone()[0]
+        connection.execute(definition.replace("AS $function$", "AS $function$\n-- isolated 0091 late CAS regression\n"))
+    try:
+        drifted = catalog()
+        blocked = _run_alembic("upgrade", "head", expect_success=False)
+        assert "work_order_account_readiness_0091" in blocked.stdout + blocked.stderr
+        assert catalog() == drifted and _current_revision() == "20260930_0090"
+    finally:
+        with psycopg.connect(**parameters) as connection:
+            connection.execute(definition)
+    assert catalog() == previous
+    _run_alembic("upgrade", "head")
+    assert catalog() == before and _current_revision() == HEAD_REVISION
+
+
 def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _assert_fresh_disposable_postgresql16()
     _bootstrap_roles()
@@ -20770,6 +20797,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _assert_0088_account_admission_migration_roundtrip()
     _assert_0089_personal_inbound_migration_roundtrip()
     _assert_0090_work_order_migration_roundtrip()
+    _assert_0091_work_order_account_migration_roundtrip()
     _assert_migration_waits_for_version_maintenance_before_writing()
     _assert_0063_empty_review_command_downgrade_and_reupgrade()
     _assert_0064_empty_finalizer_organization_downgrade_and_reupgrade()
@@ -21148,14 +21176,17 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         assert "0089 transition blocked" in blocked_my_receipt.stdout + blocked_my_receipt.stderr
         assert _current_revision() == HEAD_REVISION
         from pg16_work_order_material_gate import assert_work_order_material_gate
+        from pg16_work_order_accounts_gate import assert_work_order_accounts_gate, prepare_work_order_stock
         work_order_fixture_engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
+            prepare_work_order_stock(api_engine, work_order_fixture_engine, admin_user_id=admin_user_id)
+            assert_work_order_accounts_gate(api_engine, work_order_fixture_engine)
             assert_work_order_material_gate(api_engine, work_order_fixture_engine)
         finally:
             work_order_fixture_engine.dispose()
         blocked_work_order = _run_alembic("downgrade", "20260929_0089", expect_success=False)
-        assert "0090 transition blocked" in blocked_work_order.stdout + blocked_work_order.stderr
+        assert "0091 downgrade blocked" in blocked_work_order.stdout + blocked_work_order.stderr
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
     finally:

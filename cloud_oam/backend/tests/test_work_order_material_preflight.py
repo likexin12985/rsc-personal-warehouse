@@ -32,10 +32,10 @@ def test_batch_requires_positive_quantity():
         validate_batch((line(quantity=Decimal("0")),))
 
 
-def test_batch_rejects_duplicate_material_and_serial():
-    material = uuid4()
-    with pytest.raises(WorkOrderMaterialPreflightError, match="重复提交物料"):
-        validate_batch((line(material_id=material), line(material_id=material)))
+def test_batch_rejects_duplicate_account_and_serial():
+    account = uuid4()
+    with pytest.raises(WorkOrderMaterialPreflightError, match="同一来源库存账户"):
+        validate_batch((line(stock_account_id=account), line(stock_account_id=account)))
 
     serial = uuid4()
     with pytest.raises(WorkOrderMaterialPreflightError, match="序列号"):

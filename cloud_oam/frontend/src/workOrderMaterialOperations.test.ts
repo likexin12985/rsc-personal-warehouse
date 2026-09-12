@@ -20,6 +20,30 @@ describe("work order material operations", () => {
     expect(() => validateWorkOrderMaterialOperationInput({ ...base, lines: [{ ...line, extra: true }] }, "consume")).toThrow(ApiError);
   });
 
+  it("lets the server resolve an occupy target while keeping release and recovery explicit", () => {
+    expect(validateWorkOrderMaterialOperationInput({ ...base, lines: [line] }, "occupy").lines[0]).not.toHaveProperty("target_stock_account_id");
+    expect(validateWorkOrderMaterialOperationInput({ ...base, lines: [{ ...line, target_stock_account_id: workOrder }] }, "occupy").lines[0].target_stock_account_id).toBe(workOrder);
+    for (const operation of ["release", "recover"] as const) {
+      expect(() => validateWorkOrderMaterialOperationInput({ ...base, lines: [line] }, operation)).toThrow(ApiError);
+    }
+    for (const value of [null, "", "not-an-id"]) {
+      expect(() => validateWorkOrderMaterialOperationInput({ ...base, lines: [{ ...line, target_stock_account_id: value }] }, "occupy")).toThrow(ApiError);
+    }
+    expect(() => validateWorkOrderMaterialOperationInput({ ...base, lines: [{ ...line, extra: true }] }, "occupy")).toThrow(ApiError);
+  });
+
+  it("sends occupy without inventing a target account", async () => {
+    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "occupy", status: "posted" }), { status: 200, headers: { "content-type": "application/json" } }));
+    try {
+      await executeWorkOrderMaterialOperation(workOrder, "occupy", { ...base, lines: [line] }, { "X-Request-ID": base.request_id, "Idempotency-Key": base.idempotency_key });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(fetcher.mock.calls[0][0]).toContain(`/api/v1/work-orders/${workOrder}/material-operations/occupy`);
+      expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string).lines).toEqual([line]);
+    } finally {
+      fetcher.mockRestore();
+    }
+  });
+
   it("posts to the operation endpoint with both replay coordinates", async () => {
     const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ schema_version: "1.0", operation_id: id, operation_no: "OP-1", work_order_id: workOrder, posting_transaction_id: target, operation_type: "consume", status: "posted" }), { status: 200, headers: { "content-type": "application/json" } }));
     const result = await executeWorkOrderMaterialOperation(workOrder, "consume", { ...base, lines: [line] }, { "X-Request-ID": "web-work-order-123456", "Idempotency-Key": "work-order-material-123456" });

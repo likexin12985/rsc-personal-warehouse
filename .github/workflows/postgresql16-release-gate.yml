@@ -173,6 +173,8 @@ jobs:
             backend/tests/test_formal_work_order_material_routes.py \
             backend/tests/test_work_order_reservations.py \
             backend/tests/test_work_order_material_migration.py \
+            backend/tests/test_work_order_accounts.py \
+            backend/tests/test_work_order_account_admission_migration.py \
             backend/tests/test_opening_stocktake_service.py \
             backend/tests/test_opening_scope_qualification.py \
             backend/tests/test_opening_start_options.py \

@@ -81,8 +81,12 @@ class WorkOrderMaterialReleaseIn(StrictInput):
     request_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class WorkOrderMaterialOccupyLineIn(WorkOrderMaterialLineIn):
+    target_stock_account_id: UUID | None = None
+
+
 class WorkOrderMaterialOccupyIn(WorkOrderMaterialReleaseIn):
-    pass
+    lines: tuple[WorkOrderMaterialOccupyLineIn, ...] = Field(min_length=1, max_length=100)
 
 
 class WorkOrderMaterialRecoverLineIn(StrictInput):

@@ -33,6 +33,7 @@ from .inventory_posting import (
 from .postgresql_lock_graph import lock_material_request_work_order
 from .audit_chain import append_audit_event
 from .work_order_reservations import require_work_order_reservations
+from .work_order_accounts import resolve_work_order_reserved_lines
 
 
 class WorkOrderMaterialPreflightError(InventoryPostingError):
@@ -140,7 +141,7 @@ def operation_request_hash(**kwargs) -> str:
 def validate_batch(lines: tuple[WorkOrderMaterialLineInput, ...]) -> None:
     if not lines:
         raise WorkOrderMaterialPreflightError("empty_batch", "物料操作至少需要一条明细")
-    seen_materials: set[UUID] = set()
+    seen_accounts: set[UUID] = set()
     seen_serials: set[UUID] = set()
     for line in lines:
         if (not isinstance(line.quantity, Decimal) or not line.quantity.is_finite()
@@ -150,9 +151,9 @@ def validate_batch(lines: tuple[WorkOrderMaterialLineInput, ...]) -> None:
         if line.condition_before not in {"new", "used", "damaged", "scrapped"}:
             raise WorkOrderMaterialPreflightError("condition_invalid", "物料状态不合法")
         validate_serial_quantity(line.quantity, line.serial_ids)
-        if line.material_id in seen_materials:
-            raise WorkOrderMaterialPreflightError("duplicate_material", "同一批次不得重复提交物料")
-        seen_materials.add(line.material_id)
+        if line.stock_account_id in seen_accounts:
+            raise WorkOrderMaterialPreflightError("duplicate_stock_account", "同一来源库存账户请合并数量后提交")
+        seen_accounts.add(line.stock_account_id)
         for serial_id in line.serial_ids:
             if serial_id in seen_serials:
                 raise WorkOrderMaterialPreflightError("duplicate_serial", "同一序列号不得重复提交")
@@ -454,21 +455,16 @@ def execute_occupy_operation(
     validate_batch(lines)
     if not idempotency_key.strip():
         raise WorkOrderMaterialPreflightError("idempotency_key_missing", "缺少幂等键", "precondition_failed")
-    for line in lines:
-        if line.target_stock_account_id is None:
-            raise WorkOrderMaterialPreflightError("occupy_target_missing", "占用必须指定 reserved 目标账户", "invalid_request")
-        target = db.get(StockAccount, line.target_stock_account_id, populate_existing=True)
-        if (target is None or target.material_id != line.material_id
-                or target.custodian_person_id != current.person_id
-                or target.availability_bucket != "reserved"):
-            raise WorkOrderMaterialPreflightError("occupy_target_invalid", "占用目标不是当前人员的 reserved 账户", "conflict")
     key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
     posting_key = f"work-order-material:occupy:{work_order_id}:{key_hash}"
+    effective_at = _command_effective_at(db, order=order, posting_key=posting_key)
+    replay = db.scalar(select(InventoryTransaction.id).where(InventoryTransaction.posting_key == posting_key)) is not None
+    lines = resolve_work_order_reserved_lines(db, operator_person_id=current.person_id, lines=lines, create=not replay)
     command = InventoryPostingCommand(
         transaction_no=f"INV-WO-OCCUPY-{key_hash[:20].upper()}", movement_type="reserve",
         source_document_type="work_order_material", source_document_id=str(work_order_id),
         posting_key=posting_key,
-        effective_at=_command_effective_at(db, order=order, posting_key=posting_key),
+        effective_at=effective_at,
         movements=tuple(InventoryMovementCommand(
             from_account_id=line.stock_account_id, to_account_id=line.target_stock_account_id,
             quantity=line.quantity, serial_ids=line.serial_ids,

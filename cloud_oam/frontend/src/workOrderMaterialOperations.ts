@@ -55,7 +55,13 @@ export type WorkOrderMaterialOperationHistory = Readonly<{ items: readonly WorkO
 function fail(message: string): never { throw new ApiError(409, message); }
 function id(value: unknown, field: string): string { if (typeof value !== "string" || !UUID.test(value)) return fail(`${field}无效`); return value; }
 function text(value: unknown, field: string, max: number): string { if (typeof value !== "string" || !value || value.trim() !== value || value.length > max || /[\x00-\x1f\x7f]/.test(value)) return fail(`${field}无效`); return value; }
-function exact(value: unknown, keys: readonly string[]): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value)) return fail("工单物料输入不是对象"); const object = value as Record<string, unknown>; if (Object.keys(object).sort().join("\0") !== [...keys].sort().join("\0")) return fail("工单物料输入字段不完整"); return object; }
+function exact(value: unknown, keys: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fail("工单物料输入不是对象");
+  const object = value as Record<string, unknown>;
+  const actual = Object.keys(object);
+  if (keys.some((key) => !actual.includes(key)) || actual.some((key) => !keys.includes(key) && !optional.includes(key))) return fail("工单物料输入字段不完整");
+  return object;
+}
 
 export function validateWorkOrderMaterialOperationInput(value: unknown, operation: WorkOrderMaterialOperation): WorkOrderMaterialOperationInput {
   const keys = ["operator_person_id", "lines", "idempotency_key", "request_id"] as const;
@@ -63,8 +69,8 @@ export function validateWorkOrderMaterialOperationInput(value: unknown, operatio
   if (!Array.isArray(object.lines) || object.lines.length < 1 || object.lines.length > 100) return fail("工单物料明细无效");
   const lines = object.lines.map((raw) => {
     const line = raw as Record<string, unknown>;
-    const expected = operation === "consume" ? ["condition_before", "material_id", "quantity", "serial_ids", "serial_verifications", "stock_account_id"] : operation === "recover" ? ["condition_before", "material_id", "quantity", "serial_ids", "serial_verifications", "target_stock_account_id"] : ["condition_before", "material_id", "quantity", "serial_ids", "serial_verifications", "stock_account_id", "target_stock_account_id"];
-    const checked = exact(line, expected);
+    const expected = operation === "consume" || operation === "occupy" ? ["condition_before", "material_id", "quantity", "serial_ids", "serial_verifications", "stock_account_id"] : operation === "recover" ? ["condition_before", "material_id", "quantity", "serial_ids", "serial_verifications", "target_stock_account_id"] : ["condition_before", "material_id", "quantity", "serial_ids", "serial_verifications", "stock_account_id", "target_stock_account_id"];
+    const checked = exact(line, expected, operation === "occupy" ? ["target_stock_account_id"] : []);
     const condition = checked.condition_before;
     const allowed = operation === "recover" ? ["used", "damaged"] : ["new", "used", "damaged", "scrapped"];
     if (typeof condition !== "string" || !allowed.includes(condition)) return fail("物料状态不适用于当前操作");

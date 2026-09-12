@@ -104,6 +104,19 @@ def test_openapi_binds_release_and_recover_to_their_own_models(http):
         assert schema["$ref"] == f"#/components/schemas/{model}"
 
 
+def test_occupy_accepts_server_resolved_target_but_release_still_requires_it(http, monkeypatch):
+    fact = SimpleNamespace(id=uuid4(), operation_no="WO-FIRST", oam_work_order_id=http.order_id,
+        posting_transaction_id=uuid4(), operation_type="occupy", status="posted")
+    command = Mock(return_value=(fact, None))
+    monkeypatch.setattr(api.service, "execute_occupy_operation", command)
+    payload = payload_for(http, "occupy")
+    payload["lines"][0].pop("target_stock_account_id")
+    response = http.client.post(path_for(http, "occupy"), json=payload)
+    assert response.status_code == 200
+    assert command.call_args.kwargs["lines"][0].target_stock_account_id is None
+    assert http.client.post(path_for(http, "release"), json=payload).status_code == 422
+
+
 def test_openapi_constrains_operation_response_enums(http):
     output = http.app.openapi()["components"]["schemas"]["WorkOrderMaterialOperationOut"]
     assert output["properties"]["operation_type"]["enum"] == ["occupy", "release", "consume", "recover", "reverse"]

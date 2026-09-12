@@ -3748,7 +3748,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_require_opening_terminal_graph_0022", ""):
         "4678c65493a2ca0c8d596343053977db4d93d7758e00f1291e30e6be038d36e8",
     ("rsc_require_opening_observation_account_0023", ""):
-        "e3de9261d8947e854622ba2605be5575727d4a9e6c24e784ace79749f078e11c",
+        "d6b09038f5972a45939035bf44434d0a38a5874b1299b9c8f0936a808d028c76",
     ("rsc_opening_start_graph_complete_0052", "uuid, boolean"):
         "6db62f66efe1b87c556211e9392ab701cd2d8c6fa2c86150c1b95ee0d7f15833",
     (

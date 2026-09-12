@@ -104,7 +104,7 @@ def _checkpoint(db):
 def _snapshot(engine):
     with engine.connect() as c:
         counts = tuple(c.execute(text("SELECT count(*) FROM " + table)).scalar_one()
-            for table in ("inventory_transactions", "inventory_movements", "inventory_movement_serials",
+            for table in ("stock_accounts", "stock_balances", "inventory_transactions", "inventory_movements", "inventory_movement_serials",
                           "work_order_material_operations", "work_order_material_lines", "work_order_material_serials",
                           "audit_events", "outbox_events"))
         balances = c.execute(text("SELECT stock_account_id, quantity, ledger_cursor, version FROM stock_balances ORDER BY stock_account_id")).all()
