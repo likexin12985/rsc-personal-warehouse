@@ -11,13 +11,15 @@ const PURPOSES = new Set([
   "request_attachment",
   "external_approval_evidence",
   "stocktake_evidence",
+  "receipt_exception_evidence",
 ]);
 
 
 export type FormalFilePurpose =
   | "request_attachment"
   | "external_approval_evidence"
-  | "stocktake_evidence";
+  | "stocktake_evidence"
+  | "receipt_exception_evidence";
 
 export type FormalUploadFile = Blob & Readonly<{ name: string; type: string }>;
 

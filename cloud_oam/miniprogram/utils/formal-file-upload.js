@@ -10,7 +10,8 @@ const AWARE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]
 const PURPOSES = new Set([
   'request_attachment',
   'external_approval_evidence',
-  'stocktake_evidence'
+  'stocktake_evidence',
+  'receipt_exception_evidence'
 ])
 const MINIPROGRAM_MAXIMUM_FILE_SIZE_BYTES = 10 * 1024 * 1024
 const ALLOWED_MIME_BY_EXTENSION = Object.freeze({

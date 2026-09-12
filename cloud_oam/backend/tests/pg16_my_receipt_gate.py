@@ -15,16 +15,18 @@ from sqlalchemy.orm import Session
 
 def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_id, admin_user_id):
     from app.demand_models import MaterialRequest
-    from app.foundation_models import AuditEvent, Person
+    from app.foundation_models import AuditEvent, FileObject, Person
     from app.formal_access import load_formal_principal
     from app.inventory_models import CustodyAssignment, InventoryTransaction, OutboundPosting, OutboundPostingSerial, Receipt, StockBalance, StockLocation
     from app.models import User
     from app.formal_services import material_request_shipment as shipping
     from app.formal_services import material_request_my_receipt as service
+    from app.formal_services import formal_files
     from app.formal_services.material_request_my_receipt_candidates import my_receipt_candidates
     from app.formal_services.material_request_query import MaterialRequestReadError
     from app.material_request_my_receipt_schemas import MyReceiptIn
     from test_material_request_draft_service import SECRET
+    from test_formal_files_service import FakeStorage
 
     now = datetime.now(timezone.utc)
     with Session(security_engine) as db:
@@ -59,12 +61,30 @@ def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_i
         db.commit()
 
     print("PG16 recipient: API shipment committed", flush=True)
+    evidence_id = None
+    storage = FakeStorage()
+    if serial_ids:
+        with Session(api_engine) as db:
+            actor = load_formal_principal(db, recipient_user_id)
+            uploaded = formal_files.create_file_upload_intent(db, actor=actor,
+                command=formal_files.FileUploadIntentInput(purpose="receipt_exception_evidence", original_filename="exception.png", size_bytes=10, mime_type="image/png", sha256="a"*64),
+                idempotency_key=f"pg16-receipt-proof-{posting_id}", idempotency_hmac_secret=SECRET,
+                trace_request_id=f"trace-proof-{posting_id}", storage=storage, upload_ttl_seconds=600)
+            file = db.get(FileObject, uploaded.file_id)
+            storage.materialize(file)
+            formal_files.complete_file_upload(db, actor=actor, file_id=file.id, trace_request_id=f"complete-proof-{posting_id}", storage=storage)
+            evidence_id = file.id
+            db.commit()
+        original = value.model_dump()
+        original["lines"][0].update(accepted_qty="0.000", rejected_qty=original["lines"][0]["accepted_qty"],
+            condition="rejected", accepted_serial_ids=(), rejected_serial_ids=serial_ids, exception_evidence_file_id=evidence_id)
+        value = MyReceiptIn(**original)
     with Session(api_engine) as db:
         db.execute(text("SET TRANSACTION READ ONLY"))
         candidate = my_receipt_candidates(db, actor=load_formal_principal(db, recipient_user_id), request_id=request_id, shipment_id=value.shipment_id)
         assert candidate.can_receive and candidate.request_version == value.expected_request_version
         assert {s.serial_id for line in candidate.lines for s in line.remaining_serials} == set(serial_ids)
-        assert Decimal(candidate.lines[0].unconfirmed_qty) == value.lines[0].accepted_qty
+        assert Decimal(candidate.lines[0].unconfirmed_qty) == value.lines[0].accepted_qty + value.lines[0].rejected_qty
     with Session(api_engine) as db:
         assert db.scalar(text("SELECT has_column_privilege(current_user, 'public.material_requests', 'personal_inbound_status', 'UPDATE')"))
         assert not db.scalar(text("SELECT has_table_privilege(current_user, 'public.material_requests', 'UPDATE')"))
@@ -126,3 +146,10 @@ def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_i
         assert not candidate.can_receive and candidate.blocked_reason == "complete"
         assert all(line.unconfirmed_qty == "0.000" and not line.remaining_serials for line in candidate.lines)
     print("PG16 recipient: concurrency, replay and recovery verified", flush=True)
+    if evidence_id:
+        with Session(api_engine) as db:
+            download = formal_files.create_file_download_intent(db, actor=load_formal_principal(db, recipient_user_id), file_id=evidence_id,
+                trace_request_id=f"read-proof-{posting_id}", storage=storage, download_ttl_seconds=120)
+            assert download.file_id == evidence_id and download.purpose == "receipt_exception_evidence"
+            db.commit()
+        print("PG16 recipient: formal exception file bound and readable", flush=True)

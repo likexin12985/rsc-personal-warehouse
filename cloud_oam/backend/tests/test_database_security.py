@@ -822,6 +822,11 @@ def test_0036_formal_file_runtime_manifest_and_function_bodies_are_exact() -> No
     ):
         coordinate = (function_name, "")
         body = function_sql.split("AS $$", 1)[1].rsplit("$$", 1)[0]
+        import runpy
+        receipt_files = runpy.run_path(str(FORMAL_FILE_MIGRATION_0036.with_name("20260926_0086_receipt_evidence_files.py")))
+        for before, after in receipt_files["source_changes"]()[coordinate]:
+            assert body == before
+            body = after
         assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (
             FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
         )

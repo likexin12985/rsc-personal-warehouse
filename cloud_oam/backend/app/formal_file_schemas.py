@@ -13,6 +13,7 @@ FilePurpose = Literal[
     "request_attachment",
     "external_approval_evidence",
     "stocktake_evidence",
+    "receipt_exception_evidence",
 ]
 
 

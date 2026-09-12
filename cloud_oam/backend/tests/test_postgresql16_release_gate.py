@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20260925_0085"
+HEAD_REVISION = "20260926_0086"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7415,7 +7415,7 @@ def _load_stock_reservations_migration_0069():
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20260925_0085_fulfillment_version_commands.py"
+        "20260926_0086_receipt_evidence_files.py"
     )))
     assert migration["revision"] == HEAD_REVISION
     return migration["NEW_HASH"]
@@ -21029,7 +21029,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         finally:
             security_engine.dispose()
         blocked_my_receipt = _run_alembic("downgrade", "20260924_0084", expect_success=False)
-        assert "0085 downgrade blocked" in blocked_my_receipt.stdout + blocked_my_receipt.stderr
+        assert "0086 downgrade blocked" in blocked_my_receipt.stdout + blocked_my_receipt.stderr
         assert _current_revision() == HEAD_REVISION
     finally:
         edge_engine.dispose()

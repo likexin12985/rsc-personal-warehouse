@@ -34,6 +34,7 @@ from ..formal_access import (
     lock_formal_principal_graph,
 )
 from ..foundation_models import DocumentAttachment, FileObject
+from ..inventory_models import Receipt, ReceiptException, ReceiptLine, Shipment
 from ..stocktake_models import StocktakeScopeCountCompletion
 from .audit_chain import AuditChainError, append_audit_event
 from .file_storage import (
@@ -53,6 +54,7 @@ PURPOSES: Final[frozenset[str]] = frozenset(
         "request_attachment",
         "external_approval_evidence",
         "stocktake_evidence",
+        "receipt_exception_evidence",
     }
 )
 _PERMISSION_BY_PURPOSE: Final[dict[str, tuple[str, str, str]]] = {
@@ -63,11 +65,13 @@ _PERMISSION_BY_PURPOSE: Final[dict[str, tuple[str, str, str]]] = {
         "approval_evidence",
     ),
     "stocktake_evidence": ("stocktake", "count", ""),
+    "receipt_exception_evidence": ("material_request", "receive", ""),
 }
 _AUDIT_STREAM_BY_PURPOSE: Final[dict[str, str]] = {
     "request_attachment": "material_request",
     "external_approval_evidence": "material_request",
     "stocktake_evidence": "inventory",
+    "receipt_exception_evidence": "material_request",
 }
 _ALLOWED_MIME_EXTENSIONS: Final[dict[str, frozenset[str]]] = {
     "application/pdf": frozenset({".pdf"}),
@@ -83,7 +87,7 @@ _SAFE_TRACE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,159}$", re.ASCII)
 _SAFE_IDEMPOTENCY = re.compile(r"^[\x21-\x7e]{1,200}$", re.ASCII)
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _STORAGE_KEY = re.compile(
-    r"^formal-files/v1/(request_attachment|external_approval_evidence|stocktake_evidence)/[0-9a-f]{2}/[0-9a-f]{32}$"
+    r"^formal-files/v1/(request_attachment|external_approval_evidence|stocktake_evidence|receipt_exception_evidence)/[0-9a-f]{2}/[0-9a-f]{32}$"
 )
 _PLACEHOLDERS = ("replace-with", "replace_me", "replace-me", "change-me", "changeme")
 _FORBIDDEN_FILENAME_CODEPOINTS = frozenset(
@@ -538,9 +542,14 @@ def _authorize_download(
             .order_by(DocumentAttachment.id)
         ).all()
     )
-    has_any_binding = bool(
-        request_attachment_ids or external_request_ids or document_bindings
-    )
+    receipt_bindings = tuple(db.scalars(select(ReceiptException).where(
+        ReceiptException.evidence_file_id == row.id,
+    ).order_by(ReceiptException.id)).all())
+    has_any_binding = bool(request_attachment_ids or external_request_ids or document_bindings or receipt_bindings)
+    if receipt_bindings:
+        if purpose != "receipt_exception_evidence" or request_attachment_ids or external_request_ids or document_bindings:
+            _binding_invalid()
+        return _authorize_receipt_evidence(db, actor=actor, row=row, bindings=receipt_bindings)
     if not has_any_binding:
         if row.uploaded_by != actor.user_id:
             _fail("file_download_forbidden", "forbidden", "当前账号不能下载该文件")
@@ -586,6 +595,53 @@ def _authorize_download(
             "binding_count": len(document_bindings),
         }
     _binding_invalid()
+
+
+def _authorize_receipt_evidence(db, *, actor, row, bindings):
+    # Evidence can cover several lines of one acceptance, never unrelated
+    # receipts. Current document read scope remains required after permission
+    # changes; upload permission is not required for historical proof.
+    from . import material_request_my_receipt as my_receipt
+    from ..inventory_models import OutboundPosting, ShipmentLine, StockLocation
+    receipt_ids = {binding.receipt_id for binding in bindings}
+    if len(receipt_ids) != 1:
+        _binding_invalid()
+    receipt = db.get(Receipt, next(iter(receipt_ids)))
+    shipment = db.get(Shipment, receipt.shipment_id) if receipt else None
+    if receipt is None or shipment is None or receipt.status not in {"accepted", "exception"} or shipment.target_person_id != receipt.receiver_person_id:
+        _binding_invalid()
+    if row.metadata_jsonb.get("uploader_person_id") != str(receipt.receiver_person_id):
+        _binding_invalid()
+    for binding in bindings:
+        line = db.get(ReceiptLine, binding.receipt_line_id)
+        if line is None or line.receipt_id != receipt.id or line.condition != binding.exception_type:
+            _binding_invalid()
+        source_line = db.get(ShipmentLine, line.shipment_line_id)
+        if source_line is None or source_line.shipment_id != shipment.id:
+            _binding_invalid()
+    request_ids = set(db.scalars(select(OutboundPosting.request_id).join(
+        ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id,
+    ).where(ShipmentLine.shipment_id == shipment.id)).all())
+    if len(request_ids) != 1:
+        _binding_invalid()
+    if receipt.receiver_person_id == actor.person_id and row.uploaded_by == actor.user_id:
+        try:
+            context, request = my_receipt._context(db, actor, next(iter(request_ids)))
+            _, package_lines = my_receipt._package(db, context, request, shipment.id)
+            if any(db.get(ReceiptLine, item.receipt_line_id).shipment_line_id not in package_lines for item in bindings):
+                _binding_invalid()
+        except material_request_query.MaterialRequestReadError:
+            _fail("file_download_forbidden", "forbidden", "当前账号不能下载该验收证据")
+    else:
+        # Headquarters/region operators can inspect evidence only for a visible
+        # request and a target warehouse inside their own fulfillment scope.
+        _require_material_request_read(db, actor, tuple(request_ids))
+        location = db.get(StockLocation, shipment.target_location_id)
+        if location is None or not all(actor.allows(db, resource, action,
+            target_scope_type="organization", target_scope_id=str(location.owner_org_id))
+            for resource, action in (("material_request", "fulfill"), ("inventory", "read"))):
+            _fail("file_download_forbidden", "forbidden", "当前账号不能下载该验收证据")
+    return {"binding_type": "receipt_exception", "binding_count": len(bindings)}
 
 
 def _require_material_request_read(

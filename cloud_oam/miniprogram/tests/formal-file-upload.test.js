@@ -64,6 +64,22 @@ async function prepared() {
   })
 }
 
+test('receipt evidence retains its dedicated purpose and rejects mismatched completion', async () => {
+  const value = await prepareFormalFileUpload(localFile(), 'receipt_exception_evidence', {
+    readFile: async () => CONTENT
+  })
+  for (const purpose of ['receipt_exception_evidence', 'request_attachment']) {
+    const result = executeFormalFileUpload(value, {
+      requestApi: async (path) => path.endsWith('/complete')
+        ? completion({ purpose }) : intent({ purpose: 'receipt_exception_evidence' }),
+      objectPut: async () => ({ statusCode: 200 }),
+      now: () => NOW
+    })
+    if (purpose === 'receipt_exception_evidence') assert.equal((await result).purpose, purpose)
+    else await assert.rejects(result)
+  }
+})
+
 
 test('SHA-256 implementation matches a standard known vector', () => {
   assert.equal(sha256Hex(CONTENT), SHA)

@@ -17,6 +17,7 @@ from app.material_request_my_receipt_schemas import MyReceiptIn
 from test_material_request_my_receiving import receiving_world, outbound_world
 from test_material_request_draft_service import SECRET
 from test_formal_material_request_api import api_client
+from test_formal_files_service import FakeStorage
 
 pytest_plugins = ("test_material_request_picking",)
 
@@ -55,6 +56,20 @@ def facts(db):
     return tuple(db.scalar(select(func.count()).select_from(model)) for model in (Receipt, ReceiptLine, ReceiptSerial, AuditEvent, OutboxEvent, InventoryTransaction, MaterialRequestCommand))
 
 
+def evidence(world, key="receipt-exception-file-test-001", *, purpose="receipt_exception_evidence", complete=True):
+    from app.formal_services import formal_files
+    db, actor, *_ = world
+    storage = FakeStorage()
+    created = formal_files.create_file_upload_intent(db, actor=actor,
+        command=formal_files.FileUploadIntentInput(purpose=purpose, original_filename="exception.png", size_bytes=10, mime_type="image/png", sha256="a"*64),
+        idempotency_key=key, idempotency_hmac_secret=SECRET, trace_request_id=f"trace-{key}", storage=storage, upload_ttl_seconds=600)
+    file = db.get(FileObject, created.file_id)
+    if complete:
+        storage.materialize(file)
+        formal_files.complete_file_upload(db, actor=actor, file_id=file.id, trace_request_id=f"complete-{key}", storage=storage)
+    return file, storage
+
+
 def test_recipient_accepts_once_without_stock_posting_or_source_permissions(world):
     db, actor, request, *_ = world
     value = payload(world)
@@ -81,8 +96,7 @@ def test_rejected_serials_are_never_accepted_for_inbound(world):
     db, actor, _, _, _, _ = world
     value = payload(world).model_dump()
     line = value["lines"][0]
-    file = FileObject(id=uuid4(), storage_key=f"test/{uuid4()}", sha256="a"*64, size_bytes=10, mime_type="image/png", uploaded_by=actor.user_id, status="available")
-    db.add(file); db.flush()
+    file, _ = evidence(world)
     line.update(condition="rejected", rejected_qty=line["accepted_qty"], accepted_qty="0.000", rejected_serial_ids=line["accepted_serial_ids"], accepted_serial_ids=(), exception_evidence_file_id=file.id)
     result = create(world, MyReceiptIn(**value))
     assert result.status == "exception" and result.lines[0].accepted_qty == 0

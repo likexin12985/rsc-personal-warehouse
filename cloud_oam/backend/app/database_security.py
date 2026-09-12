@@ -1844,6 +1844,9 @@ EXPECTED_FORMAL_FILE_TRIGGERS = {
     "trg_files_formal_runtime_guard_0036": (
         "files", "rsc_guard_formal_file_object_0036", "A", 31
     ),
+    "trg_receipt_exceptions_evidence_guard_0086": (
+        "receipt_exceptions", "rsc_guard_formal_file_binding_0036", "A", 7
+    ),
     "trg_files_formal_no_truncate_0036": (
         "files", "rsc_guard_formal_file_object_0036", "A", 34
     ),
@@ -3753,9 +3756,9 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_require_stocktake_recount_graph_0032", ""):
         "294e748d5020b37057851154ecfed2ee66a85fde62bc9d0e4f8cae08aa7be1a2",
     ("rsc_guard_formal_file_object_0036", ""):
-        "b40aec00c7dda886b556b309adfff1d660c03280295a559a5fc452bb106f4b4d",
+        "76401f3c71eacdbac4c4b4d07e5a49f1159cc2cea878933df36e817c9a85e39f",
     ("rsc_guard_formal_file_binding_0036", ""):
-        "dc4d335bf59b02c6bff7714f523db54b1a1cd2f92669b34840552967f29dff65",
+        "9ad4d0b6ee9d9a4bab3cd460ca7553adb9df6c8e0040b97480019ca103696a38",
     ("rsc_validate_material_request_cancellation_0037", "uuid"):
         "64d7775a5013859d91f0ea6ec938f17a4bbfa4dd0d105069d35b6dc4db9c8617",
     ("rsc_require_material_request_cancellation_graph_0037", ""):

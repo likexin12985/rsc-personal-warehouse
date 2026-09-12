@@ -32,7 +32,7 @@ def test_non_normal_condition_is_exception_even_when_quantity_is_accepted():
 
 def test_receipt_evidence_must_be_an_available_file():
     class Db:
-        def get(self, model, key):
+        def scalar(self, query):
             return None
 
     with pytest.raises(ReceiptError, match="证据文件"):

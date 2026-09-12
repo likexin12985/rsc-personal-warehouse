@@ -5,10 +5,12 @@ import hashlib, hmac, json, uuid
 from sqlalchemy import func, select
 from ..demand_models import MaterialRequest
 from ..foundation_models import FileObject, OutboxEvent
+from ..formal_access import FormalAccessError, load_formal_principal
 from ..inventory_models import Shipment, ShipmentLine, ShipmentSerial, OutboundPosting, Receipt, ReceiptLine, ReceiptSerial, ReceiptException, StockAccount
 from .audit_chain import append_audit_event
 from . import material_request_outbound as outbound
 from . import material_request_query
+from .formal_files import is_available_formal_file_for_purpose
 
 class ReceiptError(Exception):
     def __init__(self, code, category, message): self.code, self.category, self.message = code, category, message
@@ -24,12 +26,22 @@ def _receipt_status(checked):
     """Any non-normal condition remains an exception even with zero shortage."""
     return "accepted" if all(Decimal(x.rejected_qty) == 0 and x.condition == "normal" for _, x, _, _ in checked) else "exception"
 
-def _validate_evidence_file(db, file_id):
+def _validate_evidence_file(db, file_id, *, receiver_person_id=None, required=False):
     if file_id is None:
+        if required:
+            _fail("evidence_file_required", "invalid_request", "异常验收必须提供收货人的异常证据文件")
         return
-    row = db.get(FileObject, file_id)
-    if row is None or row.status != "available":
-        _fail("evidence_file_unavailable", "precondition_failed", "异常证据文件不存在或尚未完成上传")
+    row = db.scalar(select(FileObject).where(FileObject.id == file_id).with_for_update().execution_options(populate_existing=True))
+    if not is_available_formal_file_for_purpose(row, purpose="receipt_exception_evidence"):
+        _fail("evidence_file_unavailable", "precondition_failed", "异常证据文件必须完成专用上传")
+    try:
+        uploader = load_formal_principal(db, row.uploaded_by)
+    except FormalAccessError:
+        _fail("evidence_file_unavailable", "precondition_failed", "异常证据文件的上传人身份不可用")
+    if receiver_person_id is None or uploader.account_status != "active" or uploader.employment_status != "active" or uploader.person_id != receiver_person_id or row.metadata_jsonb.get("uploader_person_id") != str(receiver_person_id) or row.metadata_jsonb.get("authorization_version") != uploader.authorization_version:
+        _fail("evidence_file_unavailable", "precondition_failed", "异常证据文件必须由当前收货人上传")
+    if db.scalar(select(ReceiptException.id).where(ReceiptException.evidence_file_id == file_id).limit(1)) is not None:
+        _fail("evidence_already_bound", "conflict", "异常证据文件已绑定其他验收")
 
 def create_receipt(db, *, actor, request_id, expected_version, receiver_person_id, received_at, lines, idempotency_key, secret, trace_request_id):
     if not isinstance(secret, bytes): secret = secret.encode()
@@ -50,7 +62,14 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
     if request.version != expected_version: _fail("version_conflict", "conflict", "需求版本已变化，请重新读取")
     now = datetime.now(timezone.utc); checked = []; shipment_id = None
     for line in lines:
-        _validate_evidence_file(db, line.exception_evidence_file_id)
+        abnormal = Decimal(line.rejected_qty) > 0 or line.condition != "normal"
+        if line.condition == "normal" and Decimal(line.rejected_qty) > 0:
+            _fail("condition_invalid", "invalid_request", "拒收数量必须登记异常验收条件")
+        if not abnormal and line.exception_evidence_file_id is not None:
+            _fail("condition_invalid", "invalid_request", "正常验收不能绑定异常证据文件")
+        if line.condition in {"damaged", "wrong_material", "wrong_serial", "rejected"} and Decimal(line.accepted_qty) > 0:
+            _fail("condition_invalid", "invalid_request", "破损、错料、错 SN 或拒收不能计入合格数量")
+        _validate_evidence_file(db, line.exception_evidence_file_id, receiver_person_id=receiver_person_id, required=abnormal)
         shipment_line = db.get(ShipmentLine, line.shipment_line_id)
         if shipment_line is None: _fail("shipment_line_not_found", "not_found", "发运明细不存在")
         posting = db.get(OutboundPosting, shipment_line.outbound_posting_id)
@@ -59,6 +78,8 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
         outbound._authorize_account_ids(db, actor, (posting.source_stock_account_id,), action="read", resource="inventory", lock_rows=False)
         shipment = db.get(Shipment, shipment_line.shipment_id)
         if shipment is None: _fail("shipment_not_found", "not_found", "发运单不存在")
+        if shipment.target_person_id != receiver_person_id:
+            _fail("recipient_mismatch", "precondition_failed", "收货人必须与包裹绑定的收件人一致")
         shipped_at = shipment.shipped_at
         # SQLite test sessions return timezone-aware columns as naive values;
         # persisted production timestamps are UTC, so normalize that read
@@ -76,12 +97,14 @@ def create_receipt(db, *, actor, request_id, expected_version, receiver_person_i
         given = set(line.serial_ids); used = set(db.scalars(select(ReceiptSerial.serial_id).join(ReceiptLine).where(ReceiptLine.shipment_line_id == shipment_line.id)).all())
         if bound:
             _validate_serial_receipt_quantity(total, given, bound, used)
+            if Decimal(line.accepted_qty) > 0 and Decimal(line.rejected_qty) > 0:
+                _fail("serial_result_required", "invalid_request", "混合 SN 验收须使用本人验收入口分别登记合格和拒收 SN")
         if not bound and given: _fail("serial_mismatch", "invalid_request", "非 SN 物料不得提交 SN")
         checked.append((shipment_line, line, total, given))
     receipt = Receipt(id=uuid.uuid4(), receipt_no=f"RCT-{now:%Y%m%d}-{uuid.uuid4().hex[:12].upper()}", shipment_id=shipment_id, status=_receipt_status(checked), received_at=when, receiver_person_id=receiver_person_id, request_hash=payload_hash, idempotency_key_hash=key_hash, created_at=now)
     db.add(receipt); db.flush(); output = []
     for shipment_line, line, total, serials in checked:
-        row = ReceiptLine(id=uuid.uuid4(), receipt_id=receipt.id, shipment_line_id=shipment_line.id, accepted_qty=line.accepted_qty, rejected_qty=line.rejected_qty, condition=line.condition, created_at=now); db.add(row); db.flush(); db.add_all(ReceiptSerial(receipt_line_id=row.id, serial_id=s, accepted=s in serials) for s in serials)
+        row = ReceiptLine(id=uuid.uuid4(), receipt_id=receipt.id, shipment_line_id=shipment_line.id, accepted_qty=line.accepted_qty, rejected_qty=line.rejected_qty, condition=line.condition, created_at=now); db.add(row); db.flush(); db.add_all(ReceiptSerial(receipt_line_id=row.id, serial_id=s, accepted=Decimal(line.accepted_qty) > 0) for s in serials)
         if Decimal(line.rejected_qty) > 0 or line.condition != "normal":
             db.add(ReceiptException(id=uuid.uuid4(), receipt_id=receipt.id, receipt_line_id=row.id, exception_type=line.condition, detail=f"验收条件={line.condition};拒收数量={_qty(line.rejected_qty)}", evidence_file_id=line.exception_evidence_file_id, created_at=now))
         output.append({"receipt_line_id": row.id, "shipment_line_id": row.shipment_line_id, "accepted_qty": _qty(row.accepted_qty), "rejected_qty": _qty(row.rejected_qty), "serial_ids": tuple(serials)})

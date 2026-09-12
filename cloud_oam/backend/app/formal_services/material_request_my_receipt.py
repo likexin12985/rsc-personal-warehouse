@@ -20,6 +20,7 @@ from . import material_request_my_receiving as receiving
 from . import material_request_query as query
 from .audit_chain import append_audit_event
 from .material_request_fulfillment_command import record_fulfillment_command, verify_fulfillment_command
+from .formal_files import is_available_formal_file_for_purpose
 
 
 def _fail(code, category, message):
@@ -101,9 +102,11 @@ def _package(db, context, request, shipment_id):
 def _evidence(db, actor, line):
     if line.exception_evidence_file_id is None:
         return
-    file = db.get(FileObject, line.exception_evidence_file_id, populate_existing=True)
-    if file is None or file.status != "available" or file.uploaded_by != actor.user_id:
-        _fail("evidence_unavailable", "precondition_failed", "异常证据必须是本人已完成上传的文件")
+    file = db.scalar(select(FileObject).where(FileObject.id == line.exception_evidence_file_id).with_for_update().execution_options(populate_existing=True))
+    if not is_available_formal_file_for_purpose(file, purpose="receipt_exception_evidence", uploader_user_id=actor.user_id) or file.metadata_jsonb.get("uploader_person_id") != str(actor.person_id) or file.metadata_jsonb.get("authorization_version") != actor.authorization_version:
+        _fail("evidence_unavailable", "precondition_failed", "异常证据必须是本人已完成上传的验收异常文件")
+    if db.scalar(select(ReceiptException.id).where(ReceiptException.evidence_file_id == file.id).limit(1)) is not None:
+        _fail("evidence_already_bound", "conflict", "异常文件已绑定其他验收，请重新选择证据")
 
 
 def _serials(db, row, line, when):

@@ -40,6 +40,8 @@ class MyReceiptLineIn(StrictModel):
             raise ValueError("验收数量或 SN 重复")
         if self.condition == "normal" and self.rejected_qty:
             raise ValueError("拒收必须注明异常类型")
+        if self.condition == "normal" and self.exception_evidence_file_id is not None:
+            raise ValueError("正常验收不能绑定异常证据文件")
         if self.condition in {"damaged", "wrong_material", "wrong_serial", "rejected"} and self.accepted_qty:
             raise ValueError("破损、错料、错 SN 或拒收不能登记为合格数量")
         if self.condition != "normal" and self.exception_evidence_file_id is None:
