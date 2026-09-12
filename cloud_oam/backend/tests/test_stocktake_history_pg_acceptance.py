@@ -252,7 +252,15 @@ def test_pg_daily_gain_prerequisite_runs_each_real_opening_service(service):
              and node.func.id == "write" and node.args}
     assert service in calls
     assert "session.commit()" in source
-    assert "physical_observations=(), zero_confirmed=False" in source
+    counts = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+              and isinstance(node.func, ast.Attribute)
+              and node.func.attr == "SubmitOpeningStocktakeScopeCountCommand"]
+    assert len(counts) == 1
+    keywords = {entry.arg: entry.value for entry in counts[0].keywords}
+    assert isinstance(keywords["physical_observations"], ast.Tuple) and not keywords["physical_observations"].elts
+    assert ast.dump(keywords["zero_confirmed"]) == ast.dump(ast.parse("expected_snapshot_line_count == 0", mode="eval").body)
+    assert inspect.signature(gate._establish_multiround_stocktake_location).parameters["expected_snapshot_line_count"].default == 1
+    assert "started.snapshot_line_count == expected_snapshot_line_count" in source
     assert "establishment.regional_review_id == regional.review_id" in source
     assert "establishment.headquarters_review_id == headquarters.review_id" in source
     assert "establishment.posting_id == posted.posting_id" in source
