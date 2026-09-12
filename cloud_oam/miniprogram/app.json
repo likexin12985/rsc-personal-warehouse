@@ -4,6 +4,7 @@
     "pages/home/index",
     "pages/formal-personal-warehouse/index",
     "pages/formal-my-receiving/index",
+    "pages/formal-my-inbound/index",
     "pages/formal-my-receipt/index",
     "pages/formal-material-requests/index",
     "pages/formal-operational-stocktakes/index",

@@ -235,6 +235,11 @@ Page({
     this.setData(Object.assign(empty(), { state: 'confirmed', receiptNo: result.receipt_no,
       message: '本次验收已登记并核验。个人仓尚需独立入账，请勿把验收记录当作库存增加。' }))
   },
+  openInbounds() {
+    if (!this._visible || this.data.busy || this.data.state !== 'confirmed') return
+    if (!this._session || !this.sameSession(this._session)) { this.invalidateContext(); return }
+    wx.navigateTo({ url: `/pages/formal-my-inbound/index?request_id=${this._requestId}` })
+  },
   async recover() {
     if (!this._visible || this.data.busy || !this._pending || !this._session) return
     const generation = this._generation, snapshot = this._session

@@ -1,0 +1,2 @@
+@import "../formal-my-receiving/index.wxss";
+.package > .button { margin-top: 24rpx; }

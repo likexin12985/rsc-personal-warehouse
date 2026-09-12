@@ -1,0 +1,25 @@
+<view class="page">
+  <view class="row between"><view><view class="page-title">个人仓入账</view><view class="page-subtitle">{{requestNo || '本次验收与入账记录'}}</view></view><button class="button button-secondary button-small" bindtap="refresh" disabled="{{loading || busy}}" loading="{{loading}}">刷新</button></view>
+  <view class="card receiving-note">{{message}}</view>
+  <button wx:if="{{state === 'pending'}}" class="button" bindtap="recover" loading="{{busy}}" disabled="{{busy}}">读取原入账结果</button>
+  <view wx:if="{{state === 'confirmed'}}" class="card package">入账单：<text selectable>{{inboundNo}}</text></view>
+  <block wx:if="{{state === 'ready'}}">
+    <view wx:for="{{items}}" wx:key="receipt_id" class="card package">
+      <view class="row between"><text class="package-number">{{item.detail.receipt_no || '验收记录待核验'}}</text><text class="status status-info">{{item.statusLabel}}</text></view>
+      <view class="package-fact">{{item.message}}</view>
+      <block wx:if="{{item.detail}}">
+        <view class="package-fact">包裹：{{item.detail.shipment_no}}</view><view class="package-fact">验收时间：{{item.detail.received_at}}</view><view class="package-fact">入账位置：{{item.detail.target_location_name}}</view>
+        <view wx:for="{{item.detail.lines}}" wx:for-item="line" wx:key="receipt_line_id" class="receipt-line">
+          <view class="material-name">{{line.material_name}}</view><view class="small muted">{{line.sku_code}}</view>
+          <view class="quantity-grid"><view><text>合格入账数量</text><text>{{line.accepted_qty}} {{line.base_unit}}</text></view><view><text>拒收（不入账）</text><text>{{line.rejected_qty}} {{line.base_unit}}</text></view></view>
+          <view wx:if="{{line.serialCount}}" class="package-fact">合格 SN 共 {{line.serialCount}} 件<text wx:if="{{line.serialCount > 20}}">，展示前 20 件</text></view>
+          <view wx:for="{{line.shownSerials}}" wx:for-item="serial" wx:key="serial_id" class="small muted"><text selectable>{{serial.serial_no}}</text></view>
+        </view>
+        <view wx:if="{{item.status === 'posted'}}" class="package-fact">入账单：{{item.detail.inbound_no}}<view>入账时间：{{item.detail.posted_at}}</view></view>
+        <button wx:if="{{item.status === 'pending'}}" class="button" bindtap="submit" data-receipt-id="{{item.receipt_id}}" disabled="{{!canPost || busy || loading}}" loading="{{busy}}">确认本次入账</button>
+      </block>
+    </view>
+    <view wx:if="{{!items.length}}" class="empty">暂无本人验收记录，请先完成包裹验收。</view>
+    <view class="pagination"><button class="button button-secondary button-small" bindtap="previousPage" disabled="{{!hasPrevious || busy || loading}}">上一页</button><text>第 {{pageNumber}} 页</text><button class="button button-secondary button-small" bindtap="nextPage" disabled="{{!hasNext || busy || loading}}">下一页</button></view>
+  </block>
+</view>

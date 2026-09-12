@@ -85,6 +85,10 @@ Page({
     this._cursors.push(this._next)
     return this.load()
   },
+  openInbounds() {
+    if (!this._visible || this.data.loading || this.data.state !== 'ready') return
+    wx.navigateTo({ url: `/pages/formal-my-inbound/index?request_id=${this._requestId}` })
+  },
   openCandidates(event) {
     if (!this._visible || this.data.loading || this.data.state !== 'ready') return
     const shipmentId = event.currentTarget.dataset.shipmentId

@@ -71,6 +71,8 @@ from ..formal_services import material_request_my_receiving as my_receiving_serv
 from ..material_request_my_receiving_schemas import MyReceivingOut
 from ..formal_services import material_request_my_receipt as my_receipt_service
 from ..formal_services import material_request_my_inbound as my_inbound_service
+from ..material_request_my_inbound_candidates_schemas import MyInboundCandidatesOut
+from ..formal_services import material_request_my_inbound_candidates as my_inbound_candidates_service
 from ..material_request_my_inbound_schemas import MyInboundIn, MyInboundOut, MyInboundCommandStatusOut
 from ..material_request_my_receipt_schemas import MyReceiptIn, MyReceiptOut, MyReceiptCommandStatusOut
 from ..formal_services import material_request_my_receipt_candidates as my_receipt_candidates_service
@@ -1137,6 +1139,25 @@ def my_material_request_receipt_trace_status(
         _raise_service_error(query_service.MaterialRequestReadError(
             "my_receipt_history_invalid", "service_unavailable", "原验收结果证据不完整，请保留原请求继续核验",
         ), no_store=True)
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.get("/{material_request_id}/my-inbounds/candidates", response_model=MyInboundCandidatesOut)
+def my_material_request_inbound_candidates(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    limit: int = Query(default=5, ge=1, le=20), after_id: UUID | None = None,
+):
+    _set_read_no_store(response)
+    try:
+        result = my_inbound_candidates_service.list_my_inbound_candidates(db, actor=principal,
+            request_id=material_request_id, limit=limit, after_id=after_id)
+        return result if runtime_settings.material_request_writes_enabled else result.model_copy(update={"can_post": False})
+    except (query_service.MaterialRequestReadError, InventoryPostingError) as exc:
+        _raise_service_error(exc, no_store=True)
     except DBAPIError:
         db.rollback()
         _raise_database_unavailable(read_only=True, no_store=True)

@@ -65,7 +65,23 @@ def assert_my_inbound_gate(api_engine, security_engine, *, request_id, receipt_i
             db.execute(text('SET CONSTRAINTS ALL IMMEDIATE')); db.commit()
             return result
 
+    def candidate_status():
+        from app.formal_services.material_request_my_inbound_candidates import list_my_inbound_candidates
+        with Session(api_engine) as db:
+            db.execute(text('SET TRANSACTION READ ONLY'))
+            actor = load_formal_principal(db, actor_id)
+            after_id = None
+            while True:
+                page = list_my_inbound_candidates(db, actor=actor, request_id=request_id, after_id=after_id)
+                for item in page.items:
+                    if item.receipt_id == receipt_id:
+                        return item
+                after_id = page.next_after_id
+                assert after_id is not None, 'original receipt must remain discoverable'
+
     before = snapshot()
+    assert candidate_status().status == ('pending' if accepted else 'no_accepted')
+    assert snapshot() == before
     if not accepted:
         with pytest.raises(service.MaterialRequestReadError, match='合格数量'):
             post(f'my-inbound-rejected-{receipt_id}')
@@ -117,6 +133,9 @@ def assert_my_inbound_gate(api_engine, security_engine, *, request_id, receipt_i
                 assert db.get(SerialCurrentPosition, serial_id).stock_account_id == target.id
     assert all(after_qty.get(account, Decimal(0)) == before_qty.get(account, Decimal(0)) + deltas.get(account, Decimal(0))
         for account in set(before_qty) | set(after_qty))
+    candidate = candidate_status()
+    assert candidate.status == 'posted' and candidate.detail.inventory_transaction_id == result.inventory_transaction_id
+    assert snapshot() == after
     replay = post(key)
     assert replay.idempotency_replayed and replay.inventory_transaction_id == result.inventory_transaction_id
     assert snapshot() == after

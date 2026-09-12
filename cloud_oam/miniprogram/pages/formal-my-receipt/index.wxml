@@ -11,6 +11,7 @@
   <view wx:if="{{state === 'confirmed'}}" class="card">
     <view class="material-name">已登记本次验收</view>
     <view class="package-fact" selectable>验收单：{{receiptNo}}</view>
+    <button class="button button-primary" bindtap="openInbounds" disabled="{{busy}}">继续个人仓入账</button>
     <view class="small muted">返回本人收货查看后续进度；个人仓入账以独立过账结果为准。</view>
   </view>
   <block wx:if="{{state === 'ready'}}">

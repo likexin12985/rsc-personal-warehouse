@@ -5,6 +5,7 @@
   </view>
   <view class="card receiving-note">{{message}}</view>
   <block wx:if="{{state === 'ready'}}">
+    <button class="button button-secondary" bindtap="openInbounds">查看验收记录 / 个人仓入账</button>
     <view wx:for="{{packages}}" wx:key="shipment_id" wx:for-item="package" class="card package">
       <view class="row between"><text class="package-number">{{package.shipment_no}}</text><text class="status status-info">{{package.statusLabel}}</text></view>
       <view class="package-fact">承运商：{{package.carrier}}</view>
