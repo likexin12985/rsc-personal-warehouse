@@ -192,7 +192,7 @@ RUNTIME_INSERT_TABLES = frozenset(
         "outbound_orders", "outbound_lines", "stock_reservation_picks", "stock_reservation_pick_serials",
         "outbound_postings", "outbound_posting_serials",
         "shipments", "shipment_lines", "shipment_serials",
-        "logistics_events", "receipts", "receipt_lines", "receipt_serials", "receipt_exceptions", "oam_receipt_evidence", "inbound_orders", "inbound_postings",
+        "logistics_events", "receipts", "receipt_lines", "receipt_serials", "receipt_exceptions", "inbound_orders", "inbound_postings",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
         "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs",
@@ -3058,7 +3058,9 @@ OPENING_COMMIT_TRIGGER_NAMES = frozenset(
 )
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _SQL_STRING_LITERAL_PATTERN = re.compile(r"'((?:''|[^'])*)'")
+RECEIPT_SYNC_RUNTIME_FUNCTION = ("rsc_oam_receipt_rls_check_0082", "text, text, text, jsonb")
 OAM_SYNC_RUNTIME_FUNCTIONS = {
+    RECEIPT_SYNC_RUNTIME_FUNCTION,
     ("rsc_oam_rls_check_0044", "text, text, jsonb"),
     ("rsc_oam_runtime_binding_ready_0044", ""),
 }
@@ -4117,6 +4119,10 @@ SELECT
                             'rsc_oam_runtime_binding_ready_0044'
                         AND oidvectortypes(function_row.proargtypes) = ''
                     )
+                    OR (
+                        function_row.proname = 'rsc_oam_receipt_rls_check_0082'
+                        AND oidvectortypes(function_row.proargtypes) = 'text, text, text, jsonb'
+                    )
                 )
                 AND function_acl.is_grantable IS FALSE
                 AND EXISTS (
@@ -4126,6 +4132,8 @@ SELECT
                        AND oam_runtime_role.rolname IN (
                            'edge_inbox', 'star_oam_projector'
                        )
+                       AND (oam_runtime_role.rolname <> 'edge_inbox'
+                            OR function_row.proname <> 'rsc_oam_receipt_rls_check_0082')
                 )
            )
     ) AS unexpected_execute_grantee_count,
@@ -6488,7 +6496,11 @@ def _assert_runtime_function_acl(
             "edge_receiver_can_execute",
             "projector_can_execute",
         ):
-            expected_audience = expected_oam_sync is not None
+            expected_audience = (
+                expected_oam_sync is not None
+                and (audience != "edge_receiver_can_execute"
+                     or coordinate != RECEIPT_SYNC_RUNTIME_FUNCTION)
+            )
             if row.get(audience) is not expected_audience:
                 failures.append(f"{label}.{audience}")
         expected_parallel = "u"

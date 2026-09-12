@@ -581,7 +581,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         | material_request_insert_tables
         | stocktake_close_insert_tables
         | stocktake_start_tables
-        | allocation_tables
+        | (allocation_tables - {"oam_receipt_evidence"})
     )
     assert set(values["API_READ_TABLES"]) <= RUNTIME_READ_TABLES
     assert set(values["API_INSERT_TABLES"]) <= RUNTIME_INSERT_TABLES
@@ -5028,6 +5028,7 @@ def test_runtime_function_acl_rejects_execute_or_wrong_owner(
             "edge_receiver_can_execute": (
                 (function_name, argument_types)
                 in OAM_SYNC_RUNTIME_FUNCTIONS
+                and function_name != "rsc_oam_receipt_rls_check_0082"
             ),
             "projector_can_execute": (
                 (function_name, argument_types)
@@ -5113,7 +5114,16 @@ def test_runtime_function_acl_rejects_execute_or_wrong_owner(
         for index, row in enumerate(allowed_rows)
         if (row["function_name"], row["argument_types"])
         in OAM_SYNC_RUNTIME_FUNCTIONS
+        and row["function_name"] != "rsc_oam_receipt_rls_check_0082"
     )
+    receipt_index = next(index for index, row in enumerate(allowed_rows)
+                         if row["function_name"] == "rsc_oam_receipt_rls_check_0082")
+    for field, value in (("can_execute", True), ("edge_receiver_can_execute", True),
+                         ("projector_can_execute", False), ("source_body", "tampered")):
+        drifted = [row.copy() for row in allowed_rows]
+        drifted[receipt_index][field] = value
+        with pytest.raises(DatabaseSecurityBoundaryError):
+            _assert_runtime_function_acl(drifted, expected_migration_role="star_oam_migrator")
     for field, value in (
         ("can_execute", True),
         ("edge_receiver_can_execute", False),

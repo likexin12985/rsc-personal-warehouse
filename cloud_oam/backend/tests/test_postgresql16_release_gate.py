@@ -20607,6 +20607,29 @@ def _assert_0059_empty_graph_downgrade_and_reupgrade() -> None:
     assert catalog() == before
 
 
+def _assert_0082_empty_downgrade_restores_prior_access():
+    _run_alembic("downgrade", "20260921_0081")
+    with psycopg.connect(**_admin_parameters()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT bool_and(NOT relrowsecurity AND NOT relforcerowsecurity) "
+                "FROM pg_class WHERE oid IN ('shipments'::regclass, 'oam_receipt_evidence'::regclass)"
+            )
+            assert cursor.fetchone() == (True,)
+            cursor.execute(
+                "SELECT has_column_privilege('star_oam_projector', "
+                "'oam_receipt_evidence', 'id', 'INSERT')"
+            )
+            assert cursor.fetchone() == (False,)
+    with psycopg.connect(**_connection_parameters(
+        role="star_oam_api", password=_role_password("star_oam_api"),
+    )) as connection:
+        assert connection.execute("SELECT count(*) FROM shipments").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM oam_receipt_evidence").fetchone() == (0,)
+    _run_alembic("upgrade", "head")
+    assert _current_revision() == HEAD_REVISION
+
+
 def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _assert_fresh_disposable_postgresql16()
     _bootstrap_roles()
@@ -20628,6 +20651,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _run_alembic("upgrade", "head")
     _run_alembic("upgrade", "head")
     assert _current_revision() == HEAD_REVISION
+    _assert_0082_empty_downgrade_restores_prior_access()
     _assert_migration_waits_for_version_maintenance_before_writing()
     _assert_0063_empty_review_command_downgrade_and_reupgrade()
     _assert_0064_empty_finalizer_organization_downgrade_and_reupgrade()
@@ -20979,6 +21003,19 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         assert "cannot downgrade 0072" in blocked_outbound.stdout + blocked_outbound.stderr
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
+        from pg16_oam_receipt_gate import assert_receipt_gate
+        receipt_migrator_engine = create_engine(_sqlalchemy_url(
+            role="star_oam_migrator", password=_role_password("star_oam_migrator")))
+        receipt_backup_engine = create_engine(_sqlalchemy_url(
+            role="star_oam_backup", password=_role_password("star_oam_backup")))
+        try:
+            assert_receipt_gate(projector_engine, receipt_migrator_engine, api_engine, receipt_backup_engine)
+        finally:
+            receipt_migrator_engine.dispose()
+            receipt_backup_engine.dispose()
+        blocked_receipt = _run_alembic("downgrade", "20260921_0081", expect_success=False)
+        assert "0082 downgrade blocked" in blocked_receipt.stdout + blocked_receipt.stderr
+        assert _current_revision() == HEAD_REVISION
     finally:
         edge_engine.dispose()
         projector_engine.dispose()

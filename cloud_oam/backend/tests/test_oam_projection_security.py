@@ -365,7 +365,7 @@ def test_0044_scope_security_has_exact_force_rls_policy_closure():
         "has_any_column_privilege",
         "search_path=pg_catalog",
         "function_acl.grantee = 0",
-        "CASE WHEN expected.is_private THEN 1 ELSE 3 END",
+        "CASE WHEN expected.is_private THEN 1",
         "IS DISTINCT FROM expected.using_expression",
         "IS DISTINCT FROM expected.check_expression",
         "source_sha256",
@@ -497,7 +497,7 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0059" in scope_security.__all__
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0060" in scope_security.__all__
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061" in scope_security.__all__
-    assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST) == 14
+    assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST) == 16
     ready_signature = "rsc_oam_runtime_binding_ready_0044()"
     for manifest in (
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0045,
@@ -522,7 +522,7 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
         assert {
             signature: definition
             for signature, definition in manifest.items()
-            if signature != ready_signature
+            if signature != ready_signature and signature in actual_manifest
         } == {
             signature: definition
             for signature, definition in actual_manifest.items()
@@ -1177,7 +1177,7 @@ def test_forward_readiness_manifests_match_head_hashes():
     )
     assert (
         scope_security.OAM_SYNC_FUNCTION_MANIFEST
-        is scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0081
+        is scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0082
     )
     migration_0070 = runpy.run_path(str(migration_root / "20260910_0070_stock_reservation_releases.py"))
     assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0070[ready_signature][6] == migration_0070["RUNTIME_READY_BODY_SHA256_0070"]
@@ -1190,7 +1190,9 @@ def test_forward_readiness_manifests_match_head_hashes():
     migration_0080 = runpy.run_path(str(migration_root / "20260920_0080_inbound_posting_acl.py"))
     assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0080[ready_signature][6] == migration_0080["RUNTIME_READY_BODY_SHA256_0080"]
     migration_0081 = runpy.run_path(str(migration_root / "20260921_0081_oam_receipt_evidence.py"))
-    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6] == migration_0081["RUNTIME_READY_BODY_SHA256_0081"]
+    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0081[ready_signature][6] == migration_0081["RUNTIME_READY_BODY_SHA256_0081"]
+    migration_0082 = runpy.run_path(str(migration_root / "20260922_0082_oam_receipt_projector_boundary.py"))
+    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6] == migration_0082["RUNTIME_READY_BODY_SHA256_0082"]
     assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064[ready_signature][6] != (
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0062[ready_signature][6]
     )

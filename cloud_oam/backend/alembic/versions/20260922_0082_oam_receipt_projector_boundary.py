@@ -30,13 +30,6 @@ RECEIPT_TABLES = (
 
 
 def _replace_readiness(*, upgrade: bool) -> None:
-    previous = runpy.run_path(
-        str(Path(__file__).with_name("20260921_0081_oam_receipt_evidence.py"))
-    )
-    migration = previous["_replace_readiness"]
-    # 0081's helper is intentionally used through its public migration helper;
-    # the body is unchanged and only the readiness head coordinate advances.
-    del migration
     older = runpy.run_path(
         str(Path(__file__).with_name("20260920_0080_inbound_posting_acl.py"))
     )
@@ -75,180 +68,187 @@ STABLE
 SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
-DECLARE
-    source_code text;
-    source_id uuid;
-    external_id text;
 BEGIN
-    IF session_user::text <> 'star_oam_projector'
-       OR p_operation NOT IN ('select', 'insert')
-       OR p_required_capability NOT IN ('projector_read', 'projector_write')
-       OR p_table_name NOT IN (
-           'external_sync_snapshots', 'external_sync_current_records',
-           'source_systems', 'sync_runs', 'external_objects',
-           'external_object_mappings', 'shipments', 'oam_receipt_evidence'
-       ) THEN
+    IF session_user::text <> 'star_oam_projector' OR p_row IS NULL
+       OR p_operation IS NULL OR p_required_capability IS NULL
+       OR p_table_name IS NULL
+       OR (p_operation, p_required_capability) NOT IN (
+           ('select', 'projector_read'), ('insert', 'projector_write'),
+           ('update', 'projector_write'))
+       OR (p_operation <> 'select' AND p_table_name NOT IN (
+           'sync_runs', 'oam_receipt_evidence'))
+       OR (p_operation = 'update' AND p_table_name <> 'sync_runs') THEN
         RETURN false;
     END IF;
 
-    IF p_table_name = 'source_systems' THEN
-        RETURN (p_row->>'code') = 'starcharge_oam'
-           AND (p_row->>'mode') = 'read_only'
-           AND (p_row->>'enabled') = 'true'
-           AND EXISTS (
-               SELECT 1 FROM public.oam_receipt_sync_scope_bindings binding
-                WHERE binding.enabled
-                  AND binding.principal_name = session_user::text
-                  AND binding.capability = p_required_capability
-                  AND binding.source_system = p_row->>'code'
-                  AND binding.entity_type = 'oam_receipt'
-           );
-    END IF;
-
-    IF p_table_name = 'external_sync_snapshots' THEN
-        RETURN (p_row->>'source_system') = 'starcharge_oam'
-           AND (p_row->>'scope_key') LIKE 'oam-receipts:%'
-           AND EXISTS (
-               SELECT 1
-                 FROM public.oam_receipt_sync_scope_bindings binding
-                WHERE binding.enabled
-                  AND binding.principal_name = session_user::text
-                  AND binding.capability = p_required_capability
-                  AND binding.source_system = 'starcharge_oam'
-                  AND binding.source_instance = p_row->>'source_instance'
-                  AND binding.scope_key = p_row->>'scope_key'
-                  AND binding.company_id = p_row->>'company_id'
-                  AND binding.org_code = p_row->>'org_code'
-                  AND binding.entity_type = 'oam_receipt'
-           );
-    END IF;
-
-    IF p_table_name = 'external_sync_current_records' THEN
-        RETURN (p_row->>'source_system') = 'starcharge_oam'
-           AND (p_row->>'entity_type') = 'oam_receipt'
-           AND (p_row->>'scope_key') LIKE 'oam-receipts:%'
-           AND EXISTS (
-               SELECT 1
-                 FROM public.oam_receipt_sync_scope_bindings binding
-                WHERE binding.enabled
-                  AND binding.principal_name = session_user::text
-                  AND binding.capability = p_required_capability
-                  AND binding.source_system = 'starcharge_oam'
-                  AND binding.source_instance = p_row->>'source_instance'
-                  AND binding.scope_key = p_row->>'scope_key'
-                  AND binding.entity_type = 'oam_receipt'
-           );
-    END IF;
-
-    IF p_table_name = 'sync_runs' THEN
-        BEGIN
-            source_id := (p_row->>'source_system_id')::uuid;
-        EXCEPTION WHEN invalid_text_representation THEN
-            RETURN false;
-        END;
-        RETURN (p_row->>'run_key') LIKE 'oam-receipt:%'
-           AND (p_row->>'scope_key') LIKE 'oam-receipts:%'
-           AND EXISTS (
-               SELECT 1
-                 FROM public.source_systems source
-                 JOIN public.oam_receipt_sync_scope_bindings binding
-                   ON binding.enabled
-                  AND binding.principal_name = session_user::text
-                  AND binding.capability = p_required_capability
-                  AND binding.source_system = source.code
-                  AND binding.scope_key = p_row->>'scope_key'
-                  AND binding.entity_type = 'oam_receipt'
-                WHERE source.id = source_id
-                  AND source.code = 'starcharge_oam'
-                  AND source.mode = 'read_only'
-                  AND source.enabled
-           );
-    END IF;
-
-    IF p_table_name = 'external_objects' THEN
-        BEGIN
-            source_id := (p_row->>'source_system_id')::uuid;
-        EXCEPTION WHEN invalid_text_representation THEN
-            RETURN false;
-        END;
-        RETURN (p_row->>'entity_type') = 'oam_receipt'
-           AND EXISTS (
-               SELECT 1 FROM public.source_systems source
-                WHERE source.id = source_id
-                  AND source.code = 'starcharge_oam'
-                  AND source.mode = 'read_only' AND source.enabled
-           );
-    END IF;
-
-    IF p_table_name = 'external_object_mappings' THEN
-        RETURN (p_row->>'local_object_type') = 'shipment'
-           AND (p_row->>'status') = 'approved'
-           AND EXISTS (
-               SELECT 1
-                 FROM public.external_objects external_object
-                 JOIN public.source_systems source
-                   ON source.id = external_object.source_system_id
-                WHERE external_object.id::text = p_row->>'external_object_id'
-                  AND external_object.entity_type = 'oam_receipt'
-                  AND source.code = 'starcharge_oam'
-                  AND source.mode = 'read_only' AND source.enabled
-                  AND EXISTS (
-                      SELECT 1
-                        FROM public.external_sync_current_records current_record
-                       WHERE current_record.source_system = source.code
-                         AND current_record.entity_type = 'oam_receipt'
-                         AND current_record.scope_key LIKE 'oam-receipts:%'
-                         AND current_record.business_key =
-                             'oam-receipt:' || external_object.external_id
-                  )
-           );
-    END IF;
-
-    IF p_table_name = 'shipments' THEN
-        RETURN EXISTS (
-            SELECT 1
-              FROM public.external_object_mappings mapping
-              JOIN public.external_objects external_object
-                ON external_object.id = mapping.external_object_id
-              JOIN public.source_systems source
-                ON source.id = external_object.source_system_id
-             WHERE mapping.local_object_type = 'shipment'
-               AND mapping.local_object_id = p_row->>'id'
-               AND mapping.status = 'approved'
-               AND external_object.entity_type = 'oam_receipt'
-               AND source.code = 'starcharge_oam'
+    -- All SECURITY DEFINER joins repeat the complete scope coordinates. Owner
+    -- access to an inner table must never turn into unscoped runtime access.
+    RETURN COALESCE((
+        WITH bindings AS MATERIALIZED (
+            SELECT binding.*
+              FROM public.oam_receipt_sync_scope_bindings binding
+             WHERE binding.enabled
+               AND binding.principal_name = session_user::text
+               AND binding.capability = p_required_capability
+               AND binding.source_system = 'starcharge_oam'
+               AND binding.entity_type = 'oam_receipt'
+        ), sources AS MATERIALIZED (
+            SELECT source.id, source.code
+              FROM public.source_systems source
+             WHERE source.code = 'starcharge_oam'
                AND source.mode = 'read_only' AND source.enabled
+               AND EXISTS (SELECT 1 FROM bindings)
+        ), snapshots AS MATERIALIZED (
+            SELECT snapshot.*, source.id AS source_id
+              FROM public.external_sync_snapshots snapshot
+              JOIN sources source ON source.code = snapshot.source_system
+             WHERE snapshot.status = 'complete'
                AND EXISTS (
-                   SELECT 1
-                     FROM public.external_sync_current_records current_record
-                    WHERE current_record.source_system = source.code
-                      AND current_record.entity_type = 'oam_receipt'
-                      AND current_record.scope_key LIKE 'oam-receipts:%'
-                      AND current_record.business_key =
-                          'oam-receipt:' || external_object.external_id
+                   SELECT 1 FROM bindings binding
+                    WHERE binding.source_instance = snapshot.source_instance
+                      AND binding.scope_key = snapshot.scope_key
+                      AND binding.company_id = snapshot.company_id
+                      AND binding.org_code = snapshot.org_code
                )
-        );
-    END IF;
-
-    IF p_table_name = 'oam_receipt_evidence' THEN
-        RETURN (p_operation = 'select' OR p_required_capability = 'projector_write')
-           AND (p_row->>'status') IN ('synced', 'exception')
-           AND EXISTS (
-               SELECT 1
-                 FROM public.external_objects external_object
-                 JOIN public.external_object_mappings mapping
-                   ON mapping.external_object_id = external_object.id
-                  AND mapping.local_object_type = 'shipment'
-                  AND mapping.local_object_id = p_row->>'shipment_id'
-                  AND mapping.status = 'approved'
-                 JOIN public.source_systems source
-                   ON source.id = external_object.source_system_id
-                WHERE external_object.id::text = p_row->>'external_object_id'
-                  AND external_object.entity_type = 'oam_receipt'
-                  AND source.code = 'starcharge_oam'
-                  AND source.mode = 'read_only' AND source.enabled
-           );
-    END IF;
+        ), records AS MATERIALIZED (
+            SELECT record.*, snapshot.source_id
+              FROM public.external_sync_current_records record
+              JOIN snapshots snapshot ON snapshot.id = record.last_snapshot_id
+               AND snapshot.source_system = record.source_system
+               AND snapshot.source_instance = record.source_instance
+               AND snapshot.scope_key = record.scope_key
+             WHERE record.entity_type = 'oam_receipt'
+        ), objects AS MATERIALIZED (
+            SELECT object.*
+              FROM public.external_objects object
+             WHERE object.entity_type = 'oam_receipt'
+               AND object.deleted_at IS NULL
+               AND EXISTS (
+                   SELECT 1 FROM records record
+                    WHERE record.source_id = object.source_system_id
+                      AND record.business_key = 'oam-receipt:' || object.external_id
+               )
+        ), mappings AS MATERIALIZED (
+            SELECT mapping.*
+              FROM public.external_object_mappings mapping
+              JOIN objects object ON object.id = mapping.external_object_id
+             WHERE mapping.local_object_type = 'shipment'
+               AND mapping.status = 'approved'
+        ), unique_mappings AS MATERIALIZED (
+            SELECT mapping.* FROM mappings mapping
+             WHERE (SELECT count(*) FROM mappings other
+                     WHERE other.external_object_id = mapping.external_object_id) = 1
+               AND mapping.approved_by IS NOT NULL
+               AND mapping.approved_at IS NOT NULL
+        )
+        SELECT CASE p_table_name
+        WHEN 'oam_receipt_sync_scope_bindings' THEN
+            EXISTS (
+                SELECT 1 FROM bindings binding
+                  JOIN public.oam_receipt_sync_scope_bindings writable
+                    ON writable.enabled
+                   AND writable.principal_name = binding.principal_name
+                   AND writable.capability = 'projector_write'
+                   AND writable.source_system = binding.source_system
+                   AND writable.source_instance = binding.source_instance
+                   AND writable.scope_key = binding.scope_key
+                   AND writable.company_id = binding.company_id
+                   AND writable.org_code = binding.org_code
+                   AND writable.entity_type = binding.entity_type
+                 WHERE EXISTS (SELECT 1 FROM sources)
+            )
+        WHEN 'source_systems' THEN
+            EXISTS (SELECT 1 FROM sources source WHERE source.id::text = p_row->>'id')
+        WHEN 'external_sync_snapshots' THEN
+            EXISTS (SELECT 1 FROM snapshots snapshot WHERE snapshot.id = p_row->>'id')
+        WHEN 'external_sync_current_records' THEN
+            EXISTS (SELECT 1 FROM records record WHERE record.id = p_row->>'id')
+        WHEN 'external_objects' THEN
+            EXISTS (SELECT 1 FROM objects object WHERE object.id::text = p_row->>'id')
+        WHEN 'external_object_mappings' THEN
+            EXISTS (SELECT 1 FROM mappings mapping WHERE mapping.id::text = p_row->>'id')
+        WHEN 'shipments' THEN
+            EXISTS (SELECT 1 FROM unique_mappings mapping
+                     WHERE mapping.local_object_id = p_row->>'id')
+        WHEN 'sync_runs' THEN
+            (p_row->>'status') IN ('validating', 'completed', 'failed')
+            AND p_row->>'watermark_from' IS NULL
+            AND p_row->>'failure_detail' IS NULL
+            AND EXISTS (
+                SELECT 1 FROM snapshots snapshot
+                 WHERE p_row->>'run_key' = 'oam-receipt:' || snapshot.id
+                   AND p_row->>'source_system_id' = snapshot.source_id::text
+                   AND p_row->>'scope_key' = snapshot.scope_key
+                   AND p_row->>'mode' = snapshot.sync_mode
+                   AND (p_row->>'watermark_to')::timestamptz = snapshot.snapshot_at
+                   AND p_row->>'manifest_sha256' = snapshot.manifest_sha256
+                   AND (p_operation = 'select' OR p_row->>'status' <> 'completed' OR (
+                       p_row->>'completed_at' IS NOT NULL
+                       AND p_row->>'failure_code' IS NULL
+                       AND snapshot.manifest_sha256 = encode(sha256(convert_to(snapshot.manifest_json, 'UTF8')), 'hex')
+                       AND jsonb_array_length(snapshot.manifest_json::jsonb->'entities') = 1
+                       AND snapshot.manifest_json::jsonb->'entities'->0->>'entity_type' = 'oam_receipt'
+                       AND (snapshot.manifest_json::jsonb->'entities'->0->>'final_record_count')::bigint
+                           = (SELECT count(*) FROM records record WHERE record.last_snapshot_id = snapshot.id)
+                       AND NOT EXISTS (
+                           SELECT 1 FROM records record
+                            WHERE record.last_snapshot_id = snapshot.id
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM objects object
+                                    JOIN unique_mappings mapping ON mapping.external_object_id = object.id
+                                    JOIN public.oam_receipt_evidence evidence
+                                      ON evidence.external_object_id = object.id
+                                     AND evidence.shipment_id::text = mapping.local_object_id
+                                   WHERE object.source_system_id = record.source_id
+                                     AND record.business_key = 'oam-receipt:' || object.external_id
+                                     AND evidence.payload_sha256 = record.payload_sha256
+                                     AND evidence.source_time = record.source_updated_at
+                                     AND evidence.source_version = record.payload_json::jsonb->>'sourceVersion'
+                                     AND evidence.status = record.payload_json::jsonb->>'status'
+                              )
+                       )
+                   ))
+            )
+        WHEN 'oam_receipt_evidence' THEN
+            EXISTS (
+                SELECT 1 FROM objects object
+                 WHERE object.id::text = p_row->>'external_object_id'
+                   AND (
+                       p_operation = 'select'
+                       OR (
+                           EXISTS (
+                               SELECT 1 FROM unique_mappings mapping
+                                JOIN public.shipments shipment
+                                  ON shipment.id::text = mapping.local_object_id
+                                WHERE mapping.external_object_id = object.id
+                                  AND shipment.id::text = p_row->>'shipment_id'
+                           )
+                           AND (SELECT count(*) FROM records record
+                                WHERE record.source_id = object.source_system_id
+                                  AND record.business_key = 'oam-receipt:' || object.external_id) = 1
+                           AND EXISTS (
+                               SELECT 1 FROM records record
+                                WHERE record.source_id = object.source_system_id
+                                  AND record.business_key = 'oam-receipt:' || object.external_id
+                                  AND record.payload_sha256 = p_row->>'payload_sha256'
+                                  AND record.payload_sha256 = encode(sha256(convert_to(record.payload_json, 'UTF8')), 'hex')
+                                  AND record.payload_json::jsonb - ARRAY['id','status','sourceTime','sourceVersion']::text[] = '{}'::jsonb
+                                  AND record.payload_json::jsonb->>'id' = object.external_id
+                                  AND record.payload_json::jsonb->>'status' IN ('synced', 'exception')
+                                  AND record.payload_json::jsonb->>'status' = p_row->>'status'
+                                  AND record.payload_json::jsonb->>'sourceVersion' ~ '^[A-Za-z0-9._:-]{1,160}$'
+                                  AND record.payload_json::jsonb->>'sourceVersion' = p_row->>'source_version'
+                                  AND record.payload_json::jsonb->>'sourceTime' ~ '(Z|[+-][0-9]{2}:[0-9]{2})$'
+                                  AND (record.payload_json::jsonb->>'sourceTime')::timestamptz = record.source_updated_at
+                                  AND record.source_updated_at = (p_row->>'source_time')::timestamptz
+                           )
+                       )
+                   )
+            )
+        ELSE false END
+    ), false);
+EXCEPTION WHEN invalid_text_representation OR invalid_datetime_format OR datetime_field_overflow
+    OR invalid_parameter_value OR numeric_value_out_of_range THEN
     RETURN false;
 END
 $$;
@@ -261,6 +261,12 @@ def _policy(table: str, command: str, capability: str) -> str:
         "public.rsc_oam_receipt_rls_check_0082("
         f"'{command}', '{capability}', '{table}', pg_catalog.to_jsonb({table}))"
     )
+    if command == "update":
+        return (
+            f"CREATE POLICY {policy} ON public.{table} AS PERMISSIVE "
+            f"FOR UPDATE TO star_oam_projector USING ({expression}) "
+            f"WITH CHECK ({expression})"
+        )
     if command == "insert":
         return (
             f"CREATE POLICY {policy} ON public.{table} AS PERMISSIVE "
@@ -331,7 +337,7 @@ def upgrade() -> None:
         "GRANT EXECUTE ON FUNCTION public.rsc_oam_receipt_rls_check_0082(text,text,text,jsonb) "
         "TO star_oam_projector, star_oam_migrator"
     )
-    for table in RECEIPT_TABLES:
+    for table in (*RECEIPT_TABLES, "oam_receipt_sync_scope_bindings"):
         op.execute(f"ALTER TABLE public.{table} ENABLE ROW LEVEL SECURITY")
         op.execute(f"ALTER TABLE public.{table} FORCE ROW LEVEL SECURITY")
     op.execute(
@@ -344,6 +350,11 @@ def upgrade() -> None:
             f"CREATE POLICY {table}_migrator_receipt_0082 ON public.{table} "
             "AS PERMISSIVE FOR ALL TO star_oam_migrator USING (true) WITH CHECK (true)"
         )
+    for table in ("shipments", "oam_receipt_evidence", "oam_receipt_sync_scope_bindings"):
+        op.execute(
+            f"CREATE POLICY {table}_backup_select_receipt_0082 ON public.{table} "
+            "AS PERMISSIVE FOR SELECT TO star_oam_backup USING (true)"
+        )
     for table in (
         "external_sync_snapshots",
         "external_sync_current_records",
@@ -355,6 +366,7 @@ def upgrade() -> None:
     ):
         op.execute(_policy(table, "select", "projector_read"))
     op.execute(_policy("sync_runs", "insert", "projector_write"))
+    op.execute(_policy("sync_runs", "update", "projector_write"))
     op.execute(_policy("oam_receipt_evidence", "select", "projector_read"))
     op.execute(_policy("oam_receipt_evidence", "insert", "projector_write"))
     op.execute(
@@ -369,10 +381,7 @@ def upgrade() -> None:
         "CREATE POLICY oam_receipt_evidence_api_select_0082 "
         "ON public.oam_receipt_evidence AS PERMISSIVE FOR SELECT TO star_oam_api USING (true)"
     )
-    op.execute(
-        "CREATE POLICY oam_receipt_evidence_api_insert_0082 "
-        "ON public.oam_receipt_evidence AS PERMISSIVE FOR INSERT TO star_oam_api WITH CHECK (true)"
-    )
+    op.execute("REVOKE INSERT ON public.oam_receipt_evidence FROM star_oam_api")
     op.execute(
         "GRANT SELECT ON TABLE public.shipments TO star_oam_projector"
     )
@@ -393,12 +402,12 @@ def downgrade() -> None:
     if dialect != "postgresql":
         raise RuntimeError("0082 supports only PostgreSQL and SQLite")
     op.execute(
-        "LOCK TABLE public.alembic_version, public.oam_receipt_sync_scope_bindings "
-        "IN ACCESS EXCLUSIVE MODE"
+        "LOCK TABLE public.alembic_version, public.oam_receipt_sync_scope_bindings, "
+        "public.sync_runs, public.oam_receipt_evidence IN ACCESS EXCLUSIVE MODE"
     )
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM public.oam_receipt_sync_scope_bindings) "
-        "THEN RAISE EXCEPTION '0082 downgrade blocked: receipt scope bindings exist'; END IF; END $$"
+        "OR EXISTS (SELECT 1 FROM public.sync_runs WHERE run_key LIKE 'oam-receipt:%') OR EXISTS (SELECT 1 FROM public.oam_receipt_evidence) THEN RAISE EXCEPTION '0082 downgrade blocked: receipt bindings or facts exist'; END IF; END $$"
     )
     for table in (
         "oam_receipt_evidence",
@@ -413,6 +422,8 @@ def downgrade() -> None:
         op.execute(f"DROP POLICY IF EXISTS {table}_projector_select_receipt_0082 ON public.{table}")
         op.execute(f"DROP POLICY IF EXISTS {table}_projector_insert_receipt_0082 ON public.{table}")
         op.execute(f"DROP POLICY IF EXISTS {table}_migrator_receipt_0082 ON public.{table}")
+        op.execute(f"DROP POLICY IF EXISTS {table}_projector_update_receipt_0082 ON public.{table}")
+        op.execute(f"DROP POLICY IF EXISTS {table}_backup_select_receipt_0082 ON public.{table}")
     op.execute("DROP POLICY IF EXISTS shipments_api_select_receipt_0082 ON public.shipments")
     op.execute("DROP POLICY IF EXISTS shipments_api_insert_receipt_0082 ON public.shipments")
     op.execute("DROP POLICY IF EXISTS oam_receipt_evidence_api_select_0082 ON public.oam_receipt_evidence")
@@ -420,6 +431,7 @@ def downgrade() -> None:
     op.execute("DROP POLICY IF EXISTS oam_receipt_sync_scope_bindings_migrator_0082 ON public.oam_receipt_sync_scope_bindings")
     for table in ("shipments", "oam_receipt_evidence"):
         op.execute(f"ALTER TABLE public.{table} NO FORCE ROW LEVEL SECURITY")
+        op.execute(f"ALTER TABLE public.{table} DISABLE ROW LEVEL SECURITY")
     op.execute(
         "REVOKE SELECT ON TABLE public.oam_receipt_sync_scope_bindings FROM star_oam_migrator"
     )
@@ -427,11 +439,14 @@ def downgrade() -> None:
         "REVOKE SELECT ON TABLE public.oam_receipt_evidence FROM star_oam_projector"
     )
     op.execute(
-        "REVOKE INSERT ON TABLE public.oam_receipt_evidence FROM star_oam_projector"
+        "REVOKE INSERT (id, external_object_id, shipment_id, status, source_time, "
+        "source_version, payload_sha256, created_at) "
+        "ON TABLE public.oam_receipt_evidence FROM star_oam_projector"
     )
     op.execute("REVOKE SELECT ON TABLE public.shipments FROM star_oam_projector")
     op.execute(
         "DROP FUNCTION public.rsc_oam_receipt_rls_check_0082(text,text,text,jsonb)"
     )
     op.execute("DROP TABLE public.oam_receipt_sync_scope_bindings")
+    op.execute("GRANT INSERT ON public.oam_receipt_evidence TO star_oam_api")
     _replace_readiness(upgrade=False)

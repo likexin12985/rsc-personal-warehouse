@@ -267,25 +267,60 @@ def _sql_nullable_literal(value: str | None) -> str:
     return "NULL" if value is None else _sql_literal(value)
 
 
+RECEIPT_TABLES = ("shipments", "oam_receipt_evidence", "oam_receipt_sync_scope_bindings")
+
+
+def _receipt_policies() -> tuple[tuple[str, str, str, str, str | None, str | None], ...]:
+    policies: list[tuple[str, str, str, str, str | None, str | None]] = []
+
+    def add(table: str, command: str, capability: str) -> None:
+        expression = (
+            "rsc_oam_receipt_rls_check_0082("
+            f"'{command}'::text, '{capability}'::text, '{table}'::text, to_jsonb({table}.*))"
+        )
+        policies.append((
+            table, f"{table}_projector_{command}_receipt_0082",
+            {"select": "r", "insert": "a", "update": "w"}[command], PROJECTOR_ROLE,
+            None if command == "insert" else expression,
+            None if command == "select" else expression,
+        ))
+
+    for table in (
+        "external_sync_snapshots", "external_sync_current_records", "source_systems",
+        "sync_runs", "external_objects", "external_object_mappings", "shipments",
+        "oam_receipt_evidence",
+    ):
+        add(table, "select", "projector_read")
+    add("sync_runs", "insert", "projector_write")
+    add("sync_runs", "update", "projector_write")
+    add("oam_receipt_evidence", "insert", "projector_write")
+    for table in RECEIPT_TABLES:
+        migrator_name = (
+            "oam_receipt_sync_scope_bindings_migrator_0082"
+            if table == "oam_receipt_sync_scope_bindings"
+            else f"{table}_migrator_receipt_0082"
+        )
+        policies.append((table, migrator_name, "*", MIGRATION_ROLE, "true", "true"))
+        policies.append((
+            table, f"{table}_backup_select_receipt_0082", "r", BACKUP_ROLE, "true", None,
+        ))
+    for table in ("shipments", "oam_receipt_evidence"):
+        suffix = "receipt_0082" if table == "shipments" else "0082"
+        policies.append((table, f"{table}_api_select_{suffix}", "r", API_ROLE, "true", None))
+        if table == "shipments":
+            policies.append((table, f"{table}_api_insert_{suffix}", "a", API_ROLE, None, "true"))
+    return tuple(policies)
+
+
+RECEIPT_POLICIES = _receipt_policies()
 _POLICY_VALUES = ",\n        ".join(
     "(" + ", ".join(_sql_nullable_literal(value) for value in policy) + ")"
-    for policy in EXPECTED_POLICIES
-)
-_RECEIPT_POLICY_NAMES_VALUES = ", ".join(
-    _sql_literal(name)
-    for name in (
-        "external_sync_snapshots_projector_select_receipt_0082",
-        "external_sync_current_records_projector_select_receipt_0082",
-        "source_systems_projector_select_receipt_0082",
-        "sync_runs_projector_select_receipt_0082",
-        "sync_runs_projector_insert_receipt_0082",
-        "external_objects_projector_select_receipt_0082",
-        "external_object_mappings_projector_select_receipt_0082",
-    )
+    for policy in (*EXPECTED_POLICIES, *RECEIPT_POLICIES)
 )
 _TABLE_VALUES = ",\n        ".join(
-    f"({_sql_literal(table_name)})" for table_name in RLS_TABLES
+    f"({_sql_literal(table_name)})" for table_name in (*RLS_TABLES, *RECEIPT_TABLES)
 )
+
 
 OAM_SYNC_FUNCTION_MANIFEST_0044 = {
     "rsc_oam_formal_scope_key_0044(text,text)": (
@@ -642,7 +677,23 @@ OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0081 = {
         "efb632b66d584cd8fe26414abd5420ddb59d7fbf97ad50e13864bb73237b14b6",
     ),
 }
-OAM_SYNC_FUNCTION_MANIFEST = OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0081
+RECEIPT_RLS_SIGNATURE = "rsc_oam_receipt_rls_check_0082(text,text,text,jsonb)"
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0082 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0081,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0081["rsc_oam_runtime_binding_ready_0044()"][:6],
+        "c6318534d12f800c067ad8ced6c2700018545c95c50e8b5078c56f3037b06210",
+    ),
+    "rsc_guard_oam_receipt_evidence_immutable_0081()": (
+        True, "v", "plpgsql", "trigger", False, "u",
+        "297ec85aaea40a667a0bed41be94f58f374bbe554b1d857c910a69d67d9405c9",
+    ),
+    RECEIPT_RLS_SIGNATURE: (
+        False, "s", "plpgsql", "boolean", False, "u",
+        "80116140d0b4514b7c1ba4c16668d243fac03d51db86ed8788510b925224aa06",
+    ),
+}
+OAM_SYNC_FUNCTION_MANIFEST = OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0082
 
 EXPECTED_TRIGGERS = (
     (
@@ -672,6 +723,11 @@ EXPECTED_TRIGGERS = (
         True,
         True,
     ),
+)
+
+RECEIPT_TRIGGERS = (
+    ("oam_receipt_evidence", "trg_oam_receipt_evidence_immutable_0081",
+     "rsc_guard_oam_receipt_evidence_immutable_0081()", 27, False, False, False),
 )
 
 _FUNCTION_VALUES = ",\n        ".join(
@@ -709,13 +765,50 @@ _TRIGGER_VALUES = ",\n        ".join(
         is_constraint,
         is_deferrable,
         is_initially_deferred,
-    ) in EXPECTED_TRIGGERS
+    ) in (*EXPECTED_TRIGGERS, *RECEIPT_TRIGGERS)
 )
 _TRIGGER_TABLE_VALUES = ",\n        ".join(
     f"({_sql_literal(table_name)})"
-    for table_name in sorted({row[0] for row in EXPECTED_TRIGGERS})
+    for table_name in sorted({row[0] for row in (*EXPECTED_TRIGGERS, *RECEIPT_TRIGGERS)})
 )
 
+
+RECEIPT_BINDING_CONSTRAINTS = {
+    "ck_oam_receipt_binding_capability_0082": (
+        "CHECK ((capability = ANY (ARRAY['projector_read'::text, 'projector_write'::text])))"
+    ),
+    "ck_oam_receipt_binding_entity_0082": (
+        "CHECK ((entity_type = 'oam_receipt'::text))"
+    ),
+    "ck_oam_receipt_binding_principal_0082": (
+        "CHECK ((principal_name = 'star_oam_projector'::text))"
+    ),
+    "ck_oam_receipt_binding_scope_0082": (
+        "CHECK ((scope_key ~ '^oam-receipts:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'::text))"
+    ),
+    "ck_oam_receipt_binding_source_0082": (
+        "CHECK ((source_system = 'starcharge_oam'::text))"
+    ),
+    "oam_receipt_sync_scope_bindings_pkey": (
+        'PRIMARY KEY (id)'
+    ),
+    "uq_oam_receipt_binding_coordinate_0082": (
+        'UNIQUE (principal_name, capability, source_system, source_instance, scope_key, company_id, org_code, entity_type)'
+    ),
+    "ck_oam_receipt_binding_company_0082": (
+        'CHECK (((length(TRIM(BOTH FROM company_id)) >= 1) AND (length(TRIM(BOTH FROM company_id)) <= 80)))'
+    ),
+    "ck_oam_receipt_binding_instance_0082": (
+        'CHECK (((length(TRIM(BOTH FROM source_instance)) >= 1) AND (length(TRIM(BOTH FROM source_instance)) <= 128)))'
+    ),
+    "ck_oam_receipt_binding_org_0082": (
+        'CHECK (((length(TRIM(BOTH FROM org_code)) >= 1) AND (length(TRIM(BOTH FROM org_code)) <= 80)))'
+    ),
+}
+_RECEIPT_CONSTRAINT_VALUES = ",\n".join(
+    f"({_sql_literal(name)}, {_sql_literal(definition)})"
+    for name, definition in RECEIPT_BINDING_CONSTRAINTS.items()
+)
 
 _RLS_BOUNDARY_SQL = text(
     f"""
@@ -756,7 +849,6 @@ actual_policies AS (
         ON schema_row.oid = table_row.relnamespace
      WHERE schema_row.nspname = 'public'
        AND table_row.relname IN (SELECT table_name FROM required_tables)
-       AND policy.polname NOT IN ({_RECEIPT_POLICY_NAMES_VALUES})
 ),
 expected_functions(
     signature,
@@ -793,7 +885,9 @@ actual_oam_functions AS (
       JOIN pg_catalog.pg_namespace AS schema_row
         ON schema_row.oid = function_row.pronamespace
      WHERE schema_row.nspname = 'public'
-       AND function_row.proname ~ '^rsc_oam_[[:alnum:]_]+_0044$'
+       AND (function_row.proname ~ '^rsc_oam_[[:alnum:]_]+_0044$'
+            OR function_row.proname IN ('rsc_oam_receipt_rls_check_0082',
+                'rsc_guard_oam_receipt_evidence_immutable_0081'))
 ),
 actual_runtime_triggers AS (
     SELECT
@@ -822,6 +916,26 @@ actual_runtime_triggers AS (
            SELECT table_name FROM required_trigger_tables
        )
        AND NOT trigger_row.tgisinternal
+),
+receipt_binding_constraints AS (
+    SELECT NOT EXISTS (
+        SELECT 1 FROM (VALUES {_RECEIPT_CONSTRAINT_VALUES}) expected(name, definition)
+        FULL JOIN (
+            SELECT conname, pg_catalog.pg_get_constraintdef(oid) definition, convalidated
+              FROM pg_catalog.pg_constraint
+             WHERE conrelid = pg_catalog.to_regclass('public.oam_receipt_sync_scope_bindings')
+        ) actual ON actual.conname = expected.name
+        WHERE actual.conname IS NULL OR expected.name IS NULL
+           OR actual.definition IS DISTINCT FROM expected.definition
+           OR actual.convalidated IS NOT TRUE
+    ) AND NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_roles role_row
+         WHERE role_row.rolname NOT IN (:migration_role, 'pg_write_all_data') AND NOT role_row.rolsuper
+           AND (pg_catalog.has_any_column_privilege(role_row.oid,
+                   'public.oam_receipt_sync_scope_bindings', 'INSERT,UPDATE,REFERENCES')
+                OR pg_catalog.has_table_privilege(role_row.oid,
+                   'public.oam_receipt_sync_scope_bindings', 'DELETE,TRUNCATE,TRIGGER'))
+    ) AS passed
 ),
 table_boundary AS (
     SELECT NOT EXISTS (
@@ -901,7 +1015,8 @@ function_boundary AS (
             ) IS DISTINCT FROM NOT expected.is_private
             OR pg_catalog.has_function_privilege(
                 '{EDGE_ROLE}', function_row.oid, 'EXECUTE'
-            ) IS DISTINCT FROM NOT expected.is_private
+            ) IS DISTINCT FROM (NOT expected.is_private
+                AND expected.signature <> '{RECEIPT_RLS_SIGNATURE}')
             OR EXISTS (
                 SELECT 1
                   FROM pg_catalog.aclexplode(
@@ -927,6 +1042,8 @@ function_boundary AS (
                                    AND allowed_role.rolname IN (
                                        '{EDGE_ROLE}', '{PROJECTOR_ROLE}'
                                    )
+                                   AND (allowed_role.rolname <> '{EDGE_ROLE}'
+                                        OR expected.signature <> '{RECEIPT_RLS_SIGNATURE}')
                             )
                         )
                     )
@@ -940,7 +1057,8 @@ function_boundary AS (
                       )
                   ) AS exact_function_acl
                  WHERE exact_function_acl.privilege_type = 'EXECUTE'
-            ) <> CASE WHEN expected.is_private THEN 1 ELSE 3 END
+            ) <> CASE WHEN expected.is_private THEN 1
+                     WHEN expected.signature = '{RECEIPT_RLS_SIGNATURE}' THEN 2 ELSE 3 END
     ) AS passed
 ),
 function_roster_boundary AS (
@@ -996,7 +1114,7 @@ trigger_boundary AS (
                pg_catalog.to_regprocedure(
                    'public.' || expected.function_signature
                )::oid
-            OR actual.enabled <> 'O'
+            OR actual.enabled <> CASE WHEN expected.table_name = 'oam_receipt_evidence' THEN 'A' ELSE 'O' END
             OR actual.trigger_type <> expected.trigger_type
             OR actual.is_constraint IS DISTINCT FROM expected.is_constraint
             OR actual.is_deferrable IS DISTINCT FROM expected.is_deferrable
@@ -1034,6 +1152,7 @@ revision_and_binding_boundary AS (
 ),
 check_results(check_name, passed) AS (
     SELECT 'forced_tables', passed FROM table_boundary
+    UNION ALL SELECT 'receipt_binding_constraints', passed FROM receipt_binding_constraints
     UNION ALL SELECT 'policy_closure', passed FROM policy_boundary
     UNION ALL SELECT 'function_closure', passed FROM function_boundary
     UNION ALL SELECT 'function_roster', passed FROM function_roster_boundary
@@ -1115,6 +1234,8 @@ __all__ = [
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0072",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0079",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0080",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0081",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0082",
     "RLS_REVISION",
     "RLS_TABLES",
     "_RLS_BOUNDARY_SQL",
