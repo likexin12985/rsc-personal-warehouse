@@ -26,10 +26,10 @@ from pg16_work_order_replacements_gate import replacement_snapshot
 from pg16_work_order_query_gate import query_worlds
 
 
-def _mini_contract(fixture):
+def _mini_contract(fixture,script_name="work-order-replacement-pg16.cjs"):
     node=shutil.which("node")
     assert node,"Node is required for the paired replacement client contract"
-    script=Path(__file__).resolve().parents[2]/"miniprogram/tests/fixtures/work-order-replacement-pg16.cjs"
+    script=Path(__file__).resolve().parents[2]/"miniprogram/tests/fixtures"/script_name
     result=subprocess.run([node,str(script)],input=json.dumps(fixture),text=True,capture_output=True,
         timeout=30,env={"PATH":os.environ.get("PATH","")})
     assert result.returncode==0,result.stderr

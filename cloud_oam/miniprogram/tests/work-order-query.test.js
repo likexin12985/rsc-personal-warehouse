@@ -275,8 +275,7 @@ test('paired original request is visible outside current orders and only its par
     access: () => ({ ...access(), permissions: access().permissions.concat({ resource: 'work_order_material', action: 'operate', field_code: '' }) }) })
   await page.onShow()
   assert.match(page.data.pendingRequests[0].label, /成对消耗与回收/)
-  assert.equal(page.data.pendingRequests[0].sealable, false)
-  await page.sealPendingRequest(event(ORDER)); assert.equal(state.calls.filter(call => call.endpoint.includes('/by-request/')).length, 0)
+  assert.equal(page.data.pendingRequests[0].sealable, true)
   await page.recoverPendingRequest(event(ORDER))
   assert.equal(store.read(marker).kind, 'missing'); assert.match(page.data.recoveryMessage, /WR-TEST/)
   assert.equal(page.data.pendingRequests.length, 0)
@@ -300,6 +299,22 @@ test('pending paired request disables ordinary drafts and retains evidence on un
     assert.doesNotMatch(page.data.recoveryMessage, /原操作已确认/)
     assert.ok(state.calls.every(call => call.method === 'GET'))
   }
+})
+test('page confirms only the parent seal and clears the marker after a matching GET', async () => {
+  const { store, marker } = await pairedPendingStore(); let posted = false, confirmations = 0
+  const sealed = { schema_version: '1.0', lookup_status: 'sealed_not_executed', command: null, seal: {
+    seal_id: OTHER, work_order_id: ORDER, operator_person_id: PERSON, operation_type: 'replace', request_id: marker.trace_request_id,
+    request_hash: marker.request_hash, sealed_at: '2026-09-13T00:00:00Z' } }
+  const { page, state } = await openDraft({ store, recovery: () => {
+    if (!posted) throw Object.assign(new Error('not observed'), { status: 404, responseReceived: true, code: 'replacement_not_found' })
+    return sealed
+  }, seal: () => { posted = true; return sealed }, confirm: options => { confirmations++; options.success({ confirm: true }) } })
+  await page.sealPendingRequest(event(ORDER))
+  assert.equal(confirmations, 1); assert.equal(store.read(marker).kind, 'missing')
+  assert.match(page.data.recoveryMessage, /已关闭且未执行/)
+  const posts = state.calls.filter(call => call.method === 'POST')
+  assert.equal(posts.length, 1); assert.equal(posts[0].endpoint,
+    `/v1/work-orders/${ORDER}/material-replacements/by-request/${marker.trace_request_id}/seal`)
 })
 function recovered(marker) {
   return { schema_version: '1.0', lookup_status: 'confirmed', command: { schema_version: '1.0', work_order_id: ORDER, operator_person_id: PERSON,

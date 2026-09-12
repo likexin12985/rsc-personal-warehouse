@@ -182,6 +182,8 @@ def execute_replacement(db, *, actor, work_order_id, consume_lines, recover_line
         from .work_order_replacement_read import replacement_result
         replacement_result(db, replacement=existing, actor=current)
         return existing
+    from .work_order_command_seal import require_unsealed_request
+    require_unsealed_request(db, actor=current, work_order_id=work_order_id, operation_type="replace", request_id=request_id)
     if order.status != "active":
         _fail("work_order_inactive", "工单当前不可执行新物料操作")
     from .work_order_query import require_new_work_order_source

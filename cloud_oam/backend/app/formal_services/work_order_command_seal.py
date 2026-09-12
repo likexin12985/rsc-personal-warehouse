@@ -8,7 +8,10 @@ from sqlalchemy import select
 from ..demand_models import WorkOrderCommandSeal, OamWorkOrder
 from ..formal_access import lock_formal_principal_graph
 from ..foundation_models import AuditEvent
-from ..work_order_material_schemas import WorkOrderMaterialSealOut, WorkOrderMaterialSealedLookupOut
+from ..work_order_material_schemas import (
+    WorkOrderMaterialSealOut, WorkOrderMaterialSealedLookupOut,
+    WorkOrderReplacementSealOut, WorkOrderReplacementSealedLookupOut,
+)
 from . import work_order_material as material
 from .audit_chain import append_audit_event, verify_audit_event_in_read_snapshot, AuditChainError
 from .inventory_posting import _request_reference, _require_current_actor, _lock_inventory_ledger_head_for_atomic_batch
@@ -51,7 +54,7 @@ def _verified_seal(db, *, actor, row):
     invalid = (row.operator_person_id != actor.person_id or row.actor_user_id != actor.user_id
         or row.request_reference != _request_reference(row.request_id)
         or not re.fullmatch(r"[0-9a-f]{64}", row.request_hash)
-        or row.operation_type not in {"occupy", "consume", "release"}
+        or row.operation_type not in {"occupy", "consume", "release", "replace"}
         or row.authorization_version < 1 or _utc(row.created_at) != _utc(row.sealed_at))
     with db.no_autoflush:
         events = tuple(db.scalars(select(AuditEvent).where(AuditEvent.stream_key == "material_request",
@@ -67,7 +70,8 @@ def _verified_seal(db, *, actor, row):
         verify_audit_event_in_read_snapshot(db, stream_key="material_request", event_id=event.id)
     except AuditChainError:
         _fail("work_order_seal_evidence_invalid", "原请求封存审计未通过核验", "service_unavailable")
-    return WorkOrderMaterialSealedLookupOut(seal=WorkOrderMaterialSealOut(
+    output, seal_type = (WorkOrderReplacementSealedLookupOut, WorkOrderReplacementSealOut) if row.operation_type == "replace" else (WorkOrderMaterialSealedLookupOut, WorkOrderMaterialSealOut)
+    return output(seal=seal_type(
         seal_id=row.id, work_order_id=row.oam_work_order_id, operator_person_id=row.operator_person_id,
         operation_type=row.operation_type, request_id=row.request_id, request_hash=row.request_hash,
         sealed_at=row.sealed_at if row.sealed_at.tzinfo else row.sealed_at.replace(tzinfo=timezone.utc)))
@@ -79,6 +83,7 @@ def lookup_command_result(db, *, actor, work_order_id, operation_type, request_i
     current = _require_current_actor(db, actor)
     row = _row(db, actor=current, work_order_id=work_order_id, operation_type=operation_type, request_id=request_id)
     if row is None:
+        _require_current_actor(db, current)
         return original
     if original.lookup_status == "confirmed":
         _fail("work_order_seal_evidence_invalid", "原请求同时存在过账和封存记录，禁止继续操作", "service_unavailable")
@@ -87,11 +92,7 @@ def lookup_command_result(db, *, actor, work_order_id, operation_type, request_i
     return result
 
 
-def seal_command(db, *, actor, work_order_id, operation_type, request_id, request_hash):
-    if (operation_type not in {"occupy", "consume", "release"}
-            or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{8,160}", request_id)
-            or not isinstance(request_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", request_hash)):
-        _fail("work_order_seal_input_invalid", "原请求封存坐标无效", "invalid_request")
+def _lock_request(db, *, actor, work_order_id):
     _lock_inventory_ledger_head_for_atomic_batch(db)
     lock_formal_principal_graph(db, (actor.user_id,))
     current = _require_current_actor(db, actor)
@@ -102,13 +103,10 @@ def seal_command(db, *, actor, work_order_id, operation_type, request_id, reques
     # namespace; it cannot operate the new assignee's inventory or requests.
     if db.get(OamWorkOrder, work_order_id, populate_existing=True) is None:
         _fail("work_order_not_found", "原工单不存在", "not_found")
-    original = lookup_command_result(db, actor=current, work_order_id=work_order_id,
-                                     operation_type=operation_type, request_id=request_id)
-    if original.lookup_status != "not_observed":
-        digest = original.command.request_hash if original.lookup_status == "confirmed" else original.seal.request_hash
-        if digest != request_hash:
-            _fail("work_order_seal_request_conflict", "原请求已绑定其他内容，请保留恢复记录核验")
-        return original
+    return current
+
+
+def _write_seal(db, *, current, work_order_id, operation_type, request_id, request_hash):
     now = datetime.now(timezone.utc)
     row = WorkOrderCommandSeal(id=uuid4(), oam_work_order_id=work_order_id,
         actor_user_id=current.user_id, operator_person_id=current.person_id,
@@ -122,3 +120,20 @@ def seal_command(db, *, actor, work_order_id, operation_type, request_id, reques
     db.flush()
     _require_current_actor(db, current)
     return _verified_seal(db, actor=current, row=row)
+
+
+def seal_command(db, *, actor, work_order_id, operation_type, request_id, request_hash):
+    if (operation_type not in {"occupy", "consume", "release"}
+            or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{8,160}", request_id)
+            or not isinstance(request_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", request_hash)):
+        _fail("work_order_seal_input_invalid", "原请求封存坐标无效", "invalid_request")
+    current = _lock_request(db, actor=actor, work_order_id=work_order_id)
+    original = lookup_command_result(db, actor=current, work_order_id=work_order_id,
+                                     operation_type=operation_type, request_id=request_id)
+    if original.lookup_status != "not_observed":
+        digest = original.command.request_hash if original.lookup_status == "confirmed" else original.seal.request_hash
+        if digest != request_hash:
+            _fail("work_order_seal_request_conflict", "原请求已绑定其他内容，请保留恢复记录核验")
+        return original
+    return _write_seal(db, current=current, work_order_id=work_order_id,
+        operation_type=operation_type, request_id=request_id, request_hash=request_hash)

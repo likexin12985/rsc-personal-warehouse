@@ -1893,6 +1893,9 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
     "approval_actions",
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
+    'trg_work_order_seals_replacement_0095': ('work_order_command_seals', 'rsc_guard_work_order_replacement_seal_0095', 'A', 5, True, True, True),
+    'trg_work_order_replacements_seal_0095': ('work_order_replacements', 'rsc_guard_work_order_replacement_seal_0095', 'A', 5, True, True, True),
+
     'trg_work_order_seals_proof_0094': ('work_order_command_seals', 'rsc_guard_work_order_command_seal_0094', 'A', 5, True, True, True),
     'trg_work_order_operations_seal_0094': ('work_order_material_operations', 'rsc_guard_work_order_command_seal_0094', 'A', 5, True, True, True),
     'trg_work_order_seals_immutable_0094': ('work_order_command_seals', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
@@ -2377,6 +2380,8 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
+    ('rsc_guard_work_order_replacement_seal_0095', ''): 'dd3fe01e41ded1ff53ae667fb268afe6f3b3229a55a1fa6c0c6a11c87713ce99',
+
     ('rsc_guard_work_order_command_seal_0094', ''): '4f8b97af1362ce7796aacd73fdcfa612017426f9e81556c31a06f9a2aded029b',
 
     ('rsc_check_work_order_replacement_0093', 'uuid'): 'd725c7c3a13482a8c4ddc8254e9ec819606ad0b6f0e5d3a5ec8cad1bbdc6606d',
@@ -2492,6 +2497,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ("rsc_guard_work_order_replacement_seal_0095", ""),
         ("rsc_guard_work_order_command_seal_0094", ""),
         ('rsc_check_work_order_replacement_0093', 'uuid'),
         ('rsc_dispatch_work_order_replacement_0093', ''),
@@ -5987,7 +5993,7 @@ def _select_material_request_approval_functions(
         for row in rows
         if isinstance(row.get("function_name"), str)
         and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094")
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094", "_0095")
         )
     ]
 

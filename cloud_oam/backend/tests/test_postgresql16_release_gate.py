@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261004_0094"
+HEAD_REVISION = "20261005_0095"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7422,7 +7422,7 @@ def _head_account_admission_hash() -> str:
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20261004_0094_work_order_command_seals.py"
+        "20261005_0095_work_order_replacement_seals.py"
     )))
     assert migration["revision"] == HEAD_REVISION
     return migration["NEW_HASH"]
@@ -21213,6 +21213,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_replacement_history_gate(api_engine)
             from pg16_work_order_replacement_preview_gate import assert_replacement_preview_gate
             assert_replacement_preview_gate(api_engine, replacement_fixture_engine)
+            from pg16_work_order_replacement_seals_gate import assert_replacement_seal_atomic_gate
+            assert_replacement_seal_atomic_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_query_gate import assert_work_order_query_gate
             assert_work_order_query_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_submit_gate import assert_work_order_submit_gate
@@ -21236,6 +21238,16 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             seal_fixture_engine.dispose()
         blocked_seal = _run_alembic("downgrade", "20261003_0093", expect_success=False)
         assert "0094 downgrade blocked" in blocked_seal.stdout + blocked_seal.stderr
+        assert _current_revision() == HEAD_REVISION
+        from pg16_work_order_replacement_seals_gate import assert_replacement_seal_commit_gate
+        replacement_seal_fixture_engine = create_engine(_sqlalchemy_url(
+            role="star_oam_migrator", password=_role_password("star_oam_migrator")))
+        try:
+            assert_replacement_seal_commit_gate(api_engine, replacement_seal_fixture_engine, seal_worlds, admin_user_id)
+        finally:
+            replacement_seal_fixture_engine.dispose()
+        blocked_parent_seal = _run_alembic("downgrade", "20261004_0094", expect_success=False)
+        assert "0095 downgrade blocked" in blocked_parent_seal.stdout + blocked_parent_seal.stderr
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
     finally:

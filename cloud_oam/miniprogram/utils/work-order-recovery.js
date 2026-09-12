@@ -2,6 +2,22 @@ const { uuid } = require('./work-order-query-contract')
 const { validateLookup } = require('./work-order-command')
 const replacement = require('./work-order-replacement-command')
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
+function originalPath(marker) {
+  return marker.kind === 'work_order_replacement'
+    ? `/v1/work-orders/${marker.work_order_id}/material-replacements/by-request/${marker.trace_request_id}`
+    : `/v1/work-orders/${marker.work_order_id}/material-operations/${marker.operation_type}/by-request/${marker.trace_request_id}`
+}
+async function originalResult(api, marker) {
+  const paired = marker.kind === 'work_order_replacement'
+  let raw
+  try { raw = await api.request(originalPath(marker), READ) } catch (error) {
+    // Only this exact server response means no parent is currently observed.
+    // It never clears storage or permits a stock POST; sealing arbitrates next.
+    if (paired && error.responseReceived === true && error.status === 404 && error.code === 'replacement_not_found') return null
+    throw error
+  }
+  return paired ? replacement.validateLookup(raw, marker) : validateLookup(raw, marker)
+}
 
 async function recoverPending({ api, store, workOrderId, personId, authorize }) {
   const order = uuid(workOrderId), person = uuid(personId)
@@ -10,11 +26,7 @@ async function recoverPending({ api, store, workOrderId, personId, authorize }) 
     if (stored.kind === 'missing') return { status: 'missing' }
     if (stored.kind !== 'valid' || stored.value.person_id !== person) throw new Error('原工单恢复记录与当前人员不一致。')
     const marker = stored.value, before = await authorize()
-    const paired = marker.kind === 'work_order_replacement'
-    const path = paired ? `/v1/work-orders/${order}/material-replacements/by-request/${marker.trace_request_id}`
-      : `/v1/work-orders/${order}/material-operations/${marker.operation_type}/by-request/${marker.trace_request_id}`
-    const raw = await api.request(path, READ)
-    const result = paired ? replacement.validateResult(raw, marker) : validateLookup(raw, marker)
+    const result = await originalResult(api, marker)
     if (await authorize() !== before) throw new Error('核验期间身份或权限发生变化，请保留原请求。')
     if (result === null) return { status: 'pending' }
     lease.clearExact(marker)
@@ -31,12 +43,9 @@ async function sealPending({ api, store, workOrderId, personId, authorize, confi
   return store.withLease({ work_order_id: order }, async lease => {
     const stored = lease.read()
     if (stored.kind !== 'valid' || stored.value.person_id !== person) throw new Error('原工单恢复记录与当前人员不一致。')
-    // Replacement sealing needs its own database arbitration. Never send it
-    // to an ordinary child endpoint or clear a parent on a missing result.
-    if (stored.value.kind === 'work_order_replacement') throw new Error('成对回收原请求目前只能读取核验，请保留恢复记录。')
     const marker = stored.value, before = await authorize()
-    const path = `/v1/work-orders/${order}/material-operations/${marker.operation_type}/by-request/${marker.trace_request_id}`
-    let result = validateLookup(await api.request(path, READ), marker)
+    const path = originalPath(marker)
+    let result = await originalResult(api, marker)
     if (await authorize() !== before) throw new Error('access changed')
     if (result !== null) { lease.clearExact(marker); return outcome(result) }
     if (!await confirm()) return { status: 'cancelled' }
@@ -45,7 +54,7 @@ async function sealPending({ api, store, workOrderId, personId, authorize, confi
     // absent GET nor a failed POST permits discarding this durable marker.
     await api.postSealNoReplay(path + '/seal', { operator_person_id: person, request_hash: marker.request_hash }, { requestId: marker.trace_request_id })
     if (await authorize() !== before) throw new Error('access changed')
-    result = validateLookup(await api.request(path, READ), marker)
+    result = await originalResult(api, marker)
     if (await authorize() !== before) throw new Error('access changed')
     if (result === null) return { status: 'pending' }
     lease.clearExact(marker)

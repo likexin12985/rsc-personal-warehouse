@@ -175,3 +175,18 @@ test('only exact original GET proof confirms both operations; POST output or unk
   assert.throws(() => replacement.validateResult(raw, { ...marker, operation_type: 'consume' }))
   assert.throws(() => replacement.validateResult(raw, { ...marker, kind: 'work_order_material' }))
 })
+test('sealed parent proof requires every original coordinate and never accepts an ordinary child seal', () => {
+  const marker = { kind: 'work_order_replacement', operation_type: 'replace', work_order_id: id(1), person_id: id(2),
+    trace_request_id: 'wxreq-' + 'a'.repeat(36), request_hash: replacement.requestHash(input()) }
+  const raw = { schema_version: '1.0', lookup_status: 'sealed_not_executed', command: null, seal: {
+    seal_id: id(50), work_order_id: id(1), operator_person_id: id(2), operation_type: 'replace',
+    request_id: marker.trace_request_id, request_hash: marker.request_hash, sealed_at: '2026-09-13T00:00:00.123456Z' } }
+  assert.equal(replacement.validateLookup(raw, marker), raw)
+  for (const change of [v => { v.seal.work_order_id = id(9) }, v => { v.seal.operator_person_id = id(9) },
+    v => { v.seal.operation_type = 'consume' }, v => { v.seal.request_id += 'b' }, v => { v.seal.request_hash = 'b'.repeat(64) },
+    v => { v.seal.sealed_at = 'bad' }, v => { v.seal.seal_id = '' }, v => { v.command = {} },
+    v => { v.schema_version = '2.0' }, v => { v.lookup_status = 'not_observed' }, v => { v.seal.extra = true }]) {
+    const copy = clone(raw); change(copy); assert.throws(() => replacement.validateLookup(copy, marker))
+  }
+  assert.throws(() => replacement.validateLookup(raw, { ...marker, kind: 'work_order_material' }))
+})

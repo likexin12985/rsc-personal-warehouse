@@ -8,7 +8,7 @@ import pytest
 import sqlalchemy as sa
 
 from app import database_security as security
-from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST
+from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0094 as OAM_SYNC_FUNCTION_MANIFEST
 
 MIGRATION = Path(__file__).parents[1] / 'alembic/versions/20261004_0094_work_order_command_seals.py'
 

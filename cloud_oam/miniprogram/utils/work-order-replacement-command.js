@@ -104,5 +104,20 @@ function validateResult(raw, marker) {
     || uuid(raw.consume_transaction_id) === uuid(raw.recover_transaction_id)) fail()
   return raw
 }
+function validateLookup(raw, marker) {
+  if (raw && raw.lookup_status === 'sealed_not_executed') {
+    exact(raw, ['schema_version', 'lookup_status', 'command', 'seal'])
+    exact(raw.seal, ['seal_id', 'work_order_id', 'operator_person_id', 'operation_type', 'request_id', 'request_hash', 'sealed_at'])
+    const seal = raw.seal
+    if (raw.schema_version !== '1.0' || raw.command !== null || marker.kind !== 'work_order_replacement'
+      || marker.operation_type !== 'replace' || seal.operation_type !== 'replace'
+      || uuid(seal.work_order_id) !== uuid(marker.work_order_id) || uuid(seal.operator_person_id) !== uuid(marker.person_id)
+      || seal.request_id !== marker.trace_request_id || typeof seal.request_id !== 'string' || !/^[A-Za-z0-9._:-]{8,160}$/.test(seal.request_id)
+      || seal.request_hash !== marker.request_hash || typeof seal.request_hash !== 'string' || !/^[a-f0-9]{64}$/.test(seal.request_hash)) fail()
+    uuid(seal.seal_id); time(seal.sealed_at)
+    return raw
+  }
+  return validateResult(raw, marker)
+}
 
-module.exports = { command, payload, requestHash, validatePreview, validateResult, context, exact, text }
+module.exports = { command, payload, requestHash, validatePreview, validateResult, validateLookup, context, exact, text }

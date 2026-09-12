@@ -274,3 +274,11 @@ class WorkOrderMaterialSealedLookupOut(BaseModel):
     lookup_status: Literal["sealed_not_executed"] = "sealed_not_executed"
     command: None = None
     seal: WorkOrderMaterialSealOut
+
+
+class WorkOrderReplacementSealOut(WorkOrderMaterialSealOut):
+    operation_type: Literal["replace"]
+
+
+class WorkOrderReplacementSealedLookupOut(WorkOrderMaterialSealedLookupOut):
+    seal: WorkOrderReplacementSealOut

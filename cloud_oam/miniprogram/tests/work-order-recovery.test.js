@@ -91,17 +91,75 @@ test('paired 404, timeout, wrong digest, partial results and lost permission all
     assert.ok(backing.data.has(storageModule.PREFIX + ORDER))
   }
 })
-test('paired recovery holds the same order lease and cannot be sealed through an ordinary child endpoint', async () => {
+test('paired recovery holds the same order lease', async () => {
   const { store } = await pairedPersisted(); let resolve, queries = 0
   const pending = recoverPending({ store, workOrderId: ORDER, personId: PERSON, authorize: async () => 'same',
     api: { request: async () => { queries++; return new Promise(done => { resolve = done }) } } })
   await new Promise(done => setImmediate(done))
   await assert.rejects(store.withLease(anchor, () => {}))
   assert.equal(queries, 1); resolve(pairedResult()); await pending
-  const again = await pairedPersisted(); let calls = 0
-  await assert.rejects(sealPending({ store: again.store, workOrderId: ORDER, personId: PERSON, api: {},
-    authorize: async () => { calls++; return 'same' }, confirm: async () => { calls++; return true } }))
-  assert.equal(calls, 0); assert.equal(again.store.read(anchor).kind, 'valid')
+})
+
+function parentNotObserved() { return Object.assign(new Error('not observed'), { status: 404, responseReceived: true, code: 'replacement_not_found' }) }
+function pairedSealed() {
+  return { schema_version: '1.0', lookup_status: 'sealed_not_executed', command: null, seal: {
+    seal_id: OPERATION, work_order_id: ORDER, operator_person_id: PERSON, operation_type: 'replace',
+    request_id: TRACE, request_hash: pairedMarker().request_hash, sealed_at: '2026-09-13T00:00:00Z' } }
+}
+test('parent not-observed only permits a confirmed parent seal followed by exact original GET proof', async () => {
+  const { store } = await pairedPersisted(), calls = []; let reads = 0
+  const api = { async request(path, options) {
+    calls.push({ path, ...options }); if (++reads === 1) throw parentNotObserved(); return pairedSealed()
+  }, async postSealNoReplay(path, body, options) { calls.push({ path, body, ...options }); return {} } }
+  const result = await sealPending({ store, api, workOrderId: ORDER, personId: PERSON, authorize: async () => 'same', confirm: async () => true })
+  assert.equal(result.status, 'sealed'); assert.equal(store.read(anchor).kind, 'missing')
+  assert.equal(calls.length, 3); assert.equal(calls[0].method, 'GET'); assert.equal(calls[2].method, 'GET')
+  assert.equal(calls[1].path, `/v1/work-orders/${ORDER}/material-replacements/by-request/${TRACE}/seal`)
+  assert.equal(calls[1].requestId, TRACE); assert.deepEqual(calls[1].body, { operator_person_id: PERSON, request_hash: pairedMarker().request_hash })
+})
+test('missing parent GET never clears storage and transient or unrelated 404 never dispatches a seal', async () => {
+  const valid = await pairedPersisted()
+  assert.equal((await recoverPending({ store: valid.store, api: { request: async () => { throw parentNotObserved() } },
+    workOrderId: ORDER, personId: PERSON, authorize: async () => 'same' })).status, 'pending')
+  assert.equal(valid.store.read(anchor).kind, 'valid')
+  for (const change of [e => { e.code = 'route_not_found' }, e => { e.responseReceived = false },
+    e => { e.status = 503 }, e => { e.status = 401 }, e => { delete e.code }]) {
+    const { store } = await pairedPersisted(), error = parentNotObserved(); change(error); let actions = 0
+    await assert.rejects(sealPending({ store, workOrderId: ORDER, personId: PERSON, authorize: async () => 'same',
+      confirm: async () => { actions++; return true }, api: { request: async () => { throw error }, postSealNoReplay: async () => { actions++ } } }))
+    assert.equal(actions, 0); assert.equal(store.read(anchor).kind, 'valid')
+  }
+})
+test('parent seal preserves its marker on cancellation, authority drift, timeout or unproven final result', async () => {
+  for (const mode of ['cancel', 'authority', 'timeout', 'post_authority', 'not_observed', 'hash', 'child']) {
+    const { store } = await pairedPersisted(); let posts = 0, reads = 0, auth = 0
+    const promise = sealPending({ store, workOrderId: ORDER, personId: PERSON,
+      authorize: async () => ++auth >= (mode === 'post_authority' ? 4 : 3) && ['authority', 'post_authority'].includes(mode) ? 'changed' : 'same',
+      confirm: async () => mode !== 'cancel', api: {
+        async request() {
+          if (++reads === 1 || mode === 'not_observed') throw parentNotObserved()
+          if (mode === 'child') return sealed()
+          const value = pairedSealed(); if (mode === 'hash') value.seal.request_hash = 'b'.repeat(64); return value
+        }, async postSealNoReplay() { posts++; if (mode === 'timeout') throw new Error('timeout'); return pairedSealed() }
+      } })
+    if (mode === 'cancel') assert.equal((await promise).status, 'cancelled')
+    else if (mode === 'not_observed') assert.equal((await promise).status, 'pending')
+    else await assert.rejects(promise)
+    assert.equal(posts, ['cancel', 'authority'].includes(mode) ? 0 : 1)
+    assert.equal(store.read(anchor).kind, 'valid')
+  }
+})
+test('already posted parent and a posting race return complete stock proof without another stock POST', async () => {
+  for (const race of [false, true]) {
+    const { store } = await pairedPersisted(); let reads = 0, posts = 0, confirmations = 0
+    const result = await sealPending({ store, workOrderId: ORDER, personId: PERSON, authorize: async () => 'same',
+      confirm: async () => { confirmations++; return true }, api: {
+        async request() { if (race && ++reads === 1) throw parentNotObserved(); return pairedResult() },
+        async postSealNoReplay() { posts++; return pairedResult() }
+      } })
+    assert.equal(result.status, 'confirmed'); assert.equal(result.command.replacement_no, 'WR-TEST')
+    assert.equal(posts, race ? 1 : 0); assert.equal(confirmations, posts); assert.equal(store.read(anchor).kind, 'missing')
+  }
 })
 
 test('canonical command fingerprint matches Python for Unicode and server-derived occupy target', () => {

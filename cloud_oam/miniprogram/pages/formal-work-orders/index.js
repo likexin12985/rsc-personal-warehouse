@@ -111,7 +111,7 @@ Page({
     const labels = { occupy: '投入占用', consume: '实际消耗', release: '释放未用物料', replace: '成对消耗与回收' }
     this.setData({ pendingRequests: snapshot.items.map((marker, index) => ({
       id: marker.work_order_id, label: `待确认请求 ${index + 1} · ${labels[marker.operation_type]}`,
-      sealable: marker.kind === 'work_order_material'
+      sealable: ['work_order_material', 'work_order_replacement'].includes(marker.kind)
     })), pendingMessage: snapshot.kind === 'ready' ? '' : '部分恢复记录暂不可读取。请保留本机记录，已列出的本人请求仍可分别核验。' })
   },
   eraseDraft() { this._drafts = {}; this._scans = {}; this._draftRevision = (this._draftRevision || 0) + 1 },
@@ -315,7 +315,7 @@ Page({
   async sealPendingRequest(event) {
     const id = event.currentTarget.dataset.id
     if (!this.data.canSeal || !this._pendingMarkers || !this._pendingMarkers.has(id)
-      || this._pendingMarkers.get(id).kind !== 'work_order_material') return
+      || !['work_order_material', 'work_order_replacement'].includes(this._pendingMarkers.get(id).kind)) return
     return this.recoverRequest(id, true)
   },
   async recoverRequest(order, seal = false) {
