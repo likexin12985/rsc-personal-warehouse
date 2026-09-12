@@ -272,6 +272,54 @@ class WorkOrderReplacement(CreatedAtMixin, Base):
     command_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
 
 
+class WorkOrderReversal(CreatedAtMixin, Base):
+    """One immutable command compensating a whole original operation or pair."""
+
+    __tablename__ = "work_order_reversals"
+    __table_args__ = (
+        UniqueConstraint("reversal_no", name="uq_work_order_reversals_no"),
+        UniqueConstraint("idempotency_key_hash", name="uq_work_order_reversals_key"),
+        UniqueConstraint("actor_user_id", "request_id", name="uq_work_order_reversals_request"),
+        UniqueConstraint("original_operation_id", name="uq_work_order_reversals_original_operation"),
+        UniqueConstraint("original_replacement_id", name="uq_work_order_reversals_original_pair"),
+        CheckConstraint("(original_operation_id IS NULL) <> (original_replacement_id IS NULL)", name="ck_work_order_reversals_one_original"),
+        CheckConstraint("authorization_version > 0 AND length(reason) BETWEEN 1 AND 500", name="ck_work_order_reversals_context"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    reversal_no: Mapped[str] = mapped_column(String(100))
+    oam_work_order_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("oam_work_orders.id", ondelete="RESTRICT"))
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
+    operator_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    original_operation_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("work_order_material_operations.id"), nullable=True)
+    original_replacement_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("work_order_replacements.id"), nullable=True)
+    reason: Mapped[str] = mapped_column(Text)
+    request_id: Mapped[str] = mapped_column(String(160))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    plan_hash: Mapped[str] = mapped_column(String(64))
+    command_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+    plan_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+
+
+class WorkOrderReversalItem(CreatedAtMixin, Base):
+    """Immutable original/inverse link; a paired command requires both items."""
+
+    __tablename__ = "work_order_reversal_items"
+    __table_args__ = (
+        UniqueConstraint("reversal_id", "ordinal", name="uq_work_order_reversal_items_order"),
+        UniqueConstraint("original_operation_id", name="uq_work_order_reversal_items_original"),
+        UniqueConstraint("inverse_operation_id", name="uq_work_order_reversal_items_inverse"),
+        CheckConstraint("ordinal IN (1,2) AND original_operation_id <> inverse_operation_id", name="ck_work_order_reversal_items_distinct"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    reversal_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("work_order_reversals.id", ondelete="RESTRICT"))
+    ordinal: Mapped[int] = mapped_column(BigInteger)
+    original_operation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("work_order_material_operations.id", ondelete="RESTRICT"))
+    inverse_operation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE,
+        ForeignKey("work_order_material_operations.id", deferrable=True, initially="DEFERRED"))
+
+
 class WorkOrderReplacementPair(CreatedAtMixin, Base):
     """Immutable installed/removed SN pairing for replacement work."""
 

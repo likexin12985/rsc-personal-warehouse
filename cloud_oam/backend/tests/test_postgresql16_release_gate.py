@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261007_0097"
+HEAD_REVISION = "20261008_0098"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7422,7 +7422,7 @@ def _head_account_admission_hash() -> str:
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20261007_0097_work_order_reversal_boundary.py"
+        "20261008_0098_work_order_reversals.py"
     )))
     assert migration["revision"] == HEAD_REVISION
     return migration["NEW_HASH"]
@@ -21228,6 +21228,11 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_reversal_migration_rejects_detached_history(api_engine, replacement_fixture_engine)
             from pg16_work_order_reversal_plan_gate import assert_reversal_plan_gate
             assert_reversal_plan_gate(api_engine, replacement_fixture_engine)
+            from pg16_work_order_reversal_write_gate import assert_reversal_write_gate, assert_reversal_database_proof_gate
+            assert_reversal_write_gate(api_engine, replacement_fixture_engine)
+            assert_reversal_database_proof_gate(api_engine, replacement_fixture_engine)
+            from pg16_work_order_reversal_write_gate import assert_reversal_concurrent_commit_gate
+            assert_reversal_concurrent_commit_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_replacement_seals_gate import assert_replacement_seal_atomic_gate
             assert_replacement_seal_atomic_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_query_gate import assert_work_order_query_gate

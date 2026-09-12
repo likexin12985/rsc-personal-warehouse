@@ -15,7 +15,7 @@ def require_registration_context(db, *, serial_id, work_order_id, basis_stock_ac
 
 
 def require_registration_posting(db, *, serial_id, state, command, movement, account):
-    if state.last_movement_id is not None:return
+    if state.admission_movement_id is not None:return
     reg=db.scalar(select(Registration).where(Registration.serial_id==serial_id))
     if reg is None:return
     basis=db.get(StockAccount,reg.basis_stock_account_id)

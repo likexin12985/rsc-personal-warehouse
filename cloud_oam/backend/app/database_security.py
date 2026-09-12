@@ -73,7 +73,7 @@ RUNTIME_READ_TABLES = frozenset(
         "materials",
         "notification_events",
         "oam_work_orders",
-        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements", "work_order_command_seals", "work_order_removed_serial_registrations",
+        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements", "work_order_reversals", "work_order_reversal_items", "work_order_command_seals", "work_order_removed_serial_registrations",
         "opening_control_reconciliation_items",
         "opening_control_reconciliation_command_consumptions",
         "opening_control_reconciliation_runs",
@@ -195,7 +195,7 @@ RUNTIME_INSERT_TABLES = frozenset(
         "logistics_events", "receipts", "receipt_lines", "receipt_serials", "receipt_exceptions", "inbound_orders", "inbound_postings",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
-        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements", "work_order_command_seals", "work_order_removed_serial_registrations",
+        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements", "work_order_reversals", "work_order_reversal_items", "work_order_command_seals", "work_order_removed_serial_registrations",
         "stock_balances",
         "stocktake_control_snapshot_lines",
         "stocktake_count_lines",
@@ -1893,6 +1893,12 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
     "approval_actions",
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
+    'trg_work_order_reversals_proof_0098': ('work_order_reversals', 'rsc_dispatch_work_order_reversal_0098', 'A', 5, True, True, True),
+    'trg_work_order_reversals_immutable_0098': ('work_order_reversals', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+    'trg_work_order_reversals_no_truncate_0098': ('work_order_reversals', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+    'trg_work_order_reversal_items_proof_0098': ('work_order_reversal_items', 'rsc_dispatch_work_order_reversal_0098', 'A', 5, True, True, True),
+    'trg_work_order_reversal_items_immutable_0098': ('work_order_reversal_items', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+    'trg_work_order_reversal_items_no_truncate_0098': ('work_order_reversal_items', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
     'trg_removed_registration_create_0096': ('work_order_removed_serial_registrations', 'rsc_create_removed_identity_0096', 'A', 7, False, False, False),
     'trg_removed_registration_proof_0096': ('work_order_removed_serial_registrations', 'rsc_check_removed_registration_0096', 'A', 5, True, True, True),
     'trg_removed_registration_immutable_0096': ('work_order_removed_serial_registrations', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
@@ -2386,9 +2392,13 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
+    ('rsc_check_work_order_reservations_0098', 'text, bigint'): '142e0f90073f3b9c77941f345b646b24d4b848e46994408f42acd050578dcd59',
+    ('rsc_check_work_order_reversal_0098', 'uuid'): 'c9834533d05df61df464350924e889a8bba8874825f32aba9bcfc48998b3bb1e',
+    ('rsc_dispatch_work_order_reversal_0098', ''): '7ba3e443ce82840c815dc8c55b088de089eb43721d08e99cd0f68b4173179d44',
+
     ('rsc_create_removed_identity_0096', ''): '5e844e093442b77d2ca8865bf897f2e8ee6022ec5eee34af13ba60c9391e8970',
     ('rsc_check_removed_registration_0096', ''): 'fa5dfc2e6e7dd28205494b249dc43abf613610a8ade91a9f65280ad4663a4e93',
-    ('rsc_check_removed_origin_0096', ''): 'd9d566c632714ee278657575a8a4cec2a1a196c0d67521fa8d0810652a98ae73',
+    ('rsc_check_removed_origin_0096', ''): '6224c2ddd50bf29e7766f761949da8b58f709899e2d606cf6fe6e4fe50c393f1',
     ('rsc_check_removed_seal_0096', ''): '4d6c36ce9044f95a5a8f241f008b166f5cf5008fe1cb0f0191f57bab353c8d0c',
     ('rsc_guard_work_order_replacement_seal_0095', ''): 'dd3fe01e41ded1ff53ae667fb268afe6f3b3229a55a1fa6c0c6a11c87713ce99',
 
@@ -2397,11 +2407,11 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ('rsc_check_work_order_replacement_0093', 'uuid'): 'd725c7c3a13482a8c4ddc8254e9ec819606ad0b6f0e5d3a5ec8cad1bbdc6606d',
     ('rsc_dispatch_work_order_replacement_0093', ''): 'e77457b79adfd9cf84e375916c05336812d23e788728e053e0a3f4062c2f779d',
 
-    ('rsc_check_serial_lifecycle_0092', 'uuid'): '291ec36bca26d8765e61265f07a344baf57936f7f7d661cebfb38e2c27cee1b2',
+    ('rsc_check_serial_lifecycle_0092', 'uuid'): '334f3ca3d06af1d1dfe047b135d00859376c671c9f8140e9d56a2c56055415d9',
     ('rsc_dispatch_serial_lifecycle_0092', ''): '612fc9726be5b13325f809b8dbf10185681f4073802b81c3771adceb83869135',
     ('rsc_guard_serial_identity_0092', ''): 'ead9491447496e5dab54787909a3cd9d0b9912a6ff007eef6394f5b99c1dd4bd',
     ('rsc_lock_work_order_material_0090', ''): '3020ff345109d942e1287ab48d8a2f53c5d722ff0fda403850649a0602c1f2a7',
-    ('rsc_check_work_order_material_transaction_0090', 'uuid'): '9a1a9aa2516fbd99c23c1b92e1e705822898036df188f58d59cc2714a172e5d7',
+    ('rsc_check_work_order_material_transaction_0090', 'uuid'): 'fd501663654b0efc0abaa5378973083d61b1593303893144b956d70c8a99f994',
     ('rsc_dispatch_work_order_material_0090', ''): 'ea3172e2be65bc40e2832953d5698e67c0246aefd2eae5063061a19ac811d0ca',
     ('rsc_guard_work_order_facts_0090', ''): '216f8cc9b38fce14a09c3ecb79ef15547fbdd89a8de35f1e8b42e498012d6cca',
     ('rsc_guard_work_order_material_operations_immutable_0077', ''): 'cd8be861e17432dc90d8129908eaa963424b8358641301fe7d5b120a8b1dc02e',
@@ -2507,6 +2517,10 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ('rsc_check_work_order_reservations_0098', 'text, bigint'),
+        ('rsc_check_work_order_reversal_0098', 'uuid'),
+        ('rsc_dispatch_work_order_reversal_0098', ''),
+
         ('rsc_create_removed_identity_0096', ''),
         ('rsc_check_removed_registration_0096', ''),
         ('rsc_check_removed_origin_0096', ''),
@@ -2565,6 +2579,9 @@ MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
 )
 MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS = frozenset(
     {
+        ('rsc_check_work_order_reservations_0098', 'text, bigint'),
+        ('rsc_check_work_order_reversal_0098', 'uuid'),
+
         ("rsc_check_work_order_replacement_0093", "uuid"),
         ("rsc_check_serial_lifecycle_0092", "uuid"),
         ("rsc_check_work_order_material_transaction_0090", "uuid"),
@@ -6007,7 +6024,7 @@ def _select_material_request_approval_functions(
         for row in rows
         if isinstance(row.get("function_name"), str)
         and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094", "_0095", "_0096")
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094", "_0095", "_0096", "_0098")
         )
     ]
 

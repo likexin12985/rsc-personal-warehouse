@@ -10,7 +10,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 from app import database_security as security
-from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST
+from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0097 as OAM_SYNC_FUNCTION_MANIFEST
 
 MIGRATION = Path(__file__).parents[1] / "alembic/versions/20261007_0097_work_order_reversal_boundary.py"
 
@@ -21,8 +21,8 @@ def test_reversal_boundary_extends_the_existing_whole_transaction_guard():
     assert m["down_revision"] == "20261006_0096"
     assert new.replace(m["GUARD"], "") == old
     assert new.index("0097 work order reversal") < new.index("IF tx.source_document_type <>")
-    assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[
-        ("rsc_check_work_order_material_transaction_0090", "uuid")] == hashlib.sha256(new.encode()).hexdigest()
+    following = runpy.run_path(str(MIGRATION.with_name("20261008_0098_work_order_reversals.py")))
+    assert new == following["_sources"]()["public.rsc_check_work_order_material_transaction_0090(uuid)"][0]
     assert OAM_SYNC_FUNCTION_MANIFEST["rsc_oam_runtime_binding_ready_0044()"][6] == m["NEW_HASH"]
 
 

@@ -195,6 +195,8 @@ jobs:
             backend/tests/test_work_order_reversal_boundary.py \
             backend/tests/test_work_order_reversal_plan.py \
             backend/tests/test_work_order_reversal_migration.py \
+            backend/tests/test_work_order_reversal_write.py \
+            backend/tests/test_work_order_reversal_write_migration.py \
             backend/tests/test_work_order_removed_registration_migration.py \
             backend/tests/test_formal_work_order_replacement_seal_routes.py \
             backend/tests/test_work_order_material_migration.py \

@@ -27,6 +27,9 @@ def test_replacement_security_pins_match_sources_and_preserve_minimum_privileges
         if name == "rsc_check_work_order_material_transaction_0090":
             following = runpy.run_path(str(MIGRATION.with_name("20261007_0097_work_order_reversal_boundary.py")))
             assert body == following["sources"]()[0]
+        elif name == "rsc_check_serial_lifecycle_0092":
+            following = runpy.run_path(str(MIGRATION.with_name("20261008_0098_work_order_reversals.py")))
+            assert body == following["_sources"]()[signature][0]
         else:
             assert catalog[coordinate] == hashlib.sha256(body.encode()).hexdigest()
     for name,(table,_,function,kind,deferred) in m["TRIGGERS"].items():

@@ -88,3 +88,30 @@ class WorkOrderReversalPreviewOut(BaseModel):
     plan_hash: str
     children: tuple[WorkOrderReversalChildOut, ...]
     replacement_pairs: tuple[WorkOrderReversalPairOut, ...]
+
+
+class WorkOrderReversalIn(WorkOrderReversalPreviewIn):
+    expected_plan_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    idempotency_key: str = Field(min_length=8, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
+    request_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class WorkOrderReversalResultItemOut(BaseModel):
+    original_operation_id: UUID
+    original_transaction_id: UUID
+    inverse_operation_id: UUID
+    inverse_transaction_id: UUID
+
+
+class WorkOrderReversalOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    status: Literal["posted"] = "posted"
+    reversal_id: UUID
+    reversal_no: str
+    work_order_id: UUID
+    operator_person_id: UUID
+    request_id: str
+    request_hash: str
+    plan_hash: str
+    posted_at: datetime
+    items: tuple[WorkOrderReversalResultItemOut, ...]

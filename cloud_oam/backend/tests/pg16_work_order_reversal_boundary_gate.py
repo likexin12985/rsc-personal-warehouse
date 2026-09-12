@@ -92,8 +92,10 @@ def assert_generic_inverse_database_boundary(api_engine, fixture_engine, *, reje
         authorize = posting._authorize_account_ids
         def authorize_own(db, actor, identifiers, **kwargs):
             return authorize(db, actor, identifiers, **{**kwargs, "resource": "work_order_material", "action": "operate"})
+        from app.formal_services import work_order_reversal_proof
         try:
-            with patch.object(posting, "_require_generic_reversal_origin", lambda *a, **k: None), \
+            with patch.object(work_order_reversal_proof, "require_reversal_posting", lambda *a, **k: {}), \
+                    patch.object(posting, "_require_generic_reversal_origin", lambda *a, **k: None), \
                     patch.object(posting, "_authorize_account_ids", authorize_own):
                 posting.reverse_inventory_transaction(db, actor=actor, command=reversal_command(original),
                     idempotency_key=uuid4().hex, request_id=uuid4().hex)

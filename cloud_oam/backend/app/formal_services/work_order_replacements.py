@@ -155,7 +155,7 @@ def _preflight_removed_serials(db, lines, *, account_contexts=None, work_order_i
                     or (state.last_movement_id is not None and (position is None
                         or position.stock_account_id is not None or position.last_movement_id != state.last_movement_id))):
                 _fail("removed_serial_unavailable", "拆回 SN 已在库存中，或缺少一致的历史位置证明")
-            if state.last_movement_id is None:
+            if state.admission_movement_id is None:
                 from .work_order_removed_origin import require_registration_context
                 require_registration_context(db, serial_id=identifier, work_order_id=work_order_id,
                     basis_stock_account_id=(basis_by_target or {}).get(line.stock_account_id, line.stock_account_id),

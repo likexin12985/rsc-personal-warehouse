@@ -21,7 +21,11 @@ def test_registration_migration_pins_sources_and_keeps_master_insert_closed():
     assert m["down_revision"]==old["revision"] and m["OLD_HASH"]==old["NEW_HASH"]
     assert OAM_SYNC_FUNCTION_MANIFEST["rsc_oam_runtime_binding_ready_0044()"][6]==m["NEW_HASH"]
     for coordinate,(_,_,body) in m["FUNCTIONS"].items():
-        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate]==hashlib.sha256(body.encode()).hexdigest()
+        if coordinate == ("rsc_check_removed_origin_0096", ""):
+            following=runpy.run_path(str(MIGRATION.with_name("20261008_0098_work_order_reversals.py")))
+            assert body==following["_sources"]()["public.rsc_check_removed_origin_0096()"][0]
+        else:
+            assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate]==hashlib.sha256(body.encode()).hexdigest()
         assert coordinate in security.MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
     for name,(table,_,function,kind,deferred) in m["TRIGGERS"].items():
         assert security.EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[name]==(table,function,"A",kind,deferred,deferred,deferred)

@@ -158,7 +158,7 @@ def _children(db, *, actor, options, operations, checked_at):
     return tuple(proposals)
 
 
-def preview_reversal(db, *, actor, work_order_id, request: WorkOrderReversalPreviewIn):
+def _preview_with_document(db, *, actor, work_order_id, request: WorkOrderReversalPreviewIn):
     current = posting._require_current_actor(db, actor)
     if request.operator_person_id != current.person_id:
         _fail("operator_mismatch", "操作人必须是当前登录人员", "forbidden")
@@ -187,12 +187,19 @@ def preview_reversal(db, *, actor, work_order_id, request: WorkOrderReversalPrev
         posting._require_current_actor(db, current)
     intent = {"work_order_id": str(work_order_id), **request.model_dump(mode="json")}
     request_hash = _hash(intent)
-    plan_hash = _hash({"intent": intent, "authorization_version": current.authorization_version,
+    document = {"intent": intent, "authorization_version": current.authorization_version,
         "work_order": options.work_order.model_dump(mode="json"), "ledger_cursor": options.ledger_cursor,
         "policies": policy_fingerprint, "children": [row.model_dump(mode="json") for row in children],
-        "replacement_pairs": [row.model_dump(mode="json") for row in pairs]})
-    return WorkOrderReversalPreviewOut(operator_person_id=current.person_id,
+        "replacement_pairs": [row.model_dump(mode="json") for row in pairs]}
+    # Freeze JSON-compatible values so persisted proof hashes round-trip exactly.
+    document = json.loads(json.dumps(document, ensure_ascii=False))
+    result = WorkOrderReversalPreviewOut(operator_person_id=current.person_id,
         authorization_version=current.authorization_version, work_order=options.work_order,
         ledger_cursor=options.ledger_cursor, checked_at=checked_at,
         original_operation_id=request.original_operation_id, original_replacement_id=request.original_replacement_id,
-        reason=request.reason, request_hash=request_hash, plan_hash=plan_hash, children=children, replacement_pairs=pairs)
+        reason=request.reason, request_hash=request_hash, plan_hash=_hash(document), children=children, replacement_pairs=pairs)
+    return result, document
+
+
+def preview_reversal(db, *, actor, work_order_id, request: WorkOrderReversalPreviewIn):
+    return _preview_with_document(db, actor=actor, work_order_id=work_order_id, request=request)[0]

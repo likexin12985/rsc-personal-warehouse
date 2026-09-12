@@ -11,6 +11,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import or_, select
+from sqlalchemy.orm import aliased
 
 from ..inventory_models import InventoryMovement, InventoryMovementSerial, InventoryTransaction
 from .inventory_posting import InventoryPostingError
@@ -26,14 +27,16 @@ def read_work_order_reservations(db, *, work_order_id, account_ids, before_curso
     account_ids = frozenset(account_ids)
     if not account_ids:
         return {}
+    original = aliased(InventoryTransaction)
     statement = (
-        select(InventoryTransaction, InventoryMovement)
+        select(InventoryTransaction, InventoryMovement, original.movement_type)
         .join(InventoryMovement, InventoryMovement.transaction_id == InventoryTransaction.id)
+        .outerjoin(original, original.id == InventoryTransaction.reversed_transaction_id)
         .where(
             InventoryTransaction.source_document_type == "work_order_material",
             InventoryTransaction.source_document_id == str(work_order_id),
             InventoryTransaction.status == "posted",
-            InventoryTransaction.movement_type.in_(("reserve", "release", "consume")),
+            InventoryTransaction.movement_type.in_(("reserve", "release", "consume", "reversal")),
             or_(InventoryMovement.from_account_id.in_(account_ids),
                 InventoryMovement.to_account_id.in_(account_ids)),
         )
@@ -46,12 +49,21 @@ def read_work_order_reservations(db, *, work_order_id, account_ids, before_curso
     if history:
         for movement_id, serial_id in db.execute(select(
                 InventoryMovementSerial.movement_id, InventoryMovementSerial.serial_id
-        ).where(InventoryMovementSerial.movement_id.in_([m.id for _, m in history]))):
+        ).where(InventoryMovementSerial.movement_id.in_([m.id for _, m, _ in history]))):
             serials[movement_id].add(serial_id)
     quantities = defaultdict(Decimal)
     reserved_serials = defaultdict(set)
-    for transaction, movement in history:
-        reserve = transaction.movement_type == "reserve"
+    for transaction, movement, original_type in history:
+        if transaction.movement_type == "reversal":
+            from .work_order_reversal_proof import require_reservation_reversal_link
+            require_reservation_reversal_link(db, transaction)
+            if original_type == "inbound":
+                continue
+            if original_type not in {"reserve", "release", "consume"}:
+                raise InventoryPostingError("work_order_reservation_history_invalid", "conflict", "冲销原占用类型无效")
+            reserve = original_type in {"release", "consume"}
+        else:
+            reserve = transaction.movement_type == "reserve"
         account_id = movement.to_account_id if reserve else movement.from_account_id
         if account_id not in account_ids:
             continue

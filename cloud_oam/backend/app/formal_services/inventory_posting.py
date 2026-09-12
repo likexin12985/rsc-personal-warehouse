@@ -1376,12 +1376,18 @@ def _post_new_transaction(
     # pure validation and remains strictly before the balance phase.
     _validate_tracking_rules(command, accounts, policies)
 
+    reversal_states = {}
+    if reversed_transaction_id is not None:
+        from .work_order_reversal_proof import require_reversal_posting
+        reversal_states = require_reversal_posting(db, actor=actor, command=command,
+            original_transaction_id=reversed_transaction_id)
     serials, positions = _lock_and_validate_serials(
         db,
         command=command,
         accounts=accounts,
         policies=policies,
         prelocked_reference_graph=active_reference_graph,
+        reversal_states=reversal_states,
     )
 
     if opening_task_id is None or prelocked_reference_graph is None:
@@ -1510,7 +1516,12 @@ def _post_new_transaction(
 
     for line_no, movement_command in enumerate(command.movements, start=1):
         for serial_id in movement_command.serial_ids:
-            if command.movement_type == "consume":
+            if serial_id in reversal_states:
+                restored = reversal_states[serial_id].lifecycle_status
+                if serials[serial_id].lifecycle_status != restored:
+                    serials[serial_id].lifecycle_status = restored
+                    serials[serial_id].updated_at = now
+            elif command.movement_type == "consume":
                 serials[serial_id].lifecycle_status = "consumed"
                 serials[serial_id].updated_at = now
             elif command.movement_type == "inbound" and serials[serial_id].lifecycle_status == "consumed":
@@ -6908,6 +6919,7 @@ def _lock_and_validate_serials(
     accounts: dict[uuid.UUID, StockAccount],
     policies: dict[uuid.UUID, MaterialInventoryPolicy],
     prelocked_reference_graph: _PrelockedInventoryGraphProof | None = None,
+    reversal_states=None,
 ) -> tuple[
     dict[uuid.UUID, InventorySerial], dict[uuid.UUID, SerialCurrentPosition]
 ]:
@@ -6987,7 +6999,8 @@ def _lock_and_validate_serials(
                 and has_serial_recovery_command(db, command=command, serial_id=serial_id,
                     operator_person_id=account.custodian_person_id)
             )
-            if serial.lifecycle_status != "active" and not controlled_recovery:
+            controlled_reversal = serial_id in (reversal_states or {})
+            if serial.lifecycle_status != "active" and not controlled_recovery and not controlled_reversal:
                 _fail(
                     "serial_lifecycle_inactive",
                     "precondition_failed",

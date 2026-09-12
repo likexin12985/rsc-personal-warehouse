@@ -12,7 +12,7 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from ..demand_models import WorkOrderMaterialLine, WorkOrderMaterialOperation, WorkOrderMaterialSerial
-from ..demand_models import WorkOrderReplacement, WorkOrderRemovedSerialRegistration as Registration
+from ..demand_models import WorkOrderReplacement, WorkOrderRemovedSerialRegistration as Registration, WorkOrderReversal, WorkOrderReversalItem
 from ..foundation_models import SourceSystem
 from ..inventory_models import FormalMaterial, InventoryLot, InventorySerial, InventoryTransaction, InventoryMovement, StockAccount
 from ..work_order_completion_schemas import WorkOrderCompletionCheckOut, WorkOrderCompletionIssueOut
@@ -68,7 +68,7 @@ def _issue(db, *, kind, reference_id, account_id, material_id, condition, quanti
 
 
 def _issues(db, *, actor, options, operations, registrations):
-    issues = []; blockers = set(); recovered_serials = set(); verified_parents = set()
+    issues = []; blockers = set(); recovered_serials = set(); verified_parents = set(); verified_reversals = set()
     order_id = options.work_order.work_order_id
     # Inspect all original reserve destinations, including accounts that no
     # longer have positive current balance. Never silently hide an obligation.
@@ -99,7 +99,19 @@ def _issues(db, *, actor, options, operations, registrations):
             blockers.add("history_scope_unresolved"); continue
         if operation.operation_type == "reverse" or db.scalar(select(InventoryTransaction.id)
                 .where(InventoryTransaction.reversed_transaction_id == tx.id).limit(1)):
-            blockers.add("reversal_review_required"); continue
+            coordinate = (WorkOrderReversalItem.inverse_operation_id if operation.operation_type == "reverse"
+                else WorkOrderReversalItem.original_operation_id)
+            item = db.scalar(select(WorkOrderReversalItem).where(coordinate == operation.id))
+            parent = db.get(WorkOrderReversal, item.reversal_id) if item else None
+            if parent is None:
+                blockers.add("reversal_review_required"); continue
+            if parent.id not in verified_reversals:
+                from .work_order_reversal_read import reversal_result
+                reversal_result(db, actor=actor, parent=parent)
+                verified_reversals.add(parent.id)
+            # Compensated recovery no longer establishes a return obligation.
+            # Its retained identity registration is considered separately below.
+            continue
         if operation.replacement_id:
             if operation.replacement_id not in verified_parents:
                 parent = db.get(WorkOrderReplacement, operation.replacement_id, populate_existing=True)
