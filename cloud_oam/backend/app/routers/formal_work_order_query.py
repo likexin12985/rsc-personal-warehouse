@@ -14,6 +14,8 @@ from ..formal_services.inventory_query import InventoryReadError
 from ..formal_services.work_order_material_options import material_options
 from ..formal_services.work_order_completion import completion_check
 from ..work_order_completion_schemas import WorkOrderCompletionCheckOut
+from ..work_order_return_schemas import WorkOrderReturnSourcesOut, WorkOrderReturnSelectionIn, WorkOrderReturnSelectionOut
+from ..formal_services.work_order_return_sources import return_sources, preview_selection
 from ..formal_services.work_order_query import list_my_work_orders
 from ..work_order_query_schemas import MyWorkOrdersOut, WorkOrderStatus, WorkOrderMaterialOptionsOut
 from ..work_order_material_schemas import WorkOrderMaterialPreviewIn, WorkOrderMaterialPreviewOut
@@ -28,6 +30,36 @@ from ..work_order_material_schemas import (
 )
 
 router = APIRouter(prefix="/v1/work-orders", tags=["formal-work-order-query"])
+
+
+def _return_query_error(exc):
+    if isinstance(exc, InventoryReadError):
+        status, detail = exc.status_code, exc.as_detail()
+    elif isinstance(exc, InventoryPostingError):
+        status, detail = exc.http_status_code, exc.as_detail()
+    else:
+        status, detail = 503, {"code": "work_order_return_sources_unavailable", "message": "退回来源暂时无法核验，请稍后重新读取"}
+    return HTTPException(status_code=status, detail=detail, headers={"Cache-Control": "private, no-store"})
+
+
+@router.get("/{work_order_id}/return-sources", response_model=WorkOrderReturnSourcesOut)
+def my_return_sources(work_order_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "read")), db: Session = Depends(get_db)):
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        return return_sources(db, actor=principal, work_order_id=work_order_id)
+    except (InventoryReadError, InventoryPostingError, SQLAlchemyError) as exc:
+        raise _return_query_error(exc) from None
+
+
+@router.post("/{work_order_id}/return-sources/preview", response_model=WorkOrderReturnSelectionOut)
+def preview_my_return_sources(work_order_id: UUID, payload: WorkOrderReturnSelectionIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "read")), db: Session = Depends(get_db)):
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        return preview_selection(db, actor=principal, work_order_id=work_order_id, request=payload)
+    except (InventoryReadError, InventoryPostingError, SQLAlchemyError) as exc:
+        raise _return_query_error(exc) from None
 
 
 @router.get("/{work_order_id}/material-completion-check", response_model=WorkOrderCompletionCheckOut)
