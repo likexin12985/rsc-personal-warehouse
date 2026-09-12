@@ -1,22 +1,26 @@
 const { uuid } = require('./work-order-query-contract')
 const { validateLookup } = require('./work-order-command')
 const replacement = require('./work-order-replacement-command')
+const registration = require('./work-order-removed-registration-command')
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
 function originalPath(marker) {
+  if (marker.kind === registration.KIND) return `/v1/work-orders/${marker.work_order_id}/material-replacements/removed-registrations/by-request/${marker.trace_request_id}`
   return marker.kind === 'work_order_replacement'
     ? `/v1/work-orders/${marker.work_order_id}/material-replacements/by-request/${marker.trace_request_id}`
     : `/v1/work-orders/${marker.work_order_id}/material-operations/${marker.operation_type}/by-request/${marker.trace_request_id}`
 }
 async function originalResult(api, marker) {
   const paired = marker.kind === 'work_order_replacement'
+  const registering = marker.kind === registration.KIND
   let raw
   try { raw = await api.request(originalPath(marker), READ) } catch (error) {
     // Only this exact server response means no parent is currently observed.
     // It never clears storage or permits a stock POST; sealing arbitrates next.
     if (paired && error.responseReceived === true && error.status === 404 && error.code === 'replacement_not_found') return null
+    if (registering && error.responseReceived === true && error.status === 404 && error.code === 'removed_registration_not_found') return null
     throw error
   }
-  return paired ? replacement.validateLookup(raw, marker) : validateLookup(raw, marker)
+  return registering ? registration.validateLookup(raw, marker) : paired ? replacement.validateLookup(raw, marker) : validateLookup(raw, marker)
 }
 
 async function recoverPending({ api, store, workOrderId, personId, authorize }) {

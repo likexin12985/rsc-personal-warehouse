@@ -7,12 +7,14 @@ const { recoverPending, sealPending } = require('../../utils/work-order-recovery
 const draft = require('../../utils/work-order-draft')
 const { submitDraft } = require('../../utils/work-order-submit')
 const { submitReplacement } = require('../../utils/work-order-replacement-submit')
+const registrationPage = require('./registration')({ api, session })
 const replacementPage = require('./replacement')({ api, session, scanCode: options => wx.scanCode(options) })
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
-function empty() { return { state: 'idle', loading: false, busy: false, search: '', orders: [], items: [], workOrder: null, locationName: '', message: '', hasNext: false, hasPrevious: false, pageNumber: 1, canRecover: false, recoveryMessage: '', pendingRequests: [], pendingMessage: '', canSeal: false, canDraft: false, operationKind: 'occupy', draftRows: [], previewMessage: '', confirming: false, reviewRows: [], reviewTitle: '', reviewWorkOrderNo: '', reviewPairs: [], removedRows: [] } }
+function empty() { return { state: 'idle', loading: false, busy: false, search: '', orders: [], items: [], workOrder: null, locationName: '', message: '', hasNext: false, hasPrevious: false, pageNumber: 1, canRecover: false, recoveryMessage: '', pendingRequests: [], pendingMessage: '', canSeal: false, canDraft: false, operationKind: 'occupy', draftRows: [], previewMessage: '', confirming: false, reviewRows: [], reviewTitle: '', reviewWorkOrderNo: '', reviewDescription: '', reviewPairs: [], removedRows: [] } }
 
 Page({
   ...replacementPage,
+  ...registrationPage,
   data: empty(),
   onShow() { this._visible = true; this._selected = null; this._cursors = [null]; this._store = recoveryStore.getStore(); return this.load() },
   onHide() { this.clearView() },
@@ -111,10 +113,10 @@ Page({
   refreshPendingRequests() {
     const snapshot = this._store.listPending(this._recoveryPerson)
     this._pendingMarkers = new Map(snapshot.items.map(marker => [marker.work_order_id, marker]))
-    const labels = { occupy: '投入占用', consume: '实际消耗', release: '释放未用物料', replace: '成对消耗与回收' }
+    const labels = { occupy: '投入占用', consume: '实际消耗', release: '释放未用物料', replace: '成对消耗与回收', register_removed: '拆回 SN 登记' }
     this.setData({ pendingRequests: snapshot.items.map((marker, index) => ({
       id: marker.work_order_id, label: `待确认请求 ${index + 1} · ${labels[marker.operation_type]}`,
-      sealable: ['work_order_material', 'work_order_replacement'].includes(marker.kind)
+      sealable: ['work_order_material', 'work_order_replacement', 'work_order_removed_registration'].includes(marker.kind)
     })), pendingMessage: snapshot.kind === 'ready' ? '' : '部分恢复记录暂不可读取。请保留本机记录，已列出的本人请求仍可分别核验。' })
   },
   eraseDraft() { this._drafts = {}; this._scans = {}; this._removedDrafts = []; this.setData({ removedRows: [] }); this._draftRevision = (this._draftRevision || 0) + 1 },
@@ -123,7 +125,7 @@ Page({
     const finish = this._confirmFinish
     this._confirmFinish = null
     if (finish) finish(confirmed)
-    this.setData({ confirming: false, reviewRows: [], reviewTitle: '', reviewWorkOrderNo: '', reviewPairs: [] })
+    this.setData({ confirming: false, reviewRows: [], reviewTitle: '', reviewWorkOrderNo: '', reviewDescription: '', reviewPairs: [] })
   },
   confirmSubmission() {
     if (!this._visible || !this.data.confirming || !this._confirmFinish || !this._sessionMatches || !this._sessionMatches()) return this.finishReview(false)
@@ -271,7 +273,7 @@ Page({
           return new Promise(resolve => {
             this._confirmFinish = resolve
             this.setData({ confirming: true, reviewTitle: review.title, reviewWorkOrderNo: review.workOrderNo,
-              reviewRows: review.rows, reviewPairs: review.pairs || [], previewMessage: '' })
+              reviewDescription: review.description || '', reviewRows: review.rows, reviewPairs: review.pairs || [], previewMessage: '' })
           })
         }
       })
@@ -319,7 +321,7 @@ Page({
   async sealPendingRequest(event) {
     const id = event.currentTarget.dataset.id
     if (!this.data.canSeal || !this._pendingMarkers || !this._pendingMarkers.has(id)
-      || !['work_order_material', 'work_order_replacement'].includes(this._pendingMarkers.get(id).kind)) return
+      || !['work_order_material', 'work_order_replacement', 'work_order_removed_registration'].includes(this._pendingMarkers.get(id).kind)) return
     return this.recoverRequest(id, true)
   },
   async recoverRequest(order, seal = false) {
@@ -342,7 +344,8 @@ Page({
         this.refreshPendingRequests()
         this.setData({ canRecover: this._selected === order ? false : this.data.canRecover,
           recoveryMessage: result.status === 'sealed' ? '原请求已关闭且未执行。请刷新工单后重新准备物料。'
-            : `原操作已确认：${result.command.replacement_no || result.command.operation_no}。请刷新库存后继续。` })
+            : result.command.status === 'registered' ? `拆回 SN 登记已确认：${result.command.registration_no}。库存未变动，请进入工单重新扫码配对。`
+              : `原操作已确认：${result.command.replacement_no || result.command.operation_no}。请刷新库存后继续。` })
       }
       else if (result.status === 'cancelled') this.setData({ recoveryMessage: '原请求仍保留，可继续读取原结果。' })
       else this.setData({ recoveryMessage: '暂未读取到已提交的原结果，仍保留恢复记录；请稍后继续核验。' })

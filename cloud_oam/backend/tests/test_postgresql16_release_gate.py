@@ -21219,6 +21219,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_removed_registration_atomic_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_removed_registration_gate import assert_removed_registration_lot_gate
             assert_removed_registration_lot_gate(api_engine, replacement_fixture_engine)
+            from pg16_work_order_removed_registration_submit_gate import assert_removed_registration_submit_gate
+            assert_removed_registration_submit_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_replacement_seals_gate import assert_replacement_seal_atomic_gate
             assert_replacement_seal_atomic_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_query_gate import assert_work_order_query_gate

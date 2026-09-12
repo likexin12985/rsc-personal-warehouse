@@ -788,7 +788,7 @@ test('unknown removed SN remains blocked and condition or physical proof changes
     return removedResult(scan)
   } }, true)
   const { page } = context, id = await addRemovedRow(context, 'OLD-1')
-  assert.equal(page.data.removedRows[0].identified, false); assert.match(page.data.previewMessage, /受控登记/)
+  assert.equal(page.data.removedRows[0].identified, false); assert.match(page.data.previewMessage, /核对扫码内容/)
   unknown = false; await page.inspectRemoved(event(id)); page.chooseInstalled({ ...event(id), detail: { value: '1' } })
   assert.equal(page.data.removedRows[0].pairIndex, 1)
   page.editRemoved(event(id, { field: 'condition', value: 'used' }))
@@ -910,5 +910,182 @@ test('late removed camera results are discarded after hide or account switch wit
     assert.equal(page._removedDrafts.length, 0); assert.equal(page.data.removedRows.length, 0)
     assert.equal(JSON.stringify(page.data).includes('PRIVATE-LATE-QR'), false)
     assert.equal(state.calls.some(call => call.method === 'POST'), false)
+  }
+})
+
+const registrationCommand = require('../utils/work-order-removed-registration-command')
+const registrationWrites = state => state.calls.filter(call => call.method === 'POST' && call.endpoint.endsWith('/removed-registrations'))
+const unknownIdentity = () => Object.assign(new Error('unknown removed identity'), { responseReceived: true, status: 412, code: 'removed_serial_not_found' })
+function registrationPreview(body) {
+  return { ...removedResult(body), tracking_mode: body.lot_no ? 'lot_and_serial' : 'serial', quantity_scale: 0, allow_fraction: false,
+    serial_id: null, status: 'registration_validated', request_hash: registrationCommand.requestHash({ workOrderId: ORDER, personId: PERSON, scan: body }) }
+}
+function registrationProof(marker, lot = false) {
+  return { schema_version: '1.0', status: 'registered', registration_id: OTHER, registration_no: 'WORS-' + 'A'.repeat(24),
+    work_order_id: ORDER, operator_person_id: PERSON, serial_id: OLD2, material_id: LOCATION, lot_id: lot ? LOCATION : null,
+    basis_stock_account_id: ACCOUNT, request_id: marker.trace_request_id, request_hash: marker.request_hash, registered_at: '2026-09-13T08:00:00Z' }
+}
+async function unknownPage(settings = {}, lot = '') {
+  const context = await pairedPage({ removed: () => { throw unknownIdentity() }, preview: (_, body) => registrationPreview(body), ...settings }, true)
+  context.store = context.page._store
+  context.removedId = await addRemovedRow(context, 'UNKNOWN-OLD', lot)
+  assert.equal(context.page.data.removedRows[0].registrationAvailable, true)
+  return context
+}
+
+test('unknown SN registration reviews only identity, writes once after durable trace and returns to explicit pairing', async () => {
+  for (const lot of ['', 'EXACT-LOT']) {
+    const { store, records } = await pendingStore(false); let marker, admitted = false
+    const context = await unknownPage({ store, removed: scan => {
+      if (!admitted) throw unknownIdentity()
+      return { ...removedResult(scan), tracking_mode: lot ? 'lot_and_serial' : 'serial' }
+    }, post: (endpoint, body, options) => {
+      assert.ok(endpoint.endsWith('/removed-registrations')); marker = store.read({ work_order_id: ORDER }).value
+      assert.equal(marker.kind, registrationCommand.KIND); assert.equal(marker.operation_type, 'register_removed')
+      const { idempotency_key, request_id, ...scan } = body
+      assert.equal(marker.request_hash, registrationPreview(scan).request_hash)
+      assert.equal(body.request_id, marker.trace_request_id); assert.equal(options.requestId, body.request_id); assert.equal(options.idempotencyKey, body.idempotency_key)
+      assert.equal(body.qr_code, 'QR-private-UNKNOWN-OLD'); assert.equal(body.lot_no, lot || null)
+      const stored = [...records.values()].join('')
+      for (const privateValue of ['QR-private', 'UNKNOWN-OLD', 'material_id', 'sku_code', 'idempotency_key']) assert.equal(stored.includes(privateValue), false)
+      admitted = true; return { ignored: 'POST alone is not original proof' }
+    }, recovery: () => registrationProof(marker, !!lot) }, lot)
+    const { page, state, removedId } = context
+    const work = page.registerRemoved(event(removedId)); await tick()
+    assert.equal(page.data.confirming, true); assert.match(page.data.reviewTitle, /登记拆回 SN/)
+    assert.match(page.data.reviewDescription, /库存不会增加/); assert.equal(page.data.reviewWorkOrderNo, 'WO-TEST')
+    assert.equal(page.data.reviewRows[0].basisSku, 'SKU-TEST'); assert.equal(page.data.reviewRows[0].lot, lot)
+    assert.equal(page.data.reviewRows[0].basisCondition, '新件'); assert.equal(page.data.reviewRows[0].basisLot, '')
+    assert.deepEqual(page.data.reviewRows[0].serialNumbers, ['UNKNOWN-OLD'])
+    assert.equal(JSON.stringify(page.data).includes('QR-private'), false)
+    assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+    await page.registerRemoved(event(removedId)); assert.equal(registrationWrites(state).length, 0)
+    page.confirmSubmission(); await work
+    assert.equal(registrationWrites(state).length, 1); assert.equal(pairedWrites(state).length, 0)
+    assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing'); assert.equal(page.data.canDraft, true)
+    assert.match(page.data.previewMessage, /登记已确认.*库存未变动/)
+    assert.equal(page.data.removedRows[0].identified, false); assert.equal(page.data.removedRows[0].registrationAvailable, false)
+    assert.equal(page._removedDrafts[0].scan.qr_code, 'QR-private-UNKNOWN-OLD')
+    await page.inspectRemoved(event(removedId)); assert.equal(page.data.removedRows[0].identified, true)
+    page.chooseInstalled({ ...event(removedId), detail: { value: '1' } })
+    assert.equal(page._removedDrafts[0].installedSerialId, SN1)
+    page.onHide(); assert.equal(page._removedDrafts.length, 0); assert.equal(JSON.stringify(page.data).includes('UNKNOWN-OLD'), false)
+  }
+})
+test('only exact unknown-identity response offers registration and input edits invalidate that offer', async () => {
+  for (const mode of ['transport', 'other_code', 'wrong_status', 'unobserved', 'known']) {
+    const context = await pairedPage({ removed: scan => {
+      if (mode === 'known') return removedResult(scan)
+      const error = unknownIdentity()
+      if (mode === 'transport') delete error.responseReceived
+      if (mode === 'other_code') error.code = 'removed_material_not_found'
+      if (mode === 'wrong_status') error.status = 404
+      if (mode === 'unobserved') error.responseReceived = false
+      throw error
+    } }, true)
+    const id = await addRemovedRow(context, 'UNKNOWN-OLD')
+    assert.equal(context.page.data.removedRows[0].registrationAvailable, false)
+    await context.page.registerRemoved(event(id)); assert.equal(registrationWrites(context.state).length, 0)
+  }
+  for (const field of ['condition', 'lot_no', 'qr_code']) {
+    const context = await unknownPage(), { page, removedId } = context
+    if (field === 'qr_code') { context.scans.push('CHANGED-QR'); await page.scanRemoved(event(removedId, { code: field })) }
+    else page.editRemoved({ ...event(removedId, { field, value: 'used' }), detail: { value: 'CHANGED-LOT' } })
+    assert.equal(page.data.removedRows[0].registrationAvailable, false)
+    await page.registerRemoved(event(removedId)); assert.equal(registrationWrites(context.state).length, 0)
+  }
+})
+test('registration cancel, navigation or account change during review never persists or writes', async () => {
+  for (const mode of ['cancel', 'hide', 'switch']) {
+    const { page, state, store, removedId } = await unknownPage()
+    const work = page.registerRemoved(event(removedId)); await tick(); assert.equal(page.data.confirming, true)
+    if (mode === 'cancel') page.cancelSubmission()
+    else if (mode === 'hide') page.onHide()
+    else { state.token = 'another-session'; page.confirmSubmission() }
+    await work
+    assert.equal(registrationWrites(state).length, 0); assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+    if (mode === 'cancel') assert.equal(page.data.removedRows[0].registrationAvailable, true)
+  }
+})
+test('registration timeout, 401, mismatched GET or absent original preserves marker and blocks all resubmission', async () => {
+  for (const mode of ['timeout', '401', 'missing', 'hash', 'parent']) {
+    let marker
+    const context = await unknownPage({ post: () => {
+      marker = context.store.read({ work_order_id: ORDER }).value
+      if (mode === 'timeout' || mode === '401') throw new Error(mode)
+      return {}
+    }, recovery: () => {
+      if (mode === 'missing') throw Object.assign(new Error('missing'), { responseReceived: true, status: 404, code: 'removed_registration_not_found' })
+      if (mode === 'parent') return pairedRecovered({ ...marker, kind: 'work_order_replacement', operation_type: 'replace' })
+      return { ...registrationProof(marker), request_hash: 'b'.repeat(64) }
+    } })
+    const { page, state, store, removedId } = context
+    const work = page.registerRemoved(event(removedId)); await tick(); page.confirmSubmission(); await work
+    assert.equal(store.read({ work_order_id: ORDER }).kind, 'valid'); assert.equal(page.data.canDraft, false)
+    assert.equal(page.data.pendingRequests[0].sealable, true); assert.match(page.data.pendingRequests[0].label, /拆回 SN 登记/)
+    assert.equal(page._removedDrafts.length, 0); assert.equal(JSON.stringify(page.data).includes('QR-private'), false)
+    await page.registerRemoved(event(removedId)); await page.submitMaterials()
+    assert.equal(registrationWrites(state).length, 1); assert.equal(pairedWrites(state).length, 0)
+  }
+})
+test('registration stored proof and independent seal remain recoverable outside the current order list', async () => {
+  for (const outcome of ['registered', 'sealed']) {
+    const { store, marker: ordinary } = await pendingStore(false)
+    const marker = { ...ordinary, kind: registrationCommand.KIND, operation_type: 'register_removed' }
+    await store.withLease(marker, lease => lease.persist(marker)); let closed = false
+    const seal = { schema_version: '1.0', lookup_status: 'sealed_not_executed', command: null, seal: { seal_id: OTHER,
+      work_order_id: ORDER, operator_person_id: PERSON, operation_type: 'register_removed', request_id: marker.trace_request_id,
+      request_hash: marker.request_hash, sealed_at: '2026-09-13T08:00:00Z' } }
+    const { page, state } = harness({ store, list: () => list(NEXT), access: () => ({ ...access(), permissions: access().permissions.concat({ resource: 'work_order_material', action: 'operate', field_code: '' }) }),
+      recovery: () => {
+        if (outcome === 'registered') return registrationProof(marker)
+        if (closed) return seal
+        throw Object.assign(new Error('missing'), { responseReceived: true, status: 404, code: 'removed_registration_not_found' })
+      }, seal: () => { closed = true; return seal }, confirm: options => options.success({ confirm: true }) })
+    await page.onShow(); assert.equal(page.data.pendingRequests[0].sealable, true)
+    if (outcome === 'registered') await page.recoverPendingRequest(event(ORDER)); else await page.sealPendingRequest(event(ORDER))
+    assert.equal(store.read(marker).kind, 'missing'); assert.equal(page.data.pendingRequests.length, 0)
+    assert.match(page.data.recoveryMessage, outcome === 'registered' ? /登记已确认.*库存未变动/ : /已关闭且未执行/)
+    assert.equal(state.calls.some(call => call.endpoint.includes('/material-options')), false)
+    assert.ok(state.calls.filter(call => call.endpoint.includes('/by-request/')).every(call => call.endpoint.includes('/removed-registrations/')))
+  }
+})
+test('registration entropy, durable readback and current operate permission guard the final transport', async () => {
+  for (const mode of ['entropy', 'storage', 'permission']) {
+    const { store, storage } = await pendingStore(false); let revoke = false
+    const context = await unknownPage({ store, randomFailure: mode === 'entropy' ? () => { throw new Error('no entropy') } : null,
+      access: () => ({ ...access(), permissions: revoke ? access().permissions : access().permissions.concat({ resource: 'work_order_material', action: 'operate', field_code: '' }) }) })
+    const work = context.page.registerRemoved(event(context.removedId)); await tick(); assert.equal(context.page.data.confirming, true)
+    if (mode === 'storage') storage.setStorageSync = () => {}
+    if (mode === 'permission') revoke = true
+    context.page.confirmSubmission(); await work
+    assert.equal(registrationWrites(context.state).length, 0)
+    assert.equal(store.read({ work_order_id: ORDER }).kind, mode === 'storage' ? 'unavailable' : 'missing')
+  }
+})
+test('registration discards late preview, POST or original GET after leaving the page', async () => {
+  for (const phase of ['preview', 'post', 'get']) {
+    const pending = deferred(); let body, marker
+    const context = await unknownPage({ preview: (_, value) => { body = value; return phase === 'preview' ? pending.promise : registrationPreview(value) },
+      post: () => { marker = context.store.read({ work_order_id: ORDER }).value; return phase === 'post' ? pending.promise : {} }, recovery: () => pending.promise })
+    const { page, state, store, removedId } = context
+    const work = page.registerRemoved(event(removedId)); await tick()
+    if (phase !== 'preview') { page.confirmSubmission(); await tick() }
+    page.onHide(); const count = state.calls.length
+    pending.resolve(phase === 'preview' ? registrationPreview(body) : phase === 'post' ? {} : registrationProof(marker))
+    await work
+    assert.equal(state.calls.length, count); assert.equal(page.data.state, 'idle')
+    assert.equal(store.read({ work_order_id: ORDER }).kind, phase === 'preview' ? 'missing' : 'valid')
+  }
+})
+test('stale registration preview, identity collision or released basis prevents any review or write', async () => {
+  for (const mode of ['hash', 'collision', 'basis']) {
+    let changed = false
+    const context = await unknownPage({ options: () => { const value = pairedOptions(true); if (changed && mode === 'basis') value.items[0].allowed_actions = []; return value },
+      preview: (_, body) => { if (mode === 'collision') throw new Error('SN 或二维码已登记'); const raw = registrationPreview(body); if (mode === 'hash') raw.request_hash = 'f'.repeat(64); return raw } })
+    changed = true
+    await context.page.registerRemoved(event(context.removedId))
+    assert.equal(context.page.data.confirming, false); assert.equal(registrationWrites(context.state).length, 0)
+    assert.equal(context.store.read({ work_order_id: ORDER }).kind, 'missing')
   }
 })

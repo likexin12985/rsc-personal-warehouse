@@ -44,9 +44,11 @@
     <view wx:if="{{confirming}}" class="card confirmation-card">
       <view class="order-no">{{reviewTitle}}</view>
       <view>工单：{{reviewWorkOrderNo}}</view>
-      <view class="muted">{{operationKind === 'replace' ? '确认后将整批登记实际消耗、拆回入库和新旧 SN 配对。请逐行核对两侧物料。' : operationKind === 'occupy' ? '确认后，本批物料将转为此工单占用。' : operationKind === 'consume' ? '请确认已实际使用，本次将扣减工单占用和个人仓实物库存。' : '确认后，此工单的未用物料将转回本人可用库存。'}}</view>
+      <view class="muted">{{reviewDescription || (operationKind === 'replace' ? '确认后将整批登记实际消耗、拆回入库和新旧 SN 配对。请逐行核对两侧物料。' : operationKind === 'occupy' ? '确认后，本批物料将转为此工单占用。' : operationKind === 'consume' ? '请确认已实际使用，本次将扣减工单占用和个人仓实物库存。' : '确认后，此工单的未用物料将转回本人可用库存。')}}</view>
       <view wx:for="{{reviewRows}}" wx:for-item="row" wx:key="lineNo" class="draft-row">
-        <view wx:if="{{row.side}}" class="order-no">{{row.side}} · 对应投入第 {{row.basisLineNo}} 行</view>
+        <view wx:if="{{row.side}}" class="order-no">{{row.side}}<text wx:if="{{row.basisLineNo}}"> · 对应投入第 {{row.basisLineNo}} 行</text></view>
+        <view wx:if="{{row.basisName}}">投入依据：{{row.basisName}} · {{row.basisSku}}</view>
+        <view wx:if="{{row.basisName}}">投入成色：{{row.basisCondition}}<text wx:if="{{row.basisLot}}"> · 批次 {{row.basisLot}}</text></view>
         <view>{{row.materialName}} · {{row.sku}}</view>
         <view>{{row.condition}}<text wx:if="{{row.lot}}"> · 批次 {{row.lot}}</text></view>
         <view class="quantity">本次数量：{{row.quantity}} {{row.unit}}</view>
@@ -115,6 +117,10 @@
           </view>
           <input class="quantity-input" disabled="{{busy}}" value="{{removed.lot}}" maxlength="160" placeholder="批次物料填写批次号；已登记 SN 可识别批次" data-id="{{removed.id}}" data-field="lot_no" bindinput="editRemoved" />
           <button size="mini" disabled="{{busy || !removed.condition || !removed.skuCaptured}}" data-id="{{removed.id}}" bindtap="inspectRemoved">识别并核验拆回件</button>
+          <block wx:if="{{removed.registrationAvailable}}">
+            <view class="muted">三码未匹配已登记 SN。请核对标签；登记只建立身份，不增加库存。</view>
+            <button size="mini" disabled="{{busy || !removed.condition || !removed.skuCaptured || !removed.snCaptured || !removed.qrCaptured}}" data-id="{{removed.id}}" bindtap="registerRemoved">核验并登记拆回 SN</button>
+          </block>
           <block wx:if="{{removed.identified}}">
             <view>{{removed.materialName}} · {{removed.sku}}</view>
             <view wx:if="{{removed.identifiedLot}}">批次：{{removed.identifiedLot}}</view>
