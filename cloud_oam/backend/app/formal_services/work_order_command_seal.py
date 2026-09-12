@@ -55,7 +55,7 @@ def _verified_seal(db, *, actor, row):
     invalid = (row.operator_person_id != actor.person_id or row.actor_user_id != actor.user_id
         or row.request_reference != _request_reference(row.request_id)
         or not re.fullmatch(r"[0-9a-f]{64}", row.request_hash)
-        or row.operation_type not in {"occupy", "consume", "release", "replace", "register_removed"}
+        or row.operation_type not in {"occupy", "consume", "release", "replace", "register_removed", "reverse"}
         or row.authorization_version < 1 or _utc(row.created_at) != _utc(row.sealed_at))
     with db.no_autoflush:
         events = tuple(db.scalars(select(AuditEvent).where(AuditEvent.stream_key == "material_request",
@@ -74,6 +74,9 @@ def _verified_seal(db, *, actor, row):
     output, seal_type = (WorkOrderReplacementSealedLookupOut, WorkOrderReplacementSealOut) if row.operation_type == "replace" else (WorkOrderMaterialSealedLookupOut, WorkOrderMaterialSealOut)
     if row.operation_type == "register_removed":
         output, seal_type = WorkOrderRemovedRegistrationSealedOut, WorkOrderRemovedRegistrationSealOut
+    if row.operation_type == "reverse":
+        from ..work_order_reversal_schemas import WorkOrderReversalSealedOut, WorkOrderReversalSealOut
+        output, seal_type = WorkOrderReversalSealedOut, WorkOrderReversalSealOut
     return output(seal=seal_type(
         seal_id=row.id, work_order_id=row.oam_work_order_id, operator_person_id=row.operator_person_id,
         operation_type=row.operation_type, request_id=row.request_id, request_hash=row.request_hash,

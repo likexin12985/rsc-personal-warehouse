@@ -7178,8 +7178,8 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 172
-    assert len(functions) == 73
+    assert len(triggers) == 174
+    assert len(functions) == 74
     _assert_material_request_approval_guards(
         triggers=triggers,
         functions=functions,
@@ -7429,7 +7429,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
     assert {
         coordinate[0].rsplit("_", 1)[-1]
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
-    } == {"0029", "0030", "0045", "0046", "0059", "0060", "0069", "0070", "0071", "0072", "0077", "0087", "0090", "0092", "0093", "0094", "0095", "0096", "0098"}
+    } == {"0029", "0030", "0045", "0046", "0059", "0060", "0069", "0070", "0071", "0072", "0077", "0087", "0090", "0092", "0093", "0094", "0095", "0096", "0098", "0099"}
 
 
 def test_0069_reservation_guard_bodies_match_runtime_manifest(monkeypatch):
@@ -7562,7 +7562,7 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         ): migration._projection_dispatcher_sql(),
     }
 
-    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 73
+    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 74
     assert set(function_sql) == {
         coordinate
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256

@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261008_0098"
+HEAD_REVISION = "20261009_0099"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -6673,6 +6673,9 @@ def _seed_0051_observation_only_completion(
                 isinstance(fixture_now, datetime)
                 and fixture_now.tzinfo is not None
             )
+            # PostgreSQL can return Asia/Shanghai locally while CI uses UTC.
+            # The shared synthetic control fixture hashes a canonical UTC time.
+            fixture_now = fixture_now.astimezone(timezone.utc)
             opening_fixtures.NOW = fixture_now
 
             roles = {
@@ -7422,7 +7425,7 @@ def _head_account_admission_hash() -> str:
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20261008_0098_work_order_reversals.py"
+        "20261009_0099_work_order_reversal_seals.py"
     )))
     assert migration["revision"] == HEAD_REVISION
     return migration["NEW_HASH"]
@@ -21231,8 +21234,10 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             from pg16_work_order_reversal_write_gate import assert_reversal_write_gate, assert_reversal_database_proof_gate
             assert_reversal_write_gate(api_engine, replacement_fixture_engine)
             assert_reversal_database_proof_gate(api_engine, replacement_fixture_engine)
+            from pg16_work_order_reversal_seals_gate import assert_reversal_seal_atomic_gate, assert_reversal_http_gate, assert_reversal_seal_commit_gate
+            assert_reversal_seal_atomic_gate(api_engine, replacement_fixture_engine)
+            assert_reversal_http_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_reversal_write_gate import assert_reversal_concurrent_commit_gate
-            assert_reversal_concurrent_commit_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_replacement_seals_gate import assert_replacement_seal_atomic_gate
             assert_replacement_seal_atomic_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_query_gate import assert_work_order_query_gate
@@ -21280,6 +21285,18 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             removed_fixture_engine.dispose()
         blocked_removed = _run_alembic("downgrade", "20261005_0095", expect_success=False)
         assert "0096 downgrade blocked" in blocked_removed.stdout + blocked_removed.stderr
+        assert _current_revision() == HEAD_REVISION
+        # New permanent compensation/seal facts follow earlier historical
+        # downgrade proofs, so their refusal cannot mask the older boundaries.
+        reversal_fixture_engine = create_engine(_sqlalchemy_url(
+            role="star_oam_migrator", password=_role_password("star_oam_migrator")))
+        try:
+            assert_reversal_concurrent_commit_gate(api_engine, reversal_fixture_engine)
+            assert_reversal_seal_commit_gate(api_engine, reversal_fixture_engine)
+        finally:
+            reversal_fixture_engine.dispose()
+        blocked_reversal_seal = _run_alembic("downgrade", "20261008_0098", expect_success=False)
+        assert "0099 downgrade blocked" in blocked_reversal_seal.stdout + blocked_reversal_seal.stderr
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
     finally:

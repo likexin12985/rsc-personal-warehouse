@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from .work_order_query_schemas import MyWorkOrderOut
+from .work_order_material_schemas import WorkOrderMaterialSealOut, WorkOrderMaterialSealedLookupOut
 
 
 class WorkOrderReversalPreviewIn(BaseModel):
@@ -113,5 +114,16 @@ class WorkOrderReversalOut(BaseModel):
     request_id: str
     request_hash: str
     plan_hash: str
+    original_operation_id: UUID | None
+    original_replacement_id: UUID | None
+    reason: str
     posted_at: datetime
     items: tuple[WorkOrderReversalResultItemOut, ...]
+
+
+class WorkOrderReversalSealOut(WorkOrderMaterialSealOut):
+    operation_type: Literal["reverse"]
+
+
+class WorkOrderReversalSealedOut(WorkOrderMaterialSealedLookupOut):
+    seal: WorkOrderReversalSealOut

@@ -153,7 +153,7 @@ def assert_work_order_material_gate(api_engine, fixture_engine):
             # Deliberately bypass Python preflight to exercise the database proof.
             with patch.object(service, "require_work_order_reservations", return_value=None):
                 _run(db, world, finish, order=1)
-        _db_denies(cross_order, api_engine, "0090 work order reserved quantity exhausted")
+        _db_denies(cross_order, api_engine, "0098 work order reserved quantity exhausted")
 
         def orphan(db):
             with patch.object(service, "record_posted_operation", return_value=SimpleNamespace(id=uuid4())):
@@ -189,7 +189,7 @@ def assert_work_order_material_gate(api_engine, fixture_engine):
             raise AssertionError("work order used another order's SN")
         with patch.object(service, "require_work_order_reservations", return_value=None):
             _run(db, sn_world, "release", serials=sn_world.serial_ids[1:2])
-    _db_denies(wrong_serial, api_engine, "0090 serial is not reserved by this work order")
+    _db_denies(wrong_serial, api_engine, "0098 serial reservation does not belong to this work order")
 
     # Terminal fixtures: simultaneous different keys can spend this reservation only once.
     for kind, world in worlds.items():

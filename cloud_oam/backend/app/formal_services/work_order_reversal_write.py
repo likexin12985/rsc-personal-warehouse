@@ -1,7 +1,7 @@
 """Append a complete work-order compensation through the unified stock writer.
 
-The caller owns rollback/commit. This service is not exposed as a public write
-route until PostgreSQL, lost-result recovery and sealing are accepted together.
+The caller owns rollback/commit. The public route shares the original-request
+recovery and permanent sealing boundary; a lost response is never replayed.
 """
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -90,6 +90,9 @@ def execute_reversal(db, *, actor, work_order_id, request):
         raise material.WorkOrderMaterialPreflightError("request_id_conflict", "请求标识已绑定原冲销，请先回读", "conflict")
     from .work_order_command_seal import require_unsealed_request
     require_unsealed_request(db, actor=current, work_order_id=work_order_id, operation_type="reverse", request_id=request.request_id)
+    from .work_order_reversal_seal import lookup_reversal
+    # Do not treat missing parent rows with surviving request evidence as a new command.
+    lookup_reversal(db, actor=current, work_order_id=work_order_id, request_id=request.request_id)
     plan, _ = _preview_with_document(db, actor=current, work_order_id=work_order_id, request=selection)
     originals = [db.get(WorkOrderMaterialOperation, row.original_operation_id) for row in plan.children]
     graph = posting.InventoryPostingCommand(transaction_no="reversal-graph", movement_type="reversal",

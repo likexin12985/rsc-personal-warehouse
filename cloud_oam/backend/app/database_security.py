@@ -1893,6 +1893,8 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
     "approval_actions",
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
+    'trg_work_order_seals_reversal_0099': ('work_order_command_seals', 'rsc_guard_work_order_reversal_seal_0099', 'A', 5, True, True, True),
+    'trg_work_order_reversals_seal_0099': ('work_order_reversals', 'rsc_guard_work_order_reversal_seal_0099', 'A', 5, True, True, True),
     'trg_work_order_reversals_proof_0098': ('work_order_reversals', 'rsc_dispatch_work_order_reversal_0098', 'A', 5, True, True, True),
     'trg_work_order_reversals_immutable_0098': ('work_order_reversals', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
     'trg_work_order_reversals_no_truncate_0098': ('work_order_reversals', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
@@ -2392,6 +2394,7 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
+    ('rsc_guard_work_order_reversal_seal_0099', ''): '2489c7ececc06338a9bea578fa0142151321eabd2d2d4cb0f5831956de9a2d3f',
     ('rsc_check_work_order_reservations_0098', 'text, bigint'): '142e0f90073f3b9c77941f345b646b24d4b848e46994408f42acd050578dcd59',
     ('rsc_check_work_order_reversal_0098', 'uuid'): 'c9834533d05df61df464350924e889a8bba8874825f32aba9bcfc48998b3bb1e',
     ('rsc_dispatch_work_order_reversal_0098', ''): '7ba3e443ce82840c815dc8c55b088de089eb43721d08e99cd0f68b4173179d44',
@@ -2517,6 +2520,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ('rsc_guard_work_order_reversal_seal_0099', ''),
         ('rsc_check_work_order_reservations_0098', 'text, bigint'),
         ('rsc_check_work_order_reversal_0098', 'uuid'),
         ('rsc_dispatch_work_order_reversal_0098', ''),
@@ -6024,7 +6028,7 @@ def _select_material_request_approval_functions(
         for row in rows
         if isinstance(row.get("function_name"), str)
         and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094", "_0095", "_0096", "_0098")
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094", "_0095", "_0096", "_0098", "_0099")
         )
     ]
 

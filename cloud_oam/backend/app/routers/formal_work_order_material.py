@@ -17,7 +17,10 @@ from ..formal_services import work_order_removed_registration as removed_registr
 from ..work_order_material_schemas import (WorkOrderRemovedScanIn, WorkOrderRemovedRegistrationIn,
     WorkOrderRemovedRegistrationPreviewOut, WorkOrderRemovedRegistrationOut, WorkOrderRemovedRegistrationSealedOut)
 from ..formal_services.inventory_query import InventoryReadError
-from ..work_order_reversal_schemas import WorkOrderReversalPreviewIn, WorkOrderReversalPreviewOut
+from ..work_order_reversal_schemas import (WorkOrderReversalPreviewIn, WorkOrderReversalPreviewOut,
+    WorkOrderReversalIn, WorkOrderReversalOut, WorkOrderReversalSealedOut)
+from ..formal_services.work_order_reversal_write import execute_reversal
+from ..formal_services.work_order_reversal_seal import lookup_reversal, seal_reversal
 from ..formal_services.work_order_replacement_read import replacement_result
 from ..formal_services.work_order_replacement_seal import lookup_replacement_result as lookup_replacement, seal_replacement
 from ..formal_services.work_order_command_seal import lookup_command_result as lookup_operation, seal_command
@@ -45,6 +48,78 @@ from ..work_order_material_schemas import (
 )
 
 router = APIRouter(prefix="/v1/work-orders", tags=["formal-work-order-material"])
+
+
+@router.post("/{work_order_id}/material-reversals", response_model=WorkOrderReversalOut)
+def execute_material_reversal(
+    work_order_id: UUID, payload: WorkOrderReversalIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")),
+    db: Session = Depends(get_db), trace: str | None = Header(default=None, alias="X-Request-ID"),
+    key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    response.headers["Cache-Control"] = "private, no-store"
+    _require_operator(payload, principal)
+    _command_trace(payload, trace)
+    if key is not None and key != payload.idempotency_key:
+        raise HTTPException(status_code=400, detail={"code": "idempotency_key_mismatch", "message": "请求头与冲销幂等键不一致"})
+    try:
+        result = execute_reversal(db, actor=principal, work_order_id=work_order_id, request=payload)
+        db.commit()
+        return result
+    except service.InventoryPostingError as exc:
+        db.rollback(); _raise(exc)
+    except InventoryReadError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.message}) from None
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=503, detail={"code": "work_order_reversal_unavailable",
+            "message": "冲销结果未确认，请保留原请求并查询，勿重新提交"}) from None
+
+
+@router.get("/{work_order_id}/material-reversals/by-request/{request_id}", response_model=WorkOrderReversalOut | WorkOrderReversalSealedOut)
+def read_material_reversal(
+    work_order_id: UUID, response: Response,
+    request_id: str = Path(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$"),
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "read")), db: Session = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        result = lookup_reversal(db, actor=principal, work_order_id=work_order_id, request_id=request_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail={"code": "work_order_reversal_not_observed",
+                "message": "暂未查到原冲销结果，不代表未执行；请保留原请求查询或封存"})
+        return result
+    except service.InventoryPostingError as exc:
+        _raise(exc)
+    except SQLAlchemyError:
+        raise HTTPException(status_code=503, detail={"code": "work_order_reversal_unavailable",
+            "message": "原冲销暂时无法核验，请保留恢复记录"}) from None
+
+
+@router.post("/{work_order_id}/material-reversals/by-request/{request_id}/seal", response_model=WorkOrderReversalOut | WorkOrderReversalSealedOut)
+def seal_original_reversal(
+    work_order_id: UUID, payload: WorkOrderMaterialSealIn, response: Response,
+    request_id: str = Path(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$"),
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")), db: Session = Depends(get_db),
+    trace: str | None = Header(default=None, alias="X-Request-ID"), key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    response.headers["Cache-Control"] = "private, no-store"
+    _require_operator(payload, principal)
+    if (trace is not None and trace != request_id) or key is not None:
+        raise HTTPException(status_code=400, detail={"code": "work_order_seal_coordinate_invalid",
+            "message": "封存只能使用原请求坐标，不接受其他幂等键"})
+    try:
+        result = seal_reversal(db, actor=principal, work_order_id=work_order_id, request_id=request_id, request_hash=payload.request_hash)
+        db.commit()
+        return result
+    except service.InventoryPostingError as exc:
+        db.rollback(); _raise(exc)
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=503, detail={"code": "work_order_seal_unavailable",
+            "message": "原冲销封存结果未确认，请保留原请求并查询"}) from None
+
 
 @router.post("/{work_order_id}/material-reversals/preview", response_model=WorkOrderReversalPreviewOut)
 def preview_material_reversal(

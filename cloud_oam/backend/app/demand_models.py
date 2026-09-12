@@ -199,7 +199,7 @@ class WorkOrderCommandSeal(CreatedAtMixin, Base):
     __tablename__ = "work_order_command_seals"
     __table_args__ = (
         UniqueConstraint("actor_user_id", "oam_work_order_id", "operation_type", "request_id", name="uq_work_order_command_seals_request"),
-        CheckConstraint("operation_type IN ('occupy', 'consume', 'release', 'replace', 'register_removed')", name="ck_work_order_command_seals_operation"),
+        CheckConstraint("operation_type IN ('occupy', 'consume', 'release', 'replace', 'register_removed', 'reverse')", name="ck_work_order_command_seals_operation"),
         CheckConstraint("authorization_version > 0", name="ck_work_order_command_seals_version"),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
