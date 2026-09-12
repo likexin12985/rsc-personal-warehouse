@@ -150,13 +150,64 @@ class WorkOrderReplacementRecoverLineIn(StrictInput):
     serial_verifications: tuple[SerialVerificationIn, ...] = Field(default=(), max_length=1000)
 
 
-class WorkOrderReplacementIn(StrictInput):
+class WorkOrderReplacementPreviewIn(StrictInput):
     operator_person_id: UUID
     consume_lines: tuple[WorkOrderMaterialLineIn, ...] = Field(min_length=1, max_length=100)
     recover_lines: tuple[WorkOrderReplacementRecoverLineIn, ...] = Field(min_length=1, max_length=100)
     replacement_pairs: tuple[WorkOrderReplacementPairIn, ...] = Field(default=(), max_length=1000)
+
+
+class WorkOrderReplacementIn(WorkOrderReplacementPreviewIn):
     idempotency_key: str = Field(min_length=1, max_length=200)
     request_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class WorkOrderReplacementPreviewOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    status: Literal["batch_validated"] = "batch_validated"
+    work_order_id: UUID
+    operator_person_id: UUID
+    authorization_version: int
+    source_version: str
+    ledger_cursor: int
+    checked_at: datetime
+    consume_line_count: int
+    recover_line_count: int
+    pair_count: int
+    request_hash: str
+
+
+class WorkOrderRemovedScanIn(StrictInput):
+    operator_person_id: UUID
+    basis_stock_account_id: UUID
+    condition_before: Literal["used", "damaged"]
+    sku_code: str = Field(min_length=1, max_length=80)
+    lot_no: str | None = Field(default=None, min_length=1, max_length=160)
+    serial_no: str | None = Field(default=None, min_length=1, max_length=200)
+    qr_code: str | None = Field(default=None, min_length=1, max_length=250)
+
+
+class WorkOrderRemovedScanOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    work_order_id: UUID
+    operator_person_id: UUID
+    authorization_version: int
+    source_version: str
+    ledger_cursor: int
+    checked_at: datetime
+    basis_stock_account_id: UUID
+    material_id: UUID
+    sku_code: str
+    material_name: str
+    base_unit: str
+    condition_before: Literal["used", "damaged"]
+    tracking_mode: Literal["none", "lot", "serial", "lot_and_serial"]
+    quantity_scale: int
+    allow_fraction: bool
+    lot_id: UUID | None = None
+    lot_no: str | None = None
+    serial_id: UUID | None = None
+    serial_no: str | None = None
 
 
 class WorkOrderReplacementOut(BaseModel):

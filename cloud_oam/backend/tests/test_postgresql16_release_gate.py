@@ -21211,6 +21211,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_work_order_replacements_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_replacements_gate import assert_replacement_history_gate
             assert_replacement_history_gate(api_engine)
+            from pg16_work_order_replacement_preview_gate import assert_replacement_preview_gate
+            assert_replacement_preview_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_query_gate import assert_work_order_query_gate
             assert_work_order_query_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_submit_gate import assert_work_order_submit_gate

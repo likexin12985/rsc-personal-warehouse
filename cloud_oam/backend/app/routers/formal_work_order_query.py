@@ -17,8 +17,60 @@ from ..work_order_query_schemas import MyWorkOrdersOut, WorkOrderStatus, WorkOrd
 from ..work_order_material_schemas import WorkOrderMaterialPreviewIn, WorkOrderMaterialPreviewOut
 from ..formal_services.work_order_preview import preview_batch
 from ..formal_services.work_order_material import WorkOrderMaterialLineInput, SerialVerificationInput
+from ..formal_services import work_order_replacement_preview as replacement_preview
+from ..formal_services.work_order_replacements import RecoveryLineInput
+from ..formal_services.work_order_material import WorkOrderReplacementPairInput
+from ..work_order_material_schemas import (
+    WorkOrderReplacementPreviewIn, WorkOrderReplacementPreviewOut,
+    WorkOrderRemovedScanIn, WorkOrderRemovedScanOut,
+)
 
 router = APIRouter(prefix="/v1/work-orders", tags=["formal-work-order-query"])
+
+
+@router.post("/{work_order_id}/material-replacements/preview", response_model=WorkOrderReplacementPreviewOut)
+def preview_my_replacement(
+    work_order_id: UUID, payload: WorkOrderReplacementPreviewIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")),
+    db: Session = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "private, no-store"
+    if payload.operator_person_id != principal.person_id:
+        raise HTTPException(status_code=403, detail={"code":"operator_mismatch", "message":"操作人必须是当前登录人员"})
+    def line(row, model):
+        values = row.model_dump()
+        values["serial_verifications"] = tuple(SerialVerificationInput(**proof) for proof in values["serial_verifications"])
+        return model(**values)
+    try:
+        return replacement_preview.preview_replacement(db, actor=principal, work_order_id=work_order_id,
+            consume_lines=tuple(line(row, WorkOrderMaterialLineInput) for row in payload.consume_lines),
+            recover_lines=tuple(line(row, RecoveryLineInput) for row in payload.recover_lines),
+            pairs=tuple(WorkOrderReplacementPairInput(**row.model_dump()) for row in payload.replacement_pairs))
+    except InventoryReadError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from None
+    except InventoryPostingError as exc:
+        raise HTTPException(status_code=exc.http_status_code, detail=exc.as_detail()) from None
+    except SQLAlchemyError:
+        raise HTTPException(status_code=503, detail={"code":"replacement_preview_unavailable", "message":"替换整批预检暂时不可用，请重新核验"}) from None
+
+
+@router.post("/{work_order_id}/material-replacements/removed-part", response_model=WorkOrderRemovedScanOut)
+def resolve_my_removed_part(
+    work_order_id: UUID, payload: WorkOrderRemovedScanIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")),
+    db: Session = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "private, no-store"
+    if payload.operator_person_id != principal.person_id:
+        raise HTTPException(status_code=403, detail={"code":"operator_mismatch", "message":"操作人必须是当前登录人员"})
+    try:
+        return replacement_preview.lookup_removed_part(db, actor=principal, work_order_id=work_order_id, scan=payload)
+    except InventoryReadError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from None
+    except InventoryPostingError as exc:
+        raise HTTPException(status_code=exc.http_status_code, detail=exc.as_detail()) from None
+    except SQLAlchemyError:
+        raise HTTPException(status_code=503, detail={"code":"removed_part_unavailable", "message":"拆回件暂时无法核验，请重新扫描"}) from None
 
 
 @router.post("/{work_order_id}/material-operations/{operation_type}/preview", response_model=WorkOrderMaterialPreviewOut)

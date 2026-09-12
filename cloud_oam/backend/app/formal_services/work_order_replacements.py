@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from ..demand_models import WorkOrderMaterialOperation, WorkOrderReplacement, WorkOrderReplacementPair
 from ..foundation_models import OutboxEvent
-from ..inventory_models import FormalMaterial, InventorySerial, SerialCurrentPosition, StockAccount, StockLocation
+from ..inventory_models import FormalMaterial, InventoryLot, InventorySerial, SerialCurrentPosition, StockAccount, StockLocation
 from . import work_order_material as material
 from . import inventory_posting as inventory
 from .audit_chain import append_audit_event
@@ -86,27 +86,36 @@ def replacement_request_payload(*, work_order_id, operator_person_id, consume_li
             "replacement_pairs": consumed["replacement_pairs"]}
 
 
+def recovery_target(db, *, operator_person_id, line, require_active):
+    """Resolve exact target dimensions without inserting even an empty account."""
+    basis = db.get(StockAccount, line.basis_stock_account_id, populate_existing=True)
+    location = db.get(StockLocation, basis.location_id, populate_existing=True) if basis else None
+    sku = db.get(FormalMaterial, line.material_id, populate_existing=True)
+    if (basis is None or basis.custodian_person_id != operator_person_id
+            or basis.availability_bucket != "reserved" or location is None
+            or location.location_type != "personal" or location.custodian_person_id != operator_person_id
+            or (require_active and location.status != "active") or sku is None or (require_active and sku.status != "active")):
+        _fail("recovery_basis_invalid", "拆回件保管位置必须来自本人有效个人仓投料账户")
+    lot = db.get(InventoryLot, line.lot_id, populate_existing=True) if line.lot_id else None
+    if line.lot_id is not None and (lot is None or lot.material_id != line.material_id):
+        _fail("recover_lot_invalid", "拆回批次与物料不一致")
+    dimensions = dict(owner_org_id=basis.owner_org_id, custodian_person_id=operator_person_id,
+        location_id=basis.location_id, material_id=line.material_id, lot_id=line.lot_id,
+        condition_code=line.condition_before, availability_bucket="available")
+    rows = tuple(db.scalars(select(StockAccount).filter_by(**dimensions).limit(2)))
+    if len(rows) > 1:
+        _fail("recover_target_missing", "原回收账户不存在或不唯一，请核验原记录")
+    if line.target_stock_account_id is not None and (len(rows) != 1 or rows[0].id != line.target_stock_account_id):
+        _fail("recover_target_invalid", "指定回收账户与本次物料、成色及保管维度不一致")
+    return dimensions, rows[0] if rows else None
+
+
 def resolve_recovery_lines(db, *, operator_person_id, lines, create):
     """Create only empty dimensions; the paired recovery admits them at commit."""
     resolved = []
     for line in lines:
-        basis = db.get(StockAccount, line.basis_stock_account_id, populate_existing=True)
-        location = db.get(StockLocation, basis.location_id, populate_existing=True) if basis else None
-        sku = db.get(FormalMaterial, line.material_id, populate_existing=True)
-        if (basis is None or basis.custodian_person_id != operator_person_id
-                or basis.availability_bucket != "reserved" or location is None
-                or location.location_type != "personal" or location.custodian_person_id != operator_person_id
-                or (create and location.status != "active") or sku is None or (create and sku.status != "active")):
-            _fail("recovery_basis_invalid", "拆回件保管位置必须来自本人有效个人仓投料账户")
-        dimensions = dict(owner_org_id=basis.owner_org_id, custodian_person_id=operator_person_id,
-            location_id=basis.location_id, material_id=line.material_id, lot_id=line.lot_id,
-            condition_code=line.condition_before, availability_bucket="available")
-        query = select(StockAccount).filter_by(**dimensions).limit(2)
-        rows = tuple(db.scalars(query))
-        if line.target_stock_account_id is not None:
-            if len(rows) != 1 or rows[0].id != line.target_stock_account_id:
-                _fail("recover_target_invalid", "指定回收账户与本次物料、成色及保管维度不一致")
-        elif not rows and create:
+        dimensions, account = recovery_target(db, operator_person_id=operator_person_id, line=line, require_active=create)
+        if account is None and create:
             if db.get_bind().dialect.name == "postgresql":
                 from sqlalchemy.dialects.postgresql import insert
             else:
@@ -114,23 +123,23 @@ def resolve_recovery_lines(db, *, operator_person_id, lines, create):
             now = datetime.now(timezone.utc)
             db.execute(insert(StockAccount).values(id=uuid4(), **dimensions,
                 created_at=now, updated_at=now).on_conflict_do_nothing())
-            rows = tuple(db.scalars(query))
-        if len(rows) != 1:
+            _dimensions, account = recovery_target(db, operator_person_id=operator_person_id, line=line, require_active=True)
+        if account is None:
             _fail("recover_target_missing", "原回收账户不存在或不唯一，请核验原记录")
-        resolved.append(material.WorkOrderMaterialLineInput(line.material_id, rows[0].id, line.quantity,
-            line.serial_ids, line.condition_before, line.serial_verifications, rows[0].id))
+        resolved.append(material.WorkOrderMaterialLineInput(line.material_id, account.id, line.quantity,
+            line.serial_ids, line.condition_before, line.serial_verifications, account.id))
     material.validate_batch(tuple(resolved))
     return tuple(resolved)
 
 
-def _preflight_removed_serials(db, lines):
+def _preflight_removed_serials(db, lines, *, account_contexts=None):
     ids = tuple(identifier for line in lines for identifier in line.serial_ids)
     try:
         states = rebuild_serial_states(db, ids)
     except SerialLedgerError:
         _fail("removed_serial_history_invalid", "拆回 SN 历史流水不一致，请先核验", "service_unavailable")
     for line in lines:
-        account = db.get(StockAccount, line.stock_account_id)
+        account = account_contexts[line.stock_account_id] if account_contexts is not None else db.get(StockAccount, line.stock_account_id)
         sku = db.get(FormalMaterial, line.material_id)
         proofs = {proof.serial_id: proof for proof in line.serial_verifications}
         for identifier in line.serial_ids:

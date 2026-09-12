@@ -196,6 +196,7 @@ jobs:
             backend/tests/test_work_order_replacements_migration.py \
             backend/tests/test_work_order_replacements.py \
             backend/tests/test_work_order_replacement_read.py \
+            backend/tests/test_work_order_replacement_preview.py \
             backend/tests/test_formal_work_order_replacements_routes.py \
             backend/tests/test_opening_stocktake_service.py \
             backend/tests/test_opening_scope_qualification.py \
