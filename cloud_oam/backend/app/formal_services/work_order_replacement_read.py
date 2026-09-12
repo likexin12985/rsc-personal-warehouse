@@ -7,11 +7,14 @@ from uuid import UUID
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from ..demand_models import WorkOrderMaterialLine, WorkOrderMaterialOperation, WorkOrderMaterialSerial, WorkOrderReplacementPair
-from ..foundation_models import AuditEvent, OutboxEvent
+from ..demand_models import WorkOrderMaterialLine, WorkOrderMaterialOperation, WorkOrderMaterialSerial, WorkOrderReplacementPair, WorkOrderReplacement
+from ..foundation_models import AuditEvent, OutboxEvent, StateTransitionEvent
 from ..inventory_models import InventoryMovement, InventoryTransaction
-from ..work_order_material_schemas import WorkOrderMaterialLineIn, WorkOrderReplacementRecoverLineIn, WorkOrderReplacementPairIn, WorkOrderReplacementOut
+from ..work_order_material_schemas import WorkOrderMaterialLineIn, WorkOrderReplacementRecoverLineIn, WorkOrderReplacementPairIn, WorkOrderReplacementOut, WorkOrderReplacementRecoveredOut
 from . import work_order_material as material
+from .audit_chain import AuditChainError, verify_audit_event_in_read_snapshot
+from .inventory_posting import _require_current_actor, _request_reference, _derived_evidence_key
+from .work_order_reservations import require_work_order_reservations
 
 
 def _invalid():
@@ -20,7 +23,42 @@ def _invalid():
 
 
 def _unique_evidence(db, model, **values):
-    return len(tuple(db.scalars(select(model.id).filter_by(**values).limit(2)))) == 1
+    # Select the unique event by its coordinates, then compare JSON values.
+    # This treats JSON null and object key order consistently on SQLite/PG16.
+    contents = {key: value for key, value in values.items() if key.endswith("_jsonb")}
+    coordinates = {key: value for key, value in values.items() if key not in contents}
+    rows = tuple(db.scalars(select(model).filter_by(**coordinates).limit(2)))
+    if len(rows) != 1:
+        return False
+    if any(getattr(rows[0], key) != value for key, value in contents.items()):
+        return False
+    if model is AuditEvent:
+        verify_audit_event_in_read_snapshot(db, stream_key=rows[0].stream_key, event_id=rows[0].id)
+    return True
+
+
+def lookup_replacement(db, *, actor, work_order_id, request_id):
+    """Own immutable history remains readable after OAM reassignment or closure."""
+    if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{8,160}", request_id):
+        raise material.WorkOrderMaterialPreflightError("replacement_lookup_invalid", "原请求查询条件无效", "invalid_request")
+    current = _require_current_actor(db, actor)
+    if not current.allows(db, "work_order_material", "read", target_scope_type="person", target_scope_id=str(current.person_id)):
+        raise material.WorkOrderMaterialPreflightError("work_order_forbidden", "没有本人工单操作读取权限", "forbidden")
+    with db.no_autoflush:
+        rows = tuple(db.scalars(select(WorkOrderReplacement).where(
+            WorkOrderReplacement.oam_work_order_id == work_order_id,
+            WorkOrderReplacement.operator_person_id == current.person_id,
+            WorkOrderReplacement.request_id == request_id).limit(2)))
+        if len(rows) > 1:
+            _invalid()
+        result = None
+        if rows:
+            original = rows[0]
+            command = replacement_result(db, replacement=original, actor=current)
+            result = WorkOrderReplacementRecoveredOut(**command.model_dump(), operator_person_id=current.person_id,
+                request_id=original.request_id, request_hash=original.request_hash)
+        _require_current_actor(db, current)
+        return result
 
 
 def replacement_result(db, *, replacement, actor):
@@ -74,7 +112,10 @@ def replacement_result(db, *, replacement, actor):
                     or operation.oam_work_order_id != replacement.oam_work_order_id or operation.operator_person_id != actor.person_id
                     or operation.status != "posted" or operation.operation_type != kind
                     or operation.idempotency_key_hash != digest or operation.request_hash != _hash(expected)
+                    or operation.operation_no != f"WOM-{replacement.oam_work_order_id.hex[:12].upper()}-{digest[:12].upper()}"
                     or transaction.status != "posted" or transaction.actor_user_id != actor.user_id
+                    or transaction.ledger_cursor <= 0 or transaction.reversed_transaction_id is not None
+                    or transaction.transaction_no != f"INV-WO-{kind.upper()}-{digest[:20].upper()}"
                     or transaction.source_document_type != "work_order_material" or transaction.source_document_id != str(replacement.oam_work_order_id)
                     or transaction.movement_type != {"consume":"consume","recover":"inbound"}[kind]
                     or transaction.posting_key != f"work-order-material:{kind}:{replacement.oam_work_order_id}:{digest}"):
@@ -101,8 +142,29 @@ def replacement_result(db, *, replacement, actor):
                         "request_hash":operation.request_hash,"command":expected}):
                 _invalid()
             if not _unique_evidence(db,OutboxEvent,event_type="work_order_material_operation_posted",aggregate_type="work_order_material_operation",
-                    aggregate_id=str(identifier),payload_jsonb={"work_order_id":str(replacement.oam_work_order_id),"operation_type":kind,
+                    aggregate_id=str(identifier),idempotency_key="work-order-material-operation:"+str(identifier),
+                    payload_jsonb={"work_order_id":str(replacement.oam_work_order_id),"operation_type":kind,
                         "operation_no":operation.operation_no,"posting_transaction_id":str(transaction.id)}):
+                _invalid()
+            if kind == "consume":
+                require_work_order_reservations(db, work_order_id=replacement.oam_work_order_id,
+                    lines=lines, before_cursor=transaction.ledger_cursor)
+            if (not _unique_evidence(db, AuditEvent, stream_key="inventory", action="inventory.transaction.posted",
+                    actor_user_id=actor.user_id, aggregate_type="inventory_transaction", aggregate_id=str(transaction.id),
+                    request_id=_request_reference(replacement.request_id), before_jsonb=None, after_jsonb={
+                        "ledger_cursor":transaction.ledger_cursor, "movement_count":len(lines), "movement_type":transaction.movement_type,
+                        "posting_key":transaction.posting_key, "reversed_transaction_id":None, "status":"posted"})
+                    or not _unique_evidence(db, OutboxEvent, event_type="inventory.transaction.posted",
+                        aggregate_type="inventory_transaction", aggregate_id=str(transaction.id),
+                        idempotency_key=_derived_evidence_key("outbox", transaction.id, "posted"), payload_jsonb={
+                            "transaction_id":str(transaction.id), "transaction_no":transaction.transaction_no,
+                            "movement_type":transaction.movement_type, "ledger_cursor":transaction.ledger_cursor, "reversed_transaction_id":None})
+                    or not _unique_evidence(db, StateTransitionEvent, aggregate_type="inventory_transaction",
+                        aggregate_id=str(transaction.id), from_status=None, to_status="posted",
+                        reason="inventory_transaction_posted", actor_id=actor.user_id,
+                        idempotency_key=_derived_evidence_key("state", transaction.id, "posted"), metadata_jsonb={
+                            "ledger_cursor":transaction.ledger_cursor, "movement_type":transaction.movement_type,
+                            "request_reference":_request_reference(replacement.request_id)})):
                 _invalid()
             transactions.append(transaction)
         actual_pairs = set(db.execute(select(WorkOrderReplacementPair.operation_id,WorkOrderReplacementPair.installed_serial_id,
@@ -115,10 +177,10 @@ def replacement_result(db, *, replacement, actor):
                     action="work_order_material.replace",aggregate_type="work_order_material_replacement",aggregate_id=str(replacement.id),
                     request_id=replacement.request_id,before_jsonb={},after_jsonb={**links,"request_hash":replacement.request_hash,"command":command})
                 or not _unique_evidence(db,OutboxEvent,event_type="work_order_material_replacement_posted",aggregate_type="work_order_material_replacement",
-                    aggregate_id=str(replacement.id),payload_jsonb=links)):
+                    aggregate_id=str(replacement.id),idempotency_key="work-order-material-replacement:"+str(replacement.id),payload_jsonb=links)):
             _invalid()
         return WorkOrderReplacementOut(replacement_id=replacement.id,replacement_no=replacement.replacement_no,
             work_order_id=replacement.oam_work_order_id,consume_operation_id=expected_ids[0],recover_operation_id=expected_ids[1],
             consume_transaction_id=transactions[0].id,recover_transaction_id=transactions[1].id)
-    except (KeyError, TypeError, ValueError, AttributeError, ValidationError):
+    except (KeyError, TypeError, ValueError, AttributeError, ValidationError, AuditChainError, material.InventoryPostingError):
         _invalid()

@@ -171,6 +171,12 @@ class WorkOrderReplacementOut(BaseModel):
     status: Literal["posted"] = "posted"
 
 
+class WorkOrderReplacementRecoveredOut(WorkOrderReplacementOut):
+    operator_person_id: UUID
+    request_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
+    request_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class WorkOrderMaterialHistorySerialOut(BaseModel):
     serial_id: UUID
     sku_verified: bool

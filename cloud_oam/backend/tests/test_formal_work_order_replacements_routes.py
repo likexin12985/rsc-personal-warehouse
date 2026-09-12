@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.routers import formal_work_order_material as api
-from app.work_order_material_schemas import WorkOrderReplacementOut
+from app.work_order_material_schemas import WorkOrderReplacementOut, WorkOrderReplacementRecoveredOut
 from test_formal_work_order_material_routes import http
 
 
@@ -64,15 +64,15 @@ def test_uncertain_commit_returns_no_success_and_requires_original_request_read(
 
 
 def test_read_by_request_only_reports_verified_original_result_without_writes(http,monkeypatch):
-    monkeypatch.setattr(api.service,"authorize_work_order",lambda *args,**kwargs:(object(),http.actor))
-    fact=object();http.db.scalar.return_value=fact;result=output(http)
-    verify=Mock(return_value=result);monkeypatch.setattr(api,"replacement_result",verify)
+    result=WorkOrderReplacementRecoveredOut(**output(http).model_dump(), operator_person_id=http.actor.person_id,
+        request_id="replacement-http-request", request_hash="a"*64)
+    verify=Mock(return_value=result);monkeypatch.setattr(api,"lookup_replacement",verify)
     response=http.client.get(path(http)+"/by-request/replacement-http-request")
     assert response.status_code==200 and response.json()==result.model_dump(mode="json")
     assert response.headers["cache-control"]=="private, no-store"
-    verify.assert_called_once_with(http.db,replacement=fact,actor=http.actor)
+    verify.assert_called_once_with(http.db,actor=http.actor,work_order_id=http.order_id,request_id="replacement-http-request")
     http.db.commit.assert_not_called();http.db.add.assert_not_called()
-    http.db.scalar.return_value=None
+    verify.return_value=None
     absent=http.client.get(path(http)+"/by-request/replacement-absent")
     assert absent.status_code==404
     http.db.commit.assert_not_called()

@@ -13,13 +13,12 @@ from ..dependencies import require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import work_order_material as service
 from ..formal_services import work_order_replacements as replacements
-from ..formal_services.work_order_replacement_read import replacement_result
+from ..formal_services.work_order_replacement_read import replacement_result, lookup_replacement
 from ..formal_services.work_order_command_seal import lookup_command_result as lookup_operation, seal_command
 from ..demand_models import (
     WorkOrderMaterialLine,
     WorkOrderMaterialOperation,
     WorkOrderMaterialSerial,
-    WorkOrderReplacement,
 )
 from ..work_order_material_schemas import (
     WorkOrderMaterialPreflightIn,
@@ -35,6 +34,7 @@ from ..work_order_material_schemas import (
     WorkOrderMaterialOperationHistoryOut,
     WorkOrderReplacementIn,
     WorkOrderReplacementOut,
+    WorkOrderReplacementRecoveredOut,
 )
 
 router = APIRouter(prefix="/v1/work-orders", tags=["formal-work-order-material"])
@@ -139,7 +139,7 @@ def execute_material_replacement(
     return output
 
 
-@router.get("/{work_order_id}/material-replacements/by-request/{request_id}", response_model=WorkOrderReplacementOut)
+@router.get("/{work_order_id}/material-replacements/by-request/{request_id}", response_model=WorkOrderReplacementRecoveredOut)
 def read_material_replacement(
     work_order_id: UUID, response: Response,
     request_id: str = Path(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$"),
@@ -148,14 +148,10 @@ def read_material_replacement(
 ):
     response.headers["Cache-Control"] = "private, no-store"
     try:
-        _order, current = service.authorize_work_order(db, actor=principal, work_order_id=work_order_id, action="read")
-        replacement = db.scalar(select(WorkOrderReplacement).where(
-            WorkOrderReplacement.oam_work_order_id == work_order_id,
-            WorkOrderReplacement.operator_person_id == current.person_id,
-            WorkOrderReplacement.request_id == request_id))
-        if replacement is None:
+        result = lookup_replacement(db, actor=principal, work_order_id=work_order_id, request_id=request_id)
+        if result is None:
             raise HTTPException(status_code=404, detail={"code": "replacement_not_found", "message": "尚未查到该请求的已提交替换记录"})
-        return replacement_result(db, replacement=replacement, actor=current)
+        return result
     except service.InventoryPostingError as exc:
         _raise(exc)
     except SQLAlchemyError:

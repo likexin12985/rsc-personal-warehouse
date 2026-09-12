@@ -285,7 +285,9 @@ def assert_replacement_concurrency_and_http(api_engine,worlds):
                 path=f"/api/v1/work-orders/{world.orders[0]}/material-replacements"
                 response=client.get(path+"/by-request/pg16-replace-"+winner[2])
                 assert response.status_code==200,response.text
-                assert response.json()==winner[1].model_dump(mode="json")
+                fact=db.get(WorkOrderReplacement,winner[1].replacement_id)
+                assert response.json()=={**winner[1].model_dump(mode="json"),
+                    "operator_person_id":str(actor.person_id),"request_id":fact.request_id,"request_hash":fact.request_hash}
                 assert response.headers["cache-control"]=="private, no-store"
                 original=db.get(WorkOrderReplacement,winner[1].replacement_id).command_jsonb
                 body={key:value for key,value in original.items() if key!="work_order_id"}
@@ -320,3 +322,43 @@ def assert_work_order_replacements_gate(api_engine,fixture_engine):
     worlds=assert_replacement_rollback_smoke(api_engine,fixture_engine)
     assert_replacement_failures_and_replay(api_engine,worlds)
     return assert_replacement_concurrency_and_http(api_engine,worlds)
+
+
+def assert_replacement_history_gate(api_engine):
+    """Both stock transactions are proven through GET in a READ ONLY session."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.database import get_db
+    from app.demand_models import WorkOrderMaterialOperation
+    from app.routers import formal_work_order_material as api
+    from app.formal_services.work_order_replacement_read import lookup_replacement
+    from app.inventory_models import InventoryTransaction
+    baseline=replacement_snapshot(api_engine)
+    kinds=set()
+    with Session(api_engine) as db:
+        db.execute(text("SET TRANSACTION READ ONLY"))
+        facts=tuple(db.scalars(select(WorkOrderReplacement).order_by(WorkOrderReplacement.id)))
+        assert len(facts)>=2
+        for original in facts:
+            operation=db.get(WorkOrderMaterialOperation,original.consume_operation_id)
+            transaction=db.get(InventoryTransaction,operation.posting_transaction_id)
+            actor=load_formal_principal(db,transaction.actor_user_id)
+            output=lookup_replacement(db,actor=actor,work_order_id=original.oam_work_order_id,request_id=original.request_id)
+            assert output.replacement_id==original.id and output.request_hash==original.request_hash
+            app=FastAPI();app.include_router(api.router,prefix="/api")
+            app.dependency_overrides[get_db]=lambda:db
+            for route in api.router.routes:
+                for dependency in route.dependant.dependencies:
+                    if dependency.name=="principal":app.dependency_overrides[dependency.call]=lambda:actor
+            with TestClient(app) as client:
+                response=client.get(f"/api/v1/work-orders/{original.oam_work_order_id}/material-replacements/by-request/{original.request_id}")
+                assert response.status_code==200,response.text
+                assert response.json()==output.model_dump(mode="json")
+                assert response.headers["cache-control"]=="private, no-store"
+                assert "qr_code" not in response.text and "command_jsonb" not in response.text
+            kinds.add("serial" if original.command_jsonb["consume_lines"][0]["serial_ids"] else "quantity")
+        assert not db.new and not db.dirty and not db.deleted
+        db.rollback()
+    assert kinds=={"quantity","serial"}
+    assert replacement_snapshot(api_engine)==baseline
+    print("PG16 quantity/SN replacement request/hash, both audit chains and READ ONLY HTTP proof PASS",flush=True)
