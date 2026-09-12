@@ -3,6 +3,16 @@
   <view class="page-subtitle">{{message}}</view>
   <view wx:if="{{loading}}" class="loading">正在读取</view>
   <button wx:if="{{state === 'error'}}" class="button" bindtap="refresh">重新读取</button>
+  <view wx:if="{{pendingRequests.length || pendingMessage || recoveryMessage}}" class="card">
+    <view class="order-no">本人待确认请求</view>
+    <view class="muted">工单改派、关闭或不在当前列表时，仍可读取此前提交的结果。</view>
+    <view wx:if="{{pendingMessage}}">{{pendingMessage}}</view>
+    <view wx:for="{{pendingRequests}}" wx:for-item="pending" wx:key="id" class="draft-row">
+      <view>{{pending.label}}</view>
+      <button size="mini" disabled="{{busy || loading}}" loading="{{busy}}" data-id="{{pending.id}}" bindtap="recoverPendingRequest">读取原请求结果</button>
+    </view>
+    <view wx:if="{{recoveryMessage}}">{{recoveryMessage}}</view>
+  </view>
   <block wx:if="{{state === 'ready' && !workOrder}}">
     <view class="card search-row">
       <input placeholder="搜索工单编号" value="{{search}}" maxlength="100" bindinput="onSearchInput" bindconfirm="search" />
@@ -22,10 +32,6 @@
     </view>
   </block>
   <block wx:if="{{state === 'ready' && workOrder}}">
-    <view wx:if="{{recoveryMessage}}" class="card">
-      <text>{{recoveryMessage}}</text>
-      <button wx:if="{{canRecover}}" size="mini" disabled="{{busy}}" loading="{{busy}}" bindtap="recover">读取原请求结果</button>
-    </view>
     <button size="mini" bindtap="backToOrders">选择其他工单</button>
     <view class="card">
       <view class="order-no">{{workOrder.work_order_no}}</view>

@@ -109,3 +109,63 @@ test('authority changes, another person and storage-clear faults never discard r
   assert.equal(store.read(anchor).kind, 'unavailable')
   assert.ok(backing.getStorageSync(storageModule.PREFIX + ORDER))
 })
+
+test('pending inbox finds own original requests across orders and authorization versions after restart', async () => {
+  const { store, backing } = await persisted()
+  const older = { ...marker(), work_order_id: OTHER_ORDER, authorization_version: 2, operation_type: 'release' }
+  await store.withLease(older, lease => lease.persist(older))
+  const foreign = { ...marker(), work_order_id: ACCOUNT, person_id: ACCOUNT }
+  await store.withLease(foreign, lease => lease.persist(foreign))
+  const snapshot = storeFor(backing).listPending(PERSON)
+  assert.equal(snapshot.kind, 'ready')
+  assert.deepEqual(snapshot.items.map(row => row.work_order_id), [ORDER, OTHER_ORDER])
+  assert.equal(snapshot.items[1].authorization_version, 2)
+  assert.equal(Object.isFrozen(snapshot.items), true)
+  assert.equal(storeFor(backing).listPending(ACCOUNT).items.length, 1)
+  assert.equal(backing.data.size, 3)
+})
+
+test('one corrupt record stays untouched and does not hide other verified own requests', async () => {
+  const { backing } = await persisted()
+  const bad = storageModule.PREFIX + OTHER_ORDER
+  backing.setStorageSync(bad, '{bad')
+  backing.setStorageSync(storageModule.PREFIX + 'non-canonical-key', 'unreadable')
+  const store = storeFor(backing), snapshot = store.listPending(PERSON)
+  assert.equal(snapshot.kind, 'partial'); assert.deepEqual(snapshot.items, [marker()])
+  assert.equal(store.read({ work_order_id: OTHER_ORDER }).kind, 'unavailable')
+  assert.equal(backing.getStorageSync(bad), '{bad')
+})
+
+test('inaccessible or changing storage cannot claim an empty pending inbox', async () => {
+  for (const phase of ['directory', 'keys', 'value', 'duplicate', 'too_many']) {
+    const { backing } = await persisted()
+    const originalDirectory = backing.getStorageInfoSync, originalRead = backing.getStorageSync
+    let calls = 0
+    if (phase === 'directory') backing.getStorageInfoSync = () => { throw new Error('storage unavailable') }
+    if (phase === 'duplicate') backing.getStorageInfoSync = () => ({ keys: [storageModule.PREFIX + ORDER, storageModule.PREFIX + ORDER] })
+    if (phase === 'keys') backing.getStorageInfoSync = () => ++calls > 1 ? { keys: [] } : originalDirectory()
+    if (phase === 'value') backing.getStorageSync = key => ++calls > 1 ? JSON.stringify({ ...marker(), request_hash: 'c'.repeat(64) }) : originalRead(key)
+    if (phase === 'too_many') backing.getStorageInfoSync = () => ({ keys: Array.from({ length: 1001 }, (_, i) => storageModule.PREFIX + i) })
+    const snapshot = storeFor(backing).listPending(PERSON)
+    assert.equal(snapshot.kind, 'unavailable', phase); assert.deepEqual(snapshot.items, [])
+    assert.ok(backing.data.has(storageModule.PREFIX + ORDER))
+  }
+})
+
+test('a failed persistence still warns after no record was created', async () => {
+  const backing = storage(); backing.setStorageSync = () => {}
+  const store = storeFor(backing)
+  await assert.rejects(store.withLease(anchor, lease => lease.persist(marker())))
+  assert.equal(store.listPending(PERSON).kind, 'partial')
+})
+
+test('a noncanonical storage alias blocks that exact order without hiding unrelated records', async () => {
+  const { store, backing } = await persisted()
+  const aliased = { ...marker(), work_order_id: 'abcdefab-0000-4000-8000-000000000002' }
+  backing.setStorageSync(storageModule.PREFIX + aliased.work_order_id.toUpperCase(), JSON.stringify(aliased))
+  const snapshot = store.listPending(PERSON)
+  assert.equal(snapshot.kind, 'partial'); assert.deepEqual(snapshot.items, [marker()])
+  assert.equal(store.read(aliased).kind, 'unavailable')
+  await assert.rejects(store.withLease(aliased, lease => lease.persist(aliased)))
+  assert.equal(backing.data.size, 2)
+})

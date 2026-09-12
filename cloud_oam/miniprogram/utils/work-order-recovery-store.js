@@ -39,7 +39,34 @@ function createStore(options = {}) {
       return { kind: 'valid', value: checked }
     } catch (_) { state.faults.add(id); return { kind: 'unavailable' } }
   }
-  return Object.freeze({ read, async withLease(value, work) {
+  function listPending(personId) {
+    const person = uuid(personId)
+    try {
+      const keys = [...directory()].filter(key => key.startsWith(PREFIX)).sort()
+      if (keys.length > 1000) fail()
+      const items = [], snapshots = []
+      let partial = state.faults.size > 0
+      for (const key of keys) {
+        let id
+        try {
+          id = uuid(key.slice(PREFIX.length))
+          if (key !== PREFIX + id) { state.faults.add(id); fail() }
+        } catch (_) { partial = true; continue }
+        const record = read({ work_order_id: id })
+        if (record.kind !== 'valid') { partial = true; continue }
+        snapshots.push(record.value)
+        if (record.value.person_id === person) items.push(record.value)
+      }
+      // Never describe a changing or inaccessible directory as an empty inbox.
+      if (keys.join('|') !== [...directory()].filter(key => key.startsWith(PREFIX)).sort().join('|')) fail()
+      for (const marker of snapshots) {
+        const after = read(marker)
+        if (after.kind !== 'valid' || canonical(after.value) !== canonical(marker)) fail()
+      }
+      return { kind: partial ? 'partial' : 'ready', items: Object.freeze(items) }
+    } catch (_) { return { kind: 'unavailable', items: Object.freeze([]) } }
+  }
+  return Object.freeze({ read, listPending, async withLease(value, work) {
     const id = keyOf(value)
     if (state.active.has(id) || read(value).kind === 'unavailable') fail('该工单正在处理或恢复记录不可用，请先核验原结果。')
     state.active.add(id)

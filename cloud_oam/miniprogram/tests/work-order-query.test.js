@@ -140,6 +140,104 @@ test('hiding during original-result lookup keeps its marker and prevents later d
   assert.equal(page.data.state, 'idle')
 })
 
+test('pending inbox recovers a reassigned order absent from the current own list', async () => {
+  const { store, marker } = await pendingStore()
+  const { page, state } = harness({ store, list: () => list(NEXT), recovery: () => recovered(marker) })
+  await page.onShow()
+  assert.equal(page.data.orders[0].work_order_id, NEXT)
+  assert.equal(page.data.pendingRequests.length, 1)
+  assert.equal(page.data.workOrder, null)
+  await page.recoverPendingRequest({ currentTarget: { dataset: { id: ORDER } } })
+  assert.equal(store.read(marker).kind, 'missing')
+  assert.equal(page.data.pendingRequests.length, 0)
+  assert.match(page.data.recoveryMessage, /原操作已确认/)
+  assert.equal(state.calls.some(row => row.endpoint.includes('/material-options')), false)
+  assert.ok(state.calls.every(row => row.method === 'GET' && row.noRefresh))
+  assert.equal(JSON.stringify(page.data).includes(marker.request_hash), false)
+})
+
+test('pending recovery remains reachable when current list or selected options are unavailable', async () => {
+  for (const mode of ['list', 'options', 'malformed']) {
+    const { store, marker } = await pendingStore()
+    const { page, state } = harness({ store, list: () => {
+      if (mode === 'list') throw new Error('temporary read failure')
+      return mode === 'malformed' ? {} : list()
+    }, options: () => { throw new Error('not own current order') }, recovery: () => recovered(marker) })
+    await page.onShow()
+    if (mode === 'options') await page.openOrder({ currentTarget: { dataset: { id: ORDER } } })
+    assert.equal(page.data.state, 'error')
+    assert.equal(page.data.pendingRequests.length, 1)
+    await page.recoverPendingRequest({ currentTarget: { dataset: { id: ORDER } } })
+    assert.equal(store.read(marker).kind, 'missing')
+    assert.equal(state.calls.filter(row => row.endpoint.includes('/by-request/')).length, 1)
+  }
+})
+
+test('pending inbox never reads another person or an invented event coordinate', async () => {
+  const { store, marker } = await pendingStore()
+  const foreign = { ...marker, work_order_id: NEXT, person_id: OTHER }
+  await store.withLease(foreign, lease => lease.persist(foreign))
+  const { page, state } = harness({ store })
+  await page.onShow()
+  assert.equal(page.data.pendingRequests.length, 1)
+  await page.recoverPendingRequest({ currentTarget: { dataset: { id: NEXT } } })
+  await page.recoverPendingRequest({ currentTarget: { dataset: { id: ACCOUNT } } })
+  assert.equal(state.calls.some(row => row.endpoint.includes('/by-request/')), false)
+  assert.equal(store.read(foreign).kind, 'valid')
+})
+
+test('pending inbox clears on access revocation or account switch while keeping recovery storage', async () => {
+  for (const mode of ['revoked', 'account', 'malformed_identity']) {
+    const { store, marker } = await pendingStore()
+    let revoke = false
+    const { page, state } = harness({ store, access: () => {
+      const result = access(); if (revoke) result.permissions = []; return result
+    }, recovery: () => {
+      if (mode === 'account') state.token = 'new-session'
+      else if (mode === 'malformed_identity') state.user = { person_id: 'invalid' }
+      else revoke = true
+      return recovered(marker)
+    } })
+    await page.onShow()
+    await page.recoverPendingRequest({ currentTarget: { dataset: { id: ORDER } } })
+    assert.equal(page.data.pendingRequests.length, 0)
+    assert.equal(store.read(marker).kind, 'valid')
+    assert.equal(state.calls.filter(row => row.endpoint.includes('/by-request/')).length, 1)
+  }
+})
+
+test('pending inbox preserves uncertain requests without displaying confirmation', async () => {
+  for (const mode of ['not_observed', 'timeout', 'hash']) {
+    const { store, marker } = await pendingStore()
+    const { page, state } = harness({ store, recovery: () => {
+      if (mode === 'timeout') throw new Error('timeout')
+      if (mode === 'not_observed') return { schema_version: '1.0', lookup_status: 'not_observed', command: null }
+      const response = recovered(marker); response.command.request_hash = '0'.repeat(64); return response
+    } })
+    await page.onShow()
+    await page.recoverPendingRequest({ currentTarget: { dataset: { id: ORDER } } })
+    assert.equal(page.data.pendingRequests.length, 1)
+    assert.equal(store.read(marker).kind, 'valid')
+    assert.doesNotMatch(page.data.recoveryMessage, /原操作已确认/)
+    assert.ok(state.calls.every(row => row.method === 'GET'))
+  }
+})
+
+test('global recovery ignores late response after hide and serializes double taps', async () => {
+  const { store, marker } = await pendingStore(), pending = deferred()
+  const { page, state } = harness({ store, recovery: () => pending.promise })
+  await page.onShow()
+  const click = { currentTarget: { dataset: { id: ORDER } } }
+  const work = page.recoverPendingRequest(click); await tick()
+  await page.recoverPendingRequest(click)
+  assert.equal(state.calls.filter(row => row.endpoint.includes('/by-request/')).length, 1)
+  page.onHide(); const count = state.calls.length
+  pending.resolve(recovered(marker)); await work
+  assert.equal(state.calls.length, count)
+  assert.equal(page.data.pendingRequests.length, 0)
+  assert.equal(store.read(marker).kind, 'valid')
+})
+
 async function pendingStore(pending = true) {
   const records = new Map()
   const module = require('../utils/work-order-recovery-store')

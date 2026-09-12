@@ -6,7 +6,7 @@ const recoveryStore = require('../../utils/work-order-recovery-store')
 const { recoverPending } = require('../../utils/work-order-recovery')
 const draft = require('../../utils/work-order-draft')
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
-function empty() { return { state: 'idle', loading: false, busy: false, search: '', orders: [], items: [], workOrder: null, locationName: '', message: '', hasNext: false, hasPrevious: false, pageNumber: 1, canRecover: false, recoveryMessage: '', canDraft: false, operationKind: 'occupy', draftRows: [], previewMessage: '' } }
+function empty() { return { state: 'idle', loading: false, busy: false, search: '', orders: [], items: [], workOrder: null, locationName: '', message: '', hasNext: false, hasPrevious: false, pageNumber: 1, canRecover: false, recoveryMessage: '', pendingRequests: [], pendingMessage: '', canDraft: false, operationKind: 'occupy', draftRows: [], previewMessage: '' } }
 
 Page({
   data: empty(),
@@ -17,6 +17,7 @@ Page({
     this._visible = false; this._generation = (this._generation || 0) + 1
     this._selected = null; this._next = null; this._cursors = [null]
     this._recoveryContext = null
+    this._recoveryPerson = null; this._pendingMarkers = new Map()
     this.resetDraft()
     this.setData(empty())
   },
@@ -43,13 +44,19 @@ Page({
     const selected = this._selected, search = this.data.search
     this._next = null
     this._recoveryContext = null
+    this._recoveryPerson = null; this._pendingMarkers = new Map()
     this.resetDraft()
     this.setData(Object.assign(empty(), { loading: true, state: 'loading', search, message: '正在读取本人工单。' }))
     if (!session.ensureLogin()) { this.setData({ loading: false, state: 'error', message: '请先登录。' }); return }
     try {
       const token = session.getToken(), stored = session.getUser()
       const person = uuid(stored.person_id), version = stored.authorization_version
-      const sameSession = () => session.getToken() === token && session.getUser() && uuid(session.getUser().person_id) === person && session.getUser().authorization_version === version
+      const sameSession = () => {
+        try {
+          const latest = session.getUser()
+          return session.getToken() === token && !!latest && uuid(latest.person_id) === person && latest.authorization_version === version
+        } catch (_) { return false }
+      }
       const context = async () => {
         if (!active() || !sameSession()) throw new Error('session changed')
         const user = await api.request('/auth/me', READ)
@@ -61,15 +68,25 @@ Page({
       const before = await context()
       const after = this._cursors[this._cursors.length - 1]
       const endpoint = selected ? `/v1/work-orders/${selected}/material-options` : `/v1/work-orders/mine?limit=20&status=all&search=${encodeURIComponent(search)}${after ? '&after_id=' + after : ''}`
-      const raw = await api.request(endpoint, READ)
+      let result, queryFailed = false
+      try {
+        const raw = await api.request(endpoint, READ)
+        if (!active() || !sameSession()) throw new Error('session changed')
+        result = selected ? validateMaterialOptions(raw, person, version, selected) : validateMyWorkOrders(raw, person, version, after)
+      } catch (_) { queryFailed = true }
       if (!active() || !sameSession()) throw new Error('session changed')
-      const result = selected ? validateMaterialOptions(raw, person, version, selected) : validateMyWorkOrders(raw, person, version, after)
       if (await context() !== before || !active() || !sameSession()) throw new Error('access changed')
+      this._recoveryContext = context
+      this._sessionMatches = sameSession
+      this._recoveryPerson = person
+      this.refreshPendingRequests()
+      if (queryFailed) {
+        this.setData({ loading: false, state: 'error', message: '工单或物料暂时无法读取；仍可核验下方本人待确认的原请求。' })
+        return
+      }
       if (selected) {
         const stored = this._store.read({ work_order_id: selected })
         const canRecover = stored.kind === 'valid' && stored.value.person_id === person
-        this._recoveryContext = context
-        this._sessionMatches = sameSession
         this.setData({ loading: false, state: 'ready', workOrder: result.workOrder, items: result.items, locationName: result.locationName || '尚未配置个人仓',
           canDraft: stored.kind === 'missing' && result.workOrder.can_operate && result.openingEstablished && hasFormalPermission(JSON.parse(before).access, 'work_order_material', 'operate'),
           canRecover, recoveryMessage: canRecover ? '该工单有待确认的原请求，请先读取原结果。' : stored.kind !== 'missing' ? '本地恢复记录暂不可用或属于其他人员，暂勿提交新操作。' : '',
@@ -80,8 +97,19 @@ Page({
           message: result.items.length ? '选择本人 OAM 工单查看物料。' : '没有符合条件的本人工单。' })
       }
     } catch (_) {
-      if (active()) this.setData(Object.assign(empty(), { state: 'error', search, message: '工单或物料暂时无法读取，请确认权限后刷新。' }))
+      if (active()) {
+        this._recoveryContext = null; this._recoveryPerson = null; this._pendingMarkers = new Map()
+        this.setData(Object.assign(empty(), { state: 'error', search, message: '工单或物料暂时无法读取，请确认权限后刷新。' }))
+      }
     }
+  },
+  refreshPendingRequests() {
+    const snapshot = this._store.listPending(this._recoveryPerson)
+    this._pendingMarkers = new Map(snapshot.items.map(marker => [marker.work_order_id, marker]))
+    const labels = { occupy: '投入占用', consume: '实际消耗', release: '释放未用物料' }
+    this.setData({ pendingRequests: snapshot.items.map((marker, index) => ({
+      id: marker.work_order_id, label: `待确认请求 ${index + 1} · ${labels[marker.operation_type]}`
+    })), pendingMessage: snapshot.kind === 'ready' ? '' : '部分恢复记录暂不可读取。请保留本机记录，已列出的本人请求仍可分别核验。' })
   },
   resetDraft() { this._drafts = {}; this._scans = {}; this._draftRevision = (this._draftRevision || 0) + 1; this._sessionMatches = null },
   draftReady() { return this._visible && this.data.canDraft && !this.data.busy && !this.data.loading && this._sessionMatches && this._sessionMatches() && this._store.read({ work_order_id: this._selected }).kind === 'missing' },
@@ -197,17 +225,39 @@ Page({
   },
   async recover() {
     if (!this._visible || !this._selected || !this.data.canRecover || this.data.loading || this.data.busy || !this._recoveryContext) return
-    const generation = this._generation, selected = this._selected, context = this._recoveryContext
-    const current = () => this._visible && generation === this._generation && this._selected === selected
+    return this.recoverRequest(this._selected)
+  },
+  async recoverPendingRequest(event) {
+    const id = event.currentTarget.dataset.id
+    if (!this._pendingMarkers || !this._pendingMarkers.has(id)) return
+    return this.recoverRequest(id)
+  },
+  async recoverRequest(order) {
+    if (!this._visible || this.data.loading || this.data.busy || !this._recoveryContext || !this._recoveryPerson) return
+    const generation = this._generation, context = this._recoveryContext, matches = this._sessionMatches
+    const current = () => this._visible && generation === this._generation
     this.setData({ busy: true })
     try {
-      const result = await recoverPending({ api, store: this._store, workOrderId: selected,
-        personId: this.data.workOrder.engineer_person_id, authorize: context })
+      const result = await recoverPending({ api, store: this._store, workOrderId: order,
+        personId: this._recoveryPerson, authorize: context })
       if (!current()) return
-      if (result.status === 'confirmed') this.setData({ canRecover: false, recoveryMessage: `原操作已确认：${result.command.operation_no}。请刷新库存后继续。` })
+      if (result.status === 'confirmed') {
+        this.refreshPendingRequests()
+        this.setData({ canRecover: this._selected === order ? false : this.data.canRecover,
+          recoveryMessage: `原操作已确认：${result.command.operation_no}。请刷新库存后继续。` })
+      }
       else this.setData({ recoveryMessage: '暂未读取到已提交的原结果，仍保留恢复记录；请稍后继续核验。' })
-    } catch (_) {
-      if (current()) this.setData({ recoveryMessage: '原请求暂未完成核验，恢复记录仍保留，请稍后重试读取。' })
-    } finally { if (current()) this.setData({ busy: false }) }
+    } catch (error) {
+      if (current()) {
+        if (['session changed', 'access changed'].includes(error.message)) {
+          this.clearView(); this.setData({ state: 'error', message: '身份或权限已变化，请重新进入工单页面。' })
+        } else this.setData({ recoveryMessage: '原请求暂未完成核验，恢复记录仍保留，请稍后重试读取。' })
+      }
+    } finally {
+      if (current()) {
+        if (!matches || !matches()) this.clearView()
+        else this.setData({ busy: false })
+      }
+    }
   }
 })
