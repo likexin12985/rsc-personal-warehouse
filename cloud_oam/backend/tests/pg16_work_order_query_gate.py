@@ -1,5 +1,6 @@
 """Real API-role reads of own stock and exact work-order occupancy on PG16."""
 from types import SimpleNamespace
+from dataclasses import replace
 from uuid import uuid4
 from decimal import Decimal
 
@@ -12,6 +13,7 @@ from app.formal_services import oam_work_order_projection as projection
 from app.formal_services import work_order_material as material
 from app.formal_services.work_order_material_options import material_options
 from app.formal_services.work_order_query import get_my_work_order, list_my_work_orders
+from app.formal_services.work_order_preview import preview_batch
 from app.inventory_models import (FormalMaterial, InventorySerial, SerialCurrentPosition,
     StockAccount, StockBalance, StockLocation)
 from app.models import User
@@ -57,6 +59,29 @@ def assert_work_order_query_gate(api_engine, fixture_engine):
         baseline = _snapshot(api_engine)
         with Session(api_engine) as db:
             actor = load_formal_principal(db, user_id)
+            preview = preview_batch(db, actor=actor, work_order_id=orders[0], operation_type="occupy", lines=(line,))
+            assert preview.status == "batch_validated" and preview.line_count == 1
+            available = next(row for row in material_options(db, actor=actor, work_order_id=orders[0]).items if row.stock_account_id == line.stock_account_id)
+            excessive = replace(line, quantity=Decimal(available.selectable_quantity) + 1, serial_ids=(), serial_verifications=())
+            try:
+                preview_batch(db, actor=actor, work_order_id=orders[0], operation_type="occupy", lines=(excessive,))
+            except material.InventoryPostingError as exc:
+                assert exc.code == "work_order_material_quantity_insufficient"
+            else:
+                raise AssertionError("preview accepted unavailable quantity")
+            if line.serial_verifications:
+                wrong = replace(line, serial_verifications=(replace(line.serial_verifications[0], qr_code="WRONG-PHYSICAL-QR"),))
+                try:
+                    preview_batch(db, actor=actor, work_order_id=orders[0], operation_type="occupy", lines=(wrong,))
+                except material.InventoryPostingError as exc:
+                    assert exc.code == "serial_verification_mismatch"
+                else:
+                    raise AssertionError("preview accepted wrong physical QR")
+            assert not db.new and not db.dirty and not db.deleted
+            db.rollback()
+        assert _snapshot(api_engine) == baseline
+        with Session(api_engine) as db:
+            actor = load_formal_principal(db, user_id)
             number = get_my_work_order(db, actor=actor, work_order_id=orders[0]).work_order_no
             choices = list_my_work_orders(db, actor=actor, search=number)
             assert len(choices.items)==1 and choices.items[0].work_order_id==orders[0]
@@ -68,6 +93,12 @@ def assert_work_order_query_gate(api_engine, fixture_engine):
             reserved = [row for row in first.items if row.availability_bucket=="reserved"]
             assert len(reserved)==1 and reserved[0].selectable_quantity=="1.000"
             assert {row.serial_id for row in reserved[0].serials}==set(line.serial_ids)
+            assert reserved[0].release_target_stock_account_id == account_id
+            reserved_line = replace(line, stock_account_id=reserved[0].stock_account_id)
+            for operation_kind in ("consume", "release"):
+                preview_line = replace(reserved_line, target_stock_account_id=account_id if operation_kind == "release" else None)
+                preview = preview_batch(db, actor=actor, work_order_id=orders[0], operation_type=operation_kind, lines=(preview_line,))
+                assert preview.status == "batch_validated"
             assert all(row.availability_bucket!="reserved" for row in second.items)
             material.execute_consume_operation(db, actor=actor, work_order_id=orders[0],
                 lines=(material.WorkOrderMaterialLineInput(line.material_id, reserved[0].stock_account_id,
@@ -79,4 +110,4 @@ def assert_work_order_query_gate(api_engine, fixture_engine):
             assert not ({row.serial_id for item in after.items for row in item.serials} & set(line.serial_ids))
             db.rollback()
         assert _snapshot(api_engine)==baseline
-        print(f"PG16 {kind} formal own order, exact reservation/SN choices, consumption refresh and rollback PASS", flush=True)
+        print(f"PG16 {kind} own order, batch/code previews, exact reservation/release choices, consumption refresh and rollback PASS", flush=True)

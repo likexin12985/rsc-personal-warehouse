@@ -8,7 +8,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from ..inventory_models import InventorySerial, SerialCurrentPosition
+from ..inventory_models import InventorySerial, SerialCurrentPosition, StockAccount
 from ..work_order_query_schemas import (
     WorkOrderMaterialOptionOut, WorkOrderMaterialOptionsOut, WorkOrderSerialOptionOut,
 )
@@ -98,6 +98,19 @@ def _material_items(db, *, order, warehouse):
                    else ("consume", "release", "replace")) if order.can_operate else ()
         items.append(WorkOrderMaterialOptionOut(**account.model_dump(),
             selectable_quantity=format(quantity, ".3f"), allowed_actions=actions,
+            release_target_stock_account_id=_release_target(db, account) if account.availability_bucket == "reserved" else None,
             serials=tuple(WorkOrderSerialOptionOut(serial_id=row.id, serial_no=row.serial_no)
                           for row in sorted(serials.values(), key=lambda row: (row.serial_no, str(row.id))))))
     return tuple(items)
+
+
+def _release_target(db, account):
+    # The original available dimension remains valid when its balance is zero
+    # and consequently absent from the positive-stock options. Never infer it
+    # from material alone or ask the engineer to provide an account UUID.
+    dimensions = {key: getattr(account, key) for key in (
+        "owner_org_id", "location_id", "custodian_person_id", "material_id", "condition_code", "lot_id")}
+    rows = tuple(db.scalars(select(StockAccount.id).filter_by(**dimensions, availability_bucket="available").limit(2)))
+    if len(rows) != 1:
+        inventory._invalid_current_projection()
+    return rows[0]

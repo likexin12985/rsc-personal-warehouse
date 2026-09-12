@@ -43,6 +43,7 @@ class WorkOrderMaterialOptionOut(InventoryAccountOut):
     # The reserved account may pool multiple work orders. This is the amount
     # belonging to the selected order, never the pooled account quantity.
     selectable_quantity: str
+    release_target_stock_account_id: UUID | None
     serials: tuple[WorkOrderSerialOptionOut, ...]
     allowed_actions: tuple[Literal["occupy", "consume", "release", "replace"], ...]
 

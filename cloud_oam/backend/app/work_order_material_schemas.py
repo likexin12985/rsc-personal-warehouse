@@ -99,6 +99,25 @@ class WorkOrderMaterialOccupyLineIn(WorkOrderMaterialLineIn):
     target_stock_account_id: UUID | None = None
 
 
+class WorkOrderMaterialPreviewIn(StrictInput):
+    operator_person_id: UUID
+    lines: tuple[WorkOrderMaterialOccupyLineIn, ...] = Field(min_length=1, max_length=100)
+
+
+class WorkOrderMaterialPreviewOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    status: Literal["batch_validated"] = "batch_validated"
+    work_order_id: UUID
+    operator_person_id: UUID
+    authorization_version: int
+    operation_type: Literal["occupy", "consume", "release"]
+    source_version: str
+    ledger_cursor: int
+    checked_at: datetime
+    line_count: int
+    request_hash: str
+
+
 class WorkOrderMaterialOccupyIn(WorkOrderMaterialReleaseIn):
     lines: tuple[WorkOrderMaterialOccupyLineIn, ...] = Field(min_length=1, max_length=100)
 

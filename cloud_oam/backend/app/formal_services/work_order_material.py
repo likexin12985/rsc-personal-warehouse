@@ -246,17 +246,26 @@ def _verify_posted_lines(db, *, transaction, operation_type, operator_person_id,
             InventoryMovementSerial.movement_id == movement.id)).all())
         if serial_ids != set(line.serial_ids):
             raise WorkOrderMaterialPreflightError("posting_serials_mismatch", "SN 与原库存流水不一致")
-        proofs = {v.serial_id: v for v in line.serial_verifications}
-        if set(proofs) != serial_ids or len(proofs) != len(line.serial_verifications):
-            raise WorkOrderMaterialPreflightError("serial_verification_missing", "每个受控 SN 必须提供完整三码校验")
-        material = db.get(FormalMaterial, line.material_id)
-        for serial_id in serial_ids:
-            serial = db.get(InventorySerial, serial_id)
-            proof = proofs[serial_id]
-            if (serial is None or material is None or serial.material_id != material.id
-                    or proof.sku_code != material.sku_code or proof.serial_no != serial.serial_no
-                    or proof.qr_code != serial.qr_code):
-                raise WorkOrderMaterialPreflightError("serial_verification_mismatch", "二维码、SKU、SN 校验不一致")
+        verify_serial_proofs(db, line=line)
+
+
+def verify_serial_proofs(db, *, line):
+    """Compare supplied physical codes with the exact formal serial master.
+
+    Shared by read-only preview and immutable posting proof; current-position
+    checks remain in the respective snapshot/posting service.
+    """
+    proofs = {v.serial_id: v for v in line.serial_verifications}
+    if set(proofs) != set(line.serial_ids) or len(proofs) != len(line.serial_verifications):
+        raise WorkOrderMaterialPreflightError("serial_verification_missing", "每个受控 SN 必须提供完整三码校验")
+    material = db.get(FormalMaterial, line.material_id, populate_existing=True)
+    for serial_id in line.serial_ids:
+        serial = db.get(InventorySerial, serial_id, populate_existing=True)
+        proof = proofs[serial_id]
+        if (serial is None or material is None or serial.material_id != material.id
+                or proof.sku_code != material.sku_code or proof.serial_no != serial.serial_no
+                or proof.qr_code != serial.qr_code):
+            raise WorkOrderMaterialPreflightError("serial_verification_mismatch", "二维码、SKU、SN 校验不一致")
 
 
 def record_posted_operation(

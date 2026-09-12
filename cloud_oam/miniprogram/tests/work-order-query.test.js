@@ -18,6 +18,7 @@ function list(id = ORDER, next = null) { return { schema_version: '1.0', person_
 function options() {
   return { schema_version: '1.0', projection_status: 'ready', opening_balance_status: 'established', ledger_cursor: 2, projected_at: '2026-09-12T08:00:00Z', person_id: PERSON, authorization_version: 7, work_order: order(), location_id: LOCATION, location_code: 'PERSON-TEST', location_name: '测试个人仓', location_status: 'active', custody_effective_from: '2026-09-01T08:00:00Z', items: [{
     stock_account_id: ACCOUNT, owner_org_id: OTHER, owner_org_code: 'OWNER', owner_org_name: '资产组织', location_owner_org_id: OTHER, location_owner_org_code: 'REGION', location_owner_org_name: '区域公司', location_id: LOCATION, location_code: 'PERSON-TEST', location_name: '测试个人仓', location_type: 'personal', location_parent_id: OTHER, custodian_person_id: PERSON, custodian_person_name: '测试工程师', material_id: OTHER, sku_code: 'SKU-TEST', material_name: '测试物料', base_unit: '个', tracking_mode: 'none', condition_code: 'new', availability_bucket: 'reserved', lot_id: null, lot_no: null, quantity_status: 'available', quantity: '7.000', balance_version: 2, ledger_cursor: 2, selectable_quantity: '2.125', serials: [], allowed_actions: ['consume', 'release', 'replace']
+    , release_target_stock_account_id: OTHER
   }] }
 }
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
@@ -25,7 +26,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve))
 function harness(settings = {}) {
   let definition, count = 0
   const state = { user: user(), token: 'fixture-session', calls: [] }
-  const context = { Page(value) { definition = value }, wx: { stopPullDownRefresh() {} }, require(name) {
+  const context = { Page(value) { definition = value }, wx: { stopPullDownRefresh() {}, scanCode: options => settings.scan(options) }, require(name) {
     if (name === '../../utils/work-order-recovery-store' && settings.store) return { getStore: () => settings.store }
     if (name === '../../utils/session') return { getUser: () => state.user, getToken: () => state.token, ensureLogin: () => !!state.token }
     if (name === '../../utils/api') return { async request(endpoint, request) {
@@ -33,6 +34,7 @@ function harness(settings = {}) {
       if (endpoint === '/auth/me') return settings.identity ? settings.identity(state) : user()
       if (endpoint === '/access/context') return settings.access ? settings.access(++count) : access()
       if (endpoint.includes('/by-request/')) return settings.recovery(state)
+      if (endpoint.endsWith('/preview')) return settings.preview(endpoint, request.data, state)
       if (endpoint.endsWith('/material-options')) return settings.options ? settings.options(state) : options()
       return settings.list ? settings.list(endpoint, state) : list()
     } }
@@ -55,6 +57,11 @@ test('options display exact own reservation quantity and do not round large deci
   const output = contract.validateMaterialOptions(r, PERSON, 7, ORDER)
   assert.equal(output.items[0].selectable_quantity, '900719925474099.998')
   assert.equal(output.items[0].quantityLabel, '本工单剩余占用')
+  assert.equal(output.items[0].release_target_stock_account_id, OTHER)
+  const missing = options(); delete missing.items[0].release_target_stock_account_id
+  assert.throws(() => contract.validateMaterialOptions(missing, PERSON, 7, ORDER))
+  const crossed = options(); crossed.items[0].release_target_stock_account_id = ACCOUNT
+  assert.throws(() => contract.validateMaterialOptions(crossed, PERSON, 7, ORDER))
 })
 test('options reject crossed account scope, missing opening, excess quantities, wrong SN and actions', () => {
   for (const change of [r => { r.items[0].custodian_person_id = OTHER }, r => { r.items[0].location_id = OTHER }, r => { r.work_order.work_order_id = NEXT }, r => { r.opening_balance_status = 'not_established' }, r => { r.items[0].selectable_quantity = '7.001' }, r => { r.items[0].selectable_quantity = 2.125 }, r => { r.items[0].tracking_mode = 'serial' }, r => { r.items[0].serials = [{ serial_id: OTHER, serial_no: 'SN' }] }, r => { r.items[0].allowed_actions = ['occupy'] }, r => { r.items[0].availability_bucket = 'frozen' }, r => { r.items.push(clone(r.items[0])) }]) {
@@ -133,7 +140,7 @@ test('hiding during original-result lookup keeps its marker and prevents later d
   assert.equal(page.data.state, 'idle')
 })
 
-async function pendingStore() {
+async function pendingStore(pending = true) {
   const records = new Map()
   const module = require('../utils/work-order-recovery-store')
   const store = module.createStore({ state: { active: new Set(), faults: new Set() }, storage: {
@@ -142,7 +149,7 @@ async function pendingStore() {
   } })
   const marker = module.validateMarker({ v: 1, kind: 'work_order_material', work_order_id: ORDER, person_id: PERSON, authorization_version: 7,
     operation_type: 'consume', trace_request_id: 'wxreq-' + 'c'.repeat(36), request_hash: 'd'.repeat(64) })
-  await store.withLease(marker, lease => lease.persist(marker))
+  if (pending) await store.withLease(marker, lease => lease.persist(marker))
   return { store, marker }
 }
 function recovered(marker) {
@@ -150,3 +157,94 @@ function recovered(marker) {
     operation_type: marker.operation_type, request_id: marker.trace_request_id, request_hash: marker.request_hash, status: 'posted',
     operation_id: OTHER, posting_transaction_id: ACCOUNT, operation_no: 'WOM-TEST', posted_at: '2026-09-12T08:00:00Z' } }
 }
+
+const event = (id, rest = {}) => ({ currentTarget: { dataset: { id, ...rest } } })
+async function openDraft(settings = {}) {
+  const { store } = await pendingStore(false)
+  const result = harness({ store, access: () => ({ ...access(), permissions: access().permissions.concat({ resource: 'work_order_material', action: 'operate', field_code: '' }) }), ...settings })
+  await result.page.onShow(); await result.page.openOrder(event(ORDER))
+  return { ...result, store }
+}
+function previewResult(kind, body) {
+  return { schema_version: '1.0', status: 'batch_validated', work_order_id: ORDER, operator_person_id: PERSON,
+    authorization_version: 7, operation_type: kind, source_version: order().source_version, ledger_cursor: 2,
+    checked_at: '2026-09-12T08:01:00Z', line_count: body.lines.length,
+    request_hash: require('../utils/work-order-command').requestHash(kind, ORDER, PERSON, body.lines) }
+}
+test('page previews a quantity batch without posting stock or persisting the command', async () => {
+  const { page, state, store } = await openDraft({ preview: (_, body) => previewResult('release', body) })
+  assert.equal(page.data.canDraft, true)
+  page.chooseOperation(event(null, { kind: 'release' })); page.addMaterial(event(ACCOUNT))
+  page.editQuantity({ ...event(ACCOUNT), detail: { value: '1.125' } })
+  await page.previewMaterials()
+  assert.match(page.data.previewMessage, /预检通过/); assert.match(page.data.previewMessage, /库存尚未变动/)
+  const posts = state.calls.filter(row => row.method === 'POST')
+  assert.equal(posts.length, 1); assert.ok(posts[0].endpoint.endsWith('/release/preview'))
+  assert.equal(posts[0].data.lines[0].target_stock_account_id, OTHER)
+  assert.equal('idempotency_key' in posts[0].data, false)
+  assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+  page.editQuantity({ ...event(ACCOUNT), detail: { value: '1' } })
+  assert.equal(page.data.previewMessage, '')
+  page.chooseOperation(event(null, { kind: 'consume' }))
+  assert.equal(page.data.draftRows.length, 0)
+})
+test('physical SKU SN and QR scans are collected separately and cleared on hide', async () => {
+  const inputs = ['SKU-TEST', 'SN-PHYSICAL', 'QR-PHYSICAL-PRIVATE']
+  const { page, state } = await openDraft({ scan(opts) { assert.equal(opts.onlyFromCamera, true); opts.success({ result: inputs.shift() }) }, options: () => {
+    const raw = options(), item = raw.items[0]
+    Object.assign(item, { tracking_mode: 'serial', selectable_quantity: '1.000', serials: [{ serial_id: OTHER, serial_no: 'SN-PHYSICAL' }] })
+    return raw
+  } })
+  page.chooseOperation(event(null, { kind: 'consume' })); page.addMaterial(event(ACCOUNT))
+  assert.equal(page.data.draftRows[0].serials.length, 0)
+  for (const code of ['sku_code', 'serial_no', 'qr_code']) await page.scanMaterialCode(event(ACCOUNT, { code }))
+  assert.equal(page.data.draftRows[0].serials.length, 0)
+  page.collectScanned(event(ACCOUNT))
+  assert.equal(page.data.draftRows[0].serials.length, 1)
+  assert.equal(JSON.stringify(page.data).includes('QR-PHYSICAL-PRIVATE'), false)
+  assert.ok(state.calls.every(row => row.method === 'GET'))
+  page.onHide()
+  assert.equal(Object.keys(page._drafts).length, 0); assert.equal(Object.keys(page._scans).length, 0)
+  assert.equal(page.data.draftRows.length, 0)
+})
+test('pending original commands block new drafts and unknown stock never passes preview', async () => {
+  const { store } = await pendingStore()
+  const waiting = await openDraft({ store })
+  assert.equal(waiting.page.data.canDraft, false)
+  waiting.page.addMaterial(event(ACCOUNT)); assert.equal(waiting.page.data.draftRows.length, 0)
+  let reads = 0
+  const fresh = await openDraft({ options: () => { const raw = options(); if (++reads > 1) raw.items[0].selectable_quantity = '0.500'; return raw } })
+  fresh.page.chooseOperation(event(null, { kind: 'consume' })); fresh.page.addMaterial(event(ACCOUNT))
+  fresh.page.editQuantity({ ...event(ACCOUNT), detail: { value: '1' } })
+  await fresh.page.previewMaterials()
+  assert.equal(fresh.state.calls.some(row => row.method === 'POST'), false)
+  assert.match(fresh.page.data.previewMessage, /不能超过/)
+})
+test('hide and account switch discard pending preview and never start dependent reads', async () => {
+  for (const mode of ['hide', 'account']) {
+    const pending = deferred(); let body
+    const { page, state } = await openDraft({ preview: (_, value) => { body = value; return pending.promise } })
+    page.chooseOperation(event(null, { kind: 'consume' })); page.addMaterial(event(ACCOUNT))
+    page.editQuantity({ ...event(ACCOUNT), detail: { value: '1' } })
+    const work = page.previewMaterials(); await tick()
+    const count = state.calls.length
+    if (mode === 'hide') page.onHide(); else state.token = 'other-session'
+    pending.resolve(previewResult('consume', body)); await work
+    assert.equal(state.calls.length, count); assert.equal(page.data.draftRows.length, 0)
+    assert.equal(page.data.previewMessage, ''); assert.equal(Object.keys(page._drafts).length, 0)
+  }
+})
+test('read permission alone cannot expose the draft editor and late camera callbacks are discarded', async () => {
+  const readonly = await openDraft({ access })
+  assert.equal(readonly.page.data.canDraft, false)
+  readonly.page.addMaterial(event(ACCOUNT)); assert.equal(readonly.page.data.draftRows.length, 0)
+  let camera
+  const { page } = await openDraft({ scan: opts => { camera = opts }, options: () => {
+    const raw = options(); Object.assign(raw.items[0], { tracking_mode: 'serial', selectable_quantity: '1.000', serials: [{ serial_id: OTHER, serial_no: 'SN-PHYSICAL' }] }); return raw
+  } })
+  page.chooseOperation(event(null, { kind: 'consume' })); page.addMaterial(event(ACCOUNT))
+  const scan = page.scanMaterialCode(event(ACCOUNT, { code: 'qr_code' }))
+  page.onHide(); camera.success({ result: 'late-private-qr' }); await scan
+  assert.equal(Object.keys(page._scans).length, 0); assert.equal(Object.keys(page._drafts).length, 0)
+  assert.equal(JSON.stringify(page.data).includes('late-private-qr'), false)
+})

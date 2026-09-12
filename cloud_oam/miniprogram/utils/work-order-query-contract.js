@@ -52,6 +52,9 @@ function validateMaterialOptions(value, person, version, workOrderId) {
     const quantity = units(raw.selectable_quantity)
     if (quantity <= 0n || quantity > units(raw.quantity) || (raw.availability_bucket === 'available' && quantity !== units(raw.quantity))) fail()
     const expected = !selectedOrder.can_operate ? [] : raw.availability_bucket === 'available' ? ['occupy'] : ['consume', 'release', 'replace']
+    if (raw.availability_bucket === 'reserved') {
+      if (uuid(raw.release_target_stock_account_id) === uuid(raw.stock_account_id)) fail()
+    } else if (raw.release_target_stock_account_id !== null) fail()
     if (!Array.isArray(raw.allowed_actions) || JSON.stringify(raw.allowed_actions) !== JSON.stringify(expected) || !Array.isArray(raw.serials)) fail()
     const serials = raw.serials.map(sn => {
       exact(sn, ['serial_id', 'serial_no']); const id = uuid(sn.serial_id); text(sn.serial_no)

@@ -6,3 +6,7 @@
 .quantity { margin-top: 20rpx; font-size: 28rpx; font-weight: 600; }
 .serial { margin-top: 12rpx; color: #52606d; overflow-wrap: anywhere; }
 .pager { margin: 24rpx 0; }
+.operation-choices, .scan-buttons { display: flex; flex-wrap: wrap; gap: 12rpx; margin-top: 20rpx; }
+.draft-row { padding: 24rpx 0; border-bottom: 1rpx solid #e5e7eb; }
+.draft-row button { margin-top: 14rpx; }
+.quantity-input { margin: 18rpx 0; padding: 16rpx; border: 1rpx solid #cbd5e1; border-radius: 8rpx; }
