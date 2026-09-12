@@ -1544,6 +1544,9 @@ def test_pg16_gate_head_matches_alembic_graph() -> None:
             constants[target.id] = constants[node.value.id]
     script = ScriptDirectory.from_config(_config("sqlite+pysqlite:///:memory:"))
     assert constants["HEAD_REVISION"] == script.get_current_head()
+    import test_postgresql16_release_gate as pg_gate
+    from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST
+    assert pg_gate._head_runtime_ready_hash() == OAM_SYNC_FUNCTION_MANIFEST["rsc_oam_runtime_binding_ready_0044()"][6]
 
 
 def test_revision_history_has_single_integrity_hardening_head() -> None:

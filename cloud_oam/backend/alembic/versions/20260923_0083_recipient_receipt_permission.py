@@ -60,16 +60,19 @@ def _swap_seed(grants, old, new):
 def _invalidate_technician_sessions():
     users = sa.table("users", sa.column("id", sa.String()), sa.column("authorization_version", sa.Integer()))
     assignments = sa.table("role_assignments", sa.column("user_id", sa.String()), sa.column("role_id", sa.Uuid()))
+    if op.get_bind().dialect.name == "postgresql":
+        # Match runtime principal locking: users first, then permission rows.
+        op.execute(sa.select(users.c.id).where(users.c.id.in_(sa.select(assignments.c.user_id).where(assignments.c.role_id == TECHNICIAN_ROLE_ID))).order_by(users.c.id).with_for_update())
     op.execute(users.update().where(users.c.id.in_(sa.select(assignments.c.user_id).where(assignments.c.role_id == TECHNICIAN_ROLE_ID))).values(authorization_version=users.c.authorization_version + 1))
 
 
 def upgrade():
     _readiness(True)
+    _invalidate_technician_sessions()
     permissions, grants = _tables()
     now = datetime.now(timezone.utc)
     op.bulk_insert(permissions, [{"id": PERMISSION_ID, "resource": "material_request", "action": "receive", "field_code": "", "description": "Accept only packages explicitly bound to the current recipient and personal warehouse", "created_at": now, "updated_at": now}])
     _swap_seed(grants, FULFILL_PERMISSION_ID, PERMISSION_ID)
-    _invalidate_technician_sessions()
 
 
 def downgrade():
@@ -84,7 +87,7 @@ def downgrade():
     elif op.get_bind().scalar(sa.select(sa.func.count()).select_from(audit).where(audit.c.action == "my_receipt_registered")):
         raise RuntimeError("0083 downgrade blocked: recipient receipt facts exist")
     _readiness(False)
+    _invalidate_technician_sessions()
     permissions, grants = _tables()
     _swap_seed(grants, PERMISSION_ID, FULFILL_PERMISSION_ID)
     op.execute(permissions.delete().where(permissions.c.id == PERMISSION_ID))
-    _invalidate_technician_sessions()
