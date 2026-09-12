@@ -17,6 +17,7 @@ from ..formal_services import work_order_removed_registration as removed_registr
 from ..work_order_material_schemas import (WorkOrderRemovedScanIn, WorkOrderRemovedRegistrationIn,
     WorkOrderRemovedRegistrationPreviewOut, WorkOrderRemovedRegistrationOut, WorkOrderRemovedRegistrationSealedOut)
 from ..formal_services.inventory_query import InventoryReadError
+from ..work_order_reversal_schemas import WorkOrderReversalPreviewIn, WorkOrderReversalPreviewOut
 from ..formal_services.work_order_replacement_read import replacement_result
 from ..formal_services.work_order_replacement_seal import lookup_replacement_result as lookup_replacement, seal_replacement
 from ..formal_services.work_order_command_seal import lookup_command_result as lookup_operation, seal_command
@@ -44,6 +45,25 @@ from ..work_order_material_schemas import (
 )
 
 router = APIRouter(prefix="/v1/work-orders", tags=["formal-work-order-material"])
+
+@router.post("/{work_order_id}/material-reversals/preview", response_model=WorkOrderReversalPreviewOut)
+def preview_material_reversal(
+    work_order_id: UUID, payload: WorkOrderReversalPreviewIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")),
+    db: Session = Depends(get_db),
+):
+    from ..formal_services.work_order_reversal_plan import preview_reversal
+    response.headers["Cache-Control"] = "private, no-store"
+    _require_operator(payload, principal)
+    try:
+        return preview_reversal(db, actor=principal, work_order_id=work_order_id, request=payload)
+    except service.InventoryPostingError as exc:
+        _raise(exc)
+    except InventoryReadError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.message}) from None
+    except SQLAlchemyError:
+        raise HTTPException(status_code=503, detail={"code": "work_order_reversal_preview_unavailable",
+            "message": "原操作反向方案暂时无法核验，请刷新后重试"}) from None
 
 
 def _lines(payload):

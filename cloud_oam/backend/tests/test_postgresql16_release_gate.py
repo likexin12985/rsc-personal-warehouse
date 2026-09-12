@@ -21226,6 +21226,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_generic_inverse_database_boundary(api_engine, replacement_fixture_engine, rejected=True)
             from pg16_work_order_reversal_boundary_gate import assert_reversal_migration_rejects_detached_history
             assert_reversal_migration_rejects_detached_history(api_engine, replacement_fixture_engine)
+            from pg16_work_order_reversal_plan_gate import assert_reversal_plan_gate
+            assert_reversal_plan_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_replacement_seals_gate import assert_replacement_seal_atomic_gate
             assert_replacement_seal_atomic_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_query_gate import assert_work_order_query_gate

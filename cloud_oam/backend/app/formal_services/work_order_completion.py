@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from ..demand_models import WorkOrderMaterialLine, WorkOrderMaterialOperation, WorkOrderMaterialSerial
 from ..demand_models import WorkOrderReplacement, WorkOrderRemovedSerialRegistration as Registration
-from ..foundation_models import AuditChainHead, SourceSystem
+from ..foundation_models import SourceSystem
 from ..inventory_models import FormalMaterial, InventoryLot, InventorySerial, InventoryTransaction, InventoryMovement, StockAccount
 from ..work_order_completion_schemas import WorkOrderCompletionCheckOut, WorkOrderCompletionIssueOut
 from ..work_order_query_schemas import WorkOrderSerialOptionOut
@@ -24,6 +24,7 @@ from .work_order_operation_read import verify_operation_history
 from .work_order_replacement_read import replacement_result
 from .work_order_removed_registration import verified_registration
 from .work_order_reservations import read_work_order_reservations
+from .work_order_evidence_snapshot import material_audit_cursor as _audit_cursor
 
 MAX_HISTORY = 1000
 
@@ -36,11 +37,6 @@ def _invalid():
 def _changed():
     raise inventory.InventoryReadError(code="work_order_completion_changed", status_code=409,
         message="工单、库存或拆回登记在检查期间发生变化，请重新检查")
-
-
-def _audit_cursor(db):
-    return tuple(db.execute(select(AuditChainHead.version, AuditChainHead.last_event_id, AuditChainHead.last_hash)
-        .where(AuditChainHead.stream_key == "material_request")))
 
 
 def _history(db, model, work_order_id):
