@@ -1087,6 +1087,13 @@ def _assert_0069_function_body_matches_runtime_manifest(
             assert latest_body.count(old) == 1 and new not in latest_body
             latest_body = latest_body.replace(old, new)
         assert hashlib.sha256(latest_body.encode()).hexdigest() == inbound["FUNCTION_HASHES"][coordinate][1]
+    if coordinate == ("rsc_validate_material_request_approval_projection_0045", "uuid"):
+        fulfillment = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20260925_0085_fulfillment_version_commands.py")))
+        assert hashlib.sha256(latest_body.encode()).hexdigest() == fulfillment["APPROVAL_OLD_HASH"]
+        for old, new in fulfillment["source_changes"]():
+            assert latest_body.count(old) == 1 and new not in latest_body
+            latest_body = latest_body.replace(old, new)
+        assert hashlib.sha256(latest_body.encode()).hexdigest() == fulfillment["APPROVAL_NEW_HASH"]
     assert MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate] == hashlib.sha256(latest_body.encode()).hexdigest()
     assert current_hash != historical_hash
     for old, new in reversed(replacements):

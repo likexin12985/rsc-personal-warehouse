@@ -66,6 +66,10 @@ def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_i
                 db.execute(text("UPDATE material_requests SET personal_inbound_status = :state, version = version + 1, updated_at = clock_timestamp() WHERE id = :id"), {"state": state, "id": request_id})
                 db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
             db.rollback()
+        with pytest.raises(DBAPIError):
+            db.execute(text("UPDATE material_requests SET version = version + 1, updated_at = clock_timestamp() WHERE id = :id"), {"id": request_id})
+            db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        db.rollback()
 
     def snapshot():
         with Session(api_engine) as db:

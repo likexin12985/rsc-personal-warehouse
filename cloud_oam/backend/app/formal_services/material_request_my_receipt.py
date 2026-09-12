@@ -19,7 +19,7 @@ from ..material_request_my_receipt_schemas import MyReceiptIn, MyReceiptLineOut,
 from . import material_request_my_receiving as receiving
 from . import material_request_query as query
 from .audit_chain import append_audit_event
-from .material_request_inbound_state import refresh_personal_inbound_status
+from .material_request_fulfillment_command import record_fulfillment_command, verify_fulfillment_command
 
 
 def _fail(code, category, message):
@@ -184,12 +184,8 @@ def create_my_receipt(db, *, actor, request_id, payload, idempotency_key, secret
     append_audit_event(db, stream_key="material_request", actor_user_id=actor.user_id, action="my_receipt_registered", aggregate_type="receipt", aggregate_id=str(receipt.id), before_jsonb={}, after_jsonb={"request_id": str(request.id), "receipt_no": receipt.receipt_no, "request_hash": digest, "command": payload.model_dump(mode="json")}, request_id=trace_request_id, occurred_at=now, created_at=now)
     db.add(OutboxEvent(event_type="receipt_registered", aggregate_type="receipt", aggregate_id=str(receipt.id), payload_jsonb={"request_id": str(request.id), "receipt_no": receipt.receipt_no, "shipment_id": str(shipment.id)}, status="pending", attempts=0, idempotency_key=f"receipt:{receipt.id}", available_at=now))
     db.flush()
-    version_before = request.version
-    refresh_personal_inbound_status(db, request)
-    if request.version == version_before:
-        # Another partial receipt still changes the request's fulfillment facts.
-        request.version += 1
-    db.flush()
+    record_fulfillment_command(db, request=request, actor=context.principal, operation="receipt", fact=receipt,
+        request_reference=f"/api/v1/material-requests/{request.id}/my-receipts", permission_action="receive")
     return _result(db, context, request, receipt, replayed=False)
 
 
@@ -206,6 +202,8 @@ def _result(db, context, request, receipt, *, replayed):
         _fail("history_invalid", "service_unavailable", "原验收请求证据不完整")
     if request_hash(request.id, context.principal.person_id, original) != receipt.request_hash or original.shipment_id != shipment.id:
         _fail("history_invalid", "service_unavailable", "验收请求指纹不一致")
+    verify_fulfillment_command(db, request=request, actor=context.principal, operation="receipt", fact=receipt,
+        request_reference=f"/api/v1/material-requests/{request.id}/my-receipts", expected_version=original.expected_request_version + 1)
     original_at = datetime.fromisoformat(original.received_at.replace("Z", "+00:00"))
     stored_at = receipt.received_at.replace(tzinfo=timezone.utc) if receipt.received_at.tzinfo is None else receipt.received_at
     if original_at != stored_at:

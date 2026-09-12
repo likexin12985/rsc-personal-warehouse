@@ -7,7 +7,8 @@ import pytest
 from sqlalchemy import select, func
 
 from app.demand_models import MaterialRequestCommand
-from app.foundation_models import AuditEvent
+from app.foundation_models import AuditEvent, Permission, Role, RolePermission
+from app.formal_access import load_formal_principal
 from app.inventory_models import (
     StockAccount, StockBalance, StockReservationPick, OutboundPosting, OutboundOrder, OutboundLine,
     InventoryMovement, InventoryTransaction, SerialCurrentPosition,
@@ -35,7 +36,17 @@ def outbound_world(pick_world, monkeypatch):
     db.flush()
     monkeypatch.setattr(outbound, "post_inventory_transaction", picking.post_inventory_transaction)
     calls.clear()
-    return db, actor, request, fact, serials, calls, target.id
+    # Match the production headquarters/region fulfillment seed. Recipient
+    # tests provision the distinct technician receive permission separately.
+    permission = db.scalar(select(Permission).where(Permission.resource == "material_request", Permission.action == "fulfill"))
+    if permission is None:
+        permission = Permission(id=uuid4(), resource="material_request", action="fulfill", field_code="", description="test fulfillment")
+        db.add(permission); db.flush()
+    for role_id in db.scalars(select(Role.id).where(Role.code.in_(("admin", "provincial_manager")))).all():
+        if db.scalar(select(RolePermission.id).where(RolePermission.role_id == role_id, RolePermission.permission_id == permission.id)) is None:
+            db.add(RolePermission(role_id=role_id, permission_id=permission.id, effect="allow"))
+    db.flush()
+    return db, load_formal_principal(db, actor.user_id), request, fact, serials, calls, target.id
 
 
 def _input(world, qty=None, serials=None):

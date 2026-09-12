@@ -2414,7 +2414,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_validate_material_request_external_causality_0045", "uuid"):
         "0f5bd6658edcb46dac6282109b71a109c14003862c89b3f5700d89f1ac13fa26",
     ("rsc_validate_material_request_approval_projection_0045", "uuid"):
-        "b5d39b3c6287e98657aa7802c628e2d67e3c2a541c1b4c5d99930b15c8cd4110",
+        "71567de7cb5a838e00bec2fa8dcfab189cefaf271eebed0e08b8c1afa9a68b60",
     ("rsc_dispatch_material_request_approval_projection_0045", ""):
         "244d188e126e66fd4b020da01c076a3018f2c8841230bd255da45b7913776d54",
     ("rsc_guard_material_request_supply_task_0059", ""):

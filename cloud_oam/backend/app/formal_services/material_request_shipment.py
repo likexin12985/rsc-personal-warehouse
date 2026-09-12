@@ -75,8 +75,9 @@ def create_shipment(db, *, actor, request_id, expected_version, target_location_
     db.add(OutboxEvent(event_type='shipment_handover_registered',aggregate_type='shipment',aggregate_id=str(shipment.id),payload_jsonb={'request_id':str(request_id),'shipment_no':shipment.shipment_no,'tracking_no':shipment.tracking_no},status='pending',attempts=0,idempotency_key=f'shipment:{shipment.id}',available_at=now))
     append_audit_event(db,stream_key='material_request',actor_user_id=actor.user_id,action='shipment_handover_registered',aggregate_type='shipment',aggregate_id=str(shipment.id),before_jsonb={},after_jsonb={'request_id':str(request_id),'shipment_no':shipment.shipment_no,'lines':[str(x['shipment_line_id']) for x in output_lines]},request_id=trace_request_id,occurred_at=now,created_at=now)
     db.flush()
-    from .material_request_inbound_state import refresh_personal_inbound_status
-    refresh_personal_inbound_status(db, request)
+    from .material_request_fulfillment_command import record_fulfillment_command
+    record_fulfillment_command(db, request=request, actor=actor, operation="shipment", fact=shipment,
+                              request_reference=path, permission_action="fulfill")
     return _result(db,shipment,request,replayed=False,lines=output_lines)
 
 def _result(db, shipment, request, replayed, lines=None):

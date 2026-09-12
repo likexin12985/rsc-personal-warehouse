@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from sqlalchemy import event, func, select
 
 from app.formal_access import load_formal_principal
+from app.demand_models import MaterialRequestCommand
 from app.foundation_models import AuditEvent, FileObject, OutboxEvent, Permission, Role, RolePermission
 from app.inventory_models import InventoryTransaction, Receipt, ReceiptLine, ReceiptSerial, ShipmentSerial, StockBalance
 from app.formal_services import material_request_my_receipt as service
@@ -51,7 +52,7 @@ def recover(world, key="my-receipt-test-command-001", actor=None):
 
 
 def facts(db):
-    return tuple(db.scalar(select(func.count()).select_from(model)) for model in (Receipt, ReceiptLine, ReceiptSerial, AuditEvent, OutboxEvent, InventoryTransaction))
+    return tuple(db.scalar(select(func.count()).select_from(model)) for model in (Receipt, ReceiptLine, ReceiptSerial, AuditEvent, OutboxEvent, InventoryTransaction, MaterialRequestCommand))
 
 
 def test_recipient_accepts_once_without_stock_posting_or_source_permissions(world):
@@ -62,6 +63,8 @@ def test_recipient_accepts_once_without_stock_posting_or_source_permissions(worl
     result = create(world, value)
     assert result.person_id == actor.person_id and not result.idempotency_replayed
     assert result.request_hash == service.request_hash(request.id, actor.person_id, value)
+    versions = tuple(db.scalars(select(MaterialRequestCommand.target_version).where(MaterialRequestCommand.request_id == request.id).order_by(MaterialRequestCommand.target_version)).all())
+    assert versions == tuple(range(request.version + 1))
     stable = facts(db)
     assert create(world, value).idempotency_replayed
     assert recover(world).receipt_id == result.receipt_id
@@ -151,6 +154,37 @@ def test_late_audit_failure_rolls_back_all_acceptance_facts(world, monkeypatch):
     with pytest.raises(RuntimeError): create(world)
     db.rollback()
     assert facts(db) == stable
+
+
+def test_late_version_audit_failure_rolls_back_receipt_and_version(world, monkeypatch):
+    from app.formal_services import material_request_fulfillment_command as commands
+    db, _, request, *_ = world
+    db.commit()
+    stable, version = facts(db), request.version
+    monkeypatch.setattr(commands, "append_audit_event", Mock(side_effect=RuntimeError("injected version audit failure")))
+    with pytest.raises(RuntimeError, match="version audit"):
+        create(world)
+    db.rollback()
+    assert facts(db) == stable and request.version == version
+
+
+@pytest.mark.parametrize("change", ["missing", "body", "audit"])
+def test_recovery_checks_the_original_version_command(world, change):
+    from app.formal_services import material_request_fulfillment_command as commands
+    db, *_ = world
+    result = create(world)
+    receipt = db.get(Receipt, result.receipt_id)
+    command = db.scalar(select(MaterialRequestCommand).where(MaterialRequestCommand.idempotency_key_hash == receipt.idempotency_key_hash))
+    if change == "missing":
+        db.delete(command)
+    elif change == "body":
+        command.result_jsonb = {**command.result_jsonb, "personal_inbound_status": "posted"}
+        command.result_hash = commands._hash(command.result_jsonb)
+    else:
+        db.query(AuditEvent).filter(AuditEvent.action == "fulfillment_version_recorded", AuditEvent.aggregate_id == str(result.receipt_id)).update({"after_jsonb": {}})
+    db.flush()
+    with pytest.raises(MaterialRequestReadError):
+        recover(world)
 
 
 def test_exception_file_must_be_available_and_owned_by_recipient(world):
