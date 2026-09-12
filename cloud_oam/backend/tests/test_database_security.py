@@ -562,7 +562,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "stock_reservation_serials",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
-        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs",
+        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements",
     }
     assert RUNTIME_READ_TABLES - set(values["API_READ_TABLES"]) == (
         safe_posting_tables
@@ -2435,6 +2435,9 @@ def _opening_terminal_0052_function_bodies() -> dict[tuple[str, str], str]:
     migration_0091 = runpy.run_path(str(Path(__file__).resolve().parents[1] / "alembic/versions/20261001_0091_work_order_account_admission.py"))
     assert hashlib.sha256(hardened_account_body.encode()).hexdigest() == migration_0091["ACCOUNT_OLD_HASH"]
     hardened_account_body = hardened_account_body.replace(migration_0088["ANCHOR"], migration_0091["ACCOUNT_BRANCH"] + migration_0088["ANCHOR"])
+    migration_0093 = runpy.run_path(str(Path(__file__).resolve().parents[1] / "alembic/versions/20261003_0093_work_order_replacements.py"))
+    assert hardened_account_body == migration_0093["_sources"]()["public.rsc_require_opening_observation_account_0023()"][0]
+    hardened_account_body = hardened_account_body.replace(migration_0088["ANCHOR"], migration_0093["ACCOUNT_BRANCH"] + migration_0088["ANCHOR"])
     assert legacy_scope_completion_body.count(
         migration_0052.LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021
     ) == 1
@@ -2597,7 +2600,7 @@ def test_0052_opening_terminal_internal_function_manifest_is_exact() -> None:
         ),
         graph_coordinate: migration_0052.GRAPH_BODY_SHA256,
         commit_coordinate: migration_0052.FIXED_COMMIT_BODY_SHA256,
-        account_coordinate: runpy.run_path(str(Path(__file__).resolve().parents[1] / "alembic/versions/20261001_0091_work_order_account_admission.py"))["ACCOUNT_NEW_HASH"],
+        account_coordinate: hashlib.sha256(runpy.run_path(str(Path(__file__).resolve().parents[1] / "alembic/versions/20261003_0093_work_order_replacements.py"))["_sources"]()["public.rsc_require_opening_observation_account_0023()"][1].encode()).hexdigest(),
         reconciliation_effect_coordinate:
             migration_0052.INHERITED_RECONCILIATION_FUNCTION_CATALOG[2][10],
     }
@@ -7175,8 +7178,8 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 149
-    assert len(functions) == 62
+    assert len(triggers) == 154
+    assert len(functions) == 64
     _assert_material_request_approval_guards(
         triggers=triggers,
         functions=functions,
@@ -7426,7 +7429,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
     assert {
         coordinate[0].rsplit("_", 1)[-1]
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
-    } == {"0029", "0030", "0045", "0046", "0059", "0060", "0069", "0070", "0071", "0072", "0077", "0087", "0090", "0092"}
+    } == {"0029", "0030", "0045", "0046", "0059", "0060", "0069", "0070", "0071", "0072", "0077", "0087", "0090", "0092", "0093"}
 
 
 def test_0069_reservation_guard_bodies_match_runtime_manifest(monkeypatch):
@@ -7559,7 +7562,7 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         ): migration._projection_dispatcher_sql(),
     }
 
-    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 62
+    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 64
     assert set(function_sql) == {
         coordinate
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256

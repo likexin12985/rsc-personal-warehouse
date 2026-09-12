@@ -15,7 +15,11 @@ MIGRATION = Path(__file__).parents[1] / "alembic/versions/20260930_0090_work_ord
 def test_work_order_guard_bodies_are_pinned_and_not_executable_by_api():
     migration = runpy.run_path(str(MIGRATION))
     for coordinate, (_, _, body) in migration["FUNCTIONS"].items():
-        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate] == hashlib.sha256(body.encode()).hexdigest()
+        if coordinate == ("rsc_check_work_order_material_transaction_0090", "uuid"):
+            following = runpy.run_path(str(MIGRATION.with_name("20261003_0093_work_order_replacements.py")))
+            assert body == following["_sources"]()["public.rsc_check_work_order_material_transaction_0090(uuid)"][0]
+        else:
+            assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate] == hashlib.sha256(body.encode()).hexdigest()
         assert coordinate in security.MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
     assert ("rsc_check_work_order_material_transaction_0090", "uuid") in security.MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS
     for table in migration["PROOF_TABLES"]:

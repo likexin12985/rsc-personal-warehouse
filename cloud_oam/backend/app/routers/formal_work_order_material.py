@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, Path
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -11,10 +11,13 @@ from ..database import get_db
 from ..dependencies import require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import work_order_material as service
+from ..formal_services import work_order_replacements as replacements
+from ..formal_services.work_order_replacement_read import replacement_result
 from ..demand_models import (
     WorkOrderMaterialLine,
     WorkOrderMaterialOperation,
     WorkOrderMaterialSerial,
+    WorkOrderReplacement,
 )
 from ..work_order_material_schemas import (
     WorkOrderMaterialPreflightIn,
@@ -26,6 +29,8 @@ from ..work_order_material_schemas import (
     WorkOrderMaterialRecoverIn,
     WorkOrderMaterialOperationHistoryItemOut,
     WorkOrderMaterialOperationHistoryOut,
+    WorkOrderReplacementIn,
+    WorkOrderReplacementOut,
 )
 
 router = APIRouter(prefix="/v1/work-orders", tags=["formal-work-order-material"])
@@ -46,6 +51,64 @@ def _raise(exc):
 def _require_operator(payload, principal):
     if payload.operator_person_id != principal.person_id:
         raise HTTPException(status_code=403, detail={"code": "operator_mismatch", "message": "操作人必须是当前登录人员"})
+
+
+@router.post("/{work_order_id}/material-replacements", response_model=WorkOrderReplacementOut)
+def execute_material_replacement(
+    work_order_id: UUID, payload: WorkOrderReplacementIn,
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")),
+    db: Session = Depends(get_db), request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    _require_operator(payload, principal)
+    if request_id is not None and request_id != payload.request_id:
+        raise HTTPException(status_code=400, detail={"code": "request_id_mismatch", "message": "请求头与原请求标识不一致"})
+    def proofs(row):
+        return tuple(service.SerialVerificationInput(**proof.model_dump()) for proof in row.serial_verifications)
+    consumed = tuple(service.WorkOrderMaterialLineInput(
+        material_id=row.material_id, stock_account_id=row.stock_account_id, quantity=row.quantity,
+        condition_before=row.condition_before, serial_ids=row.serial_ids, serial_verifications=proofs(row),
+    ) for row in payload.consume_lines)
+    recovered = tuple(replacements.RecoveryLineInput(
+        basis_stock_account_id=row.basis_stock_account_id, material_id=row.material_id,
+        lot_id=row.lot_id, target_stock_account_id=row.target_stock_account_id, quantity=row.quantity,
+        condition_before=row.condition_before, serial_ids=row.serial_ids, serial_verifications=proofs(row),
+    ) for row in payload.recover_lines)
+    pairs = tuple(service.WorkOrderReplacementPairInput(**row.model_dump()) for row in payload.replacement_pairs)
+    try:
+        replacement = replacements.execute_replacement(db, actor=principal, work_order_id=work_order_id,
+            consume_lines=consumed, recover_lines=recovered, pairs=pairs,
+            idempotency_key=payload.idempotency_key, request_id=payload.request_id)
+        output = replacement_result(db, replacement=replacement, actor=principal)
+        db.commit()
+    except service.InventoryPostingError as exc:
+        db.rollback(); _raise(exc)
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=503, detail={"code": "work_order_storage_unavailable", "message": "替换结果未确认，请按原请求标识回读"}) from None
+    return output
+
+
+@router.get("/{work_order_id}/material-replacements/by-request/{request_id}", response_model=WorkOrderReplacementOut)
+def read_material_replacement(
+    work_order_id: UUID, response: Response,
+    request_id: str = Path(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$"),
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "read")),
+    db: Session = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        _order, current = service.authorize_work_order(db, actor=principal, work_order_id=work_order_id, action="read")
+        replacement = db.scalar(select(WorkOrderReplacement).where(
+            WorkOrderReplacement.oam_work_order_id == work_order_id,
+            WorkOrderReplacement.operator_person_id == current.person_id,
+            WorkOrderReplacement.request_id == request_id))
+        if replacement is None:
+            raise HTTPException(status_code=404, detail={"code": "replacement_not_found", "message": "尚未查到该请求的已提交替换记录"})
+        return replacement_result(db, replacement=replacement, actor=current)
+    except service.InventoryPostingError as exc:
+        _raise(exc)
+    except SQLAlchemyError:
+        raise HTTPException(status_code=503, detail={"code": "work_order_storage_unavailable", "message": "原替换记录暂时无法核验，请保留原请求稍后查询"}) from None
 
 
 @router.post("/{work_order_id}/material-operations/consume", response_model=WorkOrderMaterialOperationOut)

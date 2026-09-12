@@ -106,6 +106,38 @@ class WorkOrderMaterialRecoverIn(StrictInput):
     request_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class WorkOrderReplacementRecoverLineIn(StrictInput):
+    basis_stock_account_id: UUID
+    material_id: UUID
+    lot_id: UUID | None = None
+    target_stock_account_id: UUID | None = None
+    quantity: Decimal = Field(gt=0, max_digits=18, decimal_places=3, allow_inf_nan=False)
+    condition_before: Literal["used", "damaged"]
+    serial_ids: tuple[UUID, ...] = Field(default=(), max_length=1000)
+    serial_verifications: tuple[SerialVerificationIn, ...] = Field(default=(), max_length=1000)
+
+
+class WorkOrderReplacementIn(StrictInput):
+    operator_person_id: UUID
+    consume_lines: tuple[WorkOrderMaterialLineIn, ...] = Field(min_length=1, max_length=100)
+    recover_lines: tuple[WorkOrderReplacementRecoverLineIn, ...] = Field(min_length=1, max_length=100)
+    replacement_pairs: tuple[WorkOrderReplacementPairIn, ...] = Field(default=(), max_length=1000)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    request_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class WorkOrderReplacementOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    replacement_id: UUID
+    replacement_no: str
+    work_order_id: UUID
+    consume_operation_id: UUID
+    recover_operation_id: UUID
+    consume_transaction_id: UUID
+    recover_transaction_id: UUID
+    status: Literal["posted"] = "posted"
+
+
 class WorkOrderMaterialHistorySerialOut(BaseModel):
     serial_id: UUID
     sku_verified: bool

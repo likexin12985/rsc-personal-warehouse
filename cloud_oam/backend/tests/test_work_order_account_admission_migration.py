@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pytest
 import sqlalchemy as sa
 
-from app.database_security import FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256
 from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0091
 
 MIGRATION = Path(__file__).parents[1] / "alembic/versions/20261001_0091_work_order_account_admission.py"
@@ -20,7 +19,8 @@ def test_account_admission_preserves_existing_opening_and_receipt_branches():
     assert new.replace(migration["ACCOUNT_BRANCH"], "", 1) == old
     assert hashlib.sha256(old.encode()).hexdigest() == migration["ACCOUNT_OLD_HASH"]
     assert hashlib.sha256(new.encode()).hexdigest() == migration["ACCOUNT_NEW_HASH"]
-    assert FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[("rsc_require_opening_observation_account_0023", "")] == migration["ACCOUNT_NEW_HASH"]
+    following = runpy.run_path(str(MIGRATION.with_name("20261003_0093_work_order_replacements.py")))
+    assert new == following["_sources"]()["public.rsc_require_opening_observation_account_0023()"][0]
     assert OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0091["rsc_oam_runtime_binding_ready_0044()"][6] == migration["NEW_HASH"]
 
 

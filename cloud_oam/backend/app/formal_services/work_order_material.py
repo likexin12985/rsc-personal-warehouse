@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..demand_models import (
     OamWorkOrder, WorkOrderMaterialLine, WorkOrderMaterialOperation,
-    WorkOrderMaterialSerial,
+    WorkOrderMaterialSerial, WorkOrderReplacement,
 )
 from ..foundation_models import OutboxEvent
 from ..inventory_models import (
@@ -270,6 +270,7 @@ def record_posted_operation(
     posting_transaction_id: UUID,
     idempotency_key: str,
     replacement_pairs: tuple[WorkOrderReplacementPairInput, ...] = (),
+    replacement_id: UUID | None = None,
 ) -> WorkOrderMaterialOperation:
     """Append a work-order fact only after the inventory transaction exists.
 
@@ -305,11 +306,23 @@ def record_posted_operation(
         replacement_pairs=replacement_pairs,
     )
     key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
+    replacement_operation_id = None
+    if replacement_id is not None:
+        from .work_order_replacements import child_key
+        replacement = db.get(WorkOrderReplacement, replacement_id)
+        if (replacement is None or operation_type not in {"consume", "recover"}
+                or replacement.oam_work_order_id != work_order_id
+                or replacement.operator_person_id != operator_person_id
+                or child_key(replacement.idempotency_key_hash, operation_type) != idempotency_key):
+            raise WorkOrderMaterialPreflightError("replacement_binding_invalid", "替换操作未绑定原命令")
+        replacement_operation_id = (replacement.consume_operation_id if operation_type == "consume"
+                                    else replacement.recover_operation_id)
     existing = db.scalar(select(WorkOrderMaterialOperation).where(
         WorkOrderMaterialOperation.idempotency_key_hash == key_hash
     ))
     if existing is not None:
-        if existing.request_hash != request_hash or existing.posting_transaction_id != posting_transaction_id:
+        if (existing.request_hash != request_hash or existing.posting_transaction_id != posting_transaction_id
+                or existing.replacement_id != replacement_id):
             raise WorkOrderMaterialPreflightError("idempotency_conflict", "幂等键已绑定其他工单操作")
         return existing
     bound = db.scalar(select(WorkOrderMaterialOperation.id).where(
@@ -326,6 +339,8 @@ def record_posted_operation(
         require_work_order_reservations(db, work_order_id=work_order_id, lines=lines,
                                         before_cursor=transaction.ledger_cursor)
     operation = WorkOrderMaterialOperation(
+        **({"id": replacement_operation_id} if replacement_id is not None else {}),
+        replacement_id=replacement_id,
         operation_no=f"WOM-{UUID(int=work_order_id.int).hex[:12].upper()}-{key_hash[:12].upper()}",
         oam_work_order_id=work_order_id, operator_person_id=operator_person_id,
         operation_type=operation_type, status="posted",
@@ -394,6 +409,7 @@ def execute_consume_operation(
     lines: tuple[WorkOrderMaterialLineInput, ...],
     idempotency_key: str,
     request_id: str,
+    _replacement_id: UUID | None = None,
 ) -> tuple[WorkOrderMaterialOperation, object]:
     """Atomically post a work-order consume movement and its fact.
 
@@ -439,6 +455,7 @@ def execute_consume_operation(
         operator_person_id=current.person_id, lines=lines,
         posting_transaction_id=posted.transaction_id,
         idempotency_key=idempotency_key,
+        **({"replacement_id": _replacement_id} if _replacement_id is not None else {}),
     )
     return operation, posted
 
@@ -537,6 +554,7 @@ def execute_recover_operation(
     db: Session, *, actor: FormalPrincipal, work_order_id: UUID,
     lines: tuple[WorkOrderMaterialLineInput, ...], idempotency_key: str,
     request_id: str,
+    _replacement_id: UUID | None = None,
 ) -> tuple[WorkOrderMaterialOperation, object]:
     """Receive returned material into the operator's available personal account."""
     _lock_inventory_ledger_head_for_atomic_batch(db)
@@ -587,5 +605,6 @@ def execute_recover_operation(
         db, actor=current, operation_type="recover", work_order_id=work_order_id,
         operator_person_id=current.person_id, lines=recorded_lines,
         posting_transaction_id=posted.transaction_id, idempotency_key=idempotency_key,
+        **({"replacement_id": _replacement_id} if _replacement_id is not None else {}),
     )
     return operation, posted

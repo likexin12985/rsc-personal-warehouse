@@ -30,6 +30,7 @@ def assert_serial_migration_roundtrip(gate):
             updates = db.execute("SELECT attname, has_column_privilege('star_oam_api', attrelid, attnum, 'UPDATE') FROM pg_attribute WHERE attrelid = 'public.inventory_serials'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attname").fetchall()
             return ready, functions, triggers, updates
 
+    gate._run_alembic("downgrade", "20261002_0092")
     before = catalog()
     assert len(before[1]) == 3 and len(before[2]) == 6
     assert {name for name, permitted in before[3] if permitted} == {"lifecycle_status", "updated_at"}
@@ -42,15 +43,15 @@ def assert_serial_migration_roundtrip(gate):
         db.execute(definition.replace("AS $function$", "AS $function$\n-- isolated 0092 late CAS failure\n"))
     try:
         drifted = catalog()
-        blocked = gate._run_alembic("upgrade", "head", expect_success=False)
+        blocked = gate._run_alembic("upgrade", "20261002_0092", expect_success=False)
         assert "serial_lifecycle_readiness_0092" in blocked.stdout + blocked.stderr
         assert catalog() == drifted and gate._current_revision() == "20261001_0091"
     finally:
         with psycopg.connect(**parameters) as db:
             db.execute(definition)
     assert catalog() == previous
-    gate._run_alembic("upgrade", "head")
-    assert catalog() == before and gate._current_revision() == gate.HEAD_REVISION
+    gate._run_alembic("upgrade", "20261002_0092")
+    assert catalog() == before and gate._current_revision() == "20261002_0092"
 
     # A migration may not silently remove a changed security-definer function.
     target = "public.rsc_check_serial_lifecycle_0092(uuid)"
@@ -61,7 +62,7 @@ def assert_serial_migration_roundtrip(gate):
         drifted = catalog()
         blocked = gate._run_alembic("downgrade", "20261001_0091", expect_success=False)
         assert "0092 function source or ownership drift" in blocked.stdout + blocked.stderr
-        assert catalog() == drifted and gate._current_revision() == gate.HEAD_REVISION
+        assert catalog() == drifted and gate._current_revision() == "20261002_0092"
     finally:
         with psycopg.connect(**parameters) as db:
             db.execute(definition)
@@ -71,11 +72,13 @@ def assert_serial_migration_roundtrip(gate):
         drifted = catalog()
         blocked = gate._run_alembic("downgrade", "20261001_0091", expect_success=False)
         assert "0092 function source or ownership drift" in blocked.stdout + blocked.stderr
-        assert catalog() == drifted and gate._current_revision() == gate.HEAD_REVISION
+        assert catalog() == drifted and gate._current_revision() == "20261002_0092"
     finally:
         with psycopg.connect(**parameters) as db:
             db.execute(f"REVOKE EXECUTE ON FUNCTION {target} FROM star_oam_api")
     assert catalog() == before
+    gate._run_alembic("upgrade", "head")
+    assert gate._current_revision() == gate.HEAD_REVISION
     print("PG16 0092 roundtrip, late CAS atomic rollback, source/ACL drift rejection PASS", flush=True)
 
 

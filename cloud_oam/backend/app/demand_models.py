@@ -145,6 +145,12 @@ class WorkOrderMaterialOperation(CreatedAtMixin, Base):
     )
     idempotency_key_hash: Mapped[str] = mapped_column(String(64))
     request_hash: Mapped[str] = mapped_column(String(64))
+    replacement_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("work_order_replacements.id", name="fk_work_order_operation_replacement_0093",
+                   use_alter=True, deferrable=True, initially="DEFERRED"),
+        nullable=True,
+    )
 
 
 class WorkOrderMaterialLine(CreatedAtMixin, Base):
@@ -187,6 +193,35 @@ class WorkOrderMaterialSerial(CreatedAtMixin, Base):
     qr_verified: Mapped[bool] = mapped_column(Boolean)
 
 
+class WorkOrderReplacement(CreatedAtMixin, Base):
+    """One atomic replacement command linking consume and recovery stock facts."""
+
+    __tablename__ = "work_order_replacements"
+    __table_args__ = (
+        UniqueConstraint("replacement_no", name="uq_work_order_replacements_no"),
+        UniqueConstraint("idempotency_key_hash", name="uq_work_order_replacements_key"),
+        UniqueConstraint("operator_person_id", "request_id", name="uq_work_order_replacements_request"),
+        UniqueConstraint("consume_operation_id", name="uq_work_order_replacements_consume"),
+        UniqueConstraint("recover_operation_id", name="uq_work_order_replacements_recover"),
+        CheckConstraint("consume_operation_id <> recover_operation_id", name="ck_work_order_replacements_distinct_operations"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    replacement_no: Mapped[str] = mapped_column(String(100))
+    oam_work_order_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("oam_work_orders.id", ondelete="RESTRICT"))
+    operator_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"))
+    consume_operation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("work_order_material_operations.id", deferrable=True, initially="DEFERRED"),
+    )
+    recover_operation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("work_order_material_operations.id", deferrable=True, initially="DEFERRED"),
+    )
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_id: Mapped[str] = mapped_column(String(160))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    command_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+
+
 class WorkOrderReplacementPair(CreatedAtMixin, Base):
     """Immutable installed/removed SN pairing for replacement work."""
 
@@ -199,6 +234,9 @@ class WorkOrderReplacementPair(CreatedAtMixin, Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
     operation_id: Mapped[uuid.UUID] = mapped_column(
         UUID_TYPE, ForeignKey("work_order_material_operations.id", ondelete="RESTRICT")
+    )
+    replacement_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("work_order_replacements.id", ondelete="RESTRICT"),
     )
     installed_serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
     removed_serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)

@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261002_0092"
+HEAD_REVISION = "20261003_0093"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7416,13 +7416,13 @@ def _load_stock_reservations_migration_0069():
 
 def _head_account_admission_hash() -> str:
     import runpy
-    return runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20261001_0091_work_order_account_admission.py")))["ACCOUNT_NEW_HASH"]
+    return hashlib.sha256(runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20261003_0093_work_order_replacements.py")))["_sources"]()["public.rsc_require_opening_observation_account_0023()"][1].encode()).hexdigest()
 
 
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20261002_0092_serial_consumption_projection.py"
+        "20261003_0093_work_order_replacements.py"
     )))
     assert migration["revision"] == HEAD_REVISION
     return migration["NEW_HASH"]
@@ -20800,6 +20800,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _assert_0091_work_order_account_migration_roundtrip()
     from pg16_serial_lifecycle_gate import assert_serial_migration_roundtrip
     assert_serial_migration_roundtrip(sys.modules[__name__])
+    from pg16_work_order_replacements_gate import assert_replacement_migration_roundtrip
+    assert_replacement_migration_roundtrip(sys.modules[__name__])
     _assert_migration_waits_for_version_maintenance_before_writing()
     _assert_0063_empty_review_command_downgrade_and_reupgrade()
     _assert_0064_empty_finalizer_organization_downgrade_and_reupgrade()
@@ -21199,6 +21201,16 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             serial_fixture_engine.dispose()
         blocked_serial = _run_alembic("downgrade", "20261001_0091", expect_success=False)
         assert "0092 transition blocked" in blocked_serial.stdout + blocked_serial.stderr
+        assert _current_revision() == HEAD_REVISION
+        from pg16_work_order_replacements_gate import assert_work_order_replacements_gate
+        replacement_fixture_engine = create_engine(_sqlalchemy_url(
+            role="star_oam_migrator", password=_role_password("star_oam_migrator")))
+        try:
+            assert_work_order_replacements_gate(api_engine, replacement_fixture_engine)
+        finally:
+            replacement_fixture_engine.dispose()
+        blocked_replacement = _run_alembic("downgrade", "20261002_0092", expect_success=False)
+        assert "0093 transition blocked" in blocked_replacement.stdout + blocked_replacement.stderr
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
     finally:

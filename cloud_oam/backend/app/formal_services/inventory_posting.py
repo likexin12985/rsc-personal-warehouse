@@ -63,7 +63,8 @@ from ..inventory_models import (
     StockLocation,
 )
 from ..models import User
-from .serial_ledger import SerialLedgerError, rebuild_serial_states
+from .serial_ledger import SerialLedgerError, SerialLedgerState, rebuild_serial_states
+from .work_order_replacement_proof import has_serial_recovery_command
 from ..stocktake_models import (
     FormalStocktakeScope,
     FormalStocktakeTask,
@@ -1492,6 +1493,10 @@ def _post_new_transaction(
         for serial_id in movement_command.serial_ids:
             if command.movement_type == "consume":
                 serials[serial_id].lifecycle_status = "consumed"
+                serials[serial_id].updated_at = now
+            elif command.movement_type == "inbound" and serials[serial_id].lifecycle_status == "consumed":
+                # Validation has bound this reentry to the exact paired recovery.
+                serials[serial_id].lifecycle_status = "active"
                 serials[serial_id].updated_at = now
             position = positions.get(serial_id)
             if position is None:
@@ -6932,7 +6937,7 @@ def _lock_and_validate_serials(
         position_statement = position_statement.with_for_update()
     position_rows = db.scalars(position_statement).all()
     positions = {row.serial_id: row for row in position_rows}
-    _validate_locked_serial_projections(
+    states = _validate_locked_serial_projections(
         db,
         serial_ids=serial_ids,
         positions=positions,
@@ -6948,11 +6953,24 @@ def _lock_and_validate_serials(
         policy = policies[account.material_id]
         for serial_id in movement.serial_ids:
             serial = serials[serial_id]
-            if serial.lifecycle_status != "active":
+            controlled_recovery = (
+                serial.lifecycle_status == "consumed"
+                and command.movement_type == "inbound"
+                and movement.from_account_id is None
+                and movement.to_account_id == account.id
+                and movement.external_boundary_code == "work_order_material_recover"
+                and account.availability_bucket == "available"
+                and account.condition_code in {"used", "damaged"}
+                and account.custodian_person_id is not None
+                and states[serial_id].owner_org_id == account.owner_org_id
+                and has_serial_recovery_command(db, command=command, serial_id=serial_id,
+                    operator_person_id=account.custodian_person_id)
+            )
+            if serial.lifecycle_status != "active" and not controlled_recovery:
                 _fail(
                     "serial_lifecycle_inactive",
                     "precondition_failed",
-                    "只有 active 生命周期的 SN 可参与库存过账",
+                    "非 active SN 必须有与本次操作一致的配对回收证明",
                 )
             if command.movement_type == "scrap" or (
                 command.movement_type == "consume" and (
@@ -7009,7 +7027,7 @@ def _validate_locked_serial_projections(
     serial_ids: tuple[uuid.UUID, ...],
     positions: Mapping[uuid.UUID, SerialCurrentPosition],
     serials: Mapping[uuid.UUID, InventorySerial],
-) -> None:
+) -> dict[uuid.UUID, SerialLedgerState]:
     """Re-prove each locked SN lifecycle and position from posted history."""
     try:
         states = rebuild_serial_states(db, serial_ids)
@@ -7041,6 +7059,7 @@ def _validate_locked_serial_projections(
                 "service_unavailable",
                 "SN 当前位置投影与最后不可变流水不一致，禁止继续过账",
             )
+    return states
 
 
 def _command_account_ids(command: InventoryPostingCommand) -> tuple[uuid.UUID, ...]:

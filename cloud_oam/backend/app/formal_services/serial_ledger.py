@@ -4,13 +4,15 @@ from collections.abc import Iterable
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from ..inventory_models import (
     InventoryMovement,
     InventoryMovementSerial,
     InventoryTransaction,
+    StockAccount,
 )
+from .work_order_replacement_proof import serial_recovery_coordinates
 
 
 class SerialLedgerError(ValueError):
@@ -23,6 +25,7 @@ class SerialLedgerState:
     last_movement_id: UUID | None = None
     ledger_cursor: int = 0
     lifecycle_status: str = "active"
+    owner_org_id: UUID | None = None
 
 
 def rebuild_serial_states(
@@ -41,19 +44,28 @@ def rebuild_serial_states(
     if not identifiers:
         return {}
     states = {identifier: SerialLedgerState() for identifier in identifiers}
+    recoveries = serial_recovery_coordinates(db, identifiers)
+    source = aliased(StockAccount)
+    target = aliased(StockAccount)
     statement = (
         select(
             InventoryMovementSerial.serial_id,
             InventoryMovement.id.label("movement_id"),
+            InventoryMovement.transaction_id,
             InventoryMovement.from_account_id,
             InventoryMovement.to_account_id,
             InventoryMovement.external_boundary_code,
             InventoryTransaction.movement_type,
             InventoryTransaction.source_document_type,
             InventoryTransaction.ledger_cursor,
+            source.owner_org_id.label("source_owner_org_id"),
+            target.owner_org_id.label("target_owner_org_id"),
         )
+        .select_from(InventoryMovementSerial)
         .join(InventoryMovement, InventoryMovement.id == InventoryMovementSerial.movement_id)
         .join(InventoryTransaction, InventoryTransaction.id == InventoryMovement.transaction_id)
+        .outerjoin(source, source.id == InventoryMovement.from_account_id)
+        .outerjoin(target, target.id == InventoryMovement.to_account_id)
         .where(
             InventoryMovementSerial.serial_id.in_(identifiers),
             InventoryTransaction.status == "posted",
@@ -68,10 +80,20 @@ def rebuild_serial_states(
     )).mappings()
     for row in rows:
         previous = states[row["serial_id"]]
+        controlled_recovery = (
+            previous.lifecycle_status == "consumed"
+            and row["movement_type"] == "inbound"
+            and row["source_document_type"] == "work_order_material"
+            and row["external_boundary_code"] == "work_order_material_recover"
+            and row["from_account_id"] is None and row["to_account_id"] is not None
+            and row["target_owner_org_id"] == previous.owner_org_id
+            and (row["transaction_id"], row["serial_id"]) in recoveries
+        )
         if (
             row["ledger_cursor"] <= previous.ledger_cursor
             or row["from_account_id"] != previous.stock_account_id
-            or previous.lifecycle_status != "active"
+            or (previous.lifecycle_status != "active" and not controlled_recovery)
+            or (row["from_account_id"] is None and row["to_account_id"] is None)
         ):
             raise SerialLedgerError("SN 流水不连续，或已终结的 SN 缺少受控回收/冲销事实")
         lifecycle = "active"
@@ -91,5 +113,6 @@ def rebuild_serial_states(
             last_movement_id=row["movement_id"],
             ledger_cursor=row["ledger_cursor"],
             lifecycle_status=lifecycle,
+            owner_org_id=row["target_owner_org_id"] if row["to_account_id"] is not None else row["source_owner_org_id"],
         )
     return states

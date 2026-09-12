@@ -73,7 +73,7 @@ RUNTIME_READ_TABLES = frozenset(
         "materials",
         "notification_events",
         "oam_work_orders",
-        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs",
+        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements",
         "opening_control_reconciliation_items",
         "opening_control_reconciliation_command_consumptions",
         "opening_control_reconciliation_runs",
@@ -195,7 +195,7 @@ RUNTIME_INSERT_TABLES = frozenset(
         "logistics_events", "receipts", "receipt_lines", "receipt_serials", "receipt_exceptions", "inbound_orders", "inbound_postings",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
-        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs",
+        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements",
         "stock_balances",
         "stocktake_control_snapshot_lines",
         "stocktake_count_lines",
@@ -1893,6 +1893,12 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
     "approval_actions",
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
+    'trg_work_order_replacements_proof_0093': ('work_order_replacements', 'rsc_dispatch_work_order_replacement_0093', 'A', 5, True, True, True),
+    'trg_work_order_operations_replacement_0093': ('work_order_material_operations', 'rsc_dispatch_work_order_replacement_0093', 'A', 5, True, True, True),
+    'trg_work_order_pairs_replacement_0093': ('work_order_replacement_pairs', 'rsc_dispatch_work_order_replacement_0093', 'A', 5, True, True, True),
+    'trg_work_order_replacements_immutable_0093': ('work_order_replacements', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+    'trg_work_order_replacements_no_truncate_0093': ('work_order_replacements', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+
     'trg_inventory_serials_lifecycle_0092': ('inventory_serials', 'rsc_dispatch_serial_lifecycle_0092', 'A', 21, True, True, True),
     'trg_serial_current_positions_lifecycle_0092': ('serial_current_positions', 'rsc_dispatch_serial_lifecycle_0092', 'A', 29, True, True, True),
     'trg_inventory_movement_serials_lifecycle_0092': ('inventory_movement_serials', 'rsc_dispatch_serial_lifecycle_0092', 'A', 5, True, True, True),
@@ -2366,11 +2372,14 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
-    ('rsc_check_serial_lifecycle_0092', 'uuid'): '78d403c658fdc4205a1db26daf512927eb55765f85c82c2aed984a3a3233bcdb',
+    ('rsc_check_work_order_replacement_0093', 'uuid'): 'd725c7c3a13482a8c4ddc8254e9ec819606ad0b6f0e5d3a5ec8cad1bbdc6606d',
+    ('rsc_dispatch_work_order_replacement_0093', ''): 'e77457b79adfd9cf84e375916c05336812d23e788728e053e0a3f4062c2f779d',
+
+    ('rsc_check_serial_lifecycle_0092', 'uuid'): '291ec36bca26d8765e61265f07a344baf57936f7f7d661cebfb38e2c27cee1b2',
     ('rsc_dispatch_serial_lifecycle_0092', ''): '612fc9726be5b13325f809b8dbf10185681f4073802b81c3771adceb83869135',
     ('rsc_guard_serial_identity_0092', ''): 'ead9491447496e5dab54787909a3cd9d0b9912a6ff007eef6394f5b99c1dd4bd',
     ('rsc_lock_work_order_material_0090', ''): '3020ff345109d942e1287ab48d8a2f53c5d722ff0fda403850649a0602c1f2a7',
-    ('rsc_check_work_order_material_transaction_0090', 'uuid'): '380da467dee2b7b976ea78970ec8ddd4e7f28007c77be6d5ef196506e9754707',
+    ('rsc_check_work_order_material_transaction_0090', 'uuid'): '85e03a1f8e4dcea6eda55501051e45e1b57944833a8d1ec6e5fe1a9772984458',
     ('rsc_dispatch_work_order_material_0090', ''): 'ea3172e2be65bc40e2832953d5698e67c0246aefd2eae5063061a19ac811d0ca',
     ('rsc_guard_work_order_facts_0090', ''): '216f8cc9b38fce14a09c3ecb79ef15547fbdd89a8de35f1e8b42e498012d6cca',
     ('rsc_guard_work_order_material_operations_immutable_0077', ''): 'cd8be861e17432dc90d8129908eaa963424b8358641301fe7d5b120a8b1dc02e',
@@ -2476,6 +2485,9 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ('rsc_check_work_order_replacement_0093', 'uuid'),
+        ('rsc_dispatch_work_order_replacement_0093', ''),
+
         ('rsc_check_serial_lifecycle_0092', 'uuid'),
         ('rsc_dispatch_serial_lifecycle_0092', ''),
         ('rsc_guard_serial_identity_0092', ''),
@@ -2525,6 +2537,7 @@ MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
 )
 MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS = frozenset(
     {
+        ("rsc_check_work_order_replacement_0093", "uuid"),
         ("rsc_check_serial_lifecycle_0092", "uuid"),
         ("rsc_check_work_order_material_transaction_0090", "uuid"),
         ("rsc_validate_outbound_graph_0072", "uuid"),
@@ -3762,7 +3775,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_require_opening_terminal_graph_0022", ""):
         "4678c65493a2ca0c8d596343053977db4d93d7758e00f1291e30e6be038d36e8",
     ("rsc_require_opening_observation_account_0023", ""):
-        "d6b09038f5972a45939035bf44434d0a38a5874b1299b9c8f0936a808d028c76",
+        "48cea5c4fdd20c4870f0eb963377d570f92c8a4c175590042b9ac00f2633ba60",
     ("rsc_opening_start_graph_complete_0052", "uuid, boolean"):
         "6db62f66efe1b87c556211e9392ab701cd2d8c6fa2c86150c1b95ee0d7f15833",
     (
@@ -5966,7 +5979,7 @@ def _select_material_request_approval_functions(
         for row in rows
         if isinstance(row.get("function_name"), str)
         and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092")
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093")
         )
     ]
 
