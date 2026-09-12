@@ -1892,6 +1892,8 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
     "approval_actions",
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
+    "trg_inbound_postings_facts_0087": ("inbound_postings", "rsc_guard_inbound_posting_0087", "A", 31, False, False, False),
+    "trg_inbound_postings_no_truncate_0087": ("inbound_postings", "rsc_guard_inbound_posting_0087", "A", 34, False, False, False),
     **{
         f"trg_{table}_immutable_0073": (table, f"rsc_guard_{table}_immutable_0073", "A", 27, False, False, False)
         for table in ("shipments", "shipment_lines", "shipment_serials")
@@ -2340,6 +2342,7 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
+    ("rsc_guard_inbound_posting_0087", ""): "c17d062d8a02384506c7dc0b533427787be3feeeb9763e84f2a8b8227524e458",
     ('rsc_material_request_outbound_state_0072', 'uuid, bigint'): "a89e922b7d9fbd19d46b4207fb3b36fffe1a063668073f59b1cf94db400a97ce",
     ('rsc_guard_outbound_binding_0072', ''): "9a5fcfd28a0af565202008beb20c33bf55a31ef64e7cae63ae73a01eb52a79ea",
     ('rsc_validate_outbound_graph_0072', 'uuid'): "be4206fc41fe8ea96e4b19423b25ea4d04df783b9bc25b03d626651d27424054",
@@ -2417,7 +2420,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_validate_material_request_external_causality_0045", "uuid"):
         "0f5bd6658edcb46dac6282109b71a109c14003862c89b3f5700d89f1ac13fa26",
     ("rsc_validate_material_request_approval_projection_0045", "uuid"):
-        "71567de7cb5a838e00bec2fa8dcfab189cefaf271eebed0e08b8c1afa9a68b60",
+        "593668f5e6b008d0947a24a017fb9172c5c29dca196a1a5fb6fbe6a5bd597f52",
     ("rsc_dispatch_material_request_approval_projection_0045", ""):
         "244d188e126e66fd4b020da01c076a3018f2c8841230bd255da45b7913776d54",
     ("rsc_guard_material_request_supply_task_0059", ""):
@@ -2437,6 +2440,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ("rsc_guard_inbound_posting_0087", ""),
         ('rsc_material_request_outbound_state_0072', 'uuid, bigint'),
         ('rsc_guard_outbound_binding_0072', ''),
         ('rsc_validate_outbound_graph_0072', 'uuid'),
@@ -5912,9 +5916,32 @@ def _select_material_request_approval_functions(
         for row in rows
         if isinstance(row.get("function_name"), str)
         and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072")
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0087")
         )
     ]
+
+
+_INBOUND_RECEIPT_INDEX_SQL = text("""
+SELECT table_row.relname AS table_name, index_metadata.indisunique AS is_unique,
+       index_metadata.indisvalid AS is_valid, index_metadata.indisready AS is_ready,
+       index_metadata.indislive AS is_live, index_metadata.indnkeyatts AS key_count,
+       index_metadata.indnatts AS column_count, method.amname AS access_method,
+       pg_get_indexdef(index_metadata.indexrelid, 1, TRUE) AS key_column,
+       pg_get_expr(index_metadata.indpred, index_metadata.indrelid, TRUE) AS predicate
+FROM pg_index index_metadata
+JOIN pg_class index_row ON index_row.oid = index_metadata.indexrelid
+JOIN pg_class table_row ON table_row.oid = index_metadata.indrelid
+JOIN pg_namespace schema_row ON schema_row.oid = table_row.relnamespace
+JOIN pg_am method ON method.oid = index_row.relam
+WHERE schema_row.nspname = 'public' AND index_row.relname = 'uq_inbound_orders_receipt'
+""")
+
+
+def _assert_inbound_receipt_index(rows) -> None:
+    expected = dict(table_name="inbound_orders", is_unique=True, is_valid=True, is_ready=True,
+        is_live=True, key_count=1, column_count=1, access_method="btree", key_column="receipt_id", predicate=None)
+    if len(rows) != 1 or dict(rows[0]) != expected:
+        raise DatabaseSecurityBoundaryError("production database inbound receipt uniqueness guard failed")
 
 
 def validate_production_database_security(
@@ -5994,6 +6021,7 @@ def validate_production_database_security(
             material_request_approval_triggers = connection.execute(
                 _MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL
             ).mappings().all()
+            inbound_receipt_indexes = connection.execute(_INBOUND_RECEIPT_INDEX_SQL).mappings().all()
             material_request_content_manifest_columns = connection.execute(
                 _MATERIAL_REQUEST_CONTENT_MANIFEST_COLUMN_SQL
             ).mappings().all()
@@ -6137,6 +6165,7 @@ def validate_production_database_security(
         manifest_checks=material_request_content_manifest_checks,
         expected_migration_role=expected_migration_role,
     )
+    _assert_inbound_receipt_index(inbound_receipt_indexes)
     _assert_material_request_cancellation_guards(
         triggers=material_request_cancellation_triggers,
         indexes=material_request_cancellation_indexes,

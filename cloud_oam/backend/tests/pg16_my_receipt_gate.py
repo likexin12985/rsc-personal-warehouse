@@ -13,11 +13,11 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 
-def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_id, admin_user_id):
+def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_id, admin_user_id, reject_serials=True):
     from app.demand_models import MaterialRequest
     from app.foundation_models import AuditEvent, FileObject, Person
     from app.formal_access import load_formal_principal
-    from app.inventory_models import CustodyAssignment, InventoryTransaction, OutboundPosting, OutboundPostingSerial, Receipt, StockBalance, StockLocation
+    from app.inventory_models import CustodyAssignment, InventoryTransaction, OutboundPosting, OutboundPostingSerial, Receipt, ShipmentLine, StockBalance, StockLocation
     from app.models import User
     from app.formal_services import material_request_shipment as shipping
     from app.formal_services import material_request_my_receipt as service
@@ -63,7 +63,7 @@ def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_i
     print("PG16 recipient: API shipment committed", flush=True)
     evidence_id = None
     storage = FakeStorage()
-    if serial_ids:
+    if serial_ids and reject_serials:
         with Session(api_engine) as db:
             actor = load_formal_principal(db, recipient_user_id)
             uploaded = formal_files.create_file_upload_intent(db, actor=actor,
@@ -156,3 +156,19 @@ def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_i
             assert download.file_id == evidence_id and download.purpose == "receipt_exception_evidence"
             db.commit()
         print("PG16 recipient: formal exception file bound and readable", flush=True)
+    from pg16_inbound_gate import assert_inbound_gate
+    assert_inbound_gate(api_engine, security_engine, request_id=request_id,
+        receipt_id=result.receipt_id, admin_user_id=admin_user_id)
+    if serial_ids and reject_serials:
+        # The second immutable outbound slice provides an independent accepted
+        # SN receipt. Keep the first rejection intact and prove that only the
+        # accepted serial moves from in-transit to personal available stock.
+        with Session(api_engine) as db:
+            remaining = db.scalar(select(OutboundPosting.id).where(
+                OutboundPosting.request_id == request_id,
+                OutboundPosting.id.not_in(select(ShipmentLine.outbound_posting_id)),
+                OutboundPosting.id.in_(select(OutboundPostingSerial.posting_id)),
+            ).order_by(OutboundPosting.id).limit(1))
+            assert remaining is not None
+        assert_my_receipt_gate(api_engine, security_engine, request_id=request_id,
+            posting_id=remaining, admin_user_id=admin_user_id, reject_serials=False)

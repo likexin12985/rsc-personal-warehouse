@@ -1209,7 +1209,7 @@ class OamReceiptEvidence(CreatedAtMixin, Base):
 
 class InboundOrder(CreatedAtMixin, Base):
     __tablename__ = "inbound_orders"
-    __table_args__ = (UniqueConstraint("inbound_no", name="uq_inbound_orders_number"), CheckConstraint("status IN ('pending','posted','exception')", name="ck_inbound_orders_status"))
+    __table_args__ = (UniqueConstraint("inbound_no", name="uq_inbound_orders_number"), Index("uq_inbound_orders_receipt", "receipt_id", unique=True), CheckConstraint("status IN ('pending','posted','exception')", name="ck_inbound_orders_status"))
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True); inbound_no: Mapped[str] = mapped_column(String(100)); receipt_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("receipts.id", ondelete="RESTRICT")); target_location_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE); target_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE); status: Mapped[str] = mapped_column(String(32)); posting_transaction_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("inventory_transactions.id", ondelete="RESTRICT"))
 
 class InboundPosting(CreatedAtMixin, Base):

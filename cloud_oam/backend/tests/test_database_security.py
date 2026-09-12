@@ -1099,6 +1099,12 @@ def _assert_0069_function_body_matches_runtime_manifest(
             assert latest_body.count(old) == 1 and new not in latest_body
             latest_body = latest_body.replace(old, new)
         assert hashlib.sha256(latest_body.encode()).hexdigest() == fulfillment["APPROVAL_NEW_HASH"]
+        inbound_command = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20260927_0087_inbound_fulfillment_boundary.py")))
+        assert hashlib.sha256(latest_body.encode()).hexdigest() == inbound_command["APPROVAL_OLD_HASH"]
+        for old, new in inbound_command["source_changes"]():
+            assert latest_body.count(old) == 1 and new not in latest_body
+            latest_body = latest_body.replace(old, new)
+        assert hashlib.sha256(latest_body.encode()).hexdigest() == inbound_command["APPROVAL_NEW_HASH"]
     assert MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate] == hashlib.sha256(latest_body.encode()).hexdigest()
     assert current_hash != historical_hash
     for old, new in reversed(replacements):
@@ -7154,8 +7160,8 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 125
-    assert len(functions) == 50
+    assert len(triggers) == 127
+    assert len(functions) == 51
     _assert_material_request_approval_guards(
         triggers=triggers,
         functions=functions,
@@ -7405,7 +7411,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
     assert {
         coordinate[0].rsplit("_", 1)[-1]
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
-    } == {"0029", "0030", "0045", "0046", "0059", "0060", "0069", "0070", "0071", "0072"}
+    } == {"0029", "0030", "0045", "0046", "0059", "0060", "0069", "0070", "0071", "0072", "0087"}
 
 
 def test_0069_reservation_guard_bodies_match_runtime_manifest(monkeypatch):
@@ -7538,7 +7544,7 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         ): migration._projection_dispatcher_sql(),
     }
 
-    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 50
+    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 51
     assert set(function_sql) == {
         coordinate
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256

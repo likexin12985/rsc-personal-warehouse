@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20260926_0086"
+HEAD_REVISION = "20260927_0087"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7415,7 +7415,7 @@ def _load_stock_reservations_migration_0069():
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20260926_0086_receipt_evidence_files.py"
+        "20260927_0087_inbound_fulfillment_boundary.py"
     )))
     assert migration["revision"] == HEAD_REVISION
     return migration["NEW_HASH"]
@@ -13304,6 +13304,7 @@ def _seed_0047_stocktake_inventory(
     *,
     actor_user_id: str,
     assignee_user_id: str,
+    recipient_user_id: str | None = None,
 ) -> dict[str, object]:
     """Establish the scope, then seed stock through the real posting service."""
 
@@ -16107,6 +16108,12 @@ SELECT posting.total_quantity::text,
         assignee_user_id=assignee_user_id,
     )
 
+    if recipient_user_id is not None:
+        from pg16_recipient_opening import establish_recipient_location
+        establish_recipient_location(api_engine, fixture=fixture,
+            admin_user_id=actor_user_id, manager_user_id=assignee_user_id,
+            recipient_user_id=recipient_user_id)
+
     with Session(api_engine, expire_on_commit=False) as session:
         isolation_started = _start_opening_stocktake_impl(
             session,
@@ -16920,6 +16927,7 @@ def _assert_0062_history_owner_boundary(
 
 def _establish_multiround_stocktake_location(
     api_engine, *, fixture, actor_user_id, assignee_user_id,
+    count_user_id=None, expected_snapshot_line_count=1,
 ):
     """Commit a real zero-opening lifecycle before the daily +1 gain test."""
     from app.formal_access import load_formal_principal
@@ -16974,19 +16982,19 @@ def _establish_multiround_stocktake_location(
             control_lines=fixture["control_lines"],
             scopes=(opening.OpeningStocktakeScopeInput(
                 owner_org_id=fixture["region_org_id"], location_id=fixture["recount_location_id"],
-                assignee_user_id=assignee_user_id, freeze_mode="hard",
+                assignee_user_id=count_user_id or assignee_user_id, freeze_mode="hard",
             ),), blind_count=True, deadline=fixture["deadline"],
             note="PG16 real zero-opening prerequisite for daily recount gain",
         ))
-    assert started.status == "counting" and started.snapshot_line_count == 1
+    assert started.status == "counting" and started.snapshot_line_count == expected_snapshot_line_count
     with Session(api_engine) as session:
         scope_id = session.scalars(select(FormalStocktakeScope.id).where(
             FormalStocktakeScope.task_id == started.task_id,
         )).one()
-    counted = write(count.submit_opening_stocktake_scope_count, assignee_user_id, "count",
+    counted = write(count.submit_opening_stocktake_scope_count, count_user_id or assignee_user_id, "count",
         count.SubmitOpeningStocktakeScopeCountCommand(
             task_id=started.task_id, round_id=started.initial_round_id,
-            scope_id=scope_id, physical_observations=(), zero_confirmed=False,
+            scope_id=scope_id, physical_observations=(), zero_confirmed=expected_snapshot_line_count == 0,
         ))
     assert counted.task_status == "submitted" and counted.round_sealed is True
     with Session(api_engine) as session:
@@ -19135,10 +19143,13 @@ def _assert_0047_real_api_stocktake_start(
     from test_material_request_approval_service import _principal
 
     secret = b"pg16-stocktake-start-gate-secret-v1"
+    with Session(api_engine) as session:
+        recipient_user_id = session.get(MaterialRequest, material_request_id).requester_user_id
     fixture = _seed_0047_stocktake_inventory(
         api_engine,
         actor_user_id=actor_user_id,
         assignee_user_id=assignee_user_id,
+        recipient_user_id=recipient_user_id,
     )
     _assert_stocktake_options_global_deny(
         api_engine, actor_user_id=actor_user_id,
@@ -21029,7 +21040,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         finally:
             security_engine.dispose()
         blocked_my_receipt = _run_alembic("downgrade", "20260924_0084", expect_success=False)
-        assert "0086 downgrade blocked" in blocked_my_receipt.stdout + blocked_my_receipt.stderr
+        assert "0087 downgrade blocked" in blocked_my_receipt.stdout + blocked_my_receipt.stderr
         assert _current_revision() == HEAD_REVISION
     finally:
         edge_engine.dispose()

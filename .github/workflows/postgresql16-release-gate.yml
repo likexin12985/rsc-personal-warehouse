@@ -156,6 +156,7 @@ jobs:
             backend/tests/test_material_request_inbound_contract.py \
             backend/tests/test_material_request_inbound_posting.py \
             backend/tests/test_material_request_inbound_state.py \
+            backend/tests/test_inbound_fulfillment_boundary.py \
             backend/tests/test_outbound_postings_migration.py \
             backend/tests/test_material_request_fulfillment_preparation.py \
             backend/tests/test_stock_reservation_releases_migration.py \

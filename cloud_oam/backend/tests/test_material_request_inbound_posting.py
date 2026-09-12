@@ -6,13 +6,14 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.demand_models import MaterialRequest, MaterialRequestLine
 from app.foundation_models import AuditEvent, OutboxEvent
 from app.foundation_models import Permission, RolePermission
 from app.models import User
 from app.inventory_models import (
-    InboundOrder, InboundPosting, InventoryTransaction, OutboundPosting,
+    InboundOrder, InboundPosting, InventoryTransaction, InventoryMovement, InventoryMovementSerial, OutboundPosting,
     Receipt, ReceiptLine, ReceiptSerial, Shipment, ShipmentLine,
     StockAccount, StockBalance, StockLocation,
 )
@@ -89,6 +90,13 @@ def inbound_world(outbound_world, monkeypatch):
             actor_user_id=actor.user_id,
         )
         db.add(transaction); db.flush()
+        for line_no, movement in enumerate(command.movements, 1):
+            row = InventoryMovement(id=uuid4(), transaction_id=transaction.id, line_no=line_no,
+                from_account_id=movement.from_account_id, to_account_id=movement.to_account_id,
+                quantity=movement.quantity, external_boundary_code=None, created_at=now)
+            db.add(row); db.flush()
+            db.add_all(InventoryMovementSerial(movement_id=row.id, transaction_id=transaction.id, serial_id=s) for s in movement.serial_ids)
+        db.flush()
         return inventory.InventoryPostingResult(transaction_id=transaction.id,
             transaction_no=transaction.transaction_no, ledger_cursor=transaction.ledger_cursor)
     monkeypatch.setattr(inbound, "post_inventory_transaction", seed_post)
@@ -124,8 +132,9 @@ def test_same_command_replay_returns_same_transaction_without_duplicate_binding(
     result = post(world)
     assert result["inventory_transaction_id"] == world.first["inventory_transaction_id"]
     assert result["replayed"] is True
-    assert world.order.posting_transaction_id == world.first["inventory_transaction_id"]
-    assert world.order.status == "posted"
+    assert world.order.posting_transaction_id is None
+    assert world.order.status == "pending"
+    assert inbound._posting_projection(world.db, world.order)["posting_transaction_id"] == world.first["inventory_transaction_id"]
     # The fixture ships/receives one line while the approved request has a
     # larger net quantity; one posted slice must remain partial.
     assert world.request.personal_inbound_status == "partially_accepted"
@@ -139,8 +148,10 @@ def test_same_command_replay_returns_same_transaction_without_duplicate_binding(
 def test_first_post_binds_order_to_inventory_transaction(inbound_world):
     world = inbound_world
 
-    assert world.order.status == "posted"
-    assert world.order.posting_transaction_id == world.first["inventory_transaction_id"]
+    assert world.order.status == "pending"
+    assert world.order.posting_transaction_id is None
+    assert inbound._posting_projection(world.db, world.order) == {
+        "status": "posted", "posting_transaction_id": world.first["inventory_transaction_id"]}
 
 
 def test_full_approved_line_reaches_posted_state(inbound_world):
@@ -181,7 +192,7 @@ def test_unposted_accepted_quantity_is_accepted_state(inbound_world):
     assert world.request.personal_inbound_status == "accepted"
 
 
-def test_posted_state_uses_exists_and_does_not_multiply_receipt_line(inbound_world):
+def test_duplicate_inbound_order_for_one_receipt_is_rejected(inbound_world):
     world = inbound_world
     now = datetime.now(timezone.utc)
     duplicate_order = InboundOrder(
@@ -190,22 +201,11 @@ def test_posted_state_uses_exists_and_does_not_multiply_receipt_line(inbound_wor
         target_person_id=world.order.target_person_id, status="posted",
         posting_transaction_id=None, created_at=now,
     )
-    world.db.add(duplicate_order)
-    world.db.flush()
-    duplicate_transaction = InventoryTransaction(
-        id=uuid4(), transaction_no="INV-IN-DUPLICATE", movement_type="transfer",
-        source_document_type="personal_inbound", source_document_id=str(duplicate_order.id),
-        posting_key="personal-inbound-duplicate", idempotency_key_hash="e" * 64,
-        request_hash="f" * 64, status="posted", effective_at=now, posted_at=now,
-        ledger_cursor=10001, actor_user_id=world.actor.user_id,
-    )
-    world.db.add(duplicate_transaction)
-    world.db.flush()
-    world.db.add(InboundPosting(
-        id=uuid4(), inbound_order_id=duplicate_order.id,
-        inventory_transaction_id=duplicate_transaction.id, created_at=now,
-    ))
-    world.db.flush()
+    with world.db.begin_nested():
+        with pytest.raises(IntegrityError):
+            with world.db.begin_nested():
+                world.db.add(duplicate_order)
+                world.db.flush()
     posting = world.db.scalar(
         select(OutboundPosting).where(OutboundPosting.request_id == world.request.id)
     )

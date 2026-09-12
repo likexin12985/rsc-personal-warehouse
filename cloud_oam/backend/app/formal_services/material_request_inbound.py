@@ -5,9 +5,10 @@ import uuid
 from sqlalchemy import select
 from ..foundation_models import OutboxEvent
 from ..demand_models import MaterialRequest
-from ..inventory_models import InboundOrder, InboundPosting, Receipt, ReceiptLine, Shipment, ShipmentLine, OutboundPosting, StockAccount
+from ..inventory_models import InboundOrder, InboundPosting, InventoryTransaction, Receipt, ReceiptLine, Shipment, ShipmentLine, OutboundPosting, StockAccount
 from .inventory_posting import InventoryMovementCommand, InventoryPostingCommand, InventoryPostingError, post_inventory_transaction
 from .audit_chain import append_audit_event
+from .material_request_fulfillment_command import record_fulfillment_command, verify_fulfillment_command
 from . import material_request_outbound as outbound
 from . import material_request_query
 
@@ -31,14 +32,16 @@ def create_inbound_order(db, *, actor, request_id, expected_version, receipt_id,
     shipment = db.get(Shipment, receipt.shipment_id)
     if shipment is None: _fail("shipment_not_found", "conflict", "收货关联发运不存在")
     _validate_inbound_target(shipment, target_location_id, target_person_id)
-    belongs = db.scalar(select(OutboundPosting.request_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).where(ShipmentLine.shipment_id == shipment.id))
-    if belongs != request_id: _fail("receipt_request_mismatch", "conflict", "收货单不属于当前需求")
+    belongs = set(db.scalars(select(OutboundPosting.request_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).where(ShipmentLine.shipment_id == shipment.id)).all())
+    if belongs != {request_id}: _fail("receipt_request_mismatch", "conflict", "收货单不属于当前需求")
     source_ids = tuple(db.scalars(select(OutboundPosting.source_stock_account_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).where(ShipmentLine.shipment_id == shipment.id)).all())
     if not source_ids: _fail("source_missing", "conflict", "发运缺少来源库存账户")
     outbound._authorize_account_ids(db, actor, source_ids, action="read", resource="inventory", lock_rows=False)
     if receipt.status not in {"accepted", "exception"}: _fail("receipt_not_final", "precondition_failed", "收货尚未完成验收")
+    if db.scalar(select(ReceiptLine.id).where(ReceiptLine.receipt_id == receipt.id, ReceiptLine.accepted_qty > 0).limit(1)) is None:
+        _fail("receipt_empty", "precondition_failed", "收货没有可入账的合格数量")
     existing = db.scalar(select(InboundOrder).where(InboundOrder.receipt_id == receipt.id))
-    if existing is not None: return _result(existing)
+    if existing is not None: return {**_result(existing), **_posting_projection(db, existing)}
     now = datetime.now(timezone.utc)
     row = InboundOrder(id=uuid.uuid4(), inbound_no=f"INB-{now:%Y%m%d}-{uuid.uuid4().hex[:12].upper()}", receipt_id=receipt.id, target_location_id=target_location_id, target_person_id=target_person_id, status="pending", posting_transaction_id=None, created_at=now)
     db.add(row); db.flush()
@@ -87,11 +90,11 @@ def build_inbound_posting_command(db, *, inbound_order, receipt_line_id, target_
     )
 
 def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idempotency_key, request_id):
-    # Use the same parent-first lock order as receipt/order creation. The order
-    # lock serializes different idempotency keys for one immutable posting fact.
+    # The parent lock serializes every order for this request. Orders themselves
+    # are immutable and the API deliberately has no UPDATE/row-lock privilege.
     request = db.scalar(select(MaterialRequest).where(MaterialRequest.id == material_request_id).with_for_update())
     if request is None: _fail("not_found", "not_found", "需求单不存在")
-    order = db.scalar(select(InboundOrder).where(InboundOrder.id == inbound_order_id).with_for_update())
+    order = db.scalar(select(InboundOrder).where(InboundOrder.id == inbound_order_id))
     if order is None: _fail("inbound_not_found", "not_found", "个人仓入账单不存在")
     receipt = db.get(Receipt, order.receipt_id)
     if receipt is None or receipt.status not in {"accepted", "exception"}: _fail("receipt_not_final", "precondition_failed", "收货尚未完成验收")
@@ -129,11 +132,8 @@ def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idem
         and order.posting_transaction_id != result.transaction_id
     ):
         _fail("posting_mismatch", "conflict", "入账单绑定的库存事务不一致")
-    # Keep the mutable read projection bound to the same immutable inventory
-    # transaction as InboundPosting.  This assignment is part of the caller's
-    # transaction, so a later audit/outbox failure rolls it back together with
-    # the posting binding.  Replays assign the same UUID and remain idempotent.
-    order.posting_transaction_id = result.transaction_id
+    transaction = db.get(InventoryTransaction, result.transaction_id)
+    reference = f"/api/v1/material-requests/{request.id}/inbound-orders/{order.id}/post"
     if existing is None:
         db.add(InboundPosting(id=uuid.uuid4(), inbound_order_id=order.id, inventory_transaction_id=result.transaction_id, created_at=datetime.now(timezone.utc)))
         now = datetime.now(timezone.utc)
@@ -154,24 +154,24 @@ def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idem
             }, status="pending", attempts=0,
             idempotency_key=f"inbound-posted:{order.id}", available_at=now,
         ))
-    # Keep the orchestration projection aligned with the immutable posting
-    # fact.  The inventory transaction remains the source of truth; this
-    # status is only the request-facing read model and is safe to repeat on a
-    # replay of the same bound transaction.
-    order.status = "posted"
-    # Keep the projection line-aware for split receipts and partial postings.
-    # The small contract fakes used by the unit tests do not expose a real
-    # session; production sessions always take this path after flushing the
-    # immutable posting binding.
-    if hasattr(db, "flush"):
         db.flush()
-        from .material_request_inbound_state import refresh_personal_inbound_status
-        refresh_personal_inbound_status(db, request)
+        record_fulfillment_command(db, request=request, actor=actor, operation="personal_inbound",
+            fact=transaction, request_reference=reference, permission_action="fulfill")
     else:
-        request.personal_inbound_status = "posted"
+        from ..demand_models import MaterialRequestCommand
+        original = db.scalar(select(MaterialRequestCommand).where(
+            MaterialRequestCommand.idempotency_key_hash == transaction.idempotency_key_hash))
+        if original is None:
+            _fail("inbound_command_missing", "service_unavailable", "原入账缺少连续版本命令，请保留原请求核验")
+        verify_fulfillment_command(db, request=request, actor=actor, operation="personal_inbound",
+            fact=transaction, request_reference=reference, expected_version=original.target_version)
     return {"inbound_order_id": order.id, "inventory_transaction_id": result.transaction_id, "replayed": result.replayed}
 
 def list_inbound_orders(db, *, actor, request_id):
+    with db.no_autoflush:
+        return _list_inbound_orders(db, actor=actor, request_id=request_id)
+
+def _list_inbound_orders(db, *, actor, request_id):
     context = material_request_query._load_read_context(db, actor=actor, now=None)
     request = db.scalar(select(MaterialRequest).where(
         MaterialRequest.id == request_id,
@@ -185,4 +185,17 @@ def list_inbound_orders(db, *, actor, request_id):
         source_ids = tuple(db.scalars(select(OutboundPosting.source_stock_account_id).join(ShipmentLine, ShipmentLine.outbound_posting_id == OutboundPosting.id).join(Receipt, Receipt.shipment_id == ShipmentLine.shipment_id).where(Receipt.id == row.receipt_id)).all())
         if source_ids:
             outbound._authorize_account_ids(db, actor, source_ids, action="read", resource="inventory", lock_rows=False)
-    return tuple({"schema_version":"1.0", "inbound_order_id": row.id, "inbound_no": row.inbound_no, "receipt_id": row.receipt_id, "target_location_id": row.target_location_id, "target_person_id": row.target_person_id, "status": "posted" if row.posting_transaction_id is not None else row.status, "posting_transaction_id": row.posting_transaction_id} for row in rows)
+    return tuple({**_result(row), **_posting_projection(db, row)} for row in rows)
+
+def _posting_projection(db, row):
+    posting = db.scalar(select(InboundPosting).where(InboundPosting.inbound_order_id == row.id))
+    if posting is None:
+        if row.status == "posted" or row.posting_transaction_id is not None:
+            _fail("inbound_history_invalid", "service_unavailable", "入账投影缺少不可变库存事实")
+        return {"status": row.status, "posting_transaction_id": None}
+    transaction = db.get(InventoryTransaction, posting.inventory_transaction_id)
+    if (transaction is None or transaction.status != "posted" or transaction.movement_type != "transfer"
+        or transaction.source_document_type != "personal_inbound" or transaction.source_document_id != str(row.id)
+        or transaction.posting_key != f"personal-inbound:{row.id}"):
+        _fail("inbound_history_invalid", "service_unavailable", "入账绑定与原库存事务不一致")
+    return {"status": "posted", "posting_transaction_id": transaction.id}

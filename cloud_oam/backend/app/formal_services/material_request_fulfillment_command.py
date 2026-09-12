@@ -29,13 +29,14 @@ def _document(request_id, version, operation, fact):
 
 
 def record_fulfillment_command(db, *, request, actor, operation, fact, request_reference, permission_action):
-    if operation not in {"shipment", "receipt"}:
+    if operation not in {"shipment", "receipt", "personal_inbound"}:
         raise ValueError("Unsupported fulfillment command")
     assignments = sorted({entry.assignment_id for entry in actor.entitlements
         if entry.resource == "material_request" and entry.action == permission_action and entry.effect == "allow"}, key=str)
     if not assignments:
         raise MaterialRequestReadError("fulfillment_permission_missing", "forbidden", "没有当前履约动作权限")
     target = request.version + 1
+    occurred_at = _time(fact.created_at)
     state = personal_inbound_state(db, request)
     result = {"schema_version": "1.0", "operation": operation, "request_id": str(request.id),
               "target_version": target, "fact_id": str(fact.id), "personal_inbound_status": state}
@@ -44,7 +45,7 @@ def record_fulfillment_command(db, *, request, actor, operation, fact, request_r
         request_reference=request_reference, request_hash=fact.request_hash,
         result_hash=_hash(result), request_jsonb=_document(request.id, target, operation, fact), result_jsonb=result,
         actor_user_id=actor.user_id, actor_person_id=actor.person_id, actor_role_assignment_id=assignments[0],
-        authorization_version=actor.authorization_version, occurred_at=fact.created_at, created_at=fact.created_at)
+        authorization_version=actor.authorization_version, occurred_at=occurred_at, created_at=occurred_at)
     db.add(command)
     db.flush()
     append_audit_event(db, stream_key="material_request", actor_user_id=actor.user_id,
@@ -52,10 +53,10 @@ def record_fulfillment_command(db, *, request, actor, operation, fact, request_r
         before_jsonb={}, after_jsonb={"command_id": str(command.id), "request_id": str(request.id),
             "request_version": target, "request_hash": command.request_hash,
             "result_hash": command.result_hash, "permission_action": permission_action},
-        request_id=f"fulfillment-version-{command.id}", occurred_at=fact.created_at, created_at=fact.created_at)
+        request_id=f"fulfillment-version-{command.id}", occurred_at=occurred_at, created_at=occurred_at)
     request.personal_inbound_status = state
     request.version = target
-    request.updated_at = fact.created_at
+    request.updated_at = occurred_at
     db.flush()
     return command
 
