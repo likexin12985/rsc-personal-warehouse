@@ -33,7 +33,9 @@ def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_i
         recipient_person_id = person.id
         location = db.scalar(select(StockLocation).where(StockLocation.custodian_person_id == person.id, StockLocation.location_type == "personal", StockLocation.status == "active"))
         if location is None:
-            location = StockLocation(id=uuid4(), code=f"PG16-RECEIVE-{uuid4().hex}", name="PG16 本人收货测试仓", location_type="personal", owner_org_id=person.organization_id, custodian_person_id=person.id, status="active")
+            parent = StockLocation(id=uuid4(), code=f"PG16-RECEIVE-REGION-{uuid4().hex}", name="PG16 收货区域测试仓", location_type="region", owner_org_id=person.organization_id, status="active")
+            db.add(parent); db.flush()
+            location = StockLocation(id=uuid4(), code=f"PG16-RECEIVE-{uuid4().hex}", name="PG16 本人收货测试仓", location_type="personal", owner_org_id=person.organization_id, parent_id=parent.id, custodian_person_id=person.id, status="active")
             db.add(location); db.flush()
             db.add(CustodyAssignment(id=uuid4(), location_id=location.id, custodian_person_id=person.id, valid_from=now - timedelta(days=1)))
         location_id = location.id
