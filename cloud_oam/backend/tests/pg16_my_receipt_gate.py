@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 
@@ -41,6 +42,8 @@ def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_i
         location_id = location.id
         db.commit()
 
+    print("PG16 recipient: exact target location prepared", flush=True)
+
     with Session(api_engine) as db:
         assert db.scalar(text("select current_user")) == "star_oam_api"
         recipient = load_formal_principal(db, recipient_user_id)
@@ -53,6 +56,16 @@ def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_i
         db.flush()
         value = MyReceiptIn(expected_request_version=request.version, shipment_id=shipment["shipment_id"], received_at=now.isoformat(), lines=[dict(shipment_line_id=shipment["lines"][0]["shipment_line_id"], accepted_qty=str(fact.outbound_qty), rejected_qty="0.000", condition="normal", accepted_serial_ids=serial_ids)])
         db.commit()
+
+    print("PG16 recipient: API shipment committed", flush=True)
+    with Session(api_engine) as db:
+        assert db.scalar(text("SELECT has_column_privilege(current_user, 'public.material_requests', 'personal_inbound_status', 'UPDATE')"))
+        assert not db.scalar(text("SELECT has_table_privilege(current_user, 'public.material_requests', 'UPDATE')"))
+        for state in ("accepted", "posted"):
+            with pytest.raises(DBAPIError):
+                db.execute(text("UPDATE material_requests SET personal_inbound_status = :state, version = version + 1, updated_at = clock_timestamp() WHERE id = :id"), {"state": state, "id": request_id})
+                db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+            db.rollback()
 
     def snapshot():
         with Session(api_engine) as db:
@@ -74,6 +87,7 @@ def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_i
         with pytest.raises(RuntimeError, match="injected"):
             submit(f"pg16-my-receipt-rollback-{posting_id}")
     assert snapshot() == before
+    print("PG16 recipient: late failure rolled back", flush=True)
     barrier = Barrier(2)
     keys = [f"pg16-my-receipt-race-{posting_id}-{n}" for n in range(2)]
     def race(key):
@@ -96,3 +110,4 @@ def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_i
         assert recovered.receipt_id == result.receipt_id and recovered.idempotency_replayed
         assert service.my_receipt_command_status(db, actor=load_formal_principal(db, recipient_user_id), request_id=request_id, idempotency_key=f"unseen-my-receipt-{posting_id}", secret=SECRET) is None
         assert db.scalar(select(func.count()).select_from(AuditEvent).where(AuditEvent.action == "my_receipt_registered", AuditEvent.aggregate_id == str(result.receipt_id))) == 1
+    print("PG16 recipient: concurrency, replay and recovery verified", flush=True)

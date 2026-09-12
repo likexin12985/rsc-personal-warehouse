@@ -363,6 +363,7 @@ RUNTIME_UPDATE_COLUMNS = {
             "allocation_status",
             "reservation_status",
             "outbound_status",
+            "personal_inbound_status",
             "version",
             "updated_at",
         }
@@ -2363,7 +2364,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_guard_material_request_original_line_0029", ""):
         "d00a8775d26e1b48e2a72798595354eedff873e2b83a7508c9c2961eb7d5d672",
     ("rsc_guard_material_request_identity_0029", ""):
-        "5392ed5737789b4974096e630ed77927952d44b8231c66f59e65d6c88f9603d9",
+        "349ba279bb1a9c3d46ac76aa8ad2b4a5b99f5de67db332ed6829e6b19ccac8f6",
     ("rsc_guard_material_request_revision_0029", ""):
         "ea718216fbf47320670b171a4aca22019fdbf4540533742aac6ac7573b31ab83",
     ("rsc_guard_material_request_approval_instance_0029", ""):
@@ -2421,7 +2422,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_guard_material_request_supply_write_0060", ""):
         "0fe289826a8aa4d14e2ecd48a9900484bf8929a054dbfa52340fa27786453f26",
     ("rsc_validate_material_request_supply_causality_0059", "uuid, bigint"):
-        "f2da8696a99dfa4a0a10432f016a9347c3f53f4d066474105eb5390e6f5a16a2",
+        "ef61be0a9be9435412d44d07745460fb395a2a77c443a7452c6ea84f333c2922",
     ("rsc_dispatch_material_request_supply_causality_0059", ""):
         "4228949da83f59ea1b46a8badd7c0fe8c58e188b7a88eac318ac032acd339e92",
     ("rsc_guard_material_request_content_write_0046", ""):

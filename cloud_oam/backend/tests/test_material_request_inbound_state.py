@@ -2,10 +2,12 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
+import runpy
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.demand_models import MaterialRequestLine
 from app.inventory_models import (
@@ -19,13 +21,23 @@ from app.inventory_models import (
     Shipment,
     ShipmentLine,
 )
-from app.formal_services.material_request_inbound_state import personal_inbound_state
+from app.formal_services.material_request_inbound_state import personal_inbound_state as runtime_state
 from test_material_request_outbound import outbound_world, _create as create_outbound
 # Import the transitive fixture names into this module as well.  Pytest scopes
 # fixtures declared in test modules to the module that imports them.
 from test_material_request_picking import pick_world  # noqa: F401
 from test_material_request_reservation_release import release_world  # noqa: F401
 from test_material_request_approval_service import approval_db  # noqa: F401
+
+
+def personal_inbound_state(db, request):
+    """The migration's independent SQL must agree on every state edge below."""
+    migration = runpy.run_path(str(Path(__file__).parents[1] / "alembic/versions/20260924_0084_personal_inbound_projection_boundary.py"))
+    query = migration["state_sql"](schema="", request="current_request")
+    sql_state = db.scalar(text(f"SELECT ({query}) FROM material_requests current_request WHERE id = :id"), {"id": request.id.hex})
+    expected = runtime_state(db, request)
+    assert sql_state == expected
+    return expected
 
 
 def _current_line(db, request):

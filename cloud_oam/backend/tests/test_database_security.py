@@ -704,6 +704,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
             "allocation_status",
             "reservation_status",
             "outbound_status",
+            "personal_inbound_status",
             "version",
             "updated_at",
         },
@@ -1079,6 +1080,13 @@ def _assert_0069_function_body_matches_runtime_manifest(
     for old, new in outbound["source_changes"]().get(coordinate, ()):
         assert latest_body.count(old) == 1 and new not in latest_body
         latest_body = latest_body.replace(old, new)
+    inbound = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20260924_0084_personal_inbound_projection_boundary.py")))
+    if coordinate in inbound["FUNCTION_HASHES"]:
+        assert hashlib.sha256(latest_body.encode()).hexdigest() == inbound["FUNCTION_HASHES"][coordinate][0]
+        for old, new in inbound["source_changes"]()[coordinate]:
+            assert latest_body.count(old) == 1 and new not in latest_body
+            latest_body = latest_body.replace(old, new)
+        assert hashlib.sha256(latest_body.encode()).hexdigest() == inbound["FUNCTION_HASHES"][coordinate][1]
     assert MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate] == hashlib.sha256(latest_body.encode()).hexdigest()
     assert current_hash != historical_hash
     for old, new in reversed(replacements):
