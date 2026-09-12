@@ -10,7 +10,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 from app import database_security as security
-from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST
+from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0096 as OAM_SYNC_FUNCTION_MANIFEST
 
 MIGRATION=Path(__file__).parents[1]/"alembic/versions/20261006_0096_removed_serial_registrations.py"
 

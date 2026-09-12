@@ -24,7 +24,11 @@ def test_replacement_security_pins_match_sources_and_preserve_minimum_privileges
         name,args = signature.removeprefix("public.").split("(")
         coordinate = (name,args.removesuffix(")"))
         catalog = security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 if "opening_observation" in name else security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
-        assert catalog[coordinate] == hashlib.sha256(body.encode()).hexdigest()
+        if name == "rsc_check_work_order_material_transaction_0090":
+            following = runpy.run_path(str(MIGRATION.with_name("20261007_0097_work_order_reversal_boundary.py")))
+            assert body == following["sources"]()[0]
+        else:
+            assert catalog[coordinate] == hashlib.sha256(body.encode()).hexdigest()
     for name,(table,_,function,kind,deferred) in m["TRIGGERS"].items():
         assert security.EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[name] == (table,function,"A",kind,deferred,deferred,deferred)
     assert "work_order_replacements" in security.RUNTIME_READ_TABLES & security.RUNTIME_INSERT_TABLES

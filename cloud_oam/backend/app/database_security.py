@@ -2401,7 +2401,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ('rsc_dispatch_serial_lifecycle_0092', ''): '612fc9726be5b13325f809b8dbf10185681f4073802b81c3771adceb83869135',
     ('rsc_guard_serial_identity_0092', ''): 'ead9491447496e5dab54787909a3cd9d0b9912a6ff007eef6394f5b99c1dd4bd',
     ('rsc_lock_work_order_material_0090', ''): '3020ff345109d942e1287ab48d8a2f53c5d722ff0fda403850649a0602c1f2a7',
-    ('rsc_check_work_order_material_transaction_0090', 'uuid'): '85e03a1f8e4dcea6eda55501051e45e1b57944833a8d1ec6e5fe1a9772984458',
+    ('rsc_check_work_order_material_transaction_0090', 'uuid'): '9a1a9aa2516fbd99c23c1b92e1e705822898036df188f58d59cc2714a172e5d7',
     ('rsc_dispatch_work_order_material_0090', ''): 'ea3172e2be65bc40e2832953d5698e67c0246aefd2eae5063061a19ac811d0ca',
     ('rsc_guard_work_order_facts_0090', ''): '216f8cc9b38fce14a09c3ecb79ef15547fbdd89a8de35f1e8b42e498012d6cca',
     ('rsc_guard_work_order_material_operations_immutable_0077', ''): 'cd8be861e17432dc90d8129908eaa963424b8358641301fe7d5b120a8b1dc02e',

@@ -118,6 +118,42 @@ def test_registered_identity_cannot_enter_by_unpaired_recovery(db,stock):
     db.rollback();assert inventory(db)==before
 
 
+def test_first_origin_binding_does_not_prevent_a_later_verified_work_order_cycle(db, stock):
+    from dataclasses import replace
+    registered = create(db, stock); db.commit()
+    args = replacement_input(stock, registered)
+    paired.execute_replacement(db, actor=stock.actor, work_order_id=stock.orders[0].id, **args,
+        idempotency_key=uuid4().hex, request_id=uuid4().hex)
+    db.commit()
+    position = db.get(SerialCurrentPosition, registered.serial_id)
+    held = db.get(StockAccount, position.stock_account_id)
+    recovered = args["recover_lines"][0]
+    reused = material.WorkOrderMaterialLineInput(held.material_id, held.id, Decimal(1),
+        recovered.serial_ids, held.condition_code, recovered.serial_verifications)
+    operation, _ = material.execute_occupy_operation(db, actor=stock.actor, work_order_id=stock.orders[1].id,
+        lines=(reused,), idempotency_key=uuid4().hex, request_id=uuid4().hex)
+    db.commit()
+    from app.inventory_models import InventoryMovement
+    reserved = db.scalar(select(InventoryMovement.to_account_id).where(
+        InventoryMovement.transaction_id == operation.posting_transaction_id))
+    material.execute_consume_operation(db, actor=stock.actor, work_order_id=stock.orders[1].id,
+        lines=(replace(reused, stock_account_id=reserved),), idempotency_key=uuid4().hex, request_id=uuid4().hex)
+    db.commit()
+    # Only the first inbound uses the immutable registration's original order.
+    # A later removed-part cycle still proves its current consume and new pair.
+    resolved = preview.lookup_removed_part(db, actor=stock.actor, work_order_id=stock.orders[1].id, scan=scan(stock))
+    assert resolved.serial_id == registered.serial_id
+    consumed = stock.line("1", stock.serials[2:3], identifier=stock.reserved.id)
+    paired.execute_replacement(db, actor=stock.actor, work_order_id=stock.orders[1].id,
+        consume_lines=(consumed,), recover_lines=(recovered,),
+        pairs=(material.WorkOrderReplacementPairInput(consumed.serial_ids[0], registered.serial_id),),
+        idempotency_key=uuid4().hex, request_id=uuid4().hex)
+    db.commit()
+    assert db.get(SerialCurrentPosition, registered.serial_id, populate_existing=True).stock_account_id == held.id
+    assert registration.lookup_registration(db, actor=stock.actor, work_order_id=stock.orders[0].id,
+        request_id=registered.request_id) == registered
+
+
 def test_failed_audit_rolls_back_both_identity_masters_and_registration(db,stock,monkeypatch):
     before=counts(db),inventory(db)
     def broken(*args,**kwargs):raise RuntimeError("synthetic audit failure")

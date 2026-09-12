@@ -1106,6 +1106,24 @@ def _post_inventory_transaction(
         )
 
 
+def _require_generic_reversal_origin(db: Session, command: InventoryReversalCommand) -> None:
+    """Work-order compensation must retain reservation and replacement causality.
+
+    Renaming the inverse's source cannot turn an original work-order fact into a
+    generic inventory adjustment. Keep this closed until the dedicated command
+    can prove both child inverses and reconstruct terminal serial lifecycle.
+    """
+    from ..demand_models import WorkOrderMaterialOperation
+
+    original = db.get(InventoryTransaction, command.original_transaction_id, populate_existing=True)
+    if (command.source_document_type == "work_order_material"
+            or (original is not None and original.source_document_type == "work_order_material")
+            or db.scalar(select(WorkOrderMaterialOperation.id).where(
+                WorkOrderMaterialOperation.posting_transaction_id == command.original_transaction_id).limit(1)) is not None):
+        _fail("work_order_reversal_requires_command", "precondition_failed",
+              "工单库存必须通过专用冲销命令核验原占用、SN 和成对回收，不能使用通用库存冲销")
+
+
 def reverse_inventory_transaction(
     db: Session,
     *,
@@ -1135,6 +1153,7 @@ def reverse_inventory_transaction(
         ),
     )
 
+    _require_generic_reversal_origin(db, checked_command)
     replay = _load_replay(db, storage_key, request_hash)
     if replay is not None:
         replay_account_ids = _transaction_account_ids(db, replay.transaction_id)
