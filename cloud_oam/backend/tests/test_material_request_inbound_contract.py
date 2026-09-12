@@ -1,4 +1,5 @@
 from uuid import UUID
+from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 import pytest
@@ -34,62 +35,43 @@ def test_inbound_target_must_match_shipment_destination():
 
 
 def test_inbound_posting_skips_rejected_only_receipt_lines(monkeypatch):
-    order = SimpleNamespace(id=ID, receipt_id=ID, target_location_id=ID, target_person_id=ID, posting_transaction_id=None, created_at=None)
-    receipt = SimpleNamespace(id=ID, shipment_id=ID, status="exception")
+    # Exercise the command builder, where accepted quantities are selected.
+    # Full transaction locking, posting, audit and outbox are covered by the
+    # orchestration suite and actual PG16 gate, not a fake SQLAlchemy Session.
+    order = SimpleNamespace(id=ID, receipt_id=ID, target_location_id=ID, target_person_id=ID, created_at=datetime(2026, 9, 1, tzinfo=timezone.utc))
     accepted = SimpleNamespace(id=UUID("22222222-2222-2222-2222-222222222222"), shipment_line_id=ID, accepted_qty=Decimal("2.000"))
     rejected = SimpleNamespace(id=UUID("33333333-3333-3333-3333-333333333333"), shipment_line_id=UUID("44444444-4444-4444-4444-444444444444"), accepted_qty=Decimal("0.000"))
+    db = SimpleNamespace(scalars=lambda statement: SimpleNamespace(all=lambda: [accepted, rejected]))
+    resolved, built = [], []
+    target = SimpleNamespace(id=ID)
+    movement = SimpleNamespace(quantity=accepted.accepted_qty)
+    def resolve(db, **kwargs):
+        resolved.append(kwargs)
+        return target
+    def build(db, **kwargs):
+        built.append(kwargs)
+        return SimpleNamespace(movements=(movement,))
+    monkeypatch.setattr(inbound_service, "resolve_personal_target_account", resolve)
+    monkeypatch.setattr(inbound_service, "build_inbound_posting_command", build)
 
-    class ScalarResult:
-        def __init__(self, value): self.value = value
-        def first(self): return self.value
+    command = inbound_service._order_posting_command(db, order, create_missing=True)
 
-    class FakeDb:
-        def __init__(self): self.added = []
-        def get(self, model, key):
-            if model is inbound_service.InboundOrder: return order
-            if model is inbound_service.Receipt: return receipt
-            if model is inbound_service.MaterialRequest: return SimpleNamespace(id=ID)
-            if model is inbound_service.Shipment: return SimpleNamespace(target_location_id=ID, target_person_id=ID)
-            return None
-        def scalar(self, statement):
-            if "FROM inbound_orders" in str(statement): return order
-            if "FROM material_requests" in str(statement): return SimpleNamespace(id=ID)
-            return None
-        def scalars(self, statement):
-            return SimpleNamespace(all=lambda: [ID] if "FROM outbound_postings" in str(statement) else [accepted, rejected])
-        def add(self, value): self.added.append(value)
-        def flush(self): pass
-
-    db = FakeDb()
-    monkeypatch.setattr(inbound_service, "resolve_personal_target_account", lambda db, **kwargs: SimpleNamespace(id=ID))
-    monkeypatch.setattr(inbound_service, "build_inbound_posting_command", lambda db, **kwargs: SimpleNamespace(movements=(SimpleNamespace(quantity=Decimal("2.000")),)))
-    monkeypatch.setattr(inbound_service, "post_inventory_transaction", lambda *args, **kwargs: SimpleNamespace(transaction_id=ID, replayed=False))
-    monkeypatch.setattr(inbound_service, "append_audit_event", lambda *args, **kwargs: None)
-    monkeypatch.setattr(inbound_service, "record_fulfillment_command", lambda *args, **kwargs: None)
-
-    result = inbound_service.post_inbound_order(db, actor=SimpleNamespace(user_id=ID), inbound_order_id=ID, material_request_id=ID, idempotency_key="idem", request_id="trace")
-    assert result["inventory_transaction_id"] == ID
-    assert len(db.added) == 2
-    assert db.added[1].event_type == "personal_inbound_posted"
+    assert command.movements == (movement,)
+    assert command.source_document_type == "personal_inbound"
+    assert command.source_document_id == str(order.id)
+    assert resolved == [dict(receipt_id=order.receipt_id, target_location_id=order.target_location_id,
+        target_person_id=order.target_person_id, shipment_line_id=accepted.shipment_line_id, create=True)]
+    assert built == [dict(inbound_order=order, receipt_line_id=accepted.id, target_account=target)]
 
 
 def test_inbound_posting_rejects_receipt_with_no_accepted_quantity(monkeypatch):
-    order = SimpleNamespace(id=ID, receipt_id=ID, target_location_id=ID, target_person_id=ID, posting_transaction_id=None, created_at=None)
-    receipt = SimpleNamespace(id=ID, shipment_id=ID, status="exception")
+    order = SimpleNamespace(id=ID, receipt_id=ID, target_location_id=ID, target_person_id=ID, created_at=datetime(2026, 9, 1, tzinfo=timezone.utc))
     rejected = SimpleNamespace(id=UUID("33333333-3333-3333-3333-333333333333"), shipment_line_id=ID, accepted_qty=Decimal("0.000"))
-
-    class FakeDb:
-        def get(self, model, key):
-            if model is inbound_service.InboundOrder: return order
-            if model is inbound_service.Receipt: return receipt
-            if model is inbound_service.MaterialRequest: return SimpleNamespace(id=ID)
-            if model is inbound_service.Shipment: return SimpleNamespace(target_location_id=ID, target_person_id=ID)
-            return None
-        def scalar(self, statement):
-            if "FROM inbound_orders" in str(statement): return order
-            if "FROM material_requests" in str(statement): return SimpleNamespace(id=ID)
-            return None
-        def scalars(self, statement): return SimpleNamespace(all=lambda: [ID] if "FROM outbound_postings" in str(statement) else [rejected])
+    db = SimpleNamespace(scalars=lambda statement: SimpleNamespace(all=lambda: [rejected]))
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Rejected-only receipt must not resolve/create accounts or build movements")
+    monkeypatch.setattr(inbound_service, "resolve_personal_target_account", forbidden)
+    monkeypatch.setattr(inbound_service, "build_inbound_posting_command", forbidden)
 
     with pytest.raises(inbound_service.InboundError, match="合格数量"):
-        inbound_service.post_inbound_order(FakeDb(), actor=SimpleNamespace(user_id=ID), inbound_order_id=ID, material_request_id=ID, idempotency_key="idem", request_id="trace")
+        inbound_service._order_posting_command(db, order, create_missing=True)
