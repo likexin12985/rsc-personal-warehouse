@@ -35,6 +35,8 @@ class World:
 
 
 def _worlds(engine):
+    from types import SimpleNamespace
+    from work_order_fixtures import add_order, canonical_source
     worlds = {}
     with Session(engine) as db:
         candidates = db.scalars(select(StockAccount).join(StockBalance,
@@ -43,9 +45,7 @@ def _worlds(engine):
                 StockLocation.location_type == "personal", StockLocation.status == "active",
                 StockAccount.availability_bucket == "available", StockBalance.quantity >= 1,
             ).order_by(StockBalance.quantity.desc(), StockAccount.id)).all()
-        source = SourceSystem(id=uuid4(), code="pg16-wo-" + uuid4().hex,
-            name="Isolated work-order gate", mode="read_only", enabled=True, configuration_jsonb={})
-        db.add(source); db.flush()
+        source = canonical_source(db)
         for account in candidates:
             serials = tuple(db.scalars(select(SerialCurrentPosition.serial_id).where(
                 SerialCurrentPosition.stock_account_id == account.id).order_by(SerialCurrentPosition.serial_id)))
@@ -64,14 +64,10 @@ def _worlds(engine):
                 db.add(StockBalance(stock_account_id=target.id, quantity=Decimal(0), ledger_cursor=0, version=0))
             orders = []
             for _ in range(2):
-                external = ExternalObject(id=uuid4(), source_system_id=source.id,
-                    entity_type="work_order", external_id="PG16-" + uuid4().hex)
-                db.add(external); db.flush()
-                order = OamWorkOrder(id=uuid4(), external_object_id=external.id,
-                    work_order_no="PG16-" + uuid4().hex, organization_id=account.owner_org_id,
-                    engineer_person_id=account.custodian_person_id, status="active",
-                    source_updated_at=datetime.now(timezone.utc))
-                db.add(order); orders.append(order.id)
+                world = SimpleNamespace(person=SimpleNamespace(id=account.custodian_person_id),
+                    organization=SimpleNamespace(id=account.owner_org_id))
+                order = add_order(db, world, source)
+                orders.append(order.id)
             worlds[kind] = World(actor_id, account.id, target.id, tuple(orders), serials)
         db.commit()
     assert set(worlds) == {"quantity", "serial"}, "gate requires both real personal quantity and SN stock"

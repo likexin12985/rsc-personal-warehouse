@@ -13,13 +13,12 @@ from app.formal_services import oam_work_order_projection as projection
 from app.formal_services import work_order_query as query
 from app.formal_services.inventory_posting import InventoryPostingError
 from test_work_order_material_evidence import db, evidence, world
+from work_order_fixtures import canonical_source
 
 
 @pytest.fixture
 def choices(db, evidence):
-    source = SourceSystem(id=uuid4(), code=projection.SOURCE_SYSTEM_CODE, name="OAM formal fixture",
-        mode="read_only", enabled=True, configuration_jsonb={})
-    db.add(source); db.flush()
+    source = canonical_source(db)
     now = datetime.now(timezone.utc) - timedelta(minutes=1)
     rows=[]
     # Remove the older evidence fixture from this person's choices without

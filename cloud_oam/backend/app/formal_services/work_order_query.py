@@ -77,6 +77,24 @@ def get_my_work_order(db, *, actor, work_order_id):
     return item
 
 
+def require_new_work_order_source(db, *, actor, work_order_id, now):
+    """Validate new commands under the actor and exact OAM work-order locks.
+
+    Operate permission is enforced by the command; no unrelated read grant is
+    required. Historical replay deliberately skips this current-source check.
+    """
+    current = _require_current_actor(db, actor)
+    with db.no_autoflush:
+        row = db.execute(_own_statement(current).where(OamWorkOrder.id == work_order_id)).one_or_none()
+    if row is None:
+        _fail("work_order_not_found", "本人有效工单不存在", "not_found")
+    item = _order_output(row, current=current, now=now, can_operate=True)
+    if not item.can_operate:
+        _fail("work_order_source_not_current", "工单来源已过期或停用，请同步并重新预检后再提交", "precondition_failed")
+    _require_current_actor(db, current)
+    return item
+
+
 def list_my_work_orders(db, *, actor, limit=50, after_id: UUID | None = None, search="", status="active"):
     current = _own_actor(db, actor)
     if (isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100

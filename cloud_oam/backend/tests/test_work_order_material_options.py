@@ -19,25 +19,7 @@ from app.formal_services.inventory_query import InventoryReadError
 from test_inventory_posting import world, make_material, make_positive_opening_facts, make_principal
 from test_work_order_material_evidence import db
 from test_formal_inventory_established_read import _make_personal_account
-
-
-def add_order(db, world, source, *, person=None):
-    now = datetime.now(timezone.utc) - timedelta(minutes=1)
-    person = person or world.person
-    payload = {"work_order_no": "OPTIONS-" + uuid4().hex,
-        "organization_id": str(world.organization.id), "engineer_person_id": str(person.id), "status": "active"}
-    external = ExternalObject(id=uuid4(), source_system_id=source.id, entity_type="work_order", external_id=uuid4().hex)
-    db.add(external); db.flush()
-    version = ExternalObjectVersion(id=uuid4(), external_object_id=external.id,
-        source_version=projection._projection_source_version("c" * 64, "d" * 64), source_updated_at=now,
-        valid_from=now, valid_to=None, payload_jsonb=payload, payload_sha256=projection._sha256(payload),
-        is_current=True, created_at=now)
-    db.add(version); db.flush(); external.current_version_id=version.id
-    order = OamWorkOrder(id=uuid4(), external_object_id=external.id, work_order_no=payload["work_order_no"],
-        organization_id=world.organization.id, engineer_person_id=person.id, status="active",
-        source_updated_at=now, created_at=now, updated_at=now)
-    db.add(order); db.flush()
-    return order
+from work_order_fixtures import add_order, canonical_source
 
 
 @pytest.fixture(params=["quantity", "serial"])
@@ -56,9 +38,7 @@ def stock(db, world, request):
         created_at=facts.count_line.counted_at, updated_at=facts.count_line.counted_at) for number in range(5)) if tracked else ()
     db.add_all(serials); db.flush()
     make_positive_opening_facts(db, facts, quantity=Decimal("5" if tracked else "5.125"), serials=serials)
-    source = SourceSystem(id=uuid4(), code=projection.SOURCE_SYSTEM_CODE, name="OAM options fixture",
-        mode="read_only", enabled=True, configuration_jsonb={})
-    db.add(source); db.flush()
+    source = canonical_source(db)
     orders = (add_order(db, world, source), add_order(db, world, source),
               add_order(db, world, source, person=world.headquarters_reviewer_person))
     db.commit()

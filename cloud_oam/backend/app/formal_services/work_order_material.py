@@ -393,7 +393,7 @@ def record_posted_operation(
     return operation
 
 
-def _command_effective_at(db: Session, *, order: OamWorkOrder, posting_key: str) -> datetime:
+def _command_effective_at(db: Session, *, order: OamWorkOrder, actor: FormalPrincipal, posting_key: str) -> datetime:
     """Reuse only the original server timestamp; the ledger rechecks the request.
 
     The caller already owns the work-order lock. The unified posting service
@@ -407,7 +407,10 @@ def _command_effective_at(db: Session, *, order: OamWorkOrder, posting_key: str)
         return effective_at if effective_at.tzinfo else effective_at.replace(tzinfo=timezone.utc)
     if order.status != "active":
         raise WorkOrderMaterialPreflightError("work_order_inactive", "工单当前不可执行新物料操作", "precondition_failed")
-    return datetime.now(timezone.utc)
+    from .work_order_query import require_new_work_order_source
+    now = datetime.now(timezone.utc)
+    require_new_work_order_source(db, actor=actor, work_order_id=order.id, now=now)
+    return now
 
 
 def execute_consume_operation(
@@ -446,7 +449,7 @@ def execute_consume_operation(
         movement_type="consume", source_document_type="work_order_material",
         source_document_id=str(work_order_id),
         posting_key=posting_key,
-        effective_at=_command_effective_at(db, order=order, posting_key=posting_key),
+        effective_at=_command_effective_at(db, order=order, actor=current, posting_key=posting_key),
         movements=tuple(InventoryMovementCommand(
             from_account_id=line.stock_account_id, to_account_id=None,
             quantity=line.quantity, serial_ids=line.serial_ids,
@@ -483,7 +486,7 @@ def execute_occupy_operation(
         raise WorkOrderMaterialPreflightError("idempotency_key_missing", "缺少幂等键", "precondition_failed")
     key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
     posting_key = f"work-order-material:occupy:{work_order_id}:{key_hash}"
-    effective_at = _command_effective_at(db, order=order, posting_key=posting_key)
+    effective_at = _command_effective_at(db, order=order, actor=current, posting_key=posting_key)
     replay = db.scalar(select(InventoryTransaction.id).where(InventoryTransaction.posting_key == posting_key)) is not None
     lines = resolve_work_order_reserved_lines(db, operator_person_id=current.person_id, lines=lines, create=not replay)
     command = InventoryPostingCommand(
@@ -540,7 +543,7 @@ def execute_release_operation(
         movement_type="release", source_document_type="work_order_material",
         source_document_id=str(work_order_id),
         posting_key=posting_key,
-        effective_at=_command_effective_at(db, order=order, posting_key=posting_key),
+        effective_at=_command_effective_at(db, order=order, actor=current, posting_key=posting_key),
         movements=tuple(InventoryMovementCommand(
             from_account_id=line.stock_account_id, to_account_id=line.target_stock_account_id,
             quantity=line.quantity, serial_ids=line.serial_ids,
@@ -593,7 +596,7 @@ def execute_recover_operation(
         transaction_no=f"INV-WO-RECOVER-{key_hash[:20].upper()}", movement_type="inbound",
         source_document_type="work_order_material", source_document_id=str(work_order_id),
         posting_key=posting_key,
-        effective_at=_command_effective_at(db, order=order, posting_key=posting_key),
+        effective_at=_command_effective_at(db, order=order, actor=current, posting_key=posting_key),
         movements=tuple(InventoryMovementCommand(
             from_account_id=None, to_account_id=line.target_stock_account_id,
             quantity=line.quantity, serial_ids=line.serial_ids,

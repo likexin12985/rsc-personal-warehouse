@@ -18,7 +18,7 @@ from app.inventory_models import (FormalMaterial, InventorySerial, SerialCurrent
     StockAccount, StockBalance, StockLocation)
 from app.models import User
 from pg16_work_order_material_gate import _checkpoint, _snapshot
-from test_work_order_material_options import add_order
+from work_order_fixtures import add_order
 
 
 def query_worlds(fixture_engine):
@@ -57,6 +57,7 @@ def assert_work_order_query_gate(api_engine, fixture_engine):
     worlds = query_worlds(fixture_engine)
     for kind, (account_id, user_id, orders, line) in worlds.items():
         baseline = _snapshot(api_engine)
+        assert_source_lock_boundary(api_engine, fixture_engine, user_id, orders[0])
         with Session(api_engine) as db:
             actor = load_formal_principal(db, user_id)
             preview = preview_batch(db, actor=actor, work_order_id=orders[0], operation_type="occupy", lines=(line,))
@@ -111,3 +112,31 @@ def assert_work_order_query_gate(api_engine, fixture_engine):
             db.rollback()
         assert _snapshot(api_engine)==baseline
         print(f"PG16 {kind} own order, batch/code previews, exact reservation/release choices, consumption refresh and rollback PASS", flush=True)
+
+
+def assert_source_lock_boundary(api_engine, fixture_engine, user_id, order_id):
+    """A concurrent projection write cannot overtake an authorized command."""
+    from concurrent.futures import ThreadPoolExecutor
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError
+
+    def update_projection():
+        try:
+            with fixture_engine.connect() as connection:
+                with connection.begin():
+                    connection.execute(text("SET LOCAL lock_timeout = '300ms'"))
+                    connection.execute(text("UPDATE public.oam_work_orders SET status = status WHERE id = :identifier"),
+                        {"identifier": order_id})
+                    connection.rollback()
+            return "updated"
+        except DBAPIError as exc:
+            return getattr(exc.orig, "sqlstate", None)
+
+    with Session(api_engine) as db:
+        actor = load_formal_principal(db, user_id)
+        material._lock_inventory_ledger_head_for_atomic_batch(db)
+        material.authorize_work_order(db, actor=actor, work_order_id=order_id, action="operate", lock_rows=True)
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            assert worker.submit(update_projection).result(timeout=5) == "55P03"
+        db.rollback()
+    assert update_projection() == "updated"

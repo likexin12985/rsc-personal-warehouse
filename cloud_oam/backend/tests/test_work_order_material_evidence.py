@@ -22,6 +22,7 @@ from app.inventory_models import (InventoryTransaction, InventoryMovement, Inven
 from app.formal_services import work_order_material as service
 from app.routers import formal_work_order_material as api
 from app.database import Base, get_db
+from work_order_fixtures import add_order
 
 
 @pytest.fixture
@@ -56,14 +57,7 @@ def evidence(db, world):
     location.parent_id = parent.id
     location.location_type = "personal"
     db.flush()
-    external = ExternalObject(id=uuid4(), source_system_id=world.source.id,
-                              entity_type="work_order", external_id=str(uuid4()))
-    db.add(external)
-    db.flush()
-    order = OamWorkOrder(id=uuid4(), external_object_id=external.id, work_order_no=str(uuid4()),
-                         organization_id=world.organization.id, engineer_person_id=world.person.id,
-                         status="active", source_updated_at=NOW)
-    db.add(order)
+    order = add_order(db, world)
     available = StockAccount(id=uuid4(), owner_org_id=account.owner_org_id,
         location_id=account.location_id, custodian_person_id=account.custodian_person_id,
         material_id=account.material_id, condition_code=account.condition_code,
@@ -622,14 +616,7 @@ def test_recover_real_ledger_updates_balance_and_replays(db, world, monkeypatch,
         for action in ("read", "operate")))
     db.add(AuditChainHead(id=uuid4(), stream_key="material_request",
                          last_event_id=None, last_hash=None, version=0))
-    external = ExternalObject(id=uuid4(), source_system_id=world.source.id,
-                              entity_type="work_order", external_id=str(uuid4()))
-    db.add(external)
-    db.flush()
-    order = OamWorkOrder(id=uuid4(), external_object_id=external.id, work_order_no=str(uuid4()),
-                         organization_id=world.organization.id, engineer_person_id=world.person.id,
-                         status="active", source_updated_at=NOW)
-    db.add(order)
+    order = add_order(db, world)
     db.commit()
     args = dict(actor=world.current_principal, work_order_id=order.id,
                 lines=(service.WorkOrderMaterialLineInput(

@@ -177,6 +177,7 @@ jobs:
             backend/tests/test_work_order_material_options.py \
             backend/tests/test_work_order_operation_read.py \
             backend/tests/test_work_order_preview.py \
+            backend/tests/test_work_order_current_source.py \
             backend/tests/test_work_order_material_migration.py \
             backend/tests/test_work_order_accounts.py \
             backend/tests/test_work_order_account_admission_migration.py \

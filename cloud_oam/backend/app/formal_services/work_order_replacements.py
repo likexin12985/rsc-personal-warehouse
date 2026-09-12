@@ -175,6 +175,8 @@ def execute_replacement(db, *, actor, work_order_id, consume_lines, recover_line
         return existing
     if order.status != "active":
         _fail("work_order_inactive", "工单当前不可执行新物料操作")
+    from .work_order_query import require_new_work_order_source
+    require_new_work_order_source(db, actor=current, work_order_id=work_order_id, now=datetime.now(timezone.utc))
     if db.scalar(select(WorkOrderReplacement.id).where(WorkOrderReplacement.operator_person_id == current.person_id,
             WorkOrderReplacement.request_id == request_id)) is not None:
         _fail("request_id_conflict", "请求标识已绑定原替换，请先回读")

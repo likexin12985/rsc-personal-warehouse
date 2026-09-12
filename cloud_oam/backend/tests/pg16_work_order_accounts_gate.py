@@ -90,9 +90,9 @@ def _fresh_worlds(engine):
                 StockLocation.location_type == "personal", StockLocation.status == "active",
                 StockAccount.availability_bucket == "available", StockBalance.quantity >= 1,
             ).order_by(StockAccount.id)).all()
-        source_system = SourceSystem(id=uuid4(), code="pg16-wo-account-" + uuid4().hex,
-            name="Isolated reserved account gate", mode="read_only", enabled=True, configuration_jsonb={})
-        db.add(source_system); db.flush()
+        from types import SimpleNamespace
+        from work_order_fixtures import add_order, canonical_source
+        source_system = canonical_source(db)
         for account in candidates:
             ids = tuple(db.scalars(select(SerialCurrentPosition.serial_id).where(
                 SerialCurrentPosition.stock_account_id == account.id).order_by(SerialCurrentPosition.serial_id)))
@@ -102,14 +102,8 @@ def _fresh_worlds(engine):
             actor = db.scalar(select(User.id).where(User.person_id == account.custodian_person_id))
             if actor is None:
                 continue
-            external = ExternalObject(id=uuid4(), source_system_id=source_system.id,
-                entity_type="work_order", external_id="PG16-" + uuid4().hex)
-            db.add(external); db.flush()
-            order = OamWorkOrder(id=uuid4(), external_object_id=external.id,
-                work_order_no="PG16-" + uuid4().hex, organization_id=account.owner_org_id,
-                engineer_person_id=account.custodian_person_id, status="active",
-                source_updated_at=datetime.now(timezone.utc))
-            db.add(order)
+            order = add_order(db, SimpleNamespace(person=SimpleNamespace(id=account.custodian_person_id),
+                organization=SimpleNamespace(id=account.owner_org_id)), source_system)
             worlds[kind] = World(actor, account.id, None, (order.id,), ids)
         db.commit()
     assert set(worlds) == {"quantity", "serial"}, "gate needs accepted personal stock with absent reserved dimensions"
