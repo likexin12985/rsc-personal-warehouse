@@ -238,7 +238,7 @@ test('release build has no live endpoint default and fails before transport', as
   delete global.wx
 })
 
-test('release navigation registers only reviewed formal workbench, demand, stocktake and profile pages', () => {
+test('release navigation registers only reviewed formal workbench, personal warehouse, demand, stocktake and profile pages', () => {
   const quarantinedPages = [
     'pages/inventory/index',
     'pages/transfers/index',
@@ -259,6 +259,7 @@ test('release navigation registers only reviewed formal workbench, demand, stock
   assert.deepEqual(appConfig.pages, [
     'pages/login/index',
     'pages/home/index',
+    'pages/formal-personal-warehouse/index',
     'pages/formal-material-requests/index',
     'pages/formal-operational-stocktakes/index',
     'pages/formal-operational-stocktake-detail/index',
@@ -268,6 +269,7 @@ test('release navigation registers only reviewed formal workbench, demand, stock
   ])
   assert.deepEqual(appConfig.tabBar.list.map((item) => item.pagePath), [
     'pages/home/index',
+    'pages/formal-personal-warehouse/index',
     'pages/formal-material-requests/index',
     'pages/formal-stocktakes/index',
     'pages/profile/index'
@@ -278,6 +280,8 @@ test('registered formal pages contain no v0.9 business request or deep link', ()
   const source = [
     'pages/home/index.js',
     'pages/home/index.wxml',
+    'pages/formal-personal-warehouse/index.js',
+    'pages/formal-personal-warehouse/index.wxml',
     'pages/formal-material-requests/index.js',
     'pages/formal-material-requests/index.wxml',
     'pages/formal-operational-stocktakes/index.js',

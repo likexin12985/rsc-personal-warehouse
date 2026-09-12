@@ -1,0 +1,49 @@
+<view class="page warehouse-page">
+  <view class="warehouse-heading">
+    <view>
+      <view class="page-title">个人仓</view>
+      <view class="page-subtitle">{{personName ? personName + ' · 本人保管的物资' : '查看本人保管的物资'}}</view>
+    </view>
+    <button class="button button-secondary button-small" bindtap="load" loading="{{loading}}" disabled="{{loading}}">刷新</button>
+  </view>
+
+  <view class="card warehouse-summary">
+    <view class="section-title">{{title}}</view>
+    <view wx:if="{{locationName}}" class="warehouse-location">{{locationName}}</view>
+    <view class="page-subtitle">{{message}}</view>
+    <view wx:if="{{receivedAt}}" class="read-time">本次读取 {{receivedAt}}</view>
+  </view>
+
+  <block wx:if="{{state === 'ready'}}">
+    <view class="section">
+      <input class="input" value="{{query}}" bindinput="onSearch" maxlength="100" placeholder="搜索物料编码、名称或批次" aria-label="搜索个人仓物料" />
+      <view class="warehouse-filters">
+        <picker range="{{statusLabels}}" value="{{statusIndex}}" bindchange="onStatusChange">
+          <view class="picker-field">{{statusLabels[statusIndex]}} ▾</view>
+        </picker>
+        <picker range="{{conditionLabels}}" value="{{conditionIndex}}" bindchange="onConditionChange">
+          <view class="picker-field">{{conditionLabels[conditionIndex]}} ▾</view>
+        </picker>
+      </view>
+      <view class="result-count">{{matchedCount}} 条库存明细</view>
+    </view>
+
+    <view wx:for="{{rows}}" wx:key="id" class="list-card">
+      <view class="warehouse-item-head">
+        <view class="item-material"><text class="item-code">{{item.sku}}</text><text class="item-name">{{item.name}}</text></view>
+        <view class="item-amount"><text class="item-quantity">{{item.quantity}}</text><text class="small muted"> {{item.unit}}</text></view>
+      </view>
+      <view class="warehouse-tags"><text class="status status-neutral">{{item.conditionLabel}}</text><text class="status status-info">{{item.statusLabel}}</text></view>
+      <view class="item-detail">资产所属：{{item.owner}}</view>
+      <view wx:if="{{item.lot}}" class="item-detail">批次：{{item.lot}}</view>
+      <view class="item-detail">{{item.tracking}}</view>
+    </view>
+
+    <view wx:if="{{!rows.length}}" class="empty">
+      <text class="empty-title">{{query || statusIndex || conditionIndex ? '没有符合条件的库存明细' : '当前个人仓没有库存明细'}}</text>
+      <text class="empty-text">{{query || statusIndex || conditionIndex ? '可调整关键词、成色或状态后查看。' : '后续收货完成入账后，请刷新查看。'}}</text>
+    </view>
+    <button wx:if="{{hasMore}}" class="button button-secondary" bindtap="loadMore">显示更多</button>
+    <view class="warehouse-note">本页展示个人仓库位的库存账户；发往本人的包裹进度请在需求页查看。</view>
+  </block>
+</view>

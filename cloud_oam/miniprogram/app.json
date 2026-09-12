@@ -2,6 +2,7 @@
   "pages": [
     "pages/login/index",
     "pages/home/index",
+    "pages/formal-personal-warehouse/index",
     "pages/formal-material-requests/index",
     "pages/formal-operational-stocktakes/index",
     "pages/formal-operational-stocktake-detail/index",
@@ -23,6 +24,7 @@
     "selectedColor": "#e65318",
     "list": [
       { "pagePath": "pages/home/index", "text": "工作台" },
+      { "pagePath": "pages/formal-personal-warehouse/index", "text": "个人仓" },
       { "pagePath": "pages/formal-material-requests/index", "text": "需求" },
       { "pagePath": "pages/formal-stocktakes/index", "text": "盘点" },
       { "pagePath": "pages/profile/index", "text": "我的" }

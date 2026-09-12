@@ -20,6 +20,7 @@
     </view>
 
     <view class="section menu-list">
+      <navigator class="menu-row" open-type="switchTab" url="/pages/formal-personal-warehouse/index"><text>打开个人仓</text><text class="menu-arrow">›</text></navigator>
       <view class="menu-row menu-row-disabled"><view><text>个人仓</text><text class="menu-note">{{inventoryAccessMessage}}</text></view><text class="status status-{{inventoryStatusTone}}">{{inventoryStatus}}</text></view>
       <view wx:if="{{pcOrigin}}" class="menu-row" bindtap="copyPcAddress"><text>复制 PC 端地址</text><text class="menu-value">{{pcOrigin}}</text></view>
     </view>

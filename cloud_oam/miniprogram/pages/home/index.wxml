@@ -28,7 +28,16 @@
       </view>
     </view>
 
-    <navigator wx:if="{{materialRequestAccessAllowed}}" class="card module-link" url="/pages/formal-material-requests/index">
+    <navigator wx:if="{{inventoryAccessAllowed}}" class="card module-link" open-type="switchTab" url="/pages/formal-personal-warehouse/index">
+      <view>
+        <text class="module-link-kicker">我的物资</text>
+        <text class="module-link-title">进入个人仓</text>
+        <text class="module-link-detail">按物料、批次、成色和状态查看本人库存。</text>
+      </view>
+      <text class="module-link-arrow">进入 ›</text>
+    </navigator>
+
+    <navigator wx:if="{{materialRequestAccessAllowed}}" class="card module-link" open-type="switchTab" url="/pages/formal-material-requests/index">
       <view>
         <text class="module-link-kicker">需求中心</text>
         <text class="module-link-title">需求提报与进度</text>
