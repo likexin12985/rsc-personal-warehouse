@@ -23,6 +23,7 @@ from app.formal_services.audit_chain import (
     _verify_audit_event_in_prelocked_stream,
     _verify_audit_event_with_prelocked_proof,
     verify_audit_event_in_stream,
+    verify_audit_event_in_read_snapshot,
 )
 from app.foundation_models import AuditChainHead, AuditEvent
 from app.models import User
@@ -258,9 +259,11 @@ def test_transaction_bound_prelocked_proof_allows_only_same_transaction(
     "tamper",
     ["head_version", "head_event", "event_hash", "event_coordinate"],
 )
+@pytest.mark.parametrize("verify", [verify_audit_event_in_stream, verify_audit_event_in_read_snapshot])
 def test_stream_membership_fails_closed_on_chain_tamper(
     db: Session,
     tamper: str,
+    verify,
 ):
     actor = make_actor(db)
     head = seed_head(db)
@@ -286,11 +289,51 @@ def test_stream_membership_fails_closed_on_chain_tamper(
     db.flush()
 
     with pytest.raises(AuditChainStateError):
-        verify_audit_event_in_stream(
+        verify(
             db,
             stream_key=STREAM_KEY,
             event_id=first.id,
         )
+
+
+def test_read_snapshot_has_no_locks_or_autoflush(db: Session):
+    actor = make_actor(db)
+    seed_head(db)
+    original = append_audit_event(db, **append_kwargs(actor))
+    original_id = original.id
+    db.commit()
+    actor.name = "unsaved caller change"
+    statements = []
+    def inspect_statement(state):
+        statements.append(state.statement)
+    sqlalchemy_event.listen(db, "do_orm_execute", inspect_statement)
+    try:
+        assert verify_audit_event_in_read_snapshot(db, stream_key=STREAM_KEY, event_id=original_id).id == original_id
+    finally:
+        sqlalchemy_event.remove(db, "do_orm_execute", inspect_statement)
+    assert actor in db.dirty
+    assert statements and all(statement.is_select for statement in statements)
+    assert all(getattr(statement, "_for_update_arg", None) is None for statement in statements)
+
+
+def test_read_snapshot_keeps_the_captured_prefix_when_head_advances(db: Session, monkeypatch):
+    from app.formal_services import audit_chain
+    actor = make_actor(db)
+    mutable_head = seed_head(db)
+    original = append_audit_event(db, **append_kwargs(actor))
+    original_id = original.id
+    db.commit()
+    walk = audit_chain._verify_audit_event_from_head
+    def advance_then_walk(session, **kwargs):
+        captured = kwargs["head"]
+        next_kwargs = append_kwargs(actor)
+        next_kwargs["request_id"] = "appended-after-reader-captured-head"
+        append_audit_event(session, **next_kwargs)
+        assert mutable_head.version == 2
+        assert captured.version == 1 and captured.last_event_id == original_id
+        return walk(session, **kwargs)
+    monkeypatch.setattr(audit_chain, "_verify_audit_event_from_head", advance_then_walk)
+    assert verify_audit_event_in_read_snapshot(db, stream_key=STREAM_KEY, event_id=original_id).id == original_id
 
 
 def test_event_from_another_stream_is_not_a_member(db: Session):

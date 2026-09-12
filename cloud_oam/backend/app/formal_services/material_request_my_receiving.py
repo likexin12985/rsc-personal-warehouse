@@ -101,7 +101,7 @@ def _list(db, *, actor, request_id, limit, after_id):
             if source is None or request_line is None or request_line.request_id != request.id or source.location_id != shipment.source_location_id or source.material_id != request_line.material_id:
                 _fail("history_invalid", "service_unavailable", "包裹物料来源不完整")
             try:
-                outbound.verified_outbound_history(db, fact=fact, request=request)
+                outbound.verified_outbound_history(db, fact=fact, request=request, lock_audit=False)
             except outbound.MaterialRequestOutboundError:
                 _fail("history_invalid", "service_unavailable", "包裹出库证据未通过校验")
             material = db.get(FormalMaterial, request_line.material_id)

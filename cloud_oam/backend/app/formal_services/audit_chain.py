@@ -323,6 +323,40 @@ def verify_audit_event_in_stream(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _AuditHeadSnapshot:
+    version: int
+    last_event_id: uuid.UUID | None
+    last_hash: str | None
+
+
+def verify_audit_event_in_read_snapshot(
+    db: Session, *, stream_key: str, event_id: uuid.UUID,
+) -> AuditEvent:
+    """Verify a complete immutable prefix without locking the mutable head.
+
+    One SELECT captures the head coordinates, then the existing genesis walk
+    verifies every hash and stream sequence. Concurrent appends cannot alter
+    that persisted prefix. This proves historical membership, not that the
+    observed head is still the latest. Writers keep the locking verifier.
+    """
+    checked_stream_key = _require_text("stream_key", stream_key)
+    if not isinstance(event_id, uuid.UUID) or event_id.int == 0:
+        raise AuditChainValidationError("event_id must be a non-zero UUID")
+    with db.no_autoflush:
+        row = db.execute(
+            select(AuditChainHead.version, AuditChainHead.last_event_id, AuditChainHead.last_hash)
+            .where(AuditChainHead.stream_key == checked_stream_key)
+        ).one_or_none()
+        if row is None:
+            raise AuditChainHeadNotFound("audit stream head is not provisioned")
+        head = _AuditHeadSnapshot(*row)
+        _validate_chain_head(head)
+        return _verify_audit_event_from_head(
+            db, checked_stream_key=checked_stream_key, event_id=event_id, head=head,
+        )
+
+
 def _verify_audit_event_in_prelocked_stream(
     db: Session,
     *,

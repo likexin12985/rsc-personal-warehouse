@@ -47,6 +47,20 @@ def request_hash(request_id, person_id, payload):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
+def _trace(value):
+    if not isinstance(value, str) or not 8 <= len(value) <= 160 or any(ord(c) < 33 or ord(c) > 126 for c in value):
+        _fail("trace_invalid", "invalid_request", "验收请求追踪坐标无效")
+    return value
+
+
+def _trace_audits(db, actor, request_id, trace):
+    return tuple(db.scalars(select(AuditEvent).where(
+        AuditEvent.stream_key == "material_request", AuditEvent.action == "my_receipt_registered",
+        AuditEvent.aggregate_type == "receipt", AuditEvent.actor_user_id == actor.user_id,
+        AuditEvent.request_id == _trace(trace), AuditEvent.after_jsonb["request_id"].as_string() == str(request_id),
+    ).limit(2)).all())
+
+
 def _context(db, actor, request_id, *, write=False):
     if write:
         lock_formal_principal_graph(db, (actor.user_id,))
@@ -82,7 +96,7 @@ def _package(db, context, request, shipment_id):
         if fact is None or line is None or source is None or fact.request_id != request.id or line.request_id != request.id or row.outbound_line_id != fact.outbound_line_id or source.location_id != shipment.source_location_id or source.material_id != line.material_id:
             _fail("history_invalid", "service_unavailable", "包裹与需求出库事实不一致")
         try:
-            receiving.outbound.verified_outbound_history(db, fact=fact, request=request)
+            receiving.outbound.verified_outbound_history(db, fact=fact, request=request, lock_audit=False)
         except Exception as exc:
             if hasattr(exc, "category") and hasattr(exc, "code"):
                 _fail("history_invalid", "service_unavailable", "原出库证据不完整")
@@ -141,8 +155,7 @@ def _serials(db, row, line, when):
 
 def create_my_receipt(db, *, actor, request_id, payload, idempotency_key, secret, trace_request_id):
     payload = MyReceiptIn.model_validate(payload)
-    if not isinstance(trace_request_id, str) or not 8 <= len(trace_request_id) <= 160 or any(ord(c) < 33 or ord(c) > 126 for c in trace_request_id):
-        _fail("trace_invalid", "invalid_request", "验收请求追踪坐标无效")
+    _trace(trace_request_id)
     key = _key(actor, request_id, idempotency_key, secret)
     context, request = _context(db, actor, request_id, write=True)
     digest = request_hash(request_id, context.principal.person_id, payload)
@@ -151,6 +164,8 @@ def create_my_receipt(db, *, actor, request_id, payload, idempotency_key, secret
         if old.request_hash != digest:
             _fail("key_reused", "conflict", "原幂等键已绑定其他验收内容")
         return _result(db, context, request, old, replayed=True)
+    if _trace_audits(db, context.principal, request.id, trace_request_id):
+        _fail("trace_reused", "conflict", "原请求标识已绑定验收，请先核验原结果")
     if request.version != payload.expected_request_version:
         _fail("version_conflict", "conflict", "需求版本已变化，请刷新后重新核对")
     if request.status not in {"approved", "partially_approved"}:
@@ -238,3 +253,22 @@ def my_receipt_command_status(db, *, actor, request_id, idempotency_key, secret)
         key = _key(actor, request_id, idempotency_key, secret)
         row = db.scalar(select(Receipt).where(Receipt.idempotency_key_hash == key))
         return None if row is None else _result(db, context, request, row, replayed=True)
+
+
+def my_receipt_trace_status(db, *, actor, request_id, trace_request_id):
+    """Read original facts after a client restart without retaining a write key."""
+    with db.no_autoflush:
+        context, request = _context(db, actor, request_id)
+        audits = _trace_audits(db, context.principal, request.id, trace_request_id)
+        if not audits:
+            return None
+        if len(audits) != 1:
+            _fail("history_invalid", "service_unavailable", "原请求标识对应多笔验收，继续保留恢复坐标")
+        try:
+            receipt_id = uuid.UUID(audits[0].aggregate_id)
+        except (ValueError, TypeError, AttributeError):
+            _fail("history_invalid", "service_unavailable", "原验收审计坐标无效")
+        receipt = db.get(Receipt, receipt_id)
+        if receipt is None:
+            _fail("history_invalid", "service_unavailable", "原验收事实不存在")
+        return _result(db, context, request, receipt, replayed=True)

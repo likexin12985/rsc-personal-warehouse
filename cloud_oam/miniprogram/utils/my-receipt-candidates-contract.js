@@ -58,7 +58,7 @@ function validateCandidates(value, requestId, shipmentId, personId) {
   if ((r.can_receive && complete) || (r.blocked_reason === 'complete' && !complete)) fail()
   return { requestId: uuid(r.request_id), shipmentId: uuid(r.shipment_id), personId: uuid(r.person_id), requestVersion: r.request_version,
     requestNo: r.request_no, shipmentNo: r.shipment_no, targetLocationName: r.target_location_name,
-    checkedAt: r.checked_at, canReceive: r.can_receive, blockedMessage: BLOCKED[r.blocked_reason] || '', lines }
+    checkedAt: r.checked_at, shippedAt: r.shipped_at, canReceive: r.can_receive, blockedMessage: BLOCKED[r.blocked_reason] || '', lines }
 }
 
 function matchCandidateScan(candidate, code) {

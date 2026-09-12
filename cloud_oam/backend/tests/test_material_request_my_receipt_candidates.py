@@ -26,15 +26,22 @@ def test_candidates_are_select_only_and_omit_source_dimensions(world):
     db, actor, request, _, shipment, line = world
     serials = tuple(db.scalars(select(ShipmentSerial.serial_id).where(ShipmentSerial.shipment_line_id == line.id)).all())
     statements = []
+    locking_statements = []
     def record(_conn, _cursor, statement, *_args): statements.append(statement)
+    def inspect_lock(state):
+        if getattr(state.statement, "_for_update_arg", None) is not None:
+            locking_statements.append(state.statement)
     event.listen(db.bind, "before_cursor_execute", record)
+    event.listen(db, "do_orm_execute", inspect_lock)
     # Pending unrelated data must not be flushed by a read.
     request.purpose = "unsaved caller change"
     try:
         result = read(world)
     finally:
         event.remove(db.bind, "before_cursor_execute", record)
+        event.remove(db, "do_orm_execute", inspect_lock)
     assert statements and all(s.lstrip().upper().startswith("SELECT") for s in statements)
+    assert not locking_statements, "SQLite hides FOR UPDATE; inspect the ORM statement too"
     assert result.can_receive and result.blocked_reason is None
     assert result.shipment_id == shipment.id and result.person_id == actor.person_id
     assert result.lines[0].unconfirmed_qty == format(line.shipped_qty, ".3f")

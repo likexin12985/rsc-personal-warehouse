@@ -1116,6 +1116,30 @@ def my_material_request_receipt_command_status(
         _raise_database_unavailable(read_only=True, no_store=True)
 
 
+@router.get("/{material_request_id}/my-receipts/trace-status", response_model=MyReceiptCommandStatusOut)
+def my_material_request_receipt_trace_status(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+    original_request_id: Annotated[str | None, Header(alias="X-Original-Request-ID")] = None,
+):
+    trace = _required_safe_header("X-Original-Request-ID", original_request_id, minimum=8, maximum=160)
+    _set_read_no_store(response)
+    try:
+        result = my_receipt_service.my_receipt_trace_status(db, actor=principal, request_id=material_request_id,
+            trace_request_id=trace)
+        return MyReceiptCommandStatusOut(lookup_status="confirmed" if result is not None else "not_observed", command=result)
+    except query_service.MaterialRequestReadError as exc:
+        _raise_service_error(exc, no_store=True)
+    except ValidationError:
+        _raise_service_error(query_service.MaterialRequestReadError(
+            "my_receipt_history_invalid", "service_unavailable", "原验收结果证据不完整，请保留原请求继续核验",
+        ), no_store=True)
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
 @router.post("/{material_request_id}/receipts", response_model=ReceiptOut, status_code=201)
 def create_formal_material_request_receipt(
     material_request_id: UUID, payload: ReceiptIn, response: Response,

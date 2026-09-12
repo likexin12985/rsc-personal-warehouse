@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 from unittest.mock import Mock
@@ -90,6 +91,78 @@ def test_recipient_accepts_once_without_stock_posting_or_source_permissions(worl
         create(world, value, key="my-receipt-second-command-001")
     with pytest.raises(MaterialRequestReadError, match="其他验收"):
         create(world, value.model_copy(update={"received_at": "2026-09-11T10:00:00+08:00"}))
+
+
+def test_trace_recovers_original_receipt_readonly_without_write_key(world):
+    db, actor, request, *_ = world
+    result = create(world)
+    statements = []
+    def record(_conn, _cursor, statement, *_args): statements.append(statement)
+    event.listen(db.bind, "before_cursor_execute", record)
+    try:
+        recovered = service.my_receipt_trace_status(db, actor=actor, request_id=request.id,
+            trace_request_id="trace-my-receipt-test-command-001")
+        assert recovered.receipt_id == result.receipt_id and recovered.request_hash == result.request_hash
+        assert service.my_receipt_trace_status(db, actor=actor, request_id=request.id,
+            trace_request_id="trace-not-observed-001") is None
+    finally:
+        event.remove(db.bind, "before_cursor_execute", record)
+    assert all(statement.lstrip().upper().startswith("SELECT") for statement in statements)
+
+
+def test_trace_lookup_rejects_broken_original_audit(world):
+    db, actor, request, *_ = world
+    result = create(world)
+    audit = db.scalar(select(AuditEvent).where(AuditEvent.action == "my_receipt_registered"))
+    original_id = audit.aggregate_id
+    audit.aggregate_id = str(uuid4()); db.flush()
+    with pytest.raises(MaterialRequestReadError, match="事实不存在"):
+        service.my_receipt_trace_status(db, actor=actor, request_id=request.id, trace_request_id=audit.request_id)
+    audit.aggregate_id = original_id
+    audit.after_jsonb = {**audit.after_jsonb, "request_hash": "0" * 64}; db.flush()
+    with pytest.raises(MaterialRequestReadError):
+        service.my_receipt_trace_status(db, actor=actor, request_id=request.id, trace_request_id=audit.request_id)
+
+
+def test_trace_lookup_rejects_multiple_matching_audits(world):
+    from app.formal_services.audit_chain import append_audit_event
+    db, actor, request, *_ = world
+    create(world)
+    original = db.scalar(select(AuditEvent).where(AuditEvent.action == "my_receipt_registered"))
+    append_audit_event(db, stream_key="material_request", actor_user_id=actor.user_id,
+        action=original.action, aggregate_type=original.aggregate_type, aggregate_id=str(uuid4()),
+        before_jsonb={}, after_jsonb=original.after_jsonb, request_id=original.request_id,
+        occurred_at=datetime.now(timezone.utc))
+    before = facts(db)
+    with pytest.raises(MaterialRequestReadError, match="多笔验收"):
+        service.my_receipt_trace_status(db, actor=actor, request_id=request.id, trace_request_id=original.request_id)
+    assert facts(db) == before
+
+
+def test_new_write_cannot_reuse_a_trace_already_bound_to_receipt(world):
+    db, actor, request, *_ = world
+    value = payload(world)
+    create(world, value)
+    before = facts(db)
+    with pytest.raises(MaterialRequestReadError, match="原请求标识"):
+        service.create_my_receipt(db, actor=actor, request_id=request.id, payload=value,
+            idempotency_key="different-write-key-0001", secret=SECRET,
+            trace_request_id="trace-my-receipt-test-command-001")
+    assert facts(db) == before
+
+
+def test_trace_http_is_readonly_and_requires_original_coordinate(api_client, monkeypatch):
+    client, db, principals, *_ = api_client
+    mocked = Mock(return_value=None)
+    monkeypatch.setattr(service, "my_receipt_trace_status", mocked)
+    path = f"/api/v1/material-requests/{uuid4()}/my-receipts/trace-status"
+    assert client.get(path).status_code == 400
+    mocked.assert_not_called()
+    response = client.get(path, headers={"X-Original-Request-ID": "original-receipt-trace-001"})
+    assert response.status_code == 200 and response.json()["lookup_status"] == "not_observed"
+    assert "no-store" in response.headers["Cache-Control"]
+    assert mocked.call_args.kwargs["trace_request_id"] == "original-receipt-trace-001"
+    db.commit.assert_not_called()
 
 
 def test_rejected_serials_are_never_accepted_for_inbound(world):

@@ -29,7 +29,7 @@ from ..inventory_models import (
 )
 from . import inventory_query, material_request_query, material_request_reservation as reserve
 from . import material_request_reservation_release as release
-from .audit_chain import AuditChainError, append_audit_event, verify_audit_event_in_stream
+from .audit_chain import AuditChainError, append_audit_event, verify_audit_event_in_stream, verify_audit_event_in_read_snapshot
 from .inventory_posting import (
     InventoryMovementCommand, InventoryPostingCommand, InventoryPostingError,
     _authorize_account_ids, _lock_inventory_ledger_head_for_atomic_batch,
@@ -388,7 +388,7 @@ def _recover(db, *, actor, fact, request):
     return verified_pick_history(db, fact=fact, request=request)
 
 
-def verified_pick_history(db, *, fact, request):
+def verified_pick_history(db, *, fact, request, lock_audit=True):
     """Prove immutable pick evidence after the caller authorizes its read.
 
     Hashes bind the historical actor. Current readers need not be that actor;
@@ -481,9 +481,10 @@ def verified_pick_history(db, *, fact, request):
         or any(getattr(source, name) != getattr(target, name) for name in (
             "owner_org_id", "custodian_person_id", "location_id", "material_id", "condition_code", "lot_id"))):
         _history_invalid()
-    reserve._verified_history(db, fact=original, request=request)
+    reserve._verified_history(db, fact=original, request=request, lock_audit=lock_audit)
     try:
-        verify_audit_event_in_stream(db, stream_key="material_request", event_id=audit.id)
+        verifier = verify_audit_event_in_stream if lock_audit else verify_audit_event_in_read_snapshot
+        verifier(db, stream_key="material_request", event_id=audit.id)
     except AuditChainError:
         _history_invalid()
     return _public_result(result, request, replayed=True)

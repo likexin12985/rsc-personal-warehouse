@@ -1,9 +1,18 @@
 <view class="page">
   <view class="row between">
     <view><view class="page-title">包裹验收核对</view><view class="page-subtitle">{{state === 'ready' ? shipmentNo : '本人包裹'}}</view></view>
-    <button class="button button-secondary button-small" bindtap="refresh" disabled="{{loading || scanning}}" loading="{{loading}}">刷新</button>
+    <button class="button button-secondary button-small" bindtap="refresh" disabled="{{loading || scanning || busy}}" loading="{{loading}}">刷新</button>
   </view>
   <view class="card receiving-note">{{message}}</view>
+  <view wx:if="{{state === 'pending'}}" class="card">
+    <button class="button button-primary" bindtap="recover" loading="{{busy}}" disabled="{{busy}}">核验原验收结果</button>
+    <view class="small muted">只读取原请求结果，不重新提交验收。</view>
+  </view>
+  <view wx:if="{{state === 'confirmed'}}" class="card">
+    <view class="material-name">已登记本次验收</view>
+    <view class="package-fact" selectable>验收单：{{receiptNo}}</view>
+    <view class="small muted">返回本人收货查看后续进度；个人仓入账以独立过账结果为准。</view>
+  </view>
   <block wx:if="{{state === 'ready'}}">
     <view class="card package">
       <view class="package-fact">需求：{{requestNo}}</view>
@@ -11,7 +20,7 @@
       <view class="small muted">查询时间：{{checkedAt}}</view>
       <view wx:if="{{blockedMessage}}" class="exception-note">{{blockedMessage}}</view>
       <block wx:if="{{canScan}}">
-        <button class="button button-primary" bindtap="scan" loading="{{scanning}}" disabled="{{scanning || loading}}">扫描 SN / 物料二维码</button>
+        <button class="button button-primary" bindtap="scan" loading="{{scanning}}" disabled="{{scanning || loading || busy}}">扫描 SN / 物料二维码</button>
         <view class="small muted">本次已核对 {{matchedCount}} 件；刷新或离开后重新核对。</view>
       </block>
     </view>
@@ -22,15 +31,46 @@
         <view><text>未验收</text><text>{{line.unconfirmed_qty}} {{line.base_unit}}</text></view>
         <view><text>已合格 / 拒收</text><text>{{line.accepted_qty}} / {{line.rejected_qty}} {{line.base_unit}}</text></view>
       </view>
-      <view wx:if="{{!line.tracked}}" class="package-fact">按数量验收；{{line.allow_fraction ? '支持小数，最多 ' + line.quantity_scale + ' 位' : '仅支持整数数量'}}。</view>
+      <block wx:if="{{!line.tracked}}">
+        <view class="package-fact">按数量验收；{{line.allow_fraction ? '支持小数，最多 ' + line.quantity_scale + ' 位' : '仅支持整数数量'}}。</view>
+        <view wx:if="{{canReceive && line.unconfirmed_qty !== '0.000'}}" class="acceptance-inputs">
+          <label>本次合格<input type="digit" maxlength="20" value="{{line.enteredAccepted}}" placeholder="0.000" data-line-id="{{line.shipment_line_id}}" data-field="accepted" bindinput="editQuantity" disabled="{{busy}}" /></label>
+          <label>本次拒收<input type="digit" maxlength="20" value="{{line.enteredRejected}}" placeholder="0.000" data-line-id="{{line.shipment_line_id}}" data-field="rejected" bindinput="editQuantity" disabled="{{busy}}" /></label>
+        </view>
+      </block>
       <block wx:else>
         <view class="package-fact">待验收 SN：{{line.totalSerials}} 件</view>
         <view wx:for="{{line.shownSerials}}" wx:key="serial_id" wx:for-item="serial" class="serial-row">
-          <text selectable>{{serial.serial_no}}</text><text class="scan-state">{{serial.checked ? '本次已核对' : '待核对'}}</text>
+          <view class="serial-heading"><text selectable>{{serial.serial_no}}</text><text class="scan-state">{{serial.checked ? '本次已核对' : '待核对'}}</text></view>
+          <view wx:if="{{canReceive}}" class="serial-actions">
+            <button size="mini" class="{{serial.result === 'accepted' ? 'selected-accepted' : ''}}" disabled="{{busy || !serial.checked}}" data-line-id="{{line.shipment_line_id}}" data-serial-id="{{serial.serial_id}}" data-result="accepted" bindtap="chooseSerial">合格</button>
+            <button size="mini" class="{{serial.result === 'rejected' ? 'selected-rejected' : ''}}" disabled="{{busy}}" data-line-id="{{line.shipment_line_id}}" data-serial-id="{{serial.serial_id}}" data-result="rejected" bindtap="chooseSerial">拒收</button>
+            <button size="mini" disabled="{{busy || !serial.result}}" data-line-id="{{line.shipment_line_id}}" data-serial-id="{{serial.serial_id}}" data-result="" bindtap="chooseSerial">本次不验</button>
+          </view>
         </view>
         <button wx:if="{{line.hasMore}}" class="button button-secondary button-small" data-line-id="{{line.shipment_line_id}}" bindtap="showMore">显示更多 SN</button>
+        <view wx:if="{{canReceive}}" class="small muted">本次选择：合格 {{line.selectedAccepted}} / 拒收 {{line.selectedRejected}} 件。合格 SN 需先扫码；拒收需上传凭证。</view>
+      </block>
+      <block wx:if="{{canReceive && line.unconfirmed_qty !== '0.000'}}">
+        <picker mode="selector" range="{{conditionLabels}}" value="{{line.conditionIndex}}" data-line-id="{{line.shipment_line_id}}" bindchange="changeCondition" disabled="{{busy}}">
+          <view class="condition-picker">本次验收情况：{{line.conditionLabel}} <text>选择 ›</text></view>
+        </picker>
+        <view wx:if="{{line.abnormal}}" class="evidence-box">
+          <view class="small">本行异常凭证</view>
+          <view wx:for="{{line.uploadFiles}}" wx:key="key" wx:for-item="file" class="upload-row">
+            <view>{{file.filename}} · {{file.sizeLabel}}</view><view class="small muted">{{file.statusLabel}}</view>
+            <view wx:if="{{file.error}}" class="exception-note">{{file.error}}</view>
+            <button wx:if="{{file.canRetry}}" size="mini" disabled="{{busy}}" data-line-id="{{line.shipment_line_id}}" data-file-key="{{file.key}}" data-action="retry" bindtap="evidenceAction">核验原上传</button>
+            <button wx:if="{{file.canRemove}}" size="mini" disabled="{{busy}}" data-line-id="{{line.shipment_line_id}}" data-file-key="{{file.key}}" data-action="remove" bindtap="evidenceAction">移除本次选择</button>
+          </view>
+          <button wx:if="{{line.canChooseEvidence}}" class="button button-secondary button-small" disabled="{{busy}}" data-line-id="{{line.shipment_line_id}}" data-action="select" bindtap="evidenceAction">选择并上传凭证</button>
+        </view>
       </block>
       <view wx:if="{{line.has_exception}}" class="exception-note">已有异常验收记录，仍需跟进处理。</view>
+    </view>
+    <view wx:if="{{canReceive}}" class="card">
+      <view class="small muted">只登记填写数量或已选择 SN 的明细。验收时间使用本次确认时间。</view>
+      <button class="button button-primary" bindtap="submit" loading="{{busy}}" disabled="{{busy || scanning || loading || !canSubmit}}">提交本次验收</button>
     </view>
   </block>
 </view>

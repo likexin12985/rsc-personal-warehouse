@@ -43,7 +43,7 @@ from ..inventory_models import (
 )
 from ..models import User
 from . import inventory_query, material_request_query
-from .audit_chain import AuditChainError, append_audit_event, verify_audit_event_in_stream
+from .audit_chain import AuditChainError, append_audit_event, verify_audit_event_in_stream, verify_audit_event_in_read_snapshot
 from .inventory_posting import (
     InventoryMovementCommand,
     InventoryPostingCommand,
@@ -900,7 +900,7 @@ def _reservation_event_identity(fact_id, request_id, operation, before, after):
 
 
 def _verified_history(
-    db: Session, *, fact: StockReservation, request: MaterialRequest
+    db: Session, *, fact: StockReservation, request: MaterialRequest, lock_audit: bool = True
 ) -> tuple[MaterialRequestCommand, InventoryTransaction]:
     """Prove the original command using immutable facts, never live candidates.
 
@@ -1098,7 +1098,8 @@ def _verified_history(
     ):
         _history_invalid()
     try:
-        verify_audit_event_in_stream(db, stream_key=_AUDIT_STREAM, event_id=audit.id)
+        verifier = verify_audit_event_in_stream if lock_audit else verify_audit_event_in_read_snapshot
+        verifier(db, stream_key=_AUDIT_STREAM, event_id=audit.id)
     except AuditChainError:
         _history_invalid()
     return command, transaction

@@ -1,4 +1,16 @@
 @import "../formal-my-receiving/index.wxss";
-.serial-row { display: flex; justify-content: space-between; gap: 20rpx; padding: 18rpx 0; border-bottom: 1rpx solid #e7ebed; font-size: 24rpx; word-break: break-all; }
+.serial-row { padding: 18rpx 0; border-bottom: 1rpx solid #e7ebed; font-size: 24rpx; word-break: break-all; }
+.serial-heading { display: flex; justify-content: space-between; gap: 20rpx; }
 .scan-state { min-width: 140rpx; text-align: right; color: #68717a; }
 .button-primary { margin: 24rpx 0 12rpx; }
+.acceptance-inputs { display: flex; gap: 20rpx; padding: 20rpx 0; }
+.acceptance-inputs label { flex: 1; min-width: 0; font-size: 26rpx; }
+.acceptance-inputs input { padding: 18rpx; margin-top: 10rpx; background: #f3f6f8; border: 1rpx solid #d4dce2; border-radius: 10rpx; }
+.condition-picker { display: flex; justify-content: space-between; padding: 24rpx 0; font-size: 28rpx; border-top: 1rpx solid #e7ebed; }
+.condition-picker text { color: #306d77; }
+.serial-actions { display: flex; gap: 10rpx; padding-top: 14rpx; }
+.serial-actions button { margin: 0; font-size: 23rpx; }
+.serial-actions .selected-accepted { background: #d6f0e4; color: #135c39; }
+.serial-actions .selected-rejected { background: #fbe1d9; color: #983d2b; }
+.evidence-box { background: #f7f9fa; border-radius: 12rpx; padding: 18rpx; }
+.upload-row { padding: 16rpx 0; font-size: 24rpx; word-break: break-all; }

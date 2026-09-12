@@ -23,31 +23,7 @@ function validate(r = response()) { return contract.validateCandidates(r, REQUES
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done }); return { resolve, promise } }
 const tick = () => new Promise(done => setImmediate(done))
 
-function harness(options = {}) {
-  const state = { user: { person_id: PERSON, authorization_version: 7 }, token: 'fixture-token', calls: [], scans: 0 }
-  let definition, accessReads = 0
-  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../pages/formal-my-receipt/index.js'), 'utf8'), {
-    Page(value) { definition = value },
-    wx: {
-      stopPullDownRefresh() {},
-      scanCode(callbacks) { state.scans++; state.scanCallbacks = callbacks; if (options.scan) options.scan(callbacks, state); else callbacks.success({ result: 'QR-TEST' }) }
-    },
-    require(module) {
-      if (module === '../../utils/api') return { async request(endpoint, config) { state.calls.push({ endpoint, ...clone(config) }); return options.response ? options.response(state) : response() } }
-      if (module === '../../utils/session') return { getUser: () => state.user, getToken: () => state.token, ensureLogin: () => !!state.token }
-      if (module === '../../utils/material-request-adapter') return { formalMaterialRequestAdapter: {
-        async loadIdentityNoReplay() { state.calls.push({ identity: true }); return options.identity ? options.identity(state) : clone(state.user) },
-        async loadAccessNoReplay() { state.calls.push({ access: true }); const access = { can_read: true, can_read_material_catalog: true }; return options.access ? options.access(++accessReads, access) : access }
-      } }
-      if (module === '../../utils/my-receiving-contract') return receiving
-      if (module === '../../utils/my-receipt-candidates-contract') return contract
-      throw new Error(module)
-    }
-  })
-  const page = Object.assign({}, definition, { data: clone(definition.data), setData(value) { Object.assign(this.data, clone(value)) } })
-  page.onLoad({ request_id: REQUEST, shipment_id: SHIPMENT })
-  return { page, state }
-}
+const { harness } = require('./fixtures/my-receipt')
 
 test('candidate contract preserves exact decimal quantities and only remaining serials', () => {
   assert.equal(validate().lines[0].remaining_serials[0].serial_no, 'SN-TEST')
