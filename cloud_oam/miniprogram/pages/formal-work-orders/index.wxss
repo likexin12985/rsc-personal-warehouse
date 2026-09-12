@@ -10,3 +10,5 @@
 .draft-row { padding: 24rpx 0; border-bottom: 1rpx solid #e5e7eb; }
 .draft-row button { margin-top: 14rpx; }
 .quantity-input { margin: 18rpx 0; padding: 16rpx; border: 1rpx solid #cbd5e1; border-radius: 8rpx; }
+.confirmation-card { border: 2rpx solid #e65318; }
+.confirmation-card > button { margin-top: 20rpx; }

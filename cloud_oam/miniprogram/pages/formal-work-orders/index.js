@@ -5,8 +5,9 @@ const { uuid, validateMyWorkOrders, validateMaterialOptions } = require('../../u
 const recoveryStore = require('../../utils/work-order-recovery-store')
 const { recoverPending, sealPending } = require('../../utils/work-order-recovery')
 const draft = require('../../utils/work-order-draft')
+const { submitDraft } = require('../../utils/work-order-submit')
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
-function empty() { return { state: 'idle', loading: false, busy: false, search: '', orders: [], items: [], workOrder: null, locationName: '', message: '', hasNext: false, hasPrevious: false, pageNumber: 1, canRecover: false, recoveryMessage: '', pendingRequests: [], pendingMessage: '', canSeal: false, canDraft: false, operationKind: 'occupy', draftRows: [], previewMessage: '' } }
+function empty() { return { state: 'idle', loading: false, busy: false, search: '', orders: [], items: [], workOrder: null, locationName: '', message: '', hasNext: false, hasPrevious: false, pageNumber: 1, canRecover: false, recoveryMessage: '', pendingRequests: [], pendingMessage: '', canSeal: false, canDraft: false, operationKind: 'occupy', draftRows: [], previewMessage: '', confirming: false, reviewRows: [], reviewTitle: '', reviewWorkOrderNo: '' } }
 
 Page({
   data: empty(),
@@ -112,7 +113,20 @@ Page({
       id: marker.work_order_id, label: `待确认请求 ${index + 1} · ${labels[marker.operation_type]}`
     })), pendingMessage: snapshot.kind === 'ready' ? '' : '部分恢复记录暂不可读取。请保留本机记录，已列出的本人请求仍可分别核验。' })
   },
-  resetDraft() { this._drafts = {}; this._scans = {}; this._draftRevision = (this._draftRevision || 0) + 1; this._sessionMatches = null },
+  eraseDraft() { this._drafts = {}; this._scans = {}; this._draftRevision = (this._draftRevision || 0) + 1 },
+  resetDraft() { this.finishReview(false); this.eraseDraft(); this._sessionMatches = null },
+  finishReview(confirmed) {
+    const finish = this._confirmFinish
+    this._confirmFinish = null
+    if (finish) finish(confirmed)
+    this.setData({ confirming: false, reviewRows: [], reviewTitle: '', reviewWorkOrderNo: '' })
+  },
+  confirmSubmission() {
+    if (!this._visible || !this.data.confirming || !this._confirmFinish || !this._sessionMatches || !this._sessionMatches()) return this.finishReview(false)
+    this.finishReview(true)
+    this.setData({ previewMessage: '正在提交本次物料操作。' })
+  },
+  cancelSubmission() { this.finishReview(false) },
   draftReady() { return this._visible && this.data.canDraft && !this.data.busy && !this.data.loading && this._sessionMatches && this._sessionMatches() && this._store.read({ work_order_id: this._selected }).kind === 'missing' },
   renderDraft() {
     this._draftRevision++
@@ -228,6 +242,70 @@ Page({
     if (!this._visible || !this._selected || !this.data.canRecover || this.data.loading || this.data.busy || !this._recoveryContext) return
     return this.recoverRequest(this._selected)
   },
+  async submitMaterials() {
+    if (!this.draftReady() || !this._recoveryContext) return
+    const generation = this._generation, revision = this._draftRevision, order = this._selected
+    const context = this._recoveryContext, matches = this._sessionMatches, kind = this.data.operationKind
+    const person = this.data.workOrder.engineer_person_id, version = session.getUser().authorization_version
+    const active = () => this._visible && generation === this._generation
+    const current = () => active() && matches() && revision === this._draftRevision
+    this.setData({ busy: true, previewMessage: '正在刷新工单与物料，核验整批后请确认。' })
+    try {
+      draft.buildDraft({ workOrder: this.data.workOrder, items: this.data.items, personId: person, kind, drafts: this._drafts })
+      const result = await submitDraft({ api, store: this._store, workOrderId: order, personId: person,
+        authorizationVersion: version, kind, drafts: this._drafts,
+        authorize: async () => {
+          if (!current()) throw new Error('session changed')
+          const result = await context()
+          if (!current()) throw new Error('session changed')
+          if (!hasFormalPermission(JSON.parse(result).access, 'work_order_material', 'operate')) throw new Error('access changed')
+          return result
+        },
+        confirm: review => {
+          if (!current()) return false
+          return new Promise(resolve => {
+            this._confirmFinish = resolve
+            this.setData({ confirming: true, reviewTitle: review.title, reviewWorkOrderNo: review.workOrderNo,
+              reviewRows: review.rows, previewMessage: '' })
+          })
+        }
+      })
+      if (!active()) return
+      if (!matches()) { this.clearView(); return }
+      if (result.status === 'cancelled') {
+        this.setData({ previewMessage: '已取消提交，库存未变动，可继续修改草稿。' })
+        return
+      }
+      this.eraseDraft(); this.refreshPendingRequests()
+      const stored = this._store.read({ work_order_id: order })
+      const message = result.status === 'confirmed'
+        ? `${{ occupy: '投入占用', consume: '实际消耗', release: '释放未用物料' }[kind]}已确认：${result.command.operation_no}。请刷新库存后继续。`
+        : result.status === 'sealed' ? '原请求已关闭且未执行。请刷新后重新准备物料。'
+          : '本次结果尚未确认，已保留原请求。请先读取原结果，不要重新提交。'
+      this.setData({ canDraft: false, canRecover: stored.kind === 'valid' && stored.value.person_id === person,
+        draftRows: [], previewMessage: '', recoveryMessage: message })
+    } catch (error) {
+      if (active()) {
+        if (!matches() || ['session changed', 'access changed'].includes(error.message)) {
+          this.clearView(); this.setData({ state: 'error', message: '身份或权限已变化，请重新进入工单页面。' })
+        } else {
+          const stored = this._store.read({ work_order_id: order })
+          if (stored.kind === 'missing') this.setData({ previewMessage: error.message || '整批物料尚未提交，请重新核对。' })
+          else {
+            this.eraseDraft(); this.refreshPendingRequests()
+            this.setData({ canDraft: false, canRecover: stored.kind === 'valid' && stored.value.person_id === person,
+              draftRows: [], previewMessage: '', recoveryMessage: '原请求或恢复记录尚未完成核验，请保留记录并读取原结果。' })
+          }
+        }
+      }
+    } finally {
+      if (active()) {
+        this.finishReview(false)
+        if (!matches()) this.clearView()
+        else this.setData({ busy: false })
+      }
+    }
+  },
   async recoverPendingRequest(event) {
     const id = event.currentTarget.dataset.id
     if (!this._pendingMarkers || !this._pendingMarkers.has(id)) return
@@ -245,7 +323,11 @@ Page({
     this.setData({ busy: true })
     try {
       const result = await (seal ? sealPending : recoverPending)({ api, store: this._store, workOrderId: order,
-        personId: this._recoveryPerson, authorize: context, confirm: () => new Promise((resolve, reject) => wx.showModal({
+        personId: this._recoveryPerson, authorize: async () => {
+          const result = await context()
+          if (seal && !hasFormalPermission(JSON.parse(result).access, 'work_order_material', 'operate')) throw new Error('access changed')
+          return result
+        }, confirm: () => new Promise((resolve, reject) => wx.showModal({
           title: '结束未执行请求', content: '系统将先核验原操作。若已执行，将返回原结果；若尚未执行，将永久关闭此请求，之后可重新准备物料。',
           confirmText: '确认核验', cancelText: '暂不处理', success: value => resolve(value.confirm === true), fail: reject
         })) })

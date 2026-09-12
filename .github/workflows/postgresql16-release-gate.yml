@@ -13,6 +13,7 @@ on:
       - "cloud_oam/backend/pg16_release_gate_diagnostics.py"
       - "cloud_oam/backend/requirements.txt"
       - "cloud_oam/backend/tests/**"
+      - "cloud_oam/miniprogram/**"
       - "cloud_oam/edge_sync/**"
       - "cloud_oam/docker-compose.yml"
       - "cloud_oam/deployment/docker-compose.edge.yml"
@@ -35,6 +36,7 @@ on:
       - "cloud_oam/backend/pg16_release_gate_diagnostics.py"
       - "cloud_oam/backend/requirements.txt"
       - "cloud_oam/backend/tests/**"
+      - "cloud_oam/miniprogram/**"
       - "cloud_oam/edge_sync/**"
       - "cloud_oam/docker-compose.yml"
       - "cloud_oam/deployment/docker-compose.edge.yml"
@@ -100,6 +102,11 @@ jobs:
           python -m pip install --disable-pip-version-check \
             -r cloud_oam/backend/requirements.txt \
             pytest==9.1.1 pglast==7.18 httpx==0.28.1
+
+      - name: Set up Node for mini-program API contract
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: "24.19.0"
 
       - name: Install PostgreSQL 16 client
         run: |

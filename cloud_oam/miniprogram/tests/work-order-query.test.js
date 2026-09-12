@@ -24,12 +24,17 @@ function options() {
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 const tick = () => new Promise(resolve => setImmediate(resolve))
 function harness(settings = {}) {
-  let definition, count = 0
+  let definition, count = 0, opaque = 0
   const state = { user: user(), token: 'fixture-session', calls: [] }
   const context = { Page(value) { definition = value }, wx: { stopPullDownRefresh() {}, scanCode: options => settings.scan(options), showModal: options => settings.confirm(options) }, require(name) {
     if (name === '../../utils/work-order-recovery-store' && settings.store) return { getStore: () => settings.store }
     if (name === '../../utils/session') return { getUser: () => state.user, getToken: () => state.token, ensureLogin: () => !!state.token }
-    if (name === '../../utils/api') return { async postSealNoReplay(endpoint, data, options) {
+    if (name === '../../utils/api') return {
+      createRequestId() { return settings.randomFailure ? settings.randomFailure() : 'wxreq-' + (++opaque).toString(16).padStart(36, '0') },
+      createIdempotencyKey() { return 'wxidem-' + (++opaque).toString(16).padStart(36, '0') },
+      async postNoReplay(endpoint, data, options) {
+        state.calls.push({ endpoint, method: 'POST', data: clone(data), ...clone(options) }); return settings.post(endpoint, data, options, state)
+      }, async postSealNoReplay(endpoint, data, options) {
       state.calls.push({endpoint,method:'POST',data,...clone(options)}); return settings.seal(data, state)
     }, async request(endpoint, request) {
       state.calls.push({ endpoint, ...clone(request) })
@@ -243,14 +248,15 @@ test('global recovery ignores late response after hide and serializes double tap
 async function pendingStore(pending = true) {
   const records = new Map()
   const module = require('../utils/work-order-recovery-store')
-  const store = module.createStore({ state: { active: new Set(), faults: new Set() }, storage: {
+  const storage = {
     getStorageInfoSync: () => ({ keys: [...records.keys()] }), getStorageSync: key => records.has(key) ? records.get(key) : '',
     setStorageSync: (key, value) => records.set(key, value), removeStorageSync: key => records.delete(key)
-  } })
+  }
+  const store = module.createStore({ state: { active: new Set(), faults: new Set() }, storage })
   const marker = module.validateMarker({ v: 1, kind: 'work_order_material', work_order_id: ORDER, person_id: PERSON, authorization_version: 7,
     operation_type: 'consume', trace_request_id: 'wxreq-' + 'c'.repeat(36), request_hash: 'd'.repeat(64) })
   if (pending) await store.withLease(marker, lease => lease.persist(marker))
-  return { store, marker }
+  return { store, marker, storage, records }
 }
 function recovered(marker) {
   return { schema_version: '1.0', lookup_status: 'confirmed', command: { schema_version: '1.0', work_order_id: ORDER, operator_person_id: PERSON,
@@ -378,4 +384,191 @@ test('leaving during seal confirmation stops the write and preserves original re
   modal.success({confirm:true}); await work
   assert.equal(state.calls.length,count); assert.ok(state.calls.every(row=>row.method==='GET'))
   assert.equal(store.read(marker).kind,'valid'); assert.equal(page.data.pendingRequests.length,0)
+})
+
+function prepareQuantity(page, kind = 'consume') {
+  page.chooseOperation(event(null, { kind })); page.addMaterial(event(ACCOUNT))
+  page.editQuantity({ ...event(ACCOUNT), detail: { value: '1.125' } })
+}
+
+test('confirmed quantity submission persists and reads back its marker before one POST and proves original result', async () => {
+  for (const kind of ['occupy', 'consume', 'release']) {
+    const { store, records } = await pendingStore(false)
+    let submitted
+    const { page, state } = await openDraft({ store, options: () => {
+      const raw = options()
+      if (kind === 'occupy') Object.assign(raw.items[0], { availability_bucket: 'available', selectable_quantity: raw.items[0].quantity, allowed_actions: ['occupy'], release_target_stock_account_id: null })
+      return raw
+    }, preview: (_, body) => previewResult(kind, body), post: (endpoint, body, settings) => {
+      const stored = store.read({ work_order_id: ORDER }); assert.equal(stored.kind, 'valid')
+      submitted = stored.value
+      assert.equal(body.request_id, submitted.trace_request_id); assert.equal(settings.requestId, body.request_id)
+      assert.equal(settings.idempotencyKey, body.idempotency_key)
+      assert.equal(submitted.request_hash, require('../utils/work-order-command').requestHash(kind, ORDER, PERSON, body.lines))
+      assert.equal(body.lines[0].quantity, '1.125')
+      if (kind === 'release') assert.equal(body.lines[0].target_stock_account_id, OTHER)
+      else assert.equal('target_stock_account_id' in body.lines[0], false)
+      const persisted = [...records.values()].join()
+      for (const value of ['quantity', 'material_id', 'idempotency_key', 'fixture-session']) assert.equal(persisted.includes(value), false)
+      return { ignored: 'Only the subsequent original GET is proof' }
+    }, recovery: () => recovered(submitted) })
+    prepareQuantity(page, kind)
+    const work = page.submitMaterials(); await tick()
+    assert.equal(page.data.confirming, true); assert.equal(page.data.reviewWorkOrderNo, 'WO-TEST')
+    assert.equal(page.data.reviewRows[0].quantity, '1.125'); assert.equal(page.data.reviewRows[0].sku, 'SKU-TEST')
+    assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+    assert.equal(state.calls.filter(row => row.method === 'POST' && !row.endpoint.endsWith('/preview')).length, 0)
+    await page.submitMaterials() // Double tap during review cannot launch a second workflow.
+    page.confirmSubmission(); page.confirmSubmission(); await work
+    assert.equal(page.data.canDraft, false); assert.equal(page.data.confirming, false)
+    assert.match(page.data.recoveryMessage, /已确认/); assert.equal(page.data.pendingRequests.length, 0)
+    assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+    assert.equal(state.calls.filter(row => row.method === 'POST' && !row.endpoint.endsWith('/preview')).length, 1)
+    assert.equal(state.calls.filter(row => row.endpoint.includes('/by-request/')).length, 1)
+    assert.equal(Object.keys(page._drafts).length, 0)
+  }
+})
+
+test('cancel or hide during complete batch review never persists or posts stock', async () => {
+  for (const mode of ['cancel', 'hide', 'account']) {
+    const { page, state, store } = await openDraft({ preview: (_, body) => previewResult('consume', body) })
+    prepareQuantity(page)
+    const work = page.submitMaterials(); await tick()
+    assert.equal(page.data.confirming, true)
+    if (mode === 'cancel') page.cancelSubmission()
+    else if (mode === 'hide') page.onHide()
+    else { state.token = 'new-account'; page.confirmSubmission() }
+    await work
+    assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+    assert.equal(state.calls.filter(row => row.method === 'POST' && !row.endpoint.endsWith('/preview')).length, 0)
+    assert.equal(page.data.confirming, false)
+    if (mode === 'cancel') assert.equal(page.data.draftRows.length, 1)
+    else assert.equal(page.data.reviewRows.length, 0)
+  }
+})
+
+test('unknown POST outcomes and unproven original results keep one recovery marker and prohibit resubmission', async () => {
+  for (const mode of ['post_timeout', 'post_401', 'not_observed', 'get_timeout', 'digest']) {
+    const { store } = await pendingStore(false); let submitted
+    const { page, state } = await openDraft({ store, preview: (_, body) => previewResult('consume', body), post: () => {
+      submitted = store.read({ work_order_id: ORDER }).value
+      if (mode.startsWith('post_')) throw Object.assign(new Error('outcome unknown'), { status: mode === 'post_401' ? 401 : 0 })
+      return {}
+    }, recovery: () => {
+      if (mode === 'not_observed') return { schema_version:'1.0', lookup_status:'not_observed', command:null }
+      if (mode === 'get_timeout') throw new Error('lookup timeout')
+      const raw = recovered(submitted); raw.command.request_hash = '0'.repeat(64); return raw
+    } })
+    prepareQuantity(page)
+    const work = page.submitMaterials(); await tick(); page.confirmSubmission(); await work
+    assert.equal(store.read({ work_order_id: ORDER }).kind, 'valid')
+    assert.equal(page.data.canDraft, false); assert.equal(page.data.canRecover, true)
+    assert.equal(page.data.pendingRequests.length, 1); assert.doesNotMatch(page.data.recoveryMessage, /已确认/)
+    await page.submitMaterials()
+    assert.equal(state.calls.filter(row => row.method === 'POST' && !row.endpoint.endsWith('/preview')).length, 1)
+  }
+})
+
+test('failed marker readback and missing secure entropy stop before stock POST', async () => {
+  for (const mode of ['storage', 'entropy']) {
+    const { store, storage } = await pendingStore(false)
+    const { page, state } = await openDraft({ store, preview: (_, body) => previewResult('consume', body),
+      randomFailure: mode === 'entropy' ? () => { throw new Error('secure randomness unavailable') } : null })
+    prepareQuantity(page)
+    const work = page.submitMaterials(); await tick()
+    if (mode === 'storage') storage.setStorageSync = () => {}
+    page.confirmSubmission(); await work
+    assert.equal(state.calls.filter(row => row.method === 'POST' && !row.endpoint.endsWith('/preview')).length, 0)
+    assert.equal(store.read({ work_order_id: ORDER }).kind, mode === 'storage' ? 'unavailable' : 'missing')
+  }
+})
+
+test('changed stock, preview contents or access stop the batch before review and marker creation', async () => {
+  for (const mode of ['quantity', 'preview', 'permission']) {
+    let reads = 0, revoke = false
+    const { page, state, store } = await openDraft({ options: () => { const raw = options(); if (++reads > 1 && mode === 'quantity') raw.items[0].selectable_quantity = '0.500'; return raw },
+      preview: (_, body) => { const raw = previewResult('consume', body); if (mode === 'preview') raw.request_hash = '0'.repeat(64); if (mode === 'permission') revoke = true; return raw },
+      access: () => ({ ...access(), permissions: revoke ? [] : access().permissions.concat({resource:'work_order_material',action:'operate',field_code:''}) }) })
+    prepareQuantity(page); await page.submitMaterials()
+    assert.equal(page.data.confirming, false); assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+    assert.equal(state.calls.filter(row => row.method === 'POST' && !row.endpoint.endsWith('/preview')).length, 0)
+  }
+})
+
+test('hidden page during stock POST leaves durable recovery and starts no late dependent reads', async () => {
+  const pending = deferred()
+  const { page, state, store } = await openDraft({ preview: (_, body) => previewResult('consume', body), post: () => pending.promise })
+  prepareQuantity(page); const work = page.submitMaterials(); await tick(); page.confirmSubmission(); await tick()
+  assert.equal(store.read({ work_order_id: ORDER }).kind, 'valid')
+  page.onHide(); const count = state.calls.length
+  pending.resolve({}); await work
+  assert.equal(state.calls.length, count); assert.equal(store.read({ work_order_id: ORDER }).kind, 'valid')
+  assert.equal(page.data.reviewRows.length, 0); assert.equal(page.data.draftRows.length, 0)
+})
+
+test('operate-only permission revocation before submission or sealing prevents even the confirmation step', async () => {
+  for (const seal of [false, true]) {
+    let revoked = false
+    const { store, marker } = await pendingStore(seal)
+    const { page, state } = await openDraft({ store, access: () => ({ ...access(), permissions: revoked ? access().permissions :
+      access().permissions.concat({ resource: 'work_order_material', action: 'operate', field_code: '' }) }) })
+    if (!seal) prepareQuantity(page)
+    revoked = true
+    const count = state.calls.length
+    if (seal) await page.sealPendingRequest(event(ORDER)); else await page.submitMaterials()
+    assert.equal(page.data.confirming, false)
+    assert.equal(page.data.state, 'error')
+    assert.equal(state.calls.slice(count).some(row => row.method === 'POST' || row.endpoint.includes('/by-request/') || row.endpoint.endsWith('/material-options')), false)
+    assert.equal(store.read(marker).kind, seal ? 'valid' : 'missing')
+  }
+})
+
+test('serial submission reviews every scanned SN but never exposes or stores physical QR evidence', async () => {
+  const { store, records } = await pendingStore(false)
+  const scans = ['SKU-TEST', 'SN-PHYSICAL', 'QR-PRIVATE-PHYSICAL']; let submitted
+  const { page } = await openDraft({ store, options: () => {
+    const raw = options(); Object.assign(raw.items[0], { tracking_mode:'serial', selectable_quantity:'1.000', serials:[{serial_id:OTHER,serial_no:'SN-PHYSICAL'}] }); return raw
+  }, scan: options => options.success({ result:scans.shift() }), preview: (_, body) => previewResult('consume', body),
+  post: (_, body) => {
+    submitted = store.read({ work_order_id:ORDER }).value
+    assert.equal(body.lines[0].quantity, '1.000')
+    assert.deepEqual(body.lines[0].serial_ids, [OTHER])
+    assert.equal(body.lines[0].serial_verifications[0].qr_code, 'QR-PRIVATE-PHYSICAL')
+    assert.equal([...records.values()].join().includes('QR-PRIVATE-PHYSICAL'), false)
+    return {}
+  }, recovery: () => recovered(submitted) })
+  page.chooseOperation(event(null, {kind:'consume'})); page.addMaterial(event(ACCOUNT))
+  for (const code of ['sku_code','serial_no','qr_code']) await page.scanMaterialCode(event(ACCOUNT, {code}))
+  page.collectScanned(event(ACCOUNT))
+  const work = page.submitMaterials(); await tick()
+  assert.equal(page.data.confirming, true)
+  assert.deepEqual(page.data.reviewRows[0].serialNumbers, ['SN-PHYSICAL'])
+  assert.equal(page.data.reviewRows[0].quantity, '1.000')
+  assert.equal(JSON.stringify(page.data).includes('QR-PRIVATE-PHYSICAL'), false)
+  page.confirmSubmission(); await work
+  assert.equal(store.read({ work_order_id:ORDER }).kind, 'missing')
+  assert.equal(Object.keys(page._scans).length, 0)
+})
+
+test('every batch line appears in review and a later insufficient line rejects the whole batch', async () => {
+  for (const insufficient of [false, true]) {
+    let reads = 0
+    const { page, state, store } = await openDraft({ options: () => {
+      const raw = options(); const second = clone(raw.items[0]); second.stock_account_id = NEXT; second.material_id = NEXT
+      second.material_name = '第二种物料'; second.sku_code = 'SKU-SECOND'
+      if (++reads > 1 && insufficient) second.selectable_quantity = '0.500'
+      raw.items.push(second); return raw
+    }, preview: (_, body) => previewResult('consume', body) })
+    prepareQuantity(page); page.addMaterial(event(NEXT)); page.editQuantity({...event(NEXT), detail:{value:'1'}})
+    const work = page.submitMaterials(); await tick()
+    if (insufficient) {
+      await work; assert.equal(page.data.confirming,false)
+      assert.equal(state.calls.some(row => row.endpoint.endsWith('/preview')), false)
+    } else {
+      assert.equal(page.data.reviewRows.length,2); assert.equal(page.data.reviewRows[1].sku,'SKU-SECOND')
+      page.cancelSubmission(); await work
+    }
+    assert.equal(store.read({work_order_id:ORDER}).kind,'missing')
+    assert.equal(state.calls.filter(row => row.method==='POST' && !row.endpoint.endsWith('/preview')).length,0)
+  }
 })

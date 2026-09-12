@@ -41,7 +41,20 @@
       <view class="muted">来源更新：{{workOrder.source_updated_at}}</view>
       <view class="muted">最近同步：{{workOrder.synced_at}}</view>
     </view>
-    <view wx:if="{{canDraft}}" class="card">
+    <view wx:if="{{confirming}}" class="card confirmation-card">
+      <view class="order-no">{{reviewTitle}}</view>
+      <view>工单：{{reviewWorkOrderNo}}</view>
+      <view class="muted">{{operationKind === 'occupy' ? '确认后，本批物料将转为此工单占用。' : operationKind === 'consume' ? '请确认已实际使用，本次将扣减工单占用和个人仓实物库存。' : '确认后，此工单的未用物料将转回本人可用库存。'}}</view>
+      <view wx:for="{{reviewRows}}" wx:for-item="row" wx:key="lineNo" class="draft-row">
+        <view>{{row.materialName}} · {{row.sku}}</view>
+        <view>{{row.condition}}<text wx:if="{{row.lot}}"> · 批次 {{row.lot}}</text></view>
+        <view class="quantity">本次数量：{{row.quantity}} {{row.unit}}</view>
+        <view wx:for="{{row.serialNumbers}}" wx:for-item="sn" wx:key="*this" class="serial">SN：{{sn}}</view>
+      </view>
+      <button type="primary" bindtap="confirmSubmission">{{reviewTitle}}</button>
+      <button bindtap="cancelSubmission">返回修改</button>
+    </view>
+    <view wx:if="{{canDraft && !confirming}}" class="card">
       <view class="order-no">准备本次工单物料</view>
       <view class="muted">选择操作和物料后核验整批。预检通过时库存尚未变动。</view>
       <view class="operation-choices">
@@ -50,8 +63,8 @@
         <button size="mini" type="{{operationKind === 'release' ? 'primary' : 'default'}}" disabled="{{busy}}" data-kind="release" bindtap="chooseOperation">释放未用物料</button>
       </view>
     </view>
-    <view wx:if="{{!items.length}}" class="card">暂无可展示的可用物料或本工单剩余占用。</view>
-    <view wx:for="{{items}}" wx:key="stock_account_id" class="card material-card">
+    <view wx:if="{{!items.length && !confirming}}" class="card">暂无可展示的可用物料或本工单剩余占用。</view>
+    <view wx:if="{{!confirming}}" wx:for="{{items}}" wx:key="stock_account_id" class="card material-card">
       <view class="order-no">{{item.material_name}}</view>
       <view>{{item.sku_code}} · {{item.conditionLabel}}</view>
       <view wx:if="{{item.lot_no}}" class="muted">批次：{{item.lot_no}}</view>
@@ -59,7 +72,7 @@
       <view wx:for="{{item.serials}}" wx:for-item="serial" wx:key="serial_id" class="serial">SN：{{serial.serial_no}}</view>
       <button wx:if="{{canDraft && ((operationKind === 'occupy' && item.availability_bucket === 'available') || (operationKind !== 'occupy' && item.availability_bucket === 'reserved'))}}" size="mini" disabled="{{busy}}" data-id="{{item.stock_account_id}}" bindtap="addMaterial">加入本次物料</button>
     </view>
-    <view wx:if="{{canDraft && draftRows.length}}" class="card">
+    <view wx:if="{{canDraft && draftRows.length && !confirming}}" class="card">
       <view class="order-no">本次物料草稿</view>
       <view class="muted">{{operationKind === 'occupy' ? '投入占用' : operationKind === 'consume' ? '实际消耗' : '释放未用物料'}} · 离开页面后扫码草稿清空</view>
       <view wx:for="{{draftRows}}" wx:for-item="row" wx:key="id" class="draft-row">
@@ -81,6 +94,7 @@
         <button size="mini" disabled="{{busy}}" data-id="{{row.id}}" bindtap="removeMaterial">移除该物料</button>
       </view>
       <button disabled="{{busy}}" loading="{{busy}}" bindtap="previewMaterials">核验整批物料</button>
+      <button type="primary" disabled="{{busy}}" loading="{{busy}}" bindtap="submitMaterials">{{operationKind === 'occupy' ? '投入占用' : operationKind === 'consume' ? '实际消耗' : '释放未用物料'}}：核验并确认</button>
     </view>
     <view wx:if="{{previewMessage}}" class="card">{{previewMessage}}</view>
   </block>
