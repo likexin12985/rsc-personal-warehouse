@@ -16,7 +16,7 @@ from .work_order_preview import preview_batch, _policies, _fail
 from .work_order_query import get_my_work_order
 
 
-def _recover_check(db, *, current, line, policies, checked_at):
+def _recover_check(db, *, current, line, policies, checked_at, work_order_id=None):
     dimensions, _account = replacements.recovery_target(db, operator_person_id=current.person_id,
         line=line, require_active=True)
     # The basis UUID is only the local lookup key for the shared validator.
@@ -33,7 +33,7 @@ def _recover_check(db, *, current, line, policies, checked_at):
         posting_key="replacement-preview", effective_at=checked_at,
         movements=(posting.InventoryMovementCommand(None, line.basis_stock_account_id, line.quantity, line.serial_ids),))
     posting._validate_tracking_rules(command, contexts, policies)
-    replacements._preflight_removed_serials(db, (recovered,), account_contexts=contexts)
+    replacements._preflight_removed_serials(db, (recovered,), account_contexts=contexts, work_order_id=work_order_id)
     return tuple(sorted((key, str(value)) for key, value in dimensions.items()))
 
 
@@ -51,7 +51,7 @@ def preview_replacement(db, *, actor, work_order_id, consume_lines, recover_line
         material_ids = {line.material_id for line in recover_lines}
         policies, fingerprint = _policies(db, material_ids, first.checked_at)
         dimensions = tuple(_recover_check(db, current=current, line=line, policies=policies,
-            checked_at=first.checked_at) for line in recover_lines)
+            checked_at=first.checked_at, work_order_id=work_order_id) for line in recover_lines)
         if len(set(dimensions)) != len(dimensions):
             _fail("duplicate_stock_account", "同一回收目标的拆回件请合并数量后提交")
         inventory._ensure_projection_snapshot_current(db, snapshot)
@@ -62,7 +62,7 @@ def preview_replacement(db, *, actor, work_order_id, consume_lines, recover_line
         if _policies(db, material_ids, checked_at)[1] != fingerprint:
             _fail("work_order_policy_changed", "拆回件库存策略已变化，请重新预检")
         if dimensions != tuple(_recover_check(db, current=current, line=line, policies=policies,
-                checked_at=checked_at) for line in recover_lines):
+                checked_at=checked_at, work_order_id=work_order_id) for line in recover_lines):
             _fail("replacement_preview_changed", "回收维度在预检期间发生变化，请重新核验")
         inventory._ensure_projection_snapshot_current(db, snapshot)
         posting._require_current_actor(db, current)
@@ -116,7 +116,7 @@ def lookup_removed_part(db, *, actor, work_order_id, scan):
             lot_id=lot.id if lot else None, serial_ids=(serial.id,) if serial else (),
             serial_verifications=(material.SerialVerificationInput(serial.id, scan.sku_code, scan.serial_no, scan.qr_code),) if serial else ())
         metadata = _catalog_fingerprint(db, sku.id, line.lot_id)
-        dimensions = _recover_check(db, current=current, line=line, policies=policies, checked_at=checked_at)
+        dimensions = _recover_check(db, current=current, line=line, policies=policies, checked_at=checked_at, work_order_id=work_order_id)
         output = WorkOrderRemovedScanOut(work_order_id=work_order_id, operator_person_id=current.person_id,
             authorization_version=current.authorization_version, source_version=options.work_order.source_version,
             ledger_cursor=options.ledger_cursor, checked_at=checked_at, basis_stock_account_id=scan.basis_stock_account_id,
@@ -129,7 +129,7 @@ def lookup_removed_part(db, *, actor, work_order_id, scan):
             _fail("work_order_projection_changed", "工单来源在核验期间发生变化，请重新扫描")
         if _policies(db, {sku.id}, datetime.now(timezone.utc))[1] != fingerprint:
             _fail("work_order_policy_changed", "拆回物料策略已变化，请重新扫描")
-        if _recover_check(db, current=current, line=line, policies=policies, checked_at=datetime.now(timezone.utc)) != dimensions:
+        if _recover_check(db, current=current, line=line, policies=policies, checked_at=datetime.now(timezone.utc), work_order_id=work_order_id) != dimensions:
             _fail("replacement_preview_changed", "回收维度已变化，请重新核验")
         if _catalog_fingerprint(db, sku.id, line.lot_id) != metadata:
             _fail("removed_material_changed", "拆回物料或批次资料在核验期间变化，请重新扫描")

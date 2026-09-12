@@ -282,3 +282,39 @@ class WorkOrderReplacementSealOut(WorkOrderMaterialSealOut):
 
 class WorkOrderReplacementSealedLookupOut(WorkOrderMaterialSealedLookupOut):
     seal: WorkOrderReplacementSealOut
+
+
+class WorkOrderRemovedRegistrationIn(WorkOrderRemovedScanIn):
+    serial_no: str = Field(min_length=1, max_length=200)
+    qr_code: str = Field(min_length=1, max_length=250)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    request_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class WorkOrderRemovedRegistrationPreviewOut(WorkOrderRemovedScanOut):
+    status: Literal["registration_validated"] = "registration_validated"
+    request_hash: str
+
+
+class WorkOrderRemovedRegistrationOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    status: Literal["registered"] = "registered"
+    registration_id: UUID
+    registration_no: str
+    work_order_id: UUID
+    operator_person_id: UUID
+    serial_id: UUID
+    material_id: UUID
+    lot_id: UUID | None
+    basis_stock_account_id: UUID
+    request_id: str
+    request_hash: str
+    registered_at: datetime
+
+
+class WorkOrderRemovedRegistrationSealOut(WorkOrderMaterialSealOut):
+    operation_type: Literal["register_removed"]
+
+
+class WorkOrderRemovedRegistrationSealedOut(WorkOrderMaterialSealedLookupOut):
+    seal: WorkOrderRemovedRegistrationSealOut

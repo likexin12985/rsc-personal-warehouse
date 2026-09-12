@@ -13,6 +13,10 @@ from ..dependencies import require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import work_order_material as service
 from ..formal_services import work_order_replacements as replacements
+from ..formal_services import work_order_removed_registration as removed_registration
+from ..work_order_material_schemas import (WorkOrderRemovedScanIn, WorkOrderRemovedRegistrationIn,
+    WorkOrderRemovedRegistrationPreviewOut, WorkOrderRemovedRegistrationOut, WorkOrderRemovedRegistrationSealedOut)
+from ..formal_services.inventory_query import InventoryReadError
 from ..formal_services.work_order_replacement_read import replacement_result
 from ..formal_services.work_order_replacement_seal import lookup_replacement_result as lookup_replacement, seal_replacement
 from ..formal_services.work_order_command_seal import lookup_command_result as lookup_operation, seal_command
@@ -447,3 +451,79 @@ def post_material_operation(
         db.rollback()
         raise HTTPException(status_code=503, detail={"code": "work_order_storage_unavailable", "message": "写入未确认，请回读原操作"}) from None
     return output
+
+
+# Identity registration is a separate audited command; it never posts stock.
+
+
+@router.post("/{work_order_id}/material-replacements/removed-registrations/preview", response_model=WorkOrderRemovedRegistrationPreviewOut)
+def preview_removed_registration(work_order_id: UUID, payload: WorkOrderRemovedScanIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")), db: Session = Depends(get_db)):
+    response.headers["Cache-Control"] = "private, no-store"
+    _require_operator(payload, principal)
+    try:
+        return removed_registration.preview_registration(db, actor=principal, work_order_id=work_order_id, scan=payload)
+    except service.InventoryPostingError as exc: _raise(exc)
+    except InventoryReadError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from None
+    except SQLAlchemyError:
+        raise HTTPException(status_code=503, detail={"code":"removed_registration_unavailable","message":"拆回件登记暂时无法预检"}) from None
+
+
+@router.post("/{work_order_id}/material-replacements/removed-registrations", response_model=WorkOrderRemovedRegistrationOut)
+def register_removed_identity(work_order_id: UUID, payload: WorkOrderRemovedRegistrationIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")), db: Session = Depends(get_db),
+    trace: str | None = Header(default=None, alias="X-Request-ID")):
+    response.headers["Cache-Control"] = "private, no-store"
+    _require_operator(payload, principal); _command_trace(payload, trace)
+    scan = WorkOrderRemovedScanIn.model_validate(payload.model_dump(exclude={"idempotency_key", "request_id"}))
+    try:
+        result = removed_registration.register_removed_serial(db, actor=principal, work_order_id=work_order_id,
+            scan=scan, idempotency_key=payload.idempotency_key, request_id=payload.request_id)
+        db.commit()
+        return result
+    except service.InventoryPostingError as exc: db.rollback(); _raise(exc)
+    except InventoryReadError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from None
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=503, detail={"code":"removed_registration_unavailable","message":"登记结果尚未确认，请保留原请求并回读"}) from None
+
+
+@router.get("/{work_order_id}/material-replacements/removed-registrations/by-request/{request_id}", response_model=WorkOrderRemovedRegistrationOut | WorkOrderRemovedRegistrationSealedOut)
+def read_removed_registration(work_order_id: UUID, response: Response,
+    request_id: str = Path(min_length=8,max_length=160,pattern=r"^[A-Za-z0-9._:-]+$"),
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "read")), db: Session = Depends(get_db)):
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        result=removed_registration.lookup_registration(db, actor=principal, work_order_id=work_order_id, request_id=request_id)
+        if result is None: raise HTTPException(status_code=404, detail={"code":"removed_registration_not_found","message":"尚未读取到已提交的原登记"})
+        return result
+    except service.InventoryPostingError as exc: _raise(exc)
+    except InventoryReadError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from None
+    except SQLAlchemyError:
+        raise HTTPException(status_code=503, detail={"code":"removed_registration_unavailable","message":"原登记暂时无法核验，请保留记录"}) from None
+
+
+@router.post("/{work_order_id}/material-replacements/removed-registrations/by-request/{request_id}/seal", response_model=WorkOrderRemovedRegistrationOut | WorkOrderRemovedRegistrationSealedOut)
+def seal_removed_registration(work_order_id: UUID, payload: WorkOrderMaterialSealIn, response: Response,
+    request_id: str = Path(min_length=8,max_length=160,pattern=r"^[A-Za-z0-9._:-]+$"),
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "operate")), db: Session = Depends(get_db),
+    trace: str | None = Header(default=None,alias="X-Request-ID"), key: str | None = Header(default=None,alias="Idempotency-Key")):
+    response.headers["Cache-Control"] = "private, no-store"
+    _require_operator(payload,principal)
+    if (trace is not None and trace!=request_id) or key is not None:
+        raise HTTPException(status_code=400,detail={"code":"work_order_seal_coordinate_invalid","message":"封存只能使用原请求标识，不接受其他幂等键"})
+    try:
+        result=removed_registration.seal_registration(db,actor=principal,work_order_id=work_order_id,request_id=request_id,request_hash=payload.request_hash)
+        db.commit()
+        return result
+    except service.InventoryPostingError as exc: db.rollback(); _raise(exc)
+    except InventoryReadError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from None
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=503,detail={"code":"removed_registration_unavailable","message":"原登记封存结果未确认，请保留原请求并回读"}) from None

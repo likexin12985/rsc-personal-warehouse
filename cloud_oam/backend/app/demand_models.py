@@ -199,7 +199,7 @@ class WorkOrderCommandSeal(CreatedAtMixin, Base):
     __tablename__ = "work_order_command_seals"
     __table_args__ = (
         UniqueConstraint("actor_user_id", "oam_work_order_id", "operation_type", "request_id", name="uq_work_order_command_seals_request"),
-        CheckConstraint("operation_type IN ('occupy', 'consume', 'release', 'replace')", name="ck_work_order_command_seals_operation"),
+        CheckConstraint("operation_type IN ('occupy', 'consume', 'release', 'replace', 'register_removed')", name="ck_work_order_command_seals_operation"),
         CheckConstraint("authorization_version > 0", name="ck_work_order_command_seals_version"),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
@@ -212,6 +212,35 @@ class WorkOrderCommandSeal(CreatedAtMixin, Base):
     request_reference: Mapped[str] = mapped_column(String(82))
     request_hash: Mapped[str] = mapped_column(String(64))
     sealed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class WorkOrderRemovedSerialRegistration(CreatedAtMixin, Base):
+    """Immutable identity admission; it never represents stock or consumption."""
+
+    __tablename__ = "work_order_removed_serial_registrations"
+    __table_args__ = (
+        UniqueConstraint("registration_no", name="uq_removed_registration_no"),
+        UniqueConstraint("serial_id", name="uq_removed_registration_serial"),
+        UniqueConstraint("idempotency_key_hash", name="uq_removed_registration_key"),
+        UniqueConstraint("actor_user_id", "oam_work_order_id", "request_id", name="uq_removed_registration_request"),
+        CheckConstraint("authorization_version > 0", name="ck_removed_registration_version"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    registration_no: Mapped[str] = mapped_column(String(100))
+    serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("inventory_serials.id", ondelete="RESTRICT"))
+    oam_work_order_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("oam_work_orders.id", ondelete="RESTRICT"))
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
+    operator_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"))
+    authorization_version: Mapped[int] = mapped_column(Integer)
+    source_version: Mapped[str] = mapped_column(String(1000))
+    basis_stock_account_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT"))
+    material_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("materials.id", ondelete="RESTRICT"))
+    lot_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("inventory_lots.id", ondelete="RESTRICT"), nullable=True)
+    request_id: Mapped[str] = mapped_column(String(160))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    command_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class WorkOrderReplacement(CreatedAtMixin, Base):

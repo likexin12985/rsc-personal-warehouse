@@ -132,7 +132,7 @@ def resolve_recovery_lines(db, *, operator_person_id, lines, create):
     return tuple(resolved)
 
 
-def _preflight_removed_serials(db, lines, *, account_contexts=None):
+def _preflight_removed_serials(db, lines, *, account_contexts=None, work_order_id=None, basis_by_target=None):
     ids = tuple(identifier for line in lines for identifier in line.serial_ids)
     try:
         states = rebuild_serial_states(db, ids)
@@ -155,6 +155,11 @@ def _preflight_removed_serials(db, lines, *, account_contexts=None):
                     or (state.last_movement_id is not None and (position is None
                         or position.stock_account_id is not None or position.last_movement_id != state.last_movement_id))):
                 _fail("removed_serial_unavailable", "拆回 SN 已在库存中，或缺少一致的历史位置证明")
+            if state.last_movement_id is None:
+                from .work_order_removed_origin import require_registration_context
+                require_registration_context(db, serial_id=identifier, work_order_id=work_order_id,
+                    basis_stock_account_id=(basis_by_target or {}).get(line.stock_account_id, line.stock_account_id),
+                    operator_person_id=account.custodian_person_id)
             proof = proofs[identifier]
             if (proof.sku_code != sku.sku_code or proof.serial_no != serial.serial_no or proof.qr_code != serial.qr_code):
                 _fail("serial_verification_mismatch", "拆回件二维码、SKU、SN 校验不一致")
@@ -203,7 +208,8 @@ def execute_replacement(db, *, actor, work_order_id, consume_lines, recover_line
             + tuple(inventory.InventoryMovementCommand(None, line.stock_account_id, line.quantity,
                 line.serial_ids, "work_order_material_recover") for line in recovered_lines))
     inventory._plan_and_lock_terminal_opening_graphs(db, command=graph_command, current_actor_user_id=current.user_id)
-    _preflight_removed_serials(db, recovered_lines)
+    _preflight_removed_serials(db, recovered_lines, work_order_id=work_order_id,
+        basis_by_target={target.stock_account_id: source.basis_stock_account_id for source,target in zip(recover_lines,recovered_lines)})
     replacement = WorkOrderReplacement(id=uuid4(), replacement_no="WOR-" + key_hash[:24].upper(),
         oam_work_order_id=work_order_id, operator_person_id=current.person_id,
         consume_operation_id=uuid4(), recover_operation_id=uuid4(), idempotency_key_hash=key_hash,

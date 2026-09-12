@@ -6953,6 +6953,8 @@ def _lock_and_validate_serials(
         policy = policies[account.material_id]
         for serial_id in movement.serial_ids:
             serial = serials[serial_id]
+            from .work_order_removed_origin import require_registration_posting
+            require_registration_posting(db, serial_id=serial_id, state=states[serial_id], command=command, movement=movement, account=account)
             controlled_recovery = (
                 serial.lifecycle_status == "consumed"
                 and command.movement_type == "inbound"

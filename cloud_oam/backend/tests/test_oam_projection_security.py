@@ -1177,7 +1177,7 @@ def test_forward_readiness_manifests_match_head_hashes():
     )
     assert (
         scope_security.OAM_SYNC_FUNCTION_MANIFEST
-        is scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0094
+        is scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0096
     )
     migration_0070 = runpy.run_path(str(migration_root / "20260910_0070_stock_reservation_releases.py"))
     assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0070[ready_signature][6] == migration_0070["RUNTIME_READY_BODY_SHA256_0070"]
@@ -1216,7 +1216,11 @@ def test_forward_readiness_manifests_match_head_hashes():
     migration_0093 = runpy.run_path(str(migration_root / "20261003_0093_work_order_replacements.py"))
     assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0093[ready_signature][6] == migration_0093["NEW_HASH"]
     migration_0094 = runpy.run_path(str(migration_root / "20261004_0094_work_order_command_seals.py"))
-    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6] == migration_0094["NEW_HASH"]
+    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0094[ready_signature][6] == migration_0094["NEW_HASH"]
+    migration_0095 = runpy.run_path(str(migration_root / "20261005_0095_work_order_replacement_seals.py"))
+    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0095[ready_signature][6] == migration_0095["NEW_HASH"]
+    migration_0096 = runpy.run_path(str(migration_root / "20261006_0096_removed_serial_registrations.py"))
+    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0096[ready_signature][6] == migration_0096["NEW_HASH"]
     assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0064[ready_signature][6] != (
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0062[ready_signature][6]
     )
