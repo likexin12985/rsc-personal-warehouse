@@ -48,6 +48,8 @@ def _source_enabled(db):
 
 
 def _source_items(db, *, actor, options, obligations):
+    from .stock_return_facts import commitments
+    held = commitments(db, actor=actor, recovery_line_ids={row.reference_id for row in obligations.issues if row.kind == "pending_return"})
     available = {row.stock_account_id: row for row in options.items if row.availability_bucket == "available"}
     items = []
     for issue in obligations.issues:
@@ -68,9 +70,12 @@ def _source_items(db, *, actor, options, obligations):
         # substitute another account/condition/lot merely because the SKU matches.
         quantity = Decimal(candidate.selectable_quantity) if candidate is not None else Decimal(0)
         current_serials = {row.serial_id for row in candidate.serials} if candidate is not None else set()
-        serials = tuple(WorkOrderReturnSerialOut(**row.model_dump(), selectable=row.serial_id in current_serials)
+        committed, committed_serials = held[issue.reference_id]
+        if committed > Decimal(issue.quantity) or not committed_serials <= {row.serial_id for row in issue.serials}:
+            _invalid()
+        serials = tuple(WorkOrderReturnSerialOut(**row.model_dump(), selectable=row.serial_id in current_serials and row.serial_id not in committed_serials)
             for row in issue.serials)
-        selectable = min(Decimal(issue.quantity), quantity)
+        selectable = min(Decimal(issue.quantity) - committed, quantity)
         if serials:
             selectable = min(selectable, Decimal(sum(row.selectable for row in serials)))
         items.append(WorkOrderReturnSourceOut(source_recovery_line_id=issue.reference_id,
@@ -79,7 +84,7 @@ def _source_items(db, *, actor, options, obligations):
             custodian_person_id=account.custodian_person_id, location_id=account.location_id,
             material_id=issue.material_id, sku_code=issue.sku_code, material_name=issue.material_name,
             base_unit=issue.base_unit, condition_code=issue.condition_code, lot_id=issue.lot_id, lot_no=issue.lot_no,
-            owed_quantity=issue.quantity, available_quantity=format(quantity, ".3f"),
+            owed_quantity=issue.quantity, committed_quantity=format(committed, ".3f"), available_quantity=format(quantity, ".3f"),
             selectable_quantity=format(selectable, ".3f"), serials=serials))
     return tuple(items)
 

@@ -142,7 +142,7 @@ def assert_reversal_migration_rejects_detached_history(api_engine, fixture_engin
     migration = runpy.run_path(str(Path(__file__).parents[1] /
         "alembic/versions/20261007_0097_work_order_reversal_boundary.py"))
     successors = [runpy.run_path(str(Path(__file__).parents[1] / "alembic/versions" / filename))
-        for filename in ("20261009_0099_work_order_reversal_seals.py", "20261008_0098_work_order_reversals.py")]
+        for filename in ("20261010_0100_stock_return_orders.py", "20261009_0099_work_order_reversal_seals.py", "20261008_0098_work_order_reversals.py")]
     def catalog():
         with fixture_engine.connect() as connection:
             return connection.execute(text("""SELECT oid,prosrc,proowner,proacl,prosecdef,proconfig FROM pg_proc

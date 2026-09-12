@@ -71,6 +71,13 @@ def _originals(db, actor, work_order_id, request):
             _invalid()
         if db.scalar(select(InventoryTransaction.id).where(InventoryTransaction.reversed_transaction_id == tx.id).limit(1)):
             _fail("original_transaction_already_reversed", "原操作已有反向流水，请核验原冲销记录")
+        if operation.operation_type == "recover":
+            from .stock_return_facts import commitments
+
+            origin_ids = tuple(db.scalars(select(WorkOrderMaterialLine.id).where(
+                WorkOrderMaterialLine.operation_id == operation.id)))
+            if any(quantity > 0 for quantity, _serials in commitments(db, actor=actor, recovery_line_ids=origin_ids).values()):
+                _fail("work_order_recovery_has_active_return", "原回收明细已有活动退回单，须先核验退回处置，不能直接冲销回收")
         operations.append((operation, tx))
     return tuple(operations), pairs
 

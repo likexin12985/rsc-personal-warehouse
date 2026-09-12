@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261009_0099"
+HEAD_REVISION = "20261010_0100"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7419,13 +7419,13 @@ def _load_stock_reservations_migration_0069():
 
 def _head_account_admission_hash() -> str:
     import runpy
-    return hashlib.sha256(runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20261003_0093_work_order_replacements.py")))["_sources"]()["public.rsc_require_opening_observation_account_0023()"][1].encode()).hexdigest()
+    return hashlib.sha256(runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20261010_0100_stock_return_orders.py")))["_account_sources"]()[1].encode()).hexdigest()
 
 
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20261009_0099_work_order_reversal_seals.py"
+        "20261010_0100_stock_return_orders.py"
     )))
     assert migration["revision"] == HEAD_REVISION
     return migration["NEW_HASH"]
@@ -21241,6 +21241,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_reversal_submit_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_return_sources_gate import assert_return_sources_gate
             assert_return_sources_gate(api_engine, replacement_fixture_engine)
+            from pg16_stock_return_gate import assert_stock_return_gate
+            assert_stock_return_gate(api_engine, replacement_fixture_engine)
             from pg16_work_order_reversal_write_gate import assert_reversal_concurrent_commit_gate
             from pg16_work_order_replacement_seals_gate import assert_replacement_seal_atomic_gate
             assert_replacement_seal_atomic_gate(api_engine, replacement_fixture_engine)
@@ -21302,6 +21304,18 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         blocked_reversal_seal = _run_alembic("downgrade", "20261008_0098", expect_success=False)
         assert "0099 downgrade blocked" in blocked_reversal_seal.stdout + blocked_reversal_seal.stderr
         assert _current_revision() == HEAD_REVISION
+        # Permanent return facts must follow every earlier downgrade proof.
+        from pg16_stock_return_gate import assert_stock_return_concurrent_commit_gate, snapshot as return_snapshot
+        return_fixture_engine = create_engine(_sqlalchemy_url(
+            role="star_oam_migrator", password=_role_password("star_oam_migrator")))
+        try:
+            assert_stock_return_concurrent_commit_gate(api_engine, return_fixture_engine)
+        finally:
+            return_fixture_engine.dispose()
+        return_history = return_snapshot(api_engine)
+        blocked_return = _run_alembic("downgrade", "20261009_0099", expect_success=False)
+        assert "0100 downgrade blocked: immutable return history must be retained" in blocked_return.stdout + blocked_return.stderr
+        assert _current_revision() == HEAD_REVISION and return_snapshot(api_engine) == return_history
         _validate_runtime_security(api_engine)
     finally:
         edge_engine.dispose()

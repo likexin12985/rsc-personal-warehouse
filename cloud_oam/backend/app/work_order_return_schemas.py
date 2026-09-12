@@ -34,6 +34,7 @@ class WorkOrderReturnSourceOut(BaseModel):
     lot_id: UUID | None
     lot_no: str | None
     owed_quantity: str
+    committed_quantity: str = "0.000"
     # Multiple recovery lines can share this balance. These quantities must
     # never be summed to obtain the batch's available stock.
     available_quantity: str

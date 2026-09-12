@@ -1114,8 +1114,15 @@ def _require_generic_reversal_origin(db: Session, command: InventoryReversalComm
     can prove both child inverses and reconstruct terminal serial lifecycle.
     """
     from ..demand_models import WorkOrderMaterialOperation
+    from ..stock_operation_models import StockOperationOrder, StockOperationCancellation
 
     original = db.get(InventoryTransaction, command.original_transaction_id, populate_existing=True)
+    if (command.source_document_type == "stock_operation_return"
+            or (original is not None and original.source_document_type == "stock_operation_return")
+            or any(db.scalar(select(model.id).where(model.posting_transaction_id == command.original_transaction_id).limit(1))
+                is not None for model in (StockOperationOrder, StockOperationCancellation))):
+        _fail("stock_return_reversal_requires_command", "precondition_failed",
+              "退回占用和取消必须通过原退回单处理，不能使用通用库存冲销")
     if (command.source_document_type == "work_order_material"
             or (original is not None and original.source_document_type == "work_order_material")
             or db.scalar(select(WorkOrderMaterialOperation.id).where(

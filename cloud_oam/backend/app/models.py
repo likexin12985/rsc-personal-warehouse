@@ -663,3 +663,4 @@ from . import foundation_models as _foundation_models  # noqa: E402,F401
 from . import inventory_models as _inventory_models  # noqa: E402,F401
 from . import stocktake_models as _stocktake_models  # noqa: E402,F401
 from . import demand_models as _demand_models  # noqa: E402,F401
+from . import stock_operation_models as _stock_operation_models  # noqa: E402,F401
