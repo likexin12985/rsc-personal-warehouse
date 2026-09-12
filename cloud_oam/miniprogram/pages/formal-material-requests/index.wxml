@@ -94,6 +94,7 @@
     </block>
 
     <block wx:elif="{{detail}}">
+      <navigator class="button button-secondary" url="/pages/formal-my-receiving/index?request_id={{detail.request_id}}">查看本人收货包裹</navigator>
       <view class="section-heading"><text class="section-title">{{detail.request_no}}</text><text class="status status-info">{{detail.statusLabel}}</text></view>
       <view class="notice info">{{detail.approvalNotice}}</view>
       <view class="card detail-card">
@@ -103,7 +104,7 @@
         <view class="fact"><text class="muted">联系人（脱敏）</text><text>{{detail.maskedContact}}</text></view>
         <view class="fact"><text class="muted">收货地址（脱敏）</text><text>{{detail.maskedAddress}}</text></view>
         <view class="fact"><text class="muted">备注</text><text>{{detail.note || '无'}}</text></view>
-        <view class="fact"><text class="muted">附件引用</text><text wx:if="{{detail.attachment_refs.length}}" wx:for="{{detail.attachment_refs}}" wx:key="file_id">{{item.display_name}}</text><text wx:else>无</text></view>
+        <view class="fact"><text class="muted">附件引用</text><block wx:if="{{detail.attachment_refs.length}}"><text wx:for="{{detail.attachment_refs}}" wx:key="file_id">{{item.display_name}}</text></block><text wx:else>无</text></view>
       </view>
 
       <view class="section"><text class="section-title">十个独立状态轴</text><view class="axis-grid"><view wx:for="{{detail.stateAxes}}" wx:key="key" class="axis"><text class="muted small">{{item.label}}</text><text class="mono small">{{item.value}}</text></view></view></view>
@@ -116,7 +117,7 @@
         <view class="fact"><text class="muted">备注</text><text>{{item.note || '无'}}</text></view>
       </view></view>
 
-      <view class="section"><text class="section-title">审批进度与处理</text><view class="small muted section-note">两级内部逐行审批 + 外部证据登记/独立复核；权限或证据缺失时失败关闭。</view><view wx:if="{{detail.approvalSteps.length}}" wx:for="{{detail.approvalSteps}}" wx:key="step_id" class="list-card"><view class="row between"><text>第 {{item.step_no}} 级 · {{item.source_mode}}</text><text>{{item.status}}</text></view></view><view wx:else class="empty"><text class="empty-title">尚未产生审批实例</text></view></view>
+      <view class="section"><text class="section-title">审批进度与处理</text><view class="small muted section-note">两级内部逐行审批 + 外部证据登记/独立复核；权限或证据缺失时失败关闭。</view><block wx:if="{{detail.approvalSteps.length}}"><view wx:for="{{detail.approvalSteps}}" wx:key="step_id" class="list-card"><view class="row between"><text>第 {{item.step_no}} 级 · {{item.source_mode}}</text><text>{{item.status}}</text></view></view></block><view wx:else class="empty"><text class="empty-title">尚未产生审批实例</text></view></view>
 
       <view wx:if="{{detail.verificationBlocked}}" class="notice warning">当前步骤没有唯一待复核证据，已阻止复核写入。</view>
       <view wx:if="{{detail.canProcessInternal || detail.canRegisterExternal || detail.canVerifyExternal}}" class="action-grid process-actions">
@@ -223,7 +224,7 @@
             <view class="fact"><text class="muted">明细 / 物料 / 取消量</text><text>第 {{item.lineNo}} 行 · <text class="mono">{{item.materialId}}</text> · {{item.cancelledQty}}</text></view>
             <view class="field"><text class="field-label">逐行取消原因</text><input class="input" disabled="{{busy || lifecycleConfirm.pendingMessage}}" value="{{item.reason}}" data-id="{{item.requestLineId}}" bindinput="lifecycleLineReasonInput" /></view>
           </view>
-          <view wx:else class="notice info">当前没有最终批准量大于 0 的明细，本次将提交空的取消明细集。</view>
+          <view wx:if="{{!lifecycleConfirm.lines.length}}" class="notice info">当前没有最终批准量大于 0 的明细，本次将提交空的取消明细集。</view>
         </block>
         <view wx:if="{{lifecycleConfirm.pendingMessage}}" class="notice warning">{{lifecycleConfirm.pendingMessage}}</view>
         <view wx:if="{{lifecycleConfirm.error}}" class="notice warning">{{lifecycleConfirm.error}}</view>

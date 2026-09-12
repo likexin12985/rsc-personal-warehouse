@@ -3,6 +3,7 @@
     "pages/login/index",
     "pages/home/index",
     "pages/formal-personal-warehouse/index",
+    "pages/formal-my-receiving/index",
     "pages/formal-material-requests/index",
     "pages/formal-operational-stocktakes/index",
     "pages/formal-operational-stocktake-detail/index",

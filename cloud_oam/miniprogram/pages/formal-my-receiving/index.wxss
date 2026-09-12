@@ -1,0 +1,12 @@
+.receiving-note { margin: 24rpx 0; padding: 24rpx; color: #68717a; font-size: 24rpx; line-height: 1.6; }
+.package { padding: 24rpx; margin-bottom: 24rpx; }
+.package-number { font-weight: 650; max-width: 72%; word-break: break-all; }
+.package-fact { margin-top: 12rpx; font-size: 24rpx; word-break: break-all; }
+.receipt-line { border-top: 1rpx solid #e7ebed; margin-top: 24rpx; padding-top: 24rpx; }
+.material-name { font-weight: 650; margin-bottom: 8rpx; word-break: break-all; }
+.quantity-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16rpx; margin-top: 20rpx; }
+.quantity-grid view { background: #f4f6f7; padding: 16rpx; border-radius: 8rpx; }
+.quantity-grid text { display: block; font-size: 24rpx; overflow-wrap: anywhere; }
+.quantity-grid text:first-child { color: #76818a; font-size: 22rpx; margin-bottom: 8rpx; }
+.exception-note { color: #8a5b08; background: #fff2d9; padding: 16rpx; margin-top: 16rpx; font-size: 24rpx; }
+.pagination { display: flex; align-items: center; justify-content: space-between; font-size: 24rpx; gap: 16rpx; }

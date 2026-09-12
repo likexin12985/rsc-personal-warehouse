@@ -1,0 +1,32 @@
+<view class="page">
+  <view class="row between">
+    <view><view class="page-title">本人收货</view><view class="page-subtitle">{{requestNo || '需求包裹进度'}}</view></view>
+    <button class="button button-secondary button-small" bindtap="refresh" loading="{{loading}}" disabled="{{loading}}">刷新</button>
+  </view>
+  <view class="card receiving-note">{{message}}</view>
+  <block wx:if="{{state === 'ready'}}">
+    <view wx:for="{{packages}}" wx:key="shipment_id" wx:for-item="package" class="card package">
+      <view class="row between"><text class="package-number">{{package.shipment_no}}</text><text class="status status-info">{{package.statusLabel}}</text></view>
+      <view class="package-fact">承运商：{{package.carrier}}</view>
+      <view class="package-fact">运单：<text selectable>{{package.tracking_no}}</text></view>
+      <view class="package-fact">交运时间：{{package.shipped_at}}</view>
+      <view class="package-fact">目的地：{{package.target_location_name}}</view>
+      <view wx:for="{{package.lines}}" wx:key="shipment_line_id" wx:for-item="line" class="receipt-line">
+        <view class="material-name">{{line.material_name}}</view><view class="small muted">{{line.sku_code}}</view>
+        <view class="quantity-grid">
+          <view><text>已发运</text><text>{{line.shipped_qty}} {{line.base_unit}}</text></view>
+          <view><text>合格验收</text><text>{{line.accepted_qty}} {{line.base_unit}}</text></view>
+          <view><text>拒收</text><text>{{line.rejected_qty}} {{line.base_unit}}</text></view>
+          <view><text>未验收</text><text>{{line.unconfirmed_qty}} {{line.base_unit}}</text></view>
+        </view>
+        <view wx:if="{{line.has_exception}}" class="exception-note">已有异常验收记录，需继续跟进处理。</view>
+      </view>
+    </view>
+    <view wx:if="{{!packages.length}}" class="empty"><text class="empty-title">暂无明确绑定本人的包裹</text><text class="empty-text">可返回需求详情查看整体审批及发运进度。</text></view>
+    <view class="pagination">
+      <button class="button button-secondary button-small" bindtap="previousPage" disabled="{{!hasPrevious || loading}}">上一页</button>
+      <text>第 {{pageNumber}} 页</text>
+      <button class="button button-secondary button-small" bindtap="nextPage" disabled="{{!hasNext || loading}}">下一页</button>
+    </view>
+  </block>
+</view>
