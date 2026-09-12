@@ -4,6 +4,7 @@ import ast
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
+import runpy
 from pathlib import Path
 from types import SimpleNamespace
 import uuid
@@ -2420,6 +2421,10 @@ def _opening_terminal_0052_function_bodies() -> dict[tuple[str, str], str]:
         migration_0052.LEGACY_ACCOUNT_PRINCIPAL_FRAGMENT,
         migration_0052.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT,
     )
+    migration_0088 = runpy.run_path(str(Path(__file__).resolve().parents[1] / "alembic/versions/20260928_0088_receipt_account_admission.py"))
+    assert hashlib.sha256(hardened_account_body.encode()).hexdigest() == migration_0088["ACCOUNT_OLD_HASH"] == migration_0052.FIXED_ACCOUNT_BODY_SHA256
+    assert hardened_account_body.count(migration_0088["ANCHOR"]) == 1
+    hardened_account_body = hardened_account_body.replace(migration_0088["ANCHOR"], migration_0088["ACCOUNT_BRANCH"] + migration_0088["ANCHOR"])
     assert legacy_scope_completion_body.count(
         migration_0052.LEGACY_SCOPE_COMPLETION_TOTAL_DECLARATION_0021
     ) == 1
@@ -2582,7 +2587,7 @@ def test_0052_opening_terminal_internal_function_manifest_is_exact() -> None:
         ),
         graph_coordinate: migration_0052.GRAPH_BODY_SHA256,
         commit_coordinate: migration_0052.FIXED_COMMIT_BODY_SHA256,
-        account_coordinate: migration_0052.FIXED_ACCOUNT_BODY_SHA256,
+        account_coordinate: runpy.run_path(str(Path(__file__).resolve().parents[1] / "alembic/versions/20260928_0088_receipt_account_admission.py"))["ACCOUNT_NEW_HASH"],
         reconciliation_effect_coordinate:
             migration_0052.INHERITED_RECONCILIATION_FUNCTION_CATALOG[2][10],
     }

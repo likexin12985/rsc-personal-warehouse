@@ -1206,10 +1206,13 @@ def receipt_command_status(
 def create_formal_material_request_inbound_order(
     material_request_id: UUID, payload: InboundOrderIn, response: Response,
     principal: FormalPrincipal = Depends(require_permission("material_request", "fulfill")),
-    db: Session = Depends(get_db), request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
     trace = _required_safe_header("X-Request-ID", request_id, minimum=8, maximum=160)
+    _set_read_no_store(response)
     try:
+        _require_lifecycle_write_runtime(runtime_settings)
         output = InboundOrderOut(**inbound_service.create_inbound_order(db, actor=principal, request_id=material_request_id, expected_version=payload.expected_request_version, receipt_id=payload.receipt_id, target_location_id=payload.target_location_id, target_person_id=payload.target_person_id, trace_request_id=trace)); db.commit(); _set_read_no_store(response); return output
     except Exception as exc:
         _rollback_and_raise(db, exc)
@@ -1230,12 +1233,14 @@ def list_formal_material_request_inbound_orders(
 def post_formal_material_request_inbound_order(
     material_request_id: UUID, inbound_order_id: UUID, response: Response,
     principal: FormalPrincipal = Depends(require_permission("material_request", "fulfill")),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
     key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
+    _set_read_no_store(response)
     try:
+        _require_lifecycle_write_runtime(runtime_settings)
         result = inbound_service.post_inbound_order(db, actor=principal, inbound_order_id=inbound_order_id, material_request_id=material_request_id, idempotency_key=key, request_id=trace)
         output = InboundPostingOut(**result); db.commit(); _set_read_no_store(response); _set_replay_header(response, output.replayed); return output
     except Exception as exc:

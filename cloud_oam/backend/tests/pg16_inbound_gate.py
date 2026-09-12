@@ -46,25 +46,18 @@ def assert_inbound_gate(api_engine, security_engine, *, request_id, receipt_id, 
         print('PG16 inbound: rejected-only receipt cannot create a posting order', flush=True)
         return
 
-    targets = {}
-    with Session(security_engine) as db:
-        db.execute(text('SET LOCAL ROLE star_oam_migrator'))
+    # The actual API must create new personal dimensions with the accepted
+    # receipt transaction. Migrator provisioning would conceal an ACL defect.
+    dimensions = {}
+    with Session(api_engine) as db:
         for line in accepted:
             shipped = db.get(ShipmentLine, line.shipment_line_id)
             outbound = db.get(OutboundPosting, shipped.outbound_posting_id)
             source = db.get(StockAccount, outbound.target_stock_account_id)
-            target = db.scalar(select(StockAccount).where(StockAccount.location_id == location_id,
-                StockAccount.custodian_person_id == person_id, StockAccount.owner_org_id == source.owner_org_id,
-                StockAccount.material_id == source.material_id, StockAccount.condition_code == source.condition_code,
-                StockAccount.lot_id == source.lot_id, StockAccount.availability_bucket == 'available'))
-            if target is None:
-                target = StockAccount(id=uuid4(), location_id=location_id, custodian_person_id=person_id,
-                    owner_org_id=source.owner_org_id, material_id=source.material_id,
-                    condition_code=source.condition_code, lot_id=source.lot_id, availability_bucket='available')
-                db.add(target); db.flush()
-                db.add(StockBalance(stock_account_id=target.id, quantity=Decimal('0.000'), version=0, ledger_cursor=0))
-            targets[line.id] = (source.id, target.id, line.accepted_qty)
-        db.commit()
+            dimensions[line.id] = (source.id, dict(location_id=location_id,
+                custodian_person_id=person_id, owner_org_id=source.owner_org_id,
+                material_id=source.material_id, condition_code=source.condition_code,
+                lot_id=source.lot_id, availability_bucket='available'), line.accepted_qty)
 
     order = create_order(); order_id = order['inbound_order_id']
     def snapshot():
@@ -76,7 +69,8 @@ def assert_inbound_gate(api_engine, security_engine, *, request_id, receipt_id, 
                 tuple(db.execute(select(StockBalance.stock_account_id, StockBalance.version, StockBalance.ledger_cursor).order_by(StockBalance.stock_account_id))),
                 tuple(db.execute(select(SerialCurrentPosition.serial_id, SerialCurrentPosition.stock_account_id, SerialCurrentPosition.last_movement_id).order_by(SerialCurrentPosition.serial_id))),
                 tuple(db.execute(select(InventoryLedgerHead.id, InventoryLedgerHead.next_cursor).order_by(InventoryLedgerHead.id))),
-                tuple(db.scalar(select(func.count()).select_from(model)) for model in (MaterialRequestCommand, AuditEvent, OutboxEvent, NotificationEvent)))
+                tuple(db.scalar(select(func.count()).select_from(model)) for model in (MaterialRequestCommand, AuditEvent, OutboxEvent, NotificationEvent)),
+                tuple(db.scalars(select(StockAccount.id).order_by(StockAccount.id))))
     def post(key):
         with Session(api_engine) as db:
             assert db.scalar(text('SELECT current_user')) == 'star_oam_api'
@@ -87,9 +81,36 @@ def assert_inbound_gate(api_engine, security_engine, *, request_id, receipt_id, 
             return value
 
     before = snapshot()
+    with Session(api_engine) as db:
+        assert any(db.scalar(select(StockAccount.id).filter_by(**columns)) is None
+            for _, columns, _ in dimensions.values()), "gate must exercise an absent personal account"
     with patch.object(inbound, 'append_audit_event', side_effect=RuntimeError('injected inbound audit failure')):
         with pytest.raises(RuntimeError, match='injected inbound'):
             post(f'pg16-inbound-rollback-{order_id}')
+    assert snapshot() == before
+    # A failure after the immutable binding and version command must also
+    # discard every account, ledger, audit and version change.
+    record_command = inbound.record_fulfillment_command
+    def fail_after_command(*args, **kwargs):
+        record_command(*args, **kwargs)
+        raise RuntimeError('injected inbound command failure')
+    with patch.object(inbound, 'record_fulfillment_command', side_effect=fail_after_command):
+        with pytest.raises(RuntimeError, match='injected inbound command'):
+            post(f'pg16-inbound-command-rollback-{order_id}')
+    assert snapshot() == before
+
+    def poison_initial_balance(db, **kwargs):
+        record_command(db, **kwargs)
+        for _, columns, _ in dimensions.values():
+            target = db.scalars(select(StockAccount).filter_by(**columns)).one()
+            if target.id not in before[8]:
+                db.get(StockBalance, target.id).quantity += 1
+                db.flush()
+                return
+        raise AssertionError('missing new account for the balance guard probe')
+    with patch.object(inbound, 'record_fulfillment_command', side_effect=poison_initial_balance):
+        with pytest.raises(DBAPIError, match='verified opening recount observation'):
+            post(f'pg16-inbound-balance-rollback-{order_id}')
     assert snapshot() == before
     barrier = Barrier(2)
     def race(key):
@@ -105,12 +126,20 @@ def assert_inbound_gate(api_engine, security_engine, *, request_id, receipt_id, 
     key, result = successful[0]
     after = snapshot()
     assert after[:3] == (before[0] + 1, before[1] + 1, before[2] + 1)
+    targets = {}
+    with Session(api_engine) as db:
+        for line_id, (source, columns, qty) in dimensions.items():
+            target = db.scalars(select(StockAccount).filter_by(**columns)).one()
+            targets[line_id] = source, target.id, qty
+    expected_new_ids = {target for _, target, _ in targets.values()} - set(before[8])
+    assert set(after[8]) - set(before[8]) == expected_new_ids
     quantities_before, quantities_after = dict(before[3]), dict(after[3])
     deltas = {}
     for source, target, qty in targets.values():
         deltas[source] = deltas.get(source, Decimal(0)) - qty
         deltas[target] = deltas.get(target, Decimal(0)) + qty
-    assert all(quantities_after[account] == qty + deltas.get(account, Decimal(0)) for account, qty in quantities_before.items())
+    assert all(quantities_after.get(account, Decimal(0)) == quantities_before.get(account, Decimal(0)) + deltas.get(account, Decimal(0))
+        for account in set(quantities_before) | set(quantities_after))
     assert post(key)['inventory_transaction_id'] == result['inventory_transaction_id']
     assert snapshot() == after
     with Session(api_engine) as db:
@@ -139,5 +168,13 @@ def assert_inbound_gate(api_engine, security_engine, *, request_id, receipt_id, 
         with pytest.raises(DBAPIError, match='append-only'):
             db.execute(text('DELETE FROM inbound_postings WHERE inbound_order_id=:id'), {'id': order_id})
         db.rollback()
+    # A standalone account still cannot bypass opening/receipt admission.
+    with Session(api_engine) as db:
+        columns = dict(next(iter(dimensions.values()))[1], availability_bucket='arrived_pending')
+        assert db.scalar(select(StockAccount.id).filter_by(**columns)) is None
+        db.add(StockAccount(id=uuid4(), **columns)); db.flush()
+        with pytest.raises(DBAPIError, match='verified opening recount observation'):
+            db.execute(text('SET CONSTRAINTS ALL IMMEDIATE'))
+        db.rollback()
     assert snapshot() == after
-    print('PG16 inbound: actual ledger, atomic rollback, race, immutable order, version command and READ ONLY projection PASS', flush=True)
+    print('PG16 inbound: actual account creation, ledger, atomic rollback, race, immutable order, version command and READ ONLY projection PASS', flush=True)

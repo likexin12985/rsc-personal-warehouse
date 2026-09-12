@@ -337,10 +337,48 @@ def test_inbound_http_errors_roll_back_and_preserve_stable_status(monkeypatch, c
     app.dependency_overrides[get_formal_principal] = lambda: SimpleNamespace(allows=lambda *a, **kw: True)
     def fail(*a, **kw):
         raise inbound.InboundError("inbound_test_boundary", category, "入账验证未通过")
+    from app.config import Settings, get_settings
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        material_request_writes_enabled=True,
+        material_request_idempotency_hmac_secret="test-inbound-runtime-secret-0088-allowed")
     monkeypatch.setattr(inbound, "post_inbound_order", fail)
     with TestClient(app) as client:
         response = client.post(f"/api/v1/material-requests/{uuid4()}/inbound-orders/{uuid4()}/post",
             headers={"Idempotency-Key": KEY, "X-Request-ID": "inbound-http-test-trace"})
     assert response.status_code == expected
     assert response.json()["detail"]["code"] == "inbound_test_boundary"
+    assert calls == ["rollback"]
+
+
+@pytest.mark.parametrize("post_action", [False, True])
+def test_inbound_write_routes_respect_disabled_runtime(monkeypatch, post_action):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.config import Settings, get_settings
+    from app.database import get_db
+    from app.dependencies import get_formal_principal
+    from app.routers import formal_material_requests
+
+    calls = []
+    db = SimpleNamespace(rollback=lambda: calls.append("rollback"), commit=lambda: calls.append("commit"))
+    app = FastAPI()
+    app.include_router(formal_material_requests.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_formal_principal] = lambda: SimpleNamespace(allows=lambda *a, **kw: True)
+    app.dependency_overrides[get_settings] = lambda: Settings(material_request_writes_enabled=False)
+    def forbidden(*args, **kwargs):
+        pytest.fail("disabled inbound route invoked a write service")
+    monkeypatch.setattr(inbound, "create_inbound_order", forbidden)
+    monkeypatch.setattr(inbound, "post_inbound_order", forbidden)
+    url = f"/api/v1/material-requests/{uuid4()}/inbound-orders"
+    payload = {"expected_request_version": 1, "receipt_id": str(uuid4()),
+        "target_location_id": str(uuid4()), "target_person_id": str(uuid4())}
+    if post_action:
+        url += f"/{uuid4()}/post"
+        payload = None
+    with TestClient(app) as client:
+        response = client.post(url, json=payload,
+            headers={"Idempotency-Key": KEY, "X-Request-ID": "inbound-disabled-test-trace"})
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "material_request_writes_disabled"
     assert calls == ["rollback"]

@@ -52,22 +52,38 @@ def create_inbound_order(db, *, actor, request_id, expected_version, receipt_id,
 def _result(row):
     return {"schema_version":"1.0", "inbound_order_id":row.id, "inbound_no":row.inbound_no, "receipt_id":row.receipt_id, "target_location_id":row.target_location_id, "target_person_id":row.target_person_id, "status":row.status}
 
-def resolve_personal_target_account(db, *, receipt_id, target_location_id, target_person_id, shipment_line_id):
-    """Resolve the pre-provisioned available account for accepted stock."""
+def resolve_personal_target_account(db, *, receipt_id, target_location_id, target_person_id, shipment_line_id, create=False):
+    """Resolve the receipt dimension; new accounts must commit with its posting."""
     line = db.get(ShipmentLine, shipment_line_id)
     if line is None: _fail("shipment_line_not_found", "not_found", "发运明细不存在")
     posting = db.get(OutboundPosting, line.outbound_posting_id)
     source = db.get(StockAccount, posting.target_stock_account_id) if posting else None
     if source is None: _fail("target_source_missing", "conflict", "发运目标账户不存在")
-    rows = tuple(db.scalars(select(StockAccount).where(
-        StockAccount.owner_org_id == source.owner_org_id,
-        StockAccount.custodian_person_id == target_person_id,
-        StockAccount.location_id == target_location_id,
-        StockAccount.material_id == source.material_id,
-        StockAccount.condition_code == source.condition_code,
-        StockAccount.lot_id == source.lot_id,
-        StockAccount.availability_bucket == "available",
-    ).limit(2)).all())
+    dimensions = dict(owner_org_id=source.owner_org_id,
+        custodian_person_id=target_person_id, location_id=target_location_id,
+        material_id=source.material_id, condition_code=source.condition_code,
+        lot_id=source.lot_id, availability_bucket="available")
+    query = select(StockAccount).filter_by(**dimensions).limit(2)
+    rows = tuple(db.scalars(query).all())
+    if not rows and create:
+        receipt = db.get(Receipt, receipt_id)
+        shipment = db.get(Shipment, receipt.shipment_id) if receipt else None
+        if shipment is None or line.shipment_id != shipment.id:
+            _fail("target_source_invalid", "conflict", "目标账户必须来自当前验收的原发运明细")
+        _validate_inbound_target(shipment, target_location_id, target_person_id)
+        if source.availability_bucket != "in_transit":
+            _fail("target_source_invalid", "conflict", "入账来源不是原在途库存")
+        # Keep timestamps identical for the immutable admission proof. Two
+        # independent receipts may discover the same absent dimension at once;
+        # INSERT-only conflict handling reuses the winner without UPDATE rights.
+        now = datetime.now(timezone.utc)
+        if db.get_bind().dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+        db.execute(insert(StockAccount).values(id=uuid.uuid4(), **dimensions,
+            created_at=now, updated_at=now).on_conflict_do_nothing())
+        rows = tuple(db.scalars(query).all())
     if len(rows) != 1: _fail("personal_target_missing", "precondition_failed", "个人仓目标账户不存在或不唯一")
     return rows[0]
 
@@ -114,7 +130,7 @@ def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idem
         # inventory movement.
         if Decimal(line.accepted_qty) <= 0:
             continue
-        target = resolve_personal_target_account(db, receipt_id=receipt.id, target_location_id=order.target_location_id, target_person_id=order.target_person_id, shipment_line_id=line.shipment_line_id)
+        target = resolve_personal_target_account(db, receipt_id=receipt.id, target_location_id=order.target_location_id, target_person_id=order.target_person_id, shipment_line_id=line.shipment_line_id, create=existing is None)
         command = build_inbound_posting_command(db, inbound_order=order, receipt_line_id=line.id, target_account=target)
         movements.extend(command.movements)
     if not movements:
