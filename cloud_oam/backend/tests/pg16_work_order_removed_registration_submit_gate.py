@@ -15,7 +15,7 @@ from unittest.mock import patch
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
-from sqlalchemy import select, func
+from sqlalchemy import select, func, event
 from sqlalchemy.orm import Session
 
 from app.demand_models import WorkOrderReplacement, WorkOrderMaterialOperation, WorkOrderCommandSeal
@@ -143,4 +143,28 @@ def assert_removed_registration_submit_gate(api_engine, fixture_engine):
                 for stream in (process.stdin, process.stdout, process.stderr): stream.close()
                 db.rollback()
         assert snapshot(api_engine) == baseline
-        print(f"PG16 removed SN mini {mode}: exact Unicode hash, durable marker, independent original proof and full rollback PASS", flush=True)
+        print(f"PG16 removed SN mini {mode}: original proof, exact completion obligations and full rollback PASS", flush=True)
+    assert_completion_no_write_gate(api_engine, world)
+
+
+def assert_completion_no_write_gate(api_engine, world):
+    from app.formal_services.work_order_completion import completion_check
+    before = snapshot(api_engine)
+    selects = []
+    def require_select(connection, cursor, statement, parameters, context, executemany):
+        # Opening integrity currently acquires evidence/ledger row locks. Keep
+        # that proof intact while rejecting any data mutation by the read path.
+        assert statement.lstrip().upper().startswith("SELECT"), "completion attempted a non-SELECT statement"
+        selects.append(statement)
+    event.listen(api_engine, "before_cursor_execute", require_select)
+    try:
+        with Session(api_engine) as db:
+            actor = load_formal_principal(db, world[1])
+            result = completion_check(db, actor=actor, work_order_id=world[2][0])
+            assert result.material_check_status == "clear" and not result.blockers and result.issue_count == 0
+            db.rollback()
+    finally:
+        event.remove(api_engine, "before_cursor_execute", require_select)
+    assert selects and any("FOR UPDATE" in statement for statement in selects)
+    assert snapshot(api_engine) == before
+    print("PG16 completion clear: SELECT-only, original opening proof locks retained, complete state unchanged PASS", flush=True)

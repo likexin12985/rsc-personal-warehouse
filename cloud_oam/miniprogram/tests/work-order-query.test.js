@@ -44,6 +44,7 @@ function harness(settings = {}) {
       if (endpoint.endsWith('/removed-part')) return settings.removed(request.data, state)
       if (endpoint.endsWith('/preview')) return settings.preview(endpoint, request.data, state)
       if (endpoint.endsWith('/material-options')) return settings.options ? settings.options(state) : options()
+      if (endpoint.endsWith('/material-completion-check')) return settings.completion(state)
       return settings.list ? settings.list(endpoint, state) : list()
     } }
     return require(path.resolve(__dirname, '../pages/formal-work-orders', name))
@@ -1088,4 +1089,90 @@ test('stale registration preview, identity collision or released basis prevents 
     assert.equal(context.page.data.confirming, false); assert.equal(registrationWrites(context.state).length, 0)
     assert.equal(context.store.read({ work_order_id: ORDER }).kind, 'missing')
   }
+})
+
+const completionContract = require('../utils/work-order-completion-contract')
+function completionResult(kind = 'unreleased_reservation') {
+  const issue = { kind, reference_id: kind === 'unreleased_reservation' ? ACCOUNT : NEXT,
+    operation_id: ['pending_return', 'unpaired_serial_consumption'].includes(kind) ? NEXT : null,
+    operation_no: ['pending_return', 'unpaired_serial_consumption'].includes(kind) ? 'WOM-TEST' : null,
+    stock_account_id: ACCOUNT, material_id: OTHER, sku_code: 'SKU-TEST', material_name: '测试物料', base_unit: '件',
+    condition_code: ['pending_recovery', 'pending_return'].includes(kind) ? 'damaged' : 'new',
+    lot_id: null, lot_no: null, quantity: '1.000', serials: kind === 'unreleased_reservation' ? [] : [{ serial_id: OTHER, serial_no: 'SN-TEST' }] }
+  return { schema_version: '1.0', person_id: PERSON, authorization_version: 7, work_order: order(),
+    checked_at: '2026-09-12T08:01:00Z', ledger_cursor: 7, material_check_status: kind ? 'blocked' : 'clear',
+    blockers: kind ? [kind] : [], issue_count: kind ? 1 : 0, issues: kind ? [issue] : [] }
+}
+const completionExpected = { workOrderId: ORDER, personId: PERSON, authorizationVersion: 7, sourceVersion: 'wo-v2:test' }
+test('completion contract distinguishes each obligation and exact quantities from a clear observation', () => {
+  for (const kind of ['', 'unreleased_reservation', 'pending_recovery', 'pending_return', 'unpaired_serial_consumption']) {
+    const raw = completionResult(kind), result = completionContract.validateCompletion(raw, completionExpected)
+    assert.equal(result.status, kind ? 'blocked' : 'clear'); assert.equal(result.issueCount, kind ? 1 : 0)
+  }
+  const large = completionResult(); large.issues[0].quantity = '900719925474099.999'
+  assert.equal(completionContract.validateCompletion(large, completionExpected).issues[0].quantity, large.issues[0].quantity)
+  const lot = completionResult('pending_return'); lot.issues[0].lot_id = NEXT; lot.issues[0].lot_no = 'EXACT-LOT'
+  assert.equal(completionContract.validateCompletion(lot, completionExpected).issues[0].lot_no, 'EXACT-LOT')
+})
+test('completion contract rejects partial counts, foreign context, QR leakage and false clear results', () => {
+  for (const mutate of [r => { r.person_id = OTHER }, r => { r.authorization_version++ }, r => { r.work_order.work_order_id = NEXT },
+    r => { r.work_order.source_version = 'stale' }, r => { r.checked_at = 'yesterday' }, r => { r.checked_at = '2020-01-01T00:00:00Z' },
+    r => { r.ledger_cursor = -1 }, r => { r.issue_count = 0 }, r => { r.material_check_status = 'clear' }, r => { r.blockers = [] },
+    r => { r.blockers.push('pending_return') }, r => { r.blockers.push(r.blockers[0]) }, r => { r.issues.push(clone(r.issues[0])); r.issue_count++ },
+    r => { r.issues[0].qr_code = 'private' }, r => { r.issues[0].quantity = 'NaN' }, r => { r.issues[0].quantity = '0.000' },
+    r => { r.issues[0].lot_id = OTHER }, r => { r.issues[0].lot_no = 'unbound' }, r => { r.issues[0].stock_account_id = NEXT },
+    r => { r.issues[0].serials = [{ serial_id: OTHER, serial_no: 'SN', qr_code: 'private' }] }]) {
+    const raw = completionResult(); mutate(raw); assert.throws(() => completionContract.validateCompletion(raw, completionExpected))
+  }
+  for (const kind of ['pending_recovery', 'pending_return', 'unpaired_serial_consumption']) {
+    const raw = completionResult(kind); raw.issues[0].serials.push(clone(raw.issues[0].serials[0]))
+    assert.throws(() => completionContract.validateCompletion(raw, completionExpected))
+  }
+})
+test('completion page performs only fresh no-store reads and displays exact pending return facts', async () => {
+  const { page, state, store } = await openDraft({ completion: () => completionResult('pending_return') })
+  await page.checkCompletion()
+  assert.equal(page.data.completion.issues[0].label, '回收后待退回')
+  assert.equal(page.data.completion.issues[0].serials[0].serial_no, 'SN-TEST')
+  assert.match(page.data.completionMessage, /仍有物料事项/)
+  assert.equal(store.read({ work_order_id: ORDER }).kind, 'missing')
+  for (const call of state.calls) { assert.equal(call.method, 'GET'); assert.equal(call.noRefresh, true); assert.equal(call.header['Cache-Control'], 'no-store') }
+  page.onHide(); assert.equal(page.data.completion, null); assert.equal(page.data.completionMessage, '')
+})
+test('server clear result never overrides a local uncertain original request', async () => {
+  const { store } = await pendingStore()
+  const { page } = await openDraft({ store, completion: () => completionResult('') })
+  await page.checkCompletion()
+  assert.equal(page.data.completion.status, 'clear'); assert.equal(page.data.completion.clientPending, true)
+  assert.match(page.data.completionMessage, /本机还有待确认/)
+  assert.equal(store.read({ work_order_id: ORDER }).kind, 'valid')
+})
+test('completion error, wrong source or permission drift clears the previous displayed result', async () => {
+  for (const mode of ['transport', 'source', 'permission']) {
+    let changed = false
+    const { page } = await openDraft({ access: () => changed && mode === 'permission' ? { ...access(), permissions: [] } : access(),
+      completion: () => { if (changed && mode === 'transport') throw new Error('network'); const raw = completionResult(''); if (changed) raw.work_order.source_version = 'changed'; return raw } })
+    await page.checkCompletion(); assert.equal(page.data.completion.status, 'clear')
+    changed = true; await page.checkCompletion()
+    assert.equal(page.data.completion, null)
+    if (mode !== 'permission') assert.match(page.data.completionMessage, /结束检查未完成/)
+  }
+})
+test('completion double click, hide and session change never apply a late result', async () => {
+  for (const mode of ['hide', 'switch']) {
+    const result = deferred(), { page, state } = await openDraft({ completion: () => result.promise })
+    const work = page.checkCompletion(); await tick(); await page.checkCompletion()
+    assert.equal(state.calls.filter(call => call.endpoint.endsWith('/material-completion-check')).length, 1)
+    if (mode === 'hide') page.onHide(); else state.token = 'different-session'
+    const calls = state.calls.length; result.resolve(completionResult('')); await work
+    assert.equal(page.data.completion, null); assert.equal(state.calls.length, calls)
+  }
+})
+test('a new material submission retires an earlier completion observation', async () => {
+  const { page } = await openDraft({ completion: () => completionResult(''), preview: (_, body) => previewResult('consume', body) })
+  await page.checkCompletion(); assert.equal(page.data.completion.status, 'clear')
+  page.chooseOperation(event(null, { kind: 'consume' })); page.addMaterial(event(ACCOUNT)); page.editQuantity({ ...event(ACCOUNT), detail: { value: '1' } })
+  const work = page.submitMaterials(); await tick()
+  assert.equal(page.data.completion, null); assert.equal(page.data.completionMessage, '')
+  page.cancelSubmission(); await work
 })

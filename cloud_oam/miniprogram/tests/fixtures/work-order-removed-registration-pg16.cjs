@@ -7,6 +7,7 @@ require.cache[require.resolve('../../utils/session')] = { exports: { getToken: (
 const registration = require('../../utils/work-order-removed-registration-submit')
 const paired = require('../../utils/work-order-replacement-submit')
 const recovery = require('../../utils/work-order-recovery')
+const { validateCompletion } = require('../../utils/work-order-completion-contract')
 const { createStore } = require('../../utils/work-order-recovery-store')
 const replies = readline.createInterface({ input: process.stdin })[Symbol.asyncIterator]()
 const send = value => process.stdout.write(JSON.stringify(value) + '\n')
@@ -56,6 +57,15 @@ async function main() {
   const row = { id: 'unknown-removed', basisStockAccountId: line.stock_account_id, condition: fixture.scan.condition_before,
     quantity: '1', scan: fixture.scan, installedSerialId: null }
   const { expected } = await paired.optionsFor({ api, ...fixture, current })
+  async function completion() {
+    const raw = await api.request(`/v1/work-orders/${fixture.workOrderId}/material-completion-check`,
+      { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } })
+    assert.equal(JSON.stringify(raw).includes(fixture.scan.qr_code), false)
+    return validateCompletion(raw, expected)
+  }
+  const initialCheck = await completion()
+  assert.deepEqual(initialCheck.blockers.map(row => row.code), ['unreleased_reservation'])
+  assert.equal(initialCheck.issues[0].quantity, '1.000')
   await assert.rejects(paired.resolveRemoved({ api, row, expected, current }), error =>
     error.responseReceived === true && error.status === 412 && error.code === 'removed_serial_not_found')
   let result = await registration.submitRegistration({ api, store, ...fixture, row, authorize, confirm: async review => {
@@ -81,10 +91,14 @@ async function main() {
     result = await recovery.sealPending({ api, store, ...fixture, authorize, confirm: async () => true })
     assert.equal(result.status, 'sealed'); assert.equal(result.seal.operation_type, 'register_removed')
     assert.equal(result.seal.request_id, originalTrace); assert.equal(result.seal.request_hash, fixture.expectedHash)
+    assert.deepEqual((await completion()).blockers.map(row => row.code), ['unreleased_reservation'])
   } else {
     assert.equal(result.status, 'confirmed'); assert.equal(result.command.status, 'registered')
     assert.equal(result.command.request_hash, fixture.expectedHash); assert.equal(records.size, 0)
     const registeredSerial = result.command.serial_id
+    const registeredCheck = await completion()
+    assert.deepEqual(registeredCheck.blockers.map(row => row.code), ['pending_recovery', 'unreleased_reservation'])
+    assert.equal(registeredCheck.issues.find(row => row.kind === 'pending_recovery').serials[0].serial_id, registeredSerial)
     const fresh = await paired.optionsFor({ api, ...fixture, current })
     row.candidate = await paired.resolveRemoved({ api, row, expected: fresh.expected, current })
     assert.equal(row.candidate.serial_id, registeredSerial)
@@ -102,6 +116,10 @@ async function main() {
     assert.equal(result.status, 'confirmed')
     assert.notEqual(result.command.consume_transaction_id, result.command.recover_transaction_id)
     assert.notEqual(result.command.consume_operation_id, result.command.recover_operation_id)
+    const postedCheck = await completion()
+    assert.deepEqual(postedCheck.blockers.map(row => row.code), ['pending_return'])
+    assert.equal(postedCheck.issues[0].operation_id, result.command.recover_operation_id)
+    assert.equal(postedCheck.issues[0].serials[0].serial_id, registeredSerial)
   }
   assert.equal(records.size, 0)
   send({ complete: true, registrationPosts, pairedPosts, seals, reviews })

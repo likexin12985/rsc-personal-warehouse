@@ -41,6 +41,25 @@
       <view class="muted">来源更新：{{workOrder.source_updated_at}}</view>
       <view class="muted">最近同步：{{workOrder.synced_at}}</view>
     </view>
+    <view class="card">
+      <view class="order-no">结束前物料检查</view>
+      <button size="mini" disabled="{{busy || loading}}" bindtap="checkCompletion">检查占用、回收与退回</button>
+      <view wx:if="{{completionMessage}}">{{completionMessage}}</view>
+      <block wx:if="{{completion}}">
+        <view class="muted">检查时间：{{completion.checkedAt}}</view>
+        <view wx:for="{{completion.blockers}}" wx:for-item="reason" wx:key="code">{{reason.label}}</view>
+        <view wx:for="{{completion.issues}}" wx:for-item="issue" wx:key="id" class="draft-row">
+          <view class="order-no">{{issue.label}}</view>
+          <view>{{issue.material_name}} · {{issue.sku_code}}</view>
+          <view>{{issue.conditionLabel}}<text wx:if="{{issue.lot_no}}"> · 批次 {{issue.lot_no}}</text></view>
+          <view>{{issue.quantity}} {{issue.base_unit}}</view>
+          <view wx:if="{{issue.operation_no}}" class="muted">原操作：{{issue.operation_no}}</view>
+          <view wx:for="{{issue.serials}}" wx:for-item="sn" wx:key="serial_id">SN：{{sn.serial_no}}</view>
+          <view wx:if="{{issue.kind === 'pending_return'}}" class="muted">需通过退回单及接收确认解除保管责任。</view>
+          <view wx:if="{{issue.kind === 'unpaired_serial_consumption'}}" class="muted">需核对本次是否以换代修，以及拆回件的处理情况。</view>
+        </view>
+      </block>
+    </view>
     <view wx:if="{{confirming}}" class="card confirmation-card">
       <view class="order-no">{{reviewTitle}}</view>
       <view>工单：{{reviewWorkOrderNo}}</view>

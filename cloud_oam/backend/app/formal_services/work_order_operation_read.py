@@ -96,12 +96,13 @@ def lookup_operation(db, *, actor, work_order_id, operation_type, request_id):
         return WorkOrderMaterialLookupOut(lookup_status="confirmed", command=result)
 
 
-def _verified_result(db, *, actor, request_id, operation_type, work_order_id, operation, transaction, inventory_audit):
+def _verify_operation_evidence(db, *, actor, request_reference, operation_type, work_order_id, operation, transaction, inventory_audit):
     digest = operation.idempotency_key_hash
     if (not re.fullmatch(r"[0-9a-f]{64}", digest) or operation.operator_person_id != actor.person_id
             or operation.oam_work_order_id != work_order_id or operation.operation_type != operation_type
             or operation.status != "posted" or operation.operation_no != f"WOM-{work_order_id.hex[:12].upper()}-{digest[:12].upper()}"
             or transaction.actor_user_id != actor.user_id or transaction.status != "posted" or transaction.ledger_cursor <= 0
+            or transaction.source_document_type != "work_order_material" or transaction.source_document_id != str(work_order_id)
             or transaction.reversed_transaction_id is not None
             or transaction.movement_type != material.expected_posting_movement_type(operation_type)
             or transaction.posting_key != f"work-order-material:{operation_type}:{work_order_id}:{digest}"
@@ -132,13 +133,15 @@ def _verified_result(db, *, actor, request_id, operation_type, work_order_id, op
     if len(facts) != len(lines) or len(movements) != len(lines):
         _invalid()
     for index, (line, fact, movement) in enumerate(zip(lines, facts, movements), 1):
+        source_account = None if operation_type == "recover" else line.stock_account_id
+        target_account = line.stock_account_id if operation_type == "recover" else line.target_stock_account_id
+        boundary = "work_order_material_" + operation_type if operation_type in {"consume", "recover"} else None
         if (fact.line_no != index or fact.material_id != line.material_id or fact.stock_account_id != line.stock_account_id
                 or fact.quantity != line.quantity or fact.condition_before != line.condition_before or fact.condition_after is not None
-                or movement.line_no != index or movement.from_account_id != line.stock_account_id
-                or movement.to_account_id != line.target_stock_account_id
-                or movement.external_boundary_code != ("work_order_material_consume" if operation_type=="consume" else None)):
+                or movement.line_no != index or movement.from_account_id != source_account
+                or movement.to_account_id != target_account or movement.external_boundary_code != boundary):
             _invalid()
-        if operation_type == "consume" and line.target_stock_account_id is not None:
+        if operation_type in {"consume", "recover"} and line.target_stock_account_id is not None:
             _invalid()
         if operation_type in {"occupy", "release"}:
             source = db.get(StockAccount, line.stock_account_id)
@@ -165,13 +168,37 @@ def _verified_result(db, *, actor, request_id, operation_type, work_order_id, op
         from_status=None, to_status="posted", reason="inventory_transaction_posted", actor_id=actor.user_id,
         idempotency_key=_derived_evidence_key("state", transaction.id, "posted"),
         metadata_jsonb={"ledger_cursor":transaction.ledger_cursor, "movement_type":transaction.movement_type,
-                        "request_reference":_request_reference(request_id)})
+                        "request_reference":request_reference})
     if (inventory_audit.before_jsonb is not None or inventory_audit.after_jsonb != {
             "ledger_cursor":transaction.ledger_cursor, "movement_count":len(lines), "movement_type":transaction.movement_type,
             "posting_key":transaction.posting_key, "reversed_transaction_id":None, "status":"posted"}):
         _invalid()
     verify_audit_event_in_read_snapshot(db, stream_key="inventory", event_id=inventory_audit.id)
     verify_audit_event_in_read_snapshot(db, stream_key="material_request", event_id=audit.id)
+    return lines
+
+
+def verify_operation_history(db, *, actor, operation):
+    """Verify an owned immutable fact without inventing a raw original request ID."""
+    try:
+        if operation.operation_type not in {"occupy", "release", "consume", "recover"} or operation.replacement_id is not None:
+            _invalid()
+        transaction = db.get(InventoryTransaction, operation.posting_transaction_id, populate_existing=True)
+        event = _single(db, AuditEvent, stream_key="inventory", action="inventory.transaction.posted",
+            actor_user_id=actor.user_id, aggregate_type="inventory_transaction", aggregate_id=str(transaction.id))
+        if not isinstance(event.request_id, str) or not re.fullmatch(r"inventory-request-[a-f0-9]{64}", event.request_id):
+            _invalid()
+        return _verify_operation_evidence(db, actor=actor, request_reference=event.request_id,
+            operation_type=operation.operation_type, work_order_id=operation.oam_work_order_id,
+            operation=operation, transaction=transaction, inventory_audit=event)
+    except (KeyError, TypeError, ValueError, AttributeError, ValidationError, AuditChainError, material.InventoryPostingError):
+        _invalid()
+
+
+def _verified_result(db, *, actor, request_id, operation_type, work_order_id, operation, transaction, inventory_audit):
+    lines = _verify_operation_evidence(db, actor=actor, request_reference=_request_reference(request_id),
+        operation_type=operation_type, work_order_id=work_order_id, operation=operation,
+        transaction=transaction, inventory_audit=inventory_audit)
     return WorkOrderMaterialRecoveredOut(operation_id=operation.id, operation_no=operation.operation_no,
         work_order_id=work_order_id, operator_person_id=actor.person_id, operation_type=operation_type,
         posting_transaction_id=transaction.id, status="posted", request_id=request_id,

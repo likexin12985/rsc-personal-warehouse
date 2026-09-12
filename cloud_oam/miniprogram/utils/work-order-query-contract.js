@@ -68,4 +68,4 @@ function validateMaterialOptions(value, person, version, workOrderId) {
   })
   return { workOrder: selectedOrder, items, locationName: row.location_name, openingEstablished: row.opening_balance_status === 'established' }
 }
-module.exports = { uuid, validateMyWorkOrders, validateMaterialOptions }
+module.exports = { uuid, validateWorkOrder: order, validateMyWorkOrders, validateMaterialOptions }

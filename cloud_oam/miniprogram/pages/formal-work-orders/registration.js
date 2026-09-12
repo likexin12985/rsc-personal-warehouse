@@ -9,7 +9,7 @@ module.exports = ({ api, session }) => ({
     const context = this._recoveryContext, matches = this._sessionMatches, person = this._recoveryPerson
     const active = () => this._visible && generation === this._generation
     const current = () => active() && matches() && revision === this._draftRevision
-    this.setData({ busy: true, previewMessage: '正在核验拆回件身份，请确认登记内容。' })
+    this.setData({ busy: true, completion: null, completionMessage: '', previewMessage: '正在核验拆回件身份，请确认登记内容。' })
     try {
       const result = await submitRegistration({ api, store: this._store, workOrderId: order, personId: person,
         authorizationVersion: session.getUser().authorization_version, row,

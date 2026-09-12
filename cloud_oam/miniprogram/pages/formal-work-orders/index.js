@@ -8,13 +8,15 @@ const draft = require('../../utils/work-order-draft')
 const { submitDraft } = require('../../utils/work-order-submit')
 const { submitReplacement } = require('../../utils/work-order-replacement-submit')
 const registrationPage = require('./registration')({ api, session })
+const completionPage = require('./completion')({ api, session })
 const replacementPage = require('./replacement')({ api, session, scanCode: options => wx.scanCode(options) })
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
-function empty() { return { state: 'idle', loading: false, busy: false, search: '', orders: [], items: [], workOrder: null, locationName: '', message: '', hasNext: false, hasPrevious: false, pageNumber: 1, canRecover: false, recoveryMessage: '', pendingRequests: [], pendingMessage: '', canSeal: false, canDraft: false, operationKind: 'occupy', draftRows: [], previewMessage: '', confirming: false, reviewRows: [], reviewTitle: '', reviewWorkOrderNo: '', reviewDescription: '', reviewPairs: [], removedRows: [] } }
+function empty() { return { completion: null, completionMessage: '', state: 'idle', loading: false, busy: false, search: '', orders: [], items: [], workOrder: null, locationName: '', message: '', hasNext: false, hasPrevious: false, pageNumber: 1, canRecover: false, recoveryMessage: '', pendingRequests: [], pendingMessage: '', canSeal: false, canDraft: false, operationKind: 'occupy', draftRows: [], previewMessage: '', confirming: false, reviewRows: [], reviewTitle: '', reviewWorkOrderNo: '', reviewDescription: '', reviewPairs: [], removedRows: [] } }
 
 Page({
   ...replacementPage,
   ...registrationPage,
+  ...completionPage,
   data: empty(),
   onShow() { this._visible = true; this._selected = null; this._cursors = [null]; this._store = recoveryStore.getStore(); return this.load() },
   onHide() { this.clearView() },
@@ -256,7 +258,7 @@ Page({
     const person = this.data.workOrder.engineer_person_id, version = session.getUser().authorization_version
     const active = () => this._visible && generation === this._generation
     const current = () => active() && matches() && revision === this._draftRevision
-    this.setData({ busy: true, previewMessage: '正在刷新工单与物料，核验整批后请确认。' })
+    this.setData({ busy: true, completion: null, completionMessage: '', previewMessage: '正在刷新工单与物料，核验整批后请确认。' })
     try {
       draft.buildDraft({ workOrder: this.data.workOrder, items: this.data.items, personId: person, kind: kind === 'replace' ? 'consume' : kind, drafts: this._drafts })
       const result = await (kind === 'replace' ? submitReplacement : submitDraft)({ api, store: this._store, workOrderId: order, personId: person,
@@ -328,7 +330,7 @@ Page({
     if (!this._visible || this.data.loading || this.data.busy || !this._recoveryContext || !this._recoveryPerson) return
     const generation = this._generation, context = this._recoveryContext, matches = this._sessionMatches
     const current = () => this._visible && generation === this._generation
-    this.setData({ busy: true })
+    this.setData({ busy: true, completion: null, completionMessage: '' })
     try {
       const result = await (seal ? sealPending : recoverPending)({ api, store: this._store, workOrderId: order,
         personId: this._recoveryPerson, authorize: async () => {

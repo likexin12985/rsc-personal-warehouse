@@ -12,6 +12,8 @@ from ..formal_access import FormalPrincipal
 from ..formal_services.inventory_posting import InventoryPostingError
 from ..formal_services.inventory_query import InventoryReadError
 from ..formal_services.work_order_material_options import material_options
+from ..formal_services.work_order_completion import completion_check
+from ..work_order_completion_schemas import WorkOrderCompletionCheckOut
 from ..formal_services.work_order_query import list_my_work_orders
 from ..work_order_query_schemas import MyWorkOrdersOut, WorkOrderStatus, WorkOrderMaterialOptionsOut
 from ..work_order_material_schemas import WorkOrderMaterialPreviewIn, WorkOrderMaterialPreviewOut
@@ -26,6 +28,20 @@ from ..work_order_material_schemas import (
 )
 
 router = APIRouter(prefix="/v1/work-orders", tags=["formal-work-order-query"])
+
+
+@router.get("/{work_order_id}/material-completion-check", response_model=WorkOrderCompletionCheckOut)
+def check_my_work_order_completion(work_order_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("work_order_material", "read")), db: Session = Depends(get_db)):
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        return completion_check(db, actor=principal, work_order_id=work_order_id)
+    except InventoryReadError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from None
+    except InventoryPostingError as exc:
+        raise HTTPException(status_code=exc.http_status_code, detail=exc.as_detail()) from None
+    except SQLAlchemyError:
+        raise HTTPException(status_code=503, detail={"code": "work_order_completion_unavailable", "message": "工单物料结束检查暂不可用，请稍后重新检查"}) from None
 
 
 @router.post("/{work_order_id}/material-replacements/preview", response_model=WorkOrderReplacementPreviewOut)
