@@ -28,9 +28,11 @@ from ..formal_access import FormalPrincipal, lock_formal_principal_graph
 from .inventory_posting import (
     InventoryMovementCommand, InventoryPostingCommand, InventoryPostingError,
     _require_current_actor, post_inventory_transaction,
+    _lock_inventory_ledger_head_for_atomic_batch,
 )
 from .postgresql_lock_graph import lock_material_request_work_order
 from .audit_chain import append_audit_event
+from .work_order_reservations import require_work_order_reservations
 
 
 class WorkOrderMaterialPreflightError(InventoryPostingError):
@@ -88,11 +90,11 @@ class WorkOrderReplacementPairInput:
     removed_serial_id: UUID
 
 
-def operation_request_hash(*, operation_type: str, work_order_id: UUID,
+def operation_request_payload(*, operation_type: str, work_order_id: UUID,
                            operator_person_id: UUID,
                            lines: tuple[WorkOrderMaterialLineInput, ...],
-                           replacement_pairs: tuple[WorkOrderReplacementPairInput, ...] = ()) -> str:
-    """Return a stable request fingerprint for the append-only operation fact."""
+                           replacement_pairs: tuple[WorkOrderReplacementPairInput, ...] = ()) -> dict:
+    """Return the exact command stored with the append-only operation fact."""
     if operation_type not in {"occupy", "release", "consume", "recover", "reverse"}:
         raise WorkOrderMaterialPreflightError("operation_type_invalid", "工单物料操作类型不合法")
     validate_batch(lines)
@@ -127,7 +129,12 @@ def operation_request_hash(*, operation_type: str, work_order_id: UUID,
             for row in replacement_pairs
         ],
     }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return payload
+
+
+def operation_request_hash(**kwargs) -> str:
+    return hashlib.sha256(json.dumps(operation_request_payload(**kwargs), ensure_ascii=False,
+                                     sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def validate_batch(lines: tuple[WorkOrderMaterialLineInput, ...]) -> None:
@@ -268,6 +275,7 @@ def record_posted_operation(
     This is a historical evidence recorder, not an inventory command. A future
     atomic command must call it before committing the unified stock transaction.
     """
+    _lock_inventory_ledger_head_for_atomic_batch(db)
     order, current = authorize_work_order(db, actor=actor, work_order_id=work_order_id,
                                         action="operate", lock_rows=True)
     if current.person_id != operator_person_id:
@@ -313,6 +321,9 @@ def record_posted_operation(
         # Pairing needs both a consume fact and a return fact; arbitrary UUIDs
         # cannot establish that evidence. The atomic replacement command is pending.
         raise WorkOrderMaterialPreflightError("replacement_evidence_required", "配对需由新件消耗和拆回件入账的关联命令建立")
+    if operation_type in {"consume", "release"}:
+        require_work_order_reservations(db, work_order_id=work_order_id, lines=lines,
+                                        before_cursor=transaction.ledger_cursor)
     operation = WorkOrderMaterialOperation(
         operation_no=f"WOM-{UUID(int=work_order_id.int).hex[:12].upper()}-{key_hash[:12].upper()}",
         oam_work_order_id=work_order_id, operator_person_id=operator_person_id,
@@ -341,7 +352,10 @@ def record_posted_operation(
         action=f"work_order_material.{operation_type}", aggregate_type="work_order_material_operation",
         aggregate_id=str(operation.id), before_jsonb={},
         after_jsonb={"work_order_id": str(work_order_id), "operation_type": operation_type,
-                     "posting_transaction_id": str(posting_transaction_id), "line_count": len(lines)},
+                     "posting_transaction_id": str(posting_transaction_id), "line_count": len(lines),
+                     "request_hash": request_hash, "command": operation_request_payload(
+                         operation_type=operation_type, work_order_id=work_order_id,
+                         operator_person_id=operator_person_id, lines=lines, replacement_pairs=replacement_pairs)},
         request_id=f"work-order-material:{key_hash}", occurred_at=occurred_at, created_at=occurred_at,
     )
     db.add(OutboxEvent(
@@ -385,6 +399,7 @@ def execute_consume_operation(
     No commit occurs here. The router commits both the inventory transaction
     and operation fact together, or rolls both back on any failure.
     """
+    _lock_inventory_ledger_head_for_atomic_batch(db)
     order, current = authorize_work_order(db, actor=actor, work_order_id=work_order_id,
                                           action="operate", lock_rows=True)
     # Do not reject an idempotent replay merely because the immutable OAM
@@ -396,6 +411,10 @@ def execute_consume_operation(
         raise WorkOrderMaterialPreflightError("idempotency_key_missing", "缺少幂等键", "precondition_failed")
     key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
     posting_key = f"work-order-material:consume:{work_order_id}:{key_hash}"
+    original_cursor = db.scalar(select(InventoryTransaction.ledger_cursor).where(
+        InventoryTransaction.posting_key == posting_key))
+    require_work_order_reservations(db, work_order_id=work_order_id, lines=lines,
+                                    before_cursor=original_cursor)
     command = InventoryPostingCommand(
         transaction_no=f"INV-WO-CONSUME-{key_hash[:20].upper()}",
         movement_type="consume", source_document_type="work_order_material",
@@ -429,6 +448,7 @@ def execute_occupy_operation(
     request_id: str,
 ) -> tuple[WorkOrderMaterialOperation, object]:
     """Move exact personal-available stock into reserved stock."""
+    _lock_inventory_ledger_head_for_atomic_batch(db)
     order, current = authorize_work_order(db, actor=actor, work_order_id=work_order_id,
                                           action="operate", lock_rows=True)
     validate_batch(lines)
@@ -470,6 +490,7 @@ def execute_release_operation(
     request_id: str,
 ) -> tuple[WorkOrderMaterialOperation, object]:
     """Release occupied personal stock back to the exact available account."""
+    _lock_inventory_ledger_head_for_atomic_batch(db)
     order, current = authorize_work_order(db, actor=actor, work_order_id=work_order_id,
                                           action="operate", lock_rows=True)
     validate_batch(lines)
@@ -488,6 +509,10 @@ def execute_release_operation(
             raise WorkOrderMaterialPreflightError("release_target_invalid", "释放目标不是当前人员的可用个人仓账户", "conflict")
     key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
     posting_key = f"work-order-material:release:{work_order_id}:{key_hash}"
+    original_cursor = db.scalar(select(InventoryTransaction.ledger_cursor).where(
+        InventoryTransaction.posting_key == posting_key))
+    require_work_order_reservations(db, work_order_id=work_order_id, lines=lines,
+                                    before_cursor=original_cursor)
     command = InventoryPostingCommand(
         transaction_no=f"INV-WO-RELEASE-{key_hash[:20].upper()}",
         movement_type="release", source_document_type="work_order_material",
@@ -518,6 +543,7 @@ def execute_recover_operation(
     request_id: str,
 ) -> tuple[WorkOrderMaterialOperation, object]:
     """Receive returned material into the operator's available personal account."""
+    _lock_inventory_ledger_head_for_atomic_batch(db)
     order, current = authorize_work_order(db, actor=actor, work_order_id=work_order_id,
                                           action="operate", lock_rows=True)
     validate_batch(lines)

@@ -127,6 +127,7 @@ class WorkOrderMaterialOperation(CreatedAtMixin, Base):
             name="ck_work_order_material_operations_status",
         ),
         Index("ix_work_order_material_operations_work_order", "oam_work_order_id", "created_at"),
+        Index("uq_work_order_material_posting_0090", "posting_transaction_id", unique=True),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)

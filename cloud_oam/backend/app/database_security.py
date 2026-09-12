@@ -1892,6 +1892,23 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
     "approval_actions",
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
+    'trg_inventory_transactions_proof_0090': ('inventory_transactions', 'rsc_dispatch_work_order_material_0090', 'A', 5, True, True, True),
+    'trg_inventory_movements_proof_0090': ('inventory_movements', 'rsc_dispatch_work_order_material_0090', 'A', 5, True, True, True),
+    'trg_inventory_movement_serials_proof_0090': ('inventory_movement_serials', 'rsc_dispatch_work_order_material_0090', 'A', 5, True, True, True),
+    'trg_work_order_material_operations_proof_0090': ('work_order_material_operations', 'rsc_dispatch_work_order_material_0090', 'A', 5, True, True, True),
+    'trg_work_order_material_lines_proof_0090': ('work_order_material_lines', 'rsc_dispatch_work_order_material_0090', 'A', 5, True, True, True),
+    'trg_work_order_material_serials_proof_0090': ('work_order_material_serials', 'rsc_dispatch_work_order_material_0090', 'A', 5, True, True, True),
+    'trg_work_order_replacement_pairs_proof_0090': ('work_order_replacement_pairs', 'rsc_dispatch_work_order_material_0090', 'A', 5, True, True, True),
+    'trg_inventory_transactions_work_order_lock_0090': ('inventory_transactions', 'rsc_lock_work_order_material_0090', 'A', 7, False, False, False),
+    'trg_work_order_material_operations_no_truncate_0090': ('work_order_material_operations', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+    'trg_work_order_material_operations_immutable_0077': ('work_order_material_operations', 'rsc_guard_work_order_material_operations_immutable_0077', 'A', 27, False, False, False),
+    'trg_work_order_material_lines_no_truncate_0090': ('work_order_material_lines', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+    'trg_work_order_material_lines_immutable_0077': ('work_order_material_lines', 'rsc_guard_work_order_material_lines_immutable_0077', 'A', 27, False, False, False),
+    'trg_work_order_material_serials_no_truncate_0090': ('work_order_material_serials', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+    'trg_work_order_material_serials_immutable_0077': ('work_order_material_serials', 'rsc_guard_work_order_material_serials_immutable_0077', 'A', 27, False, False, False),
+    'trg_work_order_replacement_pairs_no_truncate_0090': ('work_order_replacement_pairs', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+    'trg_work_order_replacement_pairs_immutable_0077': ('work_order_replacement_pairs', 'rsc_guard_work_order_replacement_pairs_immutable_0077', 'A', 27, False, False, False),
+
     "trg_inbound_postings_facts_0087": ("inbound_postings", "rsc_guard_inbound_posting_0087", "A", 31, False, False, False),
     "trg_inbound_postings_no_truncate_0087": ("inbound_postings", "rsc_guard_inbound_posting_0087", "A", 34, False, False, False),
     **{
@@ -2342,6 +2359,15 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
+    ('rsc_lock_work_order_material_0090', ''): '3020ff345109d942e1287ab48d8a2f53c5d722ff0fda403850649a0602c1f2a7',
+    ('rsc_check_work_order_material_transaction_0090', 'uuid'): '380da467dee2b7b976ea78970ec8ddd4e7f28007c77be6d5ef196506e9754707',
+    ('rsc_dispatch_work_order_material_0090', ''): 'ea3172e2be65bc40e2832953d5698e67c0246aefd2eae5063061a19ac811d0ca',
+    ('rsc_guard_work_order_facts_0090', ''): '216f8cc9b38fce14a09c3ecb79ef15547fbdd89a8de35f1e8b42e498012d6cca',
+    ('rsc_guard_work_order_material_operations_immutable_0077', ''): 'cd8be861e17432dc90d8129908eaa963424b8358641301fe7d5b120a8b1dc02e',
+    ('rsc_guard_work_order_material_lines_immutable_0077', ''): 'cd8be861e17432dc90d8129908eaa963424b8358641301fe7d5b120a8b1dc02e',
+    ('rsc_guard_work_order_material_serials_immutable_0077', ''): 'cd8be861e17432dc90d8129908eaa963424b8358641301fe7d5b120a8b1dc02e',
+    ('rsc_guard_work_order_replacement_pairs_immutable_0077', ''): 'cd8be861e17432dc90d8129908eaa963424b8358641301fe7d5b120a8b1dc02e',
+
     ("rsc_guard_inbound_posting_0087", ""): "c17d062d8a02384506c7dc0b533427787be3feeeb9763e84f2a8b8227524e458",
     ('rsc_material_request_outbound_state_0072', 'uuid, bigint'): "a89e922b7d9fbd19d46b4207fb3b36fffe1a063668073f59b1cf94db400a97ce",
     ('rsc_guard_outbound_binding_0072', ''): "9a5fcfd28a0af565202008beb20c33bf55a31ef64e7cae63ae73a01eb52a79ea",
@@ -2440,6 +2466,15 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ('rsc_lock_work_order_material_0090', ''),
+        ('rsc_check_work_order_material_transaction_0090', 'uuid'),
+        ('rsc_dispatch_work_order_material_0090', ''),
+        ('rsc_guard_work_order_facts_0090', ''),
+        ('rsc_guard_work_order_material_operations_immutable_0077', ''),
+        ('rsc_guard_work_order_material_lines_immutable_0077', ''),
+        ('rsc_guard_work_order_material_serials_immutable_0077', ''),
+        ('rsc_guard_work_order_replacement_pairs_immutable_0077', ''),
+
         ("rsc_guard_inbound_posting_0087", ""),
         ('rsc_material_request_outbound_state_0072', 'uuid, bigint'),
         ('rsc_guard_outbound_binding_0072', ''),
@@ -2477,6 +2512,7 @@ MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
 )
 MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS = frozenset(
     {
+        ("rsc_check_work_order_material_transaction_0090", "uuid"),
         ("rsc_validate_outbound_graph_0072", "uuid"),
         ("rsc_validate_picking_graph_0071", "uuid"),
         ("rsc_validate_reservation_graph_0070", "uuid"),
@@ -5916,7 +5952,7 @@ def _select_material_request_approval_functions(
         for row in rows
         if isinstance(row.get("function_name"), str)
         and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0087")
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090")
         )
     ]
 
@@ -5935,6 +5971,16 @@ JOIN pg_namespace schema_row ON schema_row.oid = table_row.relnamespace
 JOIN pg_am method ON method.oid = index_row.relam
 WHERE schema_row.nspname = 'public' AND index_row.relname = 'uq_inbound_orders_receipt'
 """)
+
+
+_WORK_ORDER_POSTING_INDEX_SQL = text(str(_INBOUND_RECEIPT_INDEX_SQL).replace("uq_inbound_orders_receipt", "uq_work_order_material_posting_0090"))
+
+
+def _assert_work_order_posting_index(rows) -> None:
+    expected = dict(table_name="work_order_material_operations", is_unique=True, is_valid=True, is_ready=True,
+        is_live=True, key_count=1, column_count=1, access_method="btree", key_column="posting_transaction_id", predicate=None)
+    if len(rows) != 1 or dict(rows[0]) != expected:
+        raise DatabaseSecurityBoundaryError("production database work order posting uniqueness guard failed")
 
 
 def _assert_inbound_receipt_index(rows) -> None:
@@ -6022,6 +6068,7 @@ def validate_production_database_security(
                 _MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL
             ).mappings().all()
             inbound_receipt_indexes = connection.execute(_INBOUND_RECEIPT_INDEX_SQL).mappings().all()
+            work_order_posting_indexes = connection.execute(_WORK_ORDER_POSTING_INDEX_SQL).mappings().all()
             material_request_content_manifest_columns = connection.execute(
                 _MATERIAL_REQUEST_CONTENT_MANIFEST_COLUMN_SQL
             ).mappings().all()
@@ -6166,6 +6213,7 @@ def validate_production_database_security(
         expected_migration_role=expected_migration_role,
     )
     _assert_inbound_receipt_index(inbound_receipt_indexes)
+    _assert_work_order_posting_index(work_order_posting_indexes)
     _assert_material_request_cancellation_guards(
         triggers=material_request_cancellation_triggers,
         indexes=material_request_cancellation_indexes,

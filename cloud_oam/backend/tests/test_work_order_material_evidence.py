@@ -18,7 +18,7 @@ from test_inventory_posting import world, NOW, make_account
 from app.demand_models import OamWorkOrder, WorkOrderMaterialOperation, WorkOrderMaterialSerial
 from app.foundation_models import AuditChainHead, AuditEvent, ExternalObject, OutboxEvent
 from app.inventory_models import (InventoryTransaction, InventoryMovement, InventoryMovementSerial,
-                                  InventorySerial, StockLocation)
+                                  InventorySerial, StockAccount, StockLocation)
 from app.formal_services import work_order_material as service
 from app.routers import formal_work_order_material as api
 from app.database import Base, get_db
@@ -64,6 +64,21 @@ def evidence(db, world):
                          organization_id=world.organization.id, engineer_person_id=world.person.id,
                          status="active", source_updated_at=NOW)
     db.add(order)
+    available = StockAccount(id=uuid4(), owner_org_id=account.owner_org_id,
+        location_id=account.location_id, custodian_person_id=account.custodian_person_id,
+        material_id=account.material_id, condition_code=account.condition_code,
+        availability_bucket="available", lot_id=account.lot_id)
+    db.add(available)
+    reserved = InventoryTransaction(id=uuid4(), transaction_no=str(uuid4()), movement_type="reserve",
+        source_document_type="work_order_material", source_document_id=str(order.id),
+        posting_key=str(uuid4()), idempotency_key_hash="a" * 64, request_hash="b" * 64,
+        status="posted", effective_at=NOW, posted_at=NOW, ledger_cursor=99,
+        actor_user_id=world.user.id)
+    db.add(reserved)
+    db.flush()
+    reservation = InventoryMovement(id=uuid4(), transaction_id=reserved.id, line_no=1,
+        from_account_id=available.id, to_account_id=account.id, quantity=Decimal("2"))
+    db.add(reservation)
     transaction = InventoryTransaction(
         id=uuid4(), transaction_no=str(uuid4()), movement_type="consume",
         source_document_type="work_order_material", source_document_id=str(order.id),
@@ -78,6 +93,8 @@ def evidence(db, world):
     db.add(movement)
     db.commit()
     return SimpleNamespace(world=world, order=order, transaction=transaction, movement=movement,
+                           reservation=reservation, reserved_transaction=reserved,
+                           available=available,
                            account=account, location=location,
                            line=service.WorkOrderMaterialLineInput(world.material.id, account.id, Decimal("1")))
 
@@ -154,6 +171,9 @@ def serial_evidence(db, evidence):
     db.flush()
     db.add(InventoryMovementSerial(movement_id=evidence.movement.id,
                                   transaction_id=evidence.transaction.id, serial_id=serial.id))
+    evidence.reservation.quantity = Decimal("1")
+    db.add(InventoryMovementSerial(movement_id=evidence.reservation.id,
+                                  transaction_id=evidence.reserved_transaction.id, serial_id=serial.id))
     db.commit()
     proof = service.SerialVerificationInput(serial.id, evidence.world.material.sku_code,
                                             serial.serial_no, serial.qr_code)
@@ -460,7 +480,9 @@ def test_generic_evidence_endpoint_cannot_bypass_recover_condition(db, evidence)
     evidence.transaction.movement_type = "inbound"
     evidence.movement.from_account_id = None
     evidence.movement.to_account_id = evidence.account.id
-    evidence.account.availability_bucket = "available"
+    evidence.account = evidence.available
+    evidence.movement.to_account_id = evidence.available.id
+    evidence.line = replace(evidence.line, stock_account_id=evidence.available.id)
     db.commit()
     payload = payload_for(evidence)
     payload["operation_type"] = "recover"
@@ -479,22 +501,16 @@ def replay_command(db, evidence, monkeypatch, request):
     from app.inventory_models import StockAccount
 
     operation_type = request.param
-    account = evidence.account
+    account = evidence.available if operation_type == "occupy" else evidence.account
     account.availability_bucket = "available" if operation_type in {"occupy", "recover"} else "reserved"
     account.condition_code = "used" if operation_type == "recover" else "new"
     target = None
     if operation_type in {"occupy", "release"}:
-        target = StockAccount(
-            id=uuid4(), owner_org_id=account.owner_org_id, location_id=account.location_id,
-            custodian_person_id=account.custodian_person_id, material_id=account.material_id,
-            condition_code=account.condition_code, lot_id=account.lot_id,
-            availability_bucket="reserved" if operation_type == "occupy" else "available",
-        )
-        db.add(target)
+        target = evidence.account if operation_type == "occupy" else evidence.available
     elif operation_type == "recover":
         target = account
     db.flush()
-    line = replace(evidence.line, condition_before=account.condition_code,
+    line = replace(evidence.line, stock_account_id=account.id, condition_before=account.condition_code,
                    target_stock_account_id=target.id if target else None)
     execute = getattr(service, f"execute_{operation_type}_operation")
     def seeded_post(db, *, actor, command, idempotency_key, request_id, **kwargs):
