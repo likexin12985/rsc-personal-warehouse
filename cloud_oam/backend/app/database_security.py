@@ -2420,7 +2420,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ("rsc_validate_material_request_external_causality_0045", "uuid"):
         "0f5bd6658edcb46dac6282109b71a109c14003862c89b3f5700d89f1ac13fa26",
     ("rsc_validate_material_request_approval_projection_0045", "uuid"):
-        "593668f5e6b008d0947a24a017fb9172c5c29dca196a1a5fb6fbe6a5bd597f52",
+        "9b62535f2529a416a338ce9dee244850a94c0da23a1422c3f01ee9727192f9ff",
     ("rsc_dispatch_material_request_approval_projection_0045", ""):
         "244d188e126e66fd4b020da01c076a3018f2c8841230bd255da45b7913776d54",
     ("rsc_guard_material_request_supply_task_0059", ""):

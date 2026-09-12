@@ -42,12 +42,25 @@ def create_inbound_order(db, *, actor, request_id, expected_version, receipt_id,
         _fail("receipt_empty", "precondition_failed", "收货没有可入账的合格数量")
     existing = db.scalar(select(InboundOrder).where(InboundOrder.receipt_id == receipt.id))
     if existing is not None: return {**_result(existing), **_posting_projection(db, existing)}
-    now = datetime.now(timezone.utc)
-    row = InboundOrder(id=uuid.uuid4(), inbound_no=f"INB-{now:%Y%m%d}-{uuid.uuid4().hex[:12].upper()}", receipt_id=receipt.id, target_location_id=target_location_id, target_person_id=target_person_id, status="pending", posting_transaction_id=None, created_at=now)
-    db.add(row); db.flush()
-    append_audit_event(db, stream_key="material_request", actor_user_id=actor.user_id, action="personal_inbound_order_created", aggregate_type="inbound_order", aggregate_id=str(row.id), before_jsonb={}, after_jsonb={"request_id": str(request_id), "receipt_id": str(receipt.id), "status": row.status}, request_id=trace_request_id, occurred_at=now, created_at=now)
-    db.add(OutboxEvent(event_type="personal_inbound_order_created", aggregate_type="inbound_order", aggregate_id=str(row.id), payload_jsonb={"request_id": str(request_id), "receipt_id": str(receipt.id), "inbound_no": row.inbound_no}, status="pending", attempts=0, idempotency_key=f"inbound-order:{row.id}", available_at=now))
+    row = _new_inbound_order(db, receipt_id=receipt.id, target_location_id=target_location_id, target_person_id=target_person_id)
+    _record_order_created(db, row=row, actor=actor, request_id=request_id, trace_request_id=trace_request_id)
     return _result(row)
+
+
+def _new_inbound_order(db, *, receipt_id, target_location_id, target_person_id):
+    now = datetime.now(timezone.utc)
+    row = InboundOrder(id=uuid.uuid4(), inbound_no=f"INB-{now:%Y%m%d}-{uuid.uuid4().hex[:12].upper()}", receipt_id=receipt_id, target_location_id=target_location_id, target_person_id=target_person_id, status="pending", posting_transaction_id=None, created_at=now)
+    db.add(row); db.flush()
+    return row
+
+
+def _record_order_created(db, *, row, actor, request_id, trace_request_id):
+    now = _aware_time(row.created_at)
+    append_audit_event(db, stream_key="material_request", actor_user_id=actor.user_id, action="personal_inbound_order_created", aggregate_type="inbound_order", aggregate_id=str(row.id), before_jsonb={}, after_jsonb={"request_id": str(request_id), "receipt_id": str(row.receipt_id), "status": row.status}, request_id=trace_request_id, occurred_at=now, created_at=now)
+    db.add(OutboxEvent(event_type="personal_inbound_order_created", aggregate_type="inbound_order", aggregate_id=str(row.id), payload_jsonb={"request_id": str(request_id), "receipt_id": str(row.receipt_id), "inbound_no": row.inbound_no}, status="pending", attempts=0, idempotency_key=f"inbound-order:{row.id}", available_at=now))
+
+def _aware_time(value):
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 def _result(row):
     return {"schema_version":"1.0", "inbound_order_id":row.id, "inbound_no":row.inbound_no, "receipt_id":row.receipt_id, "target_location_id":row.target_location_id, "target_person_id":row.target_person_id, "status":row.status}
@@ -97,15 +110,43 @@ def build_inbound_posting_command(db, *, inbound_order, receipt_line_id, target_
     shipment_line = db.get(ShipmentLine, line.shipment_line_id)
     posting = db.get(OutboundPosting, shipment_line.outbound_posting_id) if shipment_line else None
     if posting is None: _fail("shipment_line_invalid", "conflict", "收货明细缺少原发运事实")
-    serial_ids = tuple(db.scalars(select(ReceiptSerial.serial_id).where(ReceiptSerial.receipt_line_id == line.id, ReceiptSerial.accepted.is_(True))).all())
+    serial_ids = tuple(db.scalars(select(ReceiptSerial.serial_id).where(ReceiptSerial.receipt_line_id == line.id, ReceiptSerial.accepted.is_(True)).order_by(ReceiptSerial.serial_id)).all())
     return InventoryPostingCommand(
         transaction_no=f"INV-IN-{inbound_order.id.hex[:16].upper()}", movement_type="transfer",
         source_document_type="personal_inbound", source_document_id=str(inbound_order.id),
-        posting_key=f"personal-inbound:{inbound_order.id}:{line.id}", effective_at=inbound_order.created_at,
+        posting_key=f"personal-inbound:{inbound_order.id}:{line.id}", effective_at=_aware_time(inbound_order.created_at),
         movements=(InventoryMovementCommand(from_account_id=posting.target_stock_account_id, to_account_id=target_account.id, quantity=line.accepted_qty, serial_ids=serial_ids, external_boundary_code=None),),
     )
 
+def _order_posting_command(db, order, *, create_missing=False):
+    lines = tuple(db.scalars(select(ReceiptLine).where(ReceiptLine.receipt_id == order.receipt_id).order_by(ReceiptLine.id)).all())
+    if not lines: _fail("receipt_empty", "precondition_failed", "收货没有可入账明细")
+    movements = []
+    for line in lines:
+        # Rejected-only receipt lines remain receipt/exception facts and must
+        # never become personal-warehouse inventory.  A receipt may contain
+        # both accepted and rejected lines; only the accepted quantity is an
+        # inventory movement.
+        if Decimal(line.accepted_qty) <= 0:
+            continue
+        target = resolve_personal_target_account(db, receipt_id=order.receipt_id, target_location_id=order.target_location_id, target_person_id=order.target_person_id, shipment_line_id=line.shipment_line_id, create=create_missing)
+        command = build_inbound_posting_command(db, inbound_order=order, receipt_line_id=line.id, target_account=target)
+        movements.extend(command.movements)
+    if not movements:
+        _fail("receipt_empty", "precondition_failed", "收货没有可入账的合格数量")
+    return InventoryPostingCommand(transaction_no=f"INV-IN-{order.id.hex[:16].upper()}", movement_type="transfer", source_document_type="personal_inbound", source_document_id=str(order.id), posting_key=f"personal-inbound:{order.id}", effective_at=_aware_time(order.created_at), movements=tuple(movements))
+
+
 def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idempotency_key, request_id):
+    return _post_inbound_order(db, actor=actor, inbound_order_id=inbound_order_id,
+        material_request_id=material_request_id, idempotency_key=idempotency_key, request_id=request_id)
+
+
+def _post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idempotency_key,
+        request_id, authority=None, new_order=False):
+    from .inventory_posting import _lock_inventory_ledger_head_for_atomic_batch
+    # Match reservation/release and stocktake: ledger before principal/request.
+    _lock_inventory_ledger_head_for_atomic_batch(db)
     # The parent lock serializes every order for this request. Orders themselves
     # are immutable and the API deliberately has no UPDATE/row-lock privilege.
     request = db.scalar(select(MaterialRequest).where(MaterialRequest.id == material_request_id).with_for_update())
@@ -120,23 +161,15 @@ def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idem
     if shipment is None: _fail("shipment_not_found", "conflict", "收货关联发运不存在")
     _validate_inbound_target(shipment, order.target_location_id, order.target_person_id)
     existing = db.scalar(select(InboundPosting).where(InboundPosting.inbound_order_id == order.id))
-    lines = tuple(db.scalars(select(ReceiptLine).where(ReceiptLine.receipt_id == receipt.id).order_by(ReceiptLine.id)).all())
-    if not lines: _fail("receipt_empty", "precondition_failed", "收货没有可入账明细")
-    movements = []
-    for line in lines:
-        # Rejected-only receipt lines remain receipt/exception facts and must
-        # never become personal-warehouse inventory.  A receipt may contain
-        # both accepted and rejected lines; only the accepted quantity is an
-        # inventory movement.
-        if Decimal(line.accepted_qty) <= 0:
-            continue
-        target = resolve_personal_target_account(db, receipt_id=receipt.id, target_location_id=order.target_location_id, target_person_id=order.target_person_id, shipment_line_id=line.shipment_line_id, create=existing is None)
-        command = build_inbound_posting_command(db, inbound_order=order, receipt_line_id=line.id, target_account=target)
-        movements.extend(command.movements)
-    if not movements:
-        _fail("receipt_empty", "precondition_failed", "收货没有可入账的合格数量")
-    command = InventoryPostingCommand(transaction_no=f"INV-IN-{order.id.hex[:16].upper()}", movement_type="transfer", source_document_type="personal_inbound", source_document_id=str(order.id), posting_key=f"personal-inbound:{order.id}", effective_at=order.created_at, movements=tuple(movements))
-    result = post_inventory_transaction(db, actor=actor, command=command, idempotency_key=idempotency_key, request_id=request_id)
+    command = _order_posting_command(db, order, create_missing=existing is None)
+    if authority is None:
+        if new_order:
+            _fail("inbound_authority_missing", "forbidden", "本人入账缺少原验收授权")
+        result = post_inventory_transaction(db, actor=actor, command=command, idempotency_key=idempotency_key, request_id=request_id)
+    else:
+        from .inventory_posting import _post_personal_receipt_inventory_transaction
+        result = _post_personal_receipt_inventory_transaction(db, actor=actor, command=command,
+            idempotency_key=idempotency_key, request_id=request_id, authority=authority)
     # Even a completed order must pass the unified posting service's current
     # principal, account scopes and actor/command-bound idempotency validation.
     # A different key is a conflict, not permission to bypass those checks.
@@ -150,7 +183,11 @@ def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idem
         _fail("posting_mismatch", "conflict", "入账单绑定的库存事务不一致")
     transaction = db.get(InventoryTransaction, result.transaction_id)
     reference = f"/api/v1/material-requests/{request.id}/inbound-orders/{order.id}/post"
+    if authority is not None:
+        reference = f"/api/v1/material-requests/{request.id}/my-inbounds"
     if existing is None:
+        if new_order:
+            _record_order_created(db, row=order, actor=actor, request_id=material_request_id, trace_request_id=request_id)
         db.add(InboundPosting(id=uuid.uuid4(), inbound_order_id=order.id, inventory_transaction_id=result.transaction_id, created_at=datetime.now(timezone.utc)))
         now = datetime.now(timezone.utc)
         append_audit_event(
@@ -172,7 +209,7 @@ def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idem
         ))
         db.flush()
         record_fulfillment_command(db, request=request, actor=actor, operation="personal_inbound",
-            fact=transaction, request_reference=reference, permission_action="fulfill")
+            fact=transaction, request_reference=reference, permission_action="receive" if authority is not None else "fulfill")
     else:
         from ..demand_models import MaterialRequestCommand
         original = db.scalar(select(MaterialRequestCommand).where(

@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20260928_0088"
+HEAD_REVISION = "20260929_0089"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7422,7 +7422,7 @@ def _head_account_admission_hash() -> str:
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20260928_0088_receipt_account_admission.py"
+        "20260929_0089_personal_inbound_authority.py"
     )))
     assert migration["revision"] == HEAD_REVISION
     return migration["NEW_HASH"]
@@ -20682,6 +20682,38 @@ def _assert_0088_account_admission_migration_roundtrip():
     assert catalog() == before and _current_revision() == HEAD_REVISION
 
 
+def _assert_0089_personal_inbound_migration_roundtrip():
+    signatures = ["public.rsc_validate_material_request_approval_projection_0045(uuid)",
+                  "public.rsc_oam_runtime_binding_ready_0044()"]
+    parameters = _connection_parameters(role="star_oam_migrator", password=_role_password("star_oam_migrator"))
+    def catalog():
+        with psycopg.connect(**parameters) as connection:
+            return connection.execute(
+                "SELECT oid, proowner, proacl, prosecdef, proconfig, prosrc FROM pg_proc "
+                "WHERE oid = ANY(ARRAY[CAST(%s AS regprocedure), CAST(%s AS regprocedure)]) ORDER BY oid",
+                signatures).fetchall()
+    before = catalog()
+    _run_alembic("downgrade", "20260928_0088")
+    previous = catalog()
+    assert previous != before and _current_revision() == "20260928_0088"
+    with psycopg.connect(**parameters) as connection:
+        definition = connection.execute("SELECT pg_get_functiondef(CAST(%s AS regprocedure))", (signatures[1],)).fetchone()[0]
+        assert definition.count("AS $function$") == 1
+        connection.execute(definition.replace("AS $function$", "AS $function$\n-- isolated 0089 late CAS regression\n"))
+    try:
+        drifted = catalog()
+        assert drifted != previous
+        blocked = _run_alembic("upgrade", "head", expect_success=False)
+        assert "personal_inbound_readiness_0089" in blocked.stdout + blocked.stderr
+        assert catalog() == drifted and _current_revision() == "20260928_0088"
+    finally:
+        with psycopg.connect(**parameters) as connection:
+            connection.execute(definition)
+    assert catalog() == previous
+    _run_alembic("upgrade", "head")
+    assert catalog() == before and _current_revision() == HEAD_REVISION
+
+
 def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     _assert_fresh_disposable_postgresql16()
     _bootstrap_roles()
@@ -20705,6 +20737,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     assert _current_revision() == HEAD_REVISION
     _assert_0082_empty_downgrade_restores_prior_access()
     _assert_0088_account_admission_migration_roundtrip()
+    _assert_0089_personal_inbound_migration_roundtrip()
     _assert_migration_waits_for_version_maintenance_before_writing()
     _assert_0063_empty_review_command_downgrade_and_reupgrade()
     _assert_0064_empty_finalizer_organization_downgrade_and_reupgrade()
@@ -21080,7 +21113,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         finally:
             security_engine.dispose()
         blocked_my_receipt = _run_alembic("downgrade", "20260924_0084", expect_success=False)
-        assert "0088 downgrade blocked" in blocked_my_receipt.stdout + blocked_my_receipt.stderr
+        assert "0089 transition blocked" in blocked_my_receipt.stdout + blocked_my_receipt.stderr
         assert _current_revision() == HEAD_REVISION
     finally:
         edge_engine.dispose()

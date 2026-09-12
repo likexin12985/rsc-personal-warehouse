@@ -1106,6 +1106,12 @@ def _assert_0069_function_body_matches_runtime_manifest(
             assert latest_body.count(old) == 1 and new not in latest_body
             latest_body = latest_body.replace(old, new)
         assert hashlib.sha256(latest_body.encode()).hexdigest() == inbound_command["APPROVAL_NEW_HASH"]
+        own_inbound = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20260929_0089_personal_inbound_authority.py")))
+        assert hashlib.sha256(latest_body.encode()).hexdigest() == own_inbound["APPROVAL_OLD_HASH"]
+        old, new = own_inbound["OLD_REFERENCE"], own_inbound["NEW_REFERENCE"]
+        assert latest_body.count(old) == 1 and new not in latest_body
+        latest_body = latest_body.replace(old, new)
+        assert hashlib.sha256(latest_body.encode()).hexdigest() == own_inbound["APPROVAL_NEW_HASH"]
     assert MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate] == hashlib.sha256(latest_body.encode()).hexdigest()
     assert current_hash != historical_hash
     for old, new in reversed(replacements):

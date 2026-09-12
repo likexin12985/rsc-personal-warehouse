@@ -1018,6 +1018,34 @@ def post_inventory_transaction(
     permission_action: str = "post",
     permission_resource: str = "inventory_transaction",
 ) -> InventoryPostingResult:
+    """Append a generic posting with authority over every source and target."""
+    return _post_inventory_transaction(db, actor=actor, command=command,
+        idempotency_key=idempotency_key, request_id=request_id,
+        permission_action=permission_action, permission_resource=permission_resource)
+
+
+def _post_personal_receipt_inventory_transaction(
+    db, *, actor, command, idempotency_key, request_id, authority,
+):
+    from .material_request_inbound_authority import require_receipt_authority
+    require_receipt_authority(db, actor=actor, command=command, proof=authority)
+    return _post_inventory_transaction(db, actor=actor, command=command,
+        idempotency_key=idempotency_key, request_id=request_id,
+        permission_action="receive", permission_resource="material_request",
+        receipt_authority=authority)
+
+
+def _post_inventory_transaction(
+    db: Session,
+    *,
+    actor: FormalPrincipal,
+    command: InventoryPostingCommand,
+    idempotency_key: str,
+    request_id: str,
+    permission_action: str = "post",
+    permission_resource: str = "inventory_transaction",
+    receipt_authority: object | None = None,
+) -> InventoryPostingResult:
     """Append one formal inventory transaction without committing it."""
 
     checked_actor = _validate_supplied_actor(actor)
@@ -1044,14 +1072,12 @@ def post_inventory_transaction(
 
     replay = _load_replay(db, storage_key, request_hash)
     if replay is not None:
-        _authorize_account_ids(
-            db,
-            current_actor,
-            _command_account_ids(checked_command),
-            action=permission_action,
-            lock_rows=False,
-            resource=permission_resource,
-        )
+        if receipt_authority is None:
+            _authorize_account_ids(db, current_actor, _command_account_ids(checked_command),
+                action=permission_action, lock_rows=False, resource=permission_resource)
+        else:
+            from .material_request_inbound_authority import require_receipt_authority
+            require_receipt_authority(db, actor=current_actor, command=checked_command, proof=receipt_authority)
         return replace(replay, replayed=True)
     _require_unused_business_keys(db, checked_command)
 
@@ -1067,6 +1093,7 @@ def post_inventory_transaction(
             permission_resource=permission_resource,
             reversed_transaction_id=None,
             event_suffix="posted",
+            receipt_authority=receipt_authority,
         ).result
     except IntegrityError as exc:
         _fail(
@@ -1242,6 +1269,7 @@ def _post_new_transaction(
     opening_task_id: uuid.UUID | None = None,
     occurred_at: datetime | None = None,
     prelocked_reference_graph: _PrelockedInventoryGraphProof | None = None,
+    receipt_authority: object | None = None,
 ) -> _InventoryPostingCommit:
     # Production row-lock order is fixed and must remain identical for every
     # posting: ledger head -> account UUIDs -> location UUIDs -> material UUIDs
@@ -1291,14 +1319,15 @@ def _post_new_transaction(
             command=command,
             proof=active_reference_graph,
         )
-    accounts = _authorize_account_ids(
-        db,
-        actor,
-        account_ids,
-        action=permission_action,
-        lock_rows=True,
-        resource=permission_resource,
-    )
+    if receipt_authority is None:
+        accounts = _authorize_account_ids(db, actor, account_ids,
+            action=permission_action, lock_rows=True, resource=permission_resource)
+    else:
+        if (permission_resource != "material_request" or permission_action != "receive"
+                or opening_task_id is not None or reversed_transaction_id is not None or event_suffix != "posted"):
+            _fail("personal_inbound_authority_invalid", "forbidden", "本人入账授权不能用于其他库存操作")
+        from .material_request_inbound_authority import require_receipt_authority
+        accounts = require_receipt_authority(db, actor=actor, command=command, proof=receipt_authority)
     _require_active_account_masters(db, accounts)
     if opening_task_id is None:
         _require_established_unfrozen_scopes(

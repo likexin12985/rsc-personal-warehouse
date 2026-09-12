@@ -70,6 +70,8 @@ from ..material_request_inbound_schemas import InboundOrderIn, InboundOrderOut, 
 from ..formal_services import material_request_my_receiving as my_receiving_service
 from ..material_request_my_receiving_schemas import MyReceivingOut
 from ..formal_services import material_request_my_receipt as my_receipt_service
+from ..formal_services import material_request_my_inbound as my_inbound_service
+from ..material_request_my_inbound_schemas import MyInboundIn, MyInboundOut, MyInboundCommandStatusOut
 from ..material_request_my_receipt_schemas import MyReceiptIn, MyReceiptOut, MyReceiptCommandStatusOut
 from ..formal_services import material_request_my_receipt_candidates as my_receipt_candidates_service
 from ..material_request_my_receipt_candidate_schemas import MyReceiptCandidateOut
@@ -1134,6 +1136,79 @@ def my_material_request_receipt_trace_status(
     except ValidationError:
         _raise_service_error(query_service.MaterialRequestReadError(
             "my_receipt_history_invalid", "service_unavailable", "原验收结果证据不完整，请保留原请求继续核验",
+        ), no_store=True)
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.post("/{material_request_id}/my-inbounds", response_model=MyInboundOut, status_code=201)
+def create_my_material_request_inbound(
+    material_request_id: UUID, payload: MyInboundIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "receive")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
+    _set_read_no_store(response)
+    try:
+        secret = _require_lifecycle_write_runtime(runtime_settings)
+        result = my_inbound_service.create_my_inbound(db, actor=principal, request_id=material_request_id,
+            payload=payload, idempotency_key=key, secret=secret, trace_request_id=trace)
+        output = MyInboundOut.model_validate(result)
+        db.commit()
+    except (query_service.MaterialRequestReadError, InventoryPostingError) as exc:
+        db.rollback()
+        _raise_service_error(exc, no_store=True)
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+    _set_replay_header(response, output.idempotency_replayed)
+    return output
+
+
+@router.get("/{material_request_id}/my-inbounds/command-status", response_model=MyInboundCommandStatusOut)
+def my_material_request_inbound_command_status(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+):
+    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128)
+    _set_read_no_store(response)
+    try:
+        result = my_inbound_service.my_inbound_command_status(db, actor=principal, request_id=material_request_id,
+            idempotency_key=key, secret=_require_lifecycle_idempotency_secret(runtime_settings))
+        return MyInboundCommandStatusOut(lookup_status="confirmed" if result is not None else "not_observed", command=result)
+    except (query_service.MaterialRequestReadError, InventoryPostingError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except ValidationError:
+        _raise_service_error(query_service.MaterialRequestReadError(
+            "my_inbound_history_invalid", "service_unavailable", "原入账结果证据不完整，请保留原请求继续核验",
+        ), no_store=True)
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.get("/{material_request_id}/my-inbounds/trace-status", response_model=MyInboundCommandStatusOut)
+def my_material_request_inbound_trace_status(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+    original_request_id: Annotated[str | None, Header(alias="X-Original-Request-ID")] = None,
+):
+    trace = _required_safe_header("X-Original-Request-ID", original_request_id, minimum=8, maximum=160)
+    _set_read_no_store(response)
+    try:
+        result = my_inbound_service.my_inbound_trace_status(db, actor=principal, request_id=material_request_id,
+            trace_request_id=trace)
+        return MyInboundCommandStatusOut(lookup_status="confirmed" if result is not None else "not_observed", command=result)
+    except (query_service.MaterialRequestReadError, InventoryPostingError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except ValidationError:
+        _raise_service_error(query_service.MaterialRequestReadError(
+            "my_inbound_history_invalid", "service_unavailable", "原入账结果证据不完整，请保留原请求继续核验",
         ), no_store=True)
     except DBAPIError:
         db.rollback()

@@ -156,7 +156,7 @@ def assert_my_receipt_gate(api_engine, security_engine, *, request_id, posting_i
             assert download.file_id == evidence_id and download.purpose == "receipt_exception_evidence"
             db.commit()
         print("PG16 recipient: formal exception file bound and readable", flush=True)
-    from pg16_inbound_gate import assert_inbound_gate
+    from pg16_my_inbound_gate import assert_my_inbound_gate as assert_inbound_gate
     assert_inbound_gate(api_engine, security_engine, request_id=request_id,
         receipt_id=result.receipt_id, admin_user_id=admin_user_id)
     if serial_ids and reject_serials:

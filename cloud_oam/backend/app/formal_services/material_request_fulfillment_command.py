@@ -81,7 +81,7 @@ def verify_fulfillment_command(db, *, request, actor, operation, fact, request_r
         AuditEvent.aggregate_type == operation, AuditEvent.aggregate_id == str(fact.id))).all())
     expected_audit = {"command_id": str(command.id), "request_id": str(request.id),
         "request_version": expected_version, "request_hash": command.request_hash, "result_hash": command.result_hash,
-        "permission_action": "receive" if request_reference.endswith("/my-receipts") else "fulfill"}
+        "permission_action": "receive" if request_reference.endswith(("/my-receipts", "/my-inbounds")) else "fulfill"}
     if (len(audits) != 1 or audits[0].actor_user_id != actor.user_id or audits[0].after_jsonb != expected_audit
         or _time(audits[0].occurred_at) != _time(fact.created_at)):
         raise MaterialRequestReadError("fulfillment_command_audit_invalid", "service_unavailable", "履约版本审计证据不完整，保留原请求核验")
