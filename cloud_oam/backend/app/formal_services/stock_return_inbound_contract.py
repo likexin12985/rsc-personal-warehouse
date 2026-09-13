@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import uuid
 
 from .inventory_posting import InventoryMovementCommand, InventoryPostingCommand
@@ -39,7 +39,10 @@ def _utc(value: datetime) -> datetime:
 
 
 def _quantity(value: Decimal) -> Decimal:
-    value = Decimal(value)
+    try:
+        value = Decimal(value)
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ReturnInboundContractError("退回入账数量无效") from exc
     if not value.is_finite() or value <= 0 or value.as_tuple().exponent < -3:
         raise ReturnInboundContractError("退回入账数量必须为正的三位小数")
     return value.quantize(Decimal(".001"))
@@ -77,7 +80,10 @@ def build_return_inbound_command(
         if line.condition_code not in {"used", "damaged"}:
             raise ReturnInboundContractError("退回入账成色无效")
         quantity = _quantity(line.accepted_quantity)
-        serial_ids = tuple(sorted((uuid.UUID(str(identifier)) for identifier in line.serial_ids), key=str))
+        try:
+            serial_ids = tuple(sorted((uuid.UUID(str(identifier)) for identifier in line.serial_ids), key=str))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ReturnInboundContractError("退回入账 SN 标识无效") from exc
         if len(serial_ids) != len(set(serial_ids)) or seen_serials.intersection(serial_ids):
             raise ReturnInboundContractError("退回入账 SN 重复或跨明细重复")
         seen_serials.update(serial_ids)
