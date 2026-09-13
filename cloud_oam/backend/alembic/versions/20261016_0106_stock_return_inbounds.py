@@ -69,6 +69,14 @@ BEGIN
        OR transaction.actor_user_id <> inbound.actor_user_id THEN
         RAISE EXCEPTION '0106 return inbound coordinate or posting mismatch' USING ERRCODE = '23514';
     END IF;
+    IF NOT EXISTS (
+        SELECT 1
+          FROM public.stock_operation_return_inbound_postings posting
+         WHERE posting.inbound_id = inbound.id
+           AND posting.inventory_transaction_id = inbound.posting_transaction_id
+    ) THEN
+        RAISE EXCEPTION '0106 return inbound posting link mismatch' USING ERRCODE = '23514';
+    END IF;
     SELECT count(*) INTO expected_count
       FROM public.stock_operation_return_inbound_lines
      WHERE inbound_id = inbound.id;
