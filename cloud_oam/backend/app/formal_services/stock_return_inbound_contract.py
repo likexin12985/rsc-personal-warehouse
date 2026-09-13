@@ -38,6 +38,13 @@ def _utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def _id(value: object, label: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ReturnInboundContractError(f"{label}标识无效") from exc
+
+
 def _quantity(value: Decimal) -> Decimal:
     try:
         value = Decimal(value)
@@ -72,10 +79,16 @@ def build_return_inbound_command(
     seen_serials: set[uuid.UUID] = set()
     movements: list[InventoryMovementCommand] = []
     for line in lines:
-        if line.receipt_line_id in seen_lines:
+        receipt_line_id = _id(line.receipt_line_id, "退回验收明细")
+        source_account_id = _id(line.source_account_id, "退回在途账户")
+        target_account_id = _id(line.target_account_id, "退回区域仓账户")
+        _id(line.material_id, "物料")
+        if line.lot_id is not None:
+            _id(line.lot_id, "批次")
+        if receipt_line_id in seen_lines:
             raise ReturnInboundContractError("同一退回验收明细只能入账一次")
-        seen_lines.add(line.receipt_line_id)
-        if line.source_account_id == line.target_account_id:
+        seen_lines.add(receipt_line_id)
+        if source_account_id == target_account_id:
             raise ReturnInboundContractError("退回入账必须从在途账户转入区域仓账户")
         if line.condition_code not in {"used", "damaged"}:
             raise ReturnInboundContractError("退回入账成色无效")
@@ -88,8 +101,8 @@ def build_return_inbound_command(
             raise ReturnInboundContractError("退回入账 SN 重复或跨明细重复")
         seen_serials.update(serial_ids)
         movements.append(InventoryMovementCommand(
-            from_account_id=line.source_account_id,
-            to_account_id=line.target_account_id,
+            from_account_id=source_account_id,
+            to_account_id=target_account_id,
             quantity=quantity,
             serial_ids=serial_ids,
         ))
