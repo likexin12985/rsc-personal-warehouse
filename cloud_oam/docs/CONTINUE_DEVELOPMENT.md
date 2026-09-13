@@ -1,5 +1,57 @@
 # 切换账号后的续开发入口
 
+## 2026-09-13 账号切换交接快照（优先于下方历史记录）
+
+用户本次要求因账号额度用完而切换账号继续开发。本节为交接，不新增业务功能。
+继续使用用户提供的原项目目录及 `codex/production-readiness-gates` 分支；桌面旧
+worktree 的 `codex/mini-post-recovery` 不是本次续开发入口，不要在那里实现或提交。
+
+交接核验时，最新功能提交为 `94fa487f411db9f3c66852fe9d6b3d4d66403fcc`，
+本地与远端同 SHA，ahead/behind 为 `0/0`，功能代码均已提交并推送。
+本交接说明另作本地文档提交；新账号应核验实际 HEAD、提交父节点及差异，不能
+把下方历史 SHA 当作当前 HEAD，也不要为了回到上述功能 SHA 而 reset。
+既存根目录 `AGENTS.md` 修改和未跟踪的
+`cloud_oam/deployment/{offhost_backup,operations,preproduction,recovery}/`
+均保留，不属于本批，不要一并提交或清理。
+
+同一功能 SHA 的 GitHub Actions 在交接检查时：
+
+- Client workflow `34747724933` 已完成，结果 **success**。
+- PG16 workflow `34747724937` 仍为 **in_progress**：`pg16_runtime` 正在执行真实
+  PostgreSQL 16 迁移与并发检查，`static_safety` 正在执行投影与边缘静态检查。
+  当时尚未观察到失败，但不能据此宣布整个 gate 通过。
+
+新账号先准确读取以上 run 的最新状态。**同分支 PG16 检查运行时不得推送，文档
+推送也会通过 workflow concurrency 取消原检查。** 因此本交接文档先仅本地提交；
+当前门禁结束后再决定下一批推送。每次 commit 和每次 push 前均须单独运行
+`bash cloud_oam/scripts/verify_repository_safety.sh` 并等待退出 0。
+旧的账单阻塞和本机缺 PG16 记录已不代表本次状态：本次真实本地 PG16 已验证，
+云端 runner 已启动；旧迁移链遗漏问题已修复并包含在当前功能提交。
+
+下一批范围明确为：
+
+1. 在已有小程序接收查询页实现退回包裹整组验收表单，接正式异常凭证上传、
+   三码扫描、预览及单次提交。扫描证明仅留内存，不把二维码或凭据持久化。
+2. 为 `receive_return` 补原请求标记、准确回查和互斥封存恢复入口，携带准确的
+   `shipment_id`；超时结果未知，未查到不等于未执行，禁止盲目重发。
+3. 随后新增前向迁移，实现退回验收后的独立库存入账及保管责任交接，复用统一
+   原子过账入口；验收、库存入账、个人责任、通知和 OAM 只读收货继续分别记账。
+
+目前后端独立退回验收及小程序查询已经实现，**小程序验收提交和独立退回入账
+尚未完成**。可从下列代码接续：
+`miniprogram/pages/formal-stock-return-receiving/`、
+`miniprogram/utils/stock-return-receiving-contract.js`、
+`miniprogram/utils/work-order-recovery-store.js`、
+`miniprogram/utils/work-order-recovery.js`，以及后端
+`app/stock_return_receipt_schemas.py` 和 `app/formal_services/stock_return_receipt_*.py`。
+上述路径分别相对 `cloud_oam` 或 `cloud_oam/backend`。
+
+本批本地测试进程均已结束；准确功能 SHA 的小程序全量为 **1013 项通过**。
+下节保留各项日志和合成库坐标。并发验证已写入持久验收及封存事实，禁止重置、
+重复执行同一并发场景或强制降级；不要完整运行旧的合成库初始化脚本。
+用户已确认小程序备案及阿里云域名 `rscwz.cn` 备案通过，但尚无本批真机验收、
+生产部署或上线放行。历史工期估算不是实测剩余时长，也不是交付承诺。
+
 ## 2026-09-13 退回包裹独立验收与区域仓小程序查询
 
 本批从 `b31b91f629936a1c88ca3a140dc3b7216a574f7e` 接续，使用原目录的
@@ -42,8 +94,9 @@ POST `/preview`、GET `/by-request/{request_id}`、POST 原请求 `/seal`。
 - 真实接收身份与 HTTP、PG 强制 READ ONLY、Node 小程序目录/验收响应契约通过，
   仅执行 SELECT、原库存及验收历史未变化：`oam-return-receipt-pg-mini-read.log`。
   此检查已接入完整云端 PG16 gate，不能用纯 SQLite 或模拟响应代替。
-- 小程序全量 **1012 项通过**：`oam-return-receiving-mini-full-final.log`；随后异常
-  说明换行/Unicode 长度校验补充后专项 **25 项通过**：`oam-return-receiving-mini-tests-final.log`。
+- 准确功能提交 `94fa487` 的小程序全量 **1013 项通过**：
+  `oam-return-receiving-mini-94fa487-full.log`；异常说明换行/Unicode 长度校验等
+  专项 **25 项通过**：`oam-return-receiving-mini-tests-final.log`。
   新查询页及工作台原生 WXML/WXSS 编译均退出 0，尚无真机验收或发布。
 - 私有文件签名校验改用签名返回后的数据库当前时间，避免长事务起点导致错误过期。
   文件事实仍使用原时间规则，过期和超长链接仍拒绝；最终文件专项 **44 项通过**：
