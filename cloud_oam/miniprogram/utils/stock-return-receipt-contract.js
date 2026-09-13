@@ -115,13 +115,47 @@ function buildLines(history, drafts) {
   if (!rows.length) fail('请填写至少一条本次验收明细。')
   return rows
 }
+function validatePreviewLine(raw, expected, history) {
+  exact(raw, ['shipment_line_id', 'material_id', 'sku_code', 'material_name', 'base_unit', 'condition_code', 'lot_id', 'lot_no',
+    'shipped_qty', 'previously_accepted_qty', 'previously_rejected_qty', 'unconfirmed_qty', 'accepted_qty', 'rejected_qty',
+    'damaged_qty', 'shortage_qty', 'accepted_serials', 'damaged_serial_ids', 'rejected_serials', 'shortage_serials', 'exceptions'])
+  const source = history.package.lines.find(line => uuid(line.shipment_line_id) === uuid(expected.shipment_line_id))
+  if (!source || uuid(raw.shipment_line_id) !== uuid(expected.shipment_line_id)
+    || uuid(raw.material_id) !== uuid(source.material_id) || raw.sku_code !== source.sku_code
+    || raw.material_name !== source.material_name || raw.base_unit !== source.base_unit
+    || raw.condition_code !== source.condition_code || raw.lot_id !== source.lot_id || raw.lot_no !== source.lot_no
+    || raw.shipped_qty !== source.shipped_quantity || raw.accepted_qty !== expected.accepted_qty
+    || raw.rejected_qty !== expected.rejected_qty || raw.damaged_qty !== expected.damaged_qty
+    || raw.shortage_qty !== expected.shortage_qty) fail('预检返回的验收明细与提交内容不一致，请刷新。')
+  for (const key of ['shipped_qty', 'previously_accepted_qty', 'previously_rejected_qty', 'unconfirmed_qty', 'accepted_qty', 'rejected_qty', 'damaged_qty', 'shortage_qty']) decimal(raw[key])
+  const serials = key => list(raw[key], 0, 1000).map(item => {
+    exact(item, ['serial_id', 'serial_no']); uuid(item.serial_id); text(item.serial_no, 200); return `${uuid(item.serial_id)}|${item.serial_no}`
+  }).sort()
+  const expectedAccepted = expected.accepted_serial_verifications.map(item => `${uuid(item.serial_id)}|${item.serial_no}`).sort()
+  const expectedRejected = expected.rejected_serial_ids.map(id => uuid(id)).sort()
+  const expectedShortage = expected.shortage_serial_ids.map(id => uuid(id)).sort()
+  if (canonical(serials('accepted_serials')) !== canonical(expectedAccepted)
+    || canonical(serials('rejected_serials').map(value => value.split('|')[0])) !== canonical(expectedRejected)
+    || canonical(serials('shortage_serials').map(value => value.split('|')[0])) !== canonical(expectedShortage)
+    || canonical(list(raw.damaged_serial_ids, 0, 1000).map(uuid).sort()) !== canonical(expected.damaged_serial_ids.map(uuid).sort())) fail('预检返回的 SN 与提交内容不一致，请刷新。')
+  const exceptions = list(raw.exceptions, 0, 5).map(evidence).sort((a, b) => a.exception_type.localeCompare(b.exception_type))
+  if (canonical(exceptions) !== canonical(expected.exceptions)) fail('预检返回的异常凭证与提交内容不一致，请刷新。')
+  return raw
+}
 function validatePreview(raw, input, history, shipmentId) {
   exact(raw, ['schema_version', 'planning_status', 'shipment_id', 'operation_id', 'work_order_id', 'operator_person_id', 'authorization_version', 'received_at', 'reason', 'checked_at', 'ledger_cursor', 'package', 'request_hash', 'plan_hash', 'lines'])
   if (raw.schema_version !== '1.0' || raw.planning_status !== 'preview_only' || uuid(raw.shipment_id) !== uuid(shipmentId)
     || uuid(raw.operator_person_id) !== uuid(input.operator_person_id) || raw.request_hash !== requestHash(shipmentId, input)) fail()
   uuid(raw.operation_id); uuid(raw.work_order_id); integer(raw.authorization_version, 1); time(raw.received_at); time(raw.checked_at); integer(raw.ledger_cursor); digest(raw.request_hash); digest(raw.plan_hash)
   if (canonical(raw.package) !== canonical(history.package)) fail('预检返回的原包裹已变化，请刷新。')
-  list(raw.lines, 1, 100); return raw
+  const expected = normalizeInput(input, shipmentId, input.operator_person_id)
+  const lines = list(raw.lines, 1, 100)
+  if (lines.length !== expected.lines.length) fail('预检返回的验收行数与提交内容不一致，请刷新。')
+  const expectedIds = expected.lines.map(line => uuid(line.shipment_line_id)).sort()
+  const actualIds = lines.map(line => uuid(line.shipment_line_id)).sort()
+  if (canonical(actualIds) !== canonical(expectedIds)) fail('预检返回了不属于本次提交的验收明细，请刷新。')
+  lines.forEach(line => validatePreviewLine(line, expected.lines.find(item => uuid(item.shipment_line_id) === uuid(line.shipment_line_id)), history))
+  return raw
 }
 function validateResult(raw, marker) {
   exact(raw, ['schema_version', 'receipt_id', 'receipt_no', 'shipment_id', 'operation_id', 'work_order_id', 'operator_person_id', 'status', 'received_at', 'recorded_at', 'reason', 'request_id', 'request_hash', 'plan_hash', 'target_location_id', 'target_custody_assignment_id', 'lines'])
