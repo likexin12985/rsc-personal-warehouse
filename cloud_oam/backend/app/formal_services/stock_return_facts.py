@@ -8,7 +8,7 @@ from sqlalchemy import select
 from ..demand_models import WorkOrderMaterialLine, WorkOrderMaterialOperation, WorkOrderMaterialSerial, WorkOrderReplacement
 from ..foundation_models import AuditEvent, OutboxEvent, StateTransitionEvent
 from ..inventory_models import CustodyAssignment, InventoryMovement, InventoryMovementSerial, InventoryTransaction, StockAccount
-from ..stock_operation_models import StockOperationOrder as Order, StockOperationLine as Line, StockOperationSerial as Serial, StockOperationCancellation as Cancellation, StockOperationCommandSeal
+from ..stock_operation_models import StockOperationOrder as Order, StockOperationLine as Line, StockOperationSerial as Serial, StockOperationCancellation as Cancellation, StockOperationCommandSeal, StockOperationOutbound
 from ..stock_return_schemas import StockReturnOut, StockReturnCancellationOut, StockReturnPreviewIn
 from . import inventory_posting as posting
 from .audit_chain import AuditChainError, verify_audit_event_in_read_snapshot
@@ -200,6 +200,7 @@ def order_result(db, *, actor, order):
 def cancellation_result(db, *, actor, order, cancellation):
     try:
         row = cancellation
+        if db.scalar(select(StockOperationOutbound.id).where(StockOperationOutbound.operation_id == order.id)): invalid()
         if (row.actor_user_id != actor.user_id or row.operator_person_id != actor.person_id or row.operation_id != order.id
                 or row.authorization_version < 1 or not re.fullmatch(r"[0-9a-f]{64}", row.idempotency_key_hash)
                 or not re.fullmatch(r"[A-Za-z0-9._:-]{8,160}", row.request_id)

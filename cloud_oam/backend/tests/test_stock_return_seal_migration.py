@@ -1,6 +1,7 @@
 """Seal schema and guards retain every historical return fact."""
 from datetime import datetime, timezone
 from io import StringIO
+import hashlib
 from pathlib import Path
 import runpy
 from uuid import uuid4
@@ -24,7 +25,9 @@ def test_seal_runtime_capabilities_and_exact_sources():
     assert migration["TABLE"] in security.RUNTIME_READ_TABLES & security.RUNTIME_INSERT_TABLES
     assert migration["TABLE"] not in security.RUNTIME_UPDATE_TABLES | security.RUNTIME_DELETE_TABLES
     for key, digest in migration["FUNCTION_HASHES"].items():
-        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key] == digest
+        replacement = runpy.run_path(str(PATH.with_name("20261013_0103_stock_return_outbounds.py")))["_sources"]()[f"public.{key[0]}({key[1]})"]
+        assert hashlib.sha256(replacement[0].encode()).hexdigest() == digest
+        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key] == hashlib.sha256(replacement[1].encode()).hexdigest()
         assert key in security.MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
     for name, (table, _event, function, flags, deferred) in migration["TRIGGERS"].items():
         assert security.EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[name] == (table, function, "A", flags, deferred, deferred, deferred)

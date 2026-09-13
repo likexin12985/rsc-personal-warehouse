@@ -31,6 +31,7 @@ class DatabaseSecurityBoundaryError(RuntimeError):
 RUNTIME_READ_TABLES = frozenset(
     {
         "stock_operation_command_seals",
+        'stock_operation_outbounds', 'stock_operation_outbound_lines', 'stock_operation_outbound_serials',
         'stock_operation_orders', 'stock_operation_lines', 'stock_operation_serials', 'stock_operation_cancellations',
         "audit_chain_heads",
         "audit_events",
@@ -149,6 +150,7 @@ RUNTIME_READ_TABLES = frozenset(
 RUNTIME_INSERT_TABLES = frozenset(
     {
         "stock_operation_command_seals",
+        'stock_operation_outbounds', 'stock_operation_outbound_lines', 'stock_operation_outbound_serials',
         'stock_operation_orders', 'stock_operation_lines', 'stock_operation_serials', 'stock_operation_cancellations',
         "audit_events",
         "approval_actions",
@@ -464,6 +466,7 @@ EXPECTED_AUDIT_HEAD_IDS = {
     "material_request": "30000000-0000-4000-8000-000000000004",
 }
 EXPECTED_AUDIT_TRIGGERS = {
+    "trg_audit_events_return_outbound_0103": ("audit_events", "rsc_dispatch_stock_return_outbound_0103", 5, True, True, True),
     "trg_audit_events_stock_operation_seal_0101": ("audit_events", "rsc_guard_stock_operation_seal_0101", 5, True, True, True),
     "trg_audit_events_return_0100": (
         "audit_events", "rsc_dispatch_stock_return_0100", 5, True, True, True,
@@ -1908,6 +1911,23 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
     "approval_actions",
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
+    'trg_stock_operation_outbounds_proof_0103': ('stock_operation_outbounds', 'rsc_dispatch_stock_return_outbound_0103', 'A', 5, True, True, True),
+    'trg_stock_operation_outbounds_immutable_0103': ('stock_operation_outbounds', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+    'trg_stock_operation_outbounds_no_truncate_0103': ('stock_operation_outbounds', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+    'trg_stock_operation_outbound_lines_proof_0103': ('stock_operation_outbound_lines', 'rsc_dispatch_stock_return_outbound_0103', 'A', 5, True, True, True),
+    'trg_stock_operation_outbound_lines_immutable_0103': ('stock_operation_outbound_lines', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+    'trg_stock_operation_outbound_lines_no_truncate_0103': ('stock_operation_outbound_lines', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+    'trg_stock_operation_outbound_serials_proof_0103': ('stock_operation_outbound_serials', 'rsc_dispatch_stock_return_outbound_0103', 'A', 5, True, True, True),
+    'trg_stock_operation_outbound_serials_immutable_0103': ('stock_operation_outbound_serials', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+    'trg_stock_operation_outbound_serials_no_truncate_0103': ('stock_operation_outbound_serials', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+    'trg_inventory_transactions_return_outbound_0103': ('inventory_transactions', 'rsc_dispatch_stock_return_outbound_0103', 'A', 5, True, True, True),
+    'trg_inventory_movements_return_outbound_0103': ('inventory_movements', 'rsc_dispatch_stock_return_outbound_0103', 'A', 5, True, True, True),
+    'trg_inventory_movement_serials_return_outbound_0103': ('inventory_movement_serials', 'rsc_dispatch_stock_return_outbound_0103', 'A', 5, True, True, True),
+    'trg_audit_events_return_outbound_0103': ('audit_events', 'rsc_dispatch_stock_return_outbound_0103', 'A', 5, True, True, True),
+    'trg_outbox_events_return_outbound_0103': ('outbox_events', 'rsc_dispatch_stock_return_outbound_0103', 'A', 5, True, True, True),
+    'trg_state_transition_events_return_outbound_0103': ('state_transition_events', 'rsc_dispatch_stock_return_outbound_0103', 'A', 5, True, True, True),
+    'trg_stock_operation_outbounds_seal_0103': ('stock_operation_outbounds', 'rsc_guard_stock_operation_seal_0101', 'A', 5, True, True, True),
+
     'trg_stock_operation_seals_proof_0101': ('stock_operation_command_seals', 'rsc_guard_stock_operation_seal_0101', 'A', 5, True, True, True),
     'trg_stock_operation_seals_immutable_0101': ('stock_operation_command_seals', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
     'trg_stock_operation_seals_no_truncate_0101': ('stock_operation_command_seals', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
@@ -2433,9 +2453,12 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
-    ('rsc_guard_stock_operation_seal_0101', ''): '51a16fad8393ff21b00a8fed0d80b8c8e802ccdaadec90187131f38e300767b5',
-    ('rsc_check_stock_return_0100', 'uuid, uuid'): '634848262e0b5b484f417b6b0ab3f1d38698094f1713d6b157b36216d02d1d52',
-    ('rsc_dispatch_stock_return_0100', ''): '675473465d6c68734940ea75396d1d605c3c9d8ad0befb5f98f4d048aab9a5c8',
+    ('rsc_check_stock_return_outbound_0103', 'uuid'): 'a1613af21d955b31718555622fdb91f056377b362f5262fdeeaf1e1987552d2d',
+    ('rsc_dispatch_stock_return_outbound_0103', ''): 'fa0f8bd41c725613676fa5e2ee185b3676979462706f50f17b82c212e8aa0c27',
+
+    ('rsc_guard_stock_operation_seal_0101', ''): '4741c30321363e623d61b052769a7585febb992078a2832204e64b0e470a23a2',
+    ('rsc_check_stock_return_0100', 'uuid, uuid'): 'a9ea4f49847c50e2b4a623a4903aa38a1eaaf35d978569eedbb54bcfaf089eda',
+    ('rsc_dispatch_stock_return_0100', ''): 'f1c3ec8f8f697e8cb1612dd6226f440b0cfb68711e38ad2b402f726a2280d15d',
     ('rsc_guard_work_order_reversal_seal_0099', ''): '2489c7ececc06338a9bea578fa0142151321eabd2d2d4cb0f5831956de9a2d3f',
     ('rsc_check_work_order_reservations_0098', 'text, bigint'): '142e0f90073f3b9c77941f345b646b24d4b848e46994408f42acd050578dcd59',
     ('rsc_check_work_order_reversal_0098', 'uuid'): 'c9834533d05df61df464350924e889a8bba8874825f32aba9bcfc48998b3bb1e',
@@ -2562,6 +2585,9 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ('rsc_check_stock_return_outbound_0103', 'uuid'),
+        ('rsc_dispatch_stock_return_outbound_0103', ''),
+
         ("rsc_guard_stock_operation_seal_0101", ""),
         ('rsc_check_stock_return_0100', 'uuid, uuid'),
         ('rsc_dispatch_stock_return_0100', ''),
@@ -2628,6 +2654,7 @@ MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
 )
 MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS = frozenset(
     {
+        ('rsc_check_stock_return_outbound_0103', 'uuid'),
         ("rsc_check_stock_return_0100", "uuid, uuid"),
         ('rsc_check_work_order_reservations_0098', 'text, bigint'),
         ('rsc_check_work_order_reversal_0098', 'uuid'),
@@ -3872,7 +3899,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_require_opening_terminal_graph_0022", ""):
         "64563f1fc6f374bc41c9c06b6f20960bbb9598120b7f2d698ff4abdef9b066b0",
     ("rsc_require_opening_observation_account_0023", ""):
-        "98bde7adcba3d9c6c9b86f61fedcc8d1e6e0cba992203893fbb0e3df0abdfc29",
+        "a948ebdb1db707c0d6656c2a485fbadb07f6ed3f372af0f1897a68e0c6a05089",
     ("rsc_opening_start_graph_complete_0052", "uuid, boolean"):
         "54075228a80150ff15822991e7340576dd9a50d05ea148ab9dbb5082a7848905",
     (
@@ -6076,7 +6103,7 @@ def _select_material_request_approval_functions(
         for row in rows
         if isinstance(row.get("function_name"), str)
         and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094", "_0095", "_0096", "_0098", "_0099", "_0100", "_0101")
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094", "_0095", "_0096", "_0098", "_0099", "_0100", "_0101", "_0103")
         )
     ]
 

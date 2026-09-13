@@ -23,7 +23,9 @@ def test_return_guards_and_append_only_capabilities_match_runtime_manifest():
     assert m["down_revision"] == "20261009_0099"
     assert OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0100["rsc_oam_runtime_binding_ready_0044()"][6] == m["NEW_HASH"]
     for key, (_, _, body) in m["FUNCTIONS"].items():
-        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key] == hashlib.sha256(body.encode()).hexdigest()
+        replacement = runpy.run_path(str(MIGRATION.with_name("20261013_0103_stock_return_outbounds.py")))["_sources"]()[f"public.{key[0]}({key[1]})"]
+        assert replacement[0] == body
+        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key] == hashlib.sha256(replacement[1].encode()).hexdigest()
         assert key in security.MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
     for name, (table, _, function, flags, deferred) in m["TRIGGERS"].items():
         assert security.EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[name] == (table, function, "A", flags, deferred, deferred, deferred)

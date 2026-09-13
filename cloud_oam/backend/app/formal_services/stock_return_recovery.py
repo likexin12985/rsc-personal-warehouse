@@ -9,7 +9,7 @@ from ..demand_models import OamWorkOrder
 from ..formal_access import lock_formal_principal_graph
 from ..foundation_models import AuditEvent, StateTransitionEvent
 from ..inventory_models import InventoryLedgerHead, InventoryTransaction
-from ..stock_operation_models import StockOperationOrder as Order, StockOperationCancellation as Cancellation, StockOperationCommandSeal as Seal
+from ..stock_operation_models import StockOperationOrder as Order, StockOperationCancellation as Cancellation, StockOperationCommandSeal as Seal, StockOperationOutbound as Outbound
 from ..stock_return_schemas import StockReturnSealOut, StockReturnSealedOut
 from . import inventory_posting as posting, inventory_query as inventory, stock_return_facts as facts
 from .audit_chain import append_audit_event, AuditChainError
@@ -21,7 +21,7 @@ from .work_order_return_sources import _fail
 
 
 def _coordinate(operation_type, request_id, operation_id):
-    if (operation_type not in {"submit_return", "cancel_return"}
+    if (operation_type not in {"submit_return", "cancel_return", "outbound_return"}
             or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{8,160}", request_id)
             or (operation_type == "submit_return") != (operation_id is None)):
         _fail("stock_return_lookup_invalid", "退回原请求坐标无效", 422)
@@ -52,7 +52,7 @@ def verified_seal(db, *, actor, row):
 
 def _verified_seal(db, *, actor, row):
     if (row.actor_user_id != actor.user_id or row.operator_person_id != actor.person_id or row.authorization_version < 1
-            or row.operation_type not in {"submit_return", "cancel_return"}
+            or row.operation_type not in {"submit_return", "cancel_return", "outbound_return"}
             or (row.operation_type == "submit_return") != (row.operation_id is None)
             or not re.fullmatch(r"[A-Za-z0-9._:-]{8,160}", row.request_id)
             or not re.fullmatch(r"[0-9a-f]{64}", row.request_hash) or row.request_reference != posting._request_reference(row.request_id)):
@@ -78,11 +78,12 @@ def _original_order(db, actor, work_order_id, operation_id):
 def _require_evidence(db, *, actor, request_id, result, seal):
     expected_domain = set()
     if result is not None:
-        if hasattr(result, "cancellation_id"): expected_domain.add(("stock_operation_cancellation", str(result.cancellation_id)))
+        if hasattr(result, "outbound_id"): expected_domain.add(("stock_operation_outbound", str(result.outbound_id)))
+        elif hasattr(result, "cancellation_id"): expected_domain.add(("stock_operation_cancellation", str(result.cancellation_id)))
         else: expected_domain.add(("stock_operation_order", str(result.operation_id)))
     domains = set(db.execute(select(AuditEvent.aggregate_type, AuditEvent.aggregate_id).where(
         AuditEvent.stream_key == "material_request", AuditEvent.actor_user_id == actor.user_id,
-        AuditEvent.request_id == request_id, AuditEvent.aggregate_type.in_(("stock_operation_order", "stock_operation_cancellation")))))
+        AuditEvent.request_id == request_id, AuditEvent.aggregate_type.in_(("stock_operation_order", "stock_operation_cancellation", "stock_operation_outbound")))))
     if domains != expected_domain: facts.invalid()
     reference = posting._request_reference(request_id)
     audits = tuple(db.scalars(select(AuditEvent).where(AuditEvent.stream_key == "inventory",
@@ -97,7 +98,7 @@ def _require_evidence(db, *, actor, request_id, result, seal):
         try: transaction = db.get(InventoryTransaction, UUID(identifier), populate_existing=True)
         except (TypeError, ValueError): facts.invalid()
         if transaction is None or transaction.actor_user_id != actor.user_id: facts.invalid()
-        if transaction.source_document_type == "stock_operation_return": observed.add(transaction.id)
+        if transaction.source_document_type in {"stock_operation_return", "stock_operation_return_outbound"}: observed.add(transaction.id)
     if observed != ({result.posting_transaction_id} if result else set()): facts.invalid()
     seal_ids = set(db.scalars(select(AuditEvent.aggregate_id).where(AuditEvent.stream_key == "material_request",
         AuditEvent.actor_user_id == actor.user_id, AuditEvent.aggregate_type == "stock_operation_command_seal",
@@ -113,17 +114,21 @@ def lookup_return_request(db, *, actor, work_order_id, operation_type, request_i
         if cursor is None: facts.invalid()
         audit = material_audit_cursor(db)
         order = _original_order(db, current, work_order_id, operation_id) if operation_id else None
-        records = [(kind, row) for kind, model in (("submit_return", Order), ("cancel_return", Cancellation))
+        records = [(kind, row) for kind, model in (("submit_return", Order), ("cancel_return", Cancellation), ("outbound_return", Outbound))
             for row in db.scalars(select(model).where(model.actor_user_id == current.user_id, model.request_id == request_id)
                 .limit(2).execution_options(populate_existing=True))]
         if len(records) > 1: facts.invalid()
         result = None
         if records:
             kind, row = records[0]
-            if kind != operation_type or (kind == "submit_return" and row.oam_work_order_id != work_order_id) or (kind == "cancel_return" and row.operation_id != operation_id):
+            if kind != operation_type or (kind == "submit_return" and row.oam_work_order_id != work_order_id) or (kind != "submit_return" and row.operation_id != operation_id):
                 _fail("stock_return_request_conflict", "该请求标识已绑定其他退回操作，请核验原请求坐标")
-            result = (facts.order_result(db, actor=current, order=row) if kind == "submit_return" else
-                facts.cancellation_result(db, actor=current, order=order, cancellation=row))
+            if kind == "outbound_return":
+                from .stock_return_outbound_facts import outbound_result
+                result = outbound_result(db, actor=current, fact=row)
+            else:
+                result = (facts.order_result(db, actor=current, order=row) if kind == "submit_return" else
+                    facts.cancellation_result(db, actor=current, order=order, cancellation=row))
         row = _row(db, current, request_id)
         if row:
             if result is not None: facts.invalid()

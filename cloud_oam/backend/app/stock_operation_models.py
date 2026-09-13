@@ -8,7 +8,8 @@ from decimal import Decimal
 from typing import Any
 import uuid
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, ForeignKey, Index, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint
+from datetime import datetime
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -107,8 +108,8 @@ class StockOperationCommandSeal(CreatedAtMixin, Base):
     __tablename__ = "stock_operation_command_seals"
     __table_args__ = (
         UniqueConstraint("actor_user_id", "request_id", name="uq_stock_operation_seals_request"),
-        CheckConstraint("operation_type IN ('submit_return','cancel_return')", name="ck_stock_operation_seals_type"),
-        CheckConstraint("(operation_type='submit_return' AND operation_id IS NULL) OR (operation_type='cancel_return' AND operation_id IS NOT NULL)", name="ck_stock_operation_seals_origin"),
+        CheckConstraint("operation_type IN ('submit_return','cancel_return','outbound_return')", name="ck_stock_operation_seals_type"),
+        CheckConstraint("(operation_type='submit_return' AND operation_id IS NULL) OR (operation_type IN ('cancel_return','outbound_return') AND operation_id IS NOT NULL)", name="ck_stock_operation_seals_origin"),
         CheckConstraint("authorization_version > 0 AND length(request_hash)=64", name="ck_stock_operation_seals_context"),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
@@ -121,3 +122,59 @@ class StockOperationCommandSeal(CreatedAtMixin, Base):
     request_id: Mapped[str] = mapped_column(String(160))
     request_reference: Mapped[str] = mapped_column(String(100))
     request_hash: Mapped[str] = mapped_column(String(64))
+
+
+class StockOperationOutbound(CreatedAtMixin, Base):
+    """One physical departure; carrier handover and receiving remain separate."""
+    __tablename__ = "stock_operation_outbounds"
+    __table_args__ = (
+        UniqueConstraint("outbound_no", name="uq_stock_operation_outbounds_no"),
+        UniqueConstraint("idempotency_key_hash", name="uq_stock_operation_outbounds_key"),
+        UniqueConstraint("actor_user_id", "request_id", name="uq_stock_operation_outbounds_request"),
+        UniqueConstraint("posting_transaction_id", name="uq_stock_operation_outbounds_posting"),
+        CheckConstraint("status = 'outbound' AND authorization_version > 0 AND length(reason) BETWEEN 1 AND 500", name="ck_stock_operation_outbounds_context"),
+        CheckConstraint("outbound_at <= created_at", name="ck_stock_operation_outbounds_time"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    outbound_no: Mapped[str] = mapped_column(String(100))
+    operation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_orders.id", ondelete="RESTRICT"), index=True)
+    status: Mapped[str] = mapped_column(String(24))
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
+    operator_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"))
+    target_custody_assignment_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("custody_assignments.id", ondelete="RESTRICT"))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    reason: Mapped[str] = mapped_column(Text)
+    outbound_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    request_id: Mapped[str] = mapped_column(String(160))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    plan_hash: Mapped[str] = mapped_column(String(64))
+    command_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+    plan_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+    posting_transaction_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("inventory_transactions.id", deferrable=True, initially="DEFERRED"))
+
+
+class StockOperationOutboundLine(CreatedAtMixin, Base):
+    __tablename__ = "stock_operation_outbound_lines"
+    __table_args__ = (
+        UniqueConstraint("outbound_id", "line_no", name="uq_stock_operation_outbound_lines_order"),
+        UniqueConstraint("outbound_id", "operation_line_id", name="uq_stock_operation_outbound_lines_origin"),
+        CheckConstraint("line_no > 0 AND quantity > 0 AND source_stock_account_id <> transit_stock_account_id", name="ck_stock_operation_outbound_lines_context"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    outbound_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_outbounds.id", ondelete="RESTRICT"))
+    line_no: Mapped[int] = mapped_column(BigInteger)
+    operation_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_lines.id", ondelete="RESTRICT"), index=True)
+    source_stock_account_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT"))
+    transit_stock_account_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT"))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3))
+
+
+class StockOperationOutboundSerial(CreatedAtMixin, Base):
+    __tablename__ = "stock_operation_outbound_serials"
+    __table_args__ = (UniqueConstraint("line_id", "serial_id", name="uq_stock_operation_outbound_serials_line"),)
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_outbound_lines.id", ondelete="RESTRICT"))
+    serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("inventory_serials.id", ondelete="RESTRICT"))
+    sku_verified: Mapped[bool] = mapped_column(Boolean)
+    qr_verified: Mapped[bool] = mapped_column(Boolean)

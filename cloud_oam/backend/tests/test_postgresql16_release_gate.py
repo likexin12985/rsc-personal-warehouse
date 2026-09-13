@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261012_0102"
+HEAD_REVISION = "20261013_0103"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7437,16 +7437,16 @@ def _head_function_body_hash(signature: str) -> str:
 
 def _head_account_admission_hash() -> str:
     import runpy
-    return hashlib.sha256(runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20261010_0100_stock_return_orders.py")))["_account_sources"]()[1].encode()).hexdigest()
+    return hashlib.sha256(runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20261013_0103_stock_return_outbounds.py")))["_sources"]()["public.rsc_require_opening_observation_account_0023()"][1].encode()).hexdigest()
 
 
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20261012_0102_transit_opening_scopes.py"
+        "20261013_0103_stock_return_outbounds.py"
     )))
     assert migration["revision"] == HEAD_REVISION
-    return migration["SOURCE_CHANGES"]["rsc_oam_runtime_binding_ready_0044()"][1]
+    return migration["NEW_HASH"]
 
 
 def _assert_0058_review_terminal_catalog_state(
@@ -21372,6 +21372,14 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         blocked_transit = _run_alembic("downgrade", "20261011_0101", expect_success=False)
         assert "0102 downgrade blocked: transit stocktake history must be retained" in blocked_transit.stdout + blocked_transit.stderr
         assert _current_revision() == HEAD_REVISION
+        _validate_runtime_security(api_engine)
+        from pg16_stock_return_outbound_gate import assert_stock_return_outbound_gate
+        departure_fixture_engine = create_engine(_sqlalchemy_url(
+            role="star_oam_migrator", password=_role_password("star_oam_migrator")))
+        try:
+            assert_stock_return_outbound_gate(api_engine, departure_fixture_engine)
+        finally:
+            departure_fixture_engine.dispose()
         _validate_runtime_security(api_engine)
     finally:
         edge_engine.dispose()

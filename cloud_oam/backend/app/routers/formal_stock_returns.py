@@ -15,6 +15,9 @@ from ..formal_services.stock_return_plan import preview_return
 from ..formal_services.stock_return_options import return_options
 from ..formal_services.stock_return_history import return_history
 from ..formal_services.stock_return_recovery import lookup_return_request, seal_return_request
+from ..stock_return_outbound_schemas import StockReturnOutboundPreviewIn, StockReturnOutboundPreviewOut, StockReturnOutboundSubmitIn, StockReturnOutboundOut
+from ..formal_services.stock_return_outbound_plan import preview_outbound
+from ..formal_services.stock_return_outbound_commands import execute_outbound
 from ..stock_return_schemas import (StockReturnPreviewIn, StockReturnPreviewOut, StockReturnSubmitIn, StockReturnOut,
     StockReturnCancelIn, StockReturnCancellationOut, StockReturnSealIn, StockReturnSealedOut, StockReturnOptionsOut, StockReturnHistoryOut)
 
@@ -135,3 +138,38 @@ def seal_cancellation(work_order_id: UUID, operation_id: UUID, payload: StockRet
     _input(payload, principal, trace, key, request_id=request_id, seal=True)
     return _run(db, response, lambda: seal_return_request(db, actor=principal, work_order_id=work_order_id,
         operation_type="cancel_return", operation_id=operation_id, request_id=request_id, request_hash=payload.request_hash), write=True)
+
+
+@router.post("/{work_order_id}/returns/{operation_id}/outbounds/preview", response_model=StockReturnOutboundPreviewOut)
+def prepare_return_outbound(work_order_id: UUID, operation_id: UUID, payload: StockReturnOutboundPreviewIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("stock_operation", "outbound_return")), db: Session = Depends(get_db)):
+    _input(payload, principal)
+    return _run(db, response, lambda: preview_outbound(db, actor=principal, work_order_id=work_order_id,
+        operation_id=operation_id, request=payload)[0])
+
+
+@router.post("/{work_order_id}/returns/{operation_id}/outbounds", response_model=StockReturnOutboundOut)
+def submit_return_outbound(work_order_id: UUID, operation_id: UUID, payload: StockReturnOutboundSubmitIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("stock_operation", "outbound_return")), db: Session = Depends(get_db),
+    trace: str | None = Header(None, alias="X-Request-ID"), key: str | None = Header(None, alias="Idempotency-Key")):
+    _input(payload, principal, trace, key)
+    return _run(db, response, lambda: execute_outbound(db, actor=principal, work_order_id=work_order_id,
+        operation_id=operation_id, request=payload), write=True)
+
+
+@router.get("/{work_order_id}/returns/{operation_id}/outbounds/by-request/{request_id}", response_model=StockReturnOutboundOut | StockReturnSealedOut)
+def read_return_outbound(work_order_id: UUID, operation_id: UUID, response: Response,
+    request_id: str = Path(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$"),
+    principal: FormalPrincipal = Depends(require_permission("stock_operation", "read")), db: Session = Depends(get_db)):
+    return _run(db, response, lambda: _lookup(db, actor=principal, work_order_id=work_order_id,
+        operation_type="outbound_return", operation_id=operation_id, request_id=request_id))
+
+
+@router.post("/{work_order_id}/returns/{operation_id}/outbounds/by-request/{request_id}/seal", response_model=StockReturnOutboundOut | StockReturnSealedOut)
+def seal_return_outbound(work_order_id: UUID, operation_id: UUID, payload: StockReturnSealIn, response: Response,
+    request_id: str = Path(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$"),
+    principal: FormalPrincipal = Depends(require_permission("stock_operation", "outbound_return")), db: Session = Depends(get_db),
+    trace: str | None = Header(None, alias="X-Request-ID"), key: str | None = Header(None, alias="Idempotency-Key")):
+    _input(payload, principal, trace, key, request_id=request_id, seal=True)
+    return _run(db, response, lambda: seal_return_request(db, actor=principal, work_order_id=work_order_id,
+        operation_type="outbound_return", operation_id=operation_id, request_id=request_id, request_hash=payload.request_hash), write=True)

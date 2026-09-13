@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from ..foundation_models import AuditEvent, OutboxEvent, StateTransitionEvent
 from ..inventory_models import InventoryTransaction, StockAccount
-from ..stock_operation_models import StockOperationOrder as Order, StockOperationLine as Line, StockOperationSerial as Serial, StockOperationCancellation as Cancellation
+from ..stock_operation_models import StockOperationOrder as Order, StockOperationLine as Line, StockOperationSerial as Serial, StockOperationCancellation as Cancellation, StockOperationOutbound
 from ..stock_return_schemas import StockReturnSubmitIn, StockReturnCancelIn
 from . import inventory_posting as posting, work_order_material as material
 from .audit_chain import append_audit_event
@@ -18,13 +18,13 @@ from .work_order_return_sources import _hash, _fail
 def _fresh_request(db, *, actor, key, request_id):
     from .stock_return_recovery import require_unsealed
     require_unsealed(db, actor=actor, request_id=request_id)
-    for model in (Order, Cancellation):
+    for model in (Order, Cancellation, StockOperationOutbound):
         if db.scalar(select(model.id).where(model.actor_user_id == actor.user_id, model.request_id == request_id)):
             _fail("stock_return_request_conflict", "请求标识已有退回操作，请先回读原请求")
     if (db.scalar(select(InventoryTransaction.id).where(InventoryTransaction.idempotency_key_hash == key))
             or db.scalar(select(AuditEvent.id).where(AuditEvent.stream_key == "material_request",
                 AuditEvent.actor_user_id == actor.user_id, AuditEvent.request_id == request_id,
-                AuditEvent.action.in_(("stock_return_submitted", "stock_return_cancelled"))))):
+                AuditEvent.action.in_(("stock_return_submitted", "stock_return_cancelled", "stock_return_outbound"))))):
         facts.invalid()
 
 
@@ -144,6 +144,8 @@ def cancel_return(db, *, actor, operation_id, request, work_order_id=None):
     facts.order_result(db, actor=current, order=order)
     if db.scalar(select(Cancellation.id).where(Cancellation.operation_id == order.id)):
         _fail("stock_return_already_cancelled", "该退回单已经取消，请回读原取消记录")
+    if db.scalar(select(StockOperationOutbound.id).where(StockOperationOutbound.operation_id == order.id)):
+        _fail("stock_return_already_outbound", "该退回单已有实物发出，不能整单取消；请按原发出记录办理后续处置")
     now = datetime.now(timezone.utc)
     command = facts.posting_command(order, key=key, at=now, movements=facts.movements(db, order, cancel=True), cancel=True)
     posted = posting.post_inventory_transaction(db, actor=current, command=command, idempotency_key=request.idempotency_key,

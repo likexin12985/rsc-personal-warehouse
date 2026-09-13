@@ -128,7 +128,7 @@ class StockReturnSealOut(BaseModel):
     operator_person_id: UUID
     work_order_id: UUID
     operation_id: UUID | None
-    operation_type: Literal["submit_return", "cancel_return"]
+    operation_type: Literal["submit_return", "cancel_return", "outbound_return"]
     request_id: str
     request_hash: str
     sealed_at: datetime
