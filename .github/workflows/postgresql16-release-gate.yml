@@ -56,10 +56,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  postgresql16-release-gate:
+  pg16_runtime:
     runs-on: ubuntu-24.04
-    # Run 34733606663 already exceeded 110 minutes before the new departure
-    # SDK/concurrency cases. Keep every check and budget for the expanded suite.
+    # Keep real migrations/concurrency separate from the independent static
+    # suite. The aggregate below requires both jobs to succeed.
     timeout-minutes: 180
     services:
       postgres:
@@ -116,12 +116,42 @@ jobs:
           psql --version | grep -E ' 16[.]'
           zsh --version
 
-      # Surface migration and production-role failures before the longer static
-      # suite. Both steps remain mandatory for this job to succeed.
       - name: Run isolated PostgreSQL 16 migration and concurrency gate
         working-directory: cloud_oam/backend
         run: |
           python -m pytest -q tests/test_postgresql16_release_gate.py
+
+  static_safety:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12.13"
+
+      - name: Install pinned backend dependencies
+        run: |
+          python -m pip install --disable-pip-version-check \
+            -r cloud_oam/backend/requirements.txt \
+            pytest==9.1.1 pglast==7.18 httpx==0.28.1
+
+      - name: Set up Node for mini-program API contract
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: "24.19.0"
+
+      - name: Install static gate command dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-client-16 zsh
+          psql --version | grep -E ' 16[.]'
+          zsh --version
 
       - name: Run projector and edge static safety gates
         working-directory: cloud_oam
@@ -140,6 +170,7 @@ jobs:
             backend/tests/test_database_deployment_security.py \
             backend/tests/test_database_security.py \
             backend/tests/test_pg16_release_gate_diagnostics.py \
+            backend/tests/test_pg16_workflow_topology.py \
             backend/tests/test_alembic_migrations.py \
             backend/tests/test_material_request_draft_service.py \
             backend/tests/test_material_request_approval_service.py \
@@ -255,3 +286,17 @@ jobs:
             backend/tests/test_legacy_oam_work_order_redaction_artifact.py \
             edge_sync/test_oam_edge_sync.py \
             edge_sync/test_oam_read_client_security.py
+
+  postgresql16-release-gate:
+    if: ${{ always() }}
+    needs: [pg16_runtime, static_safety]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require both complete gates
+        env:
+          RUNTIME_RESULT: ${{ needs.pg16_runtime.result }}
+          STATIC_RESULT: ${{ needs.static_safety.result }}
+        run: |
+          test "$RUNTIME_RESULT" = success
+          test "$STATIC_RESULT" = success
