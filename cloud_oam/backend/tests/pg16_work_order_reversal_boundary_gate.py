@@ -132,6 +132,17 @@ def assert_direct_inverse_rejected(db, original):
         raise AssertionError("Database accepted an inverse detached from its original work order")
 
 
+def _reversal_successor_migrations():
+    """Use Alembic's actual head-to-target order before testing the old guard."""
+    from pathlib import Path
+    import runpy
+    from alembic.script import ScriptDirectory
+
+    folder = Path(__file__).parents[1] / 'alembic'
+    scripts = ScriptDirectory(str(folder))
+    return tuple(runpy.run_path(revision.path) for revision in scripts.iterate_revisions('heads', '20261007_0097'))
+
+
 def assert_reversal_migration_rejects_detached_history(api_engine, fixture_engine):
     """Inject legacy corruption only inside a schema-and-data rollback sandbox."""
     from pathlib import Path
@@ -141,9 +152,7 @@ def assert_reversal_migration_rejects_detached_history(api_engine, fixture_engin
 
     migration = runpy.run_path(str(Path(__file__).parents[1] /
         "alembic/versions/20261007_0097_work_order_reversal_boundary.py"))
-    successors = [runpy.run_path(str(Path(__file__).parents[1] / "alembic/versions" / filename))
-        for filename in ("20261013_0103_stock_return_outbounds.py",
-        "20261012_0102_transit_opening_scopes.py", "20261011_0101_stock_return_request_seals.py", "20261010_0100_stock_return_orders.py", "20261009_0099_work_order_reversal_seals.py", "20261008_0098_work_order_reversals.py")]
+    successors = _reversal_successor_migrations()
     def catalog():
         with fixture_engine.connect() as connection:
             return connection.execute(text("""SELECT oid,prosrc,proowner,proacl,prosecdef,proconfig FROM pg_proc
