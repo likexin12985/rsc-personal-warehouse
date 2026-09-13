@@ -552,6 +552,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
     }
     stocktake_start_tables = {"stocktake_start_completions"}
     allocation_tables = {
+        "stock_operation_command_seals",
         "stock_operation_orders", "stock_operation_lines", "stock_operation_serials", "stock_operation_cancellations",
         "outbound_postings", "outbound_posting_serials",
         "shipments", "shipment_lines", "shipment_serials",
@@ -7182,8 +7183,8 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 192
-    assert len(functions) == 76
+    assert len(triggers) == 198
+    assert len(functions) == 77
     _assert_material_request_approval_guards(
         triggers=triggers,
         functions=functions,
@@ -7433,7 +7434,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
     assert {
         coordinate[0].rsplit("_", 1)[-1]
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
-    } == {"0029", "0030", "0045", "0046", "0059", "0060", "0069", "0070", "0071", "0072", "0077", "0087", "0090", "0092", "0093", "0094", "0095", "0096", "0098", "0099", "0100"}
+    } == {"0029", "0030", "0045", "0046", "0059", "0060", "0069", "0070", "0071", "0072", "0077", "0087", "0090", "0092", "0093", "0094", "0095", "0096", "0098", "0099", "0100", "0101"}
 
 
 def test_0069_reservation_guard_bodies_match_runtime_manifest(monkeypatch):
@@ -7566,7 +7567,7 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         ): migration._projection_dispatcher_sql(),
     }
 
-    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 76
+    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 77
     assert set(function_sql) == {
         coordinate
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256

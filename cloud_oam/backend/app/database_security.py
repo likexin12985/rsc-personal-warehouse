@@ -30,6 +30,7 @@ class DatabaseSecurityBoundaryError(RuntimeError):
 
 RUNTIME_READ_TABLES = frozenset(
     {
+        "stock_operation_command_seals",
         'stock_operation_orders', 'stock_operation_lines', 'stock_operation_serials', 'stock_operation_cancellations',
         "audit_chain_heads",
         "audit_events",
@@ -147,6 +148,7 @@ RUNTIME_READ_TABLES = frozenset(
 )
 RUNTIME_INSERT_TABLES = frozenset(
     {
+        "stock_operation_command_seals",
         'stock_operation_orders', 'stock_operation_lines', 'stock_operation_serials', 'stock_operation_cancellations',
         "audit_events",
         "approval_actions",
@@ -462,6 +464,7 @@ EXPECTED_AUDIT_HEAD_IDS = {
     "material_request": "30000000-0000-4000-8000-000000000004",
 }
 EXPECTED_AUDIT_TRIGGERS = {
+    "trg_audit_events_stock_operation_seal_0101": ("audit_events", "rsc_guard_stock_operation_seal_0101", 5, True, True, True),
     "trg_audit_events_return_0100": (
         "audit_events", "rsc_dispatch_stock_return_0100", 5, True, True, True,
     ),
@@ -1898,6 +1901,12 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
     "approval_actions",
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
+    'trg_stock_operation_seals_proof_0101': ('stock_operation_command_seals', 'rsc_guard_stock_operation_seal_0101', 'A', 5, True, True, True),
+    'trg_stock_operation_seals_immutable_0101': ('stock_operation_command_seals', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+    'trg_stock_operation_seals_no_truncate_0101': ('stock_operation_command_seals', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+    'trg_stock_operation_orders_seal_0101': ('stock_operation_orders', 'rsc_guard_stock_operation_seal_0101', 'A', 5, True, True, True),
+    'trg_stock_operation_cancellations_seal_0101': ('stock_operation_cancellations', 'rsc_guard_stock_operation_seal_0101', 'A', 5, True, True, True),
+    'trg_audit_events_stock_operation_seal_0101': ('audit_events', 'rsc_guard_stock_operation_seal_0101', 'A', 5, True, True, True),
     'trg_stock_operation_orders_proof_0100': ('stock_operation_orders', 'rsc_dispatch_stock_return_0100', 'A', 5, True, True, True),
     'trg_stock_operation_orders_immutable_0100': ('stock_operation_orders', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
     'trg_stock_operation_orders_no_truncate_0100': ('stock_operation_orders', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
@@ -2417,6 +2426,7 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
+    ('rsc_guard_stock_operation_seal_0101', ''): '51a16fad8393ff21b00a8fed0d80b8c8e802ccdaadec90187131f38e300767b5',
     ('rsc_check_stock_return_0100', 'uuid, uuid'): '634848262e0b5b484f417b6b0ab3f1d38698094f1713d6b157b36216d02d1d52',
     ('rsc_dispatch_stock_return_0100', ''): '675473465d6c68734940ea75396d1d605c3c9d8ad0befb5f98f4d048aab9a5c8',
     ('rsc_guard_work_order_reversal_seal_0099', ''): '2489c7ececc06338a9bea578fa0142151321eabd2d2d4cb0f5831956de9a2d3f',
@@ -2545,6 +2555,7 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ("rsc_guard_stock_operation_seal_0101", ""),
         ('rsc_check_stock_return_0100', 'uuid, uuid'),
         ('rsc_dispatch_stock_return_0100', ''),
         ('rsc_guard_work_order_reversal_seal_0099', ''),
@@ -6056,7 +6067,7 @@ def _select_material_request_approval_functions(
         for row in rows
         if isinstance(row.get("function_name"), str)
         and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094", "_0095", "_0096", "_0098", "_0099", "_0100")
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094", "_0095", "_0096", "_0098", "_0099", "_0100", "_0101")
         )
     ]
 

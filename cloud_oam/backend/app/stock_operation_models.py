@@ -101,3 +101,23 @@ class StockOperationCancellation(CreatedAtMixin, Base):
     command_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
     posting_transaction_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE,
         ForeignKey("inventory_transactions.id", deferrable=True, initially="DEFERRED"))
+
+
+class StockOperationCommandSeal(CreatedAtMixin, Base):
+    __tablename__ = "stock_operation_command_seals"
+    __table_args__ = (
+        UniqueConstraint("actor_user_id", "request_id", name="uq_stock_operation_seals_request"),
+        CheckConstraint("operation_type IN ('submit_return','cancel_return')", name="ck_stock_operation_seals_type"),
+        CheckConstraint("(operation_type='submit_return' AND operation_id IS NULL) OR (operation_type='cancel_return' AND operation_id IS NOT NULL)", name="ck_stock_operation_seals_origin"),
+        CheckConstraint("authorization_version > 0 AND length(request_hash)=64", name="ck_stock_operation_seals_context"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
+    operator_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"))
+    oam_work_order_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("oam_work_orders.id", ondelete="RESTRICT"))
+    operation_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_orders.id", ondelete="RESTRICT"))
+    operation_type: Mapped[str] = mapped_column(String(24))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    request_id: Mapped[str] = mapped_column(String(160))
+    request_reference: Mapped[str] = mapped_column(String(100))
+    request_hash: Mapped[str] = mapped_column(String(64))

@@ -415,6 +415,10 @@ async def formal_material_request_validation_exception_handler(
 ):
     """Remove request-body values from validation responses for this PII API."""
 
+    from .formal_stock_returns import is_return_path
+    if is_return_path(request.url.path):
+        return JSONResponse(status_code=422, headers={"Cache-Control": "private, no-store"},
+            content={"detail": {"code": "stock_return_request_invalid", "message": "退回请求字段无效，请重新核验输入"}})
     if request.url.path.startswith("/api/v1/material-requests"):
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

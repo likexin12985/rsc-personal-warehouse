@@ -16,6 +16,8 @@ from .work_order_return_sources import _hash, _fail
 
 
 def _fresh_request(db, *, actor, key, request_id):
+    from .stock_return_recovery import require_unsealed
+    require_unsealed(db, actor=actor, request_id=request_id)
     for model in (Order, Cancellation):
         if db.scalar(select(model.id).where(model.actor_user_id == actor.user_id, model.request_id == request_id)):
             _fail("stock_return_request_conflict", "请求标识已有退回操作，请先回读原请求")
@@ -119,13 +121,14 @@ def submit_return(db, *, actor, work_order_id, request):
     return facts.order_result(db, actor=current, order=parent)
 
 
-def cancel_return(db, *, actor, operation_id, request):
+def cancel_return(db, *, actor, operation_id, request, work_order_id=None):
     request = StockReturnCancelIn.model_validate(request.model_dump())
     posting._lock_inventory_ledger_head_for_atomic_batch(db)
     current = authorize(db, actor, "cancel_return")
     if request.operator_person_id != current.person_id: _fail("operator_mismatch", "操作人必须是当前登录人员", 403)
     order = db.get(Order, operation_id, populate_existing=True)
-    if order is None or order.actor_user_id != current.user_id or order.requester_id != current.person_id:
+    if (order is None or order.actor_user_id != current.user_id or order.requester_id != current.person_id
+            or (work_order_id is not None and order.oam_work_order_id != work_order_id)):
         _fail("stock_return_not_found", "本人退回单不存在", 404)
     key = posting._storage_hash(posting._require_idempotency_key(request.idempotency_key))
     posting._require_request_id(request.request_id)

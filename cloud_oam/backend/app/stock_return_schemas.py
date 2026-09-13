@@ -96,3 +96,25 @@ class StockReturnCancellationOut(BaseModel):
     status: Literal["cancelled"] = "cancelled"
     posting_transaction_id: UUID
     cancelled_at: datetime
+
+
+class StockReturnSealIn(StrictInput):
+    operator_person_id: UUID
+    request_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class StockReturnSealOut(BaseModel):
+    seal_id: UUID
+    operator_person_id: UUID
+    work_order_id: UUID
+    operation_id: UUID | None
+    operation_type: Literal["submit_return", "cancel_return"]
+    request_id: str
+    request_hash: str
+    sealed_at: datetime
+
+
+class StockReturnSealedOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    lookup_status: Literal["sealed"] = "sealed"
+    seal: StockReturnSealOut

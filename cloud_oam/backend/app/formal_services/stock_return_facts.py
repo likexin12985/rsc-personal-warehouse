@@ -8,7 +8,7 @@ from sqlalchemy import select
 from ..demand_models import WorkOrderMaterialLine, WorkOrderMaterialOperation, WorkOrderMaterialSerial, WorkOrderReplacement
 from ..foundation_models import AuditEvent, OutboxEvent, StateTransitionEvent
 from ..inventory_models import CustodyAssignment, InventoryMovement, InventoryMovementSerial, InventoryTransaction, StockAccount
-from ..stock_operation_models import StockOperationOrder as Order, StockOperationLine as Line, StockOperationSerial as Serial, StockOperationCancellation as Cancellation
+from ..stock_operation_models import StockOperationOrder as Order, StockOperationLine as Line, StockOperationSerial as Serial, StockOperationCancellation as Cancellation, StockOperationCommandSeal
 from ..stock_return_schemas import StockReturnOut, StockReturnCancellationOut, StockReturnPreviewIn
 from . import inventory_posting as posting
 from .audit_chain import AuditChainError, verify_audit_event_in_read_snapshot
@@ -73,6 +73,8 @@ def audit(db, *, actor, stream, aggregate_type, identifier, action, request_id, 
 
 
 def verify_posting(db, *, actor, order, fact, cancel=False):
+    if db.scalar(select(StockOperationCommandSeal.id).where(StockOperationCommandSeal.actor_user_id == fact.actor_user_id,
+            StockOperationCommandSeal.request_id == fact.request_id)) is not None: invalid()
     tx = db.get(InventoryTransaction, fact.posting_transaction_id, populate_existing=True)
     if tx is None: invalid()
     expected = movements(db, order, cancel=cancel)

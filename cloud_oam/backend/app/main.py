@@ -28,6 +28,7 @@ from .routers import (
     formal_material_requests,
     formal_work_order_material,
     formal_work_order_query,
+    formal_stock_returns,
     formal_opening_start_options,
     formal_opening_stocktake,
     formal_opening_stocktake_read,
@@ -238,6 +239,12 @@ async def block_legacy_prototype_writes(request, call_next):
             },
         )
     response = await call_next(request)
+    if formal_stock_returns.is_return_path(request.url.path):
+        # Include authentication, validation and unmatched-method failures.
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
     if request.url.path in (
         PRIVATE_IDENTITY_READ_PATHS | PRIVATE_COMMAND_RECOVERY_PATHS
     ):
@@ -314,6 +321,7 @@ app.include_router(formal_material_request_options.router, prefix="/api")
 app.include_router(formal_material_requests.router, prefix="/api")
 app.include_router(formal_work_order_material.router, prefix="/api")
 app.include_router(formal_work_order_query.router, prefix="/api")
+app.include_router(formal_stock_returns.router, prefix="/api")
 app.include_router(formal_material_requests.command_status_router, prefix="/api")
 # Formal attachments use only private-object-store presigned intents.  The
 # adapter is disabled by default and never shares the quarantined legacy
