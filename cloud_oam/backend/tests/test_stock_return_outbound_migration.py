@@ -22,11 +22,19 @@ def test_departure_runtime_manifest_matches_installed_sources_and_minimum_acl():
         assert table in security.RUNTIME_READ_TABLES & security.RUNTIME_INSERT_TABLES
         assert table not in security.RUNTIME_UPDATE_TABLES | security.RUNTIME_DELETE_TABLES
     for coordinate,digest in m['FUNCTION_HASHES'].items():
+        successor = runpy.run_path(str(PATH.with_name('20261014_0104_stock_return_shipments.py')))['_sources']().get(f'public.{coordinate[0]}({coordinate[1]})')
+        if successor:
+            assert hashlib.sha256(successor[0].encode()).hexdigest() == digest
+            digest = hashlib.sha256(successor[1].encode()).hexdigest()
         assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate]==digest
         assert coordinate in security.MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
     for signature,(old,new) in m['_sources']().items():
         name,args=signature.removeprefix('public.').split('(');coordinate=(name,args[:-1])
         manifest = security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 if name=='rsc_require_opening_observation_account_0023' else security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
+        successor = runpy.run_path(str(PATH.with_name('20261014_0104_stock_return_shipments.py')))['_sources']().get(signature)
+        if successor:
+            assert successor[0] == new
+            new = successor[1]
         assert old!=new and manifest[coordinate]==hashlib.sha256(new.encode()).hexdigest()
     for name,(table,_events,fn,bits,deferred) in m['TRIGGERS'].items():
         assert security.EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[name]==(table,fn,'A',bits,deferred,deferred,deferred)

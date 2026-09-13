@@ -234,6 +234,9 @@ jobs:
             backend/tests/test_stock_return_outbound_recovery.py \
             backend/tests/test_stock_return_outbound_queries.py \
             backend/tests/test_stock_return_outbound_migration.py \
+            backend/tests/test_stock_return_shipment.py \
+            backend/tests/test_stock_return_shipment_recovery.py \
+            backend/tests/test_stock_return_shipment_migration.py \
             backend/tests/test_formal_stock_return_routes.py \
             backend/tests/test_stock_return_options_history.py \
             backend/tests/test_work_order_reversal_boundary.py \

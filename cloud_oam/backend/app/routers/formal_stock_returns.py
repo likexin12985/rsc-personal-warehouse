@@ -23,6 +23,9 @@ from ..stock_return_schemas import (StockReturnPreviewIn, StockReturnPreviewOut,
 
 from ..stock_return_outbound_schemas import StockReturnOutboundOptionsOut, StockReturnOutboundHistoryOut
 from ..formal_services.stock_return_outbound_queries import outbound_options, outbound_history
+from ..stock_return_shipment_schemas import StockReturnShipmentPreviewIn, StockReturnShipmentPreviewOut, StockReturnShipmentSubmitIn, StockReturnShipmentOut
+from ..formal_services.stock_return_shipment_plan import preview_shipment
+from ..formal_services.stock_return_shipment_commands import execute_shipment
 
 router = APIRouter(prefix="/v1/work-orders", tags=["formal-stock-returns"])
 PRIVATE = {"Cache-Control": "private, no-store"}
@@ -188,3 +191,38 @@ def read_outbound_options(work_order_id: UUID, operation_id: UUID, response: Res
 def read_outbound_history(work_order_id: UUID, operation_id: UUID, response: Response,
     principal: FormalPrincipal = Depends(require_permission("stock_operation", "read")), db: Session = Depends(get_db)):
     return _run(db, response, lambda: outbound_history(db, actor=principal, work_order_id=work_order_id, operation_id=operation_id))
+
+
+@router.post("/{work_order_id}/returns/{operation_id}/shipments/preview", response_model=StockReturnShipmentPreviewOut)
+def prepare_return_shipment(work_order_id: UUID, operation_id: UUID, payload: StockReturnShipmentPreviewIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("stock_operation", "ship_return")), db: Session = Depends(get_db)):
+    _input(payload, principal)
+    return _run(db, response, lambda: preview_shipment(db, actor=principal, work_order_id=work_order_id,
+        operation_id=operation_id, request=payload)[0])
+
+
+@router.post("/{work_order_id}/returns/{operation_id}/shipments", response_model=StockReturnShipmentOut)
+def submit_return_shipment(work_order_id: UUID, operation_id: UUID, payload: StockReturnShipmentSubmitIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("stock_operation", "ship_return")), db: Session = Depends(get_db),
+    trace: str | None = Header(None, alias="X-Request-ID"), key: str | None = Header(None, alias="Idempotency-Key")):
+    _input(payload, principal, trace, key)
+    return _run(db, response, lambda: execute_shipment(db, actor=principal, work_order_id=work_order_id,
+        operation_id=operation_id, request=payload), write=True)
+
+
+@router.get("/{work_order_id}/returns/{operation_id}/shipments/by-request/{request_id}", response_model=StockReturnShipmentOut | StockReturnSealedOut)
+def read_return_shipment(work_order_id: UUID, operation_id: UUID, response: Response,
+    request_id: str = Path(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$"),
+    principal: FormalPrincipal = Depends(require_permission("stock_operation", "read")), db: Session = Depends(get_db)):
+    return _run(db, response, lambda: _lookup(db, actor=principal, work_order_id=work_order_id,
+        operation_type="ship_return", operation_id=operation_id, request_id=request_id))
+
+
+@router.post("/{work_order_id}/returns/{operation_id}/shipments/by-request/{request_id}/seal", response_model=StockReturnShipmentOut | StockReturnSealedOut)
+def seal_return_shipment(work_order_id: UUID, operation_id: UUID, payload: StockReturnSealIn, response: Response,
+    request_id: str = Path(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$"),
+    principal: FormalPrincipal = Depends(require_permission("stock_operation", "ship_return")), db: Session = Depends(get_db),
+    trace: str | None = Header(None, alias="X-Request-ID"), key: str | None = Header(None, alias="Idempotency-Key")):
+    _input(payload, principal, trace, key, request_id=request_id, seal=True)
+    return _run(db, response, lambda: seal_return_request(db, actor=principal, work_order_id=work_order_id,
+        operation_type="ship_return", operation_id=operation_id, request_id=request_id, request_hash=payload.request_hash), write=True)

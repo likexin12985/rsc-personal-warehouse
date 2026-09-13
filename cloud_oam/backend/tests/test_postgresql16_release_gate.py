@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261013_0103"
+HEAD_REVISION = "20261014_0104"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7443,7 +7443,7 @@ def _head_account_admission_hash() -> str:
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20261013_0103_stock_return_outbounds.py"
+        "20261014_0104_stock_return_shipments.py"
     )))
     assert migration["revision"] == HEAD_REVISION
     return migration["NEW_HASH"]
@@ -21377,7 +21377,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         departure_fixture_engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
-            assert_stock_return_outbound_gate(api_engine, departure_fixture_engine)
+            departure_worlds = assert_stock_return_outbound_gate(api_engine, departure_fixture_engine)
         finally:
             departure_fixture_engine.dispose()
         from pg16_stock_return_outbound_gate import departure_snapshot
@@ -21385,6 +21385,14 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         blocked_departure = _run_alembic("downgrade", "20261012_0102", expect_success=False)
         assert "0103 downgrade blocked: immutable physical departure history or request seals must be retained" in blocked_departure.stdout + blocked_departure.stderr
         assert _current_revision() == HEAD_REVISION and departure_snapshot(api_engine) == departure_history
+        _validate_runtime_security(api_engine)
+        # Preserve each predecessor's downgrade proof before permanent parcels.
+        from pg16_stock_return_shipment_gate import assert_stock_return_shipment_gate, parcel_snapshot
+        assert_stock_return_shipment_gate(api_engine, departure_worlds)
+        parcel_history = parcel_snapshot(api_engine)
+        blocked_parcels = _run_alembic("downgrade", "20261013_0103", expect_success=False)
+        assert "0104 downgrade blocked: immutable return parcels or request seals must be retained" in blocked_parcels.stdout + blocked_parcels.stderr
+        assert _current_revision() == HEAD_REVISION and parcel_snapshot(api_engine) == parcel_history
         _validate_runtime_security(api_engine)
     finally:
         edge_engine.dispose()

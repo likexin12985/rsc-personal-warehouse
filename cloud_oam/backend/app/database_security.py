@@ -32,6 +32,7 @@ RUNTIME_READ_TABLES = frozenset(
     {
         "stock_operation_command_seals",
         'stock_operation_outbounds', 'stock_operation_outbound_lines', 'stock_operation_outbound_serials',
+        'stock_operation_shipments', 'stock_operation_shipment_lines', 'stock_operation_shipment_serials',
         'stock_operation_orders', 'stock_operation_lines', 'stock_operation_serials', 'stock_operation_cancellations',
         "audit_chain_heads",
         "audit_events",
@@ -151,6 +152,7 @@ RUNTIME_INSERT_TABLES = frozenset(
     {
         "stock_operation_command_seals",
         'stock_operation_outbounds', 'stock_operation_outbound_lines', 'stock_operation_outbound_serials',
+        'stock_operation_shipments', 'stock_operation_shipment_lines', 'stock_operation_shipment_serials',
         'stock_operation_orders', 'stock_operation_lines', 'stock_operation_serials', 'stock_operation_cancellations',
         "audit_events",
         "approval_actions",
@@ -466,6 +468,8 @@ EXPECTED_AUDIT_HEAD_IDS = {
     "material_request": "30000000-0000-4000-8000-000000000004",
 }
 EXPECTED_AUDIT_TRIGGERS = {
+    'trg_audit_events_return_shipment_0104': ('audit_events', 'rsc_dispatch_stock_return_shipment_0104', 5, True, True, True),
+
     "trg_audit_events_return_outbound_0103": ("audit_events", "rsc_dispatch_stock_return_outbound_0103", 5, True, True, True),
     "trg_audit_events_stock_operation_seal_0101": ("audit_events", "rsc_guard_stock_operation_seal_0101", 5, True, True, True),
     "trg_audit_events_return_0100": (
@@ -1911,6 +1915,25 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
     "approval_actions",
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
+    'trg_stock_operation_shipments_proof_0104': ('stock_operation_shipments', 'rsc_dispatch_stock_return_shipment_0104', 'A', 5, True, True, True),
+    'trg_stock_operation_shipments_immutable_0104': ('stock_operation_shipments', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+    'trg_stock_operation_shipments_no_truncate_0104': ('stock_operation_shipments', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+    'trg_stock_operation_shipment_lines_proof_0104': ('stock_operation_shipment_lines', 'rsc_dispatch_stock_return_shipment_0104', 'A', 5, True, True, True),
+    'trg_stock_operation_shipment_lines_immutable_0104': ('stock_operation_shipment_lines', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+    'trg_stock_operation_shipment_lines_no_truncate_0104': ('stock_operation_shipment_lines', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+    'trg_stock_operation_shipment_serials_proof_0104': ('stock_operation_shipment_serials', 'rsc_dispatch_stock_return_shipment_0104', 'A', 5, True, True, True),
+    'trg_stock_operation_shipment_serials_immutable_0104': ('stock_operation_shipment_serials', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+    'trg_stock_operation_shipment_serials_no_truncate_0104': ('stock_operation_shipment_serials', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+    'trg_shipments_return_shipment_0104': ('shipments', 'rsc_dispatch_stock_return_shipment_0104', 'A', 5, True, True, True),
+    'trg_shipment_lines_return_shipment_0104': ('shipment_lines', 'rsc_dispatch_stock_return_shipment_0104', 'A', 5, True, True, True),
+    'trg_logistics_events_return_shipment_0104': ('logistics_events', 'rsc_dispatch_stock_return_shipment_0104', 'A', 5, True, True, True),
+    'trg_receipts_return_shipment_0104': ('receipts', 'rsc_dispatch_stock_return_shipment_0104', 'A', 5, True, True, True),
+    'trg_inventory_transactions_return_shipment_0104': ('inventory_transactions', 'rsc_dispatch_stock_return_shipment_0104', 'A', 5, True, True, True),
+    'trg_audit_events_return_shipment_0104': ('audit_events', 'rsc_dispatch_stock_return_shipment_0104', 'A', 5, True, True, True),
+    'trg_outbox_events_return_shipment_0104': ('outbox_events', 'rsc_dispatch_stock_return_shipment_0104', 'A', 5, True, True, True),
+    'trg_state_transition_events_return_shipment_0104': ('state_transition_events', 'rsc_dispatch_stock_return_shipment_0104', 'A', 5, True, True, True),
+    'trg_stock_operation_shipments_seal_0104': ('stock_operation_shipments', 'rsc_guard_stock_operation_seal_0101', 'A', 5, True, True, True),
+
     'trg_stock_operation_outbounds_proof_0103': ('stock_operation_outbounds', 'rsc_dispatch_stock_return_outbound_0103', 'A', 5, True, True, True),
     'trg_stock_operation_outbounds_immutable_0103': ('stock_operation_outbounds', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
     'trg_stock_operation_outbounds_no_truncate_0103': ('stock_operation_outbounds', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
@@ -2453,11 +2476,14 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
-    ('rsc_check_stock_return_outbound_0103', 'uuid'): 'a1613af21d955b31718555622fdb91f056377b362f5262fdeeaf1e1987552d2d',
+    ('rsc_check_stock_return_shipment_0104', 'uuid'): '73d38ce05887f80771c50333cdc5348f19d66fd7fbfd66cbcb810a0812f8ab4b',
+    ('rsc_dispatch_stock_return_shipment_0104', ''): 'ef708c99873a93e3e5d89eaa34d26ee786addd74bf1b8eb32c42c38c650f115f',
+
+    ('rsc_check_stock_return_outbound_0103', 'uuid'): 'e62de71ccae50e8b053171f8887755d08b83d91cdbb4a7041bab5558ae874254',
     ('rsc_dispatch_stock_return_outbound_0103', ''): 'fa0f8bd41c725613676fa5e2ee185b3676979462706f50f17b82c212e8aa0c27',
 
-    ('rsc_guard_stock_operation_seal_0101', ''): '4741c30321363e623d61b052769a7585febb992078a2832204e64b0e470a23a2',
-    ('rsc_check_stock_return_0100', 'uuid, uuid'): 'a9ea4f49847c50e2b4a623a4903aa38a1eaaf35d978569eedbb54bcfaf089eda',
+    ('rsc_guard_stock_operation_seal_0101', ''): '4e5f3d5f2448bbb68196c935fac695a96631acd4e78e6301514881e44333c906',
+    ('rsc_check_stock_return_0100', 'uuid, uuid'): '0132ee150c9a94c5b299ae7cad04bc9b4429a6447e4a5db4873a622af53dc5b1',
     ('rsc_dispatch_stock_return_0100', ''): 'f1c3ec8f8f697e8cb1612dd6226f440b0cfb68711e38ad2b402f726a2280d15d',
     ('rsc_guard_work_order_reversal_seal_0099', ''): '2489c7ececc06338a9bea578fa0142151321eabd2d2d4cb0f5831956de9a2d3f',
     ('rsc_check_work_order_reservations_0098', 'text, bigint'): '142e0f90073f3b9c77941f345b646b24d4b848e46994408f42acd050578dcd59',
@@ -2585,6 +2611,9 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ('rsc_check_stock_return_shipment_0104', 'uuid'),
+        ('rsc_dispatch_stock_return_shipment_0104', ''),
+
         ('rsc_check_stock_return_outbound_0103', 'uuid'),
         ('rsc_dispatch_stock_return_outbound_0103', ''),
 
@@ -2654,6 +2683,7 @@ MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
 )
 MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS = frozenset(
     {
+        ('rsc_check_stock_return_shipment_0104', 'uuid'),
         ('rsc_check_stock_return_outbound_0103', 'uuid'),
         ("rsc_check_stock_return_0100", "uuid, uuid"),
         ('rsc_check_work_order_reservations_0098', 'text, bigint'),
@@ -6103,7 +6133,7 @@ def _select_material_request_approval_functions(
         for row in rows
         if isinstance(row.get("function_name"), str)
         and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094", "_0095", "_0096", "_0098", "_0099", "_0100", "_0101", "_0103")
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094", "_0095", "_0096", "_0098", "_0099", "_0100", "_0101", "_0103", "_0104")
         )
     ]
 

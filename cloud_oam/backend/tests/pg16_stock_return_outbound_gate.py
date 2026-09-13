@@ -188,6 +188,7 @@ def assert_stock_return_outbound_gate(api_engine, fixture_engine):
     assert_departure_commit_gate(api_engine,fixture_engine,worlds)
     from pg16_stock_return_outbound_queries_gate import assert_departure_queries_gate
     assert_departure_queries_gate(api_engine,fixture_engine,worlds)
+    return worlds
 
 
 def departure_snapshot(engine):

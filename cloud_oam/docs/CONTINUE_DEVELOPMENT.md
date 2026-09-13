@@ -1,5 +1,59 @@
 # 切换账号后的续开发入口
 
+## 2026-09-13 退回承运运单与分包（0104）
+
+从 `5231c90efae6df7f8695726752e11d5d70663289` 接续，仍使用
+`codex/production-readiness-gates`。本批开发位于原项目目录，应用中的旧
+`codex/mini-post-recovery` worktree 未修改。备案已由用户确认通过；本批没有部署
+或写入外部业务系统。父提交的 Client `34738764565` 已通过，PG16 `34738764566`
+已确认真实数据库和静态回归两个 runner 同时运行，尚未取得完整结束结果。
+
+新增 `20261014_0104`，复用不可变 `shipments` 运单头，以三个专用表关联准确的
+退回发出行和 SN，不伪造需求申请或货源分配。分包累计不超过原发出量；同一在途
+账户的整组选择还受尚未绑定运单的实际持有量约束。同一原发出行的 SN 不能重复
+装包。实际交运时间不能早于发出及接收责任生效时间，也不能晚于当前时间。
+运单登记不产生库存流水，不解除发出人的保管责任；签收、接收仓验收和后续入账
+需要各自的正式事实。现阶段拒绝把原正向需求的物流或收货接口绑定到退回运单。
+
+新增正式接口：
+`POST /api/v1/work-orders/{work_order_id}/returns/{operation_id}/shipments/preview`、
+同路径的 `POST .../shipments`、`GET .../shipments/by-request/{request_id}` 和
+`POST .../shipments/by-request/{request_id}/seal`。新增 `stock_operation/ship_return`
+最小权限。请求标识与原提交、取消、发出共用操作者命名空间；响应丢失只回查原键，
+不存在的原请求可互斥封存，不自动重放。所有响应禁用缓存，不返回二维码原文。
+
+分包不推进库存流水，因此以独立审计顺序固定每次分包之前的承诺量，历史回读同时
+使用原库存游标，避免同一库存游标下多包混淆先后。0104 前向替换三个原完整摘要
+已核验的守卫，新增两个私有函数、18 个触发器；既有 0100–0103 迁移保持原样。
+运行时 ACL、函数和触发器清单、HEAD、权限预期及 CI 清单同步扩展。
+
+已核验：
+
+- 31 项服务/输入契约通过：`/tmp/oam-return-shipment-unit.log`（23 项）及
+  `/tmp/oam-return-shipment-contract.log`（8 项）；HTTP 恢复与坐标 8 项在回归中通过。
+- 最终数据库安全、退回恢复、迁移与门禁配置回归 366 项通过：
+  `/tmp/oam-return-shipment-final-regression.log`（退出 0）。正式路由的框架错误隐私
+  专项 5 项通过：`/tmp/oam-return-shipment-production-route.log`。
+- 5 项迁移边界与 SQL 检查通过；全量 SQLite 升级、ORM、权限及降级和 HEAD 图
+  检查通过，`/tmp/oam-return-shipment-schema.log` 与
+  `/tmp/oam-return-shipment-schema-final.log`。前一日志中的旧 HEAD/权限排序断言
+  失败已经修正并由后一日志通过，不作为尚未解决的代码错误。
+- 独立 PG16 克隆升级及运行时安全检查通过：`/tmp/oam-return-0104-upgrade.log`。
+  元数据 `/tmp/oam-return-0104-trial.json`；原 0103 数据库未修改。
+- 数量/SN 真实 API 身份提交、SQL 守卫、精确重放和恢复通过：
+  `/tmp/oam-return-0104-smoke.log`（退出 0）。真实 HTTP、SELECT-only 回查、非法
+  物流绑定/超量/缺少审计拒绝及完整回滚通过：
+  `/tmp/oam-return-0104-rollback-gate.log`（退出 0）。
+- 真实两连接数量/SN 重复提交、封存先到和提交先到均通过，以
+  `pg_blocking_pids` 确认实际锁竞争。`0.375 + 0.375 + 0.250` 完成一条原发出行，
+  没有新增库存事务。空 0104 升降级保留旧事实；已有永久分包/封存后降级被拒绝，
+  历史和运行时权限不变：`/tmp/oam-return-0104-commit-gate.log`（退出 0）。
+
+0104 测试库现有永久运单及封存历史，迁移及已提交合成事实保持冻结，不得重置、
+修改旧迁移或重复执行整批提交竞争。后续迁移继续复制新逻辑库。下一步补退回分包
+目录、独立历史列表及小程序页面，然后实现接收仓验收、入账和保管责任交接。
+当前后端专项通过不等于真机/UAT、完整云端门禁或生产放行通过。
+
 ## 2026-09-13 云端门禁串行超时修复
 
 本地 `2cbdc35f6b607d9d1d099beb2ff1d28366ad73ca` 已完成退料实物发出页面。

@@ -26,6 +26,7 @@ def path(coordinates):
     value = f"/api/v1/work-orders/{coordinates['work_order_id']}/returns"
     if coordinates["operation_type"] == "cancel_return": value += f"/{coordinates['operation_id']}/cancellations"
     if coordinates["operation_type"] == "outbound_return": value += f"/{coordinates['operation_id']}/outbounds"
+    if coordinates["operation_type"] == "ship_return": value += f"/{coordinates['operation_id']}/shipments"
     return value
 
 

@@ -27,6 +27,9 @@ def test_seal_runtime_capabilities_and_exact_sources():
     for key, digest in migration["FUNCTION_HASHES"].items():
         replacement = runpy.run_path(str(PATH.with_name("20261013_0103_stock_return_outbounds.py")))["_sources"]()[f"public.{key[0]}({key[1]})"]
         assert hashlib.sha256(replacement[0].encode()).hexdigest() == digest
+        successor = runpy.run_path(str(PATH.with_name("20261014_0104_stock_return_shipments.py")))["_sources"]()[f"public.{key[0]}({key[1]})"]
+        assert successor[0] == replacement[1]
+        replacement = successor
         assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key] == hashlib.sha256(replacement[1].encode()).hexdigest()
         assert key in security.MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
     for name, (table, _event, function, flags, deferred) in migration["TRIGGERS"].items():

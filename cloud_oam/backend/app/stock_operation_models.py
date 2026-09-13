@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any
 import uuid
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, Numeric, String, Text, UniqueConstraint
 from datetime import datetime
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -108,8 +108,8 @@ class StockOperationCommandSeal(CreatedAtMixin, Base):
     __tablename__ = "stock_operation_command_seals"
     __table_args__ = (
         UniqueConstraint("actor_user_id", "request_id", name="uq_stock_operation_seals_request"),
-        CheckConstraint("operation_type IN ('submit_return','cancel_return','outbound_return')", name="ck_stock_operation_seals_type"),
-        CheckConstraint("(operation_type='submit_return' AND operation_id IS NULL) OR (operation_type IN ('cancel_return','outbound_return') AND operation_id IS NOT NULL)", name="ck_stock_operation_seals_origin"),
+        CheckConstraint("operation_type IN ('submit_return','cancel_return','outbound_return','ship_return')", name="ck_stock_operation_seals_type"),
+        CheckConstraint("(operation_type='submit_return' AND operation_id IS NULL) OR (operation_type IN ('cancel_return','outbound_return','ship_return') AND operation_id IS NOT NULL)", name="ck_stock_operation_seals_origin"),
         CheckConstraint("authorization_version > 0 AND length(request_hash)=64", name="ck_stock_operation_seals_context"),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
@@ -178,3 +178,52 @@ class StockOperationOutboundSerial(CreatedAtMixin, Base):
     serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("inventory_serials.id", ondelete="RESTRICT"))
     sku_verified: Mapped[bool] = mapped_column(Boolean)
     qr_verified: Mapped[bool] = mapped_column(Boolean)
+
+
+class StockOperationShipment(CreatedAtMixin, Base):
+    """Return-specific provenance for the shared immutable shipment header."""
+    __tablename__ = "stock_operation_shipments"
+    __table_args__ = (
+        UniqueConstraint("actor_user_id", "request_id", name="uq_stock_operation_shipments_request"),
+        UniqueConstraint("audit_version", name="uq_stock_operation_shipments_audit"),
+        CheckConstraint("audit_version > 0", name="ck_stock_operation_shipments_audit"),
+        CheckConstraint("length(reason) BETWEEN 1 AND 500 AND length(plan_hash)=64", name="ck_stock_operation_shipments_context"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("shipments.id", ondelete="RESTRICT"), primary_key=True)
+    operation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_orders.id", ondelete="RESTRICT"), index=True)
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
+    target_custody_assignment_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("custody_assignments.id", ondelete="RESTRICT"))
+    request_id: Mapped[str] = mapped_column(String(160))
+    reason: Mapped[str] = mapped_column(Text)
+    plan_hash: Mapped[str] = mapped_column(String(64))
+    audit_version: Mapped[int] = mapped_column(BigInteger)
+    command_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+    plan_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+
+
+class StockOperationShipmentLine(CreatedAtMixin, Base):
+    __tablename__ = "stock_operation_shipment_lines"
+    __table_args__ = (
+        UniqueConstraint("shipment_id", "line_no", name="uq_stock_operation_shipment_lines_order"),
+        UniqueConstraint("shipment_id", "outbound_line_id", name="uq_stock_operation_shipment_lines_origin"),
+        UniqueConstraint("id", "outbound_line_id", name="uq_stock_operation_shipment_lines_binding"),
+        CheckConstraint("line_no > 0 AND quantity > 0", name="ck_stock_operation_shipment_lines_quantity"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    shipment_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_shipments.id", ondelete="RESTRICT"))
+    line_no: Mapped[int] = mapped_column(BigInteger)
+    outbound_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_outbound_lines.id", ondelete="RESTRICT"), index=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3))
+
+
+class StockOperationShipmentSerial(CreatedAtMixin, Base):
+    __tablename__ = "stock_operation_shipment_serials"
+    __table_args__ = (
+        UniqueConstraint("line_id", "serial_id", name="uq_stock_operation_shipment_serials_line"),
+        UniqueConstraint("outbound_line_id", "serial_id", name="uq_stock_operation_shipment_serials_origin"),
+        ForeignKeyConstraint(["line_id", "outbound_line_id"], ["stock_operation_shipment_lines.id", "stock_operation_shipment_lines.outbound_line_id"], ondelete="RESTRICT"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    outbound_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("inventory_serials.id", ondelete="RESTRICT"))
