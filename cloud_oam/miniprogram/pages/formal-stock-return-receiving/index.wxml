@@ -31,6 +31,47 @@
         </block>
       </view><button wx:if="{{moreLines}}" bindtap="moreLines">显示更多明细</button>
     </view>
+    <view wx:if="{{formReady || pending}}" class="card receipt-form">
+      <view class="heading">本次整组验收</view>
+      <view class="muted">{{formMessage || pendingMessage}}</view>
+      <block wx:if="{{pending}}">
+        <button class="button button-primary" loading="{{busy}}" disabled="{{busy}}" bindtap="recoverReceipt">读取原验收结果</button>
+        <button wx:if="{{canSeal}}" class="button button-secondary" loading="{{busy}}" disabled="{{busy}}" bindtap="sealReceipt">确认未执行后封存</button>
+      </block>
+      <block wx:if="{{formReady}}">
+        <view wx:for="{{formLines}}" wx:key="id" wx:for-item="line" class="row form-line">
+          <view class="heading">{{line.materialName}} · {{line.sku}}</view>
+          <view>尚待确认 {{line.remaining}} {{line.unit}}</view>
+          <block wx:if="{{!line.tracked}}">
+            <input type="digit" data-id="{{line.id}}" data-field="accepted_qty" value="{{line.acceptedQty}}" bindinput="editFormField" placeholder="本次接受数量" />
+            <input type="digit" data-id="{{line.id}}" data-field="rejected_qty" value="{{line.rejectedQty}}" bindinput="editFormField" placeholder="本次拒收数量" />
+            <input type="digit" data-id="{{line.id}}" data-field="shortage_qty" value="{{line.shortageQty}}" bindinput="editFormField" placeholder="本次短少观察数量" />
+            <input type="digit" data-id="{{line.id}}" data-field="damaged_qty" value="{{line.damagedQty}}" bindinput="editFormField" placeholder="接受量中破损数量" />
+          </block>
+          <block wx:if="{{line.tracked}}">
+            <view wx:for="{{line.serials}}" wx:key="id" wx:for-item="sn" class="serial-row">
+              <view>{{sn.number}} · {{sn.status || '未选择'}}{{sn.damaged ? ' · 破损' : ''}}</view>
+              <button size="mini" data-line-id="{{line.id}}" data-serial-id="{{sn.id}}" bindtap="toggleSerial">循环选择接受/拒收/短少</button>
+              <button size="mini" data-line-id="{{line.id}}" data-serial-id="{{sn.id}}" data-kind="material" bindtap="scanThree">扫物料码</button>
+              <button size="mini" data-line-id="{{line.id}}" data-serial-id="{{sn.id}}" data-kind="serial" bindtap="scanThree">扫 SN</button>
+              <button size="mini" data-line-id="{{line.id}}" data-serial-id="{{sn.id}}" data-kind="qr" bindtap="scanThree">扫二维码</button>
+              <button wx:if="{{sn.status === 'accepted'}}" size="mini" data-line-id="{{line.id}}" data-serial-id="{{sn.id}}" bindtap="toggleDamaged">标记/取消破损</button>
+              <view class="muted">{{sn.scanned ? '三码已记录（仅留当前页面）' : '尚未完成三码'}}</view>
+            </view>
+          </block>
+          <view class="muted">异常类型（每项都必须填写说明并上传凭证）</view>
+          <button wx:for="{{line.exceptionChoices}}" wx:key="*this" wx:for-item="type" size="mini" data-line-id="{{line.id}}" data-type="{{type}}" bindtap="addException">添加 {{type}}</button>
+          <view wx:for="{{line.exceptions}}" wx:key="type" wx:for-item="exception" class="exception-editor">
+            <view>{{exception.type}}</view>
+            <input data-line-id="{{line.id}}" data-type="{{exception.type}}" value="{{exception.description}}" bindinput="editException" placeholder="异常说明" />
+            <button size="mini" data-line-id="{{line.id}}" data-type="{{exception.type}}" data-action="select" bindtap="evidence">选择异常凭证</button>
+            <view wx:if="{{exception.file}}" class="muted">凭证已完成上传并待本次提交绑定</view>
+          </view>
+        </view>
+        <textarea value="{{formReason}}" maxlength="500" bindinput="editFormReason" placeholder="填写本次退回验收原因" />
+        <button class="button button-primary" loading="{{busy}}" disabled="{{busy || scanning}}" bindtap="submitReceipt">预检并登记本次验收</button>
+      </block>
+    </view>
     <view class="card"><view class="heading">分批验收记录</view>
       <view wx:if="{{!batches.length}}" class="muted">尚无已确认验收记录。</view>
       <view wx:for="{{batches}}" wx:key="id" class="row"><view>{{item.number}} · {{item.status}}</view>
@@ -51,6 +92,13 @@
           </block>
         </view>
       </view><button wx:if="{{selectedReceipt.moreLines}}" bindtap="moreReceiptLines">显示更多本次明细</button>
+    </view>
+    <view wx:if="{{confirming && review}}" class="card confirm-card">
+      <view class="heading">{{review.title}}</view><view>{{review.description}}</view><view>包裹：{{review.shipmentNo}}</view>
+      <view>验收时刻：{{review.receivedAt}}</view><view>{{review.reason}}</view>
+      <view wx:for="{{review.rows}}" wx:key="id" wx:for-item="row" class="row">{{row.sku}} · 接受 {{row.accepted}} · 拒收 {{row.rejected}} · 短少 {{row.shortage}} · 破损 {{row.damaged}}</view>
+      <button class="button button-primary" data-confirm="true" bindtap="confirmSubmission">确认登记</button>
+      <button class="button button-secondary" data-confirm="false" bindtap="confirmSubmission">取消</button>
     </view>
   </block>
 </view>

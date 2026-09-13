@@ -6,26 +6,35 @@ const PREFIX = 'rsc_oam_work_order_command_v1:'
 const FIELDS = ['v', 'kind', 'work_order_id', 'person_id', 'authorization_version', 'operation_type', 'trace_request_id', 'request_hash']
 const DEFAULT_STATE = { active: new Set(), faults: new Set() }
 function fail(message = '工单恢复存储不可用，请保留原记录，暂勿再次提交。') { throw new Error(message) }
-function keyOf(value) { return uuid(value.work_order_id) }
+// Return-receipt recovery is scoped to the exact parcel. Older work-order
+// commands remain keyed only by work_order_id; a receiving marker adds the
+// shipment id so two parcels from one work order cannot share a tombstone.
+function keyOf(value) {
+  const order = uuid(value.work_order_id)
+  return value.shipment_id ? `${order}:${uuid(value.shipment_id)}` : order
+}
 function validateMarker(value) {
   const reversing = value && value.kind === 'work_order_reversal'
   const returning = value && value.kind === 'stock_return'
-  const fields = returning ? FIELDS.concat('plan_hash', 'operation_id') : reversing ? FIELDS.concat('plan_hash') : FIELDS
+  const receiving = returning && value.operation_type === 'receive_return'
+  const fields = returning ? FIELDS.concat('plan_hash', 'operation_id', ...(receiving ? ['shipment_id'] : [])) : reversing ? FIELDS.concat('plan_hash') : FIELDS
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join('|') !== fields.slice().sort().join('|')
     || value.v !== 1 || !(value.kind === 'work_order_material' && KINDS.includes(value.operation_type)
       || value.kind === 'work_order_replacement' && value.operation_type === 'replace'
       || value.kind === 'work_order_removed_registration' && value.operation_type === 'register_removed'
       || reversing && value.operation_type === 'reverse'
-      || returning && ['submit_return', 'cancel_return', 'outbound_return', 'ship_return'].includes(value.operation_type))
+      || returning && ['submit_return', 'cancel_return', 'outbound_return', 'ship_return', 'receive_return'].includes(value.operation_type))
     || !Number.isSafeInteger(value.authorization_version) || value.authorization_version < 1
     || typeof value.trace_request_id !== 'string' || !/^wxreq-[a-f0-9]{36}$/.test(value.trace_request_id)
     || typeof value.request_hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.request_hash)
-    || ((reversing || returning && ['submit_return', 'outbound_return', 'ship_return'].includes(value.operation_type)) && (typeof value.plan_hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.plan_hash)))
+    || ((reversing || returning && ['submit_return', 'outbound_return', 'ship_return', 'receive_return'].includes(value.operation_type)) && (typeof value.plan_hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.plan_hash)))
+    || (receiving && (typeof value.shipment_id !== 'string' || !/^[-0-9a-f]{36}$/i.test(value.shipment_id)))
     || (returning && (value.operation_type === 'submit_return' ? value.operation_id !== null : value.operation_type === 'cancel_return' && value.plan_hash !== null))) fail()
   return Object.freeze({ v: 1, kind: value.kind, work_order_id: uuid(value.work_order_id), person_id: uuid(value.person_id),
     authorization_version: value.authorization_version, operation_type: value.operation_type,
     trace_request_id: value.trace_request_id, request_hash: value.request_hash, ...(reversing || returning ? { plan_hash: value.plan_hash } : {}),
-    ...(returning ? { operation_id: value.operation_type === 'submit_return' ? null : uuid(value.operation_id) } : {}) })
+    ...(returning ? { operation_id: value.operation_type === 'submit_return' ? null : uuid(value.operation_id) } : {}),
+    ...(receiving ? { shipment_id: uuid(value.shipment_id) } : {}) })
 }
 function createStore(options = {}) {
   const storage = options.storage === undefined ? (typeof wx === 'undefined' ? null : wx) : options.storage
@@ -57,12 +66,16 @@ function createStore(options = {}) {
       const items = [], snapshots = []
       let partial = state.faults.size > 0
       for (const key of keys) {
-        let id
+        let id, scope
         try {
-          id = uuid(key.slice(PREFIX.length))
-          if (key !== PREFIX + id) { state.faults.add(id); fail() }
+          const suffix = key.slice(PREFIX.length), parts = suffix.split(':')
+          id = uuid(parts[0])
+          if (parts.length > 2) fail()
+          scope = { work_order_id: id }
+          if (parts.length === 2) scope.shipment_id = uuid(parts[1])
+          if (key !== PREFIX + keyOf(scope)) { state.faults.add(id); fail() }
         } catch (_) { partial = true; continue }
-        const record = read({ work_order_id: id })
+        const record = read(scope)
         if (record.kind !== 'valid') { partial = true; continue }
         snapshots.push(record.value)
         if (record.value.person_id === person) items.push(record.value)

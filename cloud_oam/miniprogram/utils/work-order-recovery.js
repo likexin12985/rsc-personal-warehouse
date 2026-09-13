@@ -6,8 +6,10 @@ const reversal = require('./work-order-reversal-command')
 const stockReturn = require('./stock-return-contract')
 const departure = require('./stock-return-outbound-contract')
 const parcel = require('./stock-return-shipment-contract')
+const receiving = require('./stock-return-receipt-contract')
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
 function originalPath(marker) {
+  if (marker.kind === receiving.KIND && marker.operation_type === receiving.ACTION) return `/v1/stock-returns/my-receiving/${uuid(marker.shipment_id)}/receipts/by-request/${marker.trace_request_id}`
   if (marker.kind === parcel.KIND && marker.operation_type === parcel.ACTION) return `/v1/work-orders/${marker.work_order_id}/returns/${marker.operation_id}/shipments/by-request/${marker.trace_request_id}`
   if (marker.kind === departure.KIND && marker.operation_type === departure.ACTION) return `/v1/work-orders/${marker.work_order_id}/returns/${marker.operation_id}/outbounds/by-request/${marker.trace_request_id}`
   if (marker.kind === stockReturn.KIND) return `/v1/work-orders/${marker.work_order_id}/returns${marker.operation_type === 'cancel_return' ? '/' + marker.operation_id + '/cancellations' : ''}/by-request/${marker.trace_request_id}`
@@ -21,6 +23,7 @@ async function originalResult(api, marker) {
   const paired = marker.kind === 'work_order_replacement'
   const registering = marker.kind === registration.KIND
   const reversing = marker.kind === reversal.KIND
+  const receivingReturn = marker.kind === receiving.KIND && marker.operation_type === receiving.ACTION
   const returning = marker.kind === stockReturn.KIND
   let raw
   try { raw = await api.request(originalPath(marker), READ) } catch (error) {
@@ -29,15 +32,16 @@ async function originalResult(api, marker) {
     if (paired && error.responseReceived === true && error.status === 404 && error.code === 'replacement_not_found') return null
     if (registering && error.responseReceived === true && error.status === 404 && error.code === 'removed_registration_not_found') return null
     if (reversing && error.responseReceived === true && error.status === 404 && error.code === 'work_order_reversal_not_observed') return null
-    if (returning && error.responseReceived === true && error.status === 404 && error.code === 'stock_return_not_observed') return null
+    if (returning && !receivingReturn && error.responseReceived === true && error.status === 404 && error.code === 'stock_return_not_observed') return null
+    if (receivingReturn && error.responseReceived === true && error.status === 404 && error.code === 'stock_return_receipt_not_observed') return null
     throw error
   }
-  return returning ? (marker.operation_type === parcel.ACTION ? parcel : marker.operation_type === departure.ACTION ? departure : stockReturn).validateLookup(raw, marker) : reversing ? reversal.validateLookup(raw, marker) : registering ? registration.validateLookup(raw, marker) : paired ? replacement.validateLookup(raw, marker) : validateLookup(raw, marker)
+  return receivingReturn ? receiving.validateLookup(raw, marker) : returning ? (marker.operation_type === parcel.ACTION ? parcel : marker.operation_type === departure.ACTION ? departure : stockReturn).validateLookup(raw, marker) : reversing ? reversal.validateLookup(raw, marker) : registering ? registration.validateLookup(raw, marker) : paired ? replacement.validateLookup(raw, marker) : validateLookup(raw, marker)
 }
 
-async function recoverPending({ api, store, workOrderId, personId, authorize }) {
+async function recoverPending({ api, store, workOrderId, shipmentId, personId, authorize }) {
   const order = uuid(workOrderId), person = uuid(personId)
-  return store.withLease({ work_order_id: order }, async lease => {
+  return store.withLease({ work_order_id: order, ...(shipmentId ? { shipment_id: uuid(shipmentId) } : {}) }, async lease => {
     const stored = lease.read()
     if (stored.kind === 'missing') return { status: 'missing' }
     if (stored.kind !== 'valid' || stored.value.person_id !== person) throw new Error('原工单恢复记录与当前人员不一致。')
@@ -54,9 +58,9 @@ function outcome(result) {
   return ['sealed', 'sealed_not_executed'].includes(result.lookup_status) ? { status: 'sealed', seal: result.seal } : { status: 'confirmed', command: result }
 }
 
-async function sealPending({ api, store, workOrderId, personId, authorize, confirm }) {
+async function sealPending({ api, store, workOrderId, shipmentId, personId, authorize, confirm }) {
   const order = uuid(workOrderId), person = uuid(personId)
-  return store.withLease({ work_order_id: order }, async lease => {
+  return store.withLease({ work_order_id: order, ...(shipmentId ? { shipment_id: uuid(shipmentId) } : {}) }, async lease => {
     const stored = lease.read()
     if (stored.kind !== 'valid' || stored.value.person_id !== person) throw new Error('原工单恢复记录与当前人员不一致。')
     const marker = stored.value, before = await authorize()
