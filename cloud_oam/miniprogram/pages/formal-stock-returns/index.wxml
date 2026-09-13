@@ -1,0 +1,68 @@
+<view class="page">
+  <view class="title">工单退回</view>
+  <view class="heading">{{workOrderNo}}</view>
+  <view class="muted">{{message}}</view>
+  <button disabled="{{busy || loading}}" loading="{{loading}}" bindtap="refresh">刷新来源和记录</button>
+  <view wx:if="{{pendingMessage}}" class="notice">
+    <view>{{pendingMessage}}</view>
+    <button wx:if="{{pending}}" size="mini" disabled="{{busy || loading}}" bindtap="recover">读取原请求结果</button>
+    <button wx:if="{{pending && canSeal}}" size="mini" disabled="{{busy || loading}}" bindtap="seal">结束未执行请求</button>
+  </view>
+  <view wx:if="{{feedback}}" class="notice">{{feedback}}</view>
+  <view wx:if="{{ready && canSubmit && !pendingMessage}}" class="card">
+    <view class="heading">选择原回收明细</view>
+    <view class="muted">同一账户可能对应多条回收记录，可用数量不能相加。已关闭工单仍可处理本人应退物料。</view>
+    <view wx:if="{{!items.length}}" class="muted">当前没有待退回来源。</view>
+    <view wx:for="{{items}}" wx:key="source_recovery_line_id" class="row">
+      <view>{{item.material_name}} · {{item.condition}}</view><view class="muted">{{item.sku_code}} · {{item.recovery_operation_no}}</view>
+      <view>应退 {{item.owed_quantity}} · 已占用 {{item.committed_quantity}} · 本行可选 {{item.selectable_quantity}} {{item.base_unit}}</view>
+      <button size="mini" disabled="{{busy || !item.selectable}}" data-id="{{item.source_recovery_line_id}}" bindtap="addSource">加入本次退回</button>
+    </view>
+    <view wx:for="{{draftRows}}" wx:for-item="row" wx:key="id" class="row">
+      <view class="heading">{{row.materialName}}</view><view class="muted">{{row.originalNo}} · 最多 {{row.maximum}} {{row.unit}}</view>
+      <input wx:if="{{!row.tracked}}" disabled="{{busy}}" type="digit" placeholder="退回数量" value="{{row.quantity}}" data-id="{{row.id}}" bindinput="editQuantity" />
+      <block wx:if="{{row.tracked}}">
+        <button size="mini" disabled="{{busy}}" data-id="{{row.id}}" data-code="sku_code" bindtap="scan">扫码物料号{{row.skuCaptured ? ' ✓' : ''}}</button>
+        <button size="mini" disabled="{{busy}}" data-id="{{row.id}}" data-code="serial_no" bindtap="scan">扫码 SN{{row.snCaptured ? ' ✓' : ''}}</button>
+        <button size="mini" disabled="{{busy}}" data-id="{{row.id}}" data-code="qr_code" bindtap="scan">扫码二维码{{row.qrCaptured ? ' ✓' : ''}}</button>
+        <button size="mini" disabled="{{busy}}" data-id="{{row.id}}" bindtap="collectScan">加入已扫码实物</button>
+        <view wx:for="{{row.serials}}" wx:for-item="serial" wx:key="id">{{serial.number}}
+          <button size="mini" disabled="{{busy}}" data-id="{{row.id}}" data-serial="{{serial.id}}" bindtap="removeScan">移除实物</button></view>
+      </block>
+      <button size="mini" disabled="{{busy}}" data-id="{{row.id}}" bindtap="removeSource">移除此行</button>
+    </view>
+    <picker disabled="{{busy}}" range="{{destinations}}" range-key="label" value="{{destinationIndex}}" bindchange="chooseDestination"><view class="picker">{{destinationLabel}}</view></picker>
+    <textarea disabled="{{busy}}" value="{{reason}}" maxlength="1000" placeholder="退回原因" bindinput="editReason" />
+    <button disabled="{{busy || !draftRows.length}}" bindtap="preview">核验本次退回</button>
+    <button class="primary" disabled="{{busy || !draftRows.length}}" bindtap="submit">核验并提交退回</button>
+  </view>
+  <view wx:if="{{ready}}" class="card">
+    <view class="heading">本人退回记录</view>
+    <view wx:if="{{!history.length}}" class="muted">暂无已核验的退回记录。</view>
+    <view wx:for="{{history}}" wx:for-item="order" wx:key="id" class="row">
+      <view class="heading">{{order.number}}</view><view>原提交已确认 · {{order.submittedAt}}</view>
+      <view class="muted">接收仓：{{order.target}} · 原因：{{order.reason}}</view>
+      <view wx:for="{{order.rows}}" wx:key="id" wx:for-item="line">{{line.materialName}} · {{line.condition}} · {{line.quantity}} {{line.unit}}</view>
+      <view wx:if="{{order.cancellation}}" class="notice">取消已确认：{{order.cancellation.cancelled_at}} · {{order.cancellation.reason}}</view>
+      <view wx:else class="muted">未见取消事实；发出和接收另行核验。</view>
+      <button wx:if="{{canCancel && !order.cancellation && !pendingMessage}}" size="mini" disabled="{{busy}}" data-id="{{order.id}}" bindtap="chooseCancellation">取消未发出退回</button>
+      <block wx:if="{{cancellationId === order.id}}"><textarea disabled="{{busy}}" value="{{cancelReason}}" maxlength="1000" placeholder="取消原因" bindinput="editCancelReason" />
+        <button disabled="{{busy}}" bindtap="cancelReturn">核验并取消</button></block>
+    </view>
+  </view>
+  <view wx:if="{{confirming}}" class="confirm-backdrop">
+    <view class="confirm-mask" catchtouchmove="holdReview"></view>
+    <view class="confirm">
+      <view class="heading">{{review.title}}</view>
+      <scroll-view scroll-y class="review-body">
+        <view>{{review.workOrderNo}}</view><view class="notice">{{review.description}}</view>
+        <view>接收仓：{{review.target}}</view><view>在途位置：{{review.transit}}</view><view>原因：{{review.reason}}</view>
+        <view wx:for="{{review.rows}}" wx:key="id" wx:for-item="line" class="row">
+          <view>{{line.materialName}} · {{line.sku}} · {{line.condition}}</view><view>{{line.quantity}} {{line.unit}} · {{line.lot}}</view>
+          <view class="muted">原回收：{{line.originalNo}}</view><view wx:for="{{line.serials}}" wx:key="id" wx:for-item="serial">{{serial.number}}</view>
+        </view>
+      </scroll-view>
+      <view class="review-actions"><button class="primary" bindtap="confirmSubmission">确认以上整组明细</button><button bindtap="cancelSubmission">暂不执行</button></view>
+    </view>
+  </view>
+</view>

@@ -3,8 +3,10 @@ const { validateLookup } = require('./work-order-command')
 const replacement = require('./work-order-replacement-command')
 const registration = require('./work-order-removed-registration-command')
 const reversal = require('./work-order-reversal-command')
+const stockReturn = require('./stock-return-contract')
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
 function originalPath(marker) {
+  if (marker.kind === stockReturn.KIND) return `/v1/work-orders/${marker.work_order_id}/returns${marker.operation_type === 'cancel_return' ? '/' + marker.operation_id + '/cancellations' : ''}/by-request/${marker.trace_request_id}`
   if (marker.kind === reversal.KIND) return `/v1/work-orders/${marker.work_order_id}/material-reversals/by-request/${marker.trace_request_id}`
   if (marker.kind === registration.KIND) return `/v1/work-orders/${marker.work_order_id}/material-replacements/removed-registrations/by-request/${marker.trace_request_id}`
   return marker.kind === 'work_order_replacement'
@@ -15,6 +17,7 @@ async function originalResult(api, marker) {
   const paired = marker.kind === 'work_order_replacement'
   const registering = marker.kind === registration.KIND
   const reversing = marker.kind === reversal.KIND
+  const returning = marker.kind === stockReturn.KIND
   let raw
   try { raw = await api.request(originalPath(marker), READ) } catch (error) {
     // Only this exact server response means no parent is currently observed.
@@ -22,9 +25,10 @@ async function originalResult(api, marker) {
     if (paired && error.responseReceived === true && error.status === 404 && error.code === 'replacement_not_found') return null
     if (registering && error.responseReceived === true && error.status === 404 && error.code === 'removed_registration_not_found') return null
     if (reversing && error.responseReceived === true && error.status === 404 && error.code === 'work_order_reversal_not_observed') return null
+    if (returning && error.responseReceived === true && error.status === 404 && error.code === 'stock_return_not_observed') return null
     throw error
   }
-  return reversing ? reversal.validateLookup(raw, marker) : registering ? registration.validateLookup(raw, marker) : paired ? replacement.validateLookup(raw, marker) : validateLookup(raw, marker)
+  return returning ? stockReturn.validateLookup(raw, marker) : reversing ? reversal.validateLookup(raw, marker) : registering ? registration.validateLookup(raw, marker) : paired ? replacement.validateLookup(raw, marker) : validateLookup(raw, marker)
 }
 
 async function recoverPending({ api, store, workOrderId, personId, authorize }) {
@@ -43,7 +47,7 @@ async function recoverPending({ api, store, workOrderId, personId, authorize }) 
 }
 
 function outcome(result) {
-  return result.lookup_status === 'sealed_not_executed' ? { status: 'sealed', seal: result.seal } : { status: 'confirmed', command: result }
+  return ['sealed', 'sealed_not_executed'].includes(result.lookup_status) ? { status: 'sealed', seal: result.seal } : { status: 'confirmed', command: result }
 }
 
 async function sealPending({ api, store, workOrderId, personId, authorize, confirm }) {

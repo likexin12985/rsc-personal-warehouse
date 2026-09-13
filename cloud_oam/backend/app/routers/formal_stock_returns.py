@@ -12,9 +12,11 @@ from ..formal_services.inventory_posting import InventoryPostingError
 from ..formal_services.inventory_query import InventoryReadError
 from ..formal_services.stock_return_commands import submit_return, cancel_return
 from ..formal_services.stock_return_plan import preview_return
+from ..formal_services.stock_return_options import return_options
+from ..formal_services.stock_return_history import return_history
 from ..formal_services.stock_return_recovery import lookup_return_request, seal_return_request
 from ..stock_return_schemas import (StockReturnPreviewIn, StockReturnPreviewOut, StockReturnSubmitIn, StockReturnOut,
-    StockReturnCancelIn, StockReturnCancellationOut, StockReturnSealIn, StockReturnSealedOut)
+    StockReturnCancelIn, StockReturnCancellationOut, StockReturnSealIn, StockReturnSealedOut, StockReturnOptionsOut, StockReturnHistoryOut)
 
 router = APIRouter(prefix="/v1/work-orders", tags=["formal-stock-returns"])
 PRIVATE = {"Cache-Control": "private, no-store"}
@@ -61,6 +63,18 @@ def _lookup(db, **coordinates):
     if result is None:
         _error(404, "stock_return_not_observed", "暂未观察到原请求结果，不代表未执行；请保留原请求回查或封存")
     return result
+
+
+@router.get("/{work_order_id}/returns/options", response_model=StockReturnOptionsOut)
+def read_return_options(work_order_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("stock_operation", "submit_return")), db: Session = Depends(get_db)):
+    return _run(db, response, lambda: return_options(db, actor=principal, work_order_id=work_order_id))
+
+
+@router.get("/{work_order_id}/returns", response_model=StockReturnHistoryOut)
+def read_return_history(work_order_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("stock_operation", "read")), db: Session = Depends(get_db)):
+    return _run(db, response, lambda: return_history(db, actor=principal, work_order_id=work_order_id))
 
 
 @router.post("/{work_order_id}/returns/preview", response_model=StockReturnPreviewOut)

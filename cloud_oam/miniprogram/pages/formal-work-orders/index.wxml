@@ -9,6 +9,7 @@
     <view wx:if="{{pendingMessage}}">{{pendingMessage}}</view>
     <view wx:for="{{pendingRequests}}" wx:for-item="pending" wx:key="id" class="draft-row">
       <view>{{pending.label}}</view>
+      <button wx:if="{{pending.returning}}" size="mini" disabled="{{busy || loading}}" data-id="{{pending.id}}" bindtap="openReturns">管理退回请求</button>
       <button size="mini" disabled="{{busy || loading}}" loading="{{busy}}" data-id="{{pending.id}}" bindtap="recoverPendingRequest">读取原请求结果</button>
       <button wx:if="{{canSeal && pending.sealable}}" size="mini" disabled="{{busy || loading}}" data-id="{{pending.id}}" bindtap="sealPendingRequest">结束未执行请求</button>
     </view>
@@ -40,6 +41,7 @@
       <view class="muted">{{locationName}}</view>
       <view class="muted">来源更新：{{workOrder.source_updated_at}}</view>
       <view class="muted">最近同步：{{workOrder.synced_at}}</view>
+      <button size="mini" disabled="{{busy || loading}}" bindtap="openReturns">查看和处理本人退回</button>
     </view>
     <view class="card">
       <view class="order-no">结束前物料检查</view>

@@ -46,6 +46,12 @@ Page({
     } catch (_) { return }
   },
   backToOrders() { this._selected = null; this._cursors = [null]; return this.load() },
+  openReturns(event) {
+    if (!this._visible || this.data.busy || this.data.loading || !this._sessionMatches || !this._sessionMatches()) return
+    const id = event.currentTarget.dataset.id || this._selected
+    if (id !== this._selected && (!this._pendingMarkers.has(id) || this._pendingMarkers.get(id).kind !== 'stock_return')) return
+    wx.navigateTo({ url: '/pages/formal-stock-returns/index?workOrderId=' + uuid(id) })
+  },
   nextPage() { if (!this.data.loading && this._next) { this._cursors.push(this._next); return this.load() } },
   previousPage() { if (!this.data.loading && this._cursors.length > 1) { this._cursors.pop(); return this.load() } },
   async load() {
@@ -118,9 +124,9 @@ Page({
   refreshPendingRequests() {
     const snapshot = this._store.listPending(this._recoveryPerson)
     this._pendingMarkers = new Map(snapshot.items.map(marker => [marker.work_order_id, marker]))
-    const labels = { occupy: '投入占用', consume: '实际消耗', release: '释放未用物料', replace: '成对消耗与回收', register_removed: '拆回 SN 登记', reverse: '工单冲销' }
+    const labels = { occupy: '投入占用', consume: '实际消耗', release: '释放未用物料', replace: '成对消耗与回收', register_removed: '拆回 SN 登记', reverse: '工单冲销', submit_return: '提交退回', cancel_return: '取消退回' }
     this.setData({ pendingRequests: snapshot.items.map((marker, index) => ({
-      id: marker.work_order_id, label: `待确认请求 ${index + 1} · ${labels[marker.operation_type]}`,
+      id: marker.work_order_id, label: `待确认请求 ${index + 1} · ${labels[marker.operation_type]}`, returning: marker.kind === 'stock_return',
       sealable: ['work_order_material', 'work_order_replacement', 'work_order_removed_registration', 'work_order_reversal'].includes(marker.kind)
     })), pendingMessage: snapshot.kind === 'ready' ? '' : '部分恢复记录暂不可读取。请保留本机记录，已列出的本人请求仍可分别核验。' })
   },
@@ -350,6 +356,7 @@ Page({
         this.refreshPendingRequests()
         this.setData({ canRecover: this._selected === order ? false : this.data.canRecover,
           recoveryMessage: result.status === 'sealed' ? '原请求已关闭且未执行。请刷新工单后重新准备物料。'
+            : result.command.status === 'cancelled' ? '取消退回已确认；原回收物料的应退责任仍保留。'
             : result.command.status === 'registered' ? `拆回 SN 登记已确认：${result.command.registration_no}。库存未变动，请进入工单重新扫码配对。`
               : `原操作已确认：${result.command.reversal_no || result.command.replacement_no || result.command.operation_no}。请刷新库存后继续。` })
       }

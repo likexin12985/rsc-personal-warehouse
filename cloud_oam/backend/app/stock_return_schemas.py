@@ -6,7 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator
 
 from .work_order_material_schemas import StrictInput
-from .work_order_return_schemas import WorkOrderReturnSelectionIn, WorkOrderReturnSelectionLineOut
+from .work_order_return_schemas import WorkOrderReturnSelectionIn, WorkOrderReturnSelectionLineOut, WorkOrderReturnSourcesOut
 
 
 class ReturnReason(StrictInput):
@@ -56,6 +56,12 @@ class StockReturnPreviewOut(BaseModel):
     lines: tuple[WorkOrderReturnSelectionLineOut, ...]
 
 
+class StockReturnOptionsOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    sources: WorkOrderReturnSourcesOut
+    destinations: tuple[StockReturnDestinationOut, ...]
+
+
 class StockReturnSubmitIn(StockReturnPreviewIn):
     expected_plan_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     idempotency_key: str = Field(min_length=8, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
@@ -96,6 +102,20 @@ class StockReturnCancellationOut(BaseModel):
     status: Literal["cancelled"] = "cancelled"
     posting_transaction_id: UUID
     cancelled_at: datetime
+
+
+class StockReturnHistoryItemOut(BaseModel):
+    original: StockReturnOut
+    cancellation: StockReturnCancellationOut | None
+
+
+class StockReturnHistoryOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    person_id: UUID
+    work_order_id: UUID
+    authorization_version: int
+    queried_at: datetime
+    items: tuple[StockReturnHistoryItemOut, ...]
 
 
 class StockReturnSealIn(StrictInput):

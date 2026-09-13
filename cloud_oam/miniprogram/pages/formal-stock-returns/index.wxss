@@ -1,0 +1,16 @@
+.page { padding: 28rpx; padding-bottom: 80rpx; }
+.title { font-size: 38rpx; font-weight: 600; margin-bottom: 16rpx; }
+.card { background: #fff; padding: 26rpx; border-radius: 18rpx; margin: 22rpx 0; }
+.heading { font-size: 30rpx; font-weight: 600; margin-bottom: 14rpx; }
+.muted { color: #626e78; font-size: 26rpx; line-height: 1.6; }
+.row { padding: 20rpx 0; border-top: 1rpx solid #e5e9ed; }
+.notice { color: #875100; background: #fff5df; padding: 20rpx; border-radius: 10rpx; line-height: 1.6; margin: 18rpx 0; }
+input, textarea, .picker { box-sizing: border-box; width: 100%; padding: 18rpx; background: #f4f6f7; border-radius: 10rpx; margin: 14rpx 0; }
+textarea { height: 160rpx; }
+button { margin: 14rpx 8rpx 8rpx 0; }
+.primary { background: #e65318; color: #fff; }
+.confirm-backdrop { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; }
+.confirm-mask { position: absolute; inset: 0; background: rgba(20, 30, 40, 0.55); }
+.confirm { position: relative; box-sizing: border-box; width: 92%; height: 84vh; padding: 28rpx; border: 3rpx solid #e65318; border-radius: 18rpx; background: #fff; display: flex; flex-direction: column; }
+.review-body { flex: 1; min-height: 0; overflow-wrap: anywhere; }
+.review-actions { flex-shrink: 0; padding-top: 12rpx; border-top: 1rpx solid #e5e9ed; }
