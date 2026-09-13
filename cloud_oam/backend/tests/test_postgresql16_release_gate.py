@@ -5650,6 +5650,11 @@ def _assert_0052_opening_terminal_catalog(
             )
             for row in migration.HEAD_ONLY_FUNCTION_CATALOG
         )
+    if expected_revision == HEAD_REVISION:
+        expected_function_catalog = [
+            (*row[:10], _head_function_body_hash(row[0]), row[11])
+            for row in expected_function_catalog
+        ]
     function_names = sorted({row[1] for row in expected_function_catalog})
     with psycopg.connect(**_admin_parameters()) as connection:
         with connection.cursor() as cursor:
@@ -5830,11 +5835,14 @@ def _assert_0052_opening_terminal_catalog(
         )
     assert [row[:32] for row in function_rows] == expected_rows
     sources = {row[1]: row[32] for row in function_rows}
-    assert (
-        migration.FIXED_TASK_BRANCH
-        if hardened
-        else migration.LEGACY_TASK_BRANCH
-    ) in sources[migration.COMMIT_FUNCTION]
+    task_branch = migration.FIXED_TASK_BRANCH if hardened else migration.LEGACY_TASK_BRANCH
+    if expected_revision == HEAD_REVISION:
+        import runpy
+        transit = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
+            "20261012_0102_transit_opening_scopes.py")))
+        for old, new, _ in transit["SOURCE_CHANGES"][migration.COMMIT_SIGNATURE.removeprefix("public.")][2]:
+            task_branch = task_branch.replace(old, new)
+    assert task_branch in sources[migration.COMMIT_FUNCTION]
     assert (
         migration.FIXED_ACCOUNT_PRINCIPAL_FRAGMENT
         if hardened
@@ -6297,7 +6305,8 @@ def _assert_0048_scope_guard_catalog(
             "plpgsql",
             "star_oam_migrator",
             ["search_path=pg_catalog, public"],
-            STOCKTAKE_SCOPE_GUARD_BODY_SHA256_0048,
+            (_head_function_body_hash(f"public.{STOCKTAKE_SCOPE_GUARD_FUNCTION_0048}()")
+             if expected_revision == HEAD_REVISION else STOCKTAKE_SCOPE_GUARD_BODY_SHA256_0048),
             False,
             False,
             False,
@@ -7077,7 +7086,8 @@ def _assert_0052_isolated_legacy_catalog_state(
             installed,
             [migration.FIXED_SEARCH_PATH],
             (
-                migration.FIXED_COMMIT_BODY_SHA256
+                (_head_function_body_hash(migration.COMMIT_SIGNATURE)
+                 if _isolated_current_revision(database_name) == HEAD_REVISION else migration.FIXED_COMMIT_BODY_SHA256)
                 if installed
                 else migration.LEGACY_COMMIT_BODY_SHA256
             ),
@@ -7415,6 +7425,14 @@ def _load_stock_reservations_migration_0069():
     assert migration.revision == STOCK_RESERVATIONS_REVISION
     assert migration.down_revision == STOCK_ALLOCATIONS_REVISION
     return migration
+
+
+def _head_function_body_hash(signature: str) -> str:
+    """HEAD catalog checks use the reviewed current manifest, not a predecessor."""
+    from app.database_security import FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256, RUNTIME_FUNCTION_BODY_SHA256
+    name, arguments = signature.removeprefix("public.").replace("timestamptz", "timestamp with time zone")[:-1].split("(", 1)
+    coordinate = (name, ", ".join(part.strip() for part in arguments.split(",")) if arguments else "")
+    return {**RUNTIME_FUNCTION_BODY_SHA256, **FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256}[coordinate]
 
 
 def _head_account_admission_hash() -> str:
