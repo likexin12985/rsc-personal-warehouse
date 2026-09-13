@@ -34,7 +34,10 @@ def test_replacement_security_pins_match_sources_and_preserve_minimum_privileges
             following = runpy.run_path(str(MIGRATION.with_name("20261010_0100_stock_return_orders.py")))
             old, current = following["_account_sources"]()
             assert body == old
-            assert catalog[coordinate] == hashlib.sha256(current.encode()).hexdigest()
+            departure = runpy.run_path(str(MIGRATION.with_name("20261013_0103_stock_return_outbounds.py")))
+            departure_old, current_head = departure["_sources"]()[signature]
+            assert current == departure_old
+            assert catalog[coordinate] == hashlib.sha256(current_head.encode()).hexdigest()
         else:
             assert catalog[coordinate] == hashlib.sha256(body.encode()).hexdigest()
     for name,(table,_,function,kind,deferred) in m["TRIGGERS"].items():

@@ -12285,8 +12285,23 @@ def test_postgresql_offline_sql_preserves_type_boundary(monkeypatch) -> None:
         function_start = sql.index(f"CREATE FUNCTION public.{function_name}(")
         body_start = sql.index("AS $$", function_start) + len("AS $$")
         body_end = sql.index("$$", body_start)
+        body = sql[body_start:body_end]
+        if function_name == "rsc_lock_opening_stocktake_start_reference_0027":
+            # 0102 replaces this frozen 0027 body by exact CAS inside a DO
+            # block. Verify both generations instead of comparing 0027 with
+            # the current runtime digest or silently accepting either one.
+            import runpy
+            transit = runpy.run_path(str(Path(__file__).parents[1] / "alembic/versions/20261012_0102_transit_opening_scopes.py"))
+            signature = f"{function_name}({_argument_types})"
+            old_hash, new_hash, replacements = transit["SOURCE_CHANGES"][signature]
+            assert hashlib.sha256(body.encode("utf-8")).hexdigest() == old_hash
+            for before, after, count in replacements:
+                assert body.count(before) == count
+                body = body.replace(before, after)
+            assert new_hash == expected_hash
+            assert old_hash in sql and new_hash in sql
         assert (
-            hashlib.sha256(sql[body_start:body_end].encode("utf-8")).hexdigest()
+            hashlib.sha256(body.encode("utf-8")).hexdigest()
             == expected_hash
         )
     assert sql_0027.count("SECURITY DEFINER") == 5

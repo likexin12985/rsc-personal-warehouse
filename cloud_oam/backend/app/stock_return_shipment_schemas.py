@@ -5,7 +5,7 @@ from typing import Literal
 from uuid import UUID
 from pydantic import BaseModel, Field, field_validator
 from .stock_return_schemas import ReturnReason, StockReturnDestinationOut
-from .stock_return_outbound_schemas import StockReturnOutboundSerialOut
+from .stock_return_outbound_schemas import StockReturnOutboundSerialOut, StockReturnOutboundHistoryOut
 from .work_order_material_schemas import StrictInput
 
 
@@ -105,3 +105,55 @@ class StockReturnShipmentOut(BaseModel):
     plan_hash: str
     destination: StockReturnDestinationOut
     lines: tuple[StockReturnShipmentLineOut, ...]
+
+
+class StockReturnShipmentOptionLineOut(BaseModel):
+    outbound_id: UUID
+    outbound_no: str
+    outbound_at: datetime
+    outbound_line_id: UUID
+    operation_line_id: UUID
+    source_recovery_line_id: UUID
+    transit_stock_account_id: UUID
+    material_id: UUID
+    sku_code: str
+    material_name: str
+    base_unit: str
+    condition_code: str
+    lot_id: UUID | None
+    lot_no: str | None
+    tracking_mode: Literal["none", "lot", "serial", "lot_and_serial"]
+    quantity_scale: int
+    allow_fraction: bool
+    outbound_quantity: str
+    shipped_quantity: str
+    unshipped_quantity: str
+    in_transit_quantity: str
+    unassigned_quantity: str
+    selectable_quantity: str
+    serials: tuple[StockReturnOutboundSerialOut, ...]
+
+
+class StockReturnShipmentOptionsOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    operation_id: UUID
+    operation_no: str
+    work_order_id: UUID
+    person_id: UUID
+    authorization_version: int
+    ledger_cursor: int
+    queried_at: datetime
+    destination: StockReturnDestinationOut
+    lines: tuple[StockReturnShipmentOptionLineOut, ...]
+
+
+class StockReturnShipmentHistoryOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    operation_id: UUID
+    work_order_id: UUID
+    person_id: UUID
+    authorization_version: int
+    queried_at: datetime
+    shipment_status: Literal["not_shipped", "partially_shipped", "shipped"]
+    departures: StockReturnOutboundHistoryOut
+    items: tuple[StockReturnShipmentOut, ...]

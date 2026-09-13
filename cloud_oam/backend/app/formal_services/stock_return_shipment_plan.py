@@ -51,13 +51,25 @@ def _committed(db, actor, accounts):
     return quantities, serials, assigned
 
 
-def _basis(db, actor, order, request):
+def shipment_context(db, actor, order, rows):
     snapshot = inventory._projection_snapshot(db)
     at = datetime.now(timezone.utc)
     route = destination(db, person_id=actor.person_id, source_location_id=order.source_location_id,
         target_location_id=order.target_location_id, transit_location_id=order.transit_location_id, at=at)
-    if request.shipped_at > at or request.shipped_at < route.custody_effective_from:
-        _fail("stock_return_shipment_time_invalid", "实际交运时间不能晚于当前时间或早于接收责任生效时间")
+    accounts = {row.transit_stock_account_id: db.get(StockAccount, row.transit_stock_account_id, populate_existing=True) for row in rows.values()}
+    posting._authorize_account_ids(db, actor, tuple(sorted(accounts, key=str)), resource="inventory", action="read", lock_rows=False)
+    posting._require_active_account_masters(db, accounts)
+    inventory._validate_current_projection_integrity(db, snapshot=snapshot, account_ids=set(accounts))
+    # An undeparted return has no transit accounts. Passing an empty scope to
+    # the posting freeze guard would query unrelated freezes globally.
+    if accounts:
+        posting._require_no_active_hard_freezes(db, accounts, effective_at=at)
+    quantities, prior_serials, assigned = _committed(db, actor, accounts)
+    policies, fingerprint = _policies(db, {account.material_id for account in accounts.values()}, at)
+    return snapshot, at, route, accounts, quantities, prior_serials, assigned, policies, fingerprint
+
+
+def _basis(db, actor, order, request):
     rows = {}; parents = {}
     for chosen in request.lines:
         row = db.get(StockOperationOutboundLine, chosen.outbound_line_id, populate_existing=True)
@@ -69,16 +81,13 @@ def _basis(db, actor, order, request):
         if parent.id not in parents:
             departures.outbound_result(db, actor=actor, fact=parent)
             parents[parent.id] = parent
+        rows[row.id] = row
+    snapshot, at, route, accounts, quantities, prior_serials, assigned, policies, fingerprint = shipment_context(db, actor, order, rows)
+    if request.shipped_at > at or request.shipped_at < route.custody_effective_from:
+        _fail("stock_return_shipment_time_invalid", "实际交运时间不能晚于当前时间或早于接收责任生效时间")
+    for parent in parents.values():
         if request.shipped_at < _aware(parent.outbound_at):
             _fail("stock_return_shipment_time_invalid", "实际交运时间不能早于所选物料的实物发出时间")
-        rows[row.id] = row
-    accounts = {row.transit_stock_account_id: db.get(StockAccount, row.transit_stock_account_id, populate_existing=True) for row in rows.values()}
-    posting._authorize_account_ids(db, actor, tuple(sorted(accounts, key=str)), resource="inventory", action="read", lock_rows=False)
-    posting._require_active_account_masters(db, accounts)
-    inventory._validate_current_projection_integrity(db, snapshot=snapshot, account_ids=set(accounts))
-    posting._require_no_active_hard_freezes(db, accounts, effective_at=at)
-    quantities, prior_serials, assigned = _committed(db, actor, accounts)
-    policies, fingerprint = _policies(db, {account.material_id for account in accounts.values()}, at)
     selected_serials = set(); totals = defaultdict(Decimal); views = []; moves = []
     for chosen in sorted(request.lines, key=lambda item: str(item.outbound_line_id)):
         row = rows[chosen.outbound_line_id]; account = accounts[row.transit_stock_account_id]

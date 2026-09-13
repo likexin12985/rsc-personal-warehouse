@@ -26,6 +26,8 @@ from ..formal_services.stock_return_outbound_queries import outbound_options, ou
 from ..stock_return_shipment_schemas import StockReturnShipmentPreviewIn, StockReturnShipmentPreviewOut, StockReturnShipmentSubmitIn, StockReturnShipmentOut
 from ..formal_services.stock_return_shipment_plan import preview_shipment
 from ..formal_services.stock_return_shipment_commands import execute_shipment
+from ..stock_return_shipment_schemas import StockReturnShipmentOptionsOut, StockReturnShipmentHistoryOut
+from ..formal_services.stock_return_shipment_queries import shipment_options, shipment_history
 
 router = APIRouter(prefix="/v1/work-orders", tags=["formal-stock-returns"])
 PRIVATE = {"Cache-Control": "private, no-store"}
@@ -226,3 +228,15 @@ def seal_return_shipment(work_order_id: UUID, operation_id: UUID, payload: Stock
     _input(payload, principal, trace, key, request_id=request_id, seal=True)
     return _run(db, response, lambda: seal_return_request(db, actor=principal, work_order_id=work_order_id,
         operation_type="ship_return", operation_id=operation_id, request_id=request_id, request_hash=payload.request_hash), write=True)
+
+
+@router.get("/{work_order_id}/returns/{operation_id}/shipments/options", response_model=StockReturnShipmentOptionsOut)
+def read_shipment_options(work_order_id: UUID, operation_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("stock_operation", "ship_return")), db: Session = Depends(get_db)):
+    return _run(db, response, lambda: shipment_options(db, actor=principal, work_order_id=work_order_id, operation_id=operation_id))
+
+
+@router.get("/{work_order_id}/returns/{operation_id}/shipments", response_model=StockReturnShipmentHistoryOut)
+def read_shipment_history(work_order_id: UUID, operation_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("stock_operation", "read")), db: Session = Depends(get_db)):
+    return _run(db, response, lambda: shipment_history(db, actor=principal, work_order_id=work_order_id, operation_id=operation_id))

@@ -17,7 +17,7 @@ from app.formal_access import load_formal_principal
 from app.foundation_models import StateTransitionEvent
 from app.inventory_models import InventoryTransaction, InventoryMovement, StockAccount, LogisticsEvent, Shipment
 from app.stock_operation_models import (StockOperationOrder, StockOperationOutbound, StockOperationOutboundLine,
-    StockOperationOutboundSerial, StockOperationShipment, StockOperationShipmentLine)
+    StockOperationOutboundSerial, StockOperationShipment, StockOperationShipmentLine, StockOperationLine)
 from app.stock_return_shipment_schemas import StockReturnShipmentPreviewIn, StockReturnShipmentSubmitIn
 from app.formal_services import stock_return_shipment_commands as commands, stock_return_recovery as recovery, inventory_posting as posting
 from app.formal_services.stock_return_shipment_plan import preview_shipment
@@ -52,6 +52,62 @@ def _command(db,candidate,quantity):
         request_id=uuid4().hex,idempotency_key=uuid4().hex),checked.request_hash
 
 
+def assert_parcel_directory_read(db, candidate):
+    """Use the real HTTP DTOs and API grants; all executed statements are SELECT."""
+    local = SimpleNamespace(connect=lambda: nullcontext(db.connection()))
+    before = parcel_snapshot(local)
+    url = f"/api/v1/work-orders/{candidate['oam_work_order_id']}/returns/{candidate['operation_id']}/shipments"
+    statements = []
+    def capture(_connection, _cursor, statement, _params, _context, _executemany):
+        statements.append(statement.strip().split()[0].upper())
+    connection = db.connection(); event.listen(connection, 'before_cursor_execute', capture)
+    try:
+        with TestClient(_app(db, candidate['actor_user_id'])) as client:
+            history = client.get(url)
+            options = client.get(url + '/options')
+    finally:
+        event.remove(connection, 'before_cursor_execute', capture)
+    assert all(response.status_code == 200 for response in (history, options)), (history.text, options.text)
+    assert all('no-store' in response.headers['cache-control'] and 'qr_code' not in response.text for response in (history, options))
+    assert statements and set(statements) == {'SELECT'}
+    source = dict(db.execute(select(StockOperationLine.id, StockOperationLine.quantity)
+        .where(StockOperationLine.operation_id == UUID(str(candidate['operation_id'])))).all())
+    totals = {str(identifier): Decimal(0) for identifier in source}
+    by_departure = {}; selected_serials = set()
+    for item in history.json()['items']:
+        for row in item['lines']:
+            totals[row['operation_line_id']] += Decimal(row['selected_quantity'])
+            identifier = row['outbound_line_id']
+            by_departure[identifier] = by_departure.get(identifier, Decimal(0)) + Decimal(row['selected_quantity'])
+            ids = {proof['serial_id'] for proof in row['selected_serials']}
+            assert not (ids & selected_serials); selected_serials.update(ids)
+    complete = all(totals[str(identifier)] == quantity for identifier, quantity in source.items())
+    status = 'shipped' if complete else 'partially_shipped' if history.json()['items'] else 'not_shipped'
+    assert history.json()['shipment_status'] == status
+    lines = tuple(db.scalars(select(StockOperationOutboundLine).join(StockOperationOutbound,
+        StockOperationOutbound.id == StockOperationOutboundLine.outbound_id)
+        .where(StockOperationOutbound.operation_id == UUID(str(candidate['operation_id'])))))
+    assert {row['outbound_line_id'] for row in options.json()['lines']} == {str(line.id) for line in lines}
+    for row in options.json()['lines']:
+        assert Decimal(row['shipped_quantity']) == by_departure.get(row['outbound_line_id'], Decimal(0))
+        assert Decimal(row['unshipped_quantity']) + Decimal(row['shipped_quantity']) == Decimal(row['outbound_quantity'])
+        assert Decimal(row['selectable_quantity']) <= min(Decimal(row['unshipped_quantity']), Decimal(row['unassigned_quantity']))
+        assert not ({proof['serial_id'] for proof in row['serials']} & selected_serials)
+    assert parcel_snapshot(local) == before
+    return status
+
+
+def assert_parcel_readonly_history(api_engine, candidates):
+    before = parcel_snapshot(api_engine)
+    for candidate in candidates:
+        with Session(api_engine) as db:
+            db.execute(text('SET TRANSACTION READ ONLY'))
+            assert_parcel_directory_read(db, candidate)
+            db.rollback()
+    assert parcel_snapshot(api_engine) == before
+    print('PG16 parcel directory/history: actual HTTP, forced READ ONLY, exact original totals and stock unchanged PASS', flush=True)
+
+
 def assert_parcel_rollback_gate(api_engine,candidate,kind):
     baseline=parcel_snapshot(api_engine)
     with Session(api_engine) as db:
@@ -75,6 +131,7 @@ def assert_parcel_rollback_gate(api_engine,candidate,kind):
             assert 'qr_code' not in read.text and 'no-store' in read.headers['cache-control']
             assert commands.execute_shipment(db,**coordinates,request=value).model_dump(mode='json')==response.json()
             assert tuple(db.execute(select(InventoryTransaction.id,InventoryTransaction.ledger_cursor).order_by(InventoryTransaction.ledger_cursor)))==stock_before
+            assert_parcel_directory_read(db,candidate)
         with db.begin_nested():
             try:
                 with db.begin_nested():
@@ -187,3 +244,4 @@ def assert_stock_return_shipment_gate(api_engine,worlds):
     candidates=parcel_candidates(api_engine,worlds)
     for kind,candidate in candidates.items():assert_parcel_rollback_gate(api_engine,candidate,kind)
     assert_parcel_commit_gate(api_engine,candidates)
+    assert_parcel_readonly_history(api_engine,tuple(candidates.values()))
