@@ -81,6 +81,12 @@ def _package(db, actor, fact, locations):
     checked = facts.verified_shipment_history(db, fact=fact)
     if checked.shipped_at > now or checked.recorded_at > now:
         facts.invalid()
+    return project_package(db, fact, checked, target_location_name=locations[header.target_location_id][0])
+
+
+def project_package(db, fact, checked, *, target_location_name):
+    """Project proven parcel facts; authorization stays with the caller."""
+    header = db.get(Shipment, fact.id, populate_existing=True)
     order = db.get(StockOperationOrder, checked.operation_id, populate_existing=True)
     # Exact association IDs are deliberately projected from typed parcel rows;
     # the sender's source accounts, balances, QR payloads and request keys are not.
@@ -94,9 +100,9 @@ def _package(db, actor, fact, locations):
         for row, view in zip(rows, checked.lines))
     return StockReturnReceivingPackageOut(shipment_id=header.id, shipment_no=checked.shipment_no,
         operation_id=order.id, operation_no=order.operation_no, work_order_id=order.oam_work_order_id,
-        sender_person_id=checked.operator_person_id, receiver_person_id=actor.person_id,
-        target_location_id=header.target_location_id, target_location_name=locations[header.target_location_id][0],
-        custody_assignment_id=assignments[0].id, carrier=checked.carrier, tracking_no=checked.tracking_no,
+        sender_person_id=checked.operator_person_id, receiver_person_id=header.target_person_id,
+        target_location_id=header.target_location_id, target_location_name=target_location_name,
+        custody_assignment_id=fact.target_custody_assignment_id, carrier=checked.carrier, tracking_no=checked.tracking_no,
         shipped_at=checked.shipped_at, recorded_at=checked.recorded_at, lines=lines)
 
 

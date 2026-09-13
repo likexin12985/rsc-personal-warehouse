@@ -514,6 +514,48 @@ def test_unbound_available_file_download_is_uploader_only(world):
     assert caught.value.code == "file_download_forbidden"
 
 
+@pytest.mark.parametrize('expiry',['current','expired','too_long'])
+def test_signed_url_uses_current_clock_after_long_transaction(world,monkeypatch,expiry):
+    # Reproduce a transaction that started well before the storage SDK signs.
+    started=datetime.now(timezone.utc)-timedelta(minutes=5)
+    monkeypatch.setattr(formal_files,'_database_now',lambda _db:started)
+    created=_create(world,key='long-transaction-'+expiry)
+    row=world.db.get(FileObject,created.file_id)
+    assert row.created_at.replace(tzinfo=timezone.utc)==started
+    replayed=_create(world,key='long-transaction-'+expiry)
+    assert replayed.replayed and replayed.upload.expires_at>datetime.now(timezone.utc)
+    world.storage.materialize(row)
+    formal_files.complete_file_upload(world.db,actor=world.owner,file_id=row.id,trace_request_id='long-complete-'+expiry,storage=world.storage)
+    original=world.storage.create_download_intent
+    def sign(**kwargs):
+        intent=original(**kwargs)
+        if expiry=='expired':return replace(intent,expires_at=started+timedelta(seconds=60))
+        if expiry=='too_long':return replace(intent,expires_at=datetime.now(timezone.utc)+timedelta(hours=1))
+        return intent
+    monkeypatch.setattr(world.storage,'create_download_intent',sign)
+    def download():
+        return formal_files.create_file_download_intent(world.db,actor=world.owner,file_id=row.id,
+            trace_request_id='long-download-'+expiry,storage=world.storage,download_ttl_seconds=60)
+    if expiry=='current':assert download().download.expires_at>datetime.now(timezone.utc)
+    else:
+        with pytest.raises(formal_files.FormalFileError) as rejected:download()
+        assert rejected.value.code=='file_storage_response_invalid'
+
+
+def test_upload_link_expired_during_storage_call_is_rejected(world,monkeypatch):
+    clock={'now':datetime.now(timezone.utc)}
+    monkeypatch.setattr(formal_files,'_database_wall_clock',lambda _db:clock['now'])
+    original=world.storage.create_upload_intent
+    def delayed(**kwargs):
+        intent=original(**kwargs)
+        clock['now']=intent.expires_at+timedelta(seconds=1)
+        return intent
+    monkeypatch.setattr(world.storage,'create_upload_intent',delayed)
+    with pytest.raises(formal_files.FormalFileError) as rejected:_create(world,key='expired-during-storage-call')
+    assert rejected.value.code=='file_storage_response_invalid'
+    assert not world.db.scalar(select(FileObject.id))
+
+
 def test_unbound_download_rechecks_uploader_identity_continuity(world):
     created = _create(world, key="download-identity-change")
     row = world.db.get(FileObject, created.file_id)

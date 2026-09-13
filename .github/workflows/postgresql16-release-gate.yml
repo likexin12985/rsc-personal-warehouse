@@ -237,6 +237,9 @@ jobs:
             backend/tests/test_stock_return_shipment.py \
             backend/tests/test_stock_return_shipment_queries.py \
             backend/tests/test_stock_return_receiving.py \
+            backend/tests/test_stock_return_receipt.py \
+            backend/tests/test_stock_return_receipt_migration.py \
+            backend/tests/test_formal_stock_return_receipt_routes.py \
             backend/tests/test_stock_return_shipment_recovery.py \
             backend/tests/test_stock_return_shipment_migration.py \
             backend/tests/test_formal_stock_return_routes.py \

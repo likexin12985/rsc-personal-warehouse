@@ -1,0 +1,56 @@
+<view class="page">
+  <view class="title">区域仓退回收货</view>
+  <view class="muted">{{message}}</view>
+  <button loading="{{loading}}" disabled="{{loading}}" bindtap="refresh">刷新原包裹和验收记录</button>
+  <block wx:if="{{ready && !detail}}">
+    <view wx:if="{{!packages.length}}" class="card muted">本页没有当前由本人接收的退回包裹。</view>
+    <view wx:for="{{packages}}" wx:key="id" class="card">
+      <block wx:if="{{item.verified}}">
+        <view class="heading">{{item.number}}</view><view>退回单：{{item.returnNo}}</view>
+        <view>接收仓：{{item.target}}</view><view class="tracking">{{item.carrier}} · {{item.trackingNo}}</view>
+        <view>实际交运：{{item.shippedAt}}</view><view>{{item.lineCount}} 条原包裹明细</view>
+        <button data-id="{{item.id}}" bindtap="openPackage">查看本包验收进度</button>
+      </block>
+      <view wx:else class="notice">{{item.message}}</view>
+    </view>
+    <button wx:if="{{next}}" bindtap="nextPage">下一页包裹</button>
+  </block>
+  <block wx:if="{{ready && detail}}">
+    <view class="card"><view class="heading">{{package.number}}</view><view>退回单：{{package.returnNo}}</view>
+      <view>接收仓：{{package.target}}</view><view class="tracking">{{package.carrier}} · {{package.trackingNo}}</view>
+      <view>实际交运：{{package.shippedAt}}</view></view>
+    <view class="card"><view class="heading">累计验收进度</view>
+      <view wx:for="{{progress}}" wx:key="id" wx:for-item="line" class="row">
+        <view class="heading">{{line.materialName}}</view><view class="muted">{{line.sku}} · {{line.condition}} · {{line.lot}}</view>
+        <view>原发出：{{line.outboundNo}}</view><view>本包发运 {{line.shipped}} {{line.unit}}</view>
+        <view>累计接受 {{line.accepted}} · 拒收 {{line.rejected}} {{line.unit}}</view>
+        <view>接受量中破损 {{line.damaged}} · 尚待确认 {{line.remaining}} {{line.unit}}</view>
+        <block wx:if="{{line.serials.total}}"><view>尚待确认 SN：{{line.serials.total}} 件</view>
+          <view wx:for="{{line.serials.rows}}" wx:key="id" wx:for-item="sn" class="serial">{{sn.number}}</view>
+          <button wx:if="{{line.serials.more}}" size="mini" data-key="{{line.serials.key}}" bindtap="moreSerials">显示更多 SN</button>
+        </block>
+      </view><button wx:if="{{moreLines}}" bindtap="moreLines">显示更多明细</button>
+    </view>
+    <view class="card"><view class="heading">分批验收记录</view>
+      <view wx:if="{{!batches.length}}" class="muted">尚无已确认验收记录。</view>
+      <view wx:for="{{batches}}" wx:key="id" class="row"><view>{{item.number}} · {{item.status}}</view>
+        <view>{{item.receivedAt}}</view><view>{{item.reason}}</view><button size="mini" data-id="{{item.id}}" bindtap="selectReceipt">查看本次验收</button>
+      </view><button wx:if="{{moreBatches}}" bindtap="moreBatches">显示更多验收记录</button>
+    </view>
+    <view wx:if="{{selectedReceipt}}" class="card"><view class="heading">{{selectedReceipt.number}}</view>
+      <view>实际验收：{{selectedReceipt.receivedAt}}</view><view class="muted">登记时间：{{selectedReceipt.recordedAt}}</view><view>{{selectedReceipt.reason}}</view>
+      <view wx:for="{{selectedReceipt.lines}}" wx:key="id" wx:for-item="line" class="row">
+        <view class="heading">{{line.materialName}} · {{line.sku}}</view>
+        <view>接受 {{line.accepted}} · 拒收 {{line.rejected}} {{line.unit}}</view>
+        <view>接受量中破损 {{line.damaged}} · 本次短少观察 {{line.shortage}} {{line.unit}}</view>
+        <view wx:for="{{line.exceptions}}" wx:key="type" wx:for-item="exception" class="notice">{{exception.label}}：{{exception.description}}（已关联凭证）</view>
+        <view wx:for="{{line.serials}}" wx:key="group" wx:for-item="group">
+          <block wx:if="{{group.total}}"><view>{{group.label}} SN · {{group.total}} 件</view>
+            <view wx:for="{{group.rows}}" wx:key="id" wx:for-item="sn" class="serial">{{sn.number}}</view>
+            <button wx:if="{{group.more}}" size="mini" data-key="{{group.key}}" bindtap="moreSerials">显示更多 SN</button>
+          </block>
+        </view>
+      </view><button wx:if="{{selectedReceipt.moreLines}}" bindtap="moreReceiptLines">显示更多本次明细</button>
+    </view>
+  </block>
+</view>

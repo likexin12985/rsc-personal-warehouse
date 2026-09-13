@@ -14,7 +14,7 @@ import hmac
 import json
 import re
 import unicodedata
-from typing import Any, Final, Mapping, Sequence
+from typing import Any, Callable, Final, Mapping, Sequence
 from urllib.parse import urlsplit
 import uuid
 
@@ -35,6 +35,7 @@ from ..formal_access import (
 )
 from ..foundation_models import DocumentAttachment, FileObject
 from ..inventory_models import Receipt, ReceiptException, ReceiptLine, Shipment
+from ..stock_operation_models import StockOperationReceipt, StockOperationReceiptException
 from ..stocktake_models import StocktakeScopeCountCompletion
 from .audit_chain import AuditChainError, append_audit_event
 from .file_storage import (
@@ -289,7 +290,7 @@ def create_file_upload_intent(
                 storage,
                 row=row,
                 ttl_seconds=ttl,
-                now=_database_now(db),
+                current_time=lambda: _database_wall_clock(db),
             )
         now = _database_now(db)
         _append_file_audit(
@@ -334,7 +335,7 @@ def create_file_upload_intent(
         storage,
         row=provisional,
         ttl_seconds=ttl,
-        now=now,
+        current_time=lambda: _database_wall_clock(db),
     )
     db.add(provisional)
     db.flush()
@@ -479,7 +480,7 @@ def create_file_download_intent(
         )
     except FileStorageError:
         _fail("file_storage_unavailable", "service_unavailable", "文件存储暂不可用")
-    _validate_download_intent(intent, row=row, now=_database_now(db), ttl_seconds=ttl)
+    _validate_download_intent(intent, row=row, now=_database_wall_clock(db), ttl_seconds=ttl)
     now = _database_now(db)
     _append_file_audit(
         db,
@@ -545,6 +546,24 @@ def _authorize_download(
     receipt_bindings = tuple(db.scalars(select(ReceiptException).where(
         ReceiptException.evidence_file_id == row.id,
     ).order_by(ReceiptException.id)).all())
+    return_receipt_bindings = tuple(db.scalars(select(StockOperationReceiptException).where(
+        StockOperationReceiptException.evidence_file_id == row.id,
+    ).order_by(StockOperationReceiptException.id).limit(501)))
+    if return_receipt_bindings:
+        if (purpose != "receipt_exception_evidence" or request_attachment_ids or external_request_ids
+                or document_bindings or receipt_bindings or len(return_receipt_bindings) > 500):
+            _binding_invalid()
+        from .stock_return_receipt_facts import receipt_result
+        from .inventory_query import InventoryReadError
+        from .inventory_posting import InventoryPostingError
+        identifiers = {item.receipt_id for item in return_receipt_bindings}
+        if len(identifiers) != 1: _binding_invalid()
+        fact = db.get(StockOperationReceipt, next(iter(identifiers)), populate_existing=True)
+        try:
+            receipt_result(db, actor=actor, fact=fact)
+        except (InventoryReadError, InventoryPostingError):
+            _fail("file_download_forbidden", "forbidden", "当前账号不能下载该退回验收证据")
+        return {"binding_type": "stock_operation_receipt_exception", "binding_count": len(return_receipt_bindings)}
     has_any_binding = bool(request_attachment_ids or external_request_ids or document_bindings or receipt_bindings)
     if receipt_bindings:
         if purpose != "receipt_exception_evidence" or request_attachment_ids or external_request_ids or document_bindings:
@@ -728,6 +747,11 @@ def _require_upload_permission(
         )
     except FormalAccessError:
         allowed = False
+    if not allowed and purpose == "receipt_exception_evidence" and {"admin", "provincial_manager"}.intersection(actor.role_codes):
+        try:
+            allowed = actor.allows(db, "stock_operation", "receive_return")
+        except FormalAccessError:
+            allowed = False
     if not allowed:
         _fail("file_purpose_forbidden", "forbidden", "当前账号不能上传该用途文件")
 
@@ -950,7 +974,7 @@ def _create_and_validate_upload_intent(
     *,
     row: FileObject,
     ttl_seconds: int,
-    now: datetime,
+    current_time: Callable[[], datetime],
 ) -> UploadIntent:
     try:
         intent = storage.create_upload_intent(
@@ -963,7 +987,7 @@ def _create_and_validate_upload_intent(
         )
     except FileStorageError:
         _fail("file_storage_unavailable", "service_unavailable", "文件存储暂不可用")
-    _validate_upload_intent(intent, row=row, now=now, ttl_seconds=ttl_seconds)
+    _validate_upload_intent(intent, row=row, now=current_time(), ttl_seconds=ttl_seconds)
     return intent
 
 
@@ -1228,7 +1252,18 @@ def _upload_request_hash(value: _PreparedUpload) -> str:
 
 
 def _database_now(db: Session) -> datetime:
-    value = db.scalar(select(func.current_timestamp()))
+    return _checked_database_time(db.scalar(select(func.current_timestamp())))
+
+
+def _database_wall_clock(db: Session) -> datetime:
+    # Signed URL lifetime starts when the storage adapter signs, not when a
+    # potentially long authorization/proof transaction began. Historical file
+    # metadata still uses _database_now to retain its original SQL contract.
+    clock = func.clock_timestamp() if db.get_bind().dialect.name == 'postgresql' else func.current_timestamp()
+    return _checked_database_time(db.scalar(select(clock)))
+
+
+def _checked_database_time(value: object) -> datetime:
     if not isinstance(value, datetime):
         _fail("file_database_clock_invalid", "service_unavailable", "数据库时间不可用")
     if value.tzinfo is None:

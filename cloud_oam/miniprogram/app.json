@@ -6,6 +6,7 @@
     "pages/formal-stock-returns/index",
     "pages/formal-stock-return-outbounds/index",
     "pages/formal-stock-return-shipments/index",
+    "pages/formal-stock-return-receiving/index",
     "pages/formal-personal-warehouse/index",
     "pages/formal-my-receiving/index",
     "pages/formal-my-inbound/index",

@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261014_0104"
+HEAD_REVISION = "20261015_0105"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7443,7 +7443,7 @@ def _head_account_admission_hash() -> str:
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20261014_0104_stock_return_shipments.py"
+        "20261015_0105_stock_return_receipts.py"
     )))
     assert migration["revision"] == HEAD_REVISION
     return migration["NEW_HASH"]
@@ -21402,6 +21402,18 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         from pg16_stock_return_receiving_gate import assert_return_receiving_gate
         from pg16_stock_return_shipment_gate import parcel_candidates
         assert_return_receiving_gate(api_engine, tuple(parcel_candidates(api_engine, departure_worlds).values()))
+        from pg16_stock_return_receipt_gate import (assert_return_receipt_rollback_gate, assert_receipt_sql_rejections,
+            assert_receipt_commit_gate, assert_receipt_http_read_gate, receipt_snapshot)
+        receipt_origins=tuple(parcel_candidates(api_engine, departure_worlds).values())
+        receipt_selected=assert_return_receipt_rollback_gate(api_engine,receipt_origins)
+        for kind,candidate in receipt_selected.items():assert_receipt_sql_rejections(api_engine,candidate,kind)
+        assert_receipt_commit_gate(api_engine,receipt_origins)
+        assert_receipt_http_read_gate(api_engine)
+        receipt_history=receipt_snapshot(api_engine)
+        blocked_receipts=_run_alembic('downgrade','20261014_0104',expect_success=False)
+        assert '0105 downgrade blocked: immutable return acceptance or request seals must be retained' in blocked_receipts.stdout+blocked_receipts.stderr
+        assert _current_revision()==HEAD_REVISION and receipt_snapshot(api_engine)==receipt_history
+        _validate_runtime_security(api_engine)
     finally:
         edge_engine.dispose()
         projector_engine.dispose()

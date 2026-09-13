@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any
 import uuid
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, Numeric, String, Text, UniqueConstraint, text
 from datetime import datetime
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -108,8 +108,9 @@ class StockOperationCommandSeal(CreatedAtMixin, Base):
     __tablename__ = "stock_operation_command_seals"
     __table_args__ = (
         UniqueConstraint("actor_user_id", "request_id", name="uq_stock_operation_seals_request"),
-        CheckConstraint("operation_type IN ('submit_return','cancel_return','outbound_return','ship_return')", name="ck_stock_operation_seals_type"),
-        CheckConstraint("(operation_type='submit_return' AND operation_id IS NULL) OR (operation_type IN ('cancel_return','outbound_return','ship_return') AND operation_id IS NOT NULL)", name="ck_stock_operation_seals_origin"),
+        CheckConstraint("operation_type IN ('submit_return','cancel_return','outbound_return','ship_return','receive_return')", name="ck_stock_operation_seals_type"),
+        CheckConstraint("(operation_type='submit_return' AND operation_id IS NULL) OR (operation_type IN ('cancel_return','outbound_return','ship_return','receive_return') AND operation_id IS NOT NULL)", name="ck_stock_operation_seals_origin"),
+        CheckConstraint("(operation_type='receive_return') = (shipment_id IS NOT NULL)", name="ck_stock_operation_seals_shipment"),
         CheckConstraint("authorization_version > 0 AND length(request_hash)=64", name="ck_stock_operation_seals_context"),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
@@ -118,6 +119,7 @@ class StockOperationCommandSeal(CreatedAtMixin, Base):
     oam_work_order_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("oam_work_orders.id", ondelete="RESTRICT"))
     operation_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_orders.id", ondelete="RESTRICT"))
     operation_type: Mapped[str] = mapped_column(String(24))
+    shipment_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_shipments.id", ondelete="RESTRICT"))
     authorization_version: Mapped[int] = mapped_column(BigInteger)
     request_id: Mapped[str] = mapped_column(String(160))
     request_reference: Mapped[str] = mapped_column(String(100))
@@ -227,3 +229,80 @@ class StockOperationShipmentSerial(CreatedAtMixin, Base):
     line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
     outbound_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
     serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("inventory_serials.id", ondelete="RESTRICT"))
+
+
+class StockOperationReceipt(CreatedAtMixin, Base):
+    """Independent acceptance of a return parcel; inbound is a later fact."""
+    __tablename__ = "stock_operation_receipts"
+    __table_args__ = (
+        UniqueConstraint("actor_user_id", "request_id", name="uq_stock_operation_receipts_request"),
+        UniqueConstraint("audit_version", name="uq_stock_operation_receipts_audit"),
+        CheckConstraint("authorization_version > 0 AND audit_version > 0", name="ck_stock_operation_receipts_versions"),
+        CheckConstraint("length(reason) BETWEEN 1 AND 500 AND length(plan_hash)=64", name="ck_stock_operation_receipts_context"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("receipts.id", ondelete="RESTRICT"), primary_key=True)
+    shipment_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_shipments.id", ondelete="RESTRICT"), index=True)
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
+    operator_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    target_custody_assignment_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("custody_assignments.id", ondelete="RESTRICT"))
+    request_id: Mapped[str] = mapped_column(String(160))
+    reason: Mapped[str] = mapped_column(Text)
+    plan_hash: Mapped[str] = mapped_column(String(64))
+    audit_version: Mapped[int] = mapped_column(BigInteger)
+    command_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+    plan_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+
+
+class StockOperationReceiptLine(CreatedAtMixin, Base):
+    __tablename__ = "stock_operation_receipt_lines"
+    __table_args__ = (
+        UniqueConstraint("receipt_id", "line_no", name="uq_stock_operation_receipt_lines_order"),
+        UniqueConstraint("receipt_id", "shipment_line_id", name="uq_stock_operation_receipt_lines_origin"),
+        UniqueConstraint("id", "shipment_line_id", name="uq_stock_operation_receipt_lines_binding"),
+        UniqueConstraint("id", "receipt_id", name="uq_stock_operation_receipt_lines_receipt"),
+        CheckConstraint("line_no > 0 AND accepted_qty >= 0 AND rejected_qty >= 0 AND shortage_qty >= 0 AND accepted_qty + rejected_qty + shortage_qty > 0 AND damaged_qty >= 0 AND damaged_qty <= accepted_qty", name="ck_stock_operation_receipt_lines_quantities"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    receipt_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_receipts.id", ondelete="RESTRICT"))
+    shipment_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_shipment_lines.id", ondelete="RESTRICT"), index=True)
+    line_no: Mapped[int] = mapped_column(BigInteger)
+    accepted_qty: Mapped[Decimal] = mapped_column(Numeric(18, 3))
+    rejected_qty: Mapped[Decimal] = mapped_column(Numeric(18, 3))
+    damaged_qty: Mapped[Decimal] = mapped_column(Numeric(18, 3))
+    shortage_qty: Mapped[Decimal] = mapped_column(Numeric(18, 3))
+
+
+class StockOperationReceiptSerial(CreatedAtMixin, Base):
+    __tablename__ = "stock_operation_receipt_serials"
+    __table_args__ = (
+        UniqueConstraint("line_id", "serial_id", name="uq_stock_operation_receipt_serials_line"),
+        Index("uq_stock_operation_receipt_serials_confirmed", "shipment_line_id", "serial_id", unique=True,
+            postgresql_where=text("result IN ('accepted','rejected')"), sqlite_where=text("result IN ('accepted','rejected')")),
+        ForeignKeyConstraint(["line_id", "shipment_line_id"], ["stock_operation_receipt_lines.id", "stock_operation_receipt_lines.shipment_line_id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(["shipment_line_id", "serial_id"], ["stock_operation_shipment_serials.line_id", "stock_operation_shipment_serials.serial_id"], ondelete="RESTRICT"),
+        CheckConstraint("result IN ('accepted','rejected','shortage') AND (NOT damaged OR result='accepted') AND ((result='accepted' AND sku_verified AND qr_verified) OR (result<>'accepted' AND NOT sku_verified AND NOT qr_verified))", name="ck_stock_operation_receipt_serials_proof"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    shipment_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    result: Mapped[str] = mapped_column(String(24))
+    damaged: Mapped[bool] = mapped_column(Boolean)
+    sku_verified: Mapped[bool] = mapped_column(Boolean)
+    qr_verified: Mapped[bool] = mapped_column(Boolean)
+
+
+class StockOperationReceiptException(CreatedAtMixin, Base):
+    __tablename__ = "stock_operation_receipt_exceptions"
+    __table_args__ = (
+        ForeignKeyConstraint(["line_id", "receipt_id"], ["stock_operation_receipt_lines.id", "stock_operation_receipt_lines.receipt_id"], ondelete="RESTRICT"),
+        UniqueConstraint("line_id", "exception_type", name="uq_stock_operation_receipt_exceptions_kind"),
+        CheckConstraint("exception_type IN ('shortage','damaged','wrong_material','wrong_serial','rejected') AND length(description) BETWEEN 1 AND 1000", name="ck_stock_operation_receipt_exceptions_detail"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    receipt_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    exception_type: Mapped[str] = mapped_column(String(32))
+    description: Mapped[str] = mapped_column(Text)
+    evidence_file_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("files.id", ondelete="RESTRICT"))

@@ -11,7 +11,7 @@ from ..inventory_models import (Shipment, ShipmentLine, LogisticsEvent, Receipt,
     CustodyAssignment, InventoryTransaction, InventoryMovement)
 from ..stock_operation_models import (StockOperationOrder, StockOperationLine, StockOperationCancellation,
     StockOperationCommandSeal, StockOperationOutbound, StockOperationOutboundLine,
-    StockOperationShipment, StockOperationShipmentLine, StockOperationShipmentSerial)
+    StockOperationShipment, StockOperationShipmentLine, StockOperationShipmentSerial, StockOperationReceipt)
 from ..stock_return_shipment_schemas import StockReturnShipmentPreviewIn, StockReturnShipmentOut, StockReturnShipmentLineOut
 from . import inventory_posting as posting, stock_return_facts as returns, stock_return_outbound_facts as departures
 from .stock_return_shipment_plan import intent
@@ -59,12 +59,16 @@ def _prior_quantities(db, fact, row, account):
 
 
 def _namespace(db, fact, header):
-    for model in (StockOperationOrder, StockOperationCancellation, StockOperationOutbound, StockOperationCommandSeal):
+    for model in (StockOperationOrder, StockOperationCancellation, StockOperationOutbound, StockOperationCommandSeal, StockOperationReceipt):
         if db.scalar(select(model.id).where(model.actor_user_id == fact.actor_user_id, model.request_id == fact.request_id).limit(1)):
             invalid()
     # Return receiving/logistics adapters must be implemented separately before these can attach.
-    for model in (ShipmentLine, LogisticsEvent, Receipt):
+    for model in (ShipmentLine, LogisticsEvent):
         if db.scalar(select(model.id).where(model.shipment_id == fact.id).limit(1)): invalid()
+    if db.scalar(select(Receipt.id).where(Receipt.shipment_id == fact.id,
+            ~Receipt.id.in_(select(StockOperationReceipt.id).where(StockOperationReceipt.shipment_id == fact.id))).limit(1)):
+        invalid()
+    if db.scalar(select(Receipt.id).where(Receipt.idempotency_key_hash == header.idempotency_key_hash).limit(1)): invalid()
     if db.scalar(select(InventoryTransaction.id).where(or_(InventoryTransaction.idempotency_key_hash == header.idempotency_key_hash,
             (InventoryTransaction.source_document_type == "stock_operation_return_shipment") & (InventoryTransaction.source_document_id == str(fact.id)))).limit(1)):
         invalid()

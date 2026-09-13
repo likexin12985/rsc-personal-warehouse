@@ -1,5 +1,68 @@
 # 切换账号后的续开发入口
 
+## 2026-09-13 退回包裹独立验收与区域仓小程序查询
+
+本批从 `b31b91f629936a1c88ca3a140dc3b7216a574f7e` 接续，使用原目录的
+`codex/production-readiness-gates`。此前未推送的 `7cf8d0e` 是接收方查询，
+`b31b91f` 是旧 PG16 回滚测试补齐当前完整迁移链。远端 `06e85c3` 的
+`34743613777` 已完整结束：静态检查成功，真实 PG16 失败于旧迁移链遗漏，
+修复已包含在 b31；该结果不能记为新版门禁通过。后续以实际 HEAD 和 CI 为准。
+
+新增前向迁移 `20261015_0105` 和退回包裹专用验收头、行、SN、异常证据。
+支持数量件/SN、正常、短少、破损、错料、错 SN、拒收、分批验收、原请求回查和
+互斥封存。短少仅记录观察量，之后仍能补收；接受及拒收消耗累计确认量，破损是
+已接受量的一部分。仅当前总部/区域负责人、原包裹指定接收人、当前有效保管责任
+和范围权限同时成立才允许验收。验收不改库存、不解除个人责任、不伪造 OAM 收货。
+
+正式接口已挂载，前缀
+`/api/v1/stock-returns/my-receiving/{shipment_id}/receipts`：GET 历史、POST 提交、
+POST `/preview`、GET `/by-request/{request_id}`、POST 原请求 `/seal`。
+响应丢失只能准确回读或互斥封存，未观察到原请求不证明未执行。普通收货行、
+直接入账、库存过账、跨操作请求键及伪造证据继续由 SQL 守卫拒绝。
+新表只追加，禁止修改、删除及清空；存在验收或验收封存历史时禁止降级。
+
+小程序新增 `pages/formal-stock-return-receiving/index`，从总部/区域工作台进入，
+按本人当前接收仓分页查看原包裹、累计确认量、剩余 SN 和逐次异常说明；无法核验的
+包裹单独提示。数据按完整响应契约和累计数量校验，页面不显示 QR、库存账户或恢复键。
+离开页面、切换账号、查询期间权限变化和读取失败均清除业务展示，迟到响应不能恢复它。
+**本页目前是查询页，尚未提供验收提交表单；独立退回入账适配器也尚未实现。**
+
+本批验证均已完成，日志位于本机 `/tmp`：
+
+- 后端组合回归 **148 项通过**：`oam-return-receipt-domain-final.log`。
+  正式接口及迁移/workflow 组合 **13 项通过**：`oam-return-receipt-http-integration.log`。
+- 数据库权限及新迁移 **305 项通过**：`oam-return-receipt-manifest-final.log`；
+  完整退回迁移专项 **23 项通过**：`oam-return-receipt-migrations-final.log`；
+  最终迁移/门禁拓扑/诊断 **21 项通过**：`oam-return-receipt-final-gate-static.log`。
+- 真实 PG16 数量/SN 正常、五类异常、短少后补收与小数分批验收通过并完整回滚：
+  `oam-return-receipt-pg-extended-v4.log`；直接 SQL 伪造/超收/错码/跨键/直接入账
+  拒绝及不可变约束通过：`oam-return-receipt-pg-sql.log`。
+- 两个真实连接的五组提交/封存竞争通过，仅产生一个有效结果，持久原请求/HTTP
+  回读及降级阻断通过：`oam-return-receipt-pg-concurrency.log`。
+- 真实接收身份与 HTTP、PG 强制 READ ONLY、Node 小程序目录/验收响应契约通过，
+  仅执行 SELECT、原库存及验收历史未变化：`oam-return-receipt-pg-mini-read.log`。
+  此检查已接入完整云端 PG16 gate，不能用纯 SQLite 或模拟响应代替。
+- 小程序全量 **1012 项通过**：`oam-return-receiving-mini-full-final.log`；随后异常
+  说明换行/Unicode 长度校验补充后专项 **25 项通过**：`oam-return-receiving-mini-tests-final.log`。
+  新查询页及工作台原生 WXML/WXSS 编译均退出 0，尚无真机验收或发布。
+- 私有文件签名校验改用签名返回后的数据库当前时间，避免长事务起点导致错误过期。
+  文件事实仍使用原时间规则，过期和超长链接仍拒绝；最终文件专项 **44 项通过**：
+  `oam-file-signing-final.log`。
+
+验证库仅为本机合成隔离库：`/tmp/oam-return-0105-trial.json` 为回滚副本，
+`/tmp/oam-return-0105-sql-trial.json` 已有持久验收/封存历史；准确结果坐标在
+`/tmp/oam-return-receipt-durable.json`。原 0104 历史保持冻结。0105 开发过程中的
+空草稿版本经精确源校验后事务替换，原文保留于
+`/tmp/oam-return-0105-installed-v{1,2,3,4}.txt`。
+**禁止重置上述持久历史、重跑同一并发场景或强制降级。** 空迁移往返另在独立
+PG16 集群验证，原函数/权限/表/触发器完整恢复：
+`/tmp/oam-ci-reversal-pg16-isolated/receipt-migration-final.log`。
+
+下一步接小程序整组验收表单、异常凭证、三码扫描、单次提交及 receive_return
+恢复入口，再新增前向迁移实现独立库存入账和保管责任交接。当前仍需新版完整云端
+门禁、真机/UAT 及生产验收放行；备案通过不代表这些门槛已完成。本批未部署、
+未写生产库、未调用外部业务写入或发送通知。既存 AGENTS.md 修改及部署证据目录保留。
+
 ## 2026-09-13 PG16 旧回滚测试遗漏 0104 的修复
 
 当前提交基线 `7cf8d0ea39877bf21b20822670d4f5a0f82bced2`。远端 `06e85c3`

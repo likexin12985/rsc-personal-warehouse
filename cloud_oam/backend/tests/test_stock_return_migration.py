@@ -12,6 +12,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 from app import database_security as security
+from migration_source_expectations import current_source_hash
 from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0100
 from app.stock_operation_models import StockOperationOrder
 
@@ -23,13 +24,8 @@ def test_return_guards_and_append_only_capabilities_match_runtime_manifest():
     assert m["down_revision"] == "20261009_0099"
     assert OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0100["rsc_oam_runtime_binding_ready_0044()"][6] == m["NEW_HASH"]
     for key, (_, _, body) in m["FUNCTIONS"].items():
-        replacement = runpy.run_path(str(MIGRATION.with_name("20261013_0103_stock_return_outbounds.py")))["_sources"]()[f"public.{key[0]}({key[1]})"]
-        assert replacement[0] == body
-        successor = runpy.run_path(str(MIGRATION.with_name("20261014_0104_stock_return_shipments.py")))["_sources"]().get(f"public.{key[0]}({key[1]})")
-        if successor:
-            assert successor[0] == replacement[1]
-            replacement = successor
-        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key] == hashlib.sha256(replacement[1].encode()).hexdigest()
+        signature=f"public.{key[0]}({key[1]})"
+        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key] == current_source_hash(m['revision'],signature,body)
         assert key in security.MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
     for name, (table, _, function, flags, deferred) in m["TRIGGERS"].items():
         assert security.EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[name] == (table, function, "A", flags, deferred, deferred, deferred)

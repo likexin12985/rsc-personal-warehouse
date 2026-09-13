@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from app import database_security as security
+from migration_source_expectations import current_source_hash
 from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0103, OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0104
 
 PATH=Path(__file__).parents[1]/'alembic/versions/20261014_0104_stock_return_shipments.py'
@@ -22,11 +23,13 @@ def test_parcel_runtime_manifest_matches_reviewed_sources_and_minimum_acl():
         assert table in security.RUNTIME_READ_TABLES & security.RUNTIME_INSERT_TABLES
         assert table not in security.RUNTIME_UPDATE_TABLES | security.RUNTIME_DELETE_TABLES
     for key,digest in m['FUNCTION_HASHES'].items():
-        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key]==digest
+        body=m['FUNCTIONS'][key][2]
+        assert hashlib.sha256(body.encode()).hexdigest()==digest
+        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key]==current_source_hash(m['revision'],f"public.{key[0]}({key[1]})",body)
         assert key in security.MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
     for signature,(old,new) in m['_sources']().items():
         name,args=signature.removeprefix('public.').split('(');key=(name,args[:-1])
-        assert old!=new and security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key]==hashlib.sha256(new.encode()).hexdigest()
+        assert old!=new and security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key]==current_source_hash(m['revision'],signature,new)
     for name,(table,_,function,bits,deferred) in m['TRIGGERS'].items():
         assert security.EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[name]==(table,function,'A',bits,deferred,deferred,deferred)
         if table=='audit_events':assert security.EXPECTED_AUDIT_TRIGGERS[name]==(table,function,bits,deferred,deferred,deferred)

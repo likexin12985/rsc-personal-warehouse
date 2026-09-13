@@ -9,7 +9,7 @@ from ..demand_models import OamWorkOrder
 from ..formal_access import lock_formal_principal_graph
 from ..foundation_models import AuditEvent, StateTransitionEvent
 from ..inventory_models import InventoryLedgerHead, InventoryTransaction
-from ..stock_operation_models import StockOperationOrder as Order, StockOperationCancellation as Cancellation, StockOperationCommandSeal as Seal, StockOperationOutbound as Outbound, StockOperationShipment as ReturnShipment
+from ..stock_operation_models import StockOperationOrder as Order, StockOperationCancellation as Cancellation, StockOperationCommandSeal as Seal, StockOperationOutbound as Outbound, StockOperationShipment as ReturnShipment, StockOperationReceipt
 from ..stock_return_schemas import StockReturnSealOut, StockReturnSealedOut
 from . import inventory_posting as posting, inventory_query as inventory, stock_return_facts as facts
 from .audit_chain import append_audit_event, AuditChainError
@@ -53,7 +53,7 @@ def verified_seal(db, *, actor, row):
 def _verified_seal(db, *, actor, row):
     if (row.actor_user_id != actor.user_id or row.operator_person_id != actor.person_id or row.authorization_version < 1
             or row.operation_type not in {"submit_return", "cancel_return", "outbound_return", "ship_return"}
-            or (row.operation_type == "submit_return") != (row.operation_id is None)
+            or (row.operation_type == "submit_return") != (row.operation_id is None) or row.shipment_id is not None
             or not re.fullmatch(r"[A-Za-z0-9._:-]{8,160}", row.request_id)
             or not re.fullmatch(r"[0-9a-f]{64}", row.request_hash) or row.request_reference != posting._request_reference(row.request_id)):
         facts.invalid()
@@ -112,6 +112,9 @@ def lookup_return_request(db, *, actor, work_order_id, operation_type, request_i
     _coordinate(operation_type, request_id, operation_id)
     current = authorize(db, actor, "read")
     with db.no_autoflush:
+        if db.scalar(select(StockOperationReceipt.id).where(StockOperationReceipt.actor_user_id == current.user_id,
+                StockOperationReceipt.request_id == request_id).limit(1)):
+            _fail("stock_return_request_conflict", "该请求标识已绑定接收验收，请核验原请求坐标")
         cursor = db.scalar(select(InventoryLedgerHead.next_cursor).where(InventoryLedgerHead.stream_key == "inventory"))
         if cursor is None: facts.invalid()
         audit = material_audit_cursor(db)

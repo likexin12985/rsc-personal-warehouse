@@ -12,6 +12,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 from app import database_security as security
+from migration_source_expectations import current_source_hash
 from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0101
 from app.stock_operation_models import StockOperationCommandSeal
 
@@ -25,12 +26,10 @@ def test_seal_runtime_capabilities_and_exact_sources():
     assert migration["TABLE"] in security.RUNTIME_READ_TABLES & security.RUNTIME_INSERT_TABLES
     assert migration["TABLE"] not in security.RUNTIME_UPDATE_TABLES | security.RUNTIME_DELETE_TABLES
     for key, digest in migration["FUNCTION_HASHES"].items():
-        replacement = runpy.run_path(str(PATH.with_name("20261013_0103_stock_return_outbounds.py")))["_sources"]()[f"public.{key[0]}({key[1]})"]
-        assert hashlib.sha256(replacement[0].encode()).hexdigest() == digest
-        successor = runpy.run_path(str(PATH.with_name("20261014_0104_stock_return_shipments.py")))["_sources"]()[f"public.{key[0]}({key[1]})"]
-        assert successor[0] == replacement[1]
-        replacement = successor
-        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key] == hashlib.sha256(replacement[1].encode()).hexdigest()
+        body=migration['FUNCTIONS'][key][2]
+        assert hashlib.sha256(body.encode()).hexdigest()==digest
+        signature=f"public.{key[0]}({key[1]})"
+        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key] == current_source_hash(migration['revision'],signature,body)
         assert key in security.MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
     for name, (table, _event, function, flags, deferred) in migration["TRIGGERS"].items():
         assert security.EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[name] == (table, function, "A", flags, deferred, deferred, deferred)

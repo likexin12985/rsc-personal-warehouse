@@ -5,8 +5,8 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from ..foundation_models import AuditEvent, OutboxEvent, StateTransitionEvent
-from ..inventory_models import InventoryTransaction, StockAccount, Shipment
-from ..stock_operation_models import StockOperationOrder as Order, StockOperationLine as Line, StockOperationSerial as Serial, StockOperationCancellation as Cancellation, StockOperationOutbound, StockOperationShipment
+from ..inventory_models import InventoryTransaction, StockAccount, Shipment, Receipt
+from ..stock_operation_models import StockOperationOrder as Order, StockOperationLine as Line, StockOperationSerial as Serial, StockOperationCancellation as Cancellation, StockOperationOutbound, StockOperationShipment, StockOperationReceipt
 from ..stock_return_schemas import StockReturnSubmitIn, StockReturnCancelIn
 from . import inventory_posting as posting, work_order_material as material
 from .audit_chain import append_audit_event
@@ -18,14 +18,15 @@ from .work_order_return_sources import _hash, _fail
 def _fresh_request(db, *, actor, key, request_id):
     from .stock_return_recovery import require_unsealed
     require_unsealed(db, actor=actor, request_id=request_id)
-    for model in (Order, Cancellation, StockOperationOutbound, StockOperationShipment):
+    for model in (Order, Cancellation, StockOperationOutbound, StockOperationShipment, StockOperationReceipt):
         if db.scalar(select(model.id).where(model.actor_user_id == actor.user_id, model.request_id == request_id)):
             _fail("stock_return_request_conflict", "请求标识已有退回操作，请先回读原请求")
     if (db.scalar(select(InventoryTransaction.id).where(InventoryTransaction.idempotency_key_hash == key))
             or db.scalar(select(Shipment.id).where(Shipment.idempotency_key_hash == key))
+            or db.scalar(select(Receipt.id).where(Receipt.idempotency_key_hash == key))
             or db.scalar(select(AuditEvent.id).where(AuditEvent.stream_key == "material_request",
                 AuditEvent.actor_user_id == actor.user_id, AuditEvent.request_id == request_id,
-                AuditEvent.action.in_(("stock_return_submitted", "stock_return_cancelled", "stock_return_outbound", "stock_return_shipped"))))):
+                AuditEvent.action.in_(("stock_return_submitted", "stock_return_cancelled", "stock_return_outbound", "stock_return_shipped", "stock_return_received"))))):
         facts.invalid()
 
 

@@ -555,6 +555,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "stock_operation_command_seals",
         "stock_operation_outbounds", "stock_operation_outbound_lines", "stock_operation_outbound_serials",
         "stock_operation_shipments", "stock_operation_shipment_lines", "stock_operation_shipment_serials",
+        "stock_operation_receipts", "stock_operation_receipt_lines", "stock_operation_receipt_serials", "stock_operation_receipt_exceptions",
         "stock_operation_orders", "stock_operation_lines", "stock_operation_serials", "stock_operation_cancellations",
         "outbound_postings", "outbound_posting_serials",
         "shipments", "shipment_lines", "shipment_serials",
@@ -833,6 +834,10 @@ def test_0036_formal_file_runtime_manifest_and_function_bodies_are_exact() -> No
         for before, after in receipt_files["source_changes"]()[coordinate]:
             assert body == before
             body = after
+        successor = runpy.run_path(str(FORMAL_FILE_MIGRATION_0036.with_name("20261015_0105_stock_return_receipts.py")))['_sources']().get(f"public.{function_name}()")
+        if successor:
+            assert body == successor[0]
+            body = successor[1]
         assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (
             FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
         )
@@ -7222,8 +7227,8 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 232
-    assert len(functions) == 81
+    assert len(triggers) == 253
+    assert len(functions) == 84
     _assert_material_request_approval_guards(
         triggers=triggers,
         functions=functions,
@@ -7473,7 +7478,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
     assert {
         coordinate[0].rsplit("_", 1)[-1]
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
-    } == {"0029", "0030", "0045", "0046", "0059", "0060", "0069", "0070", "0071", "0072", "0077", "0087", "0090", "0092", "0093", "0094", "0095", "0096", "0098", "0099", "0100", "0101", "0103", "0104"}
+    } == {"0029", "0030", "0045", "0046", "0059", "0060", "0069", "0070", "0071", "0072", "0077", "0087", "0090", "0092", "0093", "0094", "0095", "0096", "0098", "0099", "0100", "0101", "0103", "0104", "0105"}
 
 
 def test_0069_reservation_guard_bodies_match_runtime_manifest(monkeypatch):
@@ -7606,7 +7611,7 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         ): migration._projection_dispatcher_sql(),
     }
 
-    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 81
+    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 84
     assert set(function_sql) == {
         coordinate
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256

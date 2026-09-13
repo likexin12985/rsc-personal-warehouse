@@ -46,6 +46,15 @@
       <text class="module-link-arrow">进入 ›</text>
     </navigator>
 
+    <navigator wx:if="{{returnReceivingAccessAllowed}}" class="card module-link" url="/pages/formal-stock-return-receiving/index">
+      <view>
+        <text class="module-link-kicker">退回收货</text>
+        <text class="module-link-title">查看区域仓退回包裹</text>
+        <text class="module-link-detail">查看本人接收的原包裹、分批验收和异常记录。</text>
+      </view>
+      <text class="module-link-arrow">进入 ›</text>
+    </navigator>
+
     <navigator wx:if="{{materialRequestAccessAllowed}}" class="card module-link" open-type="switchTab" url="/pages/formal-material-requests/index">
       <view>
         <text class="module-link-kicker">需求中心</text>
