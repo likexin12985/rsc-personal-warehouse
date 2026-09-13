@@ -1,0 +1,101 @@
+"""Contract for the independent inbound fact after return-parcel acceptance.
+
+Acceptance is deliberately a separate fact.  This module only derives the
+immutable inventory command that a future 0106 inbound fact may post; it does
+not create a generic ``InboundOrder`` and it never treats OAM receipt evidence
+as local inventory.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from decimal import Decimal
+import uuid
+
+from .inventory_posting import InventoryMovementCommand, InventoryPostingCommand
+
+
+class ReturnInboundContractError(ValueError):
+    """The accepted return lines cannot form one safe inbound command."""
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnInboundLine:
+    receipt_line_id: uuid.UUID
+    source_account_id: uuid.UUID
+    target_account_id: uuid.UUID
+    material_id: uuid.UUID
+    condition_code: str
+    lot_id: uuid.UUID | None
+    accepted_quantity: Decimal
+    serial_ids: tuple[uuid.UUID, ...] = ()
+
+
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        raise ReturnInboundContractError("入账时刻必须带时区")
+    return value.astimezone(timezone.utc)
+
+
+def _quantity(value: Decimal) -> Decimal:
+    value = Decimal(value)
+    if not value.is_finite() or value <= 0 or value.as_tuple().exponent < -3:
+        raise ReturnInboundContractError("退回入账数量必须为正的三位小数")
+    return value.quantize(Decimal(".001"))
+
+
+def build_return_inbound_command(
+    *,
+    receipt_id: uuid.UUID,
+    effective_at: datetime,
+    lines: tuple[ReturnInboundLine, ...],
+) -> InventoryPostingCommand:
+    """Build a transit-to-region transfer from accepted receipt lines.
+
+    The caller must have independently proved the receipt, custody assignment,
+    account dimensions, material policy, and current inventory projection.  A
+    line carries those resolved dimensions so this pure boundary cannot infer
+    a target from a city, person name, or OAM state.
+    """
+
+    try:
+        receipt_id = uuid.UUID(str(receipt_id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ReturnInboundContractError("退回验收事实标识无效") from exc
+    if not lines:
+        raise ReturnInboundContractError("没有可入账的已接受退回明细")
+    seen_lines: set[uuid.UUID] = set()
+    seen_serials: set[uuid.UUID] = set()
+    movements: list[InventoryMovementCommand] = []
+    for line in lines:
+        if line.receipt_line_id in seen_lines:
+            raise ReturnInboundContractError("同一退回验收明细只能入账一次")
+        seen_lines.add(line.receipt_line_id)
+        if line.source_account_id == line.target_account_id:
+            raise ReturnInboundContractError("退回入账必须从在途账户转入区域仓账户")
+        if line.condition_code not in {"used", "damaged"}:
+            raise ReturnInboundContractError("退回入账成色无效")
+        quantity = _quantity(line.accepted_quantity)
+        serial_ids = tuple(sorted((uuid.UUID(str(identifier)) for identifier in line.serial_ids), key=str))
+        if len(serial_ids) != len(set(serial_ids)) or seen_serials.intersection(serial_ids):
+            raise ReturnInboundContractError("退回入账 SN 重复或跨明细重复")
+        seen_serials.update(serial_ids)
+        movements.append(InventoryMovementCommand(
+            from_account_id=line.source_account_id,
+            to_account_id=line.target_account_id,
+            quantity=quantity,
+            serial_ids=serial_ids,
+        ))
+    return InventoryPostingCommand(
+        transaction_no=f"INV-RETURN-IN-{receipt_id.hex[:16].upper()}",
+        movement_type="transfer",
+        source_document_type="stock_return_receipt_inbound",
+        source_document_id=str(receipt_id),
+        posting_key=f"stock-return-receipt-inbound:{receipt_id}",
+        effective_at=_utc(effective_at),
+        movements=tuple(movements),
+    )
+
+
+__all__ = ["ReturnInboundContractError", "ReturnInboundLine", "build_return_inbound_command"]
