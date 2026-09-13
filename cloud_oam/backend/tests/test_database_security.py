@@ -567,7 +567,8 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "stock_reservation_serials",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
-        "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements", "work_order_reversals", "work_order_reversal_items", "work_order_command_seals", "work_order_removed_serial_registrations",
+            "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements", "work_order_reversals", "work_order_reversal_items", "work_order_command_seals", "work_order_removed_serial_registrations",
+            "stock_operation_return_inbounds", "stock_operation_return_inbound_lines", "stock_operation_return_inbound_serials", "stock_operation_return_inbound_postings",
     }
     assert RUNTIME_READ_TABLES - set(values["API_READ_TABLES"]) == (
         safe_posting_tables
@@ -7227,7 +7228,7 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 253
+    assert len(triggers) == 265
     assert len(functions) == 84
     _assert_material_request_approval_guards(
         triggers=triggers,

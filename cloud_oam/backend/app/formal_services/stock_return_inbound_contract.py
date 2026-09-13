@@ -60,6 +60,7 @@ def build_return_inbound_command(
     receipt_id: uuid.UUID,
     effective_at: datetime,
     lines: tuple[ReturnInboundLine, ...],
+    inbound_id: uuid.UUID | None = None,
 ) -> InventoryPostingCommand:
     """Build a transit-to-region transfer from accepted receipt lines.
 
@@ -106,11 +107,12 @@ def build_return_inbound_command(
             quantity=quantity,
             serial_ids=serial_ids,
         ))
+    source_id = receipt_id if inbound_id is None else _id(inbound_id, "退回入账")
     return InventoryPostingCommand(
-        transaction_no=f"INV-RETURN-IN-{receipt_id.hex[:16].upper()}",
+        transaction_no=f"INV-RETURN-IN-{source_id.hex[:16].upper()}",
         movement_type="transfer",
         source_document_type="stock_return_receipt_inbound",
-        source_document_id=str(receipt_id),
+        source_document_id=str(source_id),
         posting_key=f"stock-return-receipt-inbound:{receipt_id}",
         effective_at=_utc(effective_at),
         movements=tuple(movements),

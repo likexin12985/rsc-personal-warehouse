@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261015_0105"
+HEAD_REVISION = "20261016_0106"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7443,7 +7443,7 @@ def _head_account_admission_hash() -> str:
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20261015_0105_stock_return_receipts.py"
+        "20261016_0106_stock_return_inbounds.py"
     )))
     assert migration["revision"] == HEAD_REVISION
     return migration["NEW_HASH"]

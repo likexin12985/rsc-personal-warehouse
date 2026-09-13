@@ -306,3 +306,145 @@ class StockOperationReceiptException(CreatedAtMixin, Base):
     exception_type: Mapped[str] = mapped_column(String(32))
     description: Mapped[str] = mapped_column(Text)
     evidence_file_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("files.id", ondelete="RESTRICT"))
+
+
+class StockOperationReturnInbound(CreatedAtMixin, Base):
+    """The independent personal/region inbound fact after return acceptance.
+
+    This document is deliberately separate from ``StockOperationReceipt``:
+    acknowledgement of a parcel never changes inventory.  The row is created
+    only in the same transaction as its immutable inventory posting.
+    """
+
+    __tablename__ = "stock_operation_return_inbounds"
+    __table_args__ = (
+        UniqueConstraint("inbound_no", name="uq_stock_operation_return_inbounds_no"),
+        UniqueConstraint("receipt_id", name="uq_stock_operation_return_inbounds_receipt"),
+        UniqueConstraint("actor_user_id", "request_id", name="uq_stock_operation_return_inbounds_request"),
+        UniqueConstraint("idempotency_key_hash", name="uq_stock_operation_return_inbounds_key"),
+        UniqueConstraint("posting_transaction_id", name="uq_stock_operation_return_inbounds_posting"),
+        Index("ix_stock_operation_return_inbounds_receipt_id", "receipt_id"),
+        CheckConstraint("status = 'posted'", name="ck_stock_operation_return_inbounds_status"),
+        CheckConstraint(
+            "authorization_version > 0 AND audit_version > 0 AND "
+            "length(reason) BETWEEN 1 AND 500 AND "
+            "length(idempotency_key_hash)=64 AND length(request_hash)=64 AND "
+            "length(receipt_plan_hash)=64 AND length(plan_hash)=64",
+            name="ck_stock_operation_return_inbounds_context",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    inbound_no: Mapped[str] = mapped_column(String(100))
+    receipt_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stock_operation_receipts.id", ondelete="RESTRICT")
+    )
+    shipment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stock_operation_shipments.id", ondelete="RESTRICT")
+    )
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
+    operator_person_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT")
+    )
+    target_location_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stock_locations.id", ondelete="RESTRICT")
+    )
+    target_custody_assignment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("custody_assignments.id", ondelete="RESTRICT")
+    )
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(24))
+    reason: Mapped[str] = mapped_column(Text)
+    request_id: Mapped[str] = mapped_column(String(160))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    receipt_plan_hash: Mapped[str] = mapped_column(String(64))
+    plan_hash: Mapped[str] = mapped_column(String(64))
+    audit_version: Mapped[int] = mapped_column(BigInteger)
+    command_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+    plan_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+    posting_transaction_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("inventory_transactions.id", ondelete="RESTRICT", deferrable=True, initially="DEFERRED"),
+    )
+
+
+class StockOperationReturnInboundLine(CreatedAtMixin, Base):
+    __tablename__ = "stock_operation_return_inbound_lines"
+    __table_args__ = (
+        UniqueConstraint("inbound_id", "line_no", name="uq_stock_operation_return_inbound_lines_order"),
+        UniqueConstraint("inbound_id", "receipt_line_id", name="uq_stock_operation_return_inbound_lines_origin"),
+        UniqueConstraint("id", "inbound_id", name="uq_stock_operation_return_inbound_lines_binding"),
+        Index("ix_stock_operation_return_inbound_lines_receipt_line_id", "receipt_line_id"),
+        CheckConstraint(
+            "line_no > 0 AND accepted_qty > 0 AND condition_code IN ('used','damaged')",
+            name="ck_stock_operation_return_inbound_lines_context",
+        ),
+        ForeignKeyConstraint(
+            ["lot_id", "material_id"],
+            ["inventory_lots.id", "inventory_lots.material_id"],
+            ondelete="RESTRICT",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    inbound_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stock_operation_return_inbounds.id", ondelete="RESTRICT")
+    )
+    receipt_line_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stock_operation_receipt_lines.id", ondelete="RESTRICT")
+    )
+    line_no: Mapped[int] = mapped_column(BigInteger)
+    source_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT")
+    )
+    target_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT")
+    )
+    material_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("materials.id", ondelete="RESTRICT")
+    )
+    lot_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    condition_code: Mapped[str] = mapped_column(String(24))
+    accepted_qty: Mapped[Decimal] = mapped_column(Numeric(18, 3))
+
+
+class StockOperationReturnInboundSerial(CreatedAtMixin, Base):
+    __tablename__ = "stock_operation_return_inbound_serials"
+    __table_args__ = (
+        UniqueConstraint("line_id", "serial_id", name="uq_stock_operation_return_inbound_serials_line"),
+        UniqueConstraint("inbound_id", "serial_id", name="uq_stock_operation_return_inbound_serials_once"),
+        UniqueConstraint("receipt_serial_id", name="uq_stock_operation_return_inbound_serials_receipt"),
+        Index("ix_stock_operation_return_inbound_serials_serial_id", "serial_id"),
+        ForeignKeyConstraint(
+            ["line_id", "inbound_id"],
+            ["stock_operation_return_inbound_lines.id", "stock_operation_return_inbound_lines.inbound_id"],
+            ondelete="RESTRICT",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    inbound_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    receipt_serial_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stock_operation_receipt_serials.id", ondelete="RESTRICT")
+    )
+    serial_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("inventory_serials.id", ondelete="RESTRICT")
+    )
+
+
+class StockOperationReturnInboundPosting(CreatedAtMixin, Base):
+    __tablename__ = "stock_operation_return_inbound_postings"
+    __table_args__ = (
+        UniqueConstraint("inbound_id", name="uq_stock_operation_return_inbound_postings_inbound"),
+        UniqueConstraint("inventory_transaction_id", name="uq_stock_operation_return_inbound_postings_transaction"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    inbound_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("stock_operation_return_inbounds.id", ondelete="RESTRICT")
+    )
+    inventory_transaction_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("inventory_transactions.id", ondelete="RESTRICT")
+    )

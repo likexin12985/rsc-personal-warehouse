@@ -25,7 +25,7 @@ from . import inventory_posting as posting
 from . import inventory_query as inventory
 from . import stock_return_receipt_facts as receipt_facts
 from .stock_return_inbound_contract import ReturnInboundLine, build_return_inbound_command
-from .work_order_return_sources import _fail
+from .work_order_return_sources import _fail, _hash
 
 
 def _aware(value: datetime) -> datetime:
@@ -113,6 +113,9 @@ def plan_return_inbound(db: Session, *, actor, receipt_id: uuid.UUID) -> dict:
             "shipment_line_id": str(view.shipment_line_id),
             "source_account_id": str(source.id),
             "target_account_id": str(target.id),
+            "material_id": str(source.material_id),
+            "condition_code": source.condition_code,
+            "lot_id": str(source.lot_id) if source.lot_id else None,
             "accepted_qty": format(accepted, ".3f"),
             "serial_ids": [str(identifier) for identifier in serial_ids],
         })
@@ -122,7 +125,7 @@ def plan_return_inbound(db: Session, *, actor, receipt_id: uuid.UUID) -> dict:
         lines=tuple(movements),
     )
     snapshot = inventory._projection_snapshot(db)
-    return {
+    result = {
         "schema_version": "1.0",
         "planning_status": "inbound_preview_only",
         "receipt_id": fact.id,
@@ -132,11 +135,25 @@ def plan_return_inbound(db: Session, *, actor, receipt_id: uuid.UUID) -> dict:
         "target_location_id": location.id,
         "target_custody_assignment_id": assignment.id,
         "receipt_plan_hash": fact.plan_hash,
+        "reason": fact.reason,
         "ledger_cursor": snapshot.ledger_cursor,
         "checked_at": datetime.now(timezone.utc),
         "command": command,
         "lines": tuple(projected_lines),
     }
+    result["plan_hash"] = _hash({
+        "schema_version": result["schema_version"],
+        "receipt_id": str(result["receipt_id"]),
+        "shipment_id": str(result["shipment_id"]),
+        "operator_person_id": str(result["operator_person_id"]),
+        "authorization_version": result["authorization_version"],
+        "target_location_id": str(result["target_location_id"]),
+        "target_custody_assignment_id": str(result["target_custody_assignment_id"]),
+        "receipt_plan_hash": result["receipt_plan_hash"],
+        "ledger_cursor": result["ledger_cursor"],
+        "lines": result["lines"],
+    })
+    return result
 
 
 __all__ = ["plan_return_inbound"]
