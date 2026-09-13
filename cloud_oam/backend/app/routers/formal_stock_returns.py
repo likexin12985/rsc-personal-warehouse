@@ -35,7 +35,8 @@ PRIVATE = {"Cache-Control": "private, no-store"}
 
 def is_return_path(path: str) -> bool:
     parts = path.split("/")
-    return len(parts) >= 6 and parts[:4] == ["", "api", "v1", "work-orders"] and parts[5] == "returns"
+    return (len(parts) >= 6 and parts[:4] == ["", "api", "v1", "work-orders"] and parts[5] == "returns"
+        or parts[:5] == ["", "api", "v1", "stock-returns", "my-receiving"])
 
 
 def _error(status, code, message):

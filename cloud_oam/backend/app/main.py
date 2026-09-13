@@ -29,6 +29,7 @@ from .routers import (
     formal_work_order_material,
     formal_work_order_query,
     formal_stock_returns,
+    formal_stock_return_receiving,
     formal_opening_start_options,
     formal_opening_stocktake,
     formal_opening_stocktake_read,
@@ -322,6 +323,7 @@ app.include_router(formal_material_requests.router, prefix="/api")
 app.include_router(formal_work_order_material.router, prefix="/api")
 app.include_router(formal_work_order_query.router, prefix="/api")
 app.include_router(formal_stock_returns.router, prefix="/api")
+app.include_router(formal_stock_return_receiving.router, prefix="/api")
 app.include_router(formal_material_requests.command_status_router, prefix="/api")
 # Formal attachments use only private-object-store presigned intents.  The
 # adapter is disabled by default and never shares the quarantined legacy

@@ -21399,6 +21399,9 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         assert "0104 downgrade blocked: immutable return parcels or request seals must be retained" in blocked_parcels.stdout + blocked_parcels.stderr
         assert _current_revision() == HEAD_REVISION and parcel_snapshot(api_engine) == parcel_history
         _validate_runtime_security(api_engine)
+        from pg16_stock_return_receiving_gate import assert_return_receiving_gate
+        from pg16_stock_return_shipment_gate import parcel_candidates
+        assert_return_receiving_gate(api_engine, tuple(parcel_candidates(api_engine, departure_worlds).values()))
     finally:
         edge_engine.dispose()
         projector_engine.dispose()

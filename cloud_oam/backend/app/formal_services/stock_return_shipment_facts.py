@@ -1,7 +1,9 @@
 """Re-prove immutable return parcels at their original ledger and audit cursors."""
 from collections import defaultdict
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import re
+from uuid import UUID
 from sqlalchemy import select, func, or_
 
 from ..foundation_models import AuditEvent, StateTransitionEvent, OutboxEvent
@@ -76,12 +78,34 @@ def _namespace(db, fact, header):
 
 
 def shipment_result(db, *, actor, fact):
-    try: return _result(db, actor, fact)
+    try: return _result(db, authorize(db, actor, "read"), fact)
+    except (ValueError, TypeError, KeyError, AttributeError, InvalidOperation, AuditChainError): invalid()
+
+
+@dataclass(frozen=True, slots=True)
+class _RecordedOperator:
+    """Hash/audit coordinates only; this object has no authorization methods."""
+    user_id: str
+    person_id: UUID
+    authorization_version: int
+
+
+def verified_shipment_history(db, *, fact):
+    """Internal immutable proof, after the caller authorizes its own reader.
+
+    A receiver must not impersonate the sender or depend on that sender still
+    having an active login. Never return this unrestricted proof from a route;
+    project only the exact recipient fields after checking current custody.
+    """
+    try:
+        header = db.get(Shipment, fact.id, populate_existing=True)
+        if header is None: invalid()
+        return _result(db, _RecordedOperator(header.actor_user_id, header.actor_person_id,
+            header.authorization_version), fact)
     except (ValueError, TypeError, KeyError, AttributeError, InvalidOperation, AuditChainError): invalid()
 
 
 def _result(db, actor, fact):
-    actor = authorize(db, actor, "read")
     if fact is None or fact.actor_user_id != actor.user_id:
         _fail("stock_return_shipment_not_found", "本人原退回运单不存在", 404)
     order = db.get(StockOperationOrder, fact.operation_id, populate_existing=True)
