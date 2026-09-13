@@ -49,3 +49,18 @@ class StockReturnInboundOut(ReturnInboundModel):
     request_hash: str
     plan_hash: str
     replayed: bool = False
+
+
+class StockReturnInboundSealIn(ReturnInboundModel):
+    request_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class StockReturnInboundSealOut(ReturnInboundModel):
+    schema_version: Literal["1.0"] = "1.0"
+    lookup_status: Literal["sealed"] = "sealed"
+    seal_id: UUID
+    receipt_id: UUID
+    shipment_id: UUID
+    request_id: str
+    request_hash: str
+    sealed_at: datetime
