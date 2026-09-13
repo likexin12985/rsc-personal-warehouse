@@ -21,6 +21,9 @@ from ..formal_services.stock_return_outbound_commands import execute_outbound
 from ..stock_return_schemas import (StockReturnPreviewIn, StockReturnPreviewOut, StockReturnSubmitIn, StockReturnOut,
     StockReturnCancelIn, StockReturnCancellationOut, StockReturnSealIn, StockReturnSealedOut, StockReturnOptionsOut, StockReturnHistoryOut)
 
+from ..stock_return_outbound_schemas import StockReturnOutboundOptionsOut, StockReturnOutboundHistoryOut
+from ..formal_services.stock_return_outbound_queries import outbound_options, outbound_history
+
 router = APIRouter(prefix="/v1/work-orders", tags=["formal-stock-returns"])
 PRIVATE = {"Cache-Control": "private, no-store"}
 
@@ -173,3 +176,15 @@ def seal_return_outbound(work_order_id: UUID, operation_id: UUID, payload: Stock
     _input(payload, principal, trace, key, request_id=request_id, seal=True)
     return _run(db, response, lambda: seal_return_request(db, actor=principal, work_order_id=work_order_id,
         operation_type="outbound_return", operation_id=operation_id, request_id=request_id, request_hash=payload.request_hash), write=True)
+
+
+@router.get("/{work_order_id}/returns/{operation_id}/outbounds/options", response_model=StockReturnOutboundOptionsOut)
+def read_outbound_options(work_order_id: UUID, operation_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("stock_operation", "outbound_return")), db: Session = Depends(get_db)):
+    return _run(db, response, lambda: outbound_options(db, actor=principal, work_order_id=work_order_id, operation_id=operation_id))
+
+
+@router.get("/{work_order_id}/returns/{operation_id}/outbounds", response_model=StockReturnOutboundHistoryOut)
+def read_outbound_history(work_order_id: UUID, operation_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("stock_operation", "read")), db: Session = Depends(get_db)):
+    return _run(db, response, lambda: outbound_history(db, actor=principal, work_order_id=work_order_id, operation_id=operation_id))

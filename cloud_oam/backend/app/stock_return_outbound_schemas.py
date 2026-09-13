@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 from pydantic import BaseModel, Field, field_validator
-from .stock_return_schemas import ReturnReason, StockReturnDestinationOut
+from .stock_return_schemas import ReturnReason, StockReturnDestinationOut, StockReturnOut, StockReturnCancellationOut
 from .work_order_material_schemas import StrictInput, SerialVerificationIn
 
 
@@ -91,3 +91,51 @@ class StockReturnOutboundOut(BaseModel):
     posting_transaction_id: UUID
     destination: StockReturnDestinationOut
     lines: tuple[StockReturnOutboundLineOut, ...]
+
+
+class StockReturnOutboundOptionLineOut(BaseModel):
+    operation_line_id: UUID
+    source_recovery_line_id: UUID
+    source_stock_account_id: UUID
+    material_id: UUID
+    sku_code: str
+    material_name: str
+    base_unit: str
+    condition_code: str
+    lot_id: UUID | None
+    lot_no: str | None
+    tracking_mode: Literal["none", "lot", "serial", "lot_and_serial"]
+    quantity_scale: int
+    allow_fraction: bool
+    return_quantity: str
+    departed_quantity: str
+    remaining_quantity: str
+    held_quantity: str
+    selectable_quantity: str
+    serials: tuple[StockReturnOutboundSerialOut, ...]
+
+
+class StockReturnOutboundOptionsOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    operation_id: UUID
+    operation_no: str
+    work_order_id: UUID
+    person_id: UUID
+    authorization_version: int
+    ledger_cursor: int
+    queried_at: datetime
+    destination: StockReturnDestinationOut
+    lines: tuple[StockReturnOutboundOptionLineOut, ...]
+
+
+class StockReturnOutboundHistoryOut(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    operation_id: UUID
+    work_order_id: UUID
+    person_id: UUID
+    authorization_version: int
+    queried_at: datetime
+    outbound_status: Literal["not_outbound", "partially_outbound", "outbound"]
+    original: StockReturnOut
+    cancellation: StockReturnCancellationOut | None
+    items: tuple[StockReturnOutboundOut, ...]

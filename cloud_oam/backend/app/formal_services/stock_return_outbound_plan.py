@@ -60,10 +60,10 @@ def transit_dimensions(source, order):
         "location_id": order.transit_location_id, "availability_bucket": "in_transit"}
 
 
-def _basis(db, actor, order, request):
+def outbound_context(db, actor, order, outbound_at):
     snapshot = inventory._projection_snapshot(db)
     at = datetime.now(timezone.utc)
-    if request.outbound_at < _aware(order.created_at) or request.outbound_at > at:
+    if outbound_at < _aware(order.created_at) or outbound_at > at:
         _fail("stock_return_outbound_time_invalid", "实物发出时间不能早于原退回提交或晚于当前时间")
     route = destination(db, person_id=actor.person_id, source_location_id=order.source_location_id,
         target_location_id=order.target_location_id, transit_location_id=order.transit_location_id, at=at)
@@ -77,11 +77,16 @@ def _basis(db, actor, order, request):
         discover_authorized_zero_scopes=False)
     if not evidence.complete:
         _fail("stock_return_outbound_opening_required", "原个人仓和退回在途位置必须先完成正式期初核验")
-    if any(_aware(row.established_at) > request.outbound_at for row in evidence.by_scope.values()):
+    if any(_aware(row.established_at) > outbound_at for row in evidence.by_scope.values()):
         _fail("stock_return_outbound_time_invalid", "实物发出时间不能早于相关位置的期初建立")
     inventory._validate_current_projection_integrity(db, snapshot=snapshot, account_ids=set(accounts))
     quantities, prior_serials = departed(db, actor, order)
     policies, policy_fingerprint = _policies(db, {row.material_id for row in rows.values()}, at)
+    return snapshot, at, route, rows, accounts, quantities, prior_serials, policies, policy_fingerprint
+
+
+def _basis(db, actor, order, request):
+    snapshot, at, route, rows, accounts, quantities, prior_serials, policies, policy_fingerprint = outbound_context(db, actor, order, request.outbound_at)
     seen = set(); seen_serials = set(); totals = defaultdict(Decimal); selected_lines = []; moves = []
     for chosen in sorted(request.lines, key=lambda row: str(row.operation_line_id)):
         line = rows.get(chosen.operation_line_id)

@@ -20,6 +20,12 @@ Page({
   onUnload() { this.clearView() },
   onPullDownRefresh() { return this.load().finally(() => wx.stopPullDownRefresh()) },
   refresh() { return this.load() },
+  openOutbounds(event) {
+    if (!this._visible || !this.data.ready || this.data.busy || this.data.loading || !this._matches || !this._matches()) return
+    const id = event.currentTarget.dataset.id
+    if (!this._history.has(id)) return
+    wx.navigateTo({ url: `/pages/formal-stock-return-outbounds/index?workOrderId=${this._order}&operationId=${id}` })
+  },
   finishReview(value) { const finish = this._confirmFinish; this._confirmFinish = null; if (finish) finish(value); this.setData({ confirming: false, review: null }) },
   clearDraft() { this.finishReview(false); this._drafts = {}; this._scans = {}; this._revision = (this._revision || 0) + 1;
     this.setData({ draftRows: [], reason: '', destinationIndex: -1, destinationLabel: '请选择接收仓和在途位置', cancellationId: '', cancelReason: '' }) },
@@ -166,7 +172,8 @@ Page({
       else result = await (kind === 'seal' ? sealPending : recoverPending)({ ...args, confirm: () => new Promise((resolve, reject) => wx.showModal({
         title: '结束原退回请求', content: '先核验原请求。已经执行就返回原记录；尚未执行则永久封存，迟到请求也无法再执行。',
         confirmText: '确认核验', success: value => resolve(value.confirm === true), fail: reject })) })
-      if (result) feedback = result.status === 'confirmed' ? result.command.status === 'cancelled' ? '取消事实已确认，原回收件的应退责任仍保留。'
+      if (result) feedback = result.status === 'confirmed' ? result.command.status === 'outbound' ? '实物发出已确认，请进入原退回的发出记录；接收和入账仍需独立确认。'
+        : result.command.status === 'cancelled' ? '取消事实已确认，原回收件的应退责任仍保留。'
         : '退回占用已确认，尚未记录实物发出或接收。' : result.status === 'sealed' ? '原请求已永久封存且未执行。可以重新准备退回。'
           : result.status === 'cancelled' ? '已停止本次操作。' : '原请求结果仍待确认，请保留记录并读取原结果。'
     } catch (error) {

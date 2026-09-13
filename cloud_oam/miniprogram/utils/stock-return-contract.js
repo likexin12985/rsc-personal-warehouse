@@ -198,4 +198,5 @@ function validateLookup(raw, marker) {
   if (raw.request_id !== marker.trace_request_id || raw.request_hash !== marker.request_hash) fail()
   return raw
 }
-module.exports = { KIND, reason, hash, command, payload, requestHash, buildLines, validateOptions, validatePreview, validateHistory, validateLookup }
+module.exports = { KIND, reason, hash, command, payload, requestHash, buildLines, validateOptions, validatePreview, validateHistory, validateLookup,
+  original, cancellation, destination, amount, digest, list, integer, requestId }

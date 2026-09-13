@@ -21380,6 +21380,11 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_stock_return_outbound_gate(api_engine, departure_fixture_engine)
         finally:
             departure_fixture_engine.dispose()
+        from pg16_stock_return_outbound_gate import departure_snapshot
+        departure_history = departure_snapshot(api_engine)
+        blocked_departure = _run_alembic("downgrade", "20261012_0102", expect_success=False)
+        assert "0103 downgrade blocked: immutable physical departure history or request seals must be retained" in blocked_departure.stdout + blocked_departure.stderr
+        assert _current_revision() == HEAD_REVISION and departure_snapshot(api_engine) == departure_history
         _validate_runtime_security(api_engine)
     finally:
         edge_engine.dispose()

@@ -55,7 +55,7 @@ def seed_departure_worlds(api_engine, fixture_engine, *, reference, admin_user_i
         posting.post_inventory_transaction(db,actor=actor,command=posting.InventoryPostingCommand(
             transaction_no='PG16-RETURN-SEED-'+token,movement_type='inbound',source_document_type='pg16_return_fixture',source_document_id=token,
             posting_key='pg16-return-fixture:'+token,effective_at=datetime.now(timezone.utc),movements=(
-                posting.InventoryMovementCommand(from_account_id=None,to_account_id=ids['quantity'],quantity=Decimal(2),external_boundary_code='PG16_RELEASE_FIXTURE'),
+                posting.InventoryMovementCommand(from_account_id=None,to_account_id=ids['quantity'],quantity=Decimal(6),external_boundary_code='PG16_RELEASE_FIXTURE'),
                 posting.InventoryMovementCommand(from_account_id=None,to_account_id=ids['serial'],quantity=Decimal(1),serial_ids=(reference['concurrency_serial_id'],),external_boundary_code='PG16_RELEASE_FIXTURE'),)),
             idempotency_key=token,request_id=uuid4().hex)
         db.commit()
@@ -97,11 +97,7 @@ def assert_departure_world(api_engine, prepared, kind):
     from pg16_work_order_reversal_submit_gate import _original
     from pg16_work_order_material_gate import _checkpoint
     from pg16_stock_return_recovery_gate import snapshot as earlier_snapshot
-    def snapshot(engine):
-        with engine.connect() as connection:
-            outbounds=tuple(tuple(connection.execute(text(f'SELECT * FROM {table} ORDER BY id'))) for table in (
-                'stock_operation_outbounds','stock_operation_outbound_lines','stock_operation_outbound_serials'))
-        return earlier_snapshot(engine),outbounds
+    snapshot=departure_snapshot
     world=prepared['world'];_account,user_id,orders,_line=world
     baseline=snapshot(api_engine)
     with Session(api_engine) as db:
@@ -186,3 +182,18 @@ def assert_departure_world(api_engine, prepared, kind):
 def assert_stock_return_outbound_gate(api_engine, fixture_engine):
     worlds=prepare_departure_worlds(api_engine,fixture_engine)
     for kind,prepared in worlds.items(): assert_departure_world(api_engine,prepared,kind)
+    from pg16_stock_return_outbound_mini_gate import assert_departure_mini_gate
+    assert_departure_mini_gate(api_engine,fixture_engine,worlds)
+    from pg16_stock_return_outbound_concurrency_gate import assert_departure_commit_gate
+    assert_departure_commit_gate(api_engine,fixture_engine,worlds)
+    from pg16_stock_return_outbound_queries_gate import assert_departure_queries_gate
+    assert_departure_queries_gate(api_engine,fixture_engine,worlds)
+
+
+def departure_snapshot(engine):
+    from sqlalchemy import text
+    from pg16_stock_return_recovery_gate import snapshot as previous_snapshot
+    with engine.connect() as connection:
+        facts=tuple(tuple(connection.execute(text(f'SELECT * FROM {table} ORDER BY id'))) for table in (
+            'stock_operation_outbounds','stock_operation_outbound_lines','stock_operation_outbound_serials'))
+    return previous_snapshot(engine),facts

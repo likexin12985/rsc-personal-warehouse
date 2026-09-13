@@ -124,7 +124,7 @@ Page({
   refreshPendingRequests() {
     const snapshot = this._store.listPending(this._recoveryPerson)
     this._pendingMarkers = new Map(snapshot.items.map(marker => [marker.work_order_id, marker]))
-    const labels = { occupy: '投入占用', consume: '实际消耗', release: '释放未用物料', replace: '成对消耗与回收', register_removed: '拆回 SN 登记', reverse: '工单冲销', submit_return: '提交退回', cancel_return: '取消退回' }
+    const labels = { occupy: '投入占用', consume: '实际消耗', release: '释放未用物料', replace: '成对消耗与回收', register_removed: '拆回 SN 登记', reverse: '工单冲销', submit_return: '提交退回', cancel_return: '取消退回', outbound_return: '退回实物发出' }
     this.setData({ pendingRequests: snapshot.items.map((marker, index) => ({
       id: marker.work_order_id, label: `待确认请求 ${index + 1} · ${labels[marker.operation_type]}`, returning: marker.kind === 'stock_return',
       sealable: ['work_order_material', 'work_order_replacement', 'work_order_removed_registration', 'work_order_reversal'].includes(marker.kind)

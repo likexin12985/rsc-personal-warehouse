@@ -58,9 +58,9 @@ concurrency:
 jobs:
   postgresql16-release-gate:
     runs-on: ubuntu-24.04
-    # Run 34724454861 passed real PG16 checks, then hit the 60-minute job limit
-    # during service regressions. Keep every check and allow the expanded suite.
-    timeout-minutes: 120
+    # Run 34733606663 already exceeded 110 minutes before the new departure
+    # SDK/concurrency cases. Keep every check and budget for the expanded suite.
+    timeout-minutes: 180
     services:
       postgres:
         image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
@@ -201,6 +201,7 @@ jobs:
             backend/tests/test_stock_return_seal_migration.py \
             backend/tests/test_stock_return_outbound.py \
             backend/tests/test_stock_return_outbound_recovery.py \
+            backend/tests/test_stock_return_outbound_queries.py \
             backend/tests/test_stock_return_outbound_migration.py \
             backend/tests/test_formal_stock_return_routes.py \
             backend/tests/test_stock_return_options_history.py \

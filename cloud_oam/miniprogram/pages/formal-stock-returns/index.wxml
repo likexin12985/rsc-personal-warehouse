@@ -45,6 +45,7 @@
       <view wx:for="{{order.rows}}" wx:key="id" wx:for-item="line">{{line.materialName}} · {{line.condition}} · {{line.quantity}} {{line.unit}}</view>
       <view wx:if="{{order.cancellation}}" class="notice">取消已确认：{{order.cancellation.cancelled_at}} · {{order.cancellation.reason}}</view>
       <view wx:else class="muted">未见取消事实；发出和接收另行核验。</view>
+      <button size="mini" disabled="{{busy || loading}}" data-id="{{order.id}}" bindtap="openOutbounds">实物发出与分批记录</button>
       <button wx:if="{{canCancel && !order.cancellation && !pendingMessage}}" size="mini" disabled="{{busy}}" data-id="{{order.id}}" bindtap="chooseCancellation">取消未发出退回</button>
       <block wx:if="{{cancellationId === order.id}}"><textarea disabled="{{busy}}" value="{{cancelReason}}" maxlength="1000" placeholder="取消原因" bindinput="editCancelReason" />
         <button disabled="{{busy}}" bindtap="cancelReturn">核验并取消</button></block>

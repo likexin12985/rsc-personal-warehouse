@@ -16,12 +16,12 @@ function validateMarker(value) {
       || value.kind === 'work_order_replacement' && value.operation_type === 'replace'
       || value.kind === 'work_order_removed_registration' && value.operation_type === 'register_removed'
       || reversing && value.operation_type === 'reverse'
-      || returning && ['submit_return', 'cancel_return'].includes(value.operation_type))
+      || returning && ['submit_return', 'cancel_return', 'outbound_return'].includes(value.operation_type))
     || !Number.isSafeInteger(value.authorization_version) || value.authorization_version < 1
     || typeof value.trace_request_id !== 'string' || !/^wxreq-[a-f0-9]{36}$/.test(value.trace_request_id)
     || typeof value.request_hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.request_hash)
-    || ((reversing || returning && value.operation_type === 'submit_return') && (typeof value.plan_hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.plan_hash)))
-    || (returning && (value.operation_type === 'submit_return' ? value.operation_id !== null : value.plan_hash !== null))) fail()
+    || ((reversing || returning && ['submit_return', 'outbound_return'].includes(value.operation_type)) && (typeof value.plan_hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.plan_hash)))
+    || (returning && (value.operation_type === 'submit_return' ? value.operation_id !== null : value.operation_type === 'cancel_return' && value.plan_hash !== null))) fail()
   return Object.freeze({ v: 1, kind: value.kind, work_order_id: uuid(value.work_order_id), person_id: uuid(value.person_id),
     authorization_version: value.authorization_version, operation_type: value.operation_type,
     trace_request_id: value.trace_request_id, request_hash: value.request_hash, ...(reversing || returning ? { plan_hash: value.plan_hash } : {}),
