@@ -457,7 +457,7 @@ REVIEW_COMMAND_STATUS_REVISION = (
     / "versions"
     / "20260906_0063_review_command_status.py"
 )
-HEAD_REVISION = "20261014_0104"
+HEAD_REVISION = "20261015_0105"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -727,6 +727,8 @@ EXPECTED_TABLES = (
         "stock_operation_cancellations", "stock_operation_command_seals",
         "stock_operation_outbounds", "stock_operation_outbound_lines", "stock_operation_outbound_serials",
         "stock_operation_shipments", "stock_operation_shipment_lines", "stock_operation_shipment_serials",
+        "stock_operation_receipts", "stock_operation_receipt_lines", "stock_operation_receipt_serials",
+        "stock_operation_receipt_exceptions",
         "stock_reservation_releases",
         "stock_reservation_release_serials",
     }
@@ -771,6 +773,7 @@ EXPECTED_PERMISSIONS = [
     ("stock_operation", "cancel_return"),
     ("stock_operation", "outbound_return"),
     ("stock_operation", "read"),
+    ("stock_operation", "receive_return"),
     ("stock_operation", "ship_return"),
     ("stock_operation", "submit_return"),
     ("stocktake", "close"),
@@ -791,7 +794,7 @@ EXPECTED_PERMISSIONS = [
 
 EXPECTED_ROLE_PERMISSIONS = {
     "admin": {
-        ("stock_operation", "cancel_return"), ("stock_operation", "read"), ("stock_operation", "submit_return"), ("stock_operation", "outbound_return"), ("stock_operation", "ship_return"),
+            ("stock_operation", "cancel_return"), ("stock_operation", "read"), ("stock_operation", "submit_return"), ("stock_operation", "outbound_return"), ("stock_operation", "ship_return"), ("stock_operation", "receive_return"),
         ("account", "read_self"),
         ("access_context", "read"),
         ("dashboard", "read"),
@@ -829,7 +832,7 @@ EXPECTED_ROLE_PERMISSIONS = {
         ("work_order_material", "operate"),
     },
     "provincial_manager": {
-        ("stock_operation", "cancel_return"), ("stock_operation", "read"), ("stock_operation", "submit_return"), ("stock_operation", "outbound_return"), ("stock_operation", "ship_return"),
+        ("stock_operation", "cancel_return"), ("stock_operation", "read"), ("stock_operation", "submit_return"), ("stock_operation", "outbound_return"), ("stock_operation", "ship_return"), ("stock_operation", "receive_return"),
         ("account", "read_self"),
         ("access_context", "read"),
         ("dashboard", "read"),
@@ -1566,7 +1569,7 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == "20261013_0103"
+    assert head.down_revision == "20261014_0104"
     assert REVIEW_COMMAND_STATUS_REVISION.exists()
     supply_event_key_head = script.get_revision(
         MATERIAL_REQUEST_SUPPLY_EVENT_KEY_REVISION_ID
@@ -10407,7 +10410,7 @@ def test_upgrade_head_matches_current_orm_and_downgrades(
                 "JOIN roles ON roles.id = role_permissions.role_id "
                 "JOIN permissions ON permissions.id = role_permissions.permission_id"
             ).all()
-            assert len(role_permission_rows) == 94
+            assert len(role_permission_rows) == 96
             assert {row[3] for row in role_permission_rows} == {"allow"}
             actual_role_permissions = {
                 role_code: {
