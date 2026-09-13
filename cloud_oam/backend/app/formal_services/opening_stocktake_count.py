@@ -2358,7 +2358,7 @@ def _validate_current_scope_dimensions(
     if (
         location is None
         or location.status != "active"
-        or location.location_type not in {"region", "personal"}
+        or location.location_type not in {"region", "personal", "transit"}
     ):
         _fail(
             "opening_count_scope_dimension_changed",
@@ -3498,7 +3498,7 @@ def _account_matches_observation(
         account.owner_org_id == scope.owner_org_id
         and account.location_id == scope.location_id
         and (
-            location_type == "region"
+            location_type in {"region", "transit"}
             or account.custodian_person_id == scope.custodian_person_id_snapshot
         )
         and account.material_id == value.material_id

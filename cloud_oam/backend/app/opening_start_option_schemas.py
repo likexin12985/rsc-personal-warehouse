@@ -61,7 +61,7 @@ class OpeningStartLocationOptionOut(_StrictOutput):
     location_id: UUID
     code: StrictStr = Field(min_length=1, max_length=100)
     name: StrictStr = Field(min_length=1, max_length=200)
-    location_type: Literal["region", "personal"]
+    location_type: Literal["region", "personal", "transit"]
     physical_owner_org_id: UUID
     physical_owner_name: StrictStr = Field(min_length=1, max_length=200)
     custodian_person_id: UUID | None = None

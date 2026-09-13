@@ -838,6 +838,7 @@ STOCKTAKE_DIFFERENCE_COMPLETION_TRIGGER_0031 = (
     "trg_stocktake_difference_set_completions_validate_0031"
 )
 EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS = {
+    "trg_stock_locations_transit_opening_0102": ("stock_locations", "rsc_guard_transit_opening_location_0102", "A", 27, False, False, False),
     "trg_stocktake_control_snapshot_00_nonopening_0057": (
         "stocktake_control_snapshot_lines",
         "rsc_guard_nonopening_control_snapshot_0057",
@@ -1197,6 +1198,8 @@ EXPECTED_STOCKTAKE_RECOUNT_TRIGGERS = {
     **EXPECTED_STOCKTAKE_RECOUNT_GRAPH_TRIGGERS,
 }
 EXPECTED_STOCKTAKE_SCOPE_TRIGGERS = {
+    "trg_stocktake_scopes_transit_opening_0102": ("stocktake_scopes", "rsc_guard_transit_opening_location_0102", "A", 7, False, False, False),
+
     "trg_stocktake_scopes_immutable_0010": (
         "stocktake_scopes",
         "rsc_block_stocktake_fact_mutation_0010",
@@ -1520,6 +1523,10 @@ EXPECTED_RECONCILIATION_PARTIAL_INDEXES = {
     "uq_reconciliation_commands_approve_run": "approve_opening",
 }
 EXPECTED_OPENING_TERMINAL_TRIGGERS = {
+    "trg_stock_locations_transit_opening_0102": ("stock_locations", "rsc_guard_transit_opening_location_0102", "A", 27),
+
+    "trg_stocktake_scopes_transit_opening_0102": ("stocktake_scopes", "rsc_guard_transit_opening_location_0102", "A", 7),
+
     "trg_stock_accounts_opening_observation_commit_0023": (
         "stock_accounts",
         "rsc_require_opening_observation_account_0023",
@@ -3417,7 +3424,7 @@ RUNTIME_FUNCTION_BODY_SHA256 = {
     (
         "rsc_lock_opening_stocktake_start_reference_0027",
         "uuid, uuid[], uuid[], uuid[], timestamp with time zone",
-    ): "dbd0d5a71b839a4c31a8defc7089177c2d4c37409cd323710b302f6b1ba1a2e9",
+    ): "d1a01b4490625242176d86f1083f3313980122d23ddaea00110e7849296eefae",
     ("rsc_lock_opening_stocktake_task_evidence_0027", "uuid, uuid"):
         "cd166490b4e7124cd5b852368902bacbce883678a380637218cda3a2c77ba866",
     (
@@ -3450,6 +3457,7 @@ RUNTIME_FUNCTION_BODY_SHA256 = {
         "d889b397912e98e1b9c2ec1de03ada750f42df01803c87239b9d04a624221982",
 }
 FORMAL_FILE_INTERNAL_FUNCTIONS = {
+    ("rsc_guard_transit_opening_location_0102", ""): ("v", True, "plpgsql", ("search_path=pg_catalog, public",)),
     (
         "rsc_stocktake_actor_assignment_valid_0011",
         "text, uuid, uuid, bigint, timestamp with time zone, text, text, text",
@@ -3833,6 +3841,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_SHAPES = {
     for coordinate in FORMAL_FILE_INTERNAL_FUNCTIONS
 }
 FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
+    ("rsc_guard_transit_opening_location_0102", ""): "ad45b40344d4fbe6ec1fb12a04b4810b906681af326a4170fea4a95337194f1e",
     (
         "rsc_stocktake_actor_assignment_valid_0011",
         "text, uuid, uuid, bigint, timestamp with time zone, text, text, text",
@@ -3861,39 +3870,39 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_opening_terminal_graph_complete_0022", "uuid, uuid"):
         "1eaf4e9bae4bac31f821ba1470d70059d9249d5459b7463e89683b03f0dc73d2",
     ("rsc_require_opening_terminal_graph_0022", ""):
-        "4678c65493a2ca0c8d596343053977db4d93d7758e00f1291e30e6be038d36e8",
+        "64563f1fc6f374bc41c9c06b6f20960bbb9598120b7f2d698ff4abdef9b066b0",
     ("rsc_require_opening_observation_account_0023", ""):
         "98bde7adcba3d9c6c9b86f61fedcc8d1e6e0cba992203893fbb0e3df0abdfc29",
     ("rsc_opening_start_graph_complete_0052", "uuid, boolean"):
-        "6db62f66efe1b87c556211e9392ab701cd2d8c6fa2c86150c1b95ee0d7f15833",
+        "54075228a80150ff15822991e7340576dd9a50d05ea148ab9dbb5082a7848905",
     (
         "rsc_opening_round_submission_complete_0052",
         "uuid, uuid, boolean",
-    ): "d57abd63b6be3b13ac0c19786f76fcc6e7eeaf4ec4dc9bd84d45fbe2452ff206",
+    ): "004ac7f4e84a75cd1b64697d3f75a58278c1b182a48c8985e3a2edc2eb733eb8",
     (
         "rsc_opening_scope_count_complete_0052",
         "uuid, uuid, uuid, boolean",
-    ): "e0c2628cdf871c1b4e7adb8234fdce6ef1dd3ee9dc80930b8cb71684f670b1e7",
+    ): "7bb94dc398ac0b8a5592df324d71d0f3f2ea0c485fd596715c859612b123ee2a",
     ("rsc_opening_review_complete_0052", "uuid, boolean"):
-        "f6b614e42e35da34e072cd12ba103688163a53fc763d3c48979883813369126a",
+        "295b5b8f381fa614820840d99d2a002f7007556d0bf359b20fba4a518cd3ef30",
     ("rsc_opening_recount_complete_0052", "uuid, boolean"):
-        "b3a26276b6b46f8e7bcbbfbd5a33f9e8171be582f471ed330dba69ea85ebcd0f",
+        "6dfa7e632c72989968e6adbfd2d152b29ed9af5401170797d7106a3ee2159f34",
     (
         "rsc_opening_observation_disposition_complete_0052",
         "uuid, boolean",
-    ): "4a5006029f95b5425704ba2b994c0ee2ff242c74e4e5c1660d368a400ffe5b0b",
+    ): "772a8dcd77022ee213e4c92b928a067b39f9873e5d8d0c0061259428932c3aa4",
     (
         "rsc_opening_terminal_side_effects_complete_0052",
         "uuid, boolean",
-    ): "d816a65969b6112edb19a6d817918eded8d470f0e2ccb3087fabd9f55dac426d",
+    ): "ed779f492d00838b9cff21cbd385676c3e4c98eafb94c6fd0127ab0f3db750cc",
     ("rsc_require_opening_task_insert_graph_0052", ""):
         "9241a81d1261fe3e3a81b81e631893b9e1b4f82112379338e09eedbb5f6e1668",
     ("rsc_require_opening_count_write_current_0052", ""):
-        "1eba1b857922dbe1b60a9e7b3c98c5b2250162057262c8849a504441bebeb537",
+        "69310a342366ae78aac2fab7164328b626e6cccec0fb2bb254b8744ebf677e88",
     ("rsc_require_opening_live_graph_0052", ""):
         "4fd3e6f9dd5ab04b21d86b9c6575171c1de92a2a54f7391ecd226ac09b4d0564",
     ("rsc_validate_stocktake_scope_region_owner_0025", ""):
-        "904a443c2c5930356af0f15f444f29ec6b6ce61f32294e4b2e3b40dd3a0e4e8e",
+        "db45b52dbf1146800044ec85f700053749879de20ca521db690bbd2665fcdb0f",
     ("rsc_guard_reconciliation_effect_0026", ""):
         "6e7e845ac518f378139b6f79218da0f08a55f9398b63429686af47f8f10024fe",
     (STOCKTAKE_DIFFERENCE_COMPLETION_FUNCTION_0031, ""):
@@ -3943,7 +3952,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_guard_nonopening_control_snapshot_0057", ""):
         "40d7a6223b6250316f7bed15c0dd4749238066865f7581156646c5b89b509249",
     ("rsc_guard_stocktake_start_completion_0047", ""):
-        "19fcb84567c36bbcf426eac4f844bfa70e32ee3247f50c402a444171c5879718",
+        "469383df84072fa66ae4f8f5ad48f6230b2e2e186dc7a3a2f08eca775da35a73",
     ("rsc_validate_nonopening_stocktake_start_causality_0047", "uuid"):
         "82537a53254a6493eea33f07795b8b47d941ecc6bd25ed8dcab8c35bcf18d3f8",
     ("rsc_dispatch_nonopening_stocktake_start_causality_0047", ""):

@@ -156,3 +156,11 @@ describe("strict read-only opening preparation directories", () => {
     expect(() => mergeOpeningStartOptions(first.items, second, context("assignees"), id(4))).toThrow();
   });
 });
+
+it("preserves a regional transit location without asserting opening completion", () => {
+  const row = { ...option("locations"), location_type: "transit", custodian_person_id: null, custodian_name: null };
+  const page = validateOpeningStartOptionPage(wire("locations", [row]), context("locations"));
+  expect(page.items[0]).toMatchObject({ locationType: "transit", physicalOwnerId: id(2), custodianPersonId: null });
+  expect(page.context.owner_org_id).toBe(id(3));
+  expect(() => validateOpeningStartOptionPage({ ...wire("locations", [row]), start_ready: true }, context("locations"))).toThrow();
+});

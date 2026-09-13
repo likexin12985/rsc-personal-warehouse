@@ -48,7 +48,7 @@ _HTTP_STATUS = {"invalid_request": 422, "forbidden": 403, "service_unavailable":
 _INELIGIBLE_SCOPE_CODES = frozenset({
     "asset_owner_outside_region", "stock_location_outside_region",
     "opening_scope_dimension_forbidden", "stock_location_invalid",
-    "asset_owner_invalid", "personal_location_owner_invalid",
+    "asset_owner_invalid", "personal_location_owner_invalid", "transit_location_parent_invalid",
 })
 _INELIGIBLE_ASSIGNEE_CODES = frozenset({
     "personal_assignee_not_custodian", "personal_assignee_count_forbidden",
@@ -281,7 +281,7 @@ def _raw_batch(
     model = StockLocation if kind == "locations" else Organization
     statement = select(model.id).where(model.status == "active").order_by(model.id)
     if kind == "locations":
-        statement = statement.where(StockLocation.location_type.in_(("region", "personal")))
+        statement = statement.where(StockLocation.location_type.in_(("region", "personal", "transit")))
     else:
         statement = statement.where(Organization.org_type == "region_company")
     if after_id is not None:
@@ -399,7 +399,7 @@ def _scope_snapshot(
     location = db.get(StockLocation, location_id, populate_existing=True)
     if (owner is None or location is None or owner.status != "active"
             or owner.org_type != "region_company" or location.status != "active"
-            or location.location_type not in {"region", "personal"}):
+            or location.location_type not in {"region", "personal", "transit"}):
         return None
     owner_signature, location_signature = _organization_signature(owner), _location_signature(location)
     owner_path = _organization_path(db, owner.id)

@@ -30,6 +30,11 @@ def test_replacement_security_pins_match_sources_and_preserve_minimum_privileges
         elif name == "rsc_check_serial_lifecycle_0092":
             following = runpy.run_path(str(MIGRATION.with_name("20261008_0098_work_order_reversals.py")))
             assert body == following["_sources"]()[signature][0]
+        elif name == "rsc_require_opening_observation_account_0023":
+            following = runpy.run_path(str(MIGRATION.with_name("20261010_0100_stock_return_orders.py")))
+            old, current = following["_account_sources"]()
+            assert body == old
+            assert catalog[coordinate] == hashlib.sha256(current.encode()).hexdigest()
         else:
             assert catalog[coordinate] == hashlib.sha256(body.encode()).hexdigest()
     for name,(table,_,function,kind,deferred) in m["TRIGGERS"].items():

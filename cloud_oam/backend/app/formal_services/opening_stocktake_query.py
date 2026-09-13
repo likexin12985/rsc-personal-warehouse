@@ -1205,7 +1205,7 @@ def _validate_task_scope_region_tree(
             or not organization_in_task_region(owner.id)
             or location is None
             or location.status != "active"
-            or location.location_type not in {"region", "personal"}
+            or location.location_type not in {"region", "personal", "transit"}
         ):
             _invalid_evidence()
         current_location: StockLocation | None = location

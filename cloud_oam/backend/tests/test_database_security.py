@@ -1291,6 +1291,35 @@ def _valid_nonopening_stocktake_start_guard_kwargs() -> dict[str, object]:
     }
 
 
+def _transit_source_change(coordinate):
+    import runpy
+    migration = runpy.run_path(str(Path(__file__).parents[1] /
+        "alembic/versions/20261012_0102_transit_opening_scopes.py"))
+    return migration["SOURCE_CHANGES"].get(f"{coordinate[0]}({coordinate[1]})")
+
+
+def _through_transit_digest(coordinate, historical):
+    change = _transit_source_change(coordinate)
+    if change is None:
+        return historical
+    before, after, _ = change
+    assert historical == before
+    return after
+
+
+def _through_transit_body(coordinate, body):
+    change = _transit_source_change(coordinate)
+    if change is None:
+        return body
+    before, after, replacements = change
+    assert hashlib.sha256(body.encode()).hexdigest() == before
+    for old, new, count in replacements:
+        assert body.count(old) == count and new not in body
+        body = body.replace(old, new)
+    assert hashlib.sha256(body.encode()).hexdigest() == after
+    return body
+
+
 def test_0047_nonopening_start_runtime_manifest_and_function_bodies_are_exact(
 ) -> None:
     migration = _load_nonopening_stocktake_start_migration_0047()
@@ -1395,7 +1424,7 @@ def test_0047_nonopening_start_runtime_manifest_and_function_bodies_are_exact(
             ) == body
             assert (
                 FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
-                == fixed_hash
+                == _through_transit_digest(coordinate, fixed_hash)
             )
         else:
             assert coordinate == (migration.PG_DISPATCH_FUNCTION, "")
@@ -1463,7 +1492,7 @@ def test_0048_scope_guard_execution_boundary_is_exact(
     assert migration_0048.SCOPE_GUARD_FUNCTION == migration_0025.PG_FUNCTION
     assert migration_0048.SCOPE_GUARD_TRIGGER == migration_0025.SCOPE_TRIGGER
     assert actual_hash == migration_0048.EXPECTED_FUNCTION_BODY_SHA256
-    assert actual_hash == FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
+    assert _through_transit_digest(coordinate, actual_hash) == FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
     assert FORMAL_FILE_INTERNAL_FUNCTIONS[coordinate] == (
         "v",
         True,
@@ -2687,7 +2716,7 @@ def test_0052_opening_terminal_internal_function_manifest_is_exact() -> None:
         body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
         assert body_hash == expected_hashes[coordinate]
         assert FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate] == (
-            body_hash
+            _through_transit_digest(coordinate, body_hash)
         )
         assert coordinate not in RUNTIME_EXECUTE_FUNCTIONS
 
@@ -2715,7 +2744,7 @@ def test_0052_opening_terminal_internal_function_manifest_is_exact() -> None:
             in bodies[coordinate]
         )
         assert FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate] == (
-            hashlib.sha256(bodies[coordinate].encode("utf-8")).hexdigest()
+            _through_transit_digest(coordinate, hashlib.sha256(bodies[coordinate].encode("utf-8")).hexdigest())
         )
     assert set(FORMAL_FILE_INTERNAL_FUNCTION_SHAPES) == set(
         FORMAL_FILE_INTERNAL_FUNCTIONS
@@ -2735,7 +2764,7 @@ def test_0052_opening_trigger_catalogs_are_pinned_by_startup_guards() -> None:
     assert len(migration.REVIEW_GUARD_TRIGGER_CATALOG) == 6
     assert len(migration.OPENING_0052_TRIGGER_CATALOG) == 20
     assert len(migration.INHERITED_RECONCILIATION_TRIGGER_CATALOG) == 6
-    assert len(EXPECTED_OPENING_TERMINAL_TRIGGERS) == 53
+    assert len(EXPECTED_OPENING_TERMINAL_TRIGGERS) == 55
     assert len(OPENING_COMMIT_TRIGGER_NAMES) == 28
     assert all(
         len(trigger_name.encode("utf-8")) <= 63
@@ -2889,7 +2918,7 @@ def test_0052_opening_terminal_startup_rejects_function_security_body_and_acl_dr
                 "argument_modes": None,
                 "argument_default_count": 0,
                 "is_strict": is_strict,
-                "source_body": bodies[coordinate],
+                "source_body": _through_transit_body(coordinate, bodies[coordinate]),
                 "volatility": volatility,
                 "parallel_safety": "u",
                 "is_leakproof": False,
@@ -6430,6 +6459,7 @@ def test_stocktake_scope_trigger_guard_is_complete_exact_startup_proof() -> None
     rows = _valid_stocktake_scope_triggers()
     _assert_stocktake_scope_triggers(rows)
     assert set(EXPECTED_STOCKTAKE_SCOPE_TRIGGERS) == {
+        "trg_stocktake_scopes_transit_opening_0102",
         "trg_stocktake_scopes_immutable_0010",
         "trg_stocktake_scopes_sealed_insert_0010",
         "trg_stocktake_scopes_region_owner_0025",
@@ -6729,6 +6759,7 @@ def test_stocktake_technician_personal_location_guards_are_exact_startup_proof(
 def test_sensitive_stocktake_trigger_allowlist_matches_migration_catalog(
 ) -> None:
     assert set(EXPECTED_STOCKTAKE_SENSITIVE_TRIGGERS) == {
+        "trg_stock_locations_transit_opening_0102",
         "trg_stocktake_control_snapshot_00_nonopening_0057",
         "trg_stocktake_control_snapshot_lines_immutable_0010",
         "trg_stocktake_control_snapshot_lines_sealed_insert_0010",
@@ -6763,6 +6794,7 @@ def test_sensitive_stocktake_trigger_allowlist_matches_migration_catalog(
         "trg_stocktake_control_snapshot_lines_immutable_0010": "O",
         "trg_stocktake_control_snapshot_lines_sealed_insert_0010": "O",
         "trg_stock_locations_stocktake_personal_continuity_0020": "A",
+        "trg_stock_locations_transit_opening_0102": "A",
         "trg_stocktake_count_lines_submitted_immutable_0010": "O",
         "trg_stocktake_count_lines_immutable_0011": "O",
         "trg_stocktake_count_lines_assignment_0021": "A",

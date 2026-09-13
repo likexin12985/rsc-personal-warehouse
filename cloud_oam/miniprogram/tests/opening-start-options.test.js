@@ -70,7 +70,7 @@ for (const stage of contract.STAGES) {
 test('asset/physical/custodian are not equated, while personal custody is mandatory', () => {
   const page = contract.validateOptionPage(wire('locations'), context('locations'))
   assert.notEqual(page.context.owner_org_id, page.items[0].physicalOwnerId)
-  for (const patch of [{ custodian_person_id: null }, { custodian_name: null }, { location_type: 'transit' }]) {
+  for (const patch of [{ custodian_person_id: null }, { custodian_name: null }, { location_type: 'quarantine' }]) {
     assert.throws(() => contract.validateOptionPage(wire('locations', [{ ...item('locations'), ...patch }]), context('locations')))
   }
   assert.equal(contract.validateOptionPage(wire('locations', [{ ...item('locations'), location_type: 'region', custodian_person_id: null, custodian_name: null }]), context('locations')).items[0].custodianPersonId, null)
@@ -135,4 +135,13 @@ test('real api transport 401 causes exactly one simulated GET and no refresh or 
     for (const [key, value] of saved) { if (value) require.cache[key] = value; else delete require.cache[key] }
     if (originalWx === undefined) delete global.wx; else global.wx = originalWx
   }
+})
+
+test('transit locations keep physical owner and optional scope custody without a readiness claim', () => {
+  const row = { ...item('locations'), location_type: 'transit', custodian_person_id: null, custodian_name: null }
+  const page = contract.validateOptionPage(wire('locations', [row]), context('locations'))
+  assert.equal(page.items[0].locationType, 'transit')
+  assert.equal(page.items[0].custodianPersonId, null)
+  assert.notEqual(page.context.owner_org_id, page.items[0].physicalOwnerId)
+  assert.throws(() => contract.validateOptionPage({ ...wire('locations', [row]), start_ready: true }, context('locations')))
 })

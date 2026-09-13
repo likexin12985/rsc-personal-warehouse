@@ -2529,7 +2529,7 @@ def _validate_source_round_structure(
         or set(locations) != {row.location_id for row in scopes}
         or any(
             (location := locations[row.location_id]).status != "active"
-            or location.location_type not in {"region", "personal"}
+            or location.location_type not in {"region", "personal", "transit"}
             for row in scopes
         )
         or not all_rounds

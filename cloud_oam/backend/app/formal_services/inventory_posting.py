@@ -5211,7 +5211,7 @@ def _validate_opening_count_evidence(
     if (
         len(locations) != len(location_ids)
         or any(
-            row.location_type not in {"region", "personal"}
+            row.location_type not in {"region", "personal", "transit"}
             for row in locations.values()
         )
     ):

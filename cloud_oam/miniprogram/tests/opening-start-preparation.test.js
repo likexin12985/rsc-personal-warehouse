@@ -60,7 +60,7 @@ test('four-layer preparation is collapsed until requested and keeps owner/custod
   assert.equal(f.state.view.startReady, false)
   assert.equal(f.state.view.controlEvidenceStatus, 'control_evidence_not_evaluated')
   assert.deepEqual(f.state.view.summary, { assetOwnerName: '资产组织0', physicalOwnerName: '物理组织',
-    custodianName: '未指定保管人（区域仓）', assigneeName: '执行人0' })
+    custodianName: '未指定位置保管人', assigneeName: '执行人0' })
 })
 for (const stage of contract.STAGES) {
   test(`${stage}: native placeholder clears the selection without choosing or loading any item`, async () => {

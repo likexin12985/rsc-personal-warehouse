@@ -87,7 +87,7 @@ function option(stage, value) {
   } else if (stage === 'locations') {
     exact(value, ['location_id', 'code', 'name', 'location_type', 'physical_owner_org_id',
       'physical_owner_name', 'custodian_person_id', 'custodian_name'])
-    if (!['region', 'personal'].includes(value.location_type)) fail()
+    if (!['region', 'personal', 'transit'].includes(value.location_type)) fail()
     const custodianPersonId = value.custodian_person_id === null ? null : uuid(value.custodian_person_id)
     const custodianName = value.custodian_name === null ? null : label(value.custodian_name, 120)
     if ((custodianPersonId === null) !== (custodianName === null)

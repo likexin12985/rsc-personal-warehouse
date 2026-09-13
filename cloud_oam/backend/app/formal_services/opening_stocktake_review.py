@@ -2591,7 +2591,7 @@ def _lock_and_validate_scope_masters(
             or owner.org_type != "region_company"
             or location is None
             or location.status != "active"
-            or location.location_type not in {"region", "personal"}
+            or location.location_type not in {"region", "personal", "transit"}
         ):
             _fail(
                 "opening_review_scope_master_invalid",

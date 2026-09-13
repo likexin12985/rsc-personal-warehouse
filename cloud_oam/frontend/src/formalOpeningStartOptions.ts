@@ -9,7 +9,7 @@ export type OpeningPreparationContext = Readonly<{
 export type OpeningPreparationOption = Readonly<
   | { stage: "regions"; id: string; name: string; code: string; provinceCode: string | null }
   | { stage: "asset-owners"; id: string; name: string; code: string }
-  | { stage: "locations"; id: string; name: string; code: string; locationType: "region" | "personal";
+  | { stage: "locations"; id: string; name: string; code: string; locationType: "region" | "personal" | "transit";
     physicalOwnerId: string; physicalOwnerName: string; custodianPersonId: string | null; custodianName: string | null }
   | { stage: "assignees"; id: string; name: string; userId: string }
 >;
@@ -81,7 +81,7 @@ function option(stage: OpeningPreparationStage, value: unknown): OpeningPreparat
   if (stage === "locations") {
     const row = exact(value, ["location_id", "code", "name", "location_type", "physical_owner_org_id",
       "physical_owner_name", "custodian_person_id", "custodian_name"]);
-    if (row.location_type !== "region" && row.location_type !== "personal") invalid();
+    if (row.location_type !== "region" && row.location_type !== "personal" && row.location_type !== "transit") invalid();
     const custodianPersonId = row.custodian_person_id === null ? null : uuid(row.custodian_person_id);
     const custodianName = row.custodian_name === null ? null : label(row.custodian_name, 120);
     if ((custodianPersonId === null) !== (custodianName === null)

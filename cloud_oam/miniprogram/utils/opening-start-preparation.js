@@ -55,7 +55,7 @@ function createPreparationController(options) {
       const owner = slots[1].selected
       const location = slots[2].selected
       if (owner && location) view.summary = { assetOwnerName: owner.name,
-        physicalOwnerName: location.physicalOwnerName, custodianName: location.custodianName || '未指定保管人（区域仓）',
+        physicalOwnerName: location.physicalOwnerName, custodianName: location.custodianName || '未指定位置保管人',
         assigneeName: slots[3].selected ? slots[3].selected.name : '' }
     }
     publish(view)

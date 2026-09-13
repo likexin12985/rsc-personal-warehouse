@@ -71,7 +71,7 @@ function Directory({ context, selection, onInvalidate, onSelect, custodianPerson
       <option value="">{loading ? "正在核验可选范围与人员" : `请选择${label}`}</option>
       {items.map((item) => <option key={item.id} value={item.id}>
         {item.name}{"code" in item ? ` · ${item.code}` : ""}
-        {item.stage === "locations" ? ` · ${item.locationType === "personal" ? "个人仓" : "区域仓"}` : ""}
+        {item.stage === "locations" ? ` · ${item.locationType === "personal" ? "个人仓" : item.locationType === "transit" ? "在途位置" : "区域仓"}` : ""}
       </option>)}
     </select></Field>
     {current && state.error && <div className="alert alert-error" role="alert">{label}目录核验失败，旧选项和后续选择已清除，请刷新后重选。</div>}
@@ -116,7 +116,7 @@ function Directories({ actor }: { actor: OpeningPreparationActor }) {
     {owner && location?.stage === "locations" && <dl className="detail-grid">
       <div><dt>资产所有组织</dt><dd>{owner.name}</dd></div>
       <div><dt>库位物理归属</dt><dd>{location.physicalOwnerName}</dd></div>
-      <div><dt>保管责任人</dt><dd>{location.custodianName ?? "未指定保管人（区域仓）"}</dd></div>
+      <div><dt>保管责任人</dt><dd>{location.custodianName ?? "未指定位置保管人"}</dd></div>
       {person && <div><dt>本次核验人员</dt><dd>{person.name}</dd></div>}
     </dl>}
   </>;

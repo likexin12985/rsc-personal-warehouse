@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261011_0101"
+HEAD_REVISION = "20261012_0102"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7425,10 +7425,10 @@ def _head_account_admission_hash() -> str:
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20261011_0101_stock_return_request_seals.py"
+        "20261012_0102_transit_opening_scopes.py"
     )))
     assert migration["revision"] == HEAD_REVISION
-    return migration["NEW_HASH"]
+    return migration["SOURCE_CHANGES"]["rsc_oam_runtime_binding_ready_0044()"][1]
 
 
 def _assert_0058_review_terminal_catalog_state(
@@ -13315,8 +13315,9 @@ def _seed_0047_stocktake_inventory(
     actor_user_id: str,
     assignee_user_id: str,
     recipient_user_id: str | None = None,
+    prepare_only: bool = False,
 ) -> dict[str, object]:
-    """Establish the scope, then seed stock through the real posting service."""
+    """Prepare synthetic master data; normally also establish and seed stock."""
 
     from unittest.mock import patch
 
@@ -14070,6 +14071,9 @@ def _seed_0047_stocktake_inventory(
             }
     finally:
         migrator_engine.dispose()
+
+    if prepare_only:
+        return fixture
 
     _assert_0052_api_orphan_stock_account_rejected(
         api_engine,
@@ -21337,6 +21341,19 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         blocked_return_seal = _run_alembic("downgrade", "20261010_0100", expect_success=False)
         assert "0101 downgrade blocked: immutable return request seals must be retained" in blocked_return_seal.stdout + blocked_return_seal.stderr
         assert _current_revision() == HEAD_REVISION and return_seal_snapshot(api_engine) == return_seal_history
+        _validate_runtime_security(api_engine)
+        # Establish durable transit history after all predecessor downgrade
+        # proofs, so the new refusal cannot hide an earlier missing guard.
+        from pg16_transit_opening_gate import assert_transit_opening_gate
+        transit_fixture_engine = create_engine(_sqlalchemy_url(
+            role="star_oam_migrator", password=_role_password("star_oam_migrator")))
+        try:
+            assert_transit_opening_gate(api_engine, transit_fixture_engine)
+        finally:
+            transit_fixture_engine.dispose()
+        blocked_transit = _run_alembic("downgrade", "20261011_0101", expect_success=False)
+        assert "0102 downgrade blocked: transit stocktake history must be retained" in blocked_transit.stdout + blocked_transit.stderr
+        assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
     finally:
         edge_engine.dispose()

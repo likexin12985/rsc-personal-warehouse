@@ -1370,10 +1370,10 @@ def _qualify_opening_scope(
             "asset_owner_outside_region", "forbidden",
             "资产所有组织必须位于期初盘点任务区域的有效组织树内",
         )
-    if location.status != "active" or location.location_type not in {"region", "personal"}:
+    if location.status != "active" or location.location_type not in {"region", "personal", "transit"}:
         _fail(
             "stock_location_invalid", "precondition_failed",
-            "期初盘点仅接受启用的区域仓或个人仓库位",
+            "期初盘点仅接受启用的区域仓、个人仓或在途位置",
         )
     _require_location_in_region_tree(db, location, region_org_id, lock_rows=lock_rows)
     manager_grant = _authorize_scope_dimensions(
@@ -2153,7 +2153,7 @@ def _load_replay(
             scope.owner.status != "active"
             or scope.owner.org_type != "region_company"
             or scope.location.status != "active"
-            or scope.location.location_type not in {"region", "personal"}
+            or scope.location.location_type not in {"region", "personal", "transit"}
         ):
             _fail(
                 "opening_idempotency_record_invalid",
@@ -2828,6 +2828,11 @@ def _require_location_in_region_tree(
     *,
     lock_rows: bool = False,
 ) -> None:
+    if location.location_type == "transit":
+        parent = db.get(StockLocation, location.parent_id, populate_existing=True) if location.parent_id else None
+        if (parent is None or parent.status != "active" or parent.location_type != "region"
+                or parent.owner_org_id != location.owner_org_id):
+            _fail("transit_location_parent_invalid", "precondition_failed", "在途位置必须直接挂在同归属的启用区域仓下")
     if location.location_type == "personal":
         location_owner_statement = (
             select(Organization)
