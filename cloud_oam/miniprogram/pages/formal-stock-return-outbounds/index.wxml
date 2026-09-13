@@ -8,6 +8,7 @@
   </view>
   <view wx:if="{{feedback}}" class="notice">{{feedback}}</view>
   <view wx:if="{{ready}}" class="card"><view>接收仓：{{target}}</view><view>在途位置：{{transit}}</view>
+    <button size="mini" disabled="{{busy || loading}}" bindtap="openShipments">交运分包与运单记录</button>
     <view wx:if="{{cancellation}}" class="notice">原退回已取消：{{cancellation.cancelledAtLabel}} · {{cancellation.reason}}</view>
   </view>
   <view wx:if="{{ready && canSubmit && !pendingMessage}}" class="card">

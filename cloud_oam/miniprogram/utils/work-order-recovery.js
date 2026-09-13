@@ -5,8 +5,10 @@ const registration = require('./work-order-removed-registration-command')
 const reversal = require('./work-order-reversal-command')
 const stockReturn = require('./stock-return-contract')
 const departure = require('./stock-return-outbound-contract')
+const parcel = require('./stock-return-shipment-contract')
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
 function originalPath(marker) {
+  if (marker.kind === parcel.KIND && marker.operation_type === parcel.ACTION) return `/v1/work-orders/${marker.work_order_id}/returns/${marker.operation_id}/shipments/by-request/${marker.trace_request_id}`
   if (marker.kind === departure.KIND && marker.operation_type === departure.ACTION) return `/v1/work-orders/${marker.work_order_id}/returns/${marker.operation_id}/outbounds/by-request/${marker.trace_request_id}`
   if (marker.kind === stockReturn.KIND) return `/v1/work-orders/${marker.work_order_id}/returns${marker.operation_type === 'cancel_return' ? '/' + marker.operation_id + '/cancellations' : ''}/by-request/${marker.trace_request_id}`
   if (marker.kind === reversal.KIND) return `/v1/work-orders/${marker.work_order_id}/material-reversals/by-request/${marker.trace_request_id}`
@@ -30,7 +32,7 @@ async function originalResult(api, marker) {
     if (returning && error.responseReceived === true && error.status === 404 && error.code === 'stock_return_not_observed') return null
     throw error
   }
-  return returning ? (marker.operation_type === departure.ACTION ? departure : stockReturn).validateLookup(raw, marker) : reversing ? reversal.validateLookup(raw, marker) : registering ? registration.validateLookup(raw, marker) : paired ? replacement.validateLookup(raw, marker) : validateLookup(raw, marker)
+  return returning ? (marker.operation_type === parcel.ACTION ? parcel : marker.operation_type === departure.ACTION ? departure : stockReturn).validateLookup(raw, marker) : reversing ? reversal.validateLookup(raw, marker) : registering ? registration.validateLookup(raw, marker) : paired ? replacement.validateLookup(raw, marker) : validateLookup(raw, marker)
 }
 
 async function recoverPending({ api, store, workOrderId, personId, authorize }) {

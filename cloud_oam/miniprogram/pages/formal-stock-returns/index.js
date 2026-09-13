@@ -26,6 +26,12 @@ Page({
     if (!this._history.has(id)) return
     wx.navigateTo({ url: `/pages/formal-stock-return-outbounds/index?workOrderId=${this._order}&operationId=${id}` })
   },
+  openShipments(event) {
+    if (!this._visible || !this.data.ready || this.data.busy || this.data.loading || !this._matches || !this._matches()) return
+    const id = event.currentTarget.dataset.id
+    if (!this._history.has(id)) return
+    wx.navigateTo({ url: `/pages/formal-stock-return-shipments/index?workOrderId=${this._order}&operationId=${id}` })
+  },
   finishReview(value) { const finish = this._confirmFinish; this._confirmFinish = null; if (finish) finish(value); this.setData({ confirming: false, review: null }) },
   clearDraft() { this.finishReview(false); this._drafts = {}; this._scans = {}; this._revision = (this._revision || 0) + 1;
     this.setData({ draftRows: [], reason: '', destinationIndex: -1, destinationLabel: '请选择接收仓和在途位置', cancellationId: '', cancelReason: '' }) },

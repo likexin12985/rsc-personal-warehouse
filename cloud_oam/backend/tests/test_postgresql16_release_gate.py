@@ -21373,11 +21373,16 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         assert "0102 downgrade blocked: transit stocktake history must be retained" in blocked_transit.stdout + blocked_transit.stderr
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
-        from pg16_stock_return_outbound_gate import assert_stock_return_outbound_gate
+        from pg16_stock_return_outbound_gate import assert_stock_return_outbound_gate, prepare_departure_worlds
+        from pg16_stock_return_shipment_mini_gate import assert_shipment_mini_gate
         departure_fixture_engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
-            departure_worlds = assert_stock_return_outbound_gate(api_engine, departure_fixture_engine)
+            departure_worlds = prepare_departure_worlds(api_engine, departure_fixture_engine)
+            # Exercise the parcel SDK with rollback-only fixtures before the
+            # later durable departure races consume these exact source SNs.
+            assert_shipment_mini_gate(api_engine, departure_fixture_engine, departure_worlds)
+            assert_stock_return_outbound_gate(api_engine, departure_fixture_engine, worlds=departure_worlds)
         finally:
             departure_fixture_engine.dispose()
         from pg16_stock_return_outbound_gate import departure_snapshot

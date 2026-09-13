@@ -179,8 +179,9 @@ def assert_departure_world(api_engine, prepared, kind):
     print(f'PG16 {kind} physical departure, exact replay, partial budget, SELECT-only lookup, SQL seal/audit mutual exclusion and full rollback PASS',flush=True)
 
 
-def assert_stock_return_outbound_gate(api_engine, fixture_engine):
-    worlds=prepare_departure_worlds(api_engine,fixture_engine)
+def assert_stock_return_outbound_gate(api_engine, fixture_engine, *, worlds=None):
+    if worlds is None:
+        worlds=prepare_departure_worlds(api_engine,fixture_engine)
     for kind,prepared in worlds.items(): assert_departure_world(api_engine,prepared,kind)
     from pg16_stock_return_outbound_mini_gate import assert_departure_mini_gate
     assert_departure_mini_gate(api_engine,fixture_engine,worlds)

@@ -1,0 +1,67 @@
+<view class="page">
+  <view class="title">退回交运分包</view><view class="heading">{{number}} · {{status}}</view>
+  <view class="muted">{{message}}</view>
+  <button disabled="{{busy || loading}}" loading="{{loading}}" bindtap="refresh">刷新剩余分包和运单</button>
+  <view wx:if="{{pendingMessage}}" class="notice"><view>{{pendingMessage}}</view>
+    <button wx:if="{{pending}}" size="mini" disabled="{{busy || loading}}" bindtap="recover">读取原请求结果</button>
+    <button wx:if="{{pending && canSeal}}" size="mini" disabled="{{busy || loading}}" bindtap="seal">结束未执行请求</button>
+  </view>
+  <view wx:if="{{feedback}}" class="notice">{{feedback}}</view>
+  <view wx:if="{{ready}}" class="card"><view>接收仓：{{target}}</view><view>在途位置：{{transit}}</view>
+    <view>实物发出：{{outboundStatus}}</view><button size="mini" disabled="{{busy || loading}}" bindtap="openDepartures">查看实物发出记录</button>
+    <view wx:if="{{cancellation}}" class="notice">原退回已取消：{{cancellation.cancelledAtLabel}} · {{cancellation.reason}}</view>
+  </view>
+  <view wx:if="{{ready && noChoices}}" class="card muted">当前没有可装包的已发出物料。尚未发出的部分需先登记实物发出。</view>
+  <view wx:if="{{ready && canSubmit && !pendingMessage}}" class="card">
+    <view class="heading">选择本包实际交运的物料</view><view class="muted">每条明细对应原实物发出批次，同一在途账户的余量不能重复装包。</view>
+    <view wx:for="{{items}}" wx:key="outbound_line_id" class="row">
+      <view>{{item.material_name}} · {{item.condition}}</view><view class="muted">{{item.sku_code}} · {{item.lot_no}}</view>
+      <view>原发出：{{item.outbound_no}}</view><view class="muted">{{item.outboundAtLabel}}</view>
+      <view>该批发出 {{item.outbound_quantity}} · 已装包 {{item.shipped_quantity}} · 剩余 {{item.unshipped_quantity}} {{item.base_unit}}</view>
+      <view>当前可选 {{item.selectable_quantity}} {{item.base_unit}}</view>
+      <button size="mini" disabled="{{busy || !item.selectable}}" data-id="{{item.outbound_line_id}}" bindtap="addSource">加入本包</button>
+    </view>
+    <view wx:for="{{draftRows}}" wx:for-item="row" wx:key="id" class="row">
+      <view class="heading">{{row.materialName}}</view><view class="muted">{{row.outboundNo}} · {{row.sku}} · 最多 {{row.maximum}} {{row.unit}}</view>
+      <input wx:if="{{!row.tracked}}" disabled="{{busy}}" type="digit" placeholder="本包实际交运数量" value="{{row.quantity}}" data-id="{{row.id}}" bindinput="editQuantity" />
+      <block wx:if="{{row.tracked}}"><view>选择本包 SN（已选 {{row.selectedCount}} 件）</view>
+        <checkbox-group data-id="{{row.id}}" bindchange="chooseSerials">
+          <label wx:for="{{row.serialOptions}}" wx:for-item="serial" wx:key="id" class="serial-choice"><checkbox disabled="{{busy}}" value="{{serial.id}}" checked="{{serial.checked}}" />{{serial.number}}</label>
+        </checkbox-group>
+      </block>
+      <button size="mini" disabled="{{busy}}" data-id="{{row.id}}" bindtap="removeSource">移除此行</button>
+    </view>
+    <view class="heading">承运信息</view>
+    <input disabled="{{busy}}" value="{{carrier}}" maxlength="200" placeholder="承运商名称" bindinput="editCarrier" />
+    <input disabled="{{busy}}" value="{{trackingNo}}" maxlength="200" placeholder="运单号" bindinput="editTrackingNo" />
+    <view class="heading">实际交运时间（北京时间）</view>
+    <picker mode="date" disabled="{{busy}}" value="{{date}}" bindchange="chooseDate"><view class="picker">{{date || '选择日期'}}</view></picker>
+    <picker mode="time" disabled="{{busy}}" value="{{clock}}" bindchange="chooseTime"><view class="picker">{{clock || '选择时间'}}</view></picker>
+    <view class="muted">秒（00–59）；同一分钟内发出和交运时，请填写实际秒数。</view>
+    <input disabled="{{busy}}" type="number" maxlength="2" value="{{seconds}}" placeholder="交运时间的秒数" bindinput="editSeconds" />
+    <textarea disabled="{{busy}}" value="{{reason}}" maxlength="1000" placeholder="本次交运说明" bindinput="editReason" />
+    <button disabled="{{busy || !draftRows.length}}" bindtap="preview">核验本包</button>
+    <button class="primary" disabled="{{busy || !draftRows.length}}" bindtap="submit">核验并登记交运</button>
+  </view>
+  <view wx:if="{{ready}}" class="card"><view class="heading">每包运单记录</view>
+    <view wx:if="{{!history.length}}" class="muted">尚未登记承运运单。</view>
+    <view wx:for="{{history}}" wx:for-item="batch" wx:key="id" class="row"><view class="heading">{{batch.number}}</view>
+      <view>{{batch.carrier}}</view><view class="tracking">运单号：{{batch.trackingNo}}</view>
+      <view>实际交运：{{batch.shippedAt}}</view><view class="muted">登记时间：{{batch.recordedAt}} · {{batch.reason}}</view>
+      <view wx:for="{{batch.rows}}" wx:for-item="line" wx:key="id"><view>{{line.materialName}} · {{line.condition}} · {{line.quantity}} {{line.unit}}</view>
+        <view class="muted">原发出 {{line.outboundNo}}</view><view wx:for="{{line.serials}}" wx:for-item="serial" wx:key="id">{{serial.number}}</view></view>
+    </view>
+  </view>
+  <view wx:if="{{confirming}}" class="confirm-backdrop"><view class="confirm-mask" catchtouchmove="holdReview"></view><view class="confirm">
+    <view class="heading">{{review.title}}</view><scroll-view scroll-y class="review-body">
+      <view>{{review.returnNo}}</view><view class="notice">{{review.description}}</view>
+      <view>接收仓：{{review.target}}</view><view>在途位置：{{review.transit}}</view>
+      <view>{{review.carrier}}</view><view class="tracking">运单号：{{review.trackingNo}}</view>
+      <view>实际交运：{{review.shippedAtLabel}}</view><view>说明：{{review.reason}}</view>
+      <view wx:for="{{review.rows}}" wx:key="id" wx:for-item="line" class="row"><view>{{line.materialName}} · {{line.sku}} · {{line.condition}}</view>
+        <view>原发出 {{line.outboundNo}}</view><view>本包 {{line.quantity}} {{line.unit}} · {{line.lot}}</view><view class="muted">装包前本行剩余 {{line.remaining}} {{line.unit}}</view>
+        <view wx:for="{{line.serials}}" wx:key="id" wx:for-item="serial">{{serial.number}}</view></view>
+    </scroll-view>
+    <view class="review-actions"><button class="primary" bindtap="confirmSubmission">确认以上物料已交运</button><button bindtap="cancelSubmission">暂不执行</button></view>
+  </view></view>
+</view>
