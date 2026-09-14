@@ -18,6 +18,9 @@ function harness(detail = true) {
         state.calls.push({ endpoint, ...clone(options) }); if (state.hook) await state.hook(endpoint)
         if (endpoint === '/auth/me') return clone(state.user)
         if (endpoint === '/access/context') return clone(state.access)
+        if (endpoint.endsWith('/inbound/preview')) return clone(state.inboundPreview)
+        if (endpoint.endsWith('/inbound')) { state.inboundPosted = true; return clone(state.inboundResult) }
+        if (endpoint.includes('/inbound/by-request/')) return clone(state.inboundResult)
         return clone(endpoint.endsWith('/receipts') ? state.history : state.directory)
       } }
       if (name === '../../utils/session') return { ensureLogin: () => !!state.token, getToken: () => state.token, getUser: () => state.user }
@@ -28,6 +31,14 @@ function harness(detail = true) {
   const page = { ...definition, data: clone(definition.data), setData(value) { Object.assign(this.data, clone(value)) } }
   page.onLoad(detail ? { shipmentId: f.id(2) } : {})
   return { page, state }
+}
+
+function inboundFixture() {
+  return { schema_version: '1.0', planning_status: 'inbound_preview_only', receipt_id: f.id(21), shipment_id: f.id(2),
+    operator_person_id: f.id(1), authorization_version: 1, target_location_id: f.id(31), target_custody_assignment_id: f.id(32),
+    receipt_plan_hash: 'c'.repeat(64), plan_hash: 'd'.repeat(64), reason: '退回件入账', checked_at: '2026-09-14T01:02:03Z', ledger_cursor: 12,
+    lines: [{ receipt_line_id: f.id(211), shipment_line_id: f.id(8), source_account_id: f.id(41), target_account_id: f.id(42),
+      material_id: f.id(43), condition_code: 'used', lot_id: null, accepted_qty: '1.000', serial_ids: [] }] }
 }
 test('regional recipient reads exact partial history and selected abnormal receipt without any write', async () => {
   const { page, state } = harness(); await page.onShow()
@@ -92,4 +103,14 @@ test('a failed refresh clears prior confirmed quantities without presenting zero
   state.hook = () => { throw new Error('offline') }; await page.refresh()
   assert.equal(page.data.ready, false); assert.deepEqual(clone(page.data.progress), []); assert.equal(page.data.package, null)
   assert.match(page.data.message, /暂时无法核验/)
+})
+
+test('selected accepted receipt previews and posts independent return inbound', async () => {
+  const { page, state } = harness(); state.inboundPreview = inboundFixture()
+  state.inboundResult = { schema_version: '1.0', inbound_id: f.id(51), inbound_no: 'RET-IN-TEST', receipt_id: f.id(21), shipment_id: f.id(2),
+    target_location_id: f.id(31), target_custody_assignment_id: f.id(32), status: 'posted', posting_transaction_id: f.id(52),
+    request_id: 'wxreq-' + 'a'.repeat(36), request_hash: 'e'.repeat(64), plan_hash: 'd'.repeat(64), replayed: false }
+  await page.onShow(); page.selectReceipt({ currentTarget: { dataset: { id: f.id(21) } } }); await page.beginInbound()
+  assert.equal(page.data.inboundConfirming, true); assert.equal(page.data.inboundReview.rows[0].quantity, '1.000')
+  await page.confirmInbound({ currentTarget: { dataset: { confirm: 'false' } } }); assert.equal(state.inboundPosted, undefined)
 })
