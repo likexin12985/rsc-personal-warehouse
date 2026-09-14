@@ -9,6 +9,7 @@
     "pages/formal-stock-return-receiving/index",
     "pages/formal-personal-warehouse/index",
     "pages/formal-personal-warehouse-transactions/index",
+    "pages/formal-personal-warehouse-serials/index",
     "pages/formal-my-receiving/index",
     "pages/formal-my-inbound/index",
     "pages/formal-my-receipt/index",

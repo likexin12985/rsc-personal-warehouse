@@ -42,6 +42,8 @@ from ..inventory_schemas import (
     InventorySummaryOut,
     InventoryTransactionOut,
     PersonalWarehouseMovementOut,
+    PersonalWarehouseSerialOut,
+    PersonalWarehouseSerialPageOut,
     PersonalWarehouseTransactionOut,
     PersonalWarehouseTransactionPageOut,
     PersonalWarehouseOut,
@@ -498,6 +500,160 @@ def personal_warehouse_transactions(
         location_id=warehouse.location_id,
         items=items,
         next_after_cursor=items[-1].ledger_cursor if has_more else None,
+    )
+
+
+def personal_warehouse_serials(
+    db: Session,
+    *,
+    actor: FormalPrincipal,
+    stock_account_id: uuid.UUID,
+    limit: int = 50,
+    after_id: uuid.UUID | None = None,
+    serial_no: str | None = None,
+) -> PersonalWarehouseSerialPageOut:
+    """Read current SNs for exactly one account in the caller's personal leaf."""
+
+    if isinstance(limit, bool) or not 1 <= limit <= 100:
+        raise InventoryReadError(
+            code="personal_serial_limit_invalid",
+            status_code=422,
+            message="个人仓 SN 分页大小无效",
+        )
+    if serial_no is not None:
+        if (
+            not serial_no
+            or serial_no != serial_no.strip()
+            or len(serial_no) > 200
+            or any(ord(character) < 32 or ord(character) == 127 for character in serial_no)
+        ):
+            raise InventoryReadError(
+                code="personal_serial_query_invalid",
+                status_code=422,
+                message="扫描的 SN 格式无效",
+            )
+        if after_id is not None:
+            raise InventoryReadError(
+                code="personal_serial_query_cursor_conflict",
+                status_code=422,
+                message="SN 精确查询不能与分页游标同时使用",
+            )
+
+    warehouse = personal_warehouse(db, actor=actor)
+    if warehouse.location_id is None or warehouse.opening_balance_status != "established":
+        raise InventoryReadError(
+            code="personal_serial_opening_not_established",
+            status_code=409,
+            message="个人仓期初尚未可信建立，已停止读取 SN",
+        )
+    account = next(
+        (row for row in warehouse.items if row.stock_account_id == stock_account_id),
+        None,
+    )
+    if account is None:
+        raise InventoryReadError(
+            code="personal_serial_account_not_found",
+            status_code=404,
+            message="本人个人仓中不存在该库存明细",
+        )
+    if account.tracking_mode not in {"serial", "lot_and_serial"}:
+        raise InventoryReadError(
+            code="personal_serial_tracking_not_enabled",
+            status_code=409,
+            message="该库存明细不按 SN 管理",
+        )
+
+    snapshot = _projection_snapshot(db)
+    if (
+        snapshot.ledger_cursor != warehouse.ledger_cursor
+        or snapshot.projected_at != warehouse.projected_at
+    ):
+        raise InventoryReadError(
+            code="inventory_projection_changed",
+            status_code=409,
+            message="库存投影在读取期间发生变化，请重新读取完整快照",
+        )
+    _validate_current_projection_integrity(
+        db,
+        snapshot=snapshot,
+        account_ids={stock_account_id},
+    )
+
+    serial_scope = SerialCurrentPosition.stock_account_id == stock_account_id
+    total_serials = int(
+        db.scalar(select(func.count()).select_from(SerialCurrentPosition).where(serial_scope))
+        or 0
+    )
+    if account.quantity is None or Decimal(account.quantity) != Decimal(total_serials):
+        raise InventoryReadError(
+            code="personal_serial_projection_mismatch",
+            status_code=503,
+            message="个人仓 SN 数量与库存投影不一致，已停止读取",
+        )
+    invalid_serial = db.scalar(
+        select(InventorySerial.id)
+        .join(SerialCurrentPosition, SerialCurrentPosition.serial_id == InventorySerial.id)
+        .where(
+            serial_scope,
+            or_(
+                InventorySerial.material_id != account.material_id,
+                InventorySerial.lifecycle_status != "active",
+                (
+                    InventorySerial.lot_id.is_not(None)
+                    if account.lot_id is None
+                    else or_(
+                        InventorySerial.lot_id.is_(None),
+                        InventorySerial.lot_id != account.lot_id,
+                    )
+                ),
+            ),
+        )
+        .limit(1)
+    )
+    if invalid_serial is not None:
+        raise InventoryReadError(
+            code="personal_serial_projection_mismatch",
+            status_code=503,
+            message="个人仓 SN 维度与库存账户不一致，已停止读取",
+        )
+
+    statement = (
+        select(InventorySerial)
+        .join(SerialCurrentPosition, SerialCurrentPosition.serial_id == InventorySerial.id)
+        .where(serial_scope)
+    )
+    if serial_no is not None:
+        statement = statement.where(InventorySerial.serial_no == serial_no)
+    if after_id is not None:
+        statement = statement.where(InventorySerial.id > after_id)
+    rows = list(db.scalars(statement.order_by(InventorySerial.id).limit(limit + 1)))
+    has_more = serial_no is None and len(rows) > limit
+    rows = rows[:limit]
+    _ensure_projection_snapshot_current(db, snapshot)
+    return PersonalWarehouseSerialPageOut(
+        **_projection_fields(snapshot, established=True),
+        person_id=warehouse.person_id,
+        location_id=warehouse.location_id,
+        stock_account_id=account.stock_account_id,
+        material_id=account.material_id,
+        sku_code=account.sku_code,
+        material_name=account.material_name,
+        base_unit=account.base_unit,
+        tracking_mode=account.tracking_mode,
+        condition_code=account.condition_code,
+        availability_bucket=account.availability_bucket,
+        lot_id=account.lot_id,
+        lot_no=account.lot_no,
+        total_serials=total_serials,
+        items=[
+            PersonalWarehouseSerialOut(
+                serial_id=row.id,
+                serial_no=row.serial_no,
+                lifecycle_status=row.lifecycle_status,
+            )
+            for row in rows
+        ],
+        next_after_id=rows[-1].id if has_more else None,
     )
 
 

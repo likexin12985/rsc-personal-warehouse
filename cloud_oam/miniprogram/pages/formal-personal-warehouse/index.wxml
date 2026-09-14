@@ -37,6 +37,7 @@
       <view class="item-detail">资产所属：{{item.owner}}</view>
       <view wx:if="{{item.lot}}" class="item-detail">批次：{{item.lot}}</view>
       <view class="item-detail">{{item.tracking}}</view>
+      <navigator wx:if="{{item.serialTracked}}" class="button button-secondary serial-link" url="/pages/formal-personal-warehouse-serials/index?accountId={{item.id}}">查看 SN 明细</navigator>
     </view>
 
     <view wx:if="{{!rows.length}}" class="empty">

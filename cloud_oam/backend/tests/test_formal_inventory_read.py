@@ -18,6 +18,7 @@ from app.formal_services.inventory_query import (
     inventory_transaction_detail,
     list_inventory_accounts,
     personal_warehouse,
+    personal_warehouse_serials,
     personal_warehouse_transactions,
 )
 from app.foundation_models import ExternalObject, Organization, Person, SourceSystem
@@ -791,6 +792,7 @@ def test_formal_inventory_router_is_read_only_and_uses_new_namespace():
     assert routes == {
         "/api/v1/inventory/summary": {"GET"},
         "/api/v1/inventory/personal/me": {"GET"},
+        "/api/v1/inventory/personal/me/accounts/{stock_account_id}/serials": {"GET"},
         "/api/v1/inventory/personal/me/transactions": {"GET"},
         "/api/v1/inventory/accounts": {"GET"},
         "/api/v1/inventory/transactions/{transaction_id}": {"GET"},

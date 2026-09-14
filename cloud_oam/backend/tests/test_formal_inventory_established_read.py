@@ -19,6 +19,7 @@ from app.formal_services.inventory_query import (
     inventory_transaction_detail,
     list_inventory_accounts,
     personal_warehouse,
+    personal_warehouse_serials,
     personal_warehouse_transactions,
 )
 from app.inventory_models import (
@@ -107,7 +108,13 @@ def _reader(
     )
 
 
-def _make_personal_account(db: Session, world, *, established: bool = True):
+def _make_personal_account(
+    db: Session,
+    world,
+    *,
+    established: bool = True,
+    material=None,
+):
     parent = StockLocation(
         id=uuid.uuid4(),
         code=f"REGION-{uuid.uuid4().hex[:10]}",
@@ -141,7 +148,7 @@ def _make_personal_account(db: Session, world, *, established: bool = True):
         owner_org_id=world.organization.id,
         custodian_person_id=world.person.id,
         location_id=location.id,
-        material_id=world.material.id,
+        material_id=(material or world.material).id,
         condition_code="new",
         availability_bucket="available",
         lot_id=None,
@@ -415,6 +422,146 @@ def test_personal_warehouse_without_opening_returns_metadata_but_no_items(
     history = personal_warehouse_transactions(posting_db, actor=actor)
     assert history.opening_balance_status == "not_established"
     assert history.items == []
+
+
+def test_personal_warehouse_serials_are_scoped_paginated_and_exact_searchable(
+    posting_db: Session,
+    posting_world,
+):
+    material = posting_fixtures.make_material(
+        posting_db,
+        posting_world.source,
+        tracking_mode="serial",
+        quantity_scale=0,
+        allow_fraction=False,
+    )
+    account, location, facts = _make_personal_account(
+        posting_db,
+        posting_world,
+        material=material,
+    )
+    assert facts is not None
+    serials = (
+        InventorySerial(
+            id=uuid.UUID("70000000-0000-4000-8000-000000000011"),
+            material_id=material.id,
+            serial_no="SN-PERSONAL-001",
+            qr_code="QR-PERSONAL-001",
+            lot_id=None,
+            lifecycle_status="active",
+            created_at=facts.count_line.counted_at,
+            updated_at=facts.count_line.counted_at,
+        ),
+        InventorySerial(
+            id=uuid.UUID("70000000-0000-4000-8000-000000000012"),
+            material_id=material.id,
+            serial_no="SN-PERSONAL-002",
+            qr_code="QR-PERSONAL-002",
+            lot_id=None,
+            lifecycle_status="active",
+            created_at=facts.count_line.counted_at,
+            updated_at=facts.count_line.counted_at,
+        ),
+    )
+    posting_db.add_all(serials)
+    posting_db.flush()
+    posting_fixtures.make_positive_opening_facts(
+        posting_db,
+        facts,
+        quantity=Decimal("2.000"),
+        serials=serials,
+    )
+    posting_db.commit()
+    actor = _reader(
+        posting_world,
+        role_code="technician",
+        scope_type="person",
+        scope_id=str(posting_world.person.id),
+    )
+
+    first = personal_warehouse_serials(
+        posting_db,
+        actor=actor,
+        stock_account_id=account.id,
+        limit=1,
+    )
+    assert first.location_id == location.id
+    assert first.stock_account_id == account.id
+    assert first.tracking_mode == "serial"
+    assert first.total_serials == 2
+    assert [row.serial_no for row in first.items] == ["SN-PERSONAL-001"]
+    assert first.next_after_id == serials[0].id
+
+    second = personal_warehouse_serials(
+        posting_db,
+        actor=actor,
+        stock_account_id=account.id,
+        limit=1,
+        after_id=first.next_after_id,
+    )
+    assert [row.serial_no for row in second.items] == ["SN-PERSONAL-002"]
+    assert second.next_after_id is None
+
+    found = personal_warehouse_serials(
+        posting_db,
+        actor=actor,
+        stock_account_id=account.id,
+        serial_no="SN-PERSONAL-002",
+    )
+    assert [row.serial_id for row in found.items] == [serials[1].id]
+    assert found.next_after_id is None
+    assert "QR-PERSONAL" not in found.model_dump_json()
+
+    with pytest.raises(InventoryReadError) as captured:
+        personal_warehouse_serials(
+            posting_db,
+            actor=actor,
+            stock_account_id=account.id,
+            after_id=serials[0].id,
+            serial_no="SN-PERSONAL-002",
+        )
+    assert captured.value.code == "personal_serial_query_cursor_conflict"
+
+
+def test_personal_warehouse_serials_reject_non_serial_and_foreign_accounts(
+    posting_db: Session,
+    posting_world,
+):
+    account, _, facts = _make_personal_account(posting_db, posting_world)
+    assert facts is not None
+    posting_fixtures.make_positive_opening_facts(
+        posting_db,
+        facts,
+        quantity=Decimal("1.000"),
+    )
+    foreign = posting_fixtures.make_account(
+        posting_db,
+        organization=posting_world.organization,
+        material=posting_world.material,
+    )
+    posting_db.commit()
+    actor = _reader(
+        posting_world,
+        role_code="technician",
+        scope_type="person",
+        scope_id=str(posting_world.person.id),
+    )
+
+    with pytest.raises(InventoryReadError) as captured:
+        personal_warehouse_serials(
+            posting_db,
+            actor=actor,
+            stock_account_id=account.id,
+        )
+    assert captured.value.code == "personal_serial_tracking_not_enabled"
+
+    with pytest.raises(InventoryReadError) as captured:
+        personal_warehouse_serials(
+            posting_db,
+            actor=actor,
+            stock_account_id=foreign.id,
+        )
+    assert captured.value.code == "personal_serial_account_not_found"
 
 
 def test_one_multi_scope_task_is_replayed_only_once_per_read(

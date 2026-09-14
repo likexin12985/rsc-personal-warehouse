@@ -170,3 +170,34 @@ class PersonalWarehouseTransactionPageOut(InventoryProjectionOut):
     location_id: UUID | None
     items: list[PersonalWarehouseTransactionOut]
     next_after_cursor: int | None
+
+
+class PersonalWarehouseSerialOut(BaseModel):
+    serial_id: UUID
+    serial_no: str
+    lifecycle_status: Literal["active", "consumed", "returned", "scrapped", "lost"]
+
+
+class PersonalWarehouseSerialPageOut(InventoryProjectionOut):
+    """Current SN projection for one account in the caller's personal leaf.
+
+    QR values are deliberately absent.  A scanned SN may be used as an exact
+    query input, but neither that input nor a QR credential crosses back into
+    the response payload.
+    """
+
+    person_id: UUID
+    location_id: UUID
+    stock_account_id: UUID
+    material_id: UUID
+    sku_code: str
+    material_name: str
+    base_unit: str
+    tracking_mode: Literal["serial", "lot_and_serial"]
+    condition_code: str
+    availability_bucket: str
+    lot_id: UUID | None
+    lot_no: str | None
+    total_serials: int
+    items: list[PersonalWarehouseSerialOut]
+    next_after_id: UUID | None

@@ -43,7 +43,7 @@ function displayRow(item) {
   return {
     id: item.stock_account_id, sku: item.sku_code, name: item.material_name,
     quantity: item.quantity, unit: item.base_unit, owner: item.owner_org_name,
-    lot: item.lot_no || '', tracking: TRACKING_LABELS[item.tracking_mode],
+    lot: item.lot_no || '', tracking: TRACKING_LABELS[item.tracking_mode], serialTracked: ['serial', 'lot_and_serial'].includes(item.tracking_mode),
     condition: item.condition_code, conditionLabel: conditionLabel(item.condition_code),
     status: item.availability_bucket, statusLabel: availabilityLabel(item.availability_bucket)
   }

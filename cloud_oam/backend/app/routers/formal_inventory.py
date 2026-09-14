@@ -22,6 +22,7 @@ from ..inventory_schemas import (
     InventorySummaryOut,
     InventoryTransactionOut,
     PersonalWarehouseTransactionPageOut,
+    PersonalWarehouseSerialPageOut,
     PersonalWarehouseOut,
 )
 
@@ -58,6 +59,29 @@ def personal_transactions(
         actor=principal,
         limit=limit,
         after_cursor=after_cursor,
+    )
+
+
+@router.get(
+    "/personal/me/accounts/{stock_account_id}/serials",
+    response_model=PersonalWarehouseSerialPageOut,
+)
+def personal_account_serials(
+    stock_account_id: UUID,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    after_id: Annotated[UUID | None, Query()] = None,
+    serial_no: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
+    principal: FormalPrincipal = Depends(require_permission("inventory", "read")),
+    db: Session = Depends(get_db),
+):
+    return _call(
+        inventory_query.personal_warehouse_serials,
+        db,
+        actor=principal,
+        stock_account_id=stock_account_id,
+        limit=limit,
+        after_id=after_id,
+        serial_no=serial_no,
     )
 
 

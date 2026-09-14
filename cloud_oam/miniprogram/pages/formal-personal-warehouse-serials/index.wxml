@@ -1,0 +1,36 @@
+<view class="page warehouse-page">
+  <view class="warehouse-heading">
+    <view>
+      <view class="page-title">个人仓 SN</view>
+      <view class="page-subtitle">{{sku ? sku + ' · ' + materialName : '查看本人当前保管的 SN'}}</view>
+    </view>
+    <button class="button button-secondary button-small" bindtap="showAll" loading="{{loading}}" disabled="{{loading || busy}}">刷新</button>
+  </view>
+  <view class="card warehouse-summary">
+    <view class="section-title">{{sku || 'SN 明细'}}</view>
+    <view wx:if="{{materialName}}">{{materialName}}</view>
+    <view wx:if="{{lot}}" class="muted">批次：{{lot}}</view>
+    <view wx:if="{{state === 'ready'}}" class="muted">当前共 {{total}} 个 SN</view>
+    <view class="page-subtitle">{{message}}</view>
+  </view>
+  <block wx:if="{{state === 'ready'}}">
+    <view class="action-grid">
+      <button class="button" bindtap="scanSerial" loading="{{busy}}" disabled="{{loading || busy}}">扫描 SN 条码</button>
+      <button wx:if="{{scanMode}}" class="button button-secondary" bindtap="showAll" disabled="{{loading || busy}}">显示全部</button>
+    </view>
+    <view wx:for="{{rows}}" wx:key="serial_id" class="list-card serial-card">
+      <view class="item-code">{{item.serial_no}}</view>
+      <view class="muted">当前状态：在库</view>
+    </view>
+    <view wx:if="{{!rows.length}}" class="empty">
+      <text class="empty-title">{{scanMode ? '没有找到该 SN' : '当前没有 SN 明细'}}</text>
+      <text class="empty-text">{{scanMode ? '请确认标签属于当前物料和本人个人仓。' : '数量与 SN 投影必须一致，否则服务端会停止返回。'}}</text>
+    </view>
+    <view wx:if="{{!scanMode}}" class="action-grid">
+      <button class="button button-secondary" bindtap="previousPage" disabled="{{!hasPrevious || loading || busy}}">上一页</button>
+      <button class="button button-secondary" bindtap="nextPage" disabled="{{!hasNext || loading || busy}}">下一页</button>
+    </view>
+    <view wx:if="{{!scanMode}}" class="page-subtitle">第 {{pageNumber}} 页</view>
+  </block>
+  <button wx:if="{{state === 'error'}}" class="button" bindtap="showAll" disabled="{{loading}}">重新读取</button>
+</view>
