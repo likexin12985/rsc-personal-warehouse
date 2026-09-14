@@ -1,0 +1,28 @@
+<view class="page scan-page">
+  <view class="page-title">统一扫码</view>
+  <view class="page-subtitle">个人仓、物料和批次二维码的正式只读识别</view>
+
+  <view class="card scan-card">
+    <view class="scan-icon">⌁</view>
+    <view class="section-title">扫描实物二维码</view>
+    <view class="page-subtitle">只读取当前账号有权限看到的对象，不会因为扫码直接改变库存、收货或盘点状态。</view>
+    <button class="button button-primary scan-action" bindtap="scan" loading="{{busy}}" disabled="{{state !== 'ready' || busy}}">开始扫描</button>
+    <view class="scan-message">{{message}}</view>
+  </view>
+
+  <view wx:if="{{result}}" class="card scan-result">
+    <view class="row between"><text class="muted">对象类型</text><text>{{result.objectType}}</text></view>
+    <view class="divider"></view>
+    <view class="result-title">{{result.displayName}}</view>
+    <view wx:if="{{result.materialName}}" class="result-line">物料：{{result.skuCode}} · {{result.materialName}}</view>
+    <view wx:if="{{result.lotNo}}" class="result-line">批次：{{result.lotNo}}</view>
+    <view wx:if="{{result.serialNo}}" class="result-line">SN：{{result.serialNo}}</view>
+    <view wx:if="{{result.objectType === 'serial'}}" class="result-line muted">当前对象在本人个人仓范围内</view>
+    <button class="button button-secondary" bindtap="openWarehouse">打开个人仓</button>
+  </view>
+
+  <view wx:if="{{state === 'error'}}" class="card safety-card">
+    <text class="safety-title">扫码入口已停止</text>
+    <text class="safety-text">{{message}}</text>
+  </view>
+</view>

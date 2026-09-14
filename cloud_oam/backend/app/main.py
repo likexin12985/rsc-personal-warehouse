@@ -312,6 +312,7 @@ app.include_router(access.router, prefix="/api")
 # The V1 inventory surface is formal-RBAC and read-only.  It is intentionally
 # mounted in production, unlike every quarantined v0.9 inventory route below.
 app.include_router(formal_inventory.router, prefix="/api")
+app.include_router(formal_inventory.qr_router, prefix="/api")
 # The active formal material catalog is a local, read-only picker. It never
 # refreshes OAM data and omits materials without a current inventory policy.
 app.include_router(formal_material_catalog.router, prefix="/api")

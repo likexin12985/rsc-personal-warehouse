@@ -23,11 +23,15 @@ from ..inventory_schemas import (
     InventoryTransactionOut,
     PersonalWarehouseTransactionPageOut,
     PersonalWarehouseSerialPageOut,
+    PersonalQrResolutionOut,
     PersonalWarehouseOut,
 )
 
 
 router = APIRouter(prefix="/v1/inventory", tags=["formal-inventory"])
+
+
+qr_router = APIRouter(prefix="/v1/scan", tags=["formal-scan"])
 
 
 @router.get("/summary", response_model=InventorySummaryOut)
@@ -82,6 +86,20 @@ def personal_account_serials(
         limit=limit,
         after_id=after_id,
         serial_no=serial_no,
+    )
+
+
+@qr_router.get("/qr", response_model=PersonalQrResolutionOut)
+def resolve_qr(
+    code: Annotated[str, Query(min_length=1, max_length=250)],
+    principal: FormalPrincipal = Depends(require_permission("inventory", "read")),
+    db: Session = Depends(get_db),
+):
+    return _call(
+        inventory_query.resolve_personal_qr,
+        db,
+        actor=principal,
+        code=code,
     )
 
 

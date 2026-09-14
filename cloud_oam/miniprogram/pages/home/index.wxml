@@ -37,6 +37,15 @@
       <text class="module-link-arrow">进入 ›</text>
     </navigator>
 
+    <navigator wx:if="{{inventoryAccessAllowed}}" class="card module-link" url="/pages/formal-scan/index">
+      <view>
+        <text class="module-link-kicker">统一扫码</text>
+        <text class="module-link-title">扫码识别物料</text>
+        <text class="module-link-detail">只读识别本人有权限查看的个人仓、物料和批次二维码。</text>
+      </view>
+      <text class="module-link-arrow">进入 ›</text>
+    </navigator>
+
     <navigator wx:if="{{workOrderAccessAllowed}}" class="card module-link" url="/pages/formal-work-orders/index">
       <view>
         <text class="module-link-kicker">工单物料</text>

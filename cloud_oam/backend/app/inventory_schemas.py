@@ -201,3 +201,26 @@ class PersonalWarehouseSerialPageOut(InventoryProjectionOut):
     total_serials: int
     items: list[PersonalWarehouseSerialOut]
     next_after_id: UUID | None
+
+
+class PersonalQrResolutionOut(BaseModel):
+    """Safe result for the unified QR read surface.
+
+    The scanned value is deliberately absent.  Only an object that is
+    visible to the current formal principal is resolved, and serial details
+    are returned only when the serial currently belongs to that person's
+    personal warehouse.
+    """
+
+    schema_version: Literal["1.0"] = "1.0"
+    object_type: Literal["serial", "material", "lot", "location"]
+    object_id: UUID
+    display_name: str
+    sku_code: str | None = None
+    material_name: str | None = None
+    lot_no: str | None = None
+    serial_no: str | None = None
+    stock_account_id: UUID | None = None
+    location_id: UUID | None = None
+    ledger_cursor: int | None = None
+    actions: tuple[Literal["view_personal_serials", "view_personal_warehouse"], ...]

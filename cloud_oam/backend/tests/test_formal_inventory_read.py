@@ -797,3 +797,9 @@ def test_formal_inventory_router_is_read_only_and_uses_new_namespace():
         "/api/v1/inventory/accounts": {"GET"},
         "/api/v1/inventory/transactions/{transaction_id}": {"GET"},
     }
+    scan_routes = {
+        route.path: set(route.methods or ())
+        for route in app.routes
+        if route.path.startswith("/api/v1/scan")
+    }
+    assert scan_routes == {"/api/v1/scan/qr": {"GET"}}

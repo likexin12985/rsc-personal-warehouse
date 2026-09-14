@@ -3,6 +3,7 @@
     "pages/login/index",
     "pages/home/index",
     "pages/formal-work-orders/index",
+    "pages/formal-scan/index",
     "pages/formal-stock-returns/index",
     "pages/formal-stock-return-outbounds/index",
     "pages/formal-stock-return-shipments/index",

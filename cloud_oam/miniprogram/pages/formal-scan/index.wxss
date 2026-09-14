@@ -1,0 +1,45 @@
+.scan-card,
+.scan-result {
+  margin-top: 28rpx;
+  padding: 30rpx;
+}
+
+.scan-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 112rpx;
+  height: 112rpx;
+  margin-bottom: 22rpx;
+  border-radius: 56rpx;
+  background: #e8f1ff;
+  color: #1e6bd6;
+  font-size: 64rpx;
+}
+
+.scan-action {
+  margin-top: 28rpx;
+}
+
+.scan-message {
+  margin-top: 20rpx;
+  color: #68717a;
+  font-size: 23rpx;
+  line-height: 1.5;
+}
+
+.result-title {
+  margin: 22rpx 0 14rpx;
+  font-size: 31rpx;
+  font-weight: 650;
+}
+
+.result-line {
+  margin-top: 10rpx;
+  color: #4f5b63;
+  font-size: 24rpx;
+}
+
+.scan-result .button {
+  margin-top: 26rpx;
+}

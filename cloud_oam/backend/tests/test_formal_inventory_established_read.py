@@ -21,6 +21,7 @@ from app.formal_services.inventory_query import (
     personal_warehouse,
     personal_warehouse_serials,
     personal_warehouse_transactions,
+    resolve_personal_qr,
 )
 from app.inventory_models import (
     CustodyAssignment,
@@ -28,6 +29,7 @@ from app.inventory_models import (
     InventoryMovement,
     InventoryMovementSerial,
     InventorySerial,
+    QrCode,
     InventoryTransaction,
     SerialCurrentPosition,
     StockAccount,
@@ -521,6 +523,74 @@ def test_personal_warehouse_serials_are_scoped_paginated_and_exact_searchable(
             serial_no="SN-PERSONAL-002",
         )
     assert captured.value.code == "personal_serial_query_cursor_conflict"
+
+
+def test_unified_qr_read_returns_only_current_personal_scope_and_never_qr_value(
+    posting_db: Session,
+    posting_world,
+):
+    material = posting_fixtures.make_material(
+        posting_db,
+        posting_world.source,
+        tracking_mode="serial",
+        quantity_scale=0,
+        allow_fraction=False,
+    )
+    account, location, facts = _make_personal_account(
+        posting_db,
+        posting_world,
+        material=material,
+    )
+    serial = InventorySerial(
+        id=uuid.UUID("70000000-0000-4000-8000-000000000021"),
+        material_id=material.id,
+        serial_no="SN-QR-001",
+        qr_code="QR-PRIVATE-001",
+        lot_id=None,
+        lifecycle_status="active",
+        created_at=facts.count_line.counted_at,
+        updated_at=facts.count_line.counted_at,
+    )
+    posting_db.add(serial)
+    posting_db.flush()
+    posting_fixtures.make_positive_opening_facts(
+        posting_db,
+        facts,
+        quantity=Decimal("1.000"),
+        serials=(serial,),
+    )
+    posting_db.add(
+        QrCode(
+            id=uuid.uuid4(),
+            code=serial.qr_code,
+            object_type="serial",
+            object_id=serial.id,
+            status="active",
+            created_at=serial.created_at,
+            updated_at=serial.updated_at,
+        )
+    )
+    posting_db.commit()
+    actor = _reader(
+        posting_world,
+        role_code="technician",
+        scope_type="person",
+        scope_id=str(posting_world.person.id),
+    )
+
+    result = resolve_personal_qr(posting_db, actor=actor, code=serial.qr_code)
+    assert result.object_type == "serial"
+    assert result.serial_no == serial.serial_no
+    assert result.stock_account_id == account.id
+    assert result.location_id == location.id
+    assert result.ledger_cursor is not None
+    assert "QR-PRIVATE-001" not in result.model_dump_json()
+
+    posting_db.scalar(select(QrCode).where(QrCode.code == serial.qr_code)).status = "void"
+    posting_db.flush()
+    with pytest.raises(InventoryReadError) as captured:
+        resolve_personal_qr(posting_db, actor=actor, code=serial.qr_code)
+    assert captured.value.code == "personal_qr_not_found"
 
 
 def test_personal_warehouse_serials_reject_non_serial_and_foreign_accounts(

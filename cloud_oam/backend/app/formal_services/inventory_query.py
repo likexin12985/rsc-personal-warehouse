@@ -25,6 +25,7 @@ from ..inventory_models import (
     InventoryMovement,
     InventoryMovementSerial,
     InventorySerial,
+    QrCode,
     InventoryTransaction,
     MaterialInventoryPolicy,
     SerialCurrentPosition,
@@ -44,6 +45,7 @@ from ..inventory_schemas import (
     PersonalWarehouseMovementOut,
     PersonalWarehouseSerialOut,
     PersonalWarehouseSerialPageOut,
+    PersonalQrResolutionOut,
     PersonalWarehouseTransactionOut,
     PersonalWarehouseTransactionPageOut,
     PersonalWarehouseOut,
@@ -654,6 +656,157 @@ def personal_warehouse_serials(
             for row in rows
         ],
         next_after_id=rows[-1].id if has_more else None,
+    )
+
+
+def resolve_personal_qr(
+    db: Session,
+    *,
+    actor: FormalPrincipal,
+    code: str,
+) -> PersonalQrResolutionOut:
+    """Resolve one exact QR object without returning the QR credential.
+
+    The unified scanner is intentionally a read surface.  Material and lot
+    labels expose only catalog identity; location and serial labels require a
+    current personal-warehouse binding.  A stale, void, malformed, or
+    cross-person identifier fails closed.
+    """
+
+    _require_inventory_read(db, actor)
+    if (
+        not isinstance(code, str)
+        or not code
+        or code != code.strip()
+        or len(code) > 250
+        or any(ord(character) < 32 or ord(character) == 127 for character in code)
+    ):
+        raise InventoryReadError(
+            code="personal_qr_code_invalid",
+            status_code=422,
+            message="二维码内容无效",
+        )
+
+    qr = db.scalar(
+        select(QrCode).where(QrCode.code == code, QrCode.status == "active")
+    )
+    if qr is None:
+        raise InventoryReadError(
+            code="personal_qr_not_found",
+            status_code=404,
+            message="二维码未绑定有效的正式对象",
+        )
+    if qr.object_type not in {"serial", "material", "lot", "location"}:
+        raise InventoryReadError(
+            code="personal_qr_object_invalid",
+            status_code=409,
+            message="二维码对象类型无效",
+        )
+
+    if qr.object_type == "material":
+        material = db.get(FormalMaterial, qr.object_id)
+        if material is None or material.status != "active":
+            raise InventoryReadError(
+                code="personal_qr_object_invalid",
+                status_code=409,
+                message="二维码绑定的物料对象无效",
+            )
+        return PersonalQrResolutionOut(
+            object_type="material",
+            object_id=material.id,
+            display_name=f"{material.sku_code} · {material.name}",
+            sku_code=material.sku_code,
+            material_name=material.name,
+            actions=("view_personal_warehouse",),
+        )
+
+    if qr.object_type == "lot":
+        lot = db.get(InventoryLot, qr.object_id)
+        material = db.get(FormalMaterial, lot.material_id) if lot else None
+        if lot is None or material is None or material.status != "active":
+            raise InventoryReadError(
+                code="personal_qr_object_invalid",
+                status_code=409,
+                message="二维码绑定的批次对象无效",
+            )
+        return PersonalQrResolutionOut(
+            object_type="lot",
+            object_id=lot.id,
+            display_name=f"{material.sku_code} · 批次 {lot.lot_no}",
+            sku_code=material.sku_code,
+            material_name=material.name,
+            lot_no=lot.lot_no,
+            actions=("view_personal_warehouse",),
+        )
+
+    warehouse = personal_warehouse(db, actor=actor)
+    if warehouse.location_id is None or warehouse.opening_balance_status != "established":
+        raise InventoryReadError(
+            code="personal_qr_opening_not_established",
+            status_code=409,
+            message="个人仓期初尚未可信建立，已停止二维码读取",
+        )
+
+    if qr.object_type == "location":
+        location = db.get(StockLocation, qr.object_id)
+        if (
+            location is None
+            or location.id != warehouse.location_id
+            or location.location_type != "personal"
+            or location.status != "active"
+        ):
+            raise InventoryReadError(
+                code="personal_qr_scope_denied",
+                status_code=404,
+                message="二维码不属于当前个人仓范围",
+            )
+        return PersonalQrResolutionOut(
+            object_type="location",
+            object_id=location.id,
+            display_name=location.name,
+            location_id=location.id,
+            ledger_cursor=warehouse.ledger_cursor,
+            actions=("view_personal_warehouse",),
+        )
+
+    serial = db.get(InventorySerial, qr.object_id)
+    position = db.get(SerialCurrentPosition, qr.object_id) if serial else None
+    account = db.get(StockAccount, position.stock_account_id) if position else None
+    if (
+        serial is None
+        or position is None
+        or account is None
+        or serial.lifecycle_status != "active"
+        or account.location_id != warehouse.location_id
+        or account.custodian_person_id != actor.person_id
+    ):
+        raise InventoryReadError(
+            code="personal_qr_scope_denied",
+            status_code=404,
+            message="二维码不属于当前个人仓范围",
+        )
+    item = next(
+        (row for row in warehouse.items if row.stock_account_id == account.id),
+        None,
+    )
+    if item is None or item.material_id != serial.material_id:
+        raise InventoryReadError(
+            code="personal_qr_projection_mismatch",
+            status_code=503,
+            message="二维码与个人仓库存投影不一致，已停止读取",
+        )
+    return PersonalQrResolutionOut(
+        object_type="serial",
+        object_id=serial.id,
+        display_name=f"{item.sku_code} · SN {serial.serial_no}",
+        sku_code=item.sku_code,
+        material_name=item.material_name,
+        lot_no=item.lot_no,
+        serial_no=serial.serial_no,
+        stock_account_id=account.id,
+        location_id=warehouse.location_id,
+        ledger_cursor=warehouse.ledger_cursor,
+        actions=("view_personal_serials",),
     )
 
 
