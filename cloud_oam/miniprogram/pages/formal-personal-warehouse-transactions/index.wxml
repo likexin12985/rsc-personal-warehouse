@@ -1,0 +1,31 @@
+<view class="page warehouse-page">
+  <view class="warehouse-heading">
+    <view>
+      <view class="page-title">个人仓流水</view>
+      <view class="page-subtitle">只读不可变库存事实与 SN 数量</view>
+    </view>
+    <button class="button button-secondary button-small" bindtap="refresh" loading="{{loading}}" disabled="{{loading}}">刷新</button>
+  </view>
+
+  <view class="card warehouse-summary"><view class="page-subtitle">{{message}}</view></view>
+  <view wx:if="{{state === 'loading'}}" class="loading">正在读取个人仓流水</view>
+  <view wx:elif="{{state === 'error'}}" class="card notice warning">{{message}}</view>
+  <block wx:elif="{{state === 'ready'}}">
+    <view wx:for="{{rows}}" wx:key="transaction_id" class="list-card">
+      <view class="row between"><text class="item-code">{{item.transaction_no}}</text><text class="small muted">游标 {{item.ledger_cursor}}</text></view>
+      <view class="fact"><text class="muted">库存动作</text><text>{{item.movement_type}}</text></view>
+      <view class="fact"><text class="muted">业务来源</text><text>{{item.source_document_type}} / {{item.source_document_id}}</text></view>
+      <view class="fact"><text class="muted">生效 / 过账</text><text>{{item.effective_at}} / {{item.posted_at}}</text></view>
+      <view wx:for="{{item.changes}}" wx:key="changeKey" wx:for-item="change" class="warehouse-change">
+        <view>{{change.sku_code}} · {{change.material_name}}</view>
+        <view>{{change.directionLabel}} {{change.quantity}} {{change.base_unit}} · {{change.condition_code}} / {{change.availability_bucket}}</view>
+        <view class="small muted">{{change.serialLabel}}</view>
+      </view>
+    </view>
+    <view wx:if="{{!rows.length}}" class="empty"><text class="empty-title">当前个人仓暂无流水</text><text class="empty-text">收货或其他库存事实完成统一过账后，刷新查看。</text></view>
+    <view wx:if="{{hasPrevious || hasNext}}" class="action-grid">
+      <button class="button button-secondary" disabled="{{loading || !hasPrevious}}" bindtap="previousPage">上一页</button>
+      <button class="button button-secondary" disabled="{{loading || !hasNext}}" bindtap="nextPage">下一页</button>
+    </view>
+  </block>
+</view>

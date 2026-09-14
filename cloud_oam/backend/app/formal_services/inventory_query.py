@@ -41,6 +41,9 @@ from ..inventory_schemas import (
     InventoryScopeOut,
     InventorySummaryOut,
     InventoryTransactionOut,
+    PersonalWarehouseMovementOut,
+    PersonalWarehouseTransactionOut,
+    PersonalWarehouseTransactionPageOut,
     PersonalWarehouseOut,
 )
 from ..models import User
@@ -310,6 +313,191 @@ def personal_warehouse(
             if established
             else []
         ),
+    )
+
+
+def personal_warehouse_transactions(
+    db: Session,
+    *,
+    actor: FormalPrincipal,
+    limit: int = 20,
+    after_cursor: int | None = None,
+) -> PersonalWarehouseTransactionPageOut:
+    """Read redacted immutable transactions touching the current personal leaf.
+
+    This deliberately reuses the full personal-warehouse read gate first.  It
+    therefore returns no history before a trusted opening balance exists and
+    never broadens a technician's scope to the source region account.
+    """
+
+    if limit < 1 or limit > 50:
+        raise InventoryReadError(
+            code="inventory_transaction_limit_invalid",
+            status_code=422,
+            message="库存流水分页大小无效",
+        )
+    if after_cursor is not None and (not isinstance(after_cursor, int) or after_cursor < 1):
+        raise InventoryReadError(
+            code="inventory_transaction_cursor_invalid",
+            status_code=422,
+            message="库存流水游标无效",
+        )
+
+    warehouse = personal_warehouse(db, actor=actor)
+    if (
+        warehouse.location_id is None
+        or warehouse.opening_balance_status != "established"
+        or not warehouse.items
+    ):
+        return PersonalWarehouseTransactionPageOut(
+            **_projection_fields(
+                _ProjectionSnapshot(
+                    ledger_cursor=warehouse.ledger_cursor,
+                    projected_at=warehouse.projected_at,
+                ),
+                established=warehouse.opening_balance_status == "established",
+            ),
+            person_id=warehouse.person_id,
+            location_id=warehouse.location_id,
+            items=[],
+            next_after_cursor=None,
+        )
+
+    snapshot = _projection_snapshot(db)
+    if (
+        snapshot.ledger_cursor != warehouse.ledger_cursor
+        or snapshot.projected_at != warehouse.projected_at
+    ):
+        raise InventoryReadError(
+            code="inventory_projection_changed",
+            status_code=409,
+            message="库存投影在读取期间发生变化，请重新读取完整快照",
+        )
+    account_ids = {row.stock_account_id for row in warehouse.items}
+    if not account_ids:
+        return PersonalWarehouseTransactionPageOut(
+            **_projection_fields(snapshot, established=True),
+            person_id=warehouse.person_id,
+            location_id=warehouse.location_id,
+            items=[],
+            next_after_cursor=None,
+        )
+    _validate_current_projection_integrity(db, snapshot=snapshot, account_ids=account_ids)
+
+    statement = (
+        select(InventoryTransaction)
+        .join(InventoryMovement, InventoryMovement.transaction_id == InventoryTransaction.id)
+        .where(
+            InventoryTransaction.status == "posted",
+            InventoryTransaction.ledger_cursor <= snapshot.ledger_cursor,
+            or_(
+                InventoryMovement.from_account_id.in_(account_ids),
+                InventoryMovement.to_account_id.in_(account_ids),
+            ),
+        )
+        .distinct()
+    )
+    if after_cursor is not None:
+        statement = statement.where(InventoryTransaction.ledger_cursor < after_cursor)
+    statement = statement.order_by(
+        InventoryTransaction.ledger_cursor.desc(), InventoryTransaction.id.desc()
+    ).limit(limit + 1)
+    transactions = list(db.scalars(statement))
+    has_more = len(transactions) > limit
+    transactions = transactions[:limit]
+    if not transactions:
+        return PersonalWarehouseTransactionPageOut(
+            **_projection_fields(snapshot, established=True),
+            person_id=warehouse.person_id,
+            location_id=warehouse.location_id,
+            items=[],
+            next_after_cursor=None,
+        )
+
+    transaction_ids = [transaction.id for transaction in transactions]
+    movement_rows = list(
+        db.scalars(
+            select(InventoryMovement)
+            .where(InventoryMovement.transaction_id.in_(transaction_ids))
+            .order_by(InventoryMovement.transaction_id, InventoryMovement.line_no)
+        )
+    )
+    movement_by_transaction: dict[uuid.UUID, list[InventoryMovement]] = {}
+    for movement in movement_rows:
+        movement_by_transaction.setdefault(movement.transaction_id, []).append(movement)
+    serial_counts = dict(
+        db.execute(
+            select(InventoryMovementSerial.movement_id, func.count(func.distinct(InventoryMovementSerial.serial_id)))
+            .join(InventoryMovement, InventoryMovement.id == InventoryMovementSerial.movement_id)
+            .where(
+                InventoryMovementSerial.transaction_id.in_(transaction_ids),
+                or_(
+                    InventoryMovement.from_account_id.in_(account_ids),
+                    InventoryMovement.to_account_id.in_(account_ids),
+                ),
+            )
+            .group_by(InventoryMovementSerial.movement_id)
+        ).all()
+    )
+    account_by_id = {row.stock_account_id: row for row in warehouse.items}
+
+    items: list[PersonalWarehouseTransactionOut] = []
+    for transaction in transactions:
+        movements = movement_by_transaction.get(transaction.id, [])
+        if not movements:
+            raise InventoryReadError(
+                code="inventory_transaction_incomplete",
+                status_code=409,
+                message="库存交易缺少流水明细，已停止读取",
+            )
+        changes: list[PersonalWarehouseMovementOut] = []
+        for movement in movements:
+            if movement.from_account_id in account_ids:
+                row = account_by_id[movement.from_account_id]
+                changes.append(PersonalWarehouseMovementOut(
+                    movement_id=movement.id, line_no=movement.line_no,
+                    stock_account_id=row.stock_account_id, material_id=row.material_id,
+                    sku_code=row.sku_code, material_name=row.material_name, base_unit=row.base_unit,
+                    condition_code=row.condition_code, availability_bucket=row.availability_bucket,
+                    direction="out", quantity=_format_quantity(movement.quantity),
+                    serial_count=int(serial_counts.get(movement.id, 0)),
+                ))
+            if movement.to_account_id in account_ids:
+                row = account_by_id[movement.to_account_id]
+                changes.append(PersonalWarehouseMovementOut(
+                    movement_id=movement.id, line_no=movement.line_no,
+                    stock_account_id=row.stock_account_id, material_id=row.material_id,
+                    sku_code=row.sku_code, material_name=row.material_name, base_unit=row.base_unit,
+                    condition_code=row.condition_code, availability_bucket=row.availability_bucket,
+                    direction="in", quantity=_format_quantity(movement.quantity),
+                    serial_count=int(serial_counts.get(movement.id, 0)),
+                ))
+        if not changes:
+            raise InventoryReadError(
+                code="inventory_transaction_scope_invalid",
+                status_code=409,
+                message="库存交易与个人仓范围不一致，已停止读取",
+            )
+        items.append(
+            PersonalWarehouseTransactionOut(
+                transaction_id=transaction.id,
+                transaction_no=transaction.transaction_no,
+                ledger_cursor=transaction.ledger_cursor,
+                movement_type=transaction.movement_type,
+                status="posted",
+                source_document_type=transaction.source_document_type,
+                source_document_id=transaction.source_document_id,
+                effective_at=transaction.effective_at,
+                posted_at=transaction.posted_at,
+                changes=changes,
+            )
+        )
+    return PersonalWarehouseTransactionPageOut(
+        **_projection_fields(snapshot, established=True),
+        person_id=warehouse.person_id,
+        location_id=warehouse.location_id,
+        items=items,
+        next_after_cursor=items[-1].ledger_cursor if has_more else None,
     )
 
 

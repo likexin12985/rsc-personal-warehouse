@@ -21,6 +21,7 @@ from ..inventory_schemas import (
     InventoryAccountPageOut,
     InventorySummaryOut,
     InventoryTransactionOut,
+    PersonalWarehouseTransactionPageOut,
     PersonalWarehouseOut,
 )
 
@@ -42,6 +43,22 @@ def personal_me(
     db: Session = Depends(get_db),
 ):
     return _call(inventory_query.personal_warehouse, db, actor=principal)
+
+
+@router.get("/personal/me/transactions", response_model=PersonalWarehouseTransactionPageOut)
+def personal_transactions(
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+    after_cursor: Annotated[int | None, Query(ge=1)] = None,
+    principal: FormalPrincipal = Depends(require_permission("inventory", "read")),
+    db: Session = Depends(get_db),
+):
+    return _call(
+        inventory_query.personal_warehouse_transactions,
+        db,
+        actor=principal,
+        limit=limit,
+        after_cursor=after_cursor,
+    )
 
 
 @router.get("/accounts", response_model=InventoryAccountPageOut)

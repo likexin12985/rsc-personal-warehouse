@@ -127,3 +127,46 @@ class InventoryTransactionOut(BaseModel):
     reversed_transaction_id: UUID | None
     reversed_by_transaction_id: UUID | None
     movements: list[InventoryMovementOut]
+
+
+class PersonalWarehouseMovementOut(BaseModel):
+    movement_id: UUID
+    line_no: int
+    stock_account_id: UUID
+    material_id: UUID
+    sku_code: str
+    material_name: str
+    base_unit: str
+    condition_code: str
+    availability_bucket: str
+    direction: Literal["in", "out"]
+    quantity: str
+    serial_count: int
+
+
+class PersonalWarehouseTransactionOut(BaseModel):
+    """A redacted ledger row whose scope is the current person's warehouse.
+
+    The detail endpoint remains available for authorized operators, but the
+    personal page must not expose source accounts or unrelated custodians.
+    Quantity remains on ``changes`` so different SKU/base-unit dimensions can
+    never be added into one misleading transaction total.
+    """
+
+    transaction_id: UUID
+    transaction_no: str
+    ledger_cursor: int
+    movement_type: str
+    status: Literal["posted"]
+    source_document_type: str
+    source_document_id: str
+    effective_at: datetime
+    posted_at: datetime
+    changes: list[PersonalWarehouseMovementOut]
+
+
+class PersonalWarehouseTransactionPageOut(InventoryProjectionOut):
+    person_id: UUID
+    location_id: UUID | None
+    items: list[PersonalWarehouseTransactionOut]
+    next_after_cursor: int | None

@@ -1,0 +1,4 @@
+.warehouse-summary { margin-top: 18rpx; }
+.fact { display: grid; gap: 8rpx; margin-top: 16rpx; line-height: 1.5; overflow-wrap: anywhere; }
+.warehouse-change { margin-top: 16rpx; padding: 16rpx; border: 1rpx solid #dfe7e9; border-radius: 8rpx; line-height: 1.55; }
+.action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16rpx; margin-top: 22rpx; }

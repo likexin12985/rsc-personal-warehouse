@@ -18,6 +18,7 @@ from app.formal_services.inventory_query import (
     inventory_transaction_detail,
     list_inventory_accounts,
     personal_warehouse,
+    personal_warehouse_transactions,
 )
 from app.foundation_models import ExternalObject, Organization, Person, SourceSystem
 from app.inventory_models import (
@@ -369,6 +370,10 @@ def test_personal_read_fails_closed_before_opening_and_never_leaks_other_region(
     warehouse = personal_warehouse(db, actor=actor)
     assert warehouse.location_id == values["personal_location"].id
     assert warehouse.items == []
+    history = personal_warehouse_transactions(db, actor=actor)
+    assert history.location_id == values["personal_location"].id
+    assert history.items == []
+    assert history.next_after_cursor is None
 
 
 def test_personal_custody_uses_effective_interval_and_rejects_overlap(db):
@@ -786,6 +791,7 @@ def test_formal_inventory_router_is_read_only_and_uses_new_namespace():
     assert routes == {
         "/api/v1/inventory/summary": {"GET"},
         "/api/v1/inventory/personal/me": {"GET"},
+        "/api/v1/inventory/personal/me/transactions": {"GET"},
         "/api/v1/inventory/accounts": {"GET"},
         "/api/v1/inventory/transactions/{transaction_id}": {"GET"},
     }

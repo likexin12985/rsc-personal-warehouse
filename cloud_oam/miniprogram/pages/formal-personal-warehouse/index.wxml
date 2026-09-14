@@ -44,6 +44,7 @@
       <text class="empty-text">{{query || statusIndex || conditionIndex ? '可调整关键词、成色或状态后查看。' : '后续收货完成入账后，请刷新查看。'}}</text>
     </view>
     <button wx:if="{{hasMore}}" class="button button-secondary" bindtap="loadMore">显示更多</button>
+    <navigator class="button button-secondary warehouse-ledger-link" url="/pages/formal-personal-warehouse-transactions/index">查看个人仓流水</navigator>
     <view class="warehouse-note">本页展示个人仓库位的库存账户；发往本人的包裹进度请在需求页查看。</view>
   </block>
 </view>

@@ -19,6 +19,7 @@ from app.formal_services.inventory_query import (
     inventory_transaction_detail,
     list_inventory_accounts,
     personal_warehouse,
+    personal_warehouse_transactions,
 )
 from app.inventory_models import (
     CustodyAssignment,
@@ -353,7 +354,7 @@ def test_personal_warehouse_uses_the_same_full_evidence_gate(
 ):
     account, location, facts = _make_personal_account(posting_db, posting_world)
     assert facts is not None
-    posting_fixtures.make_positive_opening_facts(
+    positive = posting_fixtures.make_positive_opening_facts(
         posting_db,
         facts,
         quantity=Decimal("3.000"),
@@ -372,6 +373,15 @@ def test_personal_warehouse_uses_the_same_full_evidence_gate(
     assert [(row.stock_account_id, row.quantity) for row in warehouse.items] == [
         (account.id, "3.000")
     ]
+    history = personal_warehouse_transactions(posting_db, actor=actor, limit=20)
+    assert history.location_id == location.id
+    assert len(history.items) == 1
+    assert history.items[0].transaction_id == positive.transaction.id
+    assert len(history.items[0].changes) == 1
+    assert history.items[0].changes[0].direction == "in"
+    assert history.items[0].changes[0].quantity == "3.000"
+    assert history.items[0].changes[0].serial_count == 0
+    assert history.next_after_cursor is None
 
     facts.establishment.scope_manifest_sha256 = "e" * 64
     posting_db.flush()
@@ -402,6 +412,9 @@ def test_personal_warehouse_without_opening_returns_metadata_but_no_items(
     assert warehouse.location_id == location.id
     assert warehouse.opening_balance_status == "not_established"
     assert warehouse.items == []
+    history = personal_warehouse_transactions(posting_db, actor=actor)
+    assert history.opening_balance_status == "not_established"
+    assert history.items == []
 
 
 def test_one_multi_scope_task_is_replayed_only_once_per_read(
