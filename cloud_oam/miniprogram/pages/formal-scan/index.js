@@ -89,6 +89,6 @@ Page({
     if (!this._visible || !this.sameSession(this._session) || !result
       || result.objectType !== 'serial' || !result.stockAccountId
       || !result.actions.includes('view_personal_serials')) return
-    wx.navigateTo({ url: `/pages/formal-personal-warehouse-serials/index?accountId=${result.stockAccountId}` })
+    wx.navigateTo({ url: `/pages/formal-personal-warehouse-serials/index?accountId=${result.stockAccountId}&serialNo=${encodeURIComponent(result.serialNo)}` })
   }
 })

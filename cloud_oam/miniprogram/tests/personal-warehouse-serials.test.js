@@ -92,6 +92,19 @@ test('page reads a scoped no-store page and preserves ledger cursor across pagin
   assert.match(state.calls[1].endpoint, new RegExp(`after_id=${FIRST}$`))
 })
 
+test('direct serial navigation performs one exact no-store lookup before showing the account list', async () => {
+  const { instance, state } = harness()
+  instance.onLoad({ accountId: ACCOUNT, serialNo: 'SN-002' })
+  await instance.onShow()
+  assert.equal(instance.data.scanMode, true)
+  assert.equal(instance.data.rows[0].serial_no, 'SN-002')
+  assert.match(state.calls[0].endpoint, /serial_no=SN-002$/)
+  assert.equal(state.calls.length, 1)
+  instance.showAll()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.match(state.calls[1].endpoint, /\/serials\?limit=50$/)
+})
+
 test('SN scan stays out of page data and performs an exact read only lookup', async () => {
   const { instance, state } = harness()
   await instance.onShow()

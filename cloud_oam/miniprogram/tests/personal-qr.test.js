@@ -73,7 +73,7 @@ test('page performs exact no-store read without persisting scanned QR value', as
   assert.equal(JSON.stringify(instance.data).includes('QR-SECRET'), false)
   assert.match(state.calls[0], /\/v1\/scan\/qr\?code=QR-SECRET$/)
   instance.openSerials()
-  assert.equal(state.navigateTo.url, `/pages/formal-personal-warehouse-serials/index?accountId=${ACCOUNT}`)
+  assert.equal(state.navigateTo.url, `/pages/formal-personal-warehouse-serials/index?accountId=${ACCOUNT}&serialNo=SN-001`)
 })
 
 test('late QR response after page hide cannot restore the result', async () => {

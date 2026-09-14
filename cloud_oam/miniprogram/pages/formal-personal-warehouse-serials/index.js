@@ -10,7 +10,11 @@ function empty() { return { state: 'idle', loading: false, busy: false, rows: []
 
 Page({
   data: empty(),
-  onLoad(options) { this._accountId = options && UUID.test(String(options.accountId || '')) ? String(options.accountId).toLowerCase() : '' },
+  onLoad(options) {
+    this._accountId = options && UUID.test(String(options.accountId || '')) ? String(options.accountId).toLowerCase() : ''
+    const serialNo = options && typeof options.serialNo === 'string' ? options.serialNo : ''
+    this._initialSerialNo = SAFE_SN.test(serialNo) && serialNo === serialNo.trim() ? serialNo : ''
+  },
   onShow() { this._visible = true; this._cursors = [null]; this._ledgerCursor = null; return this.load() },
   onHide() { this.clearView() },
   onUnload() { this.clearView() },
@@ -55,22 +59,25 @@ Page({
       const s = this.sessionSnapshot()
       await this.readAuthority(s, current)
       const after = this._cursors[this._cursors.length - 1]
-      const raw = await api.request(this.endpoint(after), NO_STORE)
+      const exactSerial = !after && this._initialSerialNo ? this._initialSerialNo : ''
+      const raw = await api.request(this.endpoint(after, exactSerial), NO_STORE)
       if (!current() || !this.sameSession(s)) throw new Error('身份已变化，请刷新。')
-      const result = validate(raw, { personId: s.person, accountId: this._accountId, afterId: after, ledgerCursor: after ? this._ledgerCursor : undefined })
+      const result = validate(raw, { personId: s.person, accountId: this._accountId, afterId: after, ledgerCursor: after ? this._ledgerCursor : undefined, serialNo: exactSerial || undefined })
       await this.readAuthority(s, current)
       if (!current()) return
       this._next = result.next_after_id; this._ledgerCursor = result.ledger_cursor; this._session = s
       this.setData({ state: 'ready', loading: false, rows: result.items, sku: result.sku_code, materialName: result.material_name,
         lot: result.lot_no || '', total: result.total_serials, hasNext: !!this._next, hasPrevious: this._cursors.length > 1,
-        pageNumber: this._cursors.length, scanMode: false, message: result.items.length ? '仅展示当前仍在本人该库存明细中的 SN；二维码不会返回页面。' : '当前库存明细没有 SN。' })
+        pageNumber: this._cursors.length, scanMode: !!exactSerial, message: exactSerial
+          ? (result.items.length ? '已按扫码识别的 SN 精确读取本人当前库存；二维码不会返回页面。' : '本人当前该库存明细中未找到该 SN。')
+          : (result.items.length ? '仅展示当前仍在本人该库存明细中的 SN；二维码不会返回页面。' : '当前库存明细没有 SN。') })
     } catch (error) {
       if (current()) { this._next = null; this._ledgerCursor = null; this._cursors = [null]; this.setData({ ...empty(), state: 'error', message: error.message || '个人仓 SN 未通过核验，请刷新。' }) }
     } finally { if (current() && this.data.loading) this.setData({ loading: false }) }
   },
   nextPage() { if (!this.data.loading && !this.data.busy && this.data.state === 'ready' && this._next) { this._cursors.push(this._next); return this.load() } },
   previousPage() { if (!this.data.loading && !this.data.busy && this._cursors.length > 1) { this._cursors.pop(); return this.load() } },
-  showAll() { if (!this.data.loading && !this.data.busy) { this._cursors = [null]; this._ledgerCursor = null; return this.load() } },
+  showAll() { if (!this.data.loading && !this.data.busy) { this._initialSerialNo = ''; this._cursors = [null]; this._ledgerCursor = null; return this.load() } },
   async scanSerial() {
     if (!this._visible || this.data.state !== 'ready' || this.data.loading || this.data.busy || !this._session || !this.sameSession(this._session)) return
     const generation = this._generation, s = this._session
