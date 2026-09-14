@@ -41,7 +41,8 @@ function harness(options = {}) {
         if (options.scanFailure) settings.fail(new Error('cancelled'))
         else settings.success({ result: options.scanResult || 'QR-SECRET' })
       },
-      switchTab() {}
+      switchTab(url) { state.switchTab = url },
+      navigateTo(value) { state.navigateTo = value }
     },
     require(module) {
       if (module === '../../utils/session') return { ensureLogin: () => true, getToken: () => state.token, getUser: () => state.user }
@@ -71,6 +72,8 @@ test('page performs exact no-store read without persisting scanned QR value', as
   assert.equal(Object.prototype.hasOwnProperty.call(instance.data, 'scanValue'), false)
   assert.equal(JSON.stringify(instance.data).includes('QR-SECRET'), false)
   assert.match(state.calls[0], /\/v1\/scan\/qr\?code=QR-SECRET$/)
+  instance.openSerials()
+  assert.equal(state.navigateTo.url, `/pages/formal-personal-warehouse-serials/index?accountId=${ACCOUNT}`)
 })
 
 test('late QR response after page hide cannot restore the result', async () => {

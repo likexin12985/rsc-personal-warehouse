@@ -80,7 +80,15 @@ Page({
   },
 
   openWarehouse() {
-    if (!this._visible || !this.sameSession(this._session) || !this.data.result) return
+    if (!this._visible || !this.sameSession(this._session) || !this.data.result || !this.data.result.actions.includes('view_personal_warehouse')) return
     wx.switchTab({ url: '/pages/formal-personal-warehouse/index' })
+  },
+
+  openSerials() {
+    const result = this.data.result
+    if (!this._visible || !this.sameSession(this._session) || !result
+      || result.objectType !== 'serial' || !result.stockAccountId
+      || !result.actions.includes('view_personal_serials')) return
+    wx.navigateTo({ url: `/pages/formal-personal-warehouse-serials/index?accountId=${result.stockAccountId}` })
   }
 })

@@ -18,7 +18,8 @@
     <view wx:if="{{result.lotNo}}" class="result-line">批次：{{result.lotNo}}</view>
     <view wx:if="{{result.serialNo}}" class="result-line">SN：{{result.serialNo}}</view>
     <view wx:if="{{result.objectType === 'serial'}}" class="result-line muted">当前对象在本人个人仓范围内</view>
-    <button class="button button-secondary" bindtap="openWarehouse">打开个人仓</button>
+    <button wx:if="{{result.objectType === 'serial'}}" class="button button-secondary" bindtap="openSerials">查看 SN 明细</button>
+    <button wx:if="{{result.objectType !== 'serial'}}" class="button button-secondary" bindtap="openWarehouse">打开个人仓</button>
   </view>
 
   <view wx:if="{{state === 'error'}}" class="card safety-card">
