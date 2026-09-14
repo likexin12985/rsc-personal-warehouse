@@ -16,25 +16,29 @@ function keyOf(value) {
 function validateMarker(value) {
   const reversing = value && value.kind === 'work_order_reversal'
   const returning = value && value.kind === 'stock_return'
+  const inbound = value && value.kind === 'stock_return_inbound'
   const receiving = returning && value.operation_type === 'receive_return'
-  const fields = returning ? FIELDS.concat('plan_hash', 'operation_id', ...(receiving ? ['shipment_id'] : [])) : reversing ? FIELDS.concat('plan_hash') : FIELDS
+  const fields = inbound ? FIELDS.concat('plan_hash', 'receipt_id', 'shipment_id') : returning ? FIELDS.concat('plan_hash', 'operation_id', ...(receiving ? ['shipment_id'] : [])) : reversing ? FIELDS.concat('plan_hash') : FIELDS
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join('|') !== fields.slice().sort().join('|')
     || value.v !== 1 || !(value.kind === 'work_order_material' && KINDS.includes(value.operation_type)
       || value.kind === 'work_order_replacement' && value.operation_type === 'replace'
       || value.kind === 'work_order_removed_registration' && value.operation_type === 'register_removed'
       || reversing && value.operation_type === 'reverse'
-      || returning && ['submit_return', 'cancel_return', 'outbound_return', 'ship_return', 'receive_return'].includes(value.operation_type))
+      || returning && ['submit_return', 'cancel_return', 'outbound_return', 'ship_return', 'receive_return'].includes(value.operation_type)
+      || inbound && value.operation_type === 'receive_return')
     || !Number.isSafeInteger(value.authorization_version) || value.authorization_version < 1
     || typeof value.trace_request_id !== 'string' || !/^wxreq-[a-f0-9]{36}$/.test(value.trace_request_id)
     || typeof value.request_hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.request_hash)
-    || ((reversing || returning && ['submit_return', 'outbound_return', 'ship_return', 'receive_return'].includes(value.operation_type)) && (typeof value.plan_hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.plan_hash)))
-    || (receiving && (typeof value.shipment_id !== 'string' || !/^[-0-9a-f]{36}$/i.test(value.shipment_id)))
+    || ((reversing || returning && ['submit_return', 'outbound_return', 'ship_return', 'receive_return'].includes(value.operation_type) || inbound) && (typeof value.plan_hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.plan_hash)))
+    || ((receiving || inbound) && (typeof value.shipment_id !== 'string' || !/^[-0-9a-f]{36}$/i.test(value.shipment_id)))
+    || (inbound && (typeof value.receipt_id !== 'string' || !/^[-0-9a-f]{36}$/i.test(value.receipt_id)))
     || (returning && (value.operation_type === 'submit_return' ? value.operation_id !== null : value.operation_type === 'cancel_return' && value.plan_hash !== null))) fail()
   return Object.freeze({ v: 1, kind: value.kind, work_order_id: uuid(value.work_order_id), person_id: uuid(value.person_id),
     authorization_version: value.authorization_version, operation_type: value.operation_type,
-    trace_request_id: value.trace_request_id, request_hash: value.request_hash, ...(reversing || returning ? { plan_hash: value.plan_hash } : {}),
+    trace_request_id: value.trace_request_id, request_hash: value.request_hash, ...(reversing || returning || inbound ? { plan_hash: value.plan_hash } : {}),
     ...(returning ? { operation_id: value.operation_type === 'submit_return' ? null : uuid(value.operation_id) } : {}),
-    ...(receiving ? { shipment_id: uuid(value.shipment_id) } : {}) })
+    ...(receiving || inbound ? { shipment_id: uuid(value.shipment_id) } : {}),
+    ...(inbound ? { receipt_id: uuid(value.receipt_id) } : {}) })
 }
 function createStore(options = {}) {
   const storage = options.storage === undefined ? (typeof wx === 'undefined' ? null : wx) : options.storage

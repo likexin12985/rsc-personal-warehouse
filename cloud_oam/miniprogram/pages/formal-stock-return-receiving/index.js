@@ -7,6 +7,7 @@ const { displayTime } = require('../../utils/stock-return-shipment-submit')
 const { conditionLabel } = require('../../utils/inventory-contract')
 const receiptSubmit = require('../../utils/stock-return-receipt-submit')
 const receiptContract = require('../../utils/stock-return-receipt-contract')
+const inboundSubmit = require('../../utils/stock-return-inbound-submit')
 const uploads = require('../../utils/formal-file-upload')
 const { getStore } = require('../../utils/work-order-recovery-store')
 const { recoverPending, sealPending } = require('../../utils/work-order-recovery')
@@ -16,7 +17,8 @@ const NOTICE = '验收记录与库存入账分别保存。短少数量仍待确�
 function empty() { return { ready: false, loading: false, busy: false, scanning: false, message: '', detail: false, packages: [], next: false,
   package: null, progress: [], moreLines: false, batches: [], moreBatches: false, selectedReceipt: null,
   formReady: false, formMessage: '', formReason: '', formReceivedAt: '', formLines: [], review: null, confirming: false,
-  pending: false, canSeal: false, pendingMessage: '' } }
+  pending: false, canSeal: false, pendingMessage: '', inboundPreview: null, inboundReview: null,
+  inboundConfirming: false, inboundPending: false, inboundMessage: '', inboundBusy: false, inboundCanSeal: false } }
 Page({
   data: empty(),
   onLoad(options = {}) { this._store = getStore(); this._files = {}; this._drafts = {}; try { this._shipment = options.shipmentId ? uuid(options.shipmentId) : null }
@@ -108,8 +110,10 @@ Page({
     }]))
     this._context = this._context || (() => Promise.resolve(''))
     const canSeal = !!this._access && hasFormalPermission(this._access, 'stock_operation', 'receive_return')
-    if (stored.kind === 'valid') this.setData({ formReady: false, pending: true, canSeal, pendingMessage: '有一笔验收结果待核验，请读取原请求，暂勿重复提交。' })
-    else this.setData({ formReady: hasFormalPermission(this._access, 'stock_operation', 'receive_return'), formReceivedAt: new Date().toISOString(), formMessage: hasFormalPermission(this._access, 'stock_operation', 'receive_return') ? '扫码证明仅保留在当前页面内；验收记录不会直接增加个人仓库存。' : '当前账号只有退回包裹查询权限，不能登记验收。' })
+    const inboundCanSeal = !!this._access && hasFormalPermission(this._access, 'stock_operation', 'receive_return')
+    if (stored.kind === 'valid' && stored.value.kind === 'stock_return') this.setData({ formReady: false, pending: true, canSeal, inboundCanSeal, pendingMessage: '有一笔验收结果待核验，请读取原请求，暂勿重复提交。' })
+    else if (stored.kind === 'valid' && stored.value.kind === 'stock_return_inbound') this.setData({ formReady: false, inboundPending: true, inboundCanSeal, inboundMessage: '有一笔入账结果待核验，请读取原请求，暂勿重复提交。' })
+    else this.setData({ formReady: hasFormalPermission(this._access, 'stock_operation', 'receive_return'), inboundCanSeal, formReceivedAt: new Date().toISOString(), formMessage: hasFormalPermission(this._access, 'stock_operation', 'receive_return') ? '扫码证明仅保留在当前页面内；验收记录不会直接增加个人仓库存。' : '当前账号只有退回包裹查询权限，不能登记验收。' })
     this.renderForm()
   },
   renderForm() {
@@ -186,6 +190,48 @@ Page({
   async evidence(event) { if (!this.editable()) return; const { lineId, type, action, fileKey } = event.currentTarget.dataset; try { const controller = this.fileController(lineId, type); if (action === 'select') await controller.select(); else if (action === 'retry') await controller.retry(fileKey); else controller.remove(fileKey) } catch (error) { this.setData({ formMessage: error.message || '异常凭证未完成确认。' }) } },
   async recoverReceipt() { if (!this.data.pending || this.data.busy || !this._context) return; this.setData({ busy: true }); try { const result = await recoverPending({ api, store: this._store, workOrderId: this._workOrder, shipmentId: this._shipment, personId: this._person, authorize: this._context }); if (result.status === 'confirmed') { this.setData({ pending: false, pendingMessage: '原验收结果已确认，正在刷新包裹。' }); await this.load() } else if (result.status === 'pending') this.setData({ pendingMessage: '暂未读取到原验收结果；请保留恢复记录，稍后继续核验。' }) } catch (error) { this.setData({ pendingMessage: error.message || '原验收结果尚未完成核验。' }) } finally { this.setData({ busy: false }) } },
   async sealReceipt() { if (!this.data.pending || !this.data.canSeal || this.data.busy) return; const ok = await new Promise(resolve => wx.showModal({ title: '封存未执行验收', content: '仅在确认原请求未执行后封存。结果未知时不要封存。', confirmText: '确认封存', success: value => resolve(value.confirm === true), fail: () => resolve(false) })); if (!ok) return; this.setData({ busy: true }); try { const result = await sealPending({ api, store: this._store, workOrderId: this._workOrder, shipmentId: this._shipment, personId: this._person, authorize: this._context, confirm: () => true }); if (result.status === 'sealed') await this.load() } catch (error) { this.setData({ pendingMessage: error.message || '封存未完成，请保留恢复记录。' }) } finally { this.setData({ busy: false }) } },
+  async beginInbound() {
+    if (!this.readable() || !this.data.selectedReceipt || this.data.inboundBusy) return
+    const receiptId = this.data.selectedReceipt.id
+    this.setData({ inboundBusy: true, inboundMessage: '正在核验已验收数量、在途账户和区域仓目标账户。' })
+    try {
+      const prepared = await inboundSubmit.prepareInbound({ api, current: this._context, receiptId, shipmentId: this._shipment, personId: this._person })
+      if (!this.readable()) return
+      this.setData({ inboundPreview: prepared.preview, inboundReview: prepared.review, inboundConfirming: true, inboundMessage: '入账预览只读；确认后才会登记库存流水。' })
+    } catch (error) { this.setData({ inboundMessage: error.message || '入账预检未通过，请刷新验收记录。' }) }
+    finally { this.setData({ inboundBusy: false }) }
+  },
+  async confirmInbound(event) {
+    if (!this.data.inboundConfirming || this.data.inboundBusy) return
+    const accepted = event.currentTarget.dataset.confirm === 'true'
+    this.setData({ inboundConfirming: false, inboundReview: null })
+    if (!accepted || !this.data.inboundPreview) return
+    this.setData({ inboundBusy: true })
+    try {
+      const result = await inboundSubmit.submitInbound({ api, store: this._store, workOrderId: this._workOrder, receiptId: this.data.inboundPreview.receipt_id,
+        shipmentId: this._shipment, personId: this._person, authorizationVersion: this._version, authorize: this._context, confirm: async () => true })
+      if (result.status === 'confirmed') { this.setData({ inboundPreview: null, inboundMessage: '退回入账已完成，正在刷新。' }); await this.load() }
+      else if (result.status === 'pending') this.setData({ inboundPending: true, inboundPreview: null, inboundMessage: '提交结果尚未完成核验；请回查原入账请求，暂勿重复提交。' })
+    } catch (error) { if (this.readable()) this.setData({ inboundMessage: error.message || '退回入账未完成，请保留恢复记录。' }) }
+    finally { if (this._visible) this.setData({ inboundBusy: false }) }
+  },
+  async recoverInbound() {
+    if (!this.data.inboundPending || this.data.inboundBusy || !this._context) return
+    this.setData({ inboundBusy: true })
+    try { const result = await recoverPending({ api, store: this._store, workOrderId: this._workOrder, shipmentId: this._shipment, personId: this._person, authorize: this._context })
+      if (result.status === 'confirmed') { this.setData({ inboundPending: false, inboundMessage: '原入账结果已确认，正在刷新。' }); await this.load() }
+      else if (result.status === 'pending') this.setData({ inboundMessage: '暂未读取到原入账结果，请保留恢复记录，稍后继续核验。' })
+    } catch (error) { this.setData({ inboundMessage: error.message || '原入账结果尚未完成核验。' }) } finally { this.setData({ inboundBusy: false }) }
+  },
+  async sealInbound() {
+    if (!this.data.inboundPending || !this.data.inboundCanSeal || this.data.inboundBusy) return
+    const ok = await new Promise(resolve => wx.showModal({ title: '封存未执行入账', content: '仅在确认原入账请求未执行后封存。结果未知时不要封存。', confirmText: '确认封存', success: value => resolve(value.confirm === true), fail: () => resolve(false) }))
+    if (!ok) return
+    this.setData({ inboundBusy: true })
+    try { const result = await sealPending({ api, store: this._store, workOrderId: this._workOrder, shipmentId: this._shipment, personId: this._person, authorize: this._context, confirm: () => true })
+      if (result.status === 'sealed') { this.setData({ inboundPending: false, inboundMessage: '原入账请求已封存，正在刷新。' }); await this.load() }
+    } catch (error) { this.setData({ inboundMessage: error.message || '入账封存未完成，请保留恢复记录。' }) } finally { this.setData({ inboundBusy: false }) }
+  },
   async submitReceipt() {
     if (!this.editable()) return
     this.setData({ busy: true }); const generation = this._generation, session = this._session, current = () => this._visible && generation === this._generation && this._matches && this._matches()
@@ -207,7 +253,7 @@ Page({
   },
   selectReceipt(event) { if (!this.readable() || !this._history) return; const id = event.currentTarget.dataset.id
     if (!this._history.receipts.some(row => row.receipt_id === id)) return
-    this._selected = id; this._receiptLineLimit = 20; this.renderReceipt() },
+    this._selected = id; this._receiptLineLimit = 20; this.setData({ inboundPreview: null, inboundReview: null, inboundConfirming: false, inboundPending: false, inboundMessage: '' }); this.renderReceipt() },
   moreLines() { if (this.readable() && this._history) { this._lineLimit += 20; this.renderHistory() } },
   moreBatches() { if (this.readable() && this._history) { this._batchLimit += 20; this.renderHistory() } },
   moreReceiptLines() { if (this.readable() && this._history) { this._receiptLineLimit += 20; this.renderReceipt() } },

@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
+import hashlib
+import json
 from uuid import UUID
 
 import pytest
@@ -9,6 +11,7 @@ from app.formal_services.stock_return_inbound_contract import (
     ReturnInboundLine,
     build_return_inbound_command,
 )
+from app.formal_services.stock_return_inbound_commands import _request_hash
 
 
 def ident(value: int) -> UUID:
@@ -53,3 +56,9 @@ def test_rejects_naive_time_and_zero_quantity():
         build_return_inbound_command(receipt_id=ident(9), effective_at=datetime(2026, 9, 13), lines=(line(),))
     with pytest.raises(ReturnInboundContractError, match="正"):
         build_return_inbound_command(receipt_id=ident(9), effective_at=datetime.now(timezone.utc), lines=(line(quantity="0.000"),))
+
+
+def test_recovery_digest_is_precomputable_from_receipt_plan_and_request():
+    value = {"receipt_id": str(ident(9)), "request_id": "wxreq-" + "a" * 36, "plan_hash": "b" * 64}
+    expected = hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert _request_hash(receipt_id=ident(9), request_id=value["request_id"], plan_hash=value["plan_hash"]) == expected

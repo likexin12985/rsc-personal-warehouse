@@ -7,8 +7,10 @@ const stockReturn = require('./stock-return-contract')
 const departure = require('./stock-return-outbound-contract')
 const parcel = require('./stock-return-shipment-contract')
 const receiving = require('./stock-return-receipt-contract')
+const inbound = require('./stock-return-inbound-contract')
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
 function originalPath(marker) {
+  if (marker.kind === inbound.KIND && marker.operation_type === inbound.ACTION) return `/v1/stock-returns/my-receiving/${uuid(marker.receipt_id)}/inbound/by-request/${marker.trace_request_id}`
   if (marker.kind === receiving.KIND && marker.operation_type === receiving.ACTION) return `/v1/stock-returns/my-receiving/${uuid(marker.shipment_id)}/receipts/by-request/${marker.trace_request_id}`
   if (marker.kind === parcel.KIND && marker.operation_type === parcel.ACTION) return `/v1/work-orders/${marker.work_order_id}/returns/${marker.operation_id}/shipments/by-request/${marker.trace_request_id}`
   if (marker.kind === departure.KIND && marker.operation_type === departure.ACTION) return `/v1/work-orders/${marker.work_order_id}/returns/${marker.operation_id}/outbounds/by-request/${marker.trace_request_id}`
@@ -24,6 +26,7 @@ async function originalResult(api, marker) {
   const registering = marker.kind === registration.KIND
   const reversing = marker.kind === reversal.KIND
   const receivingReturn = marker.kind === receiving.KIND && marker.operation_type === receiving.ACTION
+  const inboundReturn = marker.kind === inbound.KIND && marker.operation_type === inbound.ACTION
   const returning = marker.kind === stockReturn.KIND
   let raw
   try { raw = await api.request(originalPath(marker), READ) } catch (error) {
@@ -34,9 +37,10 @@ async function originalResult(api, marker) {
     if (reversing && error.responseReceived === true && error.status === 404 && error.code === 'work_order_reversal_not_observed') return null
     if (returning && !receivingReturn && error.responseReceived === true && error.status === 404 && error.code === 'stock_return_not_observed') return null
     if (receivingReturn && error.responseReceived === true && error.status === 404 && error.code === 'stock_return_receipt_not_observed') return null
+    if (inboundReturn && error.responseReceived === true && error.status === 404 && error.code === 'stock_return_inbound_not_observed') return null
     throw error
   }
-  return receivingReturn ? receiving.validateLookup(raw, marker) : returning ? (marker.operation_type === parcel.ACTION ? parcel : marker.operation_type === departure.ACTION ? departure : stockReturn).validateLookup(raw, marker) : reversing ? reversal.validateLookup(raw, marker) : registering ? registration.validateLookup(raw, marker) : paired ? replacement.validateLookup(raw, marker) : validateLookup(raw, marker)
+  return inboundReturn ? inbound.validateLookup(raw, marker) : receivingReturn ? receiving.validateLookup(raw, marker) : returning ? (marker.operation_type === parcel.ACTION ? parcel : marker.operation_type === departure.ACTION ? departure : stockReturn).validateLookup(raw, marker) : reversing ? reversal.validateLookup(raw, marker) : registering ? registration.validateLookup(raw, marker) : paired ? replacement.validateLookup(raw, marker) : validateLookup(raw, marker)
 }
 
 async function recoverPending({ api, store, workOrderId, shipmentId, personId, authorize }) {

@@ -63,6 +63,11 @@ def _result(row: StockOperationReturnInbound, *, replayed: bool = False) -> dict
     }
 
 
+def _request_hash(*, receipt_id: uuid.UUID, request_id: str, plan_hash: str) -> str:
+    """Return the pre-write recovery digest shared with the client contract."""
+    return _hash({"receipt_id": str(receipt_id), "request_id": request_id, "plan_hash": plan_hash})
+
+
 def preview_return_inbound(db: Session, *, actor, receipt_id: uuid.UUID) -> dict:
     plan = plan_return_inbound(db, actor=actor, receipt_id=receipt_id)
     document = _json_plan(plan)
@@ -163,7 +168,11 @@ def execute_return_inbound(
             for movement in command.movements
         ],
     }
-    request_hash = _hash({"request_id": request_id, "plan_hash": plan_hash, "command": command_json})
+    # The recovery marker must be computable before the write.  Do not include
+    # the randomly allocated inbound id or the wall-clock checked_at value in
+    # this digest: both are only known inside this transaction.  The plan hash
+    # already binds the exact receipt, target accounts, quantities and SNs.
+    request_hash = _request_hash(receipt_id=receipt_id, request_id=request_id, plan_hash=plan_hash)
     head = lock_audit_chain_head(db, stream_key="material_request")
     now = datetime.now(timezone.utc)
 

@@ -91,7 +91,22 @@
             <button wx:if="{{group.more}}" size="mini" data-key="{{group.key}}" bindtap="moreSerials">显示更多 SN</button>
           </block>
         </view>
-      </view><button wx:if="{{selectedReceipt.moreLines}}" bindtap="moreReceiptLines">显示更多本次明细</button>
+    </view><button wx:if="{{selectedReceipt.moreLines}}" bindtap="moreReceiptLines">显示更多本次明细</button>
+      <button class="button button-primary" loading="{{inboundBusy}}" disabled="{{inboundBusy || inboundPending}}" bindtap="beginInbound">为本次已验收数量生成入账预览</button>
+    </view>
+    <view wx:if="{{inboundMessage || inboundPending}}" class="card receipt-form">
+      <view class="heading">退回入账</view><view class="muted">{{inboundMessage}}</view>
+      <block wx:if="{{inboundPending}}">
+        <button class="button button-primary" loading="{{inboundBusy}}" disabled="{{inboundBusy}}" bindtap="recoverInbound">读取原入账结果</button>
+        <button wx:if="{{inboundCanSeal}}" class="button button-secondary" loading="{{inboundBusy}}" disabled="{{inboundBusy}}" bindtap="sealInbound">确认未执行后封存</button>
+      </block>
+    </view>
+    <view wx:if="{{inboundConfirming && inboundReview}}" class="card confirm-card">
+      <view class="heading">{{inboundReview.title}}</view><view>{{inboundReview.description}}</view>
+      <view>验收事实：{{inboundReview.receiptId}}</view><view>目标账户位置：{{inboundReview.target}}</view>
+      <view wx:for="{{inboundReview.rows}}" wx:key="id" wx:for-item="row" class="row">验收明细 {{row.id}} · 入账 {{row.quantity}} · SN {{row.serialCount}} 件</view>
+      <button class="button button-primary" data-confirm="true" bindtap="confirmInbound">确认入账</button>
+      <button class="button button-secondary" data-confirm="false" bindtap="confirmInbound">取消</button>
     </view>
     <view wx:if="{{confirming && review}}" class="card confirm-card">
       <view class="heading">{{review.title}}</view><view>{{review.description}}</view><view>包裹：{{review.shipmentNo}}</view>
