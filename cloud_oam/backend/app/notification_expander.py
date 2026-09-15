@@ -14,11 +14,12 @@ import sys
 import time
 from typing import Any
 
-from .database import SessionLocal
-from .formal_services.notification_expansion import (
-    NotificationExpansionError,
-    expand_pending_notification_events,
-)
+# Keep CLI parsing and argument validation independent from the production
+# database configuration. The real session factory is imported only when a
+# valid run is about to touch the queue.
+SessionLocal = None
+NotificationExpansionError = RuntimeError
+expand_pending_notification_events = None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -53,7 +54,20 @@ def _emit(payload: dict[str, Any]) -> None:
 
 
 def _run_once(*, limit: int) -> tuple[int, dict[str, Any]]:
-    with SessionLocal() as db:
+    global NotificationExpansionError, expand_pending_notification_events
+    if expand_pending_notification_events is None:
+        from .formal_services.notification_expansion import (
+            NotificationExpansionError as expansion_error,
+            expand_pending_notification_events as expand_pending,
+        )
+
+        NotificationExpansionError = expansion_error
+        expand_pending_notification_events = expand_pending
+    session_factory = SessionLocal
+    if session_factory is None:
+        from .database import SessionLocal as session_factory
+
+    with session_factory() as db:
         try:
             results = expand_pending_notification_events(db, limit=limit)
             db.commit()
@@ -123,4 +137,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
