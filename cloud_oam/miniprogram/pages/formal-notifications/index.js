@@ -20,7 +20,7 @@ Page({
   async openItem(event) {
     const id = event.currentTarget.dataset.id
     const item = this.data.items.find(row => row.delivery_id === id)
-    if (!item || item.status === 'read') return
+    if (!item || !['sent', 'delivered'].includes(item.status)) return
     try {
       const result = validateRead(await api.post(`/v1/notifications/${encodeURIComponent(id)}/read`, {}))
       this.setData({ items: this.data.items.map(row => row.delivery_id === id ? result.item : row), unreadCount: Math.max(0, this.data.unreadCount - 1) })
