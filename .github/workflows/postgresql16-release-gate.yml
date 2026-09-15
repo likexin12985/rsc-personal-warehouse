@@ -205,6 +205,7 @@ jobs:
             backend/tests/test_formal_material_request_api.py \
             backend/tests/test_notification_expansion.py \
             backend/tests/test_notification_expander.py \
+            backend/tests/test_notification_dispatcher.py \
             backend/tests/test_notification_delivery.py \
             backend/tests/test_notification_inbox.py \
             backend/tests/test_notification_events.py \

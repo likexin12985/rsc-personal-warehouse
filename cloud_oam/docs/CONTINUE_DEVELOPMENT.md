@@ -2828,3 +2828,16 @@ marker 原子推进到当前 head，尚未把云端重跑结果写成通过证�
 该进程不调用微信、短信或其他供应商，供应商调用仍必须由独立 worker 领取队列并写入精确
 发送结果。worker 单测与通知扩展回归共 8 项通过，准确提交 SHA 仍需重新通过 Client/PG16
 门禁。
+
+## 7.25 通知供应商投递 worker 边界（2026-09-16）
+
+新增 `app.notification_dispatcher` 有界投递进程：先提交 queued 投递的单 worker lease，
+再在短事务外调用显式注入的微信/短信/飞书适配器，最后用同一 lease 记录一次精确 provider
+结果。请求哈希只包含渠道、当前收件坐标、业务 payload 和尝试序号，不记录 token、Cookie 或
+响应敏感字段；供应商超时、连接异常或适配器未配置均清除 lease 并记录失败/未知结果，未知
+结果不会被 retry helper 自动重排，避免重复发送。
+
+基础部署包不提供供应商凭据或默认网络适配器；未注册经过审核的适配器时 worker 在领取前
+直接返回 `notification_provider_not_configured`。这使本地和门禁运行不会向外部系统发送消息，
+同时给生产部署留下明确的适配器注入边界。当前新增 dispatcher 回归待准确 SHA 的 Client/PG16
+门禁确认。
