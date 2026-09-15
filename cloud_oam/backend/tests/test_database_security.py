@@ -521,6 +521,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "notification_events",
         "notification_recipients",
         "oam_work_orders",
+        "wechat_identities",
         "substitution_decisions",
         "supply_tasks",
     }
