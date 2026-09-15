@@ -80,14 +80,19 @@ def _add_recipient(
     )
 
 
-def record_shipment_handover_notification(
+def record_business_notification(
     db: Session,
     *,
-    shipment: Any,
-    request_id: UUID,
+    event_type: str,
+    business_type: str,
+    business_id: UUID,
+    dedup_key: str,
+    payload: dict[str, Any],
+    recipient_person_id: UUID | None,
+    occurred_at: datetime,
     now: datetime | None = None,
 ) -> ShipmentNotificationResult:
-    """Record one target-engineer notification for a shipment handover.
+    """Record one durable business notification and its active channels.
 
     The target person is resolved through the formal ``users.person_id``
     mapping and must still be active.  We create only channels with a current
@@ -96,13 +101,19 @@ def record_shipment_handover_notification(
     they never cause a guessed recipient or a provider request.
     """
 
-    shipment_id = getattr(shipment, "id", None)
-    if not isinstance(shipment_id, UUID):
-        raise NotificationEventError("shipment identity is invalid")
-    if not isinstance(request_id, UUID):
-        raise NotificationEventError("request identity is invalid")
+    if not isinstance(event_type, str) or not event_type.strip() or len(event_type) > 100:
+        raise NotificationEventError("notification event type is invalid")
+    if not isinstance(business_type, str) or not business_type.strip() or len(business_type) > 80:
+        raise NotificationEventError("notification business type is invalid")
+    if not isinstance(business_id, UUID):
+        raise NotificationEventError("notification business identity is invalid")
+    if not isinstance(dedup_key, str) or not dedup_key.strip() or len(dedup_key) > 200:
+        raise NotificationEventError("notification deduplication key is invalid")
+    if not isinstance(payload, dict):
+        raise NotificationEventError("notification payload is invalid")
+    if not isinstance(occurred_at, datetime):
+        raise NotificationEventError("notification event time is invalid")
     effective_now = _utc(now or datetime.now(timezone.utc))
-    dedup_key = f"shipment-handover:{shipment_id}"
     existing = db.scalar(
         select(NotificationEvent).where(NotificationEvent.dedup_key == dedup_key)
     )
@@ -117,32 +128,20 @@ def record_shipment_handover_notification(
         return ShipmentNotificationResult(existing, recipient_count)
 
     event = NotificationEvent(
-        event_type="shipment_handover_registered",
-        business_type="shipment",
-        business_id=str(shipment_id),
+        event_type=event_type.strip(),
+        business_type=business_type.strip(),
+        business_id=str(business_id),
         dedup_key=dedup_key,
-        payload_jsonb={
-            "request_id": str(request_id),
-            "shipment_id": str(shipment_id),
-            "shipment_no": str(getattr(shipment, "shipment_no", "")),
-            "carrier": str(getattr(shipment, "carrier", "")),
-            "tracking_no": str(getattr(shipment, "tracking_no", "")),
-            "target_location_id": str(getattr(shipment, "target_location_id", "")),
-            "target_person_id": (
-                str(getattr(shipment, "target_person_id"))
-                if getattr(shipment, "target_person_id", None) is not None
-                else None
-            ),
-        },
+        payload_jsonb=dict(payload),
         status="pending",
-        occurred_at=_utc(getattr(shipment, "shipped_at", effective_now)),
+        occurred_at=_utc(occurred_at),
         created_at=effective_now,
     )
     db.add(event)
     db.flush()
 
     user = _active_target_user(
-        db, person_id=getattr(shipment, "target_person_id", None)
+        db, person_id=recipient_person_id
     )
     recipient_count = 0
     if user is not None:
@@ -177,8 +176,49 @@ def record_shipment_handover_notification(
     return ShipmentNotificationResult(event, recipient_count)
 
 
+def record_shipment_handover_notification(
+    db: Session,
+    *,
+    shipment: Any,
+    request_id: UUID,
+    now: datetime | None = None,
+) -> ShipmentNotificationResult:
+    """Record one target-engineer notification for a shipment handover."""
+
+    shipment_id = getattr(shipment, "id", None)
+    if not isinstance(shipment_id, UUID):
+        raise NotificationEventError("shipment identity is invalid")
+    if not isinstance(request_id, UUID):
+        raise NotificationEventError("request identity is invalid")
+    effective_now = _utc(now or datetime.now(timezone.utc))
+    return record_business_notification(
+        db,
+        event_type="shipment_handover_registered",
+        business_type="shipment",
+        business_id=shipment_id,
+        dedup_key=f"shipment-handover:{shipment_id}",
+        payload={
+            "request_id": str(request_id),
+            "shipment_id": str(shipment_id),
+            "shipment_no": str(getattr(shipment, "shipment_no", "")),
+            "carrier": str(getattr(shipment, "carrier", "")),
+            "tracking_no": str(getattr(shipment, "tracking_no", "")),
+            "target_location_id": str(getattr(shipment, "target_location_id", "")),
+            "target_person_id": (
+                str(getattr(shipment, "target_person_id"))
+                if getattr(shipment, "target_person_id", None) is not None
+                else None
+            ),
+        },
+        recipient_person_id=getattr(shipment, "target_person_id", None),
+        occurred_at=_utc(getattr(shipment, "shipped_at", effective_now)),
+        now=effective_now,
+    )
+
+
 __all__ = [
     "NotificationEventError",
     "ShipmentNotificationResult",
+    "record_business_notification",
     "record_shipment_handover_notification",
 ]
