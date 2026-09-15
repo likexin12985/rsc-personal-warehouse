@@ -12,6 +12,7 @@ from . import material_request_outbound as outbound
 from . import material_request_reservation as reserve
 from . import material_request_query
 from .audit_chain import append_audit_event, AuditChainError
+from .notification_events import record_shipment_handover_notification
 
 class ShipmentError(Exception):
     def __init__(self, code, category, message): self.code,self.category,self.message=code,category,message
@@ -73,6 +74,12 @@ def create_shipment(db, *, actor, request_id, expected_version, target_location_
         db.add_all([ShipmentSerial(shipment_line_id=sl.id,serial_id=s,created_at=now) for s in sids])
         output_lines.append({'shipment_line_id':sl.id,'outbound_posting_id':fact.id,'shipped_qty':_text(qty),'serial_ids':sids})
     db.add(OutboxEvent(event_type='shipment_handover_registered',aggregate_type='shipment',aggregate_id=str(shipment.id),payload_jsonb={'request_id':str(request_id),'shipment_no':shipment.shipment_no,'tracking_no':shipment.tracking_no},status='pending',attempts=0,idempotency_key=f'shipment:{shipment.id}',available_at=now))
+    record_shipment_handover_notification(
+        db,
+        shipment=shipment,
+        request_id=request_id,
+        now=now,
+    )
     append_audit_event(db,stream_key='material_request',actor_user_id=actor.user_id,action='shipment_handover_registered',aggregate_type='shipment',aggregate_id=str(shipment.id),before_jsonb={},after_jsonb={'request_id':str(request_id),'shipment_no':shipment.shipment_no,'lines':[str(x['shipment_line_id']) for x in output_lines]},request_id=trace_request_id,occurred_at=now,created_at=now)
     db.flush()
     from .material_request_fulfillment_command import record_fulfillment_command

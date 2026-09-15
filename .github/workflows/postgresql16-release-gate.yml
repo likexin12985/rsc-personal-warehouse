@@ -206,6 +206,7 @@ jobs:
             backend/tests/test_notification_expansion.py \
             backend/tests/test_notification_delivery.py \
             backend/tests/test_notification_inbox.py \
+            backend/tests/test_notification_events.py \
             backend/tests/test_demand_schemas.py \
             backend/tests/test_supply_task_read_contract.py \
             backend/tests/test_audit_chain.py \
