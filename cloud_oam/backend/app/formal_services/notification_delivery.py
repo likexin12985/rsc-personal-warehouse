@@ -180,9 +180,81 @@ def record_notification_delivery_result(
     return delivery
 
 
+def record_notification_provider_status(
+    db: Session,
+    *,
+    channel: str,
+    provider_message_id: str,
+    status: str,
+    occurred_at: datetime,
+) -> NotificationDelivery:
+    """Record an exact provider delivery/read acknowledgement monotonically.
+
+    Provider adapters must resolve their authenticated callback to one channel
+    and one provider message identifier before entering this boundary.  A read
+    acknowledgement proves delivery as well, but a late delivered callback can
+    never regress an already-read row.
+    """
+
+    if channel not in {"wechat", "sms", "feishu"}:
+        raise NotificationDeliveryError("notification provider channel is invalid")
+    if (
+        not isinstance(provider_message_id, str)
+        or not provider_message_id.strip()
+        or len(provider_message_id) > 250
+    ):
+        raise NotificationDeliveryError("provider message id is invalid")
+    if status not in {"delivered", "read"}:
+        raise NotificationDeliveryError("notification provider status is invalid")
+    if not isinstance(occurred_at, datetime):
+        raise NotificationDeliveryError("notification provider timestamp is invalid")
+    effective_at = _utc(occurred_at)
+    rows = tuple(
+        db.scalars(
+            select(NotificationDelivery)
+            .join(
+                NotificationRecipient,
+                NotificationRecipient.id == NotificationDelivery.recipient_id,
+            )
+            .where(
+                NotificationDelivery.provider_message_id == provider_message_id.strip(),
+                NotificationRecipient.channel == channel,
+            )
+            .limit(2)
+            .with_for_update()
+        ).all()
+    )
+    if not rows:
+        raise NotificationDeliveryError("notification provider message does not exist")
+    if len(rows) != 1:
+        raise NotificationDeliveryError("notification provider message is ambiguous")
+    delivery = rows[0]
+    if delivery.status not in {"sent", "delivered", "read"} or delivery.sent_at is None:
+        raise NotificationDeliveryError("notification provider acknowledgement is out of sequence")
+    sent_at = _utc(delivery.sent_at)
+    if effective_at < sent_at:
+        raise NotificationDeliveryError("notification provider timestamp predates send")
+
+    if status == "delivered":
+        if delivery.status == "sent":
+            delivery.status = "delivered"
+            delivery.delivered_at = effective_at
+            delivery.updated_at = effective_at
+    elif delivery.status != "read":
+        if delivery.delivered_at is not None and effective_at < _utc(delivery.delivered_at):
+            raise NotificationDeliveryError("notification read timestamp predates delivery")
+        delivery.status = "read"
+        delivery.delivered_at = delivery.delivered_at or effective_at
+        delivery.read_at = effective_at
+        delivery.updated_at = effective_at
+    db.flush()
+    return delivery
+
+
 __all__ = [
     "NotificationDeliveryClaim",
     "NotificationDeliveryError",
     "claim_notification_deliveries",
     "record_notification_delivery_result",
+    "record_notification_provider_status",
 ]

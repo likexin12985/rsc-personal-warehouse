@@ -19,6 +19,7 @@ from app.formal_services.notification_delivery import (
     NotificationDeliveryError,
     claim_notification_deliveries,
     record_notification_delivery_result,
+    record_notification_provider_status,
 )
 
 
@@ -135,3 +136,88 @@ def test_failed_result_is_recorded_without_automatic_replay(approval_db):
     assert result.status == "failed"
     assert result.last_error == "provider rejected request"
     assert claim_notification_deliveries(approval_db, worker_id="worker-a", now=NOW) == ()
+
+
+def _sent_delivery(db):
+    delivery = _queued_delivery(db)
+    claim_notification_deliveries(db, worker_id="worker-a", now=NOW)
+    return record_notification_delivery_result(
+        db,
+        delivery_id=delivery.id,
+        worker_id="worker-a",
+        request_hash=REQUEST_HASH,
+        response_code="200",
+        response_json={"ok": True},
+        provider_message_id=f"provider-{uuid4()}",
+        now=NOW,
+    )
+
+
+def test_provider_acknowledgement_advances_sent_delivered_read_monotonically(approval_db):
+    delivery = _sent_delivery(approval_db)
+    delivered_at = NOW.replace(minute=31)
+    read_at = NOW.replace(minute=32)
+
+    delivered = record_notification_provider_status(
+        approval_db,
+        channel="feishu",
+        provider_message_id=delivery.provider_message_id,
+        status="delivered",
+        occurred_at=delivered_at,
+    )
+    assert delivered.status == "delivered"
+    assert delivered.delivered_at == delivered_at
+
+    read = record_notification_provider_status(
+        approval_db,
+        channel="feishu",
+        provider_message_id=delivery.provider_message_id,
+        status="read",
+        occurred_at=read_at,
+    )
+    assert read.status == "read"
+    assert read.read_at == read_at
+
+    late_delivery = record_notification_provider_status(
+        approval_db,
+        channel="feishu",
+        provider_message_id=delivery.provider_message_id,
+        status="delivered",
+        occurred_at=read_at,
+    )
+    assert late_delivery.status == "read"
+    assert late_delivery.read_at == read_at
+
+
+def test_provider_read_implies_delivery_but_rejects_wrong_channel_or_time(approval_db):
+    delivery = _sent_delivery(approval_db)
+    read_at = NOW.replace(minute=33)
+
+    direct_read = record_notification_provider_status(
+        approval_db,
+        channel="feishu",
+        provider_message_id=delivery.provider_message_id,
+        status="read",
+        occurred_at=read_at,
+    )
+    assert direct_read.delivered_at == read_at
+    assert direct_read.read_at == read_at
+
+    with pytest.raises(NotificationDeliveryError, match="does not exist"):
+        record_notification_provider_status(
+            approval_db,
+            channel="wechat",
+            provider_message_id=delivery.provider_message_id,
+            status="delivered",
+            occurred_at=read_at,
+        )
+
+    other = _sent_delivery(approval_db)
+    with pytest.raises(NotificationDeliveryError, match="predates send"):
+        record_notification_provider_status(
+            approval_db,
+            channel="feishu",
+            provider_message_id=other.provider_message_id,
+            status="delivered",
+            occurred_at=NOW.replace(minute=29),
+        )
