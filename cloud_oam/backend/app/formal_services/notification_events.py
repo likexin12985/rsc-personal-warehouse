@@ -114,9 +114,12 @@ def record_business_notification(
     if not isinstance(occurred_at, datetime):
         raise NotificationEventError("notification event time is invalid")
     effective_now = _utc(now or datetime.now(timezone.utc))
-    existing = db.scalar(
-        select(NotificationEvent).where(NotificationEvent.dedup_key == dedup_key)
-    )
+    # Deduplication must not flush unrelated facts that the outer business
+    # command is still assembling for its atomic checkpoint.
+    with db.no_autoflush:
+        existing = db.scalar(
+            select(NotificationEvent).where(NotificationEvent.dedup_key == dedup_key)
+        )
     if existing is not None:
         recipient_count = int(
             db.scalar(
@@ -138,39 +141,45 @@ def record_business_notification(
         created_at=effective_now,
     )
     db.add(event)
-    db.flush()
-
-    user = _active_target_user(
-        db, person_id=recipient_person_id
-    )
     recipient_count = 0
-    if user is not None:
-        identity = db.scalar(
-            select(WechatIdentity)
-            .where(WechatIdentity.user_id == user.id)
-            .order_by(WechatIdentity.last_login_at.desc(), WechatIdentity.id)
-            .limit(1)
+    # Only flush the event itself to obtain its primary key.  The caller may
+    # already have staged an outbox row that must remain observable as part of
+    # the same atomic business boundary.
+    db.flush([event])
+    # User and identity lookups would otherwise trigger an autoflush of the
+    # caller's pending business/outbox facts.  Keep all recipient rows pending
+    # until the outer command commits or explicitly checkpoints them.
+    with db.no_autoflush:
+        user = _active_target_user(
+            db, person_id=recipient_person_id
         )
-        if identity is not None:
-            _add_recipient(
-                db,
-                event_id=event.id,
-                user=user,
-                channel="wechat",
-                recipient_key=identity.openid,
-                now=effective_now,
+        if user is not None:
+            identity = db.scalar(
+                select(WechatIdentity)
+                .where(WechatIdentity.user_id == user.id)
+                .order_by(WechatIdentity.last_login_at.desc(), WechatIdentity.id)
+                .limit(1)
             )
-            recipient_count += 1
-        if user.mobile:
-            _add_recipient(
-                db,
-                event_id=event.id,
-                user=user,
-                channel="sms",
-                recipient_key=user.mobile,
-                now=effective_now,
-            )
-            recipient_count += 1
+            if identity is not None:
+                _add_recipient(
+                    db,
+                    event_id=event.id,
+                    user=user,
+                    channel="wechat",
+                    recipient_key=identity.openid,
+                    now=effective_now,
+                )
+                recipient_count += 1
+            if user.mobile:
+                _add_recipient(
+                    db,
+                    event_id=event.id,
+                    user=user,
+                    channel="sms",
+                    recipient_key=user.mobile,
+                    now=effective_now,
+                )
+                recipient_count += 1
 
     # Leave recipients pending in the caller's transaction.  The business
     # command may have already staged an outbox row whose database constraint

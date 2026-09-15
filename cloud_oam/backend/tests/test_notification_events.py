@@ -8,7 +8,13 @@ from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
 
 from app.database import Base
-from app.foundation_models import NotificationEvent, NotificationRecipient, Organization, Person
+from app.foundation_models import (
+    NotificationEvent,
+    NotificationRecipient,
+    Organization,
+    OutboxEvent,
+    Person,
+)
 from app.formal_services.notification_events import (
     record_shipment_handover_notification,
     record_stock_return_notification,
@@ -128,6 +134,34 @@ def test_shipment_handover_notification_is_idempotent_and_missing_mapping_is_saf
             tuple(db.scalars(select(NotificationEvent)).all())
         ) == 1
         assert len(tuple(db.scalars(select(NotificationRecipient)).all())) == 0
+    finally:
+        engine = db.get_bind()
+        db.close()
+        engine.dispose()
+
+
+def test_notification_lookup_does_not_flush_callers_outbox_boundary():
+    db = _db()
+    try:
+        shipment = _shipment(None)
+        pending_outbox = OutboxEvent(
+            event_type="business_fact",
+            aggregate_type="shipment",
+            aggregate_id=str(shipment.id),
+            payload_jsonb={},
+            status="pending",
+            attempts=0,
+            idempotency_key=f"test-outbox:{shipment.id}",
+            available_at=NOW,
+        )
+        db.add(pending_outbox)
+
+        result = record_shipment_handover_notification(
+            db, shipment=shipment, request_id=uuid4(), now=NOW
+        )
+
+        assert pending_outbox in db.new
+        assert result.event.id is not None
     finally:
         engine = db.get_bind()
         db.close()
