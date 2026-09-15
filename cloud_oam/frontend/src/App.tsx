@@ -36,6 +36,7 @@ import { createFormalStocktakeAdapter } from "./formalStocktakeAdapter";
 import ProvincialManagersPage from "./pages/ProvincialManagers";
 import FormalInventoryPage from "./pages/FormalInventory";
 import FormalMaterialRequestsPage from "./pages/FormalMaterialRequests";
+import FormalNotificationsPage from "./pages/FormalNotifications";
 import FormalOpeningReconciliationsPage from "./pages/FormalOpeningReconciliations";
 import FormalOpeningStocktakesPage from "./pages/FormalOpeningStocktakes";
 import FormalStocktakesPage from "./pages/FormalStocktakes";
@@ -331,6 +332,7 @@ function Shell({
     { to: "/dashboard", label: "首页", icon: BarChart3 },
     ...(hasFormalPermission(access, "inventory", "read") ? [{ to: "/inventory", label: "库存账户", icon: Boxes }] : []),
     ...(hasFormalPermission(access, "material_request", "read") ? [{ to: "/material-requests", label: "需求提报", icon: ClipboardList }] : []),
+    ...(hasFormalPermission(access, "access_context", "read") ? [{ to: "/notifications", label: "消息中心", icon: MessageSquareText }] : []),
     ...(hasFormalPermission(access, "stocktake", "read") ? [{ to: "/stocktakes", label: "日常盘点", icon: ClipboardCheck }] : []),
     ...(hasFormalPermission(access, "stocktake", "read") ? [{ to: "/opening-stocktakes", label: "盘点中心", icon: ClipboardCheck }] : []),
     ...(hasFormalPermission(access, "reconciliation", "read") ? [{ to: "/opening-reconciliations", label: "控制账对账", icon: Scale }] : []),
@@ -503,6 +505,7 @@ export default function App() {
   const canManageProvincial = hasFormalPermission(access, "role_assignment", "manage_provincial");
   const canReadInventory = hasFormalPermission(access, "inventory", "read");
   const canReadMaterialRequests = hasFormalPermission(access, "material_request", "read");
+  const canReadNotifications = hasFormalPermission(access, "access_context", "read");
   const canReadStocktake = hasFormalPermission(access, "stocktake", "read");
   const canPrepareOpeningStocktake = (hasFormalRole(access, "admin") || hasFormalRole(access, "provincial_manager"))
     && hasFormalPermission(access, "stocktake", "manage");
@@ -521,6 +524,7 @@ export default function App() {
       <Route path="/dashboard" element={<FormalHome user={user} access={access} />} />
       <Route path="/inventory" element={canReadInventory ? <FormalInventoryPage /> : <Navigate to="/dashboard" replace />} />
       <Route path="/material-requests" element={canReadMaterialRequests ? <FormalMaterialRequestsRoute access={access} /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/notifications" element={canReadNotifications ? <FormalNotificationsPage /> : <Navigate to="/dashboard" replace />} />
       <Route path="/stocktakes" element={canReadStocktake ? <FormalStocktakesRoute access={access} /> : <Navigate to="/dashboard" replace />} />
       <Route path="/opening-stocktakes" element={canReadStocktake ? <FormalOpeningStocktakesPage
         key={`${access.person_id}:${access.authorization_version}`}

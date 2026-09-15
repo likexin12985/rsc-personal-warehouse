@@ -598,3 +598,10 @@ tbody tr:hover { background: #fbfcfc; }
   .work-order-toolbar .field:first-child { grid-column: auto; }
   .work-order-summary { gap: 14px; }
 }
+
+.notification-list { display: grid; gap: 16px; }
+.notification-card { margin: 0; border-left: 4px solid var(--accent); }
+.notification-card.notification-read { border-left-color: var(--line); opacity: .78; }
+.notification-card .content-title { align-items: flex-start; }
+.notification-card .content-title p { margin-top: 8px; color: var(--ink); line-height: 1.65; }
+.notification-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 14px 0; color: var(--muted); font-size: 13px; }
