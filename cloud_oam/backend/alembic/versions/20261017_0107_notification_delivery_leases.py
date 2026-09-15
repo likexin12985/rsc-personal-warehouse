@@ -24,6 +24,9 @@ RUNTIME_READY_BODY_SHA256_0106 = (
 RUNTIME_READY_BODY_SHA256_0107 = (
     "fabc93a9f0066f158ba54952bd4417436189f08f92b03686d5ac646f95f1dcb6"
 )
+# Keep the migration hash names used by the historical catalog gate.
+OLD_HASH = RUNTIME_READY_BODY_SHA256_0106
+NEW_HASH = RUNTIME_READY_BODY_SHA256_0107
 
 
 def _replace_readiness(*, upgrade: bool) -> None:
