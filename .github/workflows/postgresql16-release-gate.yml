@@ -203,6 +203,9 @@ jobs:
             backend/tests/test_material_request_fulfillment_preparation.py \
             backend/tests/test_stock_reservation_releases_migration.py \
             backend/tests/test_formal_material_request_api.py \
+            backend/tests/test_notification_expansion.py \
+            backend/tests/test_notification_delivery.py \
+            backend/tests/test_notification_inbox.py \
             backend/tests/test_demand_schemas.py \
             backend/tests/test_supply_task_read_contract.py \
             backend/tests/test_audit_chain.py \
