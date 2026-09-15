@@ -519,6 +519,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "material_requests",
         "material_substitutions",
         "notification_events",
+        "notification_recipients",
         "oam_work_orders",
         "substitution_decisions",
         "supply_tasks",
@@ -538,6 +539,8 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "material_request_lines",
         "material_request_revisions",
         "material_requests",
+        "notification_events",
+        "notification_recipients",
         "supply_tasks",
     }
     stocktake_close_read_tables = {
