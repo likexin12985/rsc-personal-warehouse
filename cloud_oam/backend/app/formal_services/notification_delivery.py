@@ -251,10 +251,72 @@ def record_notification_provider_status(
     return delivery
 
 
+def retry_failed_notification_delivery(
+    db: Session,
+    *,
+    delivery_id: UUID,
+    expected_attempt_no: int,
+    now: datetime | None = None,
+    max_attempts: int = 5,
+) -> NotificationDelivery:
+    """Explicitly requeue one definitively retryable provider failure.
+
+    The latest attempt must contain an HTTP-style 429 or 5xx response code.
+    Missing response evidence means the external outcome is unknown and is a
+    hard stop; this function never turns a timeout into a duplicate send.
+    """
+
+    if (
+        not isinstance(expected_attempt_no, int)
+        or isinstance(expected_attempt_no, bool)
+        or expected_attempt_no < 1
+    ):
+        raise NotificationDeliveryError("notification attempt number is invalid")
+    if not isinstance(max_attempts, int) or isinstance(max_attempts, bool) or max_attempts < 1:
+        raise NotificationDeliveryError("notification retry limit is invalid")
+    delivery = db.scalar(
+        select(NotificationDelivery)
+        .where(NotificationDelivery.id == delivery_id)
+        .with_for_update()
+    )
+    if delivery is None:
+        raise NotificationDeliveryError("notification delivery does not exist")
+    if delivery.status != "failed":
+        raise NotificationDeliveryError("notification delivery is not a failed attempt")
+    if delivery.attempts != expected_attempt_no:
+        raise NotificationDeliveryError("notification attempt has changed")
+    attempt = db.scalar(
+        select(NotificationAttempt)
+        .where(
+            NotificationAttempt.delivery_id == delivery.id,
+            NotificationAttempt.attempt_no == expected_attempt_no,
+        )
+    )
+    if attempt is None or not attempt.response_code:
+        raise NotificationDeliveryError("notification failure outcome is unknown")
+    response_code = attempt.response_code.strip()
+    try:
+        numeric_code = int(response_code)
+    except ValueError:
+        numeric_code = 0
+    if numeric_code != 429 and not 500 <= numeric_code <= 599:
+        raise NotificationDeliveryError("notification failure is not retryable")
+    if delivery.attempts >= max_attempts:
+        raise NotificationDeliveryError("notification retry limit reached")
+    effective_at = _utc(now)
+    delivery.status = "queued"
+    delivery.locked_at = None
+    delivery.locked_by = None
+    delivery.updated_at = effective_at
+    db.flush()
+    return delivery
+
+
 __all__ = [
     "NotificationDeliveryClaim",
     "NotificationDeliveryError",
     "claim_notification_deliveries",
     "record_notification_delivery_result",
     "record_notification_provider_status",
+    "retry_failed_notification_delivery",
 ]

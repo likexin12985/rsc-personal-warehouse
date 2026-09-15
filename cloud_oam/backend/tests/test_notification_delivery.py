@@ -20,6 +20,7 @@ from app.formal_services.notification_delivery import (
     claim_notification_deliveries,
     record_notification_delivery_result,
     record_notification_provider_status,
+    retry_failed_notification_delivery,
 )
 
 
@@ -220,4 +221,48 @@ def test_provider_read_implies_delivery_but_rejects_wrong_channel_or_time(approv
             provider_message_id=other.provider_message_id,
             status="delivered",
             occurred_at=NOW.replace(minute=29),
+        )
+
+
+def _failed_delivery(db, *, response_code: str | None, error: str = "provider failure"):
+    delivery = _queued_delivery(db)
+    claim_notification_deliveries(db, worker_id="worker-a", now=NOW)
+    return record_notification_delivery_result(
+        db,
+        delivery_id=delivery.id,
+        worker_id="worker-a",
+        request_hash=REQUEST_HASH,
+        response_code=response_code,
+        response_json={"retryable": response_code in {"429", "503"}} if response_code else None,
+        error=error,
+        now=NOW,
+    )
+
+
+def test_only_definitive_retryable_provider_failures_requeue(approval_db):
+    delivery = _failed_delivery(approval_db, response_code="503")
+    retried = retry_failed_notification_delivery(
+        approval_db,
+        delivery_id=delivery.id,
+        expected_attempt_no=1,
+        now=NOW.replace(minute=35),
+    )
+    assert retried.status == "queued"
+
+    unknown = _failed_delivery(approval_db, response_code=None)
+    with pytest.raises(NotificationDeliveryError, match="outcome is unknown"):
+        retry_failed_notification_delivery(
+            approval_db,
+            delivery_id=unknown.id,
+            expected_attempt_no=1,
+            now=NOW,
+        )
+
+    permanent = _failed_delivery(approval_db, response_code="400")
+    with pytest.raises(NotificationDeliveryError, match="not retryable"):
+        retry_failed_notification_delivery(
+            approval_db,
+            delivery_id=permanent.id,
+            expected_attempt_no=1,
+            now=NOW,
         )
