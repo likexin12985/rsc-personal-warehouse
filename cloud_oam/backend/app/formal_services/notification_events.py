@@ -29,7 +29,7 @@ class NotificationEventError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class ShipmentNotificationResult:
+class BusinessNotificationResult:
     event: NotificationEvent
     recipient_count: int
 
@@ -91,7 +91,7 @@ def record_business_notification(
     recipient_person_id: UUID | None,
     occurred_at: datetime,
     now: datetime | None = None,
-) -> ShipmentNotificationResult:
+) -> BusinessNotificationResult:
     """Record one durable business notification and its active channels.
 
     The target person is resolved through the formal ``users.person_id``
@@ -125,7 +125,7 @@ def record_business_notification(
             )
             or 0
         )
-        return ShipmentNotificationResult(existing, recipient_count)
+        return BusinessNotificationResult(existing, recipient_count)
 
     event = NotificationEvent(
         event_type=event_type.strip(),
@@ -173,7 +173,7 @@ def record_business_notification(
             recipient_count += 1
 
     db.flush()
-    return ShipmentNotificationResult(event, recipient_count)
+    return BusinessNotificationResult(event, recipient_count)
 
 
 def record_shipment_handover_notification(
@@ -182,7 +182,7 @@ def record_shipment_handover_notification(
     shipment: Any,
     request_id: UUID,
     now: datetime | None = None,
-) -> ShipmentNotificationResult:
+) -> BusinessNotificationResult:
     """Record one target-engineer notification for a shipment handover."""
 
     shipment_id = getattr(shipment, "id", None)
@@ -218,7 +218,7 @@ def record_shipment_handover_notification(
 
 __all__ = [
     "NotificationEventError",
-    "ShipmentNotificationResult",
+    "BusinessNotificationResult",
     "record_business_notification",
     "record_shipment_handover_notification",
 ]
