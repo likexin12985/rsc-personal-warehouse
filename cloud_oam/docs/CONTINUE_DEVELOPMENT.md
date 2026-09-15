@@ -2846,8 +2846,8 @@ marker 原子推进到当前 head，尚未把云端重跑结果写成通过证�
 
 真实 PostgreSQL 16 收货链首次走 `star_oam_api` 时，发现发运事务在写入通知事实前只有
 `notification_events` 读权限，`notification_recipients` 也没有运行时写权限，最终以 SQLSTATE
-`42501` 失败。新增 `20261018_0108` migration，向 API 只授予这两张表的 `SELECT/INSERT`，
-不授予更新或删除；运行时安全 manifest 与静态 ACL 回归同步更新。这样通知事件和收件人坐标仍与
+`42501` 失败。现有 `20261017_0107` migration 的 PostgreSQL 分支补充向 API 只授予这两张表的
+`SELECT/INSERT`，不授予更新或删除；运行时安全 manifest 与静态 ACL 回归同步更新。这样通知事件和收件人坐标仍与
 发运、收货、入账等业务事实在同一事务内原子提交，投递 worker 的 provider 边界保持不变。
 
 本地迁移全量回归 `168 passed`，通知与 ACL 定向回归 `15 passed`，仓库安全检查通过；云端

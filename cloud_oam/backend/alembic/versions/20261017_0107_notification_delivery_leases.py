@@ -74,6 +74,11 @@ def upgrade() -> None:
         unique=False,
     )
     if dialect == "postgresql":
+        op.execute(
+            "GRANT SELECT, INSERT ON TABLE "
+            "public.notification_events, public.notification_recipients "
+            "TO star_oam_api"
+        )
         _replace_readiness(upgrade=True)
 
 
@@ -83,6 +88,11 @@ def downgrade() -> None:
         raise RuntimeError("0107 supports PostgreSQL and SQLite only")
     if dialect == "postgresql":
         op.execute("LOCK TABLE public.alembic_version IN ACCESS EXCLUSIVE MODE")
+        op.execute(
+            "REVOKE INSERT ON TABLE "
+            "public.notification_events, public.notification_recipients "
+            "FROM star_oam_api"
+        )
         _replace_readiness(upgrade=False)
     op.drop_index(
         "ix_notification_deliveries_dispatch",
