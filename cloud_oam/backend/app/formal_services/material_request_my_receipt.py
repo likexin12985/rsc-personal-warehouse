@@ -21,6 +21,7 @@ from . import material_request_query as query
 from .audit_chain import append_audit_event
 from .material_request_fulfillment_command import record_fulfillment_command, verify_fulfillment_command
 from .formal_files import is_available_formal_file_for_purpose
+from .notification_events import record_business_notification
 
 
 def _fail(code, category, message):
@@ -201,6 +202,23 @@ def create_my_receipt(db, *, actor, request_id, payload, idempotency_key, secret
             db.add(ReceiptException(id=uuid.uuid4(), receipt_id=receipt.id, receipt_line_id=row.id, exception_type=line.condition, detail=f"本人验收条件={line.condition};拒收数量={line.rejected_qty:.3f}", evidence_file_id=line.exception_evidence_file_id, created_at=now))
     append_audit_event(db, stream_key="material_request", actor_user_id=actor.user_id, action="my_receipt_registered", aggregate_type="receipt", aggregate_id=str(receipt.id), before_jsonb={}, after_jsonb={"request_id": str(request.id), "receipt_no": receipt.receipt_no, "request_hash": digest, "command": payload.model_dump(mode="json")}, request_id=trace_request_id, occurred_at=now, created_at=now)
     db.add(OutboxEvent(event_type="receipt_registered", aggregate_type="receipt", aggregate_id=str(receipt.id), payload_jsonb={"request_id": str(request.id), "receipt_no": receipt.receipt_no, "shipment_id": str(shipment.id)}, status="pending", attempts=0, idempotency_key=f"receipt:{receipt.id}", available_at=now))
+    record_business_notification(
+        db,
+        event_type="receipt_registered",
+        business_type="receipt",
+        business_id=receipt.id,
+        dedup_key=f"receipt:{receipt.id}",
+        payload={
+            "request_id": str(request.id),
+            "receipt_id": str(receipt.id),
+            "receipt_no": receipt.receipt_no,
+            "shipment_id": str(shipment.id),
+            "status": receipt.status,
+        },
+        recipient_person_id=context.principal.person_id,
+        occurred_at=when,
+        now=now,
+    )
     db.flush()
     record_fulfillment_command(db, request=request, actor=context.principal, operation="receipt", fact=receipt,
         request_reference=f"/api/v1/material-requests/{request.id}/my-receipts", permission_action="receive")

@@ -9,6 +9,7 @@ from ..inventory_models import InboundOrder, InboundPosting, InventoryTransactio
 from .inventory_posting import InventoryMovementCommand, InventoryPostingCommand, InventoryPostingError, post_inventory_transaction
 from .audit_chain import append_audit_event
 from .material_request_fulfillment_command import record_fulfillment_command, verify_fulfillment_command
+from .notification_events import record_business_notification
 from . import material_request_outbound as outbound
 from . import material_request_query
 
@@ -58,6 +59,23 @@ def _record_order_created(db, *, row, actor, request_id, trace_request_id):
     now = _aware_time(row.created_at)
     append_audit_event(db, stream_key="material_request", actor_user_id=actor.user_id, action="personal_inbound_order_created", aggregate_type="inbound_order", aggregate_id=str(row.id), before_jsonb={}, after_jsonb={"request_id": str(request_id), "receipt_id": str(row.receipt_id), "status": row.status}, request_id=trace_request_id, occurred_at=now, created_at=now)
     db.add(OutboxEvent(event_type="personal_inbound_order_created", aggregate_type="inbound_order", aggregate_id=str(row.id), payload_jsonb={"request_id": str(request_id), "receipt_id": str(row.receipt_id), "inbound_no": row.inbound_no}, status="pending", attempts=0, idempotency_key=f"inbound-order:{row.id}", available_at=now))
+    record_business_notification(
+        db,
+        event_type="personal_inbound_order_created",
+        business_type="inbound_order",
+        business_id=row.id,
+        dedup_key=f"inbound-order:{row.id}",
+        payload={
+            "request_id": str(request_id),
+            "inbound_order_id": str(row.id),
+            "receipt_id": str(row.receipt_id),
+            "inbound_no": row.inbound_no,
+            "status": row.status,
+        },
+        recipient_person_id=row.target_person_id,
+        occurred_at=now,
+        now=now,
+    )
 
 def _aware_time(value):
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
@@ -207,6 +225,22 @@ def _post_inbound_order(db, *, actor, inbound_order_id, material_request_id, ide
             }, status="pending", attempts=0,
             idempotency_key=f"inbound-posted:{order.id}", available_at=now,
         ))
+        record_business_notification(
+            db,
+            event_type="personal_inbound_posted",
+            business_type="inbound_order",
+            business_id=order.id,
+            dedup_key=f"inbound-posted:{order.id}",
+            payload={
+                "request_id": str(material_request_id),
+                "inbound_order_id": str(order.id),
+                "inventory_transaction_id": str(result.transaction_id),
+                "status": "posted",
+            },
+            recipient_person_id=order.target_person_id,
+            occurred_at=now,
+            now=now,
+        )
         db.flush()
         record_fulfillment_command(db, request=request, actor=actor, operation="personal_inbound",
             fact=transaction, request_reference=reference, permission_action="receive" if authority is not None else "fulfill")

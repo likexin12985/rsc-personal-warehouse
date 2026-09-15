@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 from sqlalchemy import select
-from ..inventory_models import StockAccount
+from ..inventory_models import StockAccount, CustodyAssignment
 from ..foundation_models import StateTransitionEvent, OutboxEvent, AuditEvent
 from ..stock_operation_models import StockOperationOutbound, StockOperationOutboundLine, StockOperationOutboundSerial
 from ..stock_return_outbound_schemas import StockReturnOutboundSubmitIn
@@ -11,6 +11,7 @@ from .stock_return_outbound_plan import preview_outbound, original, intent, tran
 from .stock_return_plan import authorize
 from .work_order_return_sources import _hash, _fail
 from .audit_chain import append_audit_event
+from .notification_events import record_stock_return_notification
 
 
 def _record(db, actor, order, fact):
@@ -21,6 +22,17 @@ def _record(db, actor, order, fact):
         idempotency_key=kind + ":" + str(fact.id), available_at=fact.created_at, created_at=fact.created_at, updated_at=fact.created_at))
     db.add(StateTransitionEvent(aggregate_type=aggregate, aggregate_id=str(fact.id), from_status=None, to_status="outbound",
         actor_id=actor.user_id, reason=kind, idempotency_key=kind + ":" + str(fact.id), occurred_at=fact.created_at, metadata_jsonb=body, created_at=fact.created_at))
+    assignment = db.get(CustodyAssignment, fact.target_custody_assignment_id)
+    record_stock_return_notification(
+        db,
+        event_type=kind,
+        business_type=aggregate,
+        business_id=fact.id,
+        payload={**body, "target_custody_assignment_id": str(fact.target_custody_assignment_id)},
+        recipient_person_id=assignment.custodian_person_id if assignment is not None else None,
+        occurred_at=fact.created_at,
+        now=fact.created_at,
+    )
     db.flush()
 
 

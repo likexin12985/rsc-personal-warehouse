@@ -33,6 +33,7 @@ from .inventory_posting import (
 from .postgresql_lock_graph import lock_material_request_work_order
 from .audit_chain import append_audit_event
 from .work_order_reservations import require_work_order_reservations
+from .notification_events import record_business_notification
 from .work_order_accounts import resolve_work_order_reserved_lines
 
 
@@ -390,6 +391,23 @@ def record_posted_operation(
             "posting_transaction_id": str(posting_transaction_id)}, status="pending", attempts=0,
         idempotency_key=f"work-order-material-operation:{operation.id}", available_at=occurred_at,
     ))
+    record_business_notification(
+        db,
+        event_type="work_order_material_operation_posted",
+        business_type="work_order_material_operation",
+        business_id=operation.id,
+        dedup_key=f"work-order-material-operation:{operation.id}",
+        payload={
+            "work_order_id": str(work_order_id),
+            "operation_id": str(operation.id),
+            "operation_type": operation_type,
+            "operation_no": operation.operation_no,
+            "posting_transaction_id": str(posting_transaction_id),
+        },
+        recipient_person_id=operator_person_id,
+        occurred_at=occurred_at,
+        now=occurred_at,
+    )
     return operation
 
 
