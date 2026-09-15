@@ -4,12 +4,18 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from test_material_request_approval_service import approval_db
 from test_material_request_draft_service import make_world
 
 from app.foundation_models import NotificationDelivery, NotificationEvent, NotificationRecipient
+from app.database import get_db
+from app.dependencies import get_formal_principal
+from app.main import block_legacy_prototype_writes
+from app.routers import formal_notifications
 from app.formal_services.notification_inbox import (
     NotificationInboxError,
     list_notification_inbox,
@@ -18,6 +24,14 @@ from app.formal_services.notification_inbox import (
 
 
 NOW = datetime(2026, 9, 15, 2, 0, tzinfo=timezone.utc)
+
+
+class _ApiPrincipal:
+    def __init__(self, user_id: str) -> None:
+        self.user_id = user_id
+
+    def allows(self, _db, resource: str, action: str, **_kwargs) -> bool:
+        return (resource, action) == ("access_context", "read")
 
 
 def _delivery(
@@ -134,3 +148,51 @@ def test_queued_notification_cannot_be_marked_read(approval_db):
             user_id=world.actor_user.id,
             delivery_id=delivery.id,
         )
+
+
+def test_formal_api_returns_only_current_user_and_keeps_failures_private(approval_db, monkeypatch):
+    world = make_world(approval_db)
+    own = _delivery(approval_db, user_id=world.actor_user.id)
+    foreign = _delivery(approval_db, user_id=world.admin_users[0].id)
+    page = list_notification_inbox(approval_db, user_id=world.actor_user.id)
+
+    class _Db:
+        def commit(self): pass
+        def rollback(self): pass
+
+    monkeypatch.setattr(
+        formal_notifications.notification_inbox,
+        "list_notification_inbox",
+        lambda _db, *, user_id, limit, after_id: page
+        if user_id == world.actor_user.id
+        else pytest.fail("router crossed current-user boundary"),
+    )
+
+    def reject_foreign(_db, *, user_id, delivery_id):
+        assert user_id == world.actor_user.id
+        assert delivery_id == foreign.id
+        raise NotificationInboxError(
+            "notification does not belong to current user",
+            http_status_code=404,
+        )
+
+    monkeypatch.setattr(
+        formal_notifications.notification_inbox,
+        "mark_notification_read",
+        reject_foreign,
+    )
+    api = FastAPI()
+    api.middleware("http")(block_legacy_prototype_writes)
+    api.include_router(formal_notifications.router, prefix="/api")
+    api.dependency_overrides[get_db] = _Db
+    api.dependency_overrides[get_formal_principal] = lambda: _ApiPrincipal(world.actor_user.id)
+
+    with TestClient(api) as client:
+        listed = client.get("/api/v1/notifications")
+        assert listed.status_code == 200
+        assert [row["delivery_id"] for row in listed.json()["items"]] == [str(own.id)]
+        assert listed.headers["Cache-Control"] == "private, no-store, max-age=0"
+
+        rejected = client.post(f"/api/v1/notifications/{foreign.id}/read", json={})
+        assert rejected.status_code == 404
+        assert rejected.headers["Cache-Control"] == "private, no-store, max-age=0"
