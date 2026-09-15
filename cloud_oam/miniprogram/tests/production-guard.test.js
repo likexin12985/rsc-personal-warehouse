@@ -272,6 +272,7 @@ test('release navigation registers only reviewed formal workbench, scan, persona
     'pages/formal-my-inbound/index',
     'pages/formal-my-receipt/index',
     'pages/formal-material-requests/index',
+    'pages/formal-notifications/index',
     'pages/formal-operational-stocktakes/index',
     'pages/formal-operational-stocktake-detail/index',
     'pages/formal-stocktakes/index',
