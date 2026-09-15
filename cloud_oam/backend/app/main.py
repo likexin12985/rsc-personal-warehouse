@@ -98,6 +98,7 @@ PRIVATE_COMMAND_RECOVERY_PATHS = frozenset(
 )
 PRIVATE_MATERIAL_REQUEST_OPTION_PREFIX = "/api/v1/material-request-options"
 PRIVATE_OPENING_START_OPTION_PREFIX = "/api/v1/stocktakes/opening/start-options"
+PRIVATE_NOTIFICATION_PREFIX = "/api/v1/notifications"
 
 
 def is_production_auth_path(method: str, path: str) -> bool:
@@ -270,6 +271,7 @@ async def block_legacy_prototype_writes(request, call_next):
     if request.url.path.startswith((
         PRIVATE_MATERIAL_REQUEST_OPTION_PREFIX,
         PRIVATE_OPENING_START_OPTION_PREFIX,
+        PRIVATE_NOTIFICATION_PREFIX,
     )):
         # Picker rows are live authorization decisions. Apply this to
         # framework and service failures too so a cached 404/403 cannot hide a
