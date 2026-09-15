@@ -149,6 +149,7 @@ RUNTIME_READ_TABLES = frozenset(
         "sync_inbox_events",
         "sync_runs",
         "users",
+        "wechat_identities",
     }
 )
 RUNTIME_INSERT_TABLES = frozenset(

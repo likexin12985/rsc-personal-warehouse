@@ -79,6 +79,7 @@ def upgrade() -> None:
             "public.notification_events, public.notification_recipients "
             "TO star_oam_api"
         )
+        op.execute("GRANT SELECT ON TABLE public.wechat_identities TO star_oam_api")
         _replace_readiness(upgrade=True)
 
 
