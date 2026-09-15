@@ -172,7 +172,14 @@ def record_business_notification(
             )
             recipient_count += 1
 
-    db.flush()
+    # Leave recipients pending in the caller's transaction.  The business
+    # command may have already staged an outbox row whose database constraint
+    # deliberately observes the complete atomic fact set at the caller's
+    # checkpoint.  Flushing every pending object here would move that outbox
+    # row to the database before the caller can validate the same boundary.
+    # The event itself was flushed above to obtain its primary key; normal
+    # commit/autoflush persists the recipients together with the business
+    # fact and outbox event.
     return BusinessNotificationResult(event, recipient_count)
 
 
