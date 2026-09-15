@@ -1910,6 +1910,12 @@ class NotificationDelivery(TimestampMixin, Base):
         Index(
             "ix_notification_deliveries_status_created", "status", "created_at"
         ),
+        Index(
+            "ix_notification_deliveries_dispatch",
+            "status",
+            "locked_at",
+            "updated_at",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1930,6 +1936,13 @@ class NotificationDelivery(TimestampMixin, Base):
     )
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # A sending lease identifies the worker allowed to write the provider
+    # result.  An expired lease is evidence of an uncertain external call and
+    # must not be silently retried by a different worker.
+    locked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    locked_by: Mapped[str | None] = mapped_column(String(160), nullable=True)
 
 
 class NotificationAttempt(CreatedAtMixin, Base):

@@ -68,9 +68,11 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261016_0106"
+HEAD_REVISION = "20261017_0107"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
-RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
+# 0107 only adds notification delivery lease columns.  It does not change the
+# OAM scope function, so its readiness marker remains the exact 0106 body.
+RUNTIME_READY_HEAD_REVISION = "20261016_0106"
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
     {
         STOCKTAKE_POSTING_COMMAND_OUTCOMES_REVISION,
@@ -7445,7 +7447,7 @@ def _head_runtime_ready_hash() -> str:
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
         "20261016_0106_stock_return_inbounds.py"
     )))
-    assert migration["revision"] == HEAD_REVISION
+    assert migration["revision"] == RUNTIME_READY_HEAD_REVISION
     return migration["NEW_HASH"]
 
 
