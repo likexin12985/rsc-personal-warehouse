@@ -5,7 +5,7 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from ..foundation_models import AuditEvent, OutboxEvent, StateTransitionEvent
-from ..inventory_models import InventoryTransaction, StockAccount, Shipment, Receipt
+from ..inventory_models import InventoryTransaction, StockAccount, Shipment, Receipt, CustodyAssignment
 from ..stock_operation_models import StockOperationOrder as Order, StockOperationLine as Line, StockOperationSerial as Serial, StockOperationCancellation as Cancellation, StockOperationOutbound, StockOperationShipment, StockOperationReceipt
 from ..stock_return_schemas import StockReturnSubmitIn, StockReturnCancelIn
 from . import inventory_posting as posting, work_order_material as material
@@ -13,6 +13,7 @@ from .audit_chain import append_audit_event
 from . import stock_return_facts as facts
 from .stock_return_plan import authorize, intent, preview_return
 from .work_order_return_sources import _hash, _fail
+from .notification_events import record_stock_return_notification
 
 
 def _fresh_request(db, *, actor, key, request_id):
@@ -43,6 +44,17 @@ def _record(db, *, actor, order, fact, cancel=False):
     db.add(StateTransitionEvent(aggregate_type=aggregate, aggregate_id=str(fact.id), from_status=None,
         to_status="cancelled" if cancel else "submitted", actor_id=actor.user_id, reason=kind,
         idempotency_key=kind + ":" + str(fact.id), occurred_at=now, metadata_jsonb=body, created_at=now))
+    assignment = db.get(CustodyAssignment, order.target_custody_assignment_id)
+    record_stock_return_notification(
+        db,
+        event_type=kind,
+        business_type=aggregate,
+        business_id=fact.id,
+        payload={**body, "target_custody_assignment_id": str(order.target_custody_assignment_id)},
+        recipient_person_id=assignment.custodian_person_id if assignment is not None else None,
+        occurred_at=now,
+        now=now,
+    )
     db.flush()
 
 

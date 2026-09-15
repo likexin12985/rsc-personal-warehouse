@@ -216,9 +216,46 @@ def record_shipment_handover_notification(
     )
 
 
+def record_stock_return_notification(
+    db: Session,
+    *,
+    event_type: str,
+    business_type: str,
+    business_id: UUID,
+    payload: dict[str, Any],
+    recipient_person_id: UUID | None,
+    occurred_at: datetime,
+    now: datetime | None = None,
+) -> BusinessNotificationResult:
+    """Record a return-lifecycle notification for the bound custodian.
+
+    Return submission, cancellation, physical departure, acceptance, and
+    inbound posting are separate business facts.  This helper only gives each
+    fact one durable notification identity and resolves the current recipient;
+    it never collapses those state axes or invokes a provider.
+    """
+
+    if not isinstance(event_type, str) or not event_type.strip():
+        raise NotificationEventError("stock return notification event type is invalid")
+    if not isinstance(business_type, str) or not business_type.strip():
+        raise NotificationEventError("stock return notification business type is invalid")
+    return record_business_notification(
+        db,
+        event_type=event_type,
+        business_type=business_type,
+        business_id=business_id,
+        dedup_key=f"stock-return-notification:{event_type}:{business_id}",
+        payload=dict(payload),
+        recipient_person_id=recipient_person_id,
+        occurred_at=occurred_at,
+        now=now,
+    )
+
+
 __all__ = [
     "NotificationEventError",
     "BusinessNotificationResult",
     "record_business_notification",
     "record_shipment_handover_notification",
+    "record_stock_return_notification",
 ]

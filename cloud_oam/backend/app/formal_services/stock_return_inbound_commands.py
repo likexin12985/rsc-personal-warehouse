@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..foundation_models import OutboxEvent, StateTransitionEvent
-from ..inventory_models import InventoryTransaction
+from ..inventory_models import InventoryTransaction, CustodyAssignment
 from ..stock_operation_models import (
     StockOperationReceipt,
     StockOperationReceiptSerial,
@@ -28,6 +28,7 @@ from .audit_chain import append_audit_event, lock_audit_chain_head
 from .stock_return_inbound_contract import ReturnInboundLine, build_return_inbound_command
 from .stock_return_inbound_plan import plan_return_inbound
 from .work_order_return_sources import _fail, _hash
+from .notification_events import record_stock_return_notification
 
 
 def _json_plan(plan: dict) -> dict:
@@ -259,6 +260,17 @@ def execute_return_inbound(
         reason="stock_return_inbound_posted", idempotency_key=f"stock-return-inbound:{inbound_id}",
         occurred_at=now, metadata_jsonb=body, created_at=now,
     ))
+    assignment = db.get(CustodyAssignment, row.target_custody_assignment_id)
+    record_stock_return_notification(
+        db,
+        event_type="stock_return_inbound_posted",
+        business_type="stock_operation_return_inbound",
+        business_id=row.id,
+        payload={**body, "target_custody_assignment_id": str(row.target_custody_assignment_id)},
+        recipient_person_id=assignment.custodian_person_id if assignment is not None else None,
+        occurred_at=now,
+        now=now,
+    )
     db.flush()
     return _result(row)
 

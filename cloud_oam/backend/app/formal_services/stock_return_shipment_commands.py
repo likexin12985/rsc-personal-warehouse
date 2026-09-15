@@ -5,6 +5,7 @@ from sqlalchemy import select
 from ..inventory_models import Shipment
 from ..foundation_models import OutboxEvent, StateTransitionEvent
 from ..stock_operation_models import StockOperationShipment, StockOperationShipmentLine, StockOperationShipmentSerial
+from ..inventory_models import CustodyAssignment
 from ..stock_return_shipment_schemas import StockReturnShipmentSubmitIn
 from . import inventory_posting as posting, stock_return_commands as returns, stock_return_shipment_facts as facts
 from .stock_return_shipment_plan import preview_shipment, intent
@@ -13,6 +14,7 @@ from .stock_return_plan import authorize
 from .work_order_return_sources import _hash, _fail
 from .audit_chain import append_audit_event, lock_audit_chain_head
 from . import work_order_material as material
+from .notification_events import record_stock_return_notification
 
 
 def _record(db, actor, order, header, fact):
@@ -26,6 +28,17 @@ def _record(db, actor, order, header, fact):
     db.add(StateTransitionEvent(aggregate_type=aggregate, aggregate_id=str(fact.id), from_status=None, to_status="shipped",
         actor_id=actor.user_id, reason=kind, idempotency_key=kind + ":" + str(fact.id), occurred_at=fact.created_at,
         metadata_jsonb=body, created_at=fact.created_at))
+    assignment = db.get(CustodyAssignment, fact.target_custody_assignment_id)
+    record_stock_return_notification(
+        db,
+        event_type=kind,
+        business_type=aggregate,
+        business_id=fact.id,
+        payload={**body, "target_custody_assignment_id": str(fact.target_custody_assignment_id)},
+        recipient_person_id=assignment.custodian_person_id if assignment is not None else None,
+        occurred_at=fact.created_at,
+        now=fact.created_at,
+    )
     db.flush()
 
 

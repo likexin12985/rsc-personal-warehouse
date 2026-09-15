@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from ..formal_access import lock_formal_principal_graph
 from ..foundation_models import OutboxEvent, StateTransitionEvent
-from ..inventory_models import Receipt
+from ..inventory_models import Receipt, CustodyAssignment
 from ..stock_operation_models import (StockOperationReceipt, StockOperationReceiptLine,
     StockOperationReceiptSerial, StockOperationReceiptException, StockOperationShipmentLine,
     StockOperationOutboundLine)
@@ -18,6 +18,7 @@ from .formal_files import _lock_file
 from .postgresql_lock_graph import (lock_material_request_work_order, lock_inventory_serial_graph,
     lock_inventory_reference_graph)
 from .work_order_return_sources import _hash, _fail
+from .notification_events import record_stock_return_notification
 
 
 def _record(db, actor, fact, header, package):
@@ -32,6 +33,17 @@ def _record(db, actor, fact, header, package):
     db.add(StateTransitionEvent(aggregate_type=aggregate, aggregate_id=str(fact.id), from_status=None,
         to_status=header.status, actor_id=actor.user_id, reason=kind, idempotency_key=kind + ':' + str(fact.id),
         occurred_at=now, metadata_jsonb=body, created_at=now))
+    assignment = db.get(CustodyAssignment, fact.target_custody_assignment_id)
+    record_stock_return_notification(
+        db,
+        event_type=kind,
+        business_type=aggregate,
+        business_id=fact.id,
+        payload={**body, "target_custody_assignment_id": str(fact.target_custody_assignment_id)},
+        recipient_person_id=assignment.custodian_person_id if assignment is not None else None,
+        occurred_at=now,
+        now=now,
+    )
     db.flush()
 
 

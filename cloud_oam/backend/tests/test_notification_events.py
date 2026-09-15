@@ -9,7 +9,10 @@ from sqlalchemy.orm import Session
 
 from app.database import Base
 from app.foundation_models import NotificationEvent, NotificationRecipient, Organization, Person
-from app.formal_services.notification_events import record_shipment_handover_notification
+from app.formal_services.notification_events import (
+    record_shipment_handover_notification,
+    record_stock_return_notification,
+)
 from app.models import User, WechatIdentity
 
 
@@ -125,6 +128,65 @@ def test_shipment_handover_notification_is_idempotent_and_missing_mapping_is_saf
             tuple(db.scalars(select(NotificationEvent)).all())
         ) == 1
         assert len(tuple(db.scalars(select(NotificationRecipient)).all())) == 0
+    finally:
+        engine = db.get_bind()
+        db.close()
+        engine.dispose()
+
+
+def test_stock_return_notification_keeps_fact_identity_and_bound_recipient():
+    db = _db()
+    try:
+        organization = Organization(
+            id=uuid4(), code="ORG-RETURN", name="退回测试组织", org_type="region_company"
+        )
+        person = Person(
+            id=uuid4(),
+            organization_id=organization.id,
+            employee_no="E-RETURN",
+            name="退回保管人",
+            employment_status="active",
+        )
+        user = User(
+            id=str(uuid4()),
+            person_id=person.id,
+            account_status="active",
+            mobile="13900000000",
+            name="退回保管人",
+            password_hash="unused",
+            role="technician",
+            is_active=True,
+        )
+        db.add_all([organization, person, user])
+        db.flush()
+        business_id = uuid4()
+        first = record_stock_return_notification(
+            db,
+            event_type="stock_return_received",
+            business_type="stock_operation_receipt",
+            business_id=business_id,
+            payload={"receipt_id": str(business_id)},
+            recipient_person_id=person.id,
+            occurred_at=NOW,
+            now=NOW,
+        )
+        second = record_stock_return_notification(
+            db,
+            event_type="stock_return_received",
+            business_type="stock_operation_receipt",
+            business_id=business_id,
+            payload={"receipt_id": str(business_id)},
+            recipient_person_id=person.id,
+            occurred_at=NOW,
+            now=NOW,
+        )
+        assert first.event.id == second.event.id
+        assert first.recipient_count == second.recipient_count == 1
+        assert first.event.dedup_key == f"stock-return-notification:stock_return_received:{business_id}"
+        recipients = tuple(db.scalars(select(NotificationRecipient)).all())
+        assert [(row.channel, row.recipient_key, row.user_id) for row in recipients] == [
+            ("sms", "13900000000", user.id)
+        ]
     finally:
         engine = db.get_bind()
         db.close()
