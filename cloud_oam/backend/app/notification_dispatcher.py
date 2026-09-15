@@ -131,7 +131,7 @@ def _adapter_result(adapter: NotificationProvider | Adapter, claim: Any) -> Prov
         result = sender(
             channel=claim.channel,
             recipient_key=claim.recipient_key,
-            payload=claim.payload,
+            payload=dict(claim.payload),
         )
     except NotificationProviderError as exc:
         if exc.uncertain:
@@ -165,6 +165,10 @@ def _adapter_result(adapter: NotificationProvider | Adapter, claim: Any) -> Prov
         return ProviderResult.unknown(error="provider adapter omitted delivery outcome")
     if result.response_json is not None and not isinstance(result.response_json, dict):
         return ProviderResult.unknown(error="provider adapter returned invalid response evidence")
+    if result.response_code is not None and (
+        not isinstance(result.response_code, str) or not result.response_code.strip()
+    ):
+        return ProviderResult.unknown(error="provider adapter returned an invalid response code")
     return result
 
 
@@ -213,6 +217,7 @@ def dispatch_notification_batch(
     sent = failed = unknown = 0
     errors: list[str] = []
     for claim in claims:
+        request_hash = notification_request_hash(claim)
         adapter = adapters.get(claim.channel)
         if adapter is None:
             result = ProviderResult.rejected(error=f"provider adapter is not configured for {claim.channel}")
@@ -231,7 +236,7 @@ def dispatch_notification_batch(
                 result_session,
                 delivery_id=claim.delivery_id,
                 worker_id=worker_id,
-                request_hash=notification_request_hash(claim),
+                request_hash=request_hash,
                 response_code=result.response_code,
                 response_json=result.response_json,
                 provider_message_id=result.provider_message_id,
