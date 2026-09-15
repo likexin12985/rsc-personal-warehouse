@@ -109,16 +109,19 @@ def list_notification_inbox(
     if cursor is not None:
         query = query.where(
             or_(
-                NotificationDelivery.created_at > cursor.created_at,
+                NotificationDelivery.created_at < cursor.created_at,
                 and_(
                     NotificationDelivery.created_at == cursor.created_at,
-                    NotificationDelivery.id > cursor.id,
+                    NotificationDelivery.id < cursor.id,
                 ),
             )
         )
     rows = tuple(
         db.execute(
-            query.order_by(NotificationDelivery.created_at, NotificationDelivery.id).limit(limit + 1)
+            query.order_by(
+                NotificationDelivery.created_at.desc(),
+                NotificationDelivery.id.desc(),
+            ).limit(limit + 1)
         ).all()
     )
     has_next = len(rows) > limit

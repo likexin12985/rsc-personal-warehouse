@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -20,7 +20,13 @@ from app.formal_services.notification_inbox import (
 NOW = datetime(2026, 9, 15, 2, 0, tzinfo=timezone.utc)
 
 
-def _delivery(db, *, user_id: str, status: str = "sent") -> NotificationDelivery:
+def _delivery(
+    db,
+    *,
+    user_id: str,
+    status: str = "sent",
+    created_at: datetime = NOW,
+) -> NotificationDelivery:
     event = NotificationEvent(
         event_type="shipment_handover_registered",
         business_type="shipment",
@@ -28,8 +34,8 @@ def _delivery(db, *, user_id: str, status: str = "sent") -> NotificationDelivery
         dedup_key=f"inbox-event:{uuid4()}",
         payload_jsonb={"title": "包裹已发运"},
         status="expanded",
-        occurred_at=NOW,
-        created_at=NOW,
+        occurred_at=created_at,
+        created_at=created_at,
     )
     db.add(event)
     db.flush()
@@ -39,7 +45,7 @@ def _delivery(db, *, user_id: str, status: str = "sent") -> NotificationDelivery
         channel="wechat",
         recipient_key=f"user:{user_id}:{uuid4()}",
         status="active",
-        created_at=NOW,
+        created_at=created_at,
     )
     db.add(recipient)
     db.flush()
@@ -48,9 +54,9 @@ def _delivery(db, *, user_id: str, status: str = "sent") -> NotificationDelivery
         delivery_key=f"inbox-delivery:{uuid4()}",
         status=status,
         attempts=1,
-        created_at=NOW,
-        updated_at=NOW,
-        sent_at=NOW if status in {"sent", "delivered"} else None,
+        created_at=created_at,
+        updated_at=created_at,
+        sent_at=created_at if status in {"sent", "delivered"} else None,
     )
     db.add(delivery)
     db.flush()
@@ -66,6 +72,29 @@ def test_inbox_is_user_scoped_and_counts_only_unread_sent_or_delivered(approval_
 
     assert [row.delivery_id for row in page.items] == [own.id]
     assert page.unread_count == 1
+
+
+def test_inbox_orders_newest_first_and_cursor_returns_older_rows(approval_db):
+    world = make_world(approval_db)
+    older = _delivery(
+        approval_db,
+        user_id=world.actor_user.id,
+        created_at=NOW - timedelta(minutes=1),
+    )
+    newer = _delivery(approval_db, user_id=world.actor_user.id, created_at=NOW)
+
+    first = list_notification_inbox(approval_db, user_id=world.actor_user.id, limit=1)
+    second = list_notification_inbox(
+        approval_db,
+        user_id=world.actor_user.id,
+        limit=1,
+        after_id=first.next_after_id,
+    )
+
+    assert [item.delivery_id for item in first.items] == [newer.id]
+    assert first.next_after_id == newer.id
+    assert [item.delivery_id for item in second.items] == [older.id]
+    assert second.next_after_id is None
 
 
 def test_mark_read_is_monotonic_and_does_not_cross_user_boundary(approval_db):
