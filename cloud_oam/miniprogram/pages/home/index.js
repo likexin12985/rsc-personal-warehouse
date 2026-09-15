@@ -29,6 +29,7 @@ Page({
     inventoryAccessAllowed: false,
     workOrderAccessAllowed: false,
     returnReceivingAccessAllowed: false,
+    notificationAccessAllowed: false,
     inventorySummary: null,
     accessStatusLabel: '正在校验',
     accessStatusTone: 'neutral',
@@ -63,6 +64,7 @@ Page({
       inventoryAccessAllowed: false,
       workOrderAccessAllowed: false,
       returnReceivingAccessAllowed: false,
+      notificationAccessAllowed: false,
       inventorySummary: null,
       accessStatusLabel: '正在校验',
       accessStatusTone: 'neutral',
@@ -116,6 +118,10 @@ Page({
         workOrderAccessAllowed: decision.allowed && hasFormalPermission(access, 'work_order_material', 'read'),
         returnReceivingAccessAllowed: decision.allowed && hasFormalPermission(access, 'stock_operation', 'read')
           && formalRoleCodes(user).some(role => ['admin', 'provincial_manager'].includes(role)),
+        notificationAccessAllowed: (
+          access.access_mode === 'active' &&
+          hasFormalPermission(access, 'access_context', 'read')
+        ),
         accessStatusLabel: decision.allowed ? '库存权限已验证' : '库存访问已停止',
         accessStatusTone: decision.allowed ? 'success' : 'danger',
         moduleTitle: decision.allowed ? '正在读取正式库存账' : '库存访问已失败关闭',
@@ -154,6 +160,7 @@ Page({
         inventoryAccessAllowed: false,
         workOrderAccessAllowed: false,
         returnReceivingAccessAllowed: false,
+        notificationAccessAllowed: false,
         inventorySummary: null,
         accessStatusLabel: '上下文校验失败',
         accessStatusTone: 'danger',

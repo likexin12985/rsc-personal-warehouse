@@ -1,0 +1,17 @@
+<view class="page">
+  <view class="card head-card">
+    <view class="title">消息中心</view>
+    <view class="muted">只展示当前正式身份绑定的通知；送达状态与业务状态分开记录。</view>
+  </view>
+  <view wx:if="{{loading}}" class="card muted">正在读取通知。</view>
+  <view wx:elif="{{error}}" class="card error">{{error}}</view>
+  <view wx:elif="{{!items.length}}" class="card muted">暂无通知。</view>
+  <block wx:else>
+    <view wx:for="{{items}}" wx:key="delivery_id" class="card notice {{item.status === 'read' ? 'read' : ''}}" data-id="{{item.delivery_id}}" bindtap="openItem">
+      <view class="row between"><text class="notice-title">{{item.title}}</text><text class="status">{{item.status}}</text></view>
+      <view class="notice-body">{{item.body}}</view>
+      <view class="muted">{{item.business_type}} · {{item.business_id}}</view>
+    </view>
+  </block>
+  <button wx:if="{{nextAfterId}}" class="more" loading="{{loadingMore}}" bindtap="loadMore">加载更多</button>
+</view>

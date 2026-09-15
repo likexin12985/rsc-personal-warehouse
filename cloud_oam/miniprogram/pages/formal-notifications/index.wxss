@@ -1,0 +1,11 @@
+.head-card { padding: 30rpx; }
+.title { font-size: 38rpx; font-weight: 700; }
+.head-card .muted { margin-top: 14rpx; line-height: 1.6; }
+.notice { margin-top: 20rpx; padding: 28rpx 30rpx; border-left: 6rpx solid #e65318; }
+.notice.read { border-left-color: #b8c0c5; opacity: .76; }
+.notice-title { font-size: 29rpx; font-weight: 700; }
+.notice-body { margin: 16rpx 0; color: #4f5b63; line-height: 1.7; }
+.status { color: #e65318; font-size: 22rpx; }
+.muted { color: #6e7a81; font-size: 24rpx; }
+.error { padding: 30rpx; color: #b43b28; }
+.more { margin: 24rpx 0; }

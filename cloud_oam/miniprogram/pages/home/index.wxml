@@ -73,6 +73,15 @@
       <text class="module-link-arrow">进入 ›</text>
     </navigator>
 
+    <navigator wx:if="{{notificationAccessAllowed}}" class="card module-link" url="/pages/formal-notifications/index">
+      <view>
+        <text class="module-link-kicker">消息中心</text>
+        <text class="module-link-title">查看履约通知</text>
+        <text class="module-link-detail">查看本人通知的排队、送达和已读状态，不混同业务履约状态。</text>
+      </view>
+      <text class="module-link-arrow">进入 ›</text>
+    </navigator>
+
     <navigator wx:if="{{stocktakeAccessAllowed}}" class="card module-link" url="/pages/formal-operational-stocktakes/index">
       <view>
         <text class="module-link-kicker">日常盘点</text>
