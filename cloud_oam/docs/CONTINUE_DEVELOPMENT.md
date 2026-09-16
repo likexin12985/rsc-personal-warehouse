@@ -2863,5 +2863,22 @@ PG16 动态门禁需以包含该修复的准确 SHA 重新执行。
 
 通知事件、扩展、dispatcher 与工单物料证据定向回归 `68 passed`，`git diff --check` 和 Python
 编译检查通过。
-准确 SHA 的 PostgreSQL 16 门禁仍需重跑；上一轮已通过通知、收货、个人仓入账，但在工单物料
-台账门禁暴露出上述事务边界问题。
+准确远端 SHA `40fd739ab1384bd6c670a54132e3ee13c83d1429` 的 Client gate
+`35037306120` 与 PostgreSQL 16 release gate `35037306003` 均已成功；PG16 的
+`static_safety`、`pg16_runtime` 和聚合 job 全部通过。该证据覆盖上述事务边界、通知 ACL、
+发运、收货、个人仓入账和后续工单数据库门禁，不替代预生产部署或真实供应商送达验证。
+
+## 7.28 通知 worker 的生产部署入口（2026-09-16）
+
+主 Compose 新增 opt-in `notifications` profile，分别运行 `notification-expander` 和
+`notification-dispatcher`。两个进程只使用 `star_oam_api` 运行时数据库身份，等待 migration
+成功后启动，并采用只读根文件系统、非 root 用户、移除 capabilities、禁止提权以及独立的
+CPU、内存、PID 和临时目录上限。
+
+基础镜像仍不包含外部供应商适配器或凭据。dispatcher 只从部署时显式设置的
+`OAM_NOTIFICATION_ADAPTER_MODULE` 加载审核过的模块；为空或非法时在领取投递前退出，且重启
+次数有界，避免配置错误形成热循环。批量上限、轮询间隔和 worker identity 已加入环境样例，
+真实微信、短信或飞书凭据仍须由目标部署的秘密管理边界提供。
+
+部署安全、expander 与 dispatcher 定向回归 `25 passed`，Compose YAML 解析通过；尚未接入
+真实供应商、回调签名、送达回执和预生产运行，因此不能把该入口视为通知送达完成。

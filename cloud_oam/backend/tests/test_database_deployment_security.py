@@ -88,6 +88,45 @@ def test_compose_kms_pin_plan_has_no_database_secret_or_network() -> None:
     ) in plan
 
 
+def test_notification_workers_are_opt_in_and_use_only_runtime_database_role() -> None:
+    compose = COMPOSE.read_text(encoding="utf-8")
+    expander = compose.split("  notification-expander:\n", 1)[1].split(
+        "  notification-dispatcher:\n", 1
+    )[0]
+    dispatcher = compose.split("  notification-dispatcher:\n", 1)[1].split(
+        "  web:\n", 1
+    )[0]
+
+    for worker in (expander, dispatcher):
+        assert "profiles: [notifications]" in worker
+        assert "star_oam_api:${OAM_DB_API_PASSWORD}" in worker
+        assert "OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api" in worker
+        assert "migrate:\n        condition: service_completed_successfully" in worker
+        assert 'read_only: true' in worker
+        assert 'user: "65532:65532"' in worker
+        assert "cap_drop: [ALL]" in worker
+        assert "no-new-privileges:true" in worker
+        assert "OAM_DB_MIGRATOR_PASSWORD" not in worker
+        assert "OAM_DB_BACKUP_PASSWORD" not in worker
+        assert "POSTGRES_PASSWORD" not in worker
+
+    assert "app.notification_expander" in expander
+    assert "OAM_NOTIFICATION_ADAPTER_MODULE" not in expander
+    assert "app.notification_dispatcher" in dispatcher
+    assert "restart: on-failure:5" in dispatcher
+    assert "OAM_NOTIFICATION_ADAPTER_MODULE" in dispatcher
+    assert "OAM_NOTIFICATION_WORKER_ID" in dispatcher
+
+
+def test_notification_worker_environment_defaults_fail_closed() -> None:
+    env = ENV_EXAMPLE.read_text(encoding="utf-8")
+    assert "OAM_NOTIFICATION_ADAPTER_MODULE=\n" in env
+    assert "OAM_NOTIFICATION_WORKER_ID=notification-dispatcher-1" in env
+    assert "OAM_NOTIFICATION_EXPAND_LIMIT=100" in env
+    assert "OAM_NOTIFICATION_DISPATCH_LIMIT=50" in env
+    assert "OAM_NOTIFICATION_POLL_SECONDS=30" in env
+
+
 def test_fresh_database_initializer_creates_distinct_non_superuser_roles() -> None:
     subprocess.run(["sh", "-n", str(ROLE_INIT)], check=True)
     script = ROLE_INIT.read_text(encoding="utf-8")

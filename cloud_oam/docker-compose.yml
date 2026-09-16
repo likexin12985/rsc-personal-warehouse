@@ -235,6 +235,82 @@ services:
         condition: service_completed_successfully
     networks: [projector_db]
 
+  notification-expander:
+    image: star-oam-api:0.9.0
+    build: ./backend
+    profiles: [notifications]
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - app.notification_expander
+      - --limit
+      - "${OAM_NOTIFICATION_EXPAND_LIMIT:-100}"
+      - --poll-seconds
+      - "${OAM_NOTIFICATION_POLL_SECONDS:-30}"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+    mem_limit: 256m
+    cpus: 0.25
+    pids_limit: 32
+    stop_grace_period: 35s
+    environment:
+      OAM_ENVIRONMENT: production
+      OAM_DATABASE_URL: postgresql+psycopg://star_oam_api:${OAM_DB_API_PASSWORD}@db:5432/${POSTGRES_DB}
+      OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api
+      OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
+      OAM_DATABASE_SCHEMA_MODE: alembic
+      OAM_LEGACY_PROTOTYPE_WRITES_ENABLED: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [backend]
+
+  notification-dispatcher:
+    image: star-oam-api:0.9.0
+    build: ./backend
+    profiles: [notifications]
+    # A missing or invalid adapter module exits before claiming a delivery.
+    # Bound restart attempts surface configuration errors without a hot loop.
+    restart: on-failure:5
+    command:
+      - python
+      - -m
+      - app.notification_dispatcher
+      - --limit
+      - "${OAM_NOTIFICATION_DISPATCH_LIMIT:-50}"
+      - --poll-seconds
+      - "${OAM_NOTIFICATION_POLL_SECONDS:-30}"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+    mem_limit: 256m
+    cpus: 0.25
+    pids_limit: 32
+    stop_grace_period: 35s
+    environment:
+      OAM_ENVIRONMENT: production
+      OAM_DATABASE_URL: postgresql+psycopg://star_oam_api:${OAM_DB_API_PASSWORD}@db:5432/${POSTGRES_DB}
+      OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api
+      OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
+      OAM_DATABASE_SCHEMA_MODE: alembic
+      OAM_LEGACY_PROTOTYPE_WRITES_ENABLED: "false"
+      OAM_NOTIFICATION_ADAPTER_MODULE: ${OAM_NOTIFICATION_ADAPTER_MODULE:-}
+      OAM_NOTIFICATION_WORKER_ID: ${OAM_NOTIFICATION_WORKER_ID:-notification-dispatcher-1}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [backend]
+
   web:
     image: star-oam-web:0.9.0
     build: ./frontend
