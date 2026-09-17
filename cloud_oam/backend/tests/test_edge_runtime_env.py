@@ -23,6 +23,17 @@ module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(module)
 
 
+def _compose_service_section(compose: str, service_name: str) -> str:
+    match = re.search(
+        rf"^  {re.escape(service_name)}:\n(?P<body>.*?)"
+        r"(?=^  [A-Za-z0-9][A-Za-z0-9_-]*:\n|^networks:\n|^volumes:\n|\Z)",
+        compose,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None, f"compose service is missing: {service_name}"
+    return match.group("body")
+
+
 def test_runtime_values_use_dedicated_edge_credentials_only(tmp_path):
     source = tmp_path / "edge.env"
     values = module.build_runtime_values(
@@ -309,9 +320,7 @@ def test_deployment_acl_verifier_covers_edge_and_projector_full_closure():
 
 def test_main_api_compose_has_no_edge_receiver_secret():
     compose = MAIN_COMPOSE.read_text(encoding="utf-8")
-    api_section = compose.split("  api:\n", 1)[1].split(
-        "  oam-work-order-projector:\n", 1
-    )[0]
+    api_section = _compose_service_section(compose, "api")
     assert "OAM_EDGE_SYNC_SECRET" not in api_section
     assert "OAM_EDGE_SYNC_ALLOWED_SOURCES" not in api_section
     assert 'OAM_EDGE_SYNC_ENABLED: "false"' in api_section
@@ -319,9 +328,7 @@ def test_main_api_compose_has_no_edge_receiver_secret():
 
 def test_projector_compose_has_exact_database_only_environment():
     compose = MAIN_COMPOSE.read_text(encoding="utf-8")
-    projector = compose.split("  oam-work-order-projector:\n", 1)[1].split(
-        "  web:\n", 1
-    )[0]
+    projector = _compose_service_section(compose, "oam-work-order-projector")
     environment = projector.split("    environment:\n", 1)[1].split(
         "    healthcheck:\n", 1
     )[0]
@@ -370,9 +377,7 @@ def test_projector_compose_has_exact_database_only_environment():
 
 def test_projector_compose_is_nonroot_read_only_bounded_and_self_checks_acl():
     compose = MAIN_COMPOSE.read_text(encoding="utf-8")
-    projector = compose.split("  oam-work-order-projector:\n", 1)[1].split(
-        "  web:\n", 1
-    )[0]
+    projector = _compose_service_section(compose, "oam-work-order-projector")
 
     for boundary in (
         "profiles: [sync]",
@@ -405,10 +410,8 @@ def test_projector_compose_is_nonroot_read_only_bounded_and_self_checks_acl():
 
 def test_projector_compose_uses_only_internal_database_network():
     compose = MAIN_COMPOSE.read_text(encoding="utf-8")
-    database = compose.split("  db:\n", 1)[1].split("  migrate:\n", 1)[0]
-    projector = compose.split("  oam-work-order-projector:\n", 1)[1].split(
-        "  web:\n", 1
-    )[0]
+    database = _compose_service_section(compose, "db")
+    projector = _compose_service_section(compose, "oam-work-order-projector")
     network_definitions = compose.split("\nnetworks:\n", 1)[1].split(
         "\nvolumes:\n", 1
     )[0]
