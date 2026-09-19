@@ -6,14 +6,17 @@ role may read and append delivery evidence, update only the delivery state
 columns, and may not delete or alter notification attempts.  The operator
 permissions are deliberately granted to the national admin role only.
 
-This migration does not change the OAM readiness function.  The function body
-has no new database dependency here, so the exact 0107 catalog hash remains
-the valid readiness proof while the table ACL is advanced independently.
+This migration advances the OAM readiness marker to this head.  The function
+body has no new database dependency here, so the catalog hash remains
+unchanged while its embedded migration revision is advanced together with the
+table ACL.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
+import runpy
 import uuid
 
 from alembic import op
@@ -174,6 +177,27 @@ def _grant_runtime_acl() -> None:
     )
 
 
+def _replace_readiness(*, upgrade: bool) -> None:
+    """Move the immutable readiness marker with this migration head."""
+
+    source = runpy.run_path(
+        str(Path(__file__).with_name("20260912_0072_outbound_postings.py"))
+    )
+    replace = source["_previous"]()["_previous"]()["_previous"]()[
+        "_replace_function_source"
+    ]
+    old_revision, new_revision = (
+        (down_revision, revision) if upgrade else (revision, down_revision)
+    )
+    replace(
+        signature="public.rsc_oam_runtime_binding_ready_0044()",
+        expected_hash=RUNTIME_READY_BODY_SHA256_0107,
+        replacement_hash=RUNTIME_READY_BODY_SHA256_0108,
+        replacements=((old_revision, new_revision),),
+        label="notification_delivery_readiness_0108",
+    )
+
+
 def _revoke_runtime_acl() -> None:
     op.execute(
         "REVOKE UPDATE ("
@@ -192,6 +216,7 @@ def upgrade() -> None:
         raise RuntimeError("0108 supports PostgreSQL and SQLite only")
     if dialect == "postgresql":
         op.execute("LOCK TABLE public.alembic_version IN ACCESS EXCLUSIVE MODE")
+        _replace_readiness(upgrade=True)
         _grant_runtime_acl()
     _create_retry_idempotency_index()
     _seed_permissions()
@@ -205,6 +230,7 @@ def downgrade() -> None:
     _drop_retry_idempotency_index()
     if dialect == "postgresql":
         op.execute("LOCK TABLE public.alembic_version IN ACCESS EXCLUSIVE MODE")
+        _replace_readiness(upgrade=False)
         _revoke_runtime_acl()
 
 
