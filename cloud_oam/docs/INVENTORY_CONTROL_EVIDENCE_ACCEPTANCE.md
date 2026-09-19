@@ -19,6 +19,12 @@
 独立审批或已经覆盖现实中的所有省仓。当前仅用隔离假数据验收；后续必须有可信目录加载器、
 认证暂存来源和不可变采集证据，禁止把请求方自填清单或 `complete=true` 当成这些证据。
 
+本轮增加 `backend/app/inventory_control_publication.py` 的离线前置契约。它在上述校验成功后
+分别封存来源绑定、独立目录、采集链和控制 manifest 的 SHA256，作为未来前向事实模型的四个
+独立坐标；返回仍固定 `projection_published=false`、`start_ready=false`，不创建 SyncRun、
+控制库存或启动凭据，也不提供路由、worker 或生产 ACL。它只避免未来 publisher 把四类证据
+压成一个 transport hash，不能把这些摘要当作来源认证或数据库持久化。
+
 ## 来源、仓位与分页
 
 独立 expectation 描述完整 feed 的 source system/instance、company/org、scope、目录版本、

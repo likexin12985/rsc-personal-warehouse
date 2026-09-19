@@ -17,6 +17,7 @@ import sys
 import pytest
 
 from app import inventory_control_evidence as service
+from app.inventory_control_publication import prepare_inventory_control_publication
 
 
 BASE_TIME = datetime(2026, 9, 5, 1, 0, tzinfo=timezone.utc)
@@ -160,6 +161,54 @@ def assert_rejected(expected, evidence, code=None, *, checked_at=CHECK_TIME):
 
 def entity(evidence):
     return evidence["snapshots"][0]["manifest"]["entities"][0]
+
+
+def test_publication_facts_keep_source_catalogue_capture_and_manifest_separate():
+    expected, evidence = fake_bundle()
+    facts = prepare_inventory_control_publication(
+        expected_json=canonical(expected), evidence_json=canonical(evidence), checked_at=CHECK_TIME,
+    )
+    assert facts.evidence_status == "evidence_consistent"
+    assert facts.projection_published is False
+    assert facts.start_ready is False
+    digests = {
+        facts.source_binding_sha256,
+        facts.catalog_sha256,
+        facts.capture_chain_sha256,
+        facts.control_manifest_sha256,
+    }
+    assert len(digests) == 4
+    assert set(facts.as_dict()) == {
+        "schema_version", "source_binding_sha256", "catalog_sha256",
+        "capture_chain_sha256", "control_manifest_sha256", "evidence_status",
+        "projection_published", "start_ready",
+    }
+
+
+def test_publication_manifest_digest_changes_when_capture_evidence_changes():
+    expected, evidence = fake_bundle()
+    original = prepare_inventory_control_publication(
+        expected_json=canonical(expected), evidence_json=canonical(evidence), checked_at=CHECK_TIME,
+    )
+    # Keep the bundle valid while changing a detached capture fact.
+    evidence["snapshots"][0]["warehouses"][0]["started_at"] = stamp(BASE_TIME - timedelta(minutes=3))
+    changed = prepare_inventory_control_publication(
+        expected_json=canonical(expected), evidence_json=canonical(evidence), checked_at=CHECK_TIME,
+    )
+    assert changed.capture_chain_sha256 != original.capture_chain_sha256
+    assert changed.control_manifest_sha256 != original.control_manifest_sha256
+    assert changed.source_binding_sha256 == original.source_binding_sha256
+    assert changed.catalog_sha256 == original.catalog_sha256
+
+
+def test_publication_facts_preserve_fail_closed_validation():
+    expected, evidence = fake_bundle()
+    evidence["snapshots"][0]["manifest"]["scope_key"] = "warehouse:fake-W-A"
+    with pytest.raises(service.InventoryControlEvidenceError) as caught:
+        prepare_inventory_control_publication(
+            expected_json=canonical(expected), evidence_json=canonical(evidence), checked_at=CHECK_TIME,
+        )
+    assert caught.value.code == "source_binding_mismatch"
 
 
 def test_full_national_feed_selects_target_region_without_summing_other_province():

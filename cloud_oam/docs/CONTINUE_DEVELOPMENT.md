@@ -2894,3 +2894,15 @@ PG16 试跑发现的 readiness 版本、函数体哈希和 downgrade 方向问�
 [通知投递运维验证与正式基线缺口审计](NOTIFICATION_OPERATIONS_BASELINE_AUDIT_20260919.md)。
 后续优先补通用库存事件的通知覆盖、provider 回调/实发及可信控制库存发布；既有个人仓入账、
 退回入账和工单通知不可误报为未实现。真实身份、日终对账、恢复演练、压测与 UAT 继续独立验收。
+
+## 7.30 控制库存发布前置事实契约（2026-09-19）
+
+新增 `backend/app/inventory_control_publication.py`，在隔离控制证据校验成功后分别计算来源
+绑定、目录、采集链和控制 manifest 摘要；四类事实不再被隐含为一个 transport hash。该函数
+没有数据库、网络、锁、写权限或生产调用，结果始终是 `projection_published=false`、
+`start_ready=false`。新增回归覆盖四摘要独立性、采集事实变化的 manifest 变化和错误证据的
+失败关闭路径。
+
+这一步只固定未来可信 publisher 的输入形状，未关闭 B1：可信来源/目录审批、不可变采集封存、
+前向持久化模型、精确 RLS/ACL、原子幂等发布、批次选择和启动恢复仍需分别开发和用 PostgreSQL
+16 真库验收；通知 provider 回调仍按审计 N2/N3 暂缓。

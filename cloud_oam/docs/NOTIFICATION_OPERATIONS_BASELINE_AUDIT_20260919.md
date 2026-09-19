@@ -97,7 +97,7 @@ PostgreSQL 16 迁移往返与并发门禁已成功。
 
 | 编号 | 性质 | 当前实现和待补证据 |
 | --- | --- | --- |
-| B1 | 实现缺口 | 新控制证据校验器 `backend/app/inventory_control_evidence.py` 和准备目录 `opening_start_option_schemas.py` 固定 `start_ready=false`；内部一致性检查没有来源认证、目录认证或正式控制发布能力。现有 `opening_stocktake.py` 启动和历史回放服务已经存在，不应误报为完全没有启动能力。按 `OPENING_CONTROL_PROJECTION_NEXT_SLICE.md` 补新可信控制 publisher、版本/闭包和启动恢复事实，保留历史来源，不能直接把布尔值改成 true |
+| B1 | 实现及验收缺口 | 新控制证据校验器 `backend/app/inventory_control_evidence.py` 和准备目录 `opening_start_option_schemas.py` 固定 `start_ready=false`；本轮新增 `backend/app/inventory_control_publication.py`，只把来源绑定、目录、采集链和控制 manifest 分成四个离线摘要，仍不认证、不持久化、不发布。现有 `opening_stocktake.py` 启动和历史回放服务已经存在，不应误报为完全没有启动能力。按 `OPENING_CONTROL_PROJECTION_NEXT_SLICE.md` 继续补可信来源/目录/版本闭包、前向事实表、受控 publisher、ACL 和启动恢复事实，保留历史来源，不能直接把布尔值改成 true |
 | B2 | 实现及验收缺口 | 已有工单和收货 publisher；组织/人员独立正式发布、可信控制库存发布及历史迁移执行链仍未闭合。`MigrationBatch/MigrationError` 模型不等于完成迁移，需补数量、关键字段、附件以及多轮演练证据 |
 | B3 | 实现及验收缺口 | `formal_services/opening_control_reconciliation.py` 的批次 scope 为 `opening:{region}:{task}`，正式路由接的是期初对账。仍需按日、控制快照和本地流水游标建立持续对账，取得连续至少 3 天差异解释 |
 | B4 | 环境验收缺口 | 唯一身份解析及失效关闭已实现；本工作树未提供真实人员映射、首管理员、微信、短信/KMS、私有附件链的完整验收记录。现有短信认证 adapter 使用 PNVS，不能拿其他短信产品套餐替代接口验收 |
