@@ -7,9 +7,9 @@ columns, and may not delete or alter notification attempts.  The operator
 permissions are deliberately granted to the national admin role only.
 
 This migration advances the OAM readiness marker to this head.  The function
-body has no new database dependency here, so the catalog hash remains
-unchanged while its embedded migration revision is advanced together with the
-table ACL.
+body has no new database dependency here; only its embedded migration
+revision changes, with the resulting catalog hash pinned in this migration
+and the runtime manifest.
 """
 
 from __future__ import annotations
@@ -30,7 +30,9 @@ branch_labels = depends_on = None
 RUNTIME_READY_BODY_SHA256_0107 = (
     "fabc93a9f0066f158ba54952bd4417436189f08f92b03686d5ac646f95f1dcb6"
 )
-RUNTIME_READY_BODY_SHA256_0108 = RUNTIME_READY_BODY_SHA256_0107
+RUNTIME_READY_BODY_SHA256_0108 = (
+    "c118644da158bf2d36f7425105d7071d93b831e379d878ae4f9301139ae39246"
+)
 OLD_HASH = RUNTIME_READY_BODY_SHA256_0107
 NEW_HASH = RUNTIME_READY_BODY_SHA256_0108
 
