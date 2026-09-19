@@ -191,10 +191,15 @@ def _replace_readiness(*, upgrade: bool) -> None:
     old_revision, new_revision = (
         (down_revision, revision) if upgrade else (revision, down_revision)
     )
+    expected_hash, replacement_hash = (
+        (RUNTIME_READY_BODY_SHA256_0107, RUNTIME_READY_BODY_SHA256_0108)
+        if upgrade
+        else (RUNTIME_READY_BODY_SHA256_0108, RUNTIME_READY_BODY_SHA256_0107)
+    )
     replace(
         signature="public.rsc_oam_runtime_binding_ready_0044()",
-        expected_hash=RUNTIME_READY_BODY_SHA256_0107,
-        replacement_hash=RUNTIME_READY_BODY_SHA256_0108,
+        expected_hash=expected_hash,
+        replacement_hash=replacement_hash,
         replacements=((old_revision, new_revision),),
         label="notification_delivery_readiness_0108",
     )
