@@ -457,7 +457,7 @@ REVIEW_COMMAND_STATUS_REVISION = (
     / "versions"
     / "20260906_0063_review_command_status.py"
 )
-HEAD_REVISION = "20261017_0107"
+HEAD_REVISION = "20261018_0108"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -767,6 +767,8 @@ EXPECTED_PERMISSIONS = [
     ("material_request_approval", "decide_level_1"),
     ("material_request_approval", "decide_level_2"),
     ("material_request_approval", "decide_level_3"),
+    ("notification_delivery", "read"),
+    ("notification_delivery", "retry"),
     ("oam_data", "read"),
     ("people", "read_minimal"),
     ("reconciliation", "approve_opening"),
@@ -817,6 +819,8 @@ EXPECTED_ROLE_PERMISSIONS = {
         ("material_request", "register_external"),
         ("material_request", "verify_external"),
         ("material_request_approval", "decide_level_2"),
+        ("notification_delivery", "read"),
+        ("notification_delivery", "retry"),
         ("people", "read_minimal"),
         ("reconciliation", "read"),
         ("reconciliation", "create_opening"),
@@ -1573,7 +1577,7 @@ def test_revision_history_has_single_integrity_hardening_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == "20261016_0106"
+    assert head.down_revision == "20261017_0107"
     assert REVIEW_COMMAND_STATUS_REVISION.exists()
     supply_event_key_head = script.get_revision(
         MATERIAL_REQUEST_SUPPLY_EVENT_KEY_REVISION_ID
@@ -10414,7 +10418,7 @@ def test_upgrade_head_matches_current_orm_and_downgrades(
                 "JOIN roles ON roles.id = role_permissions.role_id "
                 "JOIN permissions ON permissions.id = role_permissions.permission_id"
             ).all()
-            assert len(role_permission_rows) == 96
+            assert len(role_permission_rows) == 98
             assert {row[3] for row in role_permission_rows} == {"allow"}
             actual_role_permissions = {
                 role_code: {

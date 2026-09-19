@@ -506,6 +506,8 @@ export default function App() {
   const canReadInventory = hasFormalPermission(access, "inventory", "read");
   const canReadMaterialRequests = hasFormalPermission(access, "material_request", "read");
   const canReadNotifications = hasFormalPermission(access, "access_context", "read");
+  const canReadNotificationDeliveries = hasFormalPermission(access, "notification_delivery", "read");
+  const canRetryNotificationDeliveries = hasFormalPermission(access, "notification_delivery", "retry");
   const canReadStocktake = hasFormalPermission(access, "stocktake", "read");
   const canPrepareOpeningStocktake = (hasFormalRole(access, "admin") || hasFormalRole(access, "provincial_manager"))
     && hasFormalPermission(access, "stocktake", "manage");
@@ -524,7 +526,10 @@ export default function App() {
       <Route path="/dashboard" element={<FormalHome user={user} access={access} />} />
       <Route path="/inventory" element={canReadInventory ? <FormalInventoryPage /> : <Navigate to="/dashboard" replace />} />
       <Route path="/material-requests" element={canReadMaterialRequests ? <FormalMaterialRequestsRoute access={access} /> : <Navigate to="/dashboard" replace />} />
-      <Route path="/notifications" element={canReadNotifications ? <FormalNotificationsPage /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/notifications" element={canReadNotifications ? <FormalNotificationsPage
+        canReadDeliveryRecords={canReadNotificationDeliveries}
+        canRetryDelivery={canRetryNotificationDeliveries}
+      /> : <Navigate to="/dashboard" replace />} />
       <Route path="/stocktakes" element={canReadStocktake ? <FormalStocktakesRoute access={access} /> : <Navigate to="/dashboard" replace />} />
       <Route path="/opening-stocktakes" element={canReadStocktake ? <FormalOpeningStocktakesPage
         key={`${access.person_id}:${access.authorization_version}`}

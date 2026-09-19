@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   notificationBody,
   notificationTitle,
+  validateNotificationDeliveryPage,
+  validateNotificationDeliveryRetry,
   validateNotificationPage,
   validateNotificationRead,
 } from "./formalNotifications";
@@ -50,5 +52,56 @@ describe("formal notification contract", () => {
       next_after_id: null,
       unread_count: 0,
     })).toThrow("通知状态无效");
+  });
+
+  it("accepts only the redacted operator delivery evidence needed for retry", () => {
+    const page = validateNotificationDeliveryPage({
+      schema_version: "1.0",
+      next_after_id: null,
+      items: [{
+        delivery_id: "delivery-1",
+        event_id: "event-1",
+        event_type: "shipment_handover_registered",
+        business_type: "shipment",
+        business_id: "shipment-1",
+        recipient_user_id: "user-1",
+        channel: "wechat",
+        status: "failed",
+        attempts: 2,
+        provider_message_id: null,
+        last_error: "provider unavailable",
+        created_at: "2026-09-15T02:00:00Z",
+        updated_at: "2026-09-15T02:01:00Z",
+        sent_at: null,
+        delivered_at: null,
+        read_at: null,
+        latest_attempt_no: 2,
+        latest_response_code: "503",
+        latest_error: "provider unavailable",
+        latest_attempted_at: "2026-09-15T02:01:00Z",
+        retryable: true,
+      }],
+    });
+    expect(page.items[0].retryable).toBe(true);
+    expect(page.items[0].latest_response_code).toBe("503");
+  });
+
+  it("requires a queued fact before accepting a retry response", () => {
+    expect(() => validateNotificationDeliveryRetry({
+      schema_version: "1.0",
+      delivery_id: "delivery-1",
+      retry_attempt_no: 3,
+      status: "failed",
+      queued_at: "2026-09-15T02:02:00Z",
+      replayed: false,
+    })).toThrow("未形成排队事实");
+    expect(validateNotificationDeliveryRetry({
+      schema_version: "1.0",
+      delivery_id: "delivery-1",
+      retry_attempt_no: 3,
+      status: "queued",
+      queued_at: "2026-09-15T02:02:00Z",
+      replayed: true,
+    }).replayed).toBe(true);
   });
 });

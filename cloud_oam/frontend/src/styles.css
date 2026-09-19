@@ -605,3 +605,15 @@ tbody tr:hover { background: #fbfcfc; }
 .notification-card .content-title { align-items: flex-start; }
 .notification-card .content-title p { margin-top: 8px; color: var(--ink); line-height: 1.65; }
 .notification-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 14px 0; color: var(--muted); font-size: 13px; }
+.notification-delivery-operations { overflow: visible; }
+.notification-delivery-filters { grid-template-columns: minmax(180px, 260px) minmax(180px, 260px); margin: 12px 14px; }
+.notification-delivery-table-wrap { padding-bottom: 12px; }
+.notification-delivery-table { min-width: 980px; }
+.notification-delivery-table-wrap > .button { margin: 12px 14px 0; }
+.notification-retry-form { display: grid; gap: 7px; min-width: 220px; }
+.notification-retry-form .form-actions { justify-content: flex-start; margin-top: 0; }
+.empty-state { min-height: 140px; display: grid; place-items: center; padding: 24px; color: var(--muted); }
+
+@media (max-width: 1050px) {
+  .notification-delivery-filters { grid-template-columns: 1fr 1fr; }
+}

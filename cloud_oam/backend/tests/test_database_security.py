@@ -520,6 +520,8 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "material_substitutions",
         "notification_events",
         "notification_recipients",
+        "notification_deliveries",
+        "notification_attempts",
         "oam_work_orders",
         "wechat_identities",
         "substitution_decisions",
@@ -542,6 +544,8 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "material_requests",
         "notification_events",
         "notification_recipients",
+        "notification_deliveries",
+        "notification_attempts",
         "supply_tasks",
     }
     stocktake_close_read_tables = {
@@ -628,6 +632,18 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         for table_name, column_names in RUNTIME_UPDATE_COLUMNS.items()
         if table_name not in base_update_columns
     } == {
+        "notification_deliveries": {
+            "status",
+            "provider_message_id",
+            "attempts",
+            "sent_at",
+            "delivered_at",
+            "read_at",
+            "last_error",
+            "locked_at",
+            "locked_by",
+            "updated_at",
+        },
         "login_challenges": {
             "attempts",
             "status",

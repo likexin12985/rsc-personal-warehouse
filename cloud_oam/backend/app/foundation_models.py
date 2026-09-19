@@ -2068,6 +2068,17 @@ class AuditEvent(CreatedAtMixin, Base):
                 "('material_request.withdraw', 'material_request.cancel')"
             ),
         ),
+        Index(
+            "uq_audit_events_notification_retry_request_id_0108",
+            "request_id",
+            unique=True,
+            postgresql_where=text(
+                "stream_key = 'material_request' AND action = 'notification_delivery.retry'"
+            ),
+            sqlite_where=text(
+                "stream_key = 'material_request' AND action = 'notification_delivery.retry'"
+            ),
+        ),
         Index("ix_audit_events_occurred_at", "occurred_at"),
     )
 

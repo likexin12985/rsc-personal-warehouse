@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..dependencies import require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import notification_inbox
-from ..notification_schemas import NotificationItemOut, NotificationPageOut, NotificationReadOut
+from ..formal_services import notification_delivery_operations
+from ..notification_schemas import (
+    NotificationDeliveryPageOut,
+    NotificationDeliveryRecordOut,
+    NotificationDeliveryRetryIn,
+    NotificationDeliveryRetryOut,
+    NotificationItemOut,
+    NotificationPageOut,
+    NotificationReadOut,
+)
 
 
 router = APIRouter(prefix="/v1/notifications", tags=["formal-notifications"])
@@ -40,6 +49,147 @@ def _raise(exc: notification_inbox.NotificationInboxError) -> None:
     raise HTTPException(status_code=exc.http_status_code, detail=str(exc)) from None
 
 
+def _raise_delivery(
+    exc: notification_delivery_operations.NotificationDeliveryOperationsError,
+) -> None:
+    raise HTTPException(
+        status_code=exc.http_status_code,
+        detail=exc.as_detail(),
+    ) from None
+
+
+def _private_headers(response: Response) -> None:
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+
+
+def _delivery_record_out(
+    item: notification_delivery_operations.NotificationDeliveryRecord,
+) -> NotificationDeliveryRecordOut:
+    return NotificationDeliveryRecordOut(
+        delivery_id=item.delivery_id,
+        event_id=item.event_id,
+        event_type=item.event_type,
+        business_type=item.business_type,
+        business_id=item.business_id,
+        recipient_user_id=item.recipient_user_id,
+        channel=item.channel,
+        status=item.status,
+        attempts=item.attempts,
+        provider_message_id=item.provider_message_id,
+        last_error=item.last_error,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+        sent_at=item.sent_at,
+        delivered_at=item.delivered_at,
+        read_at=item.read_at,
+        latest_attempt_no=item.latest_attempt_no,
+        latest_response_code=item.latest_response_code,
+        latest_error=item.latest_error,
+        latest_attempted_at=item.latest_attempted_at,
+        retryable=item.retryable,
+    )
+
+
+@router.get("/deliveries", response_model=NotificationDeliveryPageOut)
+def list_notification_deliveries(
+    response: Response,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    after_id: Annotated[UUID | None, Query()] = None,
+    delivery_status: Annotated[
+        Literal[
+            "queued",
+            "sending",
+            "sent",
+            "delivered",
+            "read",
+            "failed",
+            "cancelled",
+        ]
+        | None,
+        Query(alias="status"),
+    ] = None,
+    channel: Annotated[Literal["wechat", "sms", "feishu"] | None, Query()] = None,
+    principal: FormalPrincipal = Depends(
+        require_permission("notification_delivery", "read")
+    ),
+    db: Session = Depends(get_db),
+):
+    try:
+        page = notification_delivery_operations.list_notification_delivery_records(
+            db,
+            actor=principal,
+            limit=limit,
+            after_id=after_id,
+            status=delivery_status,
+            channel=channel,
+        )
+    except notification_delivery_operations.NotificationDeliveryOperationsError as exc:
+        _raise_delivery(exc)
+    _private_headers(response)
+    return NotificationDeliveryPageOut(
+        items=tuple(_delivery_record_out(item) for item in page.items),
+        next_after_id=page.next_after_id,
+    )
+
+
+@router.post(
+    "/deliveries/{delivery_id}/retry",
+    response_model=NotificationDeliveryRetryOut,
+)
+def retry_notification_delivery(
+    delivery_id: UUID,
+    payload: NotificationDeliveryRetryIn,
+    response: Response,
+    principal: FormalPrincipal = Depends(
+        require_permission("notification_delivery", "retry")
+    ),
+    db: Session = Depends(get_db),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    # The service repeats the exact validation so non-HTTP callers cannot
+    # accidentally issue an untracked command.  Keeping missing headers here
+    # produces the same structured 400 as the other formal write routes.
+    if idempotency_key is None or request_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "notification_retry_headers_required",
+                "category": "invalid_request",
+                "message": "Idempotency-Key和X-Request-ID为必填项",
+            },
+        )
+    try:
+        result = notification_delivery_operations.retry_notification_delivery(
+            db,
+            actor=principal,
+            delivery_id=delivery_id,
+            expected_attempt_no=payload.expected_attempt_no,
+            reason=payload.reason,
+            idempotency_key=idempotency_key,
+            request_id=request_id,
+        )
+        db.commit()
+    except notification_delivery_operations.NotificationDeliveryOperationsError as exc:
+        db.rollback()
+        _raise_delivery(exc)
+    except Exception:
+        db.rollback()
+        raise
+    _private_headers(response)
+    response.headers["Idempotency-Replayed"] = "true" if result.replayed else "false"
+    return NotificationDeliveryRetryOut(
+        delivery_id=result.delivery_id,
+        retry_attempt_no=result.retry_attempt_no,
+        status=result.status,
+        queued_at=result.queued_at,
+        replayed=result.replayed,
+    )
+
+
 @router.get("", response_model=NotificationPageOut)
 def list_notifications(
     response: Response,
@@ -57,9 +207,7 @@ def list_notifications(
         )
     except notification_inbox.NotificationInboxError as exc:
         _raise(exc)
-    response.headers["Cache-Control"] = "private, no-store, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Referrer-Policy"] = "no-referrer"
+    _private_headers(response)
     return NotificationPageOut(
         items=tuple(_item_out(item) for item in page.items),
         next_after_id=page.next_after_id,
@@ -84,9 +232,7 @@ def read_notification(
     except notification_inbox.NotificationInboxError as exc:
         db.rollback()
         _raise(exc)
-    response.headers["Cache-Control"] = "private, no-store, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Referrer-Policy"] = "no-referrer"
+    _private_headers(response)
     return NotificationReadOut(item=_item_out(item))
 
 

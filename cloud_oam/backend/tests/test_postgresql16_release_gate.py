@@ -68,7 +68,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261017_0107"
+HEAD_REVISION = "20261018_0108"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7443,10 +7443,10 @@ def _head_account_admission_hash() -> str:
 def _head_runtime_ready_hash() -> str:
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20261017_0107_notification_delivery_leases.py"
+        "20261018_0108_notification_delivery_operations.py"
     )))
     assert migration["revision"] == RUNTIME_READY_HEAD_REVISION
-    return migration["RUNTIME_READY_BODY_SHA256_0107"]
+    return migration["RUNTIME_READY_BODY_SHA256_0108"]
 
 
 def _assert_0058_review_terminal_catalog_state(

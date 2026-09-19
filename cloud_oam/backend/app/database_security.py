@@ -79,6 +79,8 @@ RUNTIME_READ_TABLES = frozenset(
         "materials",
         "notification_events",
         "notification_recipients",
+        "notification_deliveries",
+        "notification_attempts",
         "oam_work_orders",
         "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements", "work_order_reversals", "work_order_reversal_items", "work_order_command_seals", "work_order_removed_serial_registrations",
         "opening_control_reconciliation_items",
@@ -189,6 +191,8 @@ RUNTIME_INSERT_TABLES = frozenset(
         "material_requests",
         "notification_events",
         "notification_recipients",
+        "notification_deliveries",
+        "notification_attempts",
         "opening_control_reconciliation_items",
         "opening_control_reconciliation_command_consumptions",
         "opening_control_reconciliation_runs",
@@ -264,6 +268,20 @@ RUNTIME_DELETE_TABLES = frozenset(
     }
 )
 RUNTIME_UPDATE_COLUMNS = {
+    "notification_deliveries": frozenset(
+        {
+            "status",
+            "provider_message_id",
+            "attempts",
+            "sent_at",
+            "delivered_at",
+            "read_at",
+            "last_error",
+            "locked_at",
+            "locked_by",
+            "updated_at",
+        }
+    ),
     "inventory_serials": frozenset({"lifecycle_status", "updated_at"}),
     "login_challenges": frozenset(
         {
