@@ -800,18 +800,16 @@ def _assert_migration_waits_for_version_maintenance_before_writing() -> None:
             executor.shutdown(wait=True)
 
 
-def _run_deployment_sql(
-    script_name: str,
-    *,
+def _deployment_psql_invocation(
     variables: dict[str, str],
-    expect_success: bool = True,
-) -> subprocess.CompletedProcess[str]:
+) -> tuple[list[str], dict[str, str]]:
     parameters = _connection_parameters(
         role="star_oam_migrator",
         password=_role_password("star_oam_migrator"),
     )
     command = [
         "psql",
+        "-X",
         "--no-password",
         "--set=ON_ERROR_STOP=1",
         f"--host={parameters['host']}",
@@ -821,9 +819,19 @@ def _run_deployment_sql(
     ]
     for key, value in sorted(variables.items()):
         command.append(f"--set={key}={value}")
-    command.extend(["--file", str(CLOUD_ROOT / "deployment" / script_name)])
     environment = os.environ.copy()
     environment["PGPASSWORD"] = str(parameters["password"])
+    return command, environment
+
+
+def _run_deployment_sql(
+    script_name: str,
+    *,
+    variables: dict[str, str],
+    expect_success: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    command, environment = _deployment_psql_invocation(variables)
+    command.extend(["--file", str(CLOUD_ROOT / "deployment" / script_name)])
     completed = subprocess.run(
         command,
         cwd=CLOUD_ROOT,
@@ -1838,12 +1846,14 @@ def _provision_and_verify_deployment_acl() -> None:
         "create_oam_edge_staging.sql",
         variables={"edge_role": EDGE_RECEIVER_ROLE},
     )
-    _run_deployment_sql(
-        "verify_oam_edge_staging.sql",
-        variables={
-            "edge_role": EDGE_RECEIVER_ROLE,
-            "projector_role": "star_oam_projector",
-        },
+    from pg16_edge_deployment_gate import assert_edge_deployment_verifier
+
+    command, environment = _deployment_psql_invocation({
+        "edge_role": EDGE_RECEIVER_ROLE,
+        "projector_role": "star_oam_projector",
+    })
+    assert_edge_deployment_verifier(
+        command=command, environment=environment,
     )
 
 
@@ -13911,6 +13921,22 @@ def _seed_0047_stocktake_inventory(
         assert prevalidation.observation_count == 2
         assert prevalidation.pending_verification_input_ordinals == (2,)
         session.commit()
+    assert opening_count_snapshot(api_engine) == before_prevalidation
+
+    # Manual opening counts may retain unresolved observations, but an Excel
+    # confirmation must refuse them before creating any partial count facts.
+    with Session(api_engine) as session:
+        with pytest.raises(OpeningStocktakeCountError) as rejected_import:
+            opening_count_service.confirm_prevalidated_opening_stocktake_scope_count(
+                session,
+                actor=current_principal(session, assignee_user_id),
+                command=opening_count_command(),
+                expected_prevalidation=prevalidation,
+                idempotency_key=f"pg16-opening-count-{opening_token}",
+                request_id=f"trace-pg16-opening-import-pending-{opening_token}",
+            )
+        assert rejected_import.value.code == "opening_import_confirmation_preview_invalid"
+        session.rollback()
     assert opening_count_snapshot(api_engine) == before_prevalidation
 
     with Session(api_engine, expire_on_commit=False) as session:

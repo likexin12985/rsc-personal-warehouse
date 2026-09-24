@@ -344,22 +344,23 @@ def test_postgresql16_0049_catalog_uses_head_guard_hashes_by_revision() -> None:
     ) == migration_0049.EXPECTED_FUNCTION_BODY_SHA256[unrelated_signature]
 
 
-def test_deployment_verifier_allows_only_0044_runtime_entrypoints() -> None:
+def test_deployment_verifier_pins_runtime_entrypoint_attributes() -> None:
     source = (DEPLOYMENT / "verify_oam_edge_staging.sql").read_text(
         encoding="utf-8"
     )
 
-    assert "runtime_functions(function_signature) AS" in source
+    from pg16_edge_deployment_gate import RUNTIME_VOLATILITY
+    from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST
+
+    assert "runtime_functions(function_signature, expected_volatility) AS" in source
     assert "expected_function_acl(role_kind, function_signature) AS" in source
-    for signature in (
-        "public.rsc_oam_rls_check_0044(text,text,jsonb)",
-        "public.rsc_oam_runtime_binding_ready_0044()",
-    ):
-        assert signature in source
+    for signature, volatility in RUNTIME_VOLATILITY.items():
+        assert f"('{signature}'::text, '{volatility}'::text)" in source
+        assert OAM_SYNC_FUNCTION_MANIFEST[signature.removeprefix('public.')][1] == volatility
     for security_attribute in (
         "pg_catalog.pg_get_userbyid(function_row.proowner)",
         "NOT function_row.prosecdef",
-        "function_row.provolatile <> 's'",
+        "function_row.provolatile::text <> runtime_function.expected_volatility",
         "function_row.proleakproof",
         "ARRAY['search_path=pg_catalog']::text[]",
     ):

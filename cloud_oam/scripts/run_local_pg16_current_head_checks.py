@@ -90,6 +90,24 @@ def main(argv=None):
             command("edge-staging-grants", [psql, "-X", "-w", "--set=ON_ERROR_STOP=1",
                 "--dbname", url.replace("postgresql+psycopg:", "postgresql:", 1),
                 "-v", "edge_role=edge_inbox", "-f", str(CLOUD / "deployment/create_oam_edge_staging.sql")])
+            with engines["star_oam_migrator"].connect() as connection:
+                runtime_functions = connection.execute(text("""
+                    SELECT proname, provolatile, prosecdef, proconfig
+                    FROM pg_proc JOIN pg_namespace n ON n.oid=pronamespace
+                    WHERE n.nspname='public' AND proname IN (
+                        'rsc_oam_rls_check_0044', 'rsc_oam_runtime_binding_ready_0044',
+                        'rsc_oam_material_capture_visible_0116',
+                        'rsc_oam_material_capture_binding_0116',
+                        'rsc_oam_receipt_rls_check_0082') ORDER BY proname
+                """)).mappings().all()
+                (directory / "edge-runtime-functions.json").write_text(
+                    json.dumps([dict(row) for row in runtime_functions], indent=2) + "\n")
+            from pg16_edge_deployment_gate import assert_edge_deployment_verifier
+            edge_deployment_verifier = assert_edge_deployment_verifier(command=[
+                psql, "-X", "-w", "--set=ON_ERROR_STOP=1",
+                "--dbname", url.replace("postgresql+psycopg:", "postgresql:", 1),
+                "-v", "edge_role=edge_inbox", "-v", "projector_role=star_oam_projector"],
+                environment=environment, evidence_directory=directory)
 
             runpy.run_path(str(CLOUD / "backend/tests/conftest.py"))
             from app.daily_reconciliation.capture_provisioning import provision_capture_roles
@@ -177,6 +195,7 @@ def main(argv=None):
                         engines["star_oam_migrator"], engines["star_oam_api"],
                     )
                 result = {"status":"passed", "head":HEAD, "captureRoles":sorted(ROLES),
+                          "edgeDeploymentVerifier":edge_deployment_verifier,
                           "reportExportGrants":[list(grant) for grant in export_grants],
                           "reportJobGuardedRuntimeAcl":True,
                           "reportJobForgedCompletionRejected":True,
@@ -190,6 +209,7 @@ def main(argv=None):
                           "ciReleaseGate":False}
                 if report_full_flow is not None:
                     result["reportFullFlow"] = report_full_flow
+                    result["openingFullFlow"] = opening_fixture
                 (directory / "checks.json").write_text(json.dumps(result, sort_keys=True, indent=2, default=str) + "\n")
                 print(json.dumps({"status":"passed", "evidenceDirectory":str(directory), "head":HEAD,
                                   "captureRoleCount":len(ROLES), "smsCases":len(sms["cases"]),

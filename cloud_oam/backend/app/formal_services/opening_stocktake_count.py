@@ -421,6 +421,58 @@ def prevalidate_opening_stocktake_scope_count(
     )
 
 
+def confirm_prevalidated_opening_stocktake_scope_count(
+    db: Session,
+    *,
+    actor: FormalPrincipal,
+    command: SubmitOpeningStocktakeScopeCountCommand,
+    expected_prevalidation: OpeningStocktakeScopeCountPrevalidation,
+    idempotency_key: str,
+    request_id: str,
+) -> OpeningStocktakeScopeCountResult:
+    """Compare a persisted import proof under the count locks, then write.
+
+    This internal primitive neither accepts a browser proof nor creates an
+    import job. Its caller must load an immutable, authorized job, and commit
+    that job's terminal result in this same transaction. A consumed count key
+    is refused: uncertain acknowledgement recovery must reread the original
+    job/completion, not manufacture a new confirmation or replay old previews.
+    """
+
+    if (
+        type(expected_prevalidation) is not OpeningStocktakeScopeCountPrevalidation
+        or expected_prevalidation.pending_verification_input_ordinals != ()
+        or any(type(value) is not uuid.UUID for value in (
+            expected_prevalidation.task_id, expected_prevalidation.round_id,
+            expected_prevalidation.scope_id,
+        ))
+        or type(expected_prevalidation.task_version) is not int
+        or expected_prevalidation.task_version < 0
+        or any(type(value) is not int or value <= 0 for value in (
+            expected_prevalidation.actor_authorization_version,
+            expected_prevalidation.observation_count,
+        ))
+        or expected_prevalidation.observation_count > _MAX_PHYSICAL_OBSERVATIONS
+        or any(not isinstance(value, str) or not _SHA256.fullmatch(value) for value in (
+            expected_prevalidation.request_sha256, expected_prevalidation.binding_sha256,
+        ))
+    ):
+        _fail(
+            "opening_import_confirmation_preview_invalid", "precondition_failed",
+            "导入确认需要完整且已核实的预校验证据",
+        )
+    if db.new or db.dirty or db.deleted:
+        _fail(
+            "opening_import_confirmation_session_not_clean", "precondition_failed",
+            "导入确认前不能包含待写变更",
+        )
+    return _run_opening_stocktake_scope_count(
+        db, actor=actor, command=command, idempotency_key=idempotency_key,
+        request_id=request_id, prevalidate_only=False,
+        expected_prevalidation=expected_prevalidation,
+    )
+
+
 def _run_opening_stocktake_scope_count(
     db: Session,
     *,
@@ -429,6 +481,7 @@ def _run_opening_stocktake_scope_count(
     idempotency_key: str,
     request_id: str,
     prevalidate_only: bool,
+    expected_prevalidation: OpeningStocktakeScopeCountPrevalidation | None = None,
 ) -> OpeningStocktakeScopeCountResult | OpeningStocktakeScopeCountPrevalidation:
     """Use one error boundary for the read-only and mutating count paths."""
 
@@ -441,6 +494,7 @@ def _run_opening_stocktake_scope_count(
             idempotency_key=idempotency_key,
             request_id=request_id,
             prevalidate_only=prevalidate_only,
+            expected_prevalidation=expected_prevalidation,
         )
     except OpeningStocktakeCountError:
         raise
@@ -488,6 +542,7 @@ def _submit_opening_stocktake_scope_count(
     idempotency_key: str,
     request_id: str,
     prevalidate_only: bool,
+    expected_prevalidation: OpeningStocktakeScopeCountPrevalidation | None = None,
 ) -> OpeningStocktakeScopeCountResult | OpeningStocktakeScopeCountPrevalidation:
     """Validate one active-round scope; optionally submit without commit."""
 
@@ -696,6 +751,11 @@ def _submit_opening_stocktake_scope_count(
     _validate_current_scope_dimensions(db, task, scope, location, now)
 
     if existing_by_key is not None:
+        if expected_prevalidation is not None:
+            _fail(
+                "opening_import_confirmation_already_recorded", "conflict",
+                "该提交键已有盘点事实，请按原导入任务回读结果",
+            )
         if prevalidate_only:
             _fail(
                 "opening_count_scope_already_completed", "conflict",
@@ -916,7 +976,7 @@ def _submit_opening_stocktake_scope_count(
             "盘点范围冻结状态在提交前已变化",
         )
 
-    if prevalidate_only:
+    if prevalidate_only or expected_prevalidation is not None:
         _validate_selected_round_authorization(
             actor=current_actor,
             assignment=assignment,
@@ -930,7 +990,7 @@ def _submit_opening_stocktake_scope_count(
             row.request_item_sha256 for row in prepared_observations
             if row.verification_status != "verified"
         }
-        return OpeningStocktakeScopeCountPrevalidation(
+        current_prevalidation = OpeningStocktakeScopeCountPrevalidation(
             task_id=task.id,
             round_id=round_row.id,
             scope_id=scope.id,
@@ -957,6 +1017,13 @@ def _submit_opening_stocktake_scope_count(
                 in pending_item_hashes
             ),
         )
+        if prevalidate_only:
+            return current_prevalidation
+        if current_prevalidation != expected_prevalidation:
+            _fail(
+                "opening_import_confirmation_preview_changed", "precondition_failed",
+                "盘点范围、来源解析或授权已变化，请重新预校验",
+            )
 
     try:
         result = _write_scope_count(

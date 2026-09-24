@@ -1,4 +1,5 @@
 from io import BytesIO
+from datetime import datetime
 from zipfile import ZipFile
 
 from openpyxl import Workbook, load_workbook
@@ -6,12 +7,14 @@ import pytest
 
 from app.formal_services.opening_count_import_workbook import (
     HEADERS,
+    ImportRowError,
     SHEET_NAME,
     OpeningCountImportFormatError,
     prevalidate_opening_count_workbook,
     render_opening_count_error_report,
     render_opening_count_import_template,
 )
+import app.formal_services.opening_count_import_workbook as workbook_service
 from app.formal_services.opening_count_import_prevalidation import (
     _pending_verification_errors,
 )
@@ -74,6 +77,41 @@ def test_invalid_cells_produce_report_without_partial_executable_rows_or_source_
         assert all(row[4] != injected for row in rows[1:])
     finally:
         book.close()
+
+
+def test_error_report_bytes_are_stable_when_workbook_clock_changes(monkeypatch):
+    dates = iter((datetime(2026, 1, 1), datetime(2099, 12, 31)))
+
+    def workbook_with_different_clock():
+        book = Workbook()
+        book.properties.created = next(dates)
+        book.properties.modified = book.properties.created
+        return book
+
+    monkeypatch.setattr(workbook_service, "Workbook", workbook_with_different_clock)
+    errors = (ImportRowError(2, "row", "pending_verification", "物料尚未核实"),)
+    first = render_opening_count_error_report(errors)
+    second = render_opening_count_error_report(errors)
+    assert first == second
+    with ZipFile(BytesIO(first)) as package:
+        assert all(entry.date_time == (2000, 1, 1, 0, 0, 0) for entry in package.infolist())
+        assert b"2099" not in package.read("docProps/core.xml")
+    book = load_workbook(BytesIO(first), read_only=True, data_only=False)
+    try:
+        assert tuple(book.active.values)[1] == (SHEET_NAME, 2, "row", "pending_verification", "物料尚未核实")
+    finally:
+        book.close()
+
+
+@pytest.mark.parametrize("change", [
+    {"row": 2.5}, {"field": "=1+1"}, {"code": "=1+1"},
+    {"message": " =HYPERLINK(\"https://example.invalid\")"},
+    {"message": "x" * 501}, {"message": "bad\x00text"},
+])
+def test_private_error_report_rejects_invalid_or_executable_metadata(change):
+    values = dict(row=2, field="row", code="pending_verification", message="物料尚未核实")
+    with pytest.raises(OpeningCountImportFormatError, match="错误报告内容无效"):
+        render_opening_count_error_report((ImportRowError(**{**values, **change}),))
 
 
 def test_blank_sheet_rows_preserve_actual_source_row_coordinates():

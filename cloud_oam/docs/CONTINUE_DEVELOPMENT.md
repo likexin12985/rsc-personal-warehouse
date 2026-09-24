@@ -3,7 +3,64 @@
 更新于 **2026-09-25**。本页只保留现行状态；前 3,694 行接续记录已原样保存在
 [历史交接归档](CONTINUE_DEVELOPMENT_HISTORY_20260921.md)，不得把历史“当前进程”当作仍在运行。
 
-## 2026-09-25 推送后即时状态
+## 2026-09-25 导入确认事务接续（现行状态）
+
+最近推送 SHA 为 `1675708398422a2262592d8f412b12ae10efdabf`，包含 `db5889c`
+迁移锁/编译缓存/预检绑定修复及 `1675708` Linux 容量与依赖锁测试修复。
+[Client release gate](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36051670252)
+已在该 SHA 通过；[PG16 release gate](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36051670257)
+的 runtime 已失败于部署权限验证 `functions_sequences`，三片 static 最近回读仍
+在运行，尚无聚合终态。原迁移锁探针已通过。下方 `42d2d2a` 的
+失败属于前一候选，不能代表新 SHA；工作树的后续改动也不能借用新 SHA 的 CI。
+
+本次定位到部署验证脚本把五个运行入口一律要求为 `STABLE`，但冻结迁移 `0116`
+的两个物料采集函数实际为 `VOLATILE`，与正式运行时 manifest 一致。
+本地新建 PG16.15 实例 `run-ygol77oe` 已原样复现 `functions_sequences` 失败，
+`edge-runtime-functions.json` 记录三项 `s` / 两项 `v`，实例已停止且服务退出 0。
+这是验证器的逐函数清单错误，不应通过修改冻结迁移或放宽全部函数属性来解决。
+本地候选已改为按准确签名核验各自属性，并新增共享 PG16 正反例：每个函数两种
+错误属性、跨角色/PUBLIC/API/backup 的额外执行权、SECURITY INVOKER、错误
+search_path 和两运行角色各三种序列权限均必须拒绝。所有注入在独立 psql 事务
+结束时回滚；本地与 GitHub 使用同一用例。聚焦部署验证 **16 passed / 1 skipped**；
+跳过项为 GitHub 专用 runtime。修正后独立 PG16.15 **26 项正反例全部通过**，
+期初导入确认/回滚与报表完整流也通过；证据
+`artifacts/local-current-head-pg16/checks/run-2qun9r2j/checks.json` 的
+`edgeDeploymentVerifier`、`openingFullFlow` 和 `reportFullFlow`。
+同目录保留各反例的 psql 原始输出及函数目录；实例 stopped / passed / serverExitCode=0。
+修复未推送；为保留准确候选的三片 static 终态，不触发并发取消。
+
+本地新增期初导入内部确认能力，尚无持久 FileJob 或公开确认入口：
+
+- 重新解析同一私有源文件的字节，核对源/载荷摘要、原始行数与观察数量。
+- 进入正式盘点服务持有任务、引用和审计锁后，重新证明当前规则和权限，
+  整体对照预检的任务版本、授权版本、请求和绑定摘要，匹配才写入。
+- 原调用方拥有事务；实盘完成和未来的导入任务结果必须同事务提交。旧提交键
+  已有事实时拒绝重新确认，后续必须按原持久任务和完成记录回读未知结果。
+- 错误报告的时间元数据和 ZIP 时间固定，重生相同错误得到相同字节；严格限制
+  错误字段、行号、消息长度和不可执行文本。它目前仍未保存为私有 OSS 文件。
+
+本轮相关五模块 **179 passed**，日志
+`artifacts/pilot-live-route-preflight-20260924/import-confirm-full-20260925.log`。
+真实 PG16.15 新实例的运行权限、期初与报表完整流通过，API 角色实际证明旧预检
+拒绝、整笔回滚不留事实、原键在新事务可再次确认提交；实例已停止，证据
+`artifacts/local-current-head-pg16/checks/run-vg3c8ghn/checks.json`。其中
+`openingFullFlow.openingPrerequisites` 的 `positive.importConfirmation` 四项均为 true，
+`cluster-state.json` 为 stopped / passed / serverExitCode=0。
+完整终态输出已保存到同一 preflight 目录的 `import-confirm-pg16-final-20260925.log`。
+授权过期负例随后强化为精确错误代码并单项复跑通过。GitHub runtime 增加
+未核实行不能通过导入确认的负例；本地不伪装 CI 执行该破坏性门禁。
+所有运行均为本地合成夹具，未使用真实短信或 OSS。仓库安全扫描 1,692 文件通过。
+
+**下一块必须接通持久任务**：独立迁移扩展 `FileJob` 导入证据及受控状态、
+源文件/任务/轮次/范围/人员绑定，专用私有错误文件用途、当前身份下载、
+预检结果持久化、确认 API 与原键找回。不得直接放宽 `0136` 的导出守卫；
+必须验证 API 直写伪造/跳步/跨人拒绝、导出回归、非空证据不可降级、并发确认与
+失败恢复。确认服务不得接收浏览器自报的预检摘要作为授权证据。锁顺序须保留
+正式盘点的任务先行；源文件网络读取与任务执行分段，任务终态与盘点完成原子提交。
+本地内部原语不代表“导入功能完成”或可上线。其余真实 UAT/供应商/期初/对账仍见
+[正式验收矩阵](FORMAL_V1_UAT_AND_LAUNCH_EVIDENCE_20260925.md)。
+
+## 2026-09-25 前一候选验证记录
 
 本节覆盖下方提交前快照。候选 `2479e90` 在本地三片完整静态、客户端、
 通知聚焦、本地 PostgreSQL 16.15 空库迁移/权限、目标架构隔离镜像与仓库安全

@@ -40,6 +40,19 @@ Alembic 入口新增不可变编译缓存，仍逐次执行迁移脚本；启用
 真实隔离 Ubuntu/dash 运行同仓库的容量测试函数 17 项通过。备份生产脚本未改，
 字节限额与超限拒绝断言保留。本地补充不代替 GitHub runtime；尚无新 SHA 远端结果。
 
+最新远端为 `1675708`，客户端 CI 已通过，PG16 runtime 失败于部署权限验证
+`functions_sequences`，三片静态尚在运行。独立 PG16 已复现：验证器把 `0116`
+两项实际为 `VOLATILE` 的入口错误要求为 `STABLE`。候选改按每个函数的准确属性
+验证，并补真实 PG16 漂移/越权反例；未改冻结迁移，修复尚未取得远端 CI。
+修复本地证据为 `artifacts/local-current-head-pg16/checks/run-2qun9r2j/checks.json`：
+26 项部署验证正反例、期初及报表完整流通过，实例已停止。部署契约专项为
+16 passed / 1 skipped，跳过的 GitHub runtime 不计入通过。
+本地后续新增同事务导入确认原语与稳定错误报告：179 项相关测试通过；新 PG16
+API 角色验证旧预检拒绝、回滚事实不变及原键新事务确认通过，实例已停。
+证据见 `artifacts/local-current-head-pg16/checks/run-vg3c8ghn/checks.json` 的
+`openingFullFlow`；四项确认/回滚断言均通过，实例已停。它尚未连接持久任务或
+公开确认 API，不能把该原语视为完整导入闭环。
+
 ### P0 期初盘点 Excel 导入链的现行阻断
 
 当前正式路由 `/imports/opening-count/format-check` 仅解析工作簿格式，

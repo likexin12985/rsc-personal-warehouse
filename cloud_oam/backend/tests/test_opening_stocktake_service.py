@@ -19,6 +19,10 @@ import app.formal_services.opening_stocktake_count as opening_count_service
 from app.formal_services.opening_count_import_prevalidation import (
     prevalidate_opening_count_import_bytes,
 )
+from app.formal_services.opening_count_import_confirmation import (
+    OpeningCountImportConfirmationError,
+    confirm_opening_count_import_bytes,
+)
 from app.formal_services.opening_count_import_workbook import (
     HEADERS as OPENING_IMPORT_HEADERS,
     MAX_FILE_BYTES as OPENING_IMPORT_MAX_FILE_BYTES,
@@ -1985,6 +1989,109 @@ def _count_error_code(callable_) -> str:
     return captured.value.code
 
 
+def _ready_import(world, *, key="import-confirm-start"):
+    started = _start(world, key=key)
+    command = _scope_count_command(world, started)
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "期初盘点_V1"
+    sheet.append(OPENING_IMPORT_HEADERS)
+    sheet.append((world.material.sku_code, "sku_code", "new", "available",
+                  "2.000", None, None, None, None, ""))
+    output = BytesIO()
+    book.save(output)
+    book.close()
+    data = output.getvalue()
+    world.db.commit()
+    preview = prevalidate_opening_count_import_bytes(
+        world.db, actor=world.principals["manager_x"], data=data,
+        expected_source_sha256=sha256(data).hexdigest(),
+        task_id=command.task_id, round_id=command.round_id,
+        scope_id=command.scope_id, idempotency_key="import-confirm-key",
+        request_id="import-preview-trace",
+    )
+    assert preview.ready
+    world.db.rollback()
+    return data, preview
+
+
+def _confirm_import(world, data, preview):
+    return confirm_opening_count_import_bytes(
+        world.db, actor=world.principals["manager_x"], data=data, preview=preview,
+        idempotency_key="import-confirm-key", request_id="import-confirm-trace",
+    )
+
+
+def test_import_confirmation_writes_within_caller_transaction_and_rollback_is_complete(world):
+    data, preview = _ready_import(world)
+    result = _confirm_import(world, data, preview)
+    assert result.scope_completed and not result.replayed
+    assert world.db.scalar(select(func.count()).select_from(StocktakeScopeCountCompletion)) == 1
+    world.db.rollback()
+    assert world.db.scalar(select(func.count()).select_from(StocktakeScopeCountCompletion)) == 0
+    # A caller can roll back both count and its future FileJob result without
+    # consuming the original key or leaving partially committed count rows.
+    result = _confirm_import(world, data, preview)
+    world.db.commit()
+    assert result.scope_completed and not result.replayed
+    assert world.db.scalar(select(func.count()).select_from(StocktakeScopeCountCompletion)) == 1
+    assert _count_error_code(lambda: _confirm_import(world, data, preview)) == (
+        "opening_import_confirmation_already_recorded"
+    )
+
+
+@pytest.mark.parametrize("change", ["file", "payload", "row_count", "not_ready"])
+def test_import_confirmation_refuses_source_or_preview_drift_without_writes(world, change):
+    data, preview = _ready_import(world)
+    if change == "file":
+        data += b"changed"
+    elif change == "payload":
+        preview = replace(preview, payload_sha256="0" * 64)
+    elif change == "row_count":
+        preview = replace(preview, row_count=preview.row_count + 1)
+    else:
+        preview = replace(preview, count=None)
+    with pytest.raises(OpeningCountImportConfirmationError):
+        _confirm_import(world, data, preview)
+    assert not world.db.new and not world.db.dirty and not world.db.deleted
+    assert world.db.scalar(select(func.count()).select_from(StocktakeScopeCountCompletion)) == 0
+
+
+@pytest.mark.parametrize("change", ["binding", "request", "task_version", "authorization", "pending", "boolean_version"])
+def test_import_confirmation_refuses_stale_or_unverified_business_proof(world, change):
+    data, preview = _ready_import(world)
+    fields = {
+        "binding": {"binding_sha256": "0" * 64},
+        "request": {"request_sha256": "0" * 64},
+        "task_version": {"task_version": preview.count.task_version + 1},
+        "authorization": {"actor_authorization_version": preview.count.actor_authorization_version + 1},
+        "pending": {"pending_verification_input_ordinals": (1,)},
+        "boolean_version": {"actor_authorization_version": True},
+    }
+    preview = replace(preview, count=replace(preview.count, **fields[change]))
+    expected = "opening_import_confirmation_preview_invalid" if change in {"pending", "boolean_version"} else "opening_import_confirmation_preview_changed"
+    assert _count_error_code(lambda: _confirm_import(world, data, preview)) == expected
+    assert not world.db.new and not world.db.dirty and not world.db.deleted
+    assert world.db.scalar(select(func.count()).select_from(StocktakeScopeCountCompletion)) == 0
+
+
+def test_import_confirmation_rechecks_current_actor_and_preserves_pending_writes(world):
+    data, preview = _ready_import(world)
+    task = world.db.get(FormalStocktakeTask, preview.count.task_id)
+    task.note = "uncommitted caller change"
+    assert _count_error_code(lambda: _confirm_import(world, data, preview)) == (
+        "opening_import_confirmation_session_not_clean"
+    )
+    assert task in world.db.dirty
+    world.db.rollback()
+    world.manager_x.user.authorization_version += 1
+    world.db.commit()
+    assert _count_error_code(lambda: _confirm_import(world, data, preview)) == (
+        "opening_count_actor_principal_stale"
+    )
+    assert world.db.scalar(select(func.count()).select_from(StocktakeScopeCountCompletion)) == 0
+
+
 def test_opening_scope_business_prevalidation_is_read_only_and_does_not_consume_key(
     world: SimpleNamespace,
 ):
@@ -2088,6 +2195,15 @@ def test_opening_import_binding_detects_policy_drift_with_same_source_and_task(
     assert before.count.binding_sha256 != after.count.binding_sha256
     assert not world.db.new and not world.db.dirty and not world.db.deleted
     assert world.db.scalar(select(func.count()).select_from(StocktakeScopeCountCompletion)) == 0
+    world.db.rollback()
+    assert _count_error_code(lambda: _confirm_import(world, data, before)) == (
+        "opening_import_confirmation_preview_changed"
+    )
+    assert world.db.scalar(select(func.count()).select_from(StocktakeScopeCountCompletion)) == 0
+    world.db.rollback()
+    # The rules still accept the quantity. Only a fresh, matching review can
+    # authorize the changed interpretation within the confirmation transaction.
+    assert _confirm_import(world, data, after).scope_completed
 
 
 def test_opening_scope_business_prevalidation_rejects_wrong_assignee(

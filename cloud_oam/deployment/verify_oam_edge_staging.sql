@@ -42,13 +42,13 @@ role_names(role_kind, role_name) AS (
         ('edge'::text, :'edge_role'::text),
         ('projector'::text, :'projector_role'::text)
 ),
-runtime_functions(function_signature) AS (
+runtime_functions(function_signature, expected_volatility) AS (
     VALUES
-        ('public.rsc_oam_rls_check_0044(text,text,jsonb)'::text),
-        ('public.rsc_oam_runtime_binding_ready_0044()'::text),
-        ('public.rsc_oam_material_capture_visible_0116(text)'::text),
-        ('public.rsc_oam_material_capture_binding_0116(text,text,text)'::text),
-        ('public.rsc_oam_receipt_rls_check_0082(text,text,text,jsonb)'::text)
+        ('public.rsc_oam_rls_check_0044(text,text,jsonb)'::text, 's'::text),
+        ('public.rsc_oam_runtime_binding_ready_0044()'::text, 's'::text),
+        ('public.rsc_oam_material_capture_visible_0116(text)'::text, 'v'::text),
+        ('public.rsc_oam_material_capture_binding_0116(text,text,text)'::text, 'v'::text),
+        ('public.rsc_oam_receipt_rls_check_0082(text,text,text,jsonb)'::text, 's'::text)
 ),
 expected_function_acl(role_kind, function_signature) AS (
     SELECT role_name.role_kind, runtime_function.function_signature
@@ -500,9 +500,10 @@ column_acl_ok AS (
 ),
 function_sequence_ok AS (
     SELECT
-        -- Both runtime entrypoints are migration-owned SECURITY DEFINER
-        -- functions with a fixed catalog-only search path.  Private 0044
-        -- helpers are deliberately absent from this allowlist.
+        -- Runtime entrypoints are migration-owned SECURITY DEFINER functions
+        -- with a fixed catalog-only search path. The 0116 capture functions
+        -- require VOLATILE for clock_timestamp() and locking; the other
+        -- entrypoints remain STABLE. Private helpers are not allowlisted.
         NOT EXISTS (
             SELECT 1
             FROM runtime_functions AS runtime_function
@@ -514,7 +515,7 @@ function_sequence_ok AS (
                OR pg_catalog.pg_get_userbyid(function_row.proowner)
                     <> 'star_oam_migrator'
                OR NOT function_row.prosecdef
-               OR function_row.provolatile <> 's'
+               OR function_row.provolatile::text <> runtime_function.expected_volatility
                OR function_row.proleakproof
                OR function_row.proconfig IS DISTINCT FROM
                     ARRAY['search_path=pg_catalog']::text[]
@@ -538,7 +539,7 @@ function_sequence_ok AS (
                   ) IS DISTINCT FROM
                   (expected_acl.function_signature IS NOT NULL)
         )
-        -- The two public entrypoints may be executable only by their owner and
+        -- These entrypoints may be executable only by their owner and
         -- the exact edge/projector roles.  This rejects a grant to PUBLIC,
         -- API, backup, a stale role, or an unexpected deployment principal.
         AND NOT EXISTS (

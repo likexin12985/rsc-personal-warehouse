@@ -20,6 +20,7 @@ from openpyxl.cell.read_only import EmptyCell
 from pydantic import ValidationError
 
 from ..opening_stocktake_schemas import OpeningPhysicalObservationIn
+from .inventory_report_workbook import _canonicalize_package
 
 
 SHEET_NAME = "期初盘点_V1"
@@ -177,22 +178,36 @@ def render_opening_count_import_template() -> bytes:
 
 
 def render_opening_count_error_report(errors: tuple[ImportRowError, ...]) -> bytes:
-    """Export only controlled error metadata; never echo workbook cell values."""
+    """Render stable controlled metadata for private, write-once error files."""
 
     if not errors or len(errors) > MAX_ERRORS:
         raise OpeningCountImportFormatError("错误报告行数无效")
-    book = Workbook()
-    sheet = book.active
-    sheet.title = "预校验错误"
-    sheet.append(("工作表", "行号", "字段", "错误代码", "说明"))
     for item in errors:
-        if not isinstance(item, ImportRowError) or not 2 <= item.row <= MAX_ROWS + 1:
+        if (
+            type(item) is not ImportRowError
+            or type(item.row) is not int or not 2 <= item.row <= MAX_ROWS + 1
+            or not isinstance(item.field, str) or item.field not in (*FIELDS, "row")
+            or not isinstance(item.code, str)
+            or not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", item.code)
+            or not isinstance(item.message, str) or not 1 <= len(item.message) <= 500
+            or any(ord(char) < 32 for char in item.message)
+            or item.message.lstrip().startswith(("=", "+", "-", "@"))
+        ):
             raise OpeningCountImportFormatError("错误报告内容无效")
-        sheet.append((SHEET_NAME, item.row, item.field, item.code, item.message))
-    output = BytesIO()
-    book.save(output)
-    book.close()
-    return output.getvalue()
+    book = Workbook()
+    try:
+        sheet = book.active
+        sheet.title = "预校验错误"
+        sheet.append(("工作表", "行号", "字段", "错误代码", "说明"))
+        for item in errors:
+            sheet.append((SHEET_NAME, item.row, item.field, item.code, item.message))
+        output = BytesIO()
+        book.save(output)
+        # Regenerating after an unknown PUT must yield the same SHA-256 even
+        # when wall time and ZIP timestamps changed. Never include raw cells.
+        return _canonicalize_package(output.getvalue())
+    finally:
+        book.close()
 
 
 def _validate_archive(data: bytes) -> None:

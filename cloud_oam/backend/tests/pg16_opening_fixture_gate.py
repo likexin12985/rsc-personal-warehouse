@@ -152,7 +152,35 @@ def _exercise_opening(owner, api, fixture, admin, manager, *, positive):
                 db.commit()
             assert _count_facts(owner)==before_prevalidation
             print('Opening import business prevalidation: API role read-only, stable resolved binding across transactions and key reusable PASS',flush=True)
-        counted=write(count.submit_opening_stocktake_scope_count,manager,count_command,'count-'+str(index))
+            with Session(api) as db:
+                try:
+                    count.confirm_prevalidated_opening_stocktake_scope_count(
+                        db,actor=load_formal_principal(db,manager),command=count_command,
+                        expected_prevalidation=replace(preview,binding_sha256='0'*64),
+                        idempotency_key=token+'-count-'+str(index),request_id=token+'-confirm-stale')
+                except count.OpeningStocktakeCountError as error:
+                    assert error.code=='opening_import_confirmation_preview_changed'
+                else:
+                    raise AssertionError('changed import preview unexpectedly accepted')
+                db.rollback()
+            assert _count_facts(owner)==before_prevalidation
+            with Session(api) as db:
+                proposed=count.confirm_prevalidated_opening_stocktake_scope_count(
+                    db,actor=load_formal_principal(db,manager),command=count_command,
+                    expected_prevalidation=preview,idempotency_key=token+'-count-'+str(index),
+                    request_id=token+'-confirm-rollback')
+                assert proposed.scope_completed and not proposed.replayed
+                db.rollback()
+            assert _count_facts(owner)==before_prevalidation
+            with Session(api) as db:
+                counted=count.confirm_prevalidated_opening_stocktake_scope_count(
+                    db,actor=load_formal_principal(db,manager),command=count_command,
+                    expected_prevalidation=preview,idempotency_key=token+'-count-'+str(index),
+                    request_id=token+'-confirm-commit')
+                db.commit()
+            print('Opening import confirmation: API role rejects stale preview; complete count rollback preserves all facts; same-key fresh transaction commits PASS',flush=True)
+        else:
+            counted=write(count.submit_opening_stocktake_scope_count,manager,count_command,'count-'+str(index))
     assert counted.round_sealed and counted.task_status=='submitted'
     with Session(api) as db:
         differences=list(db.scalars(select(StocktakeDifference).where(StocktakeDifference.task_id==started.task_id)))
@@ -223,7 +251,9 @@ def _exercise_opening(owner, api, fixture, admin, manager, *, positive):
     return dict(case='positive' if positive else 'serial-duplicate',bookSnapshotLines=1,controlSnapshotLines=1,
         postedQuantity=str(posted.total_quantity),controlDifferencesAtPosting=int(positive),independentReconciliationApproved=positive,
         unresolvedControlAtClose=0,postReplayNoDuplicates=True,taskClosed=True,
-        importBusinessPrevalidationReadOnly=positive)
+        importBusinessPrevalidationReadOnly=positive,
+        importConfirmation=(dict(stalePreviewRejected=True,rollbackPreservesFacts=True,
+            originalKeyReusableAfterRollback=True,apiRoleCommitted=True) if positive else None))
 
 
 def all_reconciliation_facts(engine):
