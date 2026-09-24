@@ -354,6 +354,7 @@ class OpeningCountImportBusinessCheckOut(_StrictRequestModel):
     task_version: int | None = Field(default=None, ge=0)
     actor_authorization_version: int | None = Field(default=None, ge=1)
     request_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    binding_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     errors: tuple[OpeningCountImportErrorOut, ...] = Field(max_length=1000)
 
 

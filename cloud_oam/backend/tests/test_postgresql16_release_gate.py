@@ -41,6 +41,12 @@ from pg16_release_gate_diagnostics import (
     SanitizedPostgreSQLDiagnosticError,
     run_with_sanitized_database_diagnostics,
 )
+from pg16_migration_lock_wait import (
+    ALEMBIC_COMMAND_TIMEOUT_SECONDS,
+    observe_projector_preflight_lock,
+    observe_version_maintenance_lock,
+    wait_for_migration_lock,
+)
 
 
 CLOUD_ROOT = Path(__file__).resolve().parents[2]
@@ -691,7 +697,7 @@ def _run_alembic(
         env=_migration_environment(database_name=database_name),
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=ALEMBIC_COMMAND_TIMEOUT_SECONDS,
         check=False,
     )
     if expect_success and completed.returncode != 0:
@@ -776,39 +782,18 @@ def _assert_migration_waits_for_version_maintenance_before_writing() -> None:
                 "LOCK TABLE public.alembic_version IN SHARE UPDATE EXCLUSIVE MODE"
             )
             future = executor.submit(_run_alembic, "upgrade", "head")
-            deadline = time.monotonic() + 20
             with psycopg.connect(**_admin_parameters(), autocommit=True) as observer:
-                while time.monotonic() < deadline:
-                    rows = observer.execute(
-                        "SELECT activity.query, ARRAY(SELECT DISTINCT held.mode "
-                        "FROM pg_locks AS held WHERE held.pid = activity.pid "
-                        "AND held.locktype = 'relation' AND held.granted "
-                        "AND held.mode <> 'AccessShareLock' ORDER BY held.mode) "
-                        "FROM pg_locks AS lock_row "
-                        "JOIN pg_stat_activity AS activity USING (pid) "
-                        "WHERE lock_row.relation = 'public.alembic_version'::regclass "
-                        "AND lock_row.mode = 'AccessExclusiveLock' "
-                        "AND NOT lock_row.granted "
-                        "AND activity.usename = 'star_oam_migrator' "
-                        "AND activity.datname = current_database()"
-                    ).fetchall()
-                    if rows:
-                        # AccessExclusiveLock preparation itself assigns an
-                        # XID for standby WAL logging. Inspect granted relation
-                        # locks instead: any earlier DML would retain its
-                        # RowExclusiveLock while this statement is waiting.
-                        assert rows == [(
-                            "LOCK TABLE public.alembic_version IN ACCESS EXCLUSIVE MODE", []
-                        )], "migration acquired write locks before the version lock"
-                        break
-                    if future.done():
-                        future.result()
-                        pytest.fail("migration bypassed the version maintenance lock")
-                    time.sleep(0.05)
-                else:
-                    pytest.fail("migration did not wait for version maintenance")
+                rows = wait_for_migration_lock(future, lambda: observe_version_maintenance_lock(
+                    observer, blocker_pid=maintenance.info.backend_pid,
+                ))
+                # AccessExclusiveLock preparation itself assigns an XID for
+                # standby WAL logging. Earlier DML would retain a granted
+                # RowExclusiveLock while this statement is waiting.
+                assert rows == [(
+                    "LOCK TABLE public.alembic_version IN ACCESS EXCLUSIVE MODE", []
+                )], "migration acquired write locks before the version lock"
             maintenance.rollback()
-            future.result(timeout=30)
+            future.result(timeout=ALEMBIC_COMMAND_TIMEOUT_SECONDS)
             assert _current_revision() == HEAD_REVISION
         finally:
             maintenance.rollback()
@@ -1817,30 +1802,17 @@ def _assert_0044_preflight_serializes_projector_writer() -> None:
                 "head",
                 expect_success=False,
             )
-            deadline = time.monotonic() + 15
-            migration_waiting = False
-            while time.monotonic() < deadline and not future.done():
-                with psycopg.connect(**_admin_parameters()) as inspection:
-                    with inspection.cursor() as cursor:
-                        cursor.execute(
-                            """
-                            SELECT EXISTS (
-                                SELECT 1
-                                  FROM pg_catalog.pg_stat_activity
-                                 WHERE datname = current_database()
-                                   AND usename = 'star_oam_migrator'
-                                   AND wait_event_type = 'Lock'
-                                   AND query LIKE
-                                       'LOCK TABLE public.external_sync_snapshots,%'
-                            )
-                            """
-                        )
-                        migration_waiting = cursor.fetchone()[0]
-                if not migration_waiting:
-                    time.sleep(0.05)
-            writer.commit()
-            blocked = future.result(timeout=30)
-            assert migration_waiting is True
+            try:
+                with psycopg.connect(**_admin_parameters(), autocommit=True) as inspection:
+                    assert wait_for_migration_lock(future, lambda: observe_projector_preflight_lock(
+                        inspection, blocker_pid=writer.info.backend_pid,
+                    )) is True
+                writer.commit()
+                blocked = future.result(timeout=ALEMBIC_COMMAND_TIMEOUT_SECONDS)
+            finally:
+                # Release the writer before the executor joins a child that
+                # might still be waiting for it after an observation error.
+                writer.rollback()
 
         assert "0044 requires an empty OAM sync graph" in (
             blocked.stdout + blocked.stderr

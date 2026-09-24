@@ -128,6 +128,7 @@ def test_private_business_preview_route_binds_ids_and_returns_only_evidence(monk
             count=SimpleNamespace(
                 task_version=7, actor_authorization_version=4,
                 request_sha256="c" * 64,
+                binding_sha256="d" * 64,
             ),
             errors=(ImportRowError(
                 row=4, field="row", code="pending_verification",
@@ -149,6 +150,7 @@ def test_private_business_preview_route_binds_ids_and_returns_only_evidence(monk
         assert response.headers["cache-control"] == "no-store"
         body = response.json()
         assert body["ready"] is False and body["task_version"] == 7
+        assert body["binding_sha256"] == "d" * 64
         assert body["errors"] == [{
             "row": 4, "field": "row", "code": "pending_verification",
             "message": "物料尚未核实",

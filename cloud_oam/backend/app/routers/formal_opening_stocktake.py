@@ -250,6 +250,7 @@ def check_opening_count_import_business(
             preview.count.actor_authorization_version if preview.count else None
         ),
         request_sha256=preview.count.request_sha256 if preview.count else None,
+        binding_sha256=preview.count.binding_sha256 if preview.count else None,
         errors=tuple(OpeningCountImportErrorOut(
             row=item.row, field=item.field, code=item.code, message=item.message,
         ) for item in preview.errors),

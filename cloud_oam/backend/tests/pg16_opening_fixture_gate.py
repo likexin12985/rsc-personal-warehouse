@@ -141,9 +141,17 @@ def _exercise_opening(owner, api, fixture, admin, manager, *, positive):
                     request_id=token+'-count-'+str(index))
                 assert preview.observation_count==1
                 assert preview.pending_verification_input_ordinals==()
+                assert len(preview.binding_sha256)==64
+                db.commit()
+            with Session(api) as db:
+                repeated=count.prevalidate_opening_stocktake_scope_count(
+                    db,actor=load_formal_principal(db,manager),command=count_command,
+                    idempotency_key=token+'-count-'+str(index),
+                    request_id=token+'-count-recheck-'+str(index))
+                assert repeated.binding_sha256==preview.binding_sha256
                 db.commit()
             assert _count_facts(owner)==before_prevalidation
-            print('Opening import business prevalidation: API role read-only and key reusable PASS',flush=True)
+            print('Opening import business prevalidation: API role read-only, stable resolved binding across transactions and key reusable PASS',flush=True)
         counted=write(count.submit_opening_stocktake_scope_count,manager,count_command,'count-'+str(index))
     assert counted.round_sealed and counted.task_status=='submitted'
     with Session(api) as db:

@@ -3,7 +3,69 @@
 更新于 **2026-09-25**。本页只保留现行状态；前 3,694 行接续记录已原样保存在
 [历史交接归档](CONTINUE_DEVELOPMENT_HISTORY_20260921.md)，不得把历史“当前进程”当作仍在运行。
 
-## 2026-09-25 当前门禁与目标机接续
+## 2026-09-25 推送后即时状态
+
+本节覆盖下方提交前快照。候选 `2479e90` 在本地三片完整静态、客户端、
+通知聚焦、本地 PostgreSQL 16.15 空库迁移/权限、目标架构隔离镜像与仓库安全
+复核后提交；远端历史经无损合并为 `42d2d2a875173a93da2f7b78a6f829c3357e5588`，
+合并前后文件树完全相同，已推送到 `codex/notification-delivery-worker`。
+[Client release gate](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36042618167)
+在准确 SHA 上通过；[PostgreSQL 16 release gate](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36042618264)
+的 runtime 已失败，static 第 0、1 片已通过，第 2 片最近回读仍运行，尚无聚合终态。runtime
+在 `_assert_0044_preflight_serializes_projector_writer` 的 `future.result(timeout=30)`
+发生 `TimeoutError`；不能视为当前候选通过，也不要重复推送取消其他在跑作业。
+原日志保存在 `artifacts/pilot-live-route-preflight-20260924/github-pg16-runtime-36042618264.log`。
+本次候选改动包括导入预检绑定摘要、迁移加载/锁等待修复及三份交接/验收文档。
+历史迁移版本与 CI 工作流未改；Alembic 运行入口新增仅复用编译结果的进程内缓存。
+当前公网仍是旧登录首页；真实供应商、OSS、
+身份/期初、UAT 与书面验收仍未闭合，未部署或切换路由。
+本轮目标机只读重查仍是五个既有容器，`star-oam-web-1` 独占 80/443；
+没有 RSC 新服务容器。不要把隔离预检镜像当作试点已启动。
+正式 V1.0 逐项 UAT 与上线证明现统一列于
+[验收证据矩阵](FORMAL_V1_UAT_AND_LAUNCH_EVIDENCE_20260925.md)；其中真实身份、
+来源、期初、供应商、设备及书面签认仍为空，不能由当前 CI 或合成测试替代。
+
+期初导入预检新增 `binding_sha256`，绑定实际解析的物料/批次/SN、二维码映射、
+目标账户、追踪规则和盘点授权；同一文件/任务版本下的规则变化也会改变摘要。
+正式期初服务与导入相关完整专项 **150 passed**，覆盖两种规则漂移反例、
+只读预检、同键后续正常提交及现有实盘/回放。它仍是只读预览，持久任务、
+私有错误文件和确认执行尚未实现；后续确认必须保存并同事务重验该摘要。
+门禁修复保留 Alembic 子进程 180 秒总超时。0044 探针必须观测指定写事务造成的
+`ShareRowExclusiveLock` 等待才释放阻塞者；版本维护探针则核验
+`AccessExclusiveLock` 被指定维护事务阻塞，且此前未获取业务写锁。
+此前本地 `run-ni3gst8w` 因探针误判锁类型而主动中断，退出 130；该轮不算通过。
+修正后独立 PostgreSQL 16.15 并发验证 **退出 0**：准确阻塞者命中、错误阻塞者
+拒绝、提交写事务后 0044 原子拒绝非空同步图、版本维护锁在写锁前生效、最终升级
+`0140` 均通过，实例已停止。证据
+`artifacts/local-migration-lock-pg16/checks/run-gqoxp2f9/checks.json` 及 `cluster-state.json`。
+
+历史迁移通过 `runpy` 反复加载前序版本；新增缓存只复用源字节摘要绑定的不可变
+CodeType，不缓存执行字典或函数全局，每次仍执行脚本。解释器内部契约不匹配时
+回退原行为，调用结束恢复原加载器，调用中修改源文件会拒绝。140 版本图加载
+实测 7.3 秒，37 次编译、6,740 次复用；上述真实 PG16 并发探针启动实测 7.334 秒。
+未修改任何冻结版本脚本、SQL 或权限定义。启用缓存后的复核已终态通过：
+
+- 加载器、锁等待、SQLite 全量升至 head 再降至 base、ORM/schema 对照、
+  PostgreSQL 离线 SQL 与生产角色拒绝专项 **22 passed**（161 项未选择），退出 0。
+- 期初盘点及导入四模块 **150 passed**，退出 0；覆盖绑定摘要与规则漂移。
+- 工作流拓扑 **4 passed**；GitHub 专用 runtime 在本地按设计 **1 skipped**，
+  该跳过不算 runtime 通过。
+- 新建 PG16.15 空库升至 `0140`、运行角色/权限、九项合成短信配置、API 角色
+  期初绑定摘要与期初/报表完整流 **退出 0**，实例已停且 serverExitCode=0。
+  证据 `artifacts/local-current-head-pg16/checks/run-79h2w4if/checks.json` 与
+  `cluster-state.json`；真实短信未发送，报表仅使用合成存储。
+
+两份专项日志在 `artifacts/pilot-live-route-preflight-20260924/` 下的
+`cache-migration-focused-20260925.log` 与 `import-binding-focused-final-20260925.log`。
+
+原导入绑定摘要的 PG16 证据仍是
+`artifacts/local-current-head-pg16/checks/run-bgjxe5yt/checks.json`，只覆盖启用缓存前
+的代码；新缓存的结果需独立记录。所有本地补充均 `ciReleaseGate=false`，没有真实
+OSS/短信或生产验收。本节记录提交前复核；GitHub 链接仍对应旧 SHA，
+不得将本地候选验证写成远端通过。原 static 第 2 片终态前不推送取消该作业。
+仓库安全扫描 1,691 文件 PASS，`git diff --check` 通过；本轮未部署。
+
+## 2026-09-25 提交前历史快照（以上方现行状态为准）
 
 以下状态覆盖下方尚未整理的 2026-09-24 增量描述。候选在现有 `06f6/oam`
 工作树，分支 `codex/notification-delivery-worker`，保留所有未提交改动。

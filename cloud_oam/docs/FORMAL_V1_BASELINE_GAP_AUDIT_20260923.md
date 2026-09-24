@@ -16,10 +16,46 @@
 15 subtests passed**，覆盖 332 个互不重复的静态模块；
 两份后来新增的 CI 契约测试已分别聚焦复跑；暂存范围复核后的小程序完整
 **1,071 passed**、受影响的后端 **13 passed**，仓库安全扫描 1,685 文件通过。
-GitHub 当前候选仍无运行结果。
+GitHub 结果按下方准确 SHA 的回读状态记录。
 这些证据见[开发交接](CONTINUE_DEVELOPMENT.md)。正式公开目录仍 `pending / 0`；
 真实身份、供应商、OSS、期初、连续三天对账、500 用户/RPO/RTO、UAT 和书面上线验收
 仍未完成。下文较早的“目标 x86 镜像缺失”描述属于 2026-09-24 时间点。
+
+2026-09-25 当前 SHA `42d2d2a` 已推送；[Client release gate](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36042618167)
+已通过，[PostgreSQL 16 release gate](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36042618264)
+的 runtime 已在 0044 并发探针报 `TimeoutError`；static 第 0、1 片已通过，第 2 片仍运行。
+本地正在验证真实锁观测替代固定启动等待窗口的修复，并补了导入预检的
+解析/授权绑定摘要，不能将原 SHA 的结果外推至新工作树或宣称 PG16 已通过。
+新工作树的本地 PG16.15 空库迁移/运行权限、绑定摘要只读证明及合成期初/报表
+完整流通过，实例停止；证据 `artifacts/local-current-head-pg16/checks/run-bgjxe5yt/checks.json`，
+`ciReleaseGate=false`。CI 并发探针修复已在独立 PG16.15 实例验证通过：0044 的真实
+`ShareRowExclusiveLock`、指定阻塞者与原子拒绝，以及版本维护锁顺序均成立，
+证据 `artifacts/local-migration-lock-pg16/checks/run-gqoxp2f9/checks.json`；实例已停。
+Alembic 入口新增不可变编译缓存，仍逐次执行迁移脚本；启用缓存后的迁移升降级、
+离线 SQL、生产角色拒绝与加载器专项 22 项、期初/导入专项 150 项、拓扑 4 项通过。
+新建 PG16.15 实例的迁移/当前权限与合成期初/报表业务流复核通过且实例已停，
+证据 `artifacts/local-current-head-pg16/checks/run-79h2w4if/checks.json`。
+本地补充不代替 GitHub runtime；本段记录候选提交前证据，尚无新 SHA 的远端结果。
+
+### P0 期初盘点 Excel 导入链的现行阻断
+
+当前正式路由 `/imports/opening-count/format-check` 仅解析工作簿格式，
+`/error-report` 只为本次请求返回格式错误文件；`/business-check` 已从当前上传者的
+私有 OSS 文件读取并校验摘要、当前身份及任务/轮次/范围，调用正式实盘路径作只读
+业务预检。这些结果没有持久任务、业务错误文件或确认执行权。
+后续本地候选的预检额外返回 `binding_sha256`，捕获同一源文件、请求及任务版本下
+可能变化的解析结果、追踪规则、目标账户与实际授权。期初服务及导入专项
+150 项通过；该摘要还未存入受数据库守卫保护的导入任务，不能单独授权确认。
+`FileJob` 模型虽已有 `import` 类型、`awaiting_confirmation` 状态和 `error_file_id`，
+但 `0136` 迁移的 API 角色 INSERT/UPDATE 守卫只允许 `export`，故不能直接复用
+导出任务 API 写入一个“导入已预检”记录。用户看到的预览不等于可确认的冻结来源。
+
+下一实现需用独立迁移将导入任务绑定到源文件 ID/摘要、任务、轮次、范围、申请人及其
+授权版本，并给 API/worker 仅够用的列权限和受控状态迁移；持久错误报告须绑定
+专用私有文件用途。确认时重新核验源对象摘要、身份、任务/轮次/范围与正式实盘
+规则，复用原幂等键提交，超时结果只能按原键回读，不得整表重放。迁移需验证
+空库升降级、既有导出任务不变、API 角色直写伪造/越权/跳步拒绝，以及真实 PG16
+并发和失败恢复。完成前正式 V1.0 的“预校验、错误报告、授权确认执行”仍为开放项。
 
 2026-09-24 上一准确增量候选的冻结清单为 1,659 个 Git 可见文件、零漂移；完整后端
 三片静态门禁各自退出 0，合计 **6,785 passed / 3 skipped / 15 subtests passed**，
@@ -127,6 +163,7 @@ SHA-256 结果；下载前重新校验人员权限、私有对象 HEAD 和同事
 
 本轮 D2 入口及证据见[日终运维候选](DAILY_RECONCILIATION_OPS_ENTRY_20260923.md)；
 原受邀试点外部依赖见[真实证据审计](PILOT_REAL_EVIDENCE_GAP_AUDIT_20260922.md)。
+正式全量 UAT 的逐项场景、权威回读及当前缺口见[正式 V1.0 验收证据矩阵](FORMAL_V1_UAT_AND_LAUNCH_EVIDENCE_20260925.md)。
 受邀 HTTPS H5 `/xx` 是小范围试点目标；公开“交流备件知识大全”源仍按用户要求暂缓，
 正式公开发布门禁保持 `pending / 0` 拒绝。即使试点门禁全绿，也不能宣称正式 V1.0 全量上线。
 

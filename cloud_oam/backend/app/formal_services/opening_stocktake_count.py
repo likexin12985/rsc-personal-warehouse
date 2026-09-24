@@ -288,6 +288,7 @@ class OpeningStocktakeScopeCountPrevalidation:
     task_version: int
     actor_authorization_version: int
     request_sha256: str
+    binding_sha256: str
     observation_count: int
     pending_verification_input_ordinals: tuple[int, ...]
 
@@ -936,6 +937,18 @@ def _submit_opening_stocktake_scope_count(
             task_version=task.version,
             actor_authorization_version=current_actor.authorization_version,
             request_sha256=request_sha256,
+            binding_sha256=_prevalidation_binding_sha256(
+                actor=current_actor,
+                assignment=assignment,
+                grant=grant,
+                task=task,
+                round_row=round_row,
+                scope=scope,
+                request_sha256=request_sha256,
+                prepared_counts=prepared_counts,
+                prepared_observations=prepared_observations,
+                recount_assignment=expected_recount_assignment,
+            ),
             observation_count=len(checked.physical_observations),
             pending_verification_input_ordinals=tuple(
                 ordinal for ordinal, value in enumerate(
@@ -5727,6 +5740,16 @@ def _scope_count_request_resolution_item(
     target_type: str,
     target_id: uuid.UUID,
 ) -> dict[str, object]:
+    return {
+        **_resolved_request_item_document(source),
+        "target_id": str(target_id),
+        "target_type": target_type,
+    }
+
+
+def _resolved_request_item_document(source: _PreparedObservation) -> dict[str, object]:
+    """Canonical interpretation shared by preview and immutable count evidence."""
+
     policy = source.policy
     policy_document: dict[str, object] | None = None
     if policy is not None:
@@ -5759,9 +5782,67 @@ def _scope_count_request_resolution_item(
             if source.serial_qr_mapping_id is not None
             else None
         ),
-        "target_id": str(target_id),
-        "target_type": target_type,
     }
+
+
+def _prevalidation_binding_sha256(
+    *,
+    actor: FormalPrincipal,
+    assignment: RoleAssignment,
+    grant: ScopeGrant,
+    task: FormalStocktakeTask,
+    round_row: StocktakeRound,
+    scope: FormalStocktakeScope,
+    request_sha256: str,
+    prepared_counts: Sequence[_PreparedAccountCount],
+    prepared_observations: Sequence[_PreparedObservation],
+    recount_assignment: StocktakeRecountScopeAssignment | None,
+) -> str:
+    """Bind resolved references and authorization without a wall-clock nonce.
+
+    The same source can otherwise resolve differently after a policy, QR map,
+    account or assignment change while its raw request hash stays unchanged.
+    A persisted import must save this digest and compare a fresh proof inside
+    its confirmation transaction. This digest itself grants no write rights.
+    """
+
+    items = [
+        {
+            **_resolved_request_item_document(source),
+            "stock_account_id": str(prepared.account.id),
+            "verification_status": source.verification_status,
+            "target_type": "count_line",
+        }
+        for prepared in prepared_counts
+        for source in prepared.request_items
+    ]
+    items.extend(
+        {
+            **_resolved_request_item_document(source),
+            "stock_account_id": None,
+            "verification_status": source.verification_status,
+            "target_type": "observation",
+        }
+        for source in prepared_observations
+    )
+    items.sort(key=lambda item: int(item["request_ordinal"]))
+    return _hash_document({
+        "schema": "cloud_oam.opening_stocktake.count_prevalidation_binding.v1",
+        "task_id": str(task.id),
+        "task_version": task.version,
+        "round_id": str(round_row.id),
+        "scope_id": str(scope.id),
+        "request_sha256": request_sha256,
+        "actor_user_id": actor.user_id,
+        "actor_person_id": str(actor.person_id),
+        "actor_authorization_version": actor.authorization_version,
+        "assignment_id": str(assignment.id),
+        "role_code": grant.role_code,
+        "authorization_scope_type": grant.scope_type,
+        "authorization_scope_id": grant.scope_id,
+        "recount_assignment_id": str(recount_assignment.id) if recount_assignment else None,
+        "items": items,
+    })
 
 
 def _persisted_request_document_valid(

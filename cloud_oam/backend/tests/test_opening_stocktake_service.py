@@ -2019,14 +2019,75 @@ def test_opening_scope_business_prevalidation_is_read_only_and_does_not_consume_
     assert preview.observation_count == 1
     assert preview.pending_verification_input_ordinals == ()
     assert len(preview.request_sha256) == 64
+    assert len(preview.binding_sha256) == 64
     assert not ({"INSERT", "UPDATE", "DELETE"} & set(statements))
     assert not world.db.new and not world.db.dirty and not world.db.deleted
+
+    # Trace/key changes alone must not invalidate a human-reviewed binding.
+    repeated = prevalidate_opening_stocktake_scope_count(
+        world.db, actor=world.principals["manager_x"], command=command,
+        idempotency_key="opening-count-prevalidate-another-key",
+        request_id="opening-count-prevalidate-another-trace",
+    )
+    assert repeated.binding_sha256 == preview.binding_sha256
 
     counted = _submit_scope_count(
         world, actor=world.principals["manager_x"], command=command,
         key="opening-count-prevalidate-same-key",
     )
     assert counted.scope_completed is True
+
+
+@pytest.mark.parametrize("policy_change", ["allow_fraction", "quantity_scale"])
+def test_opening_import_binding_detects_policy_drift_with_same_source_and_task(
+    world: SimpleNamespace, policy_change: str,
+):
+    started = _start(world, key="opening-import-policy-binding-start")
+    command = _scope_count_command(world, started)
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "期初盘点_V1"
+    sheet.append(OPENING_IMPORT_HEADERS)
+    sheet.append((world.material.sku_code, "sku_code", "new", "available",
+                  "2.000", None, None, None, None, ""))
+    output = BytesIO()
+    book.save(output)
+    book.close()
+    data = output.getvalue()
+    world.db.commit()
+
+    def preview():
+        return prevalidate_opening_count_import_bytes(
+            world.db, actor=world.principals["manager_x"], data=data,
+            expected_source_sha256=sha256(data).hexdigest(),
+            task_id=command.task_id, round_id=command.round_id,
+            scope_id=command.scope_id, idempotency_key="opening-import-binding-key",
+            request_id="opening-import-binding-trace",
+        )
+
+    before = preview()
+    world.db.rollback()
+    policy = world.db.scalar(select(MaterialInventoryPolicy).where(
+        MaterialInventoryPolicy.material_id == world.material.id,
+    ))
+    assert policy is not None
+    # Both versions accept integer quantity 2; validation alone cannot reveal
+    # that the reviewed interpretation changed after the preview transaction.
+    if policy_change == "allow_fraction":
+        policy.allow_fraction = False
+    else:
+        policy.quantity_scale = 0
+    world.db.commit()
+    after = preview()
+    assert before.ready and after.ready
+    assert before.source_sha256 == after.source_sha256
+    assert before.payload_sha256 == after.payload_sha256
+    assert before.count.request_sha256 == after.count.request_sha256
+    assert before.count.task_version == after.count.task_version
+    assert before.count.actor_authorization_version == after.count.actor_authorization_version
+    assert before.count.binding_sha256 != after.count.binding_sha256
+    assert not world.db.new and not world.db.dirty and not world.db.deleted
+    assert world.db.scalar(select(func.count()).select_from(StocktakeScopeCountCompletion)) == 0
 
 
 def test_opening_scope_business_prevalidation_rejects_wrong_assignee(
