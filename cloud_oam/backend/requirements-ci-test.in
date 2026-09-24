@@ -1,0 +1,5 @@
+# Test-only tools for the PostgreSQL 16 release gate. Runtime dependencies
+# remain locked independently in requirements-linux-amd64.lock.
+pytest==9.1.1
+pglast==7.18
+httpx==0.28.1

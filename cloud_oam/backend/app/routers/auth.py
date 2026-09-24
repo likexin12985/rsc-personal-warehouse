@@ -21,7 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..authorization import FORMAL_ROLE_CODES
-from ..config import get_settings
+from ..config import Settings, get_settings
 from ..database import SmsDispatchSessionLocal, get_db
 from ..dependencies import client_ip, get_current_user, require_roles
 from ..auth_sessions import (
@@ -1129,6 +1129,15 @@ def _require_sms_configuration() -> None:
         raise HTTPException(status_code=503, detail="短信验证码登录尚未启用")
 
 
+def _provider_sms_profile(provider, mobile_hash: str) -> str:
+    provider_settings = getattr(provider, "settings", None)
+    if not isinstance(provider_settings, Settings):
+        raise SmsProviderError("短信服务暂时不可用")
+    return sms_dispatch_request_profile_sha256(
+        mobile_hash=mobile_hash, provider_settings=provider_settings
+    )
+
+
 def _request_formal_sms_code(
     payload: SmsCodeRequestIn,
     request: Request,
@@ -1241,12 +1250,15 @@ def _complete_formal_sms_dispatch(
     try:
         with SmsDispatchSessionLocal() as dispatch_db:
             try:
+                provider = get_sms_provider()
+                provider_profile = _provider_sms_profile(provider, _formal_mobile_hash(mobile))
                 authorized = authentication_challenge.authorize_dispatch_provider_call(
                     dispatch_db,
                     challenge_id=challenge_id,
                     owner_token=owner_token,
                     request_id=request_id,
                     minimum_remaining_seconds=SMS_PROVIDER_CALL_GUARD_SECONDS,
+                    current_dispatch_request_profile_sha256=provider_profile,
                 )
                 if not authorized:
                     dispatch_db.commit()
@@ -1258,7 +1270,7 @@ def _complete_formal_sms_dispatch(
                 sent = None
                 provider_failed = False
                 try:
-                    sent = get_sms_provider().send(mobile, str(challenge_id))
+                    sent = provider.send(mobile, str(challenge_id))
                 except Exception:
                     provider_failed = True
 
@@ -1670,6 +1682,19 @@ def _consume_formal_sms_code_with_provider_capacity(
     # The caller owns the bounded provider permit before identity lookup.
     # Starting an attempt here therefore cannot pin an unbounded number of
     # primary API connections across the external verification call.
+    try:
+        provider = get_sms_provider()
+        provider_profile = _provider_sms_profile(provider, mobile_hash)
+    except Exception:
+        _append_owned_failed_authentication_attempt(
+            db,
+            request_id=request_id,
+            client_type=client_type,
+            action="authentication.sms.login_failed",
+            reason_code="provider_unavailable",
+            outcome="failed",
+        )
+        raise HTTPException(status_code=502, detail="短信服务暂时不可用") from None
     verification_savepoint = db.begin_nested()
     try:
         attempt = authentication_challenge.begin_verify(
@@ -1678,6 +1703,7 @@ def _consume_formal_sms_code_with_provider_capacity(
             provider=settings.sms_provider,
             client_type=client_type,
             request_id=request_id,
+            current_dispatch_request_profile_sha256=provider_profile,
             deferred_events=deferred_challenge_events,
         )
     except AuthenticationChallengeError as exc:
@@ -1696,7 +1722,7 @@ def _consume_formal_sms_code_with_provider_capacity(
         )
 
     try:
-        verified = get_sms_provider().verify(
+        verified = provider.verify(
             mobile,
             payload.code,
             str(attempt.challenge_id),

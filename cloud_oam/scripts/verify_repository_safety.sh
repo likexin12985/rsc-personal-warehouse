@@ -71,7 +71,7 @@ while IFS= read -r -d '' path; do
       ;;
     */.env|*/.env.*|*.env|*/runtime.env|*/*.runtime.env|*/.qa-cookie|*/project.private.config.json|\
     */.npmrc|*/.netrc|*/.pypirc|*/id_rsa*|*/id_ed25519*|*/.aws/*|*/.ssh/*|*/.secrets/*|\
-    */node_modules/*|*/.pnpm-store/*|*/.venv/*|*/dist/*|*/__pycache__/*|*/.pytest_cache/*|\
+    */node_modules/*|*/.pnpm-store/*|*/.venv/*|*/dist/*|*/dist-warehouse/*|*/__pycache__/*|*/.pytest_cache/*|\
     */.demo_uploads/*|*/.qa_uploads/*|*/.test_uploads/*|*/.uploads/*|*/uploads/*|\
     */artifacts/*|*/exports/*|*/backups/*|*/outbox/*|*/inbox/*|*/quarantine/*|*/runtime/*|*/tmp/*|\
     *.db|*.db-*|*.sqlite|*.sqlite-*|*.sqlite3|*.sqlite3-*|*.log|*.pid|\

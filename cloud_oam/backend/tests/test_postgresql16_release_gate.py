@@ -3,7 +3,7 @@
 The ordinary backend suite never opens PostgreSQL.  This module runs only when
 the exact acknowledgement, GitHub-hosted runner markers, loopback-only
 coordinates, and a fresh whole cluster are all present.  Its target must be the
-empty ``rsc_pg16_release_gate`` database created by the private-repository CI
+empty ``rsc_pg16_release_gate`` database created by the GitHub CI
 service container.  No local, production, or shared database is acceptable.
 """
 
@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from functools import cache
 import hashlib
 import importlib.util
 import json
@@ -30,6 +31,8 @@ from psycopg import sql
 import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from alembic.config import Config
+from alembic.runtime.environment import EnvironmentContext
 from sqlalchemy import URL, create_engine, event, func, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
@@ -68,7 +71,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261018_0108"
+HEAD_REVISION = "20261119_0140"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -699,6 +702,68 @@ def _run_alembic(
     if not expect_success and completed.returncode == 0:
         pytest.fail("Alembic release-gate command unexpectedly succeeded")
     return completed
+
+
+def _assert_retention_downgrade(
+    destination: str, *, blocking_revision: str, blocker: str,
+) -> None:
+    """Prove chain ordering and the older guard against the same real facts.
+
+    New source evidence and control facts can stop the chain before older
+    notification seals. Determine the first guard from current facts. Then,
+    execute the predecessor's own downgrade primitive in an explicitly rolled
+    back migrator transaction; never delete target facts to reach an old guard.
+    """
+    assert _current_revision() == HEAD_REVISION
+    with psycopg.connect(**_connection_parameters(
+        role="star_oam_migrator", password=_role_password("star_oam_migrator"),
+    )) as connection:
+        opening_seals = connection.execute("SELECT EXISTS (SELECT 1 FROM public.opening_start_command_seals)").fetchone()[0]
+        opening_actors = connection.execute("SELECT EXISTS (SELECT 1 FROM public.stocktake_tasks WHERE opening_authorization_version IS NOT NULL)").fetchone()[0]
+        zero_openings = connection.execute("SELECT EXISTS (SELECT 1 FROM public.stocktake_tasks t JOIN public.control_projection_publications p ON p.sync_run_id=t.control_sync_run_id WHERE t.task_type='opening' AND p.record_count=0)").fetchone()[0]
+        published_controls = connection.execute("SELECT EXISTS (SELECT 1 FROM public.control_projection_publications)").fetchone()[0]
+        source_files = connection.execute("SELECT EXISTS (SELECT 1 FROM public.files WHERE metadata_jsonb->>'purpose'='source_configuration_evidence')").fetchone()[0]
+        control_facts = connection.execute("SELECT EXISTS (SELECT 1 FROM public.inventory_control_preparations)").fetchone()[0]
+        sealed = connection.execute("SELECT EXISTS (SELECT 1 FROM public.notification_events WHERE target_manifest_sha256 IS NOT NULL)").fetchone()[0]
+    chain_blocker = (
+        "0128 downgrade blocked: original request seals must be retained" if opening_seals else
+        "0126 downgrade blocked: opening authorization evidence must be retained" if opening_actors else
+        "0122 downgrade blocked: zero-control opening history must be retained" if zero_openings else
+        "0121 downgrade blocked: control publications must be retained" if published_controls else
+        "0120 downgrade blocked: source evidence or review facts must be retained" if source_files else
+        "0112 downgrade blocked: control preparation facts must be retained" if control_facts else
+        "0109 downgrade blocked: notification target evidence must be retained" if sealed else blocker
+    )
+    completed = _run_alembic("downgrade", destination, expect_success=False)
+    output = completed.stdout + completed.stderr
+    assert chain_blocker in output
+    if chain_blocker != blocker:
+        files = tuple((CLOUD_ROOT / "backend/alembic/versions").glob(f"{blocking_revision}_*.py"))
+        assert len(files) == 1, f"exact historical migration missing: {blocking_revision}"
+        spec = importlib.util.spec_from_file_location(f"retention_{blocking_revision}", files[0])
+        assert spec is not None and spec.loader is not None
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        engine = create_engine(_sqlalchemy_url(
+            role="star_oam_migrator", password=_role_password("star_oam_migrator"),
+        ), pool_size=1, max_overflow=0, pool_timeout=5)
+        try:
+            with engine.connect() as connection:
+                transaction = connection.begin()
+                try:
+                    assert connection.scalar(text("SELECT current_user")) == "star_oam_migrator"
+                    connection.execute(text("SET LOCAL statement_timeout = '15s'"))
+                    with EnvironmentContext(Config(), None) as environment:
+                        environment.configure(connection=connection)
+                        with Operations.context(environment.get_context()):
+                            with pytest.raises((RuntimeError, DBAPIError), match=re.escape(blocker)):
+                                migration.downgrade()
+                finally:
+                    transaction.rollback()
+        finally:
+            engine.dispose()
+        print(f"PG16 retention: current chain refusal and independent {blocking_revision} refusal PASS", flush=True)
+    assert _current_revision() == HEAD_REVISION
 
 
 def _assert_migration_waits_for_version_maintenance_before_writing() -> None:
@@ -6604,401 +6669,30 @@ def _assert_0052_startup_rejects_catalog_drift(api_engine) -> None:
     _validate_runtime_security(api_engine)
 
 
+def _legacy_backfill_engine(database_name):
+    return create_engine(_sqlalchemy_url(role="star_oam_migrator",
+        password=_role_password("star_oam_migrator"), database_name=database_name),
+        pool_size=1, max_overflow=0, pool_timeout=5)
+
+
 def _seed_0051_observation_only_completion(
     database_name: str,
     *,
     mutate_policy_after_completion: bool,
 ) -> dict[str, object]:
-    from app.formal_access import load_formal_principal
-    from app.formal_services.opening_stocktake import (
-        INVENTORY_LEDGER_HEAD_ID,
-        OpeningStocktakeScopeInput,
-        StartOpeningStocktakeCommand,
-        start_opening_stocktake,
-    )
-    from app.formal_services.opening_stocktake_count import (
-        OpeningPhysicalObservationInput,
-        SubmitOpeningStocktakeScopeCountCommand,
-        submit_opening_stocktake_scope_count,
-    )
-    from app.foundation_models import (
-        AuditChainHead,
-        Permission,
-        Role,
-        SourceSystem,
-    )
-    from app.inventory_models import (
-        InventoryLedgerHead,
-        MaterialInventoryPolicy,
-        StockAccount,
-        StockBalance,
-        StockLocation,
-    )
-    from app.stocktake_models import (
-        FormalStocktakeScope,
-        StocktakeCountLine,
-        StocktakeCountObservation,
-        StocktakeScopeCountCompletion,
-    )
-    import test_opening_stocktake_service as opening_fixtures
+    # Legacy migration facts must not import today's ORM or start/count service.
+    # The shared frozen synthetic fixture executes only 0051-era columns.
+    from pg16_legacy_opening_fixture import seed_legacy_completion
 
-    _run_alembic(
-        "upgrade",
-        STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION,
-        database_name=database_name,
-    )
-    assert _isolated_current_revision(database_name) == (
-        STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION
-    )
-
-    migrator_parameters = _isolated_connection_parameters(
-        database_name=database_name,
-        role="star_oam_migrator",
-        password=_role_password("star_oam_migrator"),
-    )
-    with psycopg.connect(**migrator_parameters) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "ALTER TABLE public.stocktake_scope_count_completions "
-                "ADD COLUMN request_jsonb jsonb, "
-                "ADD COLUMN request_resolution_jsonb jsonb"
-            )
-
-    engine = create_engine(
-        _sqlalchemy_url(
-            role="star_oam_migrator",
-            password=_role_password("star_oam_migrator"),
-            database_name=database_name,
-        ),
-        pool_size=1,
-        max_overflow=0,
-        pool_timeout=5,
-    )
-    original_fixture_now = opening_fixtures.NOW
+    _run_alembic("upgrade", STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION,
+        database_name=database_name)
+    assert _isolated_current_revision(database_name) == STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION
+    engine = _legacy_backfill_engine(database_name)
     try:
-        with Session(engine, expire_on_commit=False) as session:
-            fixture_now = session.scalar(select(func.now()))
-            assert (
-                isinstance(fixture_now, datetime)
-                and fixture_now.tzinfo is not None
-            )
-            # PostgreSQL can return Asia/Shanghai locally while CI uses UTC.
-            # The shared synthetic control fixture hashes a canonical UTC time.
-            fixture_now = fixture_now.astimezone(timezone.utc)
-            opening_fixtures.NOW = fixture_now
-
-            roles = {
-                role.code: role
-                for role in session.scalars(
-                    select(Role).where(
-                        Role.code.in_(("admin", "provincial_manager"))
-                    )
-                )
-            }
-            assert set(roles) == {"admin", "provincial_manager"}
-            assert {
-                (permission.resource, permission.action)
-                for permission in session.scalars(
-                    select(Permission).where(
-                        Permission.resource == "stocktake",
-                        Permission.action.in_(("manage", "count")),
-                        Permission.field_code == "",
-                    )
-                )
-            } == {("stocktake", "manage"), ("stocktake", "count")}
-
-            headquarters = opening_fixtures._organization(
-                session,
-                f"PG16-HQ-{uuid.uuid4().hex[:8]}",
-                "PG16 0051 回填总部",
-                "headquarters",
-            )
-            region = opening_fixtures._organization(
-                session,
-                f"PG16-REG-{uuid.uuid4().hex[:8]}",
-                "PG16 0051 回填区域",
-                "region_company",
-                parent=headquarters,
-            )
-            source = session.scalar(
-                select(SourceSystem)
-                .where(func.lower(SourceSystem.code) == "oam")
-                .order_by(SourceSystem.id)
-                .limit(1)
-            )
-            if source is None:
-                source = SourceSystem(
-                    id=uuid.uuid4(),
-                    code="OAM",
-                    name="PG16 0051 回填只读控制源",
-                    mode="read_only",
-                    enabled=True,
-                    configuration_jsonb={},
-                    created_at=fixture_now - timedelta(days=2),
-                    updated_at=fixture_now - timedelta(days=2),
-                )
-                session.add(source)
-                session.flush()
-            assert (source.mode, source.enabled) == ("read_only", True)
-            manager = opening_fixtures._user_with_role(
-                session,
-                region,
-                roles["provincial_manager"],
-                "organization",
-                str(region.id),
-                "PG16 0051 回填区域负责人",
-            )
-            material = opening_fixtures._material(session, source, "serial")
-            location = StockLocation(
-                id=uuid.uuid4(),
-                code=f"PG16-0051-WH-{uuid.uuid4().hex[:10]}",
-                name="PG16 0051 回填区域仓",
-                location_type="region",
-                owner_org_id=region.id,
-                parent_id=None,
-                custodian_person_id=None,
-                status="active",
-                created_at=fixture_now - timedelta(days=1),
-                updated_at=fixture_now - timedelta(days=1),
-            )
-            session.add(location)
-            session.flush()
-            account = StockAccount(
-                id=uuid.uuid4(),
-                owner_org_id=region.id,
-                custodian_person_id=None,
-                location_id=location.id,
-                material_id=material.id,
-                condition_code="new",
-                availability_bucket="available",
-                lot_id=None,
-                created_at=fixture_now - timedelta(days=1),
-                updated_at=fixture_now - timedelta(days=1),
-            )
-            session.add(account)
-            session.flush()
-            session.add(
-                StockBalance(
-                    stock_account_id=account.id,
-                    quantity=Decimal("0"),
-                    ledger_cursor=0,
-                    version=1,
-                    updated_at=fixture_now - timedelta(days=1),
-                )
-            )
-            assert session.get(
-                InventoryLedgerHead,
-                INVENTORY_LEDGER_HEAD_ID,
-            ) is not None
-            assert session.scalar(
-                select(AuditChainHead).where(
-                    AuditChainHead.stream_key == "inventory"
-                )
-            ) is not None
-
-            control = opening_fixtures._install_control_sync(
-                session,
-                source=source,
-                region=region,
-                material=material,
-                rows=(
-                    {
-                        "external_business_key": (
-                            f"PG16-0051-CONTROL-{uuid.uuid4().hex}"
-                        ),
-                        "material_id": material.id,
-                        "condition_code": "new",
-                        "control_qty": Decimal("0"),
-                        "mapping_status": "resolved",
-                        "mapping_note": "",
-                    },
-                ),
-            )
-
-            policy = session.scalar(
-                select(MaterialInventoryPolicy).where(
-                    MaterialInventoryPolicy.material_id == material.id
-                )
-            )
-            assert policy is not None
-            session.commit()
-
-            started = start_opening_stocktake(
-                session,
-                actor=load_formal_principal(
-                    session,
-                    manager.user.id,
-                    now=session.scalar(select(func.now())),
-                ),
-                command=StartOpeningStocktakeCommand(
-                    task_no=f"PG16-0051-{uuid.uuid4().hex[:16]}",
-                    region_org_id=region.id,
-                    control_source_system_id=source.id,
-                    control_sync_run_id=control.sync_run.id,
-                    control_sync_scope_key=control.sync_run.scope_key,
-                    scopes=(
-                        OpeningStocktakeScopeInput(
-                            owner_org_id=region.id,
-                            location_id=location.id,
-                            assignee_user_id=manager.user.id,
-                            freeze_mode="hard",
-                        ),
-                    ),
-                    control_lines=control.lines,
-                    blind_count=True,
-                    deadline=fixture_now + timedelta(days=2),
-                    note="PG16 0051 observation-only migration fixture",
-                ),
-                idempotency_key=(
-                    f"pg16-0052-legacy-start-{uuid.uuid4().hex}"
-                ),
-                request_id=f"pg16-0052-legacy-start-{uuid.uuid4().hex}",
-            )
-            session.commit()
-            scope_id = session.scalar(
-                select(FormalStocktakeScope.id).where(
-                    FormalStocktakeScope.task_id == started.task_id
-                )
-            )
-            assert isinstance(scope_id, uuid.UUID)
-
-            missing_serial = (
-                "PG16-0052-LEGACY-MISSING-SERIAL-"
-                f"{uuid.uuid4().hex[:12].upper()}"
-            )
-            # 0051 is the broken predecessor under test: its 0022 task caller
-            # rejects every legitimate counting -> submitted timestamp write.
-            # Disable only that exact legacy UPDATE trigger while producing the
-            # otherwise fully guarded historical graph, then restore ALWAYS
-            # before presenting the database to the real 0052 migration.
-            with psycopg.connect(
-                **migrator_parameters,
-                autocommit=True,
-            ) as guard_connection:
-                with guard_connection.cursor() as guard_cursor:
-                    guard_cursor.execute(
-                        "ALTER TABLE public.stocktake_tasks DISABLE TRIGGER "
-                        "trg_stocktake_tasks_opening_commit_0022"
-                    )
-            try:
-                count_result = submit_opening_stocktake_scope_count(
-                    session,
-                    actor=load_formal_principal(
-                        session,
-                        manager.user.id,
-                        now=session.scalar(select(func.now())),
-                    ),
-                    command=SubmitOpeningStocktakeScopeCountCommand(
-                        task_id=started.task_id,
-                        round_id=started.initial_round_id,
-                        scope_id=scope_id,
-                        physical_observations=(
-                            OpeningPhysicalObservationInput(
-                                material_id=material.id,
-                                material_identifier_raw=material.sku_code,
-                                material_identifier_type="sku_code",
-                                condition_code="new",
-                                availability_bucket="available",
-                                serial_no_raw=missing_serial,
-                                serial_identifier_type="serial_no",
-                                counted_qty=Decimal("1"),
-                                count_method="manual",
-                                remark="0051 legacy observation-only backfill",
-                            ),
-                        ),
-                        zero_confirmed=False,
-                    ),
-                    idempotency_key=(
-                        f"pg16-0052-legacy-count-{uuid.uuid4().hex}"
-                    ),
-                    request_id=f"pg16-0052-legacy-count-{uuid.uuid4().hex}",
-                )
-                assert count_result.round_sealed is True
-                assert count_result.has_pending_verification is True
-                session.commit()
-            finally:
-                session.rollback()
-                with psycopg.connect(
-                    **migrator_parameters,
-                    autocommit=True,
-                ) as guard_connection:
-                    with guard_connection.cursor() as guard_cursor:
-                        guard_cursor.execute(
-                            "ALTER TABLE public.stocktake_tasks ENABLE ALWAYS "
-                            "TRIGGER trg_stocktake_tasks_opening_commit_0022"
-                        )
-
-            completion = session.scalar(select(StocktakeScopeCountCompletion))
-            observation = session.scalar(select(StocktakeCountObservation))
-            assert completion is not None
-            assert observation is not None
-            assert observation.verification_status == "pending_verification"
-            assert observation.material_id == material.id
-            assert observation.serial_id is None
-            implicit_zero_lines = tuple(
-                session.scalars(select(StocktakeCountLine)).all()
-            )
-            assert len(implicit_zero_lines) == 1
-            assert implicit_zero_lines[0].counted_qty == Decimal("0")
-            original_request = completion.request_jsonb
-            original_resolution = completion.request_resolution_jsonb
-            assert original_request is not None
-            assert original_resolution is not None
-            assert original_resolution["items"][0]["target_type"] == (
-                "observation"
-            )
-            assert original_resolution["items"][0]["serial_alias_keys"] == [
-                missing_serial.lower()
-            ]
-
-            if mutate_policy_after_completion:
-                session.execute(
-                    text(
-                        "UPDATE public.material_inventory_policies "
-                        "SET updated_at = :updated_at WHERE id = :policy_id"
-                    ),
-                    {
-                        "updated_at": completion.completed_at
-                        + timedelta(seconds=1),
-                        "policy_id": policy.id,
-                    },
-                )
-                session.commit()
-                assert session.scalar(
-                    select(MaterialInventoryPolicy.updated_at).where(
-                        MaterialInventoryPolicy.id == policy.id
-                    )
-                ) > completion.completed_at
-
-            evidence = {
-                "completion_id": completion.id,
-                "expected_request_jsonb": original_request,
-                "expected_request_resolution_jsonb": original_resolution,
-                "observation_id": observation.id,
-                "policy_id": policy.id,
-                "request_sha256": completion.request_sha256,
-                "serial_alias_key": missing_serial.lower(),
-                "task_id": started.task_id,
-            }
+        return seed_legacy_completion(engine,
+            mutate_policy_after_completion=mutate_policy_after_completion)
     finally:
-        opening_fixtures.NOW = original_fixture_now
         engine.dispose()
-
-    with psycopg.connect(**migrator_parameters) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "ALTER TABLE public.stocktake_scope_count_completions "
-                "DROP COLUMN request_resolution_jsonb, "
-                "DROP COLUMN request_jsonb"
-            )
-            cursor.execute(
-                "SELECT pg_catalog.count(*) "
-                "FROM public.stocktake_scope_count_completions "
-                "WHERE id = %s",
-                (evidence["completion_id"],),
-            )
-            assert cursor.fetchone() == (1,)
-    return evidence
 
 
 def _assert_0052_isolated_legacy_catalog_state(
@@ -7109,9 +6803,11 @@ def _assert_0052_isolated_legacy_catalog_state(
 
 
 def _assert_0052_legacy_backfill_and_atomic_rejection() -> None:
+    from pg16_legacy_opening_gate import snapshot, legacy_catalog, historical_facts
     migration = _load_opening_terminal_guard_execution_migration_0052()
 
     successful_database = _create_opening_backfill_database()
+    success_engine = _legacy_backfill_engine(successful_database)
     try:
         success = _seed_0051_observation_only_completion(
             successful_database,
@@ -7121,12 +6817,14 @@ def _assert_0052_legacy_backfill_and_atomic_rejection() -> None:
             successful_database,
             installed=False,
         )
+        historical_before = historical_facts(success_engine)
         _run_alembic(
             "upgrade",
             HEAD_REVISION,
             database_name=successful_database,
         )
         assert _isolated_current_revision(successful_database) == HEAD_REVISION
+        assert historical_facts(success_engine, columns=historical_before) == historical_before
         _assert_0052_isolated_legacy_catalog_state(
             successful_database,
             installed=True,
@@ -7167,9 +6865,11 @@ def _assert_0052_legacy_backfill_and_atomic_rejection() -> None:
         assert resolution_item["target_id"] == str(success["observation_id"])
         assert resolution_item["target_type"] == "observation"
     finally:
+        success_engine.dispose()
         _drop_opening_backfill_database(successful_database)
 
     rejected_database = _create_opening_backfill_database()
+    rejected_engine = _legacy_backfill_engine(rejected_database)
     try:
         rejected = _seed_0051_observation_only_completion(
             rejected_database,
@@ -7179,12 +6879,16 @@ def _assert_0052_legacy_backfill_and_atomic_rejection() -> None:
             rejected_database,
             installed=False,
         )
+        before_rejected = snapshot(rejected_engine)
+        catalog_before_rejected = legacy_catalog(rejected_engine)
         blocked = _run_alembic(
             "upgrade",
             HEAD_REVISION,
             expect_success=False,
             database_name=rejected_database,
         )
+        assert snapshot(rejected_engine) == before_rejected
+        assert legacy_catalog(rejected_engine) == catalog_before_rejected
         output = blocked.stdout + blocked.stderr
         assert (
             migration.REQUEST_EVIDENCE_ERROR in output
@@ -7226,6 +6930,7 @@ def _assert_0052_legacy_backfill_and_atomic_rejection() -> None:
                     True,
                 )
     finally:
+        rejected_engine.dispose()
         _drop_opening_backfill_database(rejected_database)
 
 
@@ -7440,13 +7145,17 @@ def _head_account_admission_hash() -> str:
     return hashlib.sha256(runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20261013_0103_stock_return_outbounds.py")))["_sources"]()["public.rsc_require_opening_observation_account_0023()"][1].encode()).hexdigest()
 
 
+@cache
 def _head_runtime_ready_hash() -> str:
+    # This is a fixed migration-source hash within one test process.  The
+    # synthetic catalog checks call it for many mutations; re-running the
+    # nested HEAD migration imports for each row is prohibitively expensive.
     import runpy
     migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20261018_0108_notification_delivery_operations.py"
+        "20261119_0140_opening_count_source_purpose.py"
     )))
     assert migration["revision"] == RUNTIME_READY_HEAD_REVISION
-    return migration["RUNTIME_READY_BODY_SHA256_0108"]
+    return migration["NEW_READY_HASH"]
 
 
 def _assert_0058_review_terminal_catalog_state(
@@ -13315,8 +13024,8 @@ def _assert_0046_rejects_nonempty_content_downgrade(
     expected_version: int,
 ) -> None:
     assert _current_revision() == HEAD_REVISION
-    blocked = _run_alembic("downgrade", RLS_REVISION, expect_success=False)
-    assert "cannot downgrade 0046" in (blocked.stdout + blocked.stderr)
+    _assert_retention_downgrade(RLS_REVISION, blocking_revision=CONTENT_CAUSALITY_REVISION,
+        blocker="cannot downgrade 0046")
     assert _current_revision() == HEAD_REVISION
     _assert_material_request_snapshot(
         api_engine,
@@ -13339,755 +13048,21 @@ def _seed_0047_stocktake_inventory(
 
     from unittest.mock import patch
 
-    from app.foundation_models import (
-        ExternalObject,
-        ExternalObjectVersion,
-        Organization,
-        Person,
-        Role,
-        RoleAssignment,
-        SourceSystem,
-        StateTransitionEvent,
-        SyncBatch,
-        SyncInboxEvent,
-        SyncRun,
-    )
-    from app.formal_services.opening_stocktake import (
-        OPENING_CONTROL_ENTITY_TYPE,
-        OpeningControlLineInput,
-        canonical_opening_manifest_sha256,
-        opening_control_batch_body_sha256,
-        opening_control_manifest_sha256,
-        opening_control_projection_payload,
-    )
-    from app.inventory_models import (
-        CustodyAssignment,
-        FormalMaterial,
-        InventorySerial,
-        MaterialInventoryPolicy,
-        StockAccount,
-        StockLocation,
-    )
-    from app.models import User
+    from app.foundation_models import ExternalObject, ExternalObjectVersion, StateTransitionEvent
+    from app.inventory_models import FormalMaterial
 
-    migrator_engine = create_engine(
-        _sqlalchemy_url(
-            role="star_oam_migrator",
-            password=_role_password("star_oam_migrator"),
-        ),
-        pool_size=1,
-        max_overflow=0,
-        pool_timeout=5,
-    )
+    from pg16_opening_publication_fixture import prepare_stocktake_inventory
+    migrator_engine = create_engine(_sqlalchemy_url(role="star_oam_migrator",
+        password=_role_password("star_oam_migrator")), pool_size=1, max_overflow=0, pool_timeout=5)
+    edge_engine = create_engine(_sqlalchemy_url(role=EDGE_RECEIVER_ROLE,
+        password=_role_password(EDGE_RECEIVER_ROLE)), pool_size=1, max_overflow=0, pool_timeout=5)
     try:
-        with Session(migrator_engine, expire_on_commit=False) as session:
-            now = session.scalar(select(func.now()))
-            assert isinstance(now, datetime) and now.tzinfo is not None
-            manager = session.get(User, assignee_user_id)
-            assert manager is not None and manager.person_id is not None
-            manager_person = session.get(Person, manager.person_id)
-            assert manager_person is not None
-            assignment_row = session.execute(
-                select(RoleAssignment, Role)
-                .join(Role, Role.id == RoleAssignment.role_id)
-                .where(
-                    RoleAssignment.user_id == assignee_user_id,
-                    RoleAssignment.status == "active",
-                    RoleAssignment.scope_type == "organization",
-                    Role.code == "provincial_manager",
-                    Role.status == "active",
-                )
-                .order_by(RoleAssignment.id)
-            ).one()
-            assignment, role = assignment_row
-            assert role.is_external is False
-            region_org_id = uuid.UUID(assignment.scope_id)
-            region = session.get(Organization, region_org_id)
-            assert region is not None
-            assert (region.org_type, region.status) == ("region_company", "active")
-
-            administrator = session.get(User, actor_user_id)
-            assert (
-                administrator is not None
-                and administrator.person_id is not None
-            )
-            assert session.get(Person, administrator.person_id) is not None
-            headquarters_assignment_row = session.execute(
-                select(RoleAssignment, Role)
-                .join(Role, Role.id == RoleAssignment.role_id)
-                .where(
-                    RoleAssignment.user_id == actor_user_id,
-                    RoleAssignment.status == "active",
-                    RoleAssignment.scope_type == "national",
-                    RoleAssignment.scope_id == "*",
-                    Role.code == "admin",
-                    Role.status == "active",
-                )
-                .order_by(RoleAssignment.id)
-            ).one()
-            _headquarters_assignment, headquarters_role = (
-                headquarters_assignment_row
-            )
-            assert headquarters_role.is_external is False
-
-            oam_source = session.scalar(
-                select(SourceSystem)
-                .where(func.lower(SourceSystem.code) == "oam")
-                .order_by(SourceSystem.id)
-                .limit(1)
-            )
-            if oam_source is None:
-                oam_source = SourceSystem(
-                    id=uuid.uuid4(),
-                    code="OAM",
-                    name="PostgreSQL 16 隔离期初控制源",
-                    mode="read_only",
-                    enabled=True,
-                    configuration_jsonb={},
-                    created_at=now - timedelta(days=2),
-                    updated_at=now - timedelta(days=2),
-                )
-                session.add(oam_source)
-                session.flush()
-            assert (
-                oam_source.code.casefold(),
-                oam_source.mode,
-                oam_source.enabled,
-            ) == ("oam", "read_only", True)
-
-            material_created_at = now - timedelta(days=1)
-            material_id = uuid.uuid4()
-            material_sku_code = (
-                f"PG16-STK-SKU-{material_id.hex[:16].upper()}"
-            )
-            material_external_version_id = uuid.uuid4()
-            material_payload = {
-                "baseUnit": "件",
-                "materialCode": material_sku_code,
-                "materialName": "PostgreSQL 16 隔离盘点物料",
-                "specification": "",
-                "status": "active",
-            }
-            material_external_object = ExternalObject(
-                id=uuid.uuid4(),
-                source_system_id=oam_source.id,
-                entity_type="material",
-                external_id=f"PG16-STOCKTAKE-MATERIAL-{uuid.uuid4().hex}",
-                current_version_id=material_external_version_id,
-                deleted_at=None,
-                created_at=material_created_at,
-                updated_at=material_created_at,
-            )
-            session.add(material_external_object)
-            session.flush()
-            material_external_version = ExternalObjectVersion(
-                id=material_external_version_id,
-                external_object_id=material_external_object.id,
-                source_version="pg16-stocktake-material-v1",
-                source_updated_at=material_created_at,
-                valid_from=material_created_at,
-                valid_to=None,
-                payload_jsonb=material_payload,
-                payload_sha256=_projector_gate_sha256(material_payload),
-                is_current=True,
-                created_at=material_created_at,
-            )
-            session.add(material_external_version)
-            session.flush()
-            material = FormalMaterial(
-                id=material_id,
-                external_object_id=material_external_object.id,
-                sku_code=material_sku_code,
-                name="PostgreSQL 16 隔离盘点物料",
-                specification="",
-                base_unit="件",
-                status="active",
-                source_updated_at=material_created_at,
-                created_at=material_created_at,
-                updated_at=material_created_at,
-            )
-            session.add(material)
-            session.flush()
-            assert material.external_object_id == material_external_object.id
-            assert material_external_object.source_system_id == oam_source.id
-            assert (
-                material_external_object.current_version_id
-                == material_external_version.id
-            )
-
-            concurrency_material_id = uuid.uuid4()
-            concurrency_material_sku_code = (
-                f"PG16-CONCURRENT-SKU-{concurrency_material_id.hex[:16].upper()}"
-            )
-            concurrency_material_version_id = uuid.uuid4()
-            concurrency_material_payload = {
-                "baseUnit": "件",
-                "materialCode": concurrency_material_sku_code,
-                "materialName": "PostgreSQL 16 并发别名物料",
-                "specification": "",
-                "status": "active",
-            }
-            concurrency_material_source = ExternalObject(
-                id=uuid.uuid4(),
-                source_system_id=oam_source.id,
-                entity_type="material",
-                external_id=(
-                    "PG16-CONCURRENT-MATERIAL-"
-                    f"{concurrency_material_id.hex}"
-                ),
-                current_version_id=concurrency_material_version_id,
-                deleted_at=None,
-                created_at=material_created_at,
-                updated_at=material_created_at,
-            )
-            session.add(concurrency_material_source)
-            session.flush()
-            concurrency_material_version = ExternalObjectVersion(
-                id=concurrency_material_version_id,
-                external_object_id=concurrency_material_source.id,
-                source_version="pg16-concurrent-material-v1",
-                source_updated_at=material_created_at,
-                valid_from=material_created_at,
-                valid_to=None,
-                payload_jsonb=concurrency_material_payload,
-                payload_sha256=_projector_gate_sha256(
-                    concurrency_material_payload
-                ),
-                is_current=True,
-                created_at=material_created_at,
-            )
-            concurrency_material = FormalMaterial(
-                id=concurrency_material_id,
-                external_object_id=concurrency_material_source.id,
-                sku_code=concurrency_material_sku_code,
-                name="PostgreSQL 16 并发别名物料",
-                specification="",
-                base_unit="件",
-                status="active",
-                source_updated_at=material_created_at,
-                created_at=material_created_at,
-                updated_at=material_created_at,
-            )
-            session.add_all(
-                (concurrency_material_version, concurrency_material)
-            )
-            session.flush()
-
-            policy = MaterialInventoryPolicy(
-                id=uuid.uuid4(),
-                material_id=material.id,
-                tracking_mode="none",
-                quantity_scale=3,
-                allow_fraction=True,
-                effective_from=now - timedelta(days=1),
-                effective_to=None,
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            serial = InventorySerial(
-                id=uuid.uuid4(),
-                material_id=material.id,
-                serial_no=f"PG16-STK-SERIAL-{material.id.hex[:16].upper()}",
-                qr_code=f"PG16-STK-QR-{material.id.hex.upper()}",
-                lot_id=None,
-                lifecycle_status="active",
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            concurrency_policy = MaterialInventoryPolicy(
-                id=uuid.uuid4(),
-                material_id=concurrency_material.id,
-                tracking_mode="serial",
-                quantity_scale=3,
-                allow_fraction=False,
-                effective_from=now - timedelta(days=1),
-                effective_to=None,
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            concurrency_serial = InventorySerial(
-                id=uuid.uuid4(),
-                material_id=concurrency_material.id,
-                serial_no=(
-                    "PG16-CONCURRENT-SERIAL-"
-                    f"{concurrency_material.id.hex[:16].upper()}"
-                ),
-                qr_code=(
-                    "PG16-CONCURRENT-QR-"
-                    f"{concurrency_material.id.hex.upper()}"
-                ),
-                lot_id=None,
-                lifecycle_status="active",
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            location_id = uuid.uuid4()
-            location = StockLocation(
-                id=location_id,
-                code=f"PG16-STK-{location_id.hex[:16].upper()}",
-                name="PostgreSQL 16 隔离盘点仓",
-                location_type="region",
-                owner_org_id=region_org_id,
-                parent_id=None,
-                custodian_person_id=manager_person.id,
-                status="active",
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            concurrency_location_id = uuid.uuid4()
-            concurrency_location = StockLocation(
-                id=concurrency_location_id,
-                code=(
-                    "PG16-CONCURRENT-"
-                    f"{concurrency_location_id.hex[:16].upper()}"
-                ),
-                name="PostgreSQL 16 并发别名隔离仓",
-                location_type="region",
-                owner_org_id=region_org_id,
-                parent_id=None,
-                custodian_person_id=manager_person.id,
-                status="active",
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            concurrency_competing_location_id = uuid.uuid4()
-            concurrency_competing_location = StockLocation(
-                id=concurrency_competing_location_id,
-                code=(
-                    "PG16-CONCURRENT-PEER-"
-                    f"{concurrency_competing_location_id.hex[:16].upper()}"
-                ),
-                name="PostgreSQL 16 并发别名竞争空仓",
-                location_type="region",
-                owner_org_id=region_org_id,
-                parent_id=None,
-                custodian_person_id=manager_person.id,
-                status="active",
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            difference_peer_location_id = uuid.uuid4()
-            difference_peer_location = StockLocation(
-                id=difference_peer_location_id,
-                code=(
-                    "PG16-DIFFERENCE-PEER-"
-                    f"{difference_peer_location_id.hex[:16].upper()}"
-                ),
-                name="PostgreSQL 16 差异回放锁序空仓",
-                location_type="region",
-                owner_org_id=region_org_id,
-                parent_id=None,
-                custodian_person_id=manager_person.id,
-                status="active",
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            session.add_all(
-                (
-                    policy,
-                    serial,
-                    location,
-                    concurrency_policy,
-                    concurrency_serial,
-                    concurrency_location,
-                    concurrency_competing_location,
-                    difference_peer_location,
-                )
-            )
-            session.flush()
-            session.add_all(
-                (
-                    CustodyAssignment(
-                        id=uuid.uuid4(),
-                        location_id=location.id,
-                        custodian_person_id=manager_person.id,
-                        valid_from=now - timedelta(days=1),
-                        valid_to=None,
-                        handover_case_id=None,
-                        created_at=now - timedelta(days=1),
-                        updated_at=now - timedelta(days=1),
-                    ),
-                    CustodyAssignment(
-                        id=uuid.uuid4(),
-                        location_id=concurrency_location.id,
-                        custodian_person_id=manager_person.id,
-                        valid_from=now - timedelta(days=1),
-                        valid_to=None,
-                        handover_case_id=None,
-                        created_at=now - timedelta(days=1),
-                        updated_at=now - timedelta(days=1),
-                    ),
-                    CustodyAssignment(
-                        id=uuid.uuid4(),
-                        location_id=concurrency_competing_location.id,
-                        custodian_person_id=manager_person.id,
-                        valid_from=now - timedelta(days=1),
-                        valid_to=None,
-                        handover_case_id=None,
-                        created_at=now - timedelta(days=1),
-                        updated_at=now - timedelta(days=1),
-                    ),
-                    CustodyAssignment(
-                        id=uuid.uuid4(),
-                        location_id=difference_peer_location.id,
-                        custodian_person_id=manager_person.id,
-                        valid_from=now - timedelta(days=1),
-                        valid_to=None,
-                        handover_case_id=None,
-                        created_at=now - timedelta(days=1),
-                        updated_at=now - timedelta(days=1),
-                    ),
-                )
-            )
-            account = StockAccount(
-                id=uuid.uuid4(),
-                owner_org_id=region_org_id,
-                custodian_person_id=None,
-                location_id=location.id,
-                material_id=material.id,
-                condition_code="new",
-                availability_bucket="available",
-                lot_id=None,
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            concurrency_account = StockAccount(
-                id=uuid.uuid4(),
-                owner_org_id=region_org_id,
-                custodian_person_id=None,
-                location_id=concurrency_location.id,
-                material_id=concurrency_material.id,
-                condition_code="new",
-                availability_bucket="available",
-                lot_id=None,
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            difference_peer_account = StockAccount(
-                id=uuid.uuid4(),
-                owner_org_id=region_org_id,
-                custodian_person_id=None,
-                location_id=difference_peer_location.id,
-                material_id=material.id,
-                condition_code="new",
-                availability_bucket="available",
-                lot_id=None,
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            session.add_all(
-                (account, concurrency_account, difference_peer_account)
-            )
-            session.flush()
-
-            # A separate freeze owner for the multi-round recovery proof. The
-            # difference peer above deliberately remains submitted/frozen.
-            recount_location_id = uuid.uuid4()
-            recount_location = StockLocation(
-                id=recount_location_id,
-                code=f"PG16-RECOUNT-{recount_location_id.hex[:16].upper()}",
-                name="PostgreSQL 16 非期初多轮复盘隔离库位",
-                location_type="region", owner_org_id=region_org_id,
-                parent_id=None, custodian_person_id=manager_person.id,
-                status="active", created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            session.add(recount_location)
-            session.flush()
-            session.add(CustodyAssignment(
-                id=uuid.uuid4(), location_id=recount_location_id,
-                custodian_person_id=manager_person.id,
-                valid_from=now - timedelta(days=1), valid_to=None,
-                handover_case_id=None, created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            ))
-            recount_account = StockAccount(
-                id=uuid.uuid4(), owner_org_id=region_org_id,
-                custodian_person_id=None, location_id=recount_location_id,
-                material_id=material.id, condition_code="new",
-                availability_bucket="available", lot_id=None,
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            session.add(recount_account)
-            session.flush()
-
-            # Do not reuse the alias-race location: that fixture intentionally
-            # starts a separate, not-yet-established opening task later.
-            serial_replay_location_id = uuid.uuid4()
-            serial_replay_location = StockLocation(
-                id=serial_replay_location_id,
-                code=f"PG16-SN-REPLAY-{serial_replay_location_id.hex[:16].upper()}",
-                name="PostgreSQL 16 非期初串码回放隔离库位",
-                location_type="region", owner_org_id=region_org_id,
-                parent_id=None, custodian_person_id=manager_person.id,
-                status="active", created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            serial_replay_serial = InventorySerial(
-                id=uuid.uuid4(), material_id=concurrency_material.id,
-                serial_no=f"PG16-SN-REPLAY-{serial_replay_location_id.hex.upper()}",
-                qr_code=f"PG16-SN-REPLAY-QR-{serial_replay_location_id.hex.upper()}",
-                lot_id=None, lifecycle_status="active",
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            serial_replay_extra_serial = InventorySerial(
-                id=uuid.uuid4(), material_id=concurrency_material.id,
-                serial_no=f"PG16-SN-REPLAY-EXTRA-{serial_replay_location_id.hex.upper()}",
-                qr_code=f"PG16-SN-REPLAY-EXTRA-QR-{serial_replay_location_id.hex.upper()}",
-                lot_id=None, lifecycle_status="active",
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            session.add_all((
-                serial_replay_location,
-                serial_replay_serial,
-                serial_replay_extra_serial,
-            ))
-            session.flush()
-            session.add(CustodyAssignment(
-                id=uuid.uuid4(), location_id=serial_replay_location_id,
-                custodian_person_id=manager_person.id,
-                valid_from=now - timedelta(days=1), valid_to=None,
-                handover_case_id=None, created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            ))
-            serial_replay_account = StockAccount(
-                id=uuid.uuid4(), owner_org_id=region_org_id,
-                custodian_person_id=None, location_id=serial_replay_location_id,
-                material_id=concurrency_material.id, condition_code="new",
-                availability_bucket="available", lot_id=None,
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            session.add(serial_replay_account)
-            session.flush()
-
-            # A disposable non-serial peer for the real cutoff-replay
-            # multi-scope sample.  It is intentionally independent from the
-            # recount account (whose zero balance is asserted by the existing
-            # three-round recovery proof) and from the alias-race locations.
-            dynamic_peer_location_id = uuid.uuid4()
-            dynamic_peer_location = StockLocation(
-                id=dynamic_peer_location_id,
-                code=f"PG16-DYNAMIC-PEER-{dynamic_peer_location_id.hex[:16].upper()}",
-                name="PostgreSQL 16 截止回放多范围隔离库位",
-                location_type="region", owner_org_id=region_org_id,
-                parent_id=None, custodian_person_id=manager_person.id,
-                status="active", created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            session.add(dynamic_peer_location)
-            session.flush()
-            session.add(CustodyAssignment(
-                id=uuid.uuid4(), location_id=dynamic_peer_location_id,
-                custodian_person_id=manager_person.id,
-                valid_from=now - timedelta(days=1), valid_to=None,
-                handover_case_id=None, created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            ))
-            dynamic_peer_account = StockAccount(
-                id=uuid.uuid4(), owner_org_id=region_org_id,
-                custodian_person_id=None, location_id=dynamic_peer_location_id,
-                material_id=material.id, condition_code="new",
-                availability_bucket="available", lot_id=None,
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(days=1),
-            )
-            session.add(dynamic_peer_account)
-            session.flush()
-
-            control_sync_run_id = uuid.uuid4()
-            control_scope_key = (
-                f"oam_inventory_control:region:{region_org_id}"
-            )
-            control_started_at = now - timedelta(hours=4)
-            control_received_at = now - timedelta(hours=3)
-            control_validated_at = now - timedelta(hours=2, minutes=30)
-            control_completed_at = now - timedelta(hours=2)
-            control_source_updated_at = now - timedelta(
-                hours=3,
-                minutes=30,
-            )
-            control_external_business_key = (
-                f"PG16-STOCKTAKE-CONTROL-{location_id.hex}"
-            )
-            control_external_event_id = (
-                f"event-{control_external_business_key}"
-            )
-            control_source_version = "pg16-stocktake-control-v1"
-            control_event_id = uuid.uuid4()
-            control_external_version_id = uuid.uuid4()
-            control_payload = opening_control_projection_payload(
-                external_business_key=control_external_business_key,
-                region_org_id=region_org_id,
-                material_id=material.id,
-                condition_code="new",
-                control_qty=Decimal("0.000"),
-                mapping_status="resolved",
-                mapping_note="",
-            )
-            control_payload_sha256 = canonical_opening_manifest_sha256(
-                control_payload
-            )
-            control_line = OpeningControlLineInput(
-                sync_inbox_event_id=control_event_id,
-                external_object_version_id=control_external_version_id,
-                external_business_key=control_external_business_key,
-                material_id=material.id,
-                condition_code="new",
-                control_qty=Decimal("0.000"),
-                mapping_status="resolved",
-                source_updated_at=control_source_updated_at,
-                payload_sha256=control_payload_sha256,
-                mapping_note="",
-            )
-            control_manifest_sha256 = opening_control_manifest_sha256(
-                source_system_id=oam_source.id,
-                sync_run_id=control_sync_run_id,
-                sync_scope_key=control_scope_key,
-                region_org_id=region_org_id,
-                lines=(control_line,),
-            )
-            control_sync_run = SyncRun(
-                id=control_sync_run_id,
-                source_system_id=oam_source.id,
-                run_key=f"pg16-opening-control-{location_id.hex}",
-                scope_key=control_scope_key,
-                mode="full",
-                watermark_from=None,
-                watermark_to=None,
-                status="completed",
-                manifest_sha256=control_manifest_sha256,
-                started_at=control_started_at,
-                completed_at=control_completed_at,
-                failure_code=None,
-                failure_detail=None,
-                created_at=control_started_at,
-                updated_at=control_completed_at,
-            )
-            session.add(control_sync_run)
-            session.flush()
-            control_batch_id = uuid.uuid4()
-            session.add(
-                SyncBatch(
-                    id=control_batch_id,
-                    run_id=control_sync_run.id,
-                    entity_type=OPENING_CONTROL_ENTITY_TYPE,
-                    sequence=1,
-                    record_count=1,
-                    body_sha256=opening_control_batch_body_sha256(
-                        sequence=1,
-                        events=(
-                            {
-                                "event_sort_key": str(control_event_id),
-                                "external_event_id": control_external_event_id,
-                                "external_id": control_external_business_key,
-                                "payload_sha256": control_payload_sha256,
-                                "source_updated_at": control_source_updated_at.astimezone(
-                                    timezone.utc
-                                )
-                                .isoformat(timespec="microseconds")
-                                .replace("+00:00", "Z"),
-                                "source_version": control_source_version,
-                            },
-                        ),
-                    ),
-                    status="applied",
-                    received_at=control_received_at,
-                    validated_at=control_validated_at,
-                    created_at=control_received_at,
-                )
-            )
-            session.flush()
-            control_external_object = ExternalObject(
-                id=uuid.uuid4(),
-                source_system_id=oam_source.id,
-                entity_type=OPENING_CONTROL_ENTITY_TYPE,
-                external_id=control_external_business_key,
-                current_version_id=control_external_version_id,
-                deleted_at=None,
-                created_at=control_source_updated_at,
-                updated_at=control_source_updated_at,
-            )
-            session.add(control_external_object)
-            session.flush()
-            session.add_all(
-                (
-                    ExternalObjectVersion(
-                        id=control_external_version_id,
-                        external_object_id=control_external_object.id,
-                        source_version=control_source_version,
-                        source_updated_at=control_source_updated_at,
-                        valid_from=control_source_updated_at,
-                        valid_to=None,
-                        payload_jsonb=control_payload,
-                        payload_sha256=control_payload_sha256,
-                        is_current=True,
-                        created_at=control_source_updated_at,
-                    ),
-                    SyncInboxEvent(
-                        id=control_event_id,
-                        batch_id=control_batch_id,
-                        source_system_id=oam_source.id,
-                        external_event_id=control_external_event_id,
-                        entity_type=OPENING_CONTROL_ENTITY_TYPE,
-                        external_id=control_external_business_key,
-                        source_version=control_source_version,
-                        source_updated_at=control_source_updated_at,
-                        payload_jsonb=control_payload,
-                        payload_sha256=control_payload_sha256,
-                        status="applied",
-                        error_code=None,
-                        error_detail=None,
-                        processed_at=control_validated_at,
-                        created_at=control_received_at,
-                    ),
-                )
-            )
-            session.commit()
-            fixture: dict[str, object] = {
-                "account_id": account.id,
-                "assignee_person_id": manager_person.id,
-                "control_lines": (control_line,),
-                "control_scope_key": control_scope_key,
-                "control_source_system_id": oam_source.id,
-                "control_sync_run_id": control_sync_run.id,
-                "concurrency_account_id": concurrency_account.id,
-                "concurrency_competing_location_id": (
-                    concurrency_competing_location.id
-                ),
-                "concurrency_location_id": concurrency_location.id,
-                "concurrency_material_id": concurrency_material.id,
-                "concurrency_material_sku_code": concurrency_material.sku_code,
-                "concurrency_serial_id": concurrency_serial.id,
-                "concurrency_serial_no": concurrency_serial.serial_no,
-                "concurrency_serial_qr_code": concurrency_serial.qr_code,
-                "deadline": now + timedelta(days=2),
-                "difference_peer_account_id": difference_peer_account.id,
-                "difference_peer_location_id": difference_peer_location.id,
-                "recount_location_id": recount_location_id,
-                "recount_account_id": recount_account.id,
-                "serial_replay_location_id": serial_replay_location_id,
-                "serial_replay_account_id": serial_replay_account.id,
-                "serial_replay_serial_id": serial_replay_serial.id,
-                "serial_replay_extra_serial_id": serial_replay_extra_serial.id,
-                "dynamic_peer_location_id": dynamic_peer_location_id,
-                "dynamic_peer_account_id": dynamic_peer_account.id,
-                "location_id": location.id,
-                "material_external_object_id": material_external_object.id,
-                "material_external_version_id": material_external_version.id,
-                "material_id": material.id,
-                "material_policy_id": policy.id,
-                "material_sku_code": material.sku_code,
-                "opening_token": location_id.hex,
-                "region_org_id": region_org_id,
-                "serial_id": serial.id,
-                "serial_no": serial.serial_no,
-                "serial_qr_code": serial.qr_code,
-            }
+        fixture = prepare_stocktake_inventory(migrator_engine, edge_engine,
+            actor_user_id=actor_user_id, assignee_user_id=assignee_user_id)
+        from pg16_opening_fixture_gate import assert_reconciliation_event_migration
+        assert_reconciliation_event_migration(migrator_engine, api_engine, edge_engine)
     finally:
+        edge_engine.dispose()
         migrator_engine.dispose()
 
     if prepare_only:
@@ -14114,6 +13089,7 @@ def _seed_0047_stocktake_inventory(
         OpeningStocktakeCountError,
         OpeningPhysicalObservationInput,
         SubmitOpeningStocktakeScopeCountCommand,
+        prevalidate_opening_stocktake_scope_count,
         submit_opening_stocktake_scope_count,
     )
     from app.formal_services.opening_observation_disposition import (
@@ -14710,145 +13686,6 @@ def _seed_0047_stocktake_inventory(
         assert noncanonical_number.value.diagnostic.sqlstate == "23514"
         assert opening_count_snapshot(api_engine) == before_resolution_tamper
 
-    def set_material_tracking_mode(tracking_mode: str) -> None:
-        policy_engine = create_engine(
-            _sqlalchemy_url(
-                role="star_oam_migrator",
-                password=_role_password("star_oam_migrator"),
-            ),
-            pool_size=1,
-            max_overflow=0,
-            pool_timeout=5,
-        )
-        try:
-            with policy_engine.begin() as connection:
-                updated = connection.execute(
-                    text(
-                        "UPDATE public.material_inventory_policies "
-                        "SET tracking_mode = :tracking_mode "
-                        "WHERE id = :policy_id"
-                    ),
-                    {
-                        "tracking_mode": tracking_mode,
-                        "policy_id": str(fixture["material_policy_id"]),
-                    },
-                )
-                assert updated.rowcount == 1
-        finally:
-            policy_engine.dispose()
-
-    def submit_cross_table_duplicate_serial() -> None:
-        command = SubmitOpeningStocktakeScopeCountCommand(
-            task_id=started.task_id,
-            round_id=started.initial_round_id,
-            scope_id=opening_scope_id,
-            physical_observations=(
-                OpeningPhysicalObservationInput(
-                    material_identifier_raw=str(
-                        fixture["material_sku_code"]
-                    ),
-                    material_identifier_type="sku_code",
-                    condition_code="new",
-                    availability_bucket="available",
-                    counted_qty=Decimal("1.000"),
-                    serial_no_raw=str(fixture["serial_no"]),
-                    serial_identifier_type="serial_no",
-                    count_method="manual",
-                    remark="PG16 0052 已知账户 SN",
-                ),
-                OpeningPhysicalObservationInput(
-                    material_identifier_raw=str(
-                        fixture["material_sku_code"]
-                    ),
-                    material_identifier_type="sku_code",
-                    condition_code="used",
-                    availability_bucket="available",
-                    counted_qty=Decimal("1.000"),
-                    serial_no_raw=str(fixture["serial_no"]),
-                    serial_identifier_type="serial_no",
-                    count_method="manual",
-                    remark="PG16 0052 无账户观察 SN",
-                ),
-            ),
-            zero_confirmed=False,
-        )
-        with Session(api_engine, expire_on_commit=False) as session:
-            with patch.object(
-                opening_count_service,
-                "_validate_round_serial_uniqueness",
-                return_value=None,
-            ):
-                submit_opening_stocktake_scope_count(
-                    session,
-                    actor=current_principal(session, assignee_user_id),
-                    command=command,
-                    idempotency_key=(
-                        "pg16-opening-count-cross-table-serial-"
-                        f"{opening_token}"
-                    ),
-                    request_id=(
-                        "trace-pg16-opening-count-cross-table-serial-"
-                        f"{opening_token}"
-                    ),
-                )
-            session.commit()
-
-    def submit_cross_alias_duplicate_serial() -> None:
-        command = SubmitOpeningStocktakeScopeCountCommand(
-            task_id=started.task_id,
-            round_id=started.initial_round_id,
-            scope_id=opening_scope_id,
-            physical_observations=(
-                OpeningPhysicalObservationInput(
-                    material_identifier_raw=str(
-                        fixture["material_sku_code"]
-                    ),
-                    material_identifier_type="sku_code",
-                    condition_code="new",
-                    availability_bucket="available",
-                    counted_qty=Decimal("1.000"),
-                    serial_no_raw=str(fixture["serial_no"]),
-                    serial_identifier_type="serial_no",
-                    count_method="manual",
-                    remark="PG16 0052 已知账户 SN 别名",
-                ),
-                OpeningPhysicalObservationInput(
-                    material_identifier_raw=(
-                        f"PG16-UNKNOWN-MATERIAL-{opening_token[:12]}"
-                    ),
-                    material_identifier_type="unknown",
-                    condition_code="used",
-                    availability_bucket="available",
-                    counted_qty=Decimal("1.000"),
-                    serial_no_raw=str(fixture["serial_qr_code"]).lower(),
-                    serial_identifier_type="qr_code",
-                    count_method="manual",
-                    remark="PG16 0052 pending QR 大小写别名",
-                ),
-            ),
-            zero_confirmed=False,
-        )
-        with Session(api_engine, expire_on_commit=False) as session:
-            with patch.object(
-                opening_count_service,
-                "_validate_round_serial_uniqueness",
-                return_value=None,
-            ):
-                submit_opening_stocktake_scope_count(
-                    session,
-                    actor=current_principal(session, assignee_user_id),
-                    command=command,
-                    idempotency_key=(
-                        "pg16-opening-count-cross-alias-serial-"
-                        f"{opening_token}"
-                    ),
-                    request_id=(
-                        "trace-pg16-opening-count-cross-alias-serial-"
-                        f"{opening_token}"
-                    ),
-                )
-            session.commit()
-
     def assert_cross_alias_writers_serialize(
         *,
         isolation_task_id: uuid.UUID,
@@ -15089,28 +13926,20 @@ def _seed_0047_stocktake_inventory(
             trace_id=f"trace-pg16-opening-concurrent-peer-{opening_token}", round_no=1, sealed=True,
         )
 
-    set_material_tracking_mode("serial")
-    try:
-        with pytest.raises(
-            SanitizedPostgreSQLDiagnosticError
-        ) as duplicate_serial:
-            _reveal_pg16_service_database_error(
-                api_engine,
-                submit_cross_table_duplicate_serial,
-            )
-        assert duplicate_serial.value.diagnostic.sqlstate == "23514"
-        assert opening_count_snapshot(api_engine) == before_resolution_tamper
-        with pytest.raises(
-            SanitizedPostgreSQLDiagnosticError
-        ) as duplicate_serial_alias:
-            _reveal_pg16_service_database_error(
-                api_engine,
-                submit_cross_alias_duplicate_serial,
-            )
-        assert duplicate_serial_alias.value.diagnostic.sqlstate == "23514"
-        assert opening_count_snapshot(api_engine) == before_resolution_tamper
-    finally:
-        set_material_tracking_mode("none")
+    before_prevalidation = opening_count_snapshot(api_engine)
+    with Session(api_engine, expire_on_commit=False) as session:
+        prevalidation = prevalidate_opening_stocktake_scope_count(
+            session,
+            actor=current_principal(session, assignee_user_id),
+            command=opening_count_command(),
+            idempotency_key=f"pg16-opening-count-{opening_token}",
+            request_id=f"trace-pg16-opening-count-{opening_token}",
+        )
+        assert prevalidation.task_id == started.task_id
+        assert prevalidation.observation_count == 2
+        assert prevalidation.pending_verification_input_ordinals == (2,)
+        session.commit()
+    assert opening_count_snapshot(api_engine) == before_prevalidation
 
     with Session(api_engine, expire_on_commit=False) as session:
         scope = session.scalar(
@@ -16211,6 +15040,11 @@ SELECT posting.total_quantity::text,
             fixture["concurrency_location_id"],
             fixture["concurrency_competing_location_id"],
         }
+
+    from pg16_opening_serial_fixture_gate import assert_duplicate_serial_guards
+    assert_duplicate_serial_guards(api_engine, fixture=fixture, assignee_user_id=assignee_user_id,
+        task_id=isolation_started.task_id, round_id=isolation_started.initial_round_id,
+        scope_id=isolation_scopes[fixture["concurrency_location_id"]], snapshot=opening_count_snapshot)
 
     assert_cross_alias_writers_serialize(
         isolation_task_id=isolation_started.task_id,
@@ -19809,12 +18643,8 @@ def _assert_0047_rejects_nonempty_start_downgrade(
     # later audit-order guard over the same start graph, so it must block the
     # chain before 0047 is reached.  Keep that ordering proof explicit.
     audit_order = _load_nonopening_start_audit_order_migration_0055()
-    blocked = _run_alembic(
-        "downgrade",
-        CONTENT_CAUSALITY_REVISION,
-        expect_success=False,
-    )
-    assert audit_order.DOWNGRADE_BLOCKER in (blocked.stdout + blocked.stderr)
+    _assert_retention_downgrade(CONTENT_CAUSALITY_REVISION,
+        blocking_revision=NONOPENING_START_AUDIT_ORDER_REVISION, blocker=audit_order.DOWNGRADE_BLOCKER)
 
     # Exercise 0047's own downgrade contract against the same disposable
     # PostgreSQL database without traversing newer revisions.  Calling the
@@ -20010,7 +18840,13 @@ def _insert_concurrency_fixture(challenge_id: uuid.UUID) -> datetime:
                     NULL, NULL, NULL, NULL, NULL, %s
                 )
                 """,
-                (challenge_id, "c" * 64, "e" * 64, now),
+                (
+                    challenge_id, "c" * 64,
+                    hashlib.sha256(
+                        f"formal-sms-dispatch-request-v1|{challenge_id}|{'f' * 64}".encode()
+                    ).hexdigest(),
+                    now,
+                ),
             )
     return now
 
@@ -20100,6 +18936,7 @@ def _assert_single_owner_and_process_kill(api_engine) -> None:
                     owner_token=owner_token,
                     request_id="pg16-provider-kill",
                     minimum_remaining_seconds=1,
+                    current_dispatch_request_profile_sha256="f" * 64,
                     now=claim_time + timedelta(seconds=1),
                 )
                 authorized.set()
@@ -21083,7 +19920,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
                 manager_user_id=manager_user_id, admin_user_id=admin_user_id)
         finally:
             security_engine.dispose()
-        blocked_supply = _run_alembic("downgrade", SUPPLY_TASK_SECURITY_REVISION, expect_success=False)
+
         # The normal chain must stop at the first newer non-empty migration.
         # This fixture contains both the 0063 review fact and the 0065
         # seal-first posting outcome created by the opening-stocktake proof,
@@ -21091,9 +19928,9 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         # directly above; keeping the two assertions separate proves each
         # migration's own guard without weakening Alembic ordering.
         posting_outcome_migration = _load_stocktake_posting_command_outcomes_migration_0065()
-        assert posting_outcome_migration.DOWNGRADE_BLOCKER in (
-            blocked_supply.stdout + blocked_supply.stderr
-        )
+        _assert_retention_downgrade(SUPPLY_TASK_SECURITY_REVISION,
+            blocking_revision=STOCKTAKE_POSTING_COMMAND_OUTCOMES_REVISION,
+            blocker=posting_outcome_migration.DOWNGRADE_BLOCKER)
         supply_event_key = _load_supply_event_key_migration_0061()
         migrator_engine = create_engine(
             _sqlalchemy_url(
@@ -21134,12 +19971,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             )
         finally:
             security_engine.dispose()
-        blocked_reservation = _run_alembic(
-            "downgrade", "20260908_0068", expect_success=False,
-        )
-        assert "cannot downgrade 0069" in (
-            blocked_reservation.stdout + blocked_reservation.stderr
-        )
+        _assert_retention_downgrade("20260908_0068", blocking_revision=STOCK_RESERVATIONS_REVISION,
+            blocker="cannot downgrade 0069")
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
         from pg16_reservation_release_gate import assert_release_gate
@@ -21151,8 +19984,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             ))
         finally:
             security_engine.dispose()
-        blocked_release = _run_alembic("downgrade", STOCK_RESERVATIONS_REVISION, expect_success=False)
-        assert "cannot downgrade 0070" in blocked_release.stdout + blocked_release.stderr
+        _assert_retention_downgrade(STOCK_RESERVATIONS_REVISION, blocking_revision="20260910_0070",
+            blocker="cannot downgrade 0070")
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
         from pg16_picking_gate import assert_picking_gate
@@ -21164,8 +19997,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             ))
         finally:
             security_engine.dispose()
-        blocked_pick = _run_alembic("downgrade", "20260910_0070", expect_success=False)
-        assert "cannot downgrade 0071" in blocked_pick.stdout + blocked_pick.stderr
+        _assert_retention_downgrade("20260910_0070", blocking_revision="20260911_0071",
+            blocker="cannot downgrade 0071")
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
         from pg16_outbound_gate import assert_outbound_gate
@@ -21176,8 +20009,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             ))
         finally:
             security_engine.dispose()
-        blocked_outbound = _run_alembic("downgrade", "20260911_0071", expect_success=False)
-        assert "cannot downgrade 0072" in blocked_outbound.stdout + blocked_outbound.stderr
+        _assert_retention_downgrade("20260911_0071", blocking_revision="20260912_0072",
+            blocker="cannot downgrade 0072")
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
         from pg16_oam_receipt_gate import assert_receipt_gate
@@ -21190,8 +20023,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         finally:
             receipt_migrator_engine.dispose()
             receipt_backup_engine.dispose()
-        blocked_receipt = _run_alembic("downgrade", "20260921_0081", expect_success=False)
-        assert "0082 downgrade blocked" in blocked_receipt.stdout + blocked_receipt.stderr
+        _assert_retention_downgrade("20260921_0081", blocking_revision="20260922_0082",
+            blocker="0082 downgrade blocked")
         assert _current_revision() == HEAD_REVISION
         from pg16_my_receipt_gate import assert_my_receipt_gate
         security_engine = create_engine(_admin_sqlalchemy_url(), pool_size=1, max_overflow=0, pool_timeout=5)
@@ -21203,8 +20036,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
                 ))
         finally:
             security_engine.dispose()
-        blocked_my_receipt = _run_alembic("downgrade", "20260924_0084", expect_success=False)
-        assert "0089 transition blocked" in blocked_my_receipt.stdout + blocked_my_receipt.stderr
+        _assert_retention_downgrade("20260924_0084", blocking_revision="20260929_0089",
+            blocker="0089 transition blocked")
         assert _current_revision() == HEAD_REVISION
         from pg16_work_order_material_gate import assert_work_order_material_gate
         from pg16_work_order_accounts_gate import assert_work_order_accounts_gate, prepare_work_order_stock
@@ -21216,8 +20049,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_work_order_material_gate(api_engine, work_order_fixture_engine)
         finally:
             work_order_fixture_engine.dispose()
-        blocked_work_order = _run_alembic("downgrade", "20260929_0089", expect_success=False)
-        assert "0091 downgrade blocked" in blocked_work_order.stdout + blocked_work_order.stderr
+        _assert_retention_downgrade("20260929_0089", blocking_revision="20261001_0091",
+            blocker="0091 downgrade blocked")
         assert _current_revision() == HEAD_REVISION
         from pg16_serial_lifecycle_gate import assert_serial_consumption_gate
         serial_fixture_engine = create_engine(_sqlalchemy_url(
@@ -21226,8 +20059,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_serial_consumption_gate(api_engine, serial_fixture_engine)
         finally:
             serial_fixture_engine.dispose()
-        blocked_serial = _run_alembic("downgrade", "20261001_0091", expect_success=False)
-        assert "0092 transition blocked" in blocked_serial.stdout + blocked_serial.stderr
+        _assert_retention_downgrade("20261001_0091", blocking_revision="20261002_0092",
+            blocker="0092 transition blocked")
         assert _current_revision() == HEAD_REVISION
         from pg16_work_order_replacements_gate import assert_work_order_replacements_gate
         replacement_fixture_engine = create_engine(_sqlalchemy_url(
@@ -21286,8 +20119,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_work_order_recovery_gate(api_engine, replacement_fixture_engine)
         finally:
             replacement_fixture_engine.dispose()
-        blocked_replacement = _run_alembic("downgrade", "20261002_0092", expect_success=False)
-        assert "0093 transition blocked" in blocked_replacement.stdout + blocked_replacement.stderr
+        _assert_retention_downgrade("20261002_0092", blocking_revision="20261003_0093",
+            blocker="0093 transition blocked")
         assert _current_revision() == HEAD_REVISION
         seal_fixture_engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
@@ -21295,8 +20128,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_seal_commit_gate(api_engine, seal_fixture_engine, seal_worlds)
         finally:
             seal_fixture_engine.dispose()
-        blocked_seal = _run_alembic("downgrade", "20261003_0093", expect_success=False)
-        assert "0094 downgrade blocked" in blocked_seal.stdout + blocked_seal.stderr
+        _assert_retention_downgrade("20261003_0093", blocking_revision="20261004_0094",
+            blocker="0094 downgrade blocked")
         assert _current_revision() == HEAD_REVISION
         from pg16_work_order_replacement_seals_gate import assert_replacement_seal_commit_gate
         replacement_seal_fixture_engine = create_engine(_sqlalchemy_url(
@@ -21305,8 +20138,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_replacement_seal_commit_gate(api_engine, replacement_seal_fixture_engine, seal_worlds, admin_user_id)
         finally:
             replacement_seal_fixture_engine.dispose()
-        blocked_parent_seal = _run_alembic("downgrade", "20261004_0094", expect_success=False)
-        assert "0095 downgrade blocked" in blocked_parent_seal.stdout + blocked_parent_seal.stderr
+        _assert_retention_downgrade("20261004_0094", blocking_revision="20261005_0095",
+            blocker="0095 downgrade blocked")
         assert _current_revision() == HEAD_REVISION
         # Admitted identities and their permanent seals must come after older
         # downgrade proofs, or 0096 would mask those earlier guard failures.
@@ -21317,8 +20150,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_removed_registration_commit_gate(api_engine, removed_fixture_engine)
         finally:
             removed_fixture_engine.dispose()
-        blocked_removed = _run_alembic("downgrade", "20261005_0095", expect_success=False)
-        assert "0096 downgrade blocked" in blocked_removed.stdout + blocked_removed.stderr
+        _assert_retention_downgrade("20261005_0095", blocking_revision="20261006_0096",
+            blocker="0096 downgrade blocked")
         assert _current_revision() == HEAD_REVISION
         # New permanent compensation/seal facts follow earlier historical
         # downgrade proofs, so their refusal cannot mask the older boundaries.
@@ -21329,8 +20162,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_reversal_seal_commit_gate(api_engine, reversal_fixture_engine)
         finally:
             reversal_fixture_engine.dispose()
-        blocked_reversal_seal = _run_alembic("downgrade", "20261008_0098", expect_success=False)
-        assert "0099 downgrade blocked" in blocked_reversal_seal.stdout + blocked_reversal_seal.stderr
+        _assert_retention_downgrade("20261008_0098", blocking_revision="20261009_0099",
+            blocker="0099 downgrade blocked")
         assert _current_revision() == HEAD_REVISION
         # Permanent return facts must follow every earlier downgrade proof.
         from pg16_stock_return_gate import assert_stock_return_concurrent_commit_gate, snapshot as return_snapshot
@@ -21341,8 +20174,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         finally:
             return_fixture_engine.dispose()
         return_history = return_snapshot(api_engine)
-        blocked_return = _run_alembic("downgrade", "20261009_0099", expect_success=False)
-        assert "0100 downgrade blocked: immutable return history must be retained" in blocked_return.stdout + blocked_return.stderr
+        _assert_retention_downgrade("20261009_0099", blocking_revision="20261010_0100",
+            blocker="0100 downgrade blocked: immutable return history must be retained")
         assert _current_revision() == HEAD_REVISION and return_snapshot(api_engine) == return_history
         _validate_runtime_security(api_engine)
         # Permanent request seals follow the original return-history downgrade
@@ -21356,8 +20189,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         finally:
             return_seal_fixture_engine.dispose()
         return_seal_history = return_seal_snapshot(api_engine)
-        blocked_return_seal = _run_alembic("downgrade", "20261010_0100", expect_success=False)
-        assert "0101 downgrade blocked: immutable return request seals must be retained" in blocked_return_seal.stdout + blocked_return_seal.stderr
+        _assert_retention_downgrade("20261010_0100", blocking_revision="20261011_0101",
+            blocker="0101 downgrade blocked: immutable return request seals must be retained")
         assert _current_revision() == HEAD_REVISION and return_seal_snapshot(api_engine) == return_seal_history
         _validate_runtime_security(api_engine)
         # Establish durable transit history after all predecessor downgrade
@@ -21369,8 +20202,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_transit_opening_gate(api_engine, transit_fixture_engine)
         finally:
             transit_fixture_engine.dispose()
-        blocked_transit = _run_alembic("downgrade", "20261011_0101", expect_success=False)
-        assert "0102 downgrade blocked: transit stocktake history must be retained" in blocked_transit.stdout + blocked_transit.stderr
+        _assert_retention_downgrade("20261011_0101", blocking_revision="20261012_0102",
+            blocker="0102 downgrade blocked: transit stocktake history must be retained")
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
         from pg16_stock_return_outbound_gate import assert_stock_return_outbound_gate, prepare_departure_worlds
@@ -21387,16 +20220,16 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             departure_fixture_engine.dispose()
         from pg16_stock_return_outbound_gate import departure_snapshot
         departure_history = departure_snapshot(api_engine)
-        blocked_departure = _run_alembic("downgrade", "20261012_0102", expect_success=False)
-        assert "0103 downgrade blocked: immutable physical departure history or request seals must be retained" in blocked_departure.stdout + blocked_departure.stderr
+        _assert_retention_downgrade("20261012_0102", blocking_revision="20261013_0103",
+            blocker="0103 downgrade blocked: immutable physical departure history or request seals must be retained")
         assert _current_revision() == HEAD_REVISION and departure_snapshot(api_engine) == departure_history
         _validate_runtime_security(api_engine)
         # Preserve each predecessor's downgrade proof before permanent parcels.
         from pg16_stock_return_shipment_gate import assert_stock_return_shipment_gate, parcel_snapshot
         assert_stock_return_shipment_gate(api_engine, departure_worlds)
         parcel_history = parcel_snapshot(api_engine)
-        blocked_parcels = _run_alembic("downgrade", "20261013_0103", expect_success=False)
-        assert "0104 downgrade blocked: immutable return parcels or request seals must be retained" in blocked_parcels.stdout + blocked_parcels.stderr
+        _assert_retention_downgrade("20261013_0103", blocking_revision="20261014_0104",
+            blocker="0104 downgrade blocked: immutable return parcels or request seals must be retained")
         assert _current_revision() == HEAD_REVISION and parcel_snapshot(api_engine) == parcel_history
         _validate_runtime_security(api_engine)
         from pg16_stock_return_receiving_gate import assert_return_receiving_gate
@@ -21410,9 +20243,170 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         assert_receipt_commit_gate(api_engine,receipt_origins)
         assert_receipt_http_read_gate(api_engine)
         receipt_history=receipt_snapshot(api_engine)
-        blocked_receipts=_run_alembic('downgrade','20261014_0104',expect_success=False)
-        assert '0105 downgrade blocked: immutable return acceptance or request seals must be retained' in blocked_receipts.stdout+blocked_receipts.stderr
+        _assert_retention_downgrade('20261014_0104', blocking_revision="20261015_0105",
+            blocker="0105 downgrade blocked: immutable return acceptance or request seals must be retained")
         assert _current_revision()==HEAD_REVISION and receipt_snapshot(api_engine)==receipt_history
+        _validate_runtime_security(api_engine)
+        from pg16_inventory_notification_gate import assert_inventory_notification_gate
+        from pg16_notification_targets_gate import assert_notification_targets_gate
+        from notification_identity_fixtures import POLICY as notification_fixture_policy, prepare_pg16_notification_identities
+        from app.formal_services import notification_identities
+        from unittest.mock import patch as notification_policy_patch
+        target_fixture_engine = create_engine(_sqlalchemy_url(
+            role="star_oam_migrator", password=_role_password("star_oam_migrator")))
+        try:
+            prepare_pg16_notification_identities(target_fixture_engine)
+            # The synthetic test app changes configuration only; all runtime
+            # lookups, HMAC proofs, roles, row guards and API ACLs stay real.
+            with notification_policy_patch.object(notification_identities,"identity_policy",lambda:notification_fixture_policy):
+                assert_inventory_notification_gate(api_engine)
+                assert_notification_targets_gate(api_engine, target_fixture_engine)
+            from notification_target_recovery_gate import assert_pg16_recovery_gate
+            assert_pg16_recovery_gate(api_engine, target_fixture_engine)
+            from pg16_notification_expansion_gate import assert_notification_expansion_gate
+            assert_notification_expansion_gate(api_engine, target_fixture_engine)
+        finally:
+            target_fixture_engine.dispose()
+        blocked_targets = _run_alembic("downgrade", "20261018_0108", expect_success=False)
+        assert "0109 downgrade blocked: notification target evidence must be retained" in (
+            blocked_targets.stdout + blocked_targets.stderr)
+        assert _current_revision() == HEAD_REVISION
+        _validate_runtime_security(api_engine)
+        # Add durable 0110 seals after each older retention gate has proved its
+        # own boundary; the newest seal must then stop downgrade first.
+        from pg16_stock_return_inbound_seal_gate import assert_return_inbound_seal_gate, seal_snapshot
+        assert_return_inbound_seal_gate(api_engine)
+        sealed_history = seal_snapshot(api_engine)
+        _assert_retention_downgrade("20261019_0109", blocking_revision="20261020_0110",
+            blocker="0110 downgrade blocked: inbound request seals must be retained")
+        assert _current_revision() == HEAD_REVISION and seal_snapshot(api_engine) == sealed_history
+        _validate_runtime_security(api_engine)
+        from pg16_stock_return_inbound_gate import assert_return_inbound_gate, inbound_snapshot
+        assert_return_inbound_gate(api_engine, receipt_origins)
+        inbound_history = inbound_snapshot(api_engine)
+        _assert_retention_downgrade("20261020_0110", blocking_revision="20261021_0111",
+            blocker="0111 downgrade blocked: inbound proof must be retained")
+        assert _current_revision() == HEAD_REVISION and inbound_snapshot(api_engine) == inbound_history
+        _validate_runtime_security(api_engine)
+        # New permanent control preparations follow every older retention proof
+        # so 0112 cannot hide a missing predecessor downgrade boundary.
+        from pg16_inventory_control_preparation_gate import assert_inventory_control_preparation_gate, snapshot as control_preparation_snapshot
+        control_owner_engine = create_engine(_sqlalchemy_url(
+            role="star_oam_migrator", password=_role_password("star_oam_migrator")))
+        control_backup_engine = create_engine(_sqlalchemy_url(
+            role="star_oam_backup", password=_role_password("star_oam_backup")))
+        try:
+            assert_inventory_control_preparation_gate(control_owner_engine, edge_engine, api_engine,
+                projector_engine, control_backup_engine, _validate_runtime_security)
+            control_history = control_preparation_snapshot(control_owner_engine)
+            _assert_retention_downgrade("20261021_0111", blocking_revision="20261022_0112",
+                blocker="0112 downgrade blocked: control preparation facts must be retained")
+            assert _current_revision() == HEAD_REVISION and control_preparation_snapshot(control_owner_engine) == control_history
+            from pg16_inventory_control_authority_gate import assert_inventory_control_authority_gate, snapshot as control_authority_snapshot
+            assert_inventory_control_authority_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine)
+            authority_history = control_authority_snapshot(control_owner_engine)
+            _assert_retention_downgrade("20261022_0112", blocking_revision="20261023_0113",
+                blocker="0113 downgrade blocked: control authority must be retained")
+            assert _current_revision() == HEAD_REVISION and control_authority_snapshot(control_owner_engine) == authority_history
+            from pg16_inventory_control_attestation_gate import assert_inventory_control_attestation_gate, snapshot as control_attestation_snapshot
+            from app.edge_database_security import verify_edge_database_boundary
+            assert_inventory_control_attestation_gate(control_owner_engine, edge_engine, api_engine, projector_engine,
+                control_backup_engine, _validate_runtime_security, verify_edge_database_boundary)
+            attestation_history=control_attestation_snapshot(control_owner_engine)
+            _assert_retention_downgrade("20261023_0113", blocking_revision="20261024_0114",
+                blocker="0114 downgrade blocked: capture receipts must be retained")
+            assert _current_revision()==HEAD_REVISION and control_attestation_snapshot(control_owner_engine)==attestation_history
+            from pg16_inventory_control_mapping_gate import assert_inventory_control_mapping_gate, snapshot as mapping_snapshot
+            assert_inventory_control_mapping_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine)
+            mapping_history=mapping_snapshot(control_owner_engine)
+            _assert_retention_downgrade("20261024_0114", blocking_revision="20261025_0115",
+                blocker="0115 downgrade blocked: mapping decisions must be retained")
+            assert _current_revision()==HEAD_REVISION and mapping_snapshot(control_owner_engine)==mapping_history
+            from pg16_material_capture_gate import assert_material_capture_gate, snapshot as material_capture_snapshot
+            assert_material_capture_gate(control_owner_engine, edge_engine, api_engine, projector_engine,
+                control_backup_engine, _validate_runtime_security, verify_edge_database_boundary)
+            material_history=material_capture_snapshot(control_owner_engine)
+            _assert_retention_downgrade("20261025_0115", blocking_revision="20261026_0116",
+                blocker="0116 downgrade blocked: material transport evidence must be retained")
+            assert _current_revision()==HEAD_REVISION and material_capture_snapshot(control_owner_engine)==material_history
+            from pg16_material_source_authority_gate import assert_material_source_authority_gate, snapshot as material_authority_snapshot
+            assert_material_source_authority_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine)
+            material_authority_history=material_authority_snapshot(control_owner_engine)
+            _assert_retention_downgrade("20261026_0116", blocking_revision="20261027_0117",
+                blocker="0117 downgrade blocked: material source authority must be retained")
+            assert _current_revision()==HEAD_REVISION and material_authority_snapshot(control_owner_engine)==material_authority_history
+            from pg16_material_source_time_gate import assert_material_source_time_gate
+            unknown_material_id = assert_material_source_time_gate(control_owner_engine, api_engine, control_backup_engine)
+            _assert_retention_downgrade("20261027_0117", blocking_revision="20261028_0118",
+                blocker="0118 downgrade blocked: unknown material source times must be retained")
+            with control_owner_engine.connect() as checked:
+                assert checked.execute(text('SELECT source_updated_at FROM public.materials WHERE id=:id'),
+                    {'id': unknown_material_id}).one() == (None,)
+            assert _current_revision() == HEAD_REVISION
+            from pg16_material_projection_gate import assert_material_projection_gate, snapshot as material_projection_snapshot
+            assert_material_projection_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine)
+            from pg16_material_source_proof_gate import assert_material_source_proof_gate
+            assert_material_source_proof_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine)
+            from pg16_inventory_control_normalization_gate import assert_inventory_control_normalization_gate
+            assert_inventory_control_normalization_gate(control_owner_engine, edge_engine, api_engine, projector_engine, control_backup_engine, publication_check=True)
+            publication_history=material_projection_snapshot(control_owner_engine)
+            _assert_retention_downgrade("20261028_0118", blocking_revision="20261029_0119",
+                blocker="0119 downgrade blocked: material publications must be retained")
+            assert _current_revision()==HEAD_REVISION and material_projection_snapshot(control_owner_engine)==publication_history
+            # New immutable request seals come last, so their downgrade fence
+            # cannot conceal any predecessor's retention boundary.
+            from pg16_opening_start_seal_gate import run as check_opening_seals, snapshot as opening_seal_snapshot
+            seal_report = check_opening_seals({'star_oam_migrator': control_owner_engine,
+                'star_oam_api': api_engine, 'edge_inbox': edge_engine})
+            assert seal_report['status'] == 'passed'
+            opening_seal_history = opening_seal_snapshot(control_owner_engine)
+            _assert_retention_downgrade('20261106_0127', blocking_revision='20261107_0128',
+                blocker='0128 downgrade blocked: original request seals must be retained')
+            assert _current_revision() == HEAD_REVISION and opening_seal_snapshot(control_owner_engine) == opening_seal_history
+        finally:
+            control_owner_engine.dispose()
+            control_backup_engine.dispose()
+        daily_owner_engine = create_engine(
+            _sqlalchemy_url(
+                role="star_oam_migrator",
+                password=_role_password("star_oam_migrator"),
+            ),
+            pool_size=2,
+            max_overflow=0,
+            pool_timeout=5,
+        )
+        daily_admin_engine = create_engine(
+            _admin_sqlalchemy_url(),
+            pool_size=1,
+            max_overflow=0,
+            pool_timeout=5,
+        )
+        try:
+            from pg16_daily_review_runtime import run_with_capture_roles
+
+            def daily_downgrade(destination):
+                result = _run_alembic("downgrade", destination, expect_success=False)
+                return result.stdout + result.stderr
+
+            daily_result = run_with_capture_roles(
+                {
+                    "star_oam_migrator": daily_owner_engine,
+                    "star_oam_api": api_engine,
+                    "edge_inbox": edge_engine,
+                },
+                daily_admin_engine,
+                daily_downgrade,
+            )
+            assert daily_result["status"] == "passed"
+            assert len(daily_result["cases"]) == 12
+            from pg16_sms_profile_gate import run as run_sms_profile_gate
+
+            sms_profile_result = run_sms_profile_gate(daily_owner_engine, api_engine, daily_admin_engine)
+            assert sms_profile_result["status"] == "passed"
+            assert len(sms_profile_result["cases"]) == 9
+        finally:
+            daily_admin_engine.dispose()
+            daily_owner_engine.dispose()
         _validate_runtime_security(api_engine)
     finally:
         edge_engine.dispose()

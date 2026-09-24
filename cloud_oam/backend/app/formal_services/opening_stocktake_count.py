@@ -279,6 +279,20 @@ class OpeningStocktakeScopeCountResult:
 
 
 @dataclass(frozen=True, slots=True)
+class OpeningStocktakeScopeCountPrevalidation:
+    """Read-only, short-lived evidence; never an authorization to submit later."""
+
+    task_id: uuid.UUID
+    round_id: uuid.UUID
+    scope_id: uuid.UUID
+    task_version: int
+    actor_authorization_version: int
+    request_sha256: str
+    observation_count: int
+    pending_verification_input_ordinals: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _OpeningCountReplayPlan:
     """Transaction-bound structural count proof captured before audit."""
 
@@ -374,6 +388,49 @@ def submit_opening_stocktake_scope_count(
 ) -> OpeningStocktakeScopeCountResult:
     """Public database-error boundary for one complete scope submission."""
 
+    return _run_opening_stocktake_scope_count(
+        db, actor=actor, command=command, idempotency_key=idempotency_key,
+        request_id=request_id, prevalidate_only=False,
+    )
+
+
+def prevalidate_opening_stocktake_scope_count(
+    db: Session,
+    *,
+    actor: FormalPrincipal,
+    command: SubmitOpeningStocktakeScopeCountCommand,
+    idempotency_key: str,
+    request_id: str,
+) -> OpeningStocktakeScopeCountPrevalidation:
+    """Prove current count rules without creating any count or inventory fact.
+
+    The caller must own a clean transaction. This locks the same task/reference
+    graph as submission; the proof expires with that transaction and must be
+    recomputed when an import is explicitly confirmed.
+    """
+
+    if db.new or db.dirty or db.deleted:
+        _fail(
+            "opening_count_prevalidation_session_not_clean", "precondition_failed",
+            "预校验需要没有待写变更的独立事务",
+        )
+    return _run_opening_stocktake_scope_count(
+        db, actor=actor, command=command, idempotency_key=idempotency_key,
+        request_id=request_id, prevalidate_only=True,
+    )
+
+
+def _run_opening_stocktake_scope_count(
+    db: Session,
+    *,
+    actor: FormalPrincipal,
+    command: SubmitOpeningStocktakeScopeCountCommand,
+    idempotency_key: str,
+    request_id: str,
+    prevalidate_only: bool,
+) -> OpeningStocktakeScopeCountResult | OpeningStocktakeScopeCountPrevalidation:
+    """Use one error boundary for the read-only and mutating count paths."""
+
     failure: OpeningStocktakeCountError | None = None
     try:
         return _submit_opening_stocktake_scope_count(
@@ -382,6 +439,7 @@ def submit_opening_stocktake_scope_count(
             command=command,
             idempotency_key=idempotency_key,
             request_id=request_id,
+            prevalidate_only=prevalidate_only,
         )
     except OpeningStocktakeCountError:
         raise
@@ -428,8 +486,9 @@ def _submit_opening_stocktake_scope_count(
     command: SubmitOpeningStocktakeScopeCountCommand,
     idempotency_key: str,
     request_id: str,
-) -> OpeningStocktakeScopeCountResult:
-    """Atomically submit one complete active-round scope count without commit."""
+    prevalidate_only: bool,
+) -> OpeningStocktakeScopeCountResult | OpeningStocktakeScopeCountPrevalidation:
+    """Validate one active-round scope; optionally submit without commit."""
 
     supplied_actor = _validate_supplied_actor(actor)
     checked = _validate_command(command)
@@ -563,7 +622,7 @@ def _submit_opening_stocktake_scope_count(
         .where(StocktakeScopeCountCompletion.idempotency_key_hash == key_hash)
         .execution_options(populate_existing=True)
     )
-    allow_downstream = existing_by_key is not None
+    allow_downstream = existing_by_key is not None and not prevalidate_only
     _validate_start_anchors(
         db,
         task,
@@ -636,6 +695,11 @@ def _submit_opening_stocktake_scope_count(
     _validate_current_scope_dimensions(db, task, scope, location, now)
 
     if existing_by_key is not None:
+        if prevalidate_only:
+            _fail(
+                "opening_count_scope_already_completed", "conflict",
+                "该盘点范围已经提交且不可修改",
+            )
         if (
             existing_by_key.task_id != checked.task_id
             or existing_by_key.round_id != checked.round_id
@@ -849,6 +913,36 @@ def _submit_opening_stocktake_scope_count(
             "opening_count_scope_not_frozen",
             "precondition_failed",
             "盘点范围冻结状态在提交前已变化",
+        )
+
+    if prevalidate_only:
+        _validate_selected_round_authorization(
+            actor=current_actor,
+            assignment=assignment,
+            grant=grant,
+            round_row=round_row,
+            scope=scope,
+            expected_recount_assignment=expected_recount_assignment,
+        )
+        _round_state_reasons(round_row)
+        pending_item_hashes = {
+            row.request_item_sha256 for row in prepared_observations
+            if row.verification_status != "verified"
+        }
+        return OpeningStocktakeScopeCountPrevalidation(
+            task_id=task.id,
+            round_id=round_row.id,
+            scope_id=scope.id,
+            task_version=task.version,
+            actor_authorization_version=current_actor.authorization_version,
+            request_sha256=request_sha256,
+            observation_count=len(checked.physical_observations),
+            pending_verification_input_ordinals=tuple(
+                ordinal for ordinal, value in enumerate(
+                    checked.physical_observations, start=1
+                ) if _hash_document(_observation_evidence_document(value))
+                in pending_item_hashes
+            ),
         )
 
     try:

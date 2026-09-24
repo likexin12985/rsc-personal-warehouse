@@ -1114,15 +1114,16 @@ def _require_generic_reversal_origin(db: Session, command: InventoryReversalComm
     can prove both child inverses and reconstruct terminal serial lifecycle.
     """
     from ..demand_models import WorkOrderMaterialOperation
-    from ..stock_operation_models import StockOperationOrder, StockOperationCancellation, StockOperationOutbound
+    from ..stock_operation_models import (StockOperationOrder, StockOperationCancellation,
+        StockOperationOutbound, StockOperationReturnInbound)
 
     original = db.get(InventoryTransaction, command.original_transaction_id, populate_existing=True)
-    if (command.source_document_type in {"stock_operation_return", "stock_operation_return_outbound"}
-            or (original is not None and original.source_document_type in {"stock_operation_return", "stock_operation_return_outbound"})
+    if (command.source_document_type in {"stock_operation_return", "stock_operation_return_outbound", "stock_return_receipt_inbound"}
+            or (original is not None and original.source_document_type in {"stock_operation_return", "stock_operation_return_outbound", "stock_return_receipt_inbound"})
             or any(db.scalar(select(model.id).where(model.posting_transaction_id == command.original_transaction_id).limit(1))
-                is not None for model in (StockOperationOrder, StockOperationCancellation, StockOperationOutbound))):
+                is not None for model in (StockOperationOrder, StockOperationCancellation, StockOperationOutbound, StockOperationReturnInbound))):
         _fail("stock_return_reversal_requires_command", "precondition_failed",
-              "退回占用和取消必须通过原退回单处理，不能使用通用库存冲销")
+              "退回库存变动必须通过原退回单处理，不能使用通用库存冲销")
     if (command.source_document_type == "work_order_material"
             or (original is not None and original.source_document_type == "work_order_material")
             or db.scalar(select(WorkOrderMaterialOperation.id).where(
@@ -1907,7 +1908,7 @@ def _post_prelocked_stocktake_inventory_batch(
         balances = _lock_or_create_balances(db, account_ids)
 
     # The audit head is the one final shared lock even for a zero-movement
-    # completion.  No notification or reconciliation row is created here.
+    # completion. Notification delivery and reconciliation remain separate.
     _audit_head, audit_proof = _lock_audit_chain_head_with_proof(
         db,
         stream_key=INVENTORY_STREAM_KEY,
@@ -2036,6 +2037,17 @@ def _post_prelocked_stocktake_inventory_batch(
                 created_at=checked_now,
             )
         )
+        db.add(OutboxEvent(
+            event_type="inventory.transaction.stocktake_difference_posted",
+            aggregate_type="inventory_transaction", aggregate_id=str(transaction_id),
+            payload_jsonb={
+                "transaction_id": str(transaction_id), "transaction_no": command.transaction_no,
+                "movement_type": command.movement_type, "ledger_cursor": ledger_cursor,
+                "reversed_transaction_id": None,
+            }, status="pending", attempts=0,
+            idempotency_key=_derived_evidence_key("outbox", transaction_id, "stocktake-difference-posted"),
+            available_at=checked_now, created_at=checked_now, updated_at=checked_now,
+        ))
         entry_commits.append(
             _StocktakeInventoryBatchEntryCommit(
                 result=InventoryPostingResult(

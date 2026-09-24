@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from uuid import uuid4
+import pytest
 
 from app import notification_expander as worker
 from app.formal_services.notification_expansion import NotificationExpansionError
+
+
+@pytest.fixture(autouse=True)
+def empty_inventory_batch(monkeypatch):
+    monkeypatch.setattr(worker, "project_pending_inventory_notifications", lambda db, limit: SimpleNamespace(projected=(), blocked=(), deferred=0))
 
 
 class _Session:
@@ -73,3 +79,17 @@ def test_invalid_worker_arguments_fail_before_opening_database(monkeypatch, caps
     assert opened == []
     assert "notification_expansion_limit_invalid" in capsys.readouterr().out
 
+
+def test_invalid_inventory_source_rolls_back_before_delivery_expansion(monkeypatch, capsys):
+    from app.formal_services.inventory_notifications import InventoryNotificationError
+    session = _Session()
+    monkeypatch.setattr(worker, "SessionLocal", lambda: session)
+    def invalid(*_args, **_kwargs):
+        raise InventoryNotificationError("source mismatch")
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("invalid inventory must not reach delivery expansion")
+    monkeypatch.setattr(worker, "project_pending_inventory_notifications", invalid)
+    monkeypatch.setattr(worker, "expand_pending_notification_events", unexpected)
+    assert worker.main(["--once"]) == 2
+    assert session.rolled_back and not session.committed
+    assert "inventory_notification_source_invalid" in capsys.readouterr().out

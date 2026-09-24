@@ -30,6 +30,9 @@ BEGIN
         'external_sync_snapshots',
         'external_sync_snapshot_batches',
         'external_sync_snapshot_records',
+        'inventory_control_capture_attestations',
+        'oam_material_capture_bindings',
+        'oam_material_capture_receipts',
         'external_sync_current_records',
         'audit_logs',
         'oam_sync_scope_bindings'
@@ -160,7 +163,9 @@ SELECT pg_catalog.format(
 GRANT USAGE ON SCHEMA public TO :"edge_role";
 GRANT EXECUTE ON FUNCTION
     public.rsc_oam_rls_check_0044(text,text,jsonb),
-    public.rsc_oam_runtime_binding_ready_0044()
+    public.rsc_oam_runtime_binding_ready_0044(),
+    public.rsc_oam_material_capture_visible_0116(text),
+    public.rsc_oam_material_capture_binding_0116(text,text,text)
 TO :"edge_role";
 
 -- Header rows are immutable except for the reviewed receive/finalize state.
@@ -181,6 +186,15 @@ GRANT SELECT, INSERT
 ON TABLE
     public.external_sync_snapshot_batches,
     public.external_sync_snapshot_records
+TO :"edge_role";
+
+-- Capture receipts retain authenticated evidence; the receiver cannot alter it.
+GRANT SELECT, INSERT
+ON TABLE public.inventory_control_capture_attestations
+TO :"edge_role";
+
+GRANT SELECT, INSERT
+ON TABLE public.oam_material_capture_receipts
 TO :"edge_role";
 
 -- The receiver may reconcile only the mutable current-state payload fields.

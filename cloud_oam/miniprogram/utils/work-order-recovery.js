@@ -76,7 +76,10 @@ async function sealPending({ api, store, workOrderId, shipmentId, personId, auth
     if (await authorize() !== before) throw new Error('access changed')
     // The server arbitrates against the original stock writer. Neither an
     // absent GET nor a failed POST permits discarding this durable marker.
-    await api.postSealNoReplay(path + '/seal', { operator_person_id: person, request_hash: marker.request_hash }, { requestId: marker.trace_request_id })
+    const payload = marker.kind === inbound.KIND
+      ? { request_hash: marker.request_hash }
+      : { operator_person_id: person, request_hash: marker.request_hash }
+    await api.postSealNoReplay(path + '/seal', payload, { requestId: marker.trace_request_id })
     if (await authorize() !== before) throw new Error('access changed')
     result = await originalResult(api, marker)
     if (await authorize() !== before) throw new Error('access changed')

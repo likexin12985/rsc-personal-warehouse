@@ -52,4 +52,4 @@ services:
 networks:
   edge_db:
     external: true
-    name: star-oam_edge_db
+    name: ${OAM_EDGE_DB_NETWORK:-star-oam_edge_db}

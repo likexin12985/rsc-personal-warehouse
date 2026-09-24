@@ -9,7 +9,7 @@ from pathlib import Path
 import uuid
 
 import pytest
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects import postgresql
 
 import app.formal_services.inventory_posting as inventory_service
@@ -22,6 +22,7 @@ from app.formal_services.stocktake_posting import (
     post_approved_stocktake_differences,
 )
 from app.foundation_models import (
+    AuditEvent,
     Organization,
     Person,
     OutboxEvent,
@@ -31,6 +32,7 @@ from app.foundation_models import (
     StateTransitionEvent,
 )
 from app.inventory_models import (
+    InventoryLedgerHead,
     InventoryMovement,
     InventoryTransaction,
     StockBalance,
@@ -379,8 +381,9 @@ def test_finalizer_organization_tail_uses_migration_owned_lock_and_refresh():
     assert "CAST(:organization_id AS uuid)" in source
 
 
+@pytest.mark.parametrize("reject_outbox", [False, True])
 def test_accepted_loss_uses_one_union_batch_and_appends_immutable_ledger(
-    posting_world, monkeypatch
+    posting_world, monkeypatch, reject_outbox
 ):
     calls = {"reference": 0, "serial": 0}
     original_reference = inventory_service.lock_inventory_reference_graph
@@ -434,6 +437,43 @@ def test_accepted_loss_uses_one_union_batch_and_appends_immutable_ledger(
     before_outbox = posting_world.db.scalar(
         select(func.count()).select_from(OutboxEvent)
     )
+    if reject_outbox:
+        session = posting_world.db
+
+        def posting_snapshot():
+            return (
+                tuple(session.scalar(select(func.count()).select_from(model)) for model in (
+                    InventoryTransaction, InventoryMovement, AuditEvent, OutboxEvent,
+                    StocktakePostingCompletion, StocktakePostingCompletionItem,
+                )),
+                tuple(session.execute(select(StockBalance.stock_account_id, StockBalance.quantity,
+                                            StockBalance.version, StockBalance.ledger_cursor)
+                                      .order_by(StockBalance.stock_account_id))),
+                tuple(session.execute(select(InventoryLedgerHead.id, InventoryLedgerHead.next_cursor)
+                                      .order_by(InventoryLedgerHead.id))),
+                tuple(session.execute(select(InventoryFreeze.id, InventoryFreeze.status)
+                                      .where(InventoryFreeze.task_id == task.id))),
+                (task.status, task.version, task.posted_at, task.closed_at),
+            )
+
+        session.commit()  # Approval is durable before this posting attempt.
+        before_failure = posting_snapshot()
+        session.execute(text("""CREATE TRIGGER reject_test_stocktake_outbox
+            BEFORE INSERT ON outbox_events
+            WHEN NEW.event_type = 'inventory.transaction.stocktake_difference_posted'
+            BEGIN SELECT RAISE(ABORT, 'isolated stocktake Outbox failure'); END"""))
+        session.commit()
+        with pytest.raises(StocktakeDifferencePostingError) as failure:
+            _post(posting_world, task, key="safe-post-loss-idempotency")
+        assert failure.value.code == "stocktake_posting_concurrent_conflict"
+        session.rollback()
+        assert posting_snapshot() == before_failure
+        # Drop only this fault-injection trigger from the isolated SQLite fixture.
+        session.execute(text("DROP TRIGGER reject_test_stocktake_outbox"))
+        session.commit()
+        assert calls == {"reference": 1, "serial": 1}
+        calls.update(reference=0, serial=0)
+
     result = _post(posting_world, task, key="safe-post-loss-idempotency")
 
     assert result.resulting_task_status == "posted"
@@ -465,5 +505,16 @@ def test_accepted_loss_uses_one_union_batch_and_appends_immutable_ledger(
     assert balance.ledger_cursor == 2 and balance.version == 2
     assert posting_world.db.scalar(
         select(func.count()).select_from(OutboxEvent)
-    ) == before_outbox
+    ) == before_outbox + 1
+    outbox = posting_world.db.scalar(select(OutboxEvent).where(
+        OutboxEvent.aggregate_type == "inventory_transaction", OutboxEvent.aggregate_id == str(transaction.id)))
+    assert outbox.event_type == "inventory.transaction.stocktake_difference_posted"
+    assert outbox.payload_jsonb == {
+        "transaction_id": str(transaction.id), "transaction_no": transaction.transaction_no,
+        "movement_type": "stocktake_loss", "ledger_cursor": 2, "reversed_transaction_id": None,
+    }
+    from app.formal_services.inventory_notifications import project_inventory_notification
+    posting_world.db.commit()
+    notification = project_inventory_notification(posting_world.db, outbox_id=outbox.id, now=POSTED_AT)
+    assert notification.transaction_id == transaction.id and notification.created
     assert task.closed_at is None

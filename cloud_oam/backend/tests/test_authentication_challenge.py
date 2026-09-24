@@ -479,6 +479,7 @@ def test_provider_managed_success_lifecycle_is_independently_audited(db: Session
 
     attempt = begin_verify(
         db,
+        current_dispatch_request_profile_sha256="e" * 64,
         mobile_hash=MOBILE_HASH,
         provider="aliyun",
         client_type="miniprogram",
@@ -548,6 +549,7 @@ def test_verification_lifecycle_keeps_immediate_audit_by_default(db: Session):
 
     attempt = begin_verify(
         db,
+        current_dispatch_request_profile_sha256="e" * 64,
         mobile_hash=MOBILE_HASH,
         provider="aliyun",
         client_type="miniprogram",
@@ -591,6 +593,7 @@ def test_verification_lifecycle_defers_only_audit_chain_until_explicit_flush(
 
     attempt = begin_verify(
         db,
+        current_dispatch_request_profile_sha256="e" * 64,
         mobile_hash=MOBILE_HASH,
         provider="aliyun",
         client_type="miniprogram",
@@ -673,6 +676,7 @@ def test_expired_challenge_is_transitioned_before_error(db: Session):
     with pytest.raises(AuthenticationChallengeError) as caught:
         begin_verify(
             db,
+            current_dispatch_request_profile_sha256="e" * 64,
             mobile_hash=MOBILE_HASH,
             provider="aliyun",
             client_type="miniprogram",
@@ -693,6 +697,7 @@ def test_attempt_limit_locks_challenge_and_each_failure_is_audited(db: Session):
     for attempt_no, expected_code in ((1, "verification_failed"), (2, "attempts_exhausted")):
         attempt = begin_verify(
             db,
+            current_dispatch_request_profile_sha256="e" * 64,
             mobile_hash=MOBILE_HASH,
             provider="aliyun",
             client_type="miniprogram",
@@ -716,6 +721,7 @@ def test_attempt_limit_locks_challenge_and_each_failure_is_audited(db: Session):
     with pytest.raises(AuthenticationChallengeError) as caught:
         begin_verify(
             db,
+            current_dispatch_request_profile_sha256="e" * 64,
             mobile_hash=MOBILE_HASH,
             provider="aliyun",
             client_type="miniprogram",
@@ -837,6 +843,7 @@ def test_provider_call_authorization_holds_owner_and_rejects_late_start(
 
     assert authorize_dispatch_provider_call(
         db,
+        current_dispatch_request_profile_sha256="e" * 64,
         challenge_id=prepared.challenge_id,
         owner_token=owner.owner_token,
         request_id="challenge-provider-gate-authorized",
@@ -847,6 +854,7 @@ def test_provider_call_authorization_holds_owner_and_rejects_late_start(
 
     assert authorize_dispatch_provider_call(
         db,
+        current_dispatch_request_profile_sha256="e" * 64,
         challenge_id=prepared.challenge_id,
         owner_token=owner.owner_token,
         request_id="challenge-provider-gate-too-late",
@@ -1035,6 +1043,7 @@ def test_verification_can_recover_only_after_sending_lease_becomes_uncertain(
     with pytest.raises(AuthenticationChallengeError) as in_flight:
         begin_verify(
             db,
+            current_dispatch_request_profile_sha256="e" * 64,
             mobile_hash=MOBILE_HASH,
             provider="aliyun",
             client_type="miniprogram",
@@ -1045,6 +1054,7 @@ def test_verification_can_recover_only_after_sending_lease_becomes_uncertain(
 
     attempt = begin_verify(
         db,
+        current_dispatch_request_profile_sha256="e" * 64,
         mobile_hash=MOBILE_HASH,
         provider="aliyun",
         client_type="miniprogram",

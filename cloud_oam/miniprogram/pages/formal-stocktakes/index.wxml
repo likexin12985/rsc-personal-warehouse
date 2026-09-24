@@ -12,8 +12,8 @@
     </view>
 
     <view wx:if="{{canPrepare}}" class="card preparation-card">
-      <view class="section-title">期初盘点准备（只读）</view>
-      <view class="muted preparation-note">仅核验范围与人员，尚未评估省级控制库存，不可启动。不查询数量、不选择控制同步批次、不创建任务。</view>
+      <view class="section-title">{{openingStart.enabled ? '期初盘点启动' : '期初盘点准备（只读）'}}</view>
+      <view class="muted preparation-note">{{openingStart.enabled ? '添加实际盘点范围与执行人，再确认所选控制批次。服务器会重新核验。' : '仅核验范围与人员，启动功能尚未开放，不可启动。原启动结果可以独立核验。'}}</view>
       <view wx:if="{{preparation.error}}" class="status-danger preparation-note">{{preparation.error}}</view>
       <button wx:if="{{preparation.allowed}}" size="mini" bindtap="togglePreparation">{{preparation.expanded ? '收起准备目录' : '展开准备目录'}}</button>
       <block wx:if="{{preparation.allowed && preparation.expanded}}">
@@ -35,6 +35,29 @@
           <view>保管责任人：{{preparation.summary.custodianName}}</view>
           <view wx:if="{{preparation.summary.assigneeName}}">本次核验人员：{{preparation.summary.assigneeName}}</view>
         </view>
+        <view wx:if="{{openingStart.pending}}" class="status-danger preparation-note">本区域启动请求或恢复记录待核验，已停止新提交，请保留现有记录。</view>
+        <button wx:if="{{openingStart.recoverable}}" disabled="{{openingStart.busy}}" bindtap="recoverStart">核验原启动结果</button>
+        <button wx:if="{{openingStart.recoverable}}" disabled="{{openingStart.busy}}" bindtap="sealStart">终结原启动请求</button>
+        <view wx:if="{{openingStart.enabled && !openingStart.pending}}">
+          <view class="field-label">已发布控制批次</view>
+          <picker range="{{openingStart.batches}}" range-key="display" value="{{openingStart.batchValue}}" disabled="{{openingStart.busy || openingStart.batchLoading}}" bindchange="selectStartBatch">
+            <view class="preparation-picker">{{openingStart.batchLoading ? '正在核验批次' : openingStart.batches[openingStart.batchValue].display}}</view>
+          </picker>
+          <view class="muted preparation-note">{{openingStart.batchDescription}}</view>
+          <button size="mini" disabled="{{openingStart.busy || openingStart.batchLoading}}" bindtap="refreshStartBatches">刷新控制批次</button>
+          <button wx:if="{{openingStart.hasMoreBatches}}" size="mini" disabled="{{openingStart.busy || openingStart.batchLoading}}" bindtap="moreStartBatches">加载更多控制批次</button>
+          <view class="field-label">新增范围的冻结方式</view>
+          <picker range="{{startFreezeOptions}}" value="{{openingStart.freezeValue}}" disabled="{{openingStart.busy}}" data-field="freeze" bindchange="editStart"><view class="preparation-picker">{{startFreezeOptions[openingStart.freezeValue]}}</view></picker>
+          <button disabled="{{!openingStart.canAdd}}" bindtap="addStartScope">加入盘点范围</button>
+          <view wx:for="{{openingStart.scopes}}" wx:key="index"><text>{{item.label}}</text><button size="mini" disabled="{{openingStart.busy}}" data-index="{{item.index}}" bindtap="removeStartScope">移除范围</button></view>
+          <view class="field-label">期初任务编号</view><input value="{{openingStart.taskNo}}" maxlength="100" disabled="{{openingStart.busy}}" data-field="taskNo" bindinput="editStart" />
+          <view class="field-label">盲盘</view><switch checked="{{openingStart.blind}}" disabled="{{openingStart.busy}}" data-field="blind" bindchange="editStart" />
+          <view class="field-label">截止日期（选填，所选日期 00:00）</view><picker mode="date" value="{{openingStart.deadline}}" disabled="{{openingStart.busy}}" data-field="deadline" bindchange="editStart"><view class="preparation-picker">{{openingStart.deadline || '无截止时间'}}</view></picker>
+          <view class="field-label">期初盘点备注</view><textarea value="{{openingStart.note}}" maxlength="10000" disabled="{{openingStart.busy}}" data-field="note" bindinput="editStart" />
+          <button disabled="{{!openingStart.canSubmit}}" bindtap="submitStart">确认范围并启动期初盘点</button>
+        </view>
+        <view wx:if="{{openingStart.message}}" class="preparation-note">{{openingStart.message}}</view>
+        <button wx:if="{{openingStart.found}}" disabled="{{openingStart.busy}}" bindtap="openStartedTask">打开已核验任务</button>
       </block>
     </view>
 

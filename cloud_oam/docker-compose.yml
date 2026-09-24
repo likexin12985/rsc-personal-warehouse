@@ -1,6 +1,10 @@
 services:
   db:
-    image: postgres:16-alpine
+    init: true
+    image: ${RSC_DB_IMAGE:-star-oam-postgres-backup:16}
+    build:
+      context: .
+      dockerfile: deployment/backup/Postgres.Dockerfile
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -13,6 +17,8 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./deployment/postgres-init:/docker-entrypoint-initdb.d:ro
+      - ./deployment/backup:/opt/rsc-backup:ro
+      - ./deployment/backup-worker/deadline_runner.py:/opt/rsc-supervisor/deadline_runner.py:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -22,9 +28,10 @@ services:
       - backend
       - projector_db
       - edge_db
+      - daily_ops_db
 
   migrate:
-    image: star-oam-api:0.9.0
+    image: ${RSC_API_IMAGE:-star-oam-api:0.9.0}
     build: ./backend
     restart: "no"
     command: ["alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
@@ -42,7 +49,7 @@ services:
     networks: [backend]
 
   kms-pin-plan:
-    image: star-oam-api:0.9.0
+    image: ${RSC_API_IMAGE:-star-oam-api:0.9.0}
     build: ./backend
     profiles: [ops]
     restart: "no"
@@ -70,13 +77,16 @@ services:
     network_mode: none
 
   kms-pin-gate:
-    image: star-oam-api:0.9.0
+    image: ${RSC_API_IMAGE:-star-oam-api:0.9.0}
     build: ./backend
     restart: "no"
     command: ["python", "-m", "app.kms_pin_gate"]
     environment:
       OAM_ENVIRONMENT: production
       OAM_DATABASE_URL: postgresql+psycopg://star_oam_api:${OAM_DB_API_PASSWORD}@db:5432/${POSTGRES_DB}
+      ALIBABA_CLOUD_ACCESS_KEY_ID: ${ALIBABA_CLOUD_ACCESS_KEY_ID:-}
+      ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${ALIBABA_CLOUD_ACCESS_KEY_SECRET:-}
+      ALIBABA_CLOUD_SECURITY_TOKEN: ${ALIBABA_CLOUD_SECURITY_TOKEN:-}
       OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api
       OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
       OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER: ${OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER:-aliyun_kms}
@@ -97,7 +107,8 @@ services:
     networks: [backend]
 
   api:
-    image: star-oam-api:0.9.0
+    init: true
+    image: ${RSC_API_IMAGE:-star-oam-api:0.9.0}
     build: ./backend
     restart: unless-stopped
     environment:
@@ -106,6 +117,12 @@ services:
       OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api
       OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
       OAM_DATABASE_SCHEMA_MODE: ${OAM_DATABASE_SCHEMA_MODE:-alembic}
+      # KMS uses Alibaba Cloud's default credential chain.  The pilot target is
+      # a Light Server without an ECS RAM role, so deployment may inject a
+      # dedicated KMS-only identity through these environment variables.
+      ALIBABA_CLOUD_ACCESS_KEY_ID: ${ALIBABA_CLOUD_ACCESS_KEY_ID:-}
+      ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${ALIBABA_CLOUD_ACCESS_KEY_SECRET:-}
+      ALIBABA_CLOUD_SECURITY_TOKEN: ${ALIBABA_CLOUD_SECURITY_TOKEN:-}
       OAM_LEGACY_PROTOTYPE_WRITES_ENABLED: ${OAM_LEGACY_PROTOTYPE_WRITES_ENABLED:-false}
       OAM_JWT_SECRET: ${OAM_JWT_SECRET}
       OAM_IDENTITY_HASH_SECRET: ${OAM_IDENTITY_HASH_SECRET}
@@ -138,9 +155,13 @@ services:
       OAM_STOCKTAKE_WRITES_ENABLED: ${OAM_STOCKTAKE_WRITES_ENABLED:-false}
       OAM_STOCKTAKE_IDEMPOTENCY_HMAC_SECRET: ${OAM_STOCKTAKE_IDEMPOTENCY_HMAC_SECRET:-}
       OAM_FILE_STORAGE_ENABLED: ${OAM_FILE_STORAGE_ENABLED:-false}
+      OAM_INVENTORY_REPORT_EXPORT_ENABLED: ${OAM_INVENTORY_REPORT_EXPORT_ENABLED:-false}
       OAM_FILE_STORAGE_PROVIDER: ${OAM_FILE_STORAGE_PROVIDER:-disabled}
       OAM_FILE_STORAGE_REGION: ${OAM_FILE_STORAGE_REGION:-}
       OAM_FILE_STORAGE_BUCKET: ${OAM_FILE_STORAGE_BUCKET:-}
+      OSS_ACCESS_KEY_ID: ${OAM_FILE_STORAGE_ACCESS_KEY_ID:-}
+      OSS_ACCESS_KEY_SECRET: ${OAM_FILE_STORAGE_ACCESS_KEY_SECRET:-}
+      OSS_SESSION_TOKEN: ${OAM_FILE_STORAGE_SESSION_TOKEN:-}
       OAM_FILE_UPLOAD_INTENT_TTL_SECONDS: ${OAM_FILE_UPLOAD_INTENT_TTL_SECONDS:-600}
       OAM_FILE_DOWNLOAD_INTENT_TTL_SECONDS: ${OAM_FILE_DOWNLOAD_INTENT_TTL_SECONDS:-300}
       OAM_FILE_IDEMPOTENCY_HMAC_SECRET: ${OAM_FILE_IDEMPOTENCY_HMAC_SECRET:-}
@@ -154,11 +175,14 @@ services:
       OAM_ADMIN_INITIAL_PASSWORD: ${OAM_ADMIN_INITIAL_PASSWORD:-}
       OAM_APP_ORIGIN: https://${APP_DOMAIN}
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      OAM_TRUSTED_PROXY_IPS: ${OAM_TRUSTED_PROXY_IPS:-127.0.0.1,::1}
       OAM_PASSWORD_LOGIN_ENABLED: ${OAM_PASSWORD_LOGIN_ENABLED:-false}
       OAM_SMS_LOGIN_ENABLED: ${OAM_SMS_LOGIN_ENABLED:-false}
       OAM_SMS_PROVIDER: ${OAM_SMS_PROVIDER:-disabled}
       OAM_SMS_ACCESS_KEY_ID: ${OAM_SMS_ACCESS_KEY_ID:-}
       OAM_SMS_ACCESS_KEY_SECRET: ${OAM_SMS_ACCESS_KEY_SECRET:-}
+      OAM_SMS_SECURITY_TOKEN: ${OAM_SMS_SECURITY_TOKEN:-}
+      OAM_SMS_SECURITY_TOKEN_EXPIRES_AT: ${OAM_SMS_SECURITY_TOKEN_EXPIRES_AT:-}
       OAM_SMS_SIGN_NAME: ${OAM_SMS_SIGN_NAME:-}
       OAM_SMS_TEMPLATE_CODE: ${OAM_SMS_TEMPLATE_CODE:-}
       OAM_SMS_SCHEME_NAME: ${OAM_SMS_SCHEME_NAME:-RSC个人仓登录}
@@ -179,6 +203,8 @@ services:
       OAM_EDGE_SYNC_LEGACY_BATCHES_ENABLED: "false"
       OAM_EDGE_SYNC_LEGACY_PERSONNEL_PROJECTION_ENABLED: "false"
     volumes:
+      - ./deployment/backup:/opt/rsc-backup:ro
+      - ./deployment/backup-worker/deadline_runner.py:/opt/rsc-supervisor/deadline_runner.py:ro
       - uploads_data:/data/uploads
       - ${OAM_KMS_ENCRYPTED_DATA_KEY_REGISTRY_FILE}:/run/secrets/rsc-kms-data-keys.json:ro
     depends_on:
@@ -193,7 +219,7 @@ services:
     networks: [backend]
 
   oam-work-order-projector:
-    image: star-oam-api:0.9.0
+    image: ${RSC_API_IMAGE:-star-oam-api:0.9.0}
     build: ./backend
     profiles: [sync]
     restart: unless-stopped
@@ -236,7 +262,7 @@ services:
     networks: [projector_db]
 
   notification-expander:
-    image: star-oam-api:0.9.0
+    image: ${RSC_API_IMAGE:-star-oam-api:0.9.0}
     build: ./backend
     profiles: [notifications]
     restart: unless-stopped
@@ -272,7 +298,7 @@ services:
     networks: [backend]
 
   notification-dispatcher:
-    image: star-oam-api:0.9.0
+    image: ${RSC_API_IMAGE:-star-oam-api:0.9.0}
     build: ./backend
     profiles: [notifications]
     # A missing or invalid adapter module exits before claiming a delivery.
@@ -311,9 +337,53 @@ services:
         condition: service_completed_successfully
     networks: [backend]
 
+  inventory-report-worker:
+    image: ${RSC_API_IMAGE:-star-oam-api:0.9.0}
+    build: ./backend
+    profiles: [reports]
+    restart: on-failure:5
+    command:
+      - python
+      - -m
+      - app.inventory_report_worker
+      - --poll-seconds
+      - "${OAM_INVENTORY_REPORT_POLL_SECONDS:-30}"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:size=256m,mode=1777,noexec,nosuid,nodev
+    mem_limit: 768m
+    cpus: 0.50
+    pids_limit: 64
+    stop_grace_period: 120s
+    environment:
+      OAM_ENVIRONMENT: production
+      OAM_DATABASE_URL: postgresql+psycopg://star_oam_api:${OAM_DB_API_PASSWORD}@db:5432/${POSTGRES_DB}
+      OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api
+      OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
+      OAM_DATABASE_SCHEMA_MODE: alembic
+      OAM_INVENTORY_REPORT_EXPORT_ENABLED: ${OAM_INVENTORY_REPORT_EXPORT_ENABLED:-false}
+      OAM_FILE_STORAGE_ENABLED: ${OAM_FILE_STORAGE_ENABLED:-false}
+      OAM_FILE_STORAGE_PROVIDER: ${OAM_FILE_STORAGE_PROVIDER:-disabled}
+      OAM_FILE_STORAGE_REGION: ${OAM_FILE_STORAGE_REGION:-}
+      OAM_FILE_STORAGE_BUCKET: ${OAM_FILE_STORAGE_BUCKET:-}
+      OAM_FILE_IDEMPOTENCY_HMAC_SECRET: ${OAM_FILE_IDEMPOTENCY_HMAC_SECRET:-}
+      OSS_ACCESS_KEY_ID: ${OAM_FILE_STORAGE_ACCESS_KEY_ID:-}
+      OSS_ACCESS_KEY_SECRET: ${OAM_FILE_STORAGE_ACCESS_KEY_SECRET:-}
+      OSS_SESSION_TOKEN: ${OAM_FILE_STORAGE_SESSION_TOKEN:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [backend]
+
   web:
-    image: star-oam-web:0.9.0
-    build: ./frontend
+    image: ${RSC_WEB_IMAGE:-star-oam-web:0.9.0}
+    build:
+      context: ./frontend
+      args:
+        RELEASE_PROFILE: ${RSC_RELEASE_PROFILE:-production}
     restart: unless-stopped
     environment:
       APP_DOMAIN: ${APP_DOMAIN}
@@ -327,15 +397,91 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    networks: [backend]
+    networks:
+      backend:
+        ipv4_address: ${OAM_WEB_IPV4_ADDRESS:-172.30.0.4}
+
+  object-backup:
+    image: ${RSC_API_IMAGE:-star-oam-api:0.9.0}
+    profiles: [ops]
+    restart: "no"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 512m
+    working_dir: /opt/rsc-backup-worker
+    entrypoint: [python, /opt/rsc-backup-worker/backup_worker.py]
+    environment:
+      PYTHONPATH: /app
+      # Empty values fail in the worker when this ops service is explicitly run.
+      # Do not make inactive ops credentials mandatory for ordinary app startup.
+      OSS_ACCESS_KEY_ID: ${RSC_OSS_BACKUP_ACCESS_KEY_ID:-}
+      OSS_ACCESS_KEY_SECRET: ${RSC_OSS_BACKUP_ACCESS_KEY_SECRET:-}
+      OSS_SESSION_TOKEN: ${RSC_OSS_BACKUP_SESSION_TOKEN:-}
+    volumes:
+      - ./deployment/backup-worker:/opt/rsc-backup-worker:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks: [backup_egress]
+
+  daily-reconciliation-ops:
+    image: ${RSC_API_IMAGE:-star-oam-api:0.9.0}
+    build: ./backend
+    profiles: [ops]
+    restart: "no"
+    init: true
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 512m
+    cpus: 0.50
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+    stdin_open: true
+    tty: true
+    entrypoint: [python, -m, app.daily_reconciliation.ops_cli]
+    command: [--help]
+    environment:
+      OAM_ENVIRONMENT: production
+      # Settings need a canonical, non-secret URL; this service never connects
+      # through it. The three direct role connections are file-only below.
+      OAM_DATABASE_URL: postgresql+psycopg://star_oam_api@db:5432/${POSTGRES_DB}
+      OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api
+      OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
+      OAM_DATABASE_SCHEMA_MODE: alembic
+      OAM_JWT_SECRET: ${OAM_JWT_SECRET}
+      OAM_JWT_TTL_MINUTES: ${OAM_JWT_TTL_MINUTES:-15}
+      OAM_IDENTITY_HASH_VERSION: ${OAM_IDENTITY_HASH_VERSION:-1}
+      OAM_DAILY_RECONCILIATION_DATABASE_NAME: ${POSTGRES_DB}
+      OAM_DAILY_RECONCILIATION_MAXIMUM_SECONDS: ${OAM_DAILY_RECONCILIATION_MAXIMUM_SECONDS:-10}
+      OAM_DAILY_RECONCILIATION_OWNER_CONNINFO_FILE: /run/secrets/daily-owner.conninfo
+      OAM_DAILY_RECONCILIATION_SOURCE_CONNINFO_FILE: /run/secrets/daily-source.conninfo
+      OAM_DAILY_RECONCILIATION_LEDGER_CONNINFO_FILE: /run/secrets/daily-ledger.conninfo
+    # The four private, read-only files are supplied only by an explicit
+    # `docker compose run --volume ...` for this opt-in service. Default
+    # pilot prepare/start must not depend on daily operations credentials.
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [daily_ops_db]
 
 networks:
+  backup_egress: {}
   backend:
+    ipam:
+      config:
+        - subnet: ${OAM_BACKEND_SUBNET:-172.30.0.0/24}
   projector_db:
     internal: true
   edge_db:
     internal: true
-    name: star-oam_edge_db
+    name: ${OAM_EDGE_DB_NETWORK:-star-oam_edge_db}
+  daily_ops_db:
+    internal: true
 
 volumes:
   postgres_data:

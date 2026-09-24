@@ -38,3 +38,19 @@ test('formal material catalog fails closed on drift, duplicates and ambiguous qu
   assert.throws(() => contract.validateQuery(' SKU-A'))
   assert.throws(() => contract.validateQuery('SKU-A\n'))
 })
+
+test('v2 preserves explicit unknown source time and legacy v1 stays strict', () => {
+  const current = Object.assign(page(), { schema_version: '2.0' })
+  current.items[0].source_updated_at = null
+  assert.equal(contract.validatePage(current).items[0].source_updated_at, null)
+  assert.equal(contract.validatePage(current).schema_version, '2.0')
+  assert.equal(contract.validatePage(Object.assign(page(), { schema_version: '2.0' })).items[0].source_updated_at, page().items[0].source_updated_at)
+  assert.throws(() => contract.validatePage(Object.assign({}, current, { schema_version: '1.0' })))
+  assert.throws(() => contract.validatePage(Object.assign({}, current, { schema_version: '3.0' })))
+  for (const value of [undefined, '', '未知', false, 0, '2026-09-01T07:00:00']) {
+    current.items[0].source_updated_at = value
+    assert.throws(() => contract.validatePage(current))
+  }
+  delete current.items[0].source_updated_at
+  assert.throws(() => contract.validatePage(current))
+})

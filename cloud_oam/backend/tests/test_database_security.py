@@ -520,6 +520,8 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "material_substitutions",
         "notification_events",
         "notification_recipients",
+        "notification_person_targets",
+        "notification_target_bindings",
         "notification_deliveries",
         "notification_attempts",
         "oam_work_orders",
@@ -544,6 +546,8 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "material_requests",
         "notification_events",
         "notification_recipients",
+        "notification_person_targets",
+        "notification_target_bindings",
         "notification_deliveries",
         "notification_attempts",
         "supply_tasks",
@@ -558,8 +562,10 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
     stocktake_close_insert_tables = stocktake_close_read_tables - {
         "stocktake_close_transition_acks"
     }
-    stocktake_start_tables = {"stocktake_start_completions"}
+    stocktake_start_tables = {"stocktake_start_completions", "opening_start_command_seals"}
+    daily_review_tables = {"daily_review_events","daily_review_bindings","daily_review_consumptions","daily_review_request_seals"}
     allocation_tables = {
+        "stock_operation_return_inbound_seals",
         "stock_operation_command_seals",
         "stock_operation_outbounds", "stock_operation_outbound_lines", "stock_operation_outbound_serials",
         "stock_operation_shipments", "stock_operation_shipment_lines", "stock_operation_shipment_serials",
@@ -579,9 +585,11 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
             "stock_operation_return_inbounds", "stock_operation_return_inbound_lines", "stock_operation_return_inbound_serials", "stock_operation_return_inbound_postings",
     }
     assert RUNTIME_READ_TABLES - set(values["API_READ_TABLES"]) == (
-        safe_posting_tables
+        safe_posting_tables | daily_review_tables
         | {
+            "daily_reconciliation_reports",
             "document_attachments",
+            "file_jobs",
             "kms_data_key_pins",
             "sms_challenge_dispatches",
         }
@@ -591,8 +599,8 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         | allocation_tables
     )
     assert RUNTIME_INSERT_TABLES - set(values["API_INSERT_TABLES"]) == (
-        safe_posting_tables
-        | {"document_attachments", "files", "sms_challenge_dispatches"}
+        safe_posting_tables | daily_review_tables
+        | {"document_attachments", "file_jobs", "files", "sms_challenge_dispatches"}
         | material_request_insert_tables
         | stocktake_close_insert_tables
         | stocktake_start_tables
@@ -632,6 +640,8 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         for table_name, column_names in RUNTIME_UPDATE_COLUMNS.items()
         if table_name not in base_update_columns
     } == {
+        "daily_review_bindings": {"version","last_event_id","state_jsonb","updated_at"},
+        "notification_events": {"status"},
         "notification_deliveries": {
             "status",
             "provider_message_id",
@@ -662,6 +672,11 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
             "expired_at",
         },
         "files": {"status", "metadata_jsonb"},
+        "file_jobs": {
+            "status", "started_at", "completed_at", "result_file_id",
+            "result_sha256", "result_size_bytes", "error_detail",
+            "download_count", "updated_at",
+        },
         "inventory_serials": {"lifecycle_status", "updated_at"},
         "approval_external_registrations": {
             "status",
@@ -859,6 +874,21 @@ def test_0036_formal_file_runtime_manifest_and_function_bodies_are_exact() -> No
         if successor:
             assert body == successor[0]
             body = successor[1]
+        if function_name == "rsc_guard_formal_file_object_0036":
+            current = runpy.run_path(str(FORMAL_FILE_MIGRATION_0036.with_name("20261030_0120_source_configuration_files.py")))
+            before, after = current['source_changes']()
+            assert body == before
+            body = after
+            newest = runpy.run_path(str(FORMAL_FILE_MIGRATION_0036.with_name('20261112_0133_daily_review_evidence.py')))
+            before, after = newest['SOURCES']['public.rsc_guard_formal_file_object_0036()']
+            assert body == before
+            body = after
+            report_file = runpy.run_path(str(FORMAL_FILE_MIGRATION_0036.with_name('20261116_0137_report_export_file_purpose.py')))
+            assert body == report_file['OLD_BODY']
+            body = report_file['NEW_BODY']
+            opening_source = runpy.run_path(str(FORMAL_FILE_MIGRATION_0036.with_name('20261119_0140_opening_count_source_purpose.py')))
+            assert body == opening_source['OLD_BODY']
+            body = opening_source['NEW_BODY']
         assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (
             FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
         )
@@ -2797,8 +2827,8 @@ def test_0052_opening_trigger_catalogs_are_pinned_by_startup_guards() -> None:
     assert len(migration.REVIEW_GUARD_TRIGGER_CATALOG) == 6
     assert len(migration.OPENING_0052_TRIGGER_CATALOG) == 20
     assert len(migration.INHERITED_RECONCILIATION_TRIGGER_CATALOG) == 6
-    assert len(EXPECTED_OPENING_TERMINAL_TRIGGERS) == 55
-    assert len(OPENING_COMMIT_TRIGGER_NAMES) == 28
+    assert len(EXPECTED_OPENING_TERMINAL_TRIGGERS) == 66
+    assert len(OPENING_COMMIT_TRIGGER_NAMES) == 33
     assert all(
         len(trigger_name.encode("utf-8")) <= 63
         for trigger_name in EXPECTED_OPENING_TERMINAL_TRIGGERS
@@ -4936,12 +4966,15 @@ def _table_acl_row(table_name: str) -> dict[str, object]:
         "has_explicit_runtime_column_acl": table_name in RUNTIME_UPDATE_COLUMNS,
         "has_public_table_acl": False,
         "has_runtime_grant_option": False,
+        "has_unexpected_control_acl": False,
     }
 
 
 def _valid_table_acl() -> list[dict[str, object]]:
+    from app.database_security import CONTROL_PRIVATE_TABLES
     names = (
         set(RUNTIME_READ_TABLES)
+        | CONTROL_PRIVATE_TABLES
         | set(RUNTIME_INSERT_TABLES)
         | set(RUNTIME_UPDATE_TABLES)
         | set(RUNTIME_DELETE_TABLES)
@@ -5144,6 +5177,7 @@ def test_runtime_function_acl_rejects_execute_or_wrong_owner(
             "projector_can_execute": (
                 (function_name, argument_types)
                 in OAM_SYNC_RUNTIME_FUNCTIONS
+                and (function_name, argument_types) not in database_security.MATERIAL_EDGE_RUNTIME_FUNCTIONS
             ),
         }
         for index, (
@@ -5226,7 +5260,16 @@ def test_runtime_function_acl_rejects_execute_or_wrong_owner(
         if (row["function_name"], row["argument_types"])
         in OAM_SYNC_RUNTIME_FUNCTIONS
         and row["function_name"] != "rsc_oam_receipt_rls_check_0082"
+        and (row["function_name"], row["argument_types"]) not in database_security.MATERIAL_EDGE_RUNTIME_FUNCTIONS
     )
+    for coordinate in database_security.MATERIAL_EDGE_RUNTIME_FUNCTIONS:
+        index = next(i for i,row in enumerate(allowed_rows) if (row["function_name"],row["argument_types"]) == coordinate)
+        for field,value in (("can_execute",True),("projector_can_execute",True),("edge_receiver_can_execute",False),
+                            ("unexpected_execute_grantee_count",1),("source_body","tampered")):
+            drifted = [row.copy() for row in allowed_rows]
+            drifted[index][field] = value
+            with pytest.raises(DatabaseSecurityBoundaryError):
+                _assert_runtime_function_acl(drifted, expected_migration_role="star_oam_migrator")
     receipt_index = next(index for index, row in enumerate(allowed_rows)
                          if row["function_name"] == "rsc_oam_receipt_rls_check_0082")
     for field, value in (("can_execute", True), ("edge_receiver_can_execute", True),
@@ -7165,7 +7208,7 @@ def test_runtime_approval_function_selector_covers_every_manifest_family(
     _assert_valid_material_request_approval_catalog(monkeypatch, functions=selected)
 
 
-@pytest.mark.parametrize("suffix", ["0059", "0060", "0069"])
+@pytest.mark.parametrize("suffix", ["0059", "0060", "0069", "0106", "0109", "0110", "0111", "0129"])
 def test_runtime_approval_function_selector_does_not_hide_unknown_supply_function(
     monkeypatch: pytest.MonkeyPatch,
     suffix: str,
@@ -7248,8 +7291,8 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 265
-    assert len(functions) == 84
+    assert len(triggers) == 383
+    assert len(functions) == 105
     _assert_material_request_approval_guards(
         triggers=triggers,
         functions=functions,
@@ -7476,7 +7519,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
 ) -> None:
     query = " ".join(str(_MATERIAL_REQUEST_APPROVAL_TRIGGER_SQL).split())
 
-    assert "trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060|0069|0070|0071|0072)$'" in query
+    assert "trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060|0069|0070|0071|0072|0130|0132)$'" in query
     assert "function_row.proname IN" in query
     assert "AND NOT trigger_row.tgisinternal" in query
     assert "trigger_row.tgname IN" not in query
@@ -7499,7 +7542,7 @@ def test_0046_material_request_guard_trigger_query_captures_complete_scope(
     assert {
         coordinate[0].rsplit("_", 1)[-1]
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
-    } == {"0029", "0030", "0045", "0046", "0059", "0060", "0069", "0070", "0071", "0072", "0077", "0087", "0090", "0092", "0093", "0094", "0095", "0096", "0098", "0099", "0100", "0101", "0103", "0104", "0105"}
+    } == {"0026", "0029", "0030", "0045", "0046", "0059", "0060", "0069", "0070", "0071", "0072", "0077", "0087", "0090", "0092", "0093", "0094", "0095", "0096", "0098", "0099", "0100", "0101", "0103", "0104", "0105", "0106", "0109", "0110", "0111", "0112", "0113", "0115", "0117", "0119", "0120", "0121", "0129", "0130"}
 
 
 def test_0069_reservation_guard_bodies_match_runtime_manifest(monkeypatch):
@@ -7632,7 +7675,7 @@ def test_0045_material_request_approval_function_bodies_match_manifest(
         ): migration._projection_dispatcher_sql(),
     }
 
-    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 84
+    assert len(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256) == 105
     assert set(function_sql) == {
         coordinate
         for coordinate in MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256

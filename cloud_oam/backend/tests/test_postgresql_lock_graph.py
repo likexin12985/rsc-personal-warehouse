@@ -272,7 +272,7 @@ def test_opening_start_keeps_import_and_reference_locks_before_audit_head() -> N
     )
     final_freeze_reread = source.index("lock_freezes=False")
 
-    assert import_lock < ledger_lock < reference_lock < scope_read < audit_lock
+    assert ledger_lock < import_lock < reference_lock < scope_read < audit_lock
     assert first_freeze_guard < audit_lock
     assert audit_lock < final_freeze_reread
 
@@ -296,14 +296,14 @@ def test_opening_start_uses_serial_before_balance_and_plain_post_audit_rereads()
     new_fact_path = start_source[
         start_source.index("# New inventory facts use one global row-lock order") :
     ]
-    assert new_fact_path.index("lock_opening_control_import") < new_fact_path.index(
-        "select(InventoryLedgerHead)"
-    )
     assert new_fact_path.index("select(InventoryLedgerHead)") < new_fact_path.index(
         "lock_formal_principal_graph"
     )
     assert new_fact_path.index("lock_formal_principal_graph") < new_fact_path.index(
-        "lock_opening_stocktake_start_reference"
+        "lock_opening_control_import"
+    )
+    assert new_fact_path.index("lock_opening_control_import") < new_fact_path.index(
+        "_prepare_control_evidence"
     )
     post_audit = start_source[start_source.index("lock_audit_chain_head") :]
     assert ".with_for_update(" not in post_audit

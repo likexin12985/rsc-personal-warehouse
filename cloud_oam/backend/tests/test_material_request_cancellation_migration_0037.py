@@ -310,8 +310,14 @@ def test_0037_postgresql_offline_sql_acl_functions_and_manifest_match(
     }
     # Later migrations may add narrowly scoped head-only state-axis columns to
     # the runtime manifest; 0037 must remain an exact historical snapshot.
-    later_head_only_columns = {"allocation_status", "reservation_status", "outbound_status"}
-    historical_runtime_update_columns["material_requests"] -= later_head_only_columns
+    # 0068/0069/0071 add allocation/reservation/outbound, and 0084 grants
+    # personal_inbound_status only behind its projection guard. None belongs
+    # to the 0037 ACL; retain an exact comparison for every other column.
+    later_head_only_columns = {
+        "allocation_status", "reservation_status", "outbound_status",
+        "personal_inbound_status",
+    }
+    assert historical_runtime_update_columns["material_requests"].isdisjoint(later_head_only_columns)
     assert historical_runtime_update_columns == {
         name: RUNTIME_UPDATE_COLUMNS[name] - (later_head_only_columns if name == "material_requests" else set())
         for name in migration.UPDATE_COLUMNS

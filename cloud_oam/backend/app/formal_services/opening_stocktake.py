@@ -11,7 +11,7 @@ The caller owns the surrounding transaction.  The service flushes but never
 commits.  PostgreSQL transaction advisory locks serialize the idempotency key,
 task number, and active regional opening batch before the inventory ledger head
 is locked.  The remaining lock order matches the formal posting boundary:
-ledger head -> stock accounts -> locations/materials -> balances ->
+ledger head -> principals -> control source -> stock accounts -> locations/materials -> balances ->
 serials/positions -> audit head.
 """
 
@@ -78,6 +78,7 @@ from .audit_chain import (
     append_audit_event,
     lock_audit_chain_head,
     verify_audit_event_in_stream,
+    verify_audit_event_in_read_snapshot,
 )
 from .postgresql_lock_graph import (
     lock_inventory_serial_graph,
@@ -270,7 +271,12 @@ def start_opening_stocktake(
             "期初盘点启动发生并发冲突，请回滚并重新读取后再试",
         )
     except DBAPIError as exc:
-        if _is_database_guard_rejection(exc):
+        if is_actor_admission_rejection(exc):
+            failure = OpeningStocktakeError(
+                "opening_authorization_changed", "forbidden",
+                "提交时盘点管理权限已失效，请重新核对当前权限",
+            )
+        elif _is_database_guard_rejection(exc):
             failure = OpeningStocktakeError(
                 "opening_stocktake_database_guard_rejected",
                 "precondition_failed",
@@ -329,6 +335,8 @@ def _start_opening_stocktake_impl(
         preflight_actor,
         checked_command.region_org_id,
     )
+    from .opening_start_seals import require_unsealed
+    require_unsealed(db, preflight_actor, checked_request_id)
 
     principal_user_ids = (
         actor.user_id,
@@ -366,15 +374,10 @@ def _start_opening_stocktake_impl(
     _validate_deadline(checked_command.deadline, preflight_at)
     _require_unused_business_keys(db, checked_command, storage_key)
 
-    # New inventory facts use one global row-lock order.  Source evidence is
-    # pinned first, then the ledger cursor, then RBAC and all opening reference
-    # rows.  In particular, no principal row may be held while waiting for the
-    # ledger: finalize/close already use ledger -> task -> principal.
-    lock_opening_control_import(
-        db,
-        checked_command.control_source_system_id,
-        checked_command.control_sync_run_id,
-    )
+    # New inventory facts use one global row-lock order. The ledger precedes
+    # principals, as in finalize/close; principals precede the control source,
+    # as in reviewed publication. Holding the source while waiting for a
+    # publisher's principal rows creates a real PostgreSQL deadlock cycle.
     head = db.scalar(
         select(InventoryLedgerHead)
         .where(
@@ -391,6 +394,8 @@ def _start_opening_stocktake_impl(
         )
     cutoff_cursor = head.next_cursor - 1
 
+    require_unsealed(db, preflight_actor, checked_request_id)
+
     lock_formal_principal_graph(db, principal_user_ids)
     lock_probe_at = _database_now(db)
     current_actor = _require_current_actor(db, supplied_actor, now=lock_probe_at)
@@ -398,6 +403,15 @@ def _start_opening_stocktake_impl(
         db, current_actor, checked_command.region_org_id
     )
     _lock_selected_grant(db, current_actor, manager_grant, lock_probe_at)
+    from .opening_publication_admission import require_new_opening
+    require_new_opening(db, actor=current_actor, command=checked_command)
+    lock_opening_control_import(
+        db,
+        checked_command.control_source_system_id,
+        checked_command.control_sync_run_id,
+    )
+    # The import lock can wait behind publication. Revalidate current access,
+    # the deadline and the complete control version set after that wait.
     now = _database_now(db)
     current_actor = _require_current_actor(db, supplied_actor, now=now)
     manager_grant = _authorize_batch_manager(
@@ -468,6 +482,7 @@ def _start_opening_stocktake_impl(
     )
     _validate_deadline(checked_command.deadline, now)
     _require_unused_business_keys(db, checked_command, storage_key)
+    require_new_opening(db, actor=current_actor, command=checked_command)
     prepared_control, refreshed_control_manifest = _prepare_control_evidence(
         db,
         checked_command,
@@ -697,6 +712,7 @@ def _write_start_facts(
         control_manifest_sha256=control_manifest,
         current_round_no=1,
         created_by_user_id=actor.user_id,
+        opening_authorization_version=actor.authorization_version,
         deadline=command.deadline,
         issued_at=now,
         frozen_at=now,
@@ -1928,6 +1944,7 @@ def _load_replay(
     idempotency_key_hash: str,
     now: datetime,
     locked_replay: tuple[FormalStocktakeTask, StocktakeRound] | None,
+    read_only: bool = False,
 ) -> OpeningStocktakeStartResult | None:
     if locked_replay is None:
         return None
@@ -2178,7 +2195,7 @@ def _load_replay(
             owner_org_id=scope.input.owner_org_id,
             location_owner_org_id=scope.location.owner_org_id,
         )
-        _lock_selected_grant(db, actor, replay_grant, now)
+        _lock_selected_grant(db, actor, replay_grant, now, lock_rows=not read_only)
     if _scope_manifest_hash(task.region_org_id, prepared_scopes) != task.scope_manifest_sha256:
         _fail(
             "opening_idempotency_record_invalid",
@@ -2188,7 +2205,7 @@ def _load_replay(
     snapshot_line_count = _verify_persisted_snapshot_manifest(
         db, task, prepared_scopes
     )
-    _validate_start_replay_event_graph(db, task, round_row)
+    _validate_start_replay_event_graph(db, task, round_row, read_only=read_only)
     return OpeningStocktakeStartResult(
         task_id=task.id,
         task_no=task.task_no,
@@ -2205,6 +2222,7 @@ def _validate_start_replay_event_graph(
     db: Session,
     task: FormalStocktakeTask,
     round_row: StocktakeRound,
+    *, read_only: bool = False,
 ) -> None:
     """Require the exact immutable start state/outbox/audit evidence graph."""
 
@@ -2365,7 +2383,8 @@ def _validate_start_replay_event_graph(
     ):
         _invalid_start_replay()
     try:
-        verify_audit_event_in_stream(
+        verifier = verify_audit_event_in_read_snapshot if read_only else verify_audit_event_in_stream
+        verifier(
             db,
             stream_key=INVENTORY_STREAM_KEY,
             event_id=audit.id,
@@ -3338,6 +3357,15 @@ def _database_now(db: Session) -> datetime:
             )
         return _as_utc(value)
     return datetime.now(timezone.utc)
+
+
+def is_actor_admission_rejection(exc: DBAPIError) -> bool:
+    """Only the named PG admission diagnostic proves an authorization denial."""
+    return (
+        getattr(exc.orig, "sqlstate", None) == "42501"
+        and getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+        == "opening_actor_admission_0126"
+    )
 
 
 def _is_database_guard_rejection(exc: DBAPIError) -> bool:

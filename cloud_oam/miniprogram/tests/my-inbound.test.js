@@ -126,9 +126,9 @@ test('storage failure stops POST; lease prevents concurrent mutation and validat
   })
 })
 
-test('inbound page is reachable from receiving and registered in mini application', () => {
+test('preserved inbound links remain internally consistent but are excluded from the public application', () => {
   const app = JSON.parse(fs.readFileSync(require.resolve('../app.json'), 'utf8'))
-  assert.ok(app.pages.includes('pages/formal-my-inbound/index'))
+  assert.equal(app.pages.includes('pages/formal-my-inbound/index'), false)
   assert.match(fs.readFileSync(require.resolve('../pages/formal-my-receiving/index.js'), 'utf8'), /pages\/formal-my-inbound\/index/)
 })
 

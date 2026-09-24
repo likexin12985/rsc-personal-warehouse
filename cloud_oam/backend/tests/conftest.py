@@ -42,3 +42,39 @@ os.environ.update(
         "OAM_EDGE_SYNC_LEGACY_PERSONNEL_PROJECTION_ENABLED": "true",
     }
 )
+
+
+import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _reuse_unchanged_alembic_script_directory():
+    """Share the read-only production migration graph within one test process.
+
+    Migration tests still run every requested upgrade and downgrade against
+    their own databases and Config objects.  Test-created script directories
+    and nonstandard Alembic options keep Alembic's normal construction path.
+    """
+    actual_from_config = ScriptDirectory.from_config
+    cached: ScriptDirectory | None = None
+
+    def from_config(config: Config) -> ScriptDirectory:
+        nonlocal cached
+        location = config.get_alembic_option("script_location")
+        config_file = config.config_file_name
+        if (not location or not config_file
+                or Path(location).resolve() != ROOT / "backend/alembic"
+                or Path(config_file).resolve() != ROOT / "alembic.ini"
+                or config.get_version_locations_list()
+                or config.get_alembic_boolean_option("sourceless")):
+            return actual_from_config(config)
+        if cached is None:
+            cached = actual_from_config(config)
+        return cached
+
+    patcher = pytest.MonkeyPatch()
+    patcher.setattr(ScriptDirectory, "from_config", staticmethod(from_config))
+    yield
+    patcher.undo()

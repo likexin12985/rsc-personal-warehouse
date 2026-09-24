@@ -1,4 +1,4 @@
-"""Create durable notification facts from already committed business facts.
+"""Create durable notification facts in a caller-owned database transaction.
 
 This module only records the notification event and the recipient coordinates.
 It never calls a provider and never changes the business fact that triggered
@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -19,9 +20,10 @@ from sqlalchemy.orm import Session
 from ..foundation_models import (
     NotificationEvent,
     NotificationRecipient,
-    Person,
+    NotificationPersonTarget,
+    NotificationTargetBinding,
 )
-from ..models import User, WechatIdentity
+from . import notification_identities
 
 
 class NotificationEventError(RuntimeError):
@@ -40,44 +42,35 @@ def _utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-def _active_target_user(db: Session, *, person_id: UUID | None) -> User | None:
-    if person_id is None:
-        return None
-    return db.scalar(
-        select(User)
-        .join(Person, Person.id == User.person_id)
-        .where(
-            User.person_id == person_id,
-            User.account_status == "active",
-            User.is_active.is_(True),
-            Person.employment_status == "active",
-        )
-        .order_by(User.id)
-        .limit(1)
-    )
+def target_manifest_hash(people: tuple[UUID, ...]) -> str:
+    canonical = "notification-person-targets.v1\n" + ",".join(sorted({str(person) for person in people}))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _add_recipient(
     db: Session,
     *,
     event_id: UUID,
-    user: User,
+    target_id: UUID,
+    user_id: str,
     channel: str,
     recipient_key: str,
     now: datetime,
-) -> None:
+) -> bool:
     if not recipient_key.strip():
-        return
-    db.add(
-        NotificationRecipient(
+        return False
+    recipient = NotificationRecipient(
+            id=uuid4(),
             event_id=event_id,
-            user_id=user.id,
+            user_id=user_id,
             channel=channel,
             recipient_key=recipient_key.strip(),
             status="active",
             created_at=now,
         )
-    )
+    db.add(recipient)
+    db.add(NotificationTargetBinding(target_id=target_id, recipient_id=recipient.id, created_at=now))
+    return True
 
 
 def record_business_notification(
@@ -91,14 +84,15 @@ def record_business_notification(
     recipient_person_id: UUID | None,
     occurred_at: datetime,
     now: datetime | None = None,
+    recipient_person_ids: tuple[UUID, ...] | None = None,
 ) -> BusinessNotificationResult:
     """Record one durable business notification and its active channels.
 
-    The target person is resolved through the formal ``users.person_id``
-    mapping and must still be active.  We create only channels with a current
-    identity: WeChat uses the bound openid and SMS uses the current mobile
-    number.  Missing identity mappings leave the event durable and pending;
-    they never cause a guessed recipient or a provider request.
+    Each channel must match a current, verified formal AuthIdentity in the
+    configured provider/app domain. Legacy mobile/OpenID fields alone cannot
+    create recipients. Intended people are independent of channel resolution.
+    Missing accounts/channels leave an unbound person target, even after the
+    event is expanded; no guessed recipient or provider request is created.
     """
 
     if not isinstance(event_type, str) or not event_type.strip() or len(event_type) > 100:
@@ -113,6 +107,14 @@ def record_business_notification(
         raise NotificationEventError("notification payload is invalid")
     if not isinstance(occurred_at, datetime):
         raise NotificationEventError("notification event time is invalid")
+    if recipient_person_ids is not None and recipient_person_id is not None:
+        raise NotificationEventError("notification recipient forms cannot be mixed")
+    people = recipient_person_ids if recipient_person_ids is not None else (
+        (recipient_person_id,) if recipient_person_id is not None else ()
+    )
+    if not isinstance(people, tuple) or any(not isinstance(person, UUID) for person in people):
+        raise NotificationEventError("notification recipient identities are invalid")
+    people = tuple(sorted(set(people), key=str))
     effective_now = _utc(now or datetime.now(timezone.utc))
     # Deduplication must not flush unrelated facts that the outer business
     # command is still assembling for its atomic checkpoint.
@@ -121,13 +123,26 @@ def record_business_notification(
             select(NotificationEvent).where(NotificationEvent.dedup_key == dedup_key)
         )
     if existing is not None:
-        recipient_count = int(
-            db.scalar(
-                select(func.count(NotificationRecipient.id))
-                .where(NotificationRecipient.event_id == existing.id)
+        if (existing.event_type != event_type.strip() or existing.business_type != business_type.strip()
+                or existing.business_id != str(business_id) or existing.payload_jsonb != payload
+                or _utc(existing.occurred_at) != _utc(occurred_at)):
+            raise NotificationEventError("notification deduplication key is bound to different facts")
+        with db.no_autoflush:
+            targets = set(db.scalars(select(NotificationPersonTarget.person_id).where(
+                NotificationPersonTarget.event_id == existing.id)))
+            targets.update(row.person_id for row in db.new if isinstance(row, NotificationPersonTarget) and row.event_id == existing.id)
+            # Never reinterpret a historical target set using a new caller's
+            # inputs, including when that old event has zero targets.
+            if existing.target_manifest_sha256 is not None and (
+                    targets != set(people) or existing.target_manifest_sha256 != target_manifest_hash(tuple(targets))):
+                raise NotificationEventError("notification deduplication key is bound to different target people")
+            recipient_count = int(
+                db.scalar(
+                    select(func.count(NotificationRecipient.id))
+                    .where(NotificationRecipient.event_id == existing.id)
+                ) or 0
             )
-            or 0
-        )
+            recipient_count += sum(isinstance(row, NotificationRecipient) and row.event_id == existing.id for row in db.new)
         return BusinessNotificationResult(existing, recipient_count)
 
     event = NotificationEvent(
@@ -139,6 +154,7 @@ def record_business_notification(
         status="pending",
         occurred_at=_utc(occurred_at),
         created_at=effective_now,
+        target_manifest_sha256=target_manifest_hash(people),
     )
     db.add(event)
     recipient_count = 0
@@ -150,36 +166,20 @@ def record_business_notification(
     # caller's pending business/outbox facts.  Keep all recipient rows pending
     # until the outer command commits or explicitly checkpoints them.
     with db.no_autoflush:
-        user = _active_target_user(
-            db, person_id=recipient_person_id
-        )
-        if user is not None:
-            identity = db.scalar(
-                select(WechatIdentity)
-                .where(WechatIdentity.user_id == user.id)
-                .order_by(WechatIdentity.last_login_at.desc(), WechatIdentity.id)
-                .limit(1)
-            )
-            if identity is not None:
-                _add_recipient(
+        policy = notification_identities.identity_policy()
+        for person_id in people:
+            target = NotificationPersonTarget(id=uuid4(), event_id=event.id, person_id=person_id, created_at=effective_now)
+            db.add(target)
+            for channel in notification_identities.resolve_verified_channels(db,person_id=person_id,policy=policy,now=effective_now):
+                recipient_count += int(_add_recipient(
                     db,
                     event_id=event.id,
-                    user=user,
-                    channel="wechat",
-                    recipient_key=identity.openid,
+                    target_id=target.id,
+                    user_id=channel.user_id,
+                    channel=channel.channel,
+                    recipient_key=channel.recipient_key,
                     now=effective_now,
-                )
-                recipient_count += 1
-            if user.mobile:
-                _add_recipient(
-                    db,
-                    event_id=event.id,
-                    user=user,
-                    channel="sms",
-                    recipient_key=user.mobile,
-                    now=effective_now,
-                )
-                recipient_count += 1
+                ))
 
     # Leave recipients pending in the caller's transaction.  The business
     # command may have already staged an outbox row whose database constraint

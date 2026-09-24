@@ -12,6 +12,8 @@ from ..database import get_db
 from ..dependencies import require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import opening_start_options as service
+from ..formal_services.opening_control_directory import list_control_batches
+from ..opening_control_directory_schemas import OpeningControlBatchPageOut
 from ..opening_start_option_schemas import (
     OpeningStartAssigneeOptionPageOut,
     OpeningStartAssetOwnerOptionPageOut,
@@ -27,6 +29,7 @@ _PRIVATE_HEADERS = {
     "X-Content-Type-Options": "nosniff",
 }
 _QUERY_KEYS = {
+    "control-batches": frozenset({"region_org_id", "limit", "after_id"}),
     "regions": frozenset({"limit", "after_id"}),
     "asset-owners": frozenset({"region_org_id", "limit", "after_id"}),
     "locations": frozenset({"region_org_id", "owner_org_id", "limit", "after_id"}),
@@ -127,3 +130,16 @@ def list_opening_assignees(
 
 
 __all__ = ["router"]
+
+
+@router.get("/control-batches", response_model=OpeningControlBatchPageOut)
+def list_opening_control_batches(
+    response: Response,
+    region_org_id: Annotated[UUID, Query()],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    after_id: Annotated[UUID | None, Query()] = None,
+    principal: FormalPrincipal = Depends(require_permission("stocktake", "manage")),
+    db: Session = Depends(get_db),
+):
+    return _read(response, list_control_batches, db, principal,
+                 region_org_id=region_org_id, limit=limit, after_id=after_id)

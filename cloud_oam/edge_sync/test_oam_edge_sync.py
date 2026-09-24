@@ -631,7 +631,10 @@ def test_formal_work_order_upload_manifest_contains_only_work_order(tmp_path):
     def accept(**kwargs):
         requests.append(kwargs)
         accepted_records = len(kwargs["payload"].get("records", []))
-        return {"ok": True, "accepted_records": accepted_records}
+        result = dict(ok=True,duplicate=False,mode='staging_only',snapshot_id=outbox['snapshotId'])
+        if kwargs['endpoint'].endswith('/batches'):
+            return dict(result,batch_id=kwargs['batch_id'],accepted_records=accepted_records)
+        return dict(result,status='complete',personnel=None,entities={name:dict(records=entity['finalRecordCount'],sha256=entity['finalSha256'],deltaRecords=entity['deltaRecordCount']) for name,entity in outbox['entities'].items()})
 
     with patch.object(oam_edge_sync, "send_signed_json", side_effect=accept):
         oam_edge_sync.upload_outbox(

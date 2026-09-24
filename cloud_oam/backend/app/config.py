@@ -1,4 +1,5 @@
 from functools import lru_cache
+from datetime import datetime, timedelta, timezone
 from ipaddress import ip_address
 import os
 import re
@@ -59,6 +60,15 @@ class Settings(BaseSettings):
     # user sessions.  Keep the field optional at parse time and enforce it at
     # the user-facing API startup boundary instead.
     jwt_secret: str = ""
+    # Control configuration uses distinct Ed25519 directions. API deployments
+    # receive only the API private key and owner public key; owner tools receive
+    # only the API public key and owner private key. Never share the JWT key.
+    control_configuration_handoff_enabled: bool = False
+    control_configuration_deployment_id: str = ""
+    control_configuration_api_private_key: str = ""
+    control_configuration_api_public_key: str = ""
+    control_configuration_owner_private_key: str = ""
+    control_configuration_owner_public_key: str = ""
     jwt_ttl_minutes: int = Field(default=15, ge=5, le=1440)
     session_ttl_days: int = Field(default=30, ge=1, le=90)
     # Login identifiers are pseudonymized with a dedicated, versioned HMAC
@@ -135,6 +145,7 @@ class Settings(BaseSettings):
     # Credentials are resolved only by the SDK environment provider; there are
     # deliberately no OSS access-key settings in this application model.
     file_storage_enabled: bool = False
+    inventory_report_export_enabled: bool = False
     file_storage_provider: Literal["disabled", "aliyun_oss_v2"] = "disabled"
     file_storage_region: str = ""
     file_storage_bucket: str = ""
@@ -162,6 +173,10 @@ class Settings(BaseSettings):
     sms_provider: str = "disabled"
     sms_access_key_id: str = ""
     sms_access_key_secret: str = ""
+    # Dedicated PNVS STS triplet. It never falls back to the KMS/OSS default
+    # credential chain; deployment rotates all three values together.
+    sms_security_token: str = ""
+    sms_security_token_expires_at: str = ""
     sms_sign_name: str = ""
     sms_template_code: str = ""
     sms_scheme_name: str = "RSC个人仓登录"
@@ -184,6 +199,10 @@ class Settings(BaseSettings):
     edge_sync_enabled: bool = False
     edge_sync_secret: str = ""
     edge_sync_allowed_sources: str = ""
+    edge_control_capture_enabled: bool = False
+    edge_control_capture_key_id: str = ""
+    edge_material_capture_enabled: bool = False
+    edge_material_capture_key_id: str = ""
     edge_sync_legacy_batches_enabled: bool = False
     edge_sync_legacy_personnel_projection_enabled: bool = False
     edge_sync_max_clock_skew_seconds: int = Field(default=300, ge=60, le=3600)
@@ -285,6 +304,12 @@ class Settings(BaseSettings):
         if self.environment != "production":
             return
         errors: list[str] = []
+        if self.control_configuration_handoff_enabled:
+            from .inventory_control_handoff import _keys, ControlHandoffError
+            try:
+                _keys('api', self)
+            except ControlHandoffError:
+                errors.append("production control handoff requires separate configured API and owner signing authorities")
         if os.getenv("DEBUG", "").strip().lower() == "sdk":
             errors.append(
                 "production API forbids Alibaba Cloud SDK wire debug logging"
@@ -459,6 +484,10 @@ class Settings(BaseSettings):
             )
         if not self.edge_sync_configuration_ready():
             errors.append("production edge receiver configuration is incomplete")
+        if self.edge_control_capture_enabled and not self.edge_control_capture_ready():
+            errors.append("production control capture authentication is incomplete")
+        if self.edge_material_capture_enabled and not self.edge_material_capture_ready():
+            errors.append("production material capture authentication is incomplete")
         if self.database_schema_mode != "alembic":
             errors.append("production edge receiver schema mode must be alembic")
         if errors:
@@ -471,6 +500,8 @@ class Settings(BaseSettings):
             return self.environment != "production" and bool(self.sms_test_code)
         if self.sms_provider != "aliyun_pnvs":
             return False
+        if not self.sms_sts_credential_ready(minimum_validity_seconds=60):
+            return False
         return all(
             value.strip()
             for value in (
@@ -482,6 +513,22 @@ class Settings(BaseSettings):
                 self.sms_template_code,
                 self.sms_scheme_name,
             )
+        )
+
+    def sms_sts_credential_ready(self, *, minimum_validity_seconds: int = 0) -> bool:
+        """Reject partial or near-expired dedicated STS credentials."""
+        token = self.sms_security_token.strip()
+        expiry = self.sms_security_token_expires_at.strip()
+        if not token and not expiry:
+            return True  # Existing dedicated long-lived RAM credential mode.
+        if not _is_configured_secret(token, min_length=32) or not expiry:
+            return False
+        try:
+            instant = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        return instant.tzinfo is not None and instant.astimezone(timezone.utc) > (
+            datetime.now(timezone.utc) + timedelta(seconds=minimum_validity_seconds)
         )
 
     def wechat_configuration_ready(self) -> bool:
@@ -553,6 +600,16 @@ class Settings(BaseSettings):
             for source in self.edge_sync_allowed_sources.split(",")
             if source.strip()
         }
+
+    def edge_control_capture_ready(self) -> bool:
+        return self.edge_control_capture_enabled and self.edge_sync_configuration_ready() \
+            and bool(self.edge_sync_allowed_source_set()) \
+            and re.fullmatch(r'[A-Za-z0-9._:-]{1,128}', self.edge_control_capture_key_id) is not None
+
+    def edge_material_capture_ready(self) -> bool:
+        return self.edge_material_capture_enabled and self.edge_sync_configuration_ready() \
+            and bool(self.edge_sync_allowed_source_set()) \
+            and re.fullmatch(r'[A-Za-z0-9._:-]{1,128}', self.edge_material_capture_key_id) is not None
 
     def trusted_proxy_ip_set(self) -> set[str]:
         """Return canonical, exact proxy IPs allowed to supply forwarded IPs."""

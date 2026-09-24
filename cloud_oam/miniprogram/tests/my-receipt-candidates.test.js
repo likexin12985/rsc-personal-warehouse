@@ -140,9 +140,9 @@ test('serial display is bounded and more keeps only the selected line', async ()
   page.onUnload(); assert.equal(page.data.lines.length, 0)
 })
 
-test('page is registered and template cannot represent scanning as submitted acceptance', () => {
+test('preserved private page is unregistered and scanning still cannot represent submitted acceptance', () => {
   const app = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../app.json'), 'utf8'))
-  assert.ok(app.pages.includes('pages/formal-my-receipt/index'))
+  assert.equal(app.pages.includes('pages/formal-my-receipt/index'), false)
   const template = fs.readFileSync(path.resolve(__dirname, '../pages/formal-my-receipt/index.wxml'), 'utf8')
   assert.match(template, /本次已核对/); assert.doesNotMatch(template, /确认入账|验收成功|确认收货/)
 })

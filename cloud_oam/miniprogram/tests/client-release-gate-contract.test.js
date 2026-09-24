@@ -65,7 +65,10 @@ const permittedSteps = [
   { 'working-directory': 'cloud_oam/frontend', run: 'pnpm test' },
   { 'working-directory': 'cloud_oam/frontend', run: 'pnpm exec tsc -b' },
   { 'working-directory': 'cloud_oam/frontend', run: 'pnpm exec vite build' },
-  { 'working-directory': 'cloud_oam/miniprogram', run: 'node --test tests/*.test.js' }
+  { 'working-directory': 'cloud_oam/frontend', run: 'pnpm exec vite build --mode warehouse' },
+  { run: 'node cloud_oam/scripts/verify_public_entry.mjs' },
+  { 'working-directory': 'cloud_oam/miniprogram', run: 'node --test tests/*.test.js' },
+  { run: 'node cloud_oam/scripts/sync_opening_start_core.mjs --check' }
 ]
 
 function validateWorkflow(document) {
@@ -76,7 +79,9 @@ function validateWorkflow(document) {
   assert.deepEqual(document.on, {
     workflow_dispatch: {},
     pull_request: { branches: ['main'] },
-    push: { branches: ['main', 'codex/production-readiness-gates'] }
+    push: { branches: [
+      'main', 'codex/production-readiness-gates', 'codex/notification-delivery-worker'
+    ] }
   })
   assert.deepEqual(document.permissions, { contents: 'read' })
   assert.deepEqual(document.concurrency, {
@@ -129,7 +134,8 @@ const mutations = [
   ['PR trigger removed', (d) => { delete d.on.pull_request }],
   ['PR protected branch changed', (d) => { d.on.pull_request.branches = ['develop'] }],
   ['main push removed', (d) => { d.on.push.branches.shift() }],
-  ['continuation branch removed', (d) => { d.on.push.branches.pop() }],
+  ['production-readiness branch removed', (d) => { d.on.push.branches.splice(1, 1) }],
+  ['notification-delivery branch removed', (d) => { d.on.push.branches.pop() }],
   ['privileged PR trigger added', (d) => { d.on.pull_request_target = {} }],
   ['PR paths filter can leave required check pending', (d) => { d.on.pull_request.paths = ['cloud_oam/frontend/**'] }],
   ['push ignore filter skips validation', (d) => { d.on.push['paths-ignore'] = ['**'] }],
@@ -163,12 +169,14 @@ const mutations = [
   ['Web failure suppressed', (d, job) => { job.steps[5].run += ' || true' }],
   ['type check skipped', (d, job) => { job.steps[6].run = 'true' }],
   ['build replaced by deployment', (d, job) => { job.steps[7].run = 'pnpm deploy' }],
-  ['mini-program suite narrowed', (d, job) => { job.steps[8].run = 'node --test tests/client-release-gate-contract.test.js' }],
-  ['mini-program scope changed', (d, job) => { job.steps[8]['working-directory'] = '.' }],
+  ['mini-program suite narrowed', (d, job) => { job.steps[10].run = 'node --test tests/client-release-gate-contract.test.js' }],
+  ['mini-program scope changed', (d, job) => { job.steps[10]['working-directory'] = '.' }],
   ['step secret exposed', (d, job) => { job.steps[8].env = { TOKEN: '${{ secrets.PRODUCTION_TOKEN }}' } }],
   ['step label interpolates secrets', (d, job) => { job.steps[8].name = '${{ secrets.PRODUCTION_TOKEN }}' }],
   ['step failure ignored', (d, job) => { job.steps[8]['continue-on-error'] = true }],
   ['step skipped', (d, job) => { job.steps[8].if = 'false' }],
+  ['shared protocol check skipped', (d, job) => { job.steps[11].run = 'true' }],
+  ['shared protocol check mutates instead of verifies', (d, job) => { job.steps[11].run = 'node cloud_oam/scripts/sync_opening_start_core.mjs' }],
   ['gate step removed', (d, job) => { job.steps.pop() }],
   ['unreviewed upload step added', (d, job) => { job.steps.push({ name: 'Upload', uses: 'actions/upload-artifact@v4' }) }],
   ['unreviewed external command added', (d, job) => { job.steps.push({ name: 'External write', run: 'curl -X POST https://example.invalid' }) }],

@@ -1,17 +1,14 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
-import App from "./App";
-import "./styles.css";
+import PublicKnowledge from "./PublicKnowledge";
 
+// Update any root-scoped worker from the former warehouse homepage.
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js"));
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+  });
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
-  </React.StrictMode>,
+  <React.StrictMode><PublicKnowledge /></React.StrictMode>,
 );

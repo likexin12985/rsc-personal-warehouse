@@ -539,10 +539,8 @@ def _validate_snapshot_manifest(
             "oam_work_order_manifest_invalid",
             "OAM工单完成清单无效",
         ) from exc
-    canonical_manifest = _canonical_json(manifest.model_dump(mode="json"))
     if (
-        snapshot.manifest_json != canonical_manifest
-        or hashlib.sha256(canonical_manifest.encode("utf-8")).hexdigest()
+        hashlib.sha256(snapshot.manifest_json.encode("utf-8")).hexdigest()
         != snapshot.manifest_sha256
     ):
         _fail("oam_work_order_manifest_hash_mismatch", "OAM工单完成清单哈希不一致")

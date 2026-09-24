@@ -71,6 +71,33 @@ const inventorySummary = {
   expected_supply_status: "not_available",
 };
 
+describe("control configuration navigation permission", () => {
+  it.each([
+    { role: "admin", permission: true, allowed: true },
+    { role: "admin", permission: false, allowed: false },
+    { role: "technician", permission: true, allowed: false },
+  ])("requires headquarters role and configuration permission: $role/$permission", async ({ role, permission, allowed }) => {
+    vi.mocked(api).mockImplementation(async path => {
+      if (path === "/auth/me") return { ...authenticatedUser, role_codes: [role] };
+      if (path === "/access/context") return { ...accessContext, role_codes: [role], permissions: [
+        ...accessContext.permissions, ...(permission ? [{ resource: "inventory_control", action: "authorize", field_code: "" }] : []),
+      ] };
+      if (path === "/v1/inventory/summary") return inventorySummary;
+      throw new Error(`unexpected path: ${path}`);
+    });
+    render(<MemoryRouter initialEntries={["/control-configuration"]}><App /></MemoryRouter>);
+    await screen.findByRole("button", { name: "退出登录" });
+    if (allowed) {
+      expect(await screen.findByRole("region", { name: "控制来源配置" })).toBeTruthy();
+      expect(screen.getAllByRole("link", { name: "来源配置" }).every(link => link.getAttribute("href") === "/control-configuration")).toBe(true);
+    } else {
+      await screen.findByText("李珂鑫，欢迎进入 RSC 个人仓");
+      expect(screen.queryByRole("region", { name: "控制来源配置" })).toBeNull();
+      expect(screen.queryByRole("link", { name: "来源配置" })).toBeNull();
+    }
+  });
+});
+
 function renderAuthenticatedApp(logout: () => Promise<unknown>): void {
   vi.mocked(api).mockImplementation(async (path) => {
     if (path === "/auth/me") return authenticatedUser;
@@ -376,6 +403,29 @@ describe("formal opening reconciliation navigation", () => {
     expect(vi.mocked(api).mock.calls.some(([path]) => String(path).startsWith(
       "/v1/reconciliations/opening",
     ))).toBe(false);
+  });
+});
+
+describe("formal daily reconciliation navigation", () => {
+  it.each([true, false])("guards the daily route with current read permission (%s)", async allowed => {
+    vi.mocked(api).mockReset();
+    vi.mocked(api).mockImplementation(async path => {
+      if (path === '/auth/me') return authenticatedUser;
+      if (path === '/access/context') return { ...accessContext, permissions: [...accessContext.permissions,
+        ...(allowed ? [{ resource: 'reconciliation', action: 'read', field_code: '' }] : [])] };
+      if (path === '/v1/reconciliations/daily?limit=20') return { items: [], next_after_id: null };
+      if (path === '/v1/inventory/summary') return inventorySummary;
+      throw new Error(`unexpected path: ${path}`);
+    });
+    render(<MemoryRouter initialEntries={['/daily-reconciliations']}><App /></MemoryRouter>);
+    if (allowed) {
+      expect(await screen.findByText('暂无可见日终档案')).toBeTruthy();
+      expect(screen.getAllByRole('link', { name: '日终对账' })).toHaveLength(2);
+    } else {
+      await screen.findByText('李珂鑫，欢迎进入 RSC 个人仓');
+      expect(screen.queryAllByRole('link', { name: '日终对账' })).toHaveLength(0);
+      expect(vi.mocked(api).mock.calls.some(([path]) => path.startsWith('/v1/reconciliations/daily'))).toBe(false);
+    }
   });
 });
 

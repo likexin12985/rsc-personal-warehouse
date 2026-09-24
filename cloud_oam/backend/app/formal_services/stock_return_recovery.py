@@ -33,7 +33,10 @@ def _row(db, actor, request_id):
 
 
 def require_unsealed(db, *, actor, request_id):
-    if _row(db, actor, request_id) is not None:
+    from ..stock_operation_models import StockOperationReturnInboundSeal
+    if (_row(db, actor, request_id) is not None or db.scalar(select(StockOperationReturnInboundSeal.id).where(
+            StockOperationReturnInboundSeal.actor_user_id == actor.user_id,
+            StockOperationReturnInboundSeal.request_id == request_id)) is not None):
         _fail("stock_return_request_sealed", "原退回请求已永久封存，请核验原记录后重新准备操作")
 
 
@@ -112,6 +115,10 @@ def lookup_return_request(db, *, actor, work_order_id, operation_type, request_i
     _coordinate(operation_type, request_id, operation_id)
     current = authorize(db, actor, "read")
     with db.no_autoflush:
+        from ..stock_operation_models import StockOperationReturnInbound, StockOperationReturnInboundSeal
+        for model in (StockOperationReturnInbound, StockOperationReturnInboundSeal):
+            if db.scalar(select(model.id).where(model.actor_user_id == current.user_id, model.request_id == request_id)):
+                _fail("stock_return_request_conflict", "该请求已绑定退回入账，请核验准确坐标")
         if db.scalar(select(StockOperationReceipt.id).where(StockOperationReceipt.actor_user_id == current.user_id,
                 StockOperationReceipt.request_id == request_id).limit(1)):
             _fail("stock_return_request_conflict", "该请求标识已绑定接收验收，请核验原请求坐标")

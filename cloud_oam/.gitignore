@@ -76,6 +76,7 @@ htmlcov/
 node_modules/
 .pnpm-store/
 dist/
+dist-warehouse/
 coverage/
 *.tsbuildinfo
 vite.config.js

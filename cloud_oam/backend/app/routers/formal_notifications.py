@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -13,7 +14,12 @@ from ..dependencies import require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import notification_inbox
 from ..formal_services import notification_delivery_operations
+from ..formal_services import inventory_notification_operations
+from ..formal_services import notification_target_operations
 from ..notification_schemas import (
+    InventoryNotificationSourcePageOut,
+    InventoryNotificationSourceRecheckIn,
+    InventoryNotificationSourceRecheckOut,
     NotificationDeliveryPageOut,
     NotificationDeliveryRecordOut,
     NotificationDeliveryRetryIn,
@@ -21,6 +27,10 @@ from ..notification_schemas import (
     NotificationItemOut,
     NotificationPageOut,
     NotificationReadOut,
+    NotificationTargetPageOut,
+    NotificationLegacyEventPageOut,
+    NotificationTargetRecoveryIn,
+    NotificationTargetRecoveryOut,
 )
 
 
@@ -188,6 +198,112 @@ def retry_notification_delivery(
         queued_at=result.queued_at,
         replayed=result.replayed,
     )
+
+
+@router.get("/inventory-sources", response_model=InventoryNotificationSourcePageOut)
+def list_inventory_notification_sources(
+    response: Response,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    after_id: Annotated[UUID | None, Query()] = None,
+    principal: FormalPrincipal = Depends(require_permission("notification_delivery", "read")),
+    db: Session = Depends(get_db),
+):
+    try:
+        page = inventory_notification_operations.list_inventory_notification_sources(
+            db, actor=principal, limit=limit, after_id=after_id)
+    except notification_delivery_operations.NotificationDeliveryOperationsError as exc:
+        _raise_delivery(exc)
+    _private_headers(response)
+    return InventoryNotificationSourcePageOut(**asdict(page))
+
+
+@router.post("/inventory-sources/{outbox_id}/recheck", response_model=InventoryNotificationSourceRecheckOut)
+def recheck_inventory_notification_source(
+    outbox_id: UUID,
+    payload: InventoryNotificationSourceRecheckIn,
+    response: Response,
+    principal: FormalPrincipal = Depends(require_permission("notification_delivery", "retry")),
+    db: Session = Depends(get_db),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    try:
+        result = inventory_notification_operations.recheck_inventory_notification_source(
+            db, actor=principal, outbox_id=outbox_id, **payload.model_dump(),
+            idempotency_key=idempotency_key, request_id=request_id)
+        db.commit()
+    except notification_delivery_operations.NotificationDeliveryOperationsError as exc:
+        db.rollback()
+        _raise_delivery(exc)
+    except Exception:
+        db.rollback()
+        raise
+    _private_headers(response)
+    response.headers["Idempotency-Replayed"] = "true" if result.replayed else "false"
+    return InventoryNotificationSourceRecheckOut(**asdict(result))
+
+
+@router.get("/person-targets", response_model=NotificationTargetPageOut)
+def list_notification_targets(
+    response: Response,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    after_id: Annotated[UUID | None, Query()] = None,
+    unbound_only: bool = True,
+    principal: FormalPrincipal = Depends(require_permission("notification_delivery", "read")),
+    policy: notification_target_operations.IdentityPolicy = Depends(notification_target_operations.identity_policy),
+    db: Session = Depends(get_db),
+):
+    try:
+        page = notification_target_operations.list_notification_targets(db, actor=principal,
+            policy=policy, limit=limit, after_id=after_id, unbound_only=unbound_only)
+    except notification_delivery_operations.NotificationDeliveryOperationsError as exc:
+        _raise_delivery(exc)
+    _private_headers(response)
+    return NotificationTargetPageOut(**asdict(page))
+
+
+@router.get("/person-targets/legacy-events", response_model=NotificationLegacyEventPageOut)
+def list_legacy_notification_events(
+    response: Response,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    after_id: Annotated[UUID | None, Query()] = None,
+    principal: FormalPrincipal = Depends(require_permission("notification_delivery", "read")),
+    db: Session = Depends(get_db),
+):
+    try:
+        page = notification_target_operations.list_legacy_notification_events(db,
+            actor=principal, limit=limit, after_id=after_id)
+    except notification_delivery_operations.NotificationDeliveryOperationsError as exc:
+        _raise_delivery(exc)
+    _private_headers(response)
+    return NotificationLegacyEventPageOut(**asdict(page))
+
+
+@router.post("/person-targets/{target_id}/recover", response_model=NotificationTargetRecoveryOut)
+def recover_notification_target(
+    target_id: UUID,
+    payload: NotificationTargetRecoveryIn,
+    response: Response,
+    principal: FormalPrincipal = Depends(require_permission("notification_delivery", "retry")),
+    policy: notification_target_operations.IdentityPolicy = Depends(notification_target_operations.identity_policy),
+    db: Session = Depends(get_db),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    try:
+        result = notification_target_operations.recover_notification_target(db,
+            actor=principal, policy=policy, target_id=target_id, **payload.model_dump(),
+            idempotency_key=idempotency_key, request_id=request_id)
+        db.commit()
+    except notification_delivery_operations.NotificationDeliveryOperationsError as exc:
+        db.rollback()
+        _raise_delivery(exc)
+    except Exception:
+        db.rollback()
+        raise
+    _private_headers(response)
+    response.headers["Idempotency-Replayed"] = "true" if result.replayed else "false"
+    return NotificationTargetRecoveryOut(**asdict(result))
 
 
 @router.get("", response_model=NotificationPageOut)

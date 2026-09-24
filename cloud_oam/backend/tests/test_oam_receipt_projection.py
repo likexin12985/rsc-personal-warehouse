@@ -180,9 +180,16 @@ def _stage_completed_snapshot(db, row, *, snapshot_id="snapshot-1"):
     return snapshot
 
 
-def test_completed_snapshot_projects_current_mirror_and_replays(db):
+@pytest.mark.parametrize('wire_format',['canonical','offset','whitespace'])
+def test_completed_snapshot_projects_current_mirror_and_replays(db,wire_format):
     source, shipment, row = _setup(db)
     snapshot = _stage_completed_snapshot(db, row)
+    if wire_format!='canonical':
+        document=json.loads(snapshot.manifest_json)
+        document['snapshot_at']=document['snapshot_at'].replace('Z','+00:00')
+        snapshot.manifest_json=json.dumps(document,indent=2 if wire_format=='whitespace' else None)
+        snapshot.manifest_sha256=hashlib.sha256(snapshot.manifest_json.encode()).hexdigest()
+        db.flush()
     first = publish_completed_oam_receipt_snapshot(db, snapshot_id=snapshot.id, source=source)
     replay = publish_completed_oam_receipt_snapshot(db, snapshot_id=snapshot.id, source=source)
     assert first.projected_records == replay.projected_records == 1

@@ -92,7 +92,11 @@
           </block>
         </view>
     </view><button wx:if="{{selectedReceipt.moreLines}}" bindtap="moreReceiptLines">显示更多本次明细</button>
-      <button class="button button-primary" loading="{{inboundBusy}}" disabled="{{inboundBusy || inboundPending}}" bindtap="beginInbound">为本次已验收数量生成入账预览</button>
+      <view class="heading">本次验收入账</view>
+      <view class="muted">{{inboundStatusMessage}}</view>
+      <view wx:if="{{inboundStateView}}">入账单 {{inboundStateView.number}} · {{inboundStateView.postedAt}}</view>
+      <button class="button button-secondary" loading="{{inboundStatus === 'loading'}}" disabled="{{inboundBusy || inboundStatus === 'loading'}}" bindtap="refreshInboundState">刷新入账状态</button>
+      <button wx:if="{{inboundCanPost}}" class="button button-primary" loading="{{inboundBusy}}" disabled="{{inboundBusy || busy}}" bindtap="beginInbound">为本次已验收数量生成入账预览</button>
     </view>
     <view wx:if="{{inboundMessage || inboundPending}}" class="card receipt-form">
       <view class="heading">退回入账</view><view class="muted">{{inboundMessage}}</view>

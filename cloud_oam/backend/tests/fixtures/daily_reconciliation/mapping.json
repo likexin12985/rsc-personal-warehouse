@@ -1,0 +1,62 @@
+{
+  "catalog_sha256": "6d961cb5e641b0cf64a6fe18d4974664678b2699f212eaeda44b3f37d166b1ca",
+  "content_sha256": "70d4846c12b5664cc4e4ded2bbf31fee10c0966fb927facf4e5868a7ed20bf3e",
+  "included_buckets": [
+    "available",
+    "reserved"
+  ],
+  "location_bindings": [
+    {
+      "location_id": "092d25d9-84a1-4eb3-a487-763fc30a61a3",
+      "region_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+      "warehouse_code": "W-B"
+    },
+    {
+      "location_id": "108c07d8-edf4-45de-a214-d7e4f8947aef",
+      "region_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+      "warehouse_code": "W-A"
+    },
+    {
+      "location_id": "126328d6-bedd-4c16-9342-d8093689276f",
+      "region_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+      "warehouse_code": "W-A"
+    },
+    {
+      "location_id": "69b48b8b-4b37-455a-aaf8-8eec080c6f57",
+      "region_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+      "warehouse_code": "W-B"
+    },
+    {
+      "location_id": "6e71aa18-fd50-4d4f-af7f-e1bcd028b26f",
+      "region_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+      "warehouse_code": "W-A"
+    },
+    {
+      "location_id": "9169c73d-152c-4c8e-a82d-3e23b934c904",
+      "region_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+      "warehouse_code": "W-A"
+    },
+    {
+      "location_id": "920e308f-c548-4b05-92f9-20dfbc610dce",
+      "region_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+      "warehouse_code": "W-A"
+    },
+    {
+      "location_id": "fa52aa5c-e6af-47f5-808d-283600a6c50b",
+      "region_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+      "warehouse_code": "W-A"
+    }
+  ],
+  "location_facts_sha256": "bbe1e5f0b1eec89a89ab4cbac007dd0f2b47b56a8b1f5efe88ce110b0fd55b75",
+  "organization_facts_sha256": "5f7e40e32195361d084be6291f82a5c8220c8ddae8e3c48030b65fb0f57e12cc",
+  "region_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+  "schema": "rsc.daily_comparison_mapping_candidate.v1",
+  "scope_policy": "explicit_physical_location",
+  "source_quantity_policy": "published_quantity_locked_separate",
+  "source_system_id": "2f1a667c-9cb2-42ec-918b-d1be5b6060d2",
+  "version_id": "00000000-0000-0000-0000-000000000319",
+  "warehouses": [
+    "W-A",
+    "W-B"
+  ]
+}

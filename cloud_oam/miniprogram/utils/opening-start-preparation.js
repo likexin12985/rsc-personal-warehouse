@@ -59,6 +59,12 @@ function createPreparationController(options) {
         assigneeName: slots[3].selected ? slots[3].selected.name : '' }
     }
     publish(view)
+    if (options.onSelection) {
+      const owner = slots[1].selected, location = slots[2].selected, person = slots[3].selected
+      options.onSelection(active && expanded && actor ? { actor, region: slots[0].selected,
+        scope: owner && location && person ? { owner: owner.name, location: location.name, person: person.name,
+          scope: { owner_org_id: owner.id, location_id: location.id, assignee_user_id: person.userId, freeze_mode: 'hard' } } : null } : null)
+    }
   }
   function clearFrom(index) {
     for (let position = index; position < slots.length; position += 1) {

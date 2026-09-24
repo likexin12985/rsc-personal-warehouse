@@ -867,7 +867,7 @@ function MaterialPicker({
       {!!picker.items.length && <div className="table-wrap"><table>
         <thead><tr><th>SKU / 名称</th><th>规格</th><th>单位</th><th>追踪策略</th><th>数量精度</th><th>选择</th></tr></thead>
         <tbody>{picker.items.map((item) => <tr key={item.material_id}>
-          <td><strong>{item.sku_code}</strong><span className="cell-subtitle">{item.name}</span></td>
+          <td><strong>{item.sku_code}</strong><span className="cell-subtitle">{item.name}</span><span className="cell-subtitle">来源更新时间：{item.source_updated_at === null ? "未知" : item.source_updated_at}</span></td>
           <td>{item.specification || "无规格"}</td><td>{item.base_unit}</td>
           <td>{trackingLabel(item.tracking_mode)}</td>
           <td>{item.quantity_scale} 位 / {item.allow_fraction ? "允许小数" : "仅整数"}</td>

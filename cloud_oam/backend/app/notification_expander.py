@@ -20,6 +20,7 @@ from typing import Any
 SessionLocal = None
 NotificationExpansionError = RuntimeError
 expand_pending_notification_events = None
+project_pending_inventory_notifications = None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -55,6 +56,11 @@ def _emit(payload: dict[str, Any]) -> None:
 
 def _run_once(*, limit: int) -> tuple[int, dict[str, Any]]:
     global NotificationExpansionError, expand_pending_notification_events
+    global project_pending_inventory_notifications
+    from .formal_services.inventory_notifications import InventoryNotificationError
+    if project_pending_inventory_notifications is None:
+        from .formal_services.inventory_notifications import project_pending_inventory_notifications as project_inventory
+        project_pending_inventory_notifications = project_inventory
     if expand_pending_notification_events is None:
         from .formal_services.notification_expansion import (
             NotificationExpansionError as expansion_error,
@@ -69,8 +75,16 @@ def _run_once(*, limit: int) -> tuple[int, dict[str, Any]]:
 
     with session_factory() as db:
         try:
+            inventory_results = project_pending_inventory_notifications(db, limit=limit)
             results = expand_pending_notification_events(db, limit=limit)
             db.commit()
+        except InventoryNotificationError as exc:
+            db.rollback()
+            return 2, {
+                "ok": False,
+                "code": "inventory_notification_source_invalid",
+                "message": str(exc),
+            }
         except NotificationExpansionError as exc:
             db.rollback()
             return 2, {
@@ -87,7 +101,13 @@ def _run_once(*, limit: int) -> tuple[int, dict[str, Any]]:
             }
     return 0, {
         "ok": True,
-        "processed": len(results),
+        "processed": len(results) + len(inventory_results.projected) + len(inventory_results.blocked),
+        "createdInventoryNotifications": sum(item.created for item in inventory_results.projected),
+        "blockedInventorySources": [
+            {"outboxId": str(item.outbox_id), "auditId": str(item.audit_id), "code": item.code}
+            for item in inventory_results.blocked
+        ],
+        "deferredInventorySources": inventory_results.deferred,
         "createdDeliveries": sum(item.created_delivery_count for item in results),
         "eventIds": [str(item.event_id) for item in results],
     }

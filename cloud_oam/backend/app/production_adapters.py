@@ -22,7 +22,6 @@ from datetime import datetime, timezone
 from functools import lru_cache
 import hashlib
 import json
-import logging
 from pathlib import Path
 import re
 import threading
@@ -32,6 +31,7 @@ from sqlalchemy import select, union
 from sqlalchemy.orm import Session
 
 from .config import Settings
+from .aliyun_sdk_logging import silence_aliyun_sdk_loggers as _silence_aliyun_sdk_loggers
 from .demand_models import MaterialRequest, MaterialRequestRevision
 from .formal_services.authentication_idempotency import (
     Aes256GcmAuthenticationResponseCipher,
@@ -351,24 +351,6 @@ class AliyunKmsEnvelopeKeyLoader:
                 ) from exc
             self._credential_client = credential
             return credential
-
-
-def _silence_aliyun_sdk_loggers() -> None:
-    """Prevent provider secrets and wire diagnostics reaching process stderr.
-
-    The pinned credential and Tea SDKs install their own stream handlers.  Tea
-    can render complete signed request/response headers when ``DEBUG=sdk`` is
-    inherited.  KMS availability is already represented by fixed
-    readiness/business failures, so raw SDK diagnostics must not bypass the
-    application's desensitized logging boundary.
-    """
-
-    for logger_name in ("credentials", "alibabacloud-tea"):
-        sdk_logger = logging.getLogger(logger_name)
-        sdk_logger.handlers.clear()
-        sdk_logger.addHandler(logging.NullHandler())
-        sdk_logger.propagate = False
-        sdk_logger.disabled = True
 
 
 @lru_cache(maxsize=4)

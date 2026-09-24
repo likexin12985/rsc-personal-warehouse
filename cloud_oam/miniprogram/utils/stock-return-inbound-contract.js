@@ -48,7 +48,8 @@ function validatePreview(raw, expected) {
     'target_location_id', 'target_custody_assignment_id', 'receipt_plan_hash', 'plan_hash', 'reason', 'checked_at', 'ledger_cursor', 'lines'])
   if (raw.schema_version !== '1.0' || raw.planning_status !== 'inbound_preview_only'
     || uuid(raw.receipt_id) !== uuid(expected.receiptId) || uuid(raw.shipment_id) !== uuid(expected.shipmentId)
-    || uuid(raw.operator_person_id) !== uuid(expected.personId)) fail()
+    || uuid(raw.operator_person_id) !== uuid(expected.personId)
+    || raw.authorization_version !== integer(expected.authorizationVersion, 1)) fail()
   integer(raw.authorization_version, 1); uuid(raw.target_location_id); uuid(raw.target_custody_assignment_id)
   hash(raw.receipt_plan_hash); hash(raw.plan_hash); instant(raw.checked_at)
   if (!Number.isSafeInteger(raw.ledger_cursor) || raw.ledger_cursor < 0) fail()
@@ -82,4 +83,20 @@ function validateLookup(raw, marker) {
   }
   return validateResult(raw, marker)
 }
-module.exports = { KIND, ACTION, READ, requestHash, validatePreview, validateResult, validateLookup }
+function validateState(raw, expected) {
+  exact(raw, ['schema_version', 'receipt_id', 'shipment_id', 'operator_person_id', 'authorization_version',
+    'status', 'inbound', 'ledger_cursor', 'checked_at'])
+  if (raw.schema_version !== '1.0' || uuid(raw.receipt_id) !== uuid(expected.receiptId)
+    || uuid(raw.shipment_id) !== uuid(expected.shipmentId) || uuid(raw.operator_person_id) !== uuid(expected.personId)
+    || raw.authorization_version !== integer(expected.authorizationVersion, 1) || !['not_posted', 'posted'].includes(raw.status)) fail()
+  integer(raw.ledger_cursor); instant(raw.checked_at)
+  if (raw.status === 'not_posted') { if (raw.inbound !== null) fail() }
+  else {
+    exact(raw.inbound, ['inbound_id', 'inbound_no', 'target_location_id', 'posting_transaction_id', 'posted_at'])
+    uuid(raw.inbound.inbound_id); text(raw.inbound.inbound_no, 100); uuid(raw.inbound.target_location_id)
+    uuid(raw.inbound.posting_transaction_id); instant(raw.inbound.posted_at)
+    if (Date.parse(raw.inbound.posted_at) > Date.parse(raw.checked_at)) fail()
+  }
+  return raw
+}
+module.exports = { KIND, ACTION, READ, requestHash, validatePreview, validateResult, validateLookup, validateState }

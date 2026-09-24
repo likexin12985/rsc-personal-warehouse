@@ -1,7 +1,7 @@
 """Derive a return-inbound posting plan from verified acceptance facts.
 
-The plan is read-only.  It deliberately stops before creating an inbound fact
-or an inventory transaction; 0106 will add those append-only write boundaries.
+The plan is read-only. It stops before creating the separate 0106 inbound fact
+or posting its inventory transaction.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from ..stock_operation_models import (
 )
 from . import inventory_posting as posting
 from . import inventory_query as inventory
-from . import stock_return_receipt_facts as receipt_facts
+from . import stock_return_receipt_facts as receipt_facts, stock_return_receipt_plan as receipt_plan
 from .stock_return_inbound_contract import ReturnInboundLine, build_return_inbound_command
 from .work_order_return_sources import _fail, _hash
 
@@ -36,7 +36,7 @@ def _aware(value: datetime) -> datetime:
 
 def _target_account(db: Session, *, source: StockAccount, location: StockLocation, person_id: uuid.UUID) -> StockAccount:
     if source.owner_org_id != location.owner_org_id:
-        _fail("stock_return_inbound_owner_mismatch", "conflict", "退回在途账户与接收仓组织不一致")
+        _fail("stock_return_inbound_owner_mismatch", "退回在途账户与接收仓组织不一致")
     rows = tuple(db.scalars(select(StockAccount).where(
         StockAccount.owner_org_id == location.owner_org_id,
         StockAccount.custodian_person_id == person_id,
@@ -47,24 +47,49 @@ def _target_account(db: Session, *, source: StockAccount, location: StockLocatio
         StockAccount.lot_id == source.lot_id,
     ).limit(2).execution_options(populate_existing=True)))
     if len(rows) != 1:
-        _fail("stock_return_inbound_target_missing", "precondition_failed", "接收仓目标库存账户不存在或不唯一")
+        _fail("stock_return_inbound_target_missing", "接收仓目标库存账户不存在或不唯一", 412)
     return rows[0]
+
+
+def authorize_receipt(db: Session, *, actor, receipt_id: uuid.UUID, action="receive_return"):
+    """Authorize the exact acceptance and its current receiving responsibility."""
+    current = posting._require_current_actor(db, actor)
+    fact = db.get(StockOperationReceipt, receipt_id, populate_existing=True)
+    if fact is None:
+        _fail("stock_return_inbound_receipt_not_found", "退回验收事实不存在", 404)
+    if fact.operator_person_id != current.person_id or fact.actor_user_id != current.user_id:
+        _fail("stock_return_inbound_forbidden", "只有当前接收责任人可以发起退回入账", 403)
+    current, _ = receipt_plan.authorize(db, current, fact.shipment_id, action=action)
+    return current, fact
+
+
+def plan_document(plan: dict) -> dict:
+    """One canonical representation for preview, hashing and persisted plans."""
+    return {
+        "schema_version": plan["schema_version"],
+        **{key: str(plan[key]) for key in ("receipt_id", "shipment_id", "operator_person_id",
+            "target_location_id", "target_custody_assignment_id")},
+        "authorization_version": plan["authorization_version"],
+        "receipt_plan_hash": plan["receipt_plan_hash"],
+        "reason": plan["reason"],
+        "ledger_cursor": plan["ledger_cursor"],
+        "lines": plan["lines"],
+    }
 
 
 def plan_return_inbound(db: Session, *, actor, receipt_id: uuid.UUID) -> dict:
     """Return a verified, non-mutating plan for the accepted return quantity."""
+    with db.no_autoflush:
+        return _plan_return_inbound(db, actor=actor, receipt_id=receipt_id)
 
-    current = posting._require_current_actor(db, actor)
-    fact = db.get(StockOperationReceipt, receipt_id, populate_existing=True)
-    if fact is None:
-        _fail("stock_return_inbound_receipt_not_found", "not_found", "退回验收事实不存在")
-    if fact.operator_person_id != current.person_id:
-        _fail("stock_return_inbound_forbidden", "forbidden", "只有当前接收责任人可以发起退回入账")
+
+def _plan_return_inbound(db: Session, *, actor, receipt_id: uuid.UUID) -> dict:
+    current, fact = authorize_receipt(db, actor=actor, receipt_id=receipt_id)
     header = db.get(Shipment, fact.shipment_id, populate_existing=True)
     location = db.get(StockLocation, header.target_location_id, populate_existing=True) if header else None
     if (header is None or location is None or location.location_type != "region" or location.status != "active"
             or location.custodian_person_id != current.person_id):
-        _fail("stock_return_inbound_target_invalid", "conflict", "退回接收仓或当前保管责任已变化")
+        _fail("stock_return_inbound_target_invalid", "退回接收仓或当前保管责任已变化")
     assignments = tuple(db.scalars(select(CustodyAssignment).where(
         CustodyAssignment.id == fact.target_custody_assignment_id,
         CustodyAssignment.location_id == location.id,
@@ -73,7 +98,7 @@ def plan_return_inbound(db: Session, *, actor, receipt_id: uuid.UUID) -> dict:
     ).limit(2).execution_options(populate_existing=True)))
     assignment = assignments[0] if len(assignments) == 1 else None
     if assignment is None or (assignment.valid_to is not None and _aware(assignment.valid_to) <= _aware(fact.created_at)):
-        _fail("stock_return_inbound_custody_invalid", "conflict", "退回验收责任已失效，不能入账")
+        _fail("stock_return_inbound_custody_invalid", "退回验收责任已失效，不能入账")
 
     result = receipt_facts.receipt_result(db, actor=current, fact=fact)
     receipt_lines = tuple(db.scalars(select(StockOperationReceiptLine).where(
@@ -119,6 +144,8 @@ def plan_return_inbound(db: Session, *, actor, receipt_id: uuid.UUID) -> dict:
             "accepted_qty": format(accepted, ".3f"),
             "serial_ids": [str(identifier) for identifier in serial_ids],
         })
+    if not movements:
+        _fail("stock_return_inbound_no_accepted_lines", "该次退回验收没有可入账的接受数量", 409)
     command = build_return_inbound_command(
         receipt_id=fact.id,
         effective_at=_aware(fact.created_at),
@@ -141,18 +168,11 @@ def plan_return_inbound(db: Session, *, actor, receipt_id: uuid.UUID) -> dict:
         "command": command,
         "lines": tuple(projected_lines),
     }
-    result["plan_hash"] = _hash({
-        "schema_version": result["schema_version"],
-        "receipt_id": str(result["receipt_id"]),
-        "shipment_id": str(result["shipment_id"]),
-        "operator_person_id": str(result["operator_person_id"]),
-        "authorization_version": result["authorization_version"],
-        "target_location_id": str(result["target_location_id"]),
-        "target_custody_assignment_id": str(result["target_custody_assignment_id"]),
-        "receipt_plan_hash": result["receipt_plan_hash"],
-        "ledger_cursor": result["ledger_cursor"],
-        "lines": result["lines"],
-    })
+    result["plan_hash"] = _hash(plan_document(result))
+    final, _ = authorize_receipt(db, actor=current, receipt_id=receipt_id)
+    if final != current:
+        _fail("stock_return_inbound_plan_changed", "入账权限在预览期间变化，请重新核验")
+    inventory._ensure_projection_snapshot_current(db, snapshot)
     return result
 
 

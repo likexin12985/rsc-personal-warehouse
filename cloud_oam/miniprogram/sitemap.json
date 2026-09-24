@@ -1,6 +1,10 @@
 {
-  "desc": "RSC个人仓小程序页面索引",
+  "desc": "交流备件知识大全公开查询页",
   "rules": [
+    {
+      "action": "allow",
+      "page": "pages/knowledge/index"
+    },
     {
       "action": "disallow",
       "page": "*"

@@ -313,12 +313,45 @@ def _receipt_policies() -> tuple[tuple[str, str, str, str, str | None, str | Non
 
 
 RECEIPT_POLICIES = _receipt_policies()
+CAPTURE_TABLE = 'inventory_control_capture_attestations'
+CAPTURE_POLICY = "rsc_oam_rls_check_0044('external_sync_snapshot_records'::text, 'select'::text, to_jsonb(inventory_control_capture_attestations.*))"
+CAPTURE_POLICIES = (
+    (CAPTURE_TABLE, CAPTURE_TABLE+'_migrator_0114', '*', MIGRATION_ROLE, 'true', 'true'),
+    (CAPTURE_TABLE, CAPTURE_TABLE+'_backup_0114', 'r', BACKUP_ROLE, 'true', None),
+    (CAPTURE_TABLE, CAPTURE_TABLE+'_edge_select_0114', 'r', EDGE_ROLE, CAPTURE_POLICY, None),
+    (CAPTURE_TABLE, CAPTURE_TABLE+'_edge_insert_0114', 'a', EDGE_ROLE, None, CAPTURE_POLICY),
+)
+MATERIAL_BINDING_TABLE = 'oam_material_capture_bindings'
+MATERIAL_RECEIPT_TABLE = 'oam_material_capture_receipts'
+MATERIAL_TABLES = (MATERIAL_BINDING_TABLE, MATERIAL_RECEIPT_TABLE)
+MATERIAL_POLICY = 'rsc_oam_material_capture_visible_0116((source_instance)::text)'
+MATERIAL_POLICIES = tuple(
+    row for table in MATERIAL_TABLES for row in (
+        (table,table+'_owner_0116','*',MIGRATION_ROLE,'true','true'),
+        (table,table+'_backup_0116','r',BACKUP_ROLE,'true',None),
+    )
+) + (
+    (MATERIAL_RECEIPT_TABLE,MATERIAL_RECEIPT_TABLE+'_edge_select_0116','r',EDGE_ROLE,MATERIAL_POLICY,None),
+    (MATERIAL_RECEIPT_TABLE,MATERIAL_RECEIPT_TABLE+'_edge_insert_0116','a',EDGE_ROLE,None,MATERIAL_POLICY),
+)
+MATERIAL_EDGE_FUNCTIONS = (
+    'rsc_oam_material_capture_visible_0116(text)',
+    'rsc_oam_material_capture_binding_0116(text,text,text)',
+)
+_MATERIAL_EDGE_SQL = ','.join(_sql_literal(signature) for signature in MATERIAL_EDGE_FUNCTIONS)
 _POLICY_VALUES = ",\n        ".join(
     "(" + ", ".join(_sql_nullable_literal(value) for value in policy) + ")"
-    for policy in (*EXPECTED_POLICIES, *RECEIPT_POLICIES)
+    for policy in (*EXPECTED_POLICIES, *RECEIPT_POLICIES, *CAPTURE_POLICIES, *MATERIAL_POLICIES)
+)
+from .daily_reconciliation.capture_role_contract import ROLES as _DAILY_CAPTURE_ROLES
+_DAILY_CAPTURE_POLICY_VALUES = ",\n        ".join(
+    "(" + ", ".join(_sql_nullable_literal(value) for value in
+        (table, policy, 'r', role, 'true', None)) + ")"
+    for role, (tables, policy) in _DAILY_CAPTURE_ROLES.items()
+    for table in tables if table in (*RLS_TABLES, *RECEIPT_TABLES, CAPTURE_TABLE, *MATERIAL_TABLES)
 )
 _TABLE_VALUES = ",\n        ".join(
-    f"({_sql_literal(table_name)})" for table_name in (*RLS_TABLES, *RECEIPT_TABLES)
+    f"({_sql_literal(table_name)})" for table_name in (*RLS_TABLES, *RECEIPT_TABLES, CAPTURE_TABLE, *MATERIAL_TABLES)
 )
 
 
@@ -881,9 +914,205 @@ OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0108 = {
         "c118644da158bf2d36f7425105d7071d93b831e379d878ae4f9301139ae39246",
     ),
 }
-OAM_SYNC_FUNCTION_MANIFEST = OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0108
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0109 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0108,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0108["rsc_oam_runtime_binding_ready_0044()"][:6],
+        "8422e51272e7384f2c464f6f37292e846f6c0dd12a6584c5f9624700571ead52",
+    ),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0110 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0109,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0109["rsc_oam_runtime_binding_ready_0044()"][:6],
+        "2e5527dd8ffbfc5c799fa215bcdb5de1d078d62ec7b6ce6f7d621ef40034b935",
+    ),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0111 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0110,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0110["rsc_oam_runtime_binding_ready_0044()"][:6],
+        "13c5383d20ecc1bbb4a503a19dbd92f52259a61eea7a19d6c7fd3747f8109e13",
+    ),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0112 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0111,
+    "rsc_oam_runtime_binding_ready_0044()": (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0111["rsc_oam_runtime_binding_ready_0044()"][:6],
+        "a00b94ede4e9dcefb19656119fc9de62345a6f10987cebde49d392d04de29ab8",
+    ),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0113 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0112,
+    'rsc_oam_runtime_binding_ready_0044()': (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0112['rsc_oam_runtime_binding_ready_0044()'][:6],
+        '5490b4be13d675f266046001f6196d839f08108c6560b5acf07f3ab88a413aa8',
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0112['rsc_oam_runtime_binding_ready_0044()'][7:],
+    ),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0114 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0113,
+    'rsc_oam_runtime_binding_ready_0044()': (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0113['rsc_oam_runtime_binding_ready_0044()'][:6],
+        '896564c364887715d00d349b51053db48b2c8517d2f0f8f17fc06c17880b9ed5',
+    ),
+    'rsc_oam_capture_attestation_guard_0114()': (True, 'v', 'plpgsql', 'trigger', False, 'u', '5ebc65fb6efb1a5f63ff73f74b1e0bfe388116c8954d5efbddb0a08cf808c4b8'),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0115 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0114,
+    'rsc_oam_runtime_binding_ready_0044()': (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0114['rsc_oam_runtime_binding_ready_0044()'][:6],
+        '7dad591c17ca90b278337f7b012bd7e9d826e5fc7753dcb41b05e7baf518de97',
+    ),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0116 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0115,
+    'rsc_oam_runtime_binding_ready_0044()': (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0115['rsc_oam_runtime_binding_ready_0044()'][:6],
+        'c3b42e2f0ae11dbb94829eae68fd0f21c36c9e8a27118be9042d885588d3db4e',
+    ),
+    'rsc_oam_material_binding_guard_0116()': (True,'v','plpgsql','trigger',False,'u','576f8922aab725723441aeebff007ff419cdd9a090b29605480031be8ad17b8a'),
+    'rsc_oam_material_capture_visible_0116(text)': (False,'v','plpgsql','boolean',False,'u','f395737ad83e1fc99f88f7eb9b889a782772fb4543c3f028a410cec8cfc54315'),
+    'rsc_oam_material_capture_binding_0116(text,text,text)': (False,'v','plpgsql','jsonb',False,'u','435e925d9af038b9e7fbd89c2a53c69d3ad1a038451a4700c020a1fa76ad4381'),
+    'rsc_oam_material_receipt_guard_0116()': (True,'v','plpgsql','trigger',False,'u','ddeab611729f2881e88406b8ae7734494b48fd713b99a34b73d2447e88717248'),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0117 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0116,
+    'rsc_oam_runtime_binding_ready_0044()': (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0116['rsc_oam_runtime_binding_ready_0044()'][:6],
+        'cfa7f20da8cc4dfecf6d5aa2d146afc333c90b00366e29ed14811a2a042140ab',
+    ),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0118 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0117,
+    'rsc_oam_runtime_binding_ready_0044()': (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0117['rsc_oam_runtime_binding_ready_0044()'][:6],
+        '35088a5ce50b2eaa912a873d69ae86fec16eb24e230be756069de3e1994ddb1a',
+    ),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0119 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0118,
+    'rsc_guard_material_projection_graph_0119()': (True,'v','plpgsql','trigger',False,'u','886a9facd316c1b4cfe799a3c8454abe14df1c3036256d1f46b8c794f326f95f'),
+    'rsc_oam_runtime_binding_ready_0044()': (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0118['rsc_oam_runtime_binding_ready_0044()'][:6],
+        '9fd5a003a7edd553579554c538c83a70fbe6558d90463b1420554f693c809b57',
+    ),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0120 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0119,
+    'rsc_oam_runtime_binding_ready_0044()': (
+        *OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0119['rsc_oam_runtime_binding_ready_0044()'][:6],
+        '4c67e417ae3c1906dffcc79647efc686ff73022836a8c915b633e516e9c9f81a',
+    ),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0121 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0120,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0120['rsc_oam_runtime_binding_ready_0044()'][:-1], '491ceb5c4fcc06d1561068d7843f6883b2dc186cbe2c622e62b0bf3fd013f803'),
+    'rsc_guard_control_projection_graph_0121()': (True,'v','plpgsql','trigger',False,'u','7bc28eac5ac2886de484ffbc401b0b3199ad2aabbd88a45240304d28b4fa92ce'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0122 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0121,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0121['rsc_oam_runtime_binding_ready_0044()'][:-1], '2aab77c03e8798a5abebf40cdd029f8f8fa9fb95622afc0da4bd69d26a21713a'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0123 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0122,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0122['rsc_oam_runtime_binding_ready_0044()'][:-1], 'e496dad086310fed22d04a8185b2734a44f2b664f1d6b3f815afb5be5ba038d5'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0124 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0123,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0123['rsc_oam_runtime_binding_ready_0044()'][:-1], 'ef5ec4023eef4272fe3b8f8f8554eb297a4babc6cb8fa324a11d7524997a16d0'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0125 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0124,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0124['rsc_oam_runtime_binding_ready_0044()'][:-1], '52a7f17093838a129c9585f4aa26a24bb500dbc0b137724e3e21ab37b6a8aa4e'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0126 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0125,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0125['rsc_oam_runtime_binding_ready_0044()'][:-1], '7b02b7dac2db8f17d822b158c174873e8be1bfb7c196277e838667ced628c378'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0127 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0126,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0126['rsc_oam_runtime_binding_ready_0044()'][:-1], '15791fa712d5cbd8dd392995e04a1cd8482e9c941dd8ec0c0ac07c7c49f2184f'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0128 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0127,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0127['rsc_oam_runtime_binding_ready_0044()'][:-1], 'f60709881a8906be1b463bd27c78b32f9295ccb7ed3c7b6c02f2d4d000c7a083'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0129 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0128,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0128['rsc_oam_runtime_binding_ready_0044()'][:-1], '81ad8bfa4b70b8fbb1d84a624e368b40b4c36a1eeb97d575138634d0c52ee2a4'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0130 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0129,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0129['rsc_oam_runtime_binding_ready_0044()'][:-1], 'ef4d75933015da040fbb6f632cab2c7741566608d87949bc391dcdf8cc6e7d7e'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0131 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0130,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0130['rsc_oam_runtime_binding_ready_0044()'][:-1], 'c25cc7581169076ad39752300007a3dcc651daef9337b37dad1c0d1fc88441d5'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0132 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0131,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0131['rsc_oam_runtime_binding_ready_0044()'][:-1], '5779bf72dc3add0e92087e77b33576333a0ad48b23a801ca8ba6bcf7fca70ec1'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0133 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0132,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0132['rsc_oam_runtime_binding_ready_0044()'][:-1], '8aa90ab71cf315c33088f19938485ad8061babbdcf7e079fcf3ba09ddd62725f'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0134 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0133,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0133['rsc_oam_runtime_binding_ready_0044()'][:-1], '090cd3d905100ecd35933a838af64000205c5e81cc257bf8e06215f445914ee3'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0135 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0134,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0134['rsc_oam_runtime_binding_ready_0044()'][:-1], 'b707519ae06f666cce47bdd69ade705dd6875e8afff4f369a4d450bd3a1d47d1'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0136 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0135,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0135['rsc_oam_runtime_binding_ready_0044()'][:-1], '21758e867591101f40385e402d63faa22b0844670831304ed3d56038e6e2bdb4'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0137 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0136,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0136['rsc_oam_runtime_binding_ready_0044()'][:-1], 'f3ccd205bc7773ed9ae396c1372db51d996410ee678c748661c2ec69b45fda82'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0138 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0137,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0137['rsc_oam_runtime_binding_ready_0044()'][:-1], 'e91b32785ebbe4db824b38a8822aa4d31028145542f9077ab8e58db0031ed05c'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0139 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0138,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0138['rsc_oam_runtime_binding_ready_0044()'][:-1], '775ab1cd7e0aff7f7f0e50b43c86d82f53100c7fdee02744453c2239d3f1c1b5'),
+}
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0140 = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0139,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0139['rsc_oam_runtime_binding_ready_0044()'][:-1], '165a9d108f0941ef29ea3ab9e5841db8f7c0f11c5e45eb55b67f4232d6328ff7'),
+}
+OAM_SYNC_FUNCTION_MANIFEST = OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0140
 
 EXPECTED_TRIGGERS = (
+    ('sync_runs', 'trg_sync_runs_graph_0121', 'rsc_guard_control_projection_graph_0121()', 29, True, True, True),
+    ('sync_batches', 'trg_sync_batches_graph_0121', 'rsc_guard_control_projection_graph_0121()', 29, True, True, True),
+    ('sync_inbox_events', 'trg_sync_inbox_events_graph_0121', 'rsc_guard_control_projection_graph_0121()', 29, True, True, True),
+    ('external_objects', 'trg_external_objects_graph_0121', 'rsc_guard_control_projection_graph_0121()', 29, True, True, True),
+    ('external_object_versions', 'trg_external_object_versions_graph_0121', 'rsc_guard_control_projection_graph_0121()', 29, True, True, True),
+    ('sync_runs', 'trg_sync_runs_truncate_0121', 'rsc_guard_control_projection_graph_0121()', 34, False, False, False),
+    ('sync_batches', 'trg_sync_batches_truncate_0121', 'rsc_guard_control_projection_graph_0121()', 34, False, False, False),
+    ('sync_inbox_events', 'trg_sync_inbox_events_truncate_0121', 'rsc_guard_control_projection_graph_0121()', 34, False, False, False),
+    ('external_objects', 'trg_external_objects_truncate_0121', 'rsc_guard_control_projection_graph_0121()', 34, False, False, False),
+    ('external_object_versions', 'trg_external_object_versions_truncate_0121', 'rsc_guard_control_projection_graph_0121()', 34, False, False, False),
+    ('external_objects','trg_external_objects_graph_0119','rsc_guard_material_projection_graph_0119()',29,True,True,True),
+    ('external_object_versions','trg_external_object_versions_graph_0119','rsc_guard_material_projection_graph_0119()',29,True,True,True),
+    ('external_objects','trg_external_objects_truncate_0119','rsc_guard_material_projection_graph_0119()',34,False,False,False),
+    ('external_object_versions','trg_external_object_versions_truncate_0119','rsc_guard_material_projection_graph_0119()',34,False,False,False),
+    (MATERIAL_BINDING_TABLE,'trg_material_binding_facts_0116','rsc_oam_material_binding_guard_0116()',31,False,False,False),
+    (MATERIAL_BINDING_TABLE,'trg_material_binding_truncate_0116','rsc_oam_material_binding_guard_0116()',34,False,False,False),
+    (MATERIAL_RECEIPT_TABLE,'trg_material_receipt_facts_0116','rsc_oam_material_receipt_guard_0116()',31,False,False,False),
+    (MATERIAL_RECEIPT_TABLE,'trg_material_receipt_truncate_0116','rsc_oam_material_receipt_guard_0116()',34,False,False,False),
+    (CAPTURE_TABLE, 'trg_control_capture_attestation_facts_0114', 'rsc_oam_capture_attestation_guard_0114()', 31, False, False, False),
+    (CAPTURE_TABLE, 'trg_control_capture_attestation_truncate_0114', 'rsc_oam_capture_attestation_guard_0114()', 34, False, False, False),
     (
         "external_sync_snapshots",
         "trg_external_sync_snapshot_transition_0044",
@@ -1005,7 +1234,7 @@ required_tables(table_name) AS (
     VALUES
         {_TABLE_VALUES}
 ),
-expected_policies(
+base_expected_policies(
     table_name,
     policy_name,
     command_code,
@@ -1015,6 +1244,13 @@ expected_policies(
 ) AS (
     VALUES
         {_POLICY_VALUES}
+),
+expected_policies AS (
+    SELECT * FROM base_expected_policies
+    UNION ALL
+    SELECT optional.* FROM (VALUES {_DAILY_CAPTURE_POLICY_VALUES})
+      optional(table_name,policy_name,command_code,role_name,using_expression,check_expression)
+    WHERE EXISTS(SELECT 1 FROM pg_catalog.pg_roles r WHERE r.rolname=optional.role_name)
 ),
 actual_policies AS (
     SELECT
@@ -1073,9 +1309,9 @@ actual_oam_functions AS (
       JOIN pg_catalog.pg_namespace AS schema_row
         ON schema_row.oid = function_row.pronamespace
      WHERE schema_row.nspname = 'public'
-       AND (function_row.proname ~ '^rsc_oam_[[:alnum:]_]+_0044$'
+       AND (function_row.proname ~ '^rsc_oam_[[:alnum:]_]+_(0044|0114|0116)$'
             OR function_row.proname IN ('rsc_oam_receipt_rls_check_0082',
-                'rsc_guard_oam_receipt_evidence_immutable_0081'))
+                'rsc_guard_oam_receipt_evidence_immutable_0081','rsc_guard_material_projection_graph_0119','rsc_guard_control_projection_graph_0121'))
 ),
 actual_runtime_triggers AS (
     SELECT
@@ -1185,7 +1421,9 @@ function_boundary AS (
             OR function_row.proisstrict IS DISTINCT FROM expected.is_strict
             OR function_row.proparallel <> expected.parallel_safety
             OR function_row.proconfig IS DISTINCT FROM
-               ARRAY['search_path=pg_catalog']::text[]
+               CASE WHEN expected.signature IN ('rsc_guard_material_projection_graph_0119()','rsc_guard_control_projection_graph_0121()')
+                    THEN ARRAY['search_path=pg_catalog, public']::text[]
+                    ELSE ARRAY['search_path=pg_catalog']::text[] END
             OR pg_catalog.encode(
                    pg_catalog.sha256(
                        pg_catalog.convert_to(function_row.prosrc, 'UTF8')
@@ -1200,7 +1438,7 @@ function_boundary AS (
             )
             OR pg_catalog.has_function_privilege(
                 '{PROJECTOR_ROLE}', function_row.oid, 'EXECUTE'
-            ) IS DISTINCT FROM NOT expected.is_private
+            ) IS DISTINCT FROM (NOT expected.is_private AND expected.signature NOT IN ({_MATERIAL_EDGE_SQL}))
             OR pg_catalog.has_function_privilege(
                 '{EDGE_ROLE}', function_row.oid, 'EXECUTE'
             ) IS DISTINCT FROM (NOT expected.is_private
@@ -1232,6 +1470,8 @@ function_boundary AS (
                                    )
                                    AND (allowed_role.rolname <> '{EDGE_ROLE}'
                                         OR expected.signature <> '{RECEIPT_RLS_SIGNATURE}')
+                                   AND (allowed_role.rolname <> '{PROJECTOR_ROLE}'
+                                        OR expected.signature NOT IN ({_MATERIAL_EDGE_SQL}))
                             )
                         )
                     )
@@ -1246,7 +1486,7 @@ function_boundary AS (
                   ) AS exact_function_acl
                  WHERE exact_function_acl.privilege_type = 'EXECUTE'
             ) <> CASE WHEN expected.is_private THEN 1
-                     WHEN expected.signature = '{RECEIPT_RLS_SIGNATURE}' THEN 2 ELSE 3 END
+                     WHEN expected.signature = '{RECEIPT_RLS_SIGNATURE}' OR expected.signature IN ({_MATERIAL_EDGE_SQL}) THEN 2 ELSE 3 END
     ) AS passed
 ),
 function_roster_boundary AS (
@@ -1285,6 +1525,12 @@ runtime_execute_boundary AS (
                ),
                pg_catalog.to_regprocedure(
                    'public.rsc_oam_receipt_rls_check_0082(text,text,text,jsonb)'
+               ),
+               pg_catalog.to_regprocedure(
+                   'public.rsc_oam_material_capture_visible_0116(text)'
+               ),
+               pg_catalog.to_regprocedure(
+                   'public.rsc_oam_material_capture_binding_0116(text,text,text)'
                )
            )
     ) AS passed
@@ -1302,7 +1548,9 @@ trigger_boundary AS (
                pg_catalog.to_regprocedure(
                    'public.' || expected.function_signature
                )::oid
-            OR actual.enabled <> CASE WHEN expected.table_name = 'oam_receipt_evidence' THEN 'A' ELSE 'O' END
+            OR actual.enabled <> CASE WHEN expected.function_signature IN ('rsc_guard_material_projection_graph_0119()','rsc_guard_control_projection_graph_0121()')
+                OR expected.table_name IN ('oam_receipt_evidence','{CAPTURE_TABLE}',
+                '{MATERIAL_BINDING_TABLE}','{MATERIAL_RECEIPT_TABLE}') THEN 'A' ELSE 'O' END
             OR actual.trigger_type <> expected.trigger_type
             OR actual.is_constraint IS DISTINCT FROM expected.is_constraint
             OR actual.is_deferrable IS DISTINCT FROM expected.is_deferrable
@@ -1335,6 +1583,37 @@ session_boundary AS (
         )
         AS passed
 ),
+capture_acl_boundary AS (
+    SELECT EXISTS (
+        SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relname='{CAPTURE_TABLE}'
+          AND (SELECT count(*) FROM aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))))=10+CASE WHEN EXISTS(SELECT 1 FROM pg_roles WHERE rolname='rsc_control_capture') THEN 1 ELSE 0 END
+          AND NOT EXISTS (
+              SELECT 1 FROM aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))) a
+              LEFT JOIN pg_roles role ON role.oid=a.grantee
+              WHERE a.grantee<>c.relowner AND NOT COALESCE((
+                  NOT a.is_grantable AND ((role.rolname='edge_inbox' AND a.privilege_type IN ('SELECT','INSERT'))
+                      OR (role.rolname IN ('star_oam_backup','rsc_control_capture') AND a.privilege_type='SELECT'))), FALSE))
+          AND NOT EXISTS (SELECT 1 FROM pg_attribute att, LATERAL aclexplode(att.attacl) a
+              WHERE att.attrelid=c.oid AND att.attnum>0 AND NOT att.attisdropped AND a.grantee<>c.relowner)
+    ) AS passed
+),
+material_acl_boundary AS (
+    SELECT NOT EXISTS (
+        SELECT 1 FROM (VALUES ('{MATERIAL_BINDING_TABLE}',8),('{MATERIAL_RECEIPT_TABLE}',10)) expected(name,acl_count)
+        LEFT JOIN pg_class c ON c.oid=to_regclass('public.'||expected.name)
+        WHERE c.oid IS NULL
+          OR (SELECT count(*) FROM aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))))<>expected.acl_count+CASE WHEN expected.name='{MATERIAL_RECEIPT_TABLE}' AND EXISTS(SELECT 1 FROM pg_roles WHERE rolname='rsc_control_capture') THEN 1 ELSE 0 END
+          OR EXISTS (SELECT 1 FROM aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))) a
+              LEFT JOIN pg_roles role ON role.oid=a.grantee
+              WHERE a.grantee<>c.relowner AND NOT COALESCE((NOT a.is_grantable AND (
+                  (role.rolname='star_oam_backup' AND a.privilege_type='SELECT') OR
+                  (expected.name='{MATERIAL_RECEIPT_TABLE}' AND role.rolname='edge_inbox' AND a.privilege_type IN ('SELECT','INSERT')) OR
+                  (expected.name='{MATERIAL_RECEIPT_TABLE}' AND role.rolname='rsc_control_capture' AND a.privilege_type='SELECT'))),FALSE))
+          OR EXISTS (SELECT 1 FROM pg_attribute att,LATERAL aclexplode(att.attacl) a
+              WHERE att.attrelid=c.oid AND att.attnum>0 AND NOT att.attisdropped AND a.grantee<>c.relowner)
+    ) AS passed
+),
 revision_and_binding_boundary AS (
     SELECT public.rsc_oam_runtime_binding_ready_0044() AS passed
 ),
@@ -1347,6 +1626,8 @@ check_results(check_name, passed) AS (
     UNION ALL SELECT 'runtime_execute', passed FROM runtime_execute_boundary
     UNION ALL SELECT 'trigger_closure', passed FROM trigger_boundary
     UNION ALL SELECT 'session_binding', passed FROM session_boundary
+    UNION ALL SELECT 'capture_acl', passed FROM capture_acl_boundary
+    UNION ALL SELECT 'material_acl', passed FROM material_acl_boundary
     UNION ALL SELECT 'revision_and_binding', passed
       FROM revision_and_binding_boundary
 )
@@ -1370,6 +1651,8 @@ def read_oam_sync_scope_boundary(
 ) -> Mapping[str, object] | None:
     """Return one fail-closed catalog proof row without changing database state."""
 
+    from .daily_reconciliation.capture_security import validate_capture_roles
+    validate_capture_roles(connection, allow_absent=True)
     return connection.execute(
         _RLS_BOUNDARY_SQL,
         {
@@ -1425,6 +1708,38 @@ __all__ = [
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0081",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0082",
     "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0108",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0109",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0110",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0111",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0112",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0113",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0114",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0115",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0116",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0117",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0118",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0119",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0120",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0121",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0122",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0123",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0124",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0125",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0126",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0127",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0128",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0129",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0130",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0131",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0132",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0133",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0134",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0135",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0136",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0137",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0138",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0139",
+    "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0140",
     "RLS_REVISION",
     "RLS_TABLES",
     "_RLS_BOUNDARY_SQL",

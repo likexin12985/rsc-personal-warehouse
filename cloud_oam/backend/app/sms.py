@@ -11,7 +11,8 @@ from alibabacloud_dypnsapi20170525.client import Client as DypnsClient
 from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_tea_util import models as util_models
 
-from .config import get_settings
+from .aliyun_sdk_logging import silence_aliyun_sdk_loggers
+from .config import Settings, get_settings
 
 
 SMS_PROVIDER_CONNECT_TIMEOUT_MS = 5000
@@ -31,12 +32,16 @@ class SmsSendResult:
     out_id: str = ""
 
 
-def sms_dispatch_request_profile_sha256(*, mobile_hash: str) -> str:
+def sms_dispatch_request_profile_sha256(
+    *, mobile_hash: str, provider_settings: Settings | None = None
+) -> str:
     """Hash the exact non-secret PNVS request profile before dispatch exists."""
 
     if re.fullmatch(r"[0-9a-f]{64}", mobile_hash, re.ASCII) is None:
         raise SmsProviderError("短信请求摘要无效")
-    settings = get_settings()
+    # Verification and delayed dispatch bind to the very provider instance
+    # about to make the call, rather than a second global settings lookup.
+    settings = provider_settings if provider_settings is not None else get_settings()
     template_param = (
         f'{{"code":"##code##","min":"{ceil(settings.sms_valid_seconds / 60)}"}}'
     )
@@ -69,17 +74,23 @@ def sms_dispatch_request_profile_sha256(*, mobile_hash: str) -> str:
 
 class AliyunPnvsProvider:
     def __init__(self) -> None:
-        settings = get_settings()
+        settings = get_settings().model_copy(deep=True)
+        if not settings.sms_sts_credential_ready(minimum_validity_seconds=60):
+            raise SmsProviderError("短信服务暂时不可用")
         client: DypnsClient | None = None
+        silence_aliyun_sdk_loggers()
         try:
             config = open_api_models.Config(
                 access_key_id=settings.sms_access_key_id,
                 access_key_secret=settings.sms_access_key_secret,
+                security_token=settings.sms_security_token or None,
                 endpoint="dypnsapi.aliyuncs.com",
             )
             client = DypnsClient(config)
         except Exception:
             pass
+        finally:
+            silence_aliyun_sdk_loggers()
         # Raise outside the ``except`` suite so neither ``__cause__`` nor
         # ``__context__`` retains an SDK exception containing credentials.
         if client is None:
@@ -88,6 +99,8 @@ class AliyunPnvsProvider:
         self.settings = settings
 
     def send(self, mobile: str, out_id: str) -> SmsSendResult:
+        if not self.settings.sms_sts_credential_ready(minimum_validity_seconds=15):
+            raise SmsProviderError("短信服务暂时不可用")
         request = dypns_models.SendSmsVerifyCodeRequest(
             phone_number=mobile,
             country_code="86",
@@ -112,6 +125,7 @@ class AliyunPnvsProvider:
         response = None
         transport_failed = False
         try:
+            silence_aliyun_sdk_loggers()
             response = self.client.send_sms_verify_code_with_options(
                 request,
                 util_models.RuntimeOptions(
@@ -123,6 +137,8 @@ class AliyunPnvsProvider:
             )
         except Exception:
             transport_failed = True
+        finally:
+            silence_aliyun_sdk_loggers()
         if transport_failed:
             raise SmsProviderError("短信服务暂时不可用")
         body = getattr(response, "body", None)
@@ -143,6 +159,8 @@ class AliyunPnvsProvider:
         return SmsSendResult(biz_id=biz_id, out_id=echoed_out_id)
 
     def verify(self, mobile: str, code: str, out_id: str) -> bool:
+        if not self.settings.sms_sts_credential_ready(minimum_validity_seconds=15):
+            raise SmsProviderError("短信校验服务暂时不可用")
         request = dypns_models.CheckSmsVerifyCodeRequest(
             phone_number=mobile,
             country_code="86",
@@ -153,6 +171,7 @@ class AliyunPnvsProvider:
         response = None
         transport_failed = False
         try:
+            silence_aliyun_sdk_loggers()
             response = self.client.check_sms_verify_code_with_options(
                 request,
                 util_models.RuntimeOptions(
@@ -164,6 +183,8 @@ class AliyunPnvsProvider:
             )
         except Exception:
             transport_failed = True
+        finally:
+            silence_aliyun_sdk_loggers()
         if transport_failed:
             raise SmsProviderError("短信服务暂时不可用")
         body = getattr(response, "body", None)
@@ -184,7 +205,7 @@ class AliyunPnvsProvider:
 
 class MockSmsProvider:
     def __init__(self) -> None:
-        self.settings = get_settings()
+        self.settings = get_settings().model_copy(deep=True)
         if self.settings.environment == "production":
             raise SmsProviderError("生产环境禁止使用模拟短信服务")
 

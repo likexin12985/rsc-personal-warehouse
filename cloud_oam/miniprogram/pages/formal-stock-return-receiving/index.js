@@ -18,7 +18,8 @@ function empty() { return { ready: false, loading: false, busy: false, scanning:
   package: null, progress: [], moreLines: false, batches: [], moreBatches: false, selectedReceipt: null,
   formReady: false, formMessage: '', formReason: '', formReceivedAt: '', formLines: [], review: null, confirming: false,
   pending: false, canSeal: false, pendingMessage: '', inboundPreview: null, inboundReview: null,
-  inboundConfirming: false, inboundPending: false, inboundMessage: '', inboundBusy: false, inboundCanSeal: false } }
+  inboundConfirming: false, inboundPending: false, inboundMessage: '', inboundBusy: false, inboundCanSeal: false,
+  inboundStatus: '', inboundStatusMessage: '', inboundStateView: null, inboundCanPost: false, recoveryUnavailable: false } }
 Page({
   data: empty(),
   onLoad(options = {}) { this._store = getStore(); this._files = {}; this._drafts = {}; try { this._shipment = options.shipmentId ? uuid(options.shipmentId) : null }
@@ -38,6 +39,7 @@ Page({
   },
   async load(afterId = null) {
     if (!this._visible) return
+    const selected = this._selected
     const generation = (this._generation || 0) + 1; this._generation = generation
     const active = () => this._visible && this._generation === generation
     this._history = null; this._directory = null; this._matches = null; this._context = null; this._selected = null; this._session = null
@@ -63,7 +65,9 @@ Page({
       const result = this._shipment ? contract.validateHistory(raw, expected) : contract.validateDirectory(raw, expected, afterId)
       if (await context() !== before) throw new Error('access changed')
       this._matches = matches; this._context = context
-      if (this._shipment) { this._history = result; this._session = { token, person, version }; this.renderHistory(); this.prepareForm(result, person, version) }
+      if (this._shipment) { this._history = result; this._session = { token, person, version };
+        this._selected = result.receipts.some(row => row.receipt_id === selected) ? selected : null
+        this.renderHistory(); this.prepareForm(result, person, version) }
       else {
         this._directory = result
         this.setData({ packages: result.items.map(row => row.verification_status === 'verified'
@@ -72,6 +76,7 @@ Page({
           : { id: row.shipment_id, verified: false, message: row.message }), next: result.next_after_id !== null })
       }
       this.setData({ ready: true, loading: false, message: NOTICE })
+      if (this._selected) await this.refreshInboundState()
     } catch (_) { if (active()) { this._history = null; this._directory = null; this._matches = null; this._context = null;
       this.setData({ ...empty(), detail: !!this._shipment, message: '当前身份、接收责任或原包裹暂时无法核验，请刷新。' }) } }
   },
@@ -103,7 +108,7 @@ Page({
   },
   prepareForm(history, person, version) {
     let stored = { kind: 'missing' }
-    try { if (this._store) stored = this._store.read({ work_order_id: history.package.work_order_id, shipment_id: history.package.shipment_id }) } catch (_) { stored = { kind: 'missing' } }
+    try { stored = this._store ? this._store.read({ work_order_id: history.package.work_order_id, shipment_id: history.package.shipment_id }) : { kind: 'unavailable' } } catch (_) { stored = { kind: 'unavailable' } }
     this._workOrder = history.package.work_order_id; this._operation = history.package.operation_id; this._person = person; this._version = version
     this._drafts = Object.fromEntries(history.package.lines.map(line => [line.shipment_line_id, {
       accepted_qty: '0.000', rejected_qty: '0.000', shortage_qty: '0.000', damaged_qty: '0.000', serials: {}, proofs: {}, damaged_serial_ids: [], exceptions: {}
@@ -113,6 +118,8 @@ Page({
     const inboundCanSeal = !!this._access && hasFormalPermission(this._access, 'stock_operation', 'receive_return')
     if (stored.kind === 'valid' && stored.value.kind === 'stock_return') this.setData({ formReady: false, pending: true, canSeal, inboundCanSeal, pendingMessage: '有一笔验收结果待核验，请读取原请求，暂勿重复提交。' })
     else if (stored.kind === 'valid' && stored.value.kind === 'stock_return_inbound') this.setData({ formReady: false, inboundPending: true, inboundCanSeal, inboundMessage: '有一笔入账结果待核验，请读取原请求，暂勿重复提交。' })
+    else if (stored.kind !== 'missing') this.setData({ recoveryUnavailable: true, formReady: false, inboundCanPost: false,
+      inboundMessage: '本地原请求记录暂不可核验，请保留记录并刷新，暂勿再次提交。' })
     else this.setData({ formReady: hasFormalPermission(this._access, 'stock_operation', 'receive_return'), inboundCanSeal, formReceivedAt: new Date().toISOString(), formMessage: hasFormalPermission(this._access, 'stock_operation', 'receive_return') ? '扫码证明仅保留在当前页面内；验收记录不会直接增加个人仓库存。' : '当前账号只有退回包裹查询权限，不能登记验收。' })
     this.renderForm()
   },
@@ -190,47 +197,107 @@ Page({
   async evidence(event) { if (!this.editable()) return; const { lineId, type, action, fileKey } = event.currentTarget.dataset; try { const controller = this.fileController(lineId, type); if (action === 'select') await controller.select(); else if (action === 'retry') await controller.retry(fileKey); else controller.remove(fileKey) } catch (error) { this.setData({ formMessage: error.message || '异常凭证未完成确认。' }) } },
   async recoverReceipt() { if (!this.data.pending || this.data.busy || !this._context) return; this.setData({ busy: true }); try { const result = await recoverPending({ api, store: this._store, workOrderId: this._workOrder, shipmentId: this._shipment, personId: this._person, authorize: this._context }); if (result.status === 'confirmed') { this.setData({ pending: false, pendingMessage: '原验收结果已确认，正在刷新包裹。' }); await this.load() } else if (result.status === 'pending') this.setData({ pendingMessage: '暂未读取到原验收结果；请保留恢复记录，稍后继续核验。' }) } catch (error) { this.setData({ pendingMessage: error.message || '原验收结果尚未完成核验。' }) } finally { this.setData({ busy: false }) } },
   async sealReceipt() { if (!this.data.pending || !this.data.canSeal || this.data.busy) return; const ok = await new Promise(resolve => wx.showModal({ title: '封存未执行验收', content: '仅在确认原请求未执行后封存。结果未知时不要封存。', confirmText: '确认封存', success: value => resolve(value.confirm === true), fail: () => resolve(false) })); if (!ok) return; this.setData({ busy: true }); try { const result = await sealPending({ api, store: this._store, workOrderId: this._workOrder, shipmentId: this._shipment, personId: this._person, authorize: this._context, confirm: () => true }); if (result.status === 'sealed') await this.load() } catch (error) { this.setData({ pendingMessage: error.message || '封存未完成，请保留恢复记录。' }) } finally { this.setData({ busy: false }) } },
+  inboundContext(receiptId, write = false) {
+    const generation = this._generation, selection = this._inboundGeneration, context = this._context
+    return async () => {
+      const active = () => generation === this._generation && selection === this._inboundGeneration && this._selected === receiptId && this.readable()
+      if (!active() || !context) throw new Error('验收选择已变化，请重新核验。')
+      let value
+      try { value = await context() }
+      catch (error) {
+        if (generation === this._generation && this._visible) { this.clearView(); this.setData({ message: '当前身份或接收责任暂时无法核验，请重新进入退回收货。' }) }
+        throw error
+      }
+      if (!active() || (write && !hasFormalPermission(JSON.parse(value).access, 'stock_operation', 'receive_return'))) throw new Error('入账权限已变化，请刷新。')
+      return value
+    }
+  },
+  presentInboundState(state) {
+    const receipt = this._history.receipts.find(row => row.receipt_id === this._selected)
+    const accepted = receipt && receipt.lines.some(row => row.accepted_qty !== '0.000')
+    this.setData({ inboundStatus: state.status,
+      inboundStatusMessage: state.status === 'posted' ? '本次验收已完成独立入账。' : accepted ? '本次验收尚未入账。' : '本次验收没有可入账的接受数量。',
+      inboundStateView: state.inbound ? { number: state.inbound.inbound_no, postedAt: displayTime(state.inbound.posted_at) } : null,
+      inboundCanPost: state.status === 'not_posted' && accepted && !!this._access && hasFormalPermission(this._access, 'stock_operation', 'receive_return')
+        && !this.data.inboundPending && !this.data.pending && !this.data.recoveryUnavailable })
+  },
+  async refreshInboundState() {
+    if (!this.readable() || !this._selected || this.data.inboundBusy) return
+    const receiptId = this._selected, generation = this._generation, selection = (this._inboundGeneration || 0) + 1
+    this._inboundGeneration = selection
+    const active = () => this._visible && generation === this._generation && selection === this._inboundGeneration && receiptId === this._selected
+    const context = this.inboundContext(receiptId); let access
+    const current = async () => { const value = await context(); access = JSON.parse(value).access; return value }
+    this.setData({ inboundStatus: 'loading', inboundCanPost: false, inboundStateView: null, inboundPreview: null,
+      inboundReview: null, inboundConfirming: false, inboundStatusMessage: '正在核验本次验收的入账记录。' })
+    try {
+      const state = await inboundSubmit.readInboundState({ api, current, receiptId, shipmentId: this._shipment, personId: this._person, authorizationVersion: this._version })
+      if (active() && this.readable()) { this._access = access; this.presentInboundState(state) }
+    } catch (_) { if (active() && this.readable()) this.setData({ inboundStatus: 'unavailable', inboundCanPost: false,
+      inboundStateView: null, inboundStatusMessage: '入账记录暂不可核验，请刷新状态后再操作。' }) }
+  },
   async beginInbound() {
-    if (!this.readable() || !this.data.selectedReceipt || this.data.inboundBusy) return
+    if (!this.readable() || !this.data.selectedReceipt || this.data.inboundBusy || this.data.busy || !this.data.inboundCanPost) return
     const receiptId = this.data.selectedReceipt.id
+    const current = this.inboundContext(receiptId, true), generation = this._generation
     this.setData({ inboundBusy: true, inboundMessage: '正在核验已验收数量、在途账户和区域仓目标账户。' })
     try {
-      const prepared = await inboundSubmit.prepareInbound({ api, current: this._context, receiptId, shipmentId: this._shipment, personId: this._person })
-      if (!this.readable()) return
+      const prepared = await inboundSubmit.prepareInbound({ api, current, receiptId, shipmentId: this._shipment, personId: this._person, authorizationVersion: this._version })
+      await current()
+      if (prepared.state && prepared.state.status === 'posted') { this.presentInboundState(prepared.state); this.setData({ inboundMessage: '' }); return }
       this.setData({ inboundPreview: prepared.preview, inboundReview: prepared.review, inboundConfirming: true, inboundMessage: '入账预览只读；确认后才会登记库存流水。' })
-    } catch (error) { this.setData({ inboundMessage: error.message || '入账预检未通过，请刷新验收记录。' }) }
-    finally { this.setData({ inboundBusy: false }) }
+    } catch (error) { if (generation === this._generation && this.readable()) this.setData({ inboundCanPost: false,
+      inboundStatus: 'unavailable', inboundMessage: error.message || '入账预检未通过，请刷新验收记录。' }) }
+    finally { if (generation === this._generation && this._visible) this.setData({ inboundBusy: false }) }
   },
   async confirmInbound(event) {
-    if (!this.data.inboundConfirming || this.data.inboundBusy) return
+    if (!this.readable() || !this.data.inboundConfirming || this.data.inboundBusy || !this.data.inboundCanPost) return
     const accepted = event.currentTarget.dataset.confirm === 'true'
     this.setData({ inboundConfirming: false, inboundReview: null })
     if (!accepted || !this.data.inboundPreview) return
+    const preview = this.data.inboundPreview, generation = this._generation, current = this.inboundContext(preview.receipt_id, true)
     this.setData({ inboundBusy: true })
     try {
-      const result = await inboundSubmit.submitInbound({ api, store: this._store, workOrderId: this._workOrder, receiptId: this.data.inboundPreview.receipt_id,
-        shipmentId: this._shipment, personId: this._person, authorizationVersion: this._version, authorize: this._context, confirm: async () => true })
+      const result = await inboundSubmit.submitInbound({ api, store: this._store, workOrderId: this._workOrder, receiptId: preview.receipt_id,
+        shipmentId: this._shipment, personId: this._person, authorizationVersion: this._version, expectedPlanHash: preview.plan_hash, authorize: current, confirm: async () => true })
+      if (generation !== this._generation || !this.readable()) return
       if (result.status === 'confirmed') { this.setData({ inboundPreview: null, inboundMessage: '退回入账已完成，正在刷新。' }); await this.load() }
-      else if (result.status === 'pending') this.setData({ inboundPending: true, inboundPreview: null, inboundMessage: '提交结果尚未完成核验；请回查原入账请求，暂勿重复提交。' })
-    } catch (error) { if (this.readable()) this.setData({ inboundMessage: error.message || '退回入账未完成，请保留恢复记录。' }) }
-    finally { if (this._visible) this.setData({ inboundBusy: false }) }
+      else if (result.status === 'sealed') { this.setData({ inboundPreview: null, inboundMessage: '原入账请求已封存，正在刷新。' }); await this.load() }
+      else if (result.status === 'already_posted') { this.presentInboundState(result.state); this.setData({ inboundPreview: null, inboundMessage: '' }) }
+      else if (result.status === 'pending') this.setData({ inboundPending: true, inboundCanPost: false, formReady: false, inboundPreview: null, inboundMessage: '提交结果尚未完成核验；请回查原入账请求，暂勿重复提交。' })
+    } catch (error) { if (generation === this._generation && this.readable()) {
+      this.setData({ inboundCanPost: false, inboundPreview: null, inboundStatus: 'unavailable', inboundMessage: error.message || '退回入账未完成，请保留恢复记录。' })
+      // Re-read durable local recovery state; a failed GET after POST must not
+      // let the page treat the original request as absent.
+      this.prepareForm(this._history, this._person, this._version)
+    } }
+    finally { if (generation === this._generation && this._visible) this.setData({ inboundBusy: false }) }
   },
   async recoverInbound() {
-    if (!this.data.inboundPending || this.data.inboundBusy || !this._context) return
+    if (!this.readable() || !this.data.inboundPending || this.data.inboundBusy || !this._context) return
+    const generation = this._generation
     this.setData({ inboundBusy: true })
     try { const result = await recoverPending({ api, store: this._store, workOrderId: this._workOrder, shipmentId: this._shipment, personId: this._person, authorize: this._context })
+      if (generation !== this._generation || !this.readable()) return
       if (result.status === 'confirmed') { this.setData({ inboundPending: false, inboundMessage: '原入账结果已确认，正在刷新。' }); await this.load() }
+      else if (result.status === 'sealed') { this.setData({ inboundPending: false, inboundMessage: '原入账请求已封存，正在刷新。' }); await this.load() }
       else if (result.status === 'pending') this.setData({ inboundMessage: '暂未读取到原入账结果，请保留恢复记录，稍后继续核验。' })
-    } catch (error) { this.setData({ inboundMessage: error.message || '原入账结果尚未完成核验。' }) } finally { this.setData({ inboundBusy: false }) }
+    } catch (error) { if (generation === this._generation && this.readable()) this.setData({ inboundMessage: error.message || '原入账结果尚未完成核验。' }) }
+    finally { if (generation === this._generation && this._visible) this.setData({ inboundBusy: false }) }
   },
   async sealInbound() {
-    if (!this.data.inboundPending || !this.data.inboundCanSeal || this.data.inboundBusy) return
+    if (!this.readable() || !this.data.inboundPending || !this.data.inboundCanSeal || this.data.inboundBusy) return
+    const generation = this._generation
     const ok = await new Promise(resolve => wx.showModal({ title: '封存未执行入账', content: '仅在确认原入账请求未执行后封存。结果未知时不要封存。', confirmText: '确认封存', success: value => resolve(value.confirm === true), fail: () => resolve(false) }))
-    if (!ok) return
+    if (!ok || generation !== this._generation || !this.readable()) return
     this.setData({ inboundBusy: true })
     try { const result = await sealPending({ api, store: this._store, workOrderId: this._workOrder, shipmentId: this._shipment, personId: this._person, authorize: this._context, confirm: () => true })
+      if (generation !== this._generation || !this.readable()) return
       if (result.status === 'sealed') { this.setData({ inboundPending: false, inboundMessage: '原入账请求已封存，正在刷新。' }); await this.load() }
-    } catch (error) { this.setData({ inboundMessage: error.message || '入账封存未完成，请保留恢复记录。' }) } finally { this.setData({ inboundBusy: false }) }
+      else if (result.status === 'confirmed') { this.setData({ inboundPending: false, inboundMessage: '原入账已完成，正在刷新。' }); await this.load() }
+      else if (result.status === 'pending') this.setData({ inboundMessage: '封存结果尚未确认，请保留原请求记录并继续核验。' })
+    } catch (error) { if (generation === this._generation && this.readable()) this.setData({ inboundMessage: error.message || '入账封存未完成，请保留恢复记录。' }) }
+    finally { if (generation === this._generation && this._visible) this.setData({ inboundBusy: false }) }
   },
   async submitReceipt() {
     if (!this.editable()) return
@@ -251,9 +318,10 @@ Page({
           label: { accepted: '本次接受', rejected: '本次拒收', shortage: '本次短少观察', damaged: '接受件中破损' }[group],
           ...this.serialView(row.shipment_line_id, group === 'damaged' ? row.accepted_serials.filter(sn => row.damaged_serial_ids.includes(sn.serial_id)) : row[`${group}_serials`], group) })) })) } })
   },
-  selectReceipt(event) { if (!this.readable() || !this._history) return; const id = event.currentTarget.dataset.id
+  selectReceipt(event) { if (!this.readable() || !this._history || this.data.inboundBusy) return; const id = event.currentTarget.dataset.id
     if (!this._history.receipts.some(row => row.receipt_id === id)) return
-    this._selected = id; this._receiptLineLimit = 20; this.setData({ inboundPreview: null, inboundReview: null, inboundConfirming: false, inboundPending: false, inboundMessage: '' }); this.renderReceipt() },
+    this._selected = id; this._receiptLineLimit = 20; this.setData({ inboundPreview: null, inboundReview: null, inboundConfirming: false,
+      inboundStatus: '', inboundStateView: null, inboundCanPost: false }); this.renderReceipt(); return this.refreshInboundState() },
   moreLines() { if (this.readable() && this._history) { this._lineLimit += 20; this.renderHistory() } },
   moreBatches() { if (this.readable() && this._history) { this._batchLimit += 20; this.renderHistory() } },
   moreReceiptLines() { if (this.readable() && this._history) { this._receiptLineLimit += 20; this.renderReceipt() } },

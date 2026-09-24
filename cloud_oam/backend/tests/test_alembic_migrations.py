@@ -8,9 +8,12 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import sqlite3
 import subprocess
 import sys
 import uuid
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
 from alembic import command
@@ -457,7 +460,7 @@ REVIEW_COMMAND_STATUS_REVISION = (
     / "versions"
     / "20260906_0063_review_command_status.py"
 )
-HEAD_REVISION = "20261018_0108"
+HEAD_REVISION = "20261119_0140"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -695,7 +698,13 @@ MATERIAL_REQUEST_APPROVAL_TABLES = {
     "supply_tasks",
 }
 EXPECTED_TABLES = (
-    V09_TABLES_AT_HEAD
+    {"daily_review_events", "daily_review_bindings", "daily_review_consumptions", "daily_review_request_seals"} |
+    {'daily_comparison_mapping_decisions','daily_reconciliation_cutoffs'} |
+    {'inventory_control_source_bindings','inventory_control_catalog_versions','inventory_control_capture_chains',
+     'inventory_control_capture_snapshots','inventory_control_preparations','inventory_control_authority_decisions','inventory_control_capture_attestations','inventory_control_mapping_decisions','oam_material_capture_bindings','oam_material_capture_receipts','material_source_authority_decisions','material_projection_publications','material_projection_lines','control_projection_publications','control_projection_lines','control_projection_origins','control_projection_closures'}
+    |
+    {"notification_person_targets", "notification_target_bindings"}
+    | V09_TABLES_AT_HEAD
     | FOUNDATION_TABLES
     | ACTIVATION_TABLES
     | AUTHENTICATION_IDEMPOTENCY_TABLES
@@ -729,6 +738,8 @@ EXPECTED_TABLES = (
         "stock_operation_shipments", "stock_operation_shipment_lines", "stock_operation_shipment_serials",
         "stock_operation_receipts", "stock_operation_receipt_lines", "stock_operation_receipt_serials",
         "stock_operation_receipt_exceptions",
+        "stock_operation_return_inbound_seals",
+        "opening_start_command_seals",
         "stock_operation_return_inbounds",
         "stock_operation_return_inbound_lines",
         "stock_operation_return_inbound_serials",
@@ -745,6 +756,7 @@ EXPECTED_PERMISSIONS = [
     ("auth_session", "manage"),
     ("dashboard", "read"),
     ("inventory", "read"),
+    ("inventory_control", "authorize"),
     ("inventory_transaction", "post"),
     ("inventory_transaction", "reverse"),
     ("legacy_transfer_history", "read"),
@@ -767,14 +779,19 @@ EXPECTED_PERMISSIONS = [
     ("material_request_approval", "decide_level_1"),
     ("material_request_approval", "decide_level_2"),
     ("material_request_approval", "decide_level_3"),
+    ("material_source", "authorize"),
     ("notification_delivery", "read"),
     ("notification_delivery", "retry"),
     ("oam_data", "read"),
     ("people", "read_minimal"),
+    ("reconciliation", "approve_daily"),
     ("reconciliation", "approve_opening"),
+    ("reconciliation", "create_daily"),
     ("reconciliation", "create_opening"),
+    ("reconciliation", "explain_daily"),
     ("reconciliation", "explain_opening"),
     ("reconciliation", "read"),
+    ("report", "export"),
     ("role_assignment", "manage_provincial"),
     ("stock_operation", "cancel_return"),
     ("stock_operation", "outbound_return"),
@@ -800,6 +817,9 @@ EXPECTED_PERMISSIONS = [
 
 EXPECTED_ROLE_PERMISSIONS = {
     "admin": {
+        ("reconciliation", "create_daily"), ("reconciliation", "approve_daily"),
+        ("inventory_control", "authorize"),
+        ("material_source", "authorize"),
             ("stock_operation", "cancel_return"), ("stock_operation", "read"), ("stock_operation", "submit_return"), ("stock_operation", "outbound_return"), ("stock_operation", "ship_return"), ("stock_operation", "receive_return"),
         ("account", "read_self"),
         ("access_context", "read"),
@@ -823,6 +843,7 @@ EXPECTED_ROLE_PERMISSIONS = {
         ("notification_delivery", "retry"),
         ("people", "read_minimal"),
         ("reconciliation", "read"),
+        ("report", "export"),
         ("reconciliation", "create_opening"),
         ("reconciliation", "approve_opening"),
         ("role_assignment", "manage_provincial"),
@@ -840,6 +861,7 @@ EXPECTED_ROLE_PERMISSIONS = {
         ("work_order_material", "operate"),
     },
     "provincial_manager": {
+        ("reconciliation", "create_daily"), ("reconciliation", "explain_daily"),
         ("stock_operation", "cancel_return"), ("stock_operation", "read"), ("stock_operation", "submit_return"), ("stock_operation", "outbound_return"), ("stock_operation", "ship_return"), ("stock_operation", "receive_return"),
         ("account", "read_self"),
         ("access_context", "read"),
@@ -854,6 +876,7 @@ EXPECTED_ROLE_PERMISSIONS = {
         ("material_request", "read"),
         ("material_request_approval", "decide_level_1"),
         ("reconciliation", "read"),
+        ("report", "export"),
         ("reconciliation", "explain_opening"),
         ("stocktake", "read"),
         ("stocktake", "count"),
@@ -898,6 +921,94 @@ def _config(database_url: str, *, output_buffer=None) -> Config:
     config = Config(str(ALEMBIC_INI), output_buffer=output_buffer)
     config.set_main_option("sqlalchemy.url", database_url)
     return config
+
+
+@pytest.fixture(scope="module")
+def _clean_sqlite_revision_cache(tmp_path_factory: pytest.TempPathFactory):
+    """Reuse only empty-schema revisions already built by real Alembic upgrades.
+
+    The migration suite repeatedly creates a new SQLite file and upgrades it
+    through the same long prefix before testing the next revision.  Cache each
+    clean prefix after Alembic has actually applied it.  A test that inserts
+    legacy rows or otherwise prepares its database never uses this shortcut.
+    """
+    cache_dir = tmp_path_factory.mktemp("alembic-clean-sqlite")
+    # Parsing the literal revision headers avoids loading every migration
+    # module merely to rank clean snapshots.  Alembic itself still performs
+    # every cache-building upgrade and the independent graph test remains.
+    parents: dict[str, str | None] = {}
+    for path in (ROOT / "backend/alembic/versions").glob("*.py"):
+        values = {}
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                name, value = node.target.id, node.value
+            elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                name, value = node.targets[0].id, node.value
+            else:
+                continue
+            if name in {"revision", "down_revision"} and isinstance(value, ast.Constant):
+                values[name] = value.value
+        revision, parent = values["revision"], values["down_revision"]
+        assert isinstance(revision, str) and (parent is None or isinstance(parent, str))
+        assert revision not in parents
+        parents[revision] = parent
+    assert set(parents) - {parent for parent in parents.values() if parent} == {HEAD_REVISION}
+    ordered: list[str] = []
+    current: str | None = HEAD_REVISION
+    while current is not None:
+        assert current in parents and current not in ordered
+        ordered.append(current)
+        current = parents[current]
+    assert len(ordered) == len(parents)
+    rank = {revision: index for index, revision in enumerate(reversed(ordered))}
+    snapshots: dict[str, Path] = {}
+    return cache_dir, rank, snapshots
+
+
+@pytest.fixture(autouse=True)
+def _reuse_clean_sqlite_revision(request, monkeypatch):
+    # Only the SQLite-specific migration tests use cached setup.  In particular,
+    # the independent full-history and PostgreSQL checks still run unchanged.
+    if "sqlite" not in request.node.name:
+        return
+    cache_dir, rank, snapshots = request.getfixturevalue("_clean_sqlite_revision_cache")
+    actual_upgrade = command.upgrade
+
+    def cached_upgrade(config, revision, *args, **kwargs):
+        if args or kwargs or not isinstance(revision, str):
+            return actual_upgrade(config, revision, *args, **kwargs)
+        url = sa.engine.make_url(config.get_main_option("sqlalchemy.url"))
+        if url.drivername not in {"sqlite", "sqlite+pysqlite"} or not url.database or url.database == ":memory:":
+            return actual_upgrade(config, revision, *args, **kwargs)
+        target = HEAD_REVISION if revision == "head" else revision
+        if target not in rank or os.environ.get("OAM_DATABASE_URL"):
+            return actual_upgrade(config, revision, *args, **kwargs)
+        database = Path(url.database)
+        if database.exists() and database.stat().st_size:
+            with closing(sqlite3.connect(database)) as connection:
+                if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1").fetchone():
+                    return actual_upgrade(config, revision, *args, **kwargs)
+
+        ancestor = max((key for key in snapshots if rank[key] <= rank[target]),
+                       key=lambda key: rank[key], default=None)
+        if ancestor is not None:
+            database.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(snapshots[ancestor], database)
+            if ancestor == target:
+                return None
+
+        result = actual_upgrade(config, revision, *args, **kwargs)
+        with closing(sqlite3.connect(database)) as connection:
+            current = connection.execute("SELECT version_num FROM alembic_version").fetchone()
+            assert current == (target,), "cached migration setup did not reach its requested revision"
+            if target not in snapshots:
+                snapshot = cache_dir / f"{target}.db"
+                with closing(sqlite3.connect(snapshot)) as destination:
+                    connection.backup(destination)
+                snapshots[target] = snapshot
+        return result
+
+    monkeypatch.setattr(command, "upgrade", cached_upgrade)
 
 
 def _canonical_audit_hash(
@@ -1572,12 +1683,12 @@ def test_pg16_gate_head_matches_alembic_graph() -> None:
     assert pg_gate._head_runtime_ready_hash() == OAM_SYNC_FUNCTION_MANIFEST["rsc_oam_runtime_binding_ready_0044()"][6]
 
 
-def test_revision_history_has_single_integrity_hardening_head() -> None:
+def test_revision_history_has_single_current_head() -> None:
     script = ScriptDirectory.from_config(_config("sqlite+pysqlite:///:memory:"))
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == "20261017_0107"
+    assert head.down_revision == "20261118_0139"
     assert REVIEW_COMMAND_STATUS_REVISION.exists()
     supply_event_key_head = script.get_revision(
         MATERIAL_REQUEST_SUPPLY_EVENT_KEY_REVISION_ID
@@ -10418,7 +10529,7 @@ def test_upgrade_head_matches_current_orm_and_downgrades(
                 "JOIN roles ON roles.id = role_permissions.role_id "
                 "JOIN permissions ON permissions.id = role_permissions.permission_id"
             ).all()
-            assert len(role_permission_rows) == 98
+            assert len(role_permission_rows) == 106
             assert {row[3] for row in role_permission_rows} == {"allow"}
             actual_role_permissions = {
                 role_code: {
@@ -12294,8 +12405,12 @@ def test_postgresql_offline_sql_preserves_type_boundary(monkeypatch) -> None:
         RUNTIME_FUNCTION_BODY_SHA256.items()
     ):
         function_start = sql.index(f"CREATE FUNCTION public.{function_name}(")
-        body_start = sql.index("AS $$", function_start) + len("AS $$")
-        body_end = sql.index("$$", body_start)
+        # PostgreSQL permits both untagged and tagged dollar quotes. Match the
+        # actual function's delimiter rather than the next unrelated AS $$.
+        body_delimiter = re.search(r"\bAS\s+(\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$)", sql[function_start:])
+        assert body_delimiter is not None, function_name
+        body_start = function_start + body_delimiter.end()
+        body_end = sql.index(body_delimiter[1], body_start)
         body = sql[body_start:body_end]
         if function_name == "rsc_lock_opening_stocktake_start_reference_0027":
             # 0102 replaces this frozen 0027 body by exact CAS inside a DO
@@ -12311,6 +12426,14 @@ def test_postgresql_offline_sql_preserves_type_boundary(monkeypatch) -> None:
                 body = body.replace(before, after)
             assert new_hash == expected_hash
             assert old_hash in sql and new_hash in sql
+        if function_name == "rsc_lock_opening_control_import_0027":
+            import runpy
+            zero = runpy.run_path(str(Path(__file__).parents[1] / "alembic/versions/20261101_0122_zero_control_opening.py"))
+            assert hashlib.sha256(body.encode()).hexdigest() == zero["LEGACY_HASH"]
+            assert body.count(zero["LEGACY_FRAGMENT"]) == 1
+            body = body.replace(zero["LEGACY_FRAGMENT"], zero["FIXED_FRAGMENT"])
+            assert zero["FIXED_HASH"] == expected_hash
+            assert zero["LEGACY_HASH"] in sql and zero["FIXED_HASH"] in sql
         assert (
             hashlib.sha256(body.encode("utf-8")).hexdigest()
             == expected_hash

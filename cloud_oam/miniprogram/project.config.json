@@ -3,7 +3,7 @@
   "compileType": "miniprogram",
   "libVersion": "3.17.2",
   "miniprogramRoot": "./",
-  "projectname": "RSC个人仓",
+  "projectname": "交流备件知识大全",
   "setting": {
     "coverView": true,
     "es6": true,
@@ -30,7 +30,424 @@
   },
   "simulatorPluginLibVersion": {},
   "packOptions": {
-    "ignore": [],
+    "ignore": [
+      {
+        "type": "folder",
+        "value": "tests"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-material-requests"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-my-inbound"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-my-receipt"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-my-receiving"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-notifications"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-operational-stocktake-detail"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-operational-stocktakes"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-personal-warehouse"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-personal-warehouse-serials"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-personal-warehouse-transactions"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-scan"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-stock-return-outbounds"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-stock-return-receiving"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-stock-return-shipments"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-stock-returns"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-stocktake-detail"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-stocktakes"
+      },
+      {
+        "type": "folder",
+        "value": "pages/formal-work-orders"
+      },
+      {
+        "type": "folder",
+        "value": "pages/home"
+      },
+      {
+        "type": "folder",
+        "value": "pages/inventory"
+      },
+      {
+        "type": "folder",
+        "value": "pages/login"
+      },
+      {
+        "type": "folder",
+        "value": "pages/media-preview"
+      },
+      {
+        "type": "folder",
+        "value": "pages/oam-orders"
+      },
+      {
+        "type": "folder",
+        "value": "pages/password"
+      },
+      {
+        "type": "folder",
+        "value": "pages/profile"
+      },
+      {
+        "type": "folder",
+        "value": "pages/stocktake-create"
+      },
+      {
+        "type": "folder",
+        "value": "pages/stocktake-detail"
+      },
+      {
+        "type": "folder",
+        "value": "pages/stocktakes"
+      },
+      {
+        "type": "folder",
+        "value": "pages/transfer-create"
+      },
+      {
+        "type": "folder",
+        "value": "pages/transfer-detail"
+      },
+      {
+        "type": "folder",
+        "value": "pages/transfers"
+      },
+      {
+        "type": "folder",
+        "value": "pages/work-material-create"
+      },
+      {
+        "type": "folder",
+        "value": "pages/work-materials"
+      },
+      {
+        "type": "folder",
+        "value": "assets"
+      },
+      {
+        "type": "file",
+        "value": "README.md"
+      },
+      {
+        "type": "file",
+        "value": "utils/api.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/config.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/formal-file-upload.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/formal-operational-stocktake-pagination.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/formal-stocktake-adapter.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/formal-stocktake-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/formal-stocktake-count-recovery-store.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/formal-stocktake-count-recovery.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/formal-stocktake-count-submission.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/formal-stocktake-post-recovery-store.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/formal-stocktake-post-recovery.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/formal-stocktake-review-recovery-store.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/formal-stocktake-review-recovery.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/formal-stocktake-review-submission.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/format.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/inventory-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/material-catalog-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/material-request-adapter.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/material-request-allocation-recovery.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/material-request-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/material-request-lifecycle-recovery.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/material-request-option-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/material-request-supply-recovery.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/my-inbound-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/my-inbound-recovery-store.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/my-receipt-candidates-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/my-receipt-command.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/my-receipt-recovery-store.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/my-receiving-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/notification-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/opening-count-recovery-store.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/opening-count-recovery.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/opening-count-submission.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/opening-start-client.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/opening-start-core.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/opening-start-workflow.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/opening-start-options.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/opening-start-preparation.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/personal-qr-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/personal-warehouse-serials-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/personal-warehouse-transactions-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/release-config.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/stock-return-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/stock-return-inbound-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/stock-return-inbound-submit.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/stock-return-outbound-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/stock-return-outbound-submit.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/stock-return-receipt-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/stock-return-receipt-submit.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/stock-return-receiving-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/stock-return-shipment-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/stock-return-shipment-submit.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/stock-return-submit.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/stocktake-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/work-order-command.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/work-order-completion-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/work-order-draft.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/work-order-query-contract.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/work-order-recovery-store.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/work-order-recovery.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/work-order-removed-registration-command.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/work-order-removed-registration-submit.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/work-order-removed-scan.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/work-order-replacement-command.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/work-order-replacement-submit.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/work-order-reversal-command.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/work-order-reversal-submit.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/work-order-submit.js"
+      }
+    ],
     "include": []
   },
   "editorSetting": {}

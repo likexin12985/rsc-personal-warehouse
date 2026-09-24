@@ -158,7 +158,10 @@ def _item(
             tracking_mode=policy.tracking_mode,
             quantity_scale=policy.quantity_scale,
             allow_fraction=policy.allow_fraction,
-            source_updated_at=_aware(material.source_updated_at),
+            source_updated_at=(
+                _aware(material.source_updated_at)
+                if material.source_updated_at is not None else None
+            ),
         )
     except Exception:
         _fail(

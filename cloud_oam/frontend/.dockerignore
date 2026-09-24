@@ -1,5 +1,9 @@
 node_modules
 dist
+dist-warehouse
+.env*
+.git
+coverage
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts

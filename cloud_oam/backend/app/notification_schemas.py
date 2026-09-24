@@ -109,6 +109,97 @@ class NotificationDeliveryRetryOut(_StrictOutput):
     replayed: bool
 
 
+class InventoryNotificationSourceOut(_StrictOutput):
+    outbox_id: UUID
+    failure_audit_id: UUID
+    latest_audit_id: UUID
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    code: Literal["inventory_notification_source_invalid", "inventory_notification_event_conflict",
+                  "inventory_notification_source_changed"] | None
+    status: Literal["blocked", "projected"]
+    isolated_at: AwareDatetime
+    last_checked_at: AwareDatetime | None
+    event_id: UUID | None
+    recipient_count: int | None = Field(ge=0)
+
+
+class InventoryNotificationSourcePageOut(_StrictOutput):
+    schema_version: Literal["1.0"] = "1.0"
+    items: tuple[InventoryNotificationSourceOut, ...]
+    next_after_id: UUID | None
+
+
+class InventoryNotificationSourceRecheckIn(_StrictOutput):
+    expected_audit_id: UUID
+    expected_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class InventoryNotificationSourceRecheckOut(_StrictOutput):
+    schema_version: Literal["1.0"] = "1.0"
+    item: InventoryNotificationSourceOut
+    replayed: bool
+
+
+class NotificationTargetOut(_StrictOutput):
+    target_id: UUID
+    event_id: UUID
+    event_type: str = Field(min_length=1, max_length=100)
+    business_type: str = Field(min_length=1, max_length=80)
+    business_id: str = Field(min_length=1, max_length=64)
+    person_id: UUID
+    person_name: str = Field(min_length=1, max_length=200)
+    created_at: AwareDatetime
+    event_status: Literal["pending", "expanded", "cancelled"]
+    state: Literal["evidence_invalid", "cancelled", "bound", "account_inactive", "needs_account",
+                   "configuration_unavailable", "ready", "needs_verified_channel"]
+    bound_count: int = Field(ge=0)
+    available_channels: tuple[Literal["sms", "wechat"], ...]
+    latest_recovery_audit_id: UUID | None
+    snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class NotificationTargetPageOut(_StrictOutput):
+    schema_version: Literal["1.0"] = "1.0"
+    items: tuple[NotificationTargetOut, ...]
+    next_after_id: UUID | None
+
+
+class NotificationLegacyEventOut(_StrictOutput):
+    event_id: UUID
+    event_type: str = Field(min_length=1, max_length=100)
+    business_type: str = Field(min_length=1, max_length=80)
+    business_id: str = Field(min_length=1, max_length=64)
+    created_at: AwareDatetime
+    recipient_count: int = Field(ge=0)
+
+
+class NotificationLegacyEventPageOut(_StrictOutput):
+    schema_version: Literal["1.0"] = "1.0"
+    items: tuple[NotificationLegacyEventOut, ...]
+    next_after_id: UUID | None
+
+
+class NotificationTargetRecoveryIn(_StrictOutput):
+    expected_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    channel: Literal["sms", "wechat"]
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class NotificationTargetRecoveryOut(_StrictOutput):
+    schema_version: Literal["1.0"] = "1.0"
+    target_id: UUID
+    event_id: UUID
+    audit_id: UUID
+    outcome: Literal["bound", "blocked"]
+    code: Literal["evidence_invalid", "cancelled", "bound", "account_inactive", "needs_account",
+                  "configuration_unavailable", "needs_verified_channel", "channel_unavailable"] | None
+    channel: Literal["sms", "wechat"]
+    recipient_id: UUID | None
+    checked_at: AwareDatetime
+    replayed: bool
+
+
 __all__ = [
     "NotificationItemOut",
     "NotificationPageOut",
@@ -117,4 +208,14 @@ __all__ = [
     "NotificationDeliveryPageOut",
     "NotificationDeliveryRetryIn",
     "NotificationDeliveryRetryOut",
+    "InventoryNotificationSourceOut",
+    "InventoryNotificationSourcePageOut",
+    "InventoryNotificationSourceRecheckIn",
+    "InventoryNotificationSourceRecheckOut",
+    "NotificationTargetOut",
+    "NotificationTargetPageOut",
+    "NotificationLegacyEventOut",
+    "NotificationLegacyEventPageOut",
+    "NotificationTargetRecoveryIn",
+    "NotificationTargetRecoveryOut",
 ]

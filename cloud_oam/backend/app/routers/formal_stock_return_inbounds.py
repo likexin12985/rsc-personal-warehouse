@@ -16,12 +16,14 @@ from ..formal_services.stock_return_inbound_recovery import (
     lookup_return_inbound_request,
     seal_return_inbound_request,
 )
+from ..formal_services.stock_return_inbound_queries import read_return_inbound_state
 from ..stock_return_inbound_schemas import (
     StockReturnInboundOut,
     StockReturnInboundPreviewOut,
     StockReturnInboundSealIn,
     StockReturnInboundSealOut,
     StockReturnInboundSubmitIn,
+    StockReturnInboundStateOut,
 )
 from .formal_stock_returns import _error, _input, _run
 
@@ -29,6 +31,16 @@ router = APIRouter(
     prefix="/v1/stock-returns/my-receiving/{receipt_id}/inbound",
     tags=["formal-stock-return-inbounds"],
 )
+
+
+@router.get('', response_model=StockReturnInboundStateOut)
+def read_inbound_state(
+    receipt_id: UUID,
+    response: Response,
+    db: Session = Depends(get_db),
+    principal: FormalPrincipal = Depends(require_permission('stock_operation','read')),
+):
+    return _run(db,response,lambda: read_return_inbound_state(db,actor=principal,receipt_id=receipt_id))
 
 
 @router.post("/preview", response_model=StockReturnInboundPreviewOut)
@@ -89,7 +101,7 @@ def read_inbound_request(
     ))
 
 
-@router.post("/by-request/{request_id}/seal", response_model=StockReturnInboundSealOut)
+@router.post("/by-request/{request_id}/seal", response_model=StockReturnInboundOut | StockReturnInboundSealOut)
 def seal_inbound_request(
     receipt_id: UUID,
     request_id: str,

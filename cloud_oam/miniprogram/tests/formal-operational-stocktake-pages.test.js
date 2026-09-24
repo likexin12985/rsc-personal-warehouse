@@ -345,11 +345,11 @@ test('terminal buttons fail closed without the independent HQ permission even if
   } finally { loaded.restore() }
 })
 
-test('new mini pages are registered separately and contain the explicit recount/posting/formal-upload boundaries', () => {
+test('preserved private pages are unregistered and retain recount/posting/formal-upload boundaries', () => {
   const app = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../app.json'), 'utf8'))
-  assert.equal(app.pages.includes('pages/formal-operational-stocktakes/index'), true)
-  assert.equal(app.pages.includes('pages/formal-operational-stocktake-detail/index'), true)
-  assert.equal(app.pages.includes('pages/formal-stocktakes/index'), true)
+  assert.equal(app.pages.includes('pages/formal-operational-stocktakes/index'), false)
+  assert.equal(app.pages.includes('pages/formal-operational-stocktake-detail/index'), false)
+  assert.equal(app.pages.includes('pages/formal-stocktakes/index'), false)
   const source = fs.readFileSync(path.resolve(__dirname, '../pages/formal-operational-stocktake-detail/index.wxml'), 'utf8')
   assert.match(source, /assignee_user_id/)
   assert.match(source, /按所选范围开复盘/)

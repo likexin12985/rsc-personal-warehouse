@@ -1,0 +1,78 @@
+{
+  "capture_chain_sha256": "4001d70a4fd14879744b5cbbb19a538d3763a497c530c6e2567c35268c6809b3",
+  "captured_at": "2026-09-20T21:05:57.479662+00:00",
+  "catalog_sha256": "465f85c20f60d0e0e3c078970d1755a3e6826b9938c200503c527994dc5aaec7",
+  "content_sha256": "48724286132df2e51f7b57e93ab40460e297dcd52e5e86ed014303455e65ab3b",
+  "coverage": [
+    {
+      "capture_sha256": "c25c5f762f1788cb0b7e8d988d5bdbc479c6a23fc9dfda8a2ada6fad8a2dcc3a",
+      "completed_at": "2026-09-20T21:05:57.479662Z",
+      "page_count": 1,
+      "source_total": 1,
+      "started_at": "2026-09-20T21:05:57.479662Z",
+      "target_positions": [
+        "P-A",
+        "P-ZERO"
+      ],
+      "warehouse_code": "W-A"
+    },
+    {
+      "capture_sha256": "d0bb261eea7f7ff7081ef98719cbca11e1d6df3b9356214f479919c380a5df2b",
+      "completed_at": "2026-09-20T21:05:57.479662Z",
+      "page_count": 1,
+      "source_total": 0,
+      "started_at": "2026-09-20T21:05:57.479662Z",
+      "target_positions": [],
+      "warehouse_code": "W-B"
+    }
+  ],
+  "covered_warehouses": [
+    "W-A"
+  ],
+  "current_source_authorized": false,
+  "database_observation": {
+    "observed_at": "2026-09-21T01:04:01.355286+00:00",
+    "read_only": true,
+    "repeatable_read": true,
+    "role": "rsc_control_capture",
+    "snapshot": "773:773:"
+  },
+  "historical_authority": {
+    "attestation_cursor_sha256": "1648fe23cbdf5e7fefc2b4ae2c32ac66843cc35ac1c534655c2603e08baa08b0",
+    "authority_cursor_sha256": "f538c584c764fd11af09fb1b754ab4ea7a21bc3c25d8dfd5d82232ce4477bfee"
+  },
+  "historical_graph_verified": true,
+  "key_lifecycle_verified": false,
+  "material_publications": [
+    {
+      "id": "8a0329dd-f84f-4d5e-8685-697d5d5e40a5",
+      "sha256": "2b93a00a508b2e794e2e9c5c9144174fd272efab2e0c0e71c08899077d8ac26c"
+    }
+  ],
+  "operator_authority_verified": false,
+  "origin_count": 1,
+  "persisted": false,
+  "preparation_sha256": "ded8669d3f4fcfced63e8948e5e204d3e33a6292b7b1ac48cefd075de18f3f3e",
+  "publication_id": "81822f87-c92a-483a-8b4c-b03f2d43fa90",
+  "publication_sha256": "96cfe93779f09e91438d137594b978a2e0b2b8e8db892d0d29ccb905b891dafa",
+  "publication_valid_until": "2026-09-20T21:45:56.222182+00:00",
+  "published_at": "2026-09-20T21:05:58.465207+00:00",
+  "region_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+  "rows": [
+    {
+      "condition": "new",
+      "locked_quantity": "0.000",
+      "material_id": "5a9c5c7f-8aef-4ede-8898-32e0594405e9",
+      "origin_id": "9ec1d6f1-e9f2-4c3f-ba68-1a521a748280",
+      "origin_sha256": "434492940cb114eae75a8b8da6963e1359a6821cd8790820406935ee9dfc5159",
+      "position_code": "P-A",
+      "quantity": "0.000",
+      "source_business_key": "stock:opening-control",
+      "warehouse_code": "W-A"
+    }
+  ],
+  "schema": "rsc.daily_published_control_capture_candidate.v1",
+  "source_system_id": "2f1a667c-9cb2-42ec-918b-d1be5b6060d2",
+  "stock_written": false,
+  "warehouse_mapping_approved": false
+}

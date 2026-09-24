@@ -317,9 +317,9 @@ def _capture(evidence, manifest, expected, warehouses, positions, current):
     return oldest_target_capture
 
 
-def validate_inventory_control_evidence(
+def reconstruct_inventory_control_evidence(
     *, expected_json: str, evidence_json: str, checked_at: datetime,
-) -> InventoryControlValidationReport:
+) -> tuple[InventoryControlValidationReport, InventoryCoverageExpectation, tuple[dict, ...]]:
     """Check detached JSON against an independent expected catalogue.
 
     No database/session, clock, filesystem, network, locking, generated IDs,
@@ -363,7 +363,7 @@ def validate_inventory_control_evidence(
         for record in current.values()
     )
     age = checked_at - oldest
-    return InventoryControlValidationReport(
+    report = InventoryControlValidationReport(
         status="evidence_consistent", sync_mode=manifest.sync_mode,
         checked_snapshots=len(evidence.snapshots),
         target_warehouse_count=len({code for code, _ in target}),
@@ -371,3 +371,13 @@ def validate_inventory_control_evidence(
         oldest_capture_age_seconds=age.total_seconds(),
         within_freshness_target=age <= FRESHNESS_TARGET,
     )
+    return report, expected, tuple(sorted(current.values(), key=lambda row: row['business_key']))
+
+
+def validate_inventory_control_evidence(
+    *, expected_json: str, evidence_json: str, checked_at: datetime,
+) -> InventoryControlValidationReport:
+    """Preserve the detached validation contract; reconstruction is not approval."""
+    report, _, _ = reconstruct_inventory_control_evidence(
+        expected_json=expected_json, evidence_json=evidence_json, checked_at=checked_at)
+    return report

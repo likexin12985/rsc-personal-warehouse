@@ -1,6 +1,7 @@
 """Acceptance schema pins, lossless transitions and durable history retention."""
 from datetime import datetime, timezone
 import hashlib
+from migration_source_expectations import current_source_hash
 from io import StringIO
 from pathlib import Path
 import runpy
@@ -33,7 +34,7 @@ def test_receipt_runtime_manifest_matches_exact_sources_and_minimum_acl():
     for signature,(old,new) in m['_sources']().items():
         name,args=signature.removeprefix('public.').split('(');key=(name,args[:-1])
         manifest=security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 if name=='rsc_guard_formal_file_binding_0036' else security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256
-        assert old!=new and manifest[key]==hashlib.sha256(new.encode()).hexdigest()
+        assert old!=new and manifest[key]==current_source_hash(m['revision'],signature,new)
     for name,(table,_,function,bits,deferred) in m['TRIGGERS'].items():
         assert security.EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[name]==(table,function,'A',bits,deferred,deferred,deferred)
         if table=='audit_events':assert security.EXPECTED_AUDIT_TRIGGERS[name]==(table,function,bits,deferred,deferred,deferred)

@@ -1,6 +1,17 @@
 # Web 与微信小程序独立发布门禁
 
-## 已验证证据
+## 2026-09-19 入口门禁扩展
+
+增加 `vite build --mode warehouse` 和 `verify_public_entry.mjs`，独立验证公开知识页面及
+`/xx/` 个人仓产物，原有权限、动作固定版本和测试步骤不变。本次本地结果与未完成的真实
+数据/目标部署门禁见[公开入口记录](PUBLIC_KNOWLEDGE_ENTRY_20260919.md)。
+
+Client gate 的默认产物检查属于开发检查，可接受如实标记为 pending 的空目录。正式网页
+镜像构建会强制执行 `frontend/build/verify-release.mjs`；网页与小程序发布前须在仓库根运行
+`node cloud_oam/scripts/verify_public_entry.mjs --release`。这两项要求目录 ready、非空、字段和
+来源有效、源码与构建一致；当前 pending 应当失败。构建成功和发布放行不可混用。
+
+## 已验证历史证据
 
 源码提交：`ae263fb10a149a434c04ea5cb46c2a3bd3a906b5`。
 GitHub [Client release gate 33949308200](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/33949308200)

@@ -7,46 +7,17 @@ on:
       - main
     paths:
       - ".github/workflows/postgresql16-release-gate.yml"
-      - "cloud_oam/alembic.ini"
-      - "cloud_oam/backend/alembic/**"
-      - "cloud_oam/backend/app/**"
-      - "cloud_oam/backend/pg16_release_gate_diagnostics.py"
-      - "cloud_oam/backend/requirements.txt"
-      - "cloud_oam/backend/tests/**"
-      - "cloud_oam/miniprogram/**"
-      - "cloud_oam/edge_sync/**"
-      - "cloud_oam/docker-compose.yml"
-      - "cloud_oam/deployment/docker-compose.edge.yml"
-      - "cloud_oam/deployment/postgres-init/**"
-      - "cloud_oam/deployment/create_oam_edge_staging.sql"
-      - "cloud_oam/deployment/provision_edge_receiver_role.sql"
-      - "cloud_oam/deployment/provision_oam_edge_scope.sql"
-      - "cloud_oam/deployment/provision_oam_work_order_source.sql"
-      - "cloud_oam/deployment/redact_legacy_oam_work_order_details.sql"
-      - "cloud_oam/deployment/verify_oam_edge_staging.sql"
+      # Tests also read deployment files, scripts and shared backend modules.
+      # Cover the whole product tree so a new release input cannot bypass CI.
+      - "cloud_oam/**"
   push:
     branches:
       - main
       - codex/production-readiness-gates
+      - codex/notification-delivery-worker
     paths:
       - ".github/workflows/postgresql16-release-gate.yml"
-      - "cloud_oam/alembic.ini"
-      - "cloud_oam/backend/alembic/**"
-      - "cloud_oam/backend/app/**"
-      - "cloud_oam/backend/pg16_release_gate_diagnostics.py"
-      - "cloud_oam/backend/requirements.txt"
-      - "cloud_oam/backend/tests/**"
-      - "cloud_oam/miniprogram/**"
-      - "cloud_oam/edge_sync/**"
-      - "cloud_oam/docker-compose.yml"
-      - "cloud_oam/deployment/docker-compose.edge.yml"
-      - "cloud_oam/deployment/postgres-init/**"
-      - "cloud_oam/deployment/create_oam_edge_staging.sql"
-      - "cloud_oam/deployment/provision_edge_receiver_role.sql"
-      - "cloud_oam/deployment/provision_oam_edge_scope.sql"
-      - "cloud_oam/deployment/provision_oam_work_order_source.sql"
-      - "cloud_oam/deployment/redact_legacy_oam_work_order_details.sql"
-      - "cloud_oam/deployment/verify_oam_edge_staging.sql"
+      - "cloud_oam/**"
 
 permissions:
   contents: read
@@ -98,11 +69,16 @@ jobs:
         with:
           python-version: "3.12.13"
 
-      - name: Install pinned backend dependencies
+      - name: Install hash-locked backend dependencies
         run: |
-          python -m pip install --disable-pip-version-check \
-            -r cloud_oam/backend/requirements.txt \
-            pytest==9.1.1 pglast==7.18 httpx==0.28.1
+          python -m pip install --disable-pip-version-check --require-hashes \
+            -r cloud_oam/backend/requirements-build.lock
+          python -m pip install --disable-pip-version-check --no-build-isolation --require-hashes \
+            -r cloud_oam/backend/requirements-linux-amd64.lock
+          python -m pip uninstall --yes setuptools wheel
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: \
+            -r cloud_oam/backend/requirements-ci-test.lock
+          python -m pip check
 
       - name: Set up Node for mini-program API contract
         uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
@@ -123,7 +99,13 @@ jobs:
 
   static_safety:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # A prior single-job complete run exceeded six hours before its last file.
+    # Every matrix leg discovers disjoint files; aggregate requires all legs.
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
     steps:
       - name: Check out reviewed source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -135,11 +117,16 @@ jobs:
         with:
           python-version: "3.12.13"
 
-      - name: Install pinned backend dependencies
+      - name: Install hash-locked backend dependencies
         run: |
-          python -m pip install --disable-pip-version-check \
-            -r cloud_oam/backend/requirements.txt \
-            pytest==9.1.1 pglast==7.18 httpx==0.28.1
+          python -m pip install --disable-pip-version-check --require-hashes \
+            -r cloud_oam/backend/requirements-build.lock
+          python -m pip install --disable-pip-version-check --no-build-isolation --require-hashes \
+            -r cloud_oam/backend/requirements-linux-amd64.lock
+          python -m pip uninstall --yes setuptools wheel
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: \
+            -r cloud_oam/backend/requirements-ci-test.lock
+          python -m pip check
 
       - name: Set up Node for mini-program API contract
         uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
@@ -148,160 +135,16 @@ jobs:
 
       - name: Install static gate command dependencies
         run: |
+          python -m pip install --disable-pip-version-check -r cloud_oam/scripts/requirements-public-knowledge.txt
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends postgresql-client-16 zsh
           psql --version | grep -E ' 16[.]'
           zsh --version
 
-      - name: Run projector and edge static safety gates
+      - name: Run complete backend and edge static safety gates
         working-directory: cloud_oam
         run: |
-          PYTHONPATH=backend python -m pytest -q \
-            backend/tests/test_oam_work_order_projection.py \
-            backend/tests/test_oam_receipt_projection.py \
-            backend/tests/test_oam_receipt_projector.py \
-            backend/tests/test_oam_receipt_projection_security.py \
-            backend/tests/test_oam_projection_security.py \
-            backend/tests/test_edge_database_security.py \
-            backend/tests/test_edge_sync_safety.py \
-            backend/tests/test_edge_sync_status.py \
-            backend/tests/test_edge_runtime_env.py \
-            backend/tests/test_startup_security_boundary.py \
-            backend/tests/test_database_deployment_security.py \
-            backend/tests/test_database_security.py \
-            backend/tests/test_pg16_release_gate_diagnostics.py \
-            backend/tests/test_pg16_workflow_topology.py \
-            backend/tests/test_alembic_migrations.py \
-            backend/tests/test_material_request_draft_service.py \
-            backend/tests/test_material_request_approval_service.py \
-            backend/tests/test_material_request_lifecycle_service.py \
-            backend/tests/test_material_request_query_service.py \
-            backend/tests/test_material_request_supply_service.py \
-            backend/tests/test_material_request_supply_command_status_service.py \
-            backend/tests/test_material_request_allocation.py \
-            backend/tests/test_material_request_allocation_options.py \
-            backend/tests/test_material_request_reservation.py \
-            backend/tests/test_material_request_reservation_options.py \
-            backend/tests/test_stock_reservations_migration.py \
-            backend/tests/test_material_request_reservation_release.py \
-            backend/tests/test_material_request_picking.py \
-            backend/tests/test_reservation_picking_migration.py \
-            backend/tests/test_material_request_outbound.py \
-            backend/tests/test_material_request_shipment.py \
-            backend/tests/test_material_request_receipt_contract.py \
-            backend/tests/test_material_request_my_receiving.py \
-            backend/tests/test_material_request_my_receipt.py \
-            backend/tests/test_material_request_my_inbound.py \
-            backend/tests/test_material_request_my_inbound_candidates.py \
-            backend/tests/test_receipt_evidence_files.py \
-            backend/tests/test_material_request_my_receipt_candidates.py \
-            backend/tests/test_material_request_inbound_contract.py \
-            backend/tests/test_material_request_inbound_posting.py \
-            backend/tests/test_material_request_inbound_state.py \
-            backend/tests/test_inbound_fulfillment_boundary.py \
-            backend/tests/test_outbound_postings_migration.py \
-            backend/tests/test_material_request_fulfillment_preparation.py \
-            backend/tests/test_stock_reservation_releases_migration.py \
-            backend/tests/test_formal_material_request_api.py \
-            backend/tests/test_notification_expansion.py \
-            backend/tests/test_notification_expander.py \
-            backend/tests/test_notification_dispatcher.py \
-            backend/tests/test_notification_delivery.py \
-            backend/tests/test_notification_delivery_operations.py \
-            backend/tests/test_notification_inbox.py \
-            backend/tests/test_notification_events.py \
-            backend/tests/test_demand_schemas.py \
-            backend/tests/test_supply_task_read_contract.py \
-            backend/tests/test_audit_chain.py \
-            backend/tests/test_inventory_posting.py \
-            backend/tests/test_inventory_control_evidence.py \
-            backend/tests/test_work_order_material_preflight.py \
-            backend/tests/test_work_order_material_evidence.py \
-            backend/tests/test_formal_work_order_material_routes.py \
-            backend/tests/test_work_order_reservations.py \
-            backend/tests/test_work_order_query.py \
-            backend/tests/test_work_order_material_options.py \
-            backend/tests/test_work_order_operation_read.py \
-            backend/tests/test_work_order_preview.py \
-            backend/tests/test_work_order_current_source.py \
-            backend/tests/test_work_order_command_seal.py \
-            backend/tests/test_work_order_command_seal_migration.py \
-            backend/tests/test_formal_work_order_seal_routes.py \
-            backend/tests/test_work_order_replacement_seal.py \
-            backend/tests/test_work_order_replacement_seal_migration.py \
-            backend/tests/test_work_order_removed_registration.py \
-            backend/tests/test_work_order_completion.py \
-            backend/tests/test_work_order_return_sources.py \
-            backend/tests/test_stock_return_commands.py \
-            backend/tests/test_stock_return_quantities.py \
-            backend/tests/test_stock_return_migration.py \
-            backend/tests/test_stock_return_recovery.py \
-            backend/tests/test_stock_return_seal_migration.py \
-            backend/tests/test_stock_return_outbound.py \
-            backend/tests/test_stock_return_outbound_recovery.py \
-            backend/tests/test_stock_return_outbound_queries.py \
-            backend/tests/test_stock_return_outbound_migration.py \
-            backend/tests/test_stock_return_shipment.py \
-            backend/tests/test_stock_return_shipment_queries.py \
-            backend/tests/test_stock_return_receiving.py \
-            backend/tests/test_stock_return_receipt.py \
-            backend/tests/test_stock_return_receipt_migration.py \
-            backend/tests/test_formal_stock_return_receipt_routes.py \
-            backend/tests/test_stock_return_shipment_recovery.py \
-            backend/tests/test_stock_return_shipment_migration.py \
-            backend/tests/test_formal_stock_return_routes.py \
-            backend/tests/test_stock_return_options_history.py \
-            backend/tests/test_work_order_reversal_boundary.py \
-            backend/tests/test_pg16_reversal_migration_chain.py \
-            backend/tests/test_work_order_reversal_plan.py \
-            backend/tests/test_work_order_reversal_originals.py \
-            backend/tests/test_work_order_reversal_migration.py \
-            backend/tests/test_work_order_reversal_write.py \
-            backend/tests/test_work_order_reversal_write_migration.py \
-            backend/tests/test_work_order_reversal_seal.py \
-            backend/tests/test_work_order_reversal_seal_migration.py \
-            backend/tests/test_formal_work_order_reversal_routes.py \
-            backend/tests/test_work_order_removed_registration_migration.py \
-            backend/tests/test_formal_work_order_replacement_seal_routes.py \
-            backend/tests/test_work_order_material_migration.py \
-            backend/tests/test_work_order_accounts.py \
-            backend/tests/test_work_order_account_admission_migration.py \
-            backend/tests/test_serial_ledger.py \
-            backend/tests/test_serial_lifecycle_migration.py \
-            backend/tests/test_work_order_replacements_migration.py \
-            backend/tests/test_work_order_replacements.py \
-            backend/tests/test_work_order_replacement_read.py \
-            backend/tests/test_work_order_replacement_preview.py \
-            backend/tests/test_formal_work_order_replacements_routes.py \
-            backend/tests/test_opening_stocktake_service.py \
-            backend/tests/test_opening_scope_qualification.py \
-            backend/tests/test_opening_start_options.py \
-            backend/tests/test_opening_start_options_drift.py \
-            backend/tests/test_opening_stocktake_review_service.py \
-            backend/tests/test_opening_recount_assignee_options.py \
-            backend/tests/test_opening_count_command_status.py \
-            backend/tests/test_formal_opening_stocktake_write_api.py \
-            backend/tests/test_formal_opening_stocktake_api.py \
-            backend/tests/test_formal_opening_stocktake_read.py \
-            backend/tests/test_formal_opening_reconciliation_api.py \
-            backend/tests/test_stocktake_task_service.py \
-            backend/tests/test_stocktake_options.py \
-            backend/tests/test_stocktake_count_service.py \
-            backend/tests/test_stocktake_count_command_status.py \
-            backend/tests/test_stocktake_count_history_context.py \
-            backend/tests/test_stocktake_posting_command_seal.py \
-            backend/tests/test_stocktake_posting_command_outcomes_migration.py \
-            backend/tests/test_stocktake_posting_request_coordinate_migration.py \
-            backend/tests/test_stocktake_posting_seal_race_migration.py \
-            backend/tests/test_stocktake_posting_command_status.py \
-            backend/tests/test_stocktake_history_pg_acceptance.py \
-            backend/tests/test_stocktake_history_owner_migration.py \
-            backend/tests/test_stocktake_difference_service.py \
-            backend/tests/test_postgresql_lock_graph.py \
-            backend/tests/test_formal_stocktake_api.py \
-            backend/tests/test_legacy_oam_work_order_redaction_artifact.py \
-            edge_sync/test_oam_edge_sync.py \
-            edge_sync/test_oam_read_client_security.py
+          python scripts/run_static_shard.py --index ${{ matrix.shard }} --count 3
 
   postgresql16-release-gate:
     if: ${{ always() }}

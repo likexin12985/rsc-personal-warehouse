@@ -15,11 +15,17 @@ import subprocess
 import sys
 import time
 import uuid
+from copy import deepcopy
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
-from urllib import error, parse, request
+from urllib import parse
+
+if __package__:
+    from .inventory_control_capture import ControlCaptureError
+else:
+    from inventory_control_capture import ControlCaptureError
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -827,35 +833,44 @@ def send_signed_json(
         batch_id,
         body,
     )
-    req = request.Request(
-        validated_api_url(api_base, endpoint),
-        data=body,
-        method="POST",
-        headers={
+    headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
             "X-RSC-Edge-Source": source_instance,
             "X-RSC-Edge-Timestamp": timestamp,
             "X-RSC-Edge-Batch": batch_id,
             "X-RSC-Edge-Signature": signature,
-        },
-    )
-    opener = request.build_opener(request.ProxyHandler({}))
+    }
     try:
-        with opener.open(req, timeout=60) as response:
-            response_body = response.read().decode("utf-8")
-    except error.HTTPError as exc:
-        response_body = exc.read().decode("utf-8", errors="replace")
-        raise EdgeSyncError(f"云端拒绝同步：HTTP {exc.code} {response_body[:500]}") from exc
-    except error.URLError as exc:
-        raise EdgeSyncError(f"无法连接云端同步接口：{exc.reason}") from exc
+        status_code, response_body, _ = shared_edge_request('POST', validated_api_url(api_base, endpoint),
+            headers=headers, body=body, timeout=60)
+    except Exception:
+        raise EdgeSyncError("共享 Edge 同步响应未知；保留失败包并重新查询，禁止自动重放") from None
+    if not 200 <= status_code < 300:
+        raise EdgeSyncError(f"云端未确认同步：HTTP {status_code}；保留原请求核查")
     try:
         result = json.loads(response_body)
-    except json.JSONDecodeError as exc:
-        raise EdgeSyncError("云端同步接口返回格式无效") from exc
-    if not result.get("ok"):
+    except (ValueError, UnicodeError):
+        raise EdgeSyncError("云端同步接口返回格式无效") from None
+    if not isinstance(result, dict) or result.get("ok") is not True:
         raise EdgeSyncError("云端同步接口未确认接收")
     return result
+
+
+def shared_edge_request(*args, **kwargs):
+    adapter = Path.home() / 'Library' / 'Application Support' / 'CodexLocalEdge'
+    if str(adapter) not in sys.path: sys.path.insert(0, str(adapter))
+    from edge_http import request as edge_request
+    return edge_request(*args, **kwargs)
+
+
+def read_control_page(path, payload):
+    # This local client obtains the shared OAM session and uses edge_http.
+    # Missing adapter support closes this object; there is no direct fallback.
+    if path not in ('/warehouse/list', '/material_stock/list'):
+        raise EdgeSyncError('控制采集只允许仓库和库存只读接口')
+    from inventory_query_portal.oam_read_client import post_json
+    return post_json(path, payload, retries=0)
 
 
 def chunks(records: list[dict[str, Any]], size: int):
@@ -888,7 +903,8 @@ def write_private_json(path: Path, value: dict[str, Any]) -> None:
     os.chmod(path.parent, 0o700)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        with temporary.open("x", encoding="utf-8") as handle:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(
                 value,
                 handle,
@@ -901,6 +917,11 @@ def write_private_json(path: Path, value: dict[str, Any]) -> None:
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
         os.chmod(path, 0o600)
+        parent = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(parent)
+        finally:
+            os.close(parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -1086,10 +1107,11 @@ def persist_completed_state(
     state: dict[str, Any],
     outbox: dict[str, Any],
 ) -> None:
-    scopes = state.get("scopes")
+    saved_state = deepcopy(state)
+    scopes = saved_state.get("scopes")
     if not isinstance(scopes, dict):
         scopes = {}
-        state["scopes"] = scopes
+        saved_state["scopes"] = scopes
     scopes[outbox["scopeKey"]] = {
         "snapshotId": outbox["snapshotId"],
         "snapshotAt": outbox["snapshotAt"],
@@ -1105,33 +1127,28 @@ def persist_completed_state(
             }
             for entity_type, entity in outbox["entities"].items()
         },
+        **({"controlEvidence": outbox["controlEvidence"]} if "controlEvidence" in outbox else {}),
     }
-    state["version"] = 2
-    state["sourceInstance"] = outbox["sourceInstance"]
-    state["updatedAt"] = datetime.now(timezone.utc).isoformat()
-    write_private_json(state_file, state)
+    saved_state["version"] = 2
+    saved_state["sourceInstance"] = outbox["sourceInstance"]
+    saved_state["updatedAt"] = datetime.now(timezone.utc).isoformat()
+    try:
+        write_private_json(state_file, saved_state)
+    except OSError:
+        raise EdgeSyncError('本地状态写入结果未知；保留采集包，下次运行先回读本地状态并重新查询来源') from None
+    state.clear(); state.update(saved_state)
 
 
-def upload_outbox(
-    *,
-    outbox: dict[str, Any],
-    api_base: str,
-    secret: str,
-    state_file: Path,
-    state: dict[str, Any],
-) -> dict[str, Any]:
-    source_instance = outbox["sourceInstance"]
+def snapshot_batches(outbox):
     snapshot_id = outbox["snapshotId"]
     batch_size = int(outbox["batchSize"])
-    accepted_batches = 0
-    accepted_records = 0
     for entity_type, entity in outbox["entities"].items():
         batch_count = int(entity["batchCount"])
         for sequence, batch_records in enumerate(
             chunks(entity["deltaRecords"], batch_size),
             start=1,
         ):
-            payload = {
+            yield {
                 "source_system": "starcharge_oam",
                 "snapshot_id": snapshot_id,
                 "scope_key": outbox["scopeKey"],
@@ -1144,20 +1161,12 @@ def upload_outbox(
                 "total_sequences": batch_count,
                 "records": batch_records,
             }
-            response = send_signed_json(
-                api_base=api_base,
-                endpoint="integrations/oam/edge/snapshots/batches",
-                secret=secret,
-                source_instance=source_instance,
-                batch_id=f"{snapshot_id}-{entity_type}-{sequence}",
-                payload=payload,
-            )
-            accepted_batches += 1
-            accepted_records += int(response.get("accepted_records") or 0)
 
-    manifest = {
+
+def snapshot_manifest(outbox):
+    return {
         "source_system": "starcharge_oam",
-        "snapshot_id": snapshot_id,
+        "snapshot_id": outbox['snapshotId'],
         "scope_key": outbox["scopeKey"],
         "sync_mode": outbox["syncMode"],
         "company_id": outbox["companyId"],
@@ -1175,6 +1184,29 @@ def upload_outbox(
             for entity_type, entity in sorted(outbox["entities"].items())
         ],
     }
+
+
+def upload_outbox(
+    *, outbox: dict[str, Any], api_base: str, secret: str,
+    state_file: Path, state: dict[str, Any],
+) -> dict[str, Any]:
+    source_instance = outbox['sourceInstance']; snapshot_id = outbox['snapshotId']
+    if 'controlEvidence' in outbox and 'controlAttestation' not in outbox:
+        raise EdgeSyncError('控制采集缺少认证声明；必须重新采集，不推进索引')
+    accepted_batches = accepted_records = 0
+    for payload in snapshot_batches(outbox):
+        batch_id = f"{snapshot_id}-{payload['entity_type']}-{payload['sequence']}"
+        response = send_signed_json(api_base=api_base,endpoint='integrations/oam/edge/snapshots/batches',
+            secret=secret,source_instance=source_instance,
+            batch_id=batch_id,payload=payload)
+        if response.get('snapshot_id') != snapshot_id or response.get('batch_id') != batch_id \
+                or response.get('mode') != 'staging_only' or type(response.get('duplicate')) is not bool \
+                or type(response.get('accepted_records')) is not int or response['accepted_records'] != len(payload['records']) \
+                or set(response) != {'ok','duplicate','snapshot_id','batch_id','accepted_records','mode'}:
+            raise EdgeSyncError('批次回执与准确请求不一致，未推进同步状态')
+        accepted_batches += 1
+        accepted_records += int(response.get('accepted_records') or 0)
+    manifest = snapshot_manifest(outbox)
     completion = send_signed_json(
         api_base=api_base,
         endpoint="integrations/oam/edge/snapshots/complete",
@@ -1183,6 +1215,30 @@ def upload_outbox(
         batch_id=f"{snapshot_id}-complete",
         payload=manifest,
     )
+    if completion.get('snapshot_id') != snapshot_id or completion.get('status') != 'complete' \
+            or completion.get('mode') != 'staging_only' or type(completion.get('duplicate')) is not bool:
+        raise EdgeSyncError('完成回执与准确快照不一致，未推进同步状态')
+    expected_entities = {name:dict(records=entity['finalRecordCount'],sha256=entity['finalSha256'],deltaRecords=entity['deltaRecordCount'])
+                         for name, entity in outbox['entities'].items()}
+    if not completion['duplicate'] and canonical_json(completion.get('entities')) != canonical_json(expected_entities):
+        raise EdgeSyncError('完成回执的数量或摘要不一致，未推进同步状态')
+    expected_fields = {'ok','duplicate','snapshot_id','status','mode'} | ({'entities','personnel'} if not completion['duplicate'] else set())
+    if set(completion) != expected_fields:
+        raise EdgeSyncError('完成回执格式不一致，未推进同步状态')
+    attestation = None
+    if 'controlAttestation' in outbox:
+        claim = outbox['controlAttestation']
+        attestation = send_signed_json(api_base=api_base,endpoint='integrations/oam/edge/inventory-control/captures',
+            secret=secret,source_instance=source_instance,batch_id=snapshot_id+'-capture',payload=claim)
+        try: receipt_id = str(uuid.UUID(attestation.get('attestation_id','')))
+        except (ValueError,TypeError,AttributeError): receipt_id = None
+        if set(attestation) != {'ok','duplicate','mode','attestation_id','snapshot_id','source_instance','key_id','payload_sha256','capture_attested','projection_published','start_ready'} \
+                or receipt_id is None or receipt_id != attestation['attestation_id'] or type(attestation.get('duplicate')) is not bool \
+                or attestation.get('snapshot_id') != snapshot_id or attestation.get('source_instance') != source_instance \
+                or attestation.get('key_id') != claim['key_id'] or attestation.get('payload_sha256') != record_sha256(claim) \
+                or attestation.get('mode') != 'staging_only' or attestation.get('capture_attested') is not True \
+                or attestation.get('projection_published') is not False or attestation.get('start_ready') is not False:
+            raise EdgeSyncError('采集认证回执与准确请求不一致，未推进同步状态')
     persist_completed_state(state_file, state, outbox)
     return {
         "snapshotId": snapshot_id,
@@ -1190,6 +1246,7 @@ def upload_outbox(
         "acceptedBatches": accepted_batches,
         "acceptedRecords": accepted_records,
         "completion": completion,
+        **({'controlAttestation':attestation} if attestation is not None else {}),
     }
 
 
@@ -1299,6 +1356,10 @@ def parse_args() -> argparse.Namespace:
         help="人员所属的蔚来OAM企业内部ID",
     )
     parser.add_argument("--batch-size", type=int, default=500)
+    parser.add_argument('--control-catalog-file', type=Path,
+        help='库存控制采集的独立审核目录；仅支持 --entity inventory，不从库存反推目录')
+    parser.add_argument('--control-attestation-key-id',default=os.getenv('RSC_EDGE_CONTROL_CAPTURE_KEY_ID',''),
+        help='控制采集签名通道的准确密钥版本标识；不是密钥本身')
     parser.add_argument(
         "--work-order-days",
         type=int,
@@ -1359,6 +1420,17 @@ def main() -> int:
     expected_org_code = args.org_code.strip()
     if not expected_company_id or not expected_org_code:
         raise EdgeSyncError("必须配置OAM企业ID和组织编码后才能读取")
+    control = expected = capture = base_evidence = None
+    if args.control_catalog_file:
+        if args.entity != 'inventory': raise EdgeSyncError('控制目录采集只接受 --entity inventory')
+        if __package__:
+            from . import inventory_control_capture as control
+        else:
+            import inventory_control_capture as control
+        expected = control.catalog(control.read_document(args.control_catalog_file), source_instance=source_instance,
+            company_id=expected_company_id, org_code=expected_org_code, scope_key=scope_key_for(args.warehouse_code))
+        if not args.dry_run and not re.fullmatch(r'[A-Za-z0-9._:-]{1,128}',args.control_attestation_key_id):
+            raise EdgeSyncError('控制采集上传必须配置准确认证密钥版本')
     include_national = args.warehouse_code is None
     needs_people = args.entity == "employees" or (
         args.entity == "all" and include_national
@@ -1391,6 +1463,8 @@ def main() -> int:
             args.state_file,
             {"version": 2, "sourceInstance": source_instance, "scopes": {}},
         )
+        if control:
+            base_evidence = control.load_base(args.outbox_dir/'evidence', state, expected, force_full=args.force_full)
         quarantined: list[str] = []
         if not args.dry_run:
             quarantined = quarantine_pending_outboxes(args.outbox_dir)
@@ -1404,7 +1478,7 @@ def main() -> int:
         work_order_summary: dict[str, int] | None = None
         needs_warehouses = args.entity in {"warehouses", "inventory", "all"}
         warehouses: list[dict[str, Any]] = []
-        if needs_warehouses:
+        if needs_warehouses and not control:
             warehouses = load_warehouses(
                 args.warehouse_code,
                 expected_company_id,
@@ -1413,7 +1487,12 @@ def main() -> int:
         if args.entity in {"warehouses", "all"}:
             snapshots["warehouse"] = warehouse_records(warehouses)
         if args.entity in {"inventory", "all"}:
-            snapshots["inventory"] = inventory_records(load_inventory(warehouses))
+            if control:
+                capture = control.collect(expected, read_page=read_control_page,
+                    normalize_records=inventory_records, bind_scope=bind_inventory_scope)
+                snapshots['inventory'] = capture['records']
+            else:
+                snapshots["inventory"] = inventory_records(load_inventory(warehouses))
         if needs_people:
             snapshots["employee"] = employee_records(
                 load_employees(
@@ -1506,6 +1585,14 @@ def main() -> int:
             },
             "workOrders": work_order_summary,
         }
+        if control:
+            bundle = control.build_bundle(expected, capture, outbox, manifest=snapshot_manifest(outbox),
+                batches=list(snapshot_batches(outbox)), base=base_evidence)
+            summary['controlCapture'] = dict(status='collected',catalogRevision=expected['catalog_revision'],
+                warehouseCount=len(capture['warehouses']),captureAttested=False,projectionPublished=False,startReady=False)
+            if not args.dry_run:
+                outbox['controlAttestation'] = control.attestation_payload(bundle,key_id=args.control_attestation_key_id)
+                outbox['controlEvidence'] = control.archive(args.outbox_dir/'evidence', bundle)
         if not args.dry_run:
             outbox_path = args.outbox_dir / f"{outbox['snapshotId']}.json"
             write_private_json(outbox_path, outbox)
@@ -1524,7 +1611,7 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except EdgeSyncError as error_message:
+    except (EdgeSyncError, ControlCaptureError) as error_message:
         print(
             json.dumps(
                 {"ok": False, "error": str(error_message)},

@@ -1,0 +1,21 @@
+{
+  "scope": "synthetic local PG16 fixture only; not real OAM or operational evidence",
+  "files": {
+    "source.json": {
+      "source": "daily-control-publication-cases-20260921/multi-warehouse.json",
+      "sha256": "29dde493ea5e2eef0d0abb94f7d6e8a473bac21b2a2200e6c52e7c7089b47755"
+    },
+    "ledger.json": {
+      "source": "daily-ledger-capture-20260921/restored-schema-capture.json",
+      "sha256": "fe5731d52773f15ab2f8b07ccee54cb652f3fae9bf99b7497d955846273e534c"
+    },
+    "non-target-source.json": {
+      "source": "daily-control-source-20260921/capture.json",
+      "sha256": "3334dc32776d74a486f401e5664747e7329a3b77447ee3cb781ce85f85b59d88"
+    },
+    "mapping.json": {
+      "source": "daily-capture-bridge-20260921/two-warehouses-mapping.json",
+      "sha256": "503d708f05fd59133caa0743d1ddcd997f3963179d30dd71a5af1610c88ddde4"
+    }
+  }
+}

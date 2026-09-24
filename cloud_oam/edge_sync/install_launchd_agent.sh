@@ -85,6 +85,7 @@ install_runtime() {
     install -m 700 "${SCRIPT_DIR}/run_scheduled_sync.sh" "${RUNTIME_EDGE_DIR}/run_scheduled_sync.sh"
     install -m 700 "${SCRIPT_DIR}/run_launchd_sync.sh" "${RUNTIME_EDGE_DIR}/run_launchd_sync.sh"
     install -m 600 "${SCRIPT_DIR}/oam_edge_sync.py" "${RUNTIME_EDGE_DIR}/oam_edge_sync.py"
+    install -m 600 "${SCRIPT_DIR}/inventory_control_capture.py" "${RUNTIME_EDGE_DIR}/inventory_control_capture.py"
     install -m 600 "${PROJECT_ROOT}/work/oam_shared_session.py" "${RUNTIME_WORK_DIR}/oam_shared_session.py"
     install -m 600 "${PROJECT_ROOT}/work/global_business_session_health.py" "${RUNTIME_WORK_DIR}/global_business_session_health.py"
     install -m 600 "${PROJECT_ROOT}/work/inventory_query_portal/oam_read_client.py" "${RUNTIME_WORK_DIR}/inventory_query_portal/oam_read_client.py"

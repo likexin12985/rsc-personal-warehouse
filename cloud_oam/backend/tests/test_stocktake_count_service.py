@@ -99,7 +99,11 @@ def _submit(
     )
 
 
-def test_blind_scope_submission_seals_initial_round_without_inventory_or_difference(world):
+@pytest.mark.parametrize('unknown_source_time', [False, True])
+def test_blind_scope_submission_seals_initial_round_without_inventory_or_difference(world, unknown_source_time):
+    if unknown_source_time:
+        world.material_a.source_updated_at = None
+        world.db.commit()
     created, started, scopes, round_row = _started(
         world,
         key="blind",

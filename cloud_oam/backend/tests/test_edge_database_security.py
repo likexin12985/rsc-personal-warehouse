@@ -9,6 +9,25 @@ from app.edge_database_security import (
     _BOUNDARY_SQL,
     verify_edge_database_boundary,
 )
+from app.daily_reconciliation.capture_role_contract import ROLES
+from app.daily_reconciliation.capture_security import (
+    CaptureRoleSecurityError,
+    MANIFEST,
+)
+
+
+_CAPTURE_FIELDS = (
+    "present", "role_safe", "database_safe", "schema_safe", "table_safe",
+    "column_safe", "sequence_safe", "function_safe", "defaults_safe",
+    "parameter_safe", "policy_safe",
+)
+
+
+def _capture_rows():
+    return [
+        {"role_name": role, **dict.fromkeys(_CAPTURE_FIELDS, True)}
+        for role in ROLES
+    ]
 
 
 class _Mappings:
@@ -16,6 +35,9 @@ class _Mappings:
         self.row = row
 
     def one_or_none(self):
+        return self.row
+
+    def all(self):
         return self.row
 
 
@@ -45,8 +67,12 @@ class _Connection:
 
 
 class _Engine:
-    def __init__(self, row, *, rls_row=None, dialect="postgresql"):
-        self.rows = [row, row if rls_row is None else rls_row]
+    def __init__(self, row, *, rls_row=None, capture_rows=None, dialect="postgresql"):
+        self.rows = [
+            row,
+            _capture_rows() if capture_rows is None else capture_rows,
+            row if rls_row is None else rls_row,
+        ]
         self.dialect = SimpleNamespace(name=dialect)
         self.calls = []
 
@@ -63,12 +89,16 @@ def test_edge_database_boundary_accepts_only_complete_positive_evidence():
         expected_migration_role="star_oam_migrator",
     )
 
-    assert len(engine.calls) == 2
+    assert len(engine.calls) == 3
     assert engine.calls[0][1] == {
         "edge_role": "edge_inbox",
         "migration_role": "star_oam_migrator",
     }
     assert engine.calls[1][1] == {
+        "manifest": MANIFEST,
+        "login_enabled": True,
+    }
+    assert engine.calls[2][1] == {
         "runtime_role": "edge_inbox",
         "migration_role": "star_oam_migrator",
     }
@@ -107,6 +137,19 @@ def test_edge_database_boundary_rejects_force_rls_or_binding_drift():
 
     with pytest.raises(EdgeDatabaseBoundaryError, match="rls.force_scope"):
         verify_edge_database_boundary(engine)
+
+
+def test_edge_database_boundary_rejects_partial_capture_role_catalog():
+    engine = _Engine(
+        {"boundary_ok": True, "boundary_failures": ""},
+        capture_rows=_capture_rows()[:-1],
+    )
+
+    with pytest.raises(CaptureRoleSecurityError, match="daily_capture_role_set"):
+        verify_edge_database_boundary(engine)
+
+    # Incomplete capture-role evidence must stop before the scope proof runs.
+    assert len(engine.calls) == 2
 
 
 def test_edge_database_boundary_sql_covers_full_effective_acl_closure():

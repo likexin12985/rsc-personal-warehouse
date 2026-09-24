@@ -17,9 +17,10 @@ from .notification_events import record_stock_return_notification
 
 
 def _fresh_request(db, *, actor, key, request_id):
+    from ..stock_operation_models import StockOperationReturnInbound
     from .stock_return_recovery import require_unsealed
     require_unsealed(db, actor=actor, request_id=request_id)
-    for model in (Order, Cancellation, StockOperationOutbound, StockOperationShipment, StockOperationReceipt):
+    for model in (Order, Cancellation, StockOperationOutbound, StockOperationShipment, StockOperationReceipt, StockOperationReturnInbound):
         if db.scalar(select(model.id).where(model.actor_user_id == actor.user_id, model.request_id == request_id)):
             _fail("stock_return_request_conflict", "请求标识已有退回操作，请先回读原请求")
     if (db.scalar(select(InventoryTransaction.id).where(InventoryTransaction.idempotency_key_hash == key))

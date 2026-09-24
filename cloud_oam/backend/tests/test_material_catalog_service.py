@@ -17,7 +17,22 @@ from app.foundation_models import Permission, Role, RolePermission
 from app.inventory_models import MaterialInventoryPolicy
 from app.material_catalog_schemas import MaterialCatalogPageOut
 from app.routers import formal_material_catalog
-from test_stocktake_task_service import NOW, db, world  # noqa: F401
+from test_stocktake_task_service import NOW, world  # noqa: F401
+
+
+@pytest.fixture
+def db():
+    from sqlalchemy import create_engine, event
+    from sqlalchemy.orm import Session
+    from sqlalchemy.pool import StaticPool
+    from app.database import Base
+
+    engine = create_engine('sqlite+pysqlite:///:memory:', connect_args={'check_same_thread': False}, poolclass=StaticPool)
+    @event.listens_for(engine, 'connect')
+    def foreign_keys(connection, _): connection.execute('PRAGMA foreign_keys=ON')
+    Base.metadata.create_all(engine)
+    with Session(engine) as session: yield session
+    engine.dispose()
 
 
 @pytest.fixture()
@@ -86,6 +101,54 @@ def test_active_catalog_is_paginated_searchable_and_policy_complete(catalog_worl
     assert [row.sku_code for row in searched.items] == ["SKU-B"]
     assert searched.items[0].tracking_mode == "serial"
     assert searched.items[0].allow_fraction is False
+
+
+def test_unknown_source_time_is_explicit_null_through_database_http_and_mini(catalog_world, monkeypatch):
+    import json
+    import shutil
+    import subprocess
+    from pathlib import Path
+    from app.inventory_models import FormalMaterial
+
+    database = catalog_world.db
+    catalog_world.material_a.source_updated_at = None
+    database.commit()
+    known = catalog_world.material_b.source_updated_at
+    before = tuple(database.execute(select(FormalMaterial.id, FormalMaterial.source_updated_at)).all())
+    principal = catalog_world.catalog_principals['technician']
+    original = service.list_active_materials
+    monkeypatch.setattr(service, 'list_active_materials', lambda db, **kw: original(db, now=NOW, **kw))
+    api = FastAPI()
+    api.include_router(formal_material_catalog.router, prefix='/api')
+    api.dependency_overrides[get_db] = lambda: database
+    api.dependency_overrides[get_formal_principal] = lambda: principal
+    with TestClient(api) as client:
+        response = client.get('/api/v1/materials?limit=100')
+    assert response.status_code == 200 and 'no-store' in response.headers['cache-control']
+    body = response.json()
+    assert body['schema_version'] == '2.0'
+    rows = {item['material_id']: item for item in body['items']}
+    assert rows[str(catalog_world.material_a.id)]['source_updated_at'] is None
+    assert rows[str(catalog_world.material_b.id)]['source_updated_at'] == service._aware(known).isoformat().replace('+00:00', 'Z')
+    assert tuple(database.execute(select(FormalMaterial.id, FormalMaterial.source_updated_at)).all()) == before
+    node = shutil.which('node')
+    if node is None:
+        pytest.fail('Node is required to verify the actual HTTP-to-mini source-time contract')
+    module = Path(__file__).parents[2] / 'miniprogram/utils/material-catalog-contract.js'
+    result = subprocess.run([node, '-e', "const fs=require('node:fs');const c=require(process.argv[1]);process.stdout.write(JSON.stringify(c.validatePage(JSON.parse(fs.readFileSync(0,'utf8')))))", str(module)],
+        input=json.dumps(body), text=True, capture_output=True, timeout=20, check=True)
+    assert json.loads(result.stdout) == body
+
+
+def test_material_output_requires_explicit_unknown_and_rejects_invalid_time(catalog_world):
+    from pydantic import ValidationError
+    from app.material_catalog_schemas import MaterialCatalogItemOut
+
+    value = service.list_active_materials(catalog_world.db, actor=catalog_world.catalog_principals['admin'], limit=1, now=NOW).items[0].model_dump()
+    for bad in ('', 'unknown', '2026-09-01T00:00:00', False):
+        with pytest.raises(ValidationError): MaterialCatalogItemOut.model_validate(dict(value, source_updated_at=bad))
+    value.pop('source_updated_at')
+    with pytest.raises(ValidationError): MaterialCatalogItemOut.model_validate(value)
 
 
 def test_missing_current_policy_fails_closed_instead_of_showing_unusable_material(
@@ -182,7 +245,7 @@ def test_formal_catalog_api_is_read_only_and_no_store(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "items": [],
         "next_after_id": None,
     }

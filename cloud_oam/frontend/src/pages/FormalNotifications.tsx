@@ -11,6 +11,8 @@ import {
   validateNotificationRead,
 } from "../formalNotifications";
 import { Button, Loading, showError } from "../ui";
+import InventoryNotificationSources from "./InventoryNotificationSources";
+import NotificationTargets from "./NotificationTargets";
 
 type FormalNotificationsPageProps = {
   canReadDeliveryRecords?: boolean;
@@ -227,5 +229,7 @@ export default function FormalNotificationsPage({
         {deliveryNext && <Button tone="secondary" disabled={deliveryLoadingMore} onClick={() => void loadDeliveries(deliveryNext)}>{deliveryLoadingMore ? "正在加载" : "加载更多"}</Button>}
       </div>}
     </section>}
+      {canReadDeliveryRecords && <InventoryNotificationSources canRecheck={canRetryDelivery} />}
+      {canReadDeliveryRecords && <NotificationTargets canRecover={canRetryDelivery} />}
   </section>;
 }

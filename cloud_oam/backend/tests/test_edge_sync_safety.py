@@ -122,7 +122,7 @@ def test_older_snapshot_is_quarantined_without_replacing_current_projection():
             complete_snapshot(
                 payload,
                 request(),
-                verified(source, "snapshot-older-complete"),
+                verified(source, "snapshot-older-complete", integrations._canonical_json(payload.model_dump(mode='json')).encode()),
                 db,
             )
         assert error.value.status_code == 409
@@ -205,7 +205,7 @@ def test_employee_snapshot_cannot_project_into_user_directory_by_default(monkeyp
         result = complete_snapshot(
             complete_payload,
             request(),
-            verified("edge-safe", "employee-complete"),
+            verified("edge-safe", "employee-complete", integrations._canonical_json(complete_payload.model_dump(mode='json')).encode()),
             db,
         )
         assert result["personnel"]["status"] == "deferred"

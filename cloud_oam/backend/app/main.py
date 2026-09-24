@@ -23,10 +23,12 @@ from .routers import (
     auth,
     dashboard,
     formal_files,
+    formal_reports,
     formal_material_catalog,
     formal_material_request_options,
     formal_material_requests,
     formal_notifications,
+    formal_control_configuration,
     formal_work_order_material,
     formal_work_order_query,
     formal_stock_returns,
@@ -40,6 +42,7 @@ from .routers import (
     formal_stocktakes,
     formal_inventory,
     formal_reconciliation,
+    formal_daily_reconciliation,
     integrations,
     inventory,
     master,
@@ -216,6 +219,7 @@ auth.install_formal_authentication_exception_handler(app)
 formal_material_requests.install_formal_material_request_validation_exception_handler(
     app
 )
+formal_control_configuration.install_validation_handler(app)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
@@ -272,6 +276,9 @@ async def block_legacy_prototype_writes(request, call_next):
         PRIVATE_MATERIAL_REQUEST_OPTION_PREFIX,
         PRIVATE_OPENING_START_OPTION_PREFIX,
         PRIVATE_NOTIFICATION_PREFIX,
+        '/api/v1/inventory-control/configuration',
+        '/api/v1/reconciliations/daily',
+        '/api/v1/reports/inventory-balances',
     )):
         # Picker rows are live authorization decisions. Apply this to
         # framework and service failures too so a cached 404/403 cannot hide a
@@ -327,6 +334,7 @@ app.include_router(formal_material_request_options.router, prefix="/api")
 # and request-scoped KMS cipher dependency.
 app.include_router(formal_material_requests.router, prefix="/api")
 app.include_router(formal_notifications.router, prefix="/api")
+app.include_router(formal_control_configuration.router, prefix="/api")
 app.include_router(formal_work_order_material.router, prefix="/api")
 app.include_router(formal_work_order_query.router, prefix="/api")
 app.include_router(formal_stock_returns.router, prefix="/api")
@@ -338,6 +346,7 @@ app.include_router(formal_material_requests.command_status_router, prefix="/api"
 # adapter is disabled by default and never shares the quarantined legacy
 # ``/media`` filesystem route.
 app.include_router(formal_files.router, prefix="/api")
+app.include_router(formal_reports.router, prefix="/api")
 # The formal opening workflow exposes start, round-aware count, observation
 # disposition, independent regional/headquarters review, recount, post and
 # close commands.  Each route commits one transition only, revalidates its
@@ -358,6 +367,7 @@ app.include_router(formal_stocktakes.router, prefix="/api")
 # only local reconciliation explanations and approvals; it cannot mutate OAM
 # data or inventory ledger facts.
 app.include_router(formal_reconciliation.router, prefix="/api")
+app.include_router(formal_daily_reconciliation.router, prefix="/api")
 # All v0.9 business routers are compatibility-only.  Production exposes no
 # legacy read surface because empty/ambiguous legacy scopes must never degrade
 # to nationwide access.  Each V1 module is mounted only after it uses the

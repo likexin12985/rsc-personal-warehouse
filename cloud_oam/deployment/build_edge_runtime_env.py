@@ -86,6 +86,18 @@ def build_runtime_values(edge_env: dict[str, str], edge_path: Path) -> dict[str,
         "OAM_EDGE_SYNC_SECRET": edge_secret,
         "OAM_EDGE_SYNC_ALLOWED_SOURCES": ",".join(dict.fromkeys(sources)),
     }
+    capture_key_id = edge_env.get('RSC_EDGE_CONTROL_CAPTURE_KEY_ID', '')
+    if capture_key_id:
+        if not 1 <= len(capture_key_id) <= 128 or not SOURCE_PATTERN.fullmatch(capture_key_id) or contains_placeholder(capture_key_id):
+            raise RuntimeError('RSC_EDGE_CONTROL_CAPTURE_KEY_ID must identify the exact deployed authentication key version')
+        values['OAM_EDGE_CONTROL_CAPTURE_ENABLED'] = 'true'
+        values['OAM_EDGE_CONTROL_CAPTURE_KEY_ID'] = capture_key_id
+    material_key_id = edge_env.get('RSC_EDGE_MATERIAL_CAPTURE_KEY_ID', '')
+    if material_key_id:
+        if not 1 <= len(material_key_id) <= 128 or not SOURCE_PATTERN.fullmatch(material_key_id) or contains_placeholder(material_key_id):
+            raise RuntimeError('RSC_EDGE_MATERIAL_CAPTURE_KEY_ID must identify the exact registered material transport key')
+        values['OAM_EDGE_MATERIAL_CAPTURE_ENABLED'] = 'true'
+        values['OAM_EDGE_MATERIAL_CAPTURE_KEY_ID'] = material_key_id
     if any("\r" in value or "\n" in value for value in values.values()):
         raise RuntimeError("运行配置值包含非法换行")
     return values
@@ -97,10 +109,12 @@ def main() -> int:
     edge_path, output_path = map(Path, sys.argv[1:])
     edge_env = read_env(edge_path)
     values = build_runtime_values(edge_env, edge_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(output_path.parent, 0o700)
     temporary = output_path.with_name(f".{output_path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        with temporary.open("x", encoding="utf-8") as handle:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             for key, value in values.items():
                 handle.write(f"{key}={value}\n")
             handle.flush()
@@ -108,6 +122,11 @@ def main() -> int:
         os.chmod(temporary, 0o600)
         os.replace(temporary, output_path)
         os.chmod(output_path, 0o600)
+        directory = os.open(output_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     finally:
         temporary.unlink(missing_ok=True)
     print(f"runtime_env_ready keys={len(values)} mode=600")

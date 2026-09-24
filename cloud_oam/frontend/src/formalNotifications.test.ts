@@ -25,6 +25,13 @@ const item = {
 };
 
 describe("formal notification contract", () => {
+  it("describes an inventory fact without presenting queueing as receipt or inbound", () => {
+    const page = validateNotificationPage({ schema_version: "1.0", next_after_id: null, unread_count: 1,
+      items: [{ ...item, event_type: "inventory_transaction_changed", status: "queued", sent_at: null, payload: {} }] });
+    expect(notificationTitle(page.items[0])).toBe("库存变动已记录");
+    expect(notificationBody(page.items[0])).toContain("库存流水已过账");
+    expect(page.items[0].status).toBe("queued");
+  });
   it("keeps the independent delivery state and safe display text", () => {
     const page = validateNotificationPage({
       schema_version: "1.0",

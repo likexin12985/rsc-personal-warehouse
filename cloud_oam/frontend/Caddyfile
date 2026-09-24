@@ -9,10 +9,32 @@ www.{$APP_DOMAIN:localhost} {
         reverse_proxy api:8000
     }
 
+    redir /xx /xx/ 308
+
+    handle_path /xx/* {
+        root * /srv/warehouse
+        header Cache-Control "no-cache"
+        @warehouse_assets path /assets/* /sw.js /manifest.webmanifest
+        handle @warehouse_assets {
+            file_server
+        }
+        handle {
+            try_files {path} /index.html
+            file_server
+        }
+    }
+
     handle {
-        root * /srv
-        try_files {path} /index.html
-        file_server
+        root * /srv/public
+        header Cache-Control "no-cache"
+        @public_assets path /assets/* /brand/* /sw.js /manifest.webmanifest /knowledge-catalog.json
+        handle @public_assets {
+            file_server
+        }
+        handle {
+            try_files {path} /index.html
+            file_server
+        }
     }
 
     header {

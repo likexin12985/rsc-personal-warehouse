@@ -308,6 +308,26 @@ class StockOperationReceiptException(CreatedAtMixin, Base):
     evidence_file_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("files.id", ondelete="RESTRICT"))
 
 
+class StockOperationReturnInboundSeal(CreatedAtMixin, Base):
+    """Permanently close one exact acceptance's uncertain inbound request."""
+
+    __tablename__ = "stock_operation_return_inbound_seals"
+    __table_args__ = (
+        UniqueConstraint("actor_user_id", "request_id", name="uq_return_inbound_seals_request"),
+        Index("ix_return_inbound_seals_receipt", "receipt_id"),
+        CheckConstraint("authorization_version > 0 AND length(request_hash)=64", name="ck_return_inbound_seals_context"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    receipt_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_receipts.id", ondelete="RESTRICT"))
+    shipment_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_shipments.id", ondelete="RESTRICT"))
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
+    operator_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    request_id: Mapped[str] = mapped_column(String(160))
+    request_reference: Mapped[str] = mapped_column(String(100))
+    request_hash: Mapped[str] = mapped_column(String(64))
+
+
 class StockOperationReturnInbound(CreatedAtMixin, Base):
     """The independent personal/region inbound fact after return acceptance.
 

@@ -44,4 +44,17 @@ describe("formal material catalog contract", () => {
     expect(() => formalMaterialCatalogQuery(" SKU-A")).toThrow();
     expect(() => formalMaterialCatalogQuery("SKU-A\n")).toThrow();
   });
+
+  it("preserves explicit unknown times in v2 and retains strict legacy v1 parsing", () => {
+    const current = { ...page(), schema_version: "2.0", items: [{ ...page().items[0], source_updated_at: null }] };
+    expect(validateFormalMaterialCatalogPage(current)).toMatchObject({ schema_version: "2.0", items: [{ source_updated_at: null }] });
+    expect(validateFormalMaterialCatalogPage({ ...page(), schema_version: "2.0" }).items[0].source_updated_at).toBe(page().items[0].source_updated_at);
+    expect(() => validateFormalMaterialCatalogPage({ ...current, schema_version: "1.0" })).toThrow();
+    expect(() => validateFormalMaterialCatalogPage({ ...current, schema_version: "3.0" })).toThrow();
+    for (const invalid of [undefined, "", "未知", false, 0, "2026-09-01T07:00:00"]) {
+      expect(() => validateFormalMaterialCatalogPage({ ...current, items: [{ ...current.items[0], source_updated_at: invalid }] })).toThrow();
+    }
+    const { source_updated_at: _ignored, ...withoutTime } = current.items[0];
+    expect(() => validateFormalMaterialCatalogPage({ ...current, items: [withoutTime] })).toThrow();
+  });
 });

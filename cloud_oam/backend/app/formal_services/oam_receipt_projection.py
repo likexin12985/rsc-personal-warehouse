@@ -238,8 +238,7 @@ def publish_completed_oam_receipt_snapshot(
         or {entity.entity_type for entity in manifest.entities} != {OAM_RECEIPT_ENTITY}
     ):
         _fail("oam_receipt_manifest_mismatch", "OAM收货完成清单范围不一致")
-    canonical_manifest = _canonical(manifest.model_dump(mode="json"))
-    if hashlib.sha256(canonical_manifest.encode("utf-8")).hexdigest() != snapshot.manifest_sha256:
+    if hashlib.sha256(snapshot.manifest_json.encode("utf-8")).hexdigest() != snapshot.manifest_sha256:
         _fail("oam_receipt_manifest_hash_mismatch", "OAM收货完成清单哈希不一致")
     entity = manifest.entities[0]
     rows = tuple(

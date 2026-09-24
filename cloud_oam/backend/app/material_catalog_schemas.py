@@ -21,11 +21,12 @@ class MaterialCatalogItemOut(_StrictOutputModel):
     tracking_mode: Literal["none", "lot", "serial", "lot_and_serial"]
     quantity_scale: int = Field(ge=0, le=3)
     allow_fraction: bool
-    source_updated_at: AwareDatetime
+    # Required field; explicit null means the source did not provide its time.
+    source_updated_at: AwareDatetime | None
 
 
 class MaterialCatalogPageOut(_StrictOutputModel):
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["2.0"] = "2.0"
     items: tuple[MaterialCatalogItemOut, ...]
     next_after_id: UUID | None
 

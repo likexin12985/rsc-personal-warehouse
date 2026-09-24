@@ -67,16 +67,16 @@ function completion() {
 
 
 describe("formal private-file PC upload", () => {
-  it("keeps receipt evidence purpose through upload and refuses another purpose at completion", async () => {
-    const prepared = await prepareFormalFileUpload(file(), "receipt_exception_evidence", { digest });
-    for (const completionPurpose of ["receipt_exception_evidence", "request_attachment"]) {
+  it.each(["receipt_exception_evidence", "daily_reconciliation_evidence"] as const)("keeps %s purpose through upload and refuses another purpose at completion", async purpose => {
+    const prepared = await prepareFormalFileUpload(file(), purpose, { digest });
+    for (const completionPurpose of [purpose, "request_attachment"]) {
       const requester = vi.fn(async (path: string) => path.endsWith("/complete")
         ? { ...completion(), purpose: completionPurpose }
-        : uploadIntent({ purpose: "receipt_exception_evidence" }));
+        : uploadIntent({ purpose }));
       const result = executeFormalFileUpload(prepared, {
         requester, objectFetcher: async () => new Response(null, { status: 200 }), now: () => NOW,
       });
-      if (completionPurpose === "receipt_exception_evidence") {
+      if (completionPurpose === purpose) {
         expect((await result).purpose).toBe(completionPurpose);
       } else {
         await expect(result).rejects.toBeInstanceOf(ApiError);

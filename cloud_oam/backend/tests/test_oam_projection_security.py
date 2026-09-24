@@ -497,7 +497,23 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0059" in scope_security.__all__
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0060" in scope_security.__all__
     assert "OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0061" in scope_security.__all__
-    assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST) == 16
+    # The receipt extension had 16 functions; later capture/publication
+    # migrations deliberately expand the closure. Keep the historic contract
+    # and require every current addition explicitly, rather than relaxing it
+    # to a minimum count that would accept an unreviewed executable function.
+    assert len(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0082) == 16
+    assert set(scope_security.OAM_SYNC_FUNCTION_MANIFEST) == (
+        set(scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0082)
+        | {
+            'rsc_oam_capture_attestation_guard_0114()',
+            'rsc_oam_material_binding_guard_0116()',
+            'rsc_oam_material_capture_visible_0116(text)',
+            'rsc_oam_material_capture_binding_0116(text,text,text)',
+            'rsc_oam_material_receipt_guard_0116()',
+            'rsc_guard_material_projection_graph_0119()',
+            'rsc_guard_control_projection_graph_0121()',
+        }
+    )
     ready_signature = "rsc_oam_runtime_binding_ready_0044()"
     for manifest in (
         scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0045,
@@ -1048,7 +1064,7 @@ def test_0044_scope_function_manifest_matches_migration_bodies_exactly():
 
 
 def test_0044_scope_trigger_manifest_is_exact():
-    assert scope_security.EXPECTED_TRIGGERS == (
+    historical = (
         (
             "external_sync_snapshots",
             "trg_external_sync_snapshot_transition_0044",
@@ -1077,6 +1093,29 @@ def test_0044_scope_trigger_manifest_is_exact():
             True,
         ),
     )
+    assert tuple(row for row in scope_security.EXPECTED_TRIGGERS if row[1].endswith('_0044')) == historical
+    migration_root = Path(__file__).resolve().parents[1] / 'alembic' / 'versions'
+    capture = runpy.run_path(str(migration_root / '20261024_0114_control_capture_attestations.py'))
+    material = runpy.run_path(str(migration_root / '20261026_0116_material_capture_ingress.py'))
+    expected = set(historical)
+    expected.update((capture['TABLE'], name, capture['FUNCTION_NAME'] + '()', kind, False, False, False)
+                    for name, (_, kind) in capture['TRIGGERS'].items())
+    expected.update((table, name, function, kind, False, False, False)
+                    for table, name, function, _, kind in material['TRIGGERS'])
+    # Both publishers guard the same preserved external graph seen by Edge.
+    # Derive attributes from their actual migration, but keep the intended
+    # isolated table/function scope explicit and closed.
+    for filename, tables in (
+        ('20261029_0119_material_publications.py', {'external_objects', 'external_object_versions'}),
+        ('20261031_0121_control_publications.py', {'sync_runs', 'sync_batches', 'sync_inbox_events',
+                                                'external_objects', 'external_object_versions'}),
+    ):
+        migration = runpy.run_path(str(migration_root / filename))
+        expected.update((table, name, function + '()', kind, deferred, deferred, deferred)
+                        for name, (table, function, _, kind, deferred) in migration['TRIGGERS'].items()
+                        if table in tables and function == migration['GRAPH_FUNCTION'])
+    assert len(scope_security.EXPECTED_TRIGGERS) == len(expected)
+    assert set(scope_security.EXPECTED_TRIGGERS) == expected
     migration_path = (
         Path(__file__).resolve().parents[1]
         / "alembic"
@@ -1181,7 +1220,13 @@ def test_forward_readiness_manifests_match_head_hashes():
     from alembic.script import ScriptDirectory
     scripts = ScriptDirectory(str(migration_root.parent))
     head = scripts.get_revision(scripts.get_current_head())
-    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6] == head.module.NEW_HASH
+    readiness_hashes = [
+        getattr(head.module, name)
+        for name in ("NEW_HASH", "NEW_READY_HASH")
+        if hasattr(head.module, name)
+    ]
+    assert len(readiness_hashes) == 1
+    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6] == readiness_hashes[0]
     migration_0070 = runpy.run_path(str(migration_root / "20260910_0070_stock_reservation_releases.py"))
     assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0070[ready_signature][6] == migration_0070["RUNTIME_READY_BODY_SHA256_0070"]
     migration_0071 = runpy.run_path(str(migration_root / "20260911_0071_reservation_picking.py"))

@@ -29,6 +29,7 @@ CONCURRENT_TASKS = 16
 
 class BlockingSmsProvider:
     def __init__(self, *, limit: int, release: threading.Event) -> None:
+        self.settings = auth.settings.model_copy(deep=True)
         self.limit = limit
         self.release = release
         self.full = threading.Event()
@@ -119,6 +120,7 @@ def dispatch_capacity_world(
     monkeypatch.setattr(auth, "SmsDispatchSessionLocal", dispatch_session_factory)
     monkeypatch.setattr(auth, "_SMS_PROVIDER_CAPACITY", capacity)
     monkeypatch.setattr(auth, "get_sms_provider", lambda: provider)
+    monkeypatch.setattr(auth, "_formal_mobile_hash", lambda mobile: auth.hashlib.sha256(mobile.encode()).hexdigest())
     monkeypatch.setattr(
         auth.authentication_challenge,
         "authorize_dispatch_provider_call",

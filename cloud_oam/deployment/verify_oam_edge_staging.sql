@@ -46,15 +46,20 @@ runtime_functions(function_signature) AS (
     VALUES
         ('public.rsc_oam_rls_check_0044(text,text,jsonb)'::text),
         ('public.rsc_oam_runtime_binding_ready_0044()'::text),
+        ('public.rsc_oam_material_capture_visible_0116(text)'::text),
+        ('public.rsc_oam_material_capture_binding_0116(text,text,text)'::text),
         ('public.rsc_oam_receipt_rls_check_0082(text,text,text,jsonb)'::text)
 ),
 expected_function_acl(role_kind, function_signature) AS (
     SELECT role_name.role_kind, runtime_function.function_signature
     FROM role_names AS role_name
     CROSS JOIN runtime_functions AS runtime_function
-    WHERE runtime_function.function_signature
+    WHERE (role_name.role_kind <> 'projector' OR runtime_function.function_signature NOT IN (
+        'public.rsc_oam_material_capture_visible_0116(text)',
+        'public.rsc_oam_material_capture_binding_0116(text,text,text)'))
+      AND (runtime_function.function_signature
               <> 'public.rsc_oam_receipt_rls_check_0082(text,text,text,jsonb)'
-       OR role_name.role_kind = 'projector'
+       OR role_name.role_kind = 'projector')
 ),
 edge_table_acl(
     table_name,
@@ -70,6 +75,8 @@ edge_table_acl(
         ('external_sync_snapshots', TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE),
         ('external_sync_snapshot_batches', TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE),
         ('external_sync_snapshot_records', TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE),
+        ('inventory_control_capture_attestations', TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE),
+        ('oam_material_capture_receipts', TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE),
         ('external_sync_current_records', TRUE, TRUE, FALSE, TRUE, FALSE, FALSE, FALSE),
         ('audit_logs', FALSE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE)
 ),
@@ -931,6 +938,9 @@ WHERE schema_row.nspname = 'public'
       'external_sync_snapshots',
       'external_sync_snapshot_batches',
       'external_sync_snapshot_records',
+      'inventory_control_capture_attestations',
+      'oam_material_capture_bindings',
+      'oam_material_capture_receipts',
       'external_sync_current_records',
       'audit_logs',
       'oam_work_orders'

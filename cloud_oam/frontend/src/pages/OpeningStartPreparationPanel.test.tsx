@@ -12,6 +12,8 @@ function wire(path: string, identity = actor): any {
   const [base, search] = path.split("?");
   const stage = base.split("/").at(-1);
   const query = new URLSearchParams(search);
+  if (stage === "control-batches") return { schema_version: "rsc.opening_control_batches.v1", actor_person_id: identity.person_id,
+    authorization_version: identity.authorization_version, region_org_id: query.get("region_org_id"), start_ready: false, admission_status: "not_evaluated", items: [], next_after_id: null };
   const secondRegion = query.get("region_org_id") === id(12);
   const result: any = { schema_version: "1.0", actor_person_id: identity.person_id,
     authorization_version: identity.authorization_version, start_ready: false,
@@ -66,8 +68,8 @@ describe("read-only opening preparation panel", () => {
     expect(apiNoReplay).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "展开准备目录" }).getAttribute("aria-expanded")).toBe("false");
     await selectAll();
-    expect(apiNoReplay).toHaveBeenCalledTimes(4);
-    expect(screen.getByText(/仅核验范围与人员，尚未评估省级控制库存，不能启动/)).toBeTruthy();
+    expect(apiNoReplay).toHaveBeenCalledTimes(5);
+    expect(screen.getByText(/仅核验范围、人员及已发布批次摘要/)).toBeTruthy();
     expect(screen.getByText("库位物理归属")).toBeTruthy();
     expect(screen.getByText("物理归属区域")).toBeTruthy();
     expect(screen.getByText("保管责任人")).toBeTruthy();

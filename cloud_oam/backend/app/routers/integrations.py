@@ -3,7 +3,7 @@ import hmac
 import json
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -32,6 +32,9 @@ from ..schemas import (
 )
 from ..services import audit
 from ..oam_directory import OamDirectoryError, reconcile_personnel_snapshot
+from ..inventory_control_attestation import CaptureAttestationIn, CaptureAttestationError, accept_inventory_control_attestation
+from ..material_capture_ingress import handle_material_capture, key_fingerprint as material_key_fingerprint
+from ..material_master_capture_evidence import MaterialMasterCaptureError
 
 
 ingress_router = APIRouter(prefix="/integrations/oam/edge", tags=["integrations"])
@@ -68,6 +71,10 @@ class VerifiedEdgeRequest:
     batch_id: str
     body: bytes
     body_sha256: str
+    authentication_key_id: str = ''
+    authentication_key_fingerprint: str = ''
+    authenticated_at: datetime | None = None
+    signed_at: datetime | None = None
 
 
 def _canonical_json(value: Any) -> str:
@@ -346,9 +353,14 @@ async def verify_edge_request(
     if abs(int(time.time()) - timestamp) > settings.edge_sync_max_clock_skew_seconds:
         raise HTTPException(status_code=401, detail="同步请求已过期")
 
-    body = await request.body()
-    if len(body) > settings.edge_sync_max_body_bytes:
-        raise HTTPException(status_code=413, detail="同步批次超过大小限制")
+    chunks, body_size = [], 0
+    async for chunk in request.stream():
+        body_size += len(chunk)
+        if body_size > settings.edge_sync_max_body_bytes:
+            raise HTTPException(status_code=413, detail="同步批次超过大小限制")
+        chunks.append(chunk)
+    body = b''.join(chunks)
+    request._body = body
     expected = hmac.new(
         settings.edge_sync_secret.encode("utf-8"),
         _signing_message(timestamp_value, source_instance, batch_id, body),
@@ -364,7 +376,63 @@ async def verify_edge_request(
         batch_id=batch_id,
         body=body,
         body_sha256=hashlib.sha256(body).hexdigest(),
+        authentication_key_id=settings.edge_control_capture_key_id,
+        authentication_key_fingerprint=hmac.new(settings.edge_sync_secret.encode(),
+            b'rsc.inventory-control-capture-key.v1\n'+source_instance.encode(),hashlib.sha256).hexdigest(),
+        authenticated_at=datetime.now(timezone.utc),
+        signed_at=datetime.fromtimestamp(timestamp,timezone.utc),
     )
+
+
+async def verify_material_capture_request(verified: VerifiedEdgeRequest = Depends(verify_edge_request)):
+    if not settings.edge_material_capture_ready():
+        raise HTTPException(status_code=503, detail='material_capture_not_configured')
+    return replace(verified, authentication_key_id=settings.edge_material_capture_key_id,
+        authentication_key_fingerprint=material_key_fingerprint(settings.edge_sync_secret, verified.source_instance))
+
+
+def _material_capture_response(db, verified, operation):
+    try:
+        result = handle_material_capture(db, verified=verified, operation=operation)
+        db.commit()
+        return result
+    except MaterialMasterCaptureError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from None
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=503, detail='material_capture_result_unknown') from None
+
+
+@ingress_router.post('/material-master/captures')
+def receive_material_master_capture(verified: VerifiedEdgeRequest = Depends(verify_material_capture_request),
+                                    db: Session = Depends(get_db)):
+    return _material_capture_response(db, verified, 'receive')
+
+
+@ingress_router.post('/material-master/captures/status')
+def read_material_master_capture_status(verified: VerifiedEdgeRequest = Depends(verify_material_capture_request),
+                                       db: Session = Depends(get_db)):
+    return _material_capture_response(db, verified, 'status')
+
+
+@ingress_router.post('/inventory-control/captures')
+def receive_inventory_control_capture(payload: CaptureAttestationIn, request: Request,
+        verified: VerifiedEdgeRequest = Depends(verify_edge_request), db: Session = Depends(get_db)):
+    if not settings.edge_control_capture_ready():
+        raise HTTPException(status_code=503, detail='control_capture_not_configured')
+    if payload.key_id != settings.edge_control_capture_key_id:
+        raise HTTPException(status_code=401, detail='control_capture_key_mismatch')
+    try:
+        result = accept_inventory_control_attestation(db, payload=payload, verified=verified)
+        db.commit()
+        return result
+    except CaptureAttestationError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from None
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=503, detail='control_capture_result_unknown') from None
 
 
 @ingress_router.post("/batches")
@@ -613,6 +681,18 @@ def receive_snapshot_batch(
     }
 
 
+def _verified_snapshot_manifest(payload, verified):
+    """Preserve the exact signed bytes; datetime reserialization changes hashes."""
+    try:
+        raw = verified.body
+        if not isinstance(raw, bytes) or hashlib.sha256(raw).hexdigest() != verified.body_sha256 \
+                or EdgeSyncSnapshotCompleteIn.model_validate_json(raw) != payload:
+            raise ValueError()
+        return raw.decode('utf-8')
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail='snapshot_manifest_authentication_mismatch') from None
+
+
 @ingress_router.post("/snapshots/complete")
 def complete_snapshot(
     payload: EdgeSyncSnapshotCompleteIn,
@@ -620,6 +700,7 @@ def complete_snapshot(
     verified: VerifiedEdgeRequest = Depends(verify_edge_request),
     db: Session = Depends(get_db),
 ):
+    manifest_body = _verified_snapshot_manifest(payload, verified)
     _validate_snapshot_manifest_boundary(payload)
     snapshot = _get_or_create_snapshot(
         db,
@@ -842,7 +923,7 @@ def complete_snapshot(
         }
 
     snapshot.status = "complete"
-    snapshot.manifest_json = _canonical_json(payload.model_dump(mode="json"))
+    snapshot.manifest_json = manifest_body
     snapshot.manifest_sha256 = verified.body_sha256
     snapshot.completed_at = datetime.now(timezone.utc)
     # Persist current-mirror replacement and the terminal one-way seal before

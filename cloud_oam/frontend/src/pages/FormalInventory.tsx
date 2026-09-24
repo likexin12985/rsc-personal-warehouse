@@ -5,6 +5,7 @@ import { api } from "../api";
 import { validateInventoryAccountPage } from "../formalInventory";
 import type { InventoryAccountPage } from "../types";
 import { Button, Empty, Loading, SectionHeader, showError } from "../ui";
+import InventoryReportPanel from "./InventoryReportPanel";
 
 
 const CONDITION_LABELS: Record<string, string> = {
@@ -26,7 +27,11 @@ const AVAILABILITY_LABELS: Record<string, string> = {
 };
 
 
-export default function FormalInventoryPage() {
+export default function FormalInventoryPage({ canExport = false, personId = "", authorizationVersion = 0 }: {
+  canExport?: boolean;
+  personId?: string;
+  authorizationVersion?: number;
+}) {
   const [page, setPage] = useState<InventoryAccountPage | null>(null);
   const [afterId, setAfterId] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([]);
@@ -77,6 +82,11 @@ export default function FormalInventoryPage() {
       <div className="alert alert-error" role="alert"><CircleAlert size={18} />正式库存响应未通过校验：{error}</div>
       {history.length > 0 && <div className="section-actions"><Button tone="secondary" onClick={previousPage}>返回上一页</Button></div>}
     </>}
+    {canExport && <InventoryReportPanel
+      key={`${personId}:${authorizationVersion}`}
+      personId={personId}
+      authorizationVersion={authorizationVersion}
+    />}
     {page && <>
       <section className="content-section formal-inventory-status">
         <div className="content-title">

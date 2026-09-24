@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta, timezone
 import subprocess
 import sys
 from pathlib import Path
@@ -112,6 +113,24 @@ def test_production_requires_a_complete_passwordless_login_channel():
     )
     settings.validate_api_startup()
     assert settings.wechat_configuration_ready() is True
+
+
+def test_pnvs_sts_requires_complete_unexpired_dedicated_triplet():
+    future = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    valid = production_settings(sms_security_token="synthetic-token-" + "x" * 32,
+        sms_security_token_expires_at=future)
+    assert valid.sms_configuration_ready()
+    valid.validate_api_startup()
+    for change in (
+        {"sms_security_token_expires_at":""},
+        {"sms_security_token":""},
+        {"sms_security_token_expires_at":"not-a-time"},
+        {"sms_security_token_expires_at":datetime.now(timezone.utc).isoformat()},
+    ):
+        candidate = valid.model_copy(update=change)
+        assert not candidate.sms_configuration_ready()
+        with pytest.raises(ValueError, match="SMS login is not fully configured"):
+            candidate.validate_api_startup()
 
 
 def test_sms_dispatch_lease_preserves_provider_call_safety_window() -> None:
@@ -624,6 +643,10 @@ edge_routes = routes(edge_main.app)
 assert ("/api/integrations/oam/edge/snapshots/batches", "POST") not in main_routes
 assert ("/api/integrations/oam/edge/snapshots/complete", "POST") not in main_routes
 assert ("/api/integrations/oam/edge/status", "GET") not in main_routes
+for suffix in ("", "/status"):
+    material_route = ("/api/integrations/oam/edge/material-master/captures" + suffix, "POST")
+    assert material_route not in main_routes
+    assert material_route in edge_routes
 assert ("/api/access/context", "GET") in main_routes
 for legacy_path in (
     "/api/dashboard",

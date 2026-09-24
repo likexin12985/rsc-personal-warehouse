@@ -315,6 +315,48 @@ class OpeningStocktakeCountOut(BaseModel):
     replayed: bool
 
 
+class OpeningCountImportErrorOut(_StrictRequestModel):
+    row: int = Field(ge=2, le=10001)
+    field: str = Field(min_length=1, max_length=80)
+    code: str = Field(min_length=1, max_length=80)
+    message: str = Field(min_length=1, max_length=200)
+
+
+class OpeningCountImportFormatOut(_StrictRequestModel):
+    schema_version: Literal["1.0"] = "1.0"
+    format: Literal["opening_count_import_v1"] = "opening_count_import_v1"
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    row_count: int = Field(ge=1, le=10000)
+    format_valid: bool
+    payload_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    errors: tuple[OpeningCountImportErrorOut, ...] = Field(max_length=1000)
+
+
+class OpeningCountImportBusinessCheckIn(_StrictRequestModel):
+    source_file_id: UUID
+    task_id: UUID
+    round_id: UUID
+    scope_id: UUID
+
+    @field_validator("source_file_id", "task_id", "round_id", "scope_id")
+    @classmethod
+    def validate_identifiers(cls, value: UUID) -> UUID:
+        return _required_uuid(value, "opening import identifier")
+
+
+class OpeningCountImportBusinessCheckOut(_StrictRequestModel):
+    schema_version: Literal["1.0"] = "1.0"
+    format: Literal["opening_count_import_v1"] = "opening_count_import_v1"
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    payload_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    row_count: int = Field(ge=0, le=10000)
+    ready: bool
+    task_version: int | None = Field(default=None, ge=0)
+    actor_authorization_version: int | None = Field(default=None, ge=1)
+    request_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    errors: tuple[OpeningCountImportErrorOut, ...] = Field(max_length=1000)
+
+
 class OpeningStocktakeReviewItemIn(_StrictRequestModel):
     difference_id: UUID
     decision: Literal[
@@ -540,3 +582,76 @@ class OpeningStocktakeCloseOut(BaseModel):
     task_version: int = Field(ge=0)
     closed_at: datetime
     replayed: bool
+
+
+class OpeningStocktakeFromPublicationIn(_StrictRequestModel):
+    """Business input only; source/run, quantities and evidence come from server."""
+    publication_id: UUID
+    region_org_id: UUID
+    task_no: StrictStr = Field(min_length=1,max_length=100,pattern=_SAFE_REFERENCE_PATTERN)
+    scopes: tuple[OpeningStocktakeScopeIn,...] = Field(min_length=1)
+    blind_count: StrictBool = True
+    deadline: AwareDatetime | None = None
+    note: StrictStr = Field(default="",max_length=10000)
+
+    @field_validator("publication_id","region_org_id")
+    @classmethod
+    def validate_publication_ids(cls,value,info):
+        return _required_uuid(value,info.field_name)
+
+    @field_validator("deadline",mode="before")
+    @classmethod
+    def validate_publication_deadline(cls,value):
+        return _require_aware_json_timestamp(value,"deadline")
+
+    @field_validator("note")
+    @classmethod
+    def validate_publication_note(cls,value):
+        if value!=value.strip():raise ValueError("note cannot have surrounding whitespace")
+        return value
+
+
+class OpeningStocktakeStartRecoveryOut(BaseModel):
+    model_config = ConfigDict(extra="forbid",frozen=True)
+    schema_version: Literal["rsc.opening_start_recovery.v1"] = "rsc.opening_start_recovery.v1"
+    actor_person_id: UUID
+    authorization_version: int = Field(ge=1)
+    region_org_id: UUID
+    publication_id: UUID
+    outcome: Literal["found","not_observed"]
+    automatic_retry_allowed: Literal[False] = False
+    result: OpeningStocktakeStartOut | None
+
+
+class OpeningStartSealIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    region_org_id: UUID
+    publication_id: UUID
+    trace_request_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class OpeningStartSealOut(OpeningStartSealIn):
+    seal_id: UUID
+    actor_person_id: UUID
+    authorization_version: int = Field(ge=1)
+    sealed_at: AwareDatetime
+    permanent_nonexecution: Literal[True]
+
+
+class OpeningStartCommandResultOut(OpeningStocktakeStartRecoveryOut):
+    schema_version: Literal["rsc.opening_start_recovery.v2"] = "rsc.opening_start_recovery.v2"
+    outcome: Literal["found", "not_observed", "sealed"]
+    seal: OpeningStartSealOut | None
+
+    @model_validator(mode="after")
+    def validate_original_result(self):
+        if ((self.result is not None) != (self.outcome == "found")
+                or (self.seal is not None) != (self.outcome == "sealed")):
+            raise ValueError("original request must have exactly one consistent outcome")
+        if self.seal is not None and (
+                self.seal.actor_person_id != self.actor_person_id
+                or self.seal.region_org_id != self.region_org_id
+                or self.seal.publication_id != self.publication_id
+                or self.seal.authorization_version > self.authorization_version):
+            raise ValueError("seal must match the authorized original coordinates")
+        return self

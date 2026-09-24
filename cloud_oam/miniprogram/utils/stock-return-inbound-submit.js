@@ -5,20 +5,30 @@ const { uuid } = require('./work-order-query-contract')
 
 function freeze(value) { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value) }; return value }
 function pathOf(receiptId) { return `/v1/stock-returns/my-receiving/${uuid(receiptId)}/inbound` }
-async function prepareInbound({ api, current, receiptId, shipmentId, personId }) {
-  await current()
+async function readInboundState({ api, current, receiptId, shipmentId, personId, authorizationVersion }) {
+  const before = await current()
+  const raw = await api.request(pathOf(receiptId), contract.READ)
+  if (await current() !== before) throw new Error('入账记录或权限已变化，请刷新。')
+  return freeze(contract.validateState(raw, { receiptId, shipmentId, personId, authorizationVersion }))
+}
+async function prepareInbound({ api, current, receiptId, shipmentId, personId, authorizationVersion }) {
+  const before = await current()
+  const state = await readInboundState({ api, current, receiptId, shipmentId, personId, authorizationVersion })
+  if (state.status === 'posted') return { state, preview: null, review: null }
   const raw = await api.request(pathOf(receiptId) + '/preview', { ...contract.READ, method: 'POST' })
-  await current()
-  const preview = freeze(contract.validatePreview(raw, { receiptId, shipmentId, personId }))
+  if (await current() !== before) throw new Error('入账记录或权限已变化，请刷新。')
+  const preview = freeze(contract.validatePreview(raw, { receiptId, shipmentId, personId, authorizationVersion }))
   return { preview, review: freeze({ title: '确认退回入账', description: '仅将已验收的退回数量从在途账户转入当前区域仓账户；不执行普通需求收货或 OAM 收货。',
     receiptId: preview.receipt_id, shipmentId: preview.shipment_id, target: preview.target_location_id,
     rows: preview.lines.map(row => ({ id: row.receipt_line_id, quantity: row.accepted_qty, serialCount: row.serial_ids.length })) }) }
 }
-async function submitInbound({ api, store, workOrderId, receiptId, shipmentId, personId, authorizationVersion, authorize, confirm }) {
+async function submitInbound({ api, store, workOrderId, receiptId, shipmentId, personId, authorizationVersion, expectedPlanHash, authorize, confirm }) {
   return store.withLease({ work_order_id: workOrderId, shipment_id: shipmentId }, async lease => {
     if (lease.read().kind !== 'missing') throw new Error('请先核验该退回入账请求的原结果。')
     const before = await authorize(), current = async () => { if (await authorize() !== before) throw new Error('access changed') }
-    const prepared = await prepareInbound({ api, current, receiptId, shipmentId, personId })
+    const prepared = await prepareInbound({ api, current, receiptId, shipmentId, personId, authorizationVersion })
+    if (prepared.state && prepared.state.status === 'posted') return { status: 'already_posted', state: prepared.state }
+    if (prepared.preview.plan_hash !== expectedPlanHash) throw new Error('入账方案已变化，请重新预览并确认。')
     if (!await confirm(prepared.review)) return { status: 'cancelled' }
     await current()
     const trace = api.createRequestId(), key = api.createIdempotencyKey()
@@ -39,4 +49,4 @@ async function submitInbound({ api, store, workOrderId, receiptId, shipmentId, p
     return result.lookup_status === 'sealed' ? { status: 'sealed', seal: result.seal } : { status: 'confirmed', inbound: result }
   })
 }
-module.exports = { pathOf, prepareInbound, submitInbound }
+module.exports = { pathOf, readInboundState, prepareInbound, submitInbound }

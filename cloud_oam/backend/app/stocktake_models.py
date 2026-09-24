@@ -68,6 +68,25 @@ class TimestampMixin(CreatedAtMixin):
     )
 
 
+class OpeningStartCommandSeal(Base):
+    """Permanent nonexecution of one person's original opening request."""
+    __tablename__ = "opening_start_command_seals"
+    __table_args__ = (
+        UniqueConstraint("actor_user_id", "request_id", name="uq_opening_start_seal_request"),
+        UniqueConstraint("actor_user_id", "request_reference", name="uq_opening_start_seal_reference"),
+        CheckConstraint("authorization_version > 0 AND length(request_id) BETWEEN 8 AND 160 AND length(request_reference)=80", name="ck_opening_start_seal_context"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True)
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
+    actor_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    region_org_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("organizations.id", ondelete="RESTRICT"))
+    publication_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("control_projection_publications.id", ondelete="RESTRICT"))
+    request_id: Mapped[str] = mapped_column(String(160))
+    request_reference: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class FormalStocktakeTask(TimestampMixin, Base):
     __tablename__ = "stocktake_tasks"
     __table_args__ = (
@@ -123,6 +142,10 @@ class FormalStocktakeTask(TimestampMixin, Base):
         CheckConstraint(
             "closed_at IS NULL OR posted_at IS NOT NULL",
             name="ck_formal_stocktake_tasks_close_order",
+        ),
+        CheckConstraint(
+            "opening_authorization_version IS NULL OR (task_type = 'opening' AND opening_authorization_version > 0)",
+            name="ck_opening_authorization_version_0126",
         ),
         Index(
             "uq_formal_stocktake_tasks_active_opening_region",
@@ -183,6 +206,8 @@ class FormalStocktakeTask(TimestampMixin, Base):
     created_by_user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="RESTRICT")
     )
+    # NULL on pre-0126 history is unknown, never backfilled from current users.
+    opening_authorization_version: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     deadline: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

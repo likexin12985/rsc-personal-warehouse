@@ -347,7 +347,8 @@ def _stage_snapshot(
     return snapshot
 
 
-def test_publisher_creates_complete_formal_provenance_chain(db: Session):
+@pytest.mark.parametrize('wire_format',['canonical','offset','whitespace'])
+def test_publisher_creates_complete_formal_provenance_chain(db: Session,wire_format):
     source = _source(db)
     organization, person, _ = _person_mapping(db, source)
     snapshot = _stage_snapshot(
@@ -355,6 +356,13 @@ def test_publisher_creates_complete_formal_provenance_chain(db: Session):
         payloads=(_work_order_payload(),),
         snapshot_id="snapshot-work-order-0001",
     )
+
+    if wire_format!='canonical':
+        document=json.loads(snapshot.manifest_json)
+        document['snapshot_at']=document['snapshot_at'].replace('Z','+00:00')
+        snapshot.manifest_json=json.dumps(document,indent=2 if wire_format=='whitespace' else None)
+        snapshot.manifest_sha256=hashlib.sha256(snapshot.manifest_json.encode()).hexdigest()
+        db.flush()
 
     result = service.publish_completed_work_order_snapshot(
         db,

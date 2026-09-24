@@ -1,0 +1,4 @@
+# Keep the reviewed target image's transitive versions while compiling hashes.
+# The Aliyun mirror lags official PyPI for these packages.
+Mako==1.4.1
+watchfiles==1.2.0

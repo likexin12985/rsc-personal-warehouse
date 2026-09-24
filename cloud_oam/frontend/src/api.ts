@@ -495,7 +495,18 @@ export async function apiNoReplay<T>(path: string, init: RequestInit = {}): Prom
   return requestApi<T>(path, init, false);
 }
 
+/** Authenticated binary response for controlled file endpoints. */
+export async function apiBinary(path: string, init: RequestInit = {}): Promise<Response> {
+  return requestApiResponse(path, init, !requiresRequestId(init.method || "GET"));
+}
+
 async function requestApi<T>(path: string, init: RequestInit, allowRefreshReplay: boolean): Promise<T> {
+  const response = await requestApiResponse(path, init, allowRefreshReplay);
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
+}
+
+async function requestApiResponse(path: string, init: RequestInit, allowRefreshReplay: boolean): Promise<Response> {
   const method = init.method || "GET";
   const normalizedPath = path.split("?", 1)[0].replace(/\/+$/, "") || "/";
   const isPrivateIdentityRead = method.toUpperCase() === "GET" && (
@@ -510,7 +521,9 @@ async function requestApi<T>(path: string, init: RequestInit, allowRefreshReplay
     headers.set("X-Request-ID", requestId());
   }
   requireSafeAuthenticationIdempotencyKey(headers, path, method);
-  if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
+  if (init.body && !(init.body instanceof FormData) && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
   if (isPrivateIdentityRead) {
     headers.set("Cache-Control", "no-store");
     headers.set("Pragma", "no-cache");
@@ -562,8 +575,7 @@ async function requestApi<T>(path: string, init: RequestInit, allowRefreshReplay
       category,
     });
   }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+  return response;
 }
 
 export function jsonBody(value: unknown): Pick<RequestInit, "body"> {

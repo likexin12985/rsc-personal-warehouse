@@ -44,6 +44,7 @@
         <view wx:for="{{materialPicker.items}}" wx:key="material_id" class="list-card">
           <view class="row between"><text class="mono">{{item.sku_code}}</text><button class="button button-secondary button-small" data-id="{{item.material_id}}" bindtap="chooseMaterial">选择</button></view>
           <view class="fact"><text class="muted">名称 / 规格</text><text>{{item.name}} / {{item.specification || '无规格'}}</text></view>
+          <view class="fact"><text class="muted">来源更新时间</text><text>{{item.source_updated_at === null ? '未知' : item.source_updated_at}}</text></view>
           <view class="fact"><text class="muted">单位 / 追踪策略</text><text>{{item.base_unit}} / {{item.trackingLabel}}</text></view>
           <view class="fact"><text class="muted">数量规则</text><text>{{item.quantity_scale}} 位小数 / {{item.fractionLabel}}</text></view>
         </view>

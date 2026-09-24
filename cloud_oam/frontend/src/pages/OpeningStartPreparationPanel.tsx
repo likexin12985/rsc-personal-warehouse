@@ -4,6 +4,10 @@ import {
   type OpeningPreparationActor, type OpeningPreparationContext, type OpeningPreparationOption, type OpeningPreparationStage,
 } from "../formalOpeningStartOptions";
 import { Button, Field } from "../ui";
+import OpeningControlDirectory from "./OpeningControlDirectory";
+import OpeningStartWorkflow from './OpeningStartWorkflow';
+import { OPENING_START_ENABLED } from '../openingStartClient';
+import type { ControlBatch } from '../formalOpeningControlDirectory';
 
 const STAGES: OpeningPreparationStage[] = ["regions", "asset-owners", "locations", "assignees"];
 const LABELS = { regions: "任务区域", "asset-owners": "资产所有组织", locations: "实物库存位置", assignees: "初盘执行人员" };
@@ -84,11 +88,13 @@ function Directory({ context, selection, onInvalidate, onSelect, custodianPerson
   </div>;
 }
 
-function Directories({ actor }: { actor: OpeningPreparationActor }) {
+function Directories({ actor, startEnabled, onOpen }: { actor: OpeningPreparationActor; startEnabled: boolean; onOpen?: (task: string) => void }) {
+  const [batch, setBatch] = useState<ControlBatch>();
   const [selected, setSelected] = useState<Partial<Record<OpeningPreparationStage, OpeningPreparationOption>>>({});
   const [epochs, setEpochs] = useState([0, 0, 0, 0]);
   function change(stage: OpeningPreparationStage, value?: OpeningPreparationOption) {
     const index = STAGES.indexOf(stage);
+    if (index === 0) setBatch(undefined);
     setSelected((old) => {
       const next = { ...old };
       for (const descendant of STAGES.slice(index)) delete next[descendant];
@@ -108,7 +114,7 @@ function Directories({ actor }: { actor: OpeningPreparationActor }) {
     region_org_id: region.id, owner_org_id: owner.id, location_id: location.id,
   }));
   return <>
-    <p className="alert alert-warning">仅核验范围与人员，尚未评估省级控制库存，不能启动。这里不查询数量、不选择控制同步批次，也不创建任务。</p>
+    <p className="alert alert-warning">{startEnabled ? '请选择实际盘点范围、执行人与控制批次；服务器会在启动时重新核验。' : '仅核验范围、人员及已发布批次摘要，启动功能尚未开放，不能启动盘点。'}</p>
     {contexts.map((context, index) => <Directory key={`${openingPreparationContextKey(context)}:${epochs[index]}`}
       context={context} selection={selected[context.stage]} onInvalidate={() => change(context.stage)}
       onSelect={(value) => change(context.stage, value)} custodianPersonId={context.stage === "assignees"
@@ -119,26 +125,32 @@ function Directories({ actor }: { actor: OpeningPreparationActor }) {
       <div><dt>保管责任人</dt><dd>{location.custodianName ?? "未指定位置保管人"}</dd></div>
       {person && <div><dt>本次核验人员</dt><dd>{person.name}</dd></div>}
     </dl>}
+    {region && <OpeningControlDirectory key={`${region.id}:${epochs[1]}`} actor={actor} regionId={region.id} onSelect={setBatch} startEnabled={startEnabled} />}
+    {region && <OpeningStartWorkflow key={`start:${region.id}:${epochs[1]}`} actor={actor} region={region.id} batch={batch}
+      enabled={startEnabled} onOpen={onOpen} selectedScope={owner && location?.stage === 'locations' && person?.stage === 'assignees' ? {
+        scope: { owner_org_id: owner.id, location_id: location.id, assignee_user_id: person.userId, freeze_mode: 'hard' },
+        owner: owner.name, location: location.name, person: person.name,
+      } : undefined} />}
   </>;
 }
 
-function Panel({ actor }: { actor: OpeningPreparationActor }) {
+function Panel({ actor, startEnabled, onOpen }: { actor: OpeningPreparationActor; startEnabled: boolean; onOpen?: (task: string) => void }) {
   const [expanded, setExpanded] = useState(false);
-  return <section className="content-section" aria-label="期初盘点准备（只读）">
-    <div className="content-title"><div><h2>期初盘点准备（只读）</h2><p>先核验可选范围与人员；不是启动授权或库存证据。</p></div>
+  return <section className="content-section" aria-label={startEnabled ? '期初盘点启动' : '期初盘点准备（只读）'}>
+    <div className="content-title"><div><h2>{startEnabled ? '期初盘点启动' : '期初盘点准备（只读）'}</h2><p>先核验可选范围与人员；不是启动授权或库存证据。</p></div>
       <Button type="button" tone="secondary" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
         {expanded ? "收起准备目录" : "展开准备目录"}
       </Button>
     </div>
-    {expanded && <Directories actor={actor} />}
+    {expanded && <Directories actor={actor} startEnabled={startEnabled} onOpen={onOpen} />}
   </section>;
 }
 
-export default function OpeningStartPreparationPanel({ actor }: { actor: OpeningPreparationActor }) {
+export default function OpeningStartPreparationPanel({ actor, startEnabled = OPENING_START_ENABLED, onOpen }: { actor: OpeningPreparationActor; startEnabled?: boolean; onOpen?: (task: string) => void }) {
   let context: OpeningPreparationContext;
   try { context = openingPreparationContext(actor, "regions"); }
   catch { return null; }
-  return <Panel key={openingPreparationContextKey(context)} actor={{
+  return <Panel key={openingPreparationContextKey(context)} startEnabled={startEnabled} onOpen={onOpen} actor={{
     person_id: context.actor_person_id, authorization_version: context.authorization_version,
   }} />;
 }

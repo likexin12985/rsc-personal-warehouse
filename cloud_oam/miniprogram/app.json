@@ -1,46 +1,13 @@
 {
   "pages": [
-    "pages/login/index",
-    "pages/home/index",
-    "pages/formal-work-orders/index",
-    "pages/formal-scan/index",
-    "pages/formal-stock-returns/index",
-    "pages/formal-stock-return-outbounds/index",
-    "pages/formal-stock-return-shipments/index",
-    "pages/formal-stock-return-receiving/index",
-    "pages/formal-personal-warehouse/index",
-    "pages/formal-personal-warehouse-transactions/index",
-    "pages/formal-personal-warehouse-serials/index",
-    "pages/formal-my-receiving/index",
-    "pages/formal-my-inbound/index",
-    "pages/formal-my-receipt/index",
-    "pages/formal-material-requests/index",
-    "pages/formal-notifications/index",
-    "pages/formal-operational-stocktakes/index",
-    "pages/formal-operational-stocktake-detail/index",
-    "pages/formal-stocktakes/index",
-    "pages/formal-stocktake-detail/index",
-    "pages/profile/index"
+    "pages/knowledge/index"
   ],
   "window": {
-    "backgroundColor": "#f4f6f7",
+    "backgroundColor": "#f5f7f2",
     "backgroundTextStyle": "dark",
     "navigationBarBackgroundColor": "#ffffff",
     "navigationBarTextStyle": "black",
-    "navigationBarTitleText": "RSC个人仓"
-  },
-  "tabBar": {
-    "backgroundColor": "#ffffff",
-    "borderStyle": "black",
-    "color": "#68717a",
-    "selectedColor": "#e65318",
-    "list": [
-      { "pagePath": "pages/home/index", "text": "工作台" },
-      { "pagePath": "pages/formal-personal-warehouse/index", "text": "个人仓" },
-      { "pagePath": "pages/formal-material-requests/index", "text": "需求" },
-      { "pagePath": "pages/formal-stocktakes/index", "text": "盘点" },
-      { "pagePath": "pages/profile/index", "text": "我的" }
-    ]
+    "navigationBarTitleText": "交流备件知识大全"
   },
   "style": "v2",
   "lazyCodeLoading": "requiredComponents",

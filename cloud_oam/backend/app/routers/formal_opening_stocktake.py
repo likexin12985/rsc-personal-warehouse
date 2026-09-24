@@ -14,11 +14,13 @@ import re
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, Request, Query, status
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from ..database import get_db
+from ..database import SessionLocal, get_db
+from ..config import Settings, get_settings
 from ..dependencies import require_permission
 from ..foundation_models import (
     ExternalObject,
@@ -30,6 +32,11 @@ from ..formal_access import FormalPrincipal
 from ..formal_services import opening_observation_disposition as disposition_service
 from ..formal_services import opening_stocktake as start_service
 from ..formal_services import opening_stocktake_count as count_service
+from ..formal_services import opening_count_import_workbook as import_workbook
+from ..formal_services import opening_count_import_prevalidation as import_prevalidation
+from ..formal_services.opening_count_import_source import OpeningCountImportSourceError
+from ..formal_services.file_storage import FileStorageAdapter
+from .formal_files import get_formal_file_storage_adapter
 from ..formal_services import opening_stocktake_finalize as terminal_service
 from ..formal_services import opening_stocktake_recount as recount_service
 from ..formal_services import opening_stocktake_review as review_service
@@ -37,6 +44,10 @@ from ..opening_stocktake_schemas import (
     OpeningObservationDispositionIn,
     OpeningObservationDispositionOut,
     OpeningPhysicalObservationIn,
+    OpeningCountImportErrorOut,
+    OpeningCountImportFormatOut,
+    OpeningCountImportBusinessCheckIn,
+    OpeningCountImportBusinessCheckOut,
     OpeningStocktakeCloseOut,
     OpeningStocktakeCountIn,
     OpeningStocktakeCountOut,
@@ -47,6 +58,10 @@ from ..opening_stocktake_schemas import (
     OpeningStocktakeReviewIn,
     OpeningStocktakeReviewOut,
     OpeningStocktakeStartIn,
+    OpeningStocktakeFromPublicationIn,
+    OpeningStocktakeStartRecoveryOut,
+    OpeningStartSealIn,
+    OpeningStartCommandResultOut,
     OpeningStocktakeStartOut,
     OpeningStocktakeTerminalIn,
 )
@@ -59,6 +74,11 @@ router = APIRouter(
 _SAFE_HEADER_VALUE = re.compile(r"^[A-Za-z0-9._:-]+$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _QUANTITY_QUANTUM = Decimal("0.001")
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def get_opening_import_session_factory():
+    return SessionLocal
 
 
 class _OpeningStocktakeAdapterError(RuntimeError):
@@ -81,6 +101,159 @@ class _OpeningStocktakeAdapterError(RuntimeError):
             "category": self.category,
             "message": self.message,
         }
+
+
+@router.get("/imports/opening-count/template")
+def get_opening_count_import_template(
+    _principal: FormalPrincipal = Depends(require_permission("stocktake", "count")),
+):
+    """Return the exact format template; no business facts are read or written."""
+
+    return Response(
+        content=import_workbook.render_opening_count_import_template(),
+        media_type=_XLSX_MIME,
+        headers={"Cache-Control": "no-store", "Content-Disposition":
+                 'attachment; filename="rsc-opening-count-v1.xlsx"'},
+    )
+
+
+@router.post("/imports/opening-count/format-check", response_model=OpeningCountImportFormatOut)
+async def check_opening_count_import_format(
+    request: Request,
+    response: Response,
+    _principal: FormalPrincipal = Depends(require_permission("stocktake", "count")),
+):
+    """Check workbook syntax only; current scope and identity remain unconfirmed."""
+
+    result = await _opening_count_import_preview(request)
+    response.headers["Cache-Control"] = "no-store"
+    return OpeningCountImportFormatOut(
+        source_sha256=result.source_sha256,
+        row_count=result.row_count,
+        format_valid=result.ready,
+        payload_sha256=result.payload_sha256,
+        errors=tuple(OpeningCountImportErrorOut(
+            row=item.row, field=item.field, code=item.code, message=item.message,
+        ) for item in result.errors),
+    )
+
+
+@router.post("/imports/opening-count/error-report")
+async def get_opening_count_import_error_report(
+    request: Request,
+    _principal: FormalPrincipal = Depends(require_permission("stocktake", "count")),
+):
+    result = await _opening_count_import_preview(request)
+    if result.ready:
+        raise HTTPException(status_code=409, detail={
+            "code": "opening_import_no_format_errors", "category": "conflict",
+            "message": "文件没有格式错误报告",
+        }, headers={"Cache-Control": "no-store"})
+    return Response(
+        content=import_workbook.render_opening_count_error_report(result.errors),
+        media_type=_XLSX_MIME,
+        headers={"Cache-Control": "no-store", "Content-Disposition":
+                 'attachment; filename="rsc-opening-count-errors.xlsx"'},
+    )
+
+
+async def _opening_count_import_preview(request: Request) -> import_workbook.OpeningCountImportPreview:
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != _XLSX_MIME:
+        raise HTTPException(status_code=415, detail={
+            "code": "opening_import_content_type_invalid", "category": "invalid_request",
+            "message": "仅接受 XLSX 文件",
+        }, headers={"Cache-Control": "no-store"})
+    data = bytearray()
+    async for chunk in request.stream():
+        data.extend(chunk)
+        if len(data) > import_workbook.MAX_FILE_BYTES:
+            raise HTTPException(status_code=413, detail={
+                "code": "opening_import_file_too_large", "category": "invalid_request",
+                "message": "文件超过大小限制",
+            }, headers={"Cache-Control": "no-store"})
+    try:
+        return import_workbook.prevalidate_opening_count_workbook(bytes(data))
+    except import_workbook.OpeningCountImportFormatError as exc:
+        raise HTTPException(status_code=422, detail={
+            "code": "opening_import_format_invalid", "category": "invalid_request",
+            "message": str(exc),
+        }, headers={"Cache-Control": "no-store"}) from None
+
+
+@router.post(
+    "/imports/opening-count/business-check",
+    response_model=OpeningCountImportBusinessCheckOut,
+)
+def check_opening_count_import_business(
+    payload: OpeningCountImportBusinessCheckIn,
+    response: Response,
+    principal: FormalPrincipal = Depends(require_permission("stocktake", "count")),
+    settings: Settings = Depends(get_settings),
+    storage: FileStorageAdapter | None = Depends(get_formal_file_storage_adapter),
+    session_factory=Depends(get_opening_import_session_factory),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    """Read-only business preview of one completed private XLSX source."""
+
+    key, trace = _required_write_headers(
+        idempotency_key=idempotency_key, request_id=request_id,
+    )
+    if (
+        not settings.file_storage_configuration_ready()
+        or storage is None
+        or getattr(storage, "provider_code", None) != "aliyun_oss_v2"
+    ):
+        raise HTTPException(status_code=503, detail={
+            "code": "opening_import_storage_disabled", "category": "service_unavailable",
+            "message": "期初盘点私有文件服务尚未安全启用",
+        }, headers={"Cache-Control": "no-store"})
+    try:
+        preview = import_prevalidation.prevalidate_authorized_opening_count_import(
+            session_factory,
+            actor=principal,
+            storage=storage,
+            file_id=payload.source_file_id,
+            task_id=payload.task_id,
+            round_id=payload.round_id,
+            scope_id=payload.scope_id,
+            idempotency_key=key,
+            request_id=trace,
+        )
+    except OpeningCountImportSourceError as exc:
+        raise HTTPException(status_code=exc.http_status_code, detail={
+            "code": exc.code, "category": "invalid_request" if exc.http_status_code == 422 else "forbidden" if exc.http_status_code == 403 else "precondition_failed" if exc.http_status_code == 412 else "not_found",
+            "message": str(exc),
+        }, headers={"Cache-Control": "no-store"}) from None
+    except count_service.OpeningStocktakeCountError as exc:
+        raise HTTPException(status_code=exc.http_status_code, detail=exc.as_detail(),
+                            headers={"Cache-Control": "no-store"}) from None
+    except import_workbook.OpeningCountImportFormatError as exc:
+        raise HTTPException(status_code=422, detail={
+            "code": "opening_import_format_invalid", "category": "invalid_request",
+            "message": str(exc),
+        }, headers={"Cache-Control": "no-store"}) from None
+    except Exception:
+        raise HTTPException(status_code=503, detail={
+            "code": "opening_import_prevalidation_unavailable",
+            "category": "service_unavailable",
+            "message": "期初盘点业务预校验暂不可用",
+        }, headers={"Cache-Control": "no-store"}) from None
+    response.headers["Cache-Control"] = "no-store"
+    return OpeningCountImportBusinessCheckOut(
+        source_sha256=preview.source_sha256,
+        payload_sha256=preview.payload_sha256,
+        row_count=preview.row_count,
+        ready=preview.ready,
+        task_version=preview.count.task_version if preview.count else None,
+        actor_authorization_version=(
+            preview.count.actor_authorization_version if preview.count else None
+        ),
+        request_sha256=preview.count.request_sha256 if preview.count else None,
+        errors=tuple(OpeningCountImportErrorOut(
+            row=item.row, field=item.field, code=item.code, message=item.message,
+        ) for item in preview.errors),
+    )
 
 
 @router.post("", response_model=OpeningStocktakeStartOut)
@@ -176,11 +349,125 @@ def start_formal_opening_stocktake(
     ) as exc:
         db.rollback()
         _raise_write_error(exc)
+    except DBAPIError as exc:
+        db.rollback()
+        # Only a named database authorization refusal proves this outcome.
+        # Do not classify unrelated DB errors or driver text as a known denial.
+        if start_service.is_actor_admission_rejection(exc):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "opening_authorization_changed",
+                    "category": "forbidden",
+                    "message": "提交时盘点管理权限已失效，请重新核对当前权限",
+                },
+                headers={"Cache-Control": "no-store"},
+            ) from None
+        raise
     except Exception:
         db.rollback()
         raise
     _set_replay_header(response, output.replayed)
     return output
+
+
+@router.get("/start-result",response_model=OpeningStocktakeStartRecoveryOut)
+def recover_formal_opening_start(
+    request: Request,
+    response: Response,
+    region_org_id: UUID,
+    publication_id: UUID,
+    trace_request_id: Annotated[str,Query(min_length=8,max_length=160,pattern=r"^[A-Za-z0-9._:-]+$")],
+    principal: FormalPrincipal = Depends(require_permission("stocktake","manage")),
+    db: Session = Depends(get_db),
+):
+    from ..formal_services.opening_start_recovery import recover_start
+    allowed={"region_org_id","publication_id","trace_request_id"}
+    if set(request.query_params)!=allowed or any(len(request.query_params.getlist(key))!=1 for key in allowed):
+        raise HTTPException(status_code=422,detail="需要唯一的区域、发布批次及原请求编号",headers={"Cache-Control":"no-store"})
+    response.headers["Cache-Control"]="no-store"
+    try:
+        return recover_start(db,actor=principal,region_org_id=region_org_id,publication_id=publication_id,trace_request_id=trace_request_id)
+    except start_service.OpeningStocktakeError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.http_status_code,detail=exc.as_detail(),headers={"Cache-Control":"no-store"}) from None
+
+
+@router.get("/start-command-result", response_model=OpeningStartCommandResultOut)
+def recover_formal_opening_command(
+    request: Request, response: Response, region_org_id: UUID, publication_id: UUID,
+    trace_request_id: Annotated[str, Query(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._:-]+$")],
+    principal: FormalPrincipal = Depends(require_permission("stocktake", "manage")),
+    db: Session = Depends(get_db),
+):
+    from ..formal_services.opening_start_seals import recover_start_command
+    allowed = {"region_org_id", "publication_id", "trace_request_id"}
+    if set(request.query_params) != allowed or any(len(request.query_params.getlist(key)) != 1 for key in allowed):
+        raise HTTPException(status_code=422, detail="需要唯一的区域、发布批次及原请求编号", headers={"Cache-Control": "no-store"})
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return recover_start_command(db, actor=principal, region_org_id=region_org_id,
+            publication_id=publication_id, trace_request_id=trace_request_id)
+    except start_service.OpeningStocktakeError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.http_status_code, detail=exc.as_detail(), headers={"Cache-Control": "no-store"}) from None
+
+
+@router.post("/seal-start-command", response_model=OpeningStartCommandResultOut)
+def seal_formal_opening_command(
+    payload: OpeningStartSealIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("stocktake", "manage")), db: Session = Depends(get_db),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    from ..formal_services.opening_start_seals import seal_start_command
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
+    if trace != payload.trace_request_id or key != "opening-start-seal:" + payload.trace_request_id:
+        raise HTTPException(status_code=400, detail="终结只接受准确的原启动请求坐标", headers={"Cache-Control": "no-store"})
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        result = OpeningStartCommandResultOut.model_validate(seal_start_command(db, actor=principal, **payload.model_dump()))
+        db.commit()
+        return result
+    except start_service.OpeningStocktakeError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.http_status_code, detail=exc.as_detail(), headers={"Cache-Control": "no-store"}) from None
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=503, detail={"code": "opening_seal_unavailable", "category": "service_unavailable",
+            "message": "原请求终结结果暂不可确认，请保留记录并查询原结果"}, headers={"Cache-Control": "no-store"}) from None
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/from-publication", response_model=OpeningStocktakeStartOut)
+def start_formal_opening_from_publication(
+    payload: OpeningStocktakeFromPublicationIn,
+    response: Response,
+    principal: FormalPrincipal = Depends(require_permission("stocktake", "manage")),
+    db: Session = Depends(get_db),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    _required_write_headers(idempotency_key=idempotency_key,request_id=request_id)
+    from ..formal_services.opening_publication_admission import selection
+    try:
+        # Historical evidence is needed for an exact retry after expiry or
+        # replacement. The shared new-task service alone decides admission.
+        document,_ = selection(db,actor=principal,region=payload.region_org_id,publication=payload.publication_id)
+        raw=payload.model_dump(mode="json",exclude={"publication_id"})
+        raw.update(control_source_system_id=document["source_system_id"],control_sync_run_id=document["sync_run_id"],
+            control_sync_scope_key=document["sync_scope_key"],control_lines=[
+                {key:value for key,value in row.items() if key!="payload_sha256"} for row in document["control_lines"]])
+        command=OpeningStocktakeStartIn.model_validate(raw)
+    except start_service.OpeningStocktakeError as exc:
+        db.rollback()
+        _raise_write_error(exc)
+    except Exception:
+        db.rollback()
+        raise
+    return start_formal_opening_stocktake(command,response,principal,db,idempotency_key,request_id)
 
 
 @router.post(

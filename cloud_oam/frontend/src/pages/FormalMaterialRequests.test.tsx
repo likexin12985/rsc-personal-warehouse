@@ -726,7 +726,7 @@ async function openDetail(): Promise<HTMLElement> {
   return screen.findByRole("dialog", { name: "正式需求详情" });
 }
 
-async function fillCreateForm(uploadAttachment = false): Promise<void> {
+async function fillCreateForm(uploadAttachment = false, unknownSourceTime = false): Promise<void> {
   fireEvent.change(screen.getByLabelText("用途"), { target: { value: "现场故障处理" } });
   fireEvent.change(screen.getByLabelText("紧急程度"), { target: { value: "urgent" } });
   fireEvent.change(screen.getByLabelText("期望日期（可空）"), { target: { value: "2026-09-05" } });
@@ -748,6 +748,7 @@ async function fillCreateForm(uploadAttachment = false): Promise<void> {
   expect(picker.textContent).toContain("交流接触器");
   expect(picker.textContent).toContain("32A");
   expect(picker.textContent).toContain("序列号");
+  if (unknownSourceTime) expect(picker.textContent).toContain("来源更新时间：未知");
   fireEvent.click(within(picker).getByRole("button", { name: "选择" }));
   fireEvent.change(screen.getByLabelText("申请数量 1"), { target: { value: "12.345" } });
   fireEvent.change(screen.getByLabelText("需用日期 1"), { target: { value: "2026-09-05" } });
@@ -789,7 +790,7 @@ describe("formal material request PC vertical slice", () => {
     expect(panel.textContent).not.toContain(RAW_ADDRESS);
   });
 
-  it("creates a complete draft through an independent memory-only create intent", async () => {
+  it.each([false, true])("creates a complete draft through an independent memory-only create intent (unknown source time: %s)", async (unknownSourceTime) => {
     const setItem = vi.spyOn(Storage.prototype, "setItem");
     const createDraft = vi.fn().mockResolvedValue({
       schema_version: "1.0",
@@ -801,11 +802,13 @@ describe("formal material request PC vertical slice", () => {
       states: axes(),
       idempotency_replayed: false,
     });
-    const client = adapter({ createDraft });
+    const client = adapter({ createDraft, listMaterials: vi.fn().mockResolvedValue(unknownSourceTime
+      ? { ...catalogPage(), schema_version: "2.0", items: [{ ...catalogPage().items[0], source_updated_at: null }] }
+      : catalogPage()) });
     const uploads = uploadClient("request_attachment");
     await renderReady(client, uploads);
     fireEvent.click(screen.getByRole("button", { name: "新建需求" }));
-    await fillCreateForm(true);
+    await fillCreateForm(true, unknownSourceTime);
     expect(screen.queryByLabelText(/附件 file_id/)).toBeNull();
     expect(screen.getByText("现场照片.jpg")).toBeTruthy();
     expect(screen.getByText(/3 B · SHA-256/).textContent).toContain(FILE_SHA);

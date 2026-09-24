@@ -72,6 +72,12 @@ def test_runtime_values_use_dedicated_edge_credentials_only(tmp_path):
         {"RSC_EDGE_ALLOWED_SOURCES": ""},
         {"RSC_EDGE_ALLOWED_SOURCES": "valid,bad source"},
         {"RSC_EDGE_SYNC_SECRET": "replace-with-a-separate-32-character-secret"},
+        {"RSC_EDGE_CONTROL_CAPTURE_KEY_ID": "bad key version"},
+        {"RSC_EDGE_CONTROL_CAPTURE_KEY_ID": "k" * 129},
+        {"RSC_EDGE_CONTROL_CAPTURE_KEY_ID": "replace-with-version"},
+        {"RSC_EDGE_MATERIAL_CAPTURE_KEY_ID": "bad key version"},
+        {"RSC_EDGE_MATERIAL_CAPTURE_KEY_ID": "k" * 129},
+        {"RSC_EDGE_MATERIAL_CAPTURE_KEY_ID": "replace-with-version"},
         {
             "RSC_EDGE_DATABASE_URL": (
                 "postgresql+psycopg://edge_inbox:replace-me@db:5432/star_oam"
@@ -93,6 +99,45 @@ def test_runtime_values_fail_closed_on_unsafe_configuration(tmp_path, overrides)
         module.build_runtime_values(raw, tmp_path / "edge.env")
 
 
+def test_capture_receipts_require_explicit_key_version_without_new_credentials(tmp_path):
+    raw = {
+        'RSC_EDGE_DATABASE_ROLE': 'edge_inbox',
+        'RSC_EDGE_DATABASE_URL': 'postgresql+psycopg://edge_inbox:secret@db:5432/oam',
+        'RSC_EDGE_SYNC_SECRET': 's' * 32,
+        'RSC_EDGE_ALLOWED_SOURCES': 'admin-mac',
+        'RSC_EDGE_CONTROL_CAPTURE_KEY_ID': '',
+    }
+    disabled = module.build_runtime_values(raw, tmp_path / 'edge.env')
+    assert not any('CAPTURE' in key for key in disabled)
+    raw['RSC_EDGE_CONTROL_CAPTURE_KEY_ID'] = 'capture-key-v2'
+    enabled = module.build_runtime_values(raw, tmp_path / 'edge.env')
+    assert enabled == {**disabled, 'OAM_EDGE_CONTROL_CAPTURE_ENABLED': 'true',
+                       'OAM_EDGE_CONTROL_CAPTURE_KEY_ID': 'capture-key-v2'}
+    assert 'RSC_EDGE_CONTROL_CAPTURE_KEY_ID=\n' in EDGE_ENV_EXAMPLE.read_text()
+
+
+def test_material_capture_is_separately_enabled_without_forwarding_extra_credentials(tmp_path):
+    raw = {
+        'RSC_EDGE_DATABASE_ROLE': 'edge_inbox',
+        'RSC_EDGE_DATABASE_URL': 'postgresql+psycopg://edge_inbox:secret@db:5432/oam',
+        'RSC_EDGE_SYNC_SECRET': 's' * 32,
+        'RSC_EDGE_ALLOWED_SOURCES': 'admin-mac',
+        'RSC_EDGE_MATERIAL_CAPTURE_KEY_ID': '',
+    }
+    disabled = module.build_runtime_values(raw, tmp_path / 'edge.env')
+    assert not any('CAPTURE' in key for key in disabled)
+    raw['RSC_EDGE_MATERIAL_CAPTURE_KEY_ID'] = 'material-key-v2'
+    enabled = module.build_runtime_values(raw, tmp_path / 'edge.env')
+    assert enabled == {**disabled, 'OAM_EDGE_MATERIAL_CAPTURE_ENABLED': 'true',
+                       'OAM_EDGE_MATERIAL_CAPTURE_KEY_ID': 'material-key-v2'}
+    assert 'RSC_EDGE_MATERIAL_CAPTURE_KEY_ID=\n' in EDGE_ENV_EXAMPLE.read_text()
+    raw['RSC_EDGE_CONTROL_CAPTURE_KEY_ID'] = 'control-key-v3'
+    assert module.build_runtime_values(raw, tmp_path / 'edge.env') == {
+        **enabled, 'OAM_EDGE_CONTROL_CAPTURE_ENABLED': 'true',
+        'OAM_EDGE_CONTROL_CAPTURE_KEY_ID': 'control-key-v3',
+    }
+
+
 def test_main_writes_private_runtime_env_without_jwt_or_main_db_credentials(
     tmp_path, monkeypatch
 ):
@@ -107,14 +152,23 @@ def test_main_writes_private_runtime_env_without_jwt_or_main_db_credentials(
         encoding="utf-8",
     )
     monkeypatch.setattr(sys, "argv", [str(SCRIPT), str(source), str(output)])
+    fdopen = module.os.fdopen
+    opened = []
+    def verify_private_before_writing(descriptor, *args, **kwargs):
+        opened.append(stat.S_IMODE(module.os.fstat(descriptor).st_mode))
+        assert opened[-1] == 0o600
+        return fdopen(descriptor, *args, **kwargs)
+    monkeypatch.setattr(module.os, 'fdopen', verify_private_before_writing)
 
     assert module.main() == 0
+    assert opened == [0o600]
     text = output.read_text(encoding="utf-8")
     assert "OAM_JWT_SECRET" not in text
     assert "POSTGRES_PASSWORD" not in text
     assert "OAM_DATABASE_EXPECTED_EDGE_ROLE=edge_inbox" in text
     assert "OAM_EDGE_SYNC_ALLOWED_SOURCES=admin-mac" in text
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    assert stat.S_IMODE(output.parent.stat().st_mode) == 0o700
 
 
 def test_edge_database_setup_is_grants_only_and_excludes_business_tables():
@@ -127,6 +181,8 @@ def test_edge_database_setup_is_grants_only_and_excludes_business_tables():
         "external_sync_snapshots",
         "external_sync_snapshot_batches",
         "external_sync_snapshot_records",
+        "inventory_control_capture_attestations",
+        "oam_material_capture_receipts",
         "external_sync_current_records",
         "audit_logs",
     ):
@@ -153,9 +209,15 @@ def test_edge_database_setup_is_grants_only_and_excludes_business_tables():
         normalized,
     )
     assert "GRANT INSERT ON TABLE PUBLIC.AUDIT_LOGS" in normalized
+    assert 'GRANT SELECT, INSERT ON TABLE PUBLIC.INVENTORY_CONTROL_CAPTURE_ATTESTATIONS TO' in normalized
+    assert 'GRANT SELECT, INSERT ON TABLE PUBLIC.OAM_MATERIAL_CAPTURE_RECEIPTS TO' in normalized
+    assert not re.search(r'GRANT\s+[^;]*ON\s+TABLE\s+[^;]*PUBLIC\.OAM_MATERIAL_CAPTURE_BINDINGS', normalized)
+    assert "('inventory_control_capture_attestations', TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE)" in EDGE_VERIFY.read_text()
     for immutable_table in (
         "PUBLIC.EXTERNAL_SYNC_SNAPSHOT_BATCHES",
         "PUBLIC.EXTERNAL_SYNC_SNAPSHOT_RECORDS",
+        "PUBLIC.INVENTORY_CONTROL_CAPTURE_ATTESTATIONS",
+        "PUBLIC.OAM_MATERIAL_CAPTURE_RECEIPTS",
     ):
         assert not re.search(
             rf"GRANT\s+[^;]*(?:UPDATE|DELETE)[^;]*{immutable_table}",
@@ -453,9 +515,11 @@ def test_edge_receiver_compose_is_hardened_and_uses_only_internal_database_netwo
     ):
         assert boundary in edge_compose
     assert "star-oam_backend" not in edge_compose
-    assert "name: star-oam_edge_db" in edge_compose
+    network_binding = "name: ${OAM_EDGE_DB_NETWORK:-star-oam_edge_db}"
+    assert network_binding in edge_compose
     assert "      - edge_db" in database
-    assert "edge_db:\n    internal: true\n    name: star-oam_edge_db" in network_definitions
+    assert f"edge_db:\n    internal: true\n    {network_binding}" in network_definitions
+    assert "OAM_EDGE_DB_NETWORK=star-oam_edge_db\n" in ENV_EXAMPLE.read_text(encoding="utf-8")
 
 
 def test_edge_receiver_runtime_boundary_excludes_external_system_credentials():

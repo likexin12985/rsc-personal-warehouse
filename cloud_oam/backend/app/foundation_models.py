@@ -1842,6 +1842,8 @@ class NotificationEvent(CreatedAtMixin, Base):
     __tablename__ = "notification_events"
     __table_args__ = (
         UniqueConstraint("dedup_key", name="uq_notification_events_dedup_key"),
+        CheckConstraint("target_manifest_sha256 IS NULL OR length(target_manifest_sha256) = 64",
+                        name="ck_notification_events_target_manifest"),
         CheckConstraint(
             "status IN ('pending', 'expanded', 'cancelled')",
             name="ck_notification_events_status",
@@ -1861,6 +1863,9 @@ class NotificationEvent(CreatedAtMixin, Base):
     payload_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # NULL identifies legacy events whose original intended people were not
+    # retained. Never guess/backfill their targets during ordinary replay.
+    target_manifest_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class NotificationRecipient(CreatedAtMixin, Base):
@@ -1894,6 +1899,28 @@ class NotificationRecipient(CreatedAtMixin, Base):
     channel: Mapped[str] = mapped_column(String(20), index=True)
     recipient_key: Mapped[str] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(String(20), default="active")
+
+
+class NotificationPersonTarget(CreatedAtMixin, Base):
+    """Immutable intended person, even when no account/channel exists yet."""
+
+    __tablename__ = "notification_person_targets"
+    __table_args__ = (
+        UniqueConstraint("event_id", "person_id", name="uq_notification_person_targets_event_person"),
+        Index("ix_notification_person_targets_created", "created_at", "id"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    event_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("notification_events.id", ondelete="RESTRICT"))
+    person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"), index=True)
+
+
+class NotificationTargetBinding(CreatedAtMixin, Base):
+    """Append-only evidence that one exact recipient belongs to a person target."""
+
+    __tablename__ = "notification_target_bindings"
+    __table_args__ = (UniqueConstraint("recipient_id", name="uq_notification_target_bindings_recipient"),)
+    target_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("notification_person_targets.id", ondelete="RESTRICT"), primary_key=True)
+    recipient_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("notification_recipients.id", ondelete="RESTRICT"), primary_key=True)
 
 
 class NotificationDelivery(TimestampMixin, Base):
@@ -2185,6 +2212,27 @@ class FileJob(TimestampMixin, Base):
             name="ck_file_jobs_status",
         ),
         Index("ix_file_jobs_requester_status", "requested_by", "status"),
+        Index("ix_file_jobs_export_queue", "job_type", "status", "created_at", "id"),
+        Index("uq_file_jobs_result_file_id", "result_file_id", unique=True),
+        CheckConstraint(
+            "export_authorization_version IS NULL OR export_authorization_version > 0",
+            name="ck_file_jobs_export_version_positive",
+        ),
+        CheckConstraint(
+            "export_ledger_cursor IS NULL OR export_ledger_cursor >= 0",
+            name="ck_file_jobs_export_cursor_nonnegative",
+        ),
+        CheckConstraint(
+            "result_sha256 IS NULL OR length(result_sha256) = 64",
+            name="ck_file_jobs_result_sha256",
+        ),
+        CheckConstraint(
+            "result_size_bytes IS NULL OR result_size_bytes >= 0",
+            name="ck_file_jobs_result_size_nonnegative",
+        ),
+        CheckConstraint(
+            "download_count >= 0", name="ck_file_jobs_download_count_nonnegative"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -2198,6 +2246,20 @@ class FileJob(TimestampMixin, Base):
     parameters_hash: Mapped[str] = mapped_column(String(64))
     idempotency_key: Mapped[str] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(String(28), default="queued", index=True)
+    export_authorization_version: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    export_scope_jsonb: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON_DOCUMENT, nullable=True
+    )
+    export_ledger_cursor: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    result_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    result_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    download_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
     result_file_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID_TYPE, ForeignKey("files.id"), nullable=True
     )

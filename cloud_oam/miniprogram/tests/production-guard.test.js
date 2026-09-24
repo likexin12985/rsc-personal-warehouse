@@ -238,54 +238,9 @@ test('release build has no live endpoint default and fails before transport', as
   delete global.wx
 })
 
-test('release navigation registers only reviewed formal workbench, scan, personal warehouse, demand, stocktake and profile pages', () => {
-  const quarantinedPages = [
-    'pages/inventory/index',
-    'pages/transfers/index',
-    'pages/transfer-detail/index',
-    'pages/media-preview/index',
-    'pages/oam-orders/index',
-    'pages/transfer-create/index',
-    'pages/work-materials/index',
-    'pages/work-material-create/index',
-    'pages/stocktakes/index',
-    'pages/stocktake-detail/index',
-    'pages/stocktake-create/index'
-  ]
-  for (const page of quarantinedPages) {
-    assert.equal(appConfig.pages.includes(page), false)
-    assert.equal(appConfig.tabBar.list.some((item) => item.pagePath === page), false)
-  }
-  assert.deepEqual(appConfig.pages, [
-    'pages/login/index',
-    'pages/home/index',
-    'pages/formal-work-orders/index',
-    'pages/formal-scan/index',
-    'pages/formal-stock-returns/index',
-    'pages/formal-stock-return-outbounds/index',
-    'pages/formal-stock-return-shipments/index',
-    'pages/formal-stock-return-receiving/index',
-    'pages/formal-personal-warehouse/index',
-    'pages/formal-personal-warehouse-transactions/index',
-    'pages/formal-personal-warehouse-serials/index',
-    'pages/formal-my-receiving/index',
-    'pages/formal-my-inbound/index',
-    'pages/formal-my-receipt/index',
-    'pages/formal-material-requests/index',
-    'pages/formal-notifications/index',
-    'pages/formal-operational-stocktakes/index',
-    'pages/formal-operational-stocktake-detail/index',
-    'pages/formal-stocktakes/index',
-    'pages/formal-stocktake-detail/index',
-    'pages/profile/index'
-  ])
-  assert.deepEqual(appConfig.tabBar.list.map((item) => item.pagePath), [
-    'pages/home/index',
-    'pages/formal-personal-warehouse/index',
-    'pages/formal-material-requests/index',
-    'pages/formal-stocktakes/index',
-    'pages/profile/index'
-  ])
+test('public release registers only knowledge and no login or warehouse navigation', () => {
+  assert.deepEqual(appConfig.pages, ['pages/knowledge/index'])
+  assert.equal(appConfig.tabBar, undefined)
 })
 
 test('registered formal pages contain no v0.9 business request or deep link', () => {

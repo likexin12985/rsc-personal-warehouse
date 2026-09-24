@@ -15,6 +15,7 @@ ROLE_INIT = (
 )
 ENV_EXAMPLE = ROOT / ".env.example"
 BACKUP = ROOT / "scripts" / "backup.sh"
+BACKUP_DEPLOYMENT = ROOT / "deployment" / "backup"
 PG16_WORKFLOW = ROOT.parent / ".github" / "workflows" / (
     "postgresql16-release-gate.yml"
 )
@@ -164,10 +165,15 @@ def test_postgresql16_gate_covers_main_prs_and_edge_role_provisioning() -> None:
     assert "  pull_request:\n" in workflow
     assert "  push:\n" in workflow
     assert workflow.count("      - main\n") >= 2
-    assert "cloud_oam/deployment/provision_edge_receiver_role.sql" in workflow
-    assert workflow.count(
-        '      - "cloud_oam/deployment/provision_oam_edge_scope.sql"\n'
-    ) == 2
+    # Both triggers cover the whole product tree. The static job discovers
+    # tests by directory, while the separate PG16 job exercises real roles.
+    assert workflow.count('      - "cloud_oam/**"\n') == 2
+    assert "python -m pytest -q tests/test_postgresql16_release_gate.py" in workflow
+    assert "scripts/run_static_shard.py --index ${{ matrix.shard }} --count 3" in workflow
+    assert "shard: [0, 1, 2]" in workflow
+    assert "provision_edge_receiver_role.sql" in PG16_RELEASE_GATE_TEST.read_text(
+        encoding="utf-8"
+    )
     for required_gate in (
         "backend/tests/test_database_security.py",
         "backend/tests/test_oam_projection_security.py",
@@ -191,7 +197,7 @@ def test_postgresql16_gate_covers_main_prs_and_edge_role_provisioning() -> None:
         "backend/tests/test_stocktake_history_pg_acceptance.py",
         "backend/tests/test_stocktake_history_owner_migration.py",
     ):
-        assert required_gate in workflow
+        assert (ROOT / required_gate).is_file()
     assert "pytest==9.1.1 pglast==7.18 httpx==0.28.1" in workflow
 
 
@@ -462,25 +468,31 @@ def test_environment_and_backup_use_dedicated_database_credentials() -> None:
     ):
         assert key in example
     backup = BACKUP.read_text(encoding="utf-8")
-    assert "-U star_oam_backup" in backup
-    assert 'PGPASSWORD="$OAM_DB_BACKUP_PASSWORD"' in backup
-    assert 'pg_dump -U "$POSTGRES_USER"' not in backup
-    assert "umask 077" in backup
-    assert "| gzip" not in backup
-    assert 'gzip -t "$DATABASE_TMP"' in backup
-    assert 'tar -tzf "$UPLOADS_TMP"' in backup
-    assert "current_user = 'star_oam_backup'" in backup
-    assert "membership.roleid = role_row.oid" in backup
-    assert "has_table_privilege(" in backup
-    assert "has_any_column_privilege(" in backup
-    assert "attribute_row.attacl" in backup
-    assert "database_acl.is_grantable" in backup
-    assert "schema_acl.is_grantable" in backup
-    assert "table_acl.is_grantable" in backup
-    assert "sequence_acl.is_grantable" in backup
-    assert "sha256sum -c manifest.sha256" in backup
-    assert 'mv "$BUNDLE_TMP" "$BUNDLE_FINAL"' in backup
-    assert 'mv "$DATABASE_TMP" "$DATABASE_FINAL"' not in backup
+    steps = (ROOT / "scripts/backup_steps.sh").read_text(encoding="utf-8")
+    entry = (BACKUP_DEPLOYMENT / "backup_database.sh").read_text(encoding="utf-8")
+    dump = (BACKUP_DEPLOYMENT / "dump.sh").read_text(encoding="utf-8")
+    role = (BACKUP_DEPLOYMENT / "role.sql").read_text(encoding="utf-8")
+    assert "PGUSER=star_oam_backup" in entry and "-U star_oam_backup" in dump
+    assert "sh /opt/rsc-backup/backup_database.sh" in steps
+    assert "./deployment/backup:/opt/rsc-backup:ro" in COMPOSE.read_text(encoding="utf-8")
+    assert 'PGPASSWORD="$OAM_DB_BACKUP_PASSWORD"' in steps
+    assert '-e PGPASSWORD -e POSTGRES_DB -e RSC_BACKUP_MAXIMUM_BYTES' in steps
+    assert 'pg_dump -U "$POSTGRES_USER"' not in steps
+    assert "umask 077" in backup and "umask 077" in steps
+    assert 'deadline_runner.py' in backup and '--require-lease' in steps
+    assert 'capacity_run pg_dump' in dump and '--snapshot="$RSC_BACKUP_SNAPSHOT"' in dump
+    assert "current_user = 'star_oam_backup'" in role
+    assert "membership.roleid = role_row.oid" in role
+    assert "has_table_privilege(" in role
+    assert "has_any_column_privilege(" in role
+    assert "attribute_row.attacl" in role
+    assert "database_acl.is_grantable" in role
+    assert "schema_acl.is_grantable" in role
+    assert "table_acl.is_grantable" in role
+    assert "sequence_acl.is_grantable" in role
+    assert "sha256sum -c verified-joint.sha256" in steps
+    assert 'ln "$JOB_DIR/verified-joint.tar" "$FINAL"' in steps
+    assert 'mv "$BUNDLE_TMP" "$BUNDLE_FINAL"' not in steps
 
 
 def test_nonopening_stocktake_deployment_gate_is_explicit_and_disabled_by_default() -> None:
@@ -499,61 +511,9 @@ def test_nonopening_stocktake_deployment_gate_is_explicit_and_disabled_by_defaul
     ) in compose
 
 
-def test_backup_never_publishes_a_partial_set_when_atomic_rename_fails(
-    tmp_path: Path,
-) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    uploads = tmp_path / "uploads"
-    uploads.mkdir()
-    (uploads / "proof.txt").write_text("verified upload\n", encoding="utf-8")
-
-    fake_docker = fake_bin / "docker"
-    fake_docker.write_text(
-        """#!/bin/sh
-case " $* " in
-  *" psql "*)
-    printf 'ok\\n'
-    ;;
-  *" pg_dump "*)
-    printf '%s\\n' '-- deterministic local pg_dump evidence'
-    ;;
-  *" api tar "*)
-    exec tar -czf - -C "$FAKE_UPLOADS_DIR" .
-    ;;
-  *)
-    exit 64
-    ;;
-esac
-""",
-        encoding="utf-8",
-    )
-    fake_docker.chmod(0o755)
-
-    fake_mv = fake_bin / "mv"
-    fake_mv.write_text("#!/bin/sh\nexit 73\n", encoding="utf-8")
-    fake_mv.chmod(0o755)
-
-    backup_dir = tmp_path / "backups"
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "PATH": f"{fake_bin}:{environment['PATH']}",
-            "BACKUP_DIR": str(backup_dir),
-            "FAKE_UPLOADS_DIR": str(uploads),
-            "OAM_DB_BACKUP_PASSWORD": "local-test-only",
-            "POSTGRES_DB": "star_oam_test",
-        }
-    )
-    completed = subprocess.run(
-        ["sh", str(BACKUP)],
-        cwd=ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
+def test_backup_never_publishes_a_partial_set_when_exclusive_publication_fails(tmp_path: Path) -> None:
+    from backup_test_support import simulate_entry
+    completed, backup_dir, previous = simulate_entry(tmp_path, failure='publication')
     assert completed.returncode == 73
-    assert list(backup_dir.glob("backup_*.tar")) == []
-    assert list(backup_dir.glob(".star-oam-backup.*")) == []
+    assert list(backup_dir.iterdir()) == [previous]
+    assert previous.read_bytes() == b'previous complete synthetic backup'

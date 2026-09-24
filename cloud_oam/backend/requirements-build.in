@@ -1,0 +1,3 @@
+# Build tools for source distributions without pip's unpinned isolated build env.
+setuptools==80.9.0
+wheel==0.45.1

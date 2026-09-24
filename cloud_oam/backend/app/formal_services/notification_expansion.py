@@ -61,6 +61,7 @@ def expand_notification_event(
         select(NotificationEvent)
         .where(NotificationEvent.id == event_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if event is None:
         raise NotificationExpansionError("notification event does not exist")
@@ -82,7 +83,9 @@ def expand_notification_event(
                 NotificationRecipient.status == "active",
             )
             .order_by(NotificationRecipient.id)
-            .with_for_update()
+            # Recipient coordinates are append-only for the API role. The
+            # parent event FOR UPDATE lock serializes expansion and the FK
+            # binding; no recipient UPDATE privilege is needed for this read.
         ).all()
     )
 

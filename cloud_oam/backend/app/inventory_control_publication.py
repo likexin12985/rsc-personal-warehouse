@@ -82,6 +82,19 @@ def prepare_inventory_control_publication(
     intentionally absent.
     """
 
+    documents = _publication_documents(expected_json=expected_json, evidence_json=evidence_json, checked_at=checked_at)
+    return InventoryControlPublicationFacts(
+        schema_version=PUBLICATION_SCHEMA,
+        source_binding_sha256=_sha(documents["source_binding"]),
+        catalog_sha256=_sha(documents["catalog"]),
+        capture_chain_sha256=_sha(documents["capture_chain"]),
+        control_manifest_sha256=_sha(documents["control_manifest"]),
+        evidence_status="evidence_consistent",
+    )
+
+
+def _publication_documents(*, expected_json: str, evidence_json: str, checked_at: datetime) -> dict[str, Any]:
+    """Canonical detached documents; persistence does not authenticate them."""
     report = validate_inventory_control_evidence(
         expected_json=expected_json,
         evidence_json=evidence_json,
@@ -119,14 +132,8 @@ def prepare_inventory_control_publication(
         "projection_published": False,
         "start_ready": False,
     }
-    return InventoryControlPublicationFacts(
-        schema_version=PUBLICATION_SCHEMA,
-        source_binding_sha256=source_binding_sha256,
-        catalog_sha256=catalog_sha256,
-        capture_chain_sha256=capture_chain_sha256,
-        control_manifest_sha256=_sha(control_manifest),
-        evidence_status=report.status,
-    )
+    return {"source_binding": source_binding, "catalog": catalogue,
+            "capture_chain": capture_chain, "control_manifest": control_manifest}
 
 
 __all__ = [

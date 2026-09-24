@@ -33,6 +33,8 @@ expected_table_acl(
     can_trigger
 ) AS (
     VALUES
+        ('oam_material_capture_receipts', TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE),
+        ('inventory_control_capture_attestations', TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE),
         ('external_sync_snapshots', TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE),
         ('external_sync_snapshot_batches', TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE),
         ('external_sync_snapshot_records', TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE),
@@ -250,7 +252,9 @@ function_sequence_ok AS (
               )
               AND function_row.oid NOT IN (
                   'public.rsc_oam_rls_check_0044(text,text,jsonb)'::regprocedure,
-                  'public.rsc_oam_runtime_binding_ready_0044()'::regprocedure
+                  'public.rsc_oam_runtime_binding_ready_0044()'::regprocedure,
+                  'public.rsc_oam_material_capture_visible_0116(text)'::regprocedure,
+                  'public.rsc_oam_material_capture_binding_0116(text,text,text)'::regprocedure
               )
         )
         AND NOT EXISTS (

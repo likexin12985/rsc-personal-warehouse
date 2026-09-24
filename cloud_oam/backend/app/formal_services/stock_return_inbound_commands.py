@@ -13,10 +13,10 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..formal_access import lock_formal_principal_graph
 from ..foundation_models import OutboxEvent, StateTransitionEvent
-from ..inventory_models import InventoryTransaction, CustodyAssignment
+from ..inventory_models import CustodyAssignment
 from ..stock_operation_models import (
-    StockOperationReceipt,
     StockOperationReceiptSerial,
     StockOperationReturnInbound,
     StockOperationReturnInboundLine,
@@ -26,42 +26,11 @@ from ..stock_operation_models import (
 from . import inventory_posting as posting
 from .audit_chain import append_audit_event, lock_audit_chain_head
 from .stock_return_inbound_contract import ReturnInboundLine, build_return_inbound_command
-from .stock_return_inbound_plan import plan_return_inbound
+from .stock_return_inbound_plan import plan_return_inbound, authorize_receipt, plan_document as _json_plan
+from .stock_return_commands import _fresh_request
 from .work_order_return_sources import _fail, _hash
 from .notification_events import record_stock_return_notification
-
-
-def _json_plan(plan: dict) -> dict:
-    return {
-        "schema_version": plan["schema_version"],
-        "receipt_id": str(plan["receipt_id"]),
-        "shipment_id": str(plan["shipment_id"]),
-        "operator_person_id": str(plan["operator_person_id"]),
-        "authorization_version": plan["authorization_version"],
-        "target_location_id": str(plan["target_location_id"]),
-        "target_custody_assignment_id": str(plan["target_custody_assignment_id"]),
-        "receipt_plan_hash": plan["receipt_plan_hash"],
-        "ledger_cursor": plan["ledger_cursor"],
-        "lines": plan["lines"],
-    }
-
-
-def _result(row: StockOperationReturnInbound, *, replayed: bool = False) -> dict:
-    return {
-        "schema_version": "1.0",
-        "inbound_id": row.id,
-        "inbound_no": row.inbound_no,
-        "receipt_id": row.receipt_id,
-        "shipment_id": row.shipment_id,
-        "target_location_id": row.target_location_id,
-        "target_custody_assignment_id": row.target_custody_assignment_id,
-        "status": row.status,
-        "posting_transaction_id": row.posting_transaction_id,
-        "request_id": row.request_id,
-        "request_hash": row.request_hash,
-        "plan_hash": row.plan_hash,
-        "replayed": replayed,
-    }
+from .stock_return_inbound_facts import document as _result, inbound_result
 
 
 def _request_hash(*, receipt_id: uuid.UUID, request_id: str, plan_hash: str) -> str:
@@ -70,6 +39,12 @@ def _request_hash(*, receipt_id: uuid.UUID, request_id: str, plan_hash: str) -> 
 
 
 def preview_return_inbound(db: Session, *, actor, receipt_id: uuid.UUID) -> dict:
+    # A refreshed page can race another device's commit. Re-prove any existing
+    # inbound and return its business conflict before checking today's balance.
+    from .stock_return_inbound_queries import read_return_inbound_state
+    state = read_return_inbound_state(db, actor=actor, receipt_id=receipt_id)
+    if state['status'] == 'posted':
+        _fail('stock_return_inbound_receipt_already_posted', '该退回验收已完成入账，请刷新查看入账记录')
     plan = plan_return_inbound(db, actor=actor, receipt_id=receipt_id)
     document = _json_plan(plan)
     return {
@@ -91,8 +66,9 @@ def execute_return_inbound(
 ) -> dict:
     """Commit one exact return inbound, or replay its identical request."""
 
-    current = posting._require_current_actor(db, actor)
     posting._lock_inventory_ledger_head_for_atomic_batch(db)
+    lock_formal_principal_graph(db, (actor.user_id,))
+    current, _ = authorize_receipt(db, actor=actor, receipt_id=receipt_id)
     posting._require_request_id(request_id)
     key = posting._require_idempotency_key(idempotency_key)
     key_hash = posting._storage_hash(key)
@@ -103,35 +79,34 @@ def execute_return_inbound(
         .execution_options(populate_existing=True)
     )
     if existing is not None:
-        if existing.actor_user_id != current.user_id or existing.request_id != request_id:
-            _fail("stock_return_inbound_idempotency_conflict", "conflict", "原入账请求键已绑定其他请求")
+        if (existing.actor_user_id != current.user_id or existing.request_id != request_id
+                or existing.receipt_id != receipt_id):
+            _fail("stock_return_inbound_idempotency_conflict", "原入账请求键已绑定其他请求")
         if existing.plan_hash != expected_plan_hash:
-            _fail("stock_return_inbound_plan_changed", "conflict", "原入账方案与当前请求不一致，请回读原请求")
-        return _result(existing, replayed=True)
+            _fail("stock_return_inbound_plan_changed", "原入账方案与当前请求不一致，请回读原请求")
+        return inbound_result(db, actor=current, fact=existing, replayed=True)
 
-    locked_receipt = db.scalar(
-        select(StockOperationReceipt)
-        .where(StockOperationReceipt.id == receipt_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
-    if locked_receipt is None:
-        _fail("stock_return_inbound_receipt_not_found", "not_found", "退回验收事实不存在")
+    # The ledger lock serializes posting/sealing. Acceptance facts are
+    # immutable and the API intentionally has no UPDATE privilege on them.
     existing_receipt = db.scalar(
         select(StockOperationReturnInbound)
         .where(StockOperationReturnInbound.receipt_id == receipt_id)
         .execution_options(populate_existing=True)
     )
     if existing_receipt is not None:
-        if existing_receipt.actor_user_id != current.user_id or existing_receipt.plan_hash != expected_plan_hash:
-            _fail("stock_return_inbound_receipt_already_posted", "conflict", "该退回验收已完成入账")
-        return _result(existing_receipt, replayed=True)
+        _fail("stock_return_inbound_receipt_already_posted", "该退回验收已完成入账，请使用原请求回读")
+
+    if db.scalar(select(StockOperationReturnInbound.id).where(
+            StockOperationReturnInbound.actor_user_id == current.user_id,
+            StockOperationReturnInbound.request_id == request_id)) is not None:
+        _fail("stock_return_inbound_request_conflict", "原请求标识已绑定其他退回入账")
+    _fresh_request(db, actor=current, key=key_hash, request_id=request_id)
 
     plan = plan_return_inbound(db, actor=current, receipt_id=receipt_id)
     plan_json = _json_plan(plan)
     plan_hash = _hash(plan_json)
     if plan_hash != expected_plan_hash:
-        _fail("stock_return_inbound_plan_changed", "conflict", "入账方案已变化，请重新核验")
+        _fail("stock_return_inbound_plan_changed", "入账方案已变化，请重新核验")
 
     inbound_id = uuid.uuid4()
     movements = tuple(
@@ -229,7 +204,7 @@ def execute_return_inbound(
                 StockOperationReceiptSerial.result == "accepted",
             ))
             if receipt_serial is None:
-                _fail("stock_return_inbound_serial_missing", "precondition_failed", "入账 SN 未在验收事实中确认")
+                _fail("stock_return_inbound_serial_missing", "入账 SN 未在验收事实中确认", 412)
             db.add(StockOperationReturnInboundSerial(
                 id=uuid.uuid4(), line_id=line_id, inbound_id=inbound_id,
                 receipt_serial_id=receipt_serial.id, serial_id=serial_id,
@@ -272,7 +247,7 @@ def execute_return_inbound(
         now=now,
     )
     db.flush()
-    return _result(row)
+    return inbound_result(db, actor=current, fact=row)
 
 
 __all__ = ["execute_return_inbound", "preview_return_inbound"]

@@ -3,10 +3,16 @@
   "on": {
     "workflow_dispatch": {},
     "pull_request": {
-      "branches": ["main"]
+      "branches": [
+        "main"
+      ]
     },
     "push": {
-      "branches": ["main", "codex/production-readiness-gates"]
+      "branches": [
+        "main",
+        "codex/production-readiness-gates",
+        "codex/notification-delivery-worker"
+      ]
     }
   },
   "permissions": {
@@ -72,9 +78,22 @@
           "run": "pnpm exec vite build"
         },
         {
+          "name": "Build private warehouse assets for /xx without deployment",
+          "working-directory": "cloud_oam/frontend",
+          "run": "pnpm exec vite build --mode warehouse"
+        },
+        {
+          "name": "Verify public and private entry artifacts",
+          "run": "node cloud_oam/scripts/verify_public_entry.mjs"
+        },
+        {
           "name": "Run WeChat mini-program and gate contract tests",
           "working-directory": "cloud_oam/miniprogram",
           "run": "node --test tests/*.test.js"
+        },
+        {
+          "name": "Verify shared opening start protocol is generated from reviewed source",
+          "run": "node cloud_oam/scripts/sync_opening_start_core.mjs --check"
         }
       ]
     }

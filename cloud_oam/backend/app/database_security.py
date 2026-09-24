@@ -22,18 +22,30 @@ from sqlalchemy.engine import Engine
 
 from .formal_services.audit_chain import calculate_audit_event_hash
 from .oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST
+from .daily_reconciliation.capture_role_contract import PRIVATE_SELECT_EXCEPTION_SQL
+from .daily_reconciliation.capture_security import validate_capture_roles
+from .daily_reconciliation.query_security import validate_query_catalog
 
 
 class DatabaseSecurityBoundaryError(RuntimeError):
     """The production database identity or ACL boundary is not proven."""
 
 
+CONTROL_PREPARATION_PRIVATE_TABLES = frozenset({
+    'inventory_control_source_bindings', 'inventory_control_catalog_versions',
+    'inventory_control_capture_chains', 'inventory_control_capture_snapshots', 'inventory_control_preparations',
+})
+CONTROL_PRIVATE_TABLES = CONTROL_PREPARATION_PRIVATE_TABLES | {'inventory_control_authority_decisions', 'inventory_control_mapping_decisions', 'oam_material_capture_bindings', 'material_source_authority_decisions', 'material_projection_publications', 'material_projection_lines', 'control_projection_publications', 'control_projection_lines', 'control_projection_origins', 'control_projection_closures'}
+
+
 RUNTIME_READ_TABLES = frozenset(
     {
+        "daily_reconciliation_reports",
         "stock_operation_command_seals",
         'stock_operation_outbounds', 'stock_operation_outbound_lines', 'stock_operation_outbound_serials',
         'stock_operation_shipments', 'stock_operation_shipment_lines', 'stock_operation_shipment_serials',
         'stock_operation_receipts', 'stock_operation_receipt_lines', 'stock_operation_receipt_serials', 'stock_operation_receipt_exceptions',
+        'stock_operation_return_inbound_seals', 'opening_start_command_seals',
         'stock_operation_return_inbounds', 'stock_operation_return_inbound_lines', 'stock_operation_return_inbound_serials', 'stock_operation_return_inbound_postings',
         'stock_operation_orders', 'stock_operation_lines', 'stock_operation_serials', 'stock_operation_cancellations',
         "audit_chain_heads",
@@ -79,6 +91,8 @@ RUNTIME_READ_TABLES = frozenset(
         "materials",
         "notification_events",
         "notification_recipients",
+        "notification_person_targets",
+        "notification_target_bindings",
         "notification_deliveries",
         "notification_attempts",
         "oam_work_orders",
@@ -160,6 +174,7 @@ RUNTIME_INSERT_TABLES = frozenset(
         'stock_operation_outbounds', 'stock_operation_outbound_lines', 'stock_operation_outbound_serials',
         'stock_operation_shipments', 'stock_operation_shipment_lines', 'stock_operation_shipment_serials',
         'stock_operation_receipts', 'stock_operation_receipt_lines', 'stock_operation_receipt_serials', 'stock_operation_receipt_exceptions',
+        'stock_operation_return_inbound_seals', 'opening_start_command_seals',
         'stock_operation_return_inbounds', 'stock_operation_return_inbound_lines', 'stock_operation_return_inbound_serials', 'stock_operation_return_inbound_postings',
         'stock_operation_orders', 'stock_operation_lines', 'stock_operation_serials', 'stock_operation_cancellations',
         "audit_events",
@@ -191,6 +206,8 @@ RUNTIME_INSERT_TABLES = frozenset(
         "material_requests",
         "notification_events",
         "notification_recipients",
+        "notification_person_targets",
+        "notification_target_bindings",
         "notification_deliveries",
         "notification_attempts",
         "opening_control_reconciliation_items",
@@ -268,6 +285,7 @@ RUNTIME_DELETE_TABLES = frozenset(
     }
 )
 RUNTIME_UPDATE_COLUMNS = {
+    "notification_events": frozenset({"status"}),
     "notification_deliveries": frozenset(
         {
             "status",
@@ -494,6 +512,9 @@ EXPECTED_AUDIT_HEAD_IDS = {
     "material_request": "30000000-0000-4000-8000-000000000004",
 }
 EXPECTED_AUDIT_TRIGGERS = {
+    'trg_opening_start_seal_audit_0128': ('audit_events', 'rsc_guard_opening_start_seal_0128', 5, True, True, True),
+    "trg_audit_events_proof_0111": ("audit_events", "rsc_dispatch_stock_return_inbound_0111", 5, True, True, True),
+    "trg_audit_events_request_0110": ("audit_events", "rsc_guard_return_inbound_seal_0110", 5, True, True, True),
     'trg_audit_events_return_receipt_0105': ('audit_events', 'rsc_dispatch_stock_return_receipt_0105', 5, True, True, True),
     'trg_audit_events_return_shipment_0104': ('audit_events', 'rsc_dispatch_stock_return_shipment_0104', 5, True, True, True),
 
@@ -1557,6 +1578,19 @@ EXPECTED_RECONCILIATION_PARTIAL_INDEXES = {
     "uq_reconciliation_commands_approve_run": "approve_opening",
 }
 EXPECTED_OPENING_TERMINAL_TRIGGERS = {
+    'trg_opening_start_seal_insert_0128': ('opening_start_command_seals', 'rsc_guard_opening_start_seal_0128', "A", 7),
+    'trg_opening_start_seal_commit_0128': ('opening_start_command_seals', 'rsc_guard_opening_start_seal_0128', "A", 5),
+    'trg_opening_start_seal_audit_0128': ('audit_events', 'rsc_guard_opening_start_seal_0128', "A", 5),
+    'trg_opening_start_seal_state_0128': ('state_transition_events', 'rsc_guard_opening_start_seal_0128', "A", 5),
+    'trg_opening_start_seal_immutable_0128': ('opening_start_command_seals', 'rsc_guard_opening_start_seal_immutable_0128', "A", 27),
+    'trg_opening_start_seal_truncate_0128': ('opening_start_command_seals', 'rsc_guard_opening_start_seal_immutable_0128', "A", 34),
+
+    "trg_opening_actor_insert_0126": ("stocktake_tasks", "rsc_guard_opening_actor_0126", "A", 7),
+    "trg_opening_actor_commit_0126": ("stocktake_tasks", "rsc_guard_opening_actor_0126", "A", 5),
+    "trg_opening_actor_immutable_0126": ("stocktake_tasks", "rsc_guard_opening_actor_0126", "A", 19),
+
+    "trg_opening_publication_insert_0125": ("stocktake_tasks", "rsc_guard_opening_publication_0125", "A", 7),
+    "trg_opening_publication_commit_0125": ("stocktake_tasks", "rsc_guard_opening_publication_0125", "A", 5),
     "trg_stock_locations_transit_opening_0102": ("stock_locations", "rsc_guard_transit_opening_location_0102", "A", 27),
 
     "trg_stocktake_scopes_transit_opening_0102": ("stocktake_scopes", "rsc_guard_transit_opening_location_0102", "A", 7),
@@ -1942,6 +1976,94 @@ _MATERIAL_REQUEST_APPROVAL_FACT_TABLES_0029 = (
     "approval_actions",
 )
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS = {
+    'trg_notification_event_state_0129': ('notification_events', 'rsc_guard_notification_event_state_0129', 'A', 27, False, False, False),
+    'trg_notification_event_truncate_0129': ('notification_events', 'rsc_guard_notification_event_state_0129', 'A', 34, False, False, False),
+    'trg_control_publication_commit_0121': ('control_projection_publications', 'rsc_guard_control_publication_0121', 'A', 5, True, True, True),
+    'trg_control_projection_publications_facts_0121': ('control_projection_publications', 'rsc_guard_control_publication_0121', 'A', 31, False, False, False),
+    'trg_control_projection_publications_truncate_0121': ('control_projection_publications', 'rsc_guard_control_publication_0121', 'A', 34, False, False, False),
+    'trg_control_projection_lines_facts_0121': ('control_projection_lines', 'rsc_guard_control_publication_0121', 'A', 31, False, False, False),
+    'trg_control_projection_lines_truncate_0121': ('control_projection_lines', 'rsc_guard_control_publication_0121', 'A', 34, False, False, False),
+    'trg_control_projection_origins_facts_0121': ('control_projection_origins', 'rsc_guard_control_publication_0121', 'A', 31, False, False, False),
+    'trg_control_projection_origins_truncate_0121': ('control_projection_origins', 'rsc_guard_control_publication_0121', 'A', 34, False, False, False),
+    'trg_control_projection_closures_facts_0121': ('control_projection_closures', 'rsc_guard_control_publication_0121', 'A', 31, False, False, False),
+    'trg_control_projection_closures_truncate_0121': ('control_projection_closures', 'rsc_guard_control_publication_0121', 'A', 34, False, False, False),
+    'trg_control_projection_publications_graph_0121': ('control_projection_publications', 'rsc_guard_control_projection_graph_0121', 'A', 29, True, True, True),
+    'trg_control_projection_lines_graph_0121': ('control_projection_lines', 'rsc_guard_control_projection_graph_0121', 'A', 29, True, True, True),
+    'trg_control_projection_origins_graph_0121': ('control_projection_origins', 'rsc_guard_control_projection_graph_0121', 'A', 29, True, True, True),
+    'trg_control_projection_closures_graph_0121': ('control_projection_closures', 'rsc_guard_control_projection_graph_0121', 'A', 29, True, True, True),
+    'trg_sync_runs_graph_0121': ('sync_runs', 'rsc_guard_control_projection_graph_0121', 'A', 29, True, True, True),
+    'trg_sync_batches_graph_0121': ('sync_batches', 'rsc_guard_control_projection_graph_0121', 'A', 29, True, True, True),
+    'trg_sync_inbox_events_graph_0121': ('sync_inbox_events', 'rsc_guard_control_projection_graph_0121', 'A', 29, True, True, True),
+    'trg_external_objects_graph_0121': ('external_objects', 'rsc_guard_control_projection_graph_0121', 'A', 29, True, True, True),
+    'trg_external_object_versions_graph_0121': ('external_object_versions', 'rsc_guard_control_projection_graph_0121', 'A', 29, True, True, True),
+    'trg_sync_runs_truncate_0121': ('sync_runs', 'rsc_guard_control_projection_graph_0121', 'A', 34, False, False, False),
+    'trg_sync_batches_truncate_0121': ('sync_batches', 'rsc_guard_control_projection_graph_0121', 'A', 34, False, False, False),
+    'trg_sync_inbox_events_truncate_0121': ('sync_inbox_events', 'rsc_guard_control_projection_graph_0121', 'A', 34, False, False, False),
+    'trg_external_objects_truncate_0121': ('external_objects', 'rsc_guard_control_projection_graph_0121', 'A', 34, False, False, False),
+    'trg_external_object_versions_truncate_0121': ('external_object_versions', 'rsc_guard_control_projection_graph_0121', 'A', 34, False, False, False),
+    'trg_control_publication_file_0121': ('control_projection_publications', 'rsc_guard_source_evidence_0120', 'A', 7, False, False, False),
+    'trg_inventory_control_authority_decisions_file_0120': ('inventory_control_authority_decisions', 'rsc_guard_source_evidence_0120', 'A', 7, False, False, False),
+    'trg_inventory_control_mapping_decisions_file_0120': ('inventory_control_mapping_decisions', 'rsc_guard_source_evidence_0120', 'A', 7, False, False, False),
+    'trg_material_source_authority_decisions_file_0120': ('material_source_authority_decisions', 'rsc_guard_source_evidence_0120', 'A', 7, False, False, False),
+    'trg_material_projection_publications_file_0120': ('material_projection_publications', 'rsc_guard_source_evidence_0120', 'A', 7, False, False, False),
+    'trg_material_publication_commit_0119': ('material_projection_publications', 'rsc_guard_material_publication_0119', 'A', 5, True, True, True),
+    'trg_material_projection_publications_facts_0119': ('material_projection_publications', 'rsc_guard_material_publication_0119', 'A', 31, False, False, False),
+    'trg_material_projection_publications_truncate_0119': ('material_projection_publications', 'rsc_guard_material_publication_0119', 'A', 34, False, False, False),
+    'trg_material_projection_lines_facts_0119': ('material_projection_lines', 'rsc_guard_material_publication_0119', 'A', 31, False, False, False),
+    'trg_material_projection_lines_truncate_0119': ('material_projection_lines', 'rsc_guard_material_publication_0119', 'A', 34, False, False, False),
+    'trg_material_projection_publications_graph_0119': ('material_projection_publications', 'rsc_guard_material_projection_graph_0119', 'A', 29, True, True, True),
+    'trg_material_projection_lines_graph_0119': ('material_projection_lines', 'rsc_guard_material_projection_graph_0119', 'A', 29, True, True, True),
+    'trg_materials_graph_0119': ('materials', 'rsc_guard_material_projection_graph_0119', 'A', 29, True, True, True),
+    'trg_material_inventory_policies_graph_0119': ('material_inventory_policies', 'rsc_guard_material_projection_graph_0119', 'A', 29, True, True, True),
+    'trg_external_objects_graph_0119': ('external_objects', 'rsc_guard_material_projection_graph_0119', 'A', 29, True, True, True),
+    'trg_external_object_versions_graph_0119': ('external_object_versions', 'rsc_guard_material_projection_graph_0119', 'A', 29, True, True, True),
+    'trg_materials_truncate_0119': ('materials', 'rsc_guard_material_projection_graph_0119', 'A', 34, False, False, False),
+    'trg_material_inventory_policies_truncate_0119': ('material_inventory_policies', 'rsc_guard_material_projection_graph_0119', 'A', 34, False, False, False),
+    'trg_external_objects_truncate_0119': ('external_objects', 'rsc_guard_material_projection_graph_0119', 'A', 34, False, False, False),
+    'trg_external_object_versions_truncate_0119': ('external_object_versions', 'rsc_guard_material_projection_graph_0119', 'A', 34, False, False, False),
+    'trg_material_authority_facts_0117': ('material_source_authority_decisions','rsc_guard_material_source_authority_0117','A',31,False,False,False),
+    'trg_material_authority_truncate_0117': ('material_source_authority_decisions','rsc_guard_material_source_authority_0117','A',34,False,False,False),
+    'trg_control_mapping_facts_0115': ('inventory_control_mapping_decisions','rsc_guard_inventory_control_mapping_0115','A',31,False,False,False),
+    'trg_control_mapping_truncate_0115': ('inventory_control_mapping_decisions','rsc_guard_inventory_control_mapping_0115','A',34,False,False,False),
+    'trg_control_authority_facts_0113': ('inventory_control_authority_decisions','rsc_guard_inventory_control_authority_0113','A',31,False,False,False),
+    'trg_control_authority_truncate_0113': ('inventory_control_authority_decisions','rsc_guard_inventory_control_authority_0113','A',34,False,False,False),
+    **{f'trg_{table}_facts_0112': (table,'rsc_guard_inventory_control_facts_0112','A',31,False,False,False)
+       for table in CONTROL_PREPARATION_PRIVATE_TABLES},
+    **{f'trg_{table}_truncate_0112': (table,'rsc_guard_inventory_control_facts_0112','A',34,False,False,False)
+       for table in CONTROL_PREPARATION_PRIVATE_TABLES},
+    'trg_stock_operation_return_inbounds_proof_0111': ('stock_operation_return_inbounds', 'rsc_dispatch_stock_return_inbound_0111', 'A', 5, True, True, True),
+    'trg_stock_operation_return_inbound_lines_proof_0111': ('stock_operation_return_inbound_lines', 'rsc_dispatch_stock_return_inbound_0111', 'A', 5, True, True, True),
+    'trg_stock_operation_return_inbound_serials_proof_0111': ('stock_operation_return_inbound_serials', 'rsc_dispatch_stock_return_inbound_0111', 'A', 5, True, True, True),
+    'trg_stock_operation_return_inbound_postings_proof_0111': ('stock_operation_return_inbound_postings', 'rsc_dispatch_stock_return_inbound_0111', 'A', 5, True, True, True),
+    'trg_inventory_transactions_proof_0111': ('inventory_transactions', 'rsc_dispatch_stock_return_inbound_0111', 'A', 5, True, True, True),
+    'trg_inventory_movements_proof_0111': ('inventory_movements', 'rsc_dispatch_stock_return_inbound_0111', 'A', 5, True, True, True),
+    'trg_inventory_movement_serials_proof_0111': ('inventory_movement_serials', 'rsc_dispatch_stock_return_inbound_0111', 'A', 5, True, True, True),
+    'trg_audit_events_proof_0111': ('audit_events', 'rsc_dispatch_stock_return_inbound_0111', 'A', 5, True, True, True),
+    'trg_state_transition_events_proof_0111': ('state_transition_events', 'rsc_dispatch_stock_return_inbound_0111', 'A', 5, True, True, True),
+    'trg_outbox_events_proof_0111': ('outbox_events', 'rsc_dispatch_stock_return_inbound_0111', 'A', 5, True, True, True),
+
+    'trg_stock_operation_orders_request_0110': ('stock_operation_orders', 'rsc_guard_return_inbound_seal_0110', 'A', 5, True, True, True),
+    'trg_stock_operation_cancellations_request_0110': ('stock_operation_cancellations', 'rsc_guard_return_inbound_seal_0110', 'A', 5, True, True, True),
+    'trg_stock_operation_outbounds_request_0110': ('stock_operation_outbounds', 'rsc_guard_return_inbound_seal_0110', 'A', 5, True, True, True),
+    'trg_stock_operation_shipments_request_0110': ('stock_operation_shipments', 'rsc_guard_return_inbound_seal_0110', 'A', 5, True, True, True),
+    'trg_stock_operation_receipts_request_0110': ('stock_operation_receipts', 'rsc_guard_return_inbound_seal_0110', 'A', 5, True, True, True),
+    'trg_stock_operation_command_seals_request_0110': ('stock_operation_command_seals', 'rsc_guard_return_inbound_seal_0110', 'A', 5, True, True, True),
+    'trg_stock_operation_return_inbounds_request_0110': ('stock_operation_return_inbounds', 'rsc_guard_return_inbound_seal_0110', 'A', 5, True, True, True),
+    'trg_stock_operation_return_inbound_seals_request_0110': ('stock_operation_return_inbound_seals', 'rsc_guard_return_inbound_seal_0110', 'A', 5, True, True, True),
+    'trg_audit_events_request_0110': ('audit_events', 'rsc_guard_return_inbound_seal_0110', 'A', 5, True, True, True),
+    'trg_state_transition_events_request_0110': ('state_transition_events', 'rsc_guard_return_inbound_seal_0110', 'A', 5, True, True, True),
+    'trg_return_inbound_seals_immutable_0110': ('stock_operation_return_inbound_seals', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+    'trg_return_inbound_seals_no_truncate_0110': ('stock_operation_return_inbound_seals', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+    "trg_notification_event_manifest_0109": ("notification_events", "rsc_guard_notification_targets_0109", "A", 5, True, True, True),
+    "trg_notification_target_manifest_0109": ("notification_person_targets", "rsc_guard_notification_targets_0109", "A", 5, True, True, True),
+    "trg_notification_target_binding_0109": ("notification_target_bindings", "rsc_guard_notification_targets_0109", "A", 7, False, False, False),
+    "trg_notification_manifest_immutable_0109": ("notification_events", "rsc_guard_notification_targets_0109", "A", 19, False, False, False),
+    "trg_notification_event_no_delete_0109": ("notification_events", "rsc_guard_notification_targets_0109", "A", 11, False, False, False),
+    "trg_notification_events_no_truncate_0109": ("notification_events", "rsc_guard_notification_targets_0109", "A", 34, False, False, False),
+    "trg_notification_targets_immutable_0109": ("notification_person_targets", "rsc_guard_notification_targets_0109", "A", 27, False, False, False),
+    "trg_notification_targets_no_truncate_0109": ("notification_person_targets", "rsc_guard_notification_targets_0109", "A", 34, False, False, False),
+    "trg_notification_bindings_immutable_0109": ("notification_target_bindings", "rsc_guard_notification_targets_0109", "A", 27, False, False, False),
+    "trg_notification_bindings_no_truncate_0109": ("notification_target_bindings", "rsc_guard_notification_targets_0109", "A", 34, False, False, False),
     'trg_stock_operation_return_inbounds_proof_0106': ('stock_operation_return_inbounds', 'rsc_dispatch_stock_return_inbound_0106', 'A', 5, True, True, True),
     'trg_stock_operation_return_inbounds_immutable_0106': ('stock_operation_return_inbounds', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
     'trg_stock_operation_return_inbounds_no_truncate_0106': ('stock_operation_return_inbounds', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
@@ -2536,6 +2658,24 @@ EXPECTED_MATERIAL_REQUEST_CONTENT_MANIFEST_CHECK = {
     "constrained_columns": ("operation", "projection_manifest_sha256"),
 }
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
+    ('rsc_guard_notification_event_state_0129', ''): 'd73ae83a4dd9748625992fe4c48e786368ecf7e634632c3418751c224b0a49ef',
+    ('rsc_guard_opening_reconciliation_command_consumption_0026', ''): 'f1fcb2352ae8f1ca7d497bc1e2b421b450a1af37fc959aa5e96b5aec8c8f0a23',
+    ('rsc_guard_control_publication_0121', ''): '6d8c518e3efa1374a8175147cd646b19d33539ba13408dd05beeba12fcf92809',
+    ('rsc_guard_control_projection_graph_0121', ''): '7bc28eac5ac2886de484ffbc401b0b3199ad2aabbd88a45240304d28b4fa92ce',
+    ('rsc_guard_source_evidence_0120', ''): 'c151333305767b008a747a70b7fdf25587bef288c994e81f87dd9756d200867a',
+    ('rsc_guard_material_publication_0119', ''): '629119405e0da787b84583ac0ea8d2a7e2e01399272d0f8d20aba56e3702d2e1',
+    ('rsc_guard_material_projection_graph_0119', ''): '886a9facd316c1b4cfe799a3c8454abe14df1c3036256d1f46b8c794f326f95f',
+    ('rsc_guard_material_source_authority_0117',''): 'f1b622f5e46f2e93adf832fd52353c19fb1335ea213474810562a7213fdd611f',
+    ('rsc_guard_inventory_control_mapping_0115',''): 'f60b2892e9b5165bc6d75419aa11de0e3249c3c872bac9ebf743fdc3d6b0bd85',
+    ('rsc_guard_inventory_control_authority_0113',''): 'bd3f77a8547c82b9563975d15dfc22a53434c47c5f82730b46ea09c17ead5ea4',
+    ('rsc_guard_inventory_control_facts_0112',''): 'a003f8b24debd49fc3604ba3fe208adfbcc49160c9ac4b2cc6afc449476b34c3',
+    ('rsc_check_stock_return_inbound_0111', 'uuid'): '1c38ec523ef86b8d8b8ceef2dc70d9042f01395323da3339ee6077c2fb914f2b',
+    ('rsc_dispatch_stock_return_inbound_0111', ''): '5aa7b77fe3ce7511f1c29461ec18075159bfda4d9db9f45c6d156fe995b3d1bb',
+
+    ("rsc_guard_return_inbound_seal_0110", ""): "8c0fbcc35d3a0babbf2569169bc3db8edec7bd6461b615fd2c313a1cb5b698bd",
+    ("rsc_check_stock_return_inbound_0106", "uuid"): "6eab04466449162f4b0595dab3b78ccd623af7efe2b49062d506725867f8e6c8",
+    ("rsc_dispatch_stock_return_inbound_0106", ""): "0496e906a96f2e65676fe7ec2c515cf4489ae2c7573cb0ffac8a49ca53a095cd",
+    ("rsc_guard_notification_targets_0109", ""): "322319af72a7781a5dc5cb0e01cd862b79d664658928b557e9c479878e08fd90",
     ('rsc_check_return_receiver_0105', 'uuid, text, uuid, bigint, timestamp with time zone'): 'aff40a133c7ed282a8c1839197242c4e0f14022c6d84acfd0a51f605d666ab21',
     ('rsc_check_stock_return_receipt_0105', 'uuid'): '3aaed71163eb5cf6b8478dda95de8bee099b70206362af38167f6aee97e5538c',
     ('rsc_dispatch_stock_return_receipt_0105', ''): '3c608b4cfd651de0b193a0bca16179dccf6b569448fd05cc69efcdaf8c9d65ca',
@@ -2543,11 +2683,11 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
     ('rsc_dispatch_stock_return_shipment_0104', ''): '18d47d9b9441ed37bccc8bd65ced5668120c006db8091b113d916bdb49c56a43',
 
     ('rsc_check_stock_return_outbound_0103', 'uuid'): '934eda6927ccb46fe3ffd627334444006fbf6b989b491c0b18df6ea1d35b41f9',
-    ('rsc_dispatch_stock_return_outbound_0103', ''): 'fa0f8bd41c725613676fa5e2ee185b3676979462706f50f17b82c212e8aa0c27',
+    ('rsc_dispatch_stock_return_outbound_0103', ''): 'ca503d79250451fa7e53d3b631e63cd0bf5e833fe322e4ad3f4d84fcddb8a9ae',
 
-    ('rsc_guard_stock_operation_seal_0101', ''): '6a2f63d9156030fd2336d4a19a1a3600d9d9fafcd9f942ee42690f56a540dd07',
+    ('rsc_guard_stock_operation_seal_0101', ''): '097df114e7fe3b1481d22e1b19d4cee853691cce958c8341345398cf5453c4f6',
     ('rsc_check_stock_return_0100', 'uuid, uuid'): '13c5755bc4d06a8b4dfab76e4f1c6036cfe6776875f558b1e11d1a39736728a7',
-    ('rsc_dispatch_stock_return_0100', ''): 'f1c3ec8f8f697e8cb1612dd6226f440b0cfb68711e38ad2b402f726a2280d15d',
+    ('rsc_dispatch_stock_return_0100', ''): 'd5e0d66de3d2ba25ca4ee4e4d5bf19a38f7566a9a70cf2d00f6d8de39dccc782',
     ('rsc_guard_work_order_reversal_seal_0099', ''): '2489c7ececc06338a9bea578fa0142151321eabd2d2d4cb0f5831956de9a2d3f',
     ('rsc_check_work_order_reservations_0098', 'text, bigint'): '142e0f90073f3b9c77941f345b646b24d4b848e46994408f42acd050578dcd59',
     ('rsc_check_work_order_reversal_0098', 'uuid'): 'c9834533d05df61df464350924e889a8bba8874825f32aba9bcfc48998b3bb1e',
@@ -2674,6 +2814,15 @@ MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 = {
 }
 MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
     {
+        ('rsc_guard_control_projection_graph_0121', ''),
+        ('rsc_guard_material_projection_graph_0119', ''),
+        ('rsc_check_stock_return_inbound_0111', 'uuid'),
+        ('rsc_dispatch_stock_return_inbound_0111', ''),
+
+        ("rsc_check_stock_return_inbound_0106", "uuid"),
+        ("rsc_dispatch_stock_return_inbound_0106", ""),
+        ("rsc_guard_notification_targets_0109", ""),
+        ("rsc_guard_return_inbound_seal_0110", ""),
         ('rsc_check_return_receiver_0105', 'uuid, text, uuid, bigint, timestamp with time zone'),
         ('rsc_check_stock_return_receipt_0105', 'uuid'),
         ('rsc_dispatch_stock_return_receipt_0105', ''),
@@ -2749,6 +2898,8 @@ MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS = frozenset(
 )
 MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS = frozenset(
     {
+        ("rsc_check_stock_return_inbound_0111", "uuid"),
+        ("rsc_check_stock_return_inbound_0106", "uuid"),
         ('rsc_check_return_receiver_0105', 'uuid, text, uuid, bigint, timestamp with time zone'),
         ('rsc_check_stock_return_receipt_0105', 'uuid'),
         ('rsc_check_stock_return_shipment_0104', 'uuid'),
@@ -3317,6 +3468,11 @@ EXPECTED_NONOPENING_STOCKTAKE_CLOSE_CONSTRAINTS = {
 }
 OPENING_COMMIT_TRIGGER_NAMES = frozenset(
     {
+        'trg_opening_start_seal_commit_0128',
+        'trg_opening_start_seal_audit_0128',
+        'trg_opening_start_seal_state_0128',
+        "trg_opening_actor_commit_0126",
+        "trg_opening_publication_commit_0125",
         "trg_audit_events_opening_commit_0022",
         "trg_inventory_freezes_opening_commit_0022",
         "trg_inventory_movement_serials_opening_commit_0022",
@@ -3350,7 +3506,12 @@ OPENING_COMMIT_TRIGGER_NAMES = frozenset(
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _SQL_STRING_LITERAL_PATTERN = re.compile(r"'((?:''|[^'])*)'")
 RECEIPT_SYNC_RUNTIME_FUNCTION = ("rsc_oam_receipt_rls_check_0082", "text, text, text, jsonb")
+MATERIAL_EDGE_RUNTIME_FUNCTIONS = {
+    ("rsc_oam_material_capture_visible_0116", "text"),
+    ("rsc_oam_material_capture_binding_0116", "text, text, text"),
+}
 OAM_SYNC_RUNTIME_FUNCTIONS = {
+    *MATERIAL_EDGE_RUNTIME_FUNCTIONS,
     RECEIPT_SYNC_RUNTIME_FUNCTION,
     ("rsc_oam_rls_check_0044", "text, text, jsonb"),
     ("rsc_oam_runtime_binding_ready_0044", ""),
@@ -3387,6 +3548,10 @@ OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256 = {
     for coordinate in OAM_SYNC_RUNTIME_FUNCTIONS
 }
 RUNTIME_EXECUTE_FUNCTIONS = {
+    ("rsc_opening_control_selection_0125", "text, bigint, uuid, uuid, uuid, uuid, boolean"): ("v", True, "plpgsql", ("search_path=pg_catalog, public",)),
+    ("rsc_opening_control_directory_0124", "text, bigint, uuid, integer, uuid"): (
+        "s", True, "plpgsql", ("search_path=pg_catalog, public",),
+    ),
     ("rsc_canonical_reconciliation_json_0026", "jsonb"): (
         "i",
         False,
@@ -3523,7 +3688,7 @@ RUNTIME_FUNCTION_SHAPES = {
         "text" if coordinate[0] in {
             "rsc_canonical_reconciliation_json_0026",
             "rsc_reconciliation_event_key_0026",
-        } else "void",
+        } else "jsonb" if coordinate[0] in {"rsc_opening_control_directory_0124", "rsc_opening_control_selection_0125"} else "void",
         coordinate[0] in {
             "rsc_canonical_reconciliation_json_0026",
             "rsc_reconciliation_event_key_0026",
@@ -3532,6 +3697,9 @@ RUNTIME_FUNCTION_SHAPES = {
     for coordinate in RUNTIME_EXECUTE_FUNCTIONS
 }
 RUNTIME_FUNCTION_BODY_SHA256 = {
+    ("rsc_opening_control_selection_0125", "text, bigint, uuid, uuid, uuid, uuid, boolean"): '291b20245255f2da62da15556ebb584fdafc8b71b6c571e2a968470c601e5c14',
+
+    ("rsc_opening_control_directory_0124", "text, bigint, uuid, integer, uuid"): "9d313a9b1693ece9b7d3b187397546dfb87400bccb68c488ab2f1cadd6298f62",
     ("rsc_canonical_reconciliation_json_0026", "jsonb"):
         "35a956052a13a94d1c6b57f252273f46fa806b2e9c596531205a148114b7dc53",
     ("rsc_reconciliation_event_key_0026", "text, text, text"):
@@ -3545,7 +3713,7 @@ RUNTIME_FUNCTION_BODY_SHA256 = {
     ("rsc_lock_formal_principal_graph_0026", "text[]"):
         "4b7d3e47541a1de999f33af65d95a697ffd44cfea8930f6fbeb265d4fd727aaf",
     ("rsc_lock_opening_control_import_0027", "uuid, uuid"):
-        "de1a1ada12225d2c38d695448a475ebf16f404fdefb7a438a1f8fb8f50d996d1",
+        "c2004a551b55bba574cf26779e59ef04ca11caa0c9ec653183c57363c19b405a",
     (
         "rsc_lock_opening_stocktake_start_reference_0027",
         "uuid, uuid[], uuid[], uuid[], timestamp with time zone",
@@ -3582,6 +3750,14 @@ RUNTIME_FUNCTION_BODY_SHA256 = {
         "d889b397912e98e1b9c2ec1de03ada750f42df01803c87239b9d04a624221982",
 }
 FORMAL_FILE_INTERNAL_FUNCTIONS = {
+    ('rsc_guard_notification_event_state_0129', ''): ('v', False, 'plpgsql', ('search_path=pg_catalog, public',)),
+    ('rsc_guard_opening_start_seal_immutable_0128', ''): ('v', True, 'plpgsql', ('search_path=pg_catalog, public',)),
+    ('rsc_guard_opening_start_seal_0128', ''): ('v', True, 'plpgsql', ('search_path=pg_catalog, public',)),
+    ('rsc_assert_opening_actor_0126', 'text, bigint, uuid'): ("v", True, "plpgsql", ("search_path=pg_catalog, public",)),
+    ('rsc_guard_opening_actor_0126', ''): ("v", True, "plpgsql", ("search_path=pg_catalog, public",)),
+
+    ("rsc_assert_opening_publication_0125", "uuid, uuid, uuid"): ("v", True, "plpgsql", ("search_path=pg_catalog, public",)),
+    ("rsc_guard_opening_publication_0125", ""): ("v", True, "plpgsql", ("search_path=pg_catalog, public",)),
     ("rsc_guard_transit_opening_location_0102", ""): ("v", True, "plpgsql", ("search_path=pg_catalog, public",)),
     (
         "rsc_stocktake_actor_assignment_valid_0011",
@@ -3914,6 +4090,7 @@ FORMAL_FILE_INTERNAL_FUNCTIONS = {
 FORMAL_FILE_INTERNAL_FUNCTION_SHAPES = {
     coordinate: (
         "f",
+        "uuid" if coordinate[0] == "rsc_assert_opening_publication_0125" else
         "boolean"
         if coordinate in {
             (
@@ -3954,6 +4131,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_SHAPES = {
         }
         else "void"
         if coordinate in {
+            ("rsc_assert_opening_actor_0126", "text, bigint, uuid"),
             ("rsc_validate_material_request_cancellation_0037", "uuid"),
             (
                 "rsc_validate_nonopening_stocktake_start_causality_0047",
@@ -3966,6 +4144,14 @@ FORMAL_FILE_INTERNAL_FUNCTION_SHAPES = {
     for coordinate in FORMAL_FILE_INTERNAL_FUNCTIONS
 }
 FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
+    ('rsc_guard_notification_event_state_0129', ''): 'd73ae83a4dd9748625992fe4c48e786368ecf7e634632c3418751c224b0a49ef',
+    ('rsc_guard_opening_start_seal_immutable_0128', ''): 'fa26866165bb53e757ed67a2b27ab54f96d93ec1670803425e32e96e602db68d',
+    ('rsc_guard_opening_start_seal_0128', ''): 'd1d14a5adbace7fceb0977211627e91a730e87f9bc5c7c72aed7807e02f4bd05',
+    ('rsc_assert_opening_actor_0126', 'text, bigint, uuid'): 'b9a8d3cf85d3546dbedea34936b2bb392ca79d24c285d2fd6b034e58a0ace1c7',
+    ('rsc_guard_opening_actor_0126', ''): '1acb59b7885f754e964442b8afdf529cee999bfa4b14ac444864ecc97ed53d93',
+
+    ("rsc_assert_opening_publication_0125", "uuid, uuid, uuid"): '2051bdf01ffbbd86eb842f599620ab3bc3358458d902d590377be757210de895',
+    ("rsc_guard_opening_publication_0125", ""): 'edd9a8ca1c437edb86611df265d9163a80753c133b229b761cd15b4f44101784',
     ("rsc_guard_transit_opening_location_0102", ""): "ad45b40344d4fbe6ec1fb12a04b4810b906681af326a4170fea4a95337194f1e",
     (
         "rsc_stocktake_actor_assignment_valid_0011",
@@ -4045,7 +4231,7 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_require_stocktake_recount_graph_0032", ""):
         "294e748d5020b37057851154ecfed2ee66a85fde62bc9d0e4f8cae08aa7be1a2",
     ("rsc_guard_formal_file_object_0036", ""):
-        "76401f3c71eacdbac4c4b4d07e5a49f1159cc2cea878933df36e817c9a85e39f",
+        "60a661fd007fcc5c2081e717df402cf3474e4dbb9d470c7f249b189cd2255344",
     ("rsc_guard_formal_file_binding_0036", ""):
         "0f4a82758e1b00ab497660a85b8ff28672e19980a6f1a3f7ba98b9959f2c383c",
     ("rsc_validate_material_request_cancellation_0037", "uuid"):
@@ -4085,6 +4271,99 @@ FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256 = {
     ("rsc_validate_nonopening_stocktake_review_version_0063", ""):
         "e7b996ad8f85b6ffc099bc88adb622dc71e56fc239a737ff8475b980b99e4744",
 }
+
+
+# Daily evidence remains private to the controlled owner job. New tables and
+# immutable/deferred guards participate in the same fail-closed API catalogue.
+from .daily_reconciliation import security_catalog as _daily_catalog
+CONTROL_PRIVATE_TABLES = CONTROL_PRIVATE_TABLES | _daily_catalog.TABLES
+for _coordinate, _fact in _daily_catalog.FUNCTIONS.items():
+    FORMAL_FILE_INTERNAL_FUNCTIONS[_coordinate] = _fact['definition']
+    FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[_coordinate] = _fact['shape']
+    FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[_coordinate] = _fact['sha256']
+    MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[_coordinate] = _fact['sha256']
+MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS = MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS | frozenset(
+    coordinate for coordinate, fact in _daily_catalog.FUNCTIONS.items() if fact['shape'][1] == 'void'
+)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.update(_daily_catalog.TRIGGERS)
+
+
+# Formal review commands are API-writable, with immutable facts and only four
+# binding update columns. Trigger helpers stay private; one gate is callable.
+from .daily_reconciliation import review_security as _review_catalog
+RUNTIME_READ_TABLES = RUNTIME_READ_TABLES | _review_catalog.TABLES
+RUNTIME_INSERT_TABLES = RUNTIME_INSERT_TABLES | _review_catalog.TABLES
+RUNTIME_UPDATE_COLUMNS['daily_review_bindings'] = frozenset({'version','last_event_id','state_jsonb','updated_at'})
+for _coordinate, _fact in _review_catalog.FUNCTIONS.items():
+    if _fact['api']:
+        RUNTIME_EXECUTE_FUNCTIONS[_coordinate] = _fact['definition']
+        RUNTIME_FUNCTION_SHAPES[_coordinate] = _fact['shape']
+        RUNTIME_FUNCTION_BODY_SHA256[_coordinate] = _fact['sha256']
+    else:
+        FORMAL_FILE_INTERNAL_FUNCTIONS[_coordinate] = _fact['definition']
+        FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[_coordinate] = _fact['shape']
+        FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[_coordinate] = _fact['sha256']
+for _coordinate in _review_catalog.PROJECTION_GUARD_HASHES:
+    FORMAL_FILE_INTERNAL_FUNCTIONS[_coordinate] = ('v',False,'plpgsql',('search_path=pg_catalog, public',))
+    FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[_coordinate] = ('f','trigger',False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256.update(_review_catalog.PROJECTION_GUARD_HASHES)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.update(_review_catalog.TRIGGERS)
+for _name, (_table,_function,_enabled,_kind,_constraint,_deferred,_initial) in _review_catalog.TRIGGERS.items():
+    if _table=='audit_events':
+        EXPECTED_AUDIT_TRIGGERS[_name]=(_table,_function,_kind,_constraint,_deferred,_initial)
+
+from .daily_reconciliation import evidence_security as _daily_evidence_catalog
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256.update(_daily_evidence_catalog.FUNCTION_HASHES)
+
+from .daily_reconciliation import recovery_security as _daily_recovery_catalog
+RUNTIME_READ_TABLES = RUNTIME_READ_TABLES | _daily_recovery_catalog.TABLES
+RUNTIME_INSERT_TABLES = RUNTIME_INSERT_TABLES | _daily_recovery_catalog.TABLES
+for _coordinate, _fact in _daily_recovery_catalog.FUNCTIONS.items():
+    FORMAL_FILE_INTERNAL_FUNCTIONS[_coordinate] = _fact['definition']
+    FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[_coordinate] = _fact['shape']
+    FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[_coordinate] = _fact['sha256']
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.update(_daily_recovery_catalog.TRIGGERS)
+for _name, (_table,_function,_enabled,_kind,_constraint,_deferred,_initial) in _daily_recovery_catalog.TRIGGERS.items():
+    if _table=='audit_events':
+        EXPECTED_AUDIT_TRIGGERS[_name]=(_table,_function,_kind,_constraint,_deferred,_initial)
+
+# Report jobs are mutable only through the migration-owned 0136 state guard.
+# Report files have the separate 0137 purpose guard; completed jobs also
+# receive a unique result-file index in 0138.
+RUNTIME_READ_TABLES = RUNTIME_READ_TABLES | frozenset({'file_jobs'})
+RUNTIME_INSERT_TABLES = RUNTIME_INSERT_TABLES | frozenset({'file_jobs'})
+RUNTIME_UPDATE_COLUMNS['file_jobs'] = frozenset({
+    'status', 'started_at', 'completed_at', 'result_file_id', 'result_sha256',
+    'result_size_bytes', 'error_detail', 'download_count', 'updated_at',
+})
+_REPORT_JOB_GUARD = ('rsc_guard_report_export_job_0136', '')
+FORMAL_FILE_INTERNAL_FUNCTIONS[_REPORT_JOB_GUARD] = (
+    'v', True, 'plpgsql', ('search_path=pg_catalog, public',)
+)
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[_REPORT_JOB_GUARD] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[_REPORT_JOB_GUARD] = (
+    'c0d717d2739939f980b80615066b13b63cb3d358273e94995f8b606b050438cb'
+)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_formal_file_object_0036', '')] = (
+    '27a29d716186f3c47fbb787b086f6f9560d33cd6db15237006c495d87b09e102'
+)
+EXPECTED_FORMAL_FILE_TRIGGERS.update({
+    'trg_file_jobs_export_guard_0136': ('file_jobs', 'rsc_guard_report_export_job_0136', 'A', 31),
+    'trg_file_jobs_export_no_truncate_0136': ('file_jobs', 'rsc_guard_report_export_job_0136', 'A', 34),
+})
+
+_REPORT_RESULT_BINDING_GUARD = ('rsc_guard_report_result_job_binding_0139', '')
+FORMAL_FILE_INTERNAL_FUNCTIONS[_REPORT_RESULT_BINDING_GUARD] = (
+    'v', True, 'plpgsql', ('search_path=pg_catalog, public',)
+)
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[_REPORT_RESULT_BINDING_GUARD] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[_REPORT_RESULT_BINDING_GUARD] = (
+    'a2792173a7643881ab338e1303ecbda25ff7ad5f1a42d34d1e2418242070911e'
+)
+EXPECTED_FORMAL_FILE_TRIGGERS['trg_file_jobs_result_binding_0139'] = (
+    'file_jobs', 'rsc_guard_report_result_job_binding_0139', 'A', 19,
+)
+
 
 
 _ROLE_EVIDENCE_SQL = text(
@@ -4289,6 +4568,15 @@ SELECT
          WHERE table_acl.grantee = role_row.oid
            AND table_acl.is_grantable
     ) AS has_runtime_grant_option
+    ,(
+        EXISTS (SELECT 1 FROM aclexplode(COALESCE(class_row.relacl,acldefault('r',class_row.relowner))) a
+            LEFT JOIN pg_roles grantee ON grantee.oid=a.grantee
+            WHERE a.grantee<>class_row.relowner AND NOT
+                ((COALESCE(grantee.rolname,'')='star_oam_backup' AND a.privilege_type='SELECT' AND NOT a.is_grantable)
+                 OR (__DAILY_CAPTURE_SELECT__)))
+        OR EXISTS (SELECT 1 FROM pg_attribute att, LATERAL aclexplode(att.attacl) a
+            WHERE att.attrelid=class_row.oid AND att.attnum>0 AND NOT att.attisdropped AND a.grantee<>class_row.relowner)
+    ) AS has_unexpected_control_acl
 FROM pg_class AS class_row
 JOIN pg_namespace AS namespace_row
   ON namespace_row.oid = class_row.relnamespace
@@ -4297,7 +4585,7 @@ JOIN pg_roles AS role_row
 WHERE namespace_row.nspname = 'public'
   AND class_row.relkind IN ('r', 'p', 'v', 'm', 'f')
 ORDER BY class_row.relname
-"""
+""".replace("__DAILY_CAPTURE_SELECT__", PRIVATE_SELECT_EXCEPTION_SQL)
 )
 
 _COLUMN_ACL_SQL = text(
@@ -4416,6 +4704,10 @@ SELECT
                         function_row.proname = 'rsc_oam_receipt_rls_check_0082'
                         AND oidvectortypes(function_row.proargtypes) = 'text, text, text, jsonb'
                     )
+                    OR (function_row.proname = 'rsc_oam_material_capture_visible_0116'
+                        AND oidvectortypes(function_row.proargtypes) = 'text')
+                    OR (function_row.proname = 'rsc_oam_material_capture_binding_0116'
+                        AND oidvectortypes(function_row.proargtypes) = 'text, text, text')
                 )
                 AND function_acl.is_grantable IS FALSE
                 AND EXISTS (
@@ -4427,6 +4719,8 @@ SELECT
                        )
                        AND (oam_runtime_role.rolname <> 'edge_inbox'
                             OR function_row.proname <> 'rsc_oam_receipt_rls_check_0082')
+                       AND (oam_runtime_role.rolname <> 'star_oam_projector'
+                            OR function_row.proname NOT IN ('rsc_oam_material_capture_visible_0116','rsc_oam_material_capture_binding_0116'))
                 )
            )
     ) AS unexpected_execute_grantee_count,
@@ -5034,6 +5328,25 @@ WHERE schema_row.nspname = 'public'
 """
 )
 
+
+_OPENING_SEAL_INDEX_SQL = text(str(_OPENING_TERMINAL_INDEX_SQL).replace(
+    "index_row.relname = '" + EXPECTED_OPENING_TERMINAL_INDEX + "'",
+    "index_row.relname IN ('uq_opening_start_seal_request','uq_opening_start_seal_reference')"
+).replace("index_metadata.indisunique AS is_unique,", "index_metadata.indisunique AS is_unique, index_metadata.indimmediate AS is_immediate, index_metadata.indnatts AS attribute_count,"))
+
+
+def _assert_opening_seal_indexes(rows):
+    expected = {'uq_opening_start_seal_request': 'request_id', 'uq_opening_start_seal_reference': 'request_reference'}
+    if len(rows) != 2 or {row.get('index_name') for row in rows} != set(expected):
+        raise DatabaseSecurityBoundaryError('production database opening seal index set drift')
+    for row in rows:
+        if (row.get('table_name') != 'opening_start_command_seals' or row.get('access_method') != 'btree'
+                or any(row.get(key) is not True for key in ('is_unique','is_valid','is_ready','is_live','is_immediate'))
+                or tuple(row.get('key_columns') or ()) != ('actor_user_id',expected[row['index_name']])
+                or row.get('attribute_count') != 2 or row.get('predicate') is not None):
+            raise DatabaseSecurityBoundaryError('production database opening seal unique index drift')
+
+
 _FORMAL_FILE_TRIGGER_NAME_LITERALS = ",\n      ".join(
     f"'{name}'" for name in sorted(EXPECTED_FORMAL_FILE_TRIGGERS)
 )
@@ -5126,7 +5439,7 @@ JOIN pg_namespace AS function_schema
   ON function_schema.oid = function_row.pronamespace
 WHERE table_schema.nspname = 'public'
   AND (
-      trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060|0069|0070|0071|0072)$'
+      trigger_row.tgname ~ '_(0029|0030|0045|0046|0059|0060|0069|0070|0071|0072|0130|0132)$'
       OR function_row.proname IN (
           {_MATERIAL_REQUEST_APPROVAL_TRIGGER_FUNCTION_LITERALS}
       )
@@ -6200,9 +6513,10 @@ def _select_material_request_approval_functions(
         row
         for row in rows
         if isinstance(row.get("function_name"), str)
-        and row["function_name"].endswith(
-            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094", "_0095", "_0096", "_0098", "_0099", "_0100", "_0101", "_0103", "_0104", "_0105")
-        )
+        and (row["function_name"] == "rsc_guard_opening_reconciliation_command_consumption_0026"
+             or row["function_name"].endswith(
+            ("_0029", "_0030", "_0045", "_0046", "_0059", "_0060", "_0069", "_0070", "_0071", "_0072", "_0077", "_0087", "_0090", "_0092", "_0093", "_0094", "_0095", "_0096", "_0098", "_0099", "_0100", "_0101", "_0103", "_0104", "_0105", "_0106", "_0109", "_0110", "_0111", "_0112", "_0113", "_0115", "_0117", "_0119", "_0120", "_0121", "_0129", "_0130")
+        ))
     ]
 
 
@@ -6256,6 +6570,10 @@ def validate_production_database_security(
             connection = raw_connection.execution_options(
                 isolation_level="REPEATABLE READ"
             )
+            validate_capture_roles(connection, allow_absent=True)
+            validate_query_catalog(connection)
+            _review_catalog.validate_review_catalog(connection)
+            _daily_recovery_catalog.validate_recovery_catalog(connection)
             evidence = connection.execute(
                 _ROLE_EVIDENCE_SQL,
                 {"migration_role": expected_migration_role},
@@ -6307,6 +6625,7 @@ def validate_production_database_security(
             opening_terminal_indexes = connection.execute(
                 _OPENING_TERMINAL_INDEX_SQL
             ).mappings().all()
+            opening_seal_indexes = connection.execute(_OPENING_SEAL_INDEX_SQL).mappings().all()
             formal_file_triggers = connection.execute(
                 _FORMAL_FILE_TRIGGER_SQL
             ).mappings().all()
@@ -6450,6 +6769,7 @@ def validate_production_database_security(
     )
     _assert_opening_terminal_triggers(opening_terminal_triggers)
     _assert_opening_terminal_index(opening_terminal_indexes)
+    _assert_opening_seal_indexes(opening_seal_indexes)
     _assert_formal_file_guards(
         triggers=formal_file_triggers,
         indexes=formal_file_indexes,
@@ -6614,6 +6934,8 @@ def _assert_runtime_table_acl(
             failures.append("table_identity")
             continue
         actual_names.add(table_name)
+        if table_name in CONTROL_PRIVATE_TABLES and row.get('has_unexpected_control_acl') is not False:
+            failures.append(f'{table_name}.private_acl')
         if row.get("owner_name") != expected_migration_role:
             failures.append(f"{table_name}.owner")
         expected = _expected_table_privileges(table_name)
@@ -6633,6 +6955,7 @@ def _assert_runtime_table_acl(
                 failures.append(f"{table_name}.{field}")
     expected_names = (
         RUNTIME_READ_TABLES
+        | CONTROL_PRIVATE_TABLES
         | RUNTIME_INSERT_TABLES
         | RUNTIME_UPDATE_TABLES
         | RUNTIME_DELETE_TABLES
@@ -6830,6 +7153,7 @@ def _assert_runtime_function_acl(
                 expected_oam_sync is not None
                 and (audience != "edge_receiver_can_execute"
                      or coordinate != RECEIPT_SYNC_RUNTIME_FUNCTION)
+                and (audience != "projector_can_execute" or coordinate not in MATERIAL_EDGE_RUNTIME_FUNCTIONS)
             )
             if row.get(audience) is not expected_audience:
                 failures.append(f"{label}.{audience}")

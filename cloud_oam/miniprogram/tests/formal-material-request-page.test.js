@@ -1003,7 +1003,7 @@ function loadWith(transport, uploadModule = formalFileUpload) {
   })
 }
 
-test('page is registered and selects the reviewed formal transport', async (context) => {
+test('preserved private page is unregistered and retains the reviewed formal transport', async (context) => {
   globals()
   const calls = []
   const transport = fakeTransport({
@@ -1022,7 +1022,7 @@ test('page is registered and selects the reviewed formal transport', async (cont
     path.join(__dirname, '../pages/formal-material-requests/index.wxml'),
     'utf8'
   )
-  assert.equal(app.pages.includes('pages/formal-material-requests/index'), true)
+  assert.equal(app.pages.includes('pages/formal-material-requests/index'), false)
   assert.match(wxml, /生产写入仍受服务端写 gate 与 runtime ACL 控制/)
   assert.equal(instance.data.accessAllowed, true)
   assert.deepEqual(calls, ['access', 'list'])
@@ -1167,6 +1167,26 @@ test('material picker searches and paginates only the formal catalog', async (co
     ['', MATERIAL_2_ID],
     ['直流接触器', null]
   ])
+})
+
+test('material picker keeps unknown source time through selection', async (context) => {
+  globals()
+  const loaded = loadWith(fakeTransport({
+    async listMaterials() {
+      return { schema_version: '2.0', items: [Object.assign(material(), { source_updated_at: null })], next_after_id: null }
+    }
+  }))
+  context.after(() => { loaded.restore(); delete global.wx })
+  const instance = pageInstance(loaded.definition)
+  await instance.load()
+  instance.startCreate()
+  const lineKey = instance.data.form.lines[0].key
+  await instance.openMaterialPicker({ currentTarget: { dataset: { key: lineKey, target: 'material' } } })
+  assert.equal(instance.data.materialPicker.error, '')
+  assert.equal(instance.data.materialPicker.items[0].source_updated_at, null)
+  instance.chooseMaterial({ currentTarget: { dataset: { id: MATERIAL_ID } } })
+  assert.equal(instance.data.form.lines[0].material.material_id, MATERIAL_ID)
+  assert.equal(instance.data.form.lines[0].material.source_updated_at, null)
 })
 
 test('work-order picker searches, paginates, selects and explicitly clears only formal options', async (context) => {

@@ -82,7 +82,7 @@ class FormalMaterial(TimestampMixin, Base):
     specification: Mapped[str] = mapped_column(String(300), default="")
     base_unit: Mapped[str] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(20), default="active")
-    source_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class MaterialInventoryPolicy(TimestampMixin, Base):

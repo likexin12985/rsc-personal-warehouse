@@ -1,0 +1,1974 @@
+{
+  "sourceCommit": "7556de2aeb1cf64cff18758204a89f5f17f694b8",
+  "statements": [
+    {
+      "phase": 0,
+      "sql": "INSERT INTO organizations (id, external_object_id, code, name, parent_id, org_type, province_code, status, updated_at, created_at) VALUES (%(id)s::UUID, %(external_object_id)s::UUID, %(code)s::VARCHAR, %(name)s::VARCHAR, %(parent_id)s::UUID, %(org_type)s::VARCHAR, %(province_code)s::VARCHAR, %(status)s::VARCHAR, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "2263d330-9781-4c7c-bcfb-1dff5666c4fa"
+        },
+        "external_object_id": null,
+        "code": "PG16-HQ-429ea394",
+        "name": "PG16 0051 回填总部",
+        "parent_id": null,
+        "org_type": "headquarters",
+        "province_code": null,
+        "status": "active",
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.056474+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.056480+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO organizations (id, external_object_id, code, name, parent_id, org_type, province_code, status, updated_at, created_at) VALUES (%(id)s::UUID, %(external_object_id)s::UUID, %(code)s::VARCHAR, %(name)s::VARCHAR, %(parent_id)s::UUID, %(org_type)s::VARCHAR, %(province_code)s::VARCHAR, %(status)s::VARCHAR, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243"
+        },
+        "external_object_id": null,
+        "code": "PG16-REG-0a563f80",
+        "name": "PG16 0051 回填区域",
+        "parent_id": {
+          "type": "uuid",
+          "value": "2263d330-9781-4c7c-bcfb-1dff5666c4fa"
+        },
+        "org_type": "region_company",
+        "province_code": null,
+        "status": "active",
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.057670+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.057672+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO source_systems (id, code, name, mode, enabled, configuration_jsonb, updated_at, created_at) VALUES (%(id)s::UUID, %(code)s::VARCHAR, %(name)s::VARCHAR, %(mode)s::VARCHAR, %(enabled)s, %(configuration_jsonb)s::JSONB, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "04ed125c-23df-450d-a620-b83568da561e"
+        },
+        "code": "OAM",
+        "name": "PG16 0051 回填只读控制源",
+        "mode": "read_only",
+        "enabled": true,
+        "configuration_jsonb": {
+          "type": "jsonb",
+          "value": {}
+        },
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-18T12:47:46.012998+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-18T12:47:46.012998+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO people (id, external_object_id, organization_id, employee_no, name, mobile_encrypted, mobile_hash, employment_status, source_updated_at, updated_at, created_at) VALUES (%(id)s::UUID, %(external_object_id)s::UUID, %(organization_id)s::UUID, %(employee_no)s::VARCHAR, %(name)s::VARCHAR, %(mobile_encrypted)s::VARCHAR, %(mobile_hash)s::VARCHAR, %(employment_status)s::VARCHAR, %(source_updated_at)s::TIMESTAMP WITH TIME ZONE, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "3d21f0f9-4633-4d75-8e6c-6299edc8be3c"
+        },
+        "external_object_id": null,
+        "organization_id": {
+          "type": "uuid",
+          "value": "5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243"
+        },
+        "employee_no": "E-a4bc0fafe3",
+        "name": "PG16 0051 回填区域负责人",
+        "mobile_encrypted": null,
+        "mobile_hash": null,
+        "employment_status": "active",
+        "source_updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.012998+00:00"
+        },
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.060915+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.060917+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO users (id, person_id, account_status, last_login_at, authorization_version, mobile, name, password_hash, role, province, is_active, require_password_change, created_at, updated_at) VALUES (%(id)s::VARCHAR, %(person_id)s::UUID, %(account_status)s::VARCHAR, %(last_login_at)s::TIMESTAMP WITH TIME ZONE, %(authorization_version)s::BIGINT, %(mobile)s::VARCHAR, %(name)s::VARCHAR, %(password_hash)s::VARCHAR, %(role)s::VARCHAR, %(province)s::VARCHAR, %(is_active)s, %(require_password_change)s, %(created_at)s::TIMESTAMP WITH TIME ZONE, %(updated_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "person_id": {
+          "type": "uuid",
+          "value": "3d21f0f9-4633-4d75-8e6c-6299edc8be3c"
+        },
+        "account_status": "active",
+        "last_login_at": null,
+        "authorization_version": 1,
+        "mobile": "14802209107",
+        "name": "PG16 0051 回填区域负责人",
+        "password_hash": "formal-password-disabled",
+        "role": "provincial_manager",
+        "province": null,
+        "is_active": true,
+        "require_password_change": false,
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.062336+00:00"
+        },
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.062340+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO auth_identities (id, user_id, identity_type, provider_key, identifier_hash, hash_version, verified_at, status, revoked_at, updated_at, created_at) VALUES (%(id)s::UUID, %(user_id)s::VARCHAR, %(identity_type)s::VARCHAR, %(provider_key)s::VARCHAR, %(identifier_hash)s::VARCHAR, %(hash_version)s::INTEGER, %(verified_at)s::TIMESTAMP WITH TIME ZONE, %(status)s::VARCHAR, %(revoked_at)s::TIMESTAMP WITH TIME ZONE, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "20df6899-3aca-42f0-baea-e4cd32a83f52"
+        },
+        "user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "identity_type": "mobile",
+        "provider_key": "test",
+        "identifier_hash": "94c9298ecf6642c388983cca71cab7cbdfb538cd6cd84d669527cd654ecb3732",
+        "hash_version": 1,
+        "verified_at": {
+          "type": "datetime",
+          "value": "2026-09-19T12:47:46.012998+00:00"
+        },
+        "status": "active",
+        "revoked_at": null,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.063581+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.063582+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO role_assignments (id, user_id, role_id, scope_type, scope_id, valid_from, valid_to, status, assigned_by, revoked_at, revoked_by, reason, updated_at, created_at) VALUES (%(id)s::UUID, %(user_id)s::VARCHAR, %(role_id)s::UUID, %(scope_type)s::VARCHAR, %(scope_id)s::VARCHAR, %(valid_from)s::TIMESTAMP WITH TIME ZONE, %(valid_to)s::TIMESTAMP WITH TIME ZONE, %(status)s::VARCHAR, %(assigned_by)s::VARCHAR, %(revoked_at)s::TIMESTAMP WITH TIME ZONE, %(revoked_by)s::VARCHAR, %(reason)s::VARCHAR, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "cc6c5a51-acea-4fe4-9dd5-2c27bb765fa6"
+        },
+        "user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "role_id": {
+          "type": "uuid",
+          "value": "10000000-0000-4000-8000-000000000002"
+        },
+        "scope_type": "organization",
+        "scope_id": "5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243",
+        "valid_from": {
+          "type": "datetime",
+          "value": "2020-01-01T00:00:00+00:00"
+        },
+        "valid_to": null,
+        "status": "active",
+        "assigned_by": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "revoked_at": null,
+        "revoked_by": null,
+        "reason": "test",
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.064466+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.064470+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO external_objects (id, source_system_id, entity_type, external_id, current_version_id, deleted_at, updated_at, created_at) VALUES (%(id)s::UUID, %(source_system_id)s::UUID, %(entity_type)s::VARCHAR, %(external_id)s::VARCHAR, %(current_version_id)s::UUID, %(deleted_at)s::TIMESTAMP WITH TIME ZONE, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "535803fb-e8a7-4f65-8d75-2c7dcd38761e"
+        },
+        "source_system_id": {
+          "type": "uuid",
+          "value": "04ed125c-23df-450d-a620-b83568da561e"
+        },
+        "entity_type": "material",
+        "external_id": "MAT-c1f508e7df19490f9bdf7ab8a4175606",
+        "current_version_id": null,
+        "deleted_at": null,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.066191+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.066193+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO materials (id, external_object_id, sku_code, name, specification, base_unit, status, source_updated_at, updated_at, created_at) VALUES (%(id)s::UUID, %(external_object_id)s::UUID, %(sku_code)s::VARCHAR, %(name)s::VARCHAR, %(specification)s::VARCHAR, %(base_unit)s::VARCHAR, %(status)s::VARCHAR, %(source_updated_at)s::TIMESTAMP WITH TIME ZONE, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "2a183872-7cea-4f7c-9979-c84d472f6bef"
+        },
+        "external_object_id": {
+          "type": "uuid",
+          "value": "535803fb-e8a7-4f65-8d75-2c7dcd38761e"
+        },
+        "sku_code": "SKU-719990e2ba",
+        "name": "测试物料",
+        "specification": "",
+        "base_unit": "件",
+        "status": "active",
+        "source_updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.012998+00:00"
+        },
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.067147+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.067149+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO material_inventory_policies (id, material_id, tracking_mode, quantity_scale, allow_fraction, effective_from, effective_to, updated_at, created_at) VALUES (%(id)s::UUID, %(material_id)s::UUID, %(tracking_mode)s::VARCHAR, %(quantity_scale)s::INTEGER, %(allow_fraction)s, %(effective_from)s::TIMESTAMP WITH TIME ZONE, %(effective_to)s::TIMESTAMP WITH TIME ZONE, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "93f0de4c-af99-4bf9-bf99-009f246ecb86"
+        },
+        "material_id": {
+          "type": "uuid",
+          "value": "2a183872-7cea-4f7c-9979-c84d472f6bef"
+        },
+        "tracking_mode": "serial",
+        "quantity_scale": 0,
+        "allow_fraction": false,
+        "effective_from": {
+          "type": "datetime",
+          "value": "2020-01-01T00:00:00+00:00"
+        },
+        "effective_to": null,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.068051+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.068052+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO stock_locations (id, code, name, location_type, owner_org_id, parent_id, custodian_person_id, status, updated_at, created_at) VALUES (%(id)s::UUID, %(code)s::VARCHAR, %(name)s::VARCHAR, %(location_type)s::VARCHAR, %(owner_org_id)s::UUID, %(parent_id)s::UUID, %(custodian_person_id)s::UUID, %(status)s::VARCHAR, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "3f652f40-25d0-4439-bf99-67effddcc3c8"
+        },
+        "code": "PG16-0051-WH-18367ed61a",
+        "name": "PG16 0051 回填区域仓",
+        "location_type": "region",
+        "owner_org_id": {
+          "type": "uuid",
+          "value": "5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243"
+        },
+        "parent_id": null,
+        "custodian_person_id": null,
+        "status": "active",
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-19T12:47:46.012998+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-19T12:47:46.012998+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO stock_accounts (id, owner_org_id, custodian_person_id, location_id, material_id, condition_code, availability_bucket, lot_id, updated_at, created_at) VALUES (%(id)s::UUID, %(owner_org_id)s::UUID, %(custodian_person_id)s::UUID, %(location_id)s::UUID, %(material_id)s::UUID, %(condition_code)s::VARCHAR, %(availability_bucket)s::VARCHAR, %(lot_id)s::UUID, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "cd402bc4-26d6-4f8e-929d-445454948a01"
+        },
+        "owner_org_id": {
+          "type": "uuid",
+          "value": "5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243"
+        },
+        "custodian_person_id": null,
+        "location_id": {
+          "type": "uuid",
+          "value": "3f652f40-25d0-4439-bf99-67effddcc3c8"
+        },
+        "material_id": {
+          "type": "uuid",
+          "value": "2a183872-7cea-4f7c-9979-c84d472f6bef"
+        },
+        "condition_code": "new",
+        "availability_bucket": "available",
+        "lot_id": null,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-19T12:47:46.012998+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-19T12:47:46.012998+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO stock_balances (stock_account_id, quantity, ledger_cursor, version, updated_at, created_at) VALUES (%(stock_account_id)s::UUID, %(quantity)s, %(ledger_cursor)s::BIGINT, %(version)s::BIGINT, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "stock_account_id": {
+          "type": "uuid",
+          "value": "cd402bc4-26d6-4f8e-929d-445454948a01"
+        },
+        "quantity": {
+          "type": "decimal",
+          "value": "0"
+        },
+        "ledger_cursor": 0,
+        "version": 1,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-19T12:47:46.012998+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.070869+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO sync_runs (id, source_system_id, run_key, scope_key, mode, watermark_from, watermark_to, status, manifest_sha256, started_at, completed_at, failure_code, failure_detail, updated_at, created_at) VALUES (%(id)s::UUID, %(source_system_id)s::UUID, %(run_key)s::VARCHAR, %(scope_key)s::VARCHAR, %(mode)s::VARCHAR, %(watermark_from)s::VARCHAR, %(watermark_to)s::VARCHAR, %(status)s::VARCHAR, %(manifest_sha256)s::VARCHAR, %(started_at)s::TIMESTAMP WITH TIME ZONE, %(completed_at)s::TIMESTAMP WITH TIME ZONE, %(failure_code)s::VARCHAR, %(failure_detail)s::VARCHAR, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "48922577-455c-4f51-852d-22765128794e"
+        },
+        "source_system_id": {
+          "type": "uuid",
+          "value": "04ed125c-23df-450d-a620-b83568da561e"
+        },
+        "run_key": "opening-f0c8192cfb9e4702ad7eca7c0bbe6c55",
+        "scope_key": "oam_inventory_control:region:5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243",
+        "mode": "full",
+        "watermark_from": null,
+        "watermark_to": null,
+        "status": "completed",
+        "manifest_sha256": "3044db0a62d150ee35a2f1d6d362dba8fc3bff01c181f2fbe2fb5aa31eabc5e5",
+        "started_at": {
+          "type": "datetime",
+          "value": "2026-09-20T09:47:46.012998+00:00"
+        },
+        "completed_at": {
+          "type": "datetime",
+          "value": "2026-09-20T11:47:46.012998+00:00"
+        },
+        "failure_code": null,
+        "failure_detail": null,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.075196+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.075199+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO sync_batches (id, run_id, entity_type, sequence, record_count, body_sha256, status, received_at, validated_at, created_at) VALUES (%(id)s::UUID, %(run_id)s::UUID, %(entity_type)s::VARCHAR, %(sequence)s::INTEGER, %(record_count)s::INTEGER, %(body_sha256)s::VARCHAR, %(status)s::VARCHAR, %(received_at)s::TIMESTAMP WITH TIME ZONE, %(validated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "1f3e246d-9fc4-4c1d-bf50-512c586d3e72"
+        },
+        "run_id": {
+          "type": "uuid",
+          "value": "48922577-455c-4f51-852d-22765128794e"
+        },
+        "entity_type": "oam_inventory_control",
+        "sequence": 1,
+        "record_count": 1,
+        "body_sha256": "7ae0ec55a90f04acbb2ae12ddac73d1777d47c699fedd0b3725317ce34934b7c",
+        "status": "applied",
+        "received_at": {
+          "type": "datetime",
+          "value": "2026-09-20T10:47:46.012998+00:00"
+        },
+        "validated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T11:17:46.012998+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.076188+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO external_objects (id, source_system_id, entity_type, external_id, current_version_id, deleted_at, updated_at, created_at) VALUES (%(id)s::UUID, %(source_system_id)s::UUID, %(entity_type)s::VARCHAR, %(external_id)s::VARCHAR, %(current_version_id)s::UUID, %(deleted_at)s::TIMESTAMP WITH TIME ZONE, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "00c10efc-2a9d-48f3-ad31-650e9ff5619c"
+        },
+        "source_system_id": {
+          "type": "uuid",
+          "value": "04ed125c-23df-450d-a620-b83568da561e"
+        },
+        "entity_type": "oam_inventory_control",
+        "external_id": "PG16-0051-CONTROL-3d9d12b1f6414c0c8f97ce90fb7a1ab6",
+        "current_version_id": {
+          "type": "uuid",
+          "value": "50401722-df41-4c81-b736-bce26bb2ef91"
+        },
+        "deleted_at": null,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.076832+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.076833+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO external_object_versions (id, external_object_id, source_version, source_updated_at, valid_from, valid_to, payload_jsonb, payload_sha256, is_current, created_at) VALUES (%(id)s::UUID, %(external_object_id)s::UUID, %(source_version)s::VARCHAR, %(source_updated_at)s::TIMESTAMP WITH TIME ZONE, %(valid_from)s::TIMESTAMP WITH TIME ZONE, %(valid_to)s::TIMESTAMP WITH TIME ZONE, %(payload_jsonb)s::JSONB, %(payload_sha256)s::VARCHAR, %(is_current)s, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "50401722-df41-4c81-b736-bce26bb2ef91"
+        },
+        "external_object_id": {
+          "type": "uuid",
+          "value": "00c10efc-2a9d-48f3-ad31-650e9ff5619c"
+        },
+        "source_version": "v1",
+        "source_updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T10:47:46.012998+00:00"
+        },
+        "valid_from": {
+          "type": "datetime",
+          "value": "2026-09-20T10:47:46.012998+00:00"
+        },
+        "valid_to": null,
+        "payload_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "condition_code": "new",
+            "control_qty": "0",
+            "external_business_key": "PG16-0051-CONTROL-3d9d12b1f6414c0c8f97ce90fb7a1ab6",
+            "mapping_note": "",
+            "mapping_status": "resolved",
+            "material_id": "2a183872-7cea-4f7c-9979-c84d472f6bef",
+            "region_org_id": "5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243"
+          }
+        },
+        "payload_sha256": "5585f74c5b13dd985b790dd4e27ae9434c57072806b870d6b3f1ed4a78ad08da",
+        "is_current": true,
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.077308+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 0,
+      "sql": "INSERT INTO sync_inbox_events (id, batch_id, source_system_id, external_event_id, entity_type, external_id, source_version, source_updated_at, payload_jsonb, payload_sha256, status, error_code, error_detail, processed_at, created_at) VALUES (%(id)s::UUID, %(batch_id)s::UUID, %(source_system_id)s::UUID, %(external_event_id)s::VARCHAR, %(entity_type)s::VARCHAR, %(external_id)s::VARCHAR, %(source_version)s::VARCHAR, %(source_updated_at)s::TIMESTAMP WITH TIME ZONE, %(payload_jsonb)s::JSONB, %(payload_sha256)s::VARCHAR, %(status)s::VARCHAR, %(error_code)s::VARCHAR, %(error_detail)s::VARCHAR, %(processed_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "978e2931-bc66-4541-857a-d5ca300258d4"
+        },
+        "batch_id": {
+          "type": "uuid",
+          "value": "1f3e246d-9fc4-4c1d-bf50-512c586d3e72"
+        },
+        "source_system_id": {
+          "type": "uuid",
+          "value": "04ed125c-23df-450d-a620-b83568da561e"
+        },
+        "external_event_id": "event-PG16-0051-CONTROL-3d9d12b1f6414c0c8f97ce90fb7a1ab6",
+        "entity_type": "oam_inventory_control",
+        "external_id": "PG16-0051-CONTROL-3d9d12b1f6414c0c8f97ce90fb7a1ab6",
+        "source_version": "v1",
+        "source_updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T10:47:46.012998+00:00"
+        },
+        "payload_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "condition_code": "new",
+            "control_qty": "0",
+            "external_business_key": "PG16-0051-CONTROL-3d9d12b1f6414c0c8f97ce90fb7a1ab6",
+            "mapping_note": "",
+            "mapping_status": "resolved",
+            "material_id": "2a183872-7cea-4f7c-9979-c84d472f6bef",
+            "region_org_id": "5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243"
+          }
+        },
+        "payload_sha256": "5585f74c5b13dd985b790dd4e27ae9434c57072806b870d6b3f1ed4a78ad08da",
+        "status": "applied",
+        "error_code": null,
+        "error_detail": null,
+        "processed_at": {
+          "type": "datetime",
+          "value": "2026-09-20T11:47:46.012998+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.078972+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 1,
+      "sql": "INSERT INTO stocktake_tasks (id, task_no, task_type, region_org_id, status, blind_count, cutoff_ledger_cursor, cutoff_at, scope_manifest_sha256, snapshot_manifest_sha256, control_source_system_id, control_sync_run_id, control_snapshot_at, control_manifest_sha256, current_round_no, created_by_user_id, deadline, issued_at, frozen_at, submitted_at, posted_at, closed_at, cancelled_at, version, note, updated_at, created_at) VALUES (%(id)s::UUID, %(task_no)s::VARCHAR, %(task_type)s::VARCHAR, %(region_org_id)s::UUID, %(status)s::VARCHAR, %(blind_count)s, %(cutoff_ledger_cursor)s::BIGINT, %(cutoff_at)s::TIMESTAMP WITH TIME ZONE, %(scope_manifest_sha256)s::VARCHAR, %(snapshot_manifest_sha256)s::VARCHAR, %(control_source_system_id)s::UUID, %(control_sync_run_id)s::UUID, %(control_snapshot_at)s::TIMESTAMP WITH TIME ZONE, %(control_manifest_sha256)s::VARCHAR, %(current_round_no)s::INTEGER, %(created_by_user_id)s::VARCHAR, %(deadline)s::TIMESTAMP WITH TIME ZONE, %(issued_at)s::TIMESTAMP WITH TIME ZONE, %(frozen_at)s::TIMESTAMP WITH TIME ZONE, %(submitted_at)s::TIMESTAMP WITH TIME ZONE, %(posted_at)s::TIMESTAMP WITH TIME ZONE, %(closed_at)s::TIMESTAMP WITH TIME ZONE, %(cancelled_at)s::TIMESTAMP WITH TIME ZONE, %(version)s::BIGINT, %(note)s::VARCHAR, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+        },
+        "task_no": "PG16-0051-abf9ef446fe1434f",
+        "task_type": "opening",
+        "region_org_id": {
+          "type": "uuid",
+          "value": "5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243"
+        },
+        "status": "counting",
+        "blind_count": true,
+        "cutoff_ledger_cursor": 0,
+        "cutoff_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "scope_manifest_sha256": "979eee73fbcb843542815649ca1869ba2c00504014dac9e601df64a4cce93afd",
+        "snapshot_manifest_sha256": "f16ddbbbaa9a91b7c440759473052bdc2846dcbc6200af5ef74835438e01d1c6",
+        "control_source_system_id": {
+          "type": "uuid",
+          "value": "04ed125c-23df-450d-a620-b83568da561e"
+        },
+        "control_sync_run_id": {
+          "type": "uuid",
+          "value": "48922577-455c-4f51-852d-22765128794e"
+        },
+        "control_snapshot_at": {
+          "type": "datetime",
+          "value": "2026-09-20T11:47:46.012998+00:00"
+        },
+        "control_manifest_sha256": "3044db0a62d150ee35a2f1d6d362dba8fc3bff01c181f2fbe2fb5aa31eabc5e5",
+        "current_round_no": 1,
+        "created_by_user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "deadline": {
+          "type": "datetime",
+          "value": "2026-09-22T12:47:46.012998+00:00"
+        },
+        "issued_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "frozen_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "submitted_at": null,
+        "posted_at": null,
+        "closed_at": null,
+        "cancelled_at": null,
+        "version": 0,
+        "note": "PG16 0051 observation-only migration fixture",
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 1,
+      "sql": "INSERT INTO stocktake_scopes (id, task_id, scope_no, scope_mode, location_id, owner_org_id, custodian_person_id_snapshot, assignee_user_id, material_id, condition_code, availability_bucket, scope_key, scope_sha256, created_at) VALUES (%(id)s::UUID, %(task_id)s::UUID, %(scope_no)s::INTEGER, %(scope_mode)s::VARCHAR, %(location_id)s::UUID, %(owner_org_id)s::UUID, %(custodian_person_id_snapshot)s::UUID, %(assignee_user_id)s::VARCHAR, %(material_id)s::UUID, %(condition_code)s::VARCHAR, %(availability_bucket)s::VARCHAR, %(scope_key)s::VARCHAR, %(scope_sha256)s::VARCHAR, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "22516c8d-f87f-46f4-a126-3359721f346d"
+        },
+        "task_id": {
+          "type": "uuid",
+          "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+        },
+        "scope_no": 1,
+        "scope_mode": "location_all",
+        "location_id": {
+          "type": "uuid",
+          "value": "3f652f40-25d0-4439-bf99-67effddcc3c8"
+        },
+        "owner_org_id": {
+          "type": "uuid",
+          "value": "5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243"
+        },
+        "custodian_person_id_snapshot": null,
+        "assignee_user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "material_id": null,
+        "condition_code": null,
+        "availability_bucket": null,
+        "scope_key": "opening:5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243:3f652f40-25d0-4439-bf99-67effddcc3c8",
+        "scope_sha256": "848b3515a9be48a8a803d15471c2b3c4fbd7aa16b5e6cae4c282c89d0ea1a139",
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 1,
+      "sql": "INSERT INTO inventory_freezes (id, task_id, stocktake_scope_id, scope_key, freeze_mode, status, valid_from, valid_to, created_by_user_id, released_by_user_id, release_reason, version, updated_at, created_at) VALUES (%(id)s::UUID, %(task_id)s::UUID, %(stocktake_scope_id)s::UUID, %(scope_key)s::VARCHAR, %(freeze_mode)s::VARCHAR, %(status)s::VARCHAR, %(valid_from)s::TIMESTAMP WITH TIME ZONE, %(valid_to)s::TIMESTAMP WITH TIME ZONE, %(created_by_user_id)s::VARCHAR, %(released_by_user_id)s::VARCHAR, %(release_reason)s::VARCHAR, %(version)s::BIGINT, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "5ec43c20-3cc0-4af2-b8f7-f8ccba439158"
+        },
+        "task_id": {
+          "type": "uuid",
+          "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+        },
+        "stocktake_scope_id": {
+          "type": "uuid",
+          "value": "22516c8d-f87f-46f4-a126-3359721f346d"
+        },
+        "scope_key": "opening:5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243:3f652f40-25d0-4439-bf99-67effddcc3c8",
+        "freeze_mode": "hard",
+        "status": "active",
+        "valid_from": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "valid_to": null,
+        "created_by_user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "released_by_user_id": null,
+        "release_reason": "",
+        "version": 0,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 1,
+      "sql": "INSERT INTO stocktake_control_snapshot_lines (id, task_id, line_no, external_business_key, external_object_version_id, material_id, condition_code, control_qty, mapping_status, source_updated_at, payload_sha256, mapping_note, created_at) VALUES (%(id)s::UUID, %(task_id)s::UUID, %(line_no)s::INTEGER, %(external_business_key)s::VARCHAR, %(external_object_version_id)s::UUID, %(material_id)s::UUID, %(condition_code)s::VARCHAR, %(control_qty)s, %(mapping_status)s::VARCHAR, %(source_updated_at)s::TIMESTAMP WITH TIME ZONE, %(payload_sha256)s::VARCHAR, %(mapping_note)s::VARCHAR, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "443cb44d-3933-4bc2-b608-1ad3c42a9517"
+        },
+        "task_id": {
+          "type": "uuid",
+          "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+        },
+        "line_no": 1,
+        "external_business_key": "PG16-0051-CONTROL-3d9d12b1f6414c0c8f97ce90fb7a1ab6",
+        "external_object_version_id": {
+          "type": "uuid",
+          "value": "50401722-df41-4c81-b736-bce26bb2ef91"
+        },
+        "material_id": {
+          "type": "uuid",
+          "value": "2a183872-7cea-4f7c-9979-c84d472f6bef"
+        },
+        "condition_code": "new",
+        "control_qty": {
+          "type": "decimal",
+          "value": "0"
+        },
+        "mapping_status": "resolved",
+        "source_updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T10:47:46.012998+00:00"
+        },
+        "payload_sha256": "5585f74c5b13dd985b790dd4e27ae9434c57072806b870d6b3f1ed4a78ad08da",
+        "mapping_note": "",
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 1,
+      "sql": "INSERT INTO stocktake_snapshot_lines (id, task_id, scope_id, stock_account_id, book_qty, ledger_cursor, account_dimension_sha256, serial_snapshot_jsonb, serial_snapshot_sha256, serial_count, created_at) VALUES (%(id)s::UUID, %(task_id)s::UUID, %(scope_id)s::UUID, %(stock_account_id)s::UUID, %(book_qty)s, %(ledger_cursor)s::BIGINT, %(account_dimension_sha256)s::VARCHAR, %(serial_snapshot_jsonb)s::JSONB, %(serial_snapshot_sha256)s::VARCHAR, %(serial_count)s::INTEGER, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "4c48c956-7f5d-4148-9918-5d6dec4aa9dd"
+        },
+        "task_id": {
+          "type": "uuid",
+          "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+        },
+        "scope_id": {
+          "type": "uuid",
+          "value": "22516c8d-f87f-46f4-a126-3359721f346d"
+        },
+        "stock_account_id": {
+          "type": "uuid",
+          "value": "cd402bc4-26d6-4f8e-929d-445454948a01"
+        },
+        "book_qty": {
+          "type": "decimal",
+          "value": "0.000"
+        },
+        "ledger_cursor": 0,
+        "account_dimension_sha256": "28345a33b46cccb1d1f5df90963431d5f2090f9712990e1eb5271f352dd27103",
+        "serial_snapshot_jsonb": {
+          "type": "jsonb",
+          "value": []
+        },
+        "serial_snapshot_sha256": "29b635eb578f9c65f84fe11ee660672702960870d3b1dfb8e0d6668a46c14bea",
+        "serial_count": 0,
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 1,
+      "sql": "INSERT INTO outbox_events (id, event_type, aggregate_type, aggregate_id, payload_jsonb, status, attempts, idempotency_key, available_at, locked_at, locked_by, published_at, last_error, updated_at, created_at) VALUES (%(id)s::UUID, %(event_type)s::VARCHAR, %(aggregate_type)s::VARCHAR, %(aggregate_id)s::VARCHAR, %(payload_jsonb)s::JSONB, %(status)s::VARCHAR, %(attempts)s::INTEGER, %(idempotency_key)s::VARCHAR, %(available_at)s::TIMESTAMP WITH TIME ZONE, %(locked_at)s::TIMESTAMP WITH TIME ZONE, %(locked_by)s::VARCHAR, %(published_at)s::TIMESTAMP WITH TIME ZONE, %(last_error)s::VARCHAR, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "a4cee9b2-9d71-4a7c-95df-e0f7582bd39f"
+        },
+        "event_type": "stocktake.opening.started",
+        "aggregate_type": "stocktake_task",
+        "aggregate_id": "5dd10537-a60d-44ee-9ed2-414346f66237",
+        "payload_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "control_line_count": 1,
+            "cutoff_ledger_cursor": 0,
+            "initial_round_id": "cb938531-2201-40b8-ac90-65a70740456b",
+            "region_org_id": "5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243",
+            "scope_count": 1,
+            "snapshot_line_count": 1,
+            "task_id": "5dd10537-a60d-44ee-9ed2-414346f66237",
+            "task_no": "PG16-0051-abf9ef446fe1434f"
+          }
+        },
+        "status": "pending",
+        "attempts": 0,
+        "idempotency_key": "opening-outbox-8431ce3a76385738d1d33d9b6cdaa91ef5bb84562038ecaa307b55929ccc78b9",
+        "available_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "locked_at": null,
+        "locked_by": null,
+        "published_at": null,
+        "last_error": null,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 1,
+      "sql": "INSERT INTO state_transition_events (id, aggregate_type, aggregate_id, from_status, to_status, reason, actor_id, idempotency_key, occurred_at, metadata_jsonb, created_at) VALUES (%(id)s::UUID, %(aggregate_type)s::VARCHAR, %(aggregate_id)s::VARCHAR, %(from_status)s::VARCHAR, %(to_status)s::VARCHAR, %(reason)s::VARCHAR, %(actor_id)s::VARCHAR, %(idempotency_key)s::VARCHAR, %(occurred_at)s::TIMESTAMP WITH TIME ZONE, %(metadata_jsonb)s::JSONB, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "62701319-ee81-4c48-b464-d6684f694fc4"
+        },
+        "aggregate_type": "stocktake_task",
+        "aggregate_id": "5dd10537-a60d-44ee-9ed2-414346f66237",
+        "from_status": null,
+        "to_status": "draft",
+        "reason": "opening_stocktake_created",
+        "actor_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "idempotency_key": "opening-state-76b4a7a66371d7a3536fd510fd36dc2615b9c8b9cb2027a5ee66248dc5c6a0e2",
+        "occurred_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "metadata_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "control_manifest_sha256": "3044db0a62d150ee35a2f1d6d362dba8fc3bff01c181f2fbe2fb5aa31eabc5e5",
+            "cutoff_ledger_cursor": 0,
+            "request_reference": "opening-request-54356d7fe545f0b443492ba851c0d368c80b00890160032c14e20b6266705bf8",
+            "scope_manifest_sha256": "979eee73fbcb843542815649ca1869ba2c00504014dac9e601df64a4cce93afd",
+            "snapshot_manifest_sha256": "f16ddbbbaa9a91b7c440759473052bdc2846dcbc6200af5ef74835438e01d1c6"
+          }
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 1,
+      "sql": "INSERT INTO state_transition_events (id, aggregate_type, aggregate_id, from_status, to_status, reason, actor_id, idempotency_key, occurred_at, metadata_jsonb, created_at) VALUES (%(id)s::UUID, %(aggregate_type)s::VARCHAR, %(aggregate_id)s::VARCHAR, %(from_status)s::VARCHAR, %(to_status)s::VARCHAR, %(reason)s::VARCHAR, %(actor_id)s::VARCHAR, %(idempotency_key)s::VARCHAR, %(occurred_at)s::TIMESTAMP WITH TIME ZONE, %(metadata_jsonb)s::JSONB, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "96402e60-7dab-44cd-ab84-7bf011cd6a36"
+        },
+        "aggregate_type": "stocktake_task",
+        "aggregate_id": "5dd10537-a60d-44ee-9ed2-414346f66237",
+        "from_status": "draft",
+        "to_status": "issued",
+        "reason": "opening_stocktake_issued",
+        "actor_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "idempotency_key": "opening-state-a118d94b7fdd05169f6ec657020b51f6f76dac1a6269f34c8b4ce159cde60ff0",
+        "occurred_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "metadata_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "control_manifest_sha256": "3044db0a62d150ee35a2f1d6d362dba8fc3bff01c181f2fbe2fb5aa31eabc5e5",
+            "cutoff_ledger_cursor": 0,
+            "request_reference": "opening-request-54356d7fe545f0b443492ba851c0d368c80b00890160032c14e20b6266705bf8",
+            "scope_manifest_sha256": "979eee73fbcb843542815649ca1869ba2c00504014dac9e601df64a4cce93afd",
+            "snapshot_manifest_sha256": "f16ddbbbaa9a91b7c440759473052bdc2846dcbc6200af5ef74835438e01d1c6"
+          }
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 1,
+      "sql": "INSERT INTO state_transition_events (id, aggregate_type, aggregate_id, from_status, to_status, reason, actor_id, idempotency_key, occurred_at, metadata_jsonb, created_at) VALUES (%(id)s::UUID, %(aggregate_type)s::VARCHAR, %(aggregate_id)s::VARCHAR, %(from_status)s::VARCHAR, %(to_status)s::VARCHAR, %(reason)s::VARCHAR, %(actor_id)s::VARCHAR, %(idempotency_key)s::VARCHAR, %(occurred_at)s::TIMESTAMP WITH TIME ZONE, %(metadata_jsonb)s::JSONB, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "344f00b2-d2f2-4c0a-8a19-76e4551f7cd7"
+        },
+        "aggregate_type": "stocktake_task",
+        "aggregate_id": "5dd10537-a60d-44ee-9ed2-414346f66237",
+        "from_status": "issued",
+        "to_status": "frozen",
+        "reason": "opening_stocktake_frozen",
+        "actor_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "idempotency_key": "opening-state-ec0af83e19c6a962236f3198d5b4e17586f49dad78de01204984b68ee0d1f0d4",
+        "occurred_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "metadata_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "control_manifest_sha256": "3044db0a62d150ee35a2f1d6d362dba8fc3bff01c181f2fbe2fb5aa31eabc5e5",
+            "cutoff_ledger_cursor": 0,
+            "request_reference": "opening-request-54356d7fe545f0b443492ba851c0d368c80b00890160032c14e20b6266705bf8",
+            "scope_manifest_sha256": "979eee73fbcb843542815649ca1869ba2c00504014dac9e601df64a4cce93afd",
+            "snapshot_manifest_sha256": "f16ddbbbaa9a91b7c440759473052bdc2846dcbc6200af5ef74835438e01d1c6"
+          }
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 1,
+      "sql": "INSERT INTO state_transition_events (id, aggregate_type, aggregate_id, from_status, to_status, reason, actor_id, idempotency_key, occurred_at, metadata_jsonb, created_at) VALUES (%(id)s::UUID, %(aggregate_type)s::VARCHAR, %(aggregate_id)s::VARCHAR, %(from_status)s::VARCHAR, %(to_status)s::VARCHAR, %(reason)s::VARCHAR, %(actor_id)s::VARCHAR, %(idempotency_key)s::VARCHAR, %(occurred_at)s::TIMESTAMP WITH TIME ZONE, %(metadata_jsonb)s::JSONB, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "65384b06-8f47-4542-afb6-06e564992b3a"
+        },
+        "aggregate_type": "stocktake_task",
+        "aggregate_id": "5dd10537-a60d-44ee-9ed2-414346f66237",
+        "from_status": "frozen",
+        "to_status": "counting",
+        "reason": "opening_stocktake_initial_round_started",
+        "actor_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "idempotency_key": "opening-state-e7992591c4c008a39209ae37f8c72fde32830d93643fcfb42b19864923f4c6dd",
+        "occurred_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "metadata_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "control_manifest_sha256": "3044db0a62d150ee35a2f1d6d362dba8fc3bff01c181f2fbe2fb5aa31eabc5e5",
+            "cutoff_ledger_cursor": 0,
+            "request_reference": "opening-request-54356d7fe545f0b443492ba851c0d368c80b00890160032c14e20b6266705bf8",
+            "scope_manifest_sha256": "979eee73fbcb843542815649ca1869ba2c00504014dac9e601df64a4cce93afd",
+            "snapshot_manifest_sha256": "f16ddbbbaa9a91b7c440759473052bdc2846dcbc6200af5ef74835438e01d1c6"
+          }
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 1,
+      "sql": "INSERT INTO stocktake_rounds (id, task_id, round_no, round_type, status, submitted_by_user_id, started_at, submitted_at, count_manifest_sha256, idempotency_key_hash, recount_case_id, updated_at, created_at) VALUES (%(id)s::UUID, %(task_id)s::UUID, %(round_no)s::INTEGER, %(round_type)s::VARCHAR, %(status)s::VARCHAR, %(submitted_by_user_id)s::VARCHAR, %(started_at)s::TIMESTAMP WITH TIME ZONE, %(submitted_at)s::TIMESTAMP WITH TIME ZONE, %(count_manifest_sha256)s::VARCHAR, %(idempotency_key_hash)s::VARCHAR, %(recount_case_id)s::UUID, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "cb938531-2201-40b8-ac90-65a70740456b"
+        },
+        "task_id": {
+          "type": "uuid",
+          "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+        },
+        "round_no": 1,
+        "round_type": "initial",
+        "status": "counting",
+        "submitted_by_user_id": null,
+        "started_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "submitted_at": null,
+        "count_manifest_sha256": null,
+        "idempotency_key_hash": "1eabe66fbd1bec4aff99b986bda5cc61ae71649c24798e70d22fe6a52b7d4a80",
+        "recount_case_id": null,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 1,
+      "sql": "INSERT INTO audit_events (id, stream_key, stream_version, actor_user_id, action, aggregate_type, aggregate_id, before_jsonb, after_jsonb, request_id, previous_hash, event_hash, occurred_at, created_at) VALUES (%(id)s::UUID, %(stream_key)s::VARCHAR, %(stream_version)s::BIGINT, %(actor_user_id)s::VARCHAR, %(action)s::VARCHAR, %(aggregate_type)s::VARCHAR, %(aggregate_id)s::VARCHAR, %(before_jsonb)s::JSONB, %(after_jsonb)s::JSONB, %(request_id)s::VARCHAR, %(previous_hash)s::VARCHAR, %(event_hash)s::VARCHAR, %(occurred_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "fc5bf89e-e1c9-4a08-9379-c9a0ecff0a61"
+        },
+        "stream_key": "inventory",
+        "stream_version": 1,
+        "actor_user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "action": "stocktake.opening.started",
+        "aggregate_type": "stocktake_task",
+        "aggregate_id": "5dd10537-a60d-44ee-9ed2-414346f66237",
+        "before_jsonb": {
+          "type": "jsonb",
+          "value": null
+        },
+        "after_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "control_line_count": 1,
+            "control_manifest_sha256": "3044db0a62d150ee35a2f1d6d362dba8fc3bff01c181f2fbe2fb5aa31eabc5e5",
+            "cutoff_ledger_cursor": 0,
+            "initial_round_id": "cb938531-2201-40b8-ac90-65a70740456b",
+            "region_org_id": "5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243",
+            "scope_count": 1,
+            "scope_manifest_sha256": "979eee73fbcb843542815649ca1869ba2c00504014dac9e601df64a4cce93afd",
+            "snapshot_line_count": 1,
+            "snapshot_manifest_sha256": "f16ddbbbaa9a91b7c440759473052bdc2846dcbc6200af5ef74835438e01d1c6",
+            "status": "counting",
+            "task_no": "PG16-0051-abf9ef446fe1434f"
+          }
+        },
+        "request_id": "opening-request-54356d7fe545f0b443492ba851c0d368c80b00890160032c14e20b6266705bf8",
+        "previous_hash": null,
+        "event_hash": "7998d0b9343c7ab0eadc69d13ea405334c5d16dbda78910d675335e77918c611",
+        "occurred_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.179454+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 1,
+      "sql": "UPDATE audit_chain_heads SET last_event_id=%(last_event_id)s::UUID, last_hash=%(last_hash)s::VARCHAR, version=%(version)s::BIGINT, updated_at=%(updated_at)s::TIMESTAMP WITH TIME ZONE WHERE audit_chain_heads.id = %(audit_chain_heads_id)s::UUID",
+      "parameters": {
+        "last_event_id": {
+          "type": "uuid",
+          "value": "fc5bf89e-e1c9-4a08-9379-c9a0ecff0a61"
+        },
+        "last_hash": "7998d0b9343c7ab0eadc69d13ea405334c5d16dbda78910d675335e77918c611",
+        "version": 1,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.213587+00:00"
+        },
+        "audit_chain_heads_id": {
+          "type": "uuid",
+          "value": "30000000-0000-4000-8000-000000000003"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "INSERT INTO stocktake_count_lines (id, task_id, round_id, scope_id, stock_account_id, counted_qty, count_method, reason_code, remark, counted_by_user_id, counted_at, updated_at, created_at) VALUES (%(id)s::UUID, %(task_id)s::UUID, %(round_id)s::UUID, %(scope_id)s::UUID, %(stock_account_id)s::UUID, %(counted_qty)s, %(count_method)s::VARCHAR, %(reason_code)s::VARCHAR, %(remark)s::VARCHAR, %(counted_by_user_id)s::VARCHAR, %(counted_at)s::TIMESTAMP WITH TIME ZONE, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "ec878a9c-e80d-42c7-bcbc-3f11e7ee8617"
+        },
+        "task_id": {
+          "type": "uuid",
+          "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+        },
+        "round_id": {
+          "type": "uuid",
+          "value": "cb938531-2201-40b8-ac90-65a70740456b"
+        },
+        "scope_id": {
+          "type": "uuid",
+          "value": "22516c8d-f87f-46f4-a126-3359721f346d"
+        },
+        "stock_account_id": {
+          "type": "uuid",
+          "value": "cd402bc4-26d6-4f8e-929d-445454948a01"
+        },
+        "counted_qty": {
+          "type": "decimal",
+          "value": "0.000"
+        },
+        "count_method": "manual",
+        "reason_code": "scope_full_set_zero",
+        "remark": "",
+        "counted_by_user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "counted_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "INSERT INTO stocktake_count_observations (id, task_id, round_id, scope_id, observation_no, owner_org_id, location_id, custodian_person_id_snapshot, material_id, material_identifier_raw, material_identifier_type, condition_code, availability_bucket, lot_id, lot_no_raw, serial_id, serial_no_raw, serial_identifier_type, counted_qty, verification_status, count_method, reason_code, remark, counted_by_user_id, counted_at, dimension_sha256, request_sha256, idempotency_key_hash, created_at) VALUES (%(id)s::UUID, %(task_id)s::UUID, %(round_id)s::UUID, %(scope_id)s::UUID, %(observation_no)s::INTEGER, %(owner_org_id)s::UUID, %(location_id)s::UUID, %(custodian_person_id_snapshot)s::UUID, %(material_id)s::UUID, %(material_identifier_raw)s::VARCHAR, %(material_identifier_type)s::VARCHAR, %(condition_code)s::VARCHAR, %(availability_bucket)s::VARCHAR, %(lot_id)s::UUID, %(lot_no_raw)s::VARCHAR, %(serial_id)s::UUID, %(serial_no_raw)s::VARCHAR, %(serial_identifier_type)s::VARCHAR, %(counted_qty)s, %(verification_status)s::VARCHAR, %(count_method)s::VARCHAR, %(reason_code)s::VARCHAR, %(remark)s::VARCHAR, %(counted_by_user_id)s::VARCHAR, %(counted_at)s::TIMESTAMP WITH TIME ZONE, %(dimension_sha256)s::VARCHAR, %(request_sha256)s::VARCHAR, %(idempotency_key_hash)s::VARCHAR, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "b73dab4b-a21d-4ad0-a462-6523f9acba19"
+        },
+        "task_id": {
+          "type": "uuid",
+          "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+        },
+        "round_id": {
+          "type": "uuid",
+          "value": "cb938531-2201-40b8-ac90-65a70740456b"
+        },
+        "scope_id": {
+          "type": "uuid",
+          "value": "22516c8d-f87f-46f4-a126-3359721f346d"
+        },
+        "observation_no": 1,
+        "owner_org_id": {
+          "type": "uuid",
+          "value": "5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243"
+        },
+        "location_id": {
+          "type": "uuid",
+          "value": "3f652f40-25d0-4439-bf99-67effddcc3c8"
+        },
+        "custodian_person_id_snapshot": null,
+        "material_id": {
+          "type": "uuid",
+          "value": "2a183872-7cea-4f7c-9979-c84d472f6bef"
+        },
+        "material_identifier_raw": "SKU-719990e2ba",
+        "material_identifier_type": "sku_code",
+        "condition_code": "new",
+        "availability_bucket": "available",
+        "lot_id": null,
+        "lot_no_raw": null,
+        "serial_id": null,
+        "serial_no_raw": "PG16-0052-LEGACY-MISSING-SERIAL-C4475ED7EF47",
+        "serial_identifier_type": "serial_no",
+        "counted_qty": {
+          "type": "decimal",
+          "value": "1"
+        },
+        "verification_status": "pending_verification",
+        "count_method": "manual",
+        "reason_code": null,
+        "remark": "0051 legacy observation-only backfill",
+        "counted_by_user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "counted_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "dimension_sha256": "6656a88ee88c5348eabd5d65ae3c93f9acb535b50accddd3405b5cc7a385fe82",
+        "request_sha256": "07d9475a54fec8fa1af5d5a4d09a33bb0eeeced46c582797f59748a66a4187d9",
+        "idempotency_key_hash": "7b33fff0a78bffc13c29c3128a662bfabd20376c87690aa1edfa94627aa4f4f8",
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "INSERT INTO stocktake_scope_count_completions (id, task_id, round_id, scope_id, count_line_count, observation_line_count, serial_count, total_counted_qty, zero_confirmed, evidence_manifest_sha256, request_sha256, idempotency_key_hash, completed_by_user_id, completed_by_person_id, completed_role_assignment_id, authorization_version, role_code, scope_type, scope_id_snapshot, authorization_sha256, count_ledger_cursor, completed_at, created_at) VALUES (%(id)s::UUID, %(task_id)s::UUID, %(round_id)s::UUID, %(scope_id)s::UUID, %(count_line_count)s::INTEGER, %(observation_line_count)s::INTEGER, %(serial_count)s::INTEGER, %(total_counted_qty)s, %(zero_confirmed)s, %(evidence_manifest_sha256)s::VARCHAR, %(request_sha256)s::VARCHAR, %(idempotency_key_hash)s::VARCHAR, %(completed_by_user_id)s::VARCHAR, %(completed_by_person_id)s::UUID, %(completed_role_assignment_id)s::UUID, %(authorization_version)s::BIGINT, %(role_code)s::VARCHAR, %(scope_type)s::VARCHAR, %(scope_id_snapshot)s::VARCHAR, %(authorization_sha256)s::VARCHAR, %(count_ledger_cursor)s::BIGINT, %(completed_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "25ded81c-22a1-4d1a-a161-a9d35338b37f"
+        },
+        "task_id": {
+          "type": "uuid",
+          "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+        },
+        "round_id": {
+          "type": "uuid",
+          "value": "cb938531-2201-40b8-ac90-65a70740456b"
+        },
+        "scope_id": {
+          "type": "uuid",
+          "value": "22516c8d-f87f-46f4-a126-3359721f346d"
+        },
+        "count_line_count": 1,
+        "observation_line_count": 1,
+        "serial_count": 1,
+        "total_counted_qty": {
+          "type": "decimal",
+          "value": "1.000"
+        },
+        "zero_confirmed": false,
+        "evidence_manifest_sha256": "d93279d6a7e370aa2c24ead01df949eb2e37a46a731448e11ec98c9849b04f1a",
+        "request_sha256": "07d9475a54fec8fa1af5d5a4d09a33bb0eeeced46c582797f59748a66a4187d9",
+        "idempotency_key_hash": "3a8d6a9d46470af719cc6f13e75e0a53bad88c273bbcb8748be3685db87cce9e",
+        "completed_by_user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "completed_by_person_id": {
+          "type": "uuid",
+          "value": "3d21f0f9-4633-4d75-8e6c-6299edc8be3c"
+        },
+        "completed_role_assignment_id": {
+          "type": "uuid",
+          "value": "cc6c5a51-acea-4fe4-9dd5-2c27bb765fa6"
+        },
+        "authorization_version": 1,
+        "role_code": "provincial_manager",
+        "scope_type": "organization",
+        "scope_id_snapshot": "5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243",
+        "authorization_sha256": "d3910dcace2d04de135a510b2cfb80754e228662c73b9414ef3b817130f188eb",
+        "count_ledger_cursor": null,
+        "completed_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "INSERT INTO stocktake_round_submissions (id, task_id, round_id, sealing_completion_id, scope_count, zero_scope_count, count_line_count, observation_line_count, serial_count, total_counted_qty, round_manifest_sha256, count_manifest_sha256, request_sha256, idempotency_key_hash, submitted_by_user_id, submitted_by_person_id, submitted_role_assignment_id, authorization_version, submitted_at, created_at) VALUES (%(id)s::UUID, %(task_id)s::UUID, %(round_id)s::UUID, %(sealing_completion_id)s::UUID, %(scope_count)s::INTEGER, %(zero_scope_count)s::INTEGER, %(count_line_count)s::INTEGER, %(observation_line_count)s::INTEGER, %(serial_count)s::INTEGER, %(total_counted_qty)s, %(round_manifest_sha256)s::VARCHAR, %(count_manifest_sha256)s::VARCHAR, %(request_sha256)s::VARCHAR, %(idempotency_key_hash)s::VARCHAR, %(submitted_by_user_id)s::VARCHAR, %(submitted_by_person_id)s::UUID, %(submitted_role_assignment_id)s::UUID, %(authorization_version)s::BIGINT, %(submitted_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "c3200d05-427f-441d-afcf-e59e640ee553"
+        },
+        "task_id": {
+          "type": "uuid",
+          "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+        },
+        "round_id": {
+          "type": "uuid",
+          "value": "cb938531-2201-40b8-ac90-65a70740456b"
+        },
+        "sealing_completion_id": {
+          "type": "uuid",
+          "value": "25ded81c-22a1-4d1a-a161-a9d35338b37f"
+        },
+        "scope_count": 1,
+        "zero_scope_count": 0,
+        "count_line_count": 1,
+        "observation_line_count": 1,
+        "serial_count": 1,
+        "total_counted_qty": {
+          "type": "decimal",
+          "value": "1.000"
+        },
+        "round_manifest_sha256": "d1e45f69d7907c00fe4fc83e77347ce88d7f949bb0a6c8f9ea155287561c1d23",
+        "count_manifest_sha256": "8c2a27046a0c543dc5ec890be851a500f3bb38cd8441fa4d9ad949bea57a689f",
+        "request_sha256": "a283eac5af8da16c2e9712762852ca206183513e44c1d972f87c0a3cc757e18c",
+        "idempotency_key_hash": "737e1d66b09a22bf5c4ee52bebc395c071e11096b652b4da6d28e7af8dccaa9a",
+        "submitted_by_user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "submitted_by_person_id": {
+          "type": "uuid",
+          "value": "3d21f0f9-4633-4d75-8e6c-6299edc8be3c"
+        },
+        "submitted_role_assignment_id": {
+          "type": "uuid",
+          "value": "cc6c5a51-acea-4fe4-9dd5-2c27bb765fa6"
+        },
+        "authorization_version": 1,
+        "submitted_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "UPDATE stocktake_rounds SET status=%(status)s::VARCHAR, submitted_by_user_id=%(submitted_by_user_id)s::VARCHAR, submitted_at=%(submitted_at)s::TIMESTAMP WITH TIME ZONE, count_manifest_sha256=%(count_manifest_sha256)s::VARCHAR, updated_at=%(updated_at)s::TIMESTAMP WITH TIME ZONE WHERE stocktake_rounds.id = %(stocktake_rounds_id)s::UUID",
+      "parameters": {
+        "status": "submitted",
+        "submitted_by_user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "submitted_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "count_manifest_sha256": "8c2a27046a0c543dc5ec890be851a500f3bb38cd8441fa4d9ad949bea57a689f",
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "stocktake_rounds_id": {
+          "type": "uuid",
+          "value": "cb938531-2201-40b8-ac90-65a70740456b"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "UPDATE stocktake_tasks SET status=%(status)s::VARCHAR, submitted_at=%(submitted_at)s::TIMESTAMP WITH TIME ZONE, version=%(version)s::BIGINT, updated_at=%(updated_at)s::TIMESTAMP WITH TIME ZONE WHERE stocktake_tasks.id = %(stocktake_tasks_id)s::UUID",
+      "parameters": {
+        "status": "submitted",
+        "submitted_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "version": 1,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "stocktake_tasks_id": {
+          "type": "uuid",
+          "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "INSERT INTO stocktake_differences (id, task_id, round_id, scope_id, control_snapshot_line_id, difference_no, difference_type, material_id, expected_account_id, observed_account_id, observed_line_id, serial_id, book_qty, counted_qty, difference_qty, affected_qty, reason_code, reason_text, evidence_required, created_at) VALUES (%(id)s::UUID, %(task_id)s::UUID, %(round_id)s::UUID, %(scope_id)s::UUID, %(control_snapshot_line_id)s::UUID, %(difference_no)s::INTEGER, %(difference_type)s::VARCHAR, %(material_id)s::UUID, %(expected_account_id)s::UUID, %(observed_account_id)s::UUID, %(observed_line_id)s::UUID, %(serial_id)s::UUID, %(book_qty)s, %(counted_qty)s, %(difference_qty)s, %(affected_qty)s, %(reason_code)s::VARCHAR, %(reason_text)s::VARCHAR, %(evidence_required)s, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": [
+        {
+          "id": {
+            "type": "uuid",
+            "value": "6ab7974f-a92b-414c-b97b-3ea5ed409912"
+          },
+          "task_id": {
+            "type": "uuid",
+            "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+          },
+          "round_id": {
+            "type": "uuid",
+            "value": "cb938531-2201-40b8-ac90-65a70740456b"
+          },
+          "scope_id": {
+            "type": "uuid",
+            "value": "22516c8d-f87f-46f4-a126-3359721f346d"
+          },
+          "control_snapshot_line_id": null,
+          "difference_no": 1,
+          "difference_type": "excess",
+          "material_id": {
+            "type": "uuid",
+            "value": "2a183872-7cea-4f7c-9979-c84d472f6bef"
+          },
+          "expected_account_id": null,
+          "observed_account_id": null,
+          "observed_line_id": {
+            "type": "uuid",
+            "value": "b73dab4b-a21d-4ad0-a462-6523f9acba19"
+          },
+          "serial_id": null,
+          "book_qty": {
+            "type": "decimal",
+            "value": "0.000"
+          },
+          "counted_qty": {
+            "type": "decimal",
+            "value": "1"
+          },
+          "difference_qty": {
+            "type": "decimal",
+            "value": "1.000"
+          },
+          "affected_qty": {
+            "type": "decimal",
+            "value": "1.000"
+          },
+          "reason_code": "opening_pending_verification",
+          "reason_text": "现场实物标识尚未唯一解析，保留为不可过账待核实差异",
+          "evidence_required": true,
+          "created_at": {
+            "type": "datetime",
+            "value": "2026-09-20T12:47:46.270899+00:00"
+          }
+        },
+        {
+          "id": {
+            "type": "uuid",
+            "value": "b784466a-2ca2-448b-ad30-824938f3869d"
+          },
+          "task_id": {
+            "type": "uuid",
+            "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+          },
+          "round_id": {
+            "type": "uuid",
+            "value": "cb938531-2201-40b8-ac90-65a70740456b"
+          },
+          "scope_id": null,
+          "control_snapshot_line_id": {
+            "type": "uuid",
+            "value": "443cb44d-3933-4bc2-b608-1ad3c42a9517"
+          },
+          "difference_no": 2,
+          "difference_type": "control_unassigned",
+          "material_id": {
+            "type": "uuid",
+            "value": "2a183872-7cea-4f7c-9979-c84d472f6bef"
+          },
+          "expected_account_id": null,
+          "observed_account_id": null,
+          "observed_line_id": null,
+          "serial_id": null,
+          "book_qty": {
+            "type": "decimal",
+            "value": "0.000"
+          },
+          "counted_qty": {
+            "type": "decimal",
+            "value": "1.000"
+          },
+          "difference_qty": {
+            "type": "decimal",
+            "value": "1.000"
+          },
+          "affected_qty": {
+            "type": "decimal",
+            "value": "1.000"
+          },
+          "reason_code": "opening_control_reconciliation",
+          "reason_text": "OAM 省级控制数量与期初实物汇总不一致，仅用于对账",
+          "evidence_required": true,
+          "created_at": {
+            "type": "datetime",
+            "value": "2026-09-20T12:47:46.270899+00:00"
+          }
+        }
+      ],
+      "many": true
+    },
+    {
+      "phase": 2,
+      "sql": "INSERT INTO stocktake_difference_set_completions (id, task_id, round_id, round_submission_id, difference_count, physical_difference_count, control_difference_count, pending_observation_difference_count, total_affected_qty, difference_manifest_sha256, request_sha256, idempotency_key_hash, completed_by_user_id, completed_by_person_id, completed_role_assignment_id, authorization_version, role_code, scope_type, scope_id_snapshot, authorization_sha256, completed_at, created_at) VALUES (%(id)s::UUID, %(task_id)s::UUID, %(round_id)s::UUID, %(round_submission_id)s::UUID, %(difference_count)s::INTEGER, %(physical_difference_count)s::INTEGER, %(control_difference_count)s::INTEGER, %(pending_observation_difference_count)s::INTEGER, %(total_affected_qty)s, %(difference_manifest_sha256)s::VARCHAR, %(request_sha256)s::VARCHAR, %(idempotency_key_hash)s::VARCHAR, %(completed_by_user_id)s::VARCHAR, %(completed_by_person_id)s::UUID, %(completed_role_assignment_id)s::UUID, %(authorization_version)s::BIGINT, %(role_code)s::VARCHAR, %(scope_type)s::VARCHAR, %(scope_id_snapshot)s::VARCHAR, %(authorization_sha256)s::VARCHAR, %(completed_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "cf2aa00e-6b1c-4046-9fba-d1452c10819d"
+        },
+        "task_id": {
+          "type": "uuid",
+          "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+        },
+        "round_id": {
+          "type": "uuid",
+          "value": "cb938531-2201-40b8-ac90-65a70740456b"
+        },
+        "round_submission_id": {
+          "type": "uuid",
+          "value": "c3200d05-427f-441d-afcf-e59e640ee553"
+        },
+        "difference_count": 2,
+        "physical_difference_count": 1,
+        "control_difference_count": 1,
+        "pending_observation_difference_count": 1,
+        "total_affected_qty": {
+          "type": "decimal",
+          "value": "2.000"
+        },
+        "difference_manifest_sha256": "dbf8fe8cec52d4caf867393bb184ef81760ce3ad10d65ca86cf428300b0491df",
+        "request_sha256": "d1821a64f38536364c568811c15d4f940a521c2a376541b48202d58853373989",
+        "idempotency_key_hash": "edcb51655cf53b91456f51283da60547387e7c45703532ee394903ad51008f75",
+        "completed_by_user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "completed_by_person_id": {
+          "type": "uuid",
+          "value": "3d21f0f9-4633-4d75-8e6c-6299edc8be3c"
+        },
+        "completed_role_assignment_id": {
+          "type": "uuid",
+          "value": "cc6c5a51-acea-4fe4-9dd5-2c27bb765fa6"
+        },
+        "authorization_version": 1,
+        "role_code": "provincial_manager",
+        "scope_type": "organization",
+        "scope_id_snapshot": "5f38a55d-0aca-4bd3-a6f5-56dd3dcb9243",
+        "authorization_sha256": "d3910dcace2d04de135a510b2cfb80754e228662c73b9414ef3b817130f188eb",
+        "completed_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "INSERT INTO outbox_events (id, event_type, aggregate_type, aggregate_id, payload_jsonb, status, attempts, idempotency_key, available_at, locked_at, locked_by, published_at, last_error, updated_at, created_at) VALUES (%(id)s::UUID, %(event_type)s::VARCHAR, %(aggregate_type)s::VARCHAR, %(aggregate_id)s::VARCHAR, %(payload_jsonb)s::JSONB, %(status)s::VARCHAR, %(attempts)s::INTEGER, %(idempotency_key)s::VARCHAR, %(available_at)s::TIMESTAMP WITH TIME ZONE, %(locked_at)s::TIMESTAMP WITH TIME ZONE, %(locked_by)s::VARCHAR, %(published_at)s::TIMESTAMP WITH TIME ZONE, %(last_error)s::VARCHAR, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "02c926a8-727f-46a0-b159-bd595c83a9b5"
+        },
+        "event_type": "stocktake.opening.scope_count_completed",
+        "aggregate_type": "stocktake_scope",
+        "aggregate_id": "22516c8d-f87f-46f4-a126-3359721f346d",
+        "payload_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "round_id": "cb938531-2201-40b8-ac90-65a70740456b",
+            "task_id": "5dd10537-a60d-44ee-9ed2-414346f66237",
+            "round_sealed": true,
+            "scope_id": "22516c8d-f87f-46f4-a126-3359721f346d"
+          }
+        },
+        "status": "pending",
+        "attempts": 0,
+        "idempotency_key": "opening-count-scope-outbox-7b025d83e77e9b46bb77c9139528915dafb95ba32d7ac8fa102019e60978b937",
+        "available_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "locked_at": null,
+        "locked_by": null,
+        "published_at": null,
+        "last_error": null,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "INSERT INTO outbox_events (id, event_type, aggregate_type, aggregate_id, payload_jsonb, status, attempts, idempotency_key, available_at, locked_at, locked_by, published_at, last_error, updated_at, created_at) VALUES (%(id)s::UUID, %(event_type)s::VARCHAR, %(aggregate_type)s::VARCHAR, %(aggregate_id)s::VARCHAR, %(payload_jsonb)s::JSONB, %(status)s::VARCHAR, %(attempts)s::INTEGER, %(idempotency_key)s::VARCHAR, %(available_at)s::TIMESTAMP WITH TIME ZONE, %(locked_at)s::TIMESTAMP WITH TIME ZONE, %(locked_by)s::VARCHAR, %(published_at)s::TIMESTAMP WITH TIME ZONE, %(last_error)s::VARCHAR, %(updated_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "acd9fce8-7d97-4e75-9a34-efe69ec865eb"
+        },
+        "event_type": "stocktake.opening.round_submitted",
+        "aggregate_type": "stocktake_round",
+        "aggregate_id": "cb938531-2201-40b8-ac90-65a70740456b",
+        "payload_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "round_id": "cb938531-2201-40b8-ac90-65a70740456b",
+            "task_id": "5dd10537-a60d-44ee-9ed2-414346f66237"
+          }
+        },
+        "status": "pending",
+        "attempts": 0,
+        "idempotency_key": "opening-count-round-outbox-6ef0a0e2e781bb7849ee227b4dc6c22e8e86a83e62d794563cf2dfb58e9ca3fa",
+        "available_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "locked_at": null,
+        "locked_by": null,
+        "published_at": null,
+        "last_error": null,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "INSERT INTO state_transition_events (id, aggregate_type, aggregate_id, from_status, to_status, reason, actor_id, idempotency_key, occurred_at, metadata_jsonb, created_at) VALUES (%(id)s::UUID, %(aggregate_type)s::VARCHAR, %(aggregate_id)s::VARCHAR, %(from_status)s::VARCHAR, %(to_status)s::VARCHAR, %(reason)s::VARCHAR, %(actor_id)s::VARCHAR, %(idempotency_key)s::VARCHAR, %(occurred_at)s::TIMESTAMP WITH TIME ZONE, %(metadata_jsonb)s::JSONB, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "4a1d1b26-0878-497a-81dd-e4b26cbe5d4a"
+        },
+        "aggregate_type": "stocktake_scope",
+        "aggregate_id": "22516c8d-f87f-46f4-a126-3359721f346d",
+        "from_status": "counting",
+        "to_status": "completed",
+        "reason": "opening_initial_scope_count_completed",
+        "actor_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "idempotency_key": "opening-count-scope-state-d04da5e94786895dae5fb4b4b99e221b2870e365ce8c4505c3d69e61c287c68d",
+        "occurred_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "metadata_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "round_id": "cb938531-2201-40b8-ac90-65a70740456b",
+            "task_id": "5dd10537-a60d-44ee-9ed2-414346f66237",
+            "zero_confirmed": false
+          }
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "INSERT INTO state_transition_events (id, aggregate_type, aggregate_id, from_status, to_status, reason, actor_id, idempotency_key, occurred_at, metadata_jsonb, created_at) VALUES (%(id)s::UUID, %(aggregate_type)s::VARCHAR, %(aggregate_id)s::VARCHAR, %(from_status)s::VARCHAR, %(to_status)s::VARCHAR, %(reason)s::VARCHAR, %(actor_id)s::VARCHAR, %(idempotency_key)s::VARCHAR, %(occurred_at)s::TIMESTAMP WITH TIME ZONE, %(metadata_jsonb)s::JSONB, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "e50635d1-6a15-4ab8-ae06-2883f3741bea"
+        },
+        "aggregate_type": "stocktake_round",
+        "aggregate_id": "cb938531-2201-40b8-ac90-65a70740456b",
+        "from_status": "counting",
+        "to_status": "submitted",
+        "reason": "opening_initial_round_submitted",
+        "actor_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "idempotency_key": "opening-count-round-state-64ad063aaf36fc1a25cbb9322cea186a0dcb6485b30fdb61bae954fab63a4f67",
+        "occurred_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "metadata_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "task_id": "5dd10537-a60d-44ee-9ed2-414346f66237"
+          }
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "INSERT INTO state_transition_events (id, aggregate_type, aggregate_id, from_status, to_status, reason, actor_id, idempotency_key, occurred_at, metadata_jsonb, created_at) VALUES (%(id)s::UUID, %(aggregate_type)s::VARCHAR, %(aggregate_id)s::VARCHAR, %(from_status)s::VARCHAR, %(to_status)s::VARCHAR, %(reason)s::VARCHAR, %(actor_id)s::VARCHAR, %(idempotency_key)s::VARCHAR, %(occurred_at)s::TIMESTAMP WITH TIME ZONE, %(metadata_jsonb)s::JSONB, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "e933421a-f5e9-48b8-b843-4492b77b3c7b"
+        },
+        "aggregate_type": "stocktake_task",
+        "aggregate_id": "5dd10537-a60d-44ee-9ed2-414346f66237",
+        "from_status": "counting",
+        "to_status": "submitted",
+        "reason": "opening_initial_round_submitted",
+        "actor_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "idempotency_key": "opening-count-task-state-8e44271e87e6671b901432e9618c3e1b948b8e515da190413a209b22f937af68",
+        "occurred_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "metadata_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "round_id": "cb938531-2201-40b8-ac90-65a70740456b"
+          }
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "INSERT INTO audit_events (id, stream_key, stream_version, actor_user_id, action, aggregate_type, aggregate_id, before_jsonb, after_jsonb, request_id, previous_hash, event_hash, occurred_at, created_at) VALUES (%(id)s::UUID, %(stream_key)s::VARCHAR, %(stream_version)s::BIGINT, %(actor_user_id)s::VARCHAR, %(action)s::VARCHAR, %(aggregate_type)s::VARCHAR, %(aggregate_id)s::VARCHAR, %(before_jsonb)s::JSONB, %(after_jsonb)s::JSONB, %(request_id)s::VARCHAR, %(previous_hash)s::VARCHAR, %(event_hash)s::VARCHAR, %(occurred_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "3275cab6-af72-4dba-b0a2-3a2c2772eeee"
+        },
+        "stream_key": "inventory",
+        "stream_version": 2,
+        "actor_user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "action": "stocktake.opening.scope_count_completed",
+        "aggregate_type": "stocktake_scope",
+        "aggregate_id": "22516c8d-f87f-46f4-a126-3359721f346d",
+        "before_jsonb": {
+          "type": "jsonb",
+          "value": null
+        },
+        "after_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "has_pending_verification": true,
+            "round_id": "cb938531-2201-40b8-ac90-65a70740456b",
+            "round_sealed": true,
+            "task_id": "5dd10537-a60d-44ee-9ed2-414346f66237",
+            "zero_confirmed": false
+          }
+        },
+        "request_id": "opening-count-request-58b106a48f9d4ac9c52d4ced98fb334499838859d6b6299fdc74a0bbd1a8e855",
+        "previous_hash": "7998d0b9343c7ab0eadc69d13ea405334c5d16dbda78910d675335e77918c611",
+        "event_hash": "8dbaf07f5ac8e333a58432827eb4cfc657f3fff1c76288bd5a9fed5f24b44fc9",
+        "occurred_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "UPDATE audit_chain_heads SET last_event_id=%(last_event_id)s::UUID, last_hash=%(last_hash)s::VARCHAR, version=%(version)s::BIGINT, updated_at=%(updated_at)s::TIMESTAMP WITH TIME ZONE WHERE audit_chain_heads.id = %(audit_chain_heads_id)s::UUID",
+      "parameters": {
+        "last_event_id": {
+          "type": "uuid",
+          "value": "3275cab6-af72-4dba-b0a2-3a2c2772eeee"
+        },
+        "last_hash": "8dbaf07f5ac8e333a58432827eb4cfc657f3fff1c76288bd5a9fed5f24b44fc9",
+        "version": 2,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.301496+00:00"
+        },
+        "audit_chain_heads_id": {
+          "type": "uuid",
+          "value": "30000000-0000-4000-8000-000000000003"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "INSERT INTO audit_events (id, stream_key, stream_version, actor_user_id, action, aggregate_type, aggregate_id, before_jsonb, after_jsonb, request_id, previous_hash, event_hash, occurred_at, created_at) VALUES (%(id)s::UUID, %(stream_key)s::VARCHAR, %(stream_version)s::BIGINT, %(actor_user_id)s::VARCHAR, %(action)s::VARCHAR, %(aggregate_type)s::VARCHAR, %(aggregate_id)s::VARCHAR, %(before_jsonb)s::JSONB, %(after_jsonb)s::JSONB, %(request_id)s::VARCHAR, %(previous_hash)s::VARCHAR, %(event_hash)s::VARCHAR, %(occurred_at)s::TIMESTAMP WITH TIME ZONE, %(created_at)s::TIMESTAMP WITH TIME ZONE)",
+      "parameters": {
+        "id": {
+          "type": "uuid",
+          "value": "a5a32fdd-fa20-4717-854d-d4e5a570079e"
+        },
+        "stream_key": "inventory",
+        "stream_version": 3,
+        "actor_user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+        "action": "stocktake.opening.round_submitted",
+        "aggregate_type": "stocktake_round",
+        "aggregate_id": "cb938531-2201-40b8-ac90-65a70740456b",
+        "before_jsonb": {
+          "type": "jsonb",
+          "value": null
+        },
+        "after_jsonb": {
+          "type": "jsonb",
+          "value": {
+            "round_id": "cb938531-2201-40b8-ac90-65a70740456b",
+            "task_id": "5dd10537-a60d-44ee-9ed2-414346f66237"
+          }
+        },
+        "request_id": "opening-count-request-58b106a48f9d4ac9c52d4ced98fb334499838859d6b6299fdc74a0bbd1a8e855",
+        "previous_hash": "8dbaf07f5ac8e333a58432827eb4cfc657f3fff1c76288bd5a9fed5f24b44fc9",
+        "event_hash": "fcc698ec01817544e3241f9959fbddb18ceb38bb0efdb5c3d0876021f71ff38b",
+        "occurred_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        },
+        "created_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.270899+00:00"
+        }
+      },
+      "many": false
+    },
+    {
+      "phase": 2,
+      "sql": "UPDATE audit_chain_heads SET last_event_id=%(last_event_id)s::UUID, last_hash=%(last_hash)s::VARCHAR, version=%(version)s::BIGINT, updated_at=%(updated_at)s::TIMESTAMP WITH TIME ZONE WHERE audit_chain_heads.id = %(audit_chain_heads_id)s::UUID",
+      "parameters": {
+        "last_event_id": {
+          "type": "uuid",
+          "value": "a5a32fdd-fa20-4717-854d-d4e5a570079e"
+        },
+        "last_hash": "fcc698ec01817544e3241f9959fbddb18ceb38bb0efdb5c3d0876021f71ff38b",
+        "version": 3,
+        "updated_at": {
+          "type": "datetime",
+          "value": "2026-09-20T12:47:46.302180+00:00"
+        },
+        "audit_chain_heads_id": {
+          "type": "uuid",
+          "value": "30000000-0000-4000-8000-000000000003"
+        }
+      },
+      "many": false
+    }
+  ],
+  "evidence": {
+    "completion_id": {
+      "type": "uuid",
+      "value": "25ded81c-22a1-4d1a-a161-a9d35338b37f"
+    },
+    "expected_request_jsonb": {
+      "schema": "cloud_oam.opening_stocktake.scope_count_request.v1",
+      "task_id": "5dd10537-a60d-44ee-9ed2-414346f66237",
+      "round_id": "cb938531-2201-40b8-ac90-65a70740456b",
+      "scope_id": "22516c8d-f87f-46f4-a126-3359721f346d",
+      "actor_user_id": "beca656e-02ed-4d74-9100-b1dc3720a923",
+      "zero_confirmed": false,
+      "actor_person_id": "3d21f0f9-4633-4d75-8e6c-6299edc8be3c",
+      "physical_observations": [
+        {
+          "lot_id": null,
+          "remark": "0051 legacy observation-only backfill",
+          "serial_id": null,
+          "lot_no_raw": null,
+          "counted_qty": "1",
+          "material_id": "2a183872-7cea-4f7c-9979-c84d472f6bef",
+          "reason_code": null,
+          "count_method": "manual",
+          "serial_no_raw": "PG16-0052-LEGACY-MISSING-SERIAL-C4475ED7EF47",
+          "condition_code": "new",
+          "availability_bucket": "available",
+          "serial_identifier_type": "serial_no",
+          "material_identifier_raw": "SKU-719990e2ba",
+          "material_identifier_type": "sku_code"
+        }
+      ]
+    },
+    "expected_request_resolution_jsonb": {
+      "items": [
+        {
+          "policy": {
+            "id": "93f0de4c-af99-4bf9-bf99-009f246ecb86",
+            "tracking_mode": "serial",
+            "allow_fraction": false,
+            "effective_from": "2020-01-01T00:00:00.000000Z",
+            "quantity_scale": 0
+          },
+          "target_id": "b73dab4b-a21d-4ad0-a462-6523f9acba19",
+          "target_type": "observation",
+          "request_ordinal": 1,
+          "resolved_lot_id": null,
+          "serial_alias_keys": [
+            "pg16-0052-legacy-missing-serial-c4475ed7ef47"
+          ],
+          "resolved_serial_id": null,
+          "request_item_sha256": "e6098f89347adb108a2d12e70790280331918ba06aaba709691f1b773853677e",
+          "resolved_material_id": "2a183872-7cea-4f7c-9979-c84d472f6bef",
+          "serial_qr_mapping_id": null,
+          "material_qr_mapping_id": null
+        }
+      ],
+      "schema": "cloud_oam.opening_stocktake.scope_count_request_resolution.v1",
+      "task_id": "5dd10537-a60d-44ee-9ed2-414346f66237",
+      "round_id": "cb938531-2201-40b8-ac90-65a70740456b",
+      "scope_id": "22516c8d-f87f-46f4-a126-3359721f346d",
+      "request_sha256": "07d9475a54fec8fa1af5d5a4d09a33bb0eeeced46c582797f59748a66a4187d9"
+    },
+    "observation_id": {
+      "type": "uuid",
+      "value": "b73dab4b-a21d-4ad0-a462-6523f9acba19"
+    },
+    "policy_id": {
+      "type": "uuid",
+      "value": "93f0de4c-af99-4bf9-bf99-009f246ecb86"
+    },
+    "request_sha256": "07d9475a54fec8fa1af5d5a4d09a33bb0eeeced46c582797f59748a66a4187d9",
+    "serial_alias_key": "pg16-0052-legacy-missing-serial-c4475ed7ef47",
+    "task_id": {
+      "type": "uuid",
+      "value": "5dd10537-a60d-44ee-9ed2-414346f66237"
+    }
+  },
+  "legacyRevision": "20260903_0051",
+  "syntheticOnly": true,
+  "provenance": {
+    "description": "Recorded on a new owned PostgreSQL 16.15 cluster from archived service code. Harness-only adjustments: expect one implicit zero book line, and explicitly supply the material UUID in the physical request so its identity is losslessly recoverable. No service or SQL guard changed.",
+    "sourceSha256": {
+      "app/formal_services/opening_stocktake.py": "bb03f821ed03cafa67a6e0b05ae1a1472365314d0f65d91c2dae1d2a8b434d9d",
+      "app/formal_services/opening_stocktake_count.py": "acc6c33747cc79d655c8292ffdb8c38b5e22ef0d927f3018c383ababaee46684",
+      "tests/test_postgresql16_release_gate.py": "bdc6e25510251683e82672a2ee34b6b5fa44f1a92b9403388928a445f6d5c3c7",
+      "tests/test_opening_stocktake_service.py": "1869e20c9c7ecdcc96d305a13f6f9b6568dc935fcc329f32b9b4fea31944aa5e"
+    },
+    "omittedPost0051Columns": [
+      "request_jsonb",
+      "request_resolution_jsonb"
+    ],
+    "legacyTriggerException": "Only trg_stocktake_tasks_opening_commit_0022 is disabled in count phase and restored ALWAYS, matching the historical broken task UPDATE guard."
+  },
+  "tables": [
+    "audit_chain_heads",
+    "audit_events",
+    "auth_identities",
+    "external_object_versions",
+    "external_objects",
+    "inventory_freezes",
+    "material_inventory_policies",
+    "materials",
+    "organizations",
+    "outbox_events",
+    "people",
+    "role_assignments",
+    "source_systems",
+    "state_transition_events",
+    "stock_accounts",
+    "stock_balances",
+    "stock_locations",
+    "stocktake_control_snapshot_lines",
+    "stocktake_count_lines",
+    "stocktake_count_observations",
+    "stocktake_difference_set_completions",
+    "stocktake_differences",
+    "stocktake_round_submissions",
+    "stocktake_rounds",
+    "stocktake_scope_count_completions",
+    "stocktake_scopes",
+    "stocktake_snapshot_lines",
+    "stocktake_tasks",
+    "sync_batches",
+    "sync_inbox_events",
+    "sync_runs",
+    "users"
+  ]
+}

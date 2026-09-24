@@ -43,6 +43,25 @@ export RSC_EDGE_SYNC_SECRET='at-least-32-random-characters'
 
 ## 只读检查与上传
 
+7.52—7.53 增加独立 `oam_material_master_capture.py`：准确保留 OAM 备件字段、两轮完整分页、
+私有归档与离线 `--inspect-file`；新采集可显式 `--capture --upload`，未知结果通过
+`--status-file` 查询原回执，不重传。接收端须先有准确传输登记、0116 迁移和显式物料 key_id。
+范围仅为当前会话可见的备件列表。7.54 已补独立总部来源授权和持锁准入；当前部署需 head 0119，
+用于后续准入的采集必须在授权生效后开始。正式物料投影仍缺，现有同步和调度不自动启用。
+见[物料来源授权](../docs/MATERIAL_SOURCE_AUTHORITY_20260920.md)。
+详见[物料主数据采集](../docs/MATERIAL_MASTER_CAPTURE_20260920.md)与
+[专用接收和恢复](../docs/MATERIAL_CAPTURE_INGRESS_20260920.md)。
+
+2026-09-20 新增显式 `--entity inventory --control-catalog-file` 控制采集模式，严格检查完整分页、
+独立仓库/库位目录及明确零库存，上传前保存私有证据，成功后持久保存增量证据指针。现有调度器
+不自动启用该模式。所有上传使用本机共享 Edge HTTP 适配器，无直连兜底；错误或未知回执不推进
+索引。操作方式与恢复语义见
+[本地库存控制采集与持久证据](../docs/INVENTORY_CONTROL_CAPTURE_20260920.md)。
+7.48 控制模式还要求 `--control-attestation-key-id`（或同名用途的
+`RSC_EDGE_CONTROL_CAPTURE_KEY_ID` 环境配置），接收端必须已迁移到 0114 并显式启用对应版本。
+完成快照后取得准确的 HMAC 采集凭据回执才推进索引；凭据不代表目录获批或库存发布。
+部署权限、默认关闭和证明边界见[采集凭据说明](../docs/INVENTORY_CONTROL_ATTESTATION_20260920.md)。
+
 首次必须限定单仓并先 dry-run：
 
 ```bash
@@ -107,3 +126,6 @@ export RSC_EDGE_SYNC_SECRET='at-least-32-random-characters'
 过该不可逆清理，正式维护前仍需在 disposable PostgreSQL 16 完成 dry-run/执行/回滚演练。
 审批、分配、占用、出库、发货、物流签收、OAM 收货、RSC/个人仓入库、通知送达和对账同步
 仍是独立状态，工单镜像发布不会推进其中任何一项。
+
+7.56 的物料逐行审核发布已接在认证回执之后，需当前总部会话、语义决定、文件和预览 hash；
+采集器本身仍不发布主数据或库存，见[物料发布边界](../docs/MATERIAL_PUBLICATION_20260920.md)。

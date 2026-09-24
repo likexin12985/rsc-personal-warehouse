@@ -218,11 +218,13 @@ export function validateNotificationRead(value: unknown): NotificationItem {
 }
 
 export function notificationTitle(item: NotificationItem): string {
+  if (item.event_type === "inventory_transaction_changed") return "库存变动已记录";
   const title = item.payload.title ?? item.payload.subject;
   return typeof title === "string" && title.trim() ? title : "RSC个人仓通知";
 }
 
 export function notificationBody(item: NotificationItem): string {
+  if (item.event_type === "inventory_transaction_changed") return "与你保管物资相关的库存流水已过账，请到库存流水查看明细。";
   const body = item.payload.body ?? item.payload.summary;
   return typeof body === "string" && body.trim() ? body : "请进入对应业务页面查看详情。";
 }

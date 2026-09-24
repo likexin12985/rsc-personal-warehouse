@@ -1,15 +1,14 @@
 const session = require('./utils/session')
-const startupSession = session.initializeSessionState()
+session.initializeSessionState()
 
 App({
   globalData: {
-    user: startupSession.user
+    user: null
   },
 
   onLaunch() {
-    if (startupSession.forceLogin) {
-      wx.reLaunch({ url: '/pages/login/index' })
-    }
+    // Public knowledge is the entry page, including after an interrupted login.
+    // initializeSessionState still quarantines incomplete credentials on upgrades.
   },
 
   setUser(user) {

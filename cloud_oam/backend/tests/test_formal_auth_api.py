@@ -85,6 +85,7 @@ FORBIDDEN_SESSION_KEYS = FORBIDDEN_IDENTITY_KEYS | {
 
 class FakeSmsProvider:
     def __init__(self) -> None:
+        self.settings = auth.settings.model_copy(deep=True)
         self.send_calls: list[tuple[str, str]] = []
         self.verify_calls: list[tuple[str, str, str]] = []
 

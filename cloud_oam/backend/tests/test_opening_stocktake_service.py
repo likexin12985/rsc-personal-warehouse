@@ -3,9 +3,12 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from hashlib import sha256
+from io import BytesIO
 from types import SimpleNamespace
 import uuid
 
+from openpyxl import Workbook
 import pytest
 from sqlalchemy import event, func, select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -13,6 +16,15 @@ from sqlalchemy.orm import Session
 from sqlalchemy import create_engine
 
 import app.formal_services.opening_stocktake_count as opening_count_service
+from app.formal_services.opening_count_import_prevalidation import (
+    prevalidate_opening_count_import_bytes,
+)
+from app.formal_services.opening_count_import_workbook import (
+    HEADERS as OPENING_IMPORT_HEADERS,
+    MAX_FILE_BYTES as OPENING_IMPORT_MAX_FILE_BYTES,
+    OpeningCountImportFormatError,
+    render_opening_count_error_report,
+)
 import app.formal_services.opening_stocktake as opening_stocktake_service
 from app.database import Base
 from app.formal_access import FormalPrincipal, load_formal_principal
@@ -36,6 +48,7 @@ from app.formal_services.opening_stocktake_count import (
     OpeningPhysicalObservationInput,
     OpeningStocktakeCountError,
     SubmitOpeningStocktakeScopeCountCommand,
+    prevalidate_opening_stocktake_scope_count,
     submit_opening_stocktake_scope_count,
 )
 from app.foundation_models import (
@@ -657,6 +670,7 @@ def test_start_builds_atomic_evidence_without_using_oam_quantity_as_stock(
     task = db.get(FormalStocktakeTask, result.task_id)
     assert task.status == "counting"
     assert task.current_round_no == 1
+    assert task.opening_authorization_version == world.principals["manager_x"].authorization_version
     assert task.issued_at == task.frozen_at == task.cutoff_at
     assert db.get(StocktakeRound, result.initial_round_id).status == "counting"
     snapshot = db.scalar(
@@ -1969,6 +1983,186 @@ def _count_error_code(callable_) -> str:
     with pytest.raises(OpeningStocktakeCountError) as captured:
         callable_()
     return captured.value.code
+
+
+def test_opening_scope_business_prevalidation_is_read_only_and_does_not_consume_key(
+    world: SimpleNamespace,
+):
+    started = _start(world, key="opening-idempotency-prevalidate-start")
+    command = _scope_count_command(
+        world, started,
+        observations=(OpeningPhysicalObservationInput(
+            material_identifier_raw=world.material.sku_code,
+            material_identifier_type="sku_code", condition_code="new",
+            availability_bucket="available", counted_qty=Decimal("2.000"),
+            count_method="import",
+        ),),
+    )
+    world.db.commit()
+    statements: list[str] = []
+
+    def record_sql(_connection, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement.lstrip().split(None, 1)[0].upper())
+
+    engine = world.db.get_bind()
+    event.listen(engine, "before_cursor_execute", record_sql)
+    try:
+        preview = prevalidate_opening_stocktake_scope_count(
+            world.db, actor=world.principals["manager_x"], command=command,
+            idempotency_key="opening-count-prevalidate-same-key",
+            request_id="opening-count-prevalidate-trace",
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record_sql)
+    assert preview.task_id == started.task_id
+    assert preview.round_id == started.initial_round_id
+    assert preview.observation_count == 1
+    assert preview.pending_verification_input_ordinals == ()
+    assert len(preview.request_sha256) == 64
+    assert not ({"INSERT", "UPDATE", "DELETE"} & set(statements))
+    assert not world.db.new and not world.db.dirty and not world.db.deleted
+
+    counted = _submit_scope_count(
+        world, actor=world.principals["manager_x"], command=command,
+        key="opening-count-prevalidate-same-key",
+    )
+    assert counted.scope_completed is True
+
+
+def test_opening_scope_business_prevalidation_rejects_wrong_assignee(
+    world: SimpleNamespace,
+):
+    started = _start(world, key="opening-idempotency-prevalidate-assignee")
+    command = _scope_count_command(
+        world, started,
+        observations=(OpeningPhysicalObservationInput(
+            material_identifier_raw=world.material.sku_code,
+            material_identifier_type="sku_code", condition_code="new",
+            availability_bucket="available", counted_qty=Decimal("2.000"),
+            count_method="import",
+        ),),
+    )
+    world.db.commit()
+    assert _count_error_code(lambda: prevalidate_opening_stocktake_scope_count(
+        world.db, actor=world.principals["manager_y"], command=command,
+        idempotency_key="opening-count-prevalidate-wrong-assignee",
+        request_id="opening-count-prevalidate-trace",
+    )) == "opening_count_not_frozen_assignee"
+    assert not world.db.new and not world.db.dirty and not world.db.deleted
+
+
+def test_opening_scope_prevalidation_reports_input_order_not_canonical_order(
+    world: SimpleNamespace,
+):
+    started = _start(world, key="opening-idempotency-prevalidate-order")
+    known = OpeningPhysicalObservationInput(
+        material_identifier_raw=world.material.sku_code,
+        material_identifier_type="sku_code", condition_code="new",
+        availability_bucket="available", counted_qty=Decimal("2.000"),
+        count_method="import",
+    )
+    unknown = OpeningPhysicalObservationInput(
+        material_identifier_raw="UNLISTED-ONSITE-MATERIAL",
+        material_identifier_type="unknown", condition_code="new",
+        availability_bucket="available", counted_qty=Decimal("1.000"),
+        count_method="import",
+    )
+    world.db.commit()
+    for observations, expected in (((known, unknown), (2,)),
+                                   ((unknown, known), (1,))):
+        command = _scope_count_command(world, started, observations=observations)
+        preview = prevalidate_opening_stocktake_scope_count(
+            world.db, actor=world.principals["manager_x"], command=command,
+            idempotency_key="opening-count-prevalidate-order-" + str(expected[0]),
+            request_id="opening-count-prevalidate-order-trace",
+        )
+        assert preview.pending_verification_input_ordinals == expected
+        assert preview.observation_count == 2
+    assert not world.db.new and not world.db.dirty and not world.db.deleted
+
+
+def test_opening_scope_business_prevalidation_rejects_pending_session_write(
+    world: SimpleNamespace,
+):
+    started = _start(world, key="opening-idempotency-prevalidate-dirty")
+    command = _scope_count_command(world, started, zero_confirmed=True)
+    world.db.commit()
+    task = world.db.get(FormalStocktakeTask, started.task_id)
+    assert task is not None
+    task.note = "uncommitted change"
+    assert _count_error_code(lambda: prevalidate_opening_stocktake_scope_count(
+        world.db, actor=world.principals["manager_x"], command=command,
+        idempotency_key="opening-count-prevalidate-dirty-session",
+        request_id="opening-count-prevalidate-trace",
+    )) == "opening_count_prevalidation_session_not_clean"
+    assert task in world.db.dirty
+
+
+def test_opening_import_business_prevalidation_maps_real_sheet_rows_without_writes(
+    world: SimpleNamespace,
+):
+    started = _start(world, key="opening-idempotency-import-business")
+    command = _scope_count_command(world, started)
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "期初盘点_V1"
+    sheet.append(OPENING_IMPORT_HEADERS)
+    sheet.append((world.material.sku_code, "sku_code", "new", "available",
+                  "2.000", None, None, None, None, ""))
+    sheet.append((None,) * len(OPENING_IMPORT_HEADERS))
+    sheet.append(("UNKNOWN-ONSITE", "unknown", "new", "available",
+                  "1.000", None, None, None, None, ""))
+    output = BytesIO()
+    book.save(output)
+    book.close()
+    data = output.getvalue()
+    digest = sha256(data).hexdigest()
+    world.db.commit()
+    statements: list[str] = []
+
+    def record_sql(_connection, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement.lstrip().split(None, 1)[0].upper())
+
+    engine = world.db.get_bind()
+    event.listen(engine, "before_cursor_execute", record_sql)
+    try:
+        with pytest.raises(OpeningCountImportFormatError, match="文件大小"):
+            prevalidate_opening_count_import_bytes(
+                world.db, actor=world.principals["manager_x"],
+                data=b"x" * (OPENING_IMPORT_MAX_FILE_BYTES + 1),
+                expected_source_sha256=digest,
+                task_id=command.task_id, round_id=command.round_id,
+                scope_id=command.scope_id,
+                idempotency_key="opening-count-import-business-key",
+                request_id="opening-count-import-business-trace",
+            )
+        with pytest.raises(OpeningCountImportFormatError, match="摘要不一致"):
+            prevalidate_opening_count_import_bytes(
+                world.db, actor=world.principals["manager_x"], data=data,
+                expected_source_sha256="0" * 64,
+                task_id=command.task_id, round_id=command.round_id,
+                scope_id=command.scope_id,
+                idempotency_key="opening-count-import-business-key",
+                request_id="opening-count-import-business-trace",
+            )
+        result = prevalidate_opening_count_import_bytes(
+            world.db, actor=world.principals["manager_x"], data=data,
+            expected_source_sha256=digest,
+            task_id=command.task_id, round_id=command.round_id,
+            scope_id=command.scope_id,
+            idempotency_key="opening-count-import-business-key",
+            request_id="opening-count-import-business-trace",
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record_sql)
+    assert not result.ready and result.row_count == 2
+    assert result.source_sha256 == digest and len(result.payload_sha256 or "") == 64
+    assert result.count is not None and result.count.observation_count == 2
+    assert result.count.pending_verification_input_ordinals == (2,)
+    assert [(item.row, item.code) for item in result.errors] == [(4, "pending_verification")]
+    assert render_opening_count_error_report(result.errors)
+    assert not ({"INSERT", "UPDATE", "DELETE"} & set(statements))
+    assert not world.db.new and not world.db.dirty and not world.db.deleted
 
 
 def test_initial_scope_count_seals_round_without_creating_inventory_facts(

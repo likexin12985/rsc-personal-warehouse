@@ -27,9 +27,11 @@ function preview() {
 
 test('inbound preview is bound to the exact receipt and target account', () => {
   const raw = preview()
-  const value = contract.validatePreview(raw, { receiptId: RECEIPT, shipmentId: SHIPMENT, personId: PERSON })
+  const expected = { receiptId: RECEIPT, shipmentId: SHIPMENT, personId: PERSON, authorizationVersion: 2 }
+  const value = contract.validatePreview(raw, expected)
   assert.equal(value.lines[0].accepted_qty, '1.000')
-  assert.throws(() => contract.validatePreview({ ...raw, target_location_id: 'invalid' }, { receiptId: RECEIPT, shipmentId: SHIPMENT, personId: PERSON }))
+  assert.throws(() => contract.validatePreview({ ...raw, target_location_id: 'invalid' }, expected))
+  assert.throws(() => contract.validatePreview({ ...raw, authorization_version: 3 }, expected))
   assert.equal(contract.requestHash(RECEIPT, raw.plan_hash, TRACE).length, 64)
 })
 

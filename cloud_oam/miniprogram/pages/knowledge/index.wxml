@@ -1,0 +1,16 @@
+<view class="knowledge-page">
+  <view class="eyebrow">AC CHARGING · PARTS REFERENCE</view>
+  <view class="hero-title">找到备件，<text>也找到它的适用信息。</text></view>
+  <view class="intro">查询交流充电设备的物料编码、备件名称与适用型号。</view>
+  <view class="search"><input placeholder="物料编码、备件名称或型号" value="{{query}}" maxlength="160" bindinput="onQuery" confirm-type="search" aria-label="搜索备件资料" /><text>查询</text></view>
+  <view class="section-heading"><view>备件资料库</view><picker range="{{categories}}" value="{{categoryIndex}}" bindchange="onCategory"><view class="category">{{categories[categoryIndex]}} ▾</view></picker></view>
+  <view wx:if="!ready" class="empty"><view class="empty-mark">册</view><view class="empty-title">资料待更新</view><view>备件资料正在整理，完成核对后将在这里提供查询。</view><view>当前尚未导入可查询条目。</view></view>
+  <block wx:else>
+    <view class="count">共找到 {{total}} 条资料</view>
+    <view wx:if="!total" class="empty"><view class="empty-title">未找到相关备件</view><view>试试更短的关键词，或选择全部分类。</view><button bindtap="onClear">清除筛选</button></view>
+    <view wx:for="{{results}}" wx:key="key" class="card"><view class="card-heading"><text class="tag">{{item.category}}</text><text class="code">{{item.code}}</text></view><view class="part-name">{{item.name}}</view><view class="label">适用型号</view><view>{{item.model || '未注明'}}</view><block wx:if="{{item.note}}"><view class="label">资料说明</view><view class="note">{{item.note}}</view></block><view class="reference">来源：{{item.sourceSheet}} · 第 {{item.sourceRow}} 行</view></view>
+    <view wx:if="{{pageCount > 1}}" class="pagination"><button disabled="{{page === 1}}" bindtap="onPrevious">上一页</button><text>{{page}} / {{pageCount}}</text><button disabled="{{page === pageCount}}" bindtap="onNext">下一页</button></view>
+  </block>
+  <view class="source"><view>资料来源：交流备件知识大全 · 飞书原表</view><view wx:if="{{verifiedDate}}">资料核对时间：{{verifiedDate}}</view><view wx:else>导入并核对后显示资料版本。</view><button bindtap="onCopySource">复制资料来源</button></view>
+  <view class="footer">交流备件知识大全 · 公开查询</view>
+</view>

@@ -1,0 +1,114 @@
+{
+  "capture_chain_sha256": "a3d079182ef4cb1c4863ac2c517c0757ac9adcd2d13536bc24b40d078d03238a",
+  "captured_at": "2026-09-21T01:18:43.545606+00:00",
+  "catalog_sha256": "2663b0c72dd66b1cf10c9943c26669c3b459463b7c390a68df2ed7aad180f9ff",
+  "content_sha256": "5cb3288f5af3687656ffb76254f5838c63a6960eccd6769d757fb9d0b2916cff",
+  "coverage": [
+    {
+      "capture_sha256": "bcc2e8a803dc3ad3f68978609e853138116e6ce3fd980a4a2d59b6fcc6ed7e4b",
+      "completed_at": "2026-09-21T01:18:43.545606Z",
+      "page_count": 1,
+      "source_total": 2,
+      "started_at": "2026-09-21T01:18:43.545606Z",
+      "target_positions": [
+        "P-A",
+        "P-ZERO"
+      ],
+      "warehouse_code": "W-A"
+    },
+    {
+      "capture_sha256": "e783377754d9052d9b1a616eaffe774d63e7e62149d811512bad5bf13da675f7",
+      "completed_at": "2026-09-21T01:18:43.545606Z",
+      "page_count": 1,
+      "source_total": 2,
+      "started_at": "2026-09-21T01:18:43.545606Z",
+      "target_positions": [
+        "P-B"
+      ],
+      "warehouse_code": "W-B"
+    }
+  ],
+  "covered_warehouses": [
+    "W-A",
+    "W-B"
+  ],
+  "current_source_authorized": false,
+  "database_observation": {
+    "observed_at": "2026-09-21T01:18:45.532094+00:00",
+    "read_only": true,
+    "repeatable_read": true,
+    "role": "rsc_control_capture",
+    "snapshot": "804:804:"
+  },
+  "historical_authority": {
+    "attestation_cursor_sha256": "2f12f3ad7aac6c0955cdc43c59403d2d69cc697478012acab38419e240587ab2",
+    "authority_cursor_sha256": "eb178ec4b1ed74fcea40431a8363d96929c3f2995c501a4e3a88243118b559a0"
+  },
+  "historical_graph_verified": true,
+  "key_lifecycle_verified": false,
+  "material_publications": [
+    {
+      "id": "4a291bcf-8225-4a23-8671-275c296d2149",
+      "sha256": "11d8aa910a003805b28a901fe62f2c1c88227f82845a9872ba29274b1266f28a"
+    }
+  ],
+  "operator_authority_verified": false,
+  "origin_count": 4,
+  "persisted": false,
+  "preparation_sha256": "d98450d50fdc527e04c5c12e0236f28cd0101417721f3df3499aa4312b827319",
+  "publication_id": "67dfed30-29f5-4747-b1fd-e07ed6e66891",
+  "publication_sha256": "4256b391435af1260d4c2709194101e66d4fb74ea8680dec035437f98cf1f752",
+  "publication_valid_until": "2026-09-21T01:58:42.451607+00:00",
+  "published_at": "2026-09-21T01:18:44.775229+00:00",
+  "region_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+  "rows": [
+    {
+      "condition": "new",
+      "locked_quantity": "1.000",
+      "material_id": "00134110-8a4f-41ac-a556-13714f03f99d",
+      "origin_id": "23c0a7a9-02a6-40f6-9c53-d6adce9b96b7",
+      "origin_sha256": "76ff3471f9a561e7edac84cef5bf30f4f3c6291635e77c5b85ea753b9cbbc41e",
+      "position_code": "P-A",
+      "quantity": "2.000",
+      "source_business_key": "stock:daily-a1",
+      "warehouse_code": "W-A"
+    },
+    {
+      "condition": "new",
+      "locked_quantity": "0.000",
+      "material_id": "00134110-8a4f-41ac-a556-13714f03f99d",
+      "origin_id": "92cca137-1ce3-4e21-a7f3-817612fbb31c",
+      "origin_sha256": "a4c041baaae0f496eaa1f8074c85bf565116e11c4309d70022f49076daddcf5a",
+      "position_code": "P-A",
+      "quantity": "3.000",
+      "source_business_key": "stock:daily-a2",
+      "warehouse_code": "W-A"
+    },
+    {
+      "condition": "new",
+      "locked_quantity": "2.000",
+      "material_id": "00134110-8a4f-41ac-a556-13714f03f99d",
+      "origin_id": "1af61938-a5f9-46c8-9a72-4694a44cd57f",
+      "origin_sha256": "087519607d3db3e0fb467c507743ede16c64e2f8d5d6a972ce7466ba4c31b45b",
+      "position_code": "P-B",
+      "quantity": "7.000",
+      "source_business_key": "stock:daily-b1",
+      "warehouse_code": "W-B"
+    },
+    {
+      "condition": "damaged",
+      "locked_quantity": "0.000",
+      "material_id": "00134110-8a4f-41ac-a556-13714f03f99d",
+      "origin_id": "440e2779-a9c5-4763-9b95-a8b65fe6d0a2",
+      "origin_sha256": "611c4cb5629f7373c679bcc2b37a79f43f349e5da22e8cbde1e8b3d2f82e8894",
+      "position_code": "P-B",
+      "quantity": "4.000",
+      "source_business_key": "stock:daily-b2",
+      "warehouse_code": "W-B"
+    }
+  ],
+  "schema": "rsc.daily_published_control_capture_candidate.v1",
+  "source_system_id": "2f1a667c-9cb2-42ec-918b-d1be5b6060d2",
+  "stock_written": false,
+  "warehouse_mapping_approved": false
+}

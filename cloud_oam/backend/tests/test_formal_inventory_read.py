@@ -3,11 +3,14 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import hashlib
+from types import SimpleNamespace
 import uuid
 
 import pytest
+from formal_file_integrity import StoredObjectHead, _validate_intent_metadata
 from sqlalchemy import create_engine, event, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
@@ -21,7 +24,21 @@ from app.formal_services.inventory_query import (
     personal_warehouse_serials,
     personal_warehouse_transactions,
 )
-from app.foundation_models import ExternalObject, Organization, Person, SourceSystem
+from app.formal_services.inventory_report_snapshot import capture_inventory_report_snapshot
+from app.formal_services.inventory_report_jobs import (
+    claim_inventory_report_job,
+    create_inventory_report_job,
+    finish_inventory_report_job,
+    revalidate_inventory_report_job,
+)
+from app.formal_services.inventory_report_workbook import MIME_TYPE
+from app.formal_services.file_storage import DownloadIntent, FileStorageError
+from app.inventory_report_worker import process_one_inventory_report
+from app.formal_services.inventory_report_download import (
+    create_inventory_report_download_intent,
+    get_inventory_report_job_status,
+)
+from app.foundation_models import ExternalObject, FileObject, Organization, Person, SourceSystem
 from app.inventory_models import (
     CustodyAssignment,
     FormalMaterial,
@@ -787,7 +804,7 @@ def test_formal_inventory_router_is_read_only_and_uses_new_namespace():
     routes = {
         route.path: set(route.methods or ())
         for route in app.routes
-        if route.path.startswith("/api/v1/inventory")
+        if route.path.startswith("/api/v1/inventory/")
     }
     assert routes == {
         "/api/v1/inventory/summary": {"GET"},
@@ -803,3 +820,527 @@ def test_formal_inventory_router_is_read_only_and_uses_new_namespace():
         if route.path.startswith("/api/v1/scan")
     }
     assert scan_routes == {"/api/v1/scan/qr": {"GET"}}
+
+
+def test_report_snapshot_refuses_unestablished_opening(db):
+    values = _seed_inventory(db)
+    actor = _principal(
+        user_id=values["user"].id,
+        person_id=values["person"].id,
+        role_code="provincial_manager",
+        scope_type="organization",
+        scope_id=str(values["region"].id),
+    )
+    with pytest.raises(InventoryReadError) as missing_export:
+        capture_inventory_report_snapshot(db, actor=actor)
+    assert missing_export.value.code == "inventory_report_export_denied"
+    actor = _with_report_export(actor)
+    with pytest.raises(InventoryReadError) as captured:
+        capture_inventory_report_snapshot(db, actor=actor)
+    assert captured.value.code == "inventory_report_opening_not_established"
+
+
+def test_report_snapshot_requires_export_and_inventory_on_same_operational_grant(db):
+    values = _seed_inventory(db)
+    actor = _principal(
+        user_id=values["user"].id,
+        person_id=values["person"].id,
+        role_code="technician",
+        scope_type="person",
+        scope_id=str(values["person"].id),
+    )
+    separate_assignment = uuid.uuid4()
+    actor = replace(actor, entitlements=actor.entitlements + (
+        Entitlement(
+            assignment_id=separate_assignment,
+            role_code="provincial_manager",
+            scope_type="organization",
+            scope_id=str(values["region"].id),
+            resource="report",
+            action="export",
+            field_code="",
+            effect="allow",
+        ),
+    ))
+    with pytest.raises(InventoryReadError) as denied:
+        capture_inventory_report_snapshot(db, actor=actor)
+    assert denied.value.code == "inventory_report_export_denied"
+
+
+def test_report_snapshot_freezes_visible_accounts_and_cursor(db, monkeypatch):
+    values = _seed_inventory(db)
+    actor = _principal(
+        user_id=values["user"].id,
+        person_id=values["person"].id,
+        role_code="provincial_manager",
+        scope_type="organization",
+        scope_id=str(values["region"].id),
+    )
+    actor = _with_report_export(actor)
+    with pytest.raises(InventoryReadError) as stale:
+        capture_inventory_report_snapshot(db, actor=actor, expected_cursor=1)
+    assert stale.value.code == "inventory_report_cursor_changed"
+    with pytest.raises(InventoryReadError) as narrower:
+        capture_inventory_report_snapshot(
+            db, actor=actor, expected_account_ids=(),
+        )
+    assert narrower.value.code == "inventory_report_scope_changed"
+
+    # The synthetic fixture contains no approved opening. Replace only that
+    # proof to exercise the rest of the real inventory reader and SQL scope.
+    monkeypatch.setattr(
+        "app.formal_services.inventory_query._validated_opening_evidence",
+        lambda *args, **kwargs: SimpleNamespace(complete=True),
+    )
+    snapshot = capture_inventory_report_snapshot(db, actor=actor)
+    assert snapshot.ledger_cursor == 0
+    assert snapshot.account_ids == (values["account"].id,)
+    assert snapshot.assignment_ids == (actor.assignments[0].assignment_id,)
+    assert [(row.sku_code, row.quantity, row.serial_no) for row in snapshot.lines] == [
+        ("SKU-001", "0.000", None)
+    ]
+
+
+def _with_report_export(actor: FormalPrincipal) -> FormalPrincipal:
+    assignment = actor.assignments[0]
+    return replace(actor, entitlements=actor.entitlements + (
+        Entitlement(
+            assignment_id=assignment.assignment_id,
+            role_code=assignment.role_code,
+            scope_type=assignment.scope_type,
+            scope_id=assignment.scope_id,
+            resource="report",
+            action="export",
+            field_code="",
+            effect="allow",
+        ),
+    ))
+
+
+def test_report_job_freezes_scope_and_replays_only_same_snapshot(db, monkeypatch):
+    values = _seed_inventory(db)
+    actor = _with_report_export(_principal(
+        user_id=values["user"].id,
+        person_id=values["person"].id,
+        role_code="provincial_manager",
+        scope_type="organization",
+        scope_id=str(values["region"].id),
+    ))
+    # Existing inventory fixture has no formal login graph or approved opening.
+    # Keep the real account SQL, projection, job FK and idempotency paths.
+    monkeypatch.setattr(
+        "app.formal_services.inventory_report_jobs.load_formal_principal",
+        lambda *args, **kwargs: actor,
+    )
+    monkeypatch.setattr(
+        "app.formal_services.inventory_query._validated_opening_evidence",
+        lambda *args, **kwargs: SimpleNamespace(complete=True),
+    )
+    audits = []
+    monkeypatch.setattr(
+        "app.formal_services.inventory_report_jobs.append_audit_event",
+        lambda *args, **kwargs: audits.append(kwargs),
+    )
+
+    job, replayed = create_inventory_report_job(
+        db, actor=actor, idempotency_key="report-1", request_id="req-1",
+    )
+    assert not replayed
+    assert job.status == "queued"
+    assert job.parameters_jsonb == {"report": "inventory_balances", "filters": {}}
+    assert job.export_scope_jsonb == {
+        "version": 1,
+        "account_ids": [str(values["account"].id)],
+        "assignment_ids": [str(actor.assignments[0].assignment_id)],
+    }
+    assert job.export_ledger_cursor == 0
+    assert len(audits) == 1
+    same, replayed = create_inventory_report_job(
+        db, actor=actor, idempotency_key="report-1", request_id="req-1-retry",
+    )
+    assert replayed and same.id == job.id and len(audits) == 1
+    checked_actor, checked_snapshot = revalidate_inventory_report_job(db, job=job)
+    assert checked_actor.user_id == actor.user_id
+    assert checked_snapshot.account_ids == (values["account"].id,)
+
+    stale_cursor_job = SimpleNamespace(**{
+        name: getattr(job, name) for name in (
+            "job_type", "parameters_jsonb", "parameters_hash", "export_scope_jsonb",
+            "export_ledger_cursor", "export_authorization_version", "requested_by",
+        )
+    })
+    stale_cursor_job.export_ledger_cursor = 1
+    with pytest.raises(InventoryReadError) as cursor_changed:
+        revalidate_inventory_report_job(db, job=stale_cursor_job)
+    assert cursor_changed.value.code == "inventory_report_cursor_changed"
+
+    malformed_job = SimpleNamespace(**vars(stale_cursor_job))
+    malformed_job.export_ledger_cursor = 0
+    malformed_job.export_scope_jsonb = {"version": 1, "account_ids": ["wrong"], "assignment_ids": []}
+    with pytest.raises(InventoryReadError) as malformed:
+        revalidate_inventory_report_job(db, job=malformed_job)
+    assert malformed.value.code == "inventory_report_job_scope_invalid"
+
+    claim = claim_inventory_report_job(db, job_id=job.id, request_id="claim-1")
+    assert claim.status == "running" and claim.failure_code is None
+    assert claim.snapshot is not None and claim.snapshot.account_ids == (values["account"].id,)
+    with pytest.raises(InventoryReadError) as double_claim:
+        claim_inventory_report_job(db, job_id=job.id, request_id="claim-1-retry")
+    assert double_claim.value.code == "inventory_report_job_not_queued"
+
+    stored = []
+    heads = {}
+
+    def put_report_object(*, storage_key, file_id, sha256, payload):
+        stored.append((storage_key, file_id, sha256, len(payload)))
+        head = StoredObjectHead(
+            storage_key=storage_key,
+            size_bytes=len(payload),
+            mime_type=MIME_TYPE,
+            metadata={"sha256": sha256, "file-id": file_id},
+            etag=hashlib.md5(payload).hexdigest(),
+        )
+        heads[storage_key] = head
+        return head
+
+    storage = SimpleNamespace(
+        provider_code="aliyun_oss_v2",
+        put_report_object=put_report_object,
+        head_object=lambda *, storage_key: heads[storage_key],
+    )
+    complete, replayed = finish_inventory_report_job(
+        db, job_id=job.id, storage=storage, request_id="finish-1", allow_new_put=True,
+    )
+    assert not replayed and complete.status == "succeeded"
+    assert len(stored) == 1 and complete.result_sha256 == stored[0][2]
+    assert complete.result_size_bytes == stored[0][3]
+    from app.foundation_models import FileObject
+    file = db.get(FileObject, complete.result_file_id)
+    assert file.status == "available"
+    assert _validate_intent_metadata(file, allow_completed=True)["purpose"] == "inventory_report_export"
+    recovered, replayed = finish_inventory_report_job(
+        db, job_id=job.id, storage=storage, request_id="finish-1-retry", allow_new_put=False,
+    )
+    assert replayed and recovered.id == complete.id and len(stored) == 1
+
+    stale_job, _ = create_inventory_report_job(
+        db, actor=actor, idempotency_key="report-stale", request_id="req-stale-create",
+    )
+
+    values["user"].authorization_version = 2
+    db.flush()
+    stale_claim = claim_inventory_report_job(db, job_id=stale_job.id, request_id="claim-stale")
+    assert stale_claim.status == "failed"
+    assert stale_claim.failure_code == "inventory_report_actor_stale"
+    assert stale_claim.snapshot is None
+    assert stale_job.error_detail == "inventory_report_actor_stale"
+    with pytest.raises(InventoryReadError) as stale:
+        create_inventory_report_job(db, actor=actor, idempotency_key="report-1", request_id="req-stale")
+    assert stale.value.code == "inventory_report_actor_stale"
+
+
+def test_report_job_rejects_invalid_key_and_missing_export(db, monkeypatch):
+    values = _seed_inventory(db)
+    actor = _principal(
+        user_id=values["user"].id,
+        person_id=values["person"].id,
+        role_code="provincial_manager",
+        scope_type="organization",
+        scope_id=str(values["region"].id),
+    )
+    with pytest.raises(InventoryReadError) as invalid:
+        create_inventory_report_job(db, actor=actor, idempotency_key="bad key", request_id="req-1")
+    assert invalid.value.code == "inventory_report_idempotency_invalid"
+    monkeypatch.setattr(
+        "app.formal_services.inventory_report_jobs.load_formal_principal",
+        lambda *args, **kwargs: actor,
+    )
+    with pytest.raises(InventoryReadError) as denied:
+        create_inventory_report_job(db, actor=actor, idempotency_key="report-2", request_id="req-2")
+    assert denied.value.code == "inventory_report_export_denied"
+
+
+def test_report_result_rejects_ledger_change_after_private_object_put(db, monkeypatch):
+    values = _seed_inventory(db)
+    actor = _with_report_export(_principal(
+        user_id=values["user"].id,
+        person_id=values["person"].id,
+        role_code="provincial_manager",
+        scope_type="organization",
+        scope_id=str(values["region"].id),
+    ))
+    monkeypatch.setattr(
+        "app.formal_services.inventory_report_jobs.load_formal_principal",
+        lambda *args, **kwargs: actor,
+    )
+    monkeypatch.setattr(
+        "app.formal_services.inventory_query._validated_opening_evidence",
+        lambda *args, **kwargs: SimpleNamespace(complete=True),
+    )
+    monkeypatch.setattr(
+        "app.formal_services.inventory_report_jobs.append_audit_event",
+        lambda *args, **kwargs: None,
+    )
+    job, _ = create_inventory_report_job(
+        db, actor=actor, idempotency_key="report-drift", request_id="req-drift",
+    )
+    claim_inventory_report_job(db, job_id=job.id, request_id="claim-drift")
+    puts = []
+
+    def change_ledger_during_put(*, storage_key, file_id, sha256, payload):
+        puts.append(storage_key)
+        db.scalar(select(InventoryLedgerHead)).next_cursor = 2
+        return StoredObjectHead(
+            storage_key=storage_key,
+            size_bytes=len(payload),
+            mime_type=MIME_TYPE,
+            metadata={"sha256": sha256, "file-id": file_id},
+            etag=hashlib.md5(payload).hexdigest(),
+        )
+
+    storage = SimpleNamespace(
+        provider_code="aliyun_oss_v2",
+        put_report_object=change_ledger_during_put,
+    )
+    result, replayed = finish_inventory_report_job(
+        db, job_id=job.id, storage=storage, request_id="finish-drift", allow_new_put=True,
+    )
+    assert not replayed and result.status == "failed"
+    assert result.result_file_id is None and len(puts) == 1
+    from app.foundation_models import FileObject
+    assert db.scalar(select(FileObject.id)) is None
+
+
+def test_report_worker_claims_commits_and_recovers_exact_result(db, monkeypatch):
+    values = _seed_inventory(db)
+    actor = _with_report_export(_principal(
+        user_id=values["user"].id,
+        person_id=values["person"].id,
+        role_code="provincial_manager",
+        scope_type="organization",
+        scope_id=str(values["region"].id),
+    ))
+    monkeypatch.setattr(
+        "app.formal_services.inventory_report_jobs.load_formal_principal",
+        lambda *args, **kwargs: actor,
+    )
+    monkeypatch.setattr(
+        "app.formal_services.inventory_query._validated_opening_evidence",
+        lambda *args, **kwargs: SimpleNamespace(complete=True),
+    )
+    monkeypatch.setattr(
+        "app.formal_services.inventory_report_jobs.append_audit_event",
+        lambda *args, **kwargs: None,
+    )
+    job, _ = create_inventory_report_job(
+        db, actor=actor, idempotency_key="worker-job", request_id="worker-create",
+    )
+    job_id = job.id
+    db.commit()
+    heads = {}
+    puts = []
+
+    def put_report_object(*, storage_key, file_id, sha256, payload):
+        puts.append(storage_key)
+        head = StoredObjectHead(
+            storage_key=storage_key,
+            size_bytes=len(payload),
+            mime_type=MIME_TYPE,
+            metadata={"sha256": sha256, "file-id": file_id},
+            etag=hashlib.md5(payload).hexdigest(),
+        )
+        heads[storage_key] = head
+        return head
+
+    storage = SimpleNamespace(
+        provider_code="aliyun_oss_v2",
+        put_report_object=put_report_object,
+        head_object=lambda *, storage_key: heads[storage_key],
+    )
+    factory = sessionmaker(bind=db.get_bind(), expire_on_commit=False)
+    result = process_one_inventory_report(factory, storage=storage)
+    assert result.job_id == job_id and result.status == "succeeded" and not result.recovered
+    assert len(puts) == 1
+    replay = process_one_inventory_report(factory, storage=storage, job_id=job_id)
+    assert replay.job_id == job_id and replay.status == "succeeded" and replay.recovered
+    assert len(puts) == 1
+    assert process_one_inventory_report(factory, storage=storage).status == "idle"
+
+
+def test_report_worker_recovers_running_job_after_unknown_storage_result(db, monkeypatch):
+    values = _seed_inventory(db)
+    actor = _with_report_export(_principal(
+        user_id=values["user"].id,
+        person_id=values["person"].id,
+        role_code="provincial_manager",
+        scope_type="organization",
+        scope_id=str(values["region"].id),
+    ))
+    monkeypatch.setattr(
+        "app.formal_services.inventory_report_jobs.load_formal_principal",
+        lambda *args, **kwargs: actor,
+    )
+    monkeypatch.setattr(
+        "app.formal_services.inventory_query._validated_opening_evidence",
+        lambda *args, **kwargs: SimpleNamespace(complete=True),
+    )
+    monkeypatch.setattr(
+        "app.formal_services.inventory_report_jobs.append_audit_event",
+        lambda *args, **kwargs: None,
+    )
+    job, _ = create_inventory_report_job(
+        db, actor=actor, idempotency_key="worker-unknown", request_id="worker-unknown-create",
+    )
+    job_id = job.id
+    db.commit()
+    heads = {}
+    put_calls = []
+
+    def put_report_object(*, storage_key, file_id, sha256, payload):
+        put_calls.append(storage_key)
+        head = StoredObjectHead(
+            storage_key=storage_key,
+            size_bytes=len(payload),
+            mime_type=MIME_TYPE,
+            metadata={"sha256": sha256, "file-id": file_id},
+            etag=hashlib.md5(payload).hexdigest(),
+        )
+        heads[storage_key] = head
+        if len(put_calls) == 1:
+            raise FileStorageError("HEAD result unknown")
+        return head
+
+    def head_report_object(*, storage_key):
+        if storage_key not in heads:
+            raise FileStorageError("HEAD object unavailable")
+        return heads[storage_key]
+
+    storage = SimpleNamespace(
+        provider_code="aliyun_oss_v2",
+        put_report_object=put_report_object,
+        head_object=head_report_object,
+    )
+    factory = sessionmaker(bind=db.get_bind(), expire_on_commit=False)
+    with pytest.raises(FileStorageError):
+        process_one_inventory_report(factory, storage=storage)
+    with factory() as check:
+        pending = check.get(type(job), job_id)
+        assert pending.status == "running" and pending.result_file_id is None
+    key = put_calls[0]
+    original_head = heads.pop(key)
+    with pytest.raises(FileStorageError):
+        process_one_inventory_report(factory, storage=storage)
+    assert len(put_calls) == 1
+    heads[key] = replace(original_head, etag="0" * 32)
+    with pytest.raises(InventoryReadError) as mismatch:
+        process_one_inventory_report(factory, storage=storage)
+    assert mismatch.value.code == "inventory_report_result_unknown"
+    assert len(put_calls) == 1
+    heads[key] = original_head
+    completed = process_one_inventory_report(factory, storage=storage)
+    assert completed.job_id == job_id and completed.status == "succeeded"
+    assert len(put_calls) == 1
+
+
+def test_report_download_rechecks_authority_after_ledger_advances(db, monkeypatch):
+    values = _seed_inventory(db)
+    from app.foundation_models import AuditChainHead, AuditEvent
+    db.add(AuditChainHead(id=uuid.uuid4(), stream_key="inventory", version=0))
+    db.flush()
+    actor = _with_report_export(_principal(
+        user_id=values["user"].id,
+        person_id=values["person"].id,
+        role_code="provincial_manager",
+        scope_type="organization",
+        scope_id=str(values["region"].id),
+    ))
+    monkeypatch.setattr(
+        "app.formal_services.inventory_report_jobs.load_formal_principal",
+        lambda *args, **kwargs: actor,
+    )
+    monkeypatch.setattr(
+        "app.formal_services.inventory_report_download.load_formal_principal",
+        lambda *args, **kwargs: actor,
+    )
+    monkeypatch.setattr(
+        "app.formal_services.inventory_query._validated_opening_evidence",
+        lambda *args, **kwargs: SimpleNamespace(complete=True),
+    )
+    monkeypatch.setattr(
+        "app.formal_services.inventory_report_jobs.append_audit_event",
+        lambda *args, **kwargs: None,
+    )
+    job, _ = create_inventory_report_job(
+        db, actor=actor, idempotency_key="download-job", request_id="download-create",
+    )
+    job_id = job.id
+    db.commit()
+    heads = {}
+
+    def put_report_object(*, storage_key, file_id, sha256, payload):
+        head = StoredObjectHead(
+            storage_key=storage_key,
+            size_bytes=len(payload),
+            mime_type=MIME_TYPE,
+            metadata={"sha256": sha256, "file-id": file_id},
+            etag=hashlib.md5(payload).hexdigest(),
+        )
+        heads[storage_key] = head
+        return head
+
+    storage = SimpleNamespace(
+        provider_code="aliyun_oss_v2",
+        put_report_object=put_report_object,
+        head_object=lambda *, storage_key: heads[storage_key],
+        create_download_intent=lambda *, storage_key, ttl_seconds: DownloadIntent(
+            storage_key=storage_key,
+            url="https://private.example.invalid/download?signature=synthetic",
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=60),
+        ),
+    )
+    factory = sessionmaker(bind=db.get_bind(), expire_on_commit=False)
+    assert process_one_inventory_report(factory, storage=storage).status == "succeeded"
+    db.scalar(select(InventoryLedgerHead)).next_cursor = 2
+    db.commit()
+    with factory() as transaction:
+        report_status = get_inventory_report_job_status(transaction, actor=actor, job_id=job_id)
+    assert report_status.status == "succeeded" and report_status.file_available
+
+    with factory() as transaction:
+        signed = create_inventory_report_download_intent(
+            transaction, actor=actor, job_id=job_id, storage=storage,
+            request_id="download-intent-1", ttl_seconds=120,
+        )
+        transaction.commit()
+    assert signed.download_count == 1 and signed.url.startswith("https://")
+    with factory() as check:
+        events = check.scalars(select(AuditEvent).where(
+            AuditEvent.action == "inventory_report_download_intent",
+        )).all()
+        assert len(events) == 1 and events[0].after_jsonb["download_count"] == 1
+        assert check.get(type(job), job_id).download_count == 1
+    with factory() as transaction:
+        transaction.get(FileObject, signed.file_id).status = "quarantined"
+        transaction.commit()
+    with factory() as transaction:
+        assert not get_inventory_report_job_status(transaction, actor=actor, job_id=job_id).file_available
+    with factory() as transaction:
+        with pytest.raises(InventoryReadError) as replay:
+            create_inventory_report_download_intent(
+                transaction, actor=actor, job_id=job_id, storage=storage,
+                request_id="download-intent-1", ttl_seconds=120,
+            )
+    assert replay.value.code == "inventory_report_download_request_replayed"
+    values["user"].authorization_version = 2
+    db.commit()
+    with factory() as transaction:
+        with pytest.raises(InventoryReadError) as revoked:
+            create_inventory_report_download_intent(
+                transaction, actor=actor, job_id=job_id, storage=storage,
+                request_id="download-intent-2", ttl_seconds=120,
+            )
+    assert revoked.value.code == "inventory_report_actor_stale"
+    with factory() as transaction:
+        with pytest.raises(InventoryReadError) as status_denied:
+            get_inventory_report_job_status(transaction, actor=actor, job_id=job_id)
+    assert status_denied.value.code == "inventory_report_actor_stale"

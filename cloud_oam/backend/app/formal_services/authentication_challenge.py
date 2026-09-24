@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
+import hmac
 import ipaddress
 import json
 import math
@@ -582,6 +583,7 @@ def authorize_dispatch_provider_call(
     owner_token: str,
     request_id: str,
     minimum_remaining_seconds: int,
+    current_dispatch_request_profile_sha256: str | None = None,
     now: datetime | None = None,
 ) -> bool:
     """Lock and authorize one imminent provider call in the outer transaction.
@@ -636,6 +638,20 @@ def authorize_dispatch_provider_call(
                     action="authentication.sms.dispatch_uncertain",
                     outcome="uncertain",
                     reason_code="dispatch_start_window_elapsed",
+                    request_id=checked_request_id,
+                    occurred_at=effective_at,
+                )
+                return False
+            if not _dispatch_profile_matches(dispatch, current_dispatch_request_profile_sha256):
+                dispatch.uncertain_at = effective_at
+                _transition_dispatch(
+                    db,
+                    challenge=challenge,
+                    dispatch=dispatch,
+                    to_status="uncertain",
+                    action="authentication.sms.dispatch_uncertain",
+                    outcome="uncertain",
+                    reason_code="provider_configuration_changed",
                     request_id=checked_request_id,
                     occurred_at=effective_at,
                 )
@@ -704,6 +720,7 @@ def begin_verify(
     provider: str,
     client_type: str,
     request_id: str,
+    current_dispatch_request_profile_sha256: str | None = None,
     now: datetime | None = None,
     deferred_events: list[DeferredChallengeAuditEvent] | None = None,
 ) -> VerificationAttempt:
@@ -730,6 +747,7 @@ def begin_verify(
             )
             if challenge is None:
                 raise _error("challenge_unavailable", "unauthorized", PUBLIC_INVALID_MESSAGE)
+            _require_provider_managed_challenge(challenge)
             dispatch = (
                 _locked_dispatch(db, challenge.id)
                 if challenge.verification_mode == "provider_managed"
@@ -799,6 +817,15 @@ def begin_verify(
                             "challenge_not_sent",
                             "conflict",
                             "请求状态冲突",
+                        )
+                    if not _dispatch_profile_matches(dispatch, current_dispatch_request_profile_sha256):
+                        # No attempt, dispatch transition or provider call is
+                        # authorized by a challenge prepared under another
+                        # configuration. Restoring it can use this same row.
+                        raise _error(
+                            "provider_configuration_changed",
+                            "service_unavailable",
+                            PUBLIC_SERVICE_MESSAGE,
                         )
                     if dispatch.status == "sending":
                         if _as_utc(dispatch.lease_expires_at) > effective_at:
@@ -876,6 +903,7 @@ def finish_verify(
             challenge = _locked_challenge(db, checked_id)
             if challenge is None:
                 raise _error("challenge_not_found", "unauthorized", PUBLIC_INVALID_MESSAGE)
+            _require_provider_managed_challenge(challenge)
             if verified and challenge.status == "verified":
                 return _lifecycle_result(challenge, replayed=True)
             if challenge.status != "pending" or challenge.attempts <= 0:
@@ -988,6 +1016,7 @@ def consume_verified(
             challenge = _locked_challenge(db, checked_id)
             if challenge is None:
                 raise _error("challenge_not_found", "unauthorized", PUBLIC_INVALID_MESSAGE)
+            _require_provider_managed_challenge(challenge)
             if challenge.status == "consumed":
                 return _lifecycle_result(challenge, replayed=True)
             if challenge.status != "verified" or challenge.verified_at is None:
@@ -1399,12 +1428,7 @@ def _new_dispatch(
     request_profile_sha256: str,
     created_at: datetime,
 ) -> SmsChallengeDispatch:
-    request_sha256 = hashlib.sha256(
-        (
-            "formal-sms-dispatch-request-v1|"
-            f"{challenge.id}|{request_profile_sha256}"
-        ).encode("utf-8")
-    ).hexdigest()
+    request_sha256 = _dispatch_request_digest(challenge.id, request_profile_sha256)
     return SmsChallengeDispatch(
         challenge_id=challenge.id,
         provider=provider,
@@ -1799,6 +1823,34 @@ def _require_hash(field: str, value: str) -> str:
     if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
         raise _error(f"invalid_{field}", "invalid_request", "请求参数无效")
     return value
+
+
+def _dispatch_profile_matches(dispatch: SmsChallengeDispatch, current: str | None) -> bool:
+    stored = dispatch.request_sha256
+    return (
+        isinstance(stored, str)
+        and _SHA256.fullmatch(stored) is not None
+        and isinstance(current, str)
+        and _SHA256.fullmatch(current) is not None
+        and hmac.compare_digest(stored, _dispatch_request_digest(dispatch.challenge_id, current))
+    )
+
+
+def _require_provider_managed_challenge(challenge: LoginChallenge) -> None:
+    # Historic hashes/unknown material are retained as evidence, never treated
+    # as proof supplied by today's PNVS client, including lifecycle replays.
+    if challenge.verification_mode != "provider_managed":
+        raise _error(
+            "challenge_verification_mode_unsupported",
+            "service_unavailable",
+            PUBLIC_SERVICE_MESSAGE,
+        )
+
+
+def _dispatch_request_digest(challenge_id: uuid.UUID, profile: str) -> str:
+    return hashlib.sha256(
+        f"formal-sms-dispatch-request-v1|{challenge_id}|{profile}".encode("utf-8")
+    ).hexdigest()
 
 
 def _require_provider(value: str) -> str:

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   api,
+  apiBinary,
   apiNoReplay,
   createAuthenticationRefreshCoordinator,
   createIdempotencyKey,
@@ -213,6 +214,24 @@ describe("API transport quarantine", () => {
     expect(headHeaders.has("X-Request-ID")).toBe(false);
     expect(getHeaders.has("Idempotency-Key")).toBe(false);
     expect(headHeaders.has("Idempotency-Key")).toBe(false);
+  });
+
+  it("preserves explicit XLSX content type and returns binary without JSON parsing", async () => {
+    const mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    const source = new Blob(["xlsx-bytes"], { type: mime });
+    const fetchMock = vi.fn().mockResolvedValue(new Response(source, {
+      status: 200, headers: { "Content-Type": mime },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await apiBinary("/v1/stocktakes/opening/imports/opening-count/error-report", {
+      method: "POST", body: source, headers: { "Content-Type": mime }, cache: "no-store",
+    });
+    expect(await response.text()).toBe("xlsx-bytes");
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get("Content-Type")).toBe(mime);
+    expect(init.body).toBe(source);
+    expect(init.credentials).toBe("include");
+    expect(init.cache).toBe("no-store");
   });
 
   it("forces no-store for exact identity reads without changing ordinary GET caching", async () => {

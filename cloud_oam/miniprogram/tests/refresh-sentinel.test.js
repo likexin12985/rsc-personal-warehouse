@@ -318,7 +318,7 @@ test('an uncertain explicit-login transport keeps the pending sentinel and start
   assert.equal(storage.has(USER_KEY), false)
   assert.equal(storage.has(SENTINEL_KEY), false)
   appDefinition.onLaunch()
-  assert.equal(reLaunchUrl, '/pages/login/index')
+  assert.equal(reLaunchUrl, '')
 })
 
 test('hard process death during explicit login leaves a mixed tuple guarded by login pending and restart removes it', (context) => {
@@ -351,7 +351,7 @@ test('hard process death during explicit login leaves a mixed tuple guarded by l
   assert.equal(crash.persisted.has(USER_KEY), false)
   assert.equal(crash.persisted.has(SENTINEL_KEY), false)
   appDefinition.onLaunch()
-  assert.equal(reLaunchUrl, '/pages/login/index')
+  assert.equal(reLaunchUrl, '')
 })
 
 test('hard process death during explicit logout cannot auto-restore a residual refresh token', (context) => {
@@ -382,7 +382,7 @@ test('hard process death during explicit logout cannot auto-restore a residual r
   assert.equal(crash.persisted.has(USER_KEY), false)
   assert.equal(crash.persisted.has(SENTINEL_KEY), false)
   appDefinition.onLaunch()
-  assert.equal(reLaunchUrl, '/pages/login/index')
+  assert.equal(reLaunchUrl, '')
 })
 
 test('a process crash before transport leaves pending state that a simulated app restart consumes', (context) => {
@@ -421,7 +421,7 @@ test('a process crash before transport leaves pending state that a simulated app
   assert.equal(storage.has(SENTINEL_KEY), false)
   assert.equal(storage.get(DEVICE_KEY), 'device-sensitive')
   appDefinition.onLaunch()
-  assert.equal(reLaunchUrl, '/pages/login/index')
+  assert.equal(reLaunchUrl, '')
 })
 
 test('an unknown persisted refresh state clears the session before creating a new key or refresh request', async (context) => {

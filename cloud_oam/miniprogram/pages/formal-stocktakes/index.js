@@ -3,6 +3,7 @@ const session = require('../../utils/session')
 const { stocktakeAccessDecision } = require('../../utils/production-guard')
 const { preparationActor } = require('../../utils/opening-start-options')
 const { emptyView, createPreparationController } = require('../../utils/opening-start-preparation')
+const { emptyStartView, createStartController } = require('../../utils/opening-start-workflow')
 const {
   validateOpeningStocktakePage,
   stocktakeStatusLabel,
@@ -33,7 +34,9 @@ Page({
     accessMessage: '正在校验正式盘点权限',
     tasks: [],
     canPrepare: false,
-    preparation: emptyView()
+    preparation: emptyView(),
+    openingStart: emptyStartView(),
+    startFreezeOptions: ['整范围冻结', '按截止流水回算']
   },
 
   onShow() {
@@ -60,10 +63,32 @@ Page({
   preparationController() {
     if (!this._preparationController) this._preparationController = createPreparationController({
       currentIdentity: () => session.getUser(),
-      publish: (preparation) => this.setData({ preparation })
+      publish: (preparation) => this.setData({ preparation }),
+      onSelection: (selection) => { void this.startController().select(selection) }
     })
     return this._preparationController
   },
+
+  startController() {
+    if (!this._startController) this._startController = createStartController({
+      currentIdentity: () => session.getUser(),
+      publish: (openingStart) => this.setData({ openingStart }),
+      confirmSeal: (content) => new Promise((resolve) => wx.showModal({ title: '终结原启动请求', content,
+        confirmText: '确认终结', success: (value) => resolve(value.confirm === true), fail: () => resolve(false) })),
+      open: (task) => wx.navigateTo({ url: `/pages/formal-stocktake-detail/index?task_id=${encodeURIComponent(task)}` })
+    })
+    return this._startController
+  },
+  refreshStartBatches() { return this.startController().refreshBatches() },
+  moreStartBatches() { return this.startController().moreBatches() },
+  selectStartBatch(event) { this.startController().selectBatch(event.detail.value) },
+  addStartScope() { this.startController().addScope() },
+  removeStartScope(event) { this.startController().removeScope(event.currentTarget.dataset.index) },
+  editStart(event) { this.startController().edit(event.currentTarget.dataset.field, event.detail.value) },
+  submitStart() { return this.startController().submit() },
+  recoverStart() { return this.startController().recover() },
+  sealStart() { return this.startController().seal() },
+  openStartedTask() { this.startController().open() },
 
   togglePreparation() { return this.preparationController().toggle() },
   refreshPreparation(event) { return this.preparationController().refresh(event.currentTarget.dataset.stage) },

@@ -1,0 +1,319 @@
+{
+  "completed_at": "2026-09-21T00:42:33.313614+00:00",
+  "content_sha256": "fb5945c5feb5f9e60892ff8c2ed868abfe4fa6d73c00b5dd2eed8f2fbb585a30",
+  "counts": {
+    "inventory_movements": 3,
+    "inventory_transactions": 3,
+    "organizations": 2,
+    "stock_accounts": 7,
+    "stock_locations": 8
+  },
+  "cutoff_cursor": 3,
+  "facts": {
+    "inventory_movements": [
+      {
+        "external_boundary_code": "approved-opening-stocktake",
+        "from_account_id": null,
+        "id": "94c15bae-03bf-4c83-8709-947ed9cba516",
+        "line_no": 1,
+        "quantity": "1.000",
+        "to_account_id": "181fd2e8-257e-47df-903c-fd618e7f7730",
+        "transaction_id": "7ad3c245-4fc4-4a7d-bb8e-c9e3fbee1c70"
+      },
+      {
+        "external_boundary_code": "PG16_PITR_SYNTHETIC",
+        "from_account_id": null,
+        "id": "27412685-e2ec-4352-b120-63a674d3f5e0",
+        "line_no": 1,
+        "quantity": "1.000",
+        "to_account_id": "8a2da3da-7fc6-4adb-92c6-d6bbffc68420",
+        "transaction_id": "c6b180dc-e762-422a-aa1d-a76b6b025e27"
+      },
+      {
+        "external_boundary_code": null,
+        "from_account_id": "8a2da3da-7fc6-4adb-92c6-d6bbffc68420",
+        "id": "425efbfb-0695-403f-94a0-860a951e7d22",
+        "line_no": 1,
+        "quantity": "1.000",
+        "to_account_id": "fd052f2b-49c6-4565-b27e-0b3d37d8f180",
+        "transaction_id": "f8c9bf7f-d56f-433c-b89b-28f0e0889e7d"
+      }
+    ],
+    "inventory_transactions": [
+      {
+        "effective_at": "2026-09-20T21:06:20.914695+00:00",
+        "id": "7ad3c245-4fc4-4a7d-bb8e-c9e3fbee1c70",
+        "ledger_cursor": 1,
+        "movement_type": "opening",
+        "posted_at": "2026-09-20T21:06:24.241279+00:00",
+        "reversed_transaction_id": null,
+        "status": "posted"
+      },
+      {
+        "effective_at": "2026-09-20T21:06:33.184798+00:00",
+        "id": "c6b180dc-e762-422a-aa1d-a76b6b025e27",
+        "ledger_cursor": 2,
+        "movement_type": "inbound",
+        "posted_at": "2026-09-20T21:06:33.631047+00:00",
+        "reversed_transaction_id": null,
+        "status": "posted"
+      },
+      {
+        "effective_at": "2026-09-20T21:06:33.184798+00:00",
+        "id": "f8c9bf7f-d56f-433c-b89b-28f0e0889e7d",
+        "ledger_cursor": 3,
+        "movement_type": "reserve",
+        "posted_at": "2026-09-20T21:06:34.119487+00:00",
+        "reversed_transaction_id": null,
+        "status": "posted"
+      }
+    ],
+    "organizations": [
+      {
+        "code": "ORG-c21a43615547",
+        "id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+        "org_type": "region_company",
+        "parent_id": "4eda4712-2d9e-4d82-aa9e-b6c22e4a6737",
+        "status": "active"
+      },
+      {
+        "code": "ORG-b170e26e5f8e",
+        "id": "4eda4712-2d9e-4d82-aa9e-b6c22e4a6737",
+        "org_type": "headquarters",
+        "parent_id": null,
+        "status": "active"
+      }
+    ],
+    "stock_accounts": [
+      {
+        "availability_bucket": "available",
+        "condition_code": "new",
+        "custodian_person_id": null,
+        "id": "1358b9bd-4762-4c05-bfcd-c7f72e381528",
+        "location_id": "fa52aa5c-e6af-47f5-808d-283600a6c50b",
+        "lot_id": null,
+        "material_id": "5a9c5c7f-8aef-4ede-8898-32e0594405e9",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f"
+      },
+      {
+        "availability_bucket": "available",
+        "condition_code": "new",
+        "custodian_person_id": null,
+        "id": "181fd2e8-257e-47df-903c-fd618e7f7730",
+        "location_id": "126328d6-bedd-4c16-9342-d8093689276f",
+        "lot_id": null,
+        "material_id": "5a9c5c7f-8aef-4ede-8898-32e0594405e9",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f"
+      },
+      {
+        "availability_bucket": "available",
+        "condition_code": "new",
+        "custodian_person_id": null,
+        "id": "2969904b-0fa0-46ab-8c28-dcb77e99bf6e",
+        "location_id": "9169c73d-152c-4c8e-a82d-3e23b934c904",
+        "lot_id": null,
+        "material_id": "5a9c5c7f-8aef-4ede-8898-32e0594405e9",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f"
+      },
+      {
+        "availability_bucket": "available",
+        "condition_code": "new",
+        "custodian_person_id": null,
+        "id": "8a2da3da-7fc6-4adb-92c6-d6bbffc68420",
+        "location_id": "092d25d9-84a1-4eb3-a487-763fc30a61a3",
+        "lot_id": null,
+        "material_id": "00fcdbfd-58f2-4eef-ba26-5b62230d0a00",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f"
+      },
+      {
+        "availability_bucket": "available",
+        "condition_code": "new",
+        "custodian_person_id": null,
+        "id": "8c9c3702-7e3d-42fc-880b-3987c0fec215",
+        "location_id": "69b48b8b-4b37-455a-aaf8-8eec080c6f57",
+        "lot_id": null,
+        "material_id": "00fcdbfd-58f2-4eef-ba26-5b62230d0a00",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f"
+      },
+      {
+        "availability_bucket": "available",
+        "condition_code": "new",
+        "custodian_person_id": null,
+        "id": "9775e9ed-985d-4f1c-ad0f-44ac7baa0b44",
+        "location_id": "6e71aa18-fd50-4d4f-af7f-e1bcd028b26f",
+        "lot_id": null,
+        "material_id": "5a9c5c7f-8aef-4ede-8898-32e0594405e9",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f"
+      },
+      {
+        "availability_bucket": "reserved",
+        "condition_code": "new",
+        "custodian_person_id": null,
+        "id": "fd052f2b-49c6-4565-b27e-0b3d37d8f180",
+        "location_id": "092d25d9-84a1-4eb3-a487-763fc30a61a3",
+        "lot_id": null,
+        "material_id": "00fcdbfd-58f2-4eef-ba26-5b62230d0a00",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f"
+      }
+    ],
+    "stock_locations": [
+      {
+        "code": "PG16-SN-REPLAY-092D25D984A14EB3",
+        "custodian_person_id": "2d6eca80-a87d-4582-8f66-9eca7b48374f",
+        "id": "092d25d9-84a1-4eb3-a487-763fc30a61a3",
+        "location_type": "region",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+        "parent_id": null,
+        "status": "active"
+      },
+      {
+        "code": "PG16-CONCURRENT-PEER-108C07D8EDF445DE",
+        "custodian_person_id": "2d6eca80-a87d-4582-8f66-9eca7b48374f",
+        "id": "108c07d8-edf4-45de-a214-d7e4f8947aef",
+        "location_type": "region",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+        "parent_id": null,
+        "status": "active"
+      },
+      {
+        "code": "PG16-DIFFERENCE-PEER-126328D6BEDD4C16",
+        "custodian_person_id": "2d6eca80-a87d-4582-8f66-9eca7b48374f",
+        "id": "126328d6-bedd-4c16-9342-d8093689276f",
+        "location_type": "region",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+        "parent_id": null,
+        "status": "active"
+      },
+      {
+        "code": "PG16-CONCURRENT-69B48B8B4B37455A",
+        "custodian_person_id": "2d6eca80-a87d-4582-8f66-9eca7b48374f",
+        "id": "69b48b8b-4b37-455a-aaf8-8eec080c6f57",
+        "location_type": "region",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+        "parent_id": null,
+        "status": "active"
+      },
+      {
+        "code": "PG16-DYNAMIC-PEER-6E71AA18FD504D4F",
+        "custodian_person_id": "2d6eca80-a87d-4582-8f66-9eca7b48374f",
+        "id": "6e71aa18-fd50-4d4f-af7f-e1bcd028b26f",
+        "location_type": "region",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+        "parent_id": null,
+        "status": "active"
+      },
+      {
+        "code": "PG16-STK-9169C73D152C4C8E",
+        "custodian_person_id": "2d6eca80-a87d-4582-8f66-9eca7b48374f",
+        "id": "9169c73d-152c-4c8e-a82d-3e23b934c904",
+        "location_type": "region",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+        "parent_id": null,
+        "status": "active"
+      },
+      {
+        "code": "PG16-PUBLISHED-TRANSIT-edab5bf5a0c743838158619919a2eca9",
+        "custodian_person_id": null,
+        "id": "920e308f-c548-4b05-92f9-20dfbc610dce",
+        "location_type": "transit",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+        "parent_id": "9169c73d-152c-4c8e-a82d-3e23b934c904",
+        "status": "active"
+      },
+      {
+        "code": "PG16-RECOUNT-FA52AA5CE6AF47F5",
+        "custodian_person_id": "2d6eca80-a87d-4582-8f66-9eca7b48374f",
+        "id": "fa52aa5c-e6af-47f5-808d-283600a6c50b",
+        "location_type": "region",
+        "owner_org_id": "34572b4f-8e74-48ff-9dae-33bb499fe69f",
+        "parent_id": null,
+        "status": "active"
+      }
+    ]
+  },
+  "ledger_head": {
+    "id": "40000000-0000-4000-8000-000000000001",
+    "next_cursor": 4,
+    "stream_key": "inventory"
+  },
+  "observation": {
+    "captured_at": "2026-09-21T00:42:33.302020+00:00",
+    "database_name": "rsc_pg16_release_gate",
+    "role_name": "rsc_reconciliation_capture",
+    "server_version": 160015,
+    "session_role": "rsc_reconciliation_capture",
+    "snapshot_id": "764:764:"
+  },
+  "operator_authority_verified": false,
+  "owner_and_location_scope_distinct": true,
+  "persisted": false,
+  "production_schema_verified": false,
+  "region_resolution_pending": true,
+  "rls_policy_checks": [
+    {
+      "dedicatedSelectOnly": true,
+      "restrictiveReadPoliciesAbsent": true,
+      "table": "organizations",
+      "usingTrue": true
+    }
+  ],
+  "schema": "rsc.daily_raw_ledger_capture_candidate.v1",
+  "table_checks": [
+    {
+      "owns_table": false,
+      "readable": true,
+      "relforcerowsecurity": false,
+      "relkind": "r",
+      "relname": "inventory_ledger_heads",
+      "relrowsecurity": false,
+      "writable": false
+    },
+    {
+      "owns_table": false,
+      "readable": true,
+      "relforcerowsecurity": false,
+      "relkind": "r",
+      "relname": "inventory_movements",
+      "relrowsecurity": false,
+      "writable": false
+    },
+    {
+      "owns_table": false,
+      "readable": true,
+      "relforcerowsecurity": false,
+      "relkind": "r",
+      "relname": "inventory_transactions",
+      "relrowsecurity": false,
+      "writable": false
+    },
+    {
+      "owns_table": false,
+      "readable": true,
+      "relforcerowsecurity": true,
+      "relkind": "r",
+      "relname": "organizations",
+      "relrowsecurity": true,
+      "writable": false
+    },
+    {
+      "owns_table": false,
+      "readable": true,
+      "relforcerowsecurity": false,
+      "relkind": "r",
+      "relname": "stock_accounts",
+      "relrowsecurity": false,
+      "writable": false
+    },
+    {
+      "owns_table": false,
+      "readable": true,
+      "relforcerowsecurity": false,
+      "relkind": "r",
+      "relname": "stock_locations",
+      "relrowsecurity": false,
+      "writable": false
+    }
+  ],
+  "transaction_isolation": "repeatable read",
+  "transaction_read_only": true
+}

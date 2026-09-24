@@ -1,0 +1,3 @@
+# The 0130 migration stores SQLAlchemy-compiled DDL verbatim and verifies it byte-for-byte.
+# The compiler emits spaces after commas in its multiline SQL; preserve that frozen input.
+20261109_0130_daily_reconciliation_cutoffs.py whitespace=-blank-at-eol

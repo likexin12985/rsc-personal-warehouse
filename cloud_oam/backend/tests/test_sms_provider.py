@@ -42,6 +42,7 @@ def _provider(*, response=None, error: Exception | None = None):
         sms_code_length=6,
         sms_interval_seconds=60,
         sms_scheme_name="RSC个人仓登录",
+        sms_sts_credential_ready=lambda **_: True,
     )
     provider.client = _RecordingClient(response=response, error=error)
     return provider
@@ -236,3 +237,120 @@ def test_verify_wraps_sdk_exception_without_secret_cause_or_retry() -> None:
     assert captured.value.__context__ is None
     assert MOBILE not in repr(captured.value)
     assert "246810" not in repr(captured.value)
+
+
+def test_request_profile_uses_actual_provider_settings_without_global_lookup(monkeypatch) -> None:
+    from app import sms
+    from app.config import Settings
+
+    sent_settings = Settings(_env_file=None, sms_provider="aliyun_pnvs", sms_scheme_name="sent-scheme")
+    expected = sms.sms_dispatch_request_profile_sha256(
+        mobile_hash="a" * 64, provider_settings=sent_settings,
+    )
+    changed = sent_settings.model_copy(update={"sms_scheme_name": "next-scheme"})
+    monkeypatch.setattr(sms, "get_settings", lambda: changed)
+    assert sms.sms_dispatch_request_profile_sha256(mobile_hash="a" * 64) != expected
+    assert sms.sms_dispatch_request_profile_sha256(
+        mobile_hash="a" * 64, provider_settings=sent_settings,
+    ) == expected
+
+
+def test_provider_keeps_same_configuration_for_profile_and_actual_call(monkeypatch) -> None:
+    from app import sms
+    from app.config import Settings
+
+    original = Settings(_env_file=None, sms_provider="aliyun_pnvs", sms_scheme_name="sent-scheme")
+    recording = _RecordingClient(response=_verify_response())
+    monkeypatch.setattr(sms, "get_settings", lambda: original)
+    monkeypatch.setattr(sms, "DypnsClient", lambda _: recording)
+    provider = sms.AliyunPnvsProvider()
+    profile = sms.sms_dispatch_request_profile_sha256(mobile_hash="a" * 64, provider_settings=provider.settings)
+    original.sms_scheme_name = "changed-after-construction"
+
+    assert provider.verify(MOBILE, "246810", OUT_ID) is True
+    assert recording.verify_calls[0][0].scheme_name == "sent-scheme"
+    assert sms.sms_dispatch_request_profile_sha256(mobile_hash="a" * 64, provider_settings=provider.settings) == profile
+
+
+def test_request_profile_allows_credential_rotation_without_changing_sms_contract() -> None:
+    from app import sms
+    from app.config import Settings
+
+    original = Settings(_env_file=None, sms_provider="aliyun_pnvs", sms_scheme_name="same-scheme")
+    rotated = original.model_copy(update={"sms_access_key_id": "synthetic-new-id", "sms_access_key_secret": "synthetic-new-secret"})
+    assert sms.sms_dispatch_request_profile_sha256(mobile_hash="a" * 64, provider_settings=original) == sms.sms_dispatch_request_profile_sha256(mobile_hash="a" * 64, provider_settings=rotated)
+
+
+def test_dedicated_sts_triplet_reaches_sdk_without_changing_sms_profile(monkeypatch) -> None:
+    from datetime import datetime, timedelta, timezone
+    from app import sms
+    from app.config import Settings
+
+    expiry = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    settings = Settings(_env_file=None, sms_provider="aliyun_pnvs",
+        sms_access_key_id="synthetic-sts-id", sms_access_key_secret="synthetic-sts-secret",
+        sms_security_token="synthetic-pnvs-token-" + "t" * 32,
+        sms_security_token_expires_at=expiry)
+    captured = []
+    monkeypatch.setattr(sms, "get_settings", lambda: settings)
+    monkeypatch.setattr(sms, "DypnsClient", lambda config: captured.append(config) or _RecordingClient())
+    provider = sms.AliyunPnvsProvider()
+
+    assert captured[0].access_key_id == settings.sms_access_key_id
+    assert captured[0].access_key_secret == settings.sms_access_key_secret
+    assert captured[0].security_token == settings.sms_security_token
+    assert provider.settings.sms_sts_credential_ready(minimum_validity_seconds=60)
+    rotated = settings.model_copy(update={"sms_access_key_id":"synthetic-next-id",
+        "sms_access_key_secret":"synthetic-next-secret",
+        "sms_security_token":"synthetic-next-token-" + "n" * 32})
+    assert sms.sms_dispatch_request_profile_sha256(mobile_hash="a" * 64, provider_settings=settings) == \
+        sms.sms_dispatch_request_profile_sha256(mobile_hash="a" * 64, provider_settings=rotated)
+
+
+def test_expired_sts_stops_before_paid_send_or_verify(monkeypatch) -> None:
+    from datetime import datetime, timedelta, timezone
+    from app import sms
+    from app.config import Settings
+
+    settings = Settings(_env_file=None, sms_provider="aliyun_pnvs",
+        sms_access_key_id="synthetic-sts-id", sms_access_key_secret="synthetic-sts-secret",
+        sms_security_token="synthetic-pnvs-token-" + "t" * 32,
+        sms_security_token_expires_at=(datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat())
+    monkeypatch.setattr(sms, "get_settings", lambda: settings)
+    monkeypatch.setattr(sms, "DypnsClient", lambda _: pytest.fail("expired token constructed SDK"))
+    with pytest.raises(SmsProviderError) as captured:
+        sms.AliyunPnvsProvider()
+    assert captured.value.__cause__ is None and captured.value.__context__ is None
+
+    provider = _provider(response=_response())
+    provider.settings.sms_sts_credential_ready = lambda **_: False
+    with pytest.raises(SmsProviderError):
+        provider.send(MOBILE, OUT_ID)
+    with pytest.raises(SmsProviderError):
+        provider.verify(MOBILE, "246810", OUT_ID)
+    assert provider.client.calls == [] and provider.client.verify_calls == []
+
+
+def test_pnvs_sdk_handler_is_removed_even_when_constructor_fails(monkeypatch) -> None:
+    import logging
+    from app import sms
+    from app.config import Settings
+
+    logger = logging.getLogger("alibabacloud-tea")
+    original = (logger.handlers[:], logger.disabled, logger.propagate)
+    monkeypatch.setattr(sms, "get_settings", lambda: Settings(_env_file=None))
+
+    def broken_client(_):
+        logger.disabled = False
+        logger.addHandler(logging.StreamHandler())
+        raise RuntimeError("synthetic credential-bearing SDK error")
+
+    monkeypatch.setattr(sms, "DypnsClient", broken_client)
+    try:
+        with pytest.raises(SmsProviderError) as captured:
+            sms.AliyunPnvsProvider()
+        assert captured.value.__cause__ is None and captured.value.__context__ is None
+        assert logger.disabled and not logger.propagate
+        assert len(logger.handlers) == 1 and isinstance(logger.handlers[0], logging.NullHandler)
+    finally:
+        logger.handlers, logger.disabled, logger.propagate = original
