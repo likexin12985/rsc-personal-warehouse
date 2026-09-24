@@ -23,7 +23,8 @@ GitHub 结果按下方准确 SHA 的回读状态记录。
 
 2026-09-25 当前 SHA `42d2d2a` 已推送；[Client release gate](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36042618167)
 已通过，[PostgreSQL 16 release gate](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36042618264)
-的 runtime 已在 0044 并发探针报 `TimeoutError`；static 第 0、1 片已通过，第 2 片仍运行。
+的最终结果为 failure：runtime 在 0044 并发探针超时；static 第 0、1 片通过，
+第 2 片因 Linux 容量测试诊断解析及旧依赖安装断言共 3 项失败。
 本地正在验证真实锁观测替代固定启动等待窗口的修复，并补了导入预检的
 解析/授权绑定摘要，不能将原 SHA 的结果外推至新工作树或宣称 PG16 已通过。
 新工作树的本地 PG16.15 空库迁移/运行权限、绑定摘要只读证明及合成期初/报表
@@ -35,7 +36,9 @@ Alembic 入口新增不可变编译缓存，仍逐次执行迁移脚本；启用
 离线 SQL、生产角色拒绝与加载器专项 22 项、期初/导入专项 150 项、拓扑 4 项通过。
 新建 PG16.15 实例的迁移/当前权限与合成期初/报表业务流复核通过且实例已停，
 证据 `artifacts/local-current-head-pg16/checks/run-79h2w4if/checks.json`。
-本地补充不代替 GitHub runtime；本段记录候选提交前证据，尚无新 SHA 的远端结果。
+上述修复已本地提交 `db5889c`。后续静态失败修复的四模块 48 项通过；
+真实隔离 Ubuntu/dash 运行同仓库的容量测试函数 17 项通过。备份生产脚本未改，
+字节限额与超限拒绝断言保留。本地补充不代替 GitHub runtime；尚无新 SHA 远端结果。
 
 ### P0 期初盘点 Excel 导入链的现行阻断
 

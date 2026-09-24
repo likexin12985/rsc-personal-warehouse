@@ -198,7 +198,12 @@ def test_postgresql16_gate_covers_main_prs_and_edge_role_provisioning() -> None:
         "backend/tests/test_stocktake_history_owner_migration.py",
     ):
         assert (ROOT / required_gate).is_file()
-    assert "pytest==9.1.1 pglast==7.18 httpx==0.28.1" in workflow
+    # Test tooling now uses the reviewed transitive hash lock, not inline pins.
+    assert "-r cloud_oam/backend/requirements-ci-test.lock" in workflow
+    assert "--require-hashes" in workflow
+    lock = (ROOT / "backend/requirements-ci-test.lock").read_text(encoding="utf-8")
+    for package in ("pytest==9.1.1", "pglast==7.18", "httpx==0.28.1"):
+        assert package + " " in lock
 
 
 def test_postgresql16_scratch_cleanup_always_restores_projector_connect() -> None:

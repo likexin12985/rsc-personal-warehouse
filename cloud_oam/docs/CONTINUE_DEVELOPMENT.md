@@ -11,9 +11,11 @@
 合并前后文件树完全相同，已推送到 `codex/notification-delivery-worker`。
 [Client release gate](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36042618167)
 在准确 SHA 上通过；[PostgreSQL 16 release gate](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36042618264)
-的 runtime 已失败，static 第 0、1 片已通过，第 2 片最近回读仍运行，尚无聚合终态。runtime
+的最终结论为 **failure**：runtime 失败，static 第 0、1 片通过，第 2 片失败。runtime
 在 `_assert_0044_preflight_serializes_projector_writer` 的 `future.result(timeout=30)`
-发生 `TimeoutError`；不能视为当前候选通过，也不要重复推送取消其他在跑作业。
+发生 `TimeoutError`。static 第 2 片为 3 failed / 2,311 passed：
+两个容量测试误将 Linux dash 的超限诊断当 JSON，另一测试仍要求旧的内联依赖安装。
+三片合计 6,850 passed / 3 failed / 3 skipped / 15 subtests passed；聚合门禁失败。
 原日志保存在 `artifacts/pilot-live-route-preflight-20260924/github-pg16-runtime-36042618264.log`。
 本次候选改动包括导入预检绑定摘要、迁移加载/锁等待修复及三份交接/验收文档。
 历史迁移版本与 CI 工作流未改；Alembic 运行入口新增仅复用编译结果的进程内缓存。
@@ -62,7 +64,15 @@ CodeType，不缓存执行字典或函数全局，每次仍执行脚本。解释
 `artifacts/local-current-head-pg16/checks/run-bgjxe5yt/checks.json`，只覆盖启用缓存前
 的代码；新缓存的结果需独立记录。所有本地补充均 `ciReleaseGate=false`，没有真实
 OSS/短信或生产验收。本节记录提交前复核；GitHub 链接仍对应旧 SHA，
-不得将本地候选验证写成远端通过。原 static 第 2 片终态前不推送取消该作业。
+不得将本地候选验证写成远端通过。上述迁移/绑定修复已独立提交为 `db5889c`。
+旧 CI 全部终态后，新增两处静态测试修复：实际文件限额通过子进程的独立 JSON 文件
+取证，继续严格检查字节上限、超限拒绝、清理及父进程不变；依赖检查改核对当前
+哈希锁及三个原版本。应用/备份生产脚本未改。
+聚焦四模块 **48 passed**；隔离 Ubuntu 24.04 的真实 dash/Python 3.12.3 执行
+仓库中容量测试函数 **17 cases passed**，含真实 tar 与三类生产者超限拒绝。
+日志见 `static-failures-fixed-20260925.log` 和 `linux-capacity-fixed-20260925.json`
+（同一 preflight artifacts 目录）。旧失败日志 `github-static-107778253986.log` 保留。
+本段记录后续修复提交前状态，推送后的准确 SHA 和 CI 仍须独立回读。
 仓库安全扫描 1,691 文件 PASS，`git diff --check` 通过；本轮未部署。
 
 ## 2026-09-25 提交前历史快照（以上方现行状态为准）

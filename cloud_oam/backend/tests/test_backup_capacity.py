@@ -24,11 +24,13 @@ def test_invalid_budget_refused_before_any_probe(tmp_path,budget):
 def test_measured_shell_cap_is_exact_bytes_and_parent_unchanged(tmp_path,extra):
     before=resource.getrlimit(resource.RLIMIT_FSIZE)
     writer=tmp_path/'writer.py'
-    writer.write_text('import os,resource,json\nprint(json.dumps(resource.getrlimit(resource.RLIMIT_FSIZE)),file=__import__("sys").stderr)\n'
+    # dash may emit a SIGXFSZ diagnostic from capacity_prepare before the
+    # child runs. Store the measured limit separately from shell diagnostics.
+    writer.write_text('import os,resource,json,sys\nwith open(sys.argv[1],"w") as proof: json.dump(resource.getrlimit(resource.RLIMIT_FSIZE),proof)\n'
         'data=b"x"*'+str(1048576+extra)+'\nwhile data:\n n=os.write(1,data);data=data[n:]\n')
-    result=shell(tmp_path,'. "$1"; capacity_prepare "$2" 8; capacity_run "$3" "$2/writer.py" > "$2/output"')
+    result=shell(tmp_path,'. "$1"; capacity_prepare "$2" 8; capacity_run "$3" "$2/writer.py" "$2/limits.json" > "$2/output"')
     assert (result.returncode==0)==(extra==0)
-    assert json.loads(result.stderr.splitlines()[0])==[1048576,1048576]
+    assert json.loads((tmp_path/'limits.json').read_text())==[1048576,1048576]
     assert (tmp_path/'output').stat().st_size==1048576
     assert not list(tmp_path.glob('.rsc-capacity.*'))
     assert resource.getrlimit(resource.RLIMIT_FSIZE)==before
