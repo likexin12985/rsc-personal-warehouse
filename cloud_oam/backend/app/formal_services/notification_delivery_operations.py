@@ -242,6 +242,8 @@ def _is_retryable(delivery: NotificationDelivery, attempt: NotificationAttempt |
         or attempt is None
         or attempt.attempt_no != delivery.attempts
         or not attempt.response_code
+        or (isinstance(attempt.response_jsonb, dict)
+            and attempt.response_jsonb.get("outcome") == "unknown")
     ):
         return False
     try:

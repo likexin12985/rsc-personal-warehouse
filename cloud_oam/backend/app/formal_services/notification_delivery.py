@@ -94,6 +94,26 @@ def claim_notification_deliveries(
             delivery.last_error = "notification event is cancelled or missing"
             delivery.updated_at = effective_at
             continue
+        if delivery.attempts:
+            previous = db.scalar(
+                select(NotificationAttempt).where(
+                    NotificationAttempt.delivery_id == delivery.id,
+                    NotificationAttempt.attempt_no == delivery.attempts,
+                )
+            )
+            if previous is None or not previous.response_code or (
+                isinstance(previous.response_jsonb, dict)
+                and previous.response_jsonb.get("outcome") == "unknown"
+            ):
+                # Older workers may already have requeued an uncertain send.
+                # Retain its immutable attempt and restore the failed projection
+                # before any provider call; unrelated queued deliveries continue.
+                delivery.status = "failed"
+                delivery.last_error = "previous provider outcome unknown"
+                delivery.locked_at = None
+                delivery.locked_by = None
+                delivery.updated_at = effective_at
+                continue
         delivery.status = "sending"
         delivery.attempts += 1
         delivery.locked_at = effective_at
@@ -134,6 +154,11 @@ def record_notification_delivery_result(
         raise NotificationDeliveryError("notification request hash is invalid")
     if response_json is not None and not isinstance(response_json, dict):
         raise NotificationDeliveryError("notification response evidence is invalid")
+    if response_json is not None and response_json.get("outcome") == "unknown":
+        # Preserve uncertainty even for callers outside the dispatcher.
+        response_code = None
+        provider_message_id = None
+        error = error or "provider outcome unknown"
     if provider_message_id is not None and not provider_message_id.strip():
         raise NotificationDeliveryError("provider message id is invalid")
     effective_at = _utc(now)
@@ -292,7 +317,9 @@ def retry_failed_notification_delivery(
             NotificationAttempt.attempt_no == expected_attempt_no,
         )
     )
-    if attempt is None or not attempt.response_code:
+    if (attempt is None or not attempt.response_code or (
+        isinstance(attempt.response_jsonb, dict) and attempt.response_jsonb.get("outcome") == "unknown"
+    )):
         raise NotificationDeliveryError("notification failure outcome is unknown")
     response_code = attempt.response_code.strip()
     try:

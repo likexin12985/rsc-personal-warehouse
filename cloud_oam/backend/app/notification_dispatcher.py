@@ -79,7 +79,7 @@ class ProviderResult:
     def unknown(cls, *, error: str, response_json: dict[str, Any] | None = None) -> "ProviderResult":
         return cls(
             response_code=None,
-            response_json={"outcome": "unknown", **(response_json or {})},
+            response_json={**(response_json or {}), "outcome": "unknown"},
             provider_message_id=None,
             error=error,
             uncertain=True,
@@ -146,6 +146,14 @@ def _adapter_result(adapter: NotificationProvider | Adapter, claim: Any) -> Prov
 
     if not isinstance(result, ProviderResult):
         return ProviderResult.unknown(error="provider adapter returned an invalid result")
+    if type(result.uncertain) is not bool:
+        return ProviderResult.unknown(error="provider adapter returned invalid uncertainty")
+    if result.uncertain or (
+        isinstance(result.response_json, dict) and result.response_json.get("outcome") == "unknown"
+    ):
+        # An observed HTTP code or an unverified message id cannot make an
+        # explicitly unknown send safe to repeat. Persist the canonical form.
+        return ProviderResult.unknown(error="provider outcome unknown")
     if result.provider_message_id is not None and (
         not isinstance(result.provider_message_id, str)
         or not result.provider_message_id.strip()
