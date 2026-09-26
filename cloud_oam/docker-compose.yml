@@ -156,6 +156,7 @@ services:
       OAM_STOCKTAKE_IDEMPOTENCY_HMAC_SECRET: ${OAM_STOCKTAKE_IDEMPOTENCY_HMAC_SECRET:-}
       OAM_FILE_STORAGE_ENABLED: ${OAM_FILE_STORAGE_ENABLED:-false}
       OAM_INVENTORY_REPORT_EXPORT_ENABLED: ${OAM_INVENTORY_REPORT_EXPORT_ENABLED:-false}
+      OAM_OPENING_COUNT_IMPORT_ENABLED: ${OAM_OPENING_COUNT_IMPORT_ENABLED:-false}
       OAM_FILE_STORAGE_PROVIDER: ${OAM_FILE_STORAGE_PROVIDER:-disabled}
       OAM_FILE_STORAGE_REGION: ${OAM_FILE_STORAGE_REGION:-}
       OAM_FILE_STORAGE_BUCKET: ${OAM_FILE_STORAGE_BUCKET:-}
@@ -365,6 +366,47 @@ services:
       OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
       OAM_DATABASE_SCHEMA_MODE: alembic
       OAM_INVENTORY_REPORT_EXPORT_ENABLED: ${OAM_INVENTORY_REPORT_EXPORT_ENABLED:-false}
+      OAM_FILE_STORAGE_ENABLED: ${OAM_FILE_STORAGE_ENABLED:-false}
+      OAM_FILE_STORAGE_PROVIDER: ${OAM_FILE_STORAGE_PROVIDER:-disabled}
+      OAM_FILE_STORAGE_REGION: ${OAM_FILE_STORAGE_REGION:-}
+      OAM_FILE_STORAGE_BUCKET: ${OAM_FILE_STORAGE_BUCKET:-}
+      OAM_FILE_IDEMPOTENCY_HMAC_SECRET: ${OAM_FILE_IDEMPOTENCY_HMAC_SECRET:-}
+      OSS_ACCESS_KEY_ID: ${OAM_FILE_STORAGE_ACCESS_KEY_ID:-}
+      OSS_ACCESS_KEY_SECRET: ${OAM_FILE_STORAGE_ACCESS_KEY_SECRET:-}
+      OSS_SESSION_TOKEN: ${OAM_FILE_STORAGE_SESSION_TOKEN:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [backend]
+
+  opening-count-import-worker:
+    image: ${RSC_API_IMAGE:-star-oam-api:0.9.0}
+    build: ./backend
+    profiles: [imports]
+    restart: on-failure:5
+    command:
+      - python
+      - -m
+      - app.opening_count_import_worker
+      - --poll-seconds
+      - "${OAM_OPENING_COUNT_IMPORT_POLL_SECONDS:-30}"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:size=256m,mode=1777,noexec,nosuid,nodev
+    mem_limit: 768m
+    cpus: 0.50
+    pids_limit: 64
+    stop_grace_period: 120s
+    environment:
+      OAM_ENVIRONMENT: production
+      OAM_DATABASE_URL: postgresql+psycopg://star_oam_api:${OAM_DB_API_PASSWORD}@db:5432/${POSTGRES_DB}
+      OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api
+      OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
+      OAM_DATABASE_SCHEMA_MODE: alembic
+      OAM_OPENING_COUNT_IMPORT_ENABLED: ${OAM_OPENING_COUNT_IMPORT_ENABLED:-false}
       OAM_FILE_STORAGE_ENABLED: ${OAM_FILE_STORAGE_ENABLED:-false}
       OAM_FILE_STORAGE_PROVIDER: ${OAM_FILE_STORAGE_PROVIDER:-disabled}
       OAM_FILE_STORAGE_REGION: ${OAM_FILE_STORAGE_REGION:-}

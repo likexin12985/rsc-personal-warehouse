@@ -562,7 +562,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
     stocktake_close_insert_tables = stocktake_close_read_tables - {
         "stocktake_close_transition_acks"
     }
-    stocktake_start_tables = {"stocktake_start_completions", "opening_start_command_seals"}
+    stocktake_start_tables = {"stocktake_start_completions", "opening_start_command_seals", "opening_import_command_seals"}
     daily_review_tables = {"daily_review_events","daily_review_bindings","daily_review_consumptions","daily_review_request_seals"}
     allocation_tables = {
         "stock_operation_return_inbound_seals",
@@ -675,7 +675,8 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "file_jobs": {
             "status", "started_at", "completed_at", "result_file_id",
             "result_sha256", "result_size_bytes", "error_detail",
-            "download_count", "updated_at",
+            "download_count", "updated_at", "import_preview_jsonb", "import_completion_id",
+            "confirmed_by", "error_file_id", "import_error_sha256", "import_error_size_bytes",
         },
         "inventory_serials": {"lifecycle_status", "updated_at"},
         "approval_external_registrations": {
@@ -889,6 +890,9 @@ def test_0036_formal_file_runtime_manifest_and_function_bodies_are_exact() -> No
             opening_source = runpy.run_path(str(FORMAL_FILE_MIGRATION_0036.with_name('20261119_0140_opening_count_source_purpose.py')))
             assert body == opening_source['OLD_BODY']
             body = opening_source['NEW_BODY']
+            import_job = runpy.run_path(str(FORMAL_FILE_MIGRATION_0036.with_name('20261120_0141_opening_count_import_jobs.py')))
+            assert body == import_job['FILE_OLD_BODY']
+            body = import_job['FILE_NEW_BODY']
         assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (
             FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
         )
@@ -7291,7 +7295,9 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 383
+    assert len(triggers) == 386
+    assert any(row["trigger_name"] == "trg_file_jobs_import_terminal_0141"
+               and row["table_name"] == "file_jobs" for row in triggers)
     assert len(functions) == 105
     _assert_material_request_approval_guards(
         triggers=triggers,

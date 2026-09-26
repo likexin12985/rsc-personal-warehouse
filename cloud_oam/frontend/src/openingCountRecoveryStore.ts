@@ -19,6 +19,7 @@ export interface OpeningCountLockManager {
 }
 export type OpeningCountTaskLease = Readonly<{
   read(): OpeningCountSentinelRead;
+  assertNoPendingImport(): void;
   persist(value: OpeningCountSentinel): void;
   clearExact(value: OpeningCountSentinel): void;
 }>;
@@ -28,6 +29,7 @@ export type OpeningCountRecoveryStore = Readonly<{
 }>;
 
 const PREFIX = "cloud-oam-opening-count-sentinel-v1:";
+export const OPENING_IMPORT_RECORD_PREFIX = "cloud-oam-opening-import-v1:";
 const LOCK_PREFIX = "cloud-oam-opening-count-task-v1:";
 const UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const TRACE = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/;
@@ -76,6 +78,7 @@ export async function withNoPendingOpeningCount<T>(
   id: string, work: () => Promise<T>, store: OpeningCountRecoveryStore = getOpeningCountRecoveryStore(),
 ): Promise<T> {
   return store.withTaskLease(id, async (lease) => {
+    lease.assertNoPendingImport();
     if (lease.read().kind !== "missing") {
       invalid("该任务有盘点请求待核验或恢复记录不可用；请先在盘点中心只读核验，禁止其他写入");
     }
@@ -133,7 +136,15 @@ export function createOpeningCountRecoveryStore(options: Readonly<{
           }
           const lease: OpeningCountTaskLease = Object.freeze({
             read() { requireLease(); return read(checkedTaskId); },
+            assertNoPendingImport() {
+              requireLease();
+              let pending: boolean;
+              try { pending = storage.getItem(OPENING_IMPORT_RECORD_PREFIX + checkedTaskId) !== null; }
+              catch { invalid("盘点导入恢复记录不可用，禁止其他写入"); }
+              if (pending) invalid("该任务有导入请求待核验，请先恢复原导入，禁止其他写入");
+            },
             persist(value: OpeningCountSentinel) {
+              lease.assertNoPendingImport();
               const checked = expected(value);
               const serialized = JSON.stringify(checked);
               const before = read(checkedTaskId);

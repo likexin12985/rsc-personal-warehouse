@@ -114,18 +114,27 @@ def run_owned_job(worker, payload, *, maximum_seconds=10):
     except BaseException as error:
         failure = error
     finally:
-        lease_tx.close()
-        result_rx.close()
-        result_tx.close()
-        lease_rx.close()
-        if started or child.pid is not None:
-            if child.is_alive():
-                child.kill()
-            child.join(timeout=1)
-            if child.is_alive():
-                # Do not falsely claim termination; retain the process identity.
-                raise ProcessEntryError('worker_cleanup_unconfirmed_pid_' + str(child.pid))
-            child.close()
+        try:
+            lease_tx.close()
+            result_rx.close()
+            result_tx.close()
+            lease_rx.close()
+        finally:
+            # A pipe cleanup error must not skip the owned process cleanup.
+            if started or child.pid is not None:
+                worker_pid = child.pid
+                try:
+                    if child.is_alive():
+                        child.kill()
+                    child.join(timeout=1)
+                    if child.is_alive():
+                        raise ProcessEntryError('worker_still_alive')
+                    child.close()
+                except Exception:
+                    # kill/join/status/close can raise ordinary OS errors.
+                    # Preserve identity and never downgrade these to a
+                    # reaped child's unknown business result.
+                    raise ProcessEntryError('worker_cleanup_unconfirmed_pid_' + str(worker_pid)) from None
     if isinstance(failure, (KeyboardInterrupt, SystemExit)):
         raise failure
     if observed is None or observed.get('outcome') != 'observed':

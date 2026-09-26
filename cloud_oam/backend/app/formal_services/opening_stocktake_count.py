@@ -552,14 +552,8 @@ def _submit_opening_stocktake_scope_count(
     checked_request_id = _require_request_id(request_id)
     key_hash = _storage_hash(checked_key)
 
-    _take_advisory_locks(
-        db,
-        (
-            _advisory_coordinate("opening-count-idempotency", key_hash),
-            _advisory_coordinate("opening-count-task", str(checked.task_id)),
-            _advisory_coordinate("opening-count-round", str(checked.round_id)),
-        ),
-    )
+    lock_opening_count_coordinates(db, task_id=checked.task_id,
+        round_id=checked.round_id, idempotency_key=checked_key)
 
     task = db.scalar(
         select(FormalStocktakeTask)
@@ -6840,6 +6834,25 @@ def _request_reference(raw: str) -> str:
         f"cloud_oam.opening_stocktake.scope_count.request.v1\0{raw}".encode()
     ).hexdigest()
     return f"opening-count-request-{digest}"
+
+
+def lock_opening_count_coordinates(
+    db: Session, *, task_id: uuid.UUID, round_id: uuid.UUID, idempotency_key: str,
+) -> None:
+    """Share the count advisory order before any task/job row is locked.
+
+    Import confirmation calls the count service inside its transaction. Taking
+    a task row first could deadlock against a manual count holding these locks.
+    This helper grants no authority and creates no count facts.
+    """
+    if not isinstance(task_id, uuid.UUID) or not isinstance(round_id, uuid.UUID):
+        _fail("opening_count_coordinates_invalid", "invalid_request", "盘点任务或轮次标识无效")
+    key_hash = _storage_hash(_require_idempotency_key(idempotency_key))
+    _take_advisory_locks(db, (
+        _advisory_coordinate("opening-count-idempotency", key_hash),
+        _advisory_coordinate("opening-count-task", str(task_id)),
+        _advisory_coordinate("opening-count-round", str(round_id)),
+    ))
 
 
 def _advisory_coordinate(namespace: str, value: str) -> int:

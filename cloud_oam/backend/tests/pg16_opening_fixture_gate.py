@@ -1,6 +1,7 @@
 """Actual published fixture and zero-opening prerequisites on owned PG16."""
 from dataclasses import replace
 from decimal import Decimal
+from hashlib import sha256
 from uuid import uuid4
 
 import pytest
@@ -20,7 +21,8 @@ from test_formal_access import make_organization, make_user, assign
 from test_postgresql16_release_gate import _establish_multiround_stocktake_location
 
 
-def run(engines, *, establish_dynamic_peer=False):
+def run(engines, *, establish_dynamic_peer=False, require_empty_inventory=True, owned_process_checks=False):
+    assert type(owned_process_checks) is bool
     owner=engines['star_oam_migrator'];api=engines['star_oam_api'];edge=engines['edge_inbox']
     with Session(owner) as db:
         hq=make_organization(db,name='Synthetic opening fixture HQ')
@@ -38,8 +40,14 @@ def run(engines, *, establish_dynamic_peer=False):
         replace_unlinked_database_failure_when=None)
     fixture['reconciliation_reviewer_id']=reviewer_id
     with Session(owner) as db:
-        assert not db.scalar(text('SELECT EXISTS (SELECT 1 FROM inventory_transactions)'))
-        assert not db.scalar(select(StockBalance.stock_account_id).limit(1))
+        if require_empty_inventory:
+            assert not db.scalar(text('SELECT EXISTS (SELECT 1 FROM inventory_transactions)'))
+            assert not db.scalar(select(StockBalance.stock_account_id).limit(1))
+        # The shared CI database also has older test graphs. These freshly
+        # published fixture accounts must still start without seeded balances.
+        fixture_accounts = [value for key, value in fixture.items() if key.endswith('_account_id')]
+        assert fixture_accounts and not db.scalar(select(StockBalance.stock_account_id).where(
+            StockBalance.stock_account_id.in_(fixture_accounts)).limit(1))
         policies={r.material_id:r for r in db.scalars(select(MaterialInventoryPolicy))}
         assert (policies[fixture['material_id']].tracking_mode,policies[fixture['material_id']].quantity_scale,
             policies[fixture['material_id']].allow_fraction)==('none',3,True)
@@ -73,7 +81,8 @@ def run(engines, *, establish_dynamic_peer=False):
         result.append(dict(case=label,bookSnapshotLines=count,controlSnapshotLines=1,taskClosed=True))
         print('Published fixture '+label+': real start/count/two reviews/post/close PASS',flush=True)
     result.append(_exercise_opening(owner,api,fixture,admin_id,manager_id,positive=False))
-    result.append(_exercise_opening(owner,api,fixture,admin_id,manager_id,positive=True))
+    result.append(_exercise_opening(owner,api,fixture,admin_id,manager_id,positive=True,
+        owned_process_checks=owned_process_checks))
     assert_reconciliation_event_migration(owner,api,edge)
     validate_production_database_security(api,expected_runtime_role='star_oam_api',expected_migration_role='star_oam_migrator')
     verify_edge_database_boundary(edge)
@@ -81,7 +90,8 @@ def run(engines, *, establish_dynamic_peer=False):
         migration_head=revision_connection.scalar(text('SELECT version_num FROM alembic_version'))
     return dict(status='passed',scope='local-native-pg16-opening-release-fixtures',migrationHead=migration_head,
         actualPostgreSQL16=True,reconciliationEventMigrationDriftRefused=True,publishedFixture=True,unmanagedControlSeedRemoved=True,policyTamperingRefused=True,
-        openingPrerequisites=result,githubReleaseGate=False,fullReleaseGate=False,productionAcceptance=False)
+        openingPrerequisites=result,owned_process_checks=owned_process_checks,
+        githubReleaseGate=False,fullReleaseGate=False,productionAcceptance=False)
 
 
 def _count_facts(engine):
@@ -97,7 +107,7 @@ def _count_facts(engine):
     return rows
 
 
-def _exercise_opening(owner, api, fixture, admin, manager, *, positive):
+def _exercise_opening(owner, api, fixture, admin, manager, *, positive, owned_process_checks=False):
     from app.formal_services import opening_stocktake as opening,opening_stocktake_count as count
     from app.formal_services import opening_stocktake_review as review,opening_stocktake_finalize as final
     from app.stocktake_models import FormalStocktakeScope,StocktakeDifference,InventoryFreeze
@@ -119,6 +129,9 @@ def _exercise_opening(owner, api, fixture, admin, manager, *, positive):
             assignee_user_id=manager,freeze_mode='hard') for location in locations),
         blind_count=True,deadline=fixture['deadline'],note='Real published fixture lifecycle'),'start')
     assert started.control_line_count==1 and started.snapshot_line_count==1
+    from pg16_opening_raw_insert_gate import assert_raw_opening_insert_rejected
+    assert_raw_opening_insert_rejected(api, task_id=started.task_id)
+    print("Raw opening: missing actor evidence and authorized noncanonical graph both refused PASS", flush=True)
     with Session(api) as db:
         scopes={r.location_id:r.id for r in db.scalars(select(FormalStocktakeScope).where(FormalStocktakeScope.task_id==started.task_id))}
     if not positive:
@@ -126,19 +139,20 @@ def _exercise_opening(owner, api, fixture, admin, manager, *, positive):
             round_id=started.initial_round_id,scope_id=scopes[locations[0]],snapshot=_count_facts)
         print('Immutable SN fixture: cross-table serial and case-folded QR duplicate writes rejected by real PG guards; all facts unchanged PASS',flush=True)
     for index,location in enumerate(locations):
-        observations=(count.OpeningPhysicalObservationInput(material_id=fixture['material_id'],
+        observations=(count.OpeningPhysicalObservationInput(
             material_identifier_raw=fixture['material_sku_code'],material_identifier_type='sku_code',condition_code='new',
             availability_bucket='available',counted_qty=Decimal(1),count_method='import'),) if positive else ()
         count_command=count.SubmitOpeningStocktakeScopeCountCommand(
             task_id=started.task_id,round_id=started.initial_round_id,scope_id=scopes[location],physical_observations=observations,
             zero_confirmed=index==1)
         if positive:
+            import_key=sha256((token+"-import-"+str(index)).encode()).hexdigest()
             before_prevalidation=_count_facts(owner)
             with Session(api) as db:
                 preview=count.prevalidate_opening_stocktake_scope_count(
                     db,actor=load_formal_principal(db,manager),command=count_command,
-                    idempotency_key=token+'-count-'+str(index),
-                    request_id=token+'-count-'+str(index))
+                    idempotency_key=import_key,
+                    request_id=import_key)
                 assert preview.observation_count==1
                 assert preview.pending_verification_input_ordinals==()
                 assert len(preview.binding_sha256)==64
@@ -146,7 +160,7 @@ def _exercise_opening(owner, api, fixture, admin, manager, *, positive):
             with Session(api) as db:
                 repeated=count.prevalidate_opening_stocktake_scope_count(
                     db,actor=load_formal_principal(db,manager),command=count_command,
-                    idempotency_key=token+'-count-'+str(index),
+                    idempotency_key=import_key,
                     request_id=token+'-count-recheck-'+str(index))
                 assert repeated.binding_sha256==preview.binding_sha256
                 db.commit()
@@ -157,7 +171,7 @@ def _exercise_opening(owner, api, fixture, admin, manager, *, positive):
                     count.confirm_prevalidated_opening_stocktake_scope_count(
                         db,actor=load_formal_principal(db,manager),command=count_command,
                         expected_prevalidation=replace(preview,binding_sha256='0'*64),
-                        idempotency_key=token+'-count-'+str(index),request_id=token+'-confirm-stale')
+                        idempotency_key=import_key,request_id=token+'-confirm-stale')
                 except count.OpeningStocktakeCountError as error:
                     assert error.code=='opening_import_confirmation_preview_changed'
                 else:
@@ -167,17 +181,16 @@ def _exercise_opening(owner, api, fixture, admin, manager, *, positive):
             with Session(api) as db:
                 proposed=count.confirm_prevalidated_opening_stocktake_scope_count(
                     db,actor=load_formal_principal(db,manager),command=count_command,
-                    expected_prevalidation=preview,idempotency_key=token+'-count-'+str(index),
+                    expected_prevalidation=preview,idempotency_key=import_key,
                     request_id=token+'-confirm-rollback')
                 assert proposed.scope_completed and not proposed.replayed
                 db.rollback()
             assert _count_facts(owner)==before_prevalidation
-            with Session(api) as db:
-                counted=count.confirm_prevalidated_opening_stocktake_scope_count(
-                    db,actor=load_formal_principal(db,manager),command=count_command,
-                    expected_prevalidation=preview,idempotency_key=token+'-count-'+str(index),
-                    request_id=token+'-confirm-commit')
-                db.commit()
+            from pg16_opening_import_job_gate import exercise_import_job
+            counted, import_job_evidence=exercise_import_job(
+                api, policy_engine=owner, actor_id=manager, command=count_command, preview=preview,
+                key=import_key, snapshot=lambda:_count_facts(owner), other_actor_id=admin,
+                owned_process_checks=owned_process_checks)
             print('Opening import confirmation: API role rejects stale preview; complete count rollback preserves all facts; same-key fresh transaction commits PASS',flush=True)
         else:
             counted=write(count.submit_opening_stocktake_scope_count,manager,count_command,'count-'+str(index))
@@ -252,6 +265,7 @@ def _exercise_opening(owner, api, fixture, admin, manager, *, positive):
         postedQuantity=str(posted.total_quantity),controlDifferencesAtPosting=int(positive),independentReconciliationApproved=positive,
         unresolvedControlAtClose=0,postReplayNoDuplicates=True,taskClosed=True,
         importBusinessPrevalidationReadOnly=positive,
+        importJob=(import_job_evidence if positive else None),
         importConfirmation=(dict(stalePreviewRejected=True,rollbackPreservesFacts=True,
             originalKeyReusableAfterRollback=True,apiRoleCommitted=True) if positive else None))
 

@@ -71,7 +71,14 @@ def _reuse_unchanged_alembic_script_directory():
                 or config.get_alembic_boolean_option("sourceless")):
             return actual_from_config(config)
         if cached is None:
-            cached = actual_from_config(config)
+            from migration_script_cache import cache_migration_compilation
+            with cache_migration_compilation(ROOT / "backend/alembic/versions"):
+                candidate = actual_from_config(config)
+                # ScriptDirectory constructs the revision map lazily. Warm
+                # that immutable map while the source-bound compiler cache
+                # is active, including for direct catalog tests outside env.py.
+                candidate.get_heads()
+            cached = candidate
         return cached
 
     patcher = pytest.MonkeyPatch()

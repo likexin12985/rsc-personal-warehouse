@@ -77,7 +77,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261119_0140"
+HEAD_REVISION = "20261120_0141"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7133,9 +7133,11 @@ def _head_runtime_ready_hash() -> str:
     # synthetic catalog checks call it for many mutations; re-running the
     # nested HEAD migration imports for each row is prohibitively expensive.
     import runpy
-    migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-        "20261119_0140_opening_count_source_purpose.py"
-    )))
+    from migration_script_cache import cache_migration_compilation
+    with cache_migration_compilation(STOCK_RESERVATIONS_MIGRATION_0069.parent):
+        migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
+            "20261120_0141_opening_count_import_jobs.py"
+        )))
     assert migration["revision"] == RUNTIME_READY_HEAD_REVISION
     return migration["NEW_READY_HASH"]
 
@@ -8891,60 +8893,9 @@ def _assert_0052_raw_opening_task_insert_rejected(
     *,
     task_id: uuid.UUID,
 ) -> None:
-    migration = _load_opening_terminal_guard_execution_migration_0052()
-    forged_task_id = uuid.uuid4()
-    suffix = f"-RAW-{forged_task_id.hex[:8].upper()}"
-    api_parameters = _connection_parameters(
-        role="star_oam_api",
-        password=_role_password("star_oam_api"),
-    )
-    with psycopg.connect(**api_parameters) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "INSERT INTO public.stocktake_tasks ("
-                "id, task_no, task_type, region_org_id, status, blind_count, "
-                "cutoff_ledger_cursor, cutoff_at, scope_manifest_sha256, "
-                "snapshot_manifest_sha256, control_source_system_id, "
-                "control_sync_run_id, control_snapshot_at, "
-                "control_manifest_sha256, current_round_no, "
-                "created_by_user_id, deadline, issued_at, frozen_at, "
-                "submitted_at, posted_at, closed_at, cancelled_at, version, "
-                "note, created_at, updated_at) "
-                "SELECT %s, task_no || %s, task_type, region_org_id, "
-                "'cancelled', blind_count, cutoff_ledger_cursor, cutoff_at, "
-                "scope_manifest_sha256, snapshot_manifest_sha256, "
-                "control_source_system_id, control_sync_run_id, "
-                "control_snapshot_at, control_manifest_sha256, "
-                "current_round_no, created_by_user_id, deadline, issued_at, "
-                "frozen_at, NULL, NULL, NULL, pg_catalog.clock_timestamp(), "
-                "version, note, created_at, pg_catalog.clock_timestamp() "
-                "FROM public.stocktake_tasks WHERE id = %s",
-                (forged_task_id, suffix, task_id),
-            )
-            assert cursor.rowcount == 1
-            with pytest.raises(psycopg.Error) as failure:
-                # The inherited 0047 deferred guard also rejects this forged
-                # row at COMMIT, but reports its own error contract.  Force
-                # the exact 0052 constraint so this assertion proves the new
-                # opening-insert guard rather than whichever deferred trigger
-                # PostgreSQL happens to evaluate first.
-                cursor.execute(
-                    sql.SQL("SET CONSTRAINTS {} IMMEDIATE").format(
-                        sql.Identifier(migration.INSERT_GUARD_TRIGGER)
-                    )
-                )
-            assert failure.value.sqlstate == "23514"
-            assert migration.OPENING_INSERT_ERROR in str(failure.value)
-        connection.rollback()
+    from pg16_opening_raw_insert_gate import assert_raw_opening_insert_rejected
 
-    with Session(api_engine) as session:
-        assert session.execute(
-            text(
-                "SELECT pg_catalog.count(*) FROM public.stocktake_tasks "
-                "WHERE id = :task_id"
-            ),
-            {"task_id": forged_task_id},
-        ).scalar_one() == 0
+    assert_raw_opening_insert_rejected(api_engine, task_id=task_id)
 
 
 def _assert_0052_cross_domain_posting_rejected(
@@ -20402,6 +20353,37 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             sms_profile_result = run_sms_profile_gate(daily_owner_engine, api_engine, daily_admin_engine)
             assert sms_profile_result["status"] == "passed"
             assert len(sms_profile_result["cases"]) == 9
+            from pg16_opening_fixture_gate import run as run_opening_import_fixture, _count_facts
+            from pg16_inventory_report_full_flow import assert_report_full_flow
+
+            import_fixture = run_opening_import_fixture({
+                "star_oam_migrator": daily_owner_engine, "star_oam_api": api_engine,
+                "edge_inbox": edge_engine,
+            }, establish_dynamic_peer=True, require_empty_inventory=False)
+            positive_import = next(case["importJob"] for case in import_fixture["openingPrerequisites"]
+                                   if case["case"] == "positive")
+            assert positive_import["status"] == "passed"
+            assert "advisory-wait-does-not-hold-task-row" in positive_import["cases"]
+            assert {"error-file-job-commit-together", "error-file-job-rollback-together",
+                    "error-recovery-head-only", "error-job-cannot-confirm",
+                    "error-file-job-key-binding-refused"} <= set(positive_import["cases"])
+            assert_report_full_flow(daily_owner_engine, api_engine)
+            before_import_retention = _count_facts(daily_owner_engine)
+            with daily_owner_engine.connect() as connection:
+                import_jobs_before = connection.scalar(text(
+                    "SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM file_jobs j"))
+                import_files_before = connection.scalar(text(
+                    "SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM files f"))
+            refused = _run_alembic("downgrade", "20261119_0140", expect_success=False)
+            assert "0141 existing import jobs require retention and explicit migration" in refused.stdout + refused.stderr
+            assert _current_revision() == HEAD_REVISION
+            assert _count_facts(daily_owner_engine) == before_import_retention
+            with daily_owner_engine.connect() as connection:
+                assert connection.scalar(text(
+                    "SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM file_jobs j")) == import_jobs_before
+                assert connection.scalar(text(
+                    "SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM files f")) == import_files_before
+            print("PG16 import persistence, real XLSX confirmation, concurrent lock order, recovery and retention PASS", flush=True)
         finally:
             daily_admin_engine.dispose()
             daily_owner_engine.dispose()

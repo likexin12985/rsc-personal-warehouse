@@ -330,6 +330,10 @@ tbody tr:hover { background: #fbfcfc; }
 .form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .field { display: grid; gap: 6px; min-width: 0; }
+.opening-import-body { display: grid; gap: 14px; padding: 16px; }
+.opening-import-body .mono, .opening-import-body details { overflow-wrap: anywhere; }
+.opening-import-body details { margin-top: 12px; }
+.opening-import-body details p { margin-top: 6px; }
 .reservation-serial-options { display: grid; gap: 12px; min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
 .reservation-serial-options legend { padding: 0 4px; font-size: 13px; font-weight: 650; }
 .reservation-serial-option { display: flex; align-items: center; gap: 10px; min-width: 0; cursor: pointer; }

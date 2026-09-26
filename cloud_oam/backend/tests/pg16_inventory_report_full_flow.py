@@ -63,6 +63,9 @@ def assert_report_full_flow(owner_engine, api_engine) -> dict[str, bool]:
         assert requester is not None
         requester_id = requester.id
         actor = load_formal_principal(db, requester_id)
+        previous_job_ids = set(db.scalars(select(FileJob.id).where(
+            FileJob.requested_by == requester_id,
+        )))
         snapshot = capture_inventory_report_snapshot(db, actor=actor)
         assert snapshot.account_ids and snapshot.lines
         assert any(line.quantity == "1.000" for line in snapshot.lines)
@@ -126,9 +129,11 @@ def assert_report_full_flow(owner_engine, api_engine) -> dict[str, bool]:
         assert wrong_key.status_code == 404
 
     with Session(api_engine) as db:
-        assert db.scalar(select(func.count()).select_from(FileJob).where(
+        # Import and export jobs share the table and requester. A replay must
+        # add exactly this export without assuming the user has no history.
+        assert set(db.scalars(select(FileJob.id).where(
             FileJob.requested_by == requester_id,
-        )) == 1
+        ))) == previous_job_ids | {job_id}
         assert db.scalar(select(func.count()).select_from(AuditEvent).where(
             AuditEvent.action == "inventory_report_export_requested",
             AuditEvent.aggregate_id == str(job_id),

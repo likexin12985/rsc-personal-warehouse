@@ -20,7 +20,7 @@ from sqlalchemy.pool import NullPool
 
 
 CLOUD = Path(__file__).resolve().parents[1]
-HEAD = "20261119_0140"
+HEAD = "20261120_0141"
 
 
 def main(argv=None):
@@ -28,7 +28,13 @@ def main(argv=None):
     parser.add_argument("--postgres-bin", required=True)
     parser.add_argument("--report-full-flow", action="store_true",
                         help="also establish formal opening and exercise report HTTP/worker end to end")
+    parser.add_argument("--import-job-roundtrip", action="store_true",
+                        help="also downgrade the empty import schema to 0140 and upgrade again")
+    parser.add_argument("--populated-import-fixture", action="store_true",
+                        help="repeat the shared CI import fixture after existing inventory facts")
     args = parser.parse_args(argv)
+    if args.populated_import_fixture and not args.report_full_flow:
+        parser.error("--populated-import-fixture requires --report-full-flow")
     sys.path[:0] = [str(CLOUD / "backend"), str(CLOUD / "backend/tests")]
     from local_pg16_cluster import native_cluster
 
@@ -43,14 +49,31 @@ def main(argv=None):
                                OAM_DATABASE_EXPECTED_MIGRATION_ROLE="star_oam_migrator",
                                OAM_DATABASE_EXPECTED_RUNTIME_ROLE="star_oam_api")
 
-            def command(label, argv):
-                with (directory / (label + ".log")).open("wb") as output:
+            def command(label, argv, *, expected_failure=None):
+                output_path = directory / (label + ".log")
+                with output_path.open("wb") as output:
                     result = subprocess.run(argv, cwd=CLOUD, env=environment,
                                             stdout=output, stderr=subprocess.STDOUT, timeout=600)
+                if expected_failure is not None:
+                    assert result.returncode != 0 and expected_failure in output_path.read_text(), label
+                    return
                 if result.returncode:
                     raise RuntimeError(label + "_failed")
 
             command("upgrade-current-head", [sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"])
+            if args.import_job_roundtrip:
+                command("import-job-downgrade", [sys.executable, "-m", "alembic", "-c", "alembic.ini", "downgrade", "20261119_0140"])
+                with engines["star_oam_migrator"].connect() as connection:
+                    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20261119_0140"
+                    assert "import_binding_jsonb" not in {
+                        column["name"] for column in inspect(connection).get_columns("file_jobs")
+                    }
+                    assert connection.scalar(text("SELECT to_regprocedure('public.rsc_guard_opening_import_job_0141()')")) is None
+                    assert connection.scalar(text("""
+                        SELECT encode(sha256(convert_to(prosrc,'UTF8')),'hex') FROM pg_proc
+                        WHERE oid='public.rsc_guard_report_export_job_0136()'::regprocedure
+                    """)) == "c0d717d2739939f980b80615066b13b63cb3d358273e94995f8b606b050438cb"
+                command("import-job-reupgrade", [sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"])
             with engines["star_oam_migrator"].connect() as connection:
                 assert connection.scalar(text("SELECT version_num FROM alembic_version")) == HEAD
                 export_columns = {
@@ -186,15 +209,49 @@ def main(argv=None):
                 sms = run_sms_profile_gate(engines["star_oam_migrator"], engines["star_oam_api"], admin)
                 assert sms["status"] == "passed" and len(sms["cases"]) == 9
                 report_full_flow = None
+                import_retention = None
+                populated_import_fixture = None
                 if args.report_full_flow:
-                    from pg16_opening_fixture_gate import run as run_opening_fixture
+                    from pg16_opening_fixture_gate import run as run_opening_fixture, _count_facts
                     from pg16_inventory_report_full_flow import assert_report_full_flow
-                    opening_fixture = run_opening_fixture(engines, establish_dynamic_peer=True)
+                    opening_fixture = run_opening_fixture(engines, establish_dynamic_peer=True, owned_process_checks=True)
                     assert opening_fixture["status"] == "passed"
                     report_full_flow = assert_report_full_flow(
                         engines["star_oam_migrator"], engines["star_oam_api"],
                     )
+                    if args.populated_import_fixture:
+                        populated_import_fixture = run_opening_fixture(engines,
+                            establish_dynamic_peer=True, require_empty_inventory=False, owned_process_checks=True)
+                        assert populated_import_fixture["status"] == "passed"
+                    def retained_import_state():
+                        with engines["star_oam_migrator"].connect() as connection:
+                            jobs = connection.scalar(text("""
+                                SELECT jsonb_agg(to_jsonb(j) ORDER BY id)
+                                FROM file_jobs j
+                            """))
+                            assert any(job["job_type"] == "import" and job["status"] == "succeeded"
+                                       for job in jobs)
+                            revision = connection.scalar(text("SELECT version_num FROM alembic_version"))
+                            files = connection.scalar(text("""
+                                SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM files f
+                            """))
+                            seals = connection.scalar(text("SELECT jsonb_agg(to_jsonb(s) ORDER BY id) FROM opening_import_command_seals s"))
+                            assert seals, "permanent import seals missing from retention fixture"
+                        return revision, jobs, files, seals, _count_facts(engines["star_oam_migrator"])
+                    before_retention = retained_import_state()
+                    command("import-job-nonempty-downgrade-rejected", [sys.executable,
+                        "-m", "alembic", "-c", "alembic.ini", "downgrade", "20261119_0140"],
+                        expected_failure="0141 existing import jobs require retention and explicit migration")
+                    assert retained_import_state() == before_retention
+                    validate_production_database_security(engines["star_oam_api"],
+                        expected_runtime_role="star_oam_api", expected_migration_role="star_oam_migrator")
+                    import_retention = {"nonemptyDowngradeRejected":True,
+                        "jobsAndCountFactsUnchanged":True, "filesUnchanged":True, "sealsUnchanged":True, "runtimeCatalogUnchanged":True}
                 result = {"status":"passed", "head":HEAD, "captureRoles":sorted(ROLES),
+                          "importJobEmptyMigrationRoundtrip":args.import_job_roundtrip,
+                          "importJobRetention":import_retention,
+                          "importPopulatedFixture":populated_import_fixture,
+                          "owned_process_checks":bool(args.report_full_flow),
                           "edgeDeploymentVerifier":edge_deployment_verifier,
                           "reportExportGrants":[list(grant) for grant in export_grants],
                           "reportJobGuardedRuntimeAcl":True,

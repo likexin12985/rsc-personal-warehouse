@@ -46,6 +46,7 @@ import OpeningRecountAssigneePicker from "./OpeningRecountAssigneePicker";
 import OpeningCountRecoveryPanel from "./OpeningCountRecoveryPanel";
 import OpeningStartPreparationPanel from "./OpeningStartPreparationPanel";
 import OpeningCountFormatPanel from "./OpeningCountFormatPanel";
+import OpeningCountImportPanel from "./OpeningCountImportPanel";
 import { submitDurableOpeningScopeCount } from "../openingCountSubmission";
 import { getOpeningCountRecoveryStore, withNoPendingOpeningCount } from "../openingCountRecoveryStore";
 
@@ -200,7 +201,9 @@ export default function FormalOpeningStocktakesPage({ actor, canPrepare = false,
   const actionRunning = useRef(false);
   const countDraftAnchor = useRef("");
   const [recoveryRevision, setRecoveryRevision] = useState(0);
-  const [countBlocked, setCountBlocked] = useState(true);
+  const [manualCountBlocked, setCountBlocked] = useState(true);
+  const [importBlocked, setImportBlocked] = useState(false);
+  const countBlocked = manualCountBlocked || importBlocked;
   const [tasks, setTasks] = useState<OpeningStocktakeTaskSummary[]>([]);
   const tasksRef = useRef<OpeningStocktakeTaskSummary[]>([]);
   const [nextAfterId, setNextAfterId] = useState<string | null>(null);
@@ -256,6 +259,7 @@ export default function FormalOpeningStocktakesPage({ actor, canPrepare = false,
     setDetail(null);
     setDialog(null);
     setCountBlocked(true);
+    setImportBlocked(false);
     setDetailLoading(true);
     setError("");
     setNotice("");
@@ -569,6 +573,28 @@ export default function FormalOpeningStocktakesPage({ actor, canPrepare = false,
         }} />
       <div className={`alert ${detail.evidence_status === "sealed" ? "alert-info" : "alert-warning"}`}>{evidenceLabel(detail)}</div>
       <Lifecycle detail={detail} />
+      {(canCheckImport || canPrepare) && actor && <OpeningCountImportPanel
+        key={`${detail.task_id}:${actor.person_id}:${actor.authorization_version}:${renderedEpoch}`}
+        detail={detail} actor={actor} canCount={canCheckImport} canManage={canPrepare} onBlockedChange={setImportBlocked}
+        onSealFinished={() => {
+          setImportBlocked(false);
+          void openDetail(detail.task_id);
+          void loadList();
+          setNotice("原导入已永久停止并核验，本设备阻塞已解除；未生成实盘计数或库存入账。");
+        }}
+        onManagementFinished={(review) => {
+          setImportBlocked(false);
+          void openDetail(detail.task_id);
+          void loadList();
+          setNotice(review.status === "succeeded" ? "原导入计数已核验，本地阻塞已解除；复核与期初入账仍需独立完成。"
+            : "原导入终态已核验，本地阻塞已解除。服务端历史记录继续保留。");
+        }}
+        onFinished={(status) => {
+          setImportBlocked(false);
+          void openDetail(detail.task_id);
+          void loadList();
+          setNotice(status.status === "succeeded" ? "导入计数已核验；复核和期初入账仍需独立完成。" : "原导入终态已核验，可继续盘点。");
+        }} />}
       <dl className="detail-grid opening-detail-grid">
         <div><dt>当前轮次</dt><dd>{detail.current_round ? `第 ${detail.current_round.round_no} 轮 · ${statusLabel(detail.current_round.status)}` : "未开始"}</dd></div>
         <div><dt>任务版本</dt><dd>v{detail.task_version}</dd></div>

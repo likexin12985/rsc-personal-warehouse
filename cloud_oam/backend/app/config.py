@@ -146,6 +146,7 @@ class Settings(BaseSettings):
     # deliberately no OSS access-key settings in this application model.
     file_storage_enabled: bool = False
     inventory_report_export_enabled: bool = False
+    opening_count_import_enabled: bool = False
     file_storage_provider: Literal["disabled", "aliyun_oss_v2"] = "disabled"
     file_storage_region: str = ""
     file_storage_bucket: str = ""

@@ -20,7 +20,8 @@ SHA = hashlib.sha256(BODY).hexdigest()
 def _adapter(*, put_error=None, head_size=None, head_sha=None):
     calls = []
 
-    def put(request):
+    def put(request, **kwargs):
+        assert kwargs == {"retry_max_attempts": 1}
         calls.append(("put", request))
         if put_error:
             raise put_error
@@ -44,14 +45,17 @@ def _adapter(*, put_error=None, head_size=None, head_sha=None):
     return adapter, calls
 
 
-def test_report_put_is_bound_and_verified_by_head():
+@pytest.mark.parametrize("purpose,method", [("inventory_report_export", "put_report_object"),
+    ("opening_count_import_error", "put_opening_count_error")])
+def test_report_put_is_bound_and_verified_by_head(purpose, method):
     adapter, calls = _adapter()
-    result = adapter.put_report_object(storage_key=KEY, file_id=FILE_ID, sha256=SHA, payload=BODY)
-    assert result.storage_key == KEY
+    key = KEY.replace("inventory_report_export", purpose)
+    result = getattr(adapter, method)(storage_key=key, file_id=FILE_ID, sha256=SHA, payload=BODY)
+    assert result.storage_key == key
     assert [kind for kind, _ in calls] == ["put", "head"]
     request = calls[0][1]
     assert request.bucket == "private-test"
-    assert request.key == KEY
+    assert request.key == key
     assert request.body == BODY
     assert request.content_type == MIME
     assert request.content_length == len(BODY)
@@ -60,14 +64,17 @@ def test_report_put_is_bound_and_verified_by_head():
     assert request.forbid_overwrite is True
 
 
-def test_lost_put_acknowledgement_recovers_only_exact_object():
+@pytest.mark.parametrize("purpose,method", [("inventory_report_export", "put_report_object"),
+    ("opening_count_import_error", "put_opening_count_error")])
+def test_lost_put_acknowledgement_recovers_only_exact_object(purpose, method):
+    key = KEY.replace("inventory_report_export", purpose)
     adapter, calls = _adapter(put_error=TimeoutError("lost ack"))
-    adapter.put_report_object(storage_key=KEY, file_id=FILE_ID, sha256=SHA, payload=BODY)
+    getattr(adapter, method)(storage_key=key, file_id=FILE_ID, sha256=SHA, payload=BODY)
     assert [kind for kind, _ in calls] == ["put", "head"]
 
     adapter, calls = _adapter(put_error=TimeoutError("lost ack"), head_sha="0" * 64)
     with pytest.raises(FileStorageError, match="verification failed"):
-        adapter.put_report_object(storage_key=KEY, file_id=FILE_ID, sha256=SHA, payload=BODY)
+        getattr(adapter, method)(storage_key=key, file_id=FILE_ID, sha256=SHA, payload=BODY)
     assert [kind for kind, _ in calls] == ["put", "head"]
 
 

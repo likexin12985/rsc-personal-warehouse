@@ -193,6 +193,8 @@ def create_file_upload_intent(
     request_hash = _upload_request_hash(prepared)
 
     _take_file_advisory_lock(db, file_id)
+    if prepared.purpose == "opening_count_import":
+        _require_unsealed_opening_source(db, file_id)
     current = _current_principal(db, supplied, lock=True)
     _require_upload_permission(db, current, prepared.purpose)
     row = db.scalar(
@@ -317,6 +319,8 @@ def complete_file_upload(
     if metadata["provider"] != storage.provider_code:
         _storage_provider_mismatch()
     purpose = str(metadata["purpose"])
+    if purpose == "opening_count_import":
+        _require_unsealed_opening_source(db, identifier)
     if row.uploaded_by != current.user_id:
         _fail("file_upload_forbidden", "forbidden", "当前账号不能完成该文件上传")
     _require_uploader_continuity(row, metadata, current)
@@ -446,6 +450,8 @@ def _authorize_download(
     row: FileObject,
     purpose: str,
 ) -> dict[str, Any]:
+    if purpose == "opening_count_import_error":
+        _fail("file_purpose_forbidden", "forbidden", "请通过原导入任务申请错误报告下载")
     if purpose == "daily_reconciliation_evidence":
         from ..daily_reconciliation.evidence_service import authorize_download
         return authorize_download(db,actor=actor,row=row)
@@ -691,6 +697,8 @@ def _require_upload_permission(
 ) -> None:
     if purpose == "inventory_report_export":
         _fail("file_purpose_forbidden", "forbidden", "报表文件只能由后台任务生成")
+    if purpose == "opening_count_import_error":
+        _fail("file_purpose_forbidden", "forbidden", "导入错误报告只能由后台任务生成")
     if purpose == "daily_reconciliation_evidence":
         from ..daily_reconciliation.evidence_service import require_upload_permission
         require_upload_permission(db,actor)
@@ -907,6 +915,12 @@ def _validate_expiry(value: object, *, now: datetime, ttl_seconds: int) -> None:
     checked_now = now.astimezone(timezone.utc)
     if not checked_now < expires <= checked_now + timedelta(seconds=ttl_seconds + 30):
         _storage_response_invalid()
+
+
+def _require_unsealed_opening_source(db: Session, file_id: uuid.UUID) -> None:
+    from ..foundation_models import OpeningImportCommandSeal
+    if db.scalar(select(OpeningImportCommandSeal.id).where(OpeningImportCommandSeal.source_file_id == file_id)) is not None:
+        _fail("opening_import_permanently_sealed", "conflict", "原导入已永久终结，不能继续原文件上传")
 
 
 def _take_file_advisory_lock(db: Session, file_id: uuid.UUID) -> None:

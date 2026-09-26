@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Mapping, Protocol
 import uuid
 
-from formal_file_integrity import StoredObjectHead
+from formal_file_integrity import OPENING_IMPORT_ERROR_MAX_BYTES, StoredObjectHead
 
 
 class FileStorageError(RuntimeError):
@@ -57,6 +57,10 @@ class FileStorageAdapter(Protocol):
     ) -> bytes: ...
 
     def put_report_object(
+        self, *, storage_key: str, file_id: str, sha256: str, payload: bytes
+    ) -> StoredObjectHead: ...
+
+    def put_opening_count_error(
         self, *, storage_key: str, file_id: str, sha256: str, payload: bytes
     ) -> StoredObjectHead: ...
 
@@ -265,6 +269,21 @@ class AliyunOssV2StorageAdapter:
     def put_report_object(
         self, *, storage_key: str, file_id: str, sha256: str, payload: bytes
     ) -> StoredObjectHead:
+        return self._put_generated_workbook(storage_key=storage_key, file_id=file_id,
+            sha256=sha256, payload=payload, purpose="inventory_report_export",
+            maximum_bytes=self._REPORT_MAX_BYTES)
+
+    def put_opening_count_error(
+        self, *, storage_key: str, file_id: str, sha256: str, payload: bytes
+    ) -> StoredObjectHead:
+        return self._put_generated_workbook(storage_key=storage_key, file_id=file_id,
+            sha256=sha256, payload=payload, purpose="opening_count_import_error",
+            maximum_bytes=OPENING_IMPORT_ERROR_MAX_BYTES)
+
+    def _put_generated_workbook(
+        self, *, storage_key: str, file_id: str, sha256: str, payload: bytes,
+        purpose: str, maximum_bytes: int,
+    ) -> StoredObjectHead:
         """Write once, or recover only an exactly matching prior single PUT.
 
         A timeout or lost acknowledgement never authorizes a second overwrite.
@@ -277,13 +296,13 @@ class AliyunOssV2StorageAdapter:
         except (TypeError, ValueError, AttributeError) as exc:
             raise FileStorageError("report object identity is invalid") from exc
         expected_key = (
-            f"formal-files/v1/inventory_report_export/{identifier.hex[:2]}/"
+            f"formal-files/v1/{purpose}/{identifier.hex[:2]}/"
             f"{identifier.hex}"
         )
         if (
             storage_key != expected_key
             or not isinstance(payload, bytes)
-            or not 1 <= len(payload) <= self._REPORT_MAX_BYTES
+            or not 1 <= len(payload) <= maximum_bytes
             or not isinstance(sha256, str)
             or hashlib.sha256(payload).hexdigest() != sha256
         ):
@@ -301,7 +320,10 @@ class AliyunOssV2StorageAdapter:
                     content_md5=base64.b64encode(digest_md5).decode("ascii"),
                     metadata={"sha256": sha256, "file-id": str(identifier)},
                     forbid_overwrite=True,
-                )
+                ),
+                # SDK retries are writes too: a lost response permits HEAD
+                # recovery only, never a second underlying PUT attempt.
+                retry_max_attempts=1,
             )
         except Exception:
             # The PUT may have succeeded before the acknowledgement was lost.

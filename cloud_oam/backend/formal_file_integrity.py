@@ -32,6 +32,7 @@ class StoredObjectHead:
 
 
 FILE_METADATA_SCHEMA: Final[str] = "cloud_oam.formal_file_upload_intent.v1"
+OPENING_IMPORT_ERROR_MAX_BYTES: Final[int] = 2 * 1024 * 1024
 
 
 PURPOSES: Final[frozenset[str]] = frozenset(
@@ -44,6 +45,7 @@ PURPOSES: Final[frozenset[str]] = frozenset(
         "daily_reconciliation_evidence",
         "inventory_report_export",
         "opening_count_import",
+        "opening_count_import_error",
     }
 )
 
@@ -65,7 +67,7 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 _STORAGE_KEY = re.compile(
-    r"^formal-files/v1/(request_attachment|external_approval_evidence|stocktake_evidence|receipt_exception_evidence|source_configuration_evidence|daily_reconciliation_evidence|inventory_report_export|opening_count_import)/[0-9a-f]{2}/[0-9a-f]{32}$"
+    r"^formal-files/v1/(request_attachment|external_approval_evidence|stocktake_evidence|receipt_exception_evidence|source_configuration_evidence|daily_reconciliation_evidence|inventory_report_export|opening_count_import|opening_count_import_error)/[0-9a-f]{2}/[0-9a-f]{32}$"
 )
 
 
@@ -156,11 +158,13 @@ def _prepare_upload(
     suffix = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if suffix not in _ALLOWED_MIME_EXTENSIONS[mime]:
         _fail("file_extension_mismatch", "invalid_request", "文件名与文件类型不一致")
-    is_workbook_purpose = purpose in {"inventory_report_export", "opening_count_import"}
+    is_workbook_purpose = purpose in {"inventory_report_export", "opening_count_import", "opening_count_import_error"}
     is_workbook = mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     if is_workbook_purpose != is_workbook:
         _fail("file_purpose_mime_mismatch", "invalid_request", "文件用途与类型不一致")
     if purpose == "opening_count_import" and value.size_bytes > 8 * 1024 * 1024:
+        _fail("file_size_invalid", "invalid_request", "文件大小无效")
+    if purpose == "opening_count_import_error" and value.size_bytes > OPENING_IMPORT_ERROR_MAX_BYTES:
         _fail("file_size_invalid", "invalid_request", "文件大小无效")
     sha256 = value.sha256 if isinstance(value.sha256, str) else ""
     if _SHA256.fullmatch(sha256) is None:

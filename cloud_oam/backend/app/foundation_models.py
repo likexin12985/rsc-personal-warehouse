@@ -2214,6 +2214,8 @@ class FileJob(TimestampMixin, Base):
         Index("ix_file_jobs_requester_status", "requested_by", "status"),
         Index("ix_file_jobs_export_queue", "job_type", "status", "created_at", "id"),
         Index("uq_file_jobs_result_file_id", "result_file_id", unique=True),
+        Index("uq_file_jobs_import_completion", "import_completion_id", unique=True),
+        Index("uq_file_jobs_error_file_id", "error_file_id", unique=True),
         CheckConstraint(
             "export_authorization_version IS NULL OR export_authorization_version > 0",
             name="ck_file_jobs_export_version_positive",
@@ -2256,6 +2258,17 @@ class FileJob(TimestampMixin, Base):
         BigInteger, nullable=True
     )
     result_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    import_binding_jsonb: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"), nullable=True
+    )
+    import_preview_jsonb: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"), nullable=True
+    )
+    # The import guard binds this to the immutable count completion and its
+    # exact task/round/scope/request in the same PostgreSQL transaction.
+    import_completion_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    import_error_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    import_error_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     result_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     download_count: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0, server_default=text("0")
@@ -2320,3 +2333,31 @@ class SystemParameter(TimestampMixin, Base):
     approved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class OpeningImportCommandSeal(Base):
+    """Immutable proof that this original source/request cannot be admitted."""
+    __tablename__ = 'opening_import_command_seals'
+    __table_args__ = (
+        UniqueConstraint('source_file_id', name='uq_opening_import_seal_source'),
+        UniqueConstraint('import_key_hash', name='uq_opening_import_seal_request'),
+        CheckConstraint('authorization_version>0 AND reviewer_authorization_version>0 AND size_bytes BETWEEN 1 AND 8388608', name='ck_opening_import_seal_size_version'),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey('users.id', ondelete='RESTRICT'))
+    reviewer_user_id: Mapped[str] = mapped_column(String(36), ForeignKey('users.id', ondelete='RESTRICT'))
+    actor_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('people.id', ondelete='RESTRICT'))
+    reviewer_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('people.id', ondelete='RESTRICT'))
+    reviewer_assignment_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('role_assignments.id', ondelete='RESTRICT'))
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stocktake_tasks.id', ondelete='RESTRICT'))
+    round_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stocktake_rounds.id', ondelete='RESTRICT'))
+    scope_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stocktake_scopes.id', ondelete='RESTRICT'))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    reviewer_authorization_version: Mapped[int] = mapped_column(BigInteger)
+    # Intentionally no FK: a seal may precede the file metadata INSERT.
+    source_file_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    source_sha256: Mapped[str] = mapped_column(String(64))
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    upload_key_hash: Mapped[str] = mapped_column(String(64))
+    import_key_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

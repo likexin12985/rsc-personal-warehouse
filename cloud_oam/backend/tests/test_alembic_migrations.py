@@ -460,7 +460,7 @@ REVIEW_COMMAND_STATUS_REVISION = (
     / "versions"
     / "20260906_0063_review_command_status.py"
 )
-HEAD_REVISION = "20261119_0140"
+HEAD_REVISION = "20261120_0141"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -698,6 +698,7 @@ MATERIAL_REQUEST_APPROVAL_TABLES = {
     "supply_tasks",
 }
 EXPECTED_TABLES = (
+    {"opening_import_command_seals"} |
     {"daily_review_events", "daily_review_bindings", "daily_review_consumptions", "daily_review_request_seals"} |
     {'daily_comparison_mapping_decisions','daily_reconciliation_cutoffs'} |
     {'inventory_control_source_bindings','inventory_control_catalog_versions','inventory_control_capture_chains',
@@ -1688,7 +1689,7 @@ def test_revision_history_has_single_current_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == "20261118_0139"
+    assert head.down_revision == "20261119_0140"
     assert REVIEW_COMMAND_STATUS_REVISION.exists()
     supply_event_key_head = script.get_revision(
         MATERIAL_REQUEST_SUPPLY_EVENT_KEY_REVISION_ID

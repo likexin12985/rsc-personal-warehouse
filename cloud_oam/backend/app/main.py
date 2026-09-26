@@ -37,6 +37,7 @@ from .routers import (
     formal_stock_return_inbounds,
     formal_opening_start_options,
     formal_opening_stocktake,
+    formal_opening_imports,
     formal_opening_stocktake_read,
     formal_stocktake_options,
     formal_stocktakes,
@@ -355,6 +356,7 @@ app.include_router(formal_reports.router, prefix="/api")
 # a task or attest that OAM control evidence is ready.
 app.include_router(formal_opening_start_options.router, prefix="/api")
 app.include_router(formal_opening_stocktake.router, prefix="/api")
+app.include_router(formal_opening_imports.router, prefix="/api")
 app.include_router(formal_opening_stocktake_read.router, prefix="/api")
 # Managed task creation uses separately scoped read-only pickers so clients do
 # not ask managers to type raw organization, location, or person identifiers.

@@ -4365,6 +4365,62 @@ EXPECTED_FORMAL_FILE_TRIGGERS['trg_file_jobs_result_binding_0139'] = (
 )
 
 
+# Import coordinates and reviewed previews are immutable. Confirmation may
+# commit only with its exact count completion; exports keep the 0136 checks.
+RUNTIME_UPDATE_COLUMNS['file_jobs'] |= frozenset({
+    'import_preview_jsonb', 'import_completion_id', 'confirmed_by', 'error_file_id',
+    'import_error_sha256', 'import_error_size_bytes',
+})
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[_REPORT_JOB_GUARD] = 'f8273e114c4799c78e51c9835d53450300d0bf19dcc8b0b56a1bf34a74d58296'
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_formal_file_object_0036', '')] = 'b43c61e35cf6901f91fb0eaafbcd59fb430e6ff96fcf3c645fb54e2e4f5e07c7'
+for _name, _digest in {
+    'rsc_guard_opening_import_job_0141': '000a27f3c6a5321bb0b2063a3878c224b18813778456cd95153b6ea75b3af3b3',
+    'rsc_check_opening_import_transaction_0141': '193adea6a2ee51e2200382119f68a29f9ca7ed89b2a8fbc5a4804572c1301216',
+}.items():
+    _coordinate = (_name, '')
+    FORMAL_FILE_INTERNAL_FUNCTIONS[_coordinate] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+    FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[_coordinate] = ('f', 'trigger', False)
+    FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[_coordinate] = _digest
+EXPECTED_FORMAL_FILE_TRIGGERS['trg_file_jobs_import_guard_0141'] = (
+    'file_jobs', 'rsc_guard_opening_import_job_0141', 'A', 23,
+)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_file_jobs_import_terminal_0141'] = (
+    'file_jobs', 'rsc_check_opening_import_transaction_0141', 'A', 21, True, True, True,
+)
+EXPECTED_FORMAL_FILE_INDEXES['uq_file_jobs_error_file_id'] = {
+    'table': 'file_jobs', 'columns': ('error_file_id',), 'predicate': None,
+}
+EXPECTED_FORMAL_FILE_INDEXES['uq_file_jobs_import_completion'] = {
+    'table': 'file_jobs', 'columns': ('import_completion_id',), 'predicate': None,
+}
+
+
+
+# Permanent non-admission proofs for the unpublished 0141 import lifecycle.
+RUNTIME_READ_TABLES |= frozenset({'opening_import_command_seals'})
+RUNTIME_INSERT_TABLES |= frozenset({'opening_import_command_seals'})
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_assert_opening_import_seal_actor_0141', 'text, bigint, uuid, uuid, text')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_assert_opening_import_seal_actor_0141', 'text, bigint, uuid, uuid, text')] = ("f", 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_assert_opening_import_seal_actor_0141', 'text, bigint, uuid, uuid, text')] = '8826c7c09c1f4400b1d31070ae15a8dad811e4fd26b843b62382093a5f141442'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_opening_import_admission_0141', '')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_opening_import_admission_0141', '')] = ("f", 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_opening_import_admission_0141', '')] = 'cc57ca4154ee0d8dbd89edf15c03d4072c8a09b105a9bcfdf24225ca3a0828af'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_opening_import_seal_0141', '')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_opening_import_seal_0141', '')] = ("f", 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_opening_import_seal_0141', '')] = 'c7fa37924ce15f00b2524e1fc66da4542cb241cf0a1fce2d93eded159f9ef646'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_opening_import_seal_immutable_0141', '')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_opening_import_seal_immutable_0141', '')] = ("f", 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_opening_import_seal_immutable_0141', '')] = '466fd85bb3e242872881bfdadcd62861c7bf179b5a656415fa6527a26d2a9670'
+EXPECTED_FORMAL_FILE_TRIGGERS['trg_000_opening_import_file_admission_0141'] = ('files', 'rsc_guard_opening_import_admission_0141', 'A', 23)
+EXPECTED_FORMAL_FILE_TRIGGERS['trg_000_opening_import_job_admission_0141'] = ('file_jobs', 'rsc_guard_opening_import_admission_0141', 'A', 7)
+EXPECTED_FORMAL_FILE_TRIGGERS['trg_opening_import_seal_insert_0141'] = ('opening_import_command_seals', 'rsc_guard_opening_import_seal_0141', 'A', 7)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_opening_import_seal_insert_0141'] = ('opening_import_command_seals', 'rsc_guard_opening_import_seal_0141', 'A', 7, False, False, False)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_opening_import_seal_commit_0141'] = ('opening_import_command_seals', 'rsc_guard_opening_import_seal_0141', 'A', 5, True, True, True)
+EXPECTED_FORMAL_FILE_TRIGGERS['trg_opening_import_seal_immutable_0141'] = ('opening_import_command_seals', 'rsc_guard_opening_import_seal_immutable_0141', 'A', 27)
+EXPECTED_FORMAL_FILE_TRIGGERS['trg_opening_import_seal_truncate_0141'] = ('opening_import_command_seals', 'rsc_guard_opening_import_seal_immutable_0141', 'A', 34)
+EXPECTED_FORMAL_FILE_INDEXES['uq_opening_import_seal_source'] = {"table": "opening_import_command_seals", "columns": ('source_file_id',), "predicate": None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_opening_import_seal_request'] = {"table": "opening_import_command_seals", "columns": ('import_key_hash',), "predicate": None}
+
 
 _ROLE_EVIDENCE_SQL = text(
     """
