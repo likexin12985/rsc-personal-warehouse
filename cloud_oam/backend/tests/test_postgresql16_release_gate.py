@@ -20214,6 +20214,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_pg16_recovery_gate(api_engine, target_fixture_engine)
             from pg16_notification_expansion_gate import assert_notification_expansion_gate
             assert_notification_expansion_gate(api_engine, target_fixture_engine)
+            from pg16_notification_delivery_gate import assert_notification_delivery_gate
+            assert_notification_delivery_gate(api_engine)
         finally:
             target_fixture_engine.dispose()
         blocked_targets = _run_alembic("downgrade", "20261018_0108", expect_success=False)

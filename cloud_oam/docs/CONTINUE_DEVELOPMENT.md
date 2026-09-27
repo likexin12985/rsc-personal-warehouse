@@ -3,6 +3,29 @@
 更新于 **2026-09-27**。顶部为现行状态；后文保留按日期记录的阶段证据，不能将旧候选结论外推为当前通过。前 3,694 行接续记录已原样保存在
 [历史交接归档](CONTINUE_DEVELOPMENT_HISTORY_20260921.md)，不得把历史“当前进程”当作仍在运行。
 
+## 2026-09-27 重启接续：远端提交与通知持久回归
+
+两批提交 `7bc5ade`（导入与运维）和 `c5f511f`（未知通知结果保护）已上传至原分支。
+Git HTTPS 连接超时，使用已认证 `gh` 的官方 Git database API 上传；逐一核对 tree、
+commit SHA 与本地完全相同后，以 `force=false` 推进分支并回读确认。未改写提交，
+未合并 main，未部署。远端准确 SHA 为 `c5f511f4478c69b0a3a78e10505554539b28259f`。
+
+该提交的 [Client release gate](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36281648272)
+已成功；[PostgreSQL 16 release gate](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36281648228)
+已启动，runtime 与三片 static 必须全部终态成功才可放行。此处只记录当次观察，
+后续接续须读取准确 run/attempt/head SHA，不把运行中或旧 SHA 的成功当当前完整通过。
+
+进一步将原本只在忽略目录验证的通知 PG16 场景纳入长期门禁：
+`backend/tests/pg16_notification_delivery_gate.py` 由正式 runtime 检查入口调用，
+使用实际 API 角色、生产服务和内存渠道替身。已有排队夹具由独立连接持行锁隔离，
+验证真实 SKIP LOCKED 路径，逐条回读确认未被发送、取消或清理。
+本地 PG16.15 全量迁移至 0141 后，空队列与已有 expansion 队列两轮各 8 项通过，
+包含直接存储未知结果、历史已误排队、正常通知继续，以及明确拒绝后的恰好一次重试。
+句柄 97676 退出 0；实例 `run-o3kw1obd` 正常停止、源码无漂移、外部渠道调用 0。
+通知未知结果与门禁诊断聚焦共 34 项通过。证据在
+`artifacts/notification-ci-gate-20260927/`；这是 c5f511f 之后的测试增量，
+现有 GitHub run 不包含它，提交和后续 CI 结论仍以实际版本记录为准。
+
 ## 2026-09-27 通知未知结果保护已接入
 
 导入批次已提交为 `7bc5ade`。其 7030 通过 / 2 既有跳过、PG16 128×2、客户端与
