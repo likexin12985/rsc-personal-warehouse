@@ -18596,8 +18596,15 @@ def _assert_0047_rejects_nonempty_start_downgrade(
     # later audit-order guard over the same start graph, so it must block the
     # chain before 0047 is reached.  Keep that ordering proof explicit.
     audit_order = _load_nonopening_start_audit_order_migration_0055()
-    _assert_retention_downgrade(CONTENT_CAUSALITY_REVISION,
-        blocking_revision=NONOPENING_START_AUDIT_ORDER_REVISION, blocker=audit_order.DOWNGRADE_BLOCKER)
+    _assert_retention_downgrade(
+        CONTENT_CAUSALITY_REVISION,
+        blocking_revision=NONOPENING_START_AUDIT_ORDER_REVISION,
+        blocker=audit_order.DOWNGRADE_BLOCKER,
+        # Later revisions legitimately replace 0055's hash-bound functions.
+        # Probe its exact history-retention primitive at HEAD, as for 0054;
+        # the empty-database round trip still checks the full old catalog.
+        retention_guard=audit_order._require_no_start_graph,
+    )
 
     # Exercise 0047's own downgrade contract against the same disposable
     # PostgreSQL database without traversing newer revisions.  Calling the
