@@ -132,62 +132,109 @@ def assert_direct_inverse_rejected(db, original):
         raise AssertionError("Database accepted an inverse detached from its original work order")
 
 
-def _reversal_successor_migrations():
-    """Use Alembic's actual head-to-target order before testing the old guard."""
-    from pathlib import Path
-    import runpy
-    from alembic.script import ScriptDirectory
+def assert_legacy_reversal_migration_candidates(fixture_engine):
+    """Run the actual 0097 preflight on an isolated, fully migrated 0096 DB.
 
-    folder = Path(__file__).parents[1] / 'alembic'
-    scripts = ScriptDirectory(str(folder))
-    return tuple(runpy.run_path(revision.path) for revision in scripts.iterate_revisions('heads', '20261007_0097'))
+    Invalid legacy candidates stay uncommitted and are rolled back after the
+    exact preflight rejection. Current-head complete inverse checks above are
+    independent; this fixture is not a successful stock-posting example.
+    """
+    from pathlib import Path
+    import hashlib
+    import runpy
+    from types import SimpleNamespace
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from migration_script_cache import cache_migration_compilation
+    from app.demand_models import WorkOrderMaterialOperation
+    from test_formal_access import make_organization, make_user
+    from work_order_fixtures import add_order
+
+    if fixture_engine.dialect.name != 'postgresql':
+        raise RuntimeError('legacy reversal probe requires isolated PostgreSQL 0096')
+    folder = Path(__file__).parents[1] / 'alembic/versions'
+    with cache_migration_compilation(folder):
+        migration = runpy.run_path(str(folder / '20261007_0097_work_order_reversal_boundary.py'))
+        old, _ = migration['sources']()
+    signatures = (migration['SIGNATURE'], 'public.rsc_oam_runtime_binding_ready_0044()')
+    with fixture_engine.connect() as connection:
+        assert connection.scalar(text('SELECT current_user')) == 'star_oam_migrator'
+        assert connection.scalar(text('SELECT version_num FROM alembic_version')) == migration['down_revision']
+        for signature, expected in zip(signatures, (hashlib.sha256(old.encode()).hexdigest(), migration['OLD_HASH']), strict=True):
+            assert connection.scalar(text("SELECT encode(sha256(convert_to(prosrc,'UTF8')),'hex') FROM pg_proc WHERE oid=to_regprocedure(:signature)"),
+                dict(signature=signature)) == expected
+        for table in ('users', 'inventory_transactions', 'work_order_material_operations', 'stocktake_tasks'):
+            assert connection.scalar(text('SELECT count(*) FROM '+table)) == 0, 'isolated empty fixture required'
+
+    def state():
+        tables = ('users','people','organizations','auth_identities','source_systems','external_objects',
+            'external_object_versions','oam_work_orders','inventory_transactions','work_order_material_operations',
+            'inventory_ledger_heads','stock_balances','audit_events','audit_chain_heads','outbox_events','alembic_version')
+        with fixture_engine.connect() as connection:
+            facts = {table: tuple(sorted(repr(tuple(row)) for row in connection.execute(text('SELECT * FROM '+table)))) for table in tables}
+            catalog = connection.execute(text("""SELECT p.oid,p.prosrc,p.proowner,p.proacl,p.prosecdef,p.proconfig
+                FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' ORDER BY p.oid""")).all()
+            triggers = connection.execute(text("SELECT oid,tgrelid,tgfoid,tgenabled,tgdeferrable,tginitdeferred FROM pg_trigger ORDER BY oid")).all()
+            return facts, catalog, triggers
+    baseline = state()
+    for label in ('original_source', 'inverse_source', 'operation_binding'):
+        with Session(fixture_engine) as db:
+            org = make_organization(db, name='Synthetic historical reversal fixture')
+            user, person = make_user(db, org, name='Synthetic historical actor')
+            order = add_order(db, SimpleNamespace(person=person, organization=org))
+            at = datetime.now(timezone.utc)
+            def transaction(kind, source, cursor, original=None):
+                row = InventoryTransaction(id=uuid4(), transaction_no='LEGACY-'+uuid4().hex,
+                    movement_type=kind, source_document_type=source, source_document_id=str(order.id),
+                    posting_key='legacy-probe:'+uuid4().hex, idempotency_key_hash=uuid4().hex*2,
+                    request_hash=uuid4().hex*2, status='posted', effective_at=at, posted_at=at,
+                    ledger_cursor=cursor, reversed_transaction_id=original, actor_user_id=user.id, created_at=at)
+                db.add(row); db.flush(); return row
+            original = transaction('reserve', 'work_order_material' if label=='original_source' else 'legacy_stock', 1)
+            transaction('reversal', 'work_order_material' if label=='inverse_source' else 'legacy_inverse', 2, original.id)
+            if label == 'operation_binding':
+                db.add(WorkOrderMaterialOperation(id=uuid4(), operation_no='LEGACY-'+uuid4().hex,
+                    oam_work_order_id=order.id, operator_person_id=person.id, operation_type='occupy', status='posted',
+                    posting_transaction_id=original.id, idempotency_key_hash=uuid4().hex*2,
+                    request_hash=uuid4().hex*2, created_at=at))
+                db.flush()
+            assert db.scalar(text('SELECT EXISTS ('+migration['forbidden_reversals']('public.')+')'))
+            with cache_migration_compilation(folder), Operations.context(MigrationContext.configure(db.connection())):
+                try:
+                    migration['upgrade']()
+                except DBAPIError as exc:
+                    assert getattr(exc.orig, 'sqlstate', None) == 'P0001'
+                    assert '0097 transition blocked: detached work-order reversals require reviewed compensation' in str(exc.orig)
+                else:
+                    raise AssertionError('0097 accepted a detached legacy reversal candidate')
+            db.rollback()
+        assert state() == baseline, label
+    print('PG16 isolated 0096: all three 0097 legacy preflight rejections and full rollback PASS', flush=True)
+    return dict(rejectedLegacyCandidates=3, exact0097Preflight=True, fixtureAndCatalogRollback=True,
+        historicalRevision=migration['down_revision'], committedStockPostingProven=False)
 
 
 def assert_reversal_migration_rejects_detached_history(api_engine, fixture_engine):
-    """Inject legacy corruption only inside a schema-and-data rollback sandbox."""
-    from pathlib import Path
-    import runpy
-    from alembic.migration import MigrationContext
-    from alembic.operations import Operations
+    """Keep current facts intact; historical downgrade tests use another DB."""
+    from test_postgresql16_release_gate import (_create_opening_backfill_database, _drop_opening_backfill_database,
+        _run_alembic, _legacy_backfill_engine)
 
-    migration = runpy.run_path(str(Path(__file__).parents[1] /
-        "alembic/versions/20261007_0097_work_order_reversal_boundary.py"))
-    successors = _reversal_successor_migrations()
     def catalog():
         with fixture_engine.connect() as connection:
             return connection.execute(text("""SELECT oid,prosrc,proowner,proacl,prosecdef,proconfig FROM pg_proc
                 WHERE oid IN ('public.rsc_check_work_order_material_transaction_0090(uuid)'::regprocedure,
                     'public.rsc_oam_runtime_binding_ready_0044()'::regprocedure) ORDER BY oid""")).all()
     before = snapshot(api_engine), catalog()
-    with fixture_engine.connect() as connection:
-        transaction = connection.begin()
-        try:
-            with Operations.context(MigrationContext.configure(connection)):
-                # Recreate the actual 0097 catalog in this rollback-only
-                # transaction before testing its legacy-history rejection.
-                # This stage precedes permanent 0098/0099 fixture facts.
-                for successor in successors:
-                    successor["downgrade"]()
-                migration["downgrade"]()
-                original = connection.execute(text("""SELECT id,actor_user_id FROM inventory_transactions
-                    WHERE source_document_type='work_order_material' ORDER BY ledger_cursor LIMIT 1""")).one_or_none()
-                assert original is not None, "Requires existing synthetic work-order history"
-                connection.execute(text("""INSERT INTO inventory_transactions
-                    (id,transaction_no,movement_type,source_document_type,source_document_id,posting_key,
-                     idempotency_key_hash,request_hash,status,effective_at,posted_at,ledger_cursor,
-                     reversed_transaction_id,actor_user_id,created_at)
-                    VALUES (:id,:number,'reversal','legacy_inverse',:document,:posting,:hash,:hash,'posted',
-                        now(),now(),(SELECT max(ledger_cursor)+1 FROM inventory_transactions),:original,:actor,now())"""),
-                    dict(id=uuid4(), number=uuid4().hex, document=uuid4().hex, posting=uuid4().hex,
-                         hash=uuid4().hex * 2, original=original.id, actor=original.actor_user_id))
-                connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-                try:
-                    migration["upgrade"]()
-                except DBAPIError as exc:
-                    assert "0097 transition blocked" in str(exc.orig)
-                else:
-                    raise AssertionError("Migration silently accepted detached historical work-order reversal")
-        finally:
-            transaction.rollback()
+    database = _create_opening_backfill_database()
+    isolated = None
+    try:
+        for action, revision in (('upgrade','20261006_0096'),('upgrade','20261007_0097'),('downgrade','20261006_0096')):
+            _run_alembic(action, revision, database_name=database)
+        isolated = _legacy_backfill_engine(database)
+        assert_legacy_reversal_migration_candidates(isolated)
+    finally:
+        if isolated is not None:
+            isolated.dispose()
+        _drop_opening_backfill_database(database)
     assert (snapshot(api_engine), catalog()) == before
-    print("PG16 migration rejects detached legacy history; source, ACL, schema and data rollback PASS", flush=True)
+    print('PG16 independent 0096/0097 roundtrip and legacy rejection; current-head facts untouched PASS', flush=True)
