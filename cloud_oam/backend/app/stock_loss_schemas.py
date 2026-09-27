@@ -242,3 +242,16 @@ class StockLossHeadquartersReviewOut(BaseModel):
     submission_plan_hash: str
     decisions: tuple[StockLossHeadquartersDecisionIn, ...]
     reviewed_at: datetime
+
+
+class StockLossDispositionPreviewIn(StrictInput):
+    """Reference an exact approved original line; all stock values are server-owned."""
+    headquarters_decision_id: UUID
+    expected_headquarters_review_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
+    expected_submission_plan_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
+
+
+class StockLossDispositionExecuteIn(StockLossDispositionPreviewIn):
+    expected_plan_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
+    idempotency_key: str = Field(min_length=8, max_length=200, pattern=r'^[A-Za-z0-9._:-]+$')
+    request_id: str = Field(min_length=8, max_length=160, pattern=r'^[A-Za-z0-9._:-]+$')

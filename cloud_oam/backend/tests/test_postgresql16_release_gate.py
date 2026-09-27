@@ -78,7 +78,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261128_0149"
+HEAD_REVISION = "20261129_0150"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7132,7 +7132,7 @@ def _head_function_body_hash(signature: str) -> str:
 
 def _head_account_admission_hash() -> str:
     import runpy
-    return hashlib.sha256(runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20261128_0149_stock_return_inbound_account_admission.py")))["_sources"]()["public.rsc_require_opening_observation_account_0023()"][1].encode()).hexdigest()
+    return hashlib.sha256(runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20261129_0150_stock_loss_disposition.py")))["_sources"]()["public.rsc_require_opening_observation_account_0023()"][1].encode()).hexdigest()
 
 
 @cache
@@ -7144,7 +7144,7 @@ def _head_runtime_ready_hash() -> str:
     from migration_script_cache import cache_migration_compilation
     with cache_migration_compilation(STOCK_RESERVATIONS_MIGRATION_0069.parent):
         migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-            "20261128_0149_stock_return_inbound_account_admission.py"
+            "20261129_0150_stock_loss_disposition.py"
         )))
     assert migration["revision"] == RUNTIME_READY_HEAD_REVISION
     return migration["NEW_READY_HASH"]
@@ -20232,9 +20232,10 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert_notification_delivery_gate(api_engine)
         finally:
             target_fixture_engine.dispose()
-        blocked_targets = _run_alembic("downgrade", "20261018_0108", expect_success=False)
-        assert "0109 downgrade blocked: notification target evidence must be retained" in (
-            blocked_targets.stdout + blocked_targets.stderr)
+        # Earlier opening authorization facts may stop the chain at 0126.
+        # Prove both that current boundary and 0109's own retention guard.
+        _assert_retention_downgrade("20261018_0108", blocking_revision="20261019_0109",
+            blocker="0109 downgrade blocked: notification target evidence must be retained")
         assert _current_revision() == HEAD_REVISION
         _validate_runtime_security(api_engine)
         # Add durable 0110 seals after each older retention gate has proved its

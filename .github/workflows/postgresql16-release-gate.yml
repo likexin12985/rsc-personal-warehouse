@@ -104,6 +104,7 @@ jobs:
       fail-fast: false
       matrix:
         tracking: [quantity, serial]
+        flow: [submission, disposition]
     timeout-minutes: 180
     services:
       postgres:
@@ -121,6 +122,7 @@ jobs:
           --health-retries 20
     env:
       RSC_PG16_LOSS_TRACKING: ${{ matrix.tracking }}
+      RSC_PG16_LOSS_FLOW: ${{ matrix.flow }}
       RSC_PG16_GATE_ACKNOWLEDGE_DISPOSABLE: I_UNDERSTAND_THIS_DATABASE_IS_EPHEMERAL
       RSC_PG16_GATE_HOST: 127.0.0.1
       RSC_PG16_GATE_PORT: "5432"
@@ -166,7 +168,7 @@ jobs:
           psql --version | grep -E ' 16[.]'
           zsh --version
 
-      - name: Run isolated PostgreSQL 16 loss submission and recovery gate
+      - name: Run isolated PostgreSQL 16 loss ${{ matrix.flow }} gate
         working-directory: cloud_oam/backend
         run: |
           python -m pytest -q -s tests/test_postgresql16_stock_loss_release_gate.py

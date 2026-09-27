@@ -43,13 +43,16 @@ def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_a
     assert 'postgres:16-alpine@sha256:' in runtime
     assert '    strategy:\n      fail-fast: false\n      matrix:\n        tracking: [quantity, serial]\n' in loss
     assert 'RSC_PG16_LOSS_TRACKING: ${{ matrix.tracking }}' in loss
+    assert '        flow: [submission, disposition]\n' in loss
+    assert 'RSC_PG16_LOSS_FLOW: ${{ matrix.flow }}' in loss
     assert 'python -m pytest -q -s tests/test_postgresql16_stock_loss_release_gate.py' in loss
     assert '        working-directory: cloud_oam/backend\n' in loss
     # An independent service per matrix leg must retain the original fresh
     # database, role passwords, loopback host and acknowledgement boundary.
     assert runtime.split('    services:\n',1)[1].split('    steps:\n',1)[0] == (
         loss.split('    services:\n',1)[1].split('    steps:\n',1)[0].replace(
-            '      RSC_PG16_LOSS_TRACKING: ${{ matrix.tracking }}\n',''))
+            '      RSC_PG16_LOSS_TRACKING: ${{ matrix.tracking }}\n','').replace(
+            '      RSC_PG16_LOSS_FLOW: ${{ matrix.flow }}\n',''))
     assert 'RSC_PG16_GATE_' not in static and 'services:' not in static
     # The three matrix legs must run the same dynamically discovered file set
     # with disjoint assignments. The named aggregate requires every leg.
@@ -137,4 +140,18 @@ def test_loss_gate_refuses_unacknowledged_or_incorrect_hosted_context_before_dat
     for tracking in ('','both','quantity,serial','production'):
         monkeypatch.setenv('RSC_PG16_LOSS_TRACKING',tracking)
         with pytest.raises(pytest.fail.Exception,match='explicit quantity or serial'):
+            loss_gate.test_postgresql16_stock_loss_release_gate()
+
+
+def test_loss_gate_refuses_invalid_flow_before_database(monkeypatch):
+    import pytest
+    import test_postgresql16_stock_loss_release_gate as loss_gate
+    monkeypatch.setattr(loss_gate.gate,'_gate_enabled',lambda:True)
+    monkeypatch.setenv('RSC_PG16_LOSS_TRACKING','quantity')
+    def unexpected_database_access():
+        raise AssertionError('invalid flow reached database')
+    monkeypatch.setattr(loss_gate.gate,'_assert_fresh_disposable_postgresql16',unexpected_database_access)
+    for flow in ('','both','submission,disposition','production'):
+        monkeypatch.setenv('RSC_PG16_LOSS_FLOW',flow)
+        with pytest.raises(pytest.fail.Exception,match='explicit submission or disposition'):
             loss_gate.test_postgresql16_stock_loss_release_gate()

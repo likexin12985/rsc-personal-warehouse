@@ -1118,6 +1118,10 @@ def _require_generic_reversal_origin(db: Session, command: InventoryReversalComm
         StockOperationOutbound, StockOperationReturnInbound)
 
     original = db.get(InventoryTransaction, command.original_transaction_id, populate_existing=True)
+    if (command.source_document_type == "stock_loss_disposition"
+            or (original is not None and original.source_document_type == "stock_loss_disposition")):
+        _fail("stock_loss_disposition_reversal_requires_command", "precondition_failed",
+              "报损处置必须通过专用反向命令恢复原行冻结份额，不能使用通用库存冲销")
     if (command.source_document_type in {"stock_operation_return", "stock_operation_return_outbound", "stock_return_receipt_inbound"}
             or (original is not None and original.source_document_type in {"stock_operation_return", "stock_operation_return_outbound", "stock_return_receipt_inbound"})
             or any(db.scalar(select(model.id).where(model.posting_transaction_id == command.original_transaction_id).limit(1))

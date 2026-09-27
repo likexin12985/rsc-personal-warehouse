@@ -197,6 +197,48 @@ class StockLossHeadquartersDecision(CreatedAtMixin, Base):
     reason: Mapped[str] = mapped_column(Text)
 
 
+class StockLossDisposition(CreatedAtMixin, Base):
+    """Original approved line disposition; later corrections must append facts.
+
+    This model is not a production activation. The migration must independently
+    prove the exact approval, movement, remaining holds and current authority.
+    A future correction references this original instead of overwriting it.
+    """
+    __tablename__ = 'stock_loss_dispositions'
+    __table_args__ = (
+        UniqueConstraint('line_id', name='uq_loss_disposition_original_line'),
+        UniqueConstraint('headquarters_decision_id', name='uq_loss_disposition_original_decision'),
+        UniqueConstraint('posting_transaction_id', name='uq_loss_disposition_transaction'),
+        UniqueConstraint('posting_movement_id', name='uq_loss_disposition_movement'),
+        UniqueConstraint('actor_user_id', 'request_id', name='uq_loss_disposition_request'),
+        UniqueConstraint('idempotency_key_hash', name='uq_loss_disposition_key'),
+        CheckConstraint("disposition IN ('restore_available','convert_used','convert_damaged')", name='ck_loss_disposition_kind'),
+        CheckConstraint('quantity > 0 AND authorization_version > 0 AND source_account_id <> target_account_id', name='ck_loss_disposition_dimensions'),
+        CheckConstraint('length(request_hash)=64 AND length(plan_hash)=64 AND length(idempotency_key_hash)=64', name='ck_loss_disposition_hashes'),
+        CheckConstraint('length(request_id) BETWEEN 8 AND 160', name='ck_loss_disposition_request'),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    operation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stock_operation_orders.id', ondelete='RESTRICT'))
+    line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stock_operation_lines.id', ondelete='RESTRICT'))
+    headquarters_decision_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stock_loss_headquarters_decisions.id', ondelete='RESTRICT'))
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey('users.id', ondelete='RESTRICT'))
+    executor_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('people.id', ondelete='RESTRICT'))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    disposition: Mapped[str] = mapped_column(String(24))
+    source_account_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stock_accounts.id', ondelete='RESTRICT'))
+    target_account_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stock_accounts.id', ondelete='RESTRICT'))
+    custody_assignment_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('custody_assignments.id', ondelete='RESTRICT'))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3))
+    request_id: Mapped[str] = mapped_column(String(160))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    plan_hash: Mapped[str] = mapped_column(String(64))
+    command_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+    plan_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+    posting_transaction_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('inventory_transactions.id', ondelete='RESTRICT', deferrable=True, initially='DEFERRED'))
+    posting_movement_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('inventory_movements.id', ondelete='RESTRICT', deferrable=True, initially='DEFERRED'))
+
+
 class StockLossRequestSeal(CreatedAtMixin, Base):
     """An immutable loss request tombstone, with no fictitious work order."""
     __tablename__ = 'stock_loss_request_seals'

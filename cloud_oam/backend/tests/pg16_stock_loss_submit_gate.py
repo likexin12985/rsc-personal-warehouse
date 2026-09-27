@@ -95,7 +95,7 @@ def run(context):
             posting_key='synthetic-loss-hold-'+uuid4().hex,effective_at=datetime.now(timezone.utc),movements=(move,))
         posting.post_inventory_transaction(db,actor=load_formal_principal(db,actor.user_id),command=command,
             idempotency_key=uuid4().hex,request_id=uuid4().hex,permission_resource='stock_operation',permission_action='submit_loss')
-        with pytest.raises(DBAPIError,match='0145'):
+        with pytest.raises(DBAPIError,match='0150 unreleased loss quantities must remain frozen'):
             db.commit()
         db.rollback()
     assert snapshot(owner)==committed

@@ -571,7 +571,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "stock_operation_shipments", "stock_operation_shipment_lines", "stock_operation_shipment_serials",
         "stock_operation_receipts", "stock_operation_receipt_lines", "stock_operation_receipt_serials", "stock_operation_receipt_exceptions",
         "stock_operation_orders", "stock_operation_lines", "stock_operation_serials", "stock_operation_cancellations",
-        "stock_loss_files", "stock_loss_request_seals", "stock_loss_regional_reviews", "stock_loss_headquarters_reviews", "stock_loss_headquarters_decisions",
+        "stock_loss_files", "stock_loss_request_seals", "stock_loss_regional_reviews", "stock_loss_headquarters_reviews", "stock_loss_headquarters_decisions", "stock_loss_dispositions",
         "outbound_postings", "outbound_posting_serials",
         "shipments", "shipment_lines", "shipment_serials",
         "logistics_events", "receipts", "receipt_lines", "receipt_serials", "receipt_exceptions", "oam_receipt_evidence", "inbound_orders", "inbound_postings",
@@ -1371,7 +1371,11 @@ def _transit_source_change(coordinate):
             "alembic/versions/20261128_0149_stock_return_inbound_account_admission.py"))
         inbound_old, inbound_new = inbound['_sources']()['public.rsc_require_opening_observation_account_0023()']
         assert loss_new == inbound_old
-        return hashlib.sha256(old.encode()).hexdigest(), hashlib.sha256(inbound_new.encode()).hexdigest(), ((old,inbound_new,1),)
+        disposition = runpy.run_path(str(Path(__file__).parents[1] /
+            "alembic/versions/20261129_0150_stock_loss_disposition.py"))
+        disposition_old, disposition_new = disposition['_sources']()['public.rsc_require_opening_observation_account_0023()']
+        assert inbound_new == disposition_old
+        return hashlib.sha256(old.encode()).hexdigest(), hashlib.sha256(disposition_new.encode()).hexdigest(), ((old,disposition_new,1),)
     migration = runpy.run_path(str(Path(__file__).parents[1] /
         "alembic/versions/20261012_0102_transit_opening_scopes.py"))
     return migration["SOURCE_CHANGES"].get(f"{coordinate[0]}({coordinate[1]})")
@@ -7307,7 +7311,7 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 433
+    assert len(triggers) == 442
     assert any(row['trigger_name'] == 'trg_stock_loss_request_seals_loss_seal_0146'
                and row['table_name'] == 'stock_loss_request_seals'
                and row['function_name'] == 'rsc_guard_loss_seal_0146'

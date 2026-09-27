@@ -25,7 +25,7 @@ def migration():
 def test_private_complete_proof_catalog_and_inherited_returns(migration):
     m=migration
     for coordinate,(args,result,body) in m['FUNCTIONS'].items():
-        assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]==hashlib.sha256(body.encode()).hexdigest()
+        assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0149[coordinate]==hashlib.sha256(body.encode()).hexdigest()
         assert security.FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[coordinate]==('f',result,False)
         assert coordinate not in security.RUNTIME_EXECUTE_FUNCTIONS
         parser.parse_plpgsql_json(f'CREATE FUNCTION guard({args}) RETURNS {result} LANGUAGE plpgsql AS $b${body}$b$')

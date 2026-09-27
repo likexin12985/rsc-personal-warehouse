@@ -24,7 +24,9 @@ def commit_expiry(context,value):
     with Session(owner) as db:
         assignment=db.scalar(select(RoleAssignment).where(RoleAssignment.user_id==context['engineer_id']))
         identifier,old_end=assignment.id,assignment.valid_to
-        deadline=db.scalar(text('SELECT clock_timestamp()'))+timedelta(seconds=12)
+        # Allow the full source-proof/preview/command under a loaded local host.
+        # Both sides of the real clock boundary and COMMIT refusal stay asserted.
+        deadline=db.scalar(text('SELECT clock_timestamp()'))+timedelta(seconds=45)
         assignment.valid_to=deadline;db.commit()
     try:
         before=snapshot(owner)
@@ -127,7 +129,7 @@ def shared_holds(context,first):
         # cover their sum. A MAX/per-document-only guard would accept this.
         amount=min(line.quantity for line in originals)
         post(db,(movement(frozen,context['account_id'],amount,held[:1] if tracked else ()),),'release')
-        with pytest.raises(DBAPIError,match='0145 active loss quantities must remain frozen') as caught:db.commit()
+        with pytest.raises(DBAPIError,match='0150 unreleased loss quantities must remain frozen') as caught:db.commit()
         assert caught.value.orig.sqlstate=='23514';db.rollback()
     assert snapshot(owner)==before
     if tracked:
@@ -135,7 +137,7 @@ def shared_holds(context,first):
             # Keep pooled quantity constant while swapping one protected SN.
             post(db,(movement(frozen,context['account_id'],Decimal(1),held[:1]),
                 movement(context['account_id'],frozen,Decimal(1),(extras[1],))),'transfer')
-            with pytest.raises(DBAPIError,match='0145 exact active loss serials must remain frozen') as caught:db.commit()
+            with pytest.raises(DBAPIError,match='0150 exact unreleased loss serials must remain frozen') as caught:db.commit()
             assert caught.value.orig.sqlstate=='23514';db.rollback()
         assert snapshot(owner)==before
     surplus=Decimal(1) if tracked else Decimal('0.125')

@@ -4596,6 +4596,42 @@ EXPECTED_FORMAL_FILE_INDEXES['uq_loss_headquarters_review_request'] = {'table': 
 EXPECTED_FORMAL_FILE_INDEXES['uq_loss_headquarters_review_key'] = {'table': 'stock_loss_headquarters_reviews', 'columns': ('idempotency_key_hash',), 'predicate': None}
 EXPECTED_FORMAL_FILE_INDEXES['uq_loss_headquarters_decision_line'] = {'table': 'stock_loss_headquarters_decisions', 'columns': ('review_id', 'line_id'), 'predicate': None}
 
+# 0150 immutable approved dispositions and exact original-line releases.
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0149 = dict(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256)
+RUNTIME_READ_TABLES |= {'stock_loss_dispositions'}
+RUNTIME_INSERT_TABLES |= {'stock_loss_dispositions'}
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_assert_loss_disposition_authority_0150', 'text, bigint, uuid, uuid')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_assert_loss_disposition_authority_0150', 'text, bigint, uuid, uuid')] = ("f", 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_assert_loss_disposition_authority_0150', 'text, bigint, uuid, uuid')] = 'f344f157c1d75c8bdcd5434f05f955bf46b8d769313172f57582589f5ea86dea'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_lock_loss_disposition_0150', '')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_lock_loss_disposition_0150', '')] = ("f", 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_lock_loss_disposition_0150', '')] = '5fca6dc357c2eca9ebdc3ea402e6512389ad21ccd35b60e580d4d8e386ec9a44'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_check_loss_disposition_0150', 'uuid, boolean')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_check_loss_disposition_0150', 'uuid, boolean')] = ("f", 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_disposition_0150', 'uuid, boolean')] = '8e3c9c0c5e1093e9428dcc8db9aa1deebf06d4ae1515c22c36a85fd84318dd02'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_loss_disposition_0150', '')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_loss_disposition_0150', '')] = ("f", 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_loss_disposition_0150', '')] = '5621621b322934a358a36f4d13ccc5a23a974dfb60fd1627f5cf2a59755f57ad'
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_require_opening_observation_account_0023', '')] = 'f68e2e22fa484e1abd775253574a847679e31f06caffb18acd73c0e5e4e5ee7d'
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_hold_0145', 'uuid')] = 'dd1723fdf0cf6d8e8e1e223f087dd7be6eb39b16b15b4ef49d6442f1b072c02b'
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_transaction_0145', 'uuid')] = '1a137bc70ef8b540ccec80768f929473779abf344af7b715727455338d242048'
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_loss_dispositions_loss_disposition_0150'] = ('stock_loss_dispositions', 'rsc_guard_loss_disposition_0150', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_audit_events_loss_disposition_0150'] = ('audit_events', 'rsc_guard_loss_disposition_0150', 'A', 5, True, True, True)
+EXPECTED_AUDIT_TRIGGERS['trg_audit_events_loss_disposition_0150'] = ('audit_events', 'rsc_guard_loss_disposition_0150', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_state_transition_events_loss_disposition_0150'] = ('state_transition_events', 'rsc_guard_loss_disposition_0150', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_outbox_events_loss_disposition_0150'] = ('outbox_events', 'rsc_guard_loss_disposition_0150', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_notification_events_loss_disposition_0150'] = ('notification_events', 'rsc_guard_loss_disposition_0150', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_notification_person_targets_loss_disposition_0150'] = ('notification_person_targets', 'rsc_guard_loss_disposition_0150', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_disposition_lock_0150'] = ('stock_loss_dispositions', 'rsc_lock_loss_disposition_0150', 'A', 7, False, False, False)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_disposition_immutable_0150'] = ('stock_loss_dispositions', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_disposition_truncate_0150'] = ('stock_loss_dispositions', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False)
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_original_line'] = {'table': 'stock_loss_dispositions', 'columns': ('line_id',), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_original_decision'] = {'table': 'stock_loss_dispositions', 'columns': ('headquarters_decision_id',), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_transaction'] = {'table': 'stock_loss_dispositions', 'columns': ('posting_transaction_id',), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_movement'] = {'table': 'stock_loss_dispositions', 'columns': ('posting_movement_id',), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_request'] = {'table': 'stock_loss_dispositions', 'columns': ('actor_user_id', 'request_id'), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_key'] = {'table': 'stock_loss_dispositions', 'columns': ('idempotency_key_hash',), 'predicate': None}
+
 _ROLE_EVIDENCE_SQL = text(
     """
 SELECT

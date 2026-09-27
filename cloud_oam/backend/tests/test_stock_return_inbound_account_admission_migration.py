@@ -25,11 +25,11 @@ def test_exact_account_source_readiness_and_unchanged_private_acl(migration):
     assert hashlib.sha256(old.encode()).hexdigest() == m['ACCOUNT_OLD_HASH']
     assert new.replace(m['ACCOUNT_BRANCH'], '') == old
     assert hashlib.sha256(new.encode()).hexdigest() == m['ACCOUNT_NEW_HASH']
-    assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[
+    assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0149[
         ('rsc_require_opening_observation_account_0023', '')] == m['ACCOUNT_NEW_HASH']
     assert ('rsc_require_opening_observation_account_0023', '') not in security.RUNTIME_EXECUTE_FUNCTIONS
     assert m['OLD_READY_HASH'] == scope.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0148['rsc_oam_runtime_binding_ready_0044()'][6]
-    assert m['NEW_READY_HASH'] == scope.OAM_SYNC_FUNCTION_MANIFEST['rsc_oam_runtime_binding_ready_0044()'][6]
+    assert m['NEW_READY_HASH'] == scope.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0149['rsc_oam_runtime_binding_ready_0044()'][6]
     parser.parse_plpgsql_json('CREATE FUNCTION guard() RETURNS trigger LANGUAGE plpgsql AS $b$' + new + '$b$')
     assert not sa.text(new)._bindparams
 
