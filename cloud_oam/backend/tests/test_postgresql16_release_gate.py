@@ -10,6 +10,7 @@ service container.  No local, production, or shared database is acceptable.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -712,6 +713,7 @@ def _run_alembic(
 
 def _assert_retention_downgrade(
     destination: str, *, blocking_revision: str, blocker: str,
+    retention_guard: Callable[[], None] | None = None,
 ) -> None:
     """Prove chain ordering and the older guard against the same real facts.
 
@@ -719,6 +721,8 @@ def _assert_retention_downgrade(
     notification seals. Determine the first guard from current facts. Then,
     execute the predecessor's own downgrade primitive in an explicitly rolled
     back migrator transaction; never delete target facts to reach an old guard.
+    A source-hash-bound historical migration can supply its exact retention
+    guard: its obsolete catalog preflight cannot run against the current head.
     """
     assert _current_revision() == HEAD_REVISION
     with psycopg.connect(**_connection_parameters(
@@ -744,12 +748,14 @@ def _assert_retention_downgrade(
     output = completed.stdout + completed.stderr
     assert chain_blocker in output
     if chain_blocker != blocker:
-        files = tuple((CLOUD_ROOT / "backend/alembic/versions").glob(f"{blocking_revision}_*.py"))
-        assert len(files) == 1, f"exact historical migration missing: {blocking_revision}"
-        spec = importlib.util.spec_from_file_location(f"retention_{blocking_revision}", files[0])
-        assert spec is not None and spec.loader is not None
-        migration = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(migration)
+        if retention_guard is None:
+            files = tuple((CLOUD_ROOT / "backend/alembic/versions").glob(f"{blocking_revision}_*.py"))
+            assert len(files) == 1, f"exact historical migration missing: {blocking_revision}"
+            spec = importlib.util.spec_from_file_location(f"retention_{blocking_revision}", files[0])
+            assert spec is not None and spec.loader is not None
+            migration = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(migration)
+            retention_guard = migration.downgrade
         engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator"),
         ), pool_size=1, max_overflow=0, pool_timeout=5)
@@ -763,7 +769,7 @@ def _assert_retention_downgrade(
                         environment.configure(connection=connection)
                         with Operations.context(environment.get_context()):
                             with pytest.raises((RuntimeError, DBAPIError), match=re.escape(blocker)):
-                                migration.downgrade()
+                                retention_guard()
                 finally:
                     transaction.rollback()
         finally:
@@ -8824,13 +8830,11 @@ def _assert_0052_opening_history_downgrade_rejected(
             before = cursor.fetchone()
     assert before is not None
 
-    blocked = _run_alembic(
-        "downgrade",
+    _assert_retention_downgrade(
         STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION,
-        expect_success=False,
-    )
-    assert history_migration.DOWNGRADE_BLOCKER in (
-        blocked.stdout + blocked.stderr
+        blocking_revision=OPENING_RECOUNT_SOURCE_HISTORY_REVISION,
+        blocker=history_migration.DOWNGRADE_BLOCKER,
+        retention_guard=history_migration._require_no_opening_evidence,
     )
     assert _current_revision() == HEAD_REVISION
 
