@@ -126,8 +126,10 @@ def _publish_control(owner, edge_engine, world):
                 material_publication_id=world.material_publication_id)
 
 
-def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_user_id):
+def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_user_id, control_material='quantity'):
     """Publish two SKU policies and one control row; never seed balances."""
+    if control_material not in ('quantity', 'serial'):
+        raise ValueError('control_material must select quantity or serial')
     from app.foundation_models import Organization, Person, Role, RoleAssignment
     from app.inventory_models import (
         CustodyAssignment,
@@ -545,5 +547,10 @@ def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_u
             "serial_no": serial.serial_no,
             "serial_qr_code": serial.qr_code,
         }
+    if control_material == 'serial':
+        # The SN opening needs its own explicit control row. Absence from the
+        # quantity fixture's capture is not evidence of zero SN stock.
+        world.code = fixture['concurrency_material_sku_code']
+        world.material_id = fixture['concurrency_material_id']
     fixture.update(_publish_control(owner, edge_engine, world))
     return fixture

@@ -1,4 +1,4 @@
-"""The named release check cannot pass when either independent gate is absent."""
+"""The named release check cannot pass when any independent gate is absent."""
 from itertools import product
 from pathlib import Path
 import re
@@ -15,7 +15,7 @@ def _jobs():
     return dict(zip(sections[1::2],sections[2::2]))
 
 
-def test_runtime_and_static_jobs_are_independent_and_original_named_check_requires_both():
+def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_all():
     triggers=WORKFLOW.read_text().split('permissions:\n',1)[0]
     for event in ('pull_request','push'):
         trigger=triggers.split(f'  {event}:\n',1)[1]
@@ -34,12 +34,22 @@ def test_runtime_and_static_jobs_are_independent_and_original_named_check_requir
                 'codex/notification-delivery-worker',
             ]
     jobs=_jobs()
-    assert set(jobs)=={'pg16_runtime','static_safety','postgresql16-release-gate'}
+    assert set(jobs)=={'pg16_runtime','pg16_loss','static_safety','postgresql16-release-gate'}
     runtime,static,aggregate=(jobs[key] for key in ('pg16_runtime','static_safety','postgresql16-release-gate'))
-    assert not re.search(r'^    (needs|if|continue-on-error):',runtime+'\n'+static,re.MULTILINE)
+    loss=jobs['pg16_loss']
+    assert not re.search(r'^    (needs|if|continue-on-error):',runtime+'\n'+static+'\n'+loss,re.MULTILINE)
     assert 'python -m pytest -q tests/test_postgresql16_release_gate.py' in runtime
     assert 'RSC_PG16_GATE_ACKNOWLEDGE_DISPOSABLE: I_UNDERSTAND_THIS_DATABASE_IS_EPHEMERAL' in runtime
     assert 'postgres:16-alpine@sha256:' in runtime
+    assert '    strategy:\n      fail-fast: false\n      matrix:\n        tracking: [quantity, serial]\n' in loss
+    assert 'RSC_PG16_LOSS_TRACKING: ${{ matrix.tracking }}' in loss
+    assert 'python -m pytest -q -s tests/test_postgresql16_stock_loss_release_gate.py' in loss
+    assert '        working-directory: cloud_oam/backend\n' in loss
+    # An independent service per matrix leg must retain the original fresh
+    # database, role passwords, loopback host and acknowledgement boundary.
+    assert runtime.split('    services:\n',1)[1].split('    steps:\n',1)[0] == (
+        loss.split('    services:\n',1)[1].split('    steps:\n',1)[0].replace(
+            '      RSC_PG16_LOSS_TRACKING: ${{ matrix.tracking }}\n',''))
     assert 'RSC_PG16_GATE_' not in static and 'services:' not in static
     # The three matrix legs must run the same dynamically discovered file set
     # with disjoint assignments. The named aggregate requires every leg.
@@ -51,8 +61,9 @@ def test_runtime_and_static_jobs_are_independent_and_original_named_check_requir
     assert '-r cloud_oam/scripts/requirements-public-knowledge.txt' in static
     assert '    timeout-minutes: 360\n' in static
     assert '    if: ${{ always() }}\n' in aggregate
-    assert '    needs: [pg16_runtime, static_safety]\n' in aggregate
+    assert '    needs: [pg16_runtime, pg16_loss, static_safety]\n' in aggregate
     assert 'RUNTIME_RESULT: ${{ needs.pg16_runtime.result }}' in aggregate
+    assert 'LOSS_RESULT: ${{ needs.pg16_loss.result }}' in aggregate
     assert 'STATIC_RESULT: ${{ needs.static_safety.result }}' in aggregate
     assert 'continue-on-error:' not in aggregate
 
@@ -61,22 +72,23 @@ def test_static_shards_discover_every_test_module_exactly_once():
     cloud=ROOT/'cloud_oam'
     expected={str(path.relative_to(cloud)) for scope in ('backend/tests','edge_sync')
               for path in (cloud/scope).rglob('test_*.py') if path.is_file()}
-    runtime='backend/tests/test_postgresql16_release_gate.py'
-    assert runtime in expected
+    runtimes={'backend/tests/test_postgresql16_release_gate.py',
+              'backend/tests/test_postgresql16_stock_loss_release_gate.py'}
+    assert runtimes.issubset(expected)
     observed=[]
     for index in range(3):
         result=subprocess.run([sys.executable,'scripts/run_static_shard.py','--index',str(index),
                                '--count','3','--list'],cwd=cloud,capture_output=True,text=True,check=True)
         selected=result.stdout.splitlines()
-        assert selected and runtime not in selected
+        assert selected and runtimes.isdisjoint(selected)
         observed.extend(selected)
     assert len(observed)==len(set(observed))
-    assert set(observed)==expected-{runtime}
+    assert set(observed)==expected-runtimes
 
 
 def test_pg16_and_static_jobs_install_the_image_runtime_hash_lock():
     jobs=_jobs()
-    for name in ('pg16_runtime','static_safety'):
+    for name in ('pg16_runtime','pg16_loss','static_safety'):
         job=jobs[name]
         assert '-r cloud_oam/backend/requirements-build.lock' in job
         assert '-r cloud_oam/backend/requirements-linux-amd64.lock' in job
@@ -93,6 +105,36 @@ def test_aggregate_shell_rejects_every_incomplete_or_failed_combination():
     source=_jobs()['postgresql16-release-gate'].split('        run: |\n',1)[1]
     script='\n'.join(line[10:] for line in source.splitlines() if line.strip())
     statuses=('success','failure','cancelled','skipped','timed_out','in_progress','')
-    for runtime,static in product(statuses,repeat=2):
-        result=subprocess.run(['bash','-e','-c',script],env={'RUNTIME_RESULT':runtime,'STATIC_RESULT':static},capture_output=True,check=False)
-        assert (result.returncode==0)==(runtime==static=='success'),(runtime,static)
+    for runtime,loss,static in product(statuses,repeat=3):
+        result=subprocess.run(['bash','-e','-c',script],env={
+            'RUNTIME_RESULT':runtime,'LOSS_RESULT':loss,'STATIC_RESULT':static},capture_output=True,check=False)
+        assert (result.returncode==0)==(runtime==loss==static=='success'),(runtime,loss,static)
+
+
+def test_loss_gate_refuses_unacknowledged_or_incorrect_hosted_context_before_database(monkeypatch):
+    import pytest
+    import test_postgresql16_stock_loss_release_gate as loss_gate
+
+    def unexpected_database_access():
+        raise AssertionError('unacknowledged loss gate reached database')
+
+    monkeypatch.setattr(loss_gate.gate,'_assert_fresh_disposable_postgresql16',unexpected_database_access)
+    settings={
+        'RSC_PG16_GATE_ACKNOWLEDGE_DISPOSABLE':loss_gate.gate.ACKNOWLEDGEMENT,
+        'GITHUB_ACTIONS':'true','RUNNER_ENVIRONMENT':'github-hosted',
+    }
+    monkeypatch.setenv('RSC_PG16_LOSS_TRACKING','quantity')
+    for missing in settings:
+        for key,value in settings.items():monkeypatch.setenv(key,value)
+        monkeypatch.delenv(missing,raising=False)
+        with pytest.raises(pytest.fail.Exception,match='acknowledged disposable'):
+            loss_gate.test_postgresql16_stock_loss_release_gate()
+    for key,value in settings.items():monkeypatch.setenv(key,value)
+    monkeypatch.setenv('RUNNER_ENVIRONMENT','self-hosted')
+    with pytest.raises(pytest.fail.Exception,match='acknowledged disposable'):
+        loss_gate.test_postgresql16_stock_loss_release_gate()
+    monkeypatch.setenv('RUNNER_ENVIRONMENT','github-hosted')
+    for tracking in ('','both','quantity,serial','production'):
+        monkeypatch.setenv('RSC_PG16_LOSS_TRACKING',tracking)
+        with pytest.raises(pytest.fail.Exception,match='explicit quantity or serial'):
+            loss_gate.test_postgresql16_stock_loss_release_gate()

@@ -571,6 +571,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "stock_operation_shipments", "stock_operation_shipment_lines", "stock_operation_shipment_serials",
         "stock_operation_receipts", "stock_operation_receipt_lines", "stock_operation_receipt_serials", "stock_operation_receipt_exceptions",
         "stock_operation_orders", "stock_operation_lines", "stock_operation_serials", "stock_operation_cancellations",
+        "stock_loss_files", "stock_loss_request_seals", "stock_loss_regional_reviews", "stock_loss_headquarters_reviews", "stock_loss_headquarters_decisions",
         "outbound_postings", "outbound_posting_serials",
         "shipments", "shipment_lines", "shipment_serials",
         "logistics_events", "receipts", "receipt_lines", "receipt_serials", "receipt_exceptions", "oam_receipt_evidence", "inbound_orders", "inbound_postings",
@@ -893,6 +894,9 @@ def test_0036_formal_file_runtime_manifest_and_function_bodies_are_exact() -> No
             import_job = runpy.run_path(str(FORMAL_FILE_MIGRATION_0036.with_name('20261120_0141_opening_count_import_jobs.py')))
             assert body == import_job['FILE_OLD_BODY']
             body = import_job['FILE_NEW_BODY']
+            loss_evidence = runpy.run_path(str(FORMAL_FILE_MIGRATION_0036.with_name('20261122_0143_stock_loss_evidence_purpose.py')))
+            assert body == loss_evidence['OLD_BODY']
+            body = loss_evidence['NEW_BODY']
         assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (
             FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
         )
@@ -1359,7 +1363,11 @@ def _transit_source_change(coordinate):
         successor = runpy.run_path(str(Path(__file__).parents[1] /
             "alembic/versions/20261013_0103_stock_return_outbounds.py"))
         old, new = successor["_sources"]()["public.rsc_require_opening_observation_account_0023()"]
-        return hashlib.sha256(old.encode()).hexdigest(), hashlib.sha256(new.encode()).hexdigest(), ((old,new,1),)
+        loss = runpy.run_path(str(Path(__file__).parents[1] /
+            "alembic/versions/20261124_0145_stock_loss_submission_proof.py"))
+        loss_old, loss_new = loss['_sources']()['public.rsc_require_opening_observation_account_0023()']
+        assert new == loss_old
+        return hashlib.sha256(old.encode()).hexdigest(), hashlib.sha256(loss_new.encode()).hexdigest(), ((old,loss_new,1),)
     migration = runpy.run_path(str(Path(__file__).parents[1] /
         "alembic/versions/20261012_0102_transit_opening_scopes.py"))
     return migration["SOURCE_CHANGES"].get(f"{coordinate[0]}({coordinate[1]})")
@@ -7295,9 +7303,21 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 386
+    assert len(triggers) == 433
+    assert any(row['trigger_name'] == 'trg_stock_loss_request_seals_loss_seal_0146'
+               and row['table_name'] == 'stock_loss_request_seals'
+               and row['function_name'] == 'rsc_guard_loss_seal_0146'
+               for row in triggers)
     assert any(row["trigger_name"] == "trg_file_jobs_import_terminal_0141"
                and row["table_name"] == "file_jobs" for row in triggers)
+    assert any(row["trigger_name"] == "trg_files_loss_authority_commit_0143"
+               and row["table_name"] == "files"
+               and row["function_name"] == "rsc_guard_stock_loss_file_commit_0143"
+               for row in triggers)
+    assert any(row['trigger_name'] == 'trg_stock_loss_files_binding_0144'
+               and row['table_name'] == 'stock_loss_files'
+               and row['function_name'] == 'rsc_guard_stock_loss_file_binding_0144'
+               for row in triggers)
     assert len(functions) == 105
     _assert_material_request_approval_guards(
         triggers=triggers,

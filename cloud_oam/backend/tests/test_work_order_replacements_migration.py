@@ -1,5 +1,6 @@
 """Exact security catalog and source transitions for atomic replacements."""
 import hashlib
+from migration_source_expectations import current_source_hash
 from pathlib import Path
 import runpy
 from types import SimpleNamespace
@@ -37,7 +38,7 @@ def test_replacement_security_pins_match_sources_and_preserve_minimum_privileges
             departure = runpy.run_path(str(MIGRATION.with_name("20261013_0103_stock_return_outbounds.py")))
             departure_old, current_head = departure["_sources"]()[signature]
             assert current == departure_old
-            assert catalog[coordinate] == hashlib.sha256(current_head.encode()).hexdigest()
+            assert catalog[coordinate] == current_source_hash(departure["revision"], signature, current_head)
         else:
             assert catalog[coordinate] == hashlib.sha256(body.encode()).hexdigest()
     for name,(table,_,function,kind,deferred) in m["TRIGGERS"].items():

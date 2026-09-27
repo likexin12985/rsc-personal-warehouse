@@ -4422,6 +4422,179 @@ EXPECTED_FORMAL_FILE_INDEXES['uq_opening_import_seal_source'] = {"table": "openi
 EXPECTED_FORMAL_FILE_INDEXES['uq_opening_import_seal_request'] = {"table": "opening_import_command_seals", "columns": ('import_key_hash',), "predicate": None}
 
 
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0141 = dict(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256)
+
+# Typed documents are a schema prerequisite; loss writes stay closed until
+# their own inventory/approval proof is installed. Pin that boundary too.
+_LOSS_ADMISSION_GUARD = ('rsc_guard_stock_loss_admission_0142', '')
+FORMAL_FILE_INTERNAL_FUNCTIONS[_LOSS_ADMISSION_GUARD] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[_LOSS_ADMISSION_GUARD] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[_LOSS_ADMISSION_GUARD] = 'fb200f8363cf07bc88c950d0a0437953ee69f295e2740bc3ccbcd64a76f5136a'
+for _table in ('stock_operation_orders', 'stock_operation_lines'):
+    EXPECTED_FORMAL_FILE_TRIGGERS[f'trg_{_table}_loss_admission_0142'] = (
+        _table, _LOSS_ADMISSION_GUARD[0], 'A', 7,
+    )
+
+
+# Dedicated loss files require current authority again at transaction commit.
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_formal_file_object_0036', '')] = '300dbf1d339537e4f67288f4c685a0755526e5043255d40a70c4b17b7f4373c7'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_assert_stock_loss_file_authority_0143', 'text, bigint')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_assert_stock_loss_file_authority_0143', 'text, bigint')] = ('f', 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_assert_stock_loss_file_authority_0143', 'text, bigint')] = '0697f71127250fd04a8e9118feda153af0c7ea2d9701498dc50d4af1006789bd'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_stock_loss_file_commit_0143', '')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_stock_loss_file_commit_0143', '')] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_stock_loss_file_commit_0143', '')] = 'a876f82c8dd10c4eb1f9dbc782a4af9c782b4fff140837cfacd27cadd2557513'
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_files_loss_authority_commit_0143'] = ('files', 'rsc_guard_stock_loss_file_commit_0143', 'A', 21, True, True, True)
+
+
+# Typed immutable attachment references; the 0142 loss admission guard remains.
+RUNTIME_READ_TABLES |= {'stock_loss_files'}
+RUNTIME_INSERT_TABLES |= {'stock_loss_files'}
+_LOSS_BINDING_GUARD = ('rsc_guard_stock_loss_file_binding_0144', '')
+FORMAL_FILE_INTERNAL_FUNCTIONS[_LOSS_BINDING_GUARD] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[_LOSS_BINDING_GUARD] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[_LOSS_BINDING_GUARD] = '8cff04612adc7fef7856c52eea2de5d3620555070a1a3ad83a9cf59fec4b3fc4'
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.update({
+    'trg_stock_loss_files_binding_0144': ('stock_loss_files', _LOSS_BINDING_GUARD[0], 'A', 5, True, True, True),
+    'trg_stock_loss_files_immutable_0144': ('stock_loss_files', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+    'trg_stock_loss_files_truncate_0144': ('stock_loss_files', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+})
+EXPECTED_FORMAL_FILE_INDEXES['uq_stock_loss_files_file'] = {
+    'table': 'stock_loss_files', 'columns': ('file_id',), 'predicate': None,
+}
+
+
+# 0145 replaces unconditional loss rejection with a complete deferred proof.
+EXPECTED_FORMAL_FILE_TRIGGERS_THROUGH_0144 = dict(EXPECTED_FORMAL_FILE_TRIGGERS)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0144 = dict(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256)
+for _table in ('stock_operation_orders', 'stock_operation_lines'):
+    EXPECTED_FORMAL_FILE_TRIGGERS.pop(f'trg_{_table}_loss_admission_0142')
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_assert_loss_submit_authority_0145', 'text, bigint, uuid, uuid')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_assert_loss_submit_authority_0145', 'text, bigint, uuid, uuid')] = ("f", 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_assert_loss_submit_authority_0145', 'text, bigint, uuid, uuid')] = 'e8553433927bbee4ee59618552c5609ea61bcd0b9001a806e8e0df4dc164b84a'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_check_loss_hold_0145', 'uuid')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_check_loss_hold_0145', 'uuid')] = ("f", 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_hold_0145', 'uuid')] = 'fbf6723f10bd4485a4fec1860f62852cc7451c248c7814b25a66fd0530ff11ad'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_check_loss_submission_0145', 'uuid')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_check_loss_submission_0145', 'uuid')] = ("f", 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_submission_0145', 'uuid')] = '9a6604aa82474e1805d3014d78cb2a0036caef8f18b684ce302b01e005adc7ab'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_check_loss_transaction_0145', 'uuid')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_check_loss_transaction_0145', 'uuid')] = ("f", 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_transaction_0145', 'uuid')] = 'a1b7515f6ae60afd70e6affbb07052bffe1ba86793fc23c0f8c5cdd22aff7999'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_loss_notification_0145', '')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_loss_notification_0145', '')] = ("f", 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_loss_notification_0145', '')] = '4a3637f7e2b363100e78659bfb9fa2709f9b783608aca4406c7e0f941914b6d6'
+MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[('rsc_dispatch_stock_return_0100', '')] = '997af4afbce9a0444a8937e3cce36d23ccd3d49f6b9dcc399e20564a381f6484'
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_require_opening_observation_account_0023', '')] = '42eb336ee4cbf9cff4770790fedb2875ab49cf9a8b802c5d1b4f18fb33238089'
+for _table in ('notification_events','notification_person_targets'):
+    EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[f'trg_{_table}_loss_0145'] = (
+        _table, 'rsc_guard_loss_notification_0145', 'A', 5, True, True, True,
+    )
+
+
+# 0146 immutable loss request seals and shared request/key exclusion.
+EXPECTED_AUDIT_TRIGGERS['trg_audit_events_loss_seal_0146'] = (
+    'audit_events', 'rsc_guard_loss_seal_0146', 5, True, True, True,
+)
+RUNTIME_READ_TABLES |= {'stock_loss_request_seals'}
+RUNTIME_INSERT_TABLES |= {'stock_loss_request_seals'}
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_lock_loss_seal_0146', '')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_lock_loss_seal_0146', '')] = ("f", 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_lock_loss_seal_0146', '')] = 'ebe953551f9e0b436dc57d66f352ed3269287d57b82de8851af9551f08db8d3e'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_check_loss_seal_0146', 'uuid')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_check_loss_seal_0146', 'uuid')] = ("f", 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_seal_0146', 'uuid')] = '85b9245ba5122d945b67423dcdff210207ff31a4509a6e3e2eeab4582543a89e'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_loss_seal_0146', '')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_loss_seal_0146', '')] = ("f", 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_loss_seal_0146', '')] = '4f6769f8315a669f8e8c8b2109aa9ea46c80e7525c434db316035d43f2c9ba82'
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.update({
+    'trg_stock_operation_orders_loss_seal_0146': ('stock_operation_orders', 'rsc_guard_loss_seal_0146', 'A', 5, True, True, True),
+    'trg_stock_operation_cancellations_loss_seal_0146': ('stock_operation_cancellations', 'rsc_guard_loss_seal_0146', 'A', 5, True, True, True),
+    'trg_stock_operation_outbounds_loss_seal_0146': ('stock_operation_outbounds', 'rsc_guard_loss_seal_0146', 'A', 5, True, True, True),
+    'trg_stock_operation_shipments_loss_seal_0146': ('stock_operation_shipments', 'rsc_guard_loss_seal_0146', 'A', 5, True, True, True),
+    'trg_stock_operation_receipts_loss_seal_0146': ('stock_operation_receipts', 'rsc_guard_loss_seal_0146', 'A', 5, True, True, True),
+    'trg_stock_operation_return_inbounds_loss_seal_0146': ('stock_operation_return_inbounds', 'rsc_guard_loss_seal_0146', 'A', 5, True, True, True),
+    'trg_stock_operation_command_seals_loss_seal_0146': ('stock_operation_command_seals', 'rsc_guard_loss_seal_0146', 'A', 5, True, True, True),
+    'trg_stock_operation_return_inbound_seals_loss_seal_0146': ('stock_operation_return_inbound_seals', 'rsc_guard_loss_seal_0146', 'A', 5, True, True, True),
+    'trg_stock_loss_request_seals_loss_seal_0146': ('stock_loss_request_seals', 'rsc_guard_loss_seal_0146', 'A', 5, True, True, True),
+    'trg_inventory_transactions_loss_seal_0146': ('inventory_transactions', 'rsc_guard_loss_seal_0146', 'A', 5, True, True, True),
+    'trg_receipts_loss_seal_0146': ('receipts', 'rsc_guard_loss_seal_0146', 'A', 5, True, True, True),
+    'trg_shipments_loss_seal_0146': ('shipments', 'rsc_guard_loss_seal_0146', 'A', 5, True, True, True),
+    'trg_audit_events_loss_seal_0146': ('audit_events', 'rsc_guard_loss_seal_0146', 'A', 5, True, True, True),
+    'trg_state_transition_events_loss_seal_0146': ('state_transition_events', 'rsc_guard_loss_seal_0146', 'A', 5, True, True, True),
+    'trg_loss_seals_lock_0146': ('stock_loss_request_seals', 'rsc_lock_loss_seal_0146', 'A', 7, False, False, False),
+    'trg_loss_seals_immutable_0146': ('stock_loss_request_seals', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+    'trg_loss_seals_truncate_0146': ('stock_loss_request_seals', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+})
+EXPECTED_FORMAL_FILE_INDEXES['uq_stock_loss_seals_request'] = {'table': 'stock_loss_request_seals', 'columns': ('actor_user_id', 'request_id'), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_stock_loss_seals_key'] = {'table': 'stock_loss_request_seals', 'columns': ('idempotency_key_hash',), 'predicate': None}
+
+# 0147 regional verification is an immutable approval fact, never a disposal.
+RUNTIME_READ_TABLES |= {'stock_loss_regional_reviews'}
+RUNTIME_INSERT_TABLES |= {'stock_loss_regional_reviews'}
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_assert_loss_regional_authority_0147', 'text, bigint, uuid, uuid')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_assert_loss_regional_authority_0147', 'text, bigint, uuid, uuid')] = ("f", 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_assert_loss_regional_authority_0147', 'text, bigint, uuid, uuid')] = 'feda01ea7eb28070df8d4f4187bfc16126269e00190ce9a407ffd9e04bd29427'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_lock_loss_regional_review_0147', '')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_lock_loss_regional_review_0147', '')] = ("f", 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_lock_loss_regional_review_0147', '')] = 'b287d96f89ea0b952f54f762a39a2209cb17dacfceecd8f03b59193a4c48bce2'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_check_loss_regional_review_0147', 'uuid')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_check_loss_regional_review_0147', 'uuid')] = ("f", 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_regional_review_0147', 'uuid')] = '04bd4f1b1d91297f47b1dbdbd00c2318959072ba4359713dc68b2d8ce68ee1bb'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_loss_regional_review_0147', '')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_loss_regional_review_0147', '')] = ("f", 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_loss_regional_review_0147', '')] = 'c92ef2126a96e7f78b27553e4ab1136363adb8f8fb2f07edb106bd0759d44c05'
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_loss_regional_reviews_loss_regional_0147'] = ('stock_loss_regional_reviews', 'rsc_guard_loss_regional_review_0147', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_audit_events_loss_regional_0147'] = ('audit_events', 'rsc_guard_loss_regional_review_0147', 'A', 5, True, True, True)
+EXPECTED_AUDIT_TRIGGERS['trg_audit_events_loss_regional_0147'] = ('audit_events', 'rsc_guard_loss_regional_review_0147', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_state_transition_events_loss_regional_0147'] = ('state_transition_events', 'rsc_guard_loss_regional_review_0147', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_outbox_events_loss_regional_0147'] = ('outbox_events', 'rsc_guard_loss_regional_review_0147', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_notification_events_loss_regional_0147'] = ('notification_events', 'rsc_guard_loss_regional_review_0147', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_notification_person_targets_loss_regional_0147'] = ('notification_person_targets', 'rsc_guard_loss_regional_review_0147', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_inventory_transactions_loss_regional_0147'] = ('inventory_transactions', 'rsc_guard_loss_regional_review_0147', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_regional_lock_0147'] = ('stock_loss_regional_reviews', 'rsc_lock_loss_regional_review_0147', 'A', 7, False, False, False)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_regional_immutable_0147'] = ('stock_loss_regional_reviews', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_regional_truncate_0147'] = ('stock_loss_regional_reviews', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False)
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_regional_review_order'] = {'table': 'stock_loss_regional_reviews', 'columns': ('operation_id',), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_regional_review_request'] = {'table': 'stock_loss_regional_reviews', 'columns': ('actor_user_id', 'request_id'), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_regional_review_key'] = {'table': 'stock_loss_regional_reviews', 'columns': ('idempotency_key_hash',), 'predicate': None}
+
+# 0148 headquarters approval is separate from inventory disposition.
+RUNTIME_READ_TABLES |= {'stock_loss_headquarters_reviews', 'stock_loss_headquarters_decisions'}
+RUNTIME_INSERT_TABLES |= {'stock_loss_headquarters_reviews', 'stock_loss_headquarters_decisions'}
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_assert_loss_headquarters_authority_0148', 'text, bigint, uuid, uuid')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_assert_loss_headquarters_authority_0148', 'text, bigint, uuid, uuid')] = ("f", 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_assert_loss_headquarters_authority_0148', 'text, bigint, uuid, uuid')] = '0426436f35ea557e1bb81453cd2434ae8a6494fd869a8bf936f7174d717a08b7'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_lock_loss_headquarters_review_0148', '')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_lock_loss_headquarters_review_0148', '')] = ("f", 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_lock_loss_headquarters_review_0148', '')] = '19ac43b3d0a62c24e28c8b7b98e687b11f713f88c42a673c3f02d851679b7b32'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_check_loss_headquarters_review_0148', 'uuid')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_check_loss_headquarters_review_0148', 'uuid')] = ("f", 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_headquarters_review_0148', 'uuid')] = 'c674e7555bad7422604e8dff2bbcc5db4ff3b06f1471fbf08598d4409f07c00c'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_loss_headquarters_review_0148', '')] = ("v", True, "plpgsql", ("search_path=pg_catalog, public",))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_loss_headquarters_review_0148', '')] = ("f", 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_loss_headquarters_review_0148', '')] = 'f83ebcbecc1770b3bbcec5994c519cf41a580094cbbca3e6645cf744b015eb6a'
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_loss_headquarters_reviews_loss_headquarters_0148'] = ('stock_loss_headquarters_reviews', 'rsc_guard_loss_headquarters_review_0148', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_loss_headquarters_decisions_loss_headquarters_0148'] = ('stock_loss_headquarters_decisions', 'rsc_guard_loss_headquarters_review_0148', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_audit_events_loss_headquarters_0148'] = ('audit_events', 'rsc_guard_loss_headquarters_review_0148', 'A', 5, True, True, True)
+EXPECTED_AUDIT_TRIGGERS['trg_audit_events_loss_headquarters_0148'] = ('audit_events', 'rsc_guard_loss_headquarters_review_0148', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_state_transition_events_loss_headquarters_0148'] = ('state_transition_events', 'rsc_guard_loss_headquarters_review_0148', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_outbox_events_loss_headquarters_0148'] = ('outbox_events', 'rsc_guard_loss_headquarters_review_0148', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_notification_events_loss_headquarters_0148'] = ('notification_events', 'rsc_guard_loss_headquarters_review_0148', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_notification_person_targets_loss_headquarters_0148'] = ('notification_person_targets', 'rsc_guard_loss_headquarters_review_0148', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_inventory_transactions_loss_headquarters_0148'] = ('inventory_transactions', 'rsc_guard_loss_headquarters_review_0148', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_hq_review_lock_0148'] = ('stock_loss_headquarters_reviews', 'rsc_lock_loss_headquarters_review_0148', 'A', 7, False, False, False)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_hq_review_immutable_0148'] = ('stock_loss_headquarters_reviews', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_hq_review_truncate_0148'] = ('stock_loss_headquarters_reviews', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_hq_decision_lock_0148'] = ('stock_loss_headquarters_decisions', 'rsc_lock_loss_headquarters_review_0148', 'A', 7, False, False, False)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_hq_decision_immutable_0148'] = ('stock_loss_headquarters_decisions', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_hq_decision_truncate_0148'] = ('stock_loss_headquarters_decisions', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False)
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_headquarters_review_order'] = {'table': 'stock_loss_headquarters_reviews', 'columns': ('operation_id',), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_headquarters_review_regional'] = {'table': 'stock_loss_headquarters_reviews', 'columns': ('regional_review_id',), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_headquarters_review_request'] = {'table': 'stock_loss_headquarters_reviews', 'columns': ('actor_user_id', 'request_id'), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_headquarters_review_key'] = {'table': 'stock_loss_headquarters_reviews', 'columns': ('idempotency_key_hash',), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_headquarters_decision_line'] = {'table': 'stock_loss_headquarters_decisions', 'columns': ('review_id', 'line_id'), 'predicate': None}
+
 _ROLE_EVIDENCE_SQL = text(
     """
 SELECT

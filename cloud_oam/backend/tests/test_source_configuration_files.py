@@ -138,7 +138,7 @@ def test_postgresql_forward_sql_function_acl_and_manifest_agree():
     assert opening_source['OLD_FILE_HASH'] == report_file['NEW_FILE_HASH']
     import_job = runpy.run_path(str(PATH.parent/'20261120_0141_opening_count_import_jobs.py'))
     assert opening_source['NEW_FILE_HASH'] == import_job['FILE_OLD_HASH']
-    assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_formal_file_object_0036','')] == import_job['FILE_NEW_HASH']
+    assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0141[('rsc_guard_formal_file_object_0036','')] == import_job['FILE_NEW_HASH']
     assert m['NEW_HASH'] == scope.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0120['rsc_oam_runtime_binding_ready_0044()'][6]
     for name,table in m['TRIGGERS'].items():
         assert len(name) <= 63

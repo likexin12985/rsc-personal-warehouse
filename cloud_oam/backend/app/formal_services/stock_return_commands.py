@@ -17,6 +17,8 @@ from .notification_events import record_stock_return_notification
 
 
 def _fresh_request(db, *, actor, key, request_id):
+    from .stock_loss_seals import require_unsealed as require_loss_unsealed
+    require_loss_unsealed(db,actor=actor,request_id=request_id,key=key)
     from ..stock_operation_models import StockOperationReturnInbound
     from .stock_return_recovery import require_unsealed
     require_unsealed(db, actor=actor, request_id=request_id)

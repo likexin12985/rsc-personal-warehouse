@@ -27,7 +27,7 @@ def test_api_backup_and_runtime_catalog_agree():
             assert stage_hash==report_file['OLD_FILE_HASH']
             assert report_file['NEW_FILE_HASH']==opening_source['OLD_FILE_HASH']
             assert opening_source['NEW_FILE_HASH']==import_job['FILE_OLD_HASH']
-            assert import_job['FILE_NEW_HASH']==security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
+            assert import_job['FILE_NEW_HASH']==security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0141[coordinate]
         else:
             assert stage_hash==security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
         assert m['HASHES'][signature]==tuple(hashlib.sha256(x.encode()).hexdigest() for x in (old,new))

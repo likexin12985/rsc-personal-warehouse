@@ -85,3 +85,19 @@ def _reuse_unchanged_alembic_script_directory():
     patcher.setattr(ScriptDirectory, "from_config", staticmethod(from_config))
     yield
     patcher.undo()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _reuse_immutable_migration_bytecode():
+    """Reuse compilation, never execution results, for the reviewed revisions.
+
+    Historical migration tests also load revisions directly through runpy,
+    outside Alembic env.py and ScriptDirectory.from_config. Keep the existing
+    source-hash-bound compiler cache active for those calls too. Every load
+    still executes fresh globals and side effects; changes to a loaded source
+    fail closed, and the loader is restored when the test session ends.
+    """
+    from migration_script_cache import cache_migration_compilation
+
+    with cache_migration_compilation(ROOT / "backend/alembic/versions"):
+        yield

@@ -9,7 +9,7 @@ from ..formal_access import lock_formal_principal_graph
 from ..foundation_models import AuditEvent, StateTransitionEvent
 from ..stock_operation_models import (StockOperationCommandSeal, StockOperationOrder,
     StockOperationCancellation, StockOperationOutbound, StockOperationReceipt,
-    StockOperationReturnInbound, StockOperationReturnInboundSeal, StockOperationShipment)
+    StockOperationReturnInbound, StockOperationReturnInboundSeal, StockOperationShipment, StockLossRequestSeal)
 from . import inventory_posting as posting, inventory_query as inventory
 from . import stock_return_facts as facts, stock_return_receipt_facts as receipts
 from .audit_chain import append_audit_event, lock_audit_chain_head, AuditChainError
@@ -62,9 +62,9 @@ def _sealed(db, *, actor, receipt, row):
 def _other_request(db, actor, request_id):
     # Old receive_return seals describe parcel acceptance, never an inbound.
     for model in (StockOperationOrder, StockOperationCancellation, StockOperationOutbound,
-            StockOperationShipment, StockOperationReceipt, StockOperationCommandSeal):
+            StockOperationShipment, StockOperationReceipt, StockOperationCommandSeal, StockLossRequestSeal):
         if db.scalar(select(model.id).where(model.actor_user_id == actor.user_id, model.request_id == request_id).limit(1)):
-            _fail("stock_return_inbound_request_conflict", "原请求已绑定其他退回操作，请核验准确坐标")
+            _fail("stock_return_inbound_request_conflict", "原请求已绑定其他库存作业或封存，请核验准确坐标")
     if db.scalar(select(AuditEvent.id).where(AuditEvent.stream_key == "material_request",
             AuditEvent.actor_user_id == actor.user_id, AuditEvent.aggregate_type == "stock_operation_command_seal",
             AuditEvent.after_jsonb["request_id"].as_string() == request_id).limit(1)):

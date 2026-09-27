@@ -90,6 +90,7 @@ _AUDIT_STREAM_BY_PURPOSE: Final[dict[str, str]] = {
     "opening_count_import": "inventory",
     "source_configuration_evidence": "authorization",
     "daily_reconciliation_evidence": "authorization",
+    "stock_loss_evidence": "inventory",
 }
 _SAFE_TRACE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,159}$", re.ASCII)
 _SAFE_IDEMPOTENCY = re.compile(r"^[\x21-\x7e]{1,200}$", re.ASCII)
@@ -695,6 +696,10 @@ def _require_upload_permission(
     actor: FormalPrincipal,
     purpose: str,
 ) -> None:
+    if purpose == "stock_loss_evidence":
+        from .stock_loss_evidence import require_upload_permission
+        require_upload_permission(db, actor)
+        return
     if purpose == "inventory_report_export":
         _fail("file_purpose_forbidden", "forbidden", "报表文件只能由后台任务生成")
     if purpose == "opening_count_import_error":

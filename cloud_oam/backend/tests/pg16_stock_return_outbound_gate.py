@@ -42,9 +42,10 @@ def prepare_departure_worlds(api_engine, fixture_engine):
         db.add_all(accounts.values());db.flush()
         # Prepare the receiving accounts before their real zero-opening. A
         # later inbound must not rely on a privileged post-opening row insert.
+        # Both quantity replacement and registered SN recovery produce damaged stock.
         manager_actor=load_formal_principal(db,manager)
         db.add_all(StockAccount(id=uuid4(),owner_org_id=reference['region_org_id'],location_id=reference['location_id'],
-            custodian_person_id=manager_actor.person_id,material_id=identifier,condition_code='used',availability_bucket='available',
+            custodian_person_id=manager_actor.person_id,material_id=identifier,condition_code='damaged',availability_bucket='available',
             lot_id=None,created_at=at,updated_at=at) for identifier in (reference['material_id'],reference['concurrency_material_id']))
         db.flush()
         ids={kind:account.id for kind,account in accounts.items()};personal_id,transit_id=personal.id,transit.id
@@ -105,6 +106,8 @@ def assert_departure_world(api_engine, prepared, kind):
     from pg16_work_order_material_gate import _checkpoint
     from pg16_stock_return_recovery_gate import snapshot as earlier_snapshot
     snapshot=departure_snapshot
+    from pg16_stock_return_recovery_gate import _reject_at_constraint
+    results=[]
     world=prepared['world'];_account,user_id,orders,_line=world
     baseline=snapshot(api_engine)
     with Session(api_engine) as db:
@@ -145,12 +148,16 @@ def assert_departure_world(api_engine, prepared, kind):
             try:execute()
             except InventoryReadError as exc:assert exc.code=='stock_return_request_sealed'
             else:raise AssertionError('Service executed a sealed physical departure')
-            try:
+            for constraint,messages in (
+                ('trg_stock_operation_outbounds_seal_0103',('0101 sealed return request cannot execute',)),
+                ('trg_stock_operation_outbounds_request_0110',('0110 return request namespace conflict',)),
+                ('ALL',('0101 sealed return request cannot execute','0110 return request namespace conflict')),
+            ):
                 with db.begin_nested(),patch.object(returns,'_fresh_request',return_value=None),patch.object(facts,'outbound_result',return_value=None):
-                    execute();_checkpoint(db)
-            except DBAPIError as exc:assert '0101 sealed return request cannot execute' in str(exc.orig)
-            else:raise AssertionError('SQL executed a sealed physical departure')
-            db.expire_all();assert snapshot(local)==sealed
+                    message=_reject_at_constraint(db,execute,constraint=constraint,messages=messages)
+                db.expire_all();assert snapshot(local)==sealed
+                results.append(dict(tracking=kind,operation='outbound_return',direction='seal_first',
+                    constraint=constraint,sqlstate='23514',message=message,fullRollback=True))
             boundary.rollback()
         db.expire_all();assert snapshot(local)==before
         try:
@@ -163,12 +170,18 @@ def assert_departure_world(api_engine, prepared, kind):
         assert read()==result and execute()==result
         _checkpoint(db);posted=snapshot(local)
         assert recovery.seal_return_request(db,**coordinates,request_hash=checked.request_hash)==result
-        try:
+        for constraint,messages in (
+            ('trg_stock_operation_seals_proof_0101',('0101 executed return request cannot be sealed',)),
+            ('trg_stock_operation_command_seals_request_0110',('0110 return request namespace conflict',)),
+            ('ALL',('0101 executed return request cannot be sealed','0110 return request namespace conflict')),
+        ):
             with db.begin_nested(),patch.object(recovery,'lookup_return_request',return_value=None):
-                recovery.seal_return_request(db,**coordinates,request_hash=checked.request_hash);_checkpoint(db)
-        except DBAPIError as exc:assert '0101 executed return request cannot be sealed' in str(exc.orig)
-        else:raise AssertionError('SQL sealed an executed departure')
-        db.expire_all();assert snapshot(local)==posted
+                message=_reject_at_constraint(db,
+                    lambda:recovery.seal_return_request(db,**coordinates,request_hash=checked.request_hash),
+                    constraint=constraint,messages=messages)
+            db.expire_all();assert snapshot(local)==posted
+            results.append(dict(tracking=kind,operation='outbound_return',direction='command_first',
+                constraint=constraint,sqlstate='23514',message=message,fullRollback=True))
         try:
             returns.cancel_return(db,actor=actor,operation_id=submitted.operation_id,request=StockReturnCancelIn(operator_person_id=actor.person_id,
                 reason='Already departed cannot cancel',idempotency_key=uuid4().hex,request_id=uuid4().hex))
@@ -184,6 +197,8 @@ def assert_departure_world(api_engine, prepared, kind):
         db.rollback()
     assert snapshot(api_engine)==baseline
     print(f'PG16 {kind} physical departure, exact replay, partial budget, SELECT-only lookup, SQL seal/audit mutual exclusion and full rollback PASS',flush=True)
+    assert len(results)==6
+    return results
 
 
 def assert_stock_return_outbound_gate(api_engine, fixture_engine, *, worlds=None):

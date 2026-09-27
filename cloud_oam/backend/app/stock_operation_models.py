@@ -23,19 +23,30 @@ class StockOperationOrder(CreatedAtMixin, Base):
         UniqueConstraint("idempotency_key_hash", name="uq_stock_operation_orders_key"),
         UniqueConstraint("actor_user_id", "request_id", name="uq_stock_operation_orders_request"),
         UniqueConstraint("posting_transaction_id", name="uq_stock_operation_orders_posting"),
-        CheckConstraint("operation_type = 'return' AND status = 'submitted'", name="ck_stock_operation_orders_type_status"),
-        CheckConstraint("source_location_id <> target_location_id AND source_location_id <> transit_location_id AND target_location_id <> transit_location_id", name="ck_stock_operation_orders_locations"),
+        UniqueConstraint("id", "operation_type", name="uq_stock_operation_orders_typed_id"),
+        CheckConstraint("operation_type IN ('return','loss_report') AND status = 'submitted'", name="ck_stock_operation_orders_type_status"),
+        CheckConstraint(' '.join("""(
+            operation_type='return' AND oam_work_order_id IS NOT NULL
+            AND target_location_id IS NOT NULL AND transit_location_id IS NOT NULL
+            AND target_custody_assignment_id IS NOT NULL
+            AND source_location_id <> target_location_id
+            AND source_location_id <> transit_location_id AND target_location_id <> transit_location_id
+        ) OR (
+            operation_type='loss_report' AND oam_work_order_id IS NULL
+            AND target_location_id IS NULL AND transit_location_id IS NULL
+            AND target_custody_assignment_id IS NULL
+        )""".split()), name="ck_stock_operation_orders_locations"),
         CheckConstraint("authorization_version > 0 AND length(reason) BETWEEN 1 AND 500", name="ck_stock_operation_orders_context"),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
     operation_no: Mapped[str] = mapped_column(String(100))
     operation_type: Mapped[str] = mapped_column(String(24))
     status: Mapped[str] = mapped_column(String(24))
-    oam_work_order_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("oam_work_orders.id", ondelete="RESTRICT"))
+    oam_work_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("oam_work_orders.id", ondelete="RESTRICT"))
     source_location_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_locations.id", ondelete="RESTRICT"))
-    target_location_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_locations.id", ondelete="RESTRICT"))
-    transit_location_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_locations.id", ondelete="RESTRICT"))
-    target_custody_assignment_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("custody_assignments.id", ondelete="RESTRICT"))
+    target_location_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("stock_locations.id", ondelete="RESTRICT"))
+    transit_location_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("stock_locations.id", ondelete="RESTRICT"))
+    target_custody_assignment_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("custody_assignments.id", ondelete="RESTRICT"))
     requester_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"))
     actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
     authorization_version: Mapped[int] = mapped_column(BigInteger)
@@ -56,13 +67,22 @@ class StockOperationLine(CreatedAtMixin, Base):
         UniqueConstraint("operation_id", "line_no", name="uq_stock_operation_lines_order"),
         UniqueConstraint("operation_id", "source_recovery_line_id", name="uq_stock_operation_lines_origin"),
         Index("ix_stock_operation_lines_recovery", "source_recovery_line_id"),
+        ForeignKeyConstraint(["operation_id", "operation_type"],
+            ["stock_operation_orders.id", "stock_operation_orders.operation_type"],
+            name="fk_stock_operation_lines_typed_parent", ondelete="RESTRICT"),
         CheckConstraint("line_no > 0 AND quantity > 0", name="ck_stock_operation_lines_quantity"),
-        CheckConstraint("stock_account_id <> reserved_account_id AND target_condition IN ('used','damaged')", name="ck_stock_operation_lines_dimensions"),
+        CheckConstraint(' '.join("""stock_account_id <> reserved_account_id AND (
+            (operation_type='return' AND source_recovery_line_id IS NOT NULL
+                AND target_condition IN ('used','damaged'))
+            OR (operation_type='loss_report' AND source_recovery_line_id IS NULL
+                AND target_condition IN ('new','used','damaged'))
+        )""".split()), name="ck_stock_operation_lines_dimensions"),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
     operation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_orders.id", ondelete="RESTRICT"))
+    operation_type: Mapped[str] = mapped_column(String(24), server_default=text("'return'"))
     line_no: Mapped[int] = mapped_column(BigInteger)
-    source_recovery_line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("work_order_material_lines.id", ondelete="RESTRICT"))
+    source_recovery_line_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("work_order_material_lines.id", ondelete="RESTRICT"))
     stock_account_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT"))
     reserved_account_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT"))
     material_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("materials.id", ondelete="RESTRICT"))
@@ -79,6 +99,123 @@ class StockOperationSerial(CreatedAtMixin, Base):
     serial_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("inventory_serials.id", ondelete="RESTRICT"))
     sku_verified: Mapped[bool] = mapped_column(Boolean)
     qr_verified: Mapped[bool] = mapped_column(Boolean)
+
+
+class StockLossFile(CreatedAtMixin, Base):
+    """A dedicated completed file belongs to one immutable loss report."""
+    __tablename__ = "stock_loss_files"
+    __table_args__ = (
+        ForeignKeyConstraint(["operation_id", "operation_type"],
+            ["stock_operation_orders.id", "stock_operation_orders.operation_type"],
+            name="fk_stock_loss_files_typed_parent", ondelete="RESTRICT"),
+        UniqueConstraint("file_id", name="uq_stock_loss_files_file"),
+        CheckConstraint("operation_type = 'loss_report'", name="ck_stock_loss_files_type"),
+        CheckConstraint("length(metadata_sha256) = 64", name="ck_stock_loss_files_digest"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    operation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, index=True)
+    operation_type: Mapped[str] = mapped_column(String(24))
+    file_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("files.id", ondelete="RESTRICT"))
+    metadata_sha256: Mapped[str] = mapped_column(String(64))
+
+
+class StockLossRegionalReview(CreatedAtMixin, Base):
+    """Independent regional verification; never a disposal or stock posting."""
+    __tablename__ = 'stock_loss_regional_reviews'
+    __table_args__ = (
+        ForeignKeyConstraint(['operation_id', 'operation_type'],
+            ['stock_operation_orders.id', 'stock_operation_orders.operation_type'],
+            name='fk_loss_regional_review_typed_parent', ondelete='RESTRICT'),
+        UniqueConstraint('operation_id', name='uq_loss_regional_review_order'),
+        UniqueConstraint('actor_user_id', 'request_id', name='uq_loss_regional_review_request'),
+        UniqueConstraint('idempotency_key_hash', name='uq_loss_regional_review_key'),
+        CheckConstraint("operation_type='loss_report' AND decision='verified'", name='ck_loss_regional_review_kind'),
+        CheckConstraint("authorization_version>0 AND length(comment) BETWEEN 1 AND 1000", name='ck_loss_regional_review_context'),
+        CheckConstraint("length(request_hash)=64 AND length(submission_plan_hash)=64 AND length(idempotency_key_hash)=64", name='ck_loss_regional_review_hashes'),
+        CheckConstraint("length(request_id) BETWEEN 8 AND 160", name='ck_loss_regional_review_request'),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    operation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    operation_type: Mapped[str] = mapped_column(String(24))
+    owner_org_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('organizations.id', ondelete='RESTRICT'))
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey('users.id', ondelete='RESTRICT'))
+    reviewer_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('people.id', ondelete='RESTRICT'))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    decision: Mapped[str] = mapped_column(String(24))
+    comment: Mapped[str] = mapped_column(Text)
+    request_id: Mapped[str] = mapped_column(String(160))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    submission_plan_hash: Mapped[str] = mapped_column(String(64))
+
+
+class StockLossHeadquartersReview(CreatedAtMixin, Base):
+    """Immutable headquarters approval; stock disposition is a separate fact."""
+    __tablename__ = 'stock_loss_headquarters_reviews'
+    __table_args__ = (
+        ForeignKeyConstraint(['operation_id', 'operation_type'],
+            ['stock_operation_orders.id', 'stock_operation_orders.operation_type'],
+            name='fk_loss_headquarters_review_typed_parent', ondelete='RESTRICT'),
+        UniqueConstraint('operation_id', name='uq_loss_headquarters_review_order'),
+        UniqueConstraint('regional_review_id', name='uq_loss_headquarters_review_regional'),
+        UniqueConstraint('actor_user_id', 'request_id', name='uq_loss_headquarters_review_request'),
+        UniqueConstraint('idempotency_key_hash', name='uq_loss_headquarters_review_key'),
+        CheckConstraint("operation_type='loss_report' AND decision='approved'", name='ck_loss_headquarters_review_kind'),
+        CheckConstraint("authorization_version>0 AND length(comment) BETWEEN 1 AND 1000", name='ck_loss_headquarters_review_context'),
+        CheckConstraint("length(regional_review_hash)=64 AND length(request_hash)=64 AND length(submission_plan_hash)=64 AND length(idempotency_key_hash)=64", name='ck_loss_headquarters_review_hashes'),
+        CheckConstraint("length(request_id) BETWEEN 8 AND 160", name='ck_loss_headquarters_review_request'),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    operation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    operation_type: Mapped[str] = mapped_column(String(24))
+    owner_org_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('organizations.id', ondelete='RESTRICT'))
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey('users.id', ondelete='RESTRICT'))
+    reviewer_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('people.id', ondelete='RESTRICT'))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    regional_review_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stock_loss_regional_reviews.id', ondelete='RESTRICT'))
+    regional_review_hash: Mapped[str] = mapped_column(String(64))
+    decision: Mapped[str] = mapped_column(String(24))
+    comment: Mapped[str] = mapped_column(Text)
+    request_id: Mapped[str] = mapped_column(String(160))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    submission_plan_hash: Mapped[str] = mapped_column(String(64))
+
+
+class StockLossHeadquartersDecision(CreatedAtMixin, Base):
+    """One full original line and its approved disposition; never a movement."""
+    __tablename__ = 'stock_loss_headquarters_decisions'
+    __table_args__ = (
+        UniqueConstraint('review_id', 'line_id', name='uq_loss_headquarters_decision_line'),
+        CheckConstraint("disposition IN ('restore_available','convert_used','convert_damaged','return_to_region','scrap')", name='ck_loss_headquarters_disposition'),
+        CheckConstraint('length(reason) BETWEEN 1 AND 500', name='ck_loss_headquarters_reason'),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    review_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stock_loss_headquarters_reviews.id', ondelete='RESTRICT'))
+    line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stock_operation_lines.id', ondelete='RESTRICT'))
+    disposition: Mapped[str] = mapped_column(String(24))
+    reason: Mapped[str] = mapped_column(Text)
+
+
+class StockLossRequestSeal(CreatedAtMixin, Base):
+    """An immutable loss request tombstone, with no fictitious work order."""
+    __tablename__ = 'stock_loss_request_seals'
+    __table_args__ = (
+        UniqueConstraint('actor_user_id', 'request_id', name='uq_stock_loss_seals_request'),
+        UniqueConstraint('idempotency_key_hash', name='uq_stock_loss_seals_key'),
+        CheckConstraint('authorization_version > 0 AND length(request_hash)=64 AND length(plan_hash)=64 AND length(idempotency_key_hash)=64', name='ck_stock_loss_seals_context'),
+        CheckConstraint('length(request_id) BETWEEN 8 AND 160', name='ck_stock_loss_seals_request'),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey('users.id', ondelete='RESTRICT'))
+    operator_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('people.id', ondelete='RESTRICT'))
+    source_location_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stock_locations.id', ondelete='RESTRICT'))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    request_id: Mapped[str] = mapped_column(String(160))
+    request_reference: Mapped[str] = mapped_column(String(100))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    plan_hash: Mapped[str] = mapped_column(String(64))
 
 
 class StockOperationCancellation(CreatedAtMixin, Base):

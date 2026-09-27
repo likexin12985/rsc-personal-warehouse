@@ -8,6 +8,7 @@ import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import create_engine
+from migration_source_expectations import current_source_hash
 
 from app import database_security as security, oam_sync_scope_security as scope
 
@@ -29,7 +30,7 @@ def test_scope_patch_preserves_every_seal_check_and_runtime_acl():
     for signature,(old,new,anchor,fragment) in m['PATCHES'].items():
         assert new.replace(fragment,anchor)==old
         key=(signature.removeprefix('public.').removesuffix('()'),'')
-        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key]==hashlib.sha256(new.encode()).hexdigest()
+        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key]==current_source_hash(m['revision'],signature,new)
         parser.parse_plpgsql_json('CREATE FUNCTION checked() RETURNS trigger LANGUAGE plpgsql AS $body$'+new+'$body$')
 
 

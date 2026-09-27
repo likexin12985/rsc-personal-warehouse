@@ -2,7 +2,7 @@
 """Run one exhaustive, deterministic slice of the static release suite.
 
 Every test module under backend/tests and edge_sync is discovered at runtime.
-The destructive PG16 runtime module belongs to its separate CI job only.
+The destructive PG16 runtime modules belong to their separate CI jobs only.
 """
 
 import argparse
@@ -16,15 +16,18 @@ import sys
 
 CLOUD = Path(__file__).resolve().parents[1]
 SCOPES = (CLOUD / "backend/tests", CLOUD / "edge_sync")
-RUNTIME = CLOUD / "backend/tests/test_postgresql16_release_gate.py"
+RUNTIMES = frozenset(CLOUD / "backend/tests" / name for name in (
+    "test_postgresql16_release_gate.py",
+    "test_postgresql16_stock_loss_release_gate.py",
+))
 
 
 def candidates() -> tuple[Path, ...]:
     paths = tuple(sorted({path.resolve() for root in SCOPES for path in root.rglob("test_*.py")
                           if path.is_file() and not path.is_symlink()}))
-    if RUNTIME not in paths or len(paths) < 2:
+    if not RUNTIMES.issubset(paths) or len(paths) <= len(RUNTIMES):
         raise RuntimeError("static_test_discovery_incomplete")
-    return tuple(path for path in paths if path != RUNTIME)
+    return tuple(path for path in paths if path not in RUNTIMES)
 
 
 def shard_files(index: int, count: int) -> tuple[Path, ...]:

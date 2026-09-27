@@ -41,7 +41,7 @@ def main(argv=None):
                                    stderr=subprocess.STDOUT,timeout=600,check=True)
             command('upgrade-head', [sys.executable,'-m','alembic','-c','alembic.ini','upgrade','head'])
             with engines['star_oam_migrator'].connect() as connection:
-                assert connection.scalar(text('SELECT version_num FROM alembic_version'))=='20261120_0141'
+                assert connection.scalar(text('SELECT version_num FROM alembic_version'))=='20261127_0148'
             command('edge-grants', [str(Path(args.postgres_bin)/'psql'),'-X','-w',
                 '--set=ON_ERROR_STOP=1','--dbname',url.replace('postgresql+psycopg:','postgresql:',1),
                 '-v','edge_role=edge_inbox','-f',str(CLOUD/'deployment/create_oam_edge_staging.sql')])
@@ -119,7 +119,7 @@ def main(argv=None):
                     with engines['star_oam_migrator'].connect() as connection:
                         assert connection.scalar(text('SELECT count(*) FROM daily_comparison_mapping_decisions'))==1
                         assert connection.scalar(text("SELECT count(*) FROM audit_events WHERE action='daily_reconciliation.mapping.grant'"))==1
-                    result=dict(status='passed',head='20261120_0141',mappingDecisions=1,
+                    result=dict(status='passed',head='20261127_0148',mappingDecisions=1,
                         mappingAudits=1,cutoffs=len(cutoffs),cliExactMappingRead=True,
                         cliExactCutoffRecovery=True,ciReleaseGate=False)
                     (directory/'checks.json').write_text(json.dumps(result,indent=2)+'\n')

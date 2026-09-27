@@ -32,6 +32,7 @@ from .routers import (
     formal_work_order_material,
     formal_work_order_query,
     formal_stock_returns,
+    formal_stock_losses,
     formal_stock_return_receiving,
     formal_stock_return_receipts,
     formal_stock_return_inbounds,
@@ -280,6 +281,7 @@ async def block_legacy_prototype_writes(request, call_next):
         '/api/v1/inventory-control/configuration',
         '/api/v1/reconciliations/daily',
         '/api/v1/reports/inventory-balances',
+        '/api/v1/stock-operations/loss-reports',
     )):
         # Picker rows are live authorization decisions. Apply this to
         # framework and service failures too so a cached 404/403 cannot hide a
@@ -339,6 +341,7 @@ app.include_router(formal_control_configuration.router, prefix="/api")
 app.include_router(formal_work_order_material.router, prefix="/api")
 app.include_router(formal_work_order_query.router, prefix="/api")
 app.include_router(formal_stock_returns.router, prefix="/api")
+app.include_router(formal_stock_losses.router, prefix="/api")
 app.include_router(formal_stock_return_receiving.router, prefix="/api")
 app.include_router(formal_stock_return_receipts.router, prefix="/api")
 app.include_router(formal_stock_return_inbounds.router, prefix="/api")

@@ -94,7 +94,7 @@ def _corrupt(db,change):
                 elif change=='command':row.command_jsonb={**row.command_jsonb,'unexpected':True}
                 elif change=='plan':
                     value=deepcopy(row.plan_jsonb);value['ledger_cursor']=0;row.plan_jsonb=value
-            elif isinstance(row,StockOperationReturnInboundLine) and change=='quantity':row.accepted_qty+=Decimal('.001')
+            elif isinstance(row,StockOperationReturnInboundLine) and change=='quantity':row.accepted_qty=Decimal(str(row.accepted_qty))+Decimal('.001')
             elif isinstance(row,StockOperationReturnInboundPosting) and change=='posting_link':session.expunge(row)
             elif isinstance(row,StockOperationReturnInboundSerial) and change=='serial':session.expunge(row)
             elif isinstance(row,OutboxEvent) and row.aggregate_type=='stock_operation_return_inbound' and change=='outbox':session.expunge(row)
@@ -149,20 +149,28 @@ def assert_return_inbound_gate(api_engine,origins):
                 StockOperationReceiptSerial.result=='accepted').limit(1))
             candidates.setdefault('serial' if serial else 'quantity',receipt.id)
     assert set(candidates)=={'quantity','serial'},'exact accepted quantity/SN returns required'
+    orphan_rejections=[]
     for kind,identifier in candidates.items():
-        before=inbound_snapshot(api_engine)
-        with Session(api_engine) as db:
-            args,plan=_args(db,identifier);token=uuid4()
-            orphan=replace(plan['command'],source_document_id=str(token),
-                transaction_no='INV-RETURN-IN-'+token.hex[:16].upper(),effective_at=datetime.now(timezone.utc))
-            try:
-                with pytest.raises(DBAPIError) as failure:
-                    posting.post_inventory_transaction(db,actor=args['actor'],command=orphan,
-                        idempotency_key=uuid4().hex,request_id=uuid4().hex,
-                        permission_resource='stock_operation',permission_action='receive_return');_checkpoint(db)
-                assert failure.value.orig.sqlstate=='23514' and '0106 detached return inbound' in str(failure.value.orig)
-            finally:db.rollback()
-        assert inbound_snapshot(api_engine)==before
+        from pg16_stock_return_recovery_gate import _reject_at_constraint
+        for constraint,messages in (
+            ('trg_inventory_transactions_return_outbound_0103',('0106 detached return inbound',)),
+            ('trg_inventory_transactions_proof_0111',('0111 detached inbound inventory evidence',)),
+            ('ALL',('0106 detached return inbound','0111 detached inbound inventory evidence')),
+        ):
+            before=inbound_snapshot(api_engine)
+            with Session(api_engine) as db:
+                args,plan=_args(db,identifier);token=uuid4()
+                orphan=replace(plan['command'],source_document_id=str(token),
+                    transaction_no='INV-RETURN-IN-'+token.hex[:16].upper(),effective_at=datetime.now(timezone.utc))
+                message=_reject_at_constraint(db,lambda:posting.post_inventory_transaction(db,
+                    actor=args['actor'],command=orphan,idempotency_key=uuid4().hex,request_id=uuid4().hex,
+                    permission_resource='stock_operation',permission_action='receive_return'),
+                    constraint=constraint,messages=messages)
+                db.rollback()
+            assert inbound_snapshot(api_engine)==before
+            orphan_rejections.append(dict(tracking=kind,constraint=constraint,sqlstate='23514',
+                message=message,fullRollback=True))
+            print(f'PG16 {kind} orphan inbound {constraint}: exact rejection and full rollback PASS',flush=True)
         for change in ('hash','command','plan','quantity','posting_link','outbox','audit',*(('serial',) if kind=='serial' else ())):
             before=inbound_snapshot(api_engine)
             with Session(api_engine) as db:
@@ -179,6 +187,7 @@ def assert_return_inbound_gate(api_engine,origins):
                 finally:
                     event.remove(db,'before_flush',listener);db.rollback()
             assert inbound_snapshot(api_engine)==before
+            print(f'PG16 {kind} inbound malformed {change}: SQL rejection and full rollback PASS',flush=True)
         with Session(api_engine) as db:
             args,plan=_args(db,identifier)
             old={}
@@ -211,3 +220,4 @@ def assert_return_inbound_gate(api_engine,origins):
             db.rollback()
         assert inbound_snapshot(api_engine)==before
         print(f'PG16 {kind} independent inbound: malformed SQL graph rollback, two-session exact commit, receipt state read-only HTTP, ledger/SN and replay PASS',flush=True)
+    return tuple(orphan_rejections)

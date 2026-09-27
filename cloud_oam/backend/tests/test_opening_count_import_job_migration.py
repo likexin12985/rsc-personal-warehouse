@@ -26,19 +26,19 @@ def _migration():
 
 def test_import_job_guard_catalog_and_plpgsql_are_exact():
     from app.database_security import (
-        FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256, RUNTIME_UPDATE_COLUMNS,
+        FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0141, RUNTIME_UPDATE_COLUMNS,
     )
-    from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST
+    from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0141
 
     migration = _migration()
     for function, body in ((migration['FUNCTION'], migration['BODY']),
                            (migration['TERMINAL_FUNCTION'], migration['TERMINAL_BODY']),
                            ('rsc_guard_report_export_job_0136', migration['REPORT_NEW_BODY']),
                            ('rsc_guard_formal_file_object_0036', migration['FILE_NEW_BODY'])):
-        assert hashlib.sha256(body.encode()).hexdigest() == FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[(function, '')]
+        assert hashlib.sha256(body.encode()).hexdigest() == FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0141[(function, '')]
         assert not text(body)._bindparams, 'SQL body must not introduce bind parameters'
         parser.parse_plpgsql_json(f'CREATE FUNCTION {function}() RETURNS trigger LANGUAGE plpgsql AS $x${body}$x$')
-    assert migration['NEW_READY_HASH'] == OAM_SYNC_FUNCTION_MANIFEST['rsc_oam_runtime_binding_ready_0044()'][6]
+    assert migration['NEW_READY_HASH'] == OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0141['rsc_oam_runtime_binding_ready_0044()'][6]
     assert 'import_binding_jsonb' not in RUNTIME_UPDATE_COLUMNS['file_jobs']
     assert {'import_preview_jsonb', 'import_completion_id', 'confirmed_by'} <= RUNTIME_UPDATE_COLUMNS['file_jobs']
 

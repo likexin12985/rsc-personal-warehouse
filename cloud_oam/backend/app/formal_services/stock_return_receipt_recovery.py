@@ -70,11 +70,11 @@ def lookup_receipt_request(db, *, actor, shipment_id, request_id):
     with db.no_autoflush:
         snapshot = inventory._projection_snapshot(db); audit = material_audit_cursor(db)
         current, detail = plan.authorize(db, actor, shipment_id, action='read')
-        from ..stock_operation_models import StockOperationReturnInbound, StockOperationReturnInboundSeal
+        from ..stock_operation_models import StockOperationReturnInbound, StockOperationReturnInboundSeal, StockLossRequestSeal
         for model in (StockOperationOrder, StockOperationCancellation, StockOperationOutbound, StockOperationShipment,
-                StockOperationReturnInbound, StockOperationReturnInboundSeal):
+                StockOperationReturnInbound, StockOperationReturnInboundSeal, StockLossRequestSeal):
             if db.scalar(select(model.id).where(model.actor_user_id == current.user_id, model.request_id == request_id).limit(1)):
-                _fail('stock_return_request_conflict', '原请求标识已绑定其他退回操作，请核验准确坐标')
+                _fail('stock_return_request_conflict', '原请求标识已绑定其他库存作业或封存，请核验准确坐标')
         fact = db.scalar(select(StockOperationReceipt).where(StockOperationReceipt.actor_user_id == current.user_id,
             StockOperationReceipt.request_id == request_id).execution_options(populate_existing=True))
         seal = shared._row(db, current, request_id)
