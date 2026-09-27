@@ -41,6 +41,8 @@ DEDICATED_EVENTS = (
     ("stock_return_cancelled", "stock_operation_cancellation", "posting_transaction_id"),
     ("stock_return_outbound", "stock_operation_outbound", "posting_transaction_id"),
     ("stock_return_inbound_posted", "stock_operation_return_inbound", "inventory_transaction_id"),
+    ("stock_loss_submitted", "stock_operation_order", "posting_transaction_id"),
+    ("stock_loss.disposition_posted", "stock_loss_disposition", "posting_transaction_id"),
 )
 
 

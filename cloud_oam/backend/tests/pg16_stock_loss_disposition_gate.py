@@ -244,13 +244,18 @@ def run(context):
     with Session(api) as db:
         for row in db.scalars(select(StockLossDisposition)):
             assert facts.verified(db,row=row)['status']=='posted'
+    from pg16_stock_loss_notification_gate import run as notification_checks
+    notification = notification_checks(context)
+    with Session(api) as db:
+        for row in db.scalars(select(StockLossDisposition)):
+            assert facts.verified(db,row=row)['status']=='posted'
     return dict(passed=True,tracking=context['tracking'],apiRoleCommits=3,
         kinds=[r['disposition'] for r in results],businessReadOnlyPreviews=3,openingProofRowLocksRequired=True,originalReplays=3,newTargetAccounts=2,
         malformedCommitFullRollbacks=32 if context['tracking']=='serial' else 30,commitTimeAuthorityExpiryRollback=True,concurrentSameRequestSinglePosting=True,
         historicalProofAfterLaterDispositions=True,renamedGenericInverseCommitRollbacks=3,apiPermissionDenials=4,
         sharedHoldAfterRelease=True,exactLineAndMovementRefusals=True,exactSerialSwapRefusal=context['tracking']=='serial',
         wholeLocationCustodyRefused=True,custodyOverlapApiCommitFullRollback=True,expiredAndFutureCustodyAllowed=True,
-        concurrentCustodyInsertionSerialized=True,productionAcceptance=False)
+        concurrentCustodyInsertionSerialized=True,notificationDeduplication=notification,productionAcceptance=False)
 
 
 def release(engines,*,tracking,migrate,provision):

@@ -95,14 +95,15 @@ def test_exact_existing_business_notification_prevents_duplicate_delivery(fact, 
     assert delivery.status == "failed"  # No new route around the original retry boundary.
 
 
-@pytest.mark.parametrize("changes", [
-    {"event_type": "unrelated_event"}, {"business_type": "unrelated_business"},
-    {"payload": {"inventory_transaction_id": str(uuid4())}},
-])
-def test_unrelated_notification_cannot_suppress_an_affected_custodian(fact, changes):
-    args = dict(event_type="personal_inbound_posted", business_type="inbound_order", business_id=uuid4(),
-        dedup_key=f"unrelated:{uuid4()}", payload={"inventory_transaction_id": str(fact.tx.id)},
+@pytest.mark.parametrize("kind,business,key", service.DEDICATED_EVENTS)
+@pytest.mark.parametrize("damage", ["kind", "business", "transaction"])
+def test_unrelated_notification_cannot_suppress_an_affected_custodian(fact, kind, business, key, damage):
+    args = dict(event_type=kind, business_type=business, business_id=uuid4(),
+        dedup_key=f"unrelated:{uuid4()}", payload={key: str(fact.tx.id)},
         recipient_person_id=fact.other.id, occurred_at=fact.tx.posted_at, now=fact.now)
+    changes = {"kind": {"event_type": "unrelated_event"},
+               "business": {"business_type": "unrelated_business"},
+               "transaction": {"payload": {key: str(uuid4())}}}[damage]
     record_business_notification(fact.db, **dict(args, **changes))
     assert project(fact).recipient_count == 2
 
