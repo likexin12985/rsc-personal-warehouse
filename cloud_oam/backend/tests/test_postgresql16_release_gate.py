@@ -78,7 +78,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261129_0150"
+HEAD_REVISION = "20261130_0151"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -728,6 +728,7 @@ def _assert_retention_downgrade(
     with psycopg.connect(**_connection_parameters(
         role="star_oam_migrator", password=_role_password("star_oam_migrator"),
     )) as connection:
+        loss_dispositions = connection.execute("SELECT EXISTS (SELECT 1 FROM public.stock_loss_dispositions)").fetchone()[0]
         return_inbounds = connection.execute("SELECT EXISTS (SELECT 1 FROM public.stock_operation_return_inbounds)").fetchone()[0]
         opening_seals = connection.execute("SELECT EXISTS (SELECT 1 FROM public.opening_start_command_seals)").fetchone()[0]
         opening_actors = connection.execute("SELECT EXISTS (SELECT 1 FROM public.stocktake_tasks WHERE opening_authorization_version IS NOT NULL)").fetchone()[0]
@@ -737,6 +738,7 @@ def _assert_retention_downgrade(
         control_facts = connection.execute("SELECT EXISTS (SELECT 1 FROM public.inventory_control_preparations)").fetchone()[0]
         sealed = connection.execute("SELECT EXISTS (SELECT 1 FROM public.notification_events WHERE target_manifest_sha256 IS NOT NULL)").fetchone()[0]
     chain_blocker = (
+        "0151 disposition custody proof history requires retention" if loss_dispositions else
         "0149 return inbound account admission history requires retention" if return_inbounds else
         "0128 downgrade blocked: original request seals must be retained" if opening_seals else
         "0126 downgrade blocked: opening authorization evidence must be retained" if opening_actors else
@@ -7144,7 +7146,7 @@ def _head_runtime_ready_hash() -> str:
     from migration_script_cache import cache_migration_compilation
     with cache_migration_compilation(STOCK_RESERVATIONS_MIGRATION_0069.parent):
         migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-            "20261129_0150_stock_loss_disposition.py"
+            "20261130_0151_stock_loss_custody_uniqueness.py"
         )))
     assert migration["revision"] == RUNTIME_READY_HEAD_REVISION
     return migration["NEW_READY_HASH"]

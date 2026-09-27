@@ -4632,6 +4632,10 @@ EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_movement'] = {'table': 'stock_
 EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_request'] = {'table': 'stock_loss_dispositions', 'columns': ('actor_user_id', 'request_id'), 'predicate': None}
 EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_key'] = {'table': 'stock_loss_dispositions', 'columns': ('idempotency_key_hash',), 'predicate': None}
 
+# 0151 preserves the historical branch and all grants while checking the whole location.
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0150 = dict(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_disposition_0150', 'uuid, boolean')] = '6186d5278a90e85e5cf45cd260e117b7d4a2c5e6875cd2fdb28e6983a2138113'
+
 _ROLE_EVIDENCE_SQL = text(
     """
 SELECT

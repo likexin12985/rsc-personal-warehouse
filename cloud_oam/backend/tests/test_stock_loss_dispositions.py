@@ -1,5 +1,6 @@
 """Service composition with real approval/freezing; SQL COMMIT gates separate."""
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -8,7 +9,7 @@ from sqlalchemy import select, text
 
 from app.formal_access import load_formal_principal
 from app.foundation_models import Permission, Role, RolePermission
-from app.inventory_models import StockBalance, SerialCurrentPosition, StockAccount, InventoryTransaction
+from app.inventory_models import StockBalance, SerialCurrentPosition, StockAccount, InventoryTransaction, CustodyAssignment
 from app.stock_operation_models import StockLossHeadquartersDecision, StockLossDisposition, StockOperationOrder
 from app.stock_loss_schemas import StockLossDispositionPreviewIn, StockLossDispositionExecuteIn
 from app.formal_services import stock_loss_disposition_plan as plan, stock_loss_disposition_commands as commands
@@ -119,6 +120,35 @@ def test_current_disposition_authority_is_independent_from_historical_review(db,
         plan.preview_disposition(db,actor=actor,request=request)
     assert caught.value.code=={'stale':'actor_principal_stale','inactive':'actor_inactive'}.get(change,'stock_loss_disposition_forbidden')
     db.rollback(); assert snapshot(db)==before
+
+
+@pytest.mark.parametrize('kind', ['restore_available', 'convert_used', 'convert_damaged'])
+def test_other_current_custodian_blocks_preview_and_execution(db, allowed, approved, kind):
+    request = prepare(db, approved, kind)
+    preview = plan.preview_disposition(db, actor=approved.actor, request=request)
+    command = execute_request(preview, request)
+    now = datetime.now(timezone.utc)
+    overlap = CustodyAssignment(location_id=allowed.account.location_id,
+        custodian_person_id=allowed.world.headquarters_reviewer_person.id,
+        valid_from=now, valid_to=now + timedelta(hours=1))
+    db.add(overlap)
+    db.commit()
+    before = snapshot(db)
+    for operation, value in ((plan.preview_disposition, request), (commands.execute_disposition, command)):
+        with pytest.raises(InventoryReadError) as caught:
+            operation(db, actor=approved.actor, request=value)
+        assert caught.value.code == 'stock_loss_disposition_custody_changed'
+        db.rollback()
+        assert snapshot(db) == before
+    # A closed conflict does not permanently invalidate the original stock.
+    overlap.valid_to = datetime.now(timezone.utc)
+    db.commit()
+    current = plan.preview_disposition(db, actor=approved.actor, request=request)
+    assert current['plan_hash'] == preview['plan_hash']
+    result = commands.execute_disposition(db, actor=approved.actor, request=command)
+    db.commit()
+    assert result['status'] == 'posted'
+    assert facts.verified(db, row=db.get(StockLossDisposition, UUID(result['disposition_id']))) == result
 
 
 def test_changed_preview_and_posted_request_never_rebind(db,approved):

@@ -94,8 +94,27 @@ def test_release_retention_detects_newer_evidence_before_old_guards(monkeypatch,
     from types import SimpleNamespace
     import test_postgresql16_release_gate as gate
     connection=MagicMock();connection.__enter__.return_value=connection
-    connection.execute.side_effect=[SimpleNamespace(fetchone=lambda value=value:(value,))
-        for value in (False,has_seals,True,True,True,True,True,True)]
+    # Bind each synthetic fact to its exact query. A positional list silently
+    # shifts existing meanings when a newer retention guard adds a query.
+    query_facts = {
+        'SELECT EXISTS (SELECT 1 FROM public.stock_loss_dispositions)': False,
+        'SELECT EXISTS (SELECT 1 FROM public.stock_operation_return_inbounds)': False,
+        'SELECT EXISTS (SELECT 1 FROM public.opening_start_command_seals)': has_seals,
+        'SELECT EXISTS (SELECT 1 FROM public.stocktake_tasks WHERE opening_authorization_version IS NOT NULL)': True,
+        "SELECT EXISTS (SELECT 1 FROM public.stocktake_tasks t JOIN public.control_projection_publications p ON p.sync_run_id=t.control_sync_run_id WHERE t.task_type='opening' AND p.record_count=0)": True,
+        'SELECT EXISTS (SELECT 1 FROM public.control_projection_publications)': True,
+        "SELECT EXISTS (SELECT 1 FROM public.files WHERE metadata_jsonb->>'purpose'='source_configuration_evidence')": True,
+        'SELECT EXISTS (SELECT 1 FROM public.inventory_control_preparations)': True,
+        'SELECT EXISTS (SELECT 1 FROM public.notification_events WHERE target_manifest_sha256 IS NOT NULL)': True,
+    }
+    def query_result(sql):
+        # Unknown SQL must fail instead of receiving a permissive default.
+        value = query_facts[sql]
+        return SimpleNamespace(fetchone=lambda: (value,))
+    connection.execute.side_effect = query_result
+    def unexpected_engine(*args, **kwargs):
+        raise AssertionError('chain selection unit test must not connect to a database')
+    monkeypatch.setattr(gate, 'create_engine', unexpected_engine)
     monkeypatch.setattr(gate,'_current_revision',lambda:gate.HEAD_REVISION)
     monkeypatch.setattr(gate,'_role_password',lambda _:None)
     monkeypatch.setattr(gate,'_connection_parameters',lambda **_: {})
@@ -104,3 +123,5 @@ def test_release_retention_detects_newer_evidence_before_old_guards(monkeypatch,
     monkeypatch.setattr(gate,'_run_alembic',command)
     gate._assert_retention_downgrade('20261104_0125',blocking_revision=revision,blocker=blocker)
     command.assert_called_once_with('downgrade','20261104_0125',expect_success=False)
+    assert connection.execute.call_count == len(query_facts)
+    assert {call.args[0] for call in connection.execute.call_args_list} == set(query_facts)

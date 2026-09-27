@@ -115,6 +115,9 @@ def run(context):
         event.remove(api,'before_cursor_execute',query_only)
         assert preview_statements and set(preview_statements)=={'SELECT'}
         assert snapshot(owner)==before
+        if kind=='restore_available':
+            from pg16_stock_loss_custody_gate import assert_custody_uniqueness
+            assert_custody_uniqueness(context,request=value,preview=preview)
         command=StockLossDispositionExecuteIn(**value.model_dump(),expected_plan_hash=preview['plan_hash'],
             request_id=uuid4().hex,idempotency_key=uuid4().hex)
         for omission in ('audit','state','outbox','notification','quantity','plan_hash','request_hash','authorization_version','line_id','posting_movement_id')+ (('serial_swap',) if context['tracking']=='serial' and preview['source_account_id']==str(shared_source) else ()):
@@ -245,7 +248,9 @@ def run(context):
         kinds=[r['disposition'] for r in results],businessReadOnlyPreviews=3,openingProofRowLocksRequired=True,originalReplays=3,newTargetAccounts=2,
         malformedCommitFullRollbacks=32 if context['tracking']=='serial' else 30,commitTimeAuthorityExpiryRollback=True,concurrentSameRequestSinglePosting=True,
         historicalProofAfterLaterDispositions=True,renamedGenericInverseCommitRollbacks=3,apiPermissionDenials=4,
-        sharedHoldAfterRelease=True,exactLineAndMovementRefusals=True,exactSerialSwapRefusal=context['tracking']=='serial',productionAcceptance=False)
+        sharedHoldAfterRelease=True,exactLineAndMovementRefusals=True,exactSerialSwapRefusal=context['tracking']=='serial',
+        wholeLocationCustodyRefused=True,custodyOverlapApiCommitFullRollback=True,expiredAndFutureCustodyAllowed=True,
+        concurrentCustodyInsertionSerialized=True,productionAcceptance=False)
 
 
 def release(engines,*,tracking,migrate,provision):
@@ -259,9 +264,12 @@ def release(engines,*,tracking,migrate,provision):
         validate_production_database_security(engines['star_oam_api'],expected_runtime_role='star_oam_api',expected_migration_role='star_oam_migrator')
     security()
     result=sources(engines,tracking=tracking,after_preview=run)
-    migrate('retained-disposition-downgrade','downgrade','20261128_0149','0150 immutable disposition history requires retention')
+    migrate('retained-disposition-downgrade','downgrade','20261128_0149','0151 disposition custody proof history requires retention')
+    from pg16_stock_loss_custody_gate import assert_original_retention
+    assert_original_retention(engines['star_oam_migrator'])
     with engines['star_oam_migrator'].connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261129_0150'
+        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261130_0151'
     security()
-    result.update(emptyRoundtrip=True,retainedDispositionBlocksDowngrade=True,runtimeSecurityBeforeAndAfter=True)
+    result.update(emptyRoundtrip=True,retainedDispositionBlocksDowngrade=True,
+        custodyHistoryBlocksDowngrade=True,independent0150RetentionPreserved=True,runtimeSecurityBeforeAndAfter=True)
     return result

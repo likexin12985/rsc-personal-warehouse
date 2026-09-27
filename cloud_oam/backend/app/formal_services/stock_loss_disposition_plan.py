@@ -141,10 +141,10 @@ def preview_disposition(db, *, actor, request):
                 or material is None or material.status!='active'):
             sources._fail('stock_loss_disposition_source_changed', '原保管位置或物料状态已变化')
         assignments = tuple(db.scalars(select(CustodyAssignment).where(
-            CustodyAssignment.location_id==location.id, CustodyAssignment.custodian_person_id==order.requester_id,
+            CustodyAssignment.location_id==location.id,
             CustodyAssignment.valid_from<=at, or_(CustodyAssignment.valid_to.is_(None),CustodyAssignment.valid_to>at))
             .execution_options(populate_existing=True)))
-        if len(assignments)!=1:
+        if len(assignments)!=1 or assignments[0].custodian_person_id!=order.requester_id:
             sources._fail('stock_loss_disposition_custody_changed', '原冻结库存的当前保管责任不唯一或已失效')
         target = target_account(db, source, decision.disposition)
         snapshot = inventory._projection_snapshot(db)

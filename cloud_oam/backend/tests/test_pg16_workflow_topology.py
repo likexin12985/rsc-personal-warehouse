@@ -43,7 +43,7 @@ def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_a
     assert 'postgres:16-alpine@sha256:' in runtime
     assert '    strategy:\n      fail-fast: false\n      matrix:\n        tracking: [quantity, serial]\n' in loss
     assert 'RSC_PG16_LOSS_TRACKING: ${{ matrix.tracking }}' in loss
-    assert '        flow: [submission, disposition]\n' in loss
+    assert '        flow: [submission, disposition, return_preview]\n' in loss
     assert 'RSC_PG16_LOSS_FLOW: ${{ matrix.flow }}' in loss
     assert 'python -m pytest -q -s tests/test_postgresql16_stock_loss_release_gate.py' in loss
     assert '        working-directory: cloud_oam/backend\n' in loss
@@ -153,5 +153,34 @@ def test_loss_gate_refuses_invalid_flow_before_database(monkeypatch):
     monkeypatch.setattr(loss_gate.gate,'_assert_fresh_disposable_postgresql16',unexpected_database_access)
     for flow in ('','both','submission,disposition','production'):
         monkeypatch.setenv('RSC_PG16_LOSS_FLOW',flow)
-        with pytest.raises(pytest.fail.Exception,match='explicit submission or disposition'):
+        with pytest.raises(pytest.fail.Exception,match='explicit submission, disposition or return_preview'):
             loss_gate.test_postgresql16_stock_loss_release_gate()
+
+
+def test_return_preview_leg_still_requires_the_real_disposable_database_boundary(monkeypatch):
+    import pytest
+    import test_postgresql16_stock_loss_release_gate as loss_gate
+    monkeypatch.setattr(loss_gate.gate, '_gate_enabled', lambda: True)
+    monkeypatch.setenv('RSC_PG16_LOSS_TRACKING', 'quantity')
+    monkeypatch.setenv('RSC_PG16_LOSS_FLOW', 'return_preview')
+    class BoundaryReached(Exception):
+        pass
+    def boundary():
+        raise BoundaryReached()
+    def forbidden(*args, **kwargs):
+        raise AssertionError('preview gate skipped its disposable-database boundary')
+    monkeypatch.setattr(loss_gate.gate, '_assert_fresh_disposable_postgresql16', boundary)
+    monkeypatch.setattr(loss_gate.gate, '_bootstrap_roles', forbidden)
+    monkeypatch.setattr(loss_gate, 'create_engine', forbidden)
+    with pytest.raises(BoundaryReached):
+        loss_gate.test_postgresql16_stock_loss_release_gate()
+
+
+def test_shared_return_preview_rejects_invalid_tracking_before_migration():
+    import pytest
+    from pg16_stock_loss_return_preview_gate import release
+    def forbidden(*args, **kwargs):
+        raise AssertionError('invalid preview tracking reached database setup')
+    for tracking in ('', 'both', 'quantity,serial', 'production'):
+        with pytest.raises(ValueError, match='tracking must be quantity or serial'):
+            release({}, tracking=tracking, migrate=forbidden, provision=forbidden)

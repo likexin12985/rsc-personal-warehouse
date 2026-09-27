@@ -3,7 +3,170 @@
 更新于 **2026-09-28**。顶部为现行状态；后文保留按日期记录的阶段证据，不能将旧候选结论外推为当前通过。前 3,694 行接续记录已原样保存在
 [历史交接归档](CONTINUE_DEVELOPMENT_HISTORY_20260921.md)，不得把历史“当前进程”当作仍在运行。
 
-## 当前接续点：0150 本地门禁齐备，最终提交核验
+## 当前接续点：0151 本地验收证据齐全，最终安全与提交核验
+
+最终静态已收齐：第 0 片 **90235 / exit 0 / 2,428 passed / 1 skipped / 15 subtests**；
+第 1 片 **31506 / exit 1 / 2,657 passed / 2 failed / 2 skipped**，失败仅为旧历史查询
+夹具；第 2 片 **4992 / exit 0 / 2,496 passed**。旧失败保留；按最终源码完整复验的
+两个模块替换其原计数后，最终唯一覆盖为 **7,585 passed / 3 skipped / 15 subtests**，
+370 个模块无遗漏或重复。三个跳过均为既有范围：本机 OAM 客户端不在托管仓和两项
+仅适用 SN 的夹具分支。1,675 个源码摘要与最终清单逐项一致，业务/迁移输入未漂移。
+详见 `custody-0151-static-final-summary.json`，不能把原第 1 片改记为 exit 0。
+全部本地 PostgreSQL 16、权限、迁移、聚焦及静态验证已具备，正在最终安全扫描及
+索引核验；提交 SHA 与新 CI 另行回读。下面保留各轮证据及准确修正过程。
+
+本轮已按 CUSTODY-OVERLAP-01 修改处置服务，查询库位全部当前责任后再验证唯一性与
+人员；新增 `20261130_0151_stock_loss_custody_uniqueness.py`，不改已提交 0150。
+迁移仅精确替换当前责任计数和就绪版本，保留历史分支、角色、权限、触发器及原始证明。
+当前状态与真实会话见 `artifacts/next-loss-derived-return/custody-0151-status.json`。
+
+已完成：权限目录 **305 passed**，第一轮服务/迁移聚焦 **103 passed**。
+PG16 第二轮 **21631 / exit 0**：数量 **run-ukkvkwjg**、SN **run-zzhcskgt** 均完整通过，
+源码无漂移、`stopped / passed / serverExitCode=0`。包含三种实际处置、数量 30 / SN 32 组
+异常 COMMIT 完整回滚、跨人员责任重叠的 raw API 提交拒绝、过期/未来区间正例、
+同请求并发、权限到期、0151 当前历史保护及 0150 独立历史保护。
+终态证据 `custody-0151-pg16-v2-terminal.json`。第一次严格迁移替换失败记录保留。
+
+综合当前头 PG16 **43073 / exit 0 / run-dp88u32k** 完整通过，包括报表、导入往返及带
+数据夹具、2 个采集角色和 9 项合成短信配置检查。实例正常停止，外部冻结的 1,675 个
+文件在终态精确比对无漂移。证据 `custody-0151-current-head-terminal.json`；短信仍未
+计为真实渠道验收。依赖检查通过，仓库安全扫描 **1,852 文件通过**。
+
+上述两套运行退出后，已精确应用常量 CHECK_* 改名和第二连接并发责任插入测试。
+改名前后完整 PostgreSQL 升级/降级 SQL **逐字节一致**，见
+`custody-0151-rename-sql-equivalence.json`。并发补验使用实际 API 未提交过账，验证
+另一连接插入冲突责任被锁阻止，双方回滚后业务事实不变；最终终态已通过，详见下文 V3。
+独立旧迁移保留检查只增加既有字节码缓存，仍执行全新迁移 globals 和原保护断言。
+综合门禁后的四处源码差异已逐项核验：业务 app 源码全部不变，迁移 SQL 完全一致，
+并发测试由最终原生 V3 覆盖；详见 `custody-0151-current-head-input-resolution.json`。
+
+0151 下退回预览 **38920 / exit 0** 已完成：数量 **run-nmshgwbf**、SN **run-ps1jim1a**
+均通过、源码无漂移、正常停库。确切批准、原成色、工程师责任、仅 SELECT、不建账户、
+权限撤回及来源/接收责任拒绝均通过；终态 `custody-0151-return-preview-v1-terminal.json`。
+这仍是只读预览，实际派生提交和履约未实现。
+
+最终处置补验 **22871 / exit 0** 已完成：数量 **run-5gpib1l1**、SN **run-d2y9ub9m**
+均完整通过、源码无漂移、`stopped / passed / serverExitCode=0`。两套均执行三种实际
+处置、API 角色畸形 COMMIT 完整回滚（数量 30 / SN 32）、同请求并发、权限到期、
+共享冻结保护、历史证明、0151 当前及 0150 独立保留保护。新增第二连接插入责任
+在数量/SN 均被真实过账持有的锁阻止，双方回滚；原生日志已精确核对等待对象为
+`stock_locations` FK 的 FOR KEY SHARE 行锁。最终汇总及准确文件摘要见
+`custody-0151-pg16-v3-terminal-and-source-resolution.json`。
+
+上述原生运行退出、两套源码清单与停库证据核验后，已按 before/after SHA-256 应用
+唯一一行测试修正：`m[label + '_HASH']` 改为 `m['CHECK_' + label + '_HASH']`。
+原失败 **51643 / exit 1 / 6 passed / 1 failed / 133.20 秒** 保留；修正后的原测试
+曾隔离直接执行通过（89103 / exit 0），现在由最终 pytest 分片完整验证。
+没有重改迁移、业务代码或放宽断言。
+
+静态原始运行终态（保留启动输入和原日志；单一测试夹具修正另行核验）：
+- **90235 / static 0 / exit 0**：133 模块，2,428 passed / 1 skipped / 15 subtests，
+  5,922.39 秒，日志 `custody-0151-static-0.log`。
+- **31506 / static 1 / exit 1**：116 模块，2,657 passed / 2 failed / 2 skipped，
+  4,331.02 秒；失败仅为下述已独立修正的旧夹具，原日志和终态完整保留。
+- **4992 / static 2 / exit 0**：121 模块，**2,496 passed**，5,110.72 秒；终态
+  `custody-0151-static-2-terminal.json`，所选模块和业务/迁移输入未变。
+370 模块完整无重复。`custody-0151-static-module-manifest.json` 记录分片清单，
+`custody-0151-static-initial-source.json` 是 0/2 启动输入，
+`custody-0151-final-candidate-source.json` 是最终代码输入。两份源码只有上述第 1 分片
+测试的一行差异；0/2 所选模块及全部业务/迁移源码逐项相同。不得声称整仓 SHA
+完全一致，也不应因此重跑未受影响分片。
+
+静态第 1 片已出现两个失败；独立复现 **18214 / exit 1 / 2 failed**，均为
+`test_opening_start_seal_migration.py` 的历史保护链选择夹具：新增处置历史查询后，
+8 个按位置排列的 mock 返回值不足以回答 9 条 SQL，触发 `StopIteration`。
+已准备按确切 SQL 绑定结果、拒绝未知查询并禁止真实数据库连接的测试修正；
+修正已精确应用，实际源码完整模块 **19971 / exit 0 / 7 passed / 2.83 秒**。
+原三片日志和终态继续保留；业务/迁移及其他测试源码均未改。该文件仅属第 1 片，
+没有其他模块引用；已记录准确 before/after 摘要和原测试文件快照，最终源码清单为
+`custody-0151-final-candidate-source-v2.json`，映射见 `custody-retention-test-fix-applied.json`。
+这不改变迁移或数据库历史保护，也不能把当前两个失败记为通过。
+
+进一步门禁审查发现，退回预览只有本地原生验证，未进入 GitHub matrix。
+已增加 `quantity/serial × return_preview` 两腿，六腿均由命名汇总检查强制要求通过。
+本地运行器与 CI 改用同一 `pg16_stock_loss_return_preview_gate.release`，原核心
+`run(context)` 的 AST 逐项相同；新增准确 head、权限前后校验和明确预览结果字段，
+正式业务/迁移不变。完整拓扑及保留模块 **99001 / exit 0 / 15 passed**。
+新共享入口原生会话 **53848 / exit 0** 已完整通过：数量 **run-i5f6vbqj**、
+SN **run-8d66kr7h** 均源码无漂移、正常停库、权限前后校验通过；
+准确终态 `preview-ci-native-v2-terminal.json`。这不代表新矩阵腿已有远端结果。
+证据 `preview-ci-change-evidence.json`；最终候选清单更新为
+`custody-0151-final-candidate-source-v3.json`。原拓扑测试属于第 0 分片，已按最终源码
+完整独立复验；原分片日志继续保存，不重启。当前源码冻结，不改业务或测试输入。
+
+下一步：完成最终安全扫描和准确索引核验，提交并回读远端门禁。
+**本批未提交、未部署、未开放业务写入口。** 原生日志通过不能代替静态终态、真实
+身份/渠道/期初数据、完整派生退回/报废/纠正链和最终生产 UAT。
+下一批源码审计另确认个人仓待退回账户首次建账需独立准入（LOSS-RETURN-PENDING-ADMISSION-01），
+准确位置/摘要及验证要求见 `derived-return-pending-account-admission-audit.json` 和基线缺口审计顶部。
+它与已完成的区域仓验收入账首次建账分别验证，不能靠预种空账户完成派生退回。
+下一批来源模型候选保持隔离，未改正式 `stock_operation_models.py`：70 项真实候选
+CHECK/UNIQUE/外键形状测试通过，完整 ORM PostgreSQL 建/删 DDL 编译与解析通过。
+在候选模型下运行既有提交/取消、出库、发运、验收、入账及封存流程，首轮 10 passed，
+唯一失败为 Node 未加入 PATH；补齐既有运行时后该原用例 1 passed，源码未改。
+这些共 11 项仅证明 SQLite 下旧流程兼容，不等于派生退回提交或 PG16 验收；不得计入
+当前 370 模块总数，不得单独应用模型。准确候选与日志见
+`artifacts/next-loss-derived-return/provenance-draft/legacy-flow-evidence.json`。
+派生退回原子提交及历史证明草案已继续落在 `atomic-draft/`：原总部决定、子单/行、
+原冻结份额与单笔流水绑定，沿用原工程师责任；子单状态/审计、处置通知及库存同事务。
+数量/SN 共 12 项服务验证已通过（11016 / exit 0）；第一轮对零余额历史行的错误测试
+断言已修正、失败日志保留。完整补验 **75625 / exit 0 / 36 passed / 224.82 秒**，
+覆盖共享冻结份额、过期方案、同请求重放、权限撤回、晚期失败整笔回滚，以及子单/行、
+数量、状态、通知对象与不可变时间篡改拒绝；通知队列重试不改变库存历史证明。
+第三轮 **74710 / exit 1 / 28 passed / 2 failed** 为重复事件夹具缺少 `available_at`，
+修正后再验证，原失败保留。证据 `atomic-draft/atomic-v4-terminal.json`，草案及全部
+1,675 个发布输入摘要无漂移。所有候选只注入隔离测试进程，正式业务文件不变；尚无
+派生提交的实际 PostgreSQL 延迟约束/待退回建账证明，不得当作已可上线或已接入。
+另有 **LOSS-NOTIFICATION-DEDUP-01**：真实报损冻结/三种处置的数量、SN 共 8 个
+反例均复现通用库存通知未识别已有专用通知对象，形成第二个待恢复通知目标。
+当前夹具未绑定真实渠道，不能声称已重复发送。隔离候选仅增加两个准确事件/业务/
+流水字段组合，保持原始目标封存、重试和无库存写入边界；候选仍在复验，未改本批输入。
+日志见 `notification-draft/baseline-v1.log`，此缺口继续保留，正式业务入口未开放。
+后文旧候选段落仅为历史，本段及状态 JSON 优先。
+
+## 上一轮：0150 已同步，退回预览通过，发现责任约束缺口
+
+2026-09-28，上一批 38 文件已提交为 **`85a63dc19d884e6d012a27b11dda24bfffaf2018`**，
+父提交 `5c5625a`，tree `093d4bc8968ec750fb823787ef46bfe9e774304b`。
+提交 blob 与全部本地验证文件一致，提交后曾核验工作树干净。
+Git HTTPS 连接超时后，改用 GitHub 官方 Git Data API，同一父提交、tree、作者时间及消息
+重建出的 commit SHA 与本地完全一致；以 `force=false` 快进分支并回读确认准确 SHA。
+没有 reset/revert，没有改写历史。证据在 `artifacts/loss-disposition-0150-20260928/commit-evidence.json`
+和 `api-{tree,commit,ref}-*.json`。远端已触发客户端 CI `36346690872` 和 PG16 CI `36346690895`，
+客户端已取得 success；PG16 四个报损子任务和三个静态分片均 success，综合运行仍待终态。
+最新精确回读为 `base-85a63dc-ci-jobs-review.json`，上一提交失败历史仍保留。
+
+下一批已将隔离草案接入正式 Python 模块，但仍是**内部只读预览**：
+`stock_loss_return_schemas.py`、`formal_services/stock_loss_return_plan.py`。
+只接受准确总部决定及接收路线，由服务端解析原报损行、数量、SN、原成色与保管人。
+总部执行人与工程师保管人分别记录；待退回账户采用稳定完整维度 ID，预览不建账户、
+不释放冻结、不创建退回单。未启用正式路由或权限种子。
+新增 `test_stock_loss_return_plan.py` 使用正常模块导入，并补充共享冻结、责任到期、
+原审批 hash、路线变化及客户端替换维度拒绝。第一轮 33 项通过后，额外反例复现了
+另一人员的有限有效责任区间与原责任重叠时被漏查。新退回预览已修复：先查询库位
+全部当前责任，再验证唯一性和人员。最终聚焦 **95989 / exit 0 / 35 passed**，191.96 秒。
+
+最终 PG16 **89324 / exit 0**：数量 `run-73bnan1x`、SN `run-q1b0b3gi` 均通过。
+两套均实际建立期初、报损冻结与独立区域/总部审批；API 角色预览仅执行 SELECT，
+数量/SN、原成色、总部执行人与工程师保管人准确，缺失待退回账户不创建；权限撤回、
+接收责任到期、来源责任重叠均拒绝，冲突区间过期后恢复原稳定方案。权限目录前后
+通过，源码无漂移，均 `stopped / passed / serverExitCode=0`。既有期初验证仍需行锁，
+不能宣称可在数据库 READ ONLY 事务运行。第一轮 PG16 和原失败反例日志均保留。
+权威清单为 `artifacts/next-loss-derived-return/integrated-candidate-status.json`。
+本批新增 5 个 Python 文件及交接/审计文档仍未提交；未修改既有业务或迁移文件。
+
+**接下来优先处理 CUSTODY-OVERLAP-01：** 已有三种报损处置服务的同类问题也已在
+SQLite 实际命令中复现（审计会话 40770，数量/SN 共 2 failed，错误为未拒绝）。
+0150 SQL 同样按人员过滤后计数；尚未完成原生 PG16 畸形 COMMIT 复现。
+须新增迁移同时补强服务和 SQL，不修改已提交 0150。准确目标函数、前后 SHA-256、
+最小替换及所需证明见 `disposition-custody-hardening-plan.json`，该方案尚未应用。
+此项为独立上线阻断，不能把新预览通过外推为既有处置写路径已修复。
+
+派生退回实际提交仍需互斥来源约束、原子派生和冻结释放证明、独立出库/发运/收货/入账、
+新件成色完整保留、请求恢复与永久封存、专用冲销和纠正链；现有工单退回不能直接套用。
+以下 0150 门禁段落为已完成提交的历史证据。
+
+## 上批 0150 本地门禁与提交前证据
 
 2026-09-28，继续使用 06f6/oam / `codex/notification-delivery-worker`，HEAD `5c5625a` 已推送；保留全部未提交改动。
 上一提交客户端 CI success，PG16 CI `36327607121` 最新终态 failure：数量/SN 和三个静态分片 success；runtime 的通知降级旧断言只接受 0109，实际由更高版本 0126 期初授权历史保护先拒绝。已独立复现并完成双重保留验证，未放宽历史保护。

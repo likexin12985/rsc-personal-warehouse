@@ -27,7 +27,7 @@ def test_exact_private_catalog_and_no_public_activation(migration):
     assert m['OLD_READY_HASH']==scope.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0149['rsc_oam_runtime_binding_ready_0044()'][6]
     assert m['NEW_READY_HASH']==scope.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0150['rsc_oam_runtime_binding_ready_0044()'][6]
     for coordinate,(args,result,body) in m['FUNCTIONS'].items():
-        assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]==hashlib.sha256(body.encode()).hexdigest()
+        assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0150[coordinate]==hashlib.sha256(body.encode()).hexdigest()
         assert coordinate not in security.RUNTIME_EXECUTE_FUNCTIONS
         parser.parse_plpgsql_json(f'CREATE FUNCTION guard({args}) RETURNS {result} LANGUAGE plpgsql AS $b${body}$b$')
         assert not sa.text(body)._bindparams
@@ -35,7 +35,7 @@ def test_exact_private_catalog_and_no_public_activation(migration):
         name,args=signature.removeprefix('public.').rstrip(')').split('(',1)
         coordinate=name,args
         assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0149[coordinate]==hashlib.sha256(old.encode()).hexdigest()
-        assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]==hashlib.sha256(new.encode()).hexdigest()
+        assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0150[coordinate]==hashlib.sha256(new.encode()).hexdigest()
         parameters={'uuid':'checked_account uuid' if 'hold' in name else 'checked_tx uuid','':''}[args]
         result='void' if args else 'trigger'
         parser.parse_plpgsql_json(f'CREATE FUNCTION guard({parameters}) RETURNS {result} LANGUAGE plpgsql AS $b${new}$b$')
