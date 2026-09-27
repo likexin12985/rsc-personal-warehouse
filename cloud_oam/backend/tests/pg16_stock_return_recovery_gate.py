@@ -28,7 +28,22 @@ def snapshot(engine):
     return previous_snapshot(engine), seals
 
 
+def _reject_at_constraint(db, execute, *, constraint, messages):
+    """A savepoint proves one guard, or the whole graph, without order reliance."""
+    try:
+        with db.begin_nested():
+            execute(); db.flush()
+            db.execute(text('SET CONSTRAINTS '+constraint+' IMMEDIATE'))
+    except DBAPIError as exc:
+        assert exc.orig.sqlstate=='23514'
+        message=exc.orig.diag.message_primary
+        assert message in messages, message
+        return message
+    raise AssertionError('SQL accepted conflicting return/seal facts')
+
+
 def assert_stock_return_recovery_gate(api_engine, fixture_engine):
+    results=[]
     for kind, world in query_worlds(fixture_engine).items():
         account_id, user_id, orders, _ = world
         target, transit = _destination(fixture_engine, account_id)
@@ -70,12 +85,17 @@ def assert_stock_return_recovery_gate(api_engine, fixture_engine):
                     except InventoryReadError as exc: assert exc.code == "stock_return_request_sealed"
                     else: raise AssertionError("Service replayed a sealed stock request")
                     assert snapshot(local) == sealed
-                    try:
+                    table='stock_operation_orders' if coordinates['operation_type']=='submit_return' else 'stock_operation_cancellations'
+                    for constraint,messages in (
+                        ('trg_'+table+'_seal_0101',('0101 sealed return request cannot execute',)),
+                        ('trg_'+table+'_request_0110',('0110 return request namespace conflict',)),
+                        ('ALL',('0101 sealed return request cannot execute','0110 return request namespace conflict')),
+                    ):
                         with db.begin_nested(), patch.object(commands, "_fresh_request", return_value=None), patch.object(facts, "order_result", return_value=None), patch.object(facts, "cancellation_result", return_value=None):
-                            execute(); _checkpoint(db)
-                    except DBAPIError as exc: assert "0101 sealed return request cannot execute" in str(exc.orig)
-                    else: raise AssertionError("SQL allowed a late return command")
-                    db.expire_all(); assert snapshot(local) == sealed
+                            message=_reject_at_constraint(db,execute,constraint=constraint,messages=messages)
+                        db.expire_all(); assert snapshot(local) == sealed
+                        results.append(dict(tracking=kind,operation=coordinates['operation_type'],direction='seal_first',
+                            constraint=constraint,sqlstate='23514',message=message,fullRollback=True))
                     boundary.rollback()
                 db.expire_all(); assert snapshot(local) == before
 
@@ -84,12 +104,18 @@ def assert_stock_return_recovery_gate(api_engine, fixture_engine):
                 before = snapshot(local)
                 assert recovery.seal_return_request(db, **coordinates, request_hash=digest) == result
                 assert snapshot(local) == before
-                try:
+                for constraint,messages in (
+                    ('trg_stock_operation_seals_proof_0101',('0101 executed return request cannot be sealed',)),
+                    ('trg_stock_operation_command_seals_request_0110',('0110 return request namespace conflict',)),
+                    ('ALL',('0101 executed return request cannot be sealed','0110 return request namespace conflict')),
+                ):
                     with db.begin_nested(), patch.object(recovery, "lookup_return_request", return_value=None):
-                        recovery.seal_return_request(db, **coordinates, request_hash=digest); _checkpoint(db)
-                except DBAPIError as exc: assert "0101 executed return request cannot be sealed" in str(exc.orig)
-                else: raise AssertionError("SQL sealed an executed request")
-                db.expire_all(); assert snapshot(local) == before
+                        message=_reject_at_constraint(db,
+                            lambda:recovery.seal_return_request(db, **coordinates, request_hash=digest),
+                            constraint=constraint,messages=messages)
+                    db.expire_all(); assert snapshot(local) == before
+                    results.append(dict(tracking=kind,operation=coordinates['operation_type'],direction='command_first',
+                        constraint=constraint,sqlstate='23514',message=message,fullRollback=True))
 
             coordinates = dict(actor=actor, work_order_id=orders[0], operation_type="submit_return", request_id=submit.request_id)
             execute = lambda: commands.submit_return(db, actor=actor, work_order_id=orders[0], request=submit)
@@ -106,3 +132,5 @@ def assert_stock_return_recovery_gate(api_engine, fixture_engine):
             db.rollback()
         assert snapshot(api_engine) == baseline
         print(f"PG16 {kind} submit/cancel lookup, seal and SQL mutual exclusion; SELECT-only recovery and full rollback PASS", flush=True)
+    assert len(results)==24
+    return results
