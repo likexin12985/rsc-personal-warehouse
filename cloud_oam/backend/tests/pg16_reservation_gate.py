@@ -266,7 +266,10 @@ def assert_reservation_gate(api_engine, *, security_engine, source_request_id,
             assert len(candidates["items"]) == 1
             candidate = candidates["items"][0]
             assert candidate["allocation_id"] == str(allocation.allocation_id)
-            assert candidate["reservable_qty"] == "2.000"
+            # The HTTP display contract follows the material quantity scale;
+            # numeric(18,3) storage does not force three displayed decimals.
+            assert candidate["quantity_scale"] == (0 if serial_mode else 3)
+            assert candidate["reservable_qty"] == ("2" if serial_mode else "2.000")
             assert {item["serial_id"] for item in candidate["serial_options"]} == {
                 str(value) for value in serial_ids
             }
