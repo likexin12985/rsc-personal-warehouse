@@ -120,9 +120,15 @@ def assert_notification_targets_gate(api_engine, migrator_engine):
     for statement, values in mutations:
         for engine, state in ((api_engine, "42501"), (migrator_engine, "23514")):
             _rejected(engine, lambda db: db.execute(text(statement), values), state=state)
-    _rejected(api_engine, lambda db: db.execute(text(
-        "UPDATE notification_events SET target_manifest_sha256=:hash WHERE id=:id"),
-        {"hash":"f" * 64, "id":event_id}), state="23514", message="immutable")
+    # 0129 grants UPDATE(status) only. Verify API ACL and owner immutability
+    # separately so an earlier permission denial cannot mask the row guard.
+    for engine, state, message in (
+        (api_engine, "42501", "permission denied for table notification_events"),
+        (migrator_engine, "23514", "0129 notification event content is immutable"),
+    ):
+        _rejected(engine, lambda db: db.execute(text(
+            "UPDATE notification_events SET target_manifest_sha256=:hash WHERE id=:id"),
+            {"hash":"f" * 64, "id":event_id}), state=state, message=message)
 
     # New event without its sealed audience and late extra targets must be
     # rejected by the real initially deferred PostgreSQL constraint triggers.

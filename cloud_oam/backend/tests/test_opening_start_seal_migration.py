@@ -95,7 +95,7 @@ def test_release_retention_detects_newer_evidence_before_old_guards(monkeypatch,
     import test_postgresql16_release_gate as gate
     connection=MagicMock();connection.__enter__.return_value=connection
     connection.execute.side_effect=[SimpleNamespace(fetchone=lambda value=value:(value,))
-        for value in (has_seals,True,True,True,True,True,True)]
+        for value in (False,has_seals,True,True,True,True,True,True)]
     monkeypatch.setattr(gate,'_current_revision',lambda:gate.HEAD_REVISION)
     monkeypatch.setattr(gate,'_role_password',lambda _:None)
     monkeypatch.setattr(gate,'_connection_parameters',lambda **_: {})

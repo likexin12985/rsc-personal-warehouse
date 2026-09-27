@@ -108,6 +108,10 @@ def execute_return_inbound(
     if plan_hash != expected_plan_hash:
         _fail("stock_return_inbound_plan_changed", "入账方案已变化，请重新核验")
 
+    # Only an authorized, unchanged server plan may introduce a new dimension.
+    # The account stays in this transaction with its exact first inbound proof.
+    from .stock_return_inbound_accounts import materialize_targets
+    materialize_targets(db, plan=plan, created_at=plan["checked_at"])
     inbound_id = uuid.uuid4()
     movements = tuple(
         ReturnInboundLine(

@@ -35,20 +35,8 @@ def _aware(value: datetime) -> datetime:
 
 
 def _target_account(db: Session, *, source: StockAccount, location: StockLocation, person_id: uuid.UUID) -> StockAccount:
-    if source.owner_org_id != location.owner_org_id:
-        _fail("stock_return_inbound_owner_mismatch", "退回在途账户与接收仓组织不一致")
-    rows = tuple(db.scalars(select(StockAccount).where(
-        StockAccount.owner_org_id == location.owner_org_id,
-        StockAccount.custodian_person_id == person_id,
-        StockAccount.location_id == location.id,
-        StockAccount.material_id == source.material_id,
-        StockAccount.condition_code == source.condition_code,
-        StockAccount.availability_bucket == "available",
-        StockAccount.lot_id == source.lot_id,
-    ).limit(2).execution_options(populate_existing=True)))
-    if len(rows) != 1:
-        _fail("stock_return_inbound_target_missing", "接收仓目标库存账户不存在或不唯一", 412)
-    return rows[0]
+    from .stock_return_inbound_accounts import resolve_target
+    return resolve_target(db, source=source, location=location, person_id=person_id)
 
 
 def authorize_receipt(db: Session, *, actor, receipt_id: uuid.UUID, action="receive_return"):

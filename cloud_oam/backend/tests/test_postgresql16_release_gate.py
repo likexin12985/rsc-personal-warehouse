@@ -78,7 +78,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261127_0148"
+HEAD_REVISION = "20261128_0149"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -728,6 +728,7 @@ def _assert_retention_downgrade(
     with psycopg.connect(**_connection_parameters(
         role="star_oam_migrator", password=_role_password("star_oam_migrator"),
     )) as connection:
+        return_inbounds = connection.execute("SELECT EXISTS (SELECT 1 FROM public.stock_operation_return_inbounds)").fetchone()[0]
         opening_seals = connection.execute("SELECT EXISTS (SELECT 1 FROM public.opening_start_command_seals)").fetchone()[0]
         opening_actors = connection.execute("SELECT EXISTS (SELECT 1 FROM public.stocktake_tasks WHERE opening_authorization_version IS NOT NULL)").fetchone()[0]
         zero_openings = connection.execute("SELECT EXISTS (SELECT 1 FROM public.stocktake_tasks t JOIN public.control_projection_publications p ON p.sync_run_id=t.control_sync_run_id WHERE t.task_type='opening' AND p.record_count=0)").fetchone()[0]
@@ -736,6 +737,7 @@ def _assert_retention_downgrade(
         control_facts = connection.execute("SELECT EXISTS (SELECT 1 FROM public.inventory_control_preparations)").fetchone()[0]
         sealed = connection.execute("SELECT EXISTS (SELECT 1 FROM public.notification_events WHERE target_manifest_sha256 IS NOT NULL)").fetchone()[0]
     chain_blocker = (
+        "0149 return inbound account admission history requires retention" if return_inbounds else
         "0128 downgrade blocked: original request seals must be retained" if opening_seals else
         "0126 downgrade blocked: opening authorization evidence must be retained" if opening_actors else
         "0122 downgrade blocked: zero-control opening history must be retained" if zero_openings else
@@ -7130,7 +7132,7 @@ def _head_function_body_hash(signature: str) -> str:
 
 def _head_account_admission_hash() -> str:
     import runpy
-    return hashlib.sha256(runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20261124_0145_stock_loss_submission_proof.py")))["_sources"]()["public.rsc_require_opening_observation_account_0023()"][1].encode()).hexdigest()
+    return hashlib.sha256(runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20261128_0149_stock_return_inbound_account_admission.py")))["_sources"]()["public.rsc_require_opening_observation_account_0023()"][1].encode()).hexdigest()
 
 
 @cache
@@ -7142,7 +7144,7 @@ def _head_runtime_ready_hash() -> str:
     from migration_script_cache import cache_migration_compilation
     with cache_migration_compilation(STOCK_RESERVATIONS_MIGRATION_0069.parent):
         migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-            "20261127_0148_stock_loss_headquarters_review.py"
+            "20261128_0149_stock_return_inbound_account_admission.py"
         )))
     assert migration["revision"] == RUNTIME_READY_HEAD_REVISION
     return migration["NEW_READY_HASH"]
@@ -12980,6 +12982,7 @@ def _seed_0047_stocktake_inventory(
     assignee_user_id: str,
     recipient_user_id: str | None = None,
     prepare_only: bool = False,
+    with_lots: bool = False,
 ) -> dict[str, object]:
     """Prepare synthetic master data; normally also establish and seed stock."""
 
@@ -12995,7 +12998,7 @@ def _seed_0047_stocktake_inventory(
         password=_role_password(EDGE_RECEIVER_ROLE)), pool_size=1, max_overflow=0, pool_timeout=5)
     try:
         fixture = prepare_stocktake_inventory(migrator_engine, edge_engine,
-            actor_user_id=actor_user_id, assignee_user_id=assignee_user_id)
+            actor_user_id=actor_user_id, assignee_user_id=assignee_user_id, with_lots=with_lots)
         from pg16_opening_fixture_gate import assert_reconciliation_event_migration
         assert_reconciliation_event_migration(migrator_engine, api_engine, edge_engine)
     finally:
@@ -20250,6 +20253,21 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             blocker="0111 downgrade blocked: inbound proof must be retained")
         assert _current_revision() == HEAD_REVISION and inbound_snapshot(api_engine) == inbound_history
         _validate_runtime_security(api_engine)
+        from pg16_stock_return_account_admission_gate import assert_return_account_admission_gate
+        return_account_owner = create_engine(_sqlalchemy_url(
+            role="star_oam_migrator", password=_role_password("star_oam_migrator")))
+        try:
+            assert_return_account_admission_gate(api_engine, return_account_owner)
+            assert_return_account_admission_gate(api_engine, return_account_owner, with_lots=True)
+            from pg16_stock_return_multiline_account_gate import assert_multiline_return_account_gate
+            assert_multiline_return_account_gate(api_engine, return_account_owner)
+            from pg16_stock_return_first_account_boundary_gate import assert_first_account_boundaries
+            assert_first_account_boundaries(api_engine, return_account_owner)
+        finally:
+            return_account_owner.dispose()
+        _assert_retention_downgrade("20261127_0148", blocking_revision="20261128_0149",
+            blocker="0149 return inbound account admission history requires retention")
+        _validate_runtime_security(api_engine)
         # New permanent control preparations follow every older retention proof
         # so 0112 cannot hide a missing predecessor downgrade boundary.
         from pg16_inventory_control_preparation_gate import assert_inventory_control_preparation_gate, snapshot as control_preparation_snapshot
@@ -20358,6 +20376,11 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
                 },
                 daily_admin_engine,
                 daily_downgrade,
+                assert_retention=lambda destination, blocker: _assert_retention_downgrade(
+                    destination, blocking_revision={
+                        '20261108_0129': '20261109_0130', '20261110_0131': '20261111_0132',
+                        '20261111_0132': '20261112_0133', '20261112_0133': '20261113_0134',
+                    }[destination], blocker=blocker),
             )
             assert daily_result["status"] == "passed"
             assert len(daily_result["cases"]) == 12
@@ -20387,8 +20410,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
                     "SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM file_jobs j"))
                 import_files_before = connection.scalar(text(
                     "SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM files f"))
-            refused = _run_alembic("downgrade", "20261119_0140", expect_success=False)
-            assert "0141 existing import jobs require retention and explicit migration" in refused.stdout + refused.stderr
+            _assert_retention_downgrade("20261119_0140", blocking_revision="20261120_0141",
+                blocker="0141 existing import jobs require retention and explicit migration")
             assert _current_revision() == HEAD_REVISION
             assert _count_facts(daily_owner_engine) == before_import_retention
             with daily_owner_engine.connect() as connection:

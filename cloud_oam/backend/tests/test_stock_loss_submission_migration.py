@@ -1,5 +1,6 @@
 """Exact loss proofs replace only admission and typed dispatch, never returns."""
 import hashlib
+from migration_source_expectations import current_source_hash
 from io import StringIO
 from pathlib import Path
 import runpy
@@ -34,7 +35,7 @@ def test_private_complete_proof_catalog_and_inherited_returns(migration):
         parser.parse_plpgsql_json('CREATE FUNCTION guard() RETURNS trigger LANGUAGE plpgsql AS $b$'+new+'$b$')
         coordinate=(signature.removeprefix('public.').split('(')[0],'')
         catalog=security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256 if 'dispatch' in signature else security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256
-        assert catalog[coordinate]==hashlib.sha256(new.encode()).hexdigest()
+        assert catalog[coordinate]==current_source_hash(m['revision'],signature,new)
     dispatcher=m['_sources']()['public.rsc_dispatch_stock_return_0100()'][1]
     assert 'PERFORM public.rsc_check_stock_return_0100(checked_order, checked_cancel);' in dispatcher
     assert dispatcher.index('-- Unrelated event aggregates')<dispatcher.index('FOR UPDATE')

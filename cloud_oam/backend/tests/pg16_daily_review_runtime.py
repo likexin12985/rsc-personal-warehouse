@@ -25,7 +25,7 @@ def facts(owner):
             connection.dialect.identifier_preparer.quote(name)+' t')),sort_keys=True,default=str).encode()).hexdigest() for name in tables}
 
 
-def run_with_capture_roles(engines, administrator, migrate):
+def run_with_capture_roles(engines, administrator, migrate, *, assert_retention=None):
     owner=engines['star_oam_migrator'];api=engines['star_oam_api']
     passwords={role:secrets.token_urlsafe(40) for role in ROLES}
     with administrator.begin() as connection:
@@ -37,8 +37,11 @@ def run_with_capture_roles(engines, administrator, migrate):
         poolclass=NullPool,hide_parameters=True) for role in ROLES}
     def retain(destination, blocker):
         before=facts(owner)
-        output=migrate(destination)
-        assert blocker in output, 'daily migration refused at an unexpected layer'
+        if assert_retention is not None:
+            assert_retention(destination, blocker)
+        else:
+            output=migrate(destination)
+            assert blocker in output, 'daily migration refused at an unexpected layer'
         assert facts(owner)==before, 'failed daily downgrade changed committed facts'
         validate_production_database_security(api,expected_runtime_role='star_oam_api',expected_migration_role='star_oam_migrator')
     try:

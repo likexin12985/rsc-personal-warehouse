@@ -311,14 +311,23 @@ def test_http_submit_headers_and_commit_failure_preserve_original_request(db, ac
         assert original.status_code == 404
 
 
-@pytest.mark.parametrize("stock", ["quantity"], indirect=True)
-def test_missing_target_is_an_explicit_precondition_error(db, acceptance):
+def test_missing_target_preview_is_read_only_and_deterministic(db, acceptance):
+    from uuid import UUID
     receipt = execute(db, acceptance, submit(db, acceptance)); db.commit()
-    before = snapshot(db)
-    with pytest.raises(InventoryReadError) as error:
-        commands.preview_return_inbound(db, actor=acceptance.actor, receipt_id=receipt.receipt_id)
-    assert error.value.code == "stock_return_inbound_target_missing" and error.value.status_code == 412
-    assert snapshot(db) == before
+    before = snapshot(db), tuple(db.execute(text('SELECT * FROM stock_accounts ORDER BY id')))
+    statements = []
+    connection = db.connection()
+    def capture(_c, _cu, sql, *_): statements.append(sql.strip().split()[0].upper())
+    event.listen(connection, 'before_cursor_execute', capture)
+    try:
+        first = commands.preview_return_inbound(db, actor=acceptance.actor, receipt_id=receipt.receipt_id)
+        second = commands.preview_return_inbound(db, actor=acceptance.actor, receipt_id=receipt.receipt_id)
+    finally:
+        event.remove(connection, 'before_cursor_execute', capture)
+    assert first['plan_hash'] == second['plan_hash'] and first['lines'] == second['lines']
+    assert statements and set(statements) == {'SELECT'} and not db.new
+    assert all(db.get(StockAccount, UUID(line['target_account_id'])) is None for line in first['lines'])
+    assert (snapshot(db), tuple(db.execute(text('SELECT * FROM stock_accounts ORDER BY id')))) == before
 
 
 @pytest.mark.parametrize("stock", ["quantity"], indirect=True)

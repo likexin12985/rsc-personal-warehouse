@@ -4485,7 +4485,8 @@ FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_loss_notification_0145', '')] = ("v",
 FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_loss_notification_0145', '')] = ("f", 'trigger', False)
 FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_loss_notification_0145', '')] = '4a3637f7e2b363100e78659bfb9fa2709f9b783608aca4406c7e0f941914b6d6'
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[('rsc_dispatch_stock_return_0100', '')] = '997af4afbce9a0444a8937e3cce36d23ccd3d49f6b9dcc399e20564a381f6484'
-FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_require_opening_observation_account_0023', '')] = '42eb336ee4cbf9cff4770790fedb2875ab49cf9a8b802c5d1b4f18fb33238089'
+# 0149 admits an exact first return inbound while retaining all earlier account proofs.
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_require_opening_observation_account_0023', '')] = 'c9fa3bcfaf73e9d913cba1681805af51dabc9002a40ce61f23885d5735de721d'
 for _table in ('notification_events','notification_person_targets'):
     EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[f'trg_{_table}_loss_0145'] = (
         _table, 'rsc_guard_loss_notification_0145', 'A', 5, True, True, True,

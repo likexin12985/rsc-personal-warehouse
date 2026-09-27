@@ -14,7 +14,7 @@ from work_order_fixtures import add_order
 from app.formal_services.oam_work_order_projection import SOURCE_SYSTEM_CODE
 
 
-def prepare_departure_worlds(api_engine, fixture_engine):
+def prepare_departure_worlds(api_engine, fixture_engine, *, precreate_receiving_accounts=True, with_lots=False):
     """Fresh region prevents abandoned test stocktakes from blocking real opening."""
     from test_postgresql16_release_gate import _seed_0047_stocktake_inventory,_establish_multiround_stocktake_location
     with Session(fixture_engine) as db:
@@ -25,7 +25,7 @@ def prepare_departure_worlds(api_engine, fixture_engine):
         manager=_user_with_role(db,region,roles['provincial_manager'],'organization',str(region.id),'Synthetic return manager').user.id
         technician=_user_with_role(db,region,roles['technician'],'person',None,'Synthetic return technician').user.id
         db.commit()
-    reference=_seed_0047_stocktake_inventory(api_engine,actor_user_id=admin,assignee_user_id=manager,recipient_user_id=technician,prepare_only=True)
+    reference=_seed_0047_stocktake_inventory(api_engine,actor_user_id=admin,assignee_user_id=manager,recipient_user_id=technician,prepare_only=True,with_lots=with_lots)
     with Session(fixture_engine) as db:
         actor=load_formal_principal(db,technician)
         at=datetime.now(timezone.utc)
@@ -37,20 +37,21 @@ def prepare_departure_worlds(api_engine, fixture_engine):
         db.add_all((personal,transit));db.flush()
         db.add(CustodyAssignment(id=uuid4(),location_id=personal.id,custodian_person_id=actor.person_id,valid_from=at))
         accounts={kind:StockAccount(id=uuid4(),owner_org_id=reference['region_org_id'],location_id=personal.id,
-            custodian_person_id=actor.person_id,material_id=identifier,condition_code='new',availability_bucket='available',lot_id=None,
+            custodian_person_id=actor.person_id,material_id=identifier,condition_code='new',availability_bucket='available',lot_id=reference['material_lot_id' if kind=='quantity' else 'concurrency_lot_id'],
             created_at=at,updated_at=at) for kind,identifier in [('quantity',reference['material_id']),('serial',reference['concurrency_material_id'])]}
         db.add_all(accounts.values());db.flush()
-        # Prepare the receiving accounts before their real zero-opening. A
-        # later inbound must not rely on a privileged post-opening row insert.
-        # Both quantity replacement and registered SN recovery produce damaged stock.
-        manager_actor=load_formal_principal(db,manager)
-        db.add_all(StockAccount(id=uuid4(),owner_org_id=reference['region_org_id'],location_id=reference['location_id'],
-            custodian_person_id=manager_actor.person_id,material_id=identifier,condition_code='damaged',availability_bucket='available',
-            lot_id=None,created_at=at,updated_at=at) for identifier in (reference['material_id'],reference['concurrency_material_id']))
-        db.flush()
+        if precreate_receiving_accounts:
+            # Prepare the receiving accounts before their real zero-opening. A
+            # later inbound must not rely on a privileged post-opening row insert.
+            # Both quantity replacement and registered SN recovery produce damaged stock.
+            manager_actor=load_formal_principal(db,manager)
+            db.add_all(StockAccount(id=uuid4(),owner_org_id=reference['region_org_id'],location_id=reference['location_id'],
+                custodian_person_id=manager_actor.person_id,material_id=identifier,condition_code='damaged',availability_bucket='available',
+                lot_id=reference['material_lot_id' if identifier==reference['material_id'] else 'concurrency_lot_id'],created_at=at,updated_at=at) for identifier in (reference['material_id'],reference['concurrency_material_id']))
+            db.flush()
         ids={kind:account.id for kind,account in accounts.items()};personal_id,transit_id=personal.id,transit.id
         db.commit()
-    for location,expected,count_user in [(personal_id,2,technician),(transit_id,0,manager),(reference['location_id'],3,manager)]:
+    for location,expected,count_user in [(personal_id,2,technician),(transit_id,0,manager),(reference['location_id'],3 if precreate_receiving_accounts else 1,manager)]:
         _establish_multiround_stocktake_location(api_engine,fixture={**reference,'recount_location_id':location},
             actor_user_id=admin,assignee_user_id=manager,count_user_id=count_user,expected_snapshot_line_count=expected)
     return seed_departure_worlds(api_engine, fixture_engine, reference=reference, admin_user_id=admin, technician=technician, ids=ids, transit_id=transit_id)

@@ -40,7 +40,7 @@ from cloud_oam.edge_sync import oam_material_master_capture as material_capture
 from cloud_oam.edge_sync.test_inventory_control_capture import expected, row as control_row
 
 
-def _publish_materials(db, edge_engine, *, actor_user_id, source_id, region_id):
+def _publish_materials(db, edge_engine, *, actor_user_id, source_id, region_id, with_lots=False):
     assert db.execute(text('SELECT current_user,session_user')).one()==('star_oam_migrator','star_oam_migrator')
     assert int(db.scalar(text('SHOW server_version_num')))//10000==16
     actor=load_formal_principal(db,actor_user_id)
@@ -78,7 +78,7 @@ def _publish_materials(db, edge_engine, *, actor_user_id, source_id, region_id):
     receipt_id=uuid.UUID(result['receipt_id'])
     draft=material_command(db,world,receipt_id).model_dump()
     for row in draft['decisions']:
-        row.update(tracking_mode='none' if row['sku_code']==codes[0] else 'serial',
+        row.update(tracking_mode=('lot' if with_lots else 'none') if row['sku_code']==codes[0] else ('lot_and_serial' if with_lots else 'serial'),
                    quantity_scale=3 if row['sku_code']==codes[0] else 0,allow_fraction=row['sku_code']==codes[0])
     cmd=materials.MaterialPublicationCommand.model_validate(draft)
     review=materials.preview_material_publication(db,**world.login,command=cmd)
@@ -98,35 +98,44 @@ def _publish_materials(db, edge_engine, *, actor_user_id, source_id, region_id):
     return world,lines[codes[0]],lines[codes[1]]
 
 
-def _publish_control(owner, edge_engine, world):
-    """Keep one explicit zero-quantity control row, not an empty shortcut."""
+def _publish_control(owner, edge_engine, world, *, empty=False):
+    """Publish an exact complete capture, with an explicit row by default.
+
+    The lot tests use a genuinely empty synthetic full snapshot because the
+    current OAM whitelist cannot prove lot semantics. This exercises existing
+    0122 zero-control admission; it is not proof of live lot normalization.
+    """
     row=control_row('opening-control',materialStatus='usable',materialStockType='stock')
     row.update(materialCode=world.code,qtyStock='0.000')
+    source_rows = [] if empty else [row]
     with pytest.MonkeyPatch.context() as patch,TemporaryDirectory(prefix='pg16-opening-capture-') as folder:
         capture=_capture_pipeline(owner,edge_engine,world,Path(folder),patch)
-        capture([row],full=True)
+        capture(source_rows,full=True)
         with Session(owner) as db:
             source=_configuration(db,world.login,control_grant_command(db,world));db.commit()
             _configuration(db,world.login,control_grant_command(db,world,action='catalog_grant',grant=source));db.commit()
             mapping=_mapping(db,world.login,mapping_command(db,world,rules=RULES));db.commit()
             world.mapping=uuid.UUID(mapping['decision_id'])
         # The admitted full capture starts after source/catalog/rule grants.
-        capture([row],full=True)
+        capture(source_rows,full=True)
         with Session(owner) as db:
             cmd=publication_command(db,world,mapping)
             review=controls.preview_control_publication(db,**world.login,command=cmd)
             result=controls.execute_control_publication(db,**world.login,command=cmd,review_sha256=review['review_sha256']);db.commit()
             pub=db.get(ControlProjectionPublication,uuid.UUID(result['publication_id']))
-            line=db.scalars(select(ControlProjectionLine).where(ControlProjectionLine.publication_id==pub.id)).one()
-            value=controls._line_input(line)
-            assert result['record_count']==result['origin_count']==1
-            assert value.control_qty==Decimal('0') and value.material_id==world.material_id
-            return dict(control_publication_id=pub.id,control_lines=(value,),control_source_system_id=pub.source_system_id,
+            lines=tuple(db.scalars(select(ControlProjectionLine).where(ControlProjectionLine.publication_id==pub.id)))
+            values=tuple(controls._line_input(line) for line in lines)
+            assert result['record_count']==result['origin_count']==(0 if empty else 1)
+            if not empty:
+                assert len(values)==1 and values[0].control_qty==Decimal('0') and values[0].material_id==world.material_id
+            else:
+                assert values==()
+            return dict(control_publication_id=pub.id,control_lines=values,control_source_system_id=pub.source_system_id,
                 control_sync_run_id=pub.sync_run_id,control_scope_key='oam_inventory_control:region:'+str(world.region),
                 material_publication_id=world.material_publication_id)
 
 
-def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_user_id, control_material='quantity'):
+def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_user_id, control_material='quantity', with_lots=False):
     """Publish two SKU policies and one control row; never seed balances."""
     if control_material not in ('quantity', 'serial'):
         raise ValueError('control_material must select quantity or serial')
@@ -135,6 +144,7 @@ def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_u
         CustodyAssignment,
         FormalMaterial,
         InventorySerial,
+        InventoryLot,
         MaterialInventoryPolicy,
         StockAccount,
         StockLocation,
@@ -217,7 +227,7 @@ def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_u
         ) == ("oam", "read_only", True)
 
         world, primary, secondary = _publish_materials(session, edge_engine,
-            actor_user_id=actor_user_id, source_id=oam_source.id, region_id=region_org_id)
+            actor_user_id=actor_user_id, source_id=oam_source.id, region_id=region_org_id, with_lots=with_lots)
         material = session.get(FormalMaterial, primary.material_id)
         material_id = material.id
         material_external_object = session.get(ExternalObject, primary.external_object_id)
@@ -225,13 +235,20 @@ def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_u
         policy = session.get(MaterialInventoryPolicy, primary.policy_id)
         concurrency_material = session.get(FormalMaterial, secondary.material_id)
         concurrency_policy = session.get(MaterialInventoryPolicy, secondary.policy_id)
+        lot_ids = {material.id: None, concurrency_material.id: None}
+        if with_lots:
+            for identifier in lot_ids:
+                lot = InventoryLot(id=uuid.uuid4(), material_id=identifier,
+                    lot_no='PG16-RETURN-LOT-' + uuid.uuid4().hex)
+                session.add(lot); lot_ids[identifier] = lot.id
+            session.flush()
         serial = InventorySerial(id=uuid.uuid4(), material_id=material.id,
             serial_no=f"PG16-STK-SERIAL-{material.id.hex[:16].upper()}",
-            qr_code=f"PG16-STK-QR-{material.id.hex.upper()}", lot_id=None, lifecycle_status="active",
+            qr_code=f"PG16-STK-QR-{material.id.hex.upper()}", lot_id=lot_ids[material.id], lifecycle_status="active",
             created_at=now, updated_at=now)
         concurrency_serial = InventorySerial(id=uuid.uuid4(), material_id=concurrency_material.id,
             serial_no=f"PG16-CONCURRENT-SERIAL-{concurrency_material.id.hex[:16].upper()}",
-            qr_code=f"PG16-CONCURRENT-QR-{concurrency_material.id.hex.upper()}", lot_id=None, lifecycle_status="active",
+            qr_code=f"PG16-CONCURRENT-QR-{concurrency_material.id.hex.upper()}", lot_id=lot_ids[concurrency_material.id], lifecycle_status="active",
             created_at=now, updated_at=now)
         location_id = uuid.uuid4()
         location = StockLocation(
@@ -359,7 +376,7 @@ def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_u
             material_id=material.id,
             condition_code="new",
             availability_bucket="available",
-            lot_id=None,
+            lot_id=lot_ids[material.id],
             created_at=now - timedelta(days=1),
             updated_at=now - timedelta(days=1),
         )
@@ -371,7 +388,7 @@ def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_u
             material_id=concurrency_material.id,
             condition_code="new",
             availability_bucket="available",
-            lot_id=None,
+            lot_id=lot_ids[concurrency_material.id],
             created_at=now - timedelta(days=1),
             updated_at=now - timedelta(days=1),
         )
@@ -383,7 +400,7 @@ def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_u
             material_id=material.id,
             condition_code="new",
             availability_bucket="available",
-            lot_id=None,
+            lot_id=lot_ids[material.id],
             created_at=now - timedelta(days=1),
             updated_at=now - timedelta(days=1),
         )
@@ -417,7 +434,7 @@ def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_u
             id=uuid.uuid4(), owner_org_id=region_org_id,
             custodian_person_id=None, location_id=recount_location_id,
             material_id=material.id, condition_code="new",
-            availability_bucket="available", lot_id=None,
+            availability_bucket="available", lot_id=lot_ids[material.id],
             created_at=now - timedelta(days=1),
             updated_at=now - timedelta(days=1),
         )
@@ -440,7 +457,7 @@ def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_u
             id=uuid.uuid4(), material_id=concurrency_material.id,
             serial_no=f"PG16-SN-REPLAY-{serial_replay_location_id.hex.upper()}",
             qr_code=f"PG16-SN-REPLAY-QR-{serial_replay_location_id.hex.upper()}",
-            lot_id=None, lifecycle_status="active",
+            lot_id=lot_ids[concurrency_material.id], lifecycle_status="active",
             created_at=now - timedelta(days=1),
             updated_at=now - timedelta(days=1),
         )
@@ -448,7 +465,7 @@ def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_u
             id=uuid.uuid4(), material_id=concurrency_material.id,
             serial_no=f"PG16-SN-REPLAY-EXTRA-{serial_replay_location_id.hex.upper()}",
             qr_code=f"PG16-SN-REPLAY-EXTRA-QR-{serial_replay_location_id.hex.upper()}",
-            lot_id=None, lifecycle_status="active",
+            lot_id=lot_ids[concurrency_material.id], lifecycle_status="active",
             created_at=now - timedelta(days=1),
             updated_at=now - timedelta(days=1),
         )
@@ -469,7 +486,7 @@ def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_u
             id=uuid.uuid4(), owner_org_id=region_org_id,
             custodian_person_id=None, location_id=serial_replay_location_id,
             material_id=concurrency_material.id, condition_code="new",
-            availability_bucket="available", lot_id=None,
+            availability_bucket="available", lot_id=lot_ids[concurrency_material.id],
             created_at=now - timedelta(days=1),
             updated_at=now - timedelta(days=1),
         )
@@ -503,7 +520,7 @@ def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_u
             id=uuid.uuid4(), owner_org_id=region_org_id,
             custodian_person_id=None, location_id=dynamic_peer_location_id,
             material_id=material.id, condition_code="new",
-            availability_bucket="available", lot_id=None,
+            availability_bucket="available", lot_id=lot_ids[material.id],
             created_at=now - timedelta(days=1),
             updated_at=now - timedelta(days=1),
         )
@@ -513,6 +530,8 @@ def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_u
         session.commit()
         fixture: dict[str, object] = {
             "account_id": account.id,
+            "material_lot_id": lot_ids[material.id],
+            "concurrency_lot_id": lot_ids[concurrency_material.id],
             "assignee_person_id": manager_person.id,
             "concurrency_account_id": concurrency_account.id,
             "concurrency_competing_location_id": (
@@ -552,5 +571,5 @@ def prepare_stocktake_inventory(owner, edge_engine, *, actor_user_id, assignee_u
         # quantity fixture's capture is not evidence of zero SN stock.
         world.code = fixture['concurrency_material_sku_code']
         world.material_id = fixture['concurrency_material_id']
-    fixture.update(_publish_control(owner, edge_engine, world))
+    fixture.update(_publish_control(owner, edge_engine, world, empty=with_lots))
     return fixture
