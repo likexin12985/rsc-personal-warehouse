@@ -373,7 +373,8 @@ def test_assigned_region_manager_can_submit_termination_personal_scope(world):
     assert completion.scope_id_snapshot == str(world.region_x.id)
 
 
-def test_sn_is_counted_piecewise_once_and_bound_to_cutoff_policy(world):
+@pytest.mark.parametrize('counted_qty', ('1', '1.0', '1.000'))
+def test_sn_is_counted_piecewise_once_and_bound_to_cutoff_policy(world, counted_qty):
     created, _started_row, scopes, round_row = _started(
         world,
         key="serial",
@@ -387,7 +388,7 @@ def test_sn_is_counted_piecewise_once_and_bound_to_cutoff_policy(world):
         account_counts=(
             StocktakeSnapshotCountInput(
                 stock_account_id=world.region_serial.id,
-                counted_qty=Decimal("1"),
+                counted_qty=Decimal(counted_qty),
                 count_method="scan",
                 serial_ids=(world.serial.id,),
             ),

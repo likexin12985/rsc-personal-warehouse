@@ -3226,7 +3226,7 @@ def _validate_quantity(
     positive: bool,
 ) -> None:
     if (
-        _decimal_scale(value) > policy.quantity_scale
+        _significant_decimal_scale(value) > policy.quantity_scale
         or (not policy.allow_fraction and value != value.to_integral_value())
         or (positive and value <= _ZERO)
         or (not positive and value < _ZERO)
@@ -3338,6 +3338,20 @@ def _timestamp(value: datetime | None) -> str | None:
 
 def _decimal_scale(value: Decimal) -> int:
     return max(0, -value.as_tuple().exponent)
+
+
+def _significant_decimal_scale(value: Decimal) -> int:
+    # NUMERIC(18,3) and wire formatting pad integer/SN quantities with zeros.
+    # Strip only those zeros without normalize(), which may round under the
+    # active Decimal context. Input validation still enforces at most 3 places.
+    if value.is_zero():
+        return 0
+    scale = _decimal_scale(value)
+    for digit in reversed(value.as_tuple().digits):
+        if scale == 0 or digit != 0:
+            break
+        scale -= 1
+    return scale
 
 
 def _event_key(kind: str, value: uuid.UUID) -> str:
