@@ -358,3 +358,18 @@ describe("formal stocktake PC adapter", () => {
     expect(requester.mock.calls.some((call) => call[1]?.method === "POST")).toBe(false);
   });
 });
+
+describe("transit stocktake location options", () => {
+  it.each(["transit", "quarantine"])("validates the authorized %s location type", async (locationType) => {
+    const requester = vi.fn(async () => ({ schema_version: "1.0", region_org_id: REGION,
+      items: [{ location_id: LOCATION, code: "TRANSIT-001", name: "区域在途位置", location_type: locationType,
+        owner_org_id: REGION, owner_org_name: "区域公司", custodian_person_id: null, custodian_name: null }],
+      next_after_id: null, authorization_version: 7 }));
+    const adapter = createFormalStocktakeAdapter({ person_id: PERSON, authorization_version: 7 }, requester);
+    if (locationType === "transit") {
+      await expect(adapter.listLocations(REGION)).resolves.toMatchObject({ items: [{ location_type: "transit", location_id: LOCATION }] });
+    } else {
+      await expect(adapter.listLocations(REGION)).rejects.toThrow(/库位类型/);
+    }
+  });
+});

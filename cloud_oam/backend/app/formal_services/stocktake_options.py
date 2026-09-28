@@ -142,7 +142,7 @@ def list_location_options(
     after_id: uuid.UUID | None = None,
     now: datetime | None = None,
 ) -> StocktakeLocationOptionPageOut:
-    """Return active region/personal locations with unambiguous custody."""
+    """Return scoped region/personal/transit locations with valid custody."""
 
     checked_region_id = _required_uuid(region_org_id, "stocktake_region_invalid")
     checked_limit = _limit(limit)
@@ -156,7 +156,7 @@ def list_location_options(
                 select(StockLocation)
                 .where(
                     StockLocation.status == "active",
-                    StockLocation.location_type.in_(("region", "personal")),
+                    StockLocation.location_type.in_(("region", "personal", "transit")),
                 )
                 .order_by(StockLocation.id)
                 .execution_options(populate_existing=True)
@@ -313,7 +313,7 @@ def _assignee_target(db: Session, region_id: uuid.UUID, location_id: uuid.UUID, 
     if location is None:
         _fail("stocktake_location_not_found", "not_found", "盘点库位不存在")
     owner = _location_owner_in_region(db, location, region_id, refresh=True)
-    if owner is None or location.status != "active" or location.location_type not in {"region", "personal"}:
+    if owner is None or location.status != "active" or location.location_type not in {"region", "personal", "transit"}:
         _fail("stocktake_location_forbidden", "forbidden", "盘点库位不在当前授权区域")
     _validate_location_chain(db, location, region_id, refresh=True)
     custodian = _current_custodian(db, location, now=now)
@@ -580,6 +580,11 @@ def _validate_location_chain(
     *,
     refresh: bool = False,
 ) -> None:
+    if location.location_type == "transit":
+        parent = db.get(StockLocation, location.parent_id, populate_existing=refresh) if location.parent_id else None
+        if (parent is None or parent.status != "active" or parent.location_type != "region"
+                or parent.owner_org_id != location.owner_org_id):
+            _fail("stocktake_transit_parent_invalid", "service_unavailable", "在途位置必须直接挂在同归属的启用区域仓下")
     current: StockLocation | None = location
     seen: set[uuid.UUID] = set()
     while current is not None:

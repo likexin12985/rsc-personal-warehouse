@@ -50,7 +50,7 @@ export type StocktakeLocationOption = Readonly<{
   location_id: string;
   code: string;
   name: string;
-  location_type: "region" | "personal";
+  location_type: "region" | "personal" | "transit";
   owner_org_id: string;
   owner_org_name: string;
   custodian_person_id: string | null;
@@ -242,7 +242,7 @@ function optionPage(value: unknown, type: "region" | "location" | "assignee", ex
     }
     if (type === "location") {
       const item = exact(value, ["location_id", "code", "name", "location_type", "owner_org_id", "owner_org_name", "custodian_person_id", "custodian_name"], "库位选择项");
-      if (item.location_type !== "region" && item.location_type !== "personal") fail("库位类型无效");
+      if (item.location_type !== "region" && item.location_type !== "personal" && item.location_type !== "transit") fail("库位类型无效");
       return Object.freeze({ location_id: uuid(item.location_id, "location_id"), code: text(item.code, "code"), name: text(item.name, "name"), location_type: item.location_type, owner_org_id: uuid(item.owner_org_id, "owner_org_id"), owner_org_name: text(item.owner_org_name, "owner_org_name"), custodian_person_id: nullableUuid(item.custodian_person_id, "custodian_person_id"), custodian_name: item.custodian_name === null ? null : text(item.custodian_name, "custodian_name") });
     }
     const item = exact(value, ["assignee_user_id", "person_id", "name", "employee_no", "role_codes"], "盘点人员选择项");

@@ -1617,7 +1617,11 @@ def _prepare_snapshot_counts(
                 "precondition_failed",
                 "明盘账面数量确认与截止快照不一致",
             )
-        _require_account_in_scope(account, scope)
+        _require_account_in_scope(
+            account,
+            scope,
+            location=db.get(StockLocation, scope.location_id, populate_existing=True),
+        )
         policy = _load_policy(db, account.material_id, task.cutoff_at)
         _validate_account_policy(account, policy)
         _validate_quantity(value.counted_qty, policy, positive=False)
@@ -3116,12 +3120,23 @@ def _snapshot_serial_ids(snapshot: StocktakeSnapshotLine) -> frozenset[uuid.UUID
     return frozenset(values)
 
 
-def _require_account_in_scope(account: StockAccount, scope: FormalStocktakeScope) -> None:
+def _require_account_in_scope(
+    account: StockAccount,
+    scope: FormalStocktakeScope,
+    *,
+    location: StockLocation | None,
+) -> None:
+    # Transit accounts retain the original person while the scoped regional
+    # manager counts every account in the immutable location snapshot.
+    transit = location is not None and location.location_type == "transit"
     if (
-        account.owner_org_id != scope.owner_org_id
+        location is None
+        or location.id != scope.location_id
+        or account.owner_org_id != scope.owner_org_id
         or account.location_id != scope.location_id
         or (
-            account.custodian_person_id is not None
+            not transit
+            and account.custodian_person_id is not None
             and account.custodian_person_id != scope.custodian_person_id_snapshot
         )
         or (scope.material_id is not None and account.material_id != scope.material_id)

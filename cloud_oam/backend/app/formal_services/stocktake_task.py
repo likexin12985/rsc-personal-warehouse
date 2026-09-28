@@ -2258,8 +2258,13 @@ def _require_location(
     )
     if location is None:
         _fail("stocktake_location_not_found", "not_found", "盘点库位不存在")
-    if location.status != "active" or location.location_type not in {"region", "personal"}:
-        _fail("stocktake_location_invalid", "precondition_failed", "盘点仅接受启用的区域仓或个人仓")
+    if location.status != "active" or location.location_type not in {"region", "personal", "transit"}:
+        _fail("stocktake_location_invalid", "precondition_failed", "盘点仅接受启用的区域仓、个人仓或在途位置")
+    if location.location_type == "transit":
+        parent = db.get(StockLocation, location.parent_id, populate_existing=True) if location.parent_id else None
+        if (parent is None or parent.status != "active" or parent.location_type != "region"
+                or parent.owner_org_id != location.owner_org_id):
+            _fail("transit_location_parent_invalid", "precondition_failed", "在途位置必须直接挂在同归属的启用区域仓下")
     current: StockLocation | None = location
     seen: set[uuid.UUID] = set()
     while current is not None:
