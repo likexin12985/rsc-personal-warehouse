@@ -38,6 +38,8 @@ from sqlalchemy import URL, create_engine, event, func, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
+from pg16_gate_progress import run_gate_phase
+
 from pg16_release_gate_diagnostics import (
     SanitizedPostgreSQLDiagnosticError,
     run_with_sanitized_database_diagnostics,
@@ -19600,67 +19602,67 @@ def _assert_0091_work_order_account_migration_roundtrip():
 
 
 def test_postgresql16_migration_acl_concurrency_and_kill_gate():
-    _assert_fresh_disposable_postgresql16()
-    _bootstrap_roles()
-    _assert_edge_receiver_provision_rolls_back_on_cross_database_connect()
-    _provision_edge_receiver_role()
-    _assert_0052_legacy_backfill_and_atomic_rejection()
+    run_gate_phase('_assert_fresh_disposable_postgresql16', lambda: _assert_fresh_disposable_postgresql16())
+    run_gate_phase('_bootstrap_roles', lambda: _bootstrap_roles())
+    run_gate_phase('_assert_edge_receiver_provision_rolls_back_on_cross_database_connect', lambda: _assert_edge_receiver_provision_rolls_back_on_cross_database_connect())
+    run_gate_phase('_provision_edge_receiver_role', lambda: _provision_edge_receiver_role())
+    run_gate_phase('_assert_0052_legacy_backfill_and_atomic_rejection', lambda: _assert_0052_legacy_backfill_and_atomic_rejection())
 
-    _run_alembic("upgrade", "20260902_0042")
+    run_gate_phase('_run_alembic', lambda: _run_alembic("upgrade", "20260902_0042"))
     assert _current_revision() == "20260902_0042"
-    _assert_0043_rejects_projector_membership_drift()
-    _assert_0043_rejects_projector_cross_schema_drift()
-    _assert_0043_rejects_unrevocable_parameter_acl()
+    run_gate_phase('_assert_0043_rejects_projector_membership_drift', lambda: _assert_0043_rejects_projector_membership_drift())
+    run_gate_phase('_assert_0043_rejects_projector_cross_schema_drift', lambda: _assert_0043_rejects_projector_cross_schema_drift())
+    run_gate_phase('_assert_0043_rejects_unrevocable_parameter_acl', lambda: _assert_0043_rejects_unrevocable_parameter_acl())
     pre_0043_large_object_oid = _inject_pre_0043_projector_acl_drift()
-    _run_alembic("upgrade", "20260902_0043")
+    run_gate_phase('_run_alembic', lambda: _run_alembic("upgrade", "20260902_0043"))
     assert _current_revision() == "20260902_0043"
-    _assert_0044_rejects_stray_permissive_policy()
-    _assert_0044_rejects_untrusted_0043_projection_graph()
-    _assert_0044_preflight_serializes_projector_writer()
-    _run_alembic("upgrade", "head")
-    _run_alembic("upgrade", "head")
+    run_gate_phase('_assert_0044_rejects_stray_permissive_policy', lambda: _assert_0044_rejects_stray_permissive_policy())
+    run_gate_phase('_assert_0044_rejects_untrusted_0043_projection_graph', lambda: _assert_0044_rejects_untrusted_0043_projection_graph())
+    run_gate_phase('_assert_0044_preflight_serializes_projector_writer', lambda: _assert_0044_preflight_serializes_projector_writer())
+    run_gate_phase('_run_alembic', lambda: _run_alembic("upgrade", "head"))
+    run_gate_phase('_run_alembic', lambda: _run_alembic("upgrade", "head"))
     assert _current_revision() == HEAD_REVISION
-    _assert_0082_empty_downgrade_restores_prior_access()
-    _assert_0088_account_admission_migration_roundtrip()
-    _assert_0089_personal_inbound_migration_roundtrip()
-    _assert_0090_work_order_migration_roundtrip()
-    _assert_0091_work_order_account_migration_roundtrip()
+    run_gate_phase('_assert_0082_empty_downgrade_restores_prior_access', lambda: _assert_0082_empty_downgrade_restores_prior_access())
+    run_gate_phase('_assert_0088_account_admission_migration_roundtrip', lambda: _assert_0088_account_admission_migration_roundtrip())
+    run_gate_phase('_assert_0089_personal_inbound_migration_roundtrip', lambda: _assert_0089_personal_inbound_migration_roundtrip())
+    run_gate_phase('_assert_0090_work_order_migration_roundtrip', lambda: _assert_0090_work_order_migration_roundtrip())
+    run_gate_phase('_assert_0091_work_order_account_migration_roundtrip', lambda: _assert_0091_work_order_account_migration_roundtrip())
     from pg16_serial_lifecycle_gate import assert_serial_migration_roundtrip
-    assert_serial_migration_roundtrip(sys.modules[__name__])
+    run_gate_phase('assert_serial_migration_roundtrip', lambda: assert_serial_migration_roundtrip(sys.modules[__name__]))
     from pg16_work_order_replacements_gate import assert_replacement_migration_roundtrip
-    assert_replacement_migration_roundtrip(sys.modules[__name__])
+    run_gate_phase('assert_replacement_migration_roundtrip', lambda: assert_replacement_migration_roundtrip(sys.modules[__name__]))
     from pg16_work_order_seals_gate import assert_seal_migration_roundtrip
-    assert_seal_migration_roundtrip(sys.modules[__name__])
-    _assert_migration_waits_for_version_maintenance_before_writing()
-    _assert_0063_empty_review_command_downgrade_and_reupgrade()
-    _assert_0064_empty_finalizer_organization_downgrade_and_reupgrade()
-    _assert_0062_empty_history_owner_downgrade_and_reupgrade()
-    _assert_0061_empty_event_key_downgrade_and_reupgrade()
-    _assert_0060_empty_hardening_downgrade_and_reupgrade()
-    _assert_0059_empty_graph_downgrade_and_reupgrade()
-    _assert_0058_empty_terminal_downgrade_and_reupgrade()
-    _assert_0057_empty_graph_downgrade_and_reupgrade()
-    _assert_0056_empty_graph_downgrade_and_reupgrade()
-    _assert_0055_empty_graph_downgrade_and_reupgrade()
-    _assert_0054_empty_graph_downgrade_and_reupgrade()
-    _assert_0053_empty_graph_downgrade_and_reupgrade()
-    _assert_0052_empty_graph_downgrade_and_reupgrade()
-    _assert_0051_empty_graph_downgrade_and_reupgrade()
-    _assert_0050_empty_graph_downgrade_and_reupgrade()
-    _assert_0049_empty_graph_downgrade_and_reupgrade()
-    _assert_0048_empty_graph_downgrade_and_reupgrade()
-    _assert_0047_empty_graph_downgrade_and_reupgrade()
-    _assert_0046_empty_graph_downgrade_and_reupgrade()
+    run_gate_phase('assert_seal_migration_roundtrip', lambda: assert_seal_migration_roundtrip(sys.modules[__name__]))
+    run_gate_phase('_assert_migration_waits_for_version_maintenance_before_writing', lambda: _assert_migration_waits_for_version_maintenance_before_writing())
+    run_gate_phase('_assert_0063_empty_review_command_downgrade_and_reupgrade', lambda: _assert_0063_empty_review_command_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0064_empty_finalizer_organization_downgrade_and_reupgrade', lambda: _assert_0064_empty_finalizer_organization_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0062_empty_history_owner_downgrade_and_reupgrade', lambda: _assert_0062_empty_history_owner_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0061_empty_event_key_downgrade_and_reupgrade', lambda: _assert_0061_empty_event_key_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0060_empty_hardening_downgrade_and_reupgrade', lambda: _assert_0060_empty_hardening_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0059_empty_graph_downgrade_and_reupgrade', lambda: _assert_0059_empty_graph_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0058_empty_terminal_downgrade_and_reupgrade', lambda: _assert_0058_empty_terminal_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0057_empty_graph_downgrade_and_reupgrade', lambda: _assert_0057_empty_graph_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0056_empty_graph_downgrade_and_reupgrade', lambda: _assert_0056_empty_graph_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0055_empty_graph_downgrade_and_reupgrade', lambda: _assert_0055_empty_graph_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0054_empty_graph_downgrade_and_reupgrade', lambda: _assert_0054_empty_graph_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0053_empty_graph_downgrade_and_reupgrade', lambda: _assert_0053_empty_graph_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0052_empty_graph_downgrade_and_reupgrade', lambda: _assert_0052_empty_graph_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0051_empty_graph_downgrade_and_reupgrade', lambda: _assert_0051_empty_graph_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0050_empty_graph_downgrade_and_reupgrade', lambda: _assert_0050_empty_graph_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0049_empty_graph_downgrade_and_reupgrade', lambda: _assert_0049_empty_graph_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0048_empty_graph_downgrade_and_reupgrade', lambda: _assert_0048_empty_graph_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0047_empty_graph_downgrade_and_reupgrade', lambda: _assert_0047_empty_graph_downgrade_and_reupgrade())
+    run_gate_phase('_assert_0046_empty_graph_downgrade_and_reupgrade', lambda: _assert_0046_empty_graph_downgrade_and_reupgrade())
     assert _work_order_lock_function_exists() is True
-    _assert_pre_0043_acl_drift_was_cleaned(pre_0043_large_object_oid)
-    _assert_projector_exact_column_acl()
+    run_gate_phase('_assert_pre_0043_acl_drift_was_cleaned', lambda: _assert_pre_0043_acl_drift_was_cleaned(pre_0043_large_object_oid))
+    run_gate_phase('_assert_projector_exact_column_acl', lambda: _assert_projector_exact_column_acl())
     unbound_source_id = _seed_0044_unbound_source()
-    _provision_and_verify_deployment_acl()
-    _assert_request_file_guard_execution_boundary(security_definer=True)
-    _assert_decision_guard_variable_boundary(repaired=True)
-    _assert_0044_zero_binding_default_denies(unbound_source_id)
-    _provision_and_verify_oam_work_order_source()
-    _assert_0044_bound_scope_attack_matrix(unbound_source_id)
+    run_gate_phase('_provision_and_verify_deployment_acl', lambda: _provision_and_verify_deployment_acl())
+    run_gate_phase('_assert_request_file_guard_execution_boundary', lambda: _assert_request_file_guard_execution_boundary(security_definer=True))
+    run_gate_phase('_assert_decision_guard_variable_boundary', lambda: _assert_decision_guard_variable_boundary(repaired=True))
+    run_gate_phase('_assert_0044_zero_binding_default_denies', lambda: _assert_0044_zero_binding_default_denies(unbound_source_id))
+    run_gate_phase('_provision_and_verify_oam_work_order_source', lambda: _provision_and_verify_oam_work_order_source())
+    run_gate_phase('_assert_0044_bound_scope_attack_matrix', lambda: _assert_0044_bound_scope_attack_matrix(unbound_source_id))
 
     projector_engine = create_engine(
         _sqlalchemy_url(
@@ -19681,62 +19683,62 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         pool_timeout=5,
     )
     try:
-        _validate_projector_security(projector_engine)
-        _validate_edge_security(edge_engine)
-        _assert_cross_database_connections_denied()
-        _assert_projector_real_publish_paths(projector_engine)
+        run_gate_phase('_validate_projector_security', lambda: _validate_projector_security(projector_engine))
+        run_gate_phase('_validate_edge_security', lambda: _validate_edge_security(edge_engine))
+        run_gate_phase('_assert_cross_database_connections_denied', lambda: _assert_cross_database_connections_denied())
+        run_gate_phase('_assert_projector_real_publish_paths', lambda: _assert_projector_real_publish_paths(projector_engine))
     finally:
         edge_engine.dispose()
         projector_engine.dispose()
 
-    _run_alembic("downgrade", RLS_REVISION)
+    run_gate_phase('_run_alembic', lambda: _run_alembic("downgrade", RLS_REVISION))
     assert _current_revision() == RLS_REVISION
-    _assert_request_file_guard_execution_boundary(security_definer=False)
-    _assert_decision_guard_variable_boundary(repaired=False)
-    _assert_0044_rejects_nonempty_sync_downgrade()
+    run_gate_phase('_assert_request_file_guard_execution_boundary', lambda: _assert_request_file_guard_execution_boundary(security_definer=False))
+    run_gate_phase('_assert_decision_guard_variable_boundary', lambda: _assert_decision_guard_variable_boundary(repaired=False))
+    run_gate_phase('_assert_0044_rejects_nonempty_sync_downgrade', lambda: _assert_0044_rejects_nonempty_sync_downgrade())
     _clear_disposable_oam_sync_graph()
-    _run_alembic("downgrade", "20260902_0043")
-    _assert_0044_downgrade_revokes_runtime_writes()
-    _run_alembic("upgrade", "head")
+    run_gate_phase('_run_alembic', lambda: _run_alembic("downgrade", "20260902_0043"))
+    run_gate_phase('_assert_0044_downgrade_revokes_runtime_writes', lambda: _assert_0044_downgrade_revokes_runtime_writes())
+    run_gate_phase('_run_alembic', lambda: _run_alembic("upgrade", "head"))
     assert _current_revision() == HEAD_REVISION
-    _provision_and_verify_deployment_acl()
-    _assert_request_file_guard_execution_boundary(security_definer=True)
-    _assert_decision_guard_variable_boundary(repaired=True)
-    _provision_and_verify_oam_work_order_source()
-    _assert_0044_bound_scope_attack_matrix(unbound_source_id)
+    run_gate_phase('_provision_and_verify_deployment_acl', lambda: _provision_and_verify_deployment_acl())
+    run_gate_phase('_assert_request_file_guard_execution_boundary', lambda: _assert_request_file_guard_execution_boundary(security_definer=True))
+    run_gate_phase('_assert_decision_guard_variable_boundary', lambda: _assert_decision_guard_variable_boundary(repaired=True))
+    run_gate_phase('_provision_and_verify_oam_work_order_source', lambda: _provision_and_verify_oam_work_order_source())
+    run_gate_phase('_assert_0044_bound_scope_attack_matrix', lambda: _assert_0044_bound_scope_attack_matrix(unbound_source_id))
 
     _clear_disposable_oam_sync_graph()
-    _run_alembic("downgrade", "20260902_0042")
+    run_gate_phase('_run_alembic', lambda: _run_alembic("downgrade", "20260902_0042"))
     assert _current_revision() == "20260902_0042"
     assert _work_order_lock_function_exists() is True
-    _assert_projector_acl_revoked()
-    _run_alembic("upgrade", "head")
+    run_gate_phase('_assert_projector_acl_revoked', lambda: _assert_projector_acl_revoked())
+    run_gate_phase('_run_alembic', lambda: _run_alembic("upgrade", "head"))
     assert _current_revision() == HEAD_REVISION
     assert _work_order_lock_function_exists() is True
 
-    _run_alembic("downgrade", "20260902_0041")
+    run_gate_phase('_run_alembic', lambda: _run_alembic("downgrade", "20260902_0041"))
     assert _current_revision() == "20260902_0041"
     assert _work_order_lock_function_exists() is False
-    _run_alembic("upgrade", "head")
+    run_gate_phase('_run_alembic', lambda: _run_alembic("upgrade", "head"))
     assert _current_revision() == HEAD_REVISION
     assert _work_order_lock_function_exists() is True
 
-    _run_alembic("downgrade", "20260901_0040")
+    run_gate_phase('_run_alembic', lambda: _run_alembic("downgrade", "20260901_0040"))
     assert _current_revision() == "20260901_0040"
     assert _table_exists("sms_challenge_dispatches") is False
 
     blocked_challenge = uuid.uuid4()
     _insert_unexpired_preflight_challenge(blocked_challenge)
-    blocked_upgrade = _run_alembic("upgrade", "head", expect_success=False)
+    blocked_upgrade = run_gate_phase('_run_alembic', lambda: _run_alembic("upgrade", "head", expect_success=False))
     assert "0041 preflight failed" in (blocked_upgrade.stdout + blocked_upgrade.stderr)
     assert _current_revision() == "20260901_0040"
     assert _table_exists("sms_challenge_dispatches") is False
     _delete_challenge(blocked_challenge)
 
-    _run_alembic("upgrade", "head")
+    run_gate_phase('_run_alembic', lambda: _run_alembic("upgrade", "head"))
     assert _current_revision() == HEAD_REVISION
-    _provision_and_verify_deployment_acl()
-    _provision_and_verify_oam_work_order_source()
+    run_gate_phase('_provision_and_verify_deployment_acl', lambda: _provision_and_verify_deployment_acl())
+    run_gate_phase('_provision_and_verify_oam_work_order_source', lambda: _provision_and_verify_oam_work_order_source())
     api_engine = create_engine(
         _sqlalchemy_url(
             role="star_oam_api",
@@ -19765,68 +19767,68 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         pool_timeout=5,
     )
     try:
-        _validate_runtime_security(api_engine)
-        _assert_0064_finalizer_organization_runtime_lock()
-        _assert_pg16_cutoff_replay_multiscope_owner_contract()
-        _assert_pg16_posting_tail_authorization_contract()
-        _assert_0058_review_terminal_catalog_state(
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
+        run_gate_phase('_assert_0064_finalizer_organization_runtime_lock', lambda: _assert_0064_finalizer_organization_runtime_lock())
+        run_gate_phase('_assert_pg16_cutoff_replay_multiscope_owner_contract', lambda: _assert_pg16_cutoff_replay_multiscope_owner_contract())
+        run_gate_phase('_assert_pg16_posting_tail_authorization_contract', lambda: _assert_pg16_posting_tail_authorization_contract())
+        run_gate_phase('_assert_0058_review_terminal_catalog_state', lambda: _assert_0058_review_terminal_catalog_state(
             _0058_review_terminal_catalog_state(), fixed=True
-        )
-        _assert_0052_opening_terminal_catalog(
+        ))
+        run_gate_phase('_assert_0052_opening_terminal_catalog', lambda: _assert_0052_opening_terminal_catalog(
             hardened=True,
             expected_revision=HEAD_REVISION,
-        )
-        _assert_0052_api_direct_execute_denied()
-        _assert_0052_startup_rejects_catalog_drift(api_engine)
-        _assert_0051_difference_completion_catalog(
+        ))
+        run_gate_phase('_assert_0052_api_direct_execute_denied', lambda: _assert_0052_api_direct_execute_denied())
+        run_gate_phase('_assert_0052_startup_rejects_catalog_drift', lambda: _assert_0052_startup_rejects_catalog_drift(api_engine))
+        run_gate_phase('_assert_0051_difference_completion_catalog', lambda: _assert_0051_difference_completion_catalog(
             repaired=True,
             expected_revision=HEAD_REVISION,
-        )
-        _assert_0051_api_direct_execute_denied()
-        _assert_0051_startup_rejects_trigger_drift(api_engine)
-        _assert_0049_recount_guard_catalog(
+        ))
+        run_gate_phase('_assert_0051_api_direct_execute_denied', lambda: _assert_0051_api_direct_execute_denied())
+        run_gate_phase('_assert_0051_startup_rejects_trigger_drift', lambda: _assert_0051_startup_rejects_trigger_drift(api_engine))
+        run_gate_phase('_assert_0049_recount_guard_catalog', lambda: _assert_0049_recount_guard_catalog(
             callers_security_definer=True,
             expected_revision=HEAD_REVISION,
-        )
-        _assert_0049_api_direct_execute_denied()
-        _assert_0049_startup_rejects_extra_trigger_alias(api_engine)
-        _assert_0048_scope_guard_catalog(
+        ))
+        run_gate_phase('_assert_0049_api_direct_execute_denied', lambda: _assert_0049_api_direct_execute_denied())
+        run_gate_phase('_assert_0049_startup_rejects_extra_trigger_alias', lambda: _assert_0049_startup_rejects_extra_trigger_alias(api_engine))
+        run_gate_phase('_assert_0048_scope_guard_catalog', lambda: _assert_0048_scope_guard_catalog(
             security_definer=True,
             expected_revision=HEAD_REVISION,
-        )
-        _assert_0048_scope_guard_master_data_stays_read_only()
-        _assert_0045_approval_catalog_drift_is_rejected(api_engine)
-        _validate_projector_security(projector_engine)
-        _validate_edge_security(edge_engine)
-        _assert_cross_database_connections_denied()
-        _assert_sms_acl(api_engine)
-        _assert_external_sync_scope_lock_serializes(
+        ))
+        run_gate_phase('_assert_0048_scope_guard_master_data_stays_read_only', lambda: _assert_0048_scope_guard_master_data_stays_read_only())
+        run_gate_phase('_assert_0045_approval_catalog_drift_is_rejected', lambda: _assert_0045_approval_catalog_drift_is_rejected(api_engine))
+        run_gate_phase('_validate_projector_security', lambda: _validate_projector_security(projector_engine))
+        run_gate_phase('_validate_edge_security', lambda: _validate_edge_security(edge_engine))
+        run_gate_phase('_assert_cross_database_connections_denied', lambda: _assert_cross_database_connections_denied())
+        run_gate_phase('_assert_sms_acl', lambda: _assert_sms_acl(api_engine))
+        run_gate_phase('_assert_external_sync_scope_lock_serializes', lambda: _assert_external_sync_scope_lock_serializes(
             api_engine,
             projector_engine,
-        )
-        _assert_external_sync_scope_session_lock_survives_commit(
+        ))
+        run_gate_phase('_assert_external_sync_scope_session_lock_survives_commit', lambda: _assert_external_sync_scope_session_lock_survives_commit(
             api_engine,
             projector_engine,
-        )
-        _assert_work_order_lock_acl_and_concurrency()
-        _assert_database_owner_membership_boundary(api_engine)
-        _assert_membership_drift_is_rejected(api_engine)
-        _assert_projector_membership_drift_is_rejected(projector_engine)
-        _assert_projector_cross_schema_drift_is_rejected(projector_engine)
-        _assert_public_and_cluster_acl_drift_is_rejected(
+        ))
+        run_gate_phase('_assert_work_order_lock_acl_and_concurrency', lambda: _assert_work_order_lock_acl_and_concurrency())
+        run_gate_phase('_assert_database_owner_membership_boundary', lambda: _assert_database_owner_membership_boundary(api_engine))
+        run_gate_phase('_assert_membership_drift_is_rejected', lambda: _assert_membership_drift_is_rejected(api_engine))
+        run_gate_phase('_assert_projector_membership_drift_is_rejected', lambda: _assert_projector_membership_drift_is_rejected(projector_engine))
+        run_gate_phase('_assert_projector_cross_schema_drift_is_rejected', lambda: _assert_projector_cross_schema_drift_is_rejected(projector_engine))
+        run_gate_phase('_assert_public_and_cluster_acl_drift_is_rejected', lambda: _assert_public_and_cluster_acl_drift_is_rejected(
             projector_engine,
             edge_engine,
-        )
-        _assert_single_owner_and_process_kill(api_engine)
+        ))
+        run_gate_phase('_assert_single_owner_and_process_kill', lambda: _assert_single_owner_and_process_kill(api_engine))
 
         # The preceding 0042 work-order lock proof intentionally creates a
         # migrator-owned formal fixture.  Remove only the disposable CI sync
         # graph after that proof so the multi-revision downgrade can reach and
         # independently exercise 0041's nonempty SMS challenge blocker.
         _clear_disposable_oam_sync_graph()
-        blocked_downgrade = _run_alembic(
+        blocked_downgrade = run_gate_phase('_run_alembic', lambda: _run_alembic(
             "downgrade", "20260901_0040", expect_success=False
-        )
+        ))
         assert "cannot downgrade 0041" in (
             blocked_downgrade.stdout + blocked_downgrade.stderr
         )
@@ -19838,40 +19840,40 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             manager_user_id,
             admin_user_id,
         ) = (
-            _assert_0045_raw_projection_bypass_and_formal_approval(api_engine)
+            run_gate_phase('_assert_0045_raw_projection_bypass_and_formal_approval', lambda: _assert_0045_raw_projection_bypass_and_formal_approval(api_engine))
         )
-        _assert_0046_rejects_nonempty_content_downgrade(
+        run_gate_phase('_assert_0046_rejects_nonempty_content_downgrade', lambda: _assert_0046_rejects_nonempty_content_downgrade(
             api_engine,
             request_id=request_id,
             expected_version=final_request_version,
-        )
+        ))
         # This first builds and closes an opening stocktake through the API
         # session.  Its scope insert is the positive 0048 regression: the
         # unchanged 0025 trigger may read-lock master data only through its
         # migration-owned execution context.
-        _assert_0049_recount_guard_catalog(
+        run_gate_phase('_assert_0049_recount_guard_catalog', lambda: _assert_0049_recount_guard_catalog(
             callers_security_definer=True,
             expected_revision=HEAD_REVISION,
-        )
+        ))
         (
             stocktake_task_id,
             _stocktake_task_version,
             inventory_fixture,
-        ) = _assert_0047_real_api_stocktake_start(
+        ) = run_gate_phase('_assert_0047_real_api_stocktake_start', lambda: _assert_0047_real_api_stocktake_start(
             api_engine,
             actor_user_id=admin_user_id,
             assignee_user_id=manager_user_id,
             material_request_id=request_id,
-        )
+        ))
         # Create and verify the 0063 review fact only after all older
         # downgrade blockers have been exercised.  The 0047 start blocker is
         # tested inside the start helper before it creates review facts.
-        _assert_0063_nonopening_review_version_trigger(stocktake_task_id)
-        _assert_0063_rejects_nonempty_review_downgrade()
-        _assert_0049_recount_guard_catalog(
+        run_gate_phase('_assert_0063_nonopening_review_version_trigger', lambda: _assert_0063_nonopening_review_version_trigger(stocktake_task_id))
+        run_gate_phase('_assert_0063_rejects_nonempty_review_downgrade', lambda: _assert_0063_rejects_nonempty_review_downgrade())
+        run_gate_phase('_assert_0049_recount_guard_catalog', lambda: _assert_0049_recount_guard_catalog(
             callers_security_definer=True,
             expected_revision=HEAD_REVISION,
-        )
+        ))
         # Run new supply facts after all historical nonempty downgrade probes,
         # so the 0059 blocker cannot mask a lower revision's independent gate.
         from pg16_supply_gate import assert_supply_gate
@@ -19881,8 +19883,8 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             pool_size=1, max_overflow=0, pool_timeout=5,
         )
         try:
-            assert_supply_gate(api_engine, security_engine=security_engine, source_request_id=request_id,
-                manager_user_id=manager_user_id, admin_user_id=admin_user_id)
+            run_gate_phase('assert_supply_gate', lambda: assert_supply_gate(api_engine, security_engine=security_engine, source_request_id=request_id,
+                manager_user_id=manager_user_id, admin_user_id=admin_user_id))
         finally:
             security_engine.dispose()
 
@@ -19893,9 +19895,9 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         # directly above; keeping the two assertions separate proves each
         # migration's own guard without weakening Alembic ordering.
         posting_outcome_migration = _load_stocktake_posting_command_outcomes_migration_0065()
-        _assert_retention_downgrade(SUPPLY_TASK_SECURITY_REVISION,
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade(SUPPLY_TASK_SECURITY_REVISION,
             blocking_revision=STOCKTAKE_POSTING_COMMAND_OUTCOMES_REVISION,
-            blocker=posting_outcome_migration.DOWNGRADE_BLOCKER)
+            blocker=posting_outcome_migration.DOWNGRADE_BLOCKER))
         supply_event_key = _load_supply_event_key_migration_0061()
         migrator_engine = create_engine(
             _sqlalchemy_url(
@@ -19917,7 +19919,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         finally:
             migrator_engine.dispose()
         assert _current_revision() == HEAD_REVISION
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         # Reservation facts must be created after historical downgrade probes,
         # otherwise their 0069 blocker masks the older independent guards.
         from pg16_reservation_gate import assert_reservation_gate
@@ -19928,81 +19930,81 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         try:
             _reveal_pg16_service_database_error(
                 api_engine,
-                lambda: assert_reservation_gate(
+                lambda: run_gate_phase('assert_reservation_gate', lambda: assert_reservation_gate(
                     api_engine, security_engine=security_engine,
                     source_request_id=request_id, manager_user_id=manager_user_id,
                     admin_user_id=admin_user_id, inventory_fixture=inventory_fixture,
-                ),
+                )),
             )
         finally:
             security_engine.dispose()
-        _assert_retention_downgrade("20260908_0068", blocking_revision=STOCK_RESERVATIONS_REVISION,
-            blocker="cannot downgrade 0069")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20260908_0068", blocking_revision=STOCK_RESERVATIONS_REVISION,
+            blocker="cannot downgrade 0069"))
         assert _current_revision() == HEAD_REVISION
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         from pg16_reservation_release_gate import assert_release_gate
         security_engine = create_engine(_admin_sqlalchemy_url(), pool_size=1, max_overflow=0, pool_timeout=5)
         try:
-            _reveal_pg16_service_database_error(api_engine, lambda: assert_release_gate(
+            _reveal_pg16_service_database_error(api_engine, lambda: run_gate_phase('assert_release_gate', lambda: assert_release_gate(
                 api_engine, security_engine=security_engine, admin_user_id=admin_user_id,
                 inventory_fixture=inventory_fixture, source_request_id=request_id, manager_user_id=manager_user_id,
-            ))
+            )))
         finally:
             security_engine.dispose()
-        _assert_retention_downgrade(STOCK_RESERVATIONS_REVISION, blocking_revision="20260910_0070",
-            blocker="cannot downgrade 0070")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade(STOCK_RESERVATIONS_REVISION, blocking_revision="20260910_0070",
+            blocker="cannot downgrade 0070"))
         assert _current_revision() == HEAD_REVISION
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         from pg16_picking_gate import assert_picking_gate
         security_engine = create_engine(_admin_sqlalchemy_url(), pool_size=1, max_overflow=0, pool_timeout=5)
         try:
-            outbound_worlds = _reveal_pg16_service_database_error(api_engine, lambda: assert_picking_gate(
+            outbound_worlds = _reveal_pg16_service_database_error(api_engine, lambda: run_gate_phase('assert_picking_gate', lambda: assert_picking_gate(
                 api_engine, security_engine=security_engine, admin_user_id=admin_user_id,
                 inventory_fixture=inventory_fixture, source_request_id=request_id, manager_user_id=manager_user_id,
-            ))
+            )))
         finally:
             security_engine.dispose()
-        _assert_retention_downgrade("20260910_0070", blocking_revision="20260911_0071",
-            blocker="cannot downgrade 0071")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20260910_0070", blocking_revision="20260911_0071",
+            blocker="cannot downgrade 0071"))
         assert _current_revision() == HEAD_REVISION
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         from pg16_outbound_gate import assert_outbound_gate
         security_engine = create_engine(_admin_sqlalchemy_url(), pool_size=1, max_overflow=0, pool_timeout=5)
         try:
-            recipient_receipt_worlds = _reveal_pg16_service_database_error(api_engine, lambda: assert_outbound_gate(
+            recipient_receipt_worlds = _reveal_pg16_service_database_error(api_engine, lambda: run_gate_phase('assert_outbound_gate', lambda: assert_outbound_gate(
                 api_engine, security_engine=security_engine, admin_user_id=admin_user_id, worlds=outbound_worlds,
-            ))
+            )))
         finally:
             security_engine.dispose()
-        _assert_retention_downgrade("20260911_0071", blocking_revision="20260912_0072",
-            blocker="cannot downgrade 0072")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20260911_0071", blocking_revision="20260912_0072",
+            blocker="cannot downgrade 0072"))
         assert _current_revision() == HEAD_REVISION
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         from pg16_oam_receipt_gate import assert_receipt_gate
         receipt_migrator_engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         receipt_backup_engine = create_engine(_sqlalchemy_url(
             role="star_oam_backup", password=_role_password("star_oam_backup")))
         try:
-            assert_receipt_gate(projector_engine, receipt_migrator_engine, api_engine, receipt_backup_engine)
+            run_gate_phase('assert_receipt_gate', lambda: assert_receipt_gate(projector_engine, receipt_migrator_engine, api_engine, receipt_backup_engine))
         finally:
             receipt_migrator_engine.dispose()
             receipt_backup_engine.dispose()
-        _assert_retention_downgrade("20260921_0081", blocking_revision="20260922_0082",
-            blocker="0082 downgrade blocked")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20260921_0081", blocking_revision="20260922_0082",
+            blocker="0082 downgrade blocked"))
         assert _current_revision() == HEAD_REVISION
         from pg16_my_receipt_gate import assert_my_receipt_gate
         security_engine = create_engine(_admin_sqlalchemy_url(), pool_size=1, max_overflow=0, pool_timeout=5)
         try:
             for receiving_request_id, receiving_posting_id in recipient_receipt_worlds:
-                _reveal_pg16_service_database_error(api_engine, lambda: assert_my_receipt_gate(
+                _reveal_pg16_service_database_error(api_engine, lambda: run_gate_phase('assert_my_receipt_gate', lambda: assert_my_receipt_gate(
                     api_engine, security_engine, request_id=receiving_request_id,
                     posting_id=receiving_posting_id, admin_user_id=admin_user_id,
-                ))
+                )))
         finally:
             security_engine.dispose()
-        _assert_retention_downgrade("20260924_0084", blocking_revision="20260929_0089",
-            blocker="0089 transition blocked")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20260924_0084", blocking_revision="20260929_0089",
+            blocker="0089 transition blocked"))
         assert _current_revision() == HEAD_REVISION
         from pg16_work_order_material_gate import assert_work_order_material_gate
         from pg16_work_order_accounts_gate import assert_work_order_accounts_gate, prepare_work_order_stock
@@ -20010,101 +20012,101 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
             prepare_work_order_stock(api_engine, work_order_fixture_engine, admin_user_id=admin_user_id)
-            assert_work_order_accounts_gate(api_engine, work_order_fixture_engine)
-            assert_work_order_material_gate(api_engine, work_order_fixture_engine)
+            run_gate_phase('assert_work_order_accounts_gate', lambda: assert_work_order_accounts_gate(api_engine, work_order_fixture_engine))
+            run_gate_phase('assert_work_order_material_gate', lambda: assert_work_order_material_gate(api_engine, work_order_fixture_engine))
         finally:
             work_order_fixture_engine.dispose()
-        _assert_retention_downgrade("20260929_0089", blocking_revision="20261001_0091",
-            blocker="0091 downgrade blocked")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20260929_0089", blocking_revision="20261001_0091",
+            blocker="0091 downgrade blocked"))
         assert _current_revision() == HEAD_REVISION
         from pg16_serial_lifecycle_gate import assert_serial_consumption_gate
         serial_fixture_engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
-            assert_serial_consumption_gate(api_engine, serial_fixture_engine)
+            run_gate_phase('assert_serial_consumption_gate', lambda: assert_serial_consumption_gate(api_engine, serial_fixture_engine))
         finally:
             serial_fixture_engine.dispose()
-        _assert_retention_downgrade("20261001_0091", blocking_revision="20261002_0092",
-            blocker="0092 transition blocked")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261001_0091", blocking_revision="20261002_0092",
+            blocker="0092 transition blocked"))
         assert _current_revision() == HEAD_REVISION
         from pg16_work_order_replacements_gate import assert_work_order_replacements_gate
         replacement_fixture_engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
-            assert_work_order_replacements_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_work_order_replacements_gate', lambda: assert_work_order_replacements_gate(api_engine, replacement_fixture_engine))
             from pg16_work_order_replacements_gate import assert_replacement_history_gate
-            assert_replacement_history_gate(api_engine)
+            run_gate_phase('assert_replacement_history_gate', lambda: assert_replacement_history_gate(api_engine))
             from pg16_work_order_replacement_preview_gate import assert_replacement_preview_gate
-            assert_replacement_preview_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_replacement_preview_gate', lambda: assert_replacement_preview_gate(api_engine, replacement_fixture_engine))
             from pg16_work_order_replacement_submit_gate import assert_replacement_submit_gate
-            assert_replacement_submit_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_replacement_submit_gate', lambda: assert_replacement_submit_gate(api_engine, replacement_fixture_engine))
             from pg16_work_order_removed_registration_gate import assert_removed_registration_atomic_gate
-            assert_removed_registration_atomic_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_removed_registration_atomic_gate', lambda: assert_removed_registration_atomic_gate(api_engine, replacement_fixture_engine))
             from pg16_work_order_removed_registration_gate import assert_removed_registration_lot_gate
-            assert_removed_registration_lot_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_removed_registration_lot_gate', lambda: assert_removed_registration_lot_gate(api_engine, replacement_fixture_engine))
             from pg16_work_order_removed_registration_submit_gate import assert_removed_registration_submit_gate
-            assert_removed_registration_submit_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_removed_registration_submit_gate', lambda: assert_removed_registration_submit_gate(api_engine, replacement_fixture_engine))
             from pg16_work_order_reversal_boundary_gate import assert_work_order_reversal_boundary_gate, assert_generic_inverse_database_boundary
-            assert_work_order_reversal_boundary_gate(api_engine, replacement_fixture_engine)
-            assert_generic_inverse_database_boundary(api_engine, replacement_fixture_engine, rejected=True)
+            run_gate_phase('assert_work_order_reversal_boundary_gate', lambda: assert_work_order_reversal_boundary_gate(api_engine, replacement_fixture_engine))
+            run_gate_phase('assert_generic_inverse_database_boundary', lambda: assert_generic_inverse_database_boundary(api_engine, replacement_fixture_engine, rejected=True))
             from pg16_work_order_reversal_boundary_gate import assert_reversal_migration_rejects_detached_history
-            assert_reversal_migration_rejects_detached_history(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_reversal_migration_rejects_detached_history', lambda: assert_reversal_migration_rejects_detached_history(api_engine, replacement_fixture_engine))
             from pg16_work_order_reversal_plan_gate import assert_reversal_plan_gate
-            assert_reversal_plan_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_reversal_plan_gate', lambda: assert_reversal_plan_gate(api_engine, replacement_fixture_engine))
             from pg16_work_order_reversal_write_gate import assert_reversal_write_gate, assert_reversal_database_proof_gate
-            assert_reversal_write_gate(api_engine, replacement_fixture_engine)
-            assert_reversal_database_proof_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_reversal_write_gate', lambda: assert_reversal_write_gate(api_engine, replacement_fixture_engine))
+            run_gate_phase('assert_reversal_database_proof_gate', lambda: assert_reversal_database_proof_gate(api_engine, replacement_fixture_engine))
             from pg16_work_order_reversal_seals_gate import assert_reversal_seal_atomic_gate, assert_reversal_http_gate, assert_reversal_seal_commit_gate
-            assert_reversal_seal_atomic_gate(api_engine, replacement_fixture_engine)
-            assert_reversal_http_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_reversal_seal_atomic_gate', lambda: assert_reversal_seal_atomic_gate(api_engine, replacement_fixture_engine))
+            run_gate_phase('assert_reversal_http_gate', lambda: assert_reversal_http_gate(api_engine, replacement_fixture_engine))
             from pg16_work_order_reversal_submit_gate import assert_reversal_submit_gate
-            assert_reversal_submit_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_reversal_submit_gate', lambda: assert_reversal_submit_gate(api_engine, replacement_fixture_engine))
             from pg16_work_order_return_sources_gate import assert_return_sources_gate
-            assert_return_sources_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_return_sources_gate', lambda: assert_return_sources_gate(api_engine, replacement_fixture_engine))
             from pg16_stock_return_gate import assert_stock_return_gate
-            assert_stock_return_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_stock_return_gate', lambda: assert_stock_return_gate(api_engine, replacement_fixture_engine))
             from pg16_stock_return_recovery_gate import assert_stock_return_recovery_gate
-            assert_stock_return_recovery_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_stock_return_recovery_gate', lambda: assert_stock_return_recovery_gate(api_engine, replacement_fixture_engine))
             from pg16_stock_return_transport_gate import assert_stock_return_http_gate
-            assert_stock_return_http_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_stock_return_http_gate', lambda: assert_stock_return_http_gate(api_engine, replacement_fixture_engine))
             from pg16_stock_return_mini_gate import assert_stock_return_mini_gate
-            assert_stock_return_mini_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_stock_return_mini_gate', lambda: assert_stock_return_mini_gate(api_engine, replacement_fixture_engine))
             from pg16_work_order_reversal_write_gate import assert_reversal_concurrent_commit_gate
             from pg16_work_order_replacement_seals_gate import assert_replacement_seal_atomic_gate
-            assert_replacement_seal_atomic_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_replacement_seal_atomic_gate', lambda: assert_replacement_seal_atomic_gate(api_engine, replacement_fixture_engine))
             from pg16_work_order_query_gate import assert_work_order_query_gate
-            assert_work_order_query_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_work_order_query_gate', lambda: assert_work_order_query_gate(api_engine, replacement_fixture_engine))
             from pg16_work_order_submit_gate import assert_work_order_submit_gate
-            assert_work_order_submit_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_work_order_submit_gate', lambda: assert_work_order_submit_gate(api_engine, replacement_fixture_engine))
             from pg16_work_order_query_gate import query_worlds
             from pg16_work_order_seals_gate import assert_seal_atomic_gate, assert_seal_commit_gate
             seal_worlds = query_worlds(replacement_fixture_engine)
-            assert_seal_atomic_gate(api_engine, seal_worlds)
+            run_gate_phase('assert_seal_atomic_gate', lambda: assert_seal_atomic_gate(api_engine, seal_worlds))
             from pg16_work_order_recovery_gate import assert_work_order_recovery_gate
-            assert_work_order_recovery_gate(api_engine, replacement_fixture_engine)
+            run_gate_phase('assert_work_order_recovery_gate', lambda: assert_work_order_recovery_gate(api_engine, replacement_fixture_engine))
         finally:
             replacement_fixture_engine.dispose()
-        _assert_retention_downgrade("20261002_0092", blocking_revision="20261003_0093",
-            blocker="0093 transition blocked")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261002_0092", blocking_revision="20261003_0093",
+            blocker="0093 transition blocked"))
         assert _current_revision() == HEAD_REVISION
         seal_fixture_engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
-            assert_seal_commit_gate(api_engine, seal_fixture_engine, seal_worlds)
+            run_gate_phase('assert_seal_commit_gate', lambda: assert_seal_commit_gate(api_engine, seal_fixture_engine, seal_worlds))
         finally:
             seal_fixture_engine.dispose()
-        _assert_retention_downgrade("20261003_0093", blocking_revision="20261004_0094",
-            blocker="0094 downgrade blocked")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261003_0093", blocking_revision="20261004_0094",
+            blocker="0094 downgrade blocked"))
         assert _current_revision() == HEAD_REVISION
         from pg16_work_order_replacement_seals_gate import assert_replacement_seal_commit_gate
         replacement_seal_fixture_engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
-            assert_replacement_seal_commit_gate(api_engine, replacement_seal_fixture_engine, seal_worlds, admin_user_id)
+            run_gate_phase('assert_replacement_seal_commit_gate', lambda: assert_replacement_seal_commit_gate(api_engine, replacement_seal_fixture_engine, seal_worlds, admin_user_id))
         finally:
             replacement_seal_fixture_engine.dispose()
-        _assert_retention_downgrade("20261004_0094", blocking_revision="20261005_0095",
-            blocker="0095 downgrade blocked")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261004_0094", blocking_revision="20261005_0095",
+            blocker="0095 downgrade blocked"))
         assert _current_revision() == HEAD_REVISION
         # Admitted identities and their permanent seals must come after older
         # downgrade proofs, or 0096 would mask those earlier guard failures.
@@ -20112,37 +20114,37 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         removed_fixture_engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
-            assert_removed_registration_commit_gate(api_engine, removed_fixture_engine)
+            run_gate_phase('assert_removed_registration_commit_gate', lambda: assert_removed_registration_commit_gate(api_engine, removed_fixture_engine))
         finally:
             removed_fixture_engine.dispose()
-        _assert_retention_downgrade("20261005_0095", blocking_revision="20261006_0096",
-            blocker="0096 downgrade blocked")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261005_0095", blocking_revision="20261006_0096",
+            blocker="0096 downgrade blocked"))
         assert _current_revision() == HEAD_REVISION
         # New permanent compensation/seal facts follow earlier historical
         # downgrade proofs, so their refusal cannot mask the older boundaries.
         reversal_fixture_engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
-            assert_reversal_concurrent_commit_gate(api_engine, reversal_fixture_engine)
-            assert_reversal_seal_commit_gate(api_engine, reversal_fixture_engine)
+            run_gate_phase('assert_reversal_concurrent_commit_gate', lambda: assert_reversal_concurrent_commit_gate(api_engine, reversal_fixture_engine))
+            run_gate_phase('assert_reversal_seal_commit_gate', lambda: assert_reversal_seal_commit_gate(api_engine, reversal_fixture_engine))
         finally:
             reversal_fixture_engine.dispose()
-        _assert_retention_downgrade("20261008_0098", blocking_revision="20261009_0099",
-            blocker="0099 downgrade blocked")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261008_0098", blocking_revision="20261009_0099",
+            blocker="0099 downgrade blocked"))
         assert _current_revision() == HEAD_REVISION
         # Permanent return facts must follow every earlier downgrade proof.
         from pg16_stock_return_gate import assert_stock_return_concurrent_commit_gate, snapshot as return_snapshot
         return_fixture_engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
-            assert_stock_return_concurrent_commit_gate(api_engine, return_fixture_engine)
+            run_gate_phase('assert_stock_return_concurrent_commit_gate', lambda: assert_stock_return_concurrent_commit_gate(api_engine, return_fixture_engine))
         finally:
             return_fixture_engine.dispose()
         return_history = return_snapshot(api_engine)
-        _assert_retention_downgrade("20261009_0099", blocking_revision="20261010_0100",
-            blocker="0100 downgrade blocked: immutable return history must be retained")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261009_0099", blocking_revision="20261010_0100",
+            blocker="0100 downgrade blocked: immutable return history must be retained"))
         assert _current_revision() == HEAD_REVISION and return_snapshot(api_engine) == return_history
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         # Permanent request seals follow the original return-history downgrade
         # proof, so the newer refusal does not hide its predecessor.
         from pg16_stock_return_transport_gate import assert_stock_return_seal_commit_gate
@@ -20150,27 +20152,27 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         return_seal_fixture_engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
-            assert_stock_return_seal_commit_gate(api_engine, return_seal_fixture_engine)
+            run_gate_phase('assert_stock_return_seal_commit_gate', lambda: assert_stock_return_seal_commit_gate(api_engine, return_seal_fixture_engine))
         finally:
             return_seal_fixture_engine.dispose()
         return_seal_history = return_seal_snapshot(api_engine)
-        _assert_retention_downgrade("20261010_0100", blocking_revision="20261011_0101",
-            blocker="0101 downgrade blocked: immutable return request seals must be retained")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261010_0100", blocking_revision="20261011_0101",
+            blocker="0101 downgrade blocked: immutable return request seals must be retained"))
         assert _current_revision() == HEAD_REVISION and return_seal_snapshot(api_engine) == return_seal_history
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         # Establish durable transit history after all predecessor downgrade
         # proofs, so the new refusal cannot hide an earlier missing guard.
         from pg16_transit_opening_gate import assert_transit_opening_gate
         transit_fixture_engine = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
-            assert_transit_opening_gate(api_engine, transit_fixture_engine)
+            run_gate_phase('assert_transit_opening_gate', lambda: assert_transit_opening_gate(api_engine, transit_fixture_engine))
         finally:
             transit_fixture_engine.dispose()
-        _assert_retention_downgrade("20261011_0101", blocking_revision="20261012_0102",
-            blocker="0102 downgrade blocked: transit stocktake history must be retained")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261011_0101", blocking_revision="20261012_0102",
+            blocker="0102 downgrade blocked: transit stocktake history must be retained"))
         assert _current_revision() == HEAD_REVISION
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         from pg16_stock_return_outbound_gate import assert_stock_return_outbound_gate, prepare_departure_worlds
         from pg16_stock_return_shipment_mini_gate import assert_shipment_mini_gate
         departure_fixture_engine = create_engine(_sqlalchemy_url(
@@ -20179,39 +20181,39 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             departure_worlds = prepare_departure_worlds(api_engine, departure_fixture_engine)
             # Exercise the parcel SDK with rollback-only fixtures before the
             # later durable departure races consume these exact source SNs.
-            assert_shipment_mini_gate(api_engine, departure_fixture_engine, departure_worlds)
-            assert_stock_return_outbound_gate(api_engine, departure_fixture_engine, worlds=departure_worlds)
+            run_gate_phase('assert_shipment_mini_gate', lambda: assert_shipment_mini_gate(api_engine, departure_fixture_engine, departure_worlds))
+            run_gate_phase('assert_stock_return_outbound_gate', lambda: assert_stock_return_outbound_gate(api_engine, departure_fixture_engine, worlds=departure_worlds))
         finally:
             departure_fixture_engine.dispose()
         from pg16_stock_return_outbound_gate import departure_snapshot
         departure_history = departure_snapshot(api_engine)
-        _assert_retention_downgrade("20261012_0102", blocking_revision="20261013_0103",
-            blocker="0103 downgrade blocked: immutable physical departure history or request seals must be retained")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261012_0102", blocking_revision="20261013_0103",
+            blocker="0103 downgrade blocked: immutable physical departure history or request seals must be retained"))
         assert _current_revision() == HEAD_REVISION and departure_snapshot(api_engine) == departure_history
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         # Preserve each predecessor's downgrade proof before permanent parcels.
         from pg16_stock_return_shipment_gate import assert_stock_return_shipment_gate, parcel_snapshot
-        assert_stock_return_shipment_gate(api_engine, departure_worlds)
+        run_gate_phase('assert_stock_return_shipment_gate', lambda: assert_stock_return_shipment_gate(api_engine, departure_worlds))
         parcel_history = parcel_snapshot(api_engine)
-        _assert_retention_downgrade("20261013_0103", blocking_revision="20261014_0104",
-            blocker="0104 downgrade blocked: immutable return parcels or request seals must be retained")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261013_0103", blocking_revision="20261014_0104",
+            blocker="0104 downgrade blocked: immutable return parcels or request seals must be retained"))
         assert _current_revision() == HEAD_REVISION and parcel_snapshot(api_engine) == parcel_history
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         from pg16_stock_return_receiving_gate import assert_return_receiving_gate
         from pg16_stock_return_shipment_gate import parcel_candidates
-        assert_return_receiving_gate(api_engine, tuple(parcel_candidates(api_engine, departure_worlds).values()))
+        run_gate_phase('assert_return_receiving_gate', lambda: assert_return_receiving_gate(api_engine, tuple(parcel_candidates(api_engine, departure_worlds).values())))
         from pg16_stock_return_receipt_gate import (assert_return_receipt_rollback_gate, assert_receipt_sql_rejections,
             assert_receipt_commit_gate, assert_receipt_http_read_gate, receipt_snapshot)
         receipt_origins=tuple(parcel_candidates(api_engine, departure_worlds).values())
-        receipt_selected=assert_return_receipt_rollback_gate(api_engine,receipt_origins)
-        for kind,candidate in receipt_selected.items():assert_receipt_sql_rejections(api_engine,candidate,kind)
-        assert_receipt_commit_gate(api_engine,receipt_origins)
-        assert_receipt_http_read_gate(api_engine)
+        receipt_selected=run_gate_phase('assert_return_receipt_rollback_gate', lambda: assert_return_receipt_rollback_gate(api_engine,receipt_origins))
+        for kind,candidate in receipt_selected.items():run_gate_phase('assert_receipt_sql_rejections', lambda: assert_receipt_sql_rejections(api_engine,candidate,kind))
+        run_gate_phase('assert_receipt_commit_gate', lambda: assert_receipt_commit_gate(api_engine,receipt_origins))
+        run_gate_phase('assert_receipt_http_read_gate', lambda: assert_receipt_http_read_gate(api_engine))
         receipt_history=receipt_snapshot(api_engine)
-        _assert_retention_downgrade('20261014_0104', blocking_revision="20261015_0105",
-            blocker="0105 downgrade blocked: immutable return acceptance or request seals must be retained")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade('20261014_0104', blocking_revision="20261015_0105",
+            blocker="0105 downgrade blocked: immutable return acceptance or request seals must be retained"))
         assert _current_revision()==HEAD_REVISION and receipt_snapshot(api_engine)==receipt_history
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         from pg16_inventory_notification_gate import assert_inventory_notification_gate
         from pg16_notification_targets_gate import assert_notification_targets_gate
         from notification_identity_fixtures import POLICY as notification_fixture_policy, prepare_pg16_notification_identities
@@ -20224,53 +20226,53 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             # The synthetic test app changes configuration only; all runtime
             # lookups, HMAC proofs, roles, row guards and API ACLs stay real.
             with notification_policy_patch.object(notification_identities,"identity_policy",lambda:notification_fixture_policy):
-                assert_inventory_notification_gate(api_engine)
-                assert_notification_targets_gate(api_engine, target_fixture_engine)
+                run_gate_phase('assert_inventory_notification_gate', lambda: assert_inventory_notification_gate(api_engine))
+                run_gate_phase('assert_notification_targets_gate', lambda: assert_notification_targets_gate(api_engine, target_fixture_engine))
             from notification_target_recovery_gate import assert_pg16_recovery_gate
-            assert_pg16_recovery_gate(api_engine, target_fixture_engine)
+            run_gate_phase('assert_pg16_recovery_gate', lambda: assert_pg16_recovery_gate(api_engine, target_fixture_engine))
             from pg16_notification_expansion_gate import assert_notification_expansion_gate
-            assert_notification_expansion_gate(api_engine, target_fixture_engine)
+            run_gate_phase('assert_notification_expansion_gate', lambda: assert_notification_expansion_gate(api_engine, target_fixture_engine))
             from pg16_notification_delivery_gate import assert_notification_delivery_gate
-            assert_notification_delivery_gate(api_engine)
+            run_gate_phase('assert_notification_delivery_gate', lambda: assert_notification_delivery_gate(api_engine))
         finally:
             target_fixture_engine.dispose()
         # Earlier opening authorization facts may stop the chain at 0126.
         # Prove both that current boundary and 0109's own retention guard.
-        _assert_retention_downgrade("20261018_0108", blocking_revision="20261019_0109",
-            blocker="0109 downgrade blocked: notification target evidence must be retained")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261018_0108", blocking_revision="20261019_0109",
+            blocker="0109 downgrade blocked: notification target evidence must be retained"))
         assert _current_revision() == HEAD_REVISION
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         # Add durable 0110 seals after each older retention gate has proved its
         # own boundary; the newest seal must then stop downgrade first.
         from pg16_stock_return_inbound_seal_gate import assert_return_inbound_seal_gate, seal_snapshot
-        assert_return_inbound_seal_gate(api_engine)
+        run_gate_phase('assert_return_inbound_seal_gate', lambda: assert_return_inbound_seal_gate(api_engine))
         sealed_history = seal_snapshot(api_engine)
-        _assert_retention_downgrade("20261019_0109", blocking_revision="20261020_0110",
-            blocker="0110 downgrade blocked: inbound request seals must be retained")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261019_0109", blocking_revision="20261020_0110",
+            blocker="0110 downgrade blocked: inbound request seals must be retained"))
         assert _current_revision() == HEAD_REVISION and seal_snapshot(api_engine) == sealed_history
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         from pg16_stock_return_inbound_gate import assert_return_inbound_gate, inbound_snapshot
-        assert_return_inbound_gate(api_engine, receipt_origins)
+        run_gate_phase('assert_return_inbound_gate', lambda: assert_return_inbound_gate(api_engine, receipt_origins))
         inbound_history = inbound_snapshot(api_engine)
-        _assert_retention_downgrade("20261020_0110", blocking_revision="20261021_0111",
-            blocker="0111 downgrade blocked: inbound proof must be retained")
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261020_0110", blocking_revision="20261021_0111",
+            blocker="0111 downgrade blocked: inbound proof must be retained"))
         assert _current_revision() == HEAD_REVISION and inbound_snapshot(api_engine) == inbound_history
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         from pg16_stock_return_account_admission_gate import assert_return_account_admission_gate
         return_account_owner = create_engine(_sqlalchemy_url(
             role="star_oam_migrator", password=_role_password("star_oam_migrator")))
         try:
-            assert_return_account_admission_gate(api_engine, return_account_owner)
-            assert_return_account_admission_gate(api_engine, return_account_owner, with_lots=True)
+            run_gate_phase('assert_return_account_admission_gate', lambda: assert_return_account_admission_gate(api_engine, return_account_owner))
+            run_gate_phase('assert_return_account_admission_gate', lambda: assert_return_account_admission_gate(api_engine, return_account_owner, with_lots=True))
             from pg16_stock_return_multiline_account_gate import assert_multiline_return_account_gate
-            assert_multiline_return_account_gate(api_engine, return_account_owner)
+            run_gate_phase('assert_multiline_return_account_gate', lambda: assert_multiline_return_account_gate(api_engine, return_account_owner))
             from pg16_stock_return_first_account_boundary_gate import assert_first_account_boundaries
-            assert_first_account_boundaries(api_engine, return_account_owner)
+            run_gate_phase('assert_first_account_boundaries', lambda: assert_first_account_boundaries(api_engine, return_account_owner))
         finally:
             return_account_owner.dispose()
-        _assert_retention_downgrade("20261127_0148", blocking_revision="20261128_0149",
-            blocker="0149 return inbound account admission history requires retention")
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261127_0148", blocking_revision="20261128_0149",
+            blocker="0149 return inbound account admission history requires retention"))
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
         # New permanent control preparations follow every older retention proof
         # so 0112 cannot hide a missing predecessor downgrade boundary.
         from pg16_inventory_control_preparation_gate import assert_inventory_control_preparation_gate, snapshot as control_preparation_snapshot
@@ -20279,72 +20281,72 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         control_backup_engine = create_engine(_sqlalchemy_url(
             role="star_oam_backup", password=_role_password("star_oam_backup")))
         try:
-            assert_inventory_control_preparation_gate(control_owner_engine, edge_engine, api_engine,
-                projector_engine, control_backup_engine, _validate_runtime_security)
+            run_gate_phase('assert_inventory_control_preparation_gate', lambda: assert_inventory_control_preparation_gate(control_owner_engine, edge_engine, api_engine,
+                projector_engine, control_backup_engine, _validate_runtime_security))
             control_history = control_preparation_snapshot(control_owner_engine)
-            _assert_retention_downgrade("20261021_0111", blocking_revision="20261022_0112",
-                blocker="0112 downgrade blocked: control preparation facts must be retained")
+            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261021_0111", blocking_revision="20261022_0112",
+                blocker="0112 downgrade blocked: control preparation facts must be retained"))
             assert _current_revision() == HEAD_REVISION and control_preparation_snapshot(control_owner_engine) == control_history
             from pg16_inventory_control_authority_gate import assert_inventory_control_authority_gate, snapshot as control_authority_snapshot
-            assert_inventory_control_authority_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine)
+            run_gate_phase('assert_inventory_control_authority_gate', lambda: assert_inventory_control_authority_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
             authority_history = control_authority_snapshot(control_owner_engine)
-            _assert_retention_downgrade("20261022_0112", blocking_revision="20261023_0113",
-                blocker="0113 downgrade blocked: control authority must be retained")
+            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261022_0112", blocking_revision="20261023_0113",
+                blocker="0113 downgrade blocked: control authority must be retained"))
             assert _current_revision() == HEAD_REVISION and control_authority_snapshot(control_owner_engine) == authority_history
             from pg16_inventory_control_attestation_gate import assert_inventory_control_attestation_gate, snapshot as control_attestation_snapshot
             from app.edge_database_security import verify_edge_database_boundary
-            assert_inventory_control_attestation_gate(control_owner_engine, edge_engine, api_engine, projector_engine,
-                control_backup_engine, _validate_runtime_security, verify_edge_database_boundary)
+            run_gate_phase('assert_inventory_control_attestation_gate', lambda: assert_inventory_control_attestation_gate(control_owner_engine, edge_engine, api_engine, projector_engine,
+                control_backup_engine, _validate_runtime_security, verify_edge_database_boundary))
             attestation_history=control_attestation_snapshot(control_owner_engine)
-            _assert_retention_downgrade("20261023_0113", blocking_revision="20261024_0114",
-                blocker="0114 downgrade blocked: capture receipts must be retained")
+            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261023_0113", blocking_revision="20261024_0114",
+                blocker="0114 downgrade blocked: capture receipts must be retained"))
             assert _current_revision()==HEAD_REVISION and control_attestation_snapshot(control_owner_engine)==attestation_history
             from pg16_inventory_control_mapping_gate import assert_inventory_control_mapping_gate, snapshot as mapping_snapshot
-            assert_inventory_control_mapping_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine)
+            run_gate_phase('assert_inventory_control_mapping_gate', lambda: assert_inventory_control_mapping_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
             mapping_history=mapping_snapshot(control_owner_engine)
-            _assert_retention_downgrade("20261024_0114", blocking_revision="20261025_0115",
-                blocker="0115 downgrade blocked: mapping decisions must be retained")
+            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261024_0114", blocking_revision="20261025_0115",
+                blocker="0115 downgrade blocked: mapping decisions must be retained"))
             assert _current_revision()==HEAD_REVISION and mapping_snapshot(control_owner_engine)==mapping_history
             from pg16_material_capture_gate import assert_material_capture_gate, snapshot as material_capture_snapshot
-            assert_material_capture_gate(control_owner_engine, edge_engine, api_engine, projector_engine,
-                control_backup_engine, _validate_runtime_security, verify_edge_database_boundary)
+            run_gate_phase('assert_material_capture_gate', lambda: assert_material_capture_gate(control_owner_engine, edge_engine, api_engine, projector_engine,
+                control_backup_engine, _validate_runtime_security, verify_edge_database_boundary))
             material_history=material_capture_snapshot(control_owner_engine)
-            _assert_retention_downgrade("20261025_0115", blocking_revision="20261026_0116",
-                blocker="0116 downgrade blocked: material transport evidence must be retained")
+            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261025_0115", blocking_revision="20261026_0116",
+                blocker="0116 downgrade blocked: material transport evidence must be retained"))
             assert _current_revision()==HEAD_REVISION and material_capture_snapshot(control_owner_engine)==material_history
             from pg16_material_source_authority_gate import assert_material_source_authority_gate, snapshot as material_authority_snapshot
-            assert_material_source_authority_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine)
+            run_gate_phase('assert_material_source_authority_gate', lambda: assert_material_source_authority_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
             material_authority_history=material_authority_snapshot(control_owner_engine)
-            _assert_retention_downgrade("20261026_0116", blocking_revision="20261027_0117",
-                blocker="0117 downgrade blocked: material source authority must be retained")
+            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261026_0116", blocking_revision="20261027_0117",
+                blocker="0117 downgrade blocked: material source authority must be retained"))
             assert _current_revision()==HEAD_REVISION and material_authority_snapshot(control_owner_engine)==material_authority_history
             from pg16_material_source_time_gate import assert_material_source_time_gate
-            unknown_material_id = assert_material_source_time_gate(control_owner_engine, api_engine, control_backup_engine)
-            _assert_retention_downgrade("20261027_0117", blocking_revision="20261028_0118",
-                blocker="0118 downgrade blocked: unknown material source times must be retained")
+            unknown_material_id = run_gate_phase('assert_material_source_time_gate', lambda: assert_material_source_time_gate(control_owner_engine, api_engine, control_backup_engine))
+            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261027_0117", blocking_revision="20261028_0118",
+                blocker="0118 downgrade blocked: unknown material source times must be retained"))
             with control_owner_engine.connect() as checked:
                 assert checked.execute(text('SELECT source_updated_at FROM public.materials WHERE id=:id'),
                     {'id': unknown_material_id}).one() == (None,)
             assert _current_revision() == HEAD_REVISION
             from pg16_material_projection_gate import assert_material_projection_gate, snapshot as material_projection_snapshot
-            assert_material_projection_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine)
+            run_gate_phase('assert_material_projection_gate', lambda: assert_material_projection_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
             from pg16_material_source_proof_gate import assert_material_source_proof_gate
-            assert_material_source_proof_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine)
+            run_gate_phase('assert_material_source_proof_gate', lambda: assert_material_source_proof_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
             from pg16_inventory_control_normalization_gate import assert_inventory_control_normalization_gate
-            assert_inventory_control_normalization_gate(control_owner_engine, edge_engine, api_engine, projector_engine, control_backup_engine, publication_check=True)
+            run_gate_phase('assert_inventory_control_normalization_gate', lambda: assert_inventory_control_normalization_gate(control_owner_engine, edge_engine, api_engine, projector_engine, control_backup_engine, publication_check=True))
             publication_history=material_projection_snapshot(control_owner_engine)
-            _assert_retention_downgrade("20261028_0118", blocking_revision="20261029_0119",
-                blocker="0119 downgrade blocked: material publications must be retained")
+            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261028_0118", blocking_revision="20261029_0119",
+                blocker="0119 downgrade blocked: material publications must be retained"))
             assert _current_revision()==HEAD_REVISION and material_projection_snapshot(control_owner_engine)==publication_history
             # New immutable request seals come last, so their downgrade fence
             # cannot conceal any predecessor's retention boundary.
             from pg16_opening_start_seal_gate import run as check_opening_seals, snapshot as opening_seal_snapshot
-            seal_report = check_opening_seals({'star_oam_migrator': control_owner_engine,
-                'star_oam_api': api_engine, 'edge_inbox': edge_engine})
+            seal_report = run_gate_phase('check_opening_seals', lambda: check_opening_seals({'star_oam_migrator': control_owner_engine,
+                'star_oam_api': api_engine, 'edge_inbox': edge_engine}))
             assert seal_report['status'] == 'passed'
             opening_seal_history = opening_seal_snapshot(control_owner_engine)
-            _assert_retention_downgrade('20261106_0127', blocking_revision='20261107_0128',
-                blocker='0128 downgrade blocked: original request seals must be retained')
+            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade('20261106_0127', blocking_revision='20261107_0128',
+                blocker='0128 downgrade blocked: original request seals must be retained'))
             assert _current_revision() == HEAD_REVISION and opening_seal_snapshot(control_owner_engine) == opening_seal_history
         finally:
             control_owner_engine.dispose()
@@ -20368,10 +20370,10 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             from pg16_daily_review_runtime import run_with_capture_roles
 
             def daily_downgrade(destination):
-                result = _run_alembic("downgrade", destination, expect_success=False)
+                result = run_gate_phase('_run_alembic', lambda: _run_alembic("downgrade", destination, expect_success=False))
                 return result.stdout + result.stderr
 
-            daily_result = run_with_capture_roles(
+            daily_result = run_gate_phase('run_with_capture_roles', lambda: run_with_capture_roles(
                 {
                     "star_oam_migrator": daily_owner_engine,
                     "star_oam_api": api_engine,
@@ -20379,26 +20381,26 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
                 },
                 daily_admin_engine,
                 daily_downgrade,
-                assert_retention=lambda destination, blocker: _assert_retention_downgrade(
+                assert_retention=lambda destination, blocker: run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade(
                     destination, blocking_revision={
                         '20261108_0129': '20261109_0130', '20261110_0131': '20261111_0132',
                         '20261111_0132': '20261112_0133', '20261112_0133': '20261113_0134',
-                    }[destination], blocker=blocker),
-            )
+                    }[destination], blocker=blocker)),
+            ))
             assert daily_result["status"] == "passed"
             assert len(daily_result["cases"]) == 12
             from pg16_sms_profile_gate import run as run_sms_profile_gate
 
-            sms_profile_result = run_sms_profile_gate(daily_owner_engine, api_engine, daily_admin_engine)
+            sms_profile_result = run_gate_phase('run_sms_profile_gate', lambda: run_sms_profile_gate(daily_owner_engine, api_engine, daily_admin_engine))
             assert sms_profile_result["status"] == "passed"
             assert len(sms_profile_result["cases"]) == 9
             from pg16_opening_fixture_gate import run as run_opening_import_fixture, _count_facts
             from pg16_inventory_report_full_flow import assert_report_full_flow
 
-            import_fixture = run_opening_import_fixture({
+            import_fixture = run_gate_phase('run_opening_import_fixture', lambda: run_opening_import_fixture({
                 "star_oam_migrator": daily_owner_engine, "star_oam_api": api_engine,
                 "edge_inbox": edge_engine,
-            }, establish_dynamic_peer=True, require_empty_inventory=False)
+            }, establish_dynamic_peer=True, require_empty_inventory=False))
             positive_import = next(case["importJob"] for case in import_fixture["openingPrerequisites"]
                                    if case["case"] == "positive")
             assert positive_import["status"] == "passed"
@@ -20406,15 +20408,15 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
             assert {"error-file-job-commit-together", "error-file-job-rollback-together",
                     "error-recovery-head-only", "error-job-cannot-confirm",
                     "error-file-job-key-binding-refused"} <= set(positive_import["cases"])
-            assert_report_full_flow(daily_owner_engine, api_engine)
+            run_gate_phase('assert_report_full_flow', lambda: assert_report_full_flow(daily_owner_engine, api_engine))
             before_import_retention = _count_facts(daily_owner_engine)
             with daily_owner_engine.connect() as connection:
                 import_jobs_before = connection.scalar(text(
                     "SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM file_jobs j"))
                 import_files_before = connection.scalar(text(
                     "SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM files f"))
-            _assert_retention_downgrade("20261119_0140", blocking_revision="20261120_0141",
-                blocker="0141 existing import jobs require retention and explicit migration")
+            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261119_0140", blocking_revision="20261120_0141",
+                blocker="0141 existing import jobs require retention and explicit migration"))
             assert _current_revision() == HEAD_REVISION
             assert _count_facts(daily_owner_engine) == before_import_retention
             with daily_owner_engine.connect() as connection:
@@ -20426,7 +20428,7 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         finally:
             daily_admin_engine.dispose()
             daily_owner_engine.dispose()
-        _validate_runtime_security(api_engine)
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
     finally:
         edge_engine.dispose()
         projector_engine.dispose()

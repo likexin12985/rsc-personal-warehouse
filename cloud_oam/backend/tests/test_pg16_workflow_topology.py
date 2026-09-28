@@ -39,7 +39,8 @@ def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_a
     runtime,static,aggregate=(jobs[key] for key in ('pg16_runtime','static_safety','postgresql16-release-gate'))
     loss=jobs['pg16_loss']
     assert not re.search(r'^    (needs|if|continue-on-error):',runtime+'\n'+static+'\n'+loss,re.MULTILINE)
-    assert 'python -m pytest -q tests/test_postgresql16_release_gate.py' in runtime
+    assert 'python -m pytest -q tests/test_postgresql16_release_gate.py -s' in runtime
+    assert '    timeout-minutes: 360\n' in runtime
     assert 'RSC_PG16_GATE_ACKNOWLEDGE_DISPOSABLE: I_UNDERSTAND_THIS_DATABASE_IS_EPHEMERAL' in runtime
     assert 'postgres:16-alpine@sha256:' in runtime
     assert '    strategy:\n      fail-fast: false\n      matrix:\n        tracking: [quantity, serial]\n' in loss

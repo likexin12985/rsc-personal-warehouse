@@ -29,9 +29,10 @@ concurrency:
 jobs:
   pg16_runtime:
     runs-on: ubuntu-24.04
-    # Keep real migrations/concurrency separate from the independent static
-    # suite. The aggregate below requires all jobs to succeed.
-    timeout-minutes: 180
+    # The retained migration/retention chain exceeded 180 minutes while still
+    # exercising return checks. Keep every assertion and expose phase timings;
+    # the aggregate still requires this complete job to succeed.
+    timeout-minutes: 360
     services:
       postgres:
         image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
@@ -95,7 +96,7 @@ jobs:
       - name: Run isolated PostgreSQL 16 migration and concurrency gate
         working-directory: cloud_oam/backend
         run: |
-          python -m pytest -q tests/test_postgresql16_release_gate.py
+          python -m pytest -q tests/test_postgresql16_release_gate.py -s
 
   pg16_loss:
     runs-on: ubuntu-24.04
