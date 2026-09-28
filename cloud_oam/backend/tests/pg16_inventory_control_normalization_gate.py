@@ -63,13 +63,14 @@ def _mapping(db, login, cmd):
     return mapping.execute_inventory_control_mapping(db,**login,command=cmd,review_sha256=review['review_sha256'])
 
 
-def _prepare(owner):
+def _prepare(owner,fixture_object_id):
     catalog=expected()
     with Session(owner) as db:
         assert db.scalar(text('SELECT current_database()'))=='rsc_pg16_release_gate'
         assert int(db.scalar(text('SHOW server_version_num')))//10000==16
         line=db.scalars(select(MaterialProjectionLine).join(ExternalObject,
-            ExternalObject.current_version_id==MaterialProjectionLine.version_id)).one()
+            ExternalObject.current_version_id==MaterialProjectionLine.version_id)
+            .where(MaterialProjectionLine.external_object_id==fixture_object_id)).one()
         publication=db.get(MaterialProjectionPublication,line.publication_id)
         binding=db.get(MaterialCaptureBinding,publication.binding_id)
         actor=load_formal_principal(db,publication.actor_user_id)
@@ -163,8 +164,8 @@ def _edge_guard_catalog_probes(owner,edge_engine):
         verify_edge_database_boundary(edge_engine)
 
 
-def assert_inventory_control_normalization_gate(owner,edge_engine,api,projector,backup,*,publication_check=False):
-    world=_prepare(owner);before_stock=_formal_stock(owner);before_material=material_snapshot(owner)
+def assert_inventory_control_normalization_gate(owner,edge_engine,api,projector,backup,*,fixture_object_id,publication_check=False):
+    world=_prepare(owner,fixture_object_id);before_stock=_formal_stock(owner);before_material=material_snapshot(owner)
     good=source_row('1',materialStatus='usable',materialStockType='stock');good['materialCode']=world.code
     damaged=source_row('2',materialStatus='broken',materialStockType='stock');damaged.update(materialCode=world.code,qtyStock='3.000')
     other=source_row('3',materialStatus='unresolved',materialStockType='unknown')

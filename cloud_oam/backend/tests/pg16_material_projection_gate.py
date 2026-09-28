@@ -125,3 +125,4 @@ def assert_material_projection_gate(owner_engine,api_engine,edge_engine,projecto
     assert snapshot(owner_engine)==snapshot(backup_engine)
     assert _formal_stock(owner_engine)==before
     print('PG16 material publication: signed receipt, concurrent exact replay, A/B/A immutable versions, unknown source time, graph/ACL denial and precise locks PASS',flush=True)
+    return object_id

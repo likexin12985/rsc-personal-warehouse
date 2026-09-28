@@ -14,6 +14,7 @@ from app import material_capture_ingress as service
 from app.routers import integrations
 from test_material_capture_ingress import SOURCE, KEY, SECRET, bundle, packet, proof
 from pg16_inventory_control_preparation_gate import _formal_stock, _rejected
+from pg16_snapshot_assertions import assert_exact_appends
 
 
 def snapshot(engine):
@@ -23,6 +24,8 @@ def snapshot(engine):
 
 def assert_material_capture_gate(owner_engine, edge_engine, api_engine, projector_engine, backup_engine,
                                  validate_runtime_security, verify_edge_boundary):
+    receipts_before=snapshot(owner_engine)
+    edge_visible_before=snapshot(edge_engine)
     with owner_engine.connect() as c:
         assert int(c.scalar(text('SHOW server_version_num')))//10000==16
     stock_before=_formal_stock(owner_engine)
@@ -62,8 +65,7 @@ def assert_material_capture_gate(owner_engine, edge_engine, api_engine, projecto
             c.execute(text('UPDATE public.oam_material_capture_bindings SET revoked_at=clock_timestamp() WHERE id=:id'),{'id':binding_id})
         with Session(edge_engine) as db:
             with pytest.raises(HTTPException):integrations.read_material_master_capture_status(proof(packet(value,'status')),db)
-        with edge_engine.connect() as c:
-            assert c.scalar(text('SELECT count(*) FROM public.oam_material_capture_receipts'))==0
+        assert snapshot(edge_engine)==edge_visible_before
         settings.edge_material_capture_key_id=KEY+'-rotated'
         register(settings.edge_material_capture_key_id)
         with Session(edge_engine) as db:
@@ -74,7 +76,8 @@ def assert_material_capture_gate(owner_engine, edge_engine, api_engine, projecto
             zero=integrations.receive_material_master_capture(proof(packet(empty,key=settings.edge_material_capture_key_id)),db)
             assert zero['observed_count']==0 and zero['channel_attested'] and not zero['full_catalog_verified']
     saved=snapshot(owner_engine)
-    assert len(saved)==2 and snapshot(backup_engine)==saved
+    assert_exact_appends(receipts_before,saved,[results[0]['receipt_id'],zero['receipt_id']])
+    assert snapshot(backup_engine)==saved
     for engine in (api_engine,projector_engine):
         for table in ('oam_material_capture_bindings','oam_material_capture_receipts'):
             _rejected(engine,'SELECT * FROM public.'+table,state='42501')
@@ -82,7 +85,7 @@ def assert_material_capture_gate(owner_engine, edge_engine, api_engine, projecto
     _rejected(edge_engine,'SELECT * FROM public.oam_material_capture_bindings',state='42501')
     _rejected(backup_engine,'INSERT INTO public.oam_material_capture_receipts DEFAULT VALUES',state='42501')
     for statement in ('UPDATE public.oam_material_capture_receipts SET key_id=key_id',
-        'DELETE FROM public.oam_material_capture_receipts','TRUNCATE public.oam_material_capture_receipts'):
+        'DELETE FROM public.oam_material_capture_receipts','TRUNCATE public.oam_material_capture_receipts CASCADE'):
         _rejected(owner_engine,statement,state='23514',message='append-only')
         _rejected(edge_engine,statement,state='42501')
     _rejected(owner_engine,'UPDATE public.oam_material_capture_bindings SET key_id=key_id',state='23514')

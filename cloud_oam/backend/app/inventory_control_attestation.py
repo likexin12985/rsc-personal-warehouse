@@ -111,6 +111,13 @@ def accept_inventory_control_attestation(db, *, payload, verified):
         snapshot = db.scalar(select(ExternalSyncSnapshot).where(ExternalSyncSnapshot.source_instance == body['source_instance'],
             ExternalSyncSnapshot.snapshot_id == body['snapshot_id']).with_for_update().execution_options(populate_existing=True))
         if not _snapshot_matches(snapshot, body): fail('snapshot_mismatch')
+        # The lock can wait for another request to create this receipt. Its
+        # commit time must be compared with the clock after that wait, and an
+        # expired request must not bypass freshness checks via exact replay.
+        now = _clock(db)
+        if not timedelta(0) <= now - verified.authenticated_at <= timedelta(minutes=5) \
+                or abs(now - verified.signed_at) > timedelta(minutes=5) \
+                or now - started > timedelta(minutes=45): fail('expired_while_waiting')
         existing = db.scalar(select(Receipt).where(Receipt.snapshot_ref_id == snapshot.id).execution_options(populate_existing=True))
         if existing is not None:
             if existing.payload_sha256 != digest or existing.payload_jsonb != body \

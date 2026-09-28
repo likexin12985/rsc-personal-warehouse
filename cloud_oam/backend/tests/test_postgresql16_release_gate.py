@@ -20329,11 +20329,11 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
                     {'id': unknown_material_id}).one() == (None,)
             assert _current_revision() == HEAD_REVISION
             from pg16_material_projection_gate import assert_material_projection_gate, snapshot as material_projection_snapshot
-            run_gate_phase('assert_material_projection_gate', lambda: assert_material_projection_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
+            control_material_object_id = run_gate_phase('assert_material_projection_gate', lambda: assert_material_projection_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
             from pg16_material_source_proof_gate import assert_material_source_proof_gate
-            run_gate_phase('assert_material_source_proof_gate', lambda: assert_material_source_proof_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
+            run_gate_phase('assert_material_source_proof_gate', lambda: assert_material_source_proof_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine, fixture_object_id=control_material_object_id))
             from pg16_inventory_control_normalization_gate import assert_inventory_control_normalization_gate
-            run_gate_phase('assert_inventory_control_normalization_gate', lambda: assert_inventory_control_normalization_gate(control_owner_engine, edge_engine, api_engine, projector_engine, control_backup_engine, publication_check=True))
+            run_gate_phase('assert_inventory_control_normalization_gate', lambda: assert_inventory_control_normalization_gate(control_owner_engine, edge_engine, api_engine, projector_engine, control_backup_engine, fixture_object_id=control_material_object_id, publication_check=True))
             publication_history=material_projection_snapshot(control_owner_engine)
             run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261028_0118", blocking_revision="20261029_0119",
                 blocker="0119 downgrade blocked: material publications must be retained"))

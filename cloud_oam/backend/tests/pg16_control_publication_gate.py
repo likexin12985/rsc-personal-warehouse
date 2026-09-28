@@ -126,13 +126,19 @@ def assert_control_publication_gate(owner,edge,api,projector,backup,world,captur
         original=db.get(InventoryControlMappingDecision,world.mapping)
         _mapping(db,world.login,mapping_command(db,world,action='revoke',rules=None,
             revoked_grant_id=original.id,expected_subject_sha256=original.payload_sha256,evidence_file_id=world.mapping_file))
-        end=service.authority._now(db)+timedelta(seconds=4)
+        # Allow the real review/execution to finish before testing COMMIT
+        # expiry. A four-second grant can expire during review on a populated
+        # database, which never exercises the deferred database guard.
+        end=service.authority._now(db)+timedelta(seconds=30)
         grant=_mapping(db,world.login,mapping_command(db,world,rules=dict(RULES,revision='pg16-commit-expiry'),
             valid_to=end,evidence_file_id=world.mapping_file))
         cmd=publication_command(db,world,grant)
         preview=service.preview_control_publication(db,**world.login,command=cmd)
         service.execute_control_publication(db,**world.login,command=cmd,review_sha256=preview['review_sha256'])
-        time.sleep(max(0,(end-service.authority._now(db)).total_seconds())+0.025)
+        before_wait=service.authority._now(db)
+        assert before_wait < end, 'publication must execute before grant expiry'
+        time.sleep((end-before_wait).total_seconds()+0.025)
+        assert service.authority._now(db) >= end
         with pytest.raises(DBAPIError) as error:db.commit()
         assert error.value.orig.sqlstate=='23514';db.rollback()
     assert publication_snapshot(owner)==preserved

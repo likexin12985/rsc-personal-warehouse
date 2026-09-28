@@ -24,13 +24,14 @@ from pg16_material_projection_gate import snapshot
 from pg16_inventory_control_preparation_gate import _formal_stock
 
 
-def assert_material_source_proof_gate(owner_engine,api_engine,edge_engine,projector_engine,backup_engine):
+def assert_material_source_proof_gate(owner_engine,api_engine,edge_engine,projector_engine,backup_engine,*,fixture_object_id):
     before=snapshot(owner_engine); stock=_formal_stock(owner_engine)
     with Session(owner_engine) as db:
         assert db.scalar(text('SELECT current_database()'))=='rsc_pg16_release_gate'
         assert int(db.scalar(text('SHOW server_version_num')))//10000==16
         line=db.scalars(select(MaterialProjectionLine).join(ExternalObject,
-            ExternalObject.current_version_id==MaterialProjectionLine.version_id)).one()
+            ExternalObject.current_version_id==MaterialProjectionLine.version_id)
+            .where(MaterialProjectionLine.external_object_id==fixture_object_id)).one()
         row=db.get(MaterialProjectionPublication,line.publication_id)
         binding=db.get(MaterialCaptureBinding,row.binding_id)
         codes=[line.sku_code]

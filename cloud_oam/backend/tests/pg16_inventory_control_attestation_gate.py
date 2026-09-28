@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
+import re
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import uuid4
@@ -21,6 +22,7 @@ from app.schemas import EdgeSyncSnapshotBatchIn, EdgeSyncSnapshotCompleteIn
 from test_inventory_control_capture_ingress import Source, expected, edge, capture
 from test_edge_sync_safety import request
 from pg16_inventory_control_preparation_gate import _formal_stock, _rejected
+from pg16_snapshot_assertions import assert_exact_appends
 
 
 def snapshot(engine):
@@ -30,6 +32,9 @@ def snapshot(engine):
 
 def assert_inventory_control_attestation_gate(owner_engine, edge_engine, api_engine, projector_engine, backup_engine,
                                               validate_runtime_security, verify_edge_boundary):
+    receipts_before=snapshot(owner_engine)
+    edge_visible_before=snapshot(edge_engine)
+    attestation_ids=[]
     catalog=expected();catalog['binding']['source_instance']='pg16-capture-attestation'
     source_instance=catalog['binding']['source_instance'];secret='synthetic-pg16-capture-authentication-secret-only'
     with Session(owner_engine) as db:
@@ -46,7 +51,7 @@ def assert_inventory_control_attestation_gate(owner_engine, edge_engine, api_eng
     settings=integrations.settings.model_copy(update=dict(edge_sync_enabled=True,edge_sync_secret=secret,
         edge_sync_allowed_sources=source_instance,edge_control_capture_enabled=True,edge_control_capture_key_id='pg16-capture-key-v1',
         edge_sync_legacy_personnel_projection_enabled=False))
-    def transport(method,url,*,headers,body,timeout):
+    def receive(method,url,*,headers,body,timeout):
         assert method=='POST';req=request();req._body=body
         proof=asyncio.run(integrations.verify_edge_request(req,source_instance=headers['X-RSC-Edge-Source'],
             timestamp_value=headers['X-RSC-Edge-Timestamp'],batch_id=headers['X-RSC-Edge-Batch'],signature=headers['X-RSC-Edge-Signature']))
@@ -56,11 +61,24 @@ def assert_inventory_control_attestation_gate(owner_engine, edge_engine, api_eng
             elif url.endswith('/complete'):result=integrations.complete_snapshot(EdgeSyncSnapshotCompleteIn.model_validate_json(body),req,proof,db)
             else:result=integrations.receive_inventory_control_capture(attest.CaptureAttestationIn.model_validate_json(body),req,proof,db)
         return 200,json.dumps(result).encode(),{}
+    def transport(method,url,*,headers,body,timeout):
+        try:
+            return receive(method,url,headers=headers,body=body,timeout=timeout)
+        except Exception as error:
+            # The edge client intentionally hides transport exceptions. Keep
+            # only the stable synthetic receiver code, never request material.
+            detail=getattr(error,'detail',None)
+            code=detail if isinstance(detail,str) and re.fullmatch(r'[a-z_]{1,100}',detail) else None
+            print(json.dumps(dict(pg16_capture_error=type(error).__name__,code=code)),flush=True)
+            raise
     state={'version':2,'sourceInstance':source_instance,'scopes':{}};base=None;latest=None
     with pytest.MonkeyPatch.context() as patch,TemporaryDirectory(prefix='pg16-capture-') as folder:
         folder=Path(folder);patch.setattr(integrations,'settings',settings);patch.setattr(edge,'shared_edge_request',transport)
+        capture_base=datetime.now(timezone.utc)-timedelta(minutes=3)
         for number in range(3):
-            now=datetime.now(timezone.utc)-timedelta(seconds=10)
+            # The next synthetic capture must start after its predecessor's
+            # snapshot cutoff even when the in-process transport is very fast.
+            now=capture_base+timedelta(minutes=number)
             collected=capture.collect(catalog,read_page=Source([] if number else None),normalize_records=edge.inventory_records,
                 bind_scope=edge.bind_inventory_scope,page_size=2,clock=lambda:now)
             box=edge.build_outbox(source_instance=source_instance,scope_key='all',warehouse_filter=None,
@@ -80,11 +98,13 @@ def assert_inventory_control_attestation_gate(owner_engine, edge_engine, api_eng
                 with ThreadPoolExecutor(max_workers=2) as executor:results=list(executor.map(lambda _:submit(),range(2)))
                 assert {r['duplicate'] for r in results}=={True,False}
                 assert len({r['attestation_id'] for r in results})==1
+                attestation_ids.append(results[0]['attestation_id'])
                 box['controlEvidence']=pointer;edge.persist_completed_state(folder/'state.json',state,box)
             else:
                 box['controlEvidence']=pointer;box['controlAttestation']=claim
                 result=edge.upload_outbox(outbox=box,api_base='https://synthetic.invalid/api',secret=secret,state_file=folder/'state.json',state=state)
                 assert result['controlAttestation']['capture_attested']
+                attestation_ids.append(result['controlAttestation']['attestation_id'])
             base=capture.load_base(folder/'evidence',state,catalog,force_full=False)
             with Session(owner_engine) as db:
                 prepared=preparation.record_inventory_control_preparation(db,source_system_id=source_id,region_org_id=region_id,
@@ -100,21 +120,24 @@ def assert_inventory_control_attestation_gate(owner_engine, edge_engine, api_eng
         with pytest.raises(edge.EdgeSyncError):edge.send_signed_json(api_base='https://synthetic.invalid/api',
             endpoint='integrations/oam/edge/inventory-control/captures',secret=secret,source_instance=source_instance,
             batch_id=box['snapshotId']+'-capture',payload=bad)
-    saved=snapshot(owner_engine);assert len(saved)==3 and snapshot(backup_engine)==saved
+    saved=snapshot(owner_engine)
+    assert len(attestation_ids)==3
+    assert_exact_appends(receipts_before,saved,attestation_ids)
+    assert snapshot(backup_engine)==saved
     assert _formal_stock(owner_engine)==stock_before
     for engine in (api_engine,projector_engine):
         _rejected(engine,'SELECT * FROM public.inventory_control_capture_attestations',state='42501')
         _rejected(engine,'INSERT INTO public.inventory_control_capture_attestations DEFAULT VALUES',state='42501')
     _rejected(backup_engine,'INSERT INTO public.inventory_control_capture_attestations DEFAULT VALUES',state='42501')
     for command in ('UPDATE public.inventory_control_capture_attestations SET key_id=key_id',
-                    'DELETE FROM public.inventory_control_capture_attestations','TRUNCATE public.inventory_control_capture_attestations'):
+                    'DELETE FROM public.inventory_control_capture_attestations','TRUNCATE public.inventory_control_capture_attestations CASCADE'):
         _rejected(owner_engine,command,state='23514',message='append-only')
         _rejected(edge_engine,command,state='42501')
     # Current exact inventory binding controls receipt visibility, including
     # explicit-zero snapshots; a generic binding or caller GUC cannot replace it.
     try:
         with owner_engine.begin() as c:c.execute(text('UPDATE public.oam_sync_scope_bindings SET enabled=false WHERE source_instance=:source'),{'source':source_instance})
-        with edge_engine.connect() as c:assert c.scalar(text('SELECT count(*) FROM public.inventory_control_capture_attestations'))==0
+        assert snapshot(edge_engine)==edge_visible_before
     finally:
         with owner_engine.begin() as c:c.execute(text('UPDATE public.oam_sync_scope_bindings SET enabled=true WHERE source_instance=:source'),{'source':source_instance})
     verify_edge_boundary(edge_engine);validate_runtime_security(api_engine)

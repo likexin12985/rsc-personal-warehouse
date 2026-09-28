@@ -17,6 +17,7 @@ from app.inventory_control_models import InventoryControlPreparation as Preparat
 from app.inventory_control_authority_models import InventoryControlAuthorityDecision as Decision
 from test_inventory_control_authority import command
 from pg16_inventory_control_preparation_gate import _formal_stock, _rejected
+from pg16_snapshot_assertions import assert_exact_appends
 
 
 def snapshot(engine):
@@ -25,6 +26,7 @@ def snapshot(engine):
 
 
 def assert_inventory_control_authority_gate(owner_engine, api_engine, edge_engine, projector_engine, backup_engine):
+    decisions_before = snapshot(owner_engine)
     with Session(owner_engine) as db:
         assert db.scalar(text('SELECT current_database()')) == 'rsc_pg16_release_gate'
         assert int(db.scalar(text('SHOW server_version_num'))) // 10000 == 16
@@ -60,7 +62,8 @@ def assert_inventory_control_authority_gate(owner_engine, api_engine, edge_engin
             return value
     with ThreadPoolExecutor(max_workers=2) as workers:
         first,second=list(workers.map(lambda _:submit(),range(2)))
-    assert first==second and len(snapshot(owner_engine))==1
+    assert first==second
+    assert_exact_appends(decisions_before, snapshot(owner_engine), [first['decision_id']])
     with Session(owner_engine) as db:
         catalog_command=command(db,world,action='catalog_grant',grant=first)
         catalogue=authority.record_inventory_control_authority(db,actor=actor,command=catalog_command)
@@ -72,12 +75,13 @@ def assert_inventory_control_authority_gate(owner_engine, api_engine, edge_engin
             authority.record_inventory_control_authority(db,actor=actor,command=command(db,world))
         db.commit()
     saved=snapshot(owner_engine)
+    assert_exact_appends(decisions_before, saved, [first['decision_id'], catalogue['decision_id']])
     assert snapshot(backup_engine)==saved
     for engine in (api_engine,edge_engine,projector_engine):
         for sql in ('SELECT * FROM inventory_control_authority_decisions','INSERT INTO inventory_control_authority_decisions DEFAULT VALUES'):
             _rejected(engine,sql,state='42501')
     _rejected(backup_engine,'INSERT INTO inventory_control_authority_decisions DEFAULT VALUES',state='42501')
-    for sql in ('UPDATE inventory_control_authority_decisions SET id=id','DELETE FROM inventory_control_authority_decisions','TRUNCATE inventory_control_authority_decisions'):
+    for sql in ('UPDATE inventory_control_authority_decisions SET id=id','DELETE FROM inventory_control_authority_decisions','TRUNCATE inventory_control_authority_decisions CASCADE'):
         _rejected(owner_engine,sql,message='authority decisions are append-only')
     # Owner privileges cannot forge a new decision merely by cloning its body.
     _rejected(owner_engine,'''INSERT INTO inventory_control_authority_decisions
@@ -101,6 +105,9 @@ def assert_inventory_control_authority_gate(owner_engine, api_engine, edge_engin
     with Session(owner_engine) as db:
         db.execute(text('SET TRANSACTION READ ONLY'))
         assert not authority.resolve_inventory_control_authority(db,preparation_id=world.root)['catalog_authorized']
+    assert_exact_appends(decisions_before, snapshot(owner_engine),
+                         [first['decision_id'], catalogue['decision_id'], revoked['decision_id']])
+    assert snapshot(backup_engine)==snapshot(owner_engine)
     assert _formal_stock(owner_engine)==before_stock
     print('PG16 control authority: concurrent exact replay, separate catalogue grant, revocation, private ACL and immutable audit evidence PASS',flush=True)
     from pg16_inventory_control_configuration_gate import assert_inventory_control_configuration_gate

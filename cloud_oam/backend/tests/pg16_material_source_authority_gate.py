@@ -22,6 +22,7 @@ from app.security import create_access_token
 from test_material_source_authority import command
 from test_material_capture_ingress import SOURCE,KEY,SECRET,bundle,packet,proof
 from pg16_inventory_control_preparation_gate import _formal_stock,_rejected
+from pg16_snapshot_assertions import assert_exact_appends
 
 
 def snapshot(engine):
@@ -30,6 +31,7 @@ def snapshot(engine):
 
 
 def assert_material_source_authority_gate(owner_engine,api_engine,edge_engine,projector_engine,backup_engine):
+    decisions_before=snapshot(owner_engine)
     stock_before=_formal_stock(owner_engine)
     with Session(owner_engine) as db:
         assert db.scalar(text('SELECT current_database()'))=='rsc_pg16_release_gate'
@@ -59,7 +61,8 @@ def assert_material_source_authority_gate(owner_engine,api_engine,edge_engine,pr
         with Session(owner_engine) as db:
             barrier.wait(timeout=20);result=service.execute_material_source_authority(db,**args);db.commit();return result
     with ThreadPoolExecutor(max_workers=2) as pool:first,second=list(pool.map(lambda _:execute(),range(2)))
-    assert first==second and first['recorded'] and len(snapshot(owner_engine))==1
+    assert first==second and first['recorded']
+    assert_exact_appends(decisions_before,snapshot(owner_engine),[first['decision_id']])
     settings=integrations.settings.model_copy(update=dict(edge_sync_enabled=True,edge_sync_secret=SECRET,
         edge_sync_allowed_sources=SOURCE,edge_material_capture_enabled=True,edge_material_capture_key_id=KEY+'-rotated',
         edge_sync_legacy_batches_enabled=False,edge_sync_legacy_personnel_projection_enabled=False))
@@ -94,12 +97,13 @@ def assert_material_source_authority_gate(owner_engine,api_engine,edge_engine,pr
         _rejected(engine,'SELECT * FROM public.material_source_authority_decisions',state='42501')
         _rejected(engine,'INSERT INTO public.material_source_authority_decisions DEFAULT VALUES',state='42501')
     for sql in ('UPDATE public.material_source_authority_decisions SET subject_sha256=subject_sha256',
-        'DELETE FROM public.material_source_authority_decisions','TRUNCATE public.material_source_authority_decisions'):
+        'DELETE FROM public.material_source_authority_decisions','TRUNCATE public.material_source_authority_decisions CASCADE'):
         _rejected(owner_engine,sql,state='23514',message='append-only')
     with Session(owner_engine) as db:
-        service.execute_material_source_authority(db,**revoke_args);db.commit()
+        revoked=service.execute_material_source_authority(db,**revoke_args);db.commit()
         with pytest.raises(service.MaterialSourceAuthorityError,match='source_authority_unavailable'):
             service.inspect_authorized_material_capture(db,receipt_id=receipt_id)
-    assert len(snapshot(owner_engine))==2 and snapshot(owner_engine)==snapshot(backup_engine)
+    assert_exact_appends(decisions_before,snapshot(owner_engine),[first['decision_id'],revoked['decision_id']])
+    assert snapshot(owner_engine)==snapshot(backup_engine)
     assert _formal_stock(owner_engine)==stock_before
     print('PG16 material authority: current HQ session, concurrent grants, receipt/source/file/transport locks, revocation, immutable audit and ACL PASS',flush=True)

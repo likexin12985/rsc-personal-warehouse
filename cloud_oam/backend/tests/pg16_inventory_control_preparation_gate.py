@@ -19,6 +19,7 @@ from app.foundation_models import Organization, SourceSystem
 from app.inventory_control_models import InventoryControlPreparation, TABLES
 from test_inventory_control_evidence import CHECK_TIME, fake_expectation, fake_records, fake_snapshot, upsert
 from test_inventory_control_preparation import record, stage
+from pg16_snapshot_assertions import assert_exact_appends
 
 
 def snapshot(engine):
@@ -79,6 +80,7 @@ def _prepare(owner_engine):
 
 def assert_inventory_control_preparation_gate(owner_engine, edge_engine, api_engine,
                                              projector_engine, backup_engine, validate_runtime_security):
+    before_preparations = snapshot(owner_engine)
     prepared = _prepare(owner_engine)
     before_stock = _formal_stock(owner_engine)
     results = []
@@ -107,7 +109,21 @@ def assert_inventory_control_preparation_gate(owner_engine, edge_engine, api_eng
             db.execute(text('SET TRANSACTION READ ONLY'))
             assert service.read_inventory_control_preparation(db, preparation_id=value['preparation_id']) == value
     saved = snapshot(owner_engine)
-    assert tuple(map(len, saved)) == (1, 1, 3, 4, 3)
+    # Earlier opening fixtures have already published control evidence. Bind
+    # this append proof to the three returned roots, retaining all older rows.
+    root_ids = {str(value['preparation_id']) for value in results}
+    roots = [row for row in saved[4] if row['id'] in root_ids]
+    capture_ids = {row['capture_chain_id'] for row in roots}
+    expected_ids = (
+        {row['binding_id'] for row in roots},
+        {row['catalog_id'] for row in roots},
+        capture_ids,
+        {row['id'] for row in saved[3] if row['capture_chain_id'] in capture_ids},
+        root_ids,
+    )
+    assert tuple(map(len, expected_ids)) == (1, 1, 3, 4, 3)
+    for prior, current, identities in zip(before_preparations, saved, expected_ids, strict=True):
+        assert_exact_appends(prior, current, identities)
     assert snapshot(backup_engine) == saved
     assert _formal_stock(owner_engine) == before_stock
 
@@ -121,7 +137,7 @@ def assert_inventory_control_preparation_gate(owner_engine, edge_engine, api_eng
                 record(db, prepared)
     for table in TABLES:
         _rejected(backup_engine, f'INSERT INTO public.{table} DEFAULT VALUES', state='42501')
-        for operation in (f'UPDATE public.{table} SET id=id', f'DELETE FROM public.{table}', f'TRUNCATE public.{table}'):
+        for operation in (f'UPDATE public.{table} SET id=id', f'DELETE FROM public.{table}', f'TRUNCATE public.{table} CASCADE'):
             _rejected(owner_engine, operation, message='facts are append-only')
 
     # A correct hash cannot turn an internally consistent preparation into a

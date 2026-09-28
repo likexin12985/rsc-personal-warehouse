@@ -21,6 +21,7 @@ from app.models import AuthSession,User
 from app.security import create_access_token
 from test_inventory_control_mapping import command
 from pg16_inventory_control_preparation_gate import _formal_stock
+from pg16_snapshot_assertions import assert_exact_appends
 
 
 def snapshot(engine):
@@ -29,6 +30,7 @@ def snapshot(engine):
 
 
 def assert_inventory_control_mapping_gate(owner_engine,api_engine,edge_engine,projector_engine,backup_engine):
+    decisions_before=snapshot(owner_engine)
     stock_before=_formal_stock(owner_engine)
     with Session(owner_engine) as db:
         assert db.scalar(text('SELECT current_database()'))=='rsc_pg16_release_gate'
@@ -61,7 +63,9 @@ def assert_inventory_control_mapping_gate(owner_engine,api_engine,edge_engine,pr
     with ThreadPoolExecutor(max_workers=2) as pool:
         first,second=list(pool.map(lambda _:execute(),range(2)))
     assert first==second and first['recorded']
-    saved=snapshot(owner_engine);assert len(saved)==1 and snapshot(backup_engine)==saved
+    saved=snapshot(owner_engine)
+    assert_exact_appends(decisions_before,saved,[first['decision_id']])
+    assert snapshot(backup_engine)==saved
     with Session(owner_engine) as db:
         assert mapping.read_inventory_control_mapping(db,**args)==first
         revoke_args={**args,'command':command(db,world,action='revoke',rules=None,revoked_grant_id=first['decision_id'],expected_subject_sha256=first['payload_sha256'])}
@@ -80,7 +84,7 @@ def assert_inventory_control_mapping_gate(owner_engine,api_engine,edge_engine,pr
             assert error.value.orig.sqlstate=='55P03';connection.rollback()
         holder.rollback()
     for sql in ['UPDATE public.inventory_control_mapping_decisions SET rules_revision=rules_revision',
-                'DELETE FROM public.inventory_control_mapping_decisions','TRUNCATE public.inventory_control_mapping_decisions']:
+                'DELETE FROM public.inventory_control_mapping_decisions','TRUNCATE public.inventory_control_mapping_decisions CASCADE']:
         with owner_engine.connect() as connection:
             with pytest.raises(DBAPIError) as error:connection.execute(text(sql))
             assert error.value.orig.sqlstate=='23514';connection.rollback()
@@ -90,9 +94,10 @@ def assert_inventory_control_mapping_gate(owner_engine,api_engine,edge_engine,pr
                 with pytest.raises(DBAPIError) as error:connection.execute(text(sql))
                 assert error.value.orig.sqlstate=='42501';connection.rollback()
     with Session(owner_engine) as db:
-        mapping.execute_inventory_control_mapping(db,**revoke_args);db.commit()
+        revoked=mapping.execute_inventory_control_mapping(db,**revoke_args);db.commit()
         with pytest.raises(mapping.ControlMappingError,match='mapping_unavailable'):
             mapping.resolve_inventory_control_mapping(db,binding_id=world.binding,catalog_id=world.catalog,decision_id=UUID(first['decision_id']))
-    assert len(snapshot(owner_engine))==2 and snapshot(owner_engine)==snapshot(backup_engine)
+    assert_exact_appends(decisions_before,snapshot(owner_engine),[first['decision_id'],revoked['decision_id']])
+    assert snapshot(owner_engine)==snapshot(backup_engine)
     assert _formal_stock(owner_engine)==stock_before
     print('PG16 control mappings: actual grants/revocation, current web session, concurrent replay, binding/file locks, immutable facts and private ACL PASS',flush=True)
