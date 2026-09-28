@@ -20,7 +20,7 @@ from sqlalchemy.pool import NullPool
 
 
 CLOUD = Path(__file__).resolve().parents[1]
-HEAD = "20261201_0152"
+HEAD = "20261202_0153"
 
 
 def main(argv=None):

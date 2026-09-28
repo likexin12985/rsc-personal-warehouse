@@ -4649,6 +4649,27 @@ EXPECTED_FORMAL_FILE_INDEXES['uq_stock_operation_orders_loss_decision'] = {'tabl
 EXPECTED_FORMAL_FILE_INDEXES['uq_stock_operation_lines_loss_origin'] = {'table': 'stock_operation_lines', 'columns': ('operation_id', 'source_loss_line_id'), 'predicate': None}
 EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_return_operation'] = {'table': 'stock_loss_dispositions', 'columns': ('return_operation_id',), 'predicate': None}
 
+
+# 0153 loss-origin physical outbounds; all new proof functions remain private.
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0152 = dict(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256)
+MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256_THROUGH_0152 = dict(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256)
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_assert_loss_outbound_authority_0153', 'text, bigint, uuid, uuid')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_assert_loss_outbound_authority_0153', 'text, bigint, uuid, uuid')] = ('f', 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_assert_loss_outbound_authority_0153', 'text, bigint, uuid, uuid')] = 'b132b50f86594beab76f3a43fda90be3a2e3e5035c282c0ff453ecaab6e7b8b8'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_check_loss_outbound_0153', 'uuid, boolean')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_check_loss_outbound_0153', 'uuid, boolean')] = ('f', 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_outbound_0153', 'uuid, boolean')] = '0bec24059164193db5c212a63e71f809a42a65b8dadef100189d71d02fbe7aea'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_loss_outbound_insert_0153', '')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_loss_outbound_insert_0153', '')] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_loss_outbound_insert_0153', '')] = '91a9ee682443ebdfa66e0f735064e1652a97540cbcacd10068445e89f71e7b07'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_loss_outbound_notification_0153', '')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_loss_outbound_notification_0153', '')] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_loss_outbound_notification_0153', '')] = '2291846872778e75f5aed69116346666fb865610613480436ed360d7d76ea0bc'
+MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[('rsc_check_stock_return_outbound_0103', 'uuid')] = '98c810dd290ad74fab2303ea3388297920c21d3dc3cfdcc401df47cae09b02c2'
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_outbound_current_0153'] = ('stock_operation_outbounds', 'rsc_guard_loss_outbound_insert_0153', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_outbound_notification_0153'] = ('notification_events', 'rsc_guard_loss_outbound_notification_0153', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_outbound_target_0153'] = ('notification_person_targets', 'rsc_guard_loss_outbound_notification_0153', 'A', 5, True, True, True)
+
 _ROLE_EVIDENCE_SQL = text(
     """
 SELECT

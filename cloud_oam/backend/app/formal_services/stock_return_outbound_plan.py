@@ -10,7 +10,8 @@ from ..inventory_models import StockAccount, StockBalance, FormalMaterial, Inven
 from ..stock_operation_models import StockOperationOrder, StockOperationCancellation, StockOperationOutbound
 from ..stock_return_outbound_schemas import StockReturnOutboundPreviewIn, StockReturnOutboundPreviewOut, StockReturnOutboundLineOut
 from . import inventory_posting as posting, inventory_query as inventory, work_order_material as material
-from . import stock_return_facts as returns
+from . import stock_return_facts as returns, stock_return_origins as origins
+from app.loss_return_outbound_schemas import line_view,preview_view,plan_origin
 from .stock_return_plan import authorize, destination
 from .work_order_query import _aware
 from .work_order_return_sources import _hash, _fail, _policies
@@ -31,7 +32,10 @@ def original(db, actor, operation_id, work_order_id):
     order = db.get(StockOperationOrder, operation_id, populate_existing=True)
     if order is None or order.oam_work_order_id != work_order_id:
         _fail("stock_return_not_found", "本人原退回单不存在", 404)
-    result = returns.order_result(db, actor=actor, order=order)
+    # Existing directory and shipment callers retain the complete legacy result.
+    result = (returns.order_result(db, actor=actor, order=order)
+        if order.loss_headquarters_decision_id is None
+        else origins.verify_return_origin(db, actor=actor, order=order))
     cancelled = db.scalar(select(StockOperationCancellation).where(StockOperationCancellation.operation_id == order.id))
     if cancelled:
         returns.cancellation_result(db, actor=actor, order=order, cancellation=cancelled)
@@ -116,7 +120,7 @@ def _basis(db, actor, order, request):
                 _fail("stock_return_outbound_serial_position", "扫码实物已不在原待退回账户")
         sku = db.get(FormalMaterial, source.material_id, populate_existing=True)
         lot = db.get(InventoryLot, source.lot_id, populate_existing=True) if source.lot_id else None
-        selected_lines.append(StockReturnOutboundLineOut(operation_line_id=line.id, source_recovery_line_id=line.source_recovery_line_id,
+        selected_lines.append(line_view(line, operation_line_id=line.id,
             source_stock_account_id=source.id, material_id=source.material_id, sku_code=sku.sku_code, material_name=sku.name,
             base_unit=sku.base_unit, condition_code=source.condition_code, lot_id=source.lot_id, lot_no=lot.lot_no if lot else None,
             return_quantity=format(line.quantity, ".3f"), departed_quantity=format(quantities[line.id], ".3f"),
@@ -141,19 +145,22 @@ def preview_outbound(db, *, actor, work_order_id, operation_id, request):
     if request.operator_person_id != current.person_id: _fail("operator_mismatch", "操作人必须是当前登录人员", 403)
     with db.no_autoflush:
         audit = material_audit_cursor(db)
+        current, _, origin_proof = origins.authorize_return_fulfillment(db, actor=current, operation_id=operation_id, action="outbound_return")
         order, original_result = original(db, current, operation_id, work_order_id)
         first = _basis(db, current, order, request)
         latest = _basis(db, current, order, request)
-        if (first != latest or material_audit_cursor(db) != audit or returns.order_result(db, actor=current, order=order) != original_result):
+        if (first != latest or material_audit_cursor(db) != audit or original(db, current, operation_id, work_order_id)[1] != original_result):
             _fail("stock_return_outbound_plan_changed", "原退回、库存或接收责任在预检期间变化，请重新核验")
         snapshot, route, lines, policies = latest
         inventory._ensure_projection_snapshot_current(db, snapshot)
-        authorize(db, current, "outbound_return")
+        refreshed, _, rechecked = origins.authorize_return_fulfillment(db, actor=current, operation_id=operation_id, action="outbound_return")
+        if refreshed.authorization_version != current.authorization_version or rechecked != origin_proof:
+            _fail("stock_return_outbound_plan_changed", "Return authority or provenance changed during preview")
         value = intent(operation_id, request)
         plan = {"intent": value, "authorization_version": current.authorization_version, "ledger_cursor": snapshot.ledger_cursor,
-            "original_request_hash": original_result.request_hash, "destination": route.model_dump(mode="json"),
+            "original_request_hash": original_result.request_hash, **plan_origin(original_result), "destination": route.model_dump(mode="json"),
             "policies": policies, "lines": [row.model_dump(mode="json") for row in lines]}
-        return StockReturnOutboundPreviewOut(operation_id=order.id, operation_no=order.operation_no, work_order_id=work_order_id,
+        return preview_view(original_result, operation_id=order.id, operation_no=order.operation_no,
             operator_person_id=current.person_id, authorization_version=current.authorization_version, outbound_at=request.outbound_at,
             reason=request.reason, ledger_cursor=snapshot.ledger_cursor, checked_at=datetime.now(timezone.utc), destination=route,
             request_hash=_hash(value), plan_hash=_hash(plan), lines=lines), plan

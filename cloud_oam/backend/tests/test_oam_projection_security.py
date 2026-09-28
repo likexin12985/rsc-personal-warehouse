@@ -1220,13 +1220,14 @@ def test_forward_readiness_manifests_match_head_hashes():
     from alembic.script import ScriptDirectory
     scripts = ScriptDirectory(str(migration_root.parent))
     head = scripts.get_revision(scripts.get_current_head())
-    readiness_hashes = [
-        getattr(head.module, name)
-        for name in ("NEW_HASH", "NEW_READY_HASH")
-        if hasattr(head.module, name)
-    ]
-    assert len(readiness_hashes) == 1
-    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6] == readiness_hashes[0]
+    # NEW_HASH can describe a separate function in a multi-function migration.
+    # Prefer the explicitly named readiness pin; older readiness-only heads
+    # expose their pin under NEW_HASH.
+    readiness_hash = (
+        head.module.NEW_READY_HASH
+        if hasattr(head.module, "NEW_READY_HASH") else head.module.NEW_HASH
+    )
+    assert scope_security.OAM_SYNC_FUNCTION_MANIFEST[ready_signature][6] == readiness_hash
     migration_0070 = runpy.run_path(str(migration_root / "20260910_0070_stock_reservation_releases.py"))
     assert scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0070[ready_signature][6] == migration_0070["RUNTIME_READY_BODY_SHA256_0070"]
     migration_0071 = runpy.run_path(str(migration_root / "20260911_0071_reservation_picking.py"))

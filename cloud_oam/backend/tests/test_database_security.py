@@ -7315,7 +7315,15 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 442
+    assert len(triggers) == 445
+    assert {
+        (row['trigger_name'], row['table_name'], row['function_name'])
+        for row in triggers if row['trigger_name'].endswith('_0153')
+    } == {
+        ('trg_loss_outbound_current_0153', 'stock_operation_outbounds', 'rsc_guard_loss_outbound_insert_0153'),
+        ('trg_loss_outbound_notification_0153', 'notification_events', 'rsc_guard_loss_outbound_notification_0153'),
+        ('trg_loss_outbound_target_0153', 'notification_person_targets', 'rsc_guard_loss_outbound_notification_0153'),
+    }
     assert any(row['trigger_name'] == 'trg_stock_loss_request_seals_loss_seal_0146'
                and row['table_name'] == 'stock_loss_request_seals'
                and row['function_name'] == 'rsc_guard_loss_seal_0146'

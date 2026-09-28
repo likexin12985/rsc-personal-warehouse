@@ -6,13 +6,16 @@ from sqlalchemy import select, func
 from ..stock_operation_models import (StockOperationOrder, StockOperationLine, StockOperationCancellation,
     StockOperationOutbound, StockOperationOutboundLine, StockOperationOutboundSerial)
 from ..inventory_models import StockAccount, InventoryTransaction, InventoryMovement, InventoryMovementSerial, CustodyAssignment
-from ..foundation_models import StateTransitionEvent, OutboxEvent
+from ..foundation_models import StateTransitionEvent, OutboxEvent, NotificationEvent, NotificationPersonTarget
+from ..stock_return_origin_schemas import LossReturnOrigin
 from ..stock_return_outbound_schemas import StockReturnOutboundPreviewIn, StockReturnOutboundOut
-from . import inventory_posting as posting, stock_return_facts as returns
+from . import inventory_posting as posting, stock_return_facts as returns, stock_return_origins as origins
+from app.loss_return_outbound_schemas import plan_origin,posted_view,line_origin_matches
 from .stock_return_outbound_plan import intent, transit_dimensions
 from .work_order_query import _aware
 from .work_order_return_sources import _hash, _fail
 from .audit_chain import AuditChainError
+from .notification_events import target_manifest_hash
 
 
 def invalid(): _fail("stock_return_outbound_evidence_invalid", "原退回发出、流水或实物明细证据不一致，请保留原请求核验", 503)
@@ -39,8 +42,8 @@ def command(fact, moves):
         effective_at=_aware(fact.outbound_at), movements=tuple(moves))
 
 
-def payload(order, fact):
-    return {"operation_id": str(order.id), "outbound_id": str(fact.id), "work_order_id": str(order.oam_work_order_id),
+def payload(order, fact, *, origin):
+    return {"operation_id": str(order.id), "outbound_id": str(fact.id), **origins.event_origin(origin),
         "operator_person_id": str(fact.operator_person_id), "posting_transaction_id": str(fact.posting_transaction_id),
         "request_hash": fact.request_hash}
 
@@ -50,11 +53,34 @@ def outbound_result(db, *, actor, fact):
     except (ValueError, TypeError, KeyError, AttributeError, InvalidOperation, AuditChainError): invalid()
 
 
+def _loss_notification(db, *, fact, assignment, body):
+    """Bind immutable recipient intent; channel delivery remains independent."""
+    events = tuple(db.scalars(select(NotificationEvent).where(
+        NotificationEvent.business_type == "stock_operation_outbound",
+        NotificationEvent.business_id == str(fact.id),
+    ).limit(2).execution_options(populate_existing=True)))
+    if len(events) != 1:
+        invalid()
+    event = events[0]
+    targets = tuple(db.scalars(select(NotificationPersonTarget.person_id).where(
+        NotificationPersonTarget.event_id == event.id,
+    )))
+    if (event.event_type != "stock_return_outbound"
+            or event.dedup_key != f"stock-return-notification:stock_return_outbound:{fact.id}"
+            or event.payload_jsonb != {**body, "target_custody_assignment_id": str(assignment.id)}
+            or _aware(event.occurred_at) != _aware(fact.created_at)
+            or _aware(event.created_at) != _aware(fact.created_at)
+            or targets != (assignment.custodian_person_id,)
+            or event.target_manifest_sha256 != target_manifest_hash(targets)):
+        invalid()
+
+
 def _result(db, actor, fact):
     order = db.get(StockOperationOrder, fact.operation_id, populate_existing=True)
     if order is None or fact.actor_user_id != actor.user_id or fact.operator_person_id != actor.person_id:
         _fail("stock_return_outbound_not_found", "本人原退回发出记录不存在", 404)
-    original = returns.order_result(db, actor=actor, order=order)
+    original = origins.verify_return_origin(db, actor=actor, order=order)
+    if {k:fact.plan_jsonb[k] for k in ("origin",) if k in fact.plan_jsonb} != plan_origin(original): invalid()
     request = StockReturnOutboundPreviewIn.model_validate({key: fact.command_jsonb[key] for key in StockReturnOutboundPreviewIn.model_fields})
     tx = db.get(InventoryTransaction, fact.posting_transaction_id, populate_existing=True)
     if (tx is None or fact.status != "outbound" or fact.authorization_version < 1
@@ -104,7 +130,7 @@ def _result(db, actor, fact):
         spent = db.scalar(select(func.coalesce(func.sum(InventoryMovement.quantity), 0)).join(InventoryTransaction)
             .where(InventoryMovement.from_account_id == source.id, InventoryTransaction.ledger_cursor < tx.ledger_cursor))
         if (row.quantity > source_line.quantity - departed or row.quantity > available - spent
-                or view["operation_line_id"] != str(source_line.id) or view["source_recovery_line_id"] != str(source_line.source_recovery_line_id)
+                or view["operation_line_id"] != str(source_line.id) or not line_origin_matches(original, source_line, view)
                 or view["source_stock_account_id"] != str(source.id) or view["material_id"] != str(source.material_id)
                 or view["condition_code"] != source.condition_code or view["lot_id"] != (str(source.lot_id) if source.lot_id else None)
                 or view["return_quantity"] != format(source_line.quantity, ".3f") or view["departed_quantity"] != format(departed, ".3f")
@@ -137,14 +163,16 @@ def _result(db, actor, fact):
     returns.single(db, OutboxEvent, aggregate_type="inventory_transaction", aggregate_id=str(tx.id), event_type="inventory.transaction.posted",
         idempotency_key=posting._derived_evidence_key("outbox", tx.id, "posted"), payload_jsonb={"transaction_id": str(tx.id),
             "transaction_no": tx.transaction_no, "movement_type": tx.movement_type, "ledger_cursor": tx.ledger_cursor, "reversed_transaction_id": None})
-    kind = "stock_return_outbound"; aggregate = "stock_operation_outbound"; body = payload(order, fact)
+    kind = "stock_return_outbound"; aggregate = "stock_operation_outbound"; body = payload(order, fact, origin=original)
     returns.audit(db, actor=actor, stream="material_request", aggregate_type=aggregate, identifier=fact.id,
         action=kind, request_id=fact.request_id, before={}, after=body)
     returns.single(db, OutboxEvent, aggregate_type=aggregate, aggregate_id=str(fact.id), event_type=kind,
         idempotency_key=kind + ":" + str(fact.id), payload_jsonb=body)
     returns.single(db, StateTransitionEvent, aggregate_type=aggregate, aggregate_id=str(fact.id), from_status=None,
         to_status="outbound", actor_id=actor.user_id, reason=kind, idempotency_key=kind + ":" + str(fact.id), metadata_jsonb=body)
-    return StockReturnOutboundOut(outbound_id=fact.id, outbound_no=fact.outbound_no, operation_id=order.id,
-        work_order_id=order.oam_work_order_id, operator_person_id=actor.person_id, outbound_at=_aware(fact.outbound_at), recorded_at=_aware(fact.created_at),
+    if isinstance(original, LossReturnOrigin):
+        _loss_notification(db, fact=fact, assignment=assignment, body=body)
+    return posted_view(original, outbound_id=fact.id, outbound_no=fact.outbound_no, operation_id=order.id,
+        operator_person_id=actor.person_id, outbound_at=_aware(fact.outbound_at), recorded_at=_aware(fact.created_at),
         reason=fact.reason, request_id=fact.request_id, request_hash=fact.request_hash, plan_hash=fact.plan_hash,
         posting_transaction_id=tx.id, destination=route, lines=views)

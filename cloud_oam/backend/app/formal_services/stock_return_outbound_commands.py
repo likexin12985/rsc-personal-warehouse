@@ -9,13 +9,14 @@ from ..stock_return_outbound_schemas import StockReturnOutboundSubmitIn
 from . import inventory_posting as posting, stock_return_outbound_facts as facts, stock_return_commands as returns
 from .stock_return_outbound_plan import preview_outbound, original, intent, transit_dimensions
 from .stock_return_plan import authorize
+from . import stock_return_origins as origins
 from .work_order_return_sources import _hash, _fail
 from .audit_chain import append_audit_event
 from .notification_events import record_stock_return_notification
 
 
 def _record(db, actor, order, fact):
-    kind = "stock_return_outbound"; aggregate = "stock_operation_outbound"; body = facts.payload(order, fact)
+    kind = "stock_return_outbound"; aggregate = "stock_operation_outbound"; body = facts.payload(order, fact, origin=origins.verify_return_origin(db, actor=actor, order=order))
     append_audit_event(db, stream_key="material_request", actor_user_id=actor.user_id, action=kind, aggregate_type=aggregate,
         aggregate_id=str(fact.id), before_jsonb={}, after_jsonb=body, request_id=fact.request_id, occurred_at=fact.created_at, created_at=fact.created_at)
     db.add(OutboxEvent(event_type=kind, aggregate_type=aggregate, aggregate_id=str(fact.id), payload_jsonb=body,
@@ -39,7 +40,7 @@ def _record(db, actor, order, fact):
 def execute_outbound(db, *, actor, work_order_id, operation_id, request):
     request = StockReturnOutboundSubmitIn.model_validate(request.model_dump())
     posting._lock_inventory_ledger_head_for_atomic_batch(db)
-    current = authorize(db, actor, "outbound_return")
+    current, _, _ = origins.authorize_return_fulfillment(db, actor=actor, operation_id=operation_id, action="outbound_return")
     if request.operator_person_id != current.person_id: _fail("operator_mismatch", "操作人必须是当前登录人员", 403)
     key = posting._storage_hash(posting._require_idempotency_key(request.idempotency_key))
     posting._require_request_id(request.request_id)

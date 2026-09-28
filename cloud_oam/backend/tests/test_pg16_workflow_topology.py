@@ -45,7 +45,7 @@ def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_a
     assert 'postgres:16-alpine@sha256:' in runtime
     assert '    strategy:\n      fail-fast: false\n      matrix:\n        tracking: [quantity, serial]\n' in loss
     assert 'RSC_PG16_LOSS_TRACKING: ${{ matrix.tracking }}' in loss
-    assert '        flow: [submission, disposition, return_preview, return_submission]\n' in loss
+    assert '        flow: [submission, disposition, return_preview, return_submission, return_outbound]\n' in loss
     assert 'RSC_PG16_LOSS_FLOW: ${{ matrix.flow }}' in loss
     assert 'python -m pytest -q -s tests/test_postgresql16_stock_loss_release_gate.py' in loss
     assert '        working-directory: cloud_oam/backend\n' in loss
@@ -155,11 +155,11 @@ def test_loss_gate_refuses_invalid_flow_before_database(monkeypatch):
     monkeypatch.setattr(loss_gate.gate,'_assert_fresh_disposable_postgresql16',unexpected_database_access)
     for flow in ('','both','submission,disposition','production'):
         monkeypatch.setenv('RSC_PG16_LOSS_FLOW',flow)
-        with pytest.raises(pytest.fail.Exception,match='explicit submission, disposition, return_preview or return_submission'):
+        with pytest.raises(pytest.fail.Exception,match='explicit submission, disposition, return_preview, return_submission or return_outbound'):
             loss_gate.test_postgresql16_stock_loss_release_gate()
 
 
-@pytest.mark.parametrize("flow", ("return_preview", "return_submission"))
+@pytest.mark.parametrize("flow", ("return_preview", "return_submission", "return_outbound"))
 def test_return_leg_still_requires_the_real_disposable_database_boundary(monkeypatch, flow):
     import pytest
     import test_postgresql16_stock_loss_release_gate as loss_gate
