@@ -25,13 +25,13 @@ def test_exact_catalog_preserves_private_shape_and_historical_branch(migration):
     m = migration
     coordinate = ('rsc_check_loss_disposition_0150', 'uuid, boolean')
     assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0150[coordinate] == m['CHECK_OLD_HASH']
-    assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate] == m['CHECK_NEW_HASH']
-    changed = {key for key, value in security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256.items()
+    assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0151[coordinate] == m['CHECK_NEW_HASH']
+    changed = {key for key, value in security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0151.items()
         if security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0150.get(key) != value}
     assert changed == {coordinate}
     assert coordinate not in security.RUNTIME_EXECUTE_FUNCTIONS
     assert m['OLD_READY_HASH'] == scope.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0150['rsc_oam_runtime_binding_ready_0044()'][6]
-    assert m['NEW_READY_HASH'] == scope.OAM_SYNC_FUNCTION_MANIFEST['rsc_oam_runtime_binding_ready_0044()'][6]
+    assert m['NEW_READY_HASH'] == scope.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0151['rsc_oam_runtime_binding_ready_0044()'][6]
     for label in ('OLD', 'NEW'):
         body = m[label + '_BODY']
         assert hashlib.sha256(body.encode()).hexdigest() == m['CHECK_' + label + '_HASH']

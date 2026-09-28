@@ -19,6 +19,7 @@ from .foundation_models import CreatedAtMixin, JSON_DOCUMENT, UUID_TYPE, uuid4_v
 class StockOperationOrder(CreatedAtMixin, Base):
     __tablename__ = "stock_operation_orders"
     __table_args__ = (
+        UniqueConstraint("loss_headquarters_decision_id", name="uq_stock_operation_orders_loss_decision"),
         UniqueConstraint("operation_no", name="uq_stock_operation_orders_no"),
         UniqueConstraint("idempotency_key_hash", name="uq_stock_operation_orders_key"),
         UniqueConstraint("actor_user_id", "request_id", name="uq_stock_operation_orders_request"),
@@ -26,13 +27,17 @@ class StockOperationOrder(CreatedAtMixin, Base):
         UniqueConstraint("id", "operation_type", name="uq_stock_operation_orders_typed_id"),
         CheckConstraint("operation_type IN ('return','loss_report') AND status = 'submitted'", name="ck_stock_operation_orders_type_status"),
         CheckConstraint(' '.join("""(
-            operation_type='return' AND oam_work_order_id IS NOT NULL
+            operation_type='return' AND (
+                (oam_work_order_id IS NOT NULL AND loss_headquarters_decision_id IS NULL)
+                OR (oam_work_order_id IS NULL AND loss_headquarters_decision_id IS NOT NULL)
+            )
             AND target_location_id IS NOT NULL AND transit_location_id IS NOT NULL
             AND target_custody_assignment_id IS NOT NULL
             AND source_location_id <> target_location_id
             AND source_location_id <> transit_location_id AND target_location_id <> transit_location_id
         ) OR (
             operation_type='loss_report' AND oam_work_order_id IS NULL
+            AND loss_headquarters_decision_id IS NULL
             AND target_location_id IS NULL AND transit_location_id IS NULL
             AND target_custody_assignment_id IS NULL
         )""".split()), name="ck_stock_operation_orders_locations"),
@@ -43,6 +48,8 @@ class StockOperationOrder(CreatedAtMixin, Base):
     operation_type: Mapped[str] = mapped_column(String(24))
     status: Mapped[str] = mapped_column(String(24))
     oam_work_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("oam_work_orders.id", ondelete="RESTRICT"))
+    loss_headquarters_decision_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE,
+        ForeignKey("stock_loss_headquarters_decisions.id", ondelete="RESTRICT"))
     source_location_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_locations.id", ondelete="RESTRICT"))
     target_location_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("stock_locations.id", ondelete="RESTRICT"))
     transit_location_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("stock_locations.id", ondelete="RESTRICT"))
@@ -66,15 +73,23 @@ class StockOperationLine(CreatedAtMixin, Base):
     __table_args__ = (
         UniqueConstraint("operation_id", "line_no", name="uq_stock_operation_lines_order"),
         UniqueConstraint("operation_id", "source_recovery_line_id", name="uq_stock_operation_lines_origin"),
+        UniqueConstraint("operation_id", "source_loss_line_id", name="uq_stock_operation_lines_loss_origin"),
+        Index("ix_stock_operation_lines_loss", "source_loss_line_id"),
+        CheckConstraint("source_loss_line_id IS NULL OR source_loss_line_id <> id", name="ck_stock_operation_lines_loss_origin_not_self"),
         Index("ix_stock_operation_lines_recovery", "source_recovery_line_id"),
         ForeignKeyConstraint(["operation_id", "operation_type"],
             ["stock_operation_orders.id", "stock_operation_orders.operation_type"],
             name="fk_stock_operation_lines_typed_parent", ondelete="RESTRICT"),
         CheckConstraint("line_no > 0 AND quantity > 0", name="ck_stock_operation_lines_quantity"),
         CheckConstraint(' '.join("""stock_account_id <> reserved_account_id AND (
-            (operation_type='return' AND source_recovery_line_id IS NOT NULL
-                AND target_condition IN ('used','damaged'))
+            (operation_type='return' AND (
+                (source_recovery_line_id IS NOT NULL AND source_loss_line_id IS NULL
+                    AND target_condition IN ('used','damaged'))
+                OR (source_recovery_line_id IS NULL AND source_loss_line_id IS NOT NULL
+                    AND target_condition IN ('new','used','damaged'))
+            ))
             OR (operation_type='loss_report' AND source_recovery_line_id IS NULL
+                AND source_loss_line_id IS NULL
                 AND target_condition IN ('new','used','damaged'))
         )""".split()), name="ck_stock_operation_lines_dimensions"),
     )
@@ -83,6 +98,8 @@ class StockOperationLine(CreatedAtMixin, Base):
     operation_type: Mapped[str] = mapped_column(String(24), server_default=text("'return'"))
     line_no: Mapped[int] = mapped_column(BigInteger)
     source_recovery_line_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("work_order_material_lines.id", ondelete="RESTRICT"))
+    source_loss_line_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE,
+        ForeignKey("stock_operation_lines.id", ondelete="RESTRICT"))
     stock_account_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT"))
     reserved_account_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("stock_accounts.id", ondelete="RESTRICT"))
     material_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("materials.id", ondelete="RESTRICT"))
@@ -212,7 +229,8 @@ class StockLossDisposition(CreatedAtMixin, Base):
         UniqueConstraint('posting_movement_id', name='uq_loss_disposition_movement'),
         UniqueConstraint('actor_user_id', 'request_id', name='uq_loss_disposition_request'),
         UniqueConstraint('idempotency_key_hash', name='uq_loss_disposition_key'),
-        CheckConstraint("disposition IN ('restore_available','convert_used','convert_damaged')", name='ck_loss_disposition_kind'),
+        UniqueConstraint('return_operation_id', name='uq_loss_disposition_return_operation'),
+        CheckConstraint("(disposition IN ('restore_available','convert_used','convert_damaged') AND return_operation_id IS NULL) OR (disposition='return_to_region' AND return_operation_id IS NOT NULL AND return_operation_id <> operation_id)", name='ck_loss_disposition_kind'),
         CheckConstraint('quantity > 0 AND authorization_version > 0 AND source_account_id <> target_account_id', name='ck_loss_disposition_dimensions'),
         CheckConstraint('length(request_hash)=64 AND length(plan_hash)=64 AND length(idempotency_key_hash)=64', name='ck_loss_disposition_hashes'),
         CheckConstraint('length(request_id) BETWEEN 8 AND 160', name='ck_loss_disposition_request'),
@@ -221,6 +239,8 @@ class StockLossDisposition(CreatedAtMixin, Base):
     operation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stock_operation_orders.id', ondelete='RESTRICT'))
     line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stock_operation_lines.id', ondelete='RESTRICT'))
     headquarters_decision_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stock_loss_headquarters_decisions.id', ondelete='RESTRICT'))
+    return_operation_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE,
+        ForeignKey('stock_operation_orders.id', ondelete='RESTRICT', deferrable=True, initially='DEFERRED'))
     actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey('users.id', ondelete='RESTRICT'))
     executor_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('people.id', ondelete='RESTRICT'))
     authorization_version: Mapped[int] = mapped_column(BigInteger)

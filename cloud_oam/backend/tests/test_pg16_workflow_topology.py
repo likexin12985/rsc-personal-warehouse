@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import pytest
 
 ROOT=Path(__file__).resolve().parents[3]
 WORKFLOW=ROOT/'.github/workflows/postgresql16-release-gate.yml'
@@ -43,7 +44,7 @@ def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_a
     assert 'postgres:16-alpine@sha256:' in runtime
     assert '    strategy:\n      fail-fast: false\n      matrix:\n        tracking: [quantity, serial]\n' in loss
     assert 'RSC_PG16_LOSS_TRACKING: ${{ matrix.tracking }}' in loss
-    assert '        flow: [submission, disposition, return_preview]\n' in loss
+    assert '        flow: [submission, disposition, return_preview, return_submission]\n' in loss
     assert 'RSC_PG16_LOSS_FLOW: ${{ matrix.flow }}' in loss
     assert 'python -m pytest -q -s tests/test_postgresql16_stock_loss_release_gate.py' in loss
     assert '        working-directory: cloud_oam/backend\n' in loss
@@ -153,16 +154,17 @@ def test_loss_gate_refuses_invalid_flow_before_database(monkeypatch):
     monkeypatch.setattr(loss_gate.gate,'_assert_fresh_disposable_postgresql16',unexpected_database_access)
     for flow in ('','both','submission,disposition','production'):
         monkeypatch.setenv('RSC_PG16_LOSS_FLOW',flow)
-        with pytest.raises(pytest.fail.Exception,match='explicit submission, disposition or return_preview'):
+        with pytest.raises(pytest.fail.Exception,match='explicit submission, disposition, return_preview or return_submission'):
             loss_gate.test_postgresql16_stock_loss_release_gate()
 
 
-def test_return_preview_leg_still_requires_the_real_disposable_database_boundary(monkeypatch):
+@pytest.mark.parametrize("flow", ("return_preview", "return_submission"))
+def test_return_leg_still_requires_the_real_disposable_database_boundary(monkeypatch, flow):
     import pytest
     import test_postgresql16_stock_loss_release_gate as loss_gate
     monkeypatch.setattr(loss_gate.gate, '_gate_enabled', lambda: True)
     monkeypatch.setenv('RSC_PG16_LOSS_TRACKING', 'quantity')
-    monkeypatch.setenv('RSC_PG16_LOSS_FLOW', 'return_preview')
+    monkeypatch.setenv('RSC_PG16_LOSS_FLOW', flow)
     class BoundaryReached(Exception):
         pass
     def boundary():

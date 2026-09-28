@@ -19,8 +19,8 @@ def test_postgresql16_stock_loss_release_gate():
     if tracking not in ("quantity", "serial"):
         pytest.fail("loss gate requires an explicit quantity or serial matrix leg")
     flow = os.getenv("RSC_PG16_LOSS_FLOW", "")
-    if flow not in ("submission", "disposition", "return_preview"):
-        pytest.fail("loss gate requires an explicit submission, disposition or return_preview matrix leg")
+    if flow not in ("submission", "disposition", "return_preview", "return_submission"):
+        pytest.fail("loss gate requires an explicit submission, disposition, return_preview or return_submission matrix leg")
     gate._assert_fresh_disposable_postgresql16()
     gate._bootstrap_roles()
     gate._provision_edge_receiver_role()
@@ -29,8 +29,10 @@ def test_postgresql16_stock_loss_release_gate():
         from pg16_stock_loss_release_checks import run
     elif flow == "disposition":
         from pg16_stock_loss_disposition_gate import release as run
-    else:
+    elif flow == "return_preview":
         from pg16_stock_loss_return_preview_gate import release as run
+    else:
+        from pg16_stock_loss_derived_return_gate import release as run
 
     engines = {}
     try:

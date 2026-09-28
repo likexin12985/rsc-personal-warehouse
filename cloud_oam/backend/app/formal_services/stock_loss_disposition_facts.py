@@ -40,6 +40,9 @@ def posting_command(row):
 
 
 def payload(row):
+    if row.disposition == "return_to_region":
+        from .stock_loss_return_facts import payload as return_payload
+        return return_payload(row)
     return dict(disposition_id=str(row.id), operation_id=str(row.operation_id), line_id=str(row.line_id),
         headquarters_decision_id=str(row.headquarters_decision_id), disposition=row.disposition,
         executor_person_id=str(row.executor_person_id), authorization_version=row.authorization_version,
@@ -66,6 +69,9 @@ def historical_hold_basis(db, source_id, cursor):
 
 
 def _verify(db, row):
+    if row.disposition == "return_to_region":
+        from .stock_loss_return_facts import _verify as verify_return
+        return verify_return(db, row)
     line = db.get(Line, row.line_id, populate_existing=True)
     order = db.get(Order, row.operation_id, populate_existing=True)
     decision = db.get(Decision, row.headquarters_decision_id, populate_existing=True)

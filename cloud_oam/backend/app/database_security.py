@@ -4636,6 +4636,19 @@ EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_key'] = {'table': 'stock_loss_
 FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0150 = dict(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256)
 FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_disposition_0150', 'uuid, boolean')] = '6186d5278a90e85e5cf45cd260e117b7d4a2c5e6875cd2fdb28e6983a2138113'
 
+# 0152 records mutually exclusive loss origins without expanding API capabilities.
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0151 = dict(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256)
+MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256_THROUGH_0151 = dict(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256)
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_check_loss_return_0152', 'uuid, boolean')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_check_loss_return_0152', 'uuid, boolean')] = ('f', 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_return_0152', 'uuid, boolean')] = '625cd33baabbd20436a850a776743229e81a9d3aff7f5213aa3fe5fb19bc484d'
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_require_opening_observation_account_0023', '')] = 'b8ae67ff22df17c599eb72c9d7cf584bc348ed6cfc678085d4983c347761113b'
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_disposition_0150', 'uuid, boolean')] = 'c693ff953a248bf3565175322d7944c526f01197f287b86cfa46995ba590ee1c'
+MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[('rsc_check_stock_return_0100', 'uuid, uuid')] = 'aba275cb326ca7f21bf7eb3b7bf5005176c5ad2cfc2ea241ded3fb03945ec547'
+EXPECTED_FORMAL_FILE_INDEXES['uq_stock_operation_orders_loss_decision'] = {'table': 'stock_operation_orders', 'columns': ('loss_headquarters_decision_id',), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_stock_operation_lines_loss_origin'] = {'table': 'stock_operation_lines', 'columns': ('operation_id', 'source_loss_line_id'), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_return_operation'] = {'table': 'stock_loss_dispositions', 'columns': ('return_operation_id',), 'predicate': None}
+
 _ROLE_EVIDENCE_SQL = text(
     """
 SELECT

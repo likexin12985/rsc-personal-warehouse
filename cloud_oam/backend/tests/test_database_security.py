@@ -1375,7 +1375,11 @@ def _transit_source_change(coordinate):
             "alembic/versions/20261129_0150_stock_loss_disposition.py"))
         disposition_old, disposition_new = disposition['_sources']()['public.rsc_require_opening_observation_account_0023()']
         assert inbound_new == disposition_old
-        return hashlib.sha256(old.encode()).hexdigest(), hashlib.sha256(disposition_new.encode()).hexdigest(), ((old,disposition_new,1),)
+        derived_return = runpy.run_path(str(Path(__file__).parents[1] /
+            'alembic/versions/20261201_0152_stock_loss_derived_returns.py'))
+        return_old, return_new = derived_return['_sources']()['public.rsc_require_opening_observation_account_0023()']
+        assert disposition_new == return_old
+        return hashlib.sha256(old.encode()).hexdigest(), hashlib.sha256(return_new.encode()).hexdigest(), ((old,return_new,1),)
     migration = runpy.run_path(str(Path(__file__).parents[1] /
         "alembic/versions/20261012_0102_transit_opening_scopes.py"))
     return migration["SOURCE_CHANGES"].get(f"{coordinate[0]}({coordinate[1]})")
