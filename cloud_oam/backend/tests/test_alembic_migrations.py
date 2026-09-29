@@ -460,7 +460,7 @@ REVIEW_COMMAND_STATUS_REVISION = (
     / "versions"
     / "20260906_0063_review_command_status.py"
 )
-HEAD_REVISION = "20261202_0153"
+HEAD_REVISION = "20261203_0154"
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -1689,10 +1689,10 @@ def test_revision_history_has_single_current_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == "20261201_0152"
-    custody_head = script.get_revision(head.down_revision)
-    assert custody_head is not None
-    assert custody_head.down_revision == "20261130_0151"
+    assert head.down_revision == "20261202_0153"
+    outbound_head = script.get_revision(head.down_revision)
+    assert outbound_head is not None
+    assert outbound_head.down_revision == "20261201_0152"
     assert REVIEW_COMMAND_STATUS_REVISION.exists()
     supply_event_key_head = script.get_revision(
         MATERIAL_REQUEST_SUPPLY_EVENT_KEY_REVISION_ID

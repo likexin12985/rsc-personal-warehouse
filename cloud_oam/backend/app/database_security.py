@@ -4670,6 +4670,27 @@ EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_outbound_current_0153'] = 
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_outbound_notification_0153'] = ('notification_events', 'rsc_guard_loss_outbound_notification_0153', 'A', 5, True, True, True)
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_outbound_target_0153'] = ('notification_person_targets', 'rsc_guard_loss_outbound_notification_0153', 'A', 5, True, True, True)
 
+
+# 0154 loss-origin parcel handovers; no additional API SQL capabilities.
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0153 = dict(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256)
+MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256_THROUGH_0153 = dict(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256)
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_assert_loss_shipment_authority_0154', 'text, bigint, uuid, uuid')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_assert_loss_shipment_authority_0154', 'text, bigint, uuid, uuid')] = ('f', 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_assert_loss_shipment_authority_0154', 'text, bigint, uuid, uuid')] = 'b8df92f53b69776f7eb017aee4638ccf9b5bb93dd64d35abbd0e61df811fe6aa'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_check_loss_shipment_0154', 'uuid, boolean')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_check_loss_shipment_0154', 'uuid, boolean')] = ('f', 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_shipment_0154', 'uuid, boolean')] = '76d9d87f9aee3adfa8ea541f42c2ce97640f7275da53c1b44fcc1e3e5f0089d7'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_loss_shipment_insert_0154', '')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_loss_shipment_insert_0154', '')] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_loss_shipment_insert_0154', '')] = 'b25f1f6a334ebb2c4c3cd0bcb18bb17e8fa1a54420ced53a8d4e9df4cce6215f'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_loss_shipment_notification_0154', '')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_loss_shipment_notification_0154', '')] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_loss_shipment_notification_0154', '')] = '4e9484d544a0bc8a0af50628dbc7cc1f62a1b1f691ae04df46a3a48b2031abdc'
+MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[('rsc_check_stock_return_shipment_0104', 'uuid')] = '6eb8c791a5278ce3946c7b3957cc3232a880b03c74ad669176c67c59606d3f79'
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_shipment_current_0154'] = ('stock_operation_shipments', 'rsc_guard_loss_shipment_insert_0154', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_shipment_notification_0154'] = ('notification_events', 'rsc_guard_loss_shipment_notification_0154', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_shipment_target_0154'] = ('notification_person_targets', 'rsc_guard_loss_shipment_notification_0154', 'A', 5, True, True, True)
+
 _ROLE_EVIDENCE_SQL = text(
     """
 SELECT

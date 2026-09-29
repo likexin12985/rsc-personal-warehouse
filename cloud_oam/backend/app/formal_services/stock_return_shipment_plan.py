@@ -14,6 +14,9 @@ from ..stock_return_shipment_schemas import (StockReturnShipmentPreviewIn,
 from . import inventory_posting as posting, inventory_query as inventory
 from . import stock_return_facts as returns, stock_return_outbound_facts as departures
 from .stock_return_outbound_plan import original
+from . import stock_return_origins as origins
+from app.loss_return_outbound_schemas import plan_origin
+from app.loss_return_shipment_schemas import line_view, preview_view
 from .stock_return_plan import authorize, destination
 from .work_order_query import _aware
 from .work_order_return_sources import _hash, _fail, _policies
@@ -118,8 +121,8 @@ def _basis(db, actor, order, request):
         sku = db.get(FormalMaterial, account.material_id, populate_existing=True)
         lot = db.get(InventoryLot, account.lot_id, populate_existing=True) if account.lot_id else None
         original_line = db.get(StockOperationLine, row.operation_line_id, populate_existing=True)
-        views.append(StockReturnShipmentLineOut(outbound_id=row.outbound_id, outbound_no=parents[row.outbound_id].outbound_no,
-            outbound_line_id=row.id, operation_line_id=row.operation_line_id, source_recovery_line_id=original_line.source_recovery_line_id,
+        views.append(line_view(original_line, outbound_id=row.outbound_id, outbound_no=parents[row.outbound_id].outbound_no,
+            outbound_line_id=row.id, operation_line_id=row.operation_line_id,
             transit_stock_account_id=account.id, material_id=account.material_id, sku_code=sku.sku_code, material_name=sku.name,
             base_unit=sku.base_unit, condition_code=account.condition_code, lot_id=account.lot_id, lot_no=lot.lot_no if lot else None,
             outbound_quantity=format(row.quantity, ".3f"), shipped_quantity=format(quantities[row.id], ".3f"),
@@ -142,19 +145,23 @@ def preview_shipment(db, *, actor, work_order_id, operation_id, request):
     with db.no_autoflush:
         audit = material_audit_cursor(db)
         if len(audit) != 1: returns.invalid()
-        order, original_result = original(db, current, operation_id, work_order_id)
+        order, _ = original(db, current, operation_id, work_order_id)
+        original_result = origins.verify_return_origin(db, actor=current, order=order)
+        if order.loss_headquarters_decision_id is not None:
+            current, order, original_result = origins.authorize_return_fulfillment(db, actor=current,
+                operation_id=order.id, action='ship_return')
         first = _basis(db, current, order, request)
         latest = _basis(db, current, order, request)
-        if first != latest or material_audit_cursor(db) != audit or returns.order_result(db, actor=current, order=order) != original_result:
+        if first != latest or material_audit_cursor(db) != audit or origins.verify_return_origin(db, actor=current, order=order) != original_result:
             _fail("stock_return_shipment_plan_changed", "原发出、分包、库存或接收责任在预检期间变化，请重新核验")
         snapshot, route, views, policies = latest
         inventory._ensure_projection_snapshot_current(db, snapshot)
         authorize(db, current, "ship_return")
         value = intent(operation_id, request)
         plan = {"intent": value, "authorization_version": current.authorization_version, "ledger_cursor": snapshot.ledger_cursor,
-            "audit_cursor": audit[0].version, "original_request_hash": original_result.request_hash,
+            **plan_origin(original_result), "audit_cursor": audit[0].version, "original_request_hash": original_result.request_hash,
             "destination": route.model_dump(mode="json"), "policies": policies, "lines": [row.model_dump(mode="json") for row in views]}
-        return StockReturnShipmentPreviewOut(operation_id=order.id, operation_no=order.operation_no, work_order_id=work_order_id,
+        return preview_view(original_result, operation_id=order.id, operation_no=order.operation_no,
             operator_person_id=current.person_id, authorization_version=current.authorization_version, shipped_at=request.shipped_at,
             carrier=request.carrier, tracking_no=request.tracking_no, reason=request.reason, ledger_cursor=snapshot.ledger_cursor,
             checked_at=datetime.now(timezone.utc), destination=route, request_hash=_hash(value), plan_hash=_hash(plan), lines=views), plan

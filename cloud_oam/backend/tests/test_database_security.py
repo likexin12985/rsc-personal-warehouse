@@ -7315,7 +7315,15 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 445
+    assert len(triggers) == 448
+    assert {
+        (row['trigger_name'], row['table_name'], row['function_name'])
+        for row in triggers if row['trigger_name'].endswith('_0154')
+    } == {
+        ('trg_loss_shipment_current_0154', 'stock_operation_shipments', 'rsc_guard_loss_shipment_insert_0154'),
+        ('trg_loss_shipment_notification_0154', 'notification_events', 'rsc_guard_loss_shipment_notification_0154'),
+        ('trg_loss_shipment_target_0154', 'notification_person_targets', 'rsc_guard_loss_shipment_notification_0154'),
+    }
     assert {
         (row['trigger_name'], row['table_name'], row['function_name'])
         for row in triggers if row['trigger_name'].endswith('_0153')

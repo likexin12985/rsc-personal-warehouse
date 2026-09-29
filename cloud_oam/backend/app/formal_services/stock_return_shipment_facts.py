@@ -15,6 +15,12 @@ from ..stock_operation_models import (StockOperationOrder, StockOperationLine, S
 from ..stock_return_shipment_schemas import StockReturnShipmentPreviewIn, StockReturnShipmentOut, StockReturnShipmentLineOut
 from . import inventory_posting as posting, stock_return_facts as returns, stock_return_outbound_facts as departures
 from .stock_return_shipment_plan import intent
+from . import stock_return_origins as origins
+from app.stock_return_origin_schemas import LossReturnOrigin
+from app.loss_return_outbound_schemas import plan_origin, line_origin_matches
+from app.loss_return_shipment_schemas import posted_view, line_wire
+from app.foundation_models import NotificationEvent, NotificationPersonTarget
+from .notification_events import target_manifest_hash
 from .stock_return_plan import authorize
 from .work_order_query import _aware
 from .work_order_return_sources import _hash, _fail
@@ -39,8 +45,8 @@ def serial_ids(db, line):
     return tuple(row.serial_id for row in rows)
 
 
-def payload(order, header):
-    return {"operation_id": str(order.id), "shipment_id": str(header.id), "work_order_id": str(order.oam_work_order_id),
+def payload(order, header, *, origin):
+    return {"operation_id": str(order.id), "shipment_id": str(header.id), **origins.event_origin(origin),
         "operator_person_id": str(header.actor_person_id), "request_hash": header.request_hash}
 
 
@@ -115,10 +121,11 @@ def _result(db, actor, fact):
     order = db.get(StockOperationOrder, fact.operation_id, populate_existing=True)
     header = db.get(Shipment, fact.id, populate_existing=True)
     if order is None or header is None or header.actor_user_id != actor.user_id or header.actor_person_id != actor.person_id: invalid()
-    original = returns.order_result(db, actor=actor, order=order)
+    original = origins.verify_return_origin(db, actor=actor, order=order)
+    if {key:fact.plan_jsonb[key] for key in ('origin',) if key in fact.plan_jsonb} != plan_origin(original): invalid()
     request = StockReturnShipmentPreviewIn.model_validate({key: fact.command_jsonb[key] for key in StockReturnShipmentPreviewIn.model_fields})
     plan = fact.plan_jsonb
-    if (set(plan) != {"intent", "authorization_version", "ledger_cursor", "audit_cursor", "original_request_hash", "destination", "policies", "lines"}
+    if (set(plan) != {"intent", "authorization_version", "ledger_cursor", "audit_cursor", "original_request_hash", "destination", "policies", "lines", *plan_origin(original)}
             or header.status != "shipped" or header.authorization_version < 1 or fact.audit_version < 1
             or not re.fullmatch(r"[a-f0-9]{64}", header.idempotency_key_hash)
             or not re.fullmatch(r"[A-Za-z0-9._:-]{8,160}", fact.request_id)
@@ -166,17 +173,17 @@ def _result(db, actor, fact):
         totals[account.id] += line.quantity
         serial_names = {proof.serial_id: proof.serial_no for item in departed.lines if item.operation_line_id == row.operation_line_id for proof in item.selected_serials}
         if (held - assigned < totals[account.id] or row.quantity - prior < line.quantity
-                or view != StockReturnShipmentLineOut.model_validate(view).model_dump(mode="json")
+                or view != line_wire(original, view)
                 or view["outbound_id"] != str(parent.id) or view["outbound_no"] != parent.outbound_no
                 or view["outbound_line_id"] != str(row.id) or view["operation_line_id"] != str(origin.id)
-                or view["source_recovery_line_id"] != str(origin.source_recovery_line_id)
+                or not line_origin_matches(original, origin, view)
                 or view["transit_stock_account_id"] != str(account.id) or view["material_id"] != str(account.material_id)
                 or view["condition_code"] != account.condition_code or view["lot_id"] != (str(account.lot_id) if account.lot_id else None)
                 or view["outbound_quantity"] != format(row.quantity, ".3f") or view["shipped_quantity"] != format(prior, ".3f")
                 or view["unshipped_quantity"] != format(row.quantity - prior, ".3f") or view["in_transit_quantity"] != format(held, ".3f")
                 or view["unassigned_quantity"] != format(held - assigned, ".3f") or view["selected_quantity"] != format(line.quantity, ".3f")
                 or view["selected_serials"] != [{"serial_id": str(identifier), "serial_no": serial_names[identifier]} for identifier in ids]): invalid()
-    kind = "stock_return_shipped"; aggregate = "stock_operation_shipment"; body = payload(order, header)
+    kind = "stock_return_shipped"; aggregate = "stock_operation_shipment"; body = payload(order, header, origin=original)
     returns.audit(db, actor=actor, stream="material_request", aggregate_type=aggregate, identifier=fact.id,
         action=kind, request_id=fact.request_id, before={}, after=body)
     event = returns.single(db, AuditEvent, stream_key="material_request", aggregate_type=aggregate, aggregate_id=str(fact.id))
@@ -186,8 +193,27 @@ def _result(db, actor, fact):
         idempotency_key=kind + ":" + str(fact.id), payload_jsonb=body)
     returns.single(db, StateTransitionEvent, aggregate_type=aggregate, aggregate_id=str(fact.id), from_status=None,
         to_status="shipped", actor_id=actor.user_id, reason=kind, idempotency_key=kind + ":" + str(fact.id), metadata_jsonb=body)
+    if isinstance(original, LossReturnOrigin):
+        _loss_notification(db, fact=fact, assignment=assignment, body=body)
     _namespace(db, fact, header)
-    return StockReturnShipmentOut(shipment_id=fact.id, shipment_no=header.shipment_no, operation_id=order.id,
-        work_order_id=order.oam_work_order_id, operator_person_id=actor.person_id, shipped_at=_aware(header.shipped_at),
+    return posted_view(original, shipment_id=fact.id, shipment_no=header.shipment_no, operation_id=order.id,
+        operator_person_id=actor.person_id, shipped_at=_aware(header.shipped_at),
         recorded_at=_aware(fact.created_at), carrier=header.carrier, tracking_no=header.tracking_no, reason=fact.reason,
         request_id=fact.request_id, request_hash=header.request_hash, plan_hash=fact.plan_hash, destination=route, lines=views)
+
+
+def _loss_notification(db, *, fact, assignment, body):
+    events = tuple(db.scalars(select(NotificationEvent).where(
+        NotificationEvent.business_type == 'stock_operation_shipment',
+        NotificationEvent.business_id == str(fact.id)).limit(2).execution_options(populate_existing=True)))
+    if len(events) != 1: invalid()
+    event = events[0]
+    targets = tuple(db.scalars(select(NotificationPersonTarget.person_id).where(NotificationPersonTarget.event_id == event.id)))
+    if (event.event_type != 'stock_return_shipped'
+            or event.dedup_key != f'stock-return-notification:stock_return_shipped:{fact.id}'
+            or event.payload_jsonb != {**body, 'target_custody_assignment_id':str(assignment.id)}
+            or _aware(event.occurred_at) != _aware(fact.created_at)
+            or _aware(event.created_at) != _aware(fact.created_at)
+            or targets != (assignment.custodian_person_id,)
+            or event.target_manifest_sha256 != target_manifest_hash(targets)):
+        invalid()

@@ -11,6 +11,7 @@ from . import inventory_posting as posting, stock_return_commands as returns, st
 from .stock_return_shipment_plan import preview_shipment, intent
 from .stock_return_outbound_plan import original
 from .stock_return_plan import authorize
+from . import stock_return_origins as origins
 from .work_order_return_sources import _hash, _fail
 from .audit_chain import append_audit_event, lock_audit_chain_head
 from . import work_order_material as material
@@ -18,7 +19,7 @@ from .notification_events import record_stock_return_notification
 
 
 def _record(db, actor, order, header, fact):
-    kind = "stock_return_shipped"; aggregate = "stock_operation_shipment"; body = facts.payload(order, header)
+    kind = "stock_return_shipped"; aggregate = "stock_operation_shipment"; body = facts.payload(order, header, origin=origins.verify_return_origin(db, actor=actor, order=order))
     event = append_audit_event(db, stream_key="material_request", actor_user_id=actor.user_id, action=kind,
         aggregate_type=aggregate, aggregate_id=str(fact.id), before_jsonb={}, after_jsonb=body,
         request_id=fact.request_id, occurred_at=fact.created_at, created_at=fact.created_at)
@@ -61,7 +62,8 @@ def execute_shipment(db, *, actor, work_order_id, operation_id, request):
             _fail("idempotency_conflict", "原运单请求键已绑定其他内容，请回读原请求")
         return result
     returns._fresh_request(db, actor=current, key=key, request_id=request.request_id)
-    _, current = material.authorize_work_order(db, actor=current, work_order_id=work_order_id, action="read", lock_rows=True)
+    if work_order_id is not None:
+        _, current = material.authorize_work_order(db, actor=current, work_order_id=work_order_id, action="read", lock_rows=True)
     order, _ = original(db, current, operation_id, work_order_id)
     # No inventory posting occurs; serialize parcels with the material audit head
     # as well as the existing ledger/work-order lock protocol.
