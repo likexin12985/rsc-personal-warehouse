@@ -244,6 +244,32 @@ class StockLossHeadquartersReviewOut(BaseModel):
     reviewed_at: datetime
 
 
+class StockLossReviewRequestLookupIn(StrictInput):
+    """Exact coordinates of one original regional or headquarters command."""
+    operation_id: UUID
+    operator_person_id: UUID
+    expected_submission_plan_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
+    request_id: str = Field(pattern=r'^[A-Za-z0-9._:-]{8,160}$')
+    idempotency_key: str = Field(min_length=8, max_length=200)
+    request_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
+
+
+class StockLossRegionalReviewFoundOut(BaseModel):
+    lookup_status: Literal['found'] = 'found'
+    retry_permitted: Literal[False] = False
+    review: StockLossRegionalReviewOut
+
+
+class StockLossHeadquartersReviewFoundOut(BaseModel):
+    lookup_status: Literal['found'] = 'found'
+    retry_permitted: Literal[False] = False
+    review: StockLossHeadquartersReviewOut
+
+
+StockLossRegionalReviewLookupOut = StockLossRegionalReviewFoundOut | StockLossRequestMissingOut
+StockLossHeadquartersReviewLookupOut = StockLossHeadquartersReviewFoundOut | StockLossRequestMissingOut
+
+
 class StockLossDispositionPreviewIn(StrictInput):
     """Reference an exact approved original line; all stock values are server-owned."""
     headquarters_decision_id: UUID

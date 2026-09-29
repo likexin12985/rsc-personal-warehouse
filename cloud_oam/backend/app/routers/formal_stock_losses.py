@@ -8,6 +8,7 @@ from ..dependencies import require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import stock_loss_sources, stock_loss_plan, stock_loss_recovery
 from ..formal_services import stock_loss_commands, stock_loss_seals
+from ..formal_services import stock_loss_review_recovery
 from ..formal_services.audit_chain import AuditChainError
 from ..formal_services.inventory_posting import InventoryPostingError
 from ..formal_services.inventory_query import InventoryReadError
@@ -15,6 +16,7 @@ from ..stock_loss_schemas import StockLossSelectionIn, StockLossSelectionOut, St
 from ..stock_loss_schemas import StockLossRequestLookupIn, StockLossRequestLookupOut
 from ..stock_loss_schemas import StockLossSubmitIn, StockLossSubmittedOut, StockLossSealIn
 from ..stock_loss_schemas import StockLossRequestFoundOut, StockLossRequestSealedOut
+from ..stock_loss_schemas import StockLossReviewRequestLookupIn, StockLossRegionalReviewLookupOut, StockLossHeadquartersReviewLookupOut
 
 router = APIRouter(prefix='/v1/stock-operations/loss-reports', tags=['formal-stock-losses'])
 PRIVATE = {'Cache-Control': 'private, no-store'}
@@ -58,6 +60,24 @@ def lookup_request(payload: StockLossRequestLookupIn, response: Response, db: Se
     principal: FormalPrincipal = Depends(require_permission('stock_operation', 'read'))):
     return _read(response, lambda: stock_loss_recovery.lookup_loss_request(db, actor=principal, request=payload),
         unavailable=('stock_loss_lookup_unavailable', '暂时无法核验原报损请求，请保留原请求并稍后回查'))
+
+
+@router.post('/regional-reviews/request-lookup', response_model=StockLossRegionalReviewLookupOut)
+def lookup_regional_review(payload: StockLossReviewRequestLookupIn, response: Response,
+    db: Session = Depends(get_db),
+    principal: FormalPrincipal = Depends(require_permission('stock_operation', 'read'))):
+    return _read(response, lambda: stock_loss_review_recovery.lookup_review_request(
+        db, actor=principal, request=payload, stage='regional'),
+        unavailable=('stock_loss_review_lookup_unavailable', '暂时无法核验原审批请求，请保留原请求并稍后回查'))
+
+
+@router.post('/headquarters-reviews/request-lookup', response_model=StockLossHeadquartersReviewLookupOut)
+def lookup_headquarters_review(payload: StockLossReviewRequestLookupIn, response: Response,
+    db: Session = Depends(get_db),
+    principal: FormalPrincipal = Depends(require_permission('stock_operation', 'read'))):
+    return _read(response, lambda: stock_loss_review_recovery.lookup_review_request(
+        db, actor=principal, request=payload, stage='headquarters'),
+        unavailable=('stock_loss_review_lookup_unavailable', '暂时无法核验原审批请求，请保留原请求并稍后回查'))
 
 
 def _coordinates(payload, principal, trace, key):

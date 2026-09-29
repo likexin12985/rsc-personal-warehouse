@@ -150,6 +150,9 @@ def run(engines):
     with Session(api) as db:
         assert command(db,value)==result;db.commit()
     assert state()==after
+    from pg16_stock_loss_review_recovery_gate import run as recovery_checks
+    recovery=recovery_checks(engines,stage='regional',reviewer_id=reviewer_id,write_grant_id=grant_id,
+        command=value,missing_command=request(order_ids[1]),result=result,service=reviews)
     with Session(owner) as db:
         requester=db.get(User,requester_id);previous_status=requester.account_status;requester.account_status='suspended';db.commit()
     try:
@@ -174,4 +177,4 @@ def run(engines):
     print('PG16 regional loss: independent review/replay, raw refusals, expiry, exact lock race and departed-requester handling PASS',flush=True)
     return dict(passed=True,rawCommitRollbacks=10,commitExpiryRollback=True,exactConcurrentBlockerObserved=True,
         idempotentReplay=True,stockUnchanged=True,requesterSuspensionAllowed=True,immutableFacts=True,
-        approvalStage='awaiting_headquarters',disposalCompleted=False)
+        approvalStage='awaiting_headquarters',disposalCompleted=False,requestRecovery=recovery)
