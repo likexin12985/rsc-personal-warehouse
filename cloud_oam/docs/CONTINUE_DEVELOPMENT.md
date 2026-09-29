@@ -1,8 +1,30 @@
 # RSC 个人仓开发交接
 
-核对时间：2026-09-29 19:30（Asia/Shanghai）。本页为接续入口，覆盖历史文档中的旧 HEAD、候选和“当前状态”；每次接手仍须重新检查 Git、CI 和实际进程。本轮已同步 0155，新增报损提交/封存 HTTP 接口完成本地验证，尚未部署。
+核对时间：2026-09-29 23:44（Asia/Shanghai）。本页为接续入口；历史记录不覆盖当前 Git、准确 SHA 的 CI 和生产回读。
 
-**当前结论：0155 已随交接提交 `8990ebd` 推送，客户端 CI 成功，14 个报损 PG16 分支成功；综合 PG16 和静态门禁未齐。新增报损提交/封存 HTTP 已通过数量/SN 原生验证与 86 项路由回归，其提交结果见本地证据。正式上线仍未放行。**
+**当前结论：报损收货、独立入库和请求恢复已完成本地验证；HTTP 提交/封存基础提交为 `3fa414f`。PG16 拆分已完成本地聚焦及共享 control 原生验证，等待准确新 SHA 的完整远端门禁。最近核验远端为 `8990ebd`，静态三片已失败、旧 runtime 仍在运行；正式上线未放行。**
+
+## 0. 接手先看
+
+1. **继续使用现有工作树。** HTTP 基础提交 `3fa414f`，后续门禁修复提交以当前 `git log` 和 `artifacts/pg16-runtime-suites/commit-evidence.json` 为准。远端需重新读取；禁止覆盖本地改动。
+2. **原生 control 已结束。** 会话 `99829` 实际返回 exit 0；`run-8v_g0tog` 为 stopped/checks=passed/serverExitCode=0，`checks.json` 为 passed/sourceDrift=[]。不要重启旧库或继续轮询已结束句柄。
+3. **本批证据：** 102 项聚焦、12 项调用点复验（有重叠不相加）；1725 份非文档源码零漂移；共享 control 1345.474 秒通过。迁移前缀、库存主体与清理保持原有完整 AST 顺序；control 仅新增真实前置历史及保留证明。详见第 2 节。
+4. **下一步先取得远端证据。** 核对旧 CI 尚需保存的日志，再推送经验证提交并核验新 SHA 的三个 runtime、三个静态、16 个报损分支及客户端。之后补区域/总部审批的请求恢复与封存、报损发件侧。不要重复实现已完成的收货与入库。
+
+本批涉及以下 10 个文件；提交状态以 Git 为准，路径相对仓库根：
+
+| 文件 | 本批用途 |
+| --- | --- |
+| `.github/workflows/postgresql16-release-gate.yml` | runtime 三分支及汇总 |
+| `cloud_oam/backend/tests/test_postgresql16_release_gate.py` | 分支入口、共享 control 和历史降级阻断选择 |
+| `cloud_oam/backend/tests/test_pg16_workflow_topology.py` | 分支及未授权入口回归 |
+| `cloud_oam/backend/tests/test_stocktake_history_pg_acceptance.py` | 历史检查指向新迁移入口 |
+| `cloud_oam/backend/tests/pg16_runtime_control_history.py`（新） | 真实前置库存和历史不变性证明 |
+| `cloud_oam/backend/tests/test_pg16_retention_selection.py`（新） | 降级路径选择回归 |
+| `cloud_oam/scripts/run_local_pg16_control_runtime_checks.py`（新） | 自有临时 PG16 共享 control 验证 |
+| `cloud_oam/docs/CONTINUE_DEVELOPMENT.md` | 当前接续入口 |
+| `cloud_oam/docs/FORMAL_V1_BASELINE_GAP_AUDIT_20260923.md` | 正式基线剩余缺口 |
+| `cloud_oam/docs/FORMAL_V1_UAT_AND_LAUNCH_EVIDENCE_20260925.md` | UAT 和生产证据边界 |
 
 ## 1. 工作位置与固定边界
 
@@ -21,14 +43,39 @@
 | --- | --- | --- |
 | 0155 功能提交 | `d76efd135bb7e0f476a187809e14fd5b41e3c235` | 报损收货、独立入库与恢复 |
 | 已推送/远端分支头 | `8990ebddfe16d11265e7c6524fa7357d2771e26e` | 包含 0155 和交接整理；Git Data API 保留原 commit/tree，force=false，已精确回读 |
-| 本轮提交/封存 HTTP | 基于 `8990ebd`，本地验证完成 | `artifacts/loss-http-submit/`；实际提交见 `git log` 及 `commit-evidence.json`，未推送到远端前不继承任何 CI |
+| HTTP 基础提交 | `3fa414f43a9818a424c34401fcb7964f64cc7856`，尚无该 SHA 远端门禁 | `artifacts/loss-http-submit/commit-evidence.json`；本地证据不能继承为该 SHA 的远端 CI |
+| PG16 拆分候选 | runtime 三分支、workflow/拓扑测试、真实前置库存夹具及原生 control 运行器 | 102 项聚焦、12 项调用点复验和共享 control 原生通过；完整新 SHA CI 待验证 |
 | 迁移 head | `20261204_0155`，父节点 `20261203_0154` | 本轮 HTTP 接线不新增迁移或生产权限种子 |
 | 8990ebd 客户端 CI | `36560246356`：completed / success | [准确运行](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36560246356) |
-| 8990ebd PG16 CI | `36560246385`：整体仍运行；14 个报损分支成功 | [准确运行](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36560246385)；runtime/静态 2 仍运行，静态 0/1 已失败，原始日志确认 runner 收到 shutdown signal 后取消；不能视为通过 |
+| 8990ebd PG16 CI | `36560246385`：整体仍运行；14 个报损分支成功 | [准确运行](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36560246385)；runtime 仍运行，静态 0/1/2 已失败；0/1 原始日志确认 runner 收到 shutdown signal 后取消，2 的日志 API 返回 404/BlobNotFound，失败原因未确认；不能视为通过 |
 | 上一版 a03761e CI 终态 | `36521873050`：failure | [历史运行](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36521873050)；静态 0 runner 失联，runtime 超过 6 小时取消，12 个报损分支成功 |
 | 生产状态 | 未部署本批，没有正式上线验收 | 本地、准确 SHA CI、真实业务 UAT、生产回读分别核验 |
 
 Git 推送超时后先回读远端仍为 a03761e，才使用既有 Git Data API 精确提交并回读 8990ebd；没有 force push。证据：`artifacts/continue-0155-release/push-result.json`。上一版 runtime 原始日志和阶段耗时分析同目录；222 个阶段完成，但后续检查未执行，不能按通过验收。退回出库单阶段约 2250 秒，首次账户边界约 1430 秒，累计触及 6 小时上限；需要在保留全部场景和迁移顺序依赖的前提下拆分综合门禁，不能仅跳过慢检查。
+
+### 接续断点：PG16 拆分本地验证完成，远端待验
+
+本批代码把原单体入口抽成 `_run_migration_suite()`、`_run_inventory_suite()`、`_run_control_suite()`，由 `RSC_PG16_RUNTIME_SUITE` 显式选择；inventory/control 各自准备全新临时库。原测试入口名称保留。
+
+工作流现已接上三个必需分支 `migrations / inventory / control`，每个分支使用独立的新 PG16 服务，`fail-fast: false`，最终汇总继续要求 runtime/loss/static 全部成功。入口未授权、缺失或非法 suite 均在数据库准备前失败；业务异常原样传到门禁。**本地聚焦通过不等于三个分支已在准确 SHA 上跑通。**
+
+- `artifacts/pg16-runtime-suites/focused-v3.log`：拓扑、真实 pytest 入口、历史阻断版本选择、阶段记录和完整历史测试 **102 passed**。早期 `static-v1.log` 为 35 项；两组有重叠，不能相加，也不与旧 HTTP 的 86/13 项混算。
+- `extraction-v3.json`：对照本地 HEAD 原入口，67 个断言、749 个调用的 AST 多重集无遗漏；此前 `extraction-v2.json` 还核对抽取函数无未定义全局依赖。旧 `extraction-proof.json` 与 `original-runtime.py` 继续保留。文本统计不等于数据库语义验证。
+- 已抽出 `_run_control_business_checks()` 供 CI/native 共同执行；`pg16_runtime_control_history.py` 通过真实来源发布、实盘、区域/总部复核、过账和差异复核建立一件既有库存，单独生成通知事实，末尾核对旧库存/通知/outbox 行未改动。没有直接写余额、跳过触发器或调用真实通知渠道。
+- 新 `scripts/run_local_pg16_control_runtime_checks.py` 只接受 PostgreSQL 二进制路径，创建自有 Unix socket 临时库；仅将共享检查的连接坐标绑定到该实例，不伪造 GitHub 环境、不运行 CI 破坏性 bootstrap、不接外部 DSN。
+- `native-control-v1.log`：实际迁移及一件库存前置已完成，但夹具误把期初 outbox 等同通知接收人记录，断言失败。已改为单独调用通知事实服务；原实例 `run-y23c1gyi` 已 stopped / checks=failed / serverExitCode=0，不能计通过。
+- `native-control-v2.log`：在 `run-g1oblc0p` 完成真实前置库存、来源发布/权限、控制数标准化、并发和请求封存检查；进入每日对账后，旧门禁把 0128 封存错误当成降至 0129 的首个阻断。PG 日志实际返回 **0130 daily facts retention**，证明是门禁的路径判断错误。实例已 stopped / checks=failed / serverExitCode=0，不能记为通过。
+- 已修复 `_retention_chain_blocker()`：只选择目标降级实际经过、且比本次必验版本更高的已存在阻断；必验版本自身的真实拒绝和更老迁移独立证明保持不变。新增测试覆盖每日/导入目标、非相邻降级、0149/0151 较新事实优先与非法范围。旧迁移未改。
+- 已通过真实 pytest 子进程复现原入口缺少安全确认时 **1 skipped / exit 0**（`unacknowledged-entry-v1.log`）。现移除模块级跳过，入口仍先要求真实 hosted 确认；未确认返回 exit 1 且不进入数据库。相关回归包含在 102 项中，不伪造 CI 环境来执行本机破坏性门禁。
+- 旧调用点回归 v1：**11 passed / 1 failed / 294 deselected**；唯一失败是 `test_stocktake_history_pg_acceptance.py:97` 仍检查旧单体入口。已改查迁移分支，完整该文件已在 102 项中通过；其他旧调用点的 v3 复验已退出 0：**12 passed / 294 deselected**，见 `callsite-regression-v3.log`；与 102 项有重叠，不累加。
+- `native-control-v3.log` / `native-terminal-v3.json`：全新 `run-8v_g0tog` 完整共享 control **passed**，进程 exit 0，数据库 stopped/checks=passed/serverExitCode=0，结束于 2026-09-29 20:36:35（北京时间），本次实际回收终态于 23:42。包含来源、控制数、请求封存、每日 12 场景、短信配置、真实 XLSX 期初、报表和导入历史保留；未发送真实短信。1725 份源码与开始清单一致，sourceDrift=[]，前置库存/通知/outbox 历史保留。
+- `ordered-extraction-v3.json`：直接对照 Git `3fa414f`，106 条迁移顶层语句完全一致；库存 196 条顶层语句及引擎/清理结构完全一致；control 尾部除三条新增历史准备/校验语句外 AST 顺序完全一致。此证据证明抽取顺序，不能代替 hosted 三分支运行。
+- `safety-v3.log`：修复后 PASS（1903 文件）；交接后同范围安全检查亦通过。无本批业务迁移、生产权限种子或供应商实发。
+- 当前本地提交依据已齐；准确新 SHA 的完整三分支、静态三片、16 个报损分支和客户端 CI 仍须远端验证。前两轮失败记录保留，不计通过。
+- workflow 的 `cancel-in-progress: true` 会在同分支新推送时取消旧运行。先重新核验在跑 CI 与证据；不要为赶进度中断尚需取证的运行。
+- 旧 `artifacts/continue-0155-release/push-exact-api.py` 固定旧 BASE 和提交数，不可原样重跑。常规 push 失败须先精确回读远端，再决定恢复方式。
+
+本次只读 GitHub 快照、未提交文件清单、源码漂移核验和原生阶段观察保存在 `artifacts/handoff-20260929-202715/ci-snapshot.json`、`verification.json`。该 20:27 快照中 runtime/静态 2 仍运行；23:42 重新核验静态 2 也已失败、runtime 仍运行，客户端和 14 个报损分支成功。早期 `artifacts/handoff-20260929/` 保留。快照均只代表观察时点，运行中的检查必须重新取终态。
 
 ## 3. 最新一批完成了什么
 
@@ -42,7 +89,7 @@ Git 推送超时后先回读远端仍为 a03761e，才使用既有 Git Data API 
 2. 收货只保存实物验收，不变更库存；独立入库经统一流水过账，覆盖数量件和 SN、新件区域账户首次创建。
 3. 客户端恢复记录按报损处置与包裹隔离，保留原 request/hash；网络结果未知、切页及再次进入先查询。收货和入库分别封存，迟到命令拒绝。
 4. 0155 迁移补齐 PostgreSQL 当前授权与历史事实证明、精确通知接收人和来源互斥；内部证明函数不授 API 直接执行权。SQLite 对不能等价证明的报损写入失败关闭。未修改旧迁移。
-5. CI 新增数量/SN `return_receipt` 分支；当前源码报损矩阵为 14 个分支。远端 a03761e 的 12 个分支不包含本批增量。
+5. 0155 CI 新增数量/SN `return_receipt`，已推送的 `8990ebd` 报损矩阵为 14 分支；本地 `3fa414f` 再增加 `submission_http` 后为 16 分支。远端 a03761e 的 12 分支不包含这些增量。
 
 | 代码入口 | 用途 |
 | --- | --- |
@@ -80,8 +127,8 @@ Git 推送超时后先回读远端仍为 a03761e，才使用既有 Git Data API 
 
 | 顺序 | 工作 | 完成标准 |
 | --- | --- | --- |
-| 1 | 解决综合门禁累计超过 6 小时及静态 runner 取消 | 上一版终态已定位；当前 CI 继续取证。按依赖拆分并证明所有原场景仍执行，保留聚合失败关闭；不能放宽或删减门禁 |
-| 2 | 完成本轮 HTTP 增量提交及准确版本远端门禁 | 本地证据已齐；准确提交回读后验证客户端、完整 runtime/静态及 16 个报损分支；当前正在运行的旧 SHA 不被提前取消 |
+| 1 | 发布已验证的 PG16 拆分并调查静态 runner 取消 | 本地 control 与完整抽取顺序已证明；准确新 SHA 仍须通过三个 runtime 和静态矩阵。0/1 日志只证实 shutdown signal，静态 2 日志 API 返回 404/BlobNotFound，失败原因待取证 |
+| 2 | 验证准确版本远端门禁 | HTTP 增量已提交 `3fa414f`，无需重复提交；拆分证据齐备后形成新提交，再推送并验证准确 SHA 的客户端、完整 runtime/静态及 16 个报损分支 |
 | 3 | 补报损发起/审批正式接口及请求恢复 | 提交及永久封存 HTTP 本轮已补；[报损路由](../backend/app/routers/formal_stock_losses.py) 的区域/总部审批及相应请求恢复仍缺，客户端完整报损流仍缺。沿用角色/范围、同键原子性及旧权限拒绝 |
 | 4 | 补报损发件侧出库、发运接口/客户端恢复 | [退回路由](../backend/app/routers/formal_stock_returns.py) 发件坐标仍要求工单；使用精确报损来源，分别回查/封存，数量/SN 与未知结果端到端验收 |
 | 5 | 补报废反向、人员间调拨及离职交接 | 报废审批/处置/反向分别留事实；独立人员调拨闭环；交接案、唯一未结、双方确认、未结事项清理、个人仓归零及双层关闭 |
@@ -111,6 +158,20 @@ git diff --stat
 git diff --check
 ```
 
+已完成的 control 证据可只读查看（工作目录 `cloud_oam/`）：
+
+```sh
+cat artifacts/pg16-runtime-suites/native-terminal-v3.json
+cat artifacts/local-control-runtime-pg16/checks/run-8v_g0tog/checks.json
+cat artifacts/local-control-runtime-pg16/checks/run-8v_g0tog/cluster-state.json
+```
+
+仅有相关源码修改或新失败时再创建新自有实例；不得重启旧库：
+
+```sh
+.venv/bin/python scripts/run_local_pg16_control_runtime_checks.py --postgres-bin artifacts/pg16-native-20260920/install/bin
+```
+
 阅读基线后，先查本页证据目录及 GitHub 链接。若需要重跑本地报损 PG16，在 `cloud_oam/` 使用已安装的 PG16 二进制；例：
 
 ```sh
@@ -118,6 +179,17 @@ git diff --check
 ```
 
 运行前确认该路径存在、测试配置及 Node 可用，冻结非文档源码；脚本自动创建并停止两类自有实例，保存完整终态。不要为了文档改动重复运行整批业务门禁。
+
+HTTP 提交切片的聚焦命令（仅在需要验证相关代码时运行）：
+
+```sh
+# 工作目录：cloud_oam/backend
+../.venv/bin/python -m pytest -q tests/test_stock_loss_write_routes.py tests/test_pg16_workflow_topology.py
+# 工作目录：cloud_oam
+.venv/bin/python scripts/run_local_pg16_stock_loss_http_checks.py --postgres-bin artifacts/pg16-native-20260920/install/bin
+```
+
+以上聚焦命令不能替代完整 runtime 拆分验证；禁止设置虚假的 GitHub 环境标记来绕过本机破坏性测试限制。文档交接时只核对既有结果；之后的本轮拆分聚焦及原生验证记录在第 2 节，不能与旧功能测试混算。
 
 - [正式基线缺口审计](FORMAL_V1_BASELINE_GAP_AUDIT_20260923.md)：当前业务缺口与详细历史审计。
 - [V1.0 UAT 与上线证据矩阵](FORMAL_V1_UAT_AND_LAUNCH_EVIDENCE_20260925.md)：现场验收清单；旧日期的候选状态不覆盖本页。

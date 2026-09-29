@@ -93,7 +93,7 @@ def test_pg_history_owner_probe_covers_real_acl_wait_and_ancestor_union():
         "stocktake_close_completions", '"files"',
     ):
         assert required in source
-    driver = inspect.getsource(gate.test_postgresql16_migration_acl_concurrency_and_kill_gate)
+    driver = inspect.getsource(gate._run_migration_suite)
     assert "_assert_0062_empty_history_owner_downgrade_and_reupgrade()" in driver
 
 

@@ -1,6 +1,7 @@
 """The named release check cannot pass when any independent gate is absent."""
 from itertools import product
 from pathlib import Path
+import os
 import re
 import subprocess
 import sys
@@ -41,6 +42,9 @@ def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_a
     assert not re.search(r'^    (needs|if|continue-on-error):',runtime+'\n'+static+'\n'+loss,re.MULTILINE)
     assert 'python -m pytest -q tests/test_postgresql16_release_gate.py -s' in runtime
     assert '    timeout-minutes: 360\n' in runtime
+    assert '    strategy:\n      fail-fast: false\n      matrix:\n        suite: [migrations, inventory, control]\n' in runtime
+    assert 'RSC_PG16_RUNTIME_SUITE: ${{ matrix.suite }}' in runtime
+    assert 'continue-on-error:' not in runtime and 'exclude:' not in runtime
     assert 'RSC_PG16_GATE_ACKNOWLEDGE_DISPOSABLE: I_UNDERSTAND_THIS_DATABASE_IS_EPHEMERAL' in runtime
     assert 'postgres:16-alpine@sha256:' in runtime
     assert '    strategy:\n      fail-fast: false\n      matrix:\n        tracking: [quantity, serial]\n' in loss
@@ -51,7 +55,8 @@ def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_a
     assert '        working-directory: cloud_oam/backend\n' in loss
     # An independent service per matrix leg must retain the original fresh
     # database, role passwords, loopback host and acknowledgement boundary.
-    assert runtime.split('    services:\n',1)[1].split('    steps:\n',1)[0] == (
+    assert runtime.split('    services:\n',1)[1].split('    steps:\n',1)[0].replace(
+        '      RSC_PG16_RUNTIME_SUITE: ${{ matrix.suite }}\n', '') == (
         loss.split('    services:\n',1)[1].split('    steps:\n',1)[0].replace(
             '      RSC_PG16_LOSS_TRACKING: ${{ matrix.tracking }}\n','').replace(
             '      RSC_PG16_LOSS_FLOW: ${{ matrix.flow }}\n',''))
@@ -89,6 +94,83 @@ def test_static_shards_discover_every_test_module_exactly_once():
         observed.extend(selected)
     assert len(observed)==len(set(observed))
     assert set(observed)==expected-runtimes
+
+
+def test_runtime_dispatch_rejects_unacknowledged_context_before_any_database(monkeypatch):
+    import test_postgresql16_release_gate as gate
+    monkeypatch.setattr(gate, '_gate_enabled', lambda: False)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('unacknowledged runtime reached suite selection or database')
+    monkeypatch.setattr(gate, '_selected_runtime_suite', forbidden)
+    monkeypatch.setattr(gate, '_assert_fresh_disposable_postgresql16', forbidden)
+    with pytest.raises(pytest.fail.Exception, match='acknowledged disposable hosted'):
+        gate.test_postgresql16_migration_acl_concurrency_and_kill_gate()
+
+
+def test_unacknowledged_pytest_entry_fails_instead_of_reporting_a_green_skip():
+    # Exercise pytest's real collection/mark handling, not just a direct call.
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith('RSC_PG16_')
+                   and key not in ('GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'PYTEST_ADDOPTS')}
+    result = subprocess.run([sys.executable, '-m', 'pytest', '-q',
+        'tests/test_postgresql16_release_gate.py'], cwd=ROOT/'cloud_oam/backend',
+        env=environment, capture_output=True, text=True, timeout=90)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'acknowledged disposable hosted database' in result.stdout
+    assert '1 failed' in result.stdout and '1 skipped' not in result.stdout
+
+
+@pytest.mark.parametrize('suite', [None, '', 'all', 'inventory,control', 'production'])
+def test_runtime_dispatch_rejects_missing_or_unknown_suite_before_database(monkeypatch, suite):
+    import test_postgresql16_release_gate as gate
+    monkeypatch.setattr(gate, '_gate_enabled', lambda: True)
+    if suite is None:
+        monkeypatch.delenv('RSC_PG16_RUNTIME_SUITE', raising=False)
+    else:
+        monkeypatch.setenv('RSC_PG16_RUNTIME_SUITE', suite)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('invalid runtime selection reached database')
+    for name in ('_run_migration_suite', '_run_inventory_suite', '_run_control_suite'):
+        monkeypatch.setattr(gate, name, forbidden)
+    with pytest.raises(ValueError, match='explicit migrations, inventory or control'):
+        gate.test_postgresql16_migration_acl_concurrency_and_kill_gate()
+
+
+@pytest.mark.parametrize('suite', ['migrations', 'inventory', 'control'])
+def test_runtime_dispatch_runs_only_selected_suite_and_propagates_failure(monkeypatch, suite):
+    import test_postgresql16_release_gate as gate
+    monkeypatch.setattr(gate, '_gate_enabled', lambda: True)
+    monkeypatch.setenv('RSC_PG16_RUNTIME_SUITE', suite)
+    calls = []
+    def selected():
+        calls.append(suite)
+        raise RuntimeError('selected suite failed')
+    def forbidden():
+        raise AssertionError('executed an unselected suite')
+    for key, name in (('migrations', '_run_migration_suite'),
+                      ('inventory', '_run_inventory_suite'), ('control', '_run_control_suite')):
+        monkeypatch.setattr(gate, name, selected if key == suite else forbidden)
+    with pytest.raises(RuntimeError, match='selected suite failed'):
+        gate.test_postgresql16_migration_acl_concurrency_and_kill_gate()
+    assert calls == [suite]
+
+
+@pytest.mark.parametrize('suite', ['migrations', 'inventory', 'control'])
+def test_runtime_suite_proves_fresh_database_before_bootstrap(monkeypatch, suite):
+    import test_postgresql16_release_gate as gate
+    class BoundaryReached(Exception):
+        pass
+    def boundary():
+        raise BoundaryReached()
+    def forbidden(*args, **kwargs):
+        raise AssertionError('runtime suite skipped fresh database guard')
+    monkeypatch.setattr(gate, '_assert_fresh_disposable_postgresql16', boundary)
+    monkeypatch.setattr(gate, '_bootstrap_roles', forbidden)
+    monkeypatch.setattr(gate, 'create_engine', forbidden)
+    entry = {'migrations': gate._run_migration_suite, 'inventory': gate._run_inventory_suite,
+             'control': gate._run_control_suite}[suite]
+    with pytest.raises(BoundaryReached):
+        entry()
 
 
 def test_pg16_and_static_jobs_install_the_image_runtime_hash_lock():

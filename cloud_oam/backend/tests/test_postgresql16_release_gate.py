@@ -428,10 +428,8 @@ def _gate_enabled() -> bool:
     )
 
 
-pytestmark = pytest.mark.skipif(
-    not _gate_enabled(),
-    reason="requires the explicitly acknowledged disposable PostgreSQL 16 gate",
-)
+# Static discovery excludes this explicit release entry. An unacknowledged
+# invocation must fail in the entry function, never report a successful skip.
 
 
 def _required_environment(name: str) -> str:
@@ -713,6 +711,38 @@ def _run_alembic(
     return completed
 
 
+def _retention_chain_blocker(destination, *, blocking_revision, blocker, retained):
+    """Choose the newest proved fence actually crossed by this downgrade.
+
+    The requested guard is itself a required fence. Facts below it cannot mask
+    it, even when those older facts are also present in the same database.
+    """
+    def number(revision):
+        match = re.fullmatch(r"[0-9]{8}_([0-9]{4})", revision)
+        if match is None:
+            raise ValueError("retention requires an explicit numbered revision")
+        return int(match.group(1))
+
+    floor, required = number(destination), number(blocking_revision)
+    if not floor < required <= number(HEAD_REVISION):
+        raise ValueError("retention guard must be crossed by the requested downgrade")
+    candidates = [(required, blocker)]
+    for name, revision, message in (
+        ('loss_dispositions', '20261130_0151', '0151 disposition custody proof history requires retention'),
+        ('return_inbounds', '20261128_0149', '0149 return inbound account admission history requires retention'),
+        ('opening_seals', '20261107_0128', '0128 downgrade blocked: original request seals must be retained'),
+        ('opening_actors', '20261105_0126', '0126 downgrade blocked: opening authorization evidence must be retained'),
+        ('zero_openings', '20261101_0122', '0122 downgrade blocked: zero-control opening history must be retained'),
+        ('published_controls', '20261031_0121', '0121 downgrade blocked: control publications must be retained'),
+        ('source_files', '20261030_0120', '0120 downgrade blocked: source evidence or review facts must be retained'),
+        ('control_facts', '20261022_0112', '0112 downgrade blocked: control preparation facts must be retained'),
+        ('sealed', '20261019_0109', '0109 downgrade blocked: notification target evidence must be retained'),
+    ):
+        if retained.get(name, False) and number(revision) > required:
+            candidates.append((number(revision), message))
+    return max(candidates, key=lambda item: item[0])[1]
+
+
 def _assert_retention_downgrade(
     destination: str, *, blocking_revision: str, blocker: str,
     retention_guard: Callable[[], None] | None = None,
@@ -739,20 +769,15 @@ def _assert_retention_downgrade(
         source_files = connection.execute("SELECT EXISTS (SELECT 1 FROM public.files WHERE metadata_jsonb->>'purpose'='source_configuration_evidence')").fetchone()[0]
         control_facts = connection.execute("SELECT EXISTS (SELECT 1 FROM public.inventory_control_preparations)").fetchone()[0]
         sealed = connection.execute("SELECT EXISTS (SELECT 1 FROM public.notification_events WHERE target_manifest_sha256 IS NOT NULL)").fetchone()[0]
-    chain_blocker = (
-        "0151 disposition custody proof history requires retention" if loss_dispositions else
-        "0149 return inbound account admission history requires retention" if return_inbounds else
-        "0128 downgrade blocked: original request seals must be retained" if opening_seals else
-        "0126 downgrade blocked: opening authorization evidence must be retained" if opening_actors else
-        "0122 downgrade blocked: zero-control opening history must be retained" if zero_openings else
-        "0121 downgrade blocked: control publications must be retained" if published_controls else
-        "0120 downgrade blocked: source evidence or review facts must be retained" if source_files else
-        "0112 downgrade blocked: control preparation facts must be retained" if control_facts else
-        "0109 downgrade blocked: notification target evidence must be retained" if sealed else blocker
-    )
+    chain_blocker = _retention_chain_blocker(destination, blocking_revision=blocking_revision,
+        blocker=blocker, retained=dict(loss_dispositions=loss_dispositions,
+            return_inbounds=return_inbounds, opening_seals=opening_seals,
+            opening_actors=opening_actors, zero_openings=zero_openings,
+            published_controls=published_controls, source_files=source_files,
+            control_facts=control_facts, sealed=sealed))
     completed = _run_alembic("downgrade", destination, expect_success=False)
     output = completed.stdout + completed.stderr
-    assert chain_blocker in output
+    assert chain_blocker in output, f"expected first retention boundary: {chain_blocker}"
     if chain_blocker != blocker:
         if retention_guard is None:
             files = tuple((CLOUD_ROOT / "backend/alembic/versions").glob(f"{blocking_revision}_*.py"))
@@ -19601,7 +19626,25 @@ def _assert_0091_work_order_account_migration_roundtrip():
     assert catalog() == before and _current_revision() == HEAD_REVISION
 
 
-def test_postgresql16_migration_acl_concurrency_and_kill_gate():
+def _selected_runtime_suite():
+    suite = os.getenv("RSC_PG16_RUNTIME_SUITE", "")
+    if suite not in ("migrations", "inventory", "control"):
+        raise ValueError("runtime gate requires an explicit migrations, inventory or control suite")
+    return suite
+
+
+def _prepare_runtime_suite():
+    """Each non-migration leg starts from its own acknowledged empty cluster."""
+    run_gate_phase('_assert_fresh_disposable_postgresql16', lambda: _assert_fresh_disposable_postgresql16())
+    run_gate_phase('_bootstrap_roles', lambda: _bootstrap_roles())
+    run_gate_phase('_provision_edge_receiver_role', lambda: _provision_edge_receiver_role())
+    run_gate_phase('_run_alembic', lambda: _run_alembic("upgrade", "head"))
+    assert _current_revision() == HEAD_REVISION
+    run_gate_phase('_provision_and_verify_deployment_acl', lambda: _provision_and_verify_deployment_acl())
+    run_gate_phase('_provision_and_verify_oam_work_order_source', lambda: _provision_and_verify_oam_work_order_source())
+
+
+def _run_migration_suite():
     run_gate_phase('_assert_fresh_disposable_postgresql16', lambda: _assert_fresh_disposable_postgresql16())
     run_gate_phase('_bootstrap_roles', lambda: _bootstrap_roles())
     run_gate_phase('_assert_edge_receiver_provision_rolls_back_on_cross_database_connect', lambda: _assert_edge_receiver_provision_rolls_back_on_cross_database_connect())
@@ -19739,6 +19782,10 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     assert _current_revision() == HEAD_REVISION
     run_gate_phase('_provision_and_verify_deployment_acl', lambda: _provision_and_verify_deployment_acl())
     run_gate_phase('_provision_and_verify_oam_work_order_source', lambda: _provision_and_verify_oam_work_order_source())
+
+
+def _run_inventory_suite():
+    _prepare_runtime_suite()
     api_engine = create_engine(
         _sqlalchemy_url(
             role="star_oam_api",
@@ -20273,163 +20320,225 @@ def test_postgresql16_migration_acl_concurrency_and_kill_gate():
         run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261127_0148", blocking_revision="20261128_0149",
             blocker="0149 return inbound account admission history requires retention"))
         run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
-        # New permanent control preparations follow every older retention proof
-        # so 0112 cannot hide a missing predecessor downgrade boundary.
-        from pg16_inventory_control_preparation_gate import assert_inventory_control_preparation_gate, snapshot as control_preparation_snapshot
-        control_owner_engine = create_engine(_sqlalchemy_url(
-            role="star_oam_migrator", password=_role_password("star_oam_migrator")))
-        control_backup_engine = create_engine(_sqlalchemy_url(
-            role="star_oam_backup", password=_role_password("star_oam_backup")))
-        try:
-            run_gate_phase('assert_inventory_control_preparation_gate', lambda: assert_inventory_control_preparation_gate(control_owner_engine, edge_engine, api_engine,
-                projector_engine, control_backup_engine, _validate_runtime_security))
-            control_history = control_preparation_snapshot(control_owner_engine)
-            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261021_0111", blocking_revision="20261022_0112",
-                blocker="0112 downgrade blocked: control preparation facts must be retained"))
-            assert _current_revision() == HEAD_REVISION and control_preparation_snapshot(control_owner_engine) == control_history
-            from pg16_inventory_control_authority_gate import assert_inventory_control_authority_gate, snapshot as control_authority_snapshot
-            run_gate_phase('assert_inventory_control_authority_gate', lambda: assert_inventory_control_authority_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
-            authority_history = control_authority_snapshot(control_owner_engine)
-            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261022_0112", blocking_revision="20261023_0113",
-                blocker="0113 downgrade blocked: control authority must be retained"))
-            assert _current_revision() == HEAD_REVISION and control_authority_snapshot(control_owner_engine) == authority_history
-            from pg16_inventory_control_attestation_gate import assert_inventory_control_attestation_gate, snapshot as control_attestation_snapshot
-            from app.edge_database_security import verify_edge_database_boundary
-            run_gate_phase('assert_inventory_control_attestation_gate', lambda: assert_inventory_control_attestation_gate(control_owner_engine, edge_engine, api_engine, projector_engine,
-                control_backup_engine, _validate_runtime_security, verify_edge_database_boundary))
-            attestation_history=control_attestation_snapshot(control_owner_engine)
-            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261023_0113", blocking_revision="20261024_0114",
-                blocker="0114 downgrade blocked: capture receipts must be retained"))
-            assert _current_revision()==HEAD_REVISION and control_attestation_snapshot(control_owner_engine)==attestation_history
-            from pg16_inventory_control_mapping_gate import assert_inventory_control_mapping_gate, snapshot as mapping_snapshot
-            run_gate_phase('assert_inventory_control_mapping_gate', lambda: assert_inventory_control_mapping_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
-            mapping_history=mapping_snapshot(control_owner_engine)
-            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261024_0114", blocking_revision="20261025_0115",
-                blocker="0115 downgrade blocked: mapping decisions must be retained"))
-            assert _current_revision()==HEAD_REVISION and mapping_snapshot(control_owner_engine)==mapping_history
-            from pg16_material_capture_gate import assert_material_capture_gate, snapshot as material_capture_snapshot
-            run_gate_phase('assert_material_capture_gate', lambda: assert_material_capture_gate(control_owner_engine, edge_engine, api_engine, projector_engine,
-                control_backup_engine, _validate_runtime_security, verify_edge_database_boundary))
-            material_history=material_capture_snapshot(control_owner_engine)
-            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261025_0115", blocking_revision="20261026_0116",
-                blocker="0116 downgrade blocked: material transport evidence must be retained"))
-            assert _current_revision()==HEAD_REVISION and material_capture_snapshot(control_owner_engine)==material_history
-            from pg16_material_source_authority_gate import assert_material_source_authority_gate, snapshot as material_authority_snapshot
-            run_gate_phase('assert_material_source_authority_gate', lambda: assert_material_source_authority_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
-            material_authority_history=material_authority_snapshot(control_owner_engine)
-            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261026_0116", blocking_revision="20261027_0117",
-                blocker="0117 downgrade blocked: material source authority must be retained"))
-            assert _current_revision()==HEAD_REVISION and material_authority_snapshot(control_owner_engine)==material_authority_history
-            from pg16_material_source_time_gate import assert_material_source_time_gate
-            unknown_material_id = run_gate_phase('assert_material_source_time_gate', lambda: assert_material_source_time_gate(control_owner_engine, api_engine, control_backup_engine))
-            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261027_0117", blocking_revision="20261028_0118",
-                blocker="0118 downgrade blocked: unknown material source times must be retained"))
-            with control_owner_engine.connect() as checked:
-                assert checked.execute(text('SELECT source_updated_at FROM public.materials WHERE id=:id'),
-                    {'id': unknown_material_id}).one() == (None,)
-            assert _current_revision() == HEAD_REVISION
-            from pg16_material_projection_gate import assert_material_projection_gate, snapshot as material_projection_snapshot
-            control_material_object_id = run_gate_phase('assert_material_projection_gate', lambda: assert_material_projection_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
-            from pg16_material_source_proof_gate import assert_material_source_proof_gate
-            run_gate_phase('assert_material_source_proof_gate', lambda: assert_material_source_proof_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine, fixture_object_id=control_material_object_id))
-            from pg16_inventory_control_normalization_gate import assert_inventory_control_normalization_gate
-            run_gate_phase('assert_inventory_control_normalization_gate', lambda: assert_inventory_control_normalization_gate(control_owner_engine, edge_engine, api_engine, projector_engine, control_backup_engine, fixture_object_id=control_material_object_id, publication_check=True))
-            publication_history=material_projection_snapshot(control_owner_engine)
-            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261028_0118", blocking_revision="20261029_0119",
-                blocker="0119 downgrade blocked: material publications must be retained"))
-            assert _current_revision()==HEAD_REVISION and material_projection_snapshot(control_owner_engine)==publication_history
-            # New immutable request seals come last, so their downgrade fence
-            # cannot conceal any predecessor's retention boundary.
-            from pg16_opening_start_seal_gate import run as check_opening_seals, snapshot as opening_seal_snapshot
-            seal_report = run_gate_phase('check_opening_seals', lambda: check_opening_seals({'star_oam_migrator': control_owner_engine,
-                'star_oam_api': api_engine, 'edge_inbox': edge_engine}))
-            assert seal_report['status'] == 'passed'
-            opening_seal_history = opening_seal_snapshot(control_owner_engine)
-            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade('20261106_0127', blocking_revision='20261107_0128',
-                blocker='0128 downgrade blocked: original request seals must be retained'))
-            assert _current_revision() == HEAD_REVISION and opening_seal_snapshot(control_owner_engine) == opening_seal_history
-        finally:
-            control_owner_engine.dispose()
-            control_backup_engine.dispose()
-        daily_owner_engine = create_engine(
-            _sqlalchemy_url(
-                role="star_oam_migrator",
-                password=_role_password("star_oam_migrator"),
-            ),
-            pool_size=2,
-            max_overflow=0,
-            pool_timeout=5,
-        )
-        daily_admin_engine = create_engine(
-            _admin_sqlalchemy_url(),
-            pool_size=1,
-            max_overflow=0,
-            pool_timeout=5,
-        )
-        try:
-            from pg16_daily_review_runtime import run_with_capture_roles
-
-            def daily_downgrade(destination):
-                result = run_gate_phase('_run_alembic', lambda: _run_alembic("downgrade", destination, expect_success=False))
-                return result.stdout + result.stderr
-
-            daily_result = run_gate_phase('run_with_capture_roles', lambda: run_with_capture_roles(
-                {
-                    "star_oam_migrator": daily_owner_engine,
-                    "star_oam_api": api_engine,
-                    "edge_inbox": edge_engine,
-                },
-                daily_admin_engine,
-                daily_downgrade,
-                assert_retention=lambda destination, blocker: run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade(
-                    destination, blocking_revision={
-                        '20261108_0129': '20261109_0130', '20261110_0131': '20261111_0132',
-                        '20261111_0132': '20261112_0133', '20261112_0133': '20261113_0134',
-                    }[destination], blocker=blocker)),
-            ))
-            assert daily_result["status"] == "passed"
-            assert len(daily_result["cases"]) == 12
-            from pg16_sms_profile_gate import run as run_sms_profile_gate
-
-            sms_profile_result = run_gate_phase('run_sms_profile_gate', lambda: run_sms_profile_gate(daily_owner_engine, api_engine, daily_admin_engine))
-            assert sms_profile_result["status"] == "passed"
-            assert len(sms_profile_result["cases"]) == 9
-            from pg16_opening_fixture_gate import run as run_opening_import_fixture, _count_facts
-            from pg16_inventory_report_full_flow import assert_report_full_flow
-
-            import_fixture = run_gate_phase('run_opening_import_fixture', lambda: run_opening_import_fixture({
-                "star_oam_migrator": daily_owner_engine, "star_oam_api": api_engine,
-                "edge_inbox": edge_engine,
-            }, establish_dynamic_peer=True, require_empty_inventory=False))
-            positive_import = next(case["importJob"] for case in import_fixture["openingPrerequisites"]
-                                   if case["case"] == "positive")
-            assert positive_import["status"] == "passed"
-            assert "advisory-wait-does-not-hold-task-row" in positive_import["cases"]
-            assert {"error-file-job-commit-together", "error-file-job-rollback-together",
-                    "error-recovery-head-only", "error-job-cannot-confirm",
-                    "error-file-job-key-binding-refused"} <= set(positive_import["cases"])
-            run_gate_phase('assert_report_full_flow', lambda: assert_report_full_flow(daily_owner_engine, api_engine))
-            before_import_retention = _count_facts(daily_owner_engine)
-            with daily_owner_engine.connect() as connection:
-                import_jobs_before = connection.scalar(text(
-                    "SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM file_jobs j"))
-                import_files_before = connection.scalar(text(
-                    "SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM files f"))
-            run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261119_0140", blocking_revision="20261120_0141",
-                blocker="0141 existing import jobs require retention and explicit migration"))
-            assert _current_revision() == HEAD_REVISION
-            assert _count_facts(daily_owner_engine) == before_import_retention
-            with daily_owner_engine.connect() as connection:
-                assert connection.scalar(text(
-                    "SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM file_jobs j")) == import_jobs_before
-                assert connection.scalar(text(
-                    "SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM files f")) == import_files_before
-            print("PG16 import persistence, real XLSX confirmation, concurrent lock order, recovery and retention PASS", flush=True)
-        finally:
-            daily_admin_engine.dispose()
-            daily_owner_engine.dispose()
-        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
     finally:
         edge_engine.dispose()
         projector_engine.dispose()
         api_engine.dispose()
+
+
+def _run_control_suite():
+    _prepare_runtime_suite()
+    api_engine = create_engine(
+        _sqlalchemy_url(
+            role="star_oam_api",
+            password=_role_password("star_oam_api"),
+        ),
+        pool_size=4,
+        max_overflow=0,
+        pool_timeout=5,
+    )
+    projector_engine = create_engine(
+        _sqlalchemy_url(
+            role="star_oam_projector",
+            password=_role_password("star_oam_projector"),
+        ),
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=5,
+    )
+    edge_engine = create_engine(
+        _sqlalchemy_url(
+            role=EDGE_RECEIVER_ROLE,
+            password=_role_password(EDGE_RECEIVER_ROLE),
+        ),
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=5,
+    )
+    try:
+        run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
+        run_gate_phase('_validate_projector_security', lambda: _validate_projector_security(projector_engine))
+        run_gate_phase('_validate_edge_security', lambda: _validate_edge_security(edge_engine))
+        run_gate_phase('_assert_cross_database_connections_denied', lambda: _assert_cross_database_connections_denied())
+        run_gate_phase('control_business_checks', lambda: _run_control_business_checks(
+            api_engine, projector_engine, edge_engine))
+    finally:
+        edge_engine.dispose()
+        projector_engine.dispose()
+        api_engine.dispose()
+
+
+def _run_control_business_checks(api_engine, projector_engine, edge_engine):
+    """Shared business checks; caller supplies an already owned, migrated database."""
+    # Historical migration proofs remain in the inventory suite. Recreate
+    # real predecessor publication and stock here before checking appends.
+    from pg16_inventory_control_preparation_gate import assert_inventory_control_preparation_gate, snapshot as control_preparation_snapshot
+    control_owner_engine = create_engine(_sqlalchemy_url(
+        role="star_oam_migrator", password=_role_password("star_oam_migrator")))
+    control_backup_engine = create_engine(_sqlalchemy_url(
+        role="star_oam_backup", password=_role_password("star_oam_backup")))
+    try:
+        from pg16_runtime_control_history import prepare_history, assert_history_preserved
+        predecessor_history = run_gate_phase('prepare_control_predecessor_history', lambda: prepare_history(
+            control_owner_engine, api_engine, edge_engine))
+        run_gate_phase('assert_inventory_control_preparation_gate', lambda: assert_inventory_control_preparation_gate(control_owner_engine, edge_engine, api_engine,
+            projector_engine, control_backup_engine, _validate_runtime_security))
+        control_history = control_preparation_snapshot(control_owner_engine)
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261021_0111", blocking_revision="20261022_0112",
+            blocker="0112 downgrade blocked: control preparation facts must be retained"))
+        assert _current_revision() == HEAD_REVISION and control_preparation_snapshot(control_owner_engine) == control_history
+        from pg16_inventory_control_authority_gate import assert_inventory_control_authority_gate, snapshot as control_authority_snapshot
+        run_gate_phase('assert_inventory_control_authority_gate', lambda: assert_inventory_control_authority_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
+        authority_history = control_authority_snapshot(control_owner_engine)
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261022_0112", blocking_revision="20261023_0113",
+            blocker="0113 downgrade blocked: control authority must be retained"))
+        assert _current_revision() == HEAD_REVISION and control_authority_snapshot(control_owner_engine) == authority_history
+        from pg16_inventory_control_attestation_gate import assert_inventory_control_attestation_gate, snapshot as control_attestation_snapshot
+        from app.edge_database_security import verify_edge_database_boundary
+        run_gate_phase('assert_inventory_control_attestation_gate', lambda: assert_inventory_control_attestation_gate(control_owner_engine, edge_engine, api_engine, projector_engine,
+            control_backup_engine, _validate_runtime_security, verify_edge_database_boundary))
+        attestation_history=control_attestation_snapshot(control_owner_engine)
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261023_0113", blocking_revision="20261024_0114",
+            blocker="0114 downgrade blocked: capture receipts must be retained"))
+        assert _current_revision()==HEAD_REVISION and control_attestation_snapshot(control_owner_engine)==attestation_history
+        from pg16_inventory_control_mapping_gate import assert_inventory_control_mapping_gate, snapshot as mapping_snapshot
+        run_gate_phase('assert_inventory_control_mapping_gate', lambda: assert_inventory_control_mapping_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
+        mapping_history=mapping_snapshot(control_owner_engine)
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261024_0114", blocking_revision="20261025_0115",
+            blocker="0115 downgrade blocked: mapping decisions must be retained"))
+        assert _current_revision()==HEAD_REVISION and mapping_snapshot(control_owner_engine)==mapping_history
+        from pg16_material_capture_gate import assert_material_capture_gate, snapshot as material_capture_snapshot
+        run_gate_phase('assert_material_capture_gate', lambda: assert_material_capture_gate(control_owner_engine, edge_engine, api_engine, projector_engine,
+            control_backup_engine, _validate_runtime_security, verify_edge_database_boundary))
+        material_history=material_capture_snapshot(control_owner_engine)
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261025_0115", blocking_revision="20261026_0116",
+            blocker="0116 downgrade blocked: material transport evidence must be retained"))
+        assert _current_revision()==HEAD_REVISION and material_capture_snapshot(control_owner_engine)==material_history
+        from pg16_material_source_authority_gate import assert_material_source_authority_gate, snapshot as material_authority_snapshot
+        run_gate_phase('assert_material_source_authority_gate', lambda: assert_material_source_authority_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
+        material_authority_history=material_authority_snapshot(control_owner_engine)
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261026_0116", blocking_revision="20261027_0117",
+            blocker="0117 downgrade blocked: material source authority must be retained"))
+        assert _current_revision()==HEAD_REVISION and material_authority_snapshot(control_owner_engine)==material_authority_history
+        from pg16_material_source_time_gate import assert_material_source_time_gate
+        unknown_material_id = run_gate_phase('assert_material_source_time_gate', lambda: assert_material_source_time_gate(control_owner_engine, api_engine, control_backup_engine))
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261027_0117", blocking_revision="20261028_0118",
+            blocker="0118 downgrade blocked: unknown material source times must be retained"))
+        with control_owner_engine.connect() as checked:
+            assert checked.execute(text('SELECT source_updated_at FROM public.materials WHERE id=:id'),
+                {'id': unknown_material_id}).one() == (None,)
+        assert _current_revision() == HEAD_REVISION
+        from pg16_material_projection_gate import assert_material_projection_gate, snapshot as material_projection_snapshot
+        control_material_object_id = run_gate_phase('assert_material_projection_gate', lambda: assert_material_projection_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine))
+        from pg16_material_source_proof_gate import assert_material_source_proof_gate
+        run_gate_phase('assert_material_source_proof_gate', lambda: assert_material_source_proof_gate(control_owner_engine, api_engine, edge_engine, projector_engine, control_backup_engine, fixture_object_id=control_material_object_id))
+        from pg16_inventory_control_normalization_gate import assert_inventory_control_normalization_gate
+        run_gate_phase('assert_inventory_control_normalization_gate', lambda: assert_inventory_control_normalization_gate(control_owner_engine, edge_engine, api_engine, projector_engine, control_backup_engine, fixture_object_id=control_material_object_id, publication_check=True))
+        publication_history=material_projection_snapshot(control_owner_engine)
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261028_0118", blocking_revision="20261029_0119",
+            blocker="0119 downgrade blocked: material publications must be retained"))
+        assert _current_revision()==HEAD_REVISION and material_projection_snapshot(control_owner_engine)==publication_history
+        # New immutable request seals come last, so their downgrade fence
+        # cannot conceal any predecessor's retention boundary.
+        from pg16_opening_start_seal_gate import run as check_opening_seals, snapshot as opening_seal_snapshot
+        seal_report = run_gate_phase('check_opening_seals', lambda: check_opening_seals({'star_oam_migrator': control_owner_engine,
+            'star_oam_api': api_engine, 'edge_inbox': edge_engine}))
+        assert seal_report['status'] == 'passed'
+        opening_seal_history = opening_seal_snapshot(control_owner_engine)
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade('20261106_0127', blocking_revision='20261107_0128',
+            blocker='0128 downgrade blocked: original request seals must be retained'))
+        assert _current_revision() == HEAD_REVISION and opening_seal_snapshot(control_owner_engine) == opening_seal_history
+    finally:
+        control_owner_engine.dispose()
+        control_backup_engine.dispose()
+    daily_owner_engine = create_engine(
+        _sqlalchemy_url(
+            role="star_oam_migrator",
+            password=_role_password("star_oam_migrator"),
+        ),
+        pool_size=2,
+        max_overflow=0,
+        pool_timeout=5,
+    )
+    daily_admin_engine = create_engine(
+        _admin_sqlalchemy_url(),
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=5,
+    )
+    try:
+        from pg16_daily_review_runtime import run_with_capture_roles
+
+        def daily_downgrade(destination):
+            result = run_gate_phase('_run_alembic', lambda: _run_alembic("downgrade", destination, expect_success=False))
+            return result.stdout + result.stderr
+
+        daily_result = run_gate_phase('run_with_capture_roles', lambda: run_with_capture_roles(
+            {
+                "star_oam_migrator": daily_owner_engine,
+                "star_oam_api": api_engine,
+                "edge_inbox": edge_engine,
+            },
+            daily_admin_engine,
+            daily_downgrade,
+            assert_retention=lambda destination, blocker: run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade(
+                destination, blocking_revision={
+                    '20261108_0129': '20261109_0130', '20261110_0131': '20261111_0132',
+                    '20261111_0132': '20261112_0133', '20261112_0133': '20261113_0134',
+                }[destination], blocker=blocker)),
+        ))
+        assert daily_result["status"] == "passed"
+        assert len(daily_result["cases"]) == 12
+        from pg16_sms_profile_gate import run as run_sms_profile_gate
+
+        sms_profile_result = run_gate_phase('run_sms_profile_gate', lambda: run_sms_profile_gate(daily_owner_engine, api_engine, daily_admin_engine))
+        assert sms_profile_result["status"] == "passed"
+        assert len(sms_profile_result["cases"]) == 9
+        from pg16_opening_fixture_gate import run as run_opening_import_fixture, _count_facts
+        from pg16_inventory_report_full_flow import assert_report_full_flow
+
+        import_fixture = run_gate_phase('run_opening_import_fixture', lambda: run_opening_import_fixture({
+            "star_oam_migrator": daily_owner_engine, "star_oam_api": api_engine,
+            "edge_inbox": edge_engine,
+        }, establish_dynamic_peer=True, require_empty_inventory=False))
+        positive_import = next(case["importJob"] for case in import_fixture["openingPrerequisites"]
+                               if case["case"] == "positive")
+        assert positive_import["status"] == "passed"
+        assert "advisory-wait-does-not-hold-task-row" in positive_import["cases"]
+        assert {"error-file-job-commit-together", "error-file-job-rollback-together",
+                "error-recovery-head-only", "error-job-cannot-confirm",
+                "error-file-job-key-binding-refused"} <= set(positive_import["cases"])
+        run_gate_phase('assert_report_full_flow', lambda: assert_report_full_flow(daily_owner_engine, api_engine))
+        before_import_retention = _count_facts(daily_owner_engine)
+        with daily_owner_engine.connect() as connection:
+            import_jobs_before = connection.scalar(text(
+                "SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM file_jobs j"))
+            import_files_before = connection.scalar(text(
+                "SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM files f"))
+        run_gate_phase('_assert_retention_downgrade', lambda: _assert_retention_downgrade("20261119_0140", blocking_revision="20261120_0141",
+            blocker="0141 existing import jobs require retention and explicit migration"))
+        assert _current_revision() == HEAD_REVISION
+        assert _count_facts(daily_owner_engine) == before_import_retention
+        with daily_owner_engine.connect() as connection:
+            assert connection.scalar(text(
+                "SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM file_jobs j")) == import_jobs_before
+            assert connection.scalar(text(
+                "SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM files f")) == import_files_before
+        print("PG16 import persistence, real XLSX confirmation, concurrent lock order, recovery and retention PASS", flush=True)
+        assert_history_preserved(daily_owner_engine, predecessor_history)
+    finally:
+        daily_admin_engine.dispose()
+        daily_owner_engine.dispose()
+    run_gate_phase('_validate_runtime_security', lambda: _validate_runtime_security(api_engine))
+
+
+def test_postgresql16_migration_acl_concurrency_and_kill_gate():
+    # Missing/unknown selection must fail before bootstrap, never turn into a
+    # partial green run. The workflow aggregate requires all three fresh legs.
+    if not _gate_enabled():
+        pytest.fail("runtime gate requires an acknowledged disposable hosted database")
+    suite = _selected_runtime_suite()
+    operation = {"migrations": _run_migration_suite,
+                 "inventory": _run_inventory_suite,
+                 "control": _run_control_suite}[suite]
+    run_gate_phase('runtime_' + suite, operation)

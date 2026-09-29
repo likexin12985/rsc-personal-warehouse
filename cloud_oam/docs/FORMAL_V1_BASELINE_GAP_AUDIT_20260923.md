@@ -1,7 +1,19 @@
 # 正式 V1.0 基线缺口接续审计
 
-> 2026-09-29 19:30：0155 已随 `8990ebd` 推送，客户端及报损 14 分支成功，完整远端门禁未齐。本轮报损提交/封存 HTTP 已完成 86 项路由回归、13 项 CI 拓扑和数量/SN API 角色原生验证；提交证据及现行 CI 见[开发交接](CONTINUE_DEVELOPMENT.md)。以下日期段落保留其历史时点，不能代替当前值。
+> 2026-09-29 23:44 接续：0155 收货、独立入库和请求恢复已随远端 `8990ebd` 推送；HTTP 基础提交为 `3fa414f`。PG16 拆分已有 102 项聚焦、12 项调用点复验及共享 control 原生成功终态（源码零漂移、正常停库）；完整准确新 SHA CI 尚待验证。旧 SHA 静态三片失败、runtime 仍运行。真实 UAT 与正式上线均未放行。提交、证据、断点与后续顺序见[开发交接](CONTINUE_DEVELOPMENT.md)。以下日期段落仅代表历史时点。
 
+
+## 2026-09-29 报损审批接口与恢复的前置缺口复核
+
+本轮在 PG16 原生验证期间只读核对现行服务，确认下一业务切片不能只给审批服务增加 POST 路由：
+
+- `stock_loss_recovery.authorize_lookup()` 和 `_original()` 只允许原报损申请人查自己的提交请求，不能直接充当区域或总部审批人的恢复接口。
+- `verify_regional_loss()`、`approve_headquarters_loss()` 在寻找同键历史结果之前先要求当前审批写权限。因此，写权限撤销后仍有读权限的审批人，不能靠再次 POST 恢复已提交结果；需独立只读回查并核验不可变审批证据。
+- 现有 `StockLossRequestSeal` 属于原报损提交；尚无独立区域/总部审批请求封存事实。审批回查“未找到”不能作为自动重发许可，迟到提交与封存需有数据库级互斥证明。
+- 区域审核必须绑定本区域、原单计划摘要及审核人；总部终审还必须绑定准确区域审核 ID/hash 和每条原明细的处置决定。申请人自审继续禁止。两次审核均为 `stock_effect=none`；终审通过仍为 `disposition_stage=pending`，不等于已经解冻、退回或报废。
+- 正式审批待办/详情、回查/封存、当前权限与历史权限边界、HTTP COMMIT 结果未知和客户端恢复应作为同一可验收切片；真实权限种子与业务开通仍需另行核验，不能因内部服务或合成测试通过就宣称已上线。
+
+源码依据：`backend/app/formal_services/stock_loss_recovery.py`、`stock_loss_regional_reviews.py`、`stock_loss_headquarters_reviews.py`，以及 `backend/app/stock_operation_models.py`、`stock_loss_schemas.py`。这些是尚未实现的接口/恢复缺口，不影响已完成的 0155 收货、独立入库及其恢复证据。
 
 ## 2026-09-29 0155 报损收货、独立入库与原请求恢复（本地验证完成）
 

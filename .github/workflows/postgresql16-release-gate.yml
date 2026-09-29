@@ -29,9 +29,12 @@ concurrency:
 jobs:
   pg16_runtime:
     runs-on: ubuntu-24.04
-    # The retained migration/retention chain exceeded 180 minutes while still
-    # exercising return checks. Keep every assertion and expose phase timings;
-    # the aggregate still requires this complete job to succeed.
+    # Every leg has its own fresh database; all three are required by the
+    # aggregate. Preserve each dependency chain within its selected suite.
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [migrations, inventory, control]
     timeout-minutes: 360
     services:
       postgres:
@@ -48,6 +51,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
+      RSC_PG16_RUNTIME_SUITE: ${{ matrix.suite }}
       RSC_PG16_GATE_ACKNOWLEDGE_DISPOSABLE: I_UNDERSTAND_THIS_DATABASE_IS_EPHEMERAL
       RSC_PG16_GATE_HOST: 127.0.0.1
       RSC_PG16_GATE_PORT: "5432"
