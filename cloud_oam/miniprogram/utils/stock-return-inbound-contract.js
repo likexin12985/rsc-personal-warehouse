@@ -7,6 +7,7 @@ const { canonical, utf8 } = require('./work-order-command')
 const { sha256Hex } = require('./formal-file-upload')
 const { amount, requestId, digest, integer } = require('./stock-return-contract')
 
+const provenance = require('./loss-return-origin')
 const KIND = 'stock_return_inbound'
 const ACTION = 'receive_return'
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
@@ -30,12 +31,12 @@ function requestHash(receiptId, planHash, traceRequestId) {
   const value = { receipt_id: uuid(receiptId), request_id: requestId(traceRequestId), plan_hash: hash(planHash) }
   return sha256Hex(utf8(canonical(value)))
 }
-function validateLine(raw) {
+function validateLine(raw, loss = false) {
   exact(raw, ['receipt_line_id', 'shipment_line_id', 'source_account_id', 'target_account_id', 'material_id', 'condition_code', 'lot_id', 'accepted_qty', 'serial_ids'])
   uuid(raw.receipt_line_id); uuid(raw.shipment_line_id); uuid(raw.source_account_id); uuid(raw.target_account_id); uuid(raw.material_id)
   if (raw.lot_id !== null) uuid(raw.lot_id)
   amount(raw.accepted_qty)
-  if (!['used', 'damaged'].includes(raw.condition_code)) fail()
+  if (!(loss ? ['new', 'used', 'damaged'] : ['used', 'damaged']).includes(raw.condition_code)) fail()
   if (!Array.isArray(raw.serial_ids) || raw.serial_ids.length > 1000) fail()
   const serials = raw.serial_ids.map(uuid).sort()
   if (new Set(serials).size !== serials.length) fail()
@@ -45,7 +46,7 @@ function validateLine(raw) {
 }
 function validatePreview(raw, expected) {
   exact(raw, ['schema_version', 'planning_status', 'receipt_id', 'shipment_id', 'operator_person_id', 'authorization_version',
-    'target_location_id', 'target_custody_assignment_id', 'receipt_plan_hash', 'plan_hash', 'reason', 'checked_at', 'ledger_cursor', 'lines'])
+    'target_location_id', 'target_custody_assignment_id', 'receipt_plan_hash', 'plan_hash', 'reason', 'checked_at', 'ledger_cursor', 'lines', ...(provenance.isLoss(raw) ? ['origin'] : [])])
   if (raw.schema_version !== '1.0' || raw.planning_status !== 'inbound_preview_only'
     || uuid(raw.receipt_id) !== uuid(expected.receiptId) || uuid(raw.shipment_id) !== uuid(expected.shipmentId)
     || uuid(raw.operator_person_id) !== uuid(expected.personId)
@@ -55,7 +56,8 @@ function validatePreview(raw, expected) {
   if (!Number.isSafeInteger(raw.ledger_cursor) || raw.ledger_cursor < 0) fail()
   text(raw.reason, 500)
   if (!Array.isArray(raw.lines) || raw.lines.length > 100) fail()
-  const lines = raw.lines.map(validateLine)
+  if (provenance.isLoss(raw)) provenance.origin(raw.origin)
+  const lines = raw.lines.map(line => validateLine(line, provenance.isLoss(raw)))
   if (new Set(lines.map(row => row.receipt_line_id)).size !== lines.length) fail()
   return Object.freeze({ ...raw, receipt_id: uuid(raw.receipt_id), shipment_id: uuid(raw.shipment_id),
     operator_person_id: uuid(raw.operator_person_id), target_location_id: uuid(raw.target_location_id),

@@ -28,7 +28,8 @@ def test_receipt_runtime_manifest_matches_exact_sources_and_minimum_acl():
         assert table in security.RUNTIME_READ_TABLES & security.RUNTIME_INSERT_TABLES
         assert table not in security.RUNTIME_UPDATE_TABLES | security.RUNTIME_DELETE_TABLES
     for key,digest in m['FUNCTION_HASHES'].items():
-        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key]==digest
+        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key]==current_source_hash(
+            m['revision'],f'public.{key[0]}({key[1]})',m['FUNCTIONS'][key][2])
         assert key in security.MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
         assert (key in security.MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS)==(m['FUNCTIONS'][key][1]=='void')
     for signature,(old,new) in m['_sources']().items():

@@ -1379,7 +1379,11 @@ def _transit_source_change(coordinate):
             'alembic/versions/20261201_0152_stock_loss_derived_returns.py'))
         return_old, return_new = derived_return['_sources']()['public.rsc_require_opening_observation_account_0023()']
         assert disposition_new == return_old
-        return hashlib.sha256(old.encode()).hexdigest(), hashlib.sha256(return_new.encode()).hexdigest(), ((old,return_new,1),)
+        receipt = runpy.run_path(str(Path(__file__).parents[1] /
+            'alembic/versions/20261204_0155_stock_loss_return_receipts.py'))
+        receipt_old, receipt_new = receipt['_sources']()['public.rsc_require_opening_observation_account_0023()']
+        assert return_new == receipt_old
+        return hashlib.sha256(old.encode()).hexdigest(), hashlib.sha256(receipt_new.encode()).hexdigest(), ((old,receipt_new,1),)
     migration = runpy.run_path(str(Path(__file__).parents[1] /
         "alembic/versions/20261012_0102_transit_opening_scopes.py"))
     return migration["SOURCE_CHANGES"].get(f"{coordinate[0]}({coordinate[1]})")
@@ -7315,7 +7319,7 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 448
+    assert len(triggers) == 451
     assert {
         (row['trigger_name'], row['table_name'], row['function_name'])
         for row in triggers if row['trigger_name'].endswith('_0154')

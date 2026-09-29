@@ -49,6 +49,7 @@ def preview_return_inbound(db: Session, *, actor, receipt_id: uuid.UUID) -> dict
     document = _json_plan(plan)
     return {
         **document,
+        **({"origin": plan["origin"]} if "origin" in plan else {}),
         "planning_status": "inbound_preview_only",
         "plan_hash": _hash(document),
         "checked_at": plan["checked_at"],
@@ -68,7 +69,7 @@ def execute_return_inbound(
 
     posting._lock_inventory_ledger_head_for_atomic_batch(db)
     lock_formal_principal_graph(db, (actor.user_id,))
-    current, _ = authorize_receipt(db, actor=actor, receipt_id=receipt_id)
+    current, receipt = authorize_receipt(db, actor=actor, receipt_id=receipt_id)
     posting._require_request_id(request_id)
     key = posting._require_idempotency_key(idempotency_key)
     key_hash = posting._storage_hash(key)
@@ -126,11 +127,14 @@ def execute_return_inbound(
         )
         for line in plan["lines"]
     )
+    from .stock_return_receipt_facts import verified_receipt_history
+    verified_receipt = verified_receipt_history(db, fact=receipt)
     command = build_return_inbound_command(
         receipt_id=receipt_id,
         inbound_id=inbound_id,
         effective_at=plan["checked_at"],
         lines=movements,
+        loss_origin=getattr(verified_receipt, "origin", None),
     )
     command_json = {
         "source_document_type": command.source_document_type,

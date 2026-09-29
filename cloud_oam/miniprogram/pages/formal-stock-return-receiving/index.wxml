@@ -6,7 +6,7 @@
     <view wx:if="{{!packages.length}}" class="card muted">本页没有当前由本人接收的退回包裹。</view>
     <view wx:for="{{packages}}" wx:key="id" class="card">
       <block wx:if="{{item.verified}}">
-        <view class="heading">{{item.number}}</view><view>退回单：{{item.returnNo}}</view>
+        <view class="heading">{{item.number}}</view><view>{{item.originLabel}} · {{item.returnNo}}</view>
         <view>接收仓：{{item.target}}</view><view class="tracking">{{item.carrier}} · {{item.trackingNo}}</view>
         <view>实际交运：{{item.shippedAt}}</view><view>{{item.lineCount}} 条原包裹明细</view>
         <button data-id="{{item.id}}" bindtap="openPackage">查看本包验收进度</button>
@@ -16,7 +16,7 @@
     <button wx:if="{{next}}" bindtap="nextPage">下一页包裹</button>
   </block>
   <block wx:if="{{ready && detail}}">
-    <view class="card"><view class="heading">{{package.number}}</view><view>退回单：{{package.returnNo}}</view>
+    <view class="card"><view class="heading">{{package.number}}</view><view>{{package.originLabel}} · {{package.returnNo}}</view>
       <view>接收仓：{{package.target}}</view><view class="tracking">{{package.carrier}} · {{package.trackingNo}}</view>
       <view>实际交运：{{package.shippedAt}}</view></view>
     <view class="card"><view class="heading">累计验收进度</view>

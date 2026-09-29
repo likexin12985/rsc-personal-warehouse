@@ -1,5 +1,6 @@
 """Schemas for the independent return inbound posting boundary."""
 
+from .stock_return_receiving_schemas import RecipientLossOrigin
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -94,3 +95,7 @@ class StockReturnInboundStateOut(ReturnInboundModel):
         if (self.status=='posted') != (self.inbound is not None):
             raise ValueError('posted inbound requires its proven summary')
         return self
+
+
+class LossReturnInboundPreviewOut(StockReturnInboundPreviewOut):
+    origin: RecipientLossOrigin

@@ -22,7 +22,7 @@ def test_scope_patch_preserves_every_seal_check_and_runtime_acl():
     assert hashlib.sha256(repaired.encode()).hexdigest() == m['FIXED_HASH']
     assert repaired.replace(m['FIXED_FRAGMENT'],m['LEGACY_FRAGMENT']) == legacy
     assert repaired.index("IF TG_TABLE_NAME='audit_events'") < repaired.index('FOR UPDATE')
-    assert m['FIXED_HASH'] == security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[('rsc_guard_stock_operation_seal_0101','')]
+    assert m['FIXED_HASH'] == security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256_THROUGH_0154[('rsc_guard_stock_operation_seal_0101','')]
     assert m['OLD_HASH'] == scope.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0122['rsc_oam_runtime_binding_ready_0044()'][6]
     assert m['NEW_HASH'] == scope.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0123['rsc_oam_runtime_binding_ready_0044()'][6]
     parser = pytest.importorskip('pglast.parser')

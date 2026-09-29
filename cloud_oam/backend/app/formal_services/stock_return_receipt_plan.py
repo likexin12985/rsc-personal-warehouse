@@ -10,6 +10,7 @@ from ..inventory_models import InventorySerial, SerialCurrentPosition, ReceiptEx
 from ..stock_operation_models import StockOperationReceipt, StockOperationReceiptException, StockOperationOutboundLine, StockOperationShipmentLine
 from ..stock_return_receipt_schemas import StockReturnReceiptPreviewIn, StockReturnReceiptPreviewOut, StockReturnReceiptLineOut
 from . import stock_return_receiving as receiving, inventory_query as inventory
+from . import stock_return_receipt_origin as provenance
 from .formal_files import is_available_formal_file_for_purpose
 from .work_order_evidence_snapshot import material_audit_cursor
 from .work_order_query import _aware
@@ -111,7 +112,7 @@ def _basis(db, actor, package, request):
                     or proof.sku_code != original.sku_code or position is None or position.stock_account_id != departed.transit_stock_account_id):
                 _fail('stock_return_receipt_scan_invalid', '已接受物料必须按准确原包裹完成实物三码校验')
         view_serials = lambda ids: tuple(dict(serial_id=identifier, serial_no=names[identifier]) for identifier in sorted(ids, key=str))
-        views.append(StockReturnReceiptLineOut(**{key: getattr(original, key) for key in
+        views.append(provenance.line_model(original)(**{key: getattr(original, key) for key in
             ('shipment_line_id', 'material_id', 'sku_code', 'material_name', 'base_unit', 'condition_code', 'lot_id', 'lot_no')},
             shipped_qty=original.shipped_quantity, previously_accepted_qty=format(accepted[original.shipment_line_id], '.3f'),
             previously_rejected_qty=format(rejected[original.shipment_line_id], '.3f'), unconfirmed_qty=format(remaining, '.3f'),
@@ -142,7 +143,7 @@ def preview_receipt(db, *, actor, shipment_id, request):
         plan = dict(intent=value, authorization_version=current.authorization_version, ledger_cursor=snapshot.ledger_cursor,
             audit_cursor=audit[0].version, package=package.model_dump(mode='json'), policies=policies,
             evidence=evidence, lines=[row.model_dump(mode='json') for row in lines])
-        return StockReturnReceiptPreviewOut(shipment_id=shipment_id, operation_id=package.operation_id,
-            work_order_id=package.work_order_id, operator_person_id=current.person_id, authorization_version=current.authorization_version,
+        return provenance.output_model(package, 'preview')(shipment_id=shipment_id, operation_id=package.operation_id,
+            **provenance.origin_fields(package), operator_person_id=current.person_id, authorization_version=current.authorization_version,
             received_at=request.received_at, reason=request.reason, checked_at=datetime.now(timezone.utc), ledger_cursor=snapshot.ledger_cursor,
             package=package, request_hash=_hash(value), plan_hash=_hash(plan), lines=lines), plan

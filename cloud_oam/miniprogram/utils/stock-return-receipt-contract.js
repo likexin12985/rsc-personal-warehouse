@@ -8,6 +8,8 @@ const { amount, reason, requestId, digest, list, integer } = require('./stock-re
 const { fromUnits, units } = require('./my-receipt-command')
 const { instant } = require('./stock-return-outbound-contract')
 
+const origin = require('./loss-return-origin')
+const receiving = require('./stock-return-receiving-contract')
 const KIND = 'stock_return'
 const ACTION = 'receive_return'
 const TYPES = ['shortage', 'damaged', 'wrong_material', 'wrong_serial', 'rejected']
@@ -143,11 +145,11 @@ function validatePreviewLine(raw, expected, history) {
   return raw
 }
 function validatePreview(raw, input, history, shipmentId) {
-  exact(raw, ['schema_version', 'planning_status', 'shipment_id', 'operation_id', 'work_order_id', 'operator_person_id', 'authorization_version', 'received_at', 'reason', 'checked_at', 'ledger_cursor', 'package', 'request_hash', 'plan_hash', 'lines'])
+  exact(raw, ['schema_version', 'planning_status', 'shipment_id', 'operation_id', ...origin.sourceKeys(raw), 'operator_person_id', 'authorization_version', 'received_at', 'reason', 'checked_at', 'ledger_cursor', 'package', 'request_hash', 'plan_hash', 'lines'])
   if (raw.schema_version !== '1.0' || raw.planning_status !== 'preview_only' || uuid(raw.shipment_id) !== uuid(shipmentId)
     || uuid(raw.operator_person_id) !== uuid(input.operator_person_id) || raw.request_hash !== requestHash(shipmentId, input)) fail()
-  uuid(raw.operation_id); uuid(raw.work_order_id); integer(raw.authorization_version, 1); time(raw.received_at); time(raw.checked_at); integer(raw.ledger_cursor); digest(raw.request_hash); digest(raw.plan_hash)
-  if (canonical(raw.package) !== canonical(history.package)) fail('预检返回的原包裹已变化，请刷新。')
+  uuid(raw.operation_id); origin.sourceFields(raw); integer(raw.authorization_version, 1); time(raw.received_at); time(raw.checked_at); integer(raw.ledger_cursor); digest(raw.request_hash); digest(raw.plan_hash)
+  if (!origin.sameSource(raw, history.package) || raw.operation_id !== history.package.operation_id || canonical(raw.package) !== canonical(history.package)) fail('预检返回的原包裹已变化，请刷新。')
   const expected = normalizeInput(input, shipmentId, input.operator_person_id)
   const lines = list(raw.lines, 1, 100)
   if (lines.length !== expected.lines.length) fail('预检返回的验收行数与提交内容不一致，请刷新。')
@@ -158,14 +160,25 @@ function validatePreview(raw, input, history, shipmentId) {
   return raw
 }
 function validateResult(raw, marker) {
-  exact(raw, ['schema_version', 'receipt_id', 'receipt_no', 'shipment_id', 'operation_id', 'work_order_id', 'operator_person_id', 'status', 'received_at', 'recorded_at', 'reason', 'request_id', 'request_hash', 'plan_hash', 'target_location_id', 'target_custody_assignment_id', 'lines'])
+  exact(raw, ['schema_version', 'receipt_id', 'receipt_no', 'shipment_id', 'operation_id', ...origin.sourceKeys(raw), 'operator_person_id', 'status', 'received_at', 'recorded_at', 'reason', 'request_id', 'request_hash', 'plan_hash', 'target_location_id', 'target_custody_assignment_id', 'lines'])
   if (raw.schema_version !== '1.0' || uuid(raw.shipment_id) !== marker.shipment_id || uuid(raw.operator_person_id) !== marker.person_id || raw.request_id !== marker.trace_request_id || raw.request_hash !== marker.request_hash || raw.plan_hash !== marker.plan_hash) fail()
+  if (!origin.sameSource(raw, marker) || raw.operation_id !== marker.operation_id) fail()
+  receiving.receipt(raw, { personId: marker.person_id, shipmentId: marker.shipment_id })
   uuid(raw.receipt_id); text(raw.receipt_no, 100); time(raw.received_at); time(raw.recorded_at); requestId(raw.request_id); digest(raw.request_hash); digest(raw.plan_hash)
   return raw
 }
 function validateLookup(raw, marker) {
   if (raw && !Object.prototype.hasOwnProperty.call(raw, 'lookup_status')) return validateResult(raw, marker)
-  if (raw.lookup_status === 'sealed') { exact(raw, ['schema_version', 'lookup_status', 'seal']); if (raw.schema_version !== '1.0') fail(); return raw }
+  if (raw.lookup_status === 'sealed') {
+    exact(raw, ['schema_version', 'lookup_status', 'seal'])
+    const seal = raw.seal
+    exact(seal, ['seal_id', 'operation_type', 'operator_person_id', ...origin.sourceKeys(seal), 'operation_id', 'shipment_id', 'request_id', 'request_hash', 'sealed_at'])
+    uuid(seal.seal_id); time(seal.sealed_at)
+    if (raw.schema_version !== '1.0' || seal.operation_type !== ACTION || seal.operator_person_id !== marker.person_id
+      || seal.shipment_id !== marker.shipment_id || seal.operation_id !== marker.operation_id || !origin.sameSource(seal, marker)
+      || seal.request_id !== marker.trace_request_id || seal.request_hash !== marker.request_hash) fail()
+    return raw
+  }
   exact(raw, ['schema_version', 'lookup_status', 'command'])
   if (raw.schema_version !== '1.0' || raw.lookup_status !== 'confirmed') fail()
   return validateResult(raw.command, marker)

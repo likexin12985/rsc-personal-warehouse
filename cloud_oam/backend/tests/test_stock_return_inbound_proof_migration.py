@@ -56,7 +56,7 @@ def test_0111_exact_forward_dispatch_readiness_acl_and_sql_syntax():
     assert current_source_hash(migration['revision'],'public.rsc_dispatch_stock_return_outbound_0103()',updated)==security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[('rsc_dispatch_stock_return_outbound_0103','')]
     parser.parse_plpgsql_json(f'CREATE FUNCTION departure() RETURNS trigger LANGUAGE plpgsql AS $body${updated}$body$')
     for key,(args,result,body) in migration['FUNCTIONS'].items():
-        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key]==migration['FUNCTION_HASHES'][key]
+        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key]==current_source_hash(migration['revision'],f'public.{key[0]}({key[1]})',body)
         assert key in security.MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
         assert key not in security.RUNTIME_EXECUTE_FUNCTIONS
         parser.parse_plpgsql_json(f'CREATE FUNCTION {key[0]}({args}) RETURNS {result} LANGUAGE plpgsql AS $body${body}$body$')

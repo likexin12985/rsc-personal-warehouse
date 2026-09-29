@@ -138,9 +138,12 @@ def _plan_return_inbound(db: Session, *, actor, receipt_id: uuid.UUID) -> dict:
         receipt_id=fact.id,
         effective_at=_aware(fact.created_at),
         lines=tuple(movements),
+        loss_origin=getattr(result, "origin", None),
     )
     snapshot = inventory._projection_snapshot(db)
+    loss_origin = getattr(result, "origin", None)
     result = {
+        **({"origin": loss_origin.model_dump(mode="json")} if loss_origin is not None else {}),
         "schema_version": "1.0",
         "planning_status": "inbound_preview_only",
         "receipt_id": fact.id,

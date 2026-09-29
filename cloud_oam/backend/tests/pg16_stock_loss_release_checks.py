@@ -31,19 +31,19 @@ def run(engines, *, tracking, migrate, provision):
         "0146 immutable loss seal history requires retention",
     )
     with engines["star_oam_migrator"].connect() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "20261203_0154"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "20261204_0155"
     from pg16_stock_loss_regional_review_gate import run as regional_reviews
     result['regionalReview'] = regional_reviews(engines)
     migrate('retained-regional-downgrade', 'downgrade', '20261125_0146',
         '0147 immutable regional review history requires retention')
     with engines['star_oam_migrator'].connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261203_0154'
+        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261204_0155'
     from pg16_stock_loss_headquarters_review_gate import run as headquarters_reviews
     result['headquartersReview'] = headquarters_reviews(engines)
     migrate('retained-headquarters-downgrade', 'downgrade', '20261126_0147',
         '0148 immutable headquarters review history requires retention')
     with engines['star_oam_migrator'].connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261203_0154'
+        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261204_0155'
     security()
     result.update(
         emptyRoundtrip=True, retainedLossBlocksDowngrade=True,

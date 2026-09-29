@@ -19,7 +19,7 @@ from ..formal_services.stock_return_inbound_recovery import (
 from ..formal_services.stock_return_inbound_queries import read_return_inbound_state
 from ..stock_return_inbound_schemas import (
     StockReturnInboundOut,
-    StockReturnInboundPreviewOut,
+    StockReturnInboundPreviewOut, LossReturnInboundPreviewOut,
     StockReturnInboundSealIn,
     StockReturnInboundSealOut,
     StockReturnInboundSubmitIn,
@@ -43,7 +43,7 @@ def read_inbound_state(
     return _run(db,response,lambda: read_return_inbound_state(db,actor=principal,receipt_id=receipt_id))
 
 
-@router.post("/preview", response_model=StockReturnInboundPreviewOut)
+@router.post("/preview", response_model=StockReturnInboundPreviewOut | LossReturnInboundPreviewOut)
 def prepare_inbound(
     receipt_id: UUID,
     response: Response,

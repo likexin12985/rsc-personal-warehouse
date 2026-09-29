@@ -71,7 +71,7 @@ Page({
       else {
         this._directory = result
         this.setData({ packages: result.items.map(row => row.verification_status === 'verified'
-          ? { id: row.shipment_id, verified: true, number: row.shipment_no, returnNo: row.operation_no, target: row.target_location_name,
+          ? { id: row.shipment_id, verified: true, number: row.shipment_no, returnNo: row.operation_no, originLabel: row.origin ? '报损退回' : '工单退回', target: row.target_location_name,
             carrier: row.carrier, trackingNo: row.tracking_no, shippedAt: displayTime(row.shipped_at), lineCount: row.lines.length }
           : { id: row.shipment_id, verified: false, message: row.message }), next: result.next_after_id !== null })
       }
@@ -92,7 +92,7 @@ Page({
   },
   renderHistory() {
     const history = this._history, parcel = history.package
-    this.setData({ package: { number: parcel.shipment_no, returnNo: parcel.operation_no, target: parcel.target_location_name,
+    this.setData({ package: { number: parcel.shipment_no, returnNo: parcel.operation_no, originLabel: parcel.origin ? '报损退回' : '工单退回', target: parcel.target_location_name,
       carrier: parcel.carrier, trackingNo: parcel.tracking_no, shippedAt: displayTime(parcel.shipped_at) },
       progress: history.lines.slice(0, this._lineLimit).map(row => {
         const source = parcel.lines.find(line => line.shipment_line_id === row.shipment_line_id)
@@ -108,8 +108,8 @@ Page({
   },
   prepareForm(history, person, version) {
     let stored = { kind: 'missing' }
-    try { stored = this._store ? this._store.read({ work_order_id: history.package.work_order_id, shipment_id: history.package.shipment_id }) : { kind: 'unavailable' } } catch (_) { stored = { kind: 'unavailable' } }
-    this._workOrder = history.package.work_order_id; this._operation = history.package.operation_id; this._person = person; this._version = version
+    try { stored = this._store ? this._store.read(require('../../utils/loss-return-origin').scope(history.package.work_order_id, history.package.origin, history.package.shipment_id)) : { kind: 'unavailable' } } catch (_) { stored = { kind: 'unavailable' } }
+    this._workOrder = history.package.work_order_id; this._lossOrigin = history.package.origin; this._operation = history.package.operation_id; this._person = person; this._version = version
     this._drafts = Object.fromEntries(history.package.lines.map(line => [line.shipment_line_id, {
       accepted_qty: '0.000', rejected_qty: '0.000', shortage_qty: '0.000', damaged_qty: '0.000', serials: {}, proofs: {}, damaged_serial_ids: [], exceptions: {}
     }]))
@@ -195,8 +195,8 @@ Page({
   editException(event) { if (!this.editable()) return; const { lineId, type } = event.currentTarget.dataset, draft = this._drafts[lineId]; if (!draft) return; draft.exceptions[type] = { ...(draft.exceptions[type] || {}), description: String(event.detail.value || '').slice(0, 1000) }; this.renderForm() },
   addException(event) { if (!this.editable()) return; const { lineId, type } = event.currentTarget.dataset, draft = this._drafts[lineId]; if (!draft || !receiptContract.TYPES.includes(type)) return; draft.exceptions[type] = draft.exceptions[type] || { description: '', evidence_file_id: null }; this.renderForm() },
   async evidence(event) { if (!this.editable()) return; const { lineId, type, action, fileKey } = event.currentTarget.dataset; try { const controller = this.fileController(lineId, type); if (action === 'select') await controller.select(); else if (action === 'retry') await controller.retry(fileKey); else controller.remove(fileKey) } catch (error) { this.setData({ formMessage: error.message || '异常凭证未完成确认。' }) } },
-  async recoverReceipt() { if (!this.data.pending || this.data.busy || !this._context) return; this.setData({ busy: true }); try { const result = await recoverPending({ api, store: this._store, workOrderId: this._workOrder, shipmentId: this._shipment, personId: this._person, authorize: this._context }); if (result.status === 'confirmed') { this.setData({ pending: false, pendingMessage: '原验收结果已确认，正在刷新包裹。' }); await this.load() } else if (result.status === 'pending') this.setData({ pendingMessage: '暂未读取到原验收结果；请保留恢复记录，稍后继续核验。' }) } catch (error) { this.setData({ pendingMessage: error.message || '原验收结果尚未完成核验。' }) } finally { this.setData({ busy: false }) } },
-  async sealReceipt() { if (!this.data.pending || !this.data.canSeal || this.data.busy) return; const ok = await new Promise(resolve => wx.showModal({ title: '封存未执行验收', content: '仅在确认原请求未执行后封存。结果未知时不要封存。', confirmText: '确认封存', success: value => resolve(value.confirm === true), fail: () => resolve(false) })); if (!ok) return; this.setData({ busy: true }); try { const result = await sealPending({ api, store: this._store, workOrderId: this._workOrder, shipmentId: this._shipment, personId: this._person, authorize: this._context, confirm: () => true }); if (result.status === 'sealed') await this.load() } catch (error) { this.setData({ pendingMessage: error.message || '封存未完成，请保留恢复记录。' }) } finally { this.setData({ busy: false }) } },
+  async recoverReceipt() { if (!this.data.pending || this.data.busy || !this._context) return; this.setData({ busy: true }); try { const result = await recoverPending({ api, store: this._store, workOrderId: this._workOrder, lossOrigin: this._lossOrigin, shipmentId: this._shipment, personId: this._person, authorize: this._context }); if (result.status === 'confirmed') { this.setData({ pending: false, pendingMessage: '原验收结果已确认，正在刷新包裹。' }); await this.load() } else if (result.status === 'pending') this.setData({ pendingMessage: '暂未读取到原验收结果；请保留恢复记录，稍后继续核验。' }) } catch (error) { this.setData({ pendingMessage: error.message || '原验收结果尚未完成核验。' }) } finally { this.setData({ busy: false }) } },
+  async sealReceipt() { if (!this.data.pending || !this.data.canSeal || this.data.busy) return; const ok = await new Promise(resolve => wx.showModal({ title: '封存未执行验收', content: '仅在确认原请求未执行后封存。结果未知时不要封存。', confirmText: '确认封存', success: value => resolve(value.confirm === true), fail: () => resolve(false) })); if (!ok) return; this.setData({ busy: true }); try { const result = await sealPending({ api, store: this._store, workOrderId: this._workOrder, lossOrigin: this._lossOrigin, shipmentId: this._shipment, personId: this._person, authorize: this._context, confirm: () => true }); if (result.status === 'sealed') await this.load() } catch (error) { this.setData({ pendingMessage: error.message || '封存未完成，请保留恢复记录。' }) } finally { this.setData({ busy: false }) } },
   inboundContext(receiptId, write = false) {
     const generation = this._generation, selection = this._inboundGeneration, context = this._context
     return async () => {
@@ -258,7 +258,7 @@ Page({
     const preview = this.data.inboundPreview, generation = this._generation, current = this.inboundContext(preview.receipt_id, true)
     this.setData({ inboundBusy: true })
     try {
-      const result = await inboundSubmit.submitInbound({ api, store: this._store, workOrderId: this._workOrder, receiptId: preview.receipt_id,
+      const result = await inboundSubmit.submitInbound({ api, store: this._store, workOrderId: this._workOrder, lossOrigin: this._lossOrigin, receiptId: preview.receipt_id,
         shipmentId: this._shipment, personId: this._person, authorizationVersion: this._version, expectedPlanHash: preview.plan_hash, authorize: current, confirm: async () => true })
       if (generation !== this._generation || !this.readable()) return
       if (result.status === 'confirmed') { this.setData({ inboundPreview: null, inboundMessage: '退回入账已完成，正在刷新。' }); await this.load() }
@@ -277,7 +277,7 @@ Page({
     if (!this.readable() || !this.data.inboundPending || this.data.inboundBusy || !this._context) return
     const generation = this._generation
     this.setData({ inboundBusy: true })
-    try { const result = await recoverPending({ api, store: this._store, workOrderId: this._workOrder, shipmentId: this._shipment, personId: this._person, authorize: this._context })
+    try { const result = await recoverPending({ api, store: this._store, workOrderId: this._workOrder, lossOrigin: this._lossOrigin, shipmentId: this._shipment, personId: this._person, authorize: this._context })
       if (generation !== this._generation || !this.readable()) return
       if (result.status === 'confirmed') { this.setData({ inboundPending: false, inboundMessage: '原入账结果已确认，正在刷新。' }); await this.load() }
       else if (result.status === 'sealed') { this.setData({ inboundPending: false, inboundMessage: '原入账请求已封存，正在刷新。' }); await this.load() }
@@ -291,7 +291,7 @@ Page({
     const ok = await new Promise(resolve => wx.showModal({ title: '封存未执行入账', content: '仅在确认原入账请求未执行后封存。结果未知时不要封存。', confirmText: '确认封存', success: value => resolve(value.confirm === true), fail: () => resolve(false) }))
     if (!ok || generation !== this._generation || !this.readable()) return
     this.setData({ inboundBusy: true })
-    try { const result = await sealPending({ api, store: this._store, workOrderId: this._workOrder, shipmentId: this._shipment, personId: this._person, authorize: this._context, confirm: () => true })
+    try { const result = await sealPending({ api, store: this._store, workOrderId: this._workOrder, lossOrigin: this._lossOrigin, shipmentId: this._shipment, personId: this._person, authorize: this._context, confirm: () => true })
       if (generation !== this._generation || !this.readable()) return
       if (result.status === 'sealed') { this.setData({ inboundPending: false, inboundMessage: '原入账请求已封存，正在刷新。' }); await this.load() }
       else if (result.status === 'confirmed') { this.setData({ inboundPending: false, inboundMessage: '原入账已完成，正在刷新。' }); await this.load() }
@@ -302,7 +302,7 @@ Page({
   async submitReceipt() {
     if (!this.editable()) return
     this.setData({ busy: true }); const generation = this._generation, session = this._session, current = () => this._visible && generation === this._generation && this._matches && this._matches()
-    try { if (!this.data.formReason.trim()) throw new Error('请填写本次验收原因。'); const prepared = await receiptSubmit.prepareReceipt({ api, current, shipmentId: this._shipment, personId: this._person, authorizationVersion: this._version, receivedAt: this.data.formReceivedAt, reason: this.data.formReason, drafts: this._drafts }); this._confirmFinish = null; const approved = await new Promise(resolve => { this._confirmFinish = resolve; this.setData({ confirming: true, review: prepared.review }) }); this.setData({ confirming: false, review: null }); if (!approved || !current()) return; const result = await receiptSubmit.submitReceipt({ api, store: this._store, workOrderId: this._workOrder, shipmentId: this._shipment, personId: this._person, authorizationVersion: this._version, receivedAt: this.data.formReceivedAt, reason: this.data.formReason, drafts: this._drafts, authorize: this._context, confirm: async () => true }); if (result.status === 'confirmed') await this.load(); else if (result.status === 'pending') this.setData({ pending: true, formReady: false, pendingMessage: '提交结果尚未完成核验，原请求记录已保留；请读取原结果，暂勿重复提交。' }) } catch (error) { if (current()) this.setData({ formMessage: error.message || '验收预检未通过，请重新核对。' }) } finally { if (current()) this.setData({ busy: false }); else if (this._visible && session && !this._matches()) this.clearView() }
+    try { if (!this.data.formReason.trim()) throw new Error('请填写本次验收原因。'); const prepared = await receiptSubmit.prepareReceipt({ api, current, shipmentId: this._shipment, personId: this._person, authorizationVersion: this._version, receivedAt: this.data.formReceivedAt, reason: this.data.formReason, drafts: this._drafts }); this._confirmFinish = null; const approved = await new Promise(resolve => { this._confirmFinish = resolve; this.setData({ confirming: true, review: prepared.review }) }); this.setData({ confirming: false, review: null }); if (!approved || !current()) return; const result = await receiptSubmit.submitReceipt({ api, store: this._store, workOrderId: this._workOrder, lossOrigin: this._lossOrigin, shipmentId: this._shipment, personId: this._person, authorizationVersion: this._version, receivedAt: this.data.formReceivedAt, reason: this.data.formReason, drafts: this._drafts, authorize: this._context, confirm: async () => true }); if (result.status === 'confirmed') await this.load(); else if (result.status === 'pending') this.setData({ pending: true, formReady: false, pendingMessage: '提交结果尚未完成核验，原请求记录已保留；请读取原结果，暂勿重复提交。' }) } catch (error) { if (current()) this.setData({ formMessage: error.message || '验收预检未通过，请重新核对。' }) } finally { if (current()) this.setData({ busy: false }); else if (this._visible && session && !this._matches()) this.clearView() }
   },
   confirmSubmission(event) { if (this._confirmFinish) { const value = event.currentTarget.dataset.confirm === 'true'; const finish = this._confirmFinish; this._confirmFinish = null; this.setData({ confirming: false, review: null }); finish(value) } },
   renderReceipt() {

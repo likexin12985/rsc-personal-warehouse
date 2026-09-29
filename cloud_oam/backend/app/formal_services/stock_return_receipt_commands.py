@@ -75,7 +75,9 @@ def execute_receipt(db, *, actor, shipment_id, request):
             _fail('idempotency_conflict', '原验收请求键已绑定其他内容，请回读原请求')
         return facts.receipt_result(db, actor=current, fact=fact)
     returns._fresh_request(db, actor=current, key=key, request_id=request.request_id)
-    lock_material_request_work_order(db, detail.package.work_order_id)
+    from .stock_return_receipt_origin import work_order_id
+    if work_order_id(detail.package) is not None:
+        lock_material_request_work_order(db, work_order_id(detail.package))
     _lock_references(db, detail.package, request)
     lock_audit_chain_head(db, stream_key='material_request')
     checked, plan = planning.preview_receipt(db, actor=current, shipment_id=shipment_id, request=request)

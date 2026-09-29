@@ -129,6 +129,7 @@ def test_sqlite_foreign_keys_on_stops_before_table_rebuild(current,candidate):
 
 def test_current_catalog_exactly_matches_private_proof_and_patches(candidate):
     import hashlib
+    from migration_source_expectations import current_source_hash
     from pglast import parser
     from app import database_security as security, oam_sync_scope_security as scope
     m=candidate;key=(m['FUNCTION'],'uuid, boolean')
@@ -144,7 +145,7 @@ def test_current_catalog_exactly_matches_private_proof_and_patches(candidate):
     for signature,(old,new) in m['_sources']().items():
         name,args=signature.removeprefix('public.').rstrip(')').split('(',1)
         assert before[name,args]==hashlib.sha256(old.encode()).hexdigest()
-        assert after[name,args]==hashlib.sha256(new.encode()).hexdigest()
+        assert after[name,args]==current_source_hash(m['revision'],signature,new)
         assert not sa.text(new)._bindparams
     for table in ('stock_locations','custody_assignments'):
         assert table not in security.RUNTIME_UPDATE_TABLES

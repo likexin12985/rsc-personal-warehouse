@@ -11,7 +11,7 @@ import uuid
 
 from sqlalchemy import func, select
 
-from ..foundation_models import AuditEvent, OutboxEvent, StateTransitionEvent
+from ..foundation_models import AuditEvent, OutboxEvent, StateTransitionEvent, NotificationEvent, NotificationPersonTarget
 from ..inventory_models import (CustodyAssignment, InventoryMovement, InventoryMovementSerial,
     InventorySerial, InventoryTransaction, MaterialInventoryPolicy, StockAccount, StockLocation)
 from ..stock_operation_models import (StockOperationOrder, StockOperationCancellation, StockOperationOutbound,
@@ -25,6 +25,7 @@ from .audit_chain import AuditChainError
 from .stock_return_inbound_contract import ReturnInboundLine, build_return_inbound_command
 from .stock_return_inbound_plan import authorize_receipt
 from .work_order_evidence_snapshot import material_audit_cursor
+from .notification_events import target_manifest_hash
 from .work_order_query import _aware
 from .work_order_return_sources import _fail, _hash
 
@@ -199,7 +200,7 @@ def _proof(db, fact):
         target_location_id=str(fact.target_location_id),target_custody_assignment_id=str(fact.target_custody_assignment_id),
         receipt_plan_hash=receipt.plan_hash,reason=receipt.reason,ledger_cursor=plan['ledger_cursor'],lines=planned)
     if plan!=expected_plan:invalid()
-    command=build_return_inbound_command(receipt_id=receipt.id,inbound_id=fact.id,effective_at=_aware(tx.effective_at),lines=tuple(moves))
+    command=build_return_inbound_command(receipt_id=receipt.id,inbound_id=fact.id,effective_at=_aware(tx.effective_at),lines=tuple(moves),loss_origin=getattr(original,"origin",None))
     expected_command=dict(source_document_type=command.source_document_type,source_document_id=command.source_document_id,
         posting_key=command.posting_key,movement_type='transfer',effective_at=command.effective_at.isoformat(),movements=[dict(
             from_account_id=str(m.from_account_id),to_account_id=str(m.to_account_id),quantity=format(m.quantity,'.3f'),
@@ -227,6 +228,9 @@ def _proof(db, fact):
     link=shared.single(db,StockOperationReturnInboundPosting,inbound_id=fact.id)
     if link.inventory_transaction_id!=tx.id or _aware(link.created_at)!=_aware(fact.created_at):invalid()
     _stock_before(db,command,tx);_evidence(db,fact,tx,command,actor)
+    if hasattr(original,"origin"):
+        body={key:str(value) if isinstance(value,uuid.UUID) else value for key,value in document(fact).items()}
+        _loss_notification(db,fact=fact,assignment=custody,body=body)
     return document(fact)
 
 
@@ -244,3 +248,20 @@ def inbound_result(db, *, actor, fact, replayed=False):
             _fail('stock_return_inbound_lookup_changed','入账证据或权限在核验期间变化，请重新查询原请求')
         inventory._ensure_projection_snapshot_current(db,snapshot)
         return {**result,'replayed':replayed}
+
+
+def _loss_notification(db, *, fact, assignment, body):
+    events = tuple(db.scalars(select(NotificationEvent).where(
+        NotificationEvent.business_type == 'stock_operation_return_inbound',
+        NotificationEvent.business_id == str(fact.id)).limit(2).execution_options(populate_existing=True)))
+    if len(events) != 1: invalid()
+    event = events[0]
+    targets = tuple(db.scalars(select(NotificationPersonTarget.person_id).where(NotificationPersonTarget.event_id == event.id)))
+    if (event.event_type != 'stock_return_inbound_posted'
+            or event.dedup_key != f'stock-return-notification:stock_return_inbound_posted:{fact.id}'
+            or event.payload_jsonb != {**body, 'target_custody_assignment_id':str(assignment.id)}
+            or _aware(event.occurred_at) != _aware(fact.created_at)
+            or _aware(event.created_at) != _aware(fact.created_at)
+            or targets != (assignment.custodian_person_id,)
+            or event.target_manifest_sha256 != target_manifest_hash(targets)):
+        invalid()

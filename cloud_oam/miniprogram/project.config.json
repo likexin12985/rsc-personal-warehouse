@@ -446,6 +446,10 @@
       {
         "type": "file",
         "value": "utils/work-order-submit.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/loss-return-origin.js"
       }
     ],
     "include": []

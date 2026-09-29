@@ -1,3 +1,4 @@
+const origin = require('./loss-return-origin')
 const contract = require('./stock-return-receipt-contract')
 const receiving = require('./stock-return-receiving-contract')
 const { validateMarker } = require('./work-order-recovery-store')
@@ -33,16 +34,17 @@ async function prepareReceipt(args) {
     shipmentNo: history.package.shipment_no, receivedAt: displayTime(preview.received_at), reason: body.reason, rows: reviewRows(body.lines, history) }) }
 }
 async function submitReceipt(args) {
-  const { api, store, workOrderId, shipmentId, personId, authorizationVersion, authorize, confirm } = args
+  const { api, store, workOrderId, lossOrigin, shipmentId, personId, authorizationVersion, authorize, confirm } = args
   const drafts = freeze(JSON.parse(JSON.stringify(args.drafts)))
-  return store.withLease({ work_order_id: workOrderId, shipment_id: shipmentId }, async lease => {
+  return store.withLease(origin.scope(workOrderId, lossOrigin, shipmentId), async lease => {
     if (lease.read().kind !== 'missing') throw new Error('请先核验该退回包裹的原请求。')
     const before = await authorize(), current = async () => { if (await authorize() !== before) throw new Error('access changed') }
     const prepared = await prepareReceipt({ ...args, drafts, current })
+    if (!origin.sameSource(prepared.preview, origin.scope(workOrderId, lossOrigin, shipmentId))) throw new Error('报损或工单来源已变化。')
     if (!await confirm(prepared.review)) return { status: 'cancelled' }
     await current()
     const trace = api.createRequestId(), key = api.createIdempotencyKey()
-    const marker = validateMarker({ v: 1, kind: contract.KIND, work_order_id: workOrderId, shipment_id: shipmentId,
+    const marker = validateMarker({ v: 1, kind: contract.KIND, ...origin.scope(workOrderId, lossOrigin, shipmentId),
       person_id: personId, authorization_version: authorizationVersion, operation_type: contract.ACTION, operation_id: prepared.preview.operation_id,
       trace_request_id: trace, request_hash: prepared.preview.request_hash, plan_hash: prepared.preview.plan_hash })
     lease.persist(marker)
@@ -54,7 +56,7 @@ async function submitReceipt(args) {
     await current()
     if (result === null) return { status: 'pending' }
     lease.clearExact(marker)
-    return result.lookup_status === 'sealed_not_executed' ? { status: 'sealed', seal: result.seal } : { status: 'confirmed', receipt: result }
+    return ['sealed', 'sealed_not_executed'].includes(result.lookup_status) ? { status: 'sealed', seal: result.seal } : { status: 'confirmed', receipt: result }
   })
 }
 module.exports = { pathOf, readHistory, prepareReceipt, submitReceipt, displayTime, reviewRows }

@@ -45,6 +45,37 @@ class StockReturnReceivingPackageOut(ReceivingModel):
     lines: tuple[StockReturnReceivingLineOut, ...]
 
 
+class RecipientLossOrigin(ReceivingModel):
+    origin_kind: Literal['loss_report'] = 'loss_report'
+    loss_operation_id: UUID
+    loss_line_id: UUID
+    headquarters_decision_id: UUID
+    disposition_id: UUID
+
+
+class LossReceivingLine(StockReturnReceivingLineOut):
+    condition_code: Literal['new', 'used', 'damaged']
+
+
+class LossReceivingPackage(ReceivingModel):
+    verification_status: Literal['verified'] = 'verified'
+    shipment_id: UUID
+    shipment_no: str
+    operation_id: UUID
+    operation_no: str
+    origin: RecipientLossOrigin
+    sender_person_id: UUID
+    receiver_person_id: UUID
+    target_location_id: UUID
+    target_location_name: str
+    custody_assignment_id: UUID
+    carrier: str
+    tracking_no: str
+    shipped_at: datetime
+    recorded_at: datetime
+    lines: tuple[LossReceivingLine, ...]
+
+
 class StockReturnReceivingBlockedOut(ReceivingModel):
     verification_status: Literal["unavailable"] = "unavailable"
     shipment_id: UUID
@@ -58,8 +89,7 @@ class StockReturnReceivingOut(ReceivingModel):
     authorization_version: int
     ledger_cursor: int
     queried_at: datetime
-    items: tuple[Annotated[StockReturnReceivingPackageOut | StockReturnReceivingBlockedOut,
-        Field(discriminator="verification_status")], ...]
+    items: tuple[StockReturnReceivingPackageOut | LossReceivingPackage | StockReturnReceivingBlockedOut, ...]
     next_after_id: UUID | None = None
 
 
@@ -69,4 +99,4 @@ class StockReturnReceivingDetailOut(ReceivingModel):
     authorization_version: int
     ledger_cursor: int
     queried_at: datetime
-    package: StockReturnReceivingPackageOut
+    package: StockReturnReceivingPackageOut | LossReceivingPackage

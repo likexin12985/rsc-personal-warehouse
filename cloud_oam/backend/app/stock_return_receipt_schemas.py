@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .stock_return_schemas import ReturnReason
-from .stock_return_receiving_schemas import StockReturnReceivingPackageOut
+from .stock_return_receiving_schemas import (StockReturnReceivingPackageOut, LossReceivingPackage, RecipientLossOrigin)
 from .stock_return_outbound_schemas import StockReturnOutboundSerialOut
 from .work_order_material_schemas import SerialVerificationIn, StrictInput
 
@@ -172,10 +172,32 @@ class StockReturnReceiptSealOut(ReceiptOutput):
     sealed_at: datetime
 
 
+class LossReturnReceiptLineOut(StockReturnReceiptLineOut):
+    condition_code: Literal["new", "used", "damaged"]
+
+
+class LossReturnReceiptPreviewOut(StockReturnReceiptPreviewOut):
+    work_order_id: None = Field(default=None, exclude=True)
+    origin: RecipientLossOrigin
+    package: LossReceivingPackage
+    lines: tuple[LossReturnReceiptLineOut, ...]
+
+
+class LossReturnReceiptOut(StockReturnReceiptOut):
+    work_order_id: None = Field(default=None, exclude=True)
+    origin: RecipientLossOrigin
+    lines: tuple[LossReturnReceiptLineOut, ...]
+
+
+class LossReturnReceiptSealOut(StockReturnReceiptSealOut):
+    work_order_id: None = Field(default=None, exclude=True)
+    origin: RecipientLossOrigin
+
+
 class StockReturnReceiptSealedOut(ReceiptOutput):
     schema_version: Literal['1.0'] = '1.0'
     lookup_status: Literal['sealed'] = 'sealed'
-    seal: StockReturnReceiptSealOut
+    seal: StockReturnReceiptSealOut | LossReturnReceiptSealOut
 
 
 class StockReturnReceiptProgressOut(ReceiptOutput):
@@ -194,6 +216,6 @@ class StockReturnReceiptHistoryOut(ReceiptOutput):
     authorization_version: int
     ledger_cursor: int
     queried_at: datetime
-    package: StockReturnReceivingPackageOut
-    receipts: tuple[StockReturnReceiptOut, ...]
+    package: StockReturnReceivingPackageOut | LossReceivingPackage
+    receipts: tuple[StockReturnReceiptOut | LossReturnReceiptOut, ...]
     lines: tuple[StockReturnReceiptProgressOut, ...]

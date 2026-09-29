@@ -310,12 +310,14 @@ class StockOperationCommandSeal(CreatedAtMixin, Base):
         CheckConstraint("operation_type IN ('submit_return','cancel_return','outbound_return','ship_return','receive_return')", name="ck_stock_operation_seals_type"),
         CheckConstraint("(operation_type='submit_return' AND operation_id IS NULL) OR (operation_type IN ('cancel_return','outbound_return','ship_return','receive_return') AND operation_id IS NOT NULL)", name="ck_stock_operation_seals_origin"),
         CheckConstraint("(operation_type='receive_return') = (shipment_id IS NOT NULL)", name="ck_stock_operation_seals_shipment"),
+        CheckConstraint("(oam_work_order_id IS NOT NULL AND source_loss_disposition_id IS NULL) OR (oam_work_order_id IS NULL AND source_loss_disposition_id IS NOT NULL AND operation_type='receive_return')", name="ck_stock_operation_seals_source"),
         CheckConstraint("authorization_version > 0 AND length(request_hash)=64", name="ck_stock_operation_seals_context"),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
     actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"))
     operator_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("people.id", ondelete="RESTRICT"))
-    oam_work_order_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("oam_work_orders.id", ondelete="RESTRICT"))
+    oam_work_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("oam_work_orders.id", ondelete="RESTRICT"))
+    source_loss_disposition_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("stock_loss_dispositions.id", ondelete="RESTRICT"))
     operation_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_orders.id", ondelete="RESTRICT"))
     operation_type: Mapped[str] = mapped_column(String(24))
     shipment_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("stock_operation_shipments.id", ondelete="RESTRICT"))
@@ -596,7 +598,7 @@ class StockOperationReturnInboundLine(CreatedAtMixin, Base):
         UniqueConstraint("id", "inbound_id", name="uq_stock_operation_return_inbound_lines_binding"),
         Index("ix_stock_operation_return_inbound_lines_receipt_line_id", "receipt_line_id"),
         CheckConstraint(
-            "line_no > 0 AND accepted_qty > 0 AND condition_code IN ('used','damaged')",
+            "line_no > 0 AND accepted_qty > 0 AND condition_code IN ('new','used','damaged')",
             name="ck_stock_operation_return_inbound_lines_context",
         ),
         ForeignKeyConstraint(

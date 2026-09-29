@@ -303,3 +303,25 @@ test('unknown POST and failed original GET retain the recovery record across sta
     await page.refreshInboundState(); await page.beginInbound(); assert.equal(state.writes.length, 1); assert.equal(state.saved.size, 1)
   }
 })
+
+test('loss parcel page posts new-condition inbound and recovers after hide using its loss origin', async () => {
+  const { page, state } = acceptedHarness()
+  const origin = { origin_kind: 'loss_report', loss_operation_id: f.id(201), loss_line_id: f.id(202), headquarters_decision_id: f.id(203), disposition_id: f.id(204) }
+  for (const row of [state.history.package, ...state.history.receipts]) {
+    delete row.work_order_id; row.origin = origin; row.lines.forEach(line => { line.condition_code = 'new' })
+  }
+  state.inboundPreview.origin = origin; state.inboundPreview.lines[0].condition_code = 'new'
+  await page.onShow(); await choose(page)
+  assert.equal(page.data.package.originLabel, '报损退回')
+  assert.equal(page.data.inboundCanPost, true)
+  await page.beginInbound(); let release
+  state.postHook = () => new Promise(resolve => { release = resolve })
+  const posting = confirm(page); await tick(); assert.ok(release)
+  const marker = JSON.parse([...state.saved.values()][0])
+  assert.deepEqual(marker.origin, origin); assert.equal(Object.hasOwn(marker, 'work_order_id'), false)
+  page.onHide(); release(); await posting
+  assert.equal(state.saved.size, 1)
+  state.postHook = null; await page.onShow(); await choose(page); await page.recoverInbound()
+  assert.equal(state.saved.size, 0); assert.equal(state.writes.length, 1)
+  assert.equal(page.data.inboundStatus, 'posted')
+})

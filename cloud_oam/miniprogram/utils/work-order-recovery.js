@@ -8,6 +8,7 @@ const departure = require('./stock-return-outbound-contract')
 const parcel = require('./stock-return-shipment-contract')
 const receiving = require('./stock-return-receipt-contract')
 const inbound = require('./stock-return-inbound-contract')
+const origin = require('./loss-return-origin')
 const READ = { method: 'GET', noRefresh: true, header: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }
 function originalPath(marker) {
   if (marker.kind === inbound.KIND && marker.operation_type === inbound.ACTION) return `/v1/stock-returns/my-receiving/${uuid(marker.receipt_id)}/inbound/by-request/${marker.trace_request_id}`
@@ -43,9 +44,9 @@ async function originalResult(api, marker) {
   return inboundReturn ? inbound.validateLookup(raw, marker) : receivingReturn ? receiving.validateLookup(raw, marker) : returning ? (marker.operation_type === parcel.ACTION ? parcel : marker.operation_type === departure.ACTION ? departure : stockReturn).validateLookup(raw, marker) : reversing ? reversal.validateLookup(raw, marker) : registering ? registration.validateLookup(raw, marker) : paired ? replacement.validateLookup(raw, marker) : validateLookup(raw, marker)
 }
 
-async function recoverPending({ api, store, workOrderId, shipmentId, personId, authorize }) {
-  const order = uuid(workOrderId), person = uuid(personId)
-  return store.withLease({ work_order_id: order, ...(shipmentId ? { shipment_id: uuid(shipmentId) } : {}) }, async lease => {
+async function recoverPending({ api, store, workOrderId, lossOrigin, shipmentId, personId, authorize }) {
+  const scope = origin.scope(workOrderId, lossOrigin, shipmentId), person = uuid(personId)
+  return store.withLease(scope, async lease => {
     const stored = lease.read()
     if (stored.kind === 'missing') return { status: 'missing' }
     if (stored.kind !== 'valid' || stored.value.person_id !== person) throw new Error('原工单恢复记录与当前人员不一致。')
@@ -62,9 +63,9 @@ function outcome(result) {
   return ['sealed', 'sealed_not_executed'].includes(result.lookup_status) ? { status: 'sealed', seal: result.seal } : { status: 'confirmed', command: result }
 }
 
-async function sealPending({ api, store, workOrderId, shipmentId, personId, authorize, confirm }) {
-  const order = uuid(workOrderId), person = uuid(personId)
-  return store.withLease({ work_order_id: order, ...(shipmentId ? { shipment_id: uuid(shipmentId) } : {}) }, async lease => {
+async function sealPending({ api, store, workOrderId, lossOrigin, shipmentId, personId, authorize, confirm }) {
+  const scope = origin.scope(workOrderId, lossOrigin, shipmentId), person = uuid(personId)
+  return store.withLease(scope, async lease => {
     const stored = lease.read()
     if (stored.kind !== 'valid' || stored.value.person_id !== person) throw new Error('原工单恢复记录与当前人员不一致。')
     const marker = stored.value, before = await authorize()

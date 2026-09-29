@@ -2,6 +2,7 @@
 // idempotency key, full command, quantity, material details or scanned codes.
 const { uuid } = require('./work-order-query-contract')
 const { canonical, KINDS } = require('./work-order-command')
+const origin = require('./loss-return-origin')
 const PREFIX = 'rsc_oam_work_order_command_v1:'
 const FIELDS = ['v', 'kind', 'work_order_id', 'person_id', 'authorization_version', 'operation_type', 'trace_request_id', 'request_hash']
 const DEFAULT_STATE = { active: new Set(), faults: new Set() }
@@ -10,6 +11,7 @@ function fail(message = '工单恢复存储不可用，请保留原记录，暂�
 // commands remain keyed only by work_order_id; a receiving marker adds the
 // shipment id so two parcels from one work order cannot share a tombstone.
 function keyOf(value) {
+  if (origin.isLoss(value)) return `loss:${origin.origin(value.origin).disposition_id}:${uuid(value.shipment_id)}`
   const order = uuid(value.work_order_id)
   return value.shipment_id ? `${order}:${uuid(value.shipment_id)}` : order
 }
@@ -18,7 +20,10 @@ function validateMarker(value) {
   const returning = value && value.kind === 'stock_return'
   const inbound = value && value.kind === 'stock_return_inbound'
   const receiving = returning && value.operation_type === 'receive_return'
-  const fields = inbound ? FIELDS.concat('plan_hash', 'receipt_id', 'shipment_id') : returning ? FIELDS.concat('plan_hash', 'operation_id', ...(receiving ? ['shipment_id'] : [])) : reversing ? FIELDS.concat('plan_hash') : FIELDS
+  const source = origin.sourceFields(value)
+  if (origin.isLoss(value) && !receiving && !inbound) fail()
+  const baseFields = origin.isLoss(value) ? FIELDS.filter(key => key !== 'work_order_id').concat('origin') : FIELDS
+  const fields = inbound ? baseFields.concat('plan_hash', 'receipt_id', 'shipment_id') : returning ? baseFields.concat('plan_hash', 'operation_id', ...(receiving ? ['shipment_id'] : [])) : reversing ? FIELDS.concat('plan_hash') : FIELDS
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join('|') !== fields.slice().sort().join('|')
     || value.v !== 1 || !(value.kind === 'work_order_material' && KINDS.includes(value.operation_type)
       || value.kind === 'work_order_replacement' && value.operation_type === 'replace'
@@ -33,7 +38,7 @@ function validateMarker(value) {
     || ((receiving || inbound) && (typeof value.shipment_id !== 'string' || !/^[-0-9a-f]{36}$/i.test(value.shipment_id)))
     || (inbound && (typeof value.receipt_id !== 'string' || !/^[-0-9a-f]{36}$/i.test(value.receipt_id)))
     || (returning && (value.operation_type === 'submit_return' ? value.operation_id !== null : value.operation_type === 'cancel_return' && value.plan_hash !== null))) fail()
-  return Object.freeze({ v: 1, kind: value.kind, work_order_id: uuid(value.work_order_id), person_id: uuid(value.person_id),
+  return Object.freeze({ v: 1, kind: value.kind, ...source, person_id: uuid(value.person_id),
     authorization_version: value.authorization_version, operation_type: value.operation_type,
     trace_request_id: value.trace_request_id, request_hash: value.request_hash, ...(reversing || returning || inbound ? { plan_hash: value.plan_hash } : {}),
     ...(returning ? { operation_id: value.operation_type === 'submit_return' ? null : uuid(value.operation_id) } : {}),
@@ -73,11 +78,19 @@ function createStore(options = {}) {
         let id, scope
         try {
           const suffix = key.slice(PREFIX.length), parts = suffix.split(':')
+          if (parts[0] === 'loss') {
+            const raw = storage.getStorageSync(key)
+            if (typeof raw !== 'string' || raw.length > 1600) fail()
+            scope = validateMarker(JSON.parse(raw))
+            id = keyOf(scope)
+            if (!origin.isLoss(scope) || key !== PREFIX + id) fail()
+          } else {
           id = uuid(parts[0])
           if (parts.length > 2) fail()
           scope = { work_order_id: id }
           if (parts.length === 2) scope.shipment_id = uuid(parts[1])
           if (key !== PREFIX + keyOf(scope)) { state.faults.add(id); fail() }
+          }
         } catch (_) { partial = true; continue }
         const record = read(scope)
         if (record.kind !== 'valid') { partial = true; continue }

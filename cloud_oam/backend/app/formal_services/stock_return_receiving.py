@@ -13,7 +13,7 @@ from ..stock_operation_models import StockOperationOrder, StockOperationShipment
 from ..loss_return_shipment_schemas import LossReturnShipmentOut
 from ..stock_return_receiving_schemas import (
     StockReturnReceivingBlockedOut, StockReturnReceivingDetailOut, StockReturnReceivingLineOut,
-    StockReturnReceivingOut, StockReturnReceivingPackageOut,
+    StockReturnReceivingOut, StockReturnReceivingPackageOut, LossReceivingPackage, LossReceivingLine, RecipientLossOrigin,
 )
 from . import inventory_posting as posting, inventory_query as inventory
 from . import stock_return_shipment_facts as facts
@@ -87,12 +87,6 @@ def _package(db, actor, fact, locations):
 
 def project_package(db, fact, checked, *, target_location_name):
     """Project proven parcel facts; authorization stays with the caller."""
-    # Loss acceptance needs its own origin-aware receipt proof. Isolate this
-    # parcel through the existing unavailable contract until that proof exists;
-    # never coerce its condition or invent a work order for the old contract.
-    if isinstance(checked, LossReturnShipmentOut):
-        _fail("stock_return_receiving_verification_required",
-            "此包裹的来源和验收责任需要进一步核验，请保留原记录处理。", 409)
     header = db.get(Shipment, fact.id, populate_existing=True)
     order = db.get(StockOperationOrder, checked.operation_id, populate_existing=True)
     # Exact association IDs are deliberately projected from typed parcel rows;
@@ -100,13 +94,18 @@ def project_package(db, fact, checked, *, target_location_name):
     rows = facts.lines(db, fact)
     if len(rows) != len(checked.lines):
         facts.invalid()
-    lines = tuple(StockReturnReceivingLineOut(shipment_line_id=row.id, outbound_no=view.outbound_no,
+    loss = isinstance(checked, LossReturnShipmentOut)
+    line_type = LossReceivingLine if loss else StockReturnReceivingLineOut
+    package_type = LossReceivingPackage if loss else StockReturnReceivingPackageOut
+    origin = ({"origin": RecipientLossOrigin(**{key: getattr(checked.origin, key)
+        for key in RecipientLossOrigin.model_fields})} if loss else {"work_order_id": order.oam_work_order_id})
+    lines = tuple(line_type(shipment_line_id=row.id, outbound_no=view.outbound_no,
         material_id=view.material_id, sku_code=view.sku_code, material_name=view.material_name,
         base_unit=view.base_unit, condition_code=view.condition_code, lot_id=view.lot_id, lot_no=view.lot_no,
         shipped_quantity=view.selected_quantity, serials=view.selected_serials)
         for row, view in zip(rows, checked.lines))
-    return StockReturnReceivingPackageOut(shipment_id=header.id, shipment_no=checked.shipment_no,
-        operation_id=order.id, operation_no=order.operation_no, work_order_id=order.oam_work_order_id,
+    return package_type(shipment_id=header.id, shipment_no=checked.shipment_no,
+        operation_id=order.id, operation_no=order.operation_no, **origin,
         sender_person_id=checked.operator_person_id, receiver_person_id=header.target_person_id,
         target_location_id=header.target_location_id, target_location_name=target_location_name,
         custody_assignment_id=fact.target_custody_assignment_id, carrier=checked.carrier, tracking_no=checked.tracking_no,

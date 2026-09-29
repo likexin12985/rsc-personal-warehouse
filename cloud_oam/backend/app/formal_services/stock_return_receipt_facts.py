@@ -7,7 +7,7 @@ from uuid import UUID
 
 from sqlalchemy import select, or_
 
-from ..foundation_models import AuditEvent, OutboxEvent, StateTransitionEvent, FileObject
+from ..foundation_models import AuditEvent, OutboxEvent, StateTransitionEvent, FileObject, NotificationEvent, NotificationPersonTarget
 from ..inventory_models import (Receipt, ReceiptLine, ReceiptException, InboundOrder, Shipment,
     InventoryTransaction, InventoryMovement, InventoryMovementSerial, InventorySerial,
     MaterialInventoryPolicy, CustodyAssignment)
@@ -18,8 +18,10 @@ from ..stock_operation_models import (StockOperationReceipt, StockOperationRecei
 from ..stock_return_receipt_schemas import StockReturnReceiptPreviewIn, StockReturnReceiptLineOut, StockReturnReceiptOut
 from ..stock_return_receiving_schemas import StockReturnReceivingPackageOut
 from . import stock_return_receipt_plan as planning, stock_return_receiving as receiving
+from . import stock_return_receipt_origin as provenance
 from . import stock_return_shipment_facts as parcels, stock_return_facts as returns, inventory_posting as posting
 from .audit_chain import AuditChainError
+from .notification_events import target_manifest_hash
 from .formal_files import _validate_intent_metadata, FormalFileError
 from .work_order_query import _aware
 from .work_order_return_sources import _hash, _fail
@@ -31,7 +33,7 @@ def invalid():
 
 def payload(fact, header, package):
     return dict(receipt_id=str(fact.id), shipment_id=str(fact.shipment_id), operation_id=str(package.operation_id),
-        work_order_id=str(package.work_order_id), operator_person_id=str(fact.operator_person_id),
+        **provenance.origin_fields(package, json=True), operator_person_id=str(fact.operator_person_id),
         status=header.status, request_hash=header.request_hash)
 
 
@@ -146,7 +148,7 @@ def _line(db, fact, row, chosen, original, policy, accepted, rejected, used):
                 != [(item.exception_type, item.description, item.evidence_file_id) for item in selected]): invalid()
     def projected(ids):
         return tuple(dict(serial_id=identifier, serial_no=names[identifier]) for identifier in sorted(ids, key=str))
-    view = StockReturnReceiptLineOut(**{key: getattr(original, key) for key in
+    view = provenance.line_model(original)(**{key: getattr(original, key) for key in
         ('shipment_line_id', 'material_id', 'sku_code', 'material_name', 'base_unit', 'condition_code', 'lot_id', 'lot_no')},
         shipped_qty=original.shipped_quantity, previously_accepted_qty=format(accepted[row.shipment_line_id], '.3f'),
         previously_rejected_qty=format(rejected[row.shipment_line_id], '.3f'), unconfirmed_qty=format(remaining, '.3f'),
@@ -179,7 +181,7 @@ def _result(db, fact, parcel, checked, accepted, rejected, used):
             or _aware(fact.created_at) != _aware(header.created_at) or request.received_at > _aware(fact.created_at)
             or _aware(fact.created_at) > datetime.now(timezone.utc)
             or request.received_at < checked.shipped_at or _aware(fact.created_at) < checked.recorded_at): invalid()
-    package = StockReturnReceivingPackageOut.model_validate(plan['package'])
+    package = provenance.package_from_snapshot(plan['package'])
     if (not package.target_location_name.strip() or package.model_dump(mode='json') != plan['package']
             or receiving.project_package(db, parcel, checked, target_location_name=package.target_location_name) != package
             or fact.operator_person_id != package.receiver_person_id
@@ -212,8 +214,10 @@ def _result(db, fact, parcel, checked, accepted, rejected, used):
     returns.single(db, StateTransitionEvent, aggregate_type=aggregate, aggregate_id=str(fact.id), from_status=None,
         to_status=status, actor_id=actor.user_id, reason=kind, idempotency_key=kind + ':' + str(fact.id), metadata_jsonb=body)
     _namespace(db, fact, header)
-    return StockReturnReceiptOut(receipt_id=fact.id, receipt_no=header.receipt_no, shipment_id=fact.shipment_id,
-        operation_id=package.operation_id, work_order_id=package.work_order_id, operator_person_id=fact.operator_person_id,
+    if provenance.loss_disposition_id(package) is not None:
+        _loss_notification(db, fact=fact, assignment=assignment, body=body)
+    return provenance.output_model(package, 'receipt')(receipt_id=fact.id, receipt_no=header.receipt_no, shipment_id=fact.shipment_id,
+        operation_id=package.operation_id, **provenance.origin_fields(package), operator_person_id=fact.operator_person_id,
         status=status, received_at=request.received_at, recorded_at=_aware(fact.created_at), reason=fact.reason,
         request_id=fact.request_id, request_hash=header.request_hash, plan_hash=fact.plan_hash,
         target_location_id=package.target_location_id, target_custody_assignment_id=fact.target_custody_assignment_id, lines=views)
@@ -248,3 +252,20 @@ def receipt_result(db, *, actor, fact):
     if fact.actor_user_id != current.user_id or fact.operator_person_id != current.person_id:
         _fail('stock_return_receipt_not_found', '本人原验收记录不存在', 404)
     return verified_receipt_history(db, fact=fact)
+
+
+def _loss_notification(db, *, fact, assignment, body):
+    events = tuple(db.scalars(select(NotificationEvent).where(
+        NotificationEvent.business_type == 'stock_operation_receipt',
+        NotificationEvent.business_id == str(fact.id)).limit(2).execution_options(populate_existing=True)))
+    if len(events) != 1: invalid()
+    event = events[0]
+    targets = tuple(db.scalars(select(NotificationPersonTarget.person_id).where(NotificationPersonTarget.event_id == event.id)))
+    if (event.event_type != 'stock_return_received'
+            or event.dedup_key != f'stock-return-notification:stock_return_received:{fact.id}'
+            or event.payload_jsonb != {**body, 'target_custody_assignment_id':str(assignment.id)}
+            or _aware(event.occurred_at) != _aware(fact.created_at)
+            or _aware(event.created_at) != _aware(fact.created_at)
+            or targets != (assignment.custodian_person_id,)
+            or event.target_manifest_sha256 != target_manifest_hash(targets)):
+        invalid()

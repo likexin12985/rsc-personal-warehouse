@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import uuid
 
+from ..stock_return_receiving_schemas import RecipientLossOrigin
 from .inventory_posting import InventoryMovementCommand, InventoryPostingCommand
 
 
@@ -61,6 +62,7 @@ def build_return_inbound_command(
     effective_at: datetime,
     lines: tuple[ReturnInboundLine, ...],
     inbound_id: uuid.UUID | None = None,
+    loss_origin: RecipientLossOrigin | None = None,
 ) -> InventoryPostingCommand:
     """Build a transit-to-region transfer from accepted receipt lines.
 
@@ -76,6 +78,9 @@ def build_return_inbound_command(
         raise ReturnInboundContractError("退回验收事实标识无效") from exc
     if not lines:
         raise ReturnInboundContractError("没有可入账的已接受退回明细")
+    if loss_origin is not None and not isinstance(loss_origin, RecipientLossOrigin):
+        raise ReturnInboundContractError("报损来源必须是已核验的明确类型")
+    conditions = {"new", "used", "damaged"} if loss_origin is not None else {"used", "damaged"}
     seen_lines: set[uuid.UUID] = set()
     seen_serials: set[uuid.UUID] = set()
     movements: list[InventoryMovementCommand] = []
@@ -91,7 +96,7 @@ def build_return_inbound_command(
         seen_lines.add(receipt_line_id)
         if source_account_id == target_account_id:
             raise ReturnInboundContractError("退回入账必须从在途账户转入区域仓账户")
-        if line.condition_code not in {"used", "damaged"}:
+        if line.condition_code not in conditions:
             raise ReturnInboundContractError("退回入账成色无效")
         quantity = _quantity(line.accepted_quantity)
         try:

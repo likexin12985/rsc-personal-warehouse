@@ -13,6 +13,7 @@ from ..stock_return_receipt_schemas import StockReturnReceiptSealOut, StockRetur
 from . import inventory_posting as posting, inventory_query as inventory, stock_return_facts as returns
 from . import stock_return_receipt_facts as facts, stock_return_receipt_plan as plan
 from . import stock_return_recovery as shared
+from . import stock_return_receipt_origin as provenance
 from .audit_chain import append_audit_event, lock_audit_chain_head, AuditChainError
 from .postgresql_lock_graph import lock_material_request_work_order
 from .work_order_evidence_snapshot import material_audit_cursor
@@ -26,13 +27,18 @@ def coordinate(request_id):
 
 
 def seal_payload(row):
-    return {**shared.seal_payload(row), 'shipment_id': str(row.shipment_id)}
+    body = {**shared.seal_payload(row), 'shipment_id': str(row.shipment_id)}
+    if row.source_loss_disposition_id is not None:
+        body.pop('work_order_id')
+        body['source_loss_disposition_id'] = str(row.source_loss_disposition_id)
+    return body
 
 
 def verified_seal(db, *, actor, row, package):
     try:
         if (row.operation_type != 'receive_return' or row.shipment_id != package.shipment_id
-                or row.operation_id != package.operation_id or row.oam_work_order_id != package.work_order_id
+                or row.operation_id != package.operation_id or row.oam_work_order_id != provenance.work_order_id(package)
+                or row.source_loss_disposition_id != provenance.loss_disposition_id(package)
                 or row.actor_user_id != actor.user_id or row.operator_person_id != actor.person_id
                 or row.authorization_version < 1 or row.request_reference != posting._request_reference(row.request_id)
                 or not package.recorded_at <= _aware(row.created_at) <= datetime.now(timezone.utc)
@@ -42,8 +48,8 @@ def verified_seal(db, *, actor, row, package):
             action='stock_return.command_sealed', request_id='stock-return-seal:' + str(row.id), before={}, after=seal_payload(row))
         event = returns.single(db, AuditEvent, stream_key='material_request', aggregate_type='stock_operation_command_seal', aggregate_id=str(row.id))
         if _aware(event.occurred_at) != _aware(row.created_at) or _aware(event.created_at) != _aware(row.created_at): facts.invalid()
-        return StockReturnReceiptSealedOut(seal=StockReturnReceiptSealOut(seal_id=row.id, shipment_id=row.shipment_id,
-            operation_id=row.operation_id, work_order_id=row.oam_work_order_id, operator_person_id=row.operator_person_id,
+        return StockReturnReceiptSealedOut(seal=provenance.output_model(package, 'seal')(seal_id=row.id, shipment_id=row.shipment_id,
+            operation_id=row.operation_id, **provenance.origin_fields(package), operator_person_id=row.operator_person_id,
             request_id=row.request_id, request_hash=row.request_hash, sealed_at=_aware(row.created_at)))
     except (ValueError, TypeError, AttributeError, AuditChainError): facts.invalid()
 
@@ -99,7 +105,8 @@ def seal_receipt_request(db, *, actor, shipment_id, request_id, request_hash):
     posting._lock_inventory_ledger_head_for_atomic_batch(db)
     lock_formal_principal_graph(db, (actor.user_id,))
     current, detail = plan.authorize(db, actor, shipment_id)
-    lock_material_request_work_order(db, detail.package.work_order_id)
+    if provenance.work_order_id(detail.package) is not None:
+        lock_material_request_work_order(db, provenance.work_order_id(detail.package))
     lock_audit_chain_head(db, stream_key='material_request')
     previous = lookup_receipt_request(db, actor=current, shipment_id=shipment_id, request_id=request_id)
     if previous is not None:
@@ -108,7 +115,8 @@ def seal_receipt_request(db, *, actor, shipment_id, request_id, request_hash):
         return previous
     now = datetime.now(timezone.utc)
     row = StockOperationCommandSeal(id=uuid4(), operation_type='receive_return', shipment_id=shipment_id,
-        operation_id=detail.package.operation_id, oam_work_order_id=detail.package.work_order_id,
+        operation_id=detail.package.operation_id, oam_work_order_id=provenance.work_order_id(detail.package),
+        source_loss_disposition_id=provenance.loss_disposition_id(detail.package),
         actor_user_id=current.user_id, operator_person_id=current.person_id, authorization_version=current.authorization_version,
         request_id=request_id, request_reference=posting._request_reference(request_id), request_hash=request_hash, created_at=now)
     db.add(row)

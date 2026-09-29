@@ -1,3 +1,4 @@
+const origin = require('./loss-return-origin')
 const contract = require('./stock-return-inbound-contract')
 const { validateMarker } = require('./work-order-recovery-store')
 const { originalResult } = require('./work-order-recovery')
@@ -22,18 +23,19 @@ async function prepareInbound({ api, current, receiptId, shipmentId, personId, a
     receiptId: preview.receipt_id, shipmentId: preview.shipment_id, target: preview.target_location_id,
     rows: preview.lines.map(row => ({ id: row.receipt_line_id, quantity: row.accepted_qty, serialCount: row.serial_ids.length })) }) }
 }
-async function submitInbound({ api, store, workOrderId, receiptId, shipmentId, personId, authorizationVersion, expectedPlanHash, authorize, confirm }) {
-  return store.withLease({ work_order_id: workOrderId, shipment_id: shipmentId }, async lease => {
+async function submitInbound({ api, store, workOrderId, lossOrigin, receiptId, shipmentId, personId, authorizationVersion, expectedPlanHash, authorize, confirm }) {
+  return store.withLease(origin.scope(workOrderId, lossOrigin, shipmentId), async lease => {
     if (lease.read().kind !== 'missing') throw new Error('请先核验该退回入账请求的原结果。')
     const before = await authorize(), current = async () => { if (await authorize() !== before) throw new Error('access changed') }
     const prepared = await prepareInbound({ api, current, receiptId, shipmentId, personId, authorizationVersion })
     if (prepared.state && prepared.state.status === 'posted') return { status: 'already_posted', state: prepared.state }
+    if (lossOrigin === undefined ? origin.isLoss(prepared.preview) : !origin.sameSource(prepared.preview, { origin: lossOrigin })) throw new Error('报损来源已变化，请重新核验。')
     if (prepared.preview.plan_hash !== expectedPlanHash) throw new Error('入账方案已变化，请重新预览并确认。')
     if (!await confirm(prepared.review)) return { status: 'cancelled' }
     await current()
     const trace = api.createRequestId(), key = api.createIdempotencyKey()
     const requestHash = contract.requestHash(receiptId, prepared.preview.plan_hash, trace)
-    const marker = validateMarker({ v: 1, kind: contract.KIND, work_order_id: workOrderId, shipment_id: shipmentId,
+    const marker = validateMarker({ v: 1, kind: contract.KIND, ...origin.scope(workOrderId, lossOrigin, shipmentId),
       receipt_id: receiptId, person_id: personId, authorization_version: authorizationVersion, operation_type: contract.ACTION,
       trace_request_id: trace, request_hash: requestHash, plan_hash: prepared.preview.plan_hash })
     lease.persist(marker)

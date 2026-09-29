@@ -4,6 +4,7 @@ const { exact, text } = require('./work-order-replacement-command')
 const { amount, list, integer, digest, requestId, reason } = require('./stock-return-contract')
 const { instant } = require('./stock-return-outbound-contract')
 const { canonical, utf8 } = require('./work-order-command')
+const origin = require('./loss-return-origin')
 const BASE = ['shipment_line_id', 'material_id', 'sku_code', 'material_name', 'base_unit', 'condition_code', 'lot_id', 'lot_no']
 const TYPES = ['shortage', 'damaged', 'wrong_material', 'wrong_serial', 'rejected']
 function fail() { throw new Error('退回包裹或累计验收记录未通过核验，请刷新原记录。') }
@@ -13,10 +14,10 @@ function serials(rows) {
   for (const sn of list(rows)) { exact(sn, ['serial_id', 'serial_no']); uuid(sn.serial_id); text(sn.serial_no, 200) }
   unique(rows, 'serial_id'); return rows
 }
-function metadata(row) {
+function metadata(row, loss = false) {
   uuid(row.shipment_line_id); uuid(row.material_id)
   text(row.sku_code, 80); text(row.material_name, 1000); text(row.base_unit, 100)
-  if (!['used', 'damaged'].includes(row.condition_code)) fail()
+  if (!(loss ? ['new', 'used', 'damaged'] : ['used', 'damaged']).includes(row.condition_code)) fail()
   if (row.lot_id === null) { if (row.lot_no !== null) fail() } else { uuid(row.lot_id); text(row.lot_no, 160) }
 }
 function identity(raw, expected) {
@@ -25,17 +26,17 @@ function identity(raw, expected) {
   integer(raw.ledger_cursor); instant(raw.queried_at)
 }
 function parcel(raw, expected) {
-  exact(raw, ['verification_status', 'shipment_id', 'shipment_no', 'operation_id', 'operation_no', 'work_order_id',
+  exact(raw, ['verification_status', 'shipment_id', 'shipment_no', 'operation_id', 'operation_no', ...origin.sourceKeys(raw),
     'sender_person_id', 'receiver_person_id', 'target_location_id', 'target_location_name', 'custody_assignment_id',
     'carrier', 'tracking_no', 'shipped_at', 'recorded_at', 'lines'])
   if (raw.verification_status !== 'verified' || uuid(raw.receiver_person_id) !== uuid(expected.personId)
     || expected.shipmentId && raw.shipment_id !== uuid(expected.shipmentId)) fail()
-  for (const key of ['shipment_id', 'operation_id', 'work_order_id', 'sender_person_id', 'target_location_id', 'custody_assignment_id']) uuid(raw[key])
+  for (const key of ['shipment_id', 'operation_id', 'sender_person_id', 'target_location_id', 'custody_assignment_id']) uuid(raw[key])
   for (const key of ['shipment_no', 'operation_no', 'carrier', 'tracking_no']) text(raw[key], 100)
   text(raw.target_location_name, 300)
   if (earlier(raw.recorded_at, raw.shipped_at)) fail()
   for (const row of list(raw.lines, 1, 100)) {
-    exact(row, BASE.concat('outbound_no', 'shipped_quantity', 'serials')); metadata(row); text(row.outbound_no, 100)
+    exact(row, BASE.concat('outbound_no', 'shipped_quantity', 'serials')); metadata(row, origin.isLoss(raw)); text(row.outbound_no, 100)
     const qty = amount(row.shipped_quantity, 1n); serials(row.serials)
     if (row.serials.length && BigInt(row.serials.length) * 1000n !== qty) fail()
   }
@@ -57,21 +58,21 @@ function validateDirectory(raw, expected, afterId = null) {
   return raw
 }
 function receipt(raw, expected, original) {
-  exact(raw, ['schema_version', 'receipt_id', 'receipt_no', 'shipment_id', 'operation_id', 'work_order_id', 'operator_person_id', 'status',
+  exact(raw, ['schema_version', 'receipt_id', 'receipt_no', 'shipment_id', 'operation_id', ...origin.sourceKeys(raw), 'operator_person_id', 'status',
     'received_at', 'recorded_at', 'reason', 'request_id', 'request_hash', 'plan_hash', 'target_location_id', 'target_custody_assignment_id', 'lines'])
   if (raw.schema_version !== '1.0' || uuid(raw.operator_person_id) !== uuid(expected.personId)
     || uuid(raw.shipment_id) !== uuid(expected.shipmentId) || raw.reason !== reason(raw.reason)) fail()
   uuid(raw.receipt_id); text(raw.receipt_no, 100); requestId(raw.request_id); digest(raw.request_hash); digest(raw.plan_hash)
-  for (const key of ['operation_id', 'work_order_id', 'target_location_id', 'target_custody_assignment_id']) uuid(raw[key])
+  for (const key of ['operation_id', 'target_location_id', 'target_custody_assignment_id']) uuid(raw[key])
   if (earlier(raw.recorded_at, raw.received_at)) fail()
-  if (original && (['shipment_id', 'operation_id', 'work_order_id', 'target_location_id'].some(key => raw[key] !== original[key])
+  if (original && (!origin.sameSource(raw, original) || ['shipment_id', 'operation_id', 'target_location_id'].some(key => raw[key] !== original[key])
     || raw.target_custody_assignment_id !== original.custody_assignment_id || earlier(raw.received_at, original.shipped_at)
     || earlier(raw.recorded_at, original.recorded_at))) fail()
   let abnormal = false
   for (const row of list(raw.lines, 1, 100)) {
     exact(row, BASE.concat('shipped_qty', 'previously_accepted_qty', 'previously_rejected_qty', 'unconfirmed_qty',
       'accepted_qty', 'rejected_qty', 'damaged_qty', 'shortage_qty', 'accepted_serials', 'damaged_serial_ids', 'rejected_serials', 'shortage_serials', 'exceptions'))
-    metadata(row)
+    metadata(row, origin.isLoss(raw))
     const total = amount(row.shipped_qty, 1n), before = amount(row.previously_accepted_qty) + amount(row.previously_rejected_qty)
     const accepted = amount(row.accepted_qty), rejected = amount(row.rejected_qty), damaged = amount(row.damaged_qty), shortage = amount(row.shortage_qty)
     if (before > total || amount(row.unconfirmed_qty) !== total - before || accepted + rejected + shortage <= 0n

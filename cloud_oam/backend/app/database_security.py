@@ -4691,6 +4691,28 @@ EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_shipment_current_0154'] = 
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_shipment_notification_0154'] = ('notification_events', 'rsc_guard_loss_shipment_notification_0154', 'A', 5, True, True, True)
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_shipment_target_0154'] = ('notification_person_targets', 'rsc_guard_loss_shipment_notification_0154', 'A', 5, True, True, True)
 
+
+
+# 0155 loss acceptance and independent inbound; no new API SQL capabilities.
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0154 = dict(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256)
+MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256_THROUGH_0154 = dict(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256)
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_check_loss_receipt_0155', 'uuid, boolean')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_check_loss_receipt_0155', 'uuid, boolean')] = ('f', 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_receipt_0155', 'uuid, boolean')] = '13d4ffac2caf45c22be48e1a1441598cf58b0d5270f9c94420b9807577398ed4'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_loss_receipt_insert_0155', '')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_loss_receipt_insert_0155', '')] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_loss_receipt_insert_0155', '')] = '2551ce40427e2607df75ac1108ee5d94e06898eddef752d1f2e57167d67ad0f4'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_loss_receipt_notification_0155', '')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_loss_receipt_notification_0155', '')] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_loss_receipt_notification_0155', '')] = '85b78b7247256df98a6746e601841e8bcf8251b17fc62eac2a1fc8b82167327f'
+MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[('rsc_check_stock_return_receipt_0105', 'uuid')] = '12423541a5b3819aba851023612a49ac82848243e64d3ee39e8e7de9cabcb2e9'
+MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[('rsc_guard_stock_operation_seal_0101', '')] = '484989dddfd93a1b473f5418b03d7f5e55626ef535c953d96f6cb54a2307e226'
+MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[('rsc_check_stock_return_inbound_0111', 'uuid')] = '544d67d9689ef1932e697b18d211d73b7f0a97255054d6a7cae9cea4408ede54'
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_require_opening_observation_account_0023', '')] = 'd6a6bf30baa72d0df2555fd23c9d1f15fc73bb44491b27e147e4739096bd4afe'
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_receipt_current_0155'] = ('stock_operation_receipts', 'rsc_guard_loss_receipt_insert_0155', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_receipt_notification_0155'] = ('notification_events', 'rsc_guard_loss_receipt_notification_0155', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_receipt_target_0155'] = ('notification_person_targets', 'rsc_guard_loss_receipt_notification_0155', 'A', 5, True, True, True)
+
 _ROLE_EVIDENCE_SQL = text(
     """
 SELECT
