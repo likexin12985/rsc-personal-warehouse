@@ -10,6 +10,7 @@ from sqlalchemy import or_, select
 from ..foundation_models import Organization
 from ..inventory_models import CustodyAssignment, Shipment, StockLocation
 from ..stock_operation_models import StockOperationOrder, StockOperationShipment
+from ..loss_return_shipment_schemas import LossReturnShipmentOut
 from ..stock_return_receiving_schemas import (
     StockReturnReceivingBlockedOut, StockReturnReceivingDetailOut, StockReturnReceivingLineOut,
     StockReturnReceivingOut, StockReturnReceivingPackageOut,
@@ -86,6 +87,12 @@ def _package(db, actor, fact, locations):
 
 def project_package(db, fact, checked, *, target_location_name):
     """Project proven parcel facts; authorization stays with the caller."""
+    # Loss acceptance needs its own origin-aware receipt proof. Isolate this
+    # parcel through the existing unavailable contract until that proof exists;
+    # never coerce its condition or invent a work order for the old contract.
+    if isinstance(checked, LossReturnShipmentOut):
+        _fail("stock_return_receiving_verification_required",
+            "此包裹的来源和验收责任需要进一步核验，请保留原记录处理。", 409)
     header = db.get(Shipment, fact.id, populate_existing=True)
     order = db.get(StockOperationOrder, checked.operation_id, populate_existing=True)
     # Exact association IDs are deliberately projected from typed parcel rows;

@@ -1,7 +1,32 @@
 # 正式 V1.0 基线缺口接续审计
 
 
-## 2026-09-29 当前：0154 报损退回发运本地验证完成
+## 2026-09-29 接收查询隔离修复与下一批收货依赖
+
+0154 已提交为 `04557efb03fcbf3a672224731064bd9c3d06532e`，此前 7867 项静态回归与两类原生
+PG16 门禁通过。随后的真实 HTTP 回归发现：数量件/SN 报损新件均触发接收输出 ValidationError，
+未捕获异常会使整个收货列表失败（94784 exit 1，2 failed）。
+
+本修复对已验证的报损来源包裹使用既有 unavailable 合同单项隔离，详情返回私有、不可缓存的 409。
+不改成色、不编造工单、不伪造收货；保留原有区域责任、权限、历史证明与二次回读。
+原工单包裹仍使用完整验证合同。新回归和原收货/验收/HTTP 合同合计 **71 passed**（73809 exit 0），
+当前源码与 `artifacts/next-loss-return-receiving/boundary-source.json` 一致。
+仓库安全及提交证据见该目录 `boundary-safety.log`、`boundary-commit-evidence.json`。
+这一补丁不改变迁移、数据库权限或发运证明。完整报损收货和入库仍未开放。
+
+下一批接收结构候选已通过数量/SN 两项本地只读测试：真实报损来源、新件成色、接收字段白名单、
+列表/详情 JSON 往返、禁止混入工单/发起人摘要、撤权拒绝及库存不变。候选仅在 ignored
+`artifacts/next-loss-return-receiving/recipient_candidate.py`，没有接入正式接口或客户端，
+不能据此声称验收完成或原生数据库门禁通过。
+
+进一步审计发现 `StockOperationCommandSeal.oam_work_order_id` 仍不可为空，验收封存命令和 SQL
+也要求工单绑定。下一批须同时覆盖来源分型、独立验收事实、原请求回查/封存、延迟提交拒绝，
+再完成 PostgreSQL 当前权限/历史证明及并发数量/SN 门禁。来源查询、验收、入库分别验证，
+不能仅替换页面或输出结构。具体顺序见 `implementation-order.json` 与 `receipt-proof-anchors.json`。
+GitHub 新版本门禁及精确推送回读另存 `artifacts/integrated-0154`；旧 011aafd 全绿不替代新版本验收。
+未进行生产部署或真实短信发送；飞书知识源继续后置。
+
+## 2026-09-29 0154 报损退回发运本地验证完成
 
 上一批在途盘点修复提交为 `f34a0a7ea28ce49a4c9d799b69d7f852041138d3`。
 本批正式接入来源互斥的报损退回发运服务和输出、0154 私有 SQL 证明、运行时安全目录与
