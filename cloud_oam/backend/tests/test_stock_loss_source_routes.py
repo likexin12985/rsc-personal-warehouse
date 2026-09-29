@@ -78,9 +78,9 @@ def test_failures_have_private_responses_without_database_details(db, allowed, c
     assert 'PRIVATE-' not in response.text
 
 
-def test_no_submit_endpoint_or_freeze_is_exposed(db, allowed, client):
+def test_source_selection_is_not_a_complete_submission(db, allowed, client):
     before = counts(db), inventory(db)
     response = client.post(PATH, json=request(allowed).model_dump(mode='json'))
-    assert response.status_code == 404
+    assert response.status_code == 422
     private(response)
     assert (counts(db), inventory(db)) == before

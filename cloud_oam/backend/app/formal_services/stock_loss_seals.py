@@ -1,6 +1,6 @@
 """Permanently close an exact unresolved request, never replay inventory.
 
-The caller owns commit/rollback. No public write route is activated here.
+The caller owns commit/rollback; the formal router acknowledges after commit.
 PostgreSQL independently proves authority, audit and late-command exclusion.
 """
 from datetime import datetime, timezone

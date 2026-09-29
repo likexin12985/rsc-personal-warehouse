@@ -1,7 +1,7 @@
-"""Atomic loss submission candidate; public activation requires its PG proof.
+"""Atomic loss submission; the caller owns commit/rollback.
 
-The caller owns commit/rollback. This module is deliberately not routed while
-the complete database submission and review/disposition boundaries are built.
+Submission freezes stock. Regional review, headquarters approval and actual
+disposition remain separate facts with their own authorization boundaries.
 """
 from datetime import datetime, timezone
 from uuid import uuid4

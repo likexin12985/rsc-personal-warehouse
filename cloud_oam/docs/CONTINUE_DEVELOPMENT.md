@@ -1,8 +1,8 @@
 # RSC 个人仓开发交接
 
-核对时间：2026-09-29 18:26–18:30（Asia/Shanghai）。本页为接续入口，覆盖历史文档中的旧 HEAD、候选和“当前状态”；每次接手仍须重新检查 Git、CI 和实际进程。此次仅整理文档，没有修改应用代码、推送或部署。
+核对时间：2026-09-29 19:30（Asia/Shanghai）。本页为接续入口，覆盖历史文档中的旧 HEAD、候选和“当前状态”；每次接手仍须重新检查 Git、CI 和实际进程。本轮已同步 0155，新增报损提交/封存 HTTP 接口完成本地验证，尚未部署。
 
-**当前结论：0155 报损收货、独立入库与原请求恢复已完成本地验证并提交；尚未推送。上一版远端 PG16 有分片因 runner 失联失败，不能视为全绿；正式上线仍未放行。**
+**当前结论：0155 已随交接提交 `8990ebd` 推送，客户端 CI 成功，14 个报损 PG16 分支成功；综合 PG16 和静态门禁未齐。新增报损提交/封存 HTTP 已通过数量/SN 原生验证与 86 项路由回归，其提交结果见本地证据。正式上线仍未放行。**
 
 ## 1. 工作位置与固定边界
 
@@ -19,17 +19,24 @@
 
 | 对象 | 本次确认的状态 | 证据/边界 |
 | --- | --- | --- |
-| 最新功能提交 | `d76efd135bb7e0f476a187809e14fd5b41e3c235`，`feat(stock): complete loss receipt and inbound recovery` | 本地已提交；开始整理时工作树干净；之后的文档提交以 `git log` 为准 |
-| 父提交/远端分支头 | `a03761e380eb2704078dd1847b2a811cfc131382` | GitHub refs API 本次精确回读；0155 尚未推送 |
-| 迁移 head | `20261204_0155`，父节点 `20261203_0154` | 报损收货证明、来源互斥封存、新件首次入库账户准入 |
-| 上一版客户端 CI | `36521872902`：completed / success | [准确 a03761e 运行](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36521872902) |
-| 上一版 PG16 CI | `36521873050`：整体 in_progress；runtime 仍运行 | [准确 a03761e 运行](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36521873050)；12 个报损分支成功，静态 1/2 成功，静态 0 失败 |
-| 静态 0 失败 | GitHub annotation：hosted runner 与服务端失联 | [job 109256308193](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36521873050/job/109256308193)；日志接口 HTTP 404，不能推断测试断言已通过或具体资源/网络根因 |
-| 当前 0155 的远端/生产状态 | 无对应远端 CI 或生产部署证据 | 本地通过、旧 SHA CI、上线验收互不替代 |
+| 0155 功能提交 | `d76efd135bb7e0f476a187809e14fd5b41e3c235` | 报损收货、独立入库与恢复 |
+| 已推送/远端分支头 | `8990ebddfe16d11265e7c6524fa7357d2771e26e` | 包含 0155 和交接整理；Git Data API 保留原 commit/tree，force=false，已精确回读 |
+| 本轮提交/封存 HTTP | 基于 `8990ebd`，本地验证完成 | `artifacts/loss-http-submit/`；实际提交见 `git log` 及 `commit-evidence.json`，未推送到远端前不继承任何 CI |
+| 迁移 head | `20261204_0155`，父节点 `20261203_0154` | 本轮 HTTP 接线不新增迁移或生产权限种子 |
+| 8990ebd 客户端 CI | `36560246356`：completed / success | [准确运行](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36560246356) |
+| 8990ebd PG16 CI | `36560246385`：整体仍运行；14 个报损分支成功 | [准确运行](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36560246385)；runtime/静态 2 仍运行，静态 0/1 已失败，原始日志确认 runner 收到 shutdown signal 后取消；不能视为通过 |
+| 上一版 a03761e CI 终态 | `36521873050`：failure | [历史运行](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36521873050)；静态 0 runner 失联，runtime 超过 6 小时取消，12 个报损分支成功 |
+| 生产状态 | 未部署本批，没有正式上线验收 | 本地、准确 SHA CI、真实业务 UAT、生产回读分别核验 |
 
-本地提交证明：`artifacts/loss-receipt-inbound-0155/commit-evidence.json`，tree 为 `c518f1b1779eb08446e6893fc51937df9c606896`，记录 pushed=false、productionDeployed=false。
+Git 推送超时后先回读远端仍为 a03761e，才使用既有 Git Data API 精确提交并回读 8990ebd；没有 force push。证据：`artifacts/continue-0155-release/push-result.json`。上一版 runtime 原始日志和阶段耗时分析同目录；222 个阶段完成，但后续检查未执行，不能按通过验收。退回出库单阶段约 2250 秒，首次账户边界约 1430 秒，累计触及 6 小时上限；需要在保留全部场景和迁移顺序依赖的前提下拆分综合门禁，不能仅跳过慢检查。
 
 ## 3. 最新一批完成了什么
+
+本轮新增正式 `POST /api/v1/stock-operations/loss-reports` 与 `/request-seal`：当前本人/submit_loss 权限重检，请求头与原 request/key 一致性，COMMIT 完成才返回成功；数据库/审计故障返回结果未确认，保留原请求回查，不自动重发。封存若发现原单已提交，返回原单而不另造封存。区域核实/总部审批、客户端报损页面及发件接口仍待补齐。
+
+新增 `test_stock_loss_write_routes.py`、`pg16_stock_loss_write_http_gate.py` 和 `run_local_pg16_stock_loss_http_checks.py`。后端路由/来源/回查/封存 **86 passed**，CI 拓扑 **13 passed**。数量 `run-fn3k7kzl`、SN `run-xjv3qzx8` 实际 PG16 API 角色 HTTP 通过：真实提交回执丢失后找回、提交前故障回滚、封存回执丢失后找回、迟到提交拒绝、精确重试不重复冻结、撤销写权限后仍能按读权限回查。两库 stopped / serverExitCode=0，1722 份非文档源码零漂移；首次探测因测试配置源码更新主动中止并正常停库，不计通过。首次 pytest 因工作目录错误无法导入 app，改在 backend 执行后通过，原日志保留。证据见 `artifacts/loss-http-submit/evidence-index.json` 与 `native-terminal.json`。CI 增加独立数量/SN `submission_http`，当前候选矩阵为 **16 分支**；已上传版本仍为 14 分支。
+
+下面是已推送 0155 的完成范围：
 
 1. 报损包裹接收列表/详情及收货预检、提交、回查、封存支持真实五字段来源：`origin_kind`、`loss_operation_id`、`loss_line_id`、`headquarters_decision_id`、`disposition_id`。保留 new/used/damaged 成色，不补假工单，不与普通工单合同混用。
 2. 收货只保存实物验收，不变更库存；独立入库经统一流水过账，覆盖数量件和 SN、新件区域账户首次创建。
@@ -73,9 +80,9 @@
 
 | 顺序 | 工作 | 完成标准 |
 | --- | --- | --- |
-| 1 | 核对上一版 CI 终态，处理 runner 失联 | 保存准确 SHA、job/annotation 和可用日志；区分基础设施失败与测试失败；当前 runtime 未终态前避免直接推送取消它 |
-| 2 | 为 0155 完成准确候选远端门禁 | 先核对本地差异/证据，再按既有安全发布流程推送并回读 SHA；新客户端、完整 PG16 runtime、静态及 14 个报损分支各取终态，旧版全绿不继承 |
-| 3 | 补报损发起/审批正式接口及请求恢复 | 内部服务已有；[报损路由](../backend/app/routers/formal_stock_losses.py) 尚未注册完整提交/审批写入口。补角色/范围、同键原子性、旧权限拒绝及客户端完整流 |
+| 1 | 解决综合门禁累计超过 6 小时及静态 runner 取消 | 上一版终态已定位；当前 CI 继续取证。按依赖拆分并证明所有原场景仍执行，保留聚合失败关闭；不能放宽或删减门禁 |
+| 2 | 完成本轮 HTTP 增量提交及准确版本远端门禁 | 本地证据已齐；准确提交回读后验证客户端、完整 runtime/静态及 16 个报损分支；当前正在运行的旧 SHA 不被提前取消 |
+| 3 | 补报损发起/审批正式接口及请求恢复 | 提交及永久封存 HTTP 本轮已补；[报损路由](../backend/app/routers/formal_stock_losses.py) 的区域/总部审批及相应请求恢复仍缺，客户端完整报损流仍缺。沿用角色/范围、同键原子性及旧权限拒绝 |
 | 4 | 补报损发件侧出库、发运接口/客户端恢复 | [退回路由](../backend/app/routers/formal_stock_returns.py) 发件坐标仍要求工单；使用精确报损来源，分别回查/封存，数量/SN 与未知结果端到端验收 |
 | 5 | 补报废反向、人员间调拨及离职交接 | 报废审批/处置/反向分别留事实；独立人员调拨闭环；交接案、唯一未结、双方确认、未结事项清理、个人仓归零及双层关闭 |
 | 6 | 继续基线逐项审计及真实试点准备 | 报表范围/筛选/订阅、打印、真实来源/身份/期初、短信及其他通知渠道、OSS/KMS、设备 UAT、备份回滚、性能和连续三天对账逐项补证 |

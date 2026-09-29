@@ -122,5 +122,4 @@ def test_shared_return_namespace_and_http_recover_the_same_tombstone(db,readable
     assert response.json()['seal']['seal_id']==str(result.seal.seal_id)
     assert response.json()['retry_permitted'] is False and value.idempotency_key not in response.text
     private(response)
-    assert client.post(PATH+'/request-seal',json=seal_input(readable,value).model_dump(mode='json')).status_code==404
     assert snapshot(db)==before
