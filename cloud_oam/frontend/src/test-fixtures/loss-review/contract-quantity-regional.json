@@ -1,0 +1,157 @@
+{
+  "identity": {
+    "person_id": "2a191a1a-fcc5-4e82-8d04-c93252c41caa",
+    "authorization_version": 1
+  },
+  "stage": "regional",
+  "queue": {
+    "schema_version": "1.0",
+    "person_id": "2a191a1a-fcc5-4e82-8d04-c93252c41caa",
+    "authorization_version": 1,
+    "stage": "regional",
+    "view": "pending",
+    "queried_at": "2026-09-30T01:24:44.387261Z",
+    "items": [
+      {
+        "availability": "available",
+        "operation_id": "ba3109f6-2be6-4b62-9bcd-316c29d4f7ab",
+        "operation_no": "LOSS-77C21184ADBDF59100F39CD8",
+        "owner_org_id": "652e0c38-ff54-4457-8e12-3ca4a7bdc068",
+        "owner_org_name": "测试区域公司",
+        "requester_person_id": "6c30a7b6-2222-41a8-9aea-6498599960d2",
+        "requester_name": "库存工程师",
+        "source_location_id": "48a20d32-8acc-4dda-8bde-2e6e86403a5c",
+        "source_location_name": "库存工程师个人仓",
+        "submitted_at": "2026-09-30T01:24:44.245417Z",
+        "reason": "现场发现物料损坏，申请核实",
+        "submission_plan_hash": "63df1ca66f6328f62d7c5a45ae8fe156f826def1286ca5f69229f620155d9289",
+        "approval_stage": "awaiting_regional",
+        "approval_stock_effect": "none",
+        "lines": [
+          {
+            "line_id": "90df2360-1e55-4682-9439-73f223824185",
+            "material_id": "6819ea77-de45-40ba-9475-c13f3f253474",
+            "sku_code": "SKU-9545aaf8db3c",
+            "material_name": "测试物料",
+            "base_unit": "件",
+            "condition_code": "new",
+            "lot_id": null,
+            "lot_no": null,
+            "quantity": "1.000",
+            "serials": []
+          }
+        ],
+        "evidence": [
+          {
+            "file_id": "574cf96a-36cf-4101-a749-c5deb49bd814",
+            "original_filename": "报损照片1.jpg",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "size_bytes": 128,
+            "mime_type": "image/jpeg"
+          },
+          {
+            "file_id": "d7af2dcb-821a-4999-b4ce-94b98e4376c7",
+            "original_filename": "报损照片0.jpg",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "size_bytes": 128,
+            "mime_type": "image/jpeg"
+          }
+        ],
+        "regional_review": null,
+        "headquarters_review": null
+      }
+    ],
+    "next_after_id": null
+  },
+  "detail": {
+    "schema_version": "1.0",
+    "person_id": "2a191a1a-fcc5-4e82-8d04-c93252c41caa",
+    "authorization_version": 1,
+    "stage": "regional",
+    "queried_at": "2026-09-30T01:24:44.403058Z",
+    "report": {
+      "availability": "available",
+      "operation_id": "ba3109f6-2be6-4b62-9bcd-316c29d4f7ab",
+      "operation_no": "LOSS-77C21184ADBDF59100F39CD8",
+      "owner_org_id": "652e0c38-ff54-4457-8e12-3ca4a7bdc068",
+      "owner_org_name": "测试区域公司",
+      "requester_person_id": "6c30a7b6-2222-41a8-9aea-6498599960d2",
+      "requester_name": "库存工程师",
+      "source_location_id": "48a20d32-8acc-4dda-8bde-2e6e86403a5c",
+      "source_location_name": "库存工程师个人仓",
+      "submitted_at": "2026-09-30T01:24:44.245417Z",
+      "reason": "现场发现物料损坏，申请核实",
+      "submission_plan_hash": "63df1ca66f6328f62d7c5a45ae8fe156f826def1286ca5f69229f620155d9289",
+      "approval_stage": "awaiting_regional",
+      "approval_stock_effect": "none",
+      "lines": [
+        {
+          "line_id": "90df2360-1e55-4682-9439-73f223824185",
+          "material_id": "6819ea77-de45-40ba-9475-c13f3f253474",
+          "sku_code": "SKU-9545aaf8db3c",
+          "material_name": "测试物料",
+          "base_unit": "件",
+          "condition_code": "new",
+          "lot_id": null,
+          "lot_no": null,
+          "quantity": "1.000",
+          "serials": []
+        }
+      ],
+      "evidence": [
+        {
+          "file_id": "574cf96a-36cf-4101-a749-c5deb49bd814",
+          "original_filename": "报损照片1.jpg",
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "size_bytes": 128,
+          "mime_type": "image/jpeg"
+        },
+        {
+          "file_id": "d7af2dcb-821a-4999-b4ce-94b98e4376c7",
+          "original_filename": "报损照片0.jpg",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "size_bytes": 128,
+          "mime_type": "image/jpeg"
+        }
+      ],
+      "regional_review": null,
+      "headquarters_review": null
+    }
+  },
+  "pending": {
+    "v": 1,
+    "person_id": "2a191a1a-fcc5-4e82-8d04-c93252c41caa",
+    "authorization_version": 1,
+    "owner_org_id": "652e0c38-ff54-4457-8e12-3ca4a7bdc068",
+    "command": {
+      "stage": "regional",
+      "operator_person_id": "2a191a1a-fcc5-4e82-8d04-c93252c41caa",
+      "request_hash": "166e511c8dc1d1f7af7d7c0a4bb5f00c3748519e4f23457a364d9102443a0bd7",
+      "original": {
+        "operation_id": "ba3109f6-2be6-4b62-9bcd-316c29d4f7ab",
+        "expected_submission_plan_hash": "63df1ca66f6328f62d7c5a45ae8fe156f826def1286ca5f69229f620155d9289",
+        "comment": "已核实原报损明细与照片，待总部审批",
+        "request_id": "23bd191eeda84d97b18e1be58265c70c",
+        "idempotency_key": "f853fcf521ce4adb841cfcdb27bc8fdd"
+      }
+    }
+  },
+  "found": {
+    "lookup_status": "found",
+    "retry_permitted": false,
+    "review": {
+      "review_id": "fa5a11ff-dc17-45b2-a441-3146a2df1eee",
+      "operation_id": "ba3109f6-2be6-4b62-9bcd-316c29d4f7ab",
+      "owner_org_id": "652e0c38-ff54-4457-8e12-3ca4a7bdc068",
+      "reviewer_person_id": "2a191a1a-fcc5-4e82-8d04-c93252c41caa",
+      "approval_stage": "awaiting_headquarters",
+      "stock_effect": "none",
+      "decision": "verified",
+      "comment": "已核实原报损明细与照片，待总部审批",
+      "request_id": "23bd191eeda84d97b18e1be58265c70c",
+      "request_hash": "166e511c8dc1d1f7af7d7c0a4bb5f00c3748519e4f23457a364d9102443a0bd7",
+      "submission_plan_hash": "63df1ca66f6328f62d7c5a45ae8fe156f826def1286ca5f69229f620155d9289",
+      "reviewed_at": "2026-09-30T01:24:44.418068Z"
+    }
+  }
+}

@@ -508,6 +508,13 @@ def _authorize_download(
     return_receipt_bindings = tuple(db.scalars(select(StockOperationReceiptException).where(
         StockOperationReceiptException.evidence_file_id == row.id,
     ).order_by(StockOperationReceiptException.id).limit(501)))
+    if purpose == "stock_loss_evidence":
+        from .stock_loss_review_evidence import authorize_bound_loss_evidence
+        binding = authorize_bound_loss_evidence(db, actor=actor, row=row,
+            foreign_bindings_present=bool(request_attachment_ids or external_request_ids
+                or document_bindings or receipt_bindings or return_receipt_bindings))
+        if binding is not None:
+            return binding
     if return_receipt_bindings:
         if (purpose != "receipt_exception_evidence" or request_attachment_ids or external_request_ids
                 or document_bindings or receipt_bindings or len(return_receipt_bindings) > 500):

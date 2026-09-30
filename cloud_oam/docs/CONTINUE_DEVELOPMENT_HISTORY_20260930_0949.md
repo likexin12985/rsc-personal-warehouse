@@ -1,13 +1,13 @@
 # RSC 个人仓开发交接
 
-核验时间：2026-09-30 12:53（Asia/Shanghai）。当前接续入口；下列路径默认相对 `cloud_oam/`。本批审批查询/照片授权及 H5 已完成本地验收，准备提交；准确提交以 git log 和 commit-evidence.json 为准。尚无该新提交的完整远端 CI 或部署验收。
+核验时间：2026-09-30 09:49（Asia/Shanghai）。当前接续入口；下列路径默认相对 `cloud_oam/`。本轮修复 H5 类型/移动端布局，完成前端与小程序回归，启动新的 PG16；未提交、推送或部署。
 
-**报损收货、独立入库和恢复已有本地验证。当前审批查询/照片授权与 H5 本地验收完成；类型检查、1699 项前端测试、1079 项小程序测试、4 项后端合同互验、双入口构建通过。390px 布局及重入后原请求保留已用浏览器实测。数量/SN PG16 native-v4 均通过、正常停库、1759 文件零漂移，源码冻结结束；可进入提交/准确 SHA CI，不能宣布上线。父 SHA CI 仍为整体失败。**
+**报损收货、独立入库和恢复已有本地验证。当前审批查询/照片授权与 H5 仍未提交；类型检查、1699 项前端测试、1079 项小程序测试、4 项后端合同互验、双入口构建通过。390px 布局及重入后原请求保留已用浏览器实测。数量/SN PG16 native-v4 会话 45500 正在运行，1759 文件冻结；不可提交或宣布上线。父 SHA CI 仍为整体失败。**
 
 ## 1. 接手位置与不可破坏的约束
 
 - 工作树：`~/.codex/worktrees/06f6/oam`；分支 `codex/notification-delivery-worker`。禁止 reset、revert、丢弃未提交改动；不要在默认 checkout 继续。
-- 本批基础提交 `1f65dcbed655a0a1e7c4054ba8b6fe1f2d86d3d1`，前一提交 `b4a964e5443439794429de6fee85281d9b7faa5f`；本批提交/推送状态以当前 git log 和 `artifacts/loss-review-queue-next/commit-evidence.json` 为准。父 CI 对应 `3e67e51714d301bf66126b8ec55741e378d0720c`，不能覆盖新提交。
+- 本地 HEAD：`1f65dcbed655a0a1e7c4054ba8b6fe1f2d86d3d1`；前一提交 `b4a964e5443439794429de6fee85281d9b7faa5f`。两者尚未推送；远端分支上次回读为 `3e67e51714d301bf66126b8ec55741e378d0720c`，本次 CI 回读也对应该 SHA，推送前重新核对远端分支。
 - 先完整阅读[正式 V1.0 基线](../../docs/RSC个人仓与物资运营扩展系统_正式生产版需求与架构设计_V1.0.md)和 [AGENTS.md](../../AGENTS.md)，遵守用户最新路由约束。
 - 首页“交流备件知识大全”无登录，星星管理按钮指向 `https://rscwz.cn/xx`；`/xx` 是路径。公开小程序仅知识查询；飞书知识源优先级低，暂缓。
 - 审批、分配、占用、出库、发运、物流签收、OAM 收货、个人仓入库、通知、对账独立存证。未知写结果先精确回查原请求，禁止自动重放或换 key 重试。
@@ -22,14 +22,14 @@
 | 原报损提交 HTTP | `3fa414f`；COMMIT 后返回、未知结果回查 | H5 发起页面与真实业务闭环 |
 | 区域/总部审批恢复 | 本地提交 `b4a964e`；104 项聚焦、46 项 HTTP 兼容、数量/SN PG16 | 新准确 SHA 完整 CI |
 | 审批写入/封存 0156 | 本地提交 `1f65dcb`；数量/SN v5 通过 | 推送、新 SHA CI、真实验收 |
-| 审批待办/详情、照片授权 | 正式源码已接入；84 项聚焦、44 项文件兼容、16 项附件兼容通过 | 准确新 SHA CI 和真实 UAT |
-| 私有 H5 报损审批及原请求恢复 | 正式源码已接入；1699 项前端测试、类型/构建通过，含 42 项审批测试及 6 项路由权限测试 | 准确新 SHA CI、真实设备/真实服务验收 |
+| 审批待办/详情、照片授权 | 正式源码未提交；84 项聚焦、44 项文件兼容、16 项附件兼容通过 | native-v4 数量/SN 完整终态 |
+| 私有 H5 报损审批及原请求恢复 | 正式源码已接入；1699 项前端测试、类型/构建通过，含 42 项审批测试及 6 项路由权限测试 | 当前 native-v4、真实设备/真实服务验收 |
 | 报损发件侧 | 内部退回/出库/发运服务及既有门禁 | 正式 HTTP 精确来源合同与客户端恢复 |
 | 正式上线 | 尚未放行 | 完整 CI、短信/文件实测、UAT、数据与运维验收 |
 
 区域核实/总部批准均为 `stock_effect=none`，总部批准仍待处置；收货与库存入库分别落事实。私有小程序代码不代表私有 H5 可用。以上测试集合有重叠，不能相加当作总覆盖率。
 
-## 3. 本批源码：直接继续正式源码
+## 3. 当前未提交改动：直接继续正式源码
 
 后端新增：
 
@@ -57,9 +57,7 @@
 
 ## 4. 当前断点与失败历史
 
-**native-v4 会话 45500 已退出 0**。数量库 `run-18vij09f` 于 09:57:30 完成、SN 库 `run-l35n10_y` 于 10:07:33 完成；两者均 `passed=true / sourceDrift=[] / stopped / checks=passed / serverExitCode=0`。12:52 回读与当前 1759 文件清单逐项一致，终态 `artifacts/loss-review-queue-next/native-terminal-v4.json`。源码冻结结束；不要重启已停库或继续轮询 45500。
-
-两模式的区域/总部 reviewQuery 均通过真实 API 角色 HTTP、分页/范围、撤写后读取、附件审计与撤读拒绝。合成对象存储不代表真实 OSS。v4 有历史审批封存拒绝降级通过；旧 0147/0148 各自拒绝降级由既有独立门禁验证，本轮相应 flag=false 表示未重复该子流程，不把它宣传为本轮通过。
+**native-v4 会话 45500 / runner PID 50811 已实测存活**，数量库 `artifacts/local-stock-loss-review-seals-pg16/checks/run-18vij09f`，日志 `artifacts/loss-review-queue-next/native-v4.log`。1759 份非 Markdown 源码冻结直至数量/SN 全部终态；不要超时重启，不修改非 Markdown 源码。
 
 | 历史轮次 | 实例 | 终态与修复 |
 | --- | --- | --- |
@@ -67,7 +65,7 @@
 | v2 | run-o91wn_xt | Session 外读取 ORM ID，已提前保存 scalar ID；failed/stopped/0 |
 | v3 | run-p_qiwloj | 为修复浏览器实测布局主动 SIGINT；KeyboardInterrupt、failed/stopped/0；不是断言失败，也不是通过 |
 
-旧会话 58080、24163、83651 均结束，不再轮询或重启旧库。v4 独立完整通过全部数量/SN；之前任一轮的局部门禁输出不能代替完整终态。
+旧会话 58080、24163、83651 均结束，不再轮询或重启旧库。v4 独立重新跑全部数量/SN，之前任一轮的局部门禁输出都不能代替完整终态。
 
 前端旧类型失败 `integrated-typecheck-v2.log` 已修复：合成 JSON 改静态 import，WebCrypto 使用项目既有 `vi.importActual<{webcrypto:Crypto}>`，没有新增依赖或放宽 tsconfig。`integrated-typecheck-v4.log` 通过。路由新增测试首轮 3 个断言未计 no-cache 参数失败，修正后由全量 1699 项通过覆盖，原日志保留。
 
@@ -90,8 +88,7 @@
 | loss-review-ui-next/build-public-v2.log / build-warehouse-v2.log | 最终 CSS 后双入口构建通过；私有包有 >500kB 提示 |
 | loss-review-ui-next/public-entry-v2.log | 开发产物检查通过；知识目录 pending/0 条，不代表资料上线 |
 | loss-review-ui-next/opening-protocol-v1.log | 共享期初协议生成一致性检查通过 |
-| loss-review-ui-next/repository-safety-v2.log | 最终代码 PASS 1942 文件；随后仅更新 Markdown 验收记录 |
-| loss-review-queue-next/native-terminal-v4.json | 本批完整数量/SN PG16、正常停库、1759 文件零漂移 |
+| loss-review-ui-next/repository-safety-v1.log | PASS 1940 文件，早于最后三行 CSS；最终审查仍需确认 |
 | loss-review-seals-0156/native-terminal-v5.json | 0156 数量/SN 通过，1739 文件零漂移；仅覆盖该历史候选 |
 | loss-review-recovery/native-terminal.json | b4a964e 审批恢复本地数量/SN 终态 |
 | loss-receipt-inbound-0155/native-v4-terminal.json | 0155 收货/独立入库/恢复本地数量/SN 终态 |
@@ -99,7 +96,7 @@
 
 0156 v5 数量库 `run-flxjwk3f`、SN 库 `run-o500b2w_` 均正常停止，runner 28123 已退出 0。其迁移/权限、实际 COMMIT 双向互斥、API 原始 SQL 拒绝、HTTP、空库往返和有历史拒绝降级已通过。该证据的 `matchesCurrentSource=true` 是生成时历史断言，不代表当前新增源码。
 
-本轮最终代码安全检查、依赖 pip check 和 diff 检查通过；修改源码后仍需对应复验。失败日志保留，不能把修正后的定点通过改写成原整轮全绿。
+历史安全检查通过不覆盖本次新增全部文件；提交前必须重新跑仓库安全和 diff 检查。失败日志保留，不能把修正后的定点通过改写成原整轮全绿。
 
 ## 6. GitHub 最新终态（本次实时回读）
 
@@ -110,7 +107,7 @@
 - 本次已取三片完整日志 `parent-static-{0,1,2}-final.log`：静态 1 明确 runner shutdown，0/2 为 operation canceled；三片均未出现最终断言失败汇总。不能把取消写成通过，底层取消原因未确认。
 - 本次快照：`artifacts/loss-review-queue-next/handoff-parent-ci-20260930.json`。
 - 父版本客户端运行 36593125653 的历史回读为成功，本次未再次查询；不能覆盖当前新源码。
-- 现在不再受“父任务仍运行”的旧等待条件限制，本批本地门禁已完成，可提交推送以触发新 SHA CI；不能作为生产放行。最终必须验证准确新 SHA 完整 CI。
+- 现在不再受“父任务仍运行”的旧等待条件限制，但当前本地候选尚未完成门禁，仍不能提交/推送作为合格版本。最终必须验证准确新 SHA 完整 CI。
 - 推送结果未知先精确回读；旧 `push-exact-api.py` 含固定旧坐标，禁止原样复用。
 
 ## 7. 接续执行顺序
@@ -118,8 +115,8 @@
 1. 重新确认分支/HEAD/diff，读本页和机读断点；保留所有未提交文件。
 2. 本轮 H5 类型、集成测试、导航/路由权限、后端 fixture schema/命令互验已完成；不要重复解决旧类型错误或重拷草案。
 3. 前端/小程序回归与双入口构建已完成，记录其证据边界；真实服务/设备/身份 UAT 仍需独立验收。
-4. native-v4 已通过并结束，回读终态文件即可；不要重复启动。
-5. 当前本地验收记录见 LOSS_REVIEW_H5_LOCAL_ACCEPTANCE_20260930.md，进入提交/推送与准确 SHA CI；接手先检查是否已提交，避免重复。父 CI 三片取消日志已取证，处理必要问题，再推送并等待准确新 SHA 客户端/完整 PG16 通过。
+4. 回收现有 native-v4 会话 45500，核验数量/SN 全部终态、正常停库、1759 文件零漂移；保持源码冻结。若出现终态失败再修复另启新轮次，观察超时不重启。
+5. 审查全部 diff、新文件、迁移/权限和安全检查；收齐证据后才能提交。父 CI 三片取消日志已取证，处理必要问题，再推送并等待准确新 SHA 客户端/完整 PG16 通过。
 6. 补私有 H5 报损发起、退回收货、独立入库及原请求恢复；补发件出库/发运正式 HTTP 和客户端恢复。不要重复开发已验证的 0155 后端。
 7. 继续基线缺口审计：报废反向冲销、人员调拨、离职交接；真实 UAT、试点和完整生产分别验收。
 
@@ -136,7 +133,7 @@ cat artifacts/loss-review-queue-next/continuation.json
 cat artifacts/loss-review-ui-next/integrated-typecheck-v2.log
 ```
 
-当前 Node 不在默认 PATH，使用 `~/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node`；后端解释器 `.venv/bin/python`。本轮本地验证已结束，无需再轮询旧会话。新增代码须独立验证，不能复用本轮 source-manifest 当作新源码证据。
+当前 Node 不在默认 PATH，使用 `~/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node`；后端解释器 `.venv/bin/python`。当前已有 native-v4 活跃进程，**不要再启动第二个 runner**。通过工具会话 45500 回收输出；失去会话时先核对 PID、进程命令、日志和 cluster-state，不因客户端重启就重跑。
 
 注意 cwd，避免在 frontend 下再次拼 frontend/src。不要重新执行旧草案生成器。ignored artifacts 不随 Git 克隆；换机器应受控复制必要日志/合成 fixture 或重跑，不能复制真实数据、凭据或临时数据库目录。
 
@@ -146,6 +143,6 @@ cat artifacts/loss-review-ui-next/integrated-typecheck-v2.log
 
 受邀 HTTPS H5 小范围试点与完整 V1.0 分开验收，不提供无证据的完成百分比或上线日期。
 
-相关文档：[本批本地验收](LOSS_REVIEW_H5_LOCAL_ACCEPTANCE_20260930.md)、[退回 H5 接入验收](LOSS_RETURN_H5_ACCEPTANCE_20260930.md)、[基线缺口审计](FORMAL_V1_BASELINE_GAP_AUDIT_20260923.md)、[UAT/上线矩阵](FORMAL_V1_UAT_AND_LAUNCH_EVIDENCE_20260925.md)、[部署入口](PILOT_DEPLOY_ENTRY_20260922.md)、[双入口烟测](PILOT_LIVE_ROUTE_SMOKE_20260924.md)、[短信认证](PNVS_01_AUTHENTICATION_PLAN_20260921.md)、[通知运维](NOTIFICATION_OPERATIONS_BASELINE_AUDIT_20260919.md)。
+相关文档：[退回 H5 接入验收](LOSS_RETURN_H5_ACCEPTANCE_20260930.md)、[基线缺口审计](FORMAL_V1_BASELINE_GAP_AUDIT_20260923.md)、[UAT/上线矩阵](FORMAL_V1_UAT_AND_LAUNCH_EVIDENCE_20260925.md)、[部署入口](PILOT_DEPLOY_ENTRY_20260922.md)、[双入口烟测](PILOT_LIVE_ROUTE_SMOKE_20260924.md)、[短信认证](PNVS_01_AUTHENTICATION_PLAN_20260921.md)、[通知运维](NOTIFICATION_OPERATIONS_BASELINE_AUDIT_20260919.md)。
 
 历史入口：[09:34 快照](CONTINUE_DEVELOPMENT_HISTORY_20260930_0934.md)、[09:05 快照](CONTINUE_DEVELOPMENT_HISTORY_20260930_0905.md)、[08:45 快照](CONTINUE_DEVELOPMENT_HISTORY_20260930_0845.md)、[9 月 30 日早期](CONTINUE_DEVELOPMENT_HISTORY_20260930.md)。旧文档的运行中状态和下一步已被本页替代，保留仅供追溯。

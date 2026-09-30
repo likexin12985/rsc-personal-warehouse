@@ -41,6 +41,9 @@ import FormalOpeningReconciliationsPage from "./pages/FormalOpeningReconciliatio
 import FormalDailyReconciliationsPage from "./pages/FormalDailyReconciliations";
 import FormalOpeningStocktakesPage from "./pages/FormalOpeningStocktakes";
 import FormalStocktakesPage from "./pages/FormalStocktakes";
+import FormalLossReviews from "./FormalLossReviews";
+import { createAdapter as createLossReviewAdapter } from "./lossReviewAdapter";
+import type { Stage as LossReviewStage } from "./formalLossReview";
 import ControlConfigurationPage from "./pages/ControlConfiguration";
 import type { AccessContext, AuthenticatedUser, FormalUser, InventorySummary } from "./types";
 import { Button, Field, Loading, showError } from "./ui";
@@ -336,6 +339,7 @@ function Shell({
     ...(hasFormalPermission(access, "material_request", "read") ? [{ to: "/material-requests", label: "需求提报", icon: ClipboardList }] : []),
     ...(hasFormalPermission(access, "access_context", "read") ? [{ to: "/notifications", label: "消息中心", icon: MessageSquareText }] : []),
     ...(hasFormalPermission(access, "stocktake", "read") ? [{ to: "/stocktakes", label: "日常盘点", icon: ClipboardCheck }] : []),
+    ...(lossReviewStages(access).length ? [{ to: "/loss-reviews", label: "报损审批", icon: ClipboardCheck }] : []),
     ...(hasFormalPermission(access, "stocktake", "read") ? [{ to: "/opening-stocktakes", label: "盘点中心", icon: ClipboardCheck }] : []),
     ...(hasFormalPermission(access, "reconciliation", "read") ? [{ to: "/opening-reconciliations", label: "控制账对账", icon: Scale }] : []),
     ...(hasFormalPermission(access, "reconciliation", "read") ? [{ to: "/daily-reconciliations", label: "日终对账", icon: Scale }] : []),
@@ -375,6 +379,20 @@ function FormalStocktakesRoute({ access }: { access: AccessContext }) {
     authorization_version: access.authorization_version,
   }, api, apiNoReplay, apiNoReplay), [access.person_id, access.authorization_version]);
   return <FormalStocktakesPage adapter={adapter} />;
+}
+
+function lossReviewStages(access: AccessContext): LossReviewStage[] {
+  if (!hasFormalPermission(access, "stock_operation", "read")) return [];
+  return [
+    ...(hasFormalRole(access, "provincial_manager") ? ["regional" as const] : []),
+    ...(hasFormalRole(access, "admin") ? ["headquarters" as const] : []),
+  ];
+}
+
+function FormalLossReviewsRoute({ access }: { access: AccessContext }) {
+  const adapter = useMemo(() => createLossReviewAdapter(access.person_id, apiNoReplay), [access.person_id]);
+  return <FormalLossReviews identity={{ person_id: access.person_id, authorization_version: access.authorization_version }}
+    stages={lossReviewStages(access)} adapter={adapter} />;
 }
 
 export default function App() {
@@ -540,6 +558,9 @@ export default function App() {
         canRetryDelivery={canRetryNotificationDeliveries}
       /> : <Navigate to="/dashboard" replace />} />
       <Route path="/stocktakes" element={canReadStocktake ? <FormalStocktakesRoute access={access} /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/loss-reviews" element={lossReviewStages(access).length ? <FormalLossReviewsRoute
+        key={`${access.person_id}:${access.authorization_version}:${lossReviewStages(access).join(":")}`} access={access}
+      /> : <Navigate to="/dashboard" replace />} />
       <Route path="/opening-stocktakes" element={canReadStocktake ? <FormalOpeningStocktakesPage
         key={`${access.person_id}:${access.authorization_version}`}
         actor={{ person_id: access.person_id, authorization_version: access.authorization_version }}

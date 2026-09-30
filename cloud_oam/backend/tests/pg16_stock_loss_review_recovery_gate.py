@@ -76,10 +76,13 @@ def run(engines, *, stage, reviewer_id, write_grant_id, command, missing_command
                 with Session(owner) as db:db.get(RolePermission,read_grant_id).effect='allow';db.commit()
                 assert post(body,200)==recovered
         assert snapshot(owner)==before
+        from pg16_stock_loss_review_query_gate import run as query_checks
+        query_result=query_checks(engines,stage=stage,reviewer_id=reviewer_id,read_grant_id=read_grant_id,
+            command=command,missing_command=missing_command)
     finally:
         with Session(owner) as db:
             db.get(RolePermission,write_grant_id).effect=prior_write
             db.get(RolePermission,read_grant_id).effect='allow';db.commit()
     print('PG16 '+stage+' review recovery: API-role read-only HTTP, revoked write, exact coordinates, revoked read and unchanged stock/history PASS',flush=True)
     return dict(passed=True,apiRoleReadOnlyHttp=True,revokedWriteReadable=True,revokedReadDenied=True,
-        exactRequestCoordinates=True,missingNeverPermitsRetry=True,stockAndHistoryUnchanged=True)
+        exactRequestCoordinates=True,missingNeverPermitsRetry=True,stockAndHistoryUnchanged=True,reviewQuery=query_result)

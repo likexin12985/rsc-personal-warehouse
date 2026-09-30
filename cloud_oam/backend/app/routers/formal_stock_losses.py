@@ -1,7 +1,9 @@
 """Own-stock loss submission and exact original-request recovery."""
 from types import SimpleNamespace
+from typing import Literal
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -12,6 +14,8 @@ from ..formal_services import stock_loss_sources, stock_loss_plan, stock_loss_re
 from ..formal_services import stock_loss_commands, stock_loss_seals
 from ..formal_services import stock_loss_review_recovery, stock_loss_review_seals
 from ..formal_services import stock_loss_regional_reviews, stock_loss_headquarters_reviews
+from ..formal_services import stock_loss_review_query
+from ..stock_loss_review_query_schemas import LossReviewQueueOut, LossReviewQueryOut
 from ..formal_services.audit_chain import AuditChainError
 from ..formal_services.inventory_posting import InventoryPostingError
 from ..formal_services.inventory_query import InventoryReadError
@@ -151,6 +155,25 @@ def _review_coordinates(payload, principal, trace, key):
     _coordinates(SimpleNamespace(operator_person_id=payload.operator_person_id,
         request_id=payload.original.request_id, idempotency_key=payload.original.idempotency_key),
         principal, trace, key)
+
+
+@router.get('/reviews/{stage}', response_model=LossReviewQueueOut)
+def list_reviews(stage: Literal['regional', 'headquarters'], response: Response,
+    view: Literal['pending', 'all'] = 'pending', limit: int = Query(10, ge=1, le=20),
+    after_id: UUID | None = None, db: Session = Depends(get_db),
+    principal: FormalPrincipal = Depends(require_permission('stock_operation', 'read'))):
+    return _read(response, lambda: stock_loss_review_query.list_review_reports(
+        db, actor=principal, stage=stage, view=view, limit=limit, after_id=after_id),
+        unavailable=('stock_loss_review_query_unavailable', '暂时无法核验审批待办，请稍后刷新'))
+
+
+@router.get('/reviews/{stage}/{operation_id}', response_model=LossReviewQueryOut)
+def read_review(stage: Literal['regional', 'headquarters'], operation_id: UUID,
+    response: Response, db: Session = Depends(get_db),
+    principal: FormalPrincipal = Depends(require_permission('stock_operation', 'read'))):
+    return _read(response, lambda: stock_loss_review_query.review_report_detail(
+        db, actor=principal, stage=stage, operation_id=operation_id),
+        unavailable=('stock_loss_review_query_unavailable', '暂时无法核验审批详情，请稍后刷新'))
 
 
 @router.post('/regional-reviews', response_model=StockLossRegionalReviewOut)

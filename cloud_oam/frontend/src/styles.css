@@ -621,3 +621,27 @@ tbody tr:hover { background: #fbfcfc; }
 @media (max-width: 1050px) {
   .notification-delivery-filters { grid-template-columns: 1fr 1fr; }
 }
+
+/* Private loss approval workspace. */
+.loss-review-page { display: grid; gap: 20px; }
+.loss-review-page > * { min-width: 0; }
+.loss-review-page h2 { overflow-wrap: anywhere; }
+.loss-review-page input[type="checkbox"] { width: auto; min-height: auto; margin: 0 8px 0 0; vertical-align: middle; }
+.loss-review-page .panel { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 22px; }
+.loss-review-page .filter-bar, .loss-review-page .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.loss-review-page .toolbar { padding: 12px 0; border-bottom: 1px solid #eef2f7; overflow-wrap: anywhere; }
+.loss-review-page .toolbar span { flex: 1 1 280px; }
+.loss-review-page fieldset { border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; margin: 16px 0; min-width: 0; }
+.loss-review-page legend { font-weight: 600; padding: 0 6px; }
+.loss-review-page form label { display: block; margin: 12px 0; }
+.loss-review-page textarea { display: block; width: 100%; min-height: 86px; resize: vertical; }
+.loss-review-page textarea, .loss-review-page select { border: 1px solid #cbd5e1; border-radius: 7px; padding: 9px; font: inherit; background: #fff; color: #172b4d; }
+.loss-review-page button { margin: 4px; padding: 8px 14px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; color: #1e3a5f; cursor: pointer; font: inherit; }
+.loss-review-page button[type="submit"] { background: #1d4ed8; border-color: #1d4ed8; color: white; }
+.loss-review-page button:disabled { cursor: not-allowed; opacity: .5; }
+.loss-review-page button:focus-visible, .loss-review-page a:focus-visible { outline: 3px solid #60a5fa; outline-offset: 2px; }
+.loss-review-page p, .loss-review-page li { overflow-wrap: anywhere; }
+.loss-review-page .table-scroll { overflow-x: auto; }
+.loss-review-page table { width: 100%; border-collapse: collapse; text-align: left; }
+.loss-review-page td, .loss-review-page th { padding: 12px 10px; border-bottom: 1px solid #e2e8f0; }
+@media (max-width: 600px) { .loss-review-page .panel { padding: 14px; } .loss-review-page td, .loss-review-page th { padding: 8px 5px; } }
