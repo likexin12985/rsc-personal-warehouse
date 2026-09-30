@@ -80,7 +80,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261204_0155"
+HEAD_REVISION = "20261205_0156"
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -7173,7 +7173,7 @@ def _head_runtime_ready_hash() -> str:
     from migration_script_cache import cache_migration_compilation
     with cache_migration_compilation(STOCK_RESERVATIONS_MIGRATION_0069.parent):
         migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-            "20261204_0155_stock_loss_return_receipts.py"
+            "20261205_0156_stock_loss_review_request_seals.py"
         )))
     assert migration["revision"] == RUNTIME_READY_HEAD_REVISION
     return migration["NEW_READY_HASH"]

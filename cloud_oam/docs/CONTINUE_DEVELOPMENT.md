@@ -1,138 +1,137 @@
 # RSC 个人仓开发交接
 
-核验时间：2026-09-30 00:24（Asia/Shanghai）。本页是当前接续入口；历史文档和历史 CI 不覆盖本页核验值。下文路径默认相对 `cloud_oam/`。
+核验时间：2026-09-30 08:45–08:52（Asia/Shanghai）。这是当前接续入口，路径默认相对 `cloud_oam/`。本次仅整理文档、只读核查和保存交接证据，没有修改业务源码、提交、推送或部署。
 
-**当前结论：报损收货、独立入库及其请求恢复已实现并完成本地验证；提交/封存 HTTP 与 PG16 门禁拆分已推送。新一批区域/总部审批只读请求恢复已完成本地数量件、SN 验证，尚未提交。准确 SHA 的完整 CI、真实业务验收和生产部署尚未完成，不能宣布上线。**
+**报损收货、独立入库及请求恢复已完成本地实现和验证。当前 0156 审批请求封存、正式写 HTTP 与并发门禁已进入未提交源码；最新原生 PG16 v5 数量件和 SN 均通过，两库正常停止、源码零漂移。审批查询与照片授权仍为草案，私有 H5 页面未补齐。新版本准确 SHA 的完整 CI、真实 UAT、生产上线均未完成。**
 
-## 1. 接手位置与约束
+## 1. 接手位置和约束
 
-- 工作树：`~/.codex/worktrees/06f6/oam`；分支：`codex/notification-delivery-worker`。禁止 reset、revert、丢弃或覆盖未提交改动。
-- 本地 HEAD：`3e67e51714d301bf66126b8ec55741e378d0720c`。已推送该 SHA，当前两个 GitHub 运行的 headSha 均为此值；远端分支仍应在下次推送前精确回读。
-- 先完整阅读[正式 V1.0 需求与架构基线](../../docs/RSC个人仓与物资运营扩展系统_正式生产版需求与架构设计_V1.0.md)和 [AGENTS.md](../../AGENTS.md)。
-- 公开首页：“交流备件知识大全”，无登录；星星后台按钮跳转 `https://rscwz.cn/xx`。`/xx` 是路径。公开小程序仅知识查询，私有仓库页面不进入公开包。飞书知识源后置。
-- 审批、分配、占用、出库、发运、物流签收、OAM 收货、个人仓入库、通知送达与对账分别存证。未知结果先精确回查原请求，不自动重放。
-- 开发与本地验证不授权真实短信、外部业务写入或生产迁移/部署。生产凭据、业务数据和运行日志不进 Git。
-- 本地 PG16 仅新建自有临时实例；不接生产 DSN、不复用已停止旧库、不伪造 GitHub 环境绕过保护。
+- 工作树：`~/.codex/worktrees/06f6/oam`；分支：`codex/notification-delivery-worker`。不要在另一默认 checkout 接续。禁止 reset、revert、丢弃或覆盖未提交改动。
+- 本地 HEAD：`b4a964e5443439794429de6fee85281d9b7faa5f`，未推送；远端分支本次实时回读为 `3e67e51714d301bf66126b8ec55741e378d0720c`。
+- 整理前 **30 个已跟踪修改 + 11 个未跟踪源码文件**，此次另增 Markdown 历史归档。完整清单以 `git status --short` 为准；快照 `artifacts/loss-review-seals-0156/handoff-worktree-20260930-latest.json`。只拉远端会遗漏本地提交、未提交源码和 ignored 草案。
+- 先完整阅读[正式 V1.0 基线](../../docs/RSC个人仓与物资运营扩展系统_正式生产版需求与架构设计_V1.0.md)及 [AGENTS.md](../../AGENTS.md)，遵守用户最新业务路由要求。
+- 公开首页为“交流备件知识大全”，无登录；星星按钮跳转 `https://rscwz.cn/xx`，`/xx` 是路径。公开小程序仅知识查询，不包含私有仓库页面；飞书知识源后置。
+- 审批、分配、占用、出库、发运、物流签收、OAM 收货、个人仓入库、通知与对账分别存证。结果未知先精确回查原请求，不自动重放。
+- 本地合成验证不代表真实身份或业务验收，不授权真实短信、外部业务写入或生产迁移。凭据、生产数据不进 Git。
 
-## 2. 已完成、未完成分别是什么
+## 2. 已完成与未完成
 
-| 范围 | 已完成 | 尚未完成 |
+| 范围 | 已有实现和本地证据 | 尚缺 |
 | --- | --- | --- |
-| 报损接收侧（0155） | 报损来源列表/详情、收货预检/提交/回查/封存；独立入库、数量/SN、客户端恢复隔离；本地迁移/权限/并发验证 | 真实身份、真实业务 UAT 与生产验收 |
-| 报损发起 HTTP（`3fa414f`） | 提交、原请求永久封存、COMMIT 后回执、结果未知回查；本地实际 API 角色 HTTP 验证 | 完整报损客户端业务闭环 |
-| PG16 门禁拆分（`3e67e51`） | migrations/inventory/control 独立分支；完整检查顺序保留；本地 control 及远端 control 成功 | 完整准确 SHA 的 runtime/static 总门禁 |
-| 审批只读恢复（未提交） | 区域/总部独立回查服务及 HTTP；撤销写权限后仍可按当前读权限恢复；数量/SN 本地通过 | 新提交、其准确 SHA CI；独立审批封存、正式审批写 HTTP、待办/详情和客户端 |
-| 报损发件侧 | 已有内部退回/出库/发运服务和相应门禁 | 正式发件 HTTP 的报损来源合同及客户端恢复闭环 |
+| 报损接收侧 0155 | 来源列表/详情，收货预检/提交/回查/封存，独立入库，数量/SN 与客户端恢复隔离；原生 PG16 完成 | 私有 H5 接入、真实 UAT 和生产验收 |
+| 原报损提交 HTTP | `3fa414f`：提交/封存、COMMIT 后回执、结果未知回查，实际 API 角色 HTTP 验证 | 完整报损客户端闭环 |
+| PG16 门禁拆分 | `3e67e51`：migrations/inventory/control 与报损独立分支；父 SHA 实质任务成功 | 静态及汇总门禁未全绿，不能覆盖新 SHA |
+| 审批只读恢复 | `b4a964e` 本地提交：区域/总部独立回查，当前读写权限分离，数量/SN 通过 | 推送及该准确 SHA 完整 CI |
+| 审批写入/独立封存 0156 | 当前未提交：服务、ORM、迁移、正式 HTTP、COMMIT 互斥、CI 分支；数量 v5 通过 | 最终审查、提交及新 SHA 完整 CI |
+| 审批查询/照片授权 | ignored 查询草案旧版 36 项通过；已追加原单照片授权草案 | 新增测试未跑，未接正式路由/下载/H5 |
+| 报损发件侧 | 内部退回/出库/发运服务及门禁 | 正式发件 HTTP 的精确来源合同与客户端恢复 |
 
-收货只确认实物验收，入库另行过账；区域核实/总部批准均不改变库存，总部通过仍待处置。不得将以上局部完成当成全流程完成。
+收货只确认实物验收，入库独立过账；区域核实/总部批准均不改变库存，总部批准仍待处置。私有小程序接收页面不等于 H5 页面上线。
 
-## 3. 当前未提交改动和本地终态
+## 3. 当前 PG16：v5 已完整通过
 
-本次交接保留全部业务改动，不做业务提交或推送。交接前 9 个变更文件，加本次历史归档共 10 个；以实时 `git status --short` 为准。
+日志 `artifacts/loss-review-seals-0156/native-v5.log`；会话 **28123 已退出 0**，不能继续轮询或重启历史实例。整理期间任务完成，最终核验替代 08:45 的运行中观察。
 
-| 路径 | 状态/用途 |
+| 模式 | 实例（前缀 `artifacts/local-stock-loss-review-seals-pg16/checks/`） | 终态 |
+| --- | --- | --- |
+| 数量件 | `run-flxjwk3f` | 08:38:22 完成，passed=true、sourceDrift=[]；stopped/checks=passed/serverExitCode=0 |
+| SN | `run-o500b2w_` | 08:49:13 完成，passed=true、sourceDrift=[]；stopped/checks=passed/serverExitCode=0 |
+
+统一终态证据 `artifacts/loss-review-seals-0156/native-terminal-v5.json`，包含两种模式的 checks、cluster-state、source-manifest 文件摘要。本次重新生成 manifest，两份清单均与当前 **1739 份非 Markdown 源码**逐项一致。
+
+区域/总部审批与封存、API 角色 HTTP、原始 SQL 拒绝、真实锁竞争、空库迁移、运行期权限和保留历史拒绝降级均通过。**本轮源码冻结已结束**，可以审查接入下一切片，但新增源码须产生自己的验证证据；该本地证明不等于 GitHub 或生产验收。
+
+历史：v2 通过只覆盖旧 1736 份源码；v3 因三写者间接阻塞断言失败；v4 在确认 SQL/Python 文本规则差异后主动停止。v3/v4 均正常停库，不算通过，不替代 v5。所有已停旧库均不重启。
+
+## 4. 当前 0156 改动和测试证据
+
+- 新迁移 `backend/alembic/versions/20261205_0156_stock_loss_review_request_seals.py`，配套 `stock_loss_review_seals.py`、`stock_loss_review_seal_schemas.py`、ORM、运行期权限目录和 head 检查。历史迁移未改；API 无私有 SQL EXECUTE 权限；封存不可改删，保留历史阻止降级。
+- 区域/总部各自封存原命令、request/key/hash；迟到审批与封存在实际 COMMIT 双向互斥。恢复使用当前读权限，所有结果 retry_permitted=false，查不到不自动重发。
+- 路由 `backend/app/routers/formal_stock_losses.py`：`/api/v1/stock-operations/loss-reports/regional-reviews`、`/headquarters-reviews`，各自含 `/request-lookup`、`/request-seal`。成功回执在 COMMIT 后返回，未知只回查。
+- 并发验证通过真实 pg_blocking_pids 链找到准确原写事务，支持第二等待者先被第一等待者阻塞。独立复现 `lock-queue-checks/run-nvz02ob7/checks.json`。
+- 修复 Python strip 与 SQL btrim 的 Unicode 首尾空白差异、理由 CR 漏拒绝。29 种空白共 58 个边界实测，保留合法多行中文；只更新未提交 0156 及函数摘要。诊断 `text-contract-checks/run-zjr8ms2a/checks.json`。
+- CI 新增 review_seals，9 个报损流程 × 数量/SN = 18 分支；旧 0147/0148 的历史拒绝降级仍由原独立门禁证明。
+- **四份旧 HTTP/head、并发、原生 HTTP、CI patch 和权限目录修正全部已应用。不得再次应用或重跑生成器覆盖现有文件。**
+
+证据在 `artifacts/loss-review-seals-0156/`；集合存在重叠，不累加总数。
+
+| 日志 | 实测结果 |
 | --- | --- |
-| `backend/app/formal_services/stock_loss_review_recovery.py` | 新增：区域/总部原请求只读恢复 |
-| `backend/app/routers/formal_stock_losses.py` | 修改：两个审批 `request-lookup` HTTP 入口 |
-| `backend/app/stock_loss_schemas.py` | 修改：严格请求坐标和阶段结果合同 |
-| `backend/tests/test_stock_loss_review_recovery.py` | 新增：权限、错坐标、证据破坏、游标变化、HTTP 等回归 |
-| `backend/tests/pg16_stock_loss_review_recovery_gate.py` | 新增：实际 API 角色只读事务 HTTP 证明 |
-| `backend/tests/pg16_stock_loss_regional_review_gate.py` | 修改：接入区域恢复门禁 |
-| `backend/tests/pg16_stock_loss_headquarters_review_gate.py` | 修改：接入总部恢复门禁 |
-| `docs/CONTINUE_DEVELOPMENT.md` | 当前交接入口 |
-| `docs/FORMAL_V1_BASELINE_GAP_AUDIT_20260923.md` | 缺口审计及后续审批封存设计 |
-| `docs/CONTINUE_DEVELOPMENT_HISTORY_20260930.md` | 本次整理前入口原文，逐字归档 |
+| http-contracts-v2.log | 95 passed；v1 的 4 个断言问题已修复并复验 |
+| topology-head-v4.log | 28 passed；历史链漏 0155 父节点已修正 |
+| security-head-cli-v1.log | 389 passed / 2 failed；保留原失败，不能称该轮全绿 |
+| security-catalog-v2.log | 上述表/触发器清单修复后，2 个失败用例定点通过 |
+| text-contracts-v3.log | 41 passed，包含旧合同，与 HTTP 集合重叠 |
+| migration-text-v2.log | 当前文本规则和迁移 4 passed |
+| services-v1.log | 早期服务/恢复 155 passed；后续改动以最新对应门禁为准 |
+| repository-safety-v5.log | PASS，1918 文件；本次整理前结果 |
 
-两个入口为 `POST /api/v1/stock-operations/loss-reports/regional-reviews/request-lookup` 和 `.../headquarters-reviews/request-lookup`。绑定原单、原审批人、request ID、幂等键、请求摘要与提交计划摘要；核验不可变审批/审计/状态/outbox/通知证据。当前读权限或游标变化则拒绝结果；所有结果 `retry_permitted=false`。本批没有新迁移、审批写入口或生产权限种子，迁移 head 仍为 `20261204_0155`。
+SN v5 已完成；提交前仍需最终 diff 审查和文档整理后的仓库安全检查。证据齐全前不提交业务改动。
 
-### 已核验的本批证据
+已有独立历史证据：0155 的 `artifacts/loss-receipt-inbound-0155/native-v4-terminal.json`；提交 HTTP 的 `artifacts/loss-http-submit/native-terminal.json`；审批恢复的 `artifacts/loss-review-recovery/native-terminal.json`（104 项聚焦、46 项 HTTP 兼容、数量/SN 完成，1728 份源码零漂移）。这些证明各自候选，不覆盖当前新增代码。
 
-证据目录：`artifacts/loss-review-recovery/`。全部为 ignored 本地文件，不随 Git 克隆；跨机器交接须取得受控证据或重跑。
+## 5. 待接入草案：交接不可遗漏
 
-| 证据 | 结果 |
-| --- | --- |
-| `focused-v1.log` | 104 passed，356.29 秒，exit 0 |
-| `http-compatibility-v1.log` | 原提交/恢复 HTTP 兼容：46 passed，147.02 秒，exit 0 |
-| `native-v1.log`、`native-terminal.json` | 会话 63519 已退出 0；数量件与 SN 均完成，不能继续按运行中处理 |
-| `repository-safety-v1.log` | 本批代码安全检查 PASS，1906 文件；属于整理前快照 |
-| `continuation.json` | 已更新终态及接续坐标；其中 CI 状态仅代表注明的观察时点 |
+`artifacts/loss-review-queue-next/` 被 Git 忽略，含：
 
-数量实例：`artifacts/local-stock-loss-submit-pg16/checks/run-9zogl5op`。
-SN 实例：`artifacts/local-stock-loss-submit-pg16/checks/run-bcp7pjwm`。
+- stock_loss_review_query_schemas.py：待办/详情 DTO。
+- stock_loss_review_query.py：角色同一授权绑定、区域/全国范围、分页、原提交/审批事实核验和只读查询。
+- stock_loss_review_evidence.py：审核人按原单当前读权限看照片，拒绝跨业务混合绑定。
+- test_stock_loss_review_query_draft.py、run_draft_tests.py、draft-v1.log。
 
-两实例均 `checks.json: passed=true / sourceDrift=[]`、`cluster-state.json: stopped / checks=passed / serverExitCode=0`。数量于 00:12:13、SN 于 00:21:50 正常结束；本次 00:23 后回收进程终态。重新比对全部 **1728 份非 Markdown 源码零漂移**。区域和总部恢复均通过 API 角色 `SET TRANSACTION READ ONLY`、撤销写权限仍可读、撤销读权限拒绝、精确坐标和库存/历史不变校验；空库迁移往返、保留历史拒绝降级、原有权限/并发检查也通过。身份由合成夹具及真实 principal loader 提供，不是生产 JWT 或真实业务验收。
+旧版 **36 passed / 1 warning / 130.07 秒**，只证明当时查询代码；之后新增照片授权、证据权限和跨区域测试尚未运行，不能称当前草案全绿。
 
-先前三批证据继续保留，不混算测试总数：
+接下来补分页/稀疏页/自审排除验证；照片授权需接 `formal_files.py` 真实下载流程，验证签名意图与审计，不能仅测试 helper。现有报损照片下载主要限上传者，是审批页面前置缺口。原生冻结现已结束，下一步审查集成并接正式 HTTP/私有 H5/权限显隐/原请求保存与恢复。
 
-- 0155：`artifacts/loss-receipt-inbound-0155/native-v4-terminal.json`、`completed-checks.json`、`final-source-v4.json`；数量/SN 原生终态通过。提交 `d76efd1`，后由 `8990ebd` 推送。
-- HTTP：`artifacts/loss-http-submit/evidence-index.json`、`native-terminal.json`；86 项后端、13 项拓扑及数量/SN API HTTP 通过。提交 `3fa414f`。
-- PG16 拆分：`artifacts/pg16-runtime-suites/native-terminal-v3.json`、`ordered-extraction-v3.json`、`commit-evidence.json`；102 项聚焦、12 项有重叠调用点复验，本地 control 通过、1725 份源码零漂移。提交 `3e67e51`。
+草案及原生证据不随 Git 克隆；换机器须受控复制必要文件或重跑，不复制数据库数据目录、凭据或真实业务数据。
 
-## 4. 远端 CI：准确 SHA 与当前问题
+## 6. 远端 CI：父 SHA 第 2 次仍运行
 
-本次 00:23:49 快照：`artifacts/handoff-20260930/ci-snapshot.json`。两运行 headSha 均为 `3e67e51714d301bf66126b8ec55741e378d0720c`，**不包含未提交审批恢复代码**。
+本次 GitHub CLI 只读快照：`artifacts/loss-review-seals-0156/handoff-pg16-ci-20260930-latest.json`。
 
-| 门禁 | 当前状态 |
-| --- | --- |
-| [客户端 36593125653](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36593125653) | completed / success |
-| [PG16 36593125765](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36593125765) | in_progress；17 个成功、4 个运行、1 个失败 |
-| PG16 已成功 | control + 全部 16 个报损分支 |
-| 仍运行 | migrations、inventory、static_safety (0)、static_safety (2) |
-| 已失败 | static_safety (1)，job `109491289567` |
+- [客户端 36593125653](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36593125653)：父 SHA 3e67e51 成功。
+- [PG16 36593125765](https://github.com/likexin12985/rsc-personal-warehouse/actions/runs/36593125765)：attempt 2 / in_progress；static 0/2 仍运行，static 1 失败；19 个实质任务显示成功。
+- static 1 job 109678169916 日志含 runner shutdown / operation canceled，见 ci-attempt2-static1.log；未观察到断言失败，底层原因未确认，不概括成“GitHub 链接失败”。
+- 第 1 次整体失败是历史，不能把第 2 次写成“无在跑任务”；未终结时不要反复重跑。
+- cancel-in-progress=true；先回读父运行终态再推送，避免取消取证。新提交必须有自己准确 SHA 的客户端/完整 PG16 门禁，不能继承父版本绿灯。
+- 旧 push-exact-api.py 固定旧 BASE/commit/tree，禁止原样重用；推送结果未知先精确回读，禁止盲目重试。
 
-静态 1 原始日志证实运行器收到 shutdown signal，随后 operation canceled；未观察到测试断言失败，底层关闭原因未确认。日志：`artifacts/pg16-runtime-suites/ci-static-1.log`；单 job 重跑尝试返回 `job cannot be rerun`，见 `ci-static-1-rerun.json`。待工作流终态后重跑失败任务，再取得真实成功结果。
+## 7. 下一步顺序及命令
 
-工作流 `cancel-in-progress: true`：新推送会取消同分支在跑 CI。可在证据齐备后形成本地提交，但不要为推送新批次打断尚需取证的迁移/库存门禁。新提交最终仍要通过自己的准确 SHA 门禁，不能继承 `3e67e51` 的结果。
-
-此前普通 push 超时后已精确回读，再通过 Git Data API 保留原 commit/tree、force=false 推送成功。`artifacts/pg16-runtime-suites/push-exact-api.py` 固定旧 BASE 和两个 SHA，**不得原样用于下次推送**。其他旧推送脚本同样不可盲目重跑。
-
-## 5. 下一步执行顺序
-
-1. 复核 Git diff、上述原生终态和源码摘要；对当前审批只读恢复做最后审查，证据齐备再提交本地业务改动。无需重复跑无变更的整批原生门禁。
-2. 回读 `3e67e51` 在跑 CI；工作流终态后只重跑失败任务。保存确切失败/成功证据，再安排新批次推送和新 SHA 验证。
-3. 补区域/总部**独立审批请求永久封存及迟到审批数据库互斥**。具体字段、锁序、当前/历史权限及验收要求见[缺口审计](FORMAL_V1_BASELINE_GAP_AUDIT_20260923.md)的“后续审批封存切片”。这是设计，尚无 0156 实现；新增迁移，不修改 0146/0147/0148。
-4. 补正式审批写 HTTP、待办/详情和客户端恢复，验证 COMMIT 前故障回滚、回执丢失回查、原请求封存和真实并发；区域/总部审批仍不直接产生库存效果。
-5. 补报损发件侧出库/发运的精确来源合同和客户端恢复。不要重复实现已完成的接收侧 0155。
-6. 继续补报废反向、独立人员调拨、离职交接等基线缺口；并行准备真实 UAT 所需条件，但不越权执行生产或外部业务写入。
-
-## 6. 上线仍缺哪些证据
-
-- 目标服务器已由用户确认是旧备份脚本的 `118.31.37.87`，无需重复询问。Ubuntu 24.04/x86_64、旧 star-oam 占用 80/443 是 **2026-09-24 历史快照**，本次未连接服务器；部署前重新检查容器/卷/端口/镜像/回滚点。
-- 新版公开首页与 `/xx` 尚无生产双入口验收；备案审核通过截图不代替实际域名、公开内容、HTTPS 与部署回读。
-- 短信仅有配置及合成验证；真实 PNVS/身份映射、最小权限、实发及回读尚无验收，不可称“短信已完成”。通知 outbox 不代表渠道送达。
-- 真实 OSS/KMS、来源目录/公开性审核、期初数据、OAM 批次语义、设备 UAT、500 用户负载、备份恢复（RPO≤5 分钟、RTO≤2 小时）及至少连续三天对账解释待补证。
-- 受邀小范围 H5 试点与完整 V1.0 正式发布分别验收，不给缺乏依据的完成百分比或上线日期。
-
-## 7. 接手命令和导航
-
-先只读确认，终态会话 63519 不再轮询，已停止旧库不重启：
+1. 核对工作树、HEAD、diff、进程与 continuation.json；不重复开发已完成的 0155 和 b4a964e。
+2. 回读 native-terminal-v5.json 与两份实例证据；v5 已完成，不再轮询会话 28123 或重启旧库。
+3. 审查 0156 迁移/权限、未知结果恢复、HTTP COMMIT、并发与两种跟踪模式；证据齐全后提交。
+4. 回读父 CI 终态，再推送已审查提交；要求新准确 SHA 完整 CI，不把文档完成当上线完成。
+5. 完成待办/详情、原单照片授权、私有 H5，再补发件出库/发运精确来源及客户端恢复。
+6. 继续报废反向冲销、人员调拨、离职交接；分别准备真实 UAT、试点及正式生产验收。
 
 ```sh
 cd ~/.codex/worktrees/06f6/oam
 git branch --show-current
+git rev-parse HEAD
 git status --short
-git log -5 --oneline
 git diff --check
 cd cloud_oam
-cat artifacts/loss-review-recovery/native-terminal.json
-cat artifacts/handoff-20260930/ci-snapshot.json
+cat artifacts/loss-review-seals-0156/continuation.json
+cat artifacts/local-stock-loss-review-seals-pg16/checks/run-o500b2w_/cluster-state.json
+cat artifacts/loss-review-seals-0156/native-terminal-v5.json
 ```
 
-后续确有相关源码变更或新失败时，才按以下命令复验：
+草案后续复验（不集成正式源码，保留旧日志）：
 
 ```sh
-# 工作目录 cloud_oam/backend
-../.venv/bin/python -m pytest -q tests/test_stock_loss_review_recovery.py
-../.venv/bin/python -m pytest -q tests/test_stock_loss_recovery_routes.py tests/test_stock_loss_write_routes.py
-# 工作目录 cloud_oam；新建自有数量/SN 实例
-.venv/bin/python scripts/run_local_pg16_stock_loss_submit_checks.py --postgres-bin artifacts/pg16-native-20260920/install/bin
+# 工作目录 cloud_oam
+.venv/bin/python artifacts/loss-review-queue-next/run_draft_tests.py > artifacts/loss-review-queue-next/draft-v2.log 2>&1
 ```
 
-- [正式基线缺口审计](FORMAL_V1_BASELINE_GAP_AUDIT_20260923.md)：剩余业务及后续审批封存设计。
-- [UAT 与上线证据矩阵](FORMAL_V1_UAT_AND_LAUNCH_EVIDENCE_20260925.md)：现场验收；旧候选值不覆盖本页。
-- [部署入口](PILOT_DEPLOY_ENTRY_20260922.md)、[公网双入口烟测](PILOT_LIVE_ROUTE_SMOKE_20260924.md)。
-- [短信认证专项](PNVS_01_AUTHENTICATION_PLAN_20260921.md)、[通知运维审计](NOTIFICATION_OPERATIONS_BASELINE_AUDIT_20260919.md)。
-- [本次整理前交接原文](CONTINUE_DEVELOPMENT_HISTORY_20260930.md)：含中间运行状态和详细门禁修复经过，原文保留，只作历史。
-- [9 月 29 日归档](CONTINUE_DEVELOPMENT_HISTORY_20260929.md)、[9 月 21 日归档](CONTINUE_DEVELOPMENT_HISTORY_20260921.md)。
+## 8. 上线缺口与相关文档
 
-维护时更新本页的当前值与核验时间，详细过程放证据或历史归档；不得执行历史文档中已过期的“下一步”。本地通过、准确 SHA CI、真实 UAT、生产上线必须分别报告。
+- 用户已确认目标为旧备份脚本服务器 118.31.37.87，不再重复问。Ubuntu 24.04/x86_64、旧 star-oam 占用 80/443 是 9 月 24 日历史；本次未连服务器，部署前重查容器/卷/端口/镜像/回滚点。
+- 新版首页与 /xx 无生产双入口验收；备案通过截图不等于域名、HTTPS、内容和部署验收。
+- 短信仅配置及合成验证，真实 PNVS、身份唯一映射、实发及回读未验收；outbox 不等于送达。
+- 真实 OSS/KMS、来源公开性、期初数据、OAM 批次语义、设备 UAT、500 用户负载、RPO≤5 分钟/RTO≤2 小时恢复及至少连续三天对账解释待补。
+- 受邀小范围 HTTPS H5 试点与完整 V1.0 发布分别验收，不给无依据的完成百分比或上线日期。
+
+导航：[基线缺口审计](FORMAL_V1_BASELINE_GAP_AUDIT_20260923.md)、[UAT/上线矩阵](FORMAL_V1_UAT_AND_LAUNCH_EVIDENCE_20260925.md)、[部署入口](PILOT_DEPLOY_ENTRY_20260922.md)、[双入口烟测](PILOT_LIVE_ROUTE_SMOKE_20260924.md)、[短信认证](PNVS_01_AUTHENTICATION_PLAN_20260921.md)、[通知运维](NOTIFICATION_OPERATIONS_BASELINE_AUDIT_20260919.md)。
+
+历史：[本次整理前完整入口](CONTINUE_DEVELOPMENT_HISTORY_20260930_0845.md)、[9 月 30 日早期归档](CONTINUE_DEVELOPMENT_HISTORY_20260930.md)、[9 月 29 日归档](CONTINUE_DEVELOPMENT_HISTORY_20260929.md)。历史“下一步”不直接执行；当前状态以本页和最新实际产物为准。

@@ -571,7 +571,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "stock_operation_shipments", "stock_operation_shipment_lines", "stock_operation_shipment_serials",
         "stock_operation_receipts", "stock_operation_receipt_lines", "stock_operation_receipt_serials", "stock_operation_receipt_exceptions",
         "stock_operation_orders", "stock_operation_lines", "stock_operation_serials", "stock_operation_cancellations",
-        "stock_loss_files", "stock_loss_request_seals", "stock_loss_regional_reviews", "stock_loss_headquarters_reviews", "stock_loss_headquarters_decisions", "stock_loss_dispositions",
+        "stock_loss_files", "stock_loss_request_seals", "stock_loss_review_request_seals", "stock_loss_regional_reviews", "stock_loss_headquarters_reviews", "stock_loss_headquarters_decisions", "stock_loss_dispositions",
         "outbound_postings", "outbound_posting_serials",
         "shipments", "shipment_lines", "shipment_serials",
         "logistics_events", "receipts", "receipt_lines", "receipt_serials", "receipt_exceptions", "oam_receipt_evidence", "inbound_orders", "inbound_postings",
@@ -7319,7 +7319,19 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 451
+    assert len(triggers) == 461
+    assert {row['trigger_name'] for row in triggers if row['trigger_name'].endswith('_0156')} == {
+        'trg_stock_loss_review_request_seals_review_seal_0156',
+        'trg_stock_loss_regional_reviews_review_seal_0156',
+        'trg_stock_loss_headquarters_reviews_review_seal_0156',
+        'trg_audit_events_review_seal_0156',
+        'trg_outbox_events_review_seal_0156',
+        'trg_state_transition_events_review_seal_0156',
+        'trg_notification_events_review_seal_0156',
+        'trg_loss_review_seal_lock_0156',
+        'trg_loss_review_seal_immutable_0156',
+        'trg_loss_review_seal_truncate_0156',
+    }
     assert {
         (row['trigger_name'], row['table_name'], row['function_name'])
         for row in triggers if row['trigger_name'].endswith('_0154')

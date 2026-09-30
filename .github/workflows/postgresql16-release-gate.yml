@@ -109,7 +109,7 @@ jobs:
       fail-fast: false
       matrix:
         tracking: [quantity, serial]
-        flow: [submission, submission_http, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt]
+        flow: [submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt]
     timeout-minutes: 180
     services:
       postgres:

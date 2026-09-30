@@ -266,8 +266,27 @@ class StockLossHeadquartersReviewFoundOut(BaseModel):
     review: StockLossHeadquartersReviewOut
 
 
-StockLossRegionalReviewLookupOut = StockLossRegionalReviewFoundOut | StockLossRequestMissingOut
-StockLossHeadquartersReviewLookupOut = StockLossHeadquartersReviewFoundOut | StockLossRequestMissingOut
+class StockLossReviewSealOut(BaseModel):
+    seal_id: UUID
+    stage: Literal['regional', 'headquarters']
+    operation_id: UUID
+    owner_org_id: UUID
+    reviewer_person_id: UUID
+    request_id: str
+    request_hash: str
+    submission_plan_hash: str
+    stock_effect: Literal['none'] = 'none'
+    sealed_at: datetime
+
+
+class StockLossReviewRequestSealedOut(BaseModel):
+    lookup_status: Literal['sealed'] = 'sealed'
+    retry_permitted: Literal[False] = False
+    seal: StockLossReviewSealOut
+
+
+StockLossRegionalReviewLookupOut = StockLossRegionalReviewFoundOut | StockLossRequestMissingOut | StockLossReviewRequestSealedOut
+StockLossHeadquartersReviewLookupOut = StockLossHeadquartersReviewFoundOut | StockLossRequestMissingOut | StockLossReviewRequestSealedOut
 
 
 class StockLossDispositionPreviewIn(StrictInput):

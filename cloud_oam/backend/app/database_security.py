@@ -4713,6 +4713,32 @@ EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_receipt_current_0155'] = (
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_receipt_notification_0155'] = ('notification_events', 'rsc_guard_loss_receipt_notification_0155', 'A', 5, True, True, True)
 EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_receipt_target_0155'] = ('notification_person_targets', 'rsc_guard_loss_receipt_notification_0155', 'A', 5, True, True, True)
 
+# 0156 independent approval request seals; private proofs and immutable facts.
+RUNTIME_READ_TABLES |= {'stock_loss_review_request_seals'}
+RUNTIME_INSERT_TABLES |= {'stock_loss_review_request_seals'}
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_lock_loss_review_seal_0156', '')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_lock_loss_review_seal_0156', '')] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_lock_loss_review_seal_0156', '')] = 'aca4e739693fc4956349c6e363678d505859ee28b78830cf265bd8c55a0b0400'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_check_loss_review_seal_0156', 'uuid')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_check_loss_review_seal_0156', 'uuid')] = ('f', 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_review_seal_0156', 'uuid')] = 'ab01d701ce1ec2eb57a548417413a8560028829947305340d044c613c606c715'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_loss_review_seal_0156', '')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_loss_review_seal_0156', '')] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_loss_review_seal_0156', '')] = 'c57fd7163e3a0519da32606415c29956d9e5c3350ee69cd1acaef0b05e93416e'
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_loss_review_request_seals_review_seal_0156'] = ('stock_loss_review_request_seals', 'rsc_guard_loss_review_seal_0156', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_loss_regional_reviews_review_seal_0156'] = ('stock_loss_regional_reviews', 'rsc_guard_loss_review_seal_0156', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_loss_headquarters_reviews_review_seal_0156'] = ('stock_loss_headquarters_reviews', 'rsc_guard_loss_review_seal_0156', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_audit_events_review_seal_0156'] = ('audit_events', 'rsc_guard_loss_review_seal_0156', 'A', 5, True, True, True)
+EXPECTED_AUDIT_TRIGGERS['trg_audit_events_review_seal_0156'] = ('audit_events', 'rsc_guard_loss_review_seal_0156', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_outbox_events_review_seal_0156'] = ('outbox_events', 'rsc_guard_loss_review_seal_0156', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_state_transition_events_review_seal_0156'] = ('state_transition_events', 'rsc_guard_loss_review_seal_0156', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_notification_events_review_seal_0156'] = ('notification_events', 'rsc_guard_loss_review_seal_0156', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_review_seal_lock_0156'] = ('stock_loss_review_request_seals', 'rsc_lock_loss_review_seal_0156', 'A', 7, False, False, False)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_review_seal_immutable_0156'] = ('stock_loss_review_request_seals', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_review_seal_truncate_0156'] = ('stock_loss_review_request_seals', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False)
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_review_seal_request'] = {'table': 'stock_loss_review_request_seals', 'columns': ('stage', 'actor_user_id', 'request_id'), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_review_seal_key'] = {'table': 'stock_loss_review_request_seals', 'columns': ('stage', 'idempotency_key_hash'), 'predicate': None}
+
 _ROLE_EVIDENCE_SQL = text(
     """
 SELECT

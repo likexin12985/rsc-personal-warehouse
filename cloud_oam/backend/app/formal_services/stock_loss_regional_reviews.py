@@ -121,6 +121,8 @@ def verify_regional_loss(db, *, actor, request):
     facts.submission_evidence(db, order=order)
     # Review idempotency is independent from stock and submission keys.
     key = posting._storage_hash('stock-loss-regional-review:'+posting._require_idempotency_key(request.idempotency_key))
+    from .stock_loss_review_seals import require_unsealed
+    require_unsealed(db, actor=current, stage='regional', request_id=request.request_id, key=key)
     rows = tuple(db.scalars(select(Review).where(or_(Review.operation_id == order.id,
         Review.idempotency_key_hash == key,
         (Review.actor_user_id == current.user_id) & (Review.request_id == request.request_id)))

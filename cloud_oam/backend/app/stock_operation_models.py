@@ -136,6 +136,34 @@ class StockLossFile(CreatedAtMixin, Base):
     metadata_sha256: Mapped[str] = mapped_column(String(64))
 
 
+class StockLossReviewRequestSeal(CreatedAtMixin, Base):
+    """One original approval request permanently closed without stock effects."""
+    __tablename__ = 'stock_loss_review_request_seals'
+    __table_args__ = (
+        ForeignKeyConstraint(['operation_id', 'operation_type'],
+            ['stock_operation_orders.id', 'stock_operation_orders.operation_type'],
+            name='fk_loss_review_seal_parent', ondelete='RESTRICT'),
+        UniqueConstraint('stage', 'actor_user_id', 'request_id', name='uq_loss_review_seal_request'),
+        UniqueConstraint('stage', 'idempotency_key_hash', name='uq_loss_review_seal_key'),
+        CheckConstraint("operation_type='loss_report' AND stage IN ('regional','headquarters')", name='ck_loss_review_seal_kind'),
+        CheckConstraint('authorization_version>0 AND length(request_id) BETWEEN 8 AND 160', name='ck_loss_review_seal_context'),
+        CheckConstraint('length(request_hash)=64 AND length(submission_plan_hash)=64 AND length(idempotency_key_hash)=64', name='ck_loss_review_seal_hashes'),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    operation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    operation_type: Mapped[str] = mapped_column(String(24))
+    stage: Mapped[str] = mapped_column(String(24))
+    owner_org_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('organizations.id', ondelete='RESTRICT'))
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey('users.id', ondelete='RESTRICT'))
+    reviewer_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('people.id', ondelete='RESTRICT'))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    request_id: Mapped[str] = mapped_column(String(160))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    submission_plan_hash: Mapped[str] = mapped_column(String(64))
+    command_intent_jsonb: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT)
+
+
 class StockLossRegionalReview(CreatedAtMixin, Base):
     """Independent regional verification; never a disposal or stock posting."""
     __tablename__ = 'stock_loss_regional_reviews'

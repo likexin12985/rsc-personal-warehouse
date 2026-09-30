@@ -81,6 +81,7 @@ def _request_events(db, actor, request, service, row):
 
 
 def lookup_review_request(db, *, actor, request, stage):
+    from . import stock_loss_review_seals as seals
     service, model, output = _stage(stage)
     request = StockLossReviewRequestLookupIn.model_validate(request.model_dump())
     with db.no_autoflush:
@@ -96,7 +97,8 @@ def lookup_review_request(db, *, actor, request, stage):
         facts.submission_evidence(db, order=order)
         key = posting._storage_hash('stock-loss-'+stage+'-review:'
             + posting._require_idempotency_key(request.idempotency_key))
-        rows = tuple(db.scalars(select(model).where(or_(model.operation_id == order.id,
+        seal = seals.find(db, actor=current, stage=stage, request=request, key=key)
+        rows = tuple(db.scalars(select(model).where(or_(model.operation_id == order.id if seal is None else False,
             model.idempotency_key_hash == key,
             (model.actor_user_id == current.user_id) & (model.request_id == request.request_id)))
             .limit(3).execution_options(populate_existing=True)))
@@ -111,8 +113,13 @@ def lookup_review_request(db, *, actor, request, stage):
                     or row.request_hash != request.request_hash
                     or row.submission_plan_hash != request.expected_submission_plan_hash):
                 _conflict()
+        if seal is not None and (row is not None or seal.owner_org_id != owner):
+            facts.invalid()
         _request_events(db, current, request, service, row)
-        result = output(review=service.verified(db, row=row, order=order)) if row else StockLossRequestMissingOut()
+        if seal is not None:
+            result = seals.verified(db, actor=current, row=seal, order=order, stage=stage)
+        else:
+            result = output(review=service.verified(db, row=row, order=order)) if row else StockLossRequestMissingOut()
         if _cursor(db) != before:
             sources._fail('stock_loss_review_lookup_changed', '审批记录在回查期间变化，请保留原请求重新查询')
         _authorize(db, current, order, stage)

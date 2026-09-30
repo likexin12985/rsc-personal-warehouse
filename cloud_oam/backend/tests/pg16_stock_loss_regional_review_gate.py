@@ -23,7 +23,7 @@ from pg16_stock_loss_submit_gate import snapshot
 from test_formal_access import make_user, assign
 
 
-def run(engines):
+def run(engines, *, check_seals=False):
     owner,api=(engines[key] for key in ('star_oam_migrator','star_oam_api'))
     with Session(owner) as db:
         orders=tuple(db.scalars(select(Order).where(Order.operation_type=='loss_report').order_by(Order.id)))
@@ -119,6 +119,12 @@ def run(engines):
     finally:
         with Session(owner) as db:db.get(RoleAssignment,assignment_id).valid_to=old_end;db.commit()
 
+    seal_result = None
+    if check_seals:
+        from pg16_stock_loss_review_seals_gate import run as seal_checks
+        seal_result = seal_checks(engines,stage='regional',reviewer_id=reviewer_id,assignment_id=assignment_id,
+            command=request(),service=reviews)
+
     before=state();value=request();started=threading.Event();waiter_pid=[]
     def competing_review():
         with Session(api) as db:
@@ -127,20 +133,37 @@ def run(engines):
     with Session(api) as first:
         first_pid=first.scalar(text('SELECT pg_backend_pid()'))
         result=command(first,value)
-        with ThreadPoolExecutor(max_workers=1) as pool:
+        with ThreadPoolExecutor(max_workers=2 if check_seals else 1) as pool:
             pending=pool.submit(competing_review)
+            seal_future=None
+            if check_seals:
+                from pg16_stock_loss_review_seals_gate import seal_competitor, wait_for_blocker
+                seal_ready=threading.Event();seal_pids=[]
+                seal_future=pool.submit(seal_competitor,api,stage='regional',reviewer_id=reviewer_id,
+                    command=value,service=reviews,ready=seal_ready,pids=seal_pids)
             try:
                 assert started.wait(10)
-                limit=time.monotonic()+15;observed=False
-                while time.monotonic()<limit:
-                    with owner.connect() as db:blockers=db.scalar(text('SELECT pg_blocking_pids(:pid)'),{'pid':waiter_pid[0]})
-                    if first_pid in blockers:observed=True;break
-                    time.sleep(.05)
-                assert observed,'regional replay did not wait for exact first transaction'
+                if check_seals:
+                    seal_result['approvalWaitPath']=wait_for_blocker(owner,waiter_pid[0],first_pid)
+                else:
+                    limit=time.monotonic()+15;observed=False
+                    while time.monotonic()<limit:
+                        with owner.connect() as db:blockers=db.scalar(text('SELECT pg_blocking_pids(:pid)'),{'pid':waiter_pid[0]})
+                        if first_pid in blockers:observed=True;break
+                        time.sleep(.05)
+                    assert observed,'approval replay did not wait for exact first transaction'
+                if check_seals:
+                    assert seal_ready.wait(10)
+                    wait_for_blocker(owner,seal_pids[0],first_pid)
                 first.commit()
             finally:
                 first.rollback()
             assert pending.result(timeout=30)==result
+            if check_seals:
+                recovered=seal_future.result(timeout=30)
+                assert recovered.lookup_status=='found' and recovered.review==result
+                assert recovered.retry_permitted is False
+                seal_result['reviewFirstSealReturnsOriginal']=True
     after=state()
     for table in ('stock_accounts','stock_balances','inventory_transactions','inventory_movements','inventory_movement_serials',
             'serial_current_positions','inventory_serials','stock_operation_orders','stock_operation_lines','stock_operation_serials',
@@ -157,7 +180,13 @@ def run(engines):
         requester=db.get(User,requester_id);previous_status=requester.account_status;requester.account_status='suspended';db.commit()
     try:
         with Session(api) as db:
-            second=command(db,request(order_ids[1]));db.commit()
+            if check_seals:
+                from pg16_stock_loss_review_write_http_gate import run as http_checks
+                second,http_result=http_checks(engines,stage='regional',reviewer_id=reviewer_id,
+                    write_grant_id=grant_id,command=request(order_ids[1]),service=reviews)
+                seal_result['http']=http_result
+            else:
+                second=command(db,request(order_ids[1]));db.commit()
             assert second.approval_stage=='awaiting_headquarters' and second.stock_effect=='none'
             for order_id in order_ids:
                 original=facts.submission_evidence(db,order=db.get(Order,order_id))
@@ -177,4 +206,4 @@ def run(engines):
     print('PG16 regional loss: independent review/replay, raw refusals, expiry, exact lock race and departed-requester handling PASS',flush=True)
     return dict(passed=True,rawCommitRollbacks=10,commitExpiryRollback=True,exactConcurrentBlockerObserved=True,
         idempotentReplay=True,stockUnchanged=True,requesterSuspensionAllowed=True,immutableFacts=True,
-        approvalStage='awaiting_headquarters',disposalCompleted=False,requestRecovery=recovery)
+        approvalStage='awaiting_headquarters',disposalCompleted=False,requestSeals=seal_result,requestRecovery=recovery)

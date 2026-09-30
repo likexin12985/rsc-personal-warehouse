@@ -1,4 +1,6 @@
 """Own-stock loss submission and exact original-request recovery."""
+from types import SimpleNamespace
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -8,7 +10,8 @@ from ..dependencies import require_permission
 from ..formal_access import FormalPrincipal
 from ..formal_services import stock_loss_sources, stock_loss_plan, stock_loss_recovery
 from ..formal_services import stock_loss_commands, stock_loss_seals
-from ..formal_services import stock_loss_review_recovery
+from ..formal_services import stock_loss_review_recovery, stock_loss_review_seals
+from ..formal_services import stock_loss_regional_reviews, stock_loss_headquarters_reviews
 from ..formal_services.audit_chain import AuditChainError
 from ..formal_services.inventory_posting import InventoryPostingError
 from ..formal_services.inventory_query import InventoryReadError
@@ -17,6 +20,15 @@ from ..stock_loss_schemas import StockLossRequestLookupIn, StockLossRequestLooku
 from ..stock_loss_schemas import StockLossSubmitIn, StockLossSubmittedOut, StockLossSealIn
 from ..stock_loss_schemas import StockLossRequestFoundOut, StockLossRequestSealedOut
 from ..stock_loss_schemas import StockLossReviewRequestLookupIn, StockLossRegionalReviewLookupOut, StockLossHeadquartersReviewLookupOut
+
+from ..stock_loss_review_seal_schemas import (
+    StockLossRegionalReviewCommandIn, StockLossHeadquartersReviewCommandIn,
+    StockLossRegionalReviewSealIn, StockLossHeadquartersReviewSealIn,
+)
+from ..stock_loss_schemas import (
+    StockLossRegionalReviewOut, StockLossHeadquartersReviewOut,
+    StockLossRegionalReviewFoundOut, StockLossHeadquartersReviewFoundOut, StockLossReviewRequestSealedOut,
+)
 
 router = APIRouter(prefix='/v1/stock-operations/loss-reports', tags=['formal-stock-losses'])
 PRIVATE = {'Cache-Control': 'private, no-store'}
@@ -133,3 +145,53 @@ def seal_request(payload: StockLossSealIn, response: Response, db: Session = Dep
     # These are the original report coordinates, never a new submission key.
     _coordinates(payload, principal, trace, key)
     return _write(db, response, lambda: stock_loss_seals.seal_loss_request(db, actor=principal, request=payload))
+
+
+def _review_coordinates(payload, principal, trace, key):
+    _coordinates(SimpleNamespace(operator_person_id=payload.operator_person_id,
+        request_id=payload.original.request_id, idempotency_key=payload.original.idempotency_key),
+        principal, trace, key)
+
+
+@router.post('/regional-reviews', response_model=StockLossRegionalReviewOut)
+def submit_regional_review(payload: StockLossRegionalReviewCommandIn, response: Response,
+    db: Session = Depends(get_db),
+    principal: FormalPrincipal = Depends(require_permission('stock_operation', 'review_loss_regional')),
+    trace: str | None = Header(None, alias='X-Request-ID'),
+    key: str | None = Header(None, alias='Idempotency-Key')):
+    _review_coordinates(payload, principal, trace, key)
+    return _write(db, response, lambda: stock_loss_regional_reviews.verify_regional_loss(
+        db, actor=principal, request=payload.original))
+
+
+@router.post('/headquarters-reviews', response_model=StockLossHeadquartersReviewOut)
+def submit_headquarters_review(payload: StockLossHeadquartersReviewCommandIn, response: Response,
+    db: Session = Depends(get_db),
+    principal: FormalPrincipal = Depends(require_permission('stock_operation', 'finalize_loss')),
+    trace: str | None = Header(None, alias='X-Request-ID'),
+    key: str | None = Header(None, alias='Idempotency-Key')):
+    _review_coordinates(payload, principal, trace, key)
+    return _write(db, response, lambda: stock_loss_headquarters_reviews.approve_headquarters_loss(
+        db, actor=principal, request=payload.original))
+
+
+@router.post('/regional-reviews/request-seal', response_model=StockLossRegionalReviewFoundOut | StockLossReviewRequestSealedOut)
+def seal_regional_review(payload: StockLossRegionalReviewSealIn, response: Response,
+    db: Session = Depends(get_db),
+    principal: FormalPrincipal = Depends(require_permission('stock_operation', 'review_loss_regional')),
+    trace: str | None = Header(None, alias='X-Request-ID'),
+    key: str | None = Header(None, alias='Idempotency-Key')):
+    _review_coordinates(payload, principal, trace, key)
+    return _write(db, response, lambda: stock_loss_review_seals.seal_review_request(
+        db, actor=principal, request=payload, stage='regional'))
+
+
+@router.post('/headquarters-reviews/request-seal', response_model=StockLossHeadquartersReviewFoundOut | StockLossReviewRequestSealedOut)
+def seal_headquarters_review(payload: StockLossHeadquartersReviewSealIn, response: Response,
+    db: Session = Depends(get_db),
+    principal: FormalPrincipal = Depends(require_permission('stock_operation', 'finalize_loss')),
+    trace: str | None = Header(None, alias='X-Request-ID'),
+    key: str | None = Header(None, alias='Idempotency-Key')):
+    _review_coordinates(payload, principal, trace, key)
+    return _write(db, response, lambda: stock_loss_review_seals.seal_review_request(
+        db, actor=principal, request=payload, stage='headquarters'))
