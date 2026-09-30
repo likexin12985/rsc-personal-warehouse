@@ -625,6 +625,22 @@ tbody tr:hover { background: #fbfcfc; }
 /* Private loss approval workspace. */
 .loss-review-page { display: grid; gap: 20px; }
 .loss-review-page > * { min-width: 0; }
+.return-receiving-page { display: grid; gap: 20px; }
+.return-receiving-page > *, .return-receiving-page fieldset { min-width: 0; }
+.return-receiving-page .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+.return-receiving-page .table-scroll { max-width: 100%; overflow-x: auto; }
+.return-receiving-page .toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 12px; }
+.return-receiving-page p, .return-receiving-page li { overflow-wrap: anywhere; }
+.return-receiving-page button { margin: 4px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); color: var(--ink); }
+.return-receiving-page button[type="submit"] { background: var(--teal); border-color: var(--teal); color: white; }
+.return-receiving-page button:focus-visible { outline: 3px solid var(--teal); outline-offset: 2px; }
+.return-receiving-page legend { font-weight: 600; }
+@media (max-width: 600px) { .return-receiving-page .panel { padding: 14px; } }
+.return-receiving-page h2, .return-receiving-page h4, .return-receiving-page legend, .return-pending { overflow-wrap: anywhere; }
+.return-receiving-page input[type="checkbox"] { width: auto; min-height: auto; margin-right: .5rem; vertical-align: middle; }
+.return-receiving-page fieldset { margin-block: 1rem; padding: 1rem; border: 1px solid var(--border, #d9e0e7); border-radius: .5rem; }
+.return-receiving-page label { display: block; margin-block: .5rem; }
+.return-receipt, .return-pending { padding-block: 1rem; border-bottom: 1px solid var(--border, #d9e0e7); }
 .loss-review-page h2 { overflow-wrap: anywhere; }
 .loss-review-page input[type="checkbox"] { width: auto; min-height: auto; margin: 0 8px 0 0; vertical-align: middle; }
 .loss-review-page .panel { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 22px; }

@@ -1,0 +1,459 @@
+{
+  "identity": {
+    "person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+    "authorization_version": 7
+  },
+  "directory": {
+    "schema_version": "1.0",
+    "person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+    "authorization_version": 7,
+    "ledger_cursor": 8,
+    "queried_at": "2026-09-30T05:42:34.345806Z",
+    "items": [
+      {
+        "verification_status": "verified",
+        "shipment_id": "81a8a8f4-305f-4c41-ae1f-fc0a00ee057e",
+        "shipment_no": "RET-SHP-738325E84CEC57287A1B40B2",
+        "operation_id": "31fb0cf6-37f5-47be-a533-6af65e0c2e1f",
+        "operation_no": "RET-9EB47B330441BE2930D4E9A8",
+        "work_order_id": "b77d7e5d-b808-42df-a9d5-7700ea7d5fea",
+        "sender_person_id": "5c50895a-170e-40cb-8e68-69e7b04f5442",
+        "receiver_person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+        "target_location_id": "5f6393ba-3f90-4d24-9e1b-1a2abb8a9e4d",
+        "target_location_name": "测试区域仓",
+        "custody_assignment_id": "f96f7566-fe8a-4c3c-b789-15c97dbee3b5",
+        "carrier": "人工登记承运商",
+        "tracking_no": "SYNTHETIC-RETURN-1",
+        "shipped_at": "2026-09-30T05:42:32.134042Z",
+        "recorded_at": "2026-09-30T05:42:33.104713Z",
+        "lines": [
+          {
+            "shipment_line_id": "a9f5bbb0-773b-4652-971c-7633ef4a9f23",
+            "outbound_no": "RET-OUT-F54C3972212F5B188ADBD06A",
+            "material_id": "8b297bd0-00e2-4137-ad28-f6da20fd09cd",
+            "sku_code": "SKU-5bf17c88dd38",
+            "material_name": "测试物料",
+            "base_unit": "件",
+            "condition_code": "used",
+            "lot_id": null,
+            "lot_no": null,
+            "shipped_quantity": "1.000",
+            "serials": [
+              {
+                "serial_id": "2bf492c2-166d-44dd-9551-ecfdd904a294",
+                "serial_no": "OPTIONS-SN-0"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "next_after_id": null
+  },
+  "before": {
+    "schema_version": "1.0",
+    "person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+    "authorization_version": 7,
+    "ledger_cursor": 8,
+    "queried_at": "2026-09-30T05:42:34.811751Z",
+    "package": {
+      "verification_status": "verified",
+      "shipment_id": "81a8a8f4-305f-4c41-ae1f-fc0a00ee057e",
+      "shipment_no": "RET-SHP-738325E84CEC57287A1B40B2",
+      "operation_id": "31fb0cf6-37f5-47be-a533-6af65e0c2e1f",
+      "operation_no": "RET-9EB47B330441BE2930D4E9A8",
+      "work_order_id": "b77d7e5d-b808-42df-a9d5-7700ea7d5fea",
+      "sender_person_id": "5c50895a-170e-40cb-8e68-69e7b04f5442",
+      "receiver_person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+      "target_location_id": "5f6393ba-3f90-4d24-9e1b-1a2abb8a9e4d",
+      "target_location_name": "测试区域仓",
+      "custody_assignment_id": "f96f7566-fe8a-4c3c-b789-15c97dbee3b5",
+      "carrier": "人工登记承运商",
+      "tracking_no": "SYNTHETIC-RETURN-1",
+      "shipped_at": "2026-09-30T05:42:32.134042Z",
+      "recorded_at": "2026-09-30T05:42:33.104713Z",
+      "lines": [
+        {
+          "shipment_line_id": "a9f5bbb0-773b-4652-971c-7633ef4a9f23",
+          "outbound_no": "RET-OUT-F54C3972212F5B188ADBD06A",
+          "material_id": "8b297bd0-00e2-4137-ad28-f6da20fd09cd",
+          "sku_code": "SKU-5bf17c88dd38",
+          "material_name": "测试物料",
+          "base_unit": "件",
+          "condition_code": "used",
+          "lot_id": null,
+          "lot_no": null,
+          "shipped_quantity": "1.000",
+          "serials": [
+            {
+              "serial_id": "2bf492c2-166d-44dd-9551-ecfdd904a294",
+              "serial_no": "OPTIONS-SN-0"
+            }
+          ]
+        }
+      ]
+    },
+    "receipts": [],
+    "lines": [
+      {
+        "shipment_line_id": "a9f5bbb0-773b-4652-971c-7633ef4a9f23",
+        "shipped_qty": "1.000",
+        "accepted_qty": "0.000",
+        "rejected_qty": "0.000",
+        "damaged_qty": "0.000",
+        "unconfirmed_qty": "1.000",
+        "unconfirmed_serials": [
+          {
+            "serial_id": "2bf492c2-166d-44dd-9551-ecfdd904a294",
+            "serial_no": "OPTIONS-SN-0"
+          }
+        ]
+      }
+    ]
+  },
+  "preview": {
+    "schema_version": "1.0",
+    "planning_status": "preview_only",
+    "shipment_id": "81a8a8f4-305f-4c41-ae1f-fc0a00ee057e",
+    "operation_id": "31fb0cf6-37f5-47be-a533-6af65e0c2e1f",
+    "work_order_id": "b77d7e5d-b808-42df-a9d5-7700ea7d5fea",
+    "operator_person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+    "authorization_version": 7,
+    "received_at": "2026-09-30T05:42:34.212635Z",
+    "reason": "逐件验收退回物料，尚未入账",
+    "checked_at": "2026-09-30T05:42:36.005810Z",
+    "ledger_cursor": 8,
+    "package": {
+      "verification_status": "verified",
+      "shipment_id": "81a8a8f4-305f-4c41-ae1f-fc0a00ee057e",
+      "shipment_no": "RET-SHP-738325E84CEC57287A1B40B2",
+      "operation_id": "31fb0cf6-37f5-47be-a533-6af65e0c2e1f",
+      "operation_no": "RET-9EB47B330441BE2930D4E9A8",
+      "work_order_id": "b77d7e5d-b808-42df-a9d5-7700ea7d5fea",
+      "sender_person_id": "5c50895a-170e-40cb-8e68-69e7b04f5442",
+      "receiver_person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+      "target_location_id": "5f6393ba-3f90-4d24-9e1b-1a2abb8a9e4d",
+      "target_location_name": "测试区域仓",
+      "custody_assignment_id": "f96f7566-fe8a-4c3c-b789-15c97dbee3b5",
+      "carrier": "人工登记承运商",
+      "tracking_no": "SYNTHETIC-RETURN-1",
+      "shipped_at": "2026-09-30T05:42:32.134042Z",
+      "recorded_at": "2026-09-30T05:42:33.104713Z",
+      "lines": [
+        {
+          "shipment_line_id": "a9f5bbb0-773b-4652-971c-7633ef4a9f23",
+          "outbound_no": "RET-OUT-F54C3972212F5B188ADBD06A",
+          "material_id": "8b297bd0-00e2-4137-ad28-f6da20fd09cd",
+          "sku_code": "SKU-5bf17c88dd38",
+          "material_name": "测试物料",
+          "base_unit": "件",
+          "condition_code": "used",
+          "lot_id": null,
+          "lot_no": null,
+          "shipped_quantity": "1.000",
+          "serials": [
+            {
+              "serial_id": "2bf492c2-166d-44dd-9551-ecfdd904a294",
+              "serial_no": "OPTIONS-SN-0"
+            }
+          ]
+        }
+      ]
+    },
+    "request_hash": "ebad50dc4d52339609345134d55405d3a500658a60b7f5717ee70265bae67e01",
+    "plan_hash": "21b2ee4ff35abe22d3d7df83d045fc118c8749b082a0b08df83fe8fcd702c549",
+    "lines": [
+      {
+        "shipment_line_id": "a9f5bbb0-773b-4652-971c-7633ef4a9f23",
+        "material_id": "8b297bd0-00e2-4137-ad28-f6da20fd09cd",
+        "sku_code": "SKU-5bf17c88dd38",
+        "material_name": "测试物料",
+        "base_unit": "件",
+        "condition_code": "used",
+        "lot_id": null,
+        "lot_no": null,
+        "shipped_qty": "1.000",
+        "previously_accepted_qty": "0.000",
+        "previously_rejected_qty": "0.000",
+        "unconfirmed_qty": "1.000",
+        "accepted_qty": "1.000",
+        "rejected_qty": "0.000",
+        "damaged_qty": "0.000",
+        "shortage_qty": "0.000",
+        "accepted_serials": [
+          {
+            "serial_id": "2bf492c2-166d-44dd-9551-ecfdd904a294",
+            "serial_no": "OPTIONS-SN-0"
+          }
+        ],
+        "damaged_serial_ids": [],
+        "rejected_serials": [],
+        "shortage_serials": [],
+        "exceptions": []
+      }
+    ]
+  },
+  "command": {
+    "reason": "逐件验收退回物料，尚未入账",
+    "operator_person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+    "received_at": "2026-09-30T05:42:34.212635Z",
+    "lines": [
+      {
+        "shipment_line_id": "a9f5bbb0-773b-4652-971c-7633ef4a9f23",
+        "accepted_qty": "1.000",
+        "rejected_qty": "0.000",
+        "damaged_qty": "0.000",
+        "shortage_qty": "0.000",
+        "accepted_serial_verifications": [
+          {
+            "serial_id": "2bf492c2-166d-44dd-9551-ecfdd904a294",
+            "sku_code": "SKU-5bf17c88dd38",
+            "serial_no": "OPTIONS-SN-0",
+            "qr_code": "OPTIONS-QR-0"
+          }
+        ],
+        "damaged_serial_ids": [],
+        "rejected_serial_ids": [],
+        "shortage_serial_ids": [],
+        "exceptions": []
+      }
+    ],
+    "expected_plan_hash": "21b2ee4ff35abe22d3d7df83d045fc118c8749b082a0b08df83fe8fcd702c549",
+    "request_id": "c1742db0cd354c90857b25409925650e",
+    "idempotency_key": "3cde885120ec435f9950b9ab1f576db8"
+  },
+  "receipt": {
+    "schema_version": "1.0",
+    "receipt_id": "2d1904eb-80b3-4bef-a1c7-bb5d71628253",
+    "receipt_no": "RET-RCV-BEB682EAC77A459E3D6FC692",
+    "shipment_id": "81a8a8f4-305f-4c41-ae1f-fc0a00ee057e",
+    "operation_id": "31fb0cf6-37f5-47be-a533-6af65e0c2e1f",
+    "work_order_id": "b77d7e5d-b808-42df-a9d5-7700ea7d5fea",
+    "operator_person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+    "status": "accepted",
+    "received_at": "2026-09-30T05:42:34.212635Z",
+    "recorded_at": "2026-09-30T05:42:36.786458Z",
+    "reason": "逐件验收退回物料，尚未入账",
+    "request_id": "c1742db0cd354c90857b25409925650e",
+    "request_hash": "ebad50dc4d52339609345134d55405d3a500658a60b7f5717ee70265bae67e01",
+    "plan_hash": "21b2ee4ff35abe22d3d7df83d045fc118c8749b082a0b08df83fe8fcd702c549",
+    "target_location_id": "5f6393ba-3f90-4d24-9e1b-1a2abb8a9e4d",
+    "target_custody_assignment_id": "f96f7566-fe8a-4c3c-b789-15c97dbee3b5",
+    "lines": [
+      {
+        "shipment_line_id": "a9f5bbb0-773b-4652-971c-7633ef4a9f23",
+        "material_id": "8b297bd0-00e2-4137-ad28-f6da20fd09cd",
+        "sku_code": "SKU-5bf17c88dd38",
+        "material_name": "测试物料",
+        "base_unit": "件",
+        "condition_code": "used",
+        "lot_id": null,
+        "lot_no": null,
+        "shipped_qty": "1.000",
+        "previously_accepted_qty": "0.000",
+        "previously_rejected_qty": "0.000",
+        "unconfirmed_qty": "1.000",
+        "accepted_qty": "1.000",
+        "rejected_qty": "0.000",
+        "damaged_qty": "0.000",
+        "shortage_qty": "0.000",
+        "accepted_serials": [
+          {
+            "serial_id": "2bf492c2-166d-44dd-9551-ecfdd904a294",
+            "serial_no": "OPTIONS-SN-0"
+          }
+        ],
+        "damaged_serial_ids": [],
+        "rejected_serials": [],
+        "shortage_serials": [],
+        "exceptions": []
+      }
+    ]
+  },
+  "after": {
+    "schema_version": "1.0",
+    "person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+    "authorization_version": 7,
+    "ledger_cursor": 8,
+    "queried_at": "2026-09-30T05:42:37.579575Z",
+    "package": {
+      "verification_status": "verified",
+      "shipment_id": "81a8a8f4-305f-4c41-ae1f-fc0a00ee057e",
+      "shipment_no": "RET-SHP-738325E84CEC57287A1B40B2",
+      "operation_id": "31fb0cf6-37f5-47be-a533-6af65e0c2e1f",
+      "operation_no": "RET-9EB47B330441BE2930D4E9A8",
+      "work_order_id": "b77d7e5d-b808-42df-a9d5-7700ea7d5fea",
+      "sender_person_id": "5c50895a-170e-40cb-8e68-69e7b04f5442",
+      "receiver_person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+      "target_location_id": "5f6393ba-3f90-4d24-9e1b-1a2abb8a9e4d",
+      "target_location_name": "测试区域仓",
+      "custody_assignment_id": "f96f7566-fe8a-4c3c-b789-15c97dbee3b5",
+      "carrier": "人工登记承运商",
+      "tracking_no": "SYNTHETIC-RETURN-1",
+      "shipped_at": "2026-09-30T05:42:32.134042Z",
+      "recorded_at": "2026-09-30T05:42:33.104713Z",
+      "lines": [
+        {
+          "shipment_line_id": "a9f5bbb0-773b-4652-971c-7633ef4a9f23",
+          "outbound_no": "RET-OUT-F54C3972212F5B188ADBD06A",
+          "material_id": "8b297bd0-00e2-4137-ad28-f6da20fd09cd",
+          "sku_code": "SKU-5bf17c88dd38",
+          "material_name": "测试物料",
+          "base_unit": "件",
+          "condition_code": "used",
+          "lot_id": null,
+          "lot_no": null,
+          "shipped_quantity": "1.000",
+          "serials": [
+            {
+              "serial_id": "2bf492c2-166d-44dd-9551-ecfdd904a294",
+              "serial_no": "OPTIONS-SN-0"
+            }
+          ]
+        }
+      ]
+    },
+    "receipts": [
+      {
+        "schema_version": "1.0",
+        "receipt_id": "2d1904eb-80b3-4bef-a1c7-bb5d71628253",
+        "receipt_no": "RET-RCV-BEB682EAC77A459E3D6FC692",
+        "shipment_id": "81a8a8f4-305f-4c41-ae1f-fc0a00ee057e",
+        "operation_id": "31fb0cf6-37f5-47be-a533-6af65e0c2e1f",
+        "work_order_id": "b77d7e5d-b808-42df-a9d5-7700ea7d5fea",
+        "operator_person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+        "status": "accepted",
+        "received_at": "2026-09-30T05:42:34.212635Z",
+        "recorded_at": "2026-09-30T05:42:36.786458Z",
+        "reason": "逐件验收退回物料，尚未入账",
+        "request_id": "c1742db0cd354c90857b25409925650e",
+        "request_hash": "ebad50dc4d52339609345134d55405d3a500658a60b7f5717ee70265bae67e01",
+        "plan_hash": "21b2ee4ff35abe22d3d7df83d045fc118c8749b082a0b08df83fe8fcd702c549",
+        "target_location_id": "5f6393ba-3f90-4d24-9e1b-1a2abb8a9e4d",
+        "target_custody_assignment_id": "f96f7566-fe8a-4c3c-b789-15c97dbee3b5",
+        "lines": [
+          {
+            "shipment_line_id": "a9f5bbb0-773b-4652-971c-7633ef4a9f23",
+            "material_id": "8b297bd0-00e2-4137-ad28-f6da20fd09cd",
+            "sku_code": "SKU-5bf17c88dd38",
+            "material_name": "测试物料",
+            "base_unit": "件",
+            "condition_code": "used",
+            "lot_id": null,
+            "lot_no": null,
+            "shipped_qty": "1.000",
+            "previously_accepted_qty": "0.000",
+            "previously_rejected_qty": "0.000",
+            "unconfirmed_qty": "1.000",
+            "accepted_qty": "1.000",
+            "rejected_qty": "0.000",
+            "damaged_qty": "0.000",
+            "shortage_qty": "0.000",
+            "accepted_serials": [
+              {
+                "serial_id": "2bf492c2-166d-44dd-9551-ecfdd904a294",
+                "serial_no": "OPTIONS-SN-0"
+              }
+            ],
+            "damaged_serial_ids": [],
+            "rejected_serials": [],
+            "shortage_serials": [],
+            "exceptions": []
+          }
+        ]
+      }
+    ],
+    "lines": [
+      {
+        "shipment_line_id": "a9f5bbb0-773b-4652-971c-7633ef4a9f23",
+        "shipped_qty": "1.000",
+        "accepted_qty": "1.000",
+        "rejected_qty": "0.000",
+        "damaged_qty": "0.000",
+        "unconfirmed_qty": "0.000",
+        "unconfirmed_serials": []
+      }
+    ]
+  },
+  "inbound": {
+    "before": {
+      "schema_version": "1.0",
+      "receipt_id": "2d1904eb-80b3-4bef-a1c7-bb5d71628253",
+      "shipment_id": "81a8a8f4-305f-4c41-ae1f-fc0a00ee057e",
+      "operator_person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+      "authorization_version": 7,
+      "status": "not_posted",
+      "inbound": null,
+      "ledger_cursor": 8,
+      "checked_at": "2026-09-30T05:42:38.602037Z"
+    },
+    "preview": {
+      "schema_version": "1.0",
+      "planning_status": "inbound_preview_only",
+      "receipt_id": "2d1904eb-80b3-4bef-a1c7-bb5d71628253",
+      "shipment_id": "81a8a8f4-305f-4c41-ae1f-fc0a00ee057e",
+      "operator_person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+      "authorization_version": 7,
+      "target_location_id": "5f6393ba-3f90-4d24-9e1b-1a2abb8a9e4d",
+      "target_custody_assignment_id": "f96f7566-fe8a-4c3c-b789-15c97dbee3b5",
+      "receipt_plan_hash": "21b2ee4ff35abe22d3d7df83d045fc118c8749b082a0b08df83fe8fcd702c549",
+      "plan_hash": "1658be5a69b14213c5fbe723754b37fddfaad055ba618aff5c3a4ee99eafb064",
+      "reason": "逐件验收退回物料，尚未入账",
+      "checked_at": "2026-09-30T05:42:39.739010Z",
+      "ledger_cursor": 8,
+      "lines": [
+        {
+          "receipt_line_id": "79781058-aa1f-4cc0-8dc0-221e7165e01d",
+          "shipment_line_id": "a9f5bbb0-773b-4652-971c-7633ef4a9f23",
+          "source_account_id": "b805bbfb-e999-4587-a2c8-fe5f30160106",
+          "target_account_id": "d57043fb-8968-46e5-9e3f-a0e6064e538a",
+          "material_id": "8b297bd0-00e2-4137-ad28-f6da20fd09cd",
+          "condition_code": "used",
+          "lot_id": null,
+          "accepted_qty": "1.000",
+          "serial_ids": [
+            "2bf492c2-166d-44dd-9551-ecfdd904a294"
+          ]
+        }
+      ]
+    },
+    "command": {
+      "operator_person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+      "expected_plan_hash": "1658be5a69b14213c5fbe723754b37fddfaad055ba618aff5c3a4ee99eafb064",
+      "request_id": "5dd71cc7942c467c8c715b43326275aa",
+      "idempotency_key": "9f24076f224d4240ac50d6842d26d818"
+    },
+    "posted": {
+      "schema_version": "1.0",
+      "inbound_id": "773005ea-0ffe-4018-bf26-bed6eff62665",
+      "inbound_no": "RET-IN-773005EA0FFE4018BF26",
+      "receipt_id": "2d1904eb-80b3-4bef-a1c7-bb5d71628253",
+      "shipment_id": "81a8a8f4-305f-4c41-ae1f-fc0a00ee057e",
+      "target_location_id": "5f6393ba-3f90-4d24-9e1b-1a2abb8a9e4d",
+      "target_custody_assignment_id": "f96f7566-fe8a-4c3c-b789-15c97dbee3b5",
+      "status": "posted",
+      "posting_transaction_id": "f022a586-9463-4e55-9fa8-4ab8b689eda5",
+      "request_id": "5dd71cc7942c467c8c715b43326275aa",
+      "request_hash": "07f327cfd709df78318fcc8624bc1b89df6ee58e96fd57c2d3bfb043edf87d1c",
+      "plan_hash": "1658be5a69b14213c5fbe723754b37fddfaad055ba618aff5c3a4ee99eafb064",
+      "replayed": false
+    },
+    "after": {
+      "schema_version": "1.0",
+      "receipt_id": "2d1904eb-80b3-4bef-a1c7-bb5d71628253",
+      "shipment_id": "81a8a8f4-305f-4c41-ae1f-fc0a00ee057e",
+      "operator_person_id": "c8b0345b-91f8-4da8-8259-eeb4414d4e04",
+      "authorization_version": 7,
+      "status": "posted",
+      "inbound": {
+        "inbound_id": "773005ea-0ffe-4018-bf26-bed6eff62665",
+        "inbound_no": "RET-IN-773005EA0FFE4018BF26",
+        "target_location_id": "5f6393ba-3f90-4d24-9e1b-1a2abb8a9e4d",
+        "posting_transaction_id": "f022a586-9463-4e55-9fa8-4ab8b689eda5",
+        "posted_at": "2026-09-30T05:42:41.192472Z"
+      },
+      "ledger_cursor": 9,
+      "checked_at": "2026-09-30T05:42:43.149512Z"
+    }
+  }
+}

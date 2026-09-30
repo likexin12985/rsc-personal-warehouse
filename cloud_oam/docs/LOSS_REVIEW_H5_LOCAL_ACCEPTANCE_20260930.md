@@ -1,6 +1,8 @@
 # 报损审批查询、照片授权与私有 H5 本地验收
 
-核验日期：2026-09-30。基础提交 `1f65dcb`，本批提交以 Git 历史及 ignored `artifacts/loss-review-queue-next/commit-evidence.json` 为准。本记录仅证明以下本地候选，不是生产放行。
+> 2026-09-30 14:23：本文件只覆盖已发布 ff25289 的审批版本。新增退回收货/入库 H5 尚未提交，不能复用这里的浏览器、全量或 PG16 结论；最新状态见 [开发交接](CONTINUE_DEVELOPMENT.md)。
+
+核验日期：2026-09-30。基础提交 `1f65dcb`，本批提交以 Git 历史及 ignored `artifacts/loss-review-queue-next/commit-evidence.json` 为准。本记录仅证明以下本地候选，不是生产放行。2026-09-30 13:24 交接回读：候选已提交并发布为 ff25289，准确 SHA CI 尚未完成，当前状态见开发交接。
 
 ## 问题与实现
 
@@ -32,7 +34,7 @@
 | 最终 CSS 后公开/私有构建 | loss-review-ui-next/build-public-v2.log、build-warehouse-v2.log：exit 0 |
 | 双入口产物 | loss-review-ui-next/public-entry-v2.log：开发检查通过；知识目录 pending/0 条，不是知识上线 |
 | 共享期初协议 | loss-review-ui-next/opening-protocol-v1.log：通过 |
-| 仓库安全/依赖/diff | repository-safety-v2.log：1942 文件 PASS（loss-review-ui-next）；pip check 无损坏依赖；git diff --check 通过 |
+| 仓库安全/依赖/diff | repository-safety-v3.log：1944 文件 PASS（loss-review-ui-next）；pip check 无损坏依赖；git diff --check 通过 |
 | 浏览器合成操作 | loss-review-ui-next/browser-recovery-final.png：未知请求刷新重入后仍保留；browser-layout-final.json：正式 CSS 390px 无整页溢出 |
 
 最后仅三行 CSS 修改发生在前端全量测试之后；该修改通过重新双构建及实际浏览器验证，native-v4 包含最终 CSS。未将合成 adapter 的页面验证称为真实后台/真实设备 UAT。

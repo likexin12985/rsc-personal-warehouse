@@ -42,6 +42,8 @@ import FormalDailyReconciliationsPage from "./pages/FormalDailyReconciliations";
 import FormalOpeningStocktakesPage from "./pages/FormalOpeningStocktakes";
 import FormalStocktakesPage from "./pages/FormalStocktakes";
 import FormalLossReviews from "./FormalLossReviews";
+import FormalReturnReceiving from "./FormalReturnReceivingPage";
+import { createAdapter as createReturnReceivingAdapter } from "./returnReceivingAdapter";
 import { createAdapter as createLossReviewAdapter } from "./lossReviewAdapter";
 import type { Stage as LossReviewStage } from "./formalLossReview";
 import ControlConfigurationPage from "./pages/ControlConfiguration";
@@ -340,6 +342,7 @@ function Shell({
     ...(hasFormalPermission(access, "access_context", "read") ? [{ to: "/notifications", label: "消息中心", icon: MessageSquareText }] : []),
     ...(hasFormalPermission(access, "stocktake", "read") ? [{ to: "/stocktakes", label: "日常盘点", icon: ClipboardCheck }] : []),
     ...(lossReviewStages(access).length ? [{ to: "/loss-reviews", label: "报损审批", icon: ClipboardCheck }] : []),
+    ...(canReadReturnReceiving(access) ? [{ to: "/return-receiving", label: "退回收货与入库", icon: Boxes }] : []),
     ...(hasFormalPermission(access, "stocktake", "read") ? [{ to: "/opening-stocktakes", label: "盘点中心", icon: ClipboardCheck }] : []),
     ...(hasFormalPermission(access, "reconciliation", "read") ? [{ to: "/opening-reconciliations", label: "控制账对账", icon: Scale }] : []),
     ...(hasFormalPermission(access, "reconciliation", "read") ? [{ to: "/daily-reconciliations", label: "日终对账", icon: Scale }] : []),
@@ -393,6 +396,16 @@ function FormalLossReviewsRoute({ access }: { access: AccessContext }) {
   const adapter = useMemo(() => createLossReviewAdapter(access.person_id, apiNoReplay), [access.person_id]);
   return <FormalLossReviews identity={{ person_id: access.person_id, authorization_version: access.authorization_version }}
     stages={lossReviewStages(access)} adapter={adapter} />;
+}
+
+function canReadReturnReceiving(access: AccessContext): boolean {
+  return hasFormalPermission(access, "stock_operation", "read")
+    && (hasFormalRole(access, "admin") || hasFormalRole(access, "provincial_manager"));
+}
+
+function FormalReturnReceivingRoute({ access }: { access: AccessContext }) {
+  const adapter = useMemo(() => createReturnReceivingAdapter(access.person_id, apiNoReplay), [access.person_id]);
+  return <FormalReturnReceiving identity={{ person_id: access.person_id, authorization_version: access.authorization_version }} adapter={adapter} />;
 }
 
 export default function App() {
@@ -560,6 +573,9 @@ export default function App() {
       <Route path="/stocktakes" element={canReadStocktake ? <FormalStocktakesRoute access={access} /> : <Navigate to="/dashboard" replace />} />
       <Route path="/loss-reviews" element={lossReviewStages(access).length ? <FormalLossReviewsRoute
         key={`${access.person_id}:${access.authorization_version}:${lossReviewStages(access).join(":")}`} access={access}
+      /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/return-receiving" element={canReadReturnReceiving(access) ? <FormalReturnReceivingRoute
+        key={`${access.person_id}:${access.authorization_version}`} access={access}
       /> : <Navigate to="/dashboard" replace />} />
       <Route path="/opening-stocktakes" element={canReadStocktake ? <FormalOpeningStocktakesPage
         key={`${access.person_id}:${access.authorization_version}`}
