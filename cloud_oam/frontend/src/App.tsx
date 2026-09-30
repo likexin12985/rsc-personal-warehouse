@@ -43,6 +43,10 @@ import FormalOpeningStocktakesPage from "./pages/FormalOpeningStocktakes";
 import FormalStocktakesPage from "./pages/FormalStocktakes";
 import FormalLossReviews from "./FormalLossReviews";
 import FormalReturnReceiving from "./FormalReturnReceivingPage";
+import FormalLossSubmissionPage from "./FormalLossSubmissionPage";
+import FormalLossSendingPage from "./FormalLossSendingPage";
+import { createAdapter as createLossSendingAdapter } from "./lossSenderAdapter";
+import { createAdapter as createLossSubmissionAdapter } from "./lossSubmissionAdapter";
 import { createAdapter as createReturnReceivingAdapter } from "./returnReceivingAdapter";
 import { createAdapter as createLossReviewAdapter } from "./lossReviewAdapter";
 import type { Stage as LossReviewStage } from "./formalLossReview";
@@ -343,6 +347,8 @@ function Shell({
     ...(hasFormalPermission(access, "stocktake", "read") ? [{ to: "/stocktakes", label: "日常盘点", icon: ClipboardCheck }] : []),
     ...(lossReviewStages(access).length ? [{ to: "/loss-reviews", label: "报损审批", icon: ClipboardCheck }] : []),
     ...(canReadReturnReceiving(access) ? [{ to: "/return-receiving", label: "退回收货与入库", icon: Boxes }] : []),
+    ...(canReadLossSubmission(access) ? [{ to: "/loss-reports/new", label: "本人报损", icon: ClipboardCheck }] : []),
+    ...(canReadLossSubmission(access) ? [{ to: "/loss-returns/sending", label: "报损退回发件", icon: ClipboardCheck }] : []),
     ...(hasFormalPermission(access, "stocktake", "read") ? [{ to: "/opening-stocktakes", label: "盘点中心", icon: ClipboardCheck }] : []),
     ...(hasFormalPermission(access, "reconciliation", "read") ? [{ to: "/opening-reconciliations", label: "控制账对账", icon: Scale }] : []),
     ...(hasFormalPermission(access, "reconciliation", "read") ? [{ to: "/daily-reconciliations", label: "日终对账", icon: Scale }] : []),
@@ -401,6 +407,24 @@ function FormalLossReviewsRoute({ access }: { access: AccessContext }) {
 function canReadReturnReceiving(access: AccessContext): boolean {
   return hasFormalPermission(access, "stock_operation", "read")
     && (hasFormalRole(access, "admin") || hasFormalRole(access, "provincial_manager"));
+}
+
+function canReadLossSubmission(access: AccessContext): boolean {
+  return hasFormalPermission(access, "stock_operation", "read")
+    && (["admin", "provincial_manager", "technician"] as const).some(role => hasFormalRole(access, role));
+}
+
+function FormalLossSubmissionRoute({ access }: { access: AccessContext }) {
+  const adapter = useMemo(() => createLossSubmissionAdapter(access.person_id, apiNoReplay), [access.person_id]);
+  return <FormalLossSubmissionPage identity={{ person_id: access.person_id, authorization_version: access.authorization_version }} adapter={adapter} />;
+}
+
+function FormalLossSendingRoute({ access }: { access: AccessContext }) {
+  const adapters = useMemo(() => ({
+    outbound_return: createLossSendingAdapter(access.person_id, "outbound_return", apiNoReplay),
+    ship_return: createLossSendingAdapter(access.person_id, "ship_return", apiNoReplay),
+  }), [access.person_id]);
+  return <FormalLossSendingPage identity={{ person_id: access.person_id, authorization_version: access.authorization_version }} adapters={adapters} />;
 }
 
 function FormalReturnReceivingRoute({ access }: { access: AccessContext }) {
@@ -575,6 +599,12 @@ export default function App() {
         key={`${access.person_id}:${access.authorization_version}:${lossReviewStages(access).join(":")}`} access={access}
       /> : <Navigate to="/dashboard" replace />} />
       <Route path="/return-receiving" element={canReadReturnReceiving(access) ? <FormalReturnReceivingRoute
+        key={`${access.person_id}:${access.authorization_version}`} access={access}
+      /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/loss-reports/new" element={canReadLossSubmission(access) ? <FormalLossSubmissionRoute
+        key={`${access.person_id}:${access.authorization_version}`} access={access}
+      /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/loss-returns/sending" element={canReadLossSubmission(access) ? <FormalLossSendingRoute
         key={`${access.person_id}:${access.authorization_version}`} access={access}
       /> : <Navigate to="/dashboard" replace />} />
       <Route path="/opening-stocktakes" element={canReadStocktake ? <FormalOpeningStocktakesPage

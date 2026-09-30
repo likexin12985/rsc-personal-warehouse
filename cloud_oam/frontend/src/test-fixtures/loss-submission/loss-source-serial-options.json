@@ -1,0 +1,81 @@
+{
+  "identity": {
+    "person_id": "0102a6b5-8bce-42c8-893c-b4ea00c2eac5",
+    "authorization_version": 7
+  },
+  "sources": {
+    "schema_version": "1.0",
+    "person_id": "0102a6b5-8bce-42c8-893c-b4ea00c2eac5",
+    "authorization_version": 7,
+    "location_id": "1b8857a1-6c57-453e-af39-28ea72d80101",
+    "custody_effective_from": "2026-08-29T12:00:00Z",
+    "ledger_cursor": 4,
+    "projected_at": "2026-09-30T10:57:59.356115Z",
+    "queried_at": "2026-09-30T10:57:59.628245Z",
+    "items": [
+      {
+        "stock_account_id": "f0fca627-6494-4f5d-992a-5d001cb383eb",
+        "owner_org_id": "6a1fc66b-2263-4263-9c0b-3f3e325f749c",
+        "owner_org_code": "ORG-4a3966bfeb",
+        "owner_org_name": "测试区域公司",
+        "location_owner_org_id": "6a1fc66b-2263-4263-9c0b-3f3e325f749c",
+        "location_owner_org_code": "ORG-4a3966bfeb",
+        "location_owner_org_name": "测试区域公司",
+        "location_id": "1b8857a1-6c57-453e-af39-28ea72d80101",
+        "location_code": "PERSONAL-0aa1b53a5b",
+        "location_name": "库存工程师个人仓",
+        "location_type": "personal",
+        "location_parent_id": "4a60aec8-3d4d-4d02-977c-b6082368fcbe",
+        "custodian_person_id": "0102a6b5-8bce-42c8-893c-b4ea00c2eac5",
+        "custodian_person_name": "库存工程师",
+        "material_id": "38a6fa95-2d3d-4bbb-84d0-a92543fc450c",
+        "sku_code": "SKU-74cdcb51a093",
+        "material_name": "测试物料",
+        "base_unit": "件",
+        "tracking_mode": "serial",
+        "condition_code": "new",
+        "availability_bucket": "available",
+        "lot_id": null,
+        "lot_no": null,
+        "quantity_status": "available",
+        "quantity": "2.000",
+        "balance_version": 3,
+        "ledger_cursor": 3
+      }
+    ]
+  },
+  "page": {
+    "schema_version": "1.0",
+    "projection_status": "ready",
+    "opening_balance_status": "established",
+    "projected_at": "2026-09-30T10:57:59.356115Z",
+    "ledger_cursor": 4,
+    "person_id": "0102a6b5-8bce-42c8-893c-b4ea00c2eac5",
+    "location_id": "1b8857a1-6c57-453e-af39-28ea72d80101",
+    "stock_account_id": "f0fca627-6494-4f5d-992a-5d001cb383eb",
+    "material_id": "38a6fa95-2d3d-4bbb-84d0-a92543fc450c",
+    "sku_code": "SKU-74cdcb51a093",
+    "material_name": "测试物料",
+    "base_unit": "件",
+    "tracking_mode": "serial",
+    "condition_code": "new",
+    "availability_bucket": "available",
+    "lot_id": null,
+    "lot_no": null,
+    "total_serials": 2,
+    "items": [
+      {
+        "serial_id": "08660e90-ba9e-4c0b-abf6-1642f38b757f",
+        "serial_no": "OPTIONS-SN-3",
+        "lifecycle_status": "active"
+      },
+      {
+        "serial_id": "0caf5ac6-4ccf-4d9a-9c03-1ed0e622f3c8",
+        "serial_no": "OPTIONS-SN-4",
+        "lifecycle_status": "active"
+      }
+    ],
+    "next_after_id": null
+  },
+  "synthetic_only": true
+}

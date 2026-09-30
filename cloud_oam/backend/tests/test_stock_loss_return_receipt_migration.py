@@ -9,6 +9,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from pglast import parser
 from migration_script_cache import cache_migration_compilation
+from migration_source_expectations import current_source_hash
 from app import database_security as security, oam_sync_scope_security as scope
 
 
@@ -29,7 +30,8 @@ def test_private_proof_catalog_and_source_chain(migration):
     for key,(args,result,old,new) in m['PATCHES'].items():
         catalog = 'FORMAL_FILE_INTERNAL' if key==m['ACCOUNT_KEY'] else 'MATERIAL_REQUEST_APPROVAL'
         assert getattr(security,catalog+'_FUNCTION_BODY_SHA256_THROUGH_0154')[key]==hashlib.sha256(old.encode()).hexdigest()
-        assert getattr(security,catalog+'_FUNCTION_BODY_SHA256')[key]==hashlib.sha256(new.encode()).hexdigest()
+        assert getattr(security,catalog+'_FUNCTION_BODY_SHA256')[key]==current_source_hash(
+            m['revision'], 'public.'+key[0]+'('+key[1]+')', new)
         parser.parse_plpgsql_json(f'CREATE FUNCTION guard({args}) RETURNS {result} LANGUAGE plpgsql AS $b${new}$b$')
     prefix,remainder=m['DISPATCHED'].split('    END IF;\n',1)
     assert m['BASE']==m['DISPATCHED'].split('BEGIN\n',1)[0]+'BEGIN\n'+remainder

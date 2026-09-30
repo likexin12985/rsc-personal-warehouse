@@ -218,3 +218,7 @@ def seal_headquarters_review(payload: StockLossHeadquartersReviewSealIn, respons
     _review_coordinates(payload, principal, trace, key)
     return _write(db, response, lambda: stock_loss_review_seals.seal_review_request(
         db, actor=principal, request=payload, stage='headquarters'))
+
+
+from .formal_loss_return_sending import router as sender_router
+router.include_router(sender_router)

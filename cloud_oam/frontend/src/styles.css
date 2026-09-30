@@ -640,6 +640,10 @@ tbody tr:hover { background: #fbfcfc; }
 .return-receiving-page input[type="checkbox"] { width: auto; min-height: auto; margin-right: .5rem; vertical-align: middle; }
 .return-receiving-page fieldset { margin-block: 1rem; padding: 1rem; border: 1px solid var(--border, #d9e0e7); border-radius: .5rem; }
 .return-receiving-page label { display: block; margin-block: .5rem; }
+.loss-submission-page .formal-file-upload .table-action { width: 100%; min-width: 0; white-space: normal; }
+.loss-submission-page input[type="file"] { display: block; width: 100%; max-width: 100%; margin-top: 8px; }
+.loss-submission-page .formal-file-upload article > div { min-width: 0; overflow-wrap: anywhere; }
+.loss-submission-page .formal-file-upload article span { display: block; }
 .return-receipt, .return-pending { padding-block: 1rem; border-bottom: 1px solid var(--border, #d9e0e7); }
 .loss-review-page h2 { overflow-wrap: anywhere; }
 .loss-review-page input[type="checkbox"] { width: auto; min-height: auto; margin: 0 8px 0 0; vertical-align: middle; }
@@ -661,3 +665,12 @@ tbody tr:hover { background: #fbfcfc; }
 .loss-review-page table { width: 100%; border-collapse: collapse; text-align: left; }
 .loss-review-page td, .loss-review-page th { padding: 12px 10px; border-bottom: 1px solid #e2e8f0; }
 @media (max-width: 600px) { .loss-review-page .panel { padding: 14px; } .loss-review-page td, .loss-review-page th { padding: 8px 5px; } }
+
+/* Loss-derived physical departure and parcel handover. */
+.loss-sending-page article { padding: 16px 0; border-bottom: 1px solid #e4eaf2; }
+.loss-sending-page button { margin: 6px 8px 6px 0; min-height: 42px; }
+.loss-sending-page fieldset { min-width: 0; margin: 12px 0; padding: 16px; border: 1px solid #cdd9e8; border-radius: 10px; }
+.loss-sending-page label { display: block; margin: 12px 0; }
+.loss-sending-page input:not([type=checkbox]), .loss-sending-page textarea { display: block; max-width: 100%; box-sizing: border-box; width: 100%; min-height: 40px; margin-top: 6px; }
+.loss-sending-page h3,.loss-sending-page strong,.loss-sending-page p { overflow-wrap: anywhere; }
+@media(max-width:600px) { .loss-sending-page fieldset { padding:10px; } }

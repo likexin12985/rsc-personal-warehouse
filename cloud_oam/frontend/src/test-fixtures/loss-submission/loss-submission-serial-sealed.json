@@ -1,0 +1,268 @@
+{
+  "identity": {
+    "person_id": "2071ec27-88c0-4c93-b573-05b5f5840c4c",
+    "authorization_version": 7
+  },
+  "sources": {
+    "schema_version": "1.0",
+    "person_id": "2071ec27-88c0-4c93-b573-05b5f5840c4c",
+    "authorization_version": 7,
+    "location_id": "ef6a4ab0-aaf4-4630-83a1-4539aa44cc00",
+    "custody_effective_from": "2026-08-29T12:00:00Z",
+    "ledger_cursor": 4,
+    "projected_at": "2026-09-30T06:42:58.593530Z",
+    "queried_at": "2026-09-30T06:42:58.844655Z",
+    "items": [
+      {
+        "stock_account_id": "79383805-c1e4-434a-a0b6-120ca660e9ed",
+        "owner_org_id": "72922556-9d2b-4613-956a-421d15548b7b",
+        "owner_org_code": "ORG-f54147fc0c",
+        "owner_org_name": "测试区域公司",
+        "location_owner_org_id": "72922556-9d2b-4613-956a-421d15548b7b",
+        "location_owner_org_code": "ORG-f54147fc0c",
+        "location_owner_org_name": "测试区域公司",
+        "location_id": "ef6a4ab0-aaf4-4630-83a1-4539aa44cc00",
+        "location_code": "PERSONAL-879b203aff",
+        "location_name": "库存工程师个人仓",
+        "location_type": "personal",
+        "location_parent_id": "aa0da9ff-7525-4cbd-9f9c-26a8285af174",
+        "custodian_person_id": "2071ec27-88c0-4c93-b573-05b5f5840c4c",
+        "custodian_person_name": "库存工程师",
+        "material_id": "111f7a0c-f248-4bf1-b4ef-16c6d73c7ab1",
+        "sku_code": "SKU-db795d67ccba",
+        "material_name": "测试物料",
+        "base_unit": "件",
+        "tracking_mode": "serial",
+        "condition_code": "new",
+        "availability_bucket": "available",
+        "lot_id": null,
+        "lot_no": null,
+        "quantity_status": "available",
+        "quantity": "2.000",
+        "balance_version": 3,
+        "ledger_cursor": 3
+      }
+    ]
+  },
+  "selection_input": {
+    "operator_person_id": "2071ec27-88c0-4c93-b573-05b5f5840c4c",
+    "lines": [
+      {
+        "stock_account_id": "79383805-c1e4-434a-a0b6-120ca660e9ed",
+        "quantity": "1",
+        "serial_verifications": [
+          {
+            "serial_id": "1d46823e-2691-41c2-8b0c-d223d76904d0",
+            "sku_code": "SKU-db795d67ccba",
+            "serial_no": "OPTIONS-SN-3",
+            "qr_code": "OPTIONS-QR-3"
+          }
+        ]
+      }
+    ]
+  },
+  "selection": {
+    "schema_version": "1.0",
+    "planning_status": "source_selection_only",
+    "operator_person_id": "2071ec27-88c0-4c93-b573-05b5f5840c4c",
+    "authorization_version": 7,
+    "location_id": "ef6a4ab0-aaf4-4630-83a1-4539aa44cc00",
+    "ledger_cursor": 4,
+    "checked_at": "2026-09-30T06:42:59.138348Z",
+    "selection_hash": "e4f6fa04ce17e0d83b3dd1094223f21eeacf2275d097e8879e3eceea122ccbdd",
+    "basis_hash": "946fb1683fa89886e359d2e6f592bf969d5be5996a07d1f2baad33d7ab5eb64e",
+    "lines": [
+      {
+        "source": {
+          "stock_account_id": "79383805-c1e4-434a-a0b6-120ca660e9ed",
+          "owner_org_id": "72922556-9d2b-4613-956a-421d15548b7b",
+          "owner_org_code": "ORG-f54147fc0c",
+          "owner_org_name": "测试区域公司",
+          "location_owner_org_id": "72922556-9d2b-4613-956a-421d15548b7b",
+          "location_owner_org_code": "ORG-f54147fc0c",
+          "location_owner_org_name": "测试区域公司",
+          "location_id": "ef6a4ab0-aaf4-4630-83a1-4539aa44cc00",
+          "location_code": "PERSONAL-879b203aff",
+          "location_name": "库存工程师个人仓",
+          "location_type": "personal",
+          "location_parent_id": "aa0da9ff-7525-4cbd-9f9c-26a8285af174",
+          "custodian_person_id": "2071ec27-88c0-4c93-b573-05b5f5840c4c",
+          "custodian_person_name": "库存工程师",
+          "material_id": "111f7a0c-f248-4bf1-b4ef-16c6d73c7ab1",
+          "sku_code": "SKU-db795d67ccba",
+          "material_name": "测试物料",
+          "base_unit": "件",
+          "tracking_mode": "serial",
+          "condition_code": "new",
+          "availability_bucket": "available",
+          "lot_id": null,
+          "lot_no": null,
+          "quantity_status": "available",
+          "quantity": "2.000",
+          "balance_version": 3,
+          "ledger_cursor": 3
+        },
+        "selected_quantity": "1.000",
+        "selected_serials": [
+          {
+            "serial_id": "1d46823e-2691-41c2-8b0c-d223d76904d0",
+            "serial_no": "OPTIONS-SN-3"
+          }
+        ]
+      }
+    ]
+  },
+  "preview_input": {
+    "operator_person_id": "2071ec27-88c0-4c93-b573-05b5f5840c4c",
+    "lines": [
+      {
+        "stock_account_id": "79383805-c1e4-434a-a0b6-120ca660e9ed",
+        "quantity": "1",
+        "serial_verifications": [
+          {
+            "serial_id": "1d46823e-2691-41c2-8b0c-d223d76904d0",
+            "sku_code": "SKU-db795d67ccba",
+            "serial_no": "OPTIONS-SN-3",
+            "qr_code": "OPTIONS-QR-3"
+          }
+        ]
+      }
+    ],
+    "reason": "现场发现物料损坏，申请核实",
+    "evidence_file_ids": [
+      "41c355be-d379-4544-928b-ac59a7da3e1f",
+      "b4c6f980-cf6c-4cf0-8d09-e0a6b589a347"
+    ]
+  },
+  "preview": {
+    "schema_version": "1.0",
+    "planning_status": "preview_only",
+    "operator_person_id": "2071ec27-88c0-4c93-b573-05b5f5840c4c",
+    "authorization_version": 7,
+    "location_id": "ef6a4ab0-aaf4-4630-83a1-4539aa44cc00",
+    "ledger_cursor": 4,
+    "checked_at": "2026-09-30T06:43:00.198630Z",
+    "reason": "现场发现物料损坏，申请核实",
+    "request_hash": "12c2ae35acef4826a6412508302b6d615b16516f9735c688180cd57371b42ef9",
+    "plan_hash": "f24979fe5d694ad27feac78c7179ad2db76e8e842be07529d48c13d071cea344",
+    "lines": [
+      {
+        "source": {
+          "stock_account_id": "79383805-c1e4-434a-a0b6-120ca660e9ed",
+          "owner_org_id": "72922556-9d2b-4613-956a-421d15548b7b",
+          "owner_org_code": "ORG-f54147fc0c",
+          "owner_org_name": "测试区域公司",
+          "location_owner_org_id": "72922556-9d2b-4613-956a-421d15548b7b",
+          "location_owner_org_code": "ORG-f54147fc0c",
+          "location_owner_org_name": "测试区域公司",
+          "location_id": "ef6a4ab0-aaf4-4630-83a1-4539aa44cc00",
+          "location_code": "PERSONAL-879b203aff",
+          "location_name": "库存工程师个人仓",
+          "location_type": "personal",
+          "location_parent_id": "aa0da9ff-7525-4cbd-9f9c-26a8285af174",
+          "custodian_person_id": "2071ec27-88c0-4c93-b573-05b5f5840c4c",
+          "custodian_person_name": "库存工程师",
+          "material_id": "111f7a0c-f248-4bf1-b4ef-16c6d73c7ab1",
+          "sku_code": "SKU-db795d67ccba",
+          "material_name": "测试物料",
+          "base_unit": "件",
+          "tracking_mode": "serial",
+          "condition_code": "new",
+          "availability_bucket": "available",
+          "lot_id": null,
+          "lot_no": null,
+          "quantity_status": "available",
+          "quantity": "2.000",
+          "balance_version": 3,
+          "ledger_cursor": 3
+        },
+        "selected_quantity": "1.000",
+        "selected_serials": [
+          {
+            "serial_id": "1d46823e-2691-41c2-8b0c-d223d76904d0",
+            "serial_no": "OPTIONS-SN-3"
+          }
+        ]
+      }
+    ],
+    "evidence": [
+      {
+        "file_id": "41c355be-d379-4544-928b-ac59a7da3e1f",
+        "original_filename": "报损照片0.jpg",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "size_bytes": 128,
+        "mime_type": "image/jpeg"
+      },
+      {
+        "file_id": "b4c6f980-cf6c-4cf0-8d09-e0a6b589a347",
+        "original_filename": "报损照片1.jpg",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "size_bytes": 128,
+        "mime_type": "image/jpeg"
+      }
+    ]
+  },
+  "command": {
+    "operator_person_id": "2071ec27-88c0-4c93-b573-05b5f5840c4c",
+    "lines": [
+      {
+        "stock_account_id": "79383805-c1e4-434a-a0b6-120ca660e9ed",
+        "quantity": "1",
+        "serial_verifications": [
+          {
+            "serial_id": "1d46823e-2691-41c2-8b0c-d223d76904d0",
+            "sku_code": "SKU-db795d67ccba",
+            "serial_no": "OPTIONS-SN-3",
+            "qr_code": "OPTIONS-QR-3"
+          }
+        ]
+      }
+    ],
+    "reason": "现场发现物料损坏，申请核实",
+    "evidence_file_ids": [
+      "41c355be-d379-4544-928b-ac59a7da3e1f",
+      "b4c6f980-cf6c-4cf0-8d09-e0a6b589a347"
+    ],
+    "expected_plan_hash": "f24979fe5d694ad27feac78c7179ad2db76e8e842be07529d48c13d071cea344",
+    "idempotency_key": "207cbb10ac4f4cbe8934b56a40c88a51",
+    "request_id": "fcb92606a4ce4dfcb9c040a7b8ccdd1f"
+  },
+  "lookup_input": {
+    "operator_person_id": "2071ec27-88c0-4c93-b573-05b5f5840c4c",
+    "request_id": "fcb92606a4ce4dfcb9c040a7b8ccdd1f",
+    "idempotency_key": "207cbb10ac4f4cbe8934b56a40c88a51",
+    "request_hash": "12c2ae35acef4826a6412508302b6d615b16516f9735c688180cd57371b42ef9",
+    "expected_plan_hash": "f24979fe5d694ad27feac78c7179ad2db76e8e842be07529d48c13d071cea344"
+  },
+  "missing": {
+    "lookup_status": "not_found",
+    "retry_permitted": false
+  },
+  "result": {
+    "lookup_status": "sealed",
+    "retry_permitted": false,
+    "seal": {
+      "seal_id": "1efeee19-6833-482c-b4c5-2f613249b3ce",
+      "operator_person_id": "2071ec27-88c0-4c93-b573-05b5f5840c4c",
+      "source_location_id": "ef6a4ab0-aaf4-4630-83a1-4539aa44cc00",
+      "request_id": "fcb92606a4ce4dfcb9c040a7b8ccdd1f",
+      "request_hash": "12c2ae35acef4826a6412508302b6d615b16516f9735c688180cd57371b42ef9",
+      "plan_hash": "f24979fe5d694ad27feac78c7179ad2db76e8e842be07529d48c13d071cea344",
+      "sealed_at": "2026-09-30T06:43:00.405555Z"
+    }
+  },
+  "observed": {
+    "lookup_status": "sealed",
+    "retry_permitted": false,
+    "seal": {
+      "seal_id": "1efeee19-6833-482c-b4c5-2f613249b3ce",
+      "operator_person_id": "2071ec27-88c0-4c93-b573-05b5f5840c4c",
+      "source_location_id": "ef6a4ab0-aaf4-4630-83a1-4539aa44cc00",
+      "request_id": "fcb92606a4ce4dfcb9c040a7b8ccdd1f",
+      "request_hash": "12c2ae35acef4826a6412508302b6d615b16516f9735c688180cd57371b42ef9",
+      "plan_hash": "f24979fe5d694ad27feac78c7179ad2db76e8e842be07529d48c13d071cea344",
+      "sealed_at": "2026-09-30T06:43:00.405555Z"
+    }
+  },
+  "synthetic_only": true
+}

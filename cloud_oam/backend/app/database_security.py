@@ -4739,6 +4739,10 @@ EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_review_seal_truncate_0156'
 EXPECTED_FORMAL_FILE_INDEXES['uq_loss_review_seal_request'] = {'table': 'stock_loss_review_request_seals', 'columns': ('stage', 'actor_user_id', 'request_id'), 'predicate': None}
 EXPECTED_FORMAL_FILE_INDEXES['uq_loss_review_seal_key'] = {'table': 'stock_loss_review_request_seals', 'columns': ('stage', 'idempotency_key_hash'), 'predicate': None}
 
+# 0157 loss sender seals retain existing private function and trigger privileges.
+MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256_THROUGH_0156 = dict(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256)
+MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[('rsc_guard_stock_operation_seal_0101', '')] = 'fb21e5e08b5cf8301e70a768212de069aa9ae45748022b6c7c8bccb5743ebef8'
+
 _ROLE_EVIDENCE_SQL = text(
     """
 SELECT

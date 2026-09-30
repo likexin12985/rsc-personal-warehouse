@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 
 CLOUD = Path(__file__).resolve().parents[1]
@@ -56,8 +57,14 @@ def main(argv=None) -> int:
     print(f"static shard {args.index + 1}/{args.count}: {len(relative)} files", flush=True)
     environment = {key:value for key,value in os.environ.items() if not key.startswith(
         ("PG", "OAM_", "RSC_PG16_", "ALIBABA_CLOUD_", "OSS_", "AWS_"))}
-    environment["PYTHONPATH"] = "backend"
-    return subprocess.run([sys.executable, "-m", "pytest", "-q", "-ra", "--tb=short", *relative],
+    environment["PYTHONPATH"] = os.pathsep.join(("backend", str(CLOUD / "scripts")))
+    output_root = CLOUD / "artifacts/static-safety"
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_directory = Path(tempfile.mkdtemp(prefix=f"shard-{args.index}-", dir=output_root))
+    progress = run_directory / "progress.jsonl"
+    print(f"static gate progress: {progress.relative_to(CLOUD)}", flush=True)
+    return subprocess.run([sys.executable, "-m", "pytest", "-q", "-ra", "--tb=short",
+                           "-p", "static_gate_diagnostics", "--static-diagnostics", str(progress), *relative],
                           cwd=CLOUD, env=environment, check=False).returncode
 
 

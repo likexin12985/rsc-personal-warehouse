@@ -51,3 +51,51 @@ def posted_view(origin, **fields):
     if isinstance(origin, WorkOrderReturnOrigin):
         return StockReturnShipmentOut(work_order_id=origin.work_order_id, **fields)
     raise TypeError('verified return origin required')
+
+
+from pydantic import ConfigDict
+from app.stock_return_shipment_schemas import (
+    StockReturnShipmentOptionLineOut, StockReturnShipmentOptionsOut, StockReturnShipmentHistoryOut,
+)
+from app.loss_return_outbound_schemas import LossReturnOutboundHistoryOut
+
+
+class LossReturnShipmentOptionLineOut(StockReturnShipmentOptionLineOut):
+    model_config = ConfigDict(extra='forbid')
+    source_recovery_line_id: None = Field(default=None, exclude=True)
+    source_loss_line_id: UUID
+
+
+class LossReturnShipmentOptionsOut(StockReturnShipmentOptionsOut):
+    model_config = ConfigDict(extra='forbid')
+    work_order_id: None = Field(default=None, exclude=True)
+    origin: LossReturnOrigin
+    lines: tuple[LossReturnShipmentOptionLineOut, ...]
+
+
+class LossReturnShipmentHistoryOut(StockReturnShipmentHistoryOut):
+    model_config = ConfigDict(extra='forbid')
+    work_order_id: None = Field(default=None, exclude=True)
+    origin: LossReturnOrigin
+    departures: LossReturnOutboundHistoryOut
+    items: tuple[LossReturnShipmentOut, ...]
+
+
+def option_line_view(line, **fields):
+    if line.source_loss_line_id is not None:
+        if line.source_recovery_line_id is not None:
+            raise ValueError('exclusive line origin required')
+        return LossReturnShipmentOptionLineOut(source_loss_line_id=line.source_loss_line_id, **fields)
+    return StockReturnShipmentOptionLineOut(source_recovery_line_id=line.source_recovery_line_id, **fields)
+
+
+def options_view(original, **fields):
+    if isinstance(original, LossReturnOrigin):
+        return LossReturnShipmentOptionsOut(origin=original, **fields)
+    return StockReturnShipmentOptionsOut(work_order_id=original.work_order_id, **fields)
+
+
+def history_view(original, **fields):
+    if isinstance(original, LossReturnOrigin):
+        return LossReturnShipmentHistoryOut(origin=original, **fields)
+    return StockReturnShipmentHistoryOut(work_order_id=original.work_order_id, **fields)

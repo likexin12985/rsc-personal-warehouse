@@ -338,7 +338,7 @@ class StockOperationCommandSeal(CreatedAtMixin, Base):
         CheckConstraint("operation_type IN ('submit_return','cancel_return','outbound_return','ship_return','receive_return')", name="ck_stock_operation_seals_type"),
         CheckConstraint("(operation_type='submit_return' AND operation_id IS NULL) OR (operation_type IN ('cancel_return','outbound_return','ship_return','receive_return') AND operation_id IS NOT NULL)", name="ck_stock_operation_seals_origin"),
         CheckConstraint("(operation_type='receive_return') = (shipment_id IS NOT NULL)", name="ck_stock_operation_seals_shipment"),
-        CheckConstraint("(oam_work_order_id IS NOT NULL AND source_loss_disposition_id IS NULL) OR (oam_work_order_id IS NULL AND source_loss_disposition_id IS NOT NULL AND operation_type='receive_return')", name="ck_stock_operation_seals_source"),
+        CheckConstraint("(oam_work_order_id IS NOT NULL AND source_loss_disposition_id IS NULL) OR (oam_work_order_id IS NULL AND source_loss_disposition_id IS NOT NULL AND operation_type IN ('outbound_return','ship_return','receive_return'))", name="ck_stock_operation_seals_source"),
         CheckConstraint("authorization_version > 0 AND length(request_hash)=64", name="ck_stock_operation_seals_context"),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)

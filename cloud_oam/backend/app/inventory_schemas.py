@@ -7,11 +7,11 @@ summary from a paginated account list.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 
 
 ProjectionStatus = Literal["not_initialized", "ready"]
@@ -33,6 +33,16 @@ class InventoryProjectionOut(BaseModel):
     opening_balance_status: OpeningBalanceStatus
     projected_at: datetime | None
     ledger_cursor: int
+
+    @field_serializer('projected_at', when_used='json')
+    def serialize_projected_at(self, value: datetime | None) -> str | None:
+        # SQLite fixtures retain UTC clock values without tzinfo; PostgreSQL
+        # timestamptz is aware. Keep internal snapshot comparisons untouched,
+        # while both backends expose the same unambiguous UTC wire timestamp.
+        if value is None:
+            return None
+        aware = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+        return aware.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
 
 
 class InventorySummaryOut(InventoryProjectionOut):

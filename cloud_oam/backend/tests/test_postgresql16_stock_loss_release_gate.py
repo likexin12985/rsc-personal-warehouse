@@ -19,8 +19,8 @@ def test_postgresql16_stock_loss_release_gate():
     if tracking not in ("quantity", "serial"):
         pytest.fail("loss gate requires an explicit quantity or serial matrix leg")
     flow = os.getenv("RSC_PG16_LOSS_FLOW", "")
-    if flow not in ("submission", "submission_http", "review_seals", "disposition", "return_preview", "return_submission", "return_outbound", "return_shipment", "return_receipt"):
-        pytest.fail("loss gate requires an explicit submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment or return_receipt matrix leg")
+    if flow not in ("submission", "submission_http", "review_seals", "disposition", "return_preview", "return_submission", "return_outbound", "return_shipment", "return_receipt", "sender_http", "sender_seals"):
+        pytest.fail("loss gate requires an explicit submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt, sender_http or sender_seals matrix leg")
     gate._assert_fresh_disposable_postgresql16()
     gate._bootstrap_roles()
     gate._provision_edge_receiver_role()
@@ -39,8 +39,12 @@ def test_postgresql16_stock_loss_release_gate():
         from pg16_stock_loss_return_outbound_gate import release as run
     elif flow == "return_shipment":
         from pg16_stock_loss_return_shipment_gate import release as run
-    else:
+    elif flow == "return_receipt":
         from pg16_stock_loss_return_receipt_gate import release as run
+    elif flow == "sender_http":
+        from pg16_loss_sender_http_gate import release as run
+    else:
+        from pg16_loss_sender_seal_gate import release as run
 
     engines = {}
     try:

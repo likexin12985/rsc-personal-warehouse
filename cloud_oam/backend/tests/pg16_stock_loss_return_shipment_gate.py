@@ -24,6 +24,7 @@ from pg16_stock_loss_return_preview_gate import run as preview
 from pg16_stock_loss_submit_gate import snapshot as stock_snapshot
 from test_postgresql16_release_gate import _establish_multiround_stocktake_location
 import pg16_stock_loss_sources_gate as source_gate
+from pg16_loss_return_sender_read_gate import run as sender_read_gate
 
 
 
@@ -38,7 +39,7 @@ from app.stocktake_task_schemas import StocktakeTaskCreateIn, StocktakeScopeSele
 from app.stocktake_models import InventoryFreeze
 from app.stock_operation_models import StockOperationShipment, StockOperationShipmentLine, StockOperationShipmentSerial
 
-def run_sources(engines, *, tracking):
+def run_sources(engines, *, tracking, after_preview=None):
     captured = {}
     original = source_gate.prepare_stocktake_inventory
     def prepare(owner, edge, **kwargs):
@@ -53,10 +54,10 @@ def run_sources(engines, *, tracking):
         captured.update(transit_id=transit_id,manager_id=kwargs['assignee_user_id'])
         return fixture
     with patch.object(source_gate, 'prepare_stocktake_inventory', prepare):
-        return source_gate.run(engines, tracking=tracking, after_preview=lambda context: exercise({**context, **captured}))
+        return source_gate.run(engines, tracking=tracking, after_preview=lambda context: (after_preview or exercise)({**context, **captured}))
 
 
-def prepare_departures(context):
+def prepare_departures(context, *, departure=None):
     assert preview(context)['passed']
     owner, api = (context['engines'][key] for key in ('star_oam_migrator', 'star_oam_api'))
     with Session(owner) as db:
@@ -92,11 +93,17 @@ def prepare_departures(context):
     def depart(quantity):
         with Session(api) as db:
             actor, request = request_for(db, quantity)
-            result = commands.execute_outbound(db, actor=actor, work_order_id=None, operation_id=child_id, request=request)
+            result = (departure or commands.execute_outbound)(db, actor=actor, work_order_id=None, operation_id=child_id, request=request)
             db.commit()
             return result
-    first = depart(Decimal('1') if context['tracking']=='serial' else Decimal('.100'))
-    return dict(context=context, owner=owner, api=api, order_id=child_id, first=first, depart=depart)
+    world = dict(context=context, owner=owner, api=api, order_id=child_id, depart=depart)
+    world['senderReads'] = [sender_read_gate(world, phase='pending_departure',
+        departed='0', shipped='0', snapshot=snapshot)]
+    first_quantity = Decimal('1') if context['tracking']=='serial' else Decimal('.100')
+    world['first'] = depart(first_quantity)
+    world['senderReads'].append(sender_read_gate(world, phase='departed_not_shipped',
+        departed=first_quantity, shipped='0', snapshot=snapshot))
+    return world
 
 
 def snapshot(owner):
@@ -417,7 +424,10 @@ def exercise(context):
     with Session(api) as db:
         for result in results:
             assert ship_facts.verified_shipment_history(db,fact=db.get(StockOperationShipment,result.shipment_id))==result
-    return dict(transitLifecycle=closed,passed=True,tracking=context['tracking'],malformedRollbacks=rejected,actualShipmentCount=len(results),
+    total=context['request'].lines[0].quantity
+    world['senderReads'].append(sender_read_gate(world, phase='shipped_history',
+        departed=total, shipped=total, snapshot=snapshot, permissions=True))
+    return dict(senderReads=world['senderReads'],transitLifecycle=closed,passed=True,tracking=context['tracking'],malformedRollbacks=rejected,actualShipmentCount=len(results),
         stockNeutral=True,exactReplay=True,historyAfterLaterStockPosting=context['tracking']=='quantity',
         historyAfterPermissionRevocation=True,currentAuthorityExpiryAtCommit=True,receiptNotCreated=True,
         newConditionPreserved=True,formalMigrationImplemented=True,productionAcceptance=False,

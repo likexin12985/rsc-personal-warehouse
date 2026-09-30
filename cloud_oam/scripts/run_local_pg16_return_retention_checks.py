@@ -128,9 +128,9 @@ def main(argv=None):
             assert snapshot(api) == before and hashes() == new_hashes
             security()
             with owner.connect() as db:
-                assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261205_0156'
+                assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261206_0157'
             assert sources == manifest()
-            report = dict(migrationHead='20261205_0156', actualMigrationIntegration=True,
+            report = dict(migrationHead='20261206_0157', actualMigrationIntegration=True,
                 emptyRoundtrip=True, populatedDowngradeRetainsFactsAndCatalog=True,
                 hashesBefore=old_hashes, hashesAfter=new_hashes, checks=results,
                 runtimeSecurityBeforeAndAfter=True, sourceDrift=[], productionAcceptance=False, githubReleaseGate=False)

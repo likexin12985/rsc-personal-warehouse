@@ -50,8 +50,12 @@ async function fillQuantity(w: ReturnType<typeof setup>) {
   fireEvent.click(await screen.findByText('查看包裹'));
   fireEvent.change(await screen.findByLabelText(`接受数量 ${w.before.package.lines[0].sku_code}`), { target: { value: '1' } });
   fireEvent.change(screen.getByLabelText('验收说明'), { target: { value: '逐件核对本次实物' } });
-  fireEvent.click(screen.getByText('核验并预览本次验收'));
-  await screen.findByRole('region', { name: '确认本次操作' });
+  const preview = screen.getByRole('button', { name: '核验并预览本次验收' }) as HTMLButtonElement;
+  await waitFor(() => expect(preview.disabled).toBe(false));
+  fireEvent.click(preview);
+  // Real Web Crypto proofs may take longer than the default one-second DOM
+  // wait under the complete suite. Still require the actual confirmation UI.
+  await screen.findByRole('region', { name: '确认本次操作' }, { timeout: 5000 });
 }
 function confirm() { fireEvent.click(screen.getByLabelText('已核对本次物料、数量、SN 和目标仓')); }
 it('quantity acceptance and independent inbound require separate previews and confirmations', async () => {

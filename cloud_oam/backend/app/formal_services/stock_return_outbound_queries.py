@@ -5,7 +5,10 @@ from decimal import Decimal,ROUND_DOWN
 from types import SimpleNamespace
 from sqlalchemy import select
 from ..inventory_models import StockBalance,FormalMaterial,InventoryLot,InventorySerial,SerialCurrentPosition
-from ..stock_operation_models import StockOperationOutbound,StockOperationCancellation
+from ..stock_operation_models import StockOperationOrder,StockOperationOutbound,StockOperationCancellation
+from ..stock_return_origin_schemas import LossReturnOrigin
+from ..loss_return_outbound_schemas import option_line_view, options_view, history_view
+from . import stock_return_origins as origins
 from ..stock_return_outbound_schemas import StockReturnOutboundOptionLineOut,StockReturnOutboundOptionsOut,StockReturnOutboundHistoryOut
 from . import inventory_posting as posting,inventory_query as inventory,stock_return_facts as returns,stock_return_outbound_facts as facts
 from .stock_return_outbound_plan import original,outbound_context,transit_dimensions
@@ -46,7 +49,7 @@ def _options_basis(db,actor,order):
             _fail('stock_return_outbound_serial_policy','原退料 SN 数量与当前追踪策略不一致，请核验原记录')
         scale=policy.quantity_scale if policy.allow_fraction and not tracked else 0
         selectable=min(remaining,held).quantize(Decimal(1).scaleb(-scale),rounding=ROUND_DOWN)
-        options.append(StockReturnOutboundOptionLineOut(operation_line_id=line.id,source_recovery_line_id=line.source_recovery_line_id,
+        options.append(option_line_view(line,operation_line_id=line.id,
             source_stock_account_id=source.id,material_id=source.material_id,sku_code=sku.sku_code,material_name=sku.name,base_unit=sku.base_unit,
             condition_code=source.condition_code,lot_id=source.lot_id,lot_no=lot.lot_no if lot else None,tracking_mode=policy.tracking_mode,
             quantity_scale=policy.quantity_scale,allow_fraction=policy.allow_fraction,return_quantity=format(line.quantity,'.3f'),
@@ -61,25 +64,39 @@ def outbound_options(db,*,actor,work_order_id,operation_id):
     with db.no_autoflush:
         audit=material_audit_cursor(db)
         order,original_result=original(db,current,operation_id,work_order_id)
+        current,_,proof=origins.authorize_return_fulfillment(db,actor=current,operation_id=operation_id,action="outbound_return")
         first=_options_basis(db,current,order)
         latest=_options_basis(db,current,order)
-        if first!=latest or material_audit_cursor(db)!=audit or returns.order_result(db,actor=current,order=order)!=original_result:
+        if first!=latest or material_audit_cursor(db)!=audit or original(db,current,operation_id,work_order_id)[1]!=original_result:
             _fail('stock_return_outbound_options_changed','退料明细、库存或接收责任在读取期间变化，请刷新后重新选择')
         snapshot,route,lines,_policies=latest
         inventory._ensure_projection_snapshot_current(db,snapshot)
-        authorize(db,current,'outbound_return')
-        return StockReturnOutboundOptionsOut(operation_id=order.id,operation_no=order.operation_no,work_order_id=work_order_id,
+        refreshed,_,latest_proof=origins.authorize_return_fulfillment(db,actor=current,operation_id=operation_id,action='outbound_return')
+        if refreshed.authorization_version!=current.authorization_version or latest_proof!=proof:
+            _fail('stock_return_outbound_options_changed','Departure authority or source changed during query')
+        return options_view(original_result,operation_id=order.id,operation_no=order.operation_no,
             person_id=current.person_id,authorization_version=current.authorization_version,ledger_cursor=snapshot.ledger_cursor,
             queried_at=datetime.now(timezone.utc),destination=route,lines=lines)
+
+
+def _read_original(db, actor, work_order_id, operation_id):
+    if work_order_id is not None:
+        order=_original_order(db,actor,work_order_id,operation_id)
+        return order,returns.order_result(db,actor=actor,order=order)
+    order=db.get(StockOperationOrder,operation_id,populate_existing=True)
+    proof=origins.verify_return_origin(db,actor=actor,order=order)
+    if not isinstance(proof,LossReturnOrigin):
+        _fail('stock_return_not_found','Own loss-derived return was not found',404)
+    return order,proof
 
 
 def outbound_history(db,*,actor,work_order_id,operation_id):
     current=authorize(db,actor,'read')
     with db.no_autoflush:
         audit=material_audit_cursor(db);snapshot=inventory._projection_snapshot(db)
-        order=_original_order(db,current,work_order_id,operation_id)
-        original_result=returns.order_result(db,actor=current,order=order)
+        order,original_result=_read_original(db,current,work_order_id,operation_id)
         cancellation=db.scalar(select(StockOperationCancellation).where(StockOperationCancellation.operation_id==order.id).execution_options(populate_existing=True))
+        if isinstance(original_result,LossReturnOrigin) and cancellation is not None: returns.invalid()
         cancelled=returns.cancellation_result(db,actor=current,order=order,cancellation=cancellation) if cancellation else None
         rows=tuple(db.scalars(select(StockOperationOutbound).where(StockOperationOutbound.operation_id==order.id)
             .order_by(StockOperationOutbound.created_at,StockOperationOutbound.id).limit(1001).execution_options(populate_existing=True)))
@@ -97,6 +114,6 @@ def outbound_history(db,*,actor,work_order_id,operation_id):
         status='outbound' if all(quantities[line.id]==line.quantity for line in originals) else 'partially_outbound' if any(quantities.values()) else 'not_outbound'
         if material_audit_cursor(db)!=audit:_fail('stock_return_outbound_history_changed','退料发出历史在读取期间变化，请重新查询')
         inventory._ensure_projection_snapshot_current(db,snapshot);authorize(db,current,'read')
-        return StockReturnOutboundHistoryOut(operation_id=order.id,work_order_id=work_order_id,person_id=current.person_id,
+        return history_view(original_result,operation_id=order.id,person_id=current.person_id,
             authorization_version=current.authorization_version,queried_at=datetime.now(timezone.utc),outbound_status=status,
-            original=original_result,cancellation=cancelled,items=tuple(items))
+            cancellation=cancelled,items=tuple(items))
