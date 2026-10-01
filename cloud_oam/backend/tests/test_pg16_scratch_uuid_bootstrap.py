@@ -55,3 +55,45 @@ def test_scratch_database_provisions_uuid_as_its_own_dba(monkeypatch, bootstrap_
     else:
         assert created == scratch
         assert dropped == []
+
+
+def test_legacy_seed_uses_exact_old_graph_then_releases_it_before_current_upgrade(monkeypatch):
+    from pathlib import Path
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    import pg16_legacy_opening_fixture
+
+    scratch = gate.OPENING_BACKFILL_DATABASE_PREFIX + 'synthetic'
+    calls = []
+    engine = object()
+    disposed = []
+
+    class Owner:
+        def dispose(self):
+            disposed.append(self)
+
+    engine = Owner()
+
+    def migrate(*arguments, database_name, config_path=None):
+        assert database_name == scratch
+        scripts = ScriptDirectory.from_config(Config(str(config_path)))
+        assert scripts.get_heads() == ['20260903_0051']
+        assert len(tuple(scripts.walk_revisions())) == 51
+        calls.append((arguments, Path(config_path)))
+
+    def seed(owner, *, mutate_policy_after_completion):
+        assert owner is engine and mutate_policy_after_completion is True
+        # The isolated graph is scoped to the initial upgrade, not later
+        # current-head verification or execution of the historical fixture.
+        assert not calls[0][1].exists()
+        return {'synthetic': 'legacy evidence'}
+
+    monkeypatch.setattr(gate, '_run_alembic', migrate)
+    monkeypatch.setattr(gate, '_isolated_current_revision', lambda name:
+        gate.STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION if name == scratch else None)
+    monkeypatch.setattr(gate, '_legacy_backfill_engine', lambda name: engine if name == scratch else None)
+    monkeypatch.setattr(pg16_legacy_opening_fixture, 'seed_legacy_completion', seed)
+    assert gate._seed_0051_observation_only_completion(scratch,
+        mutate_policy_after_completion=True) == {'synthetic': 'legacy evidence'}
+    assert calls[0][0] == ('upgrade', '20260903_0051')
+    assert disposed == [engine]

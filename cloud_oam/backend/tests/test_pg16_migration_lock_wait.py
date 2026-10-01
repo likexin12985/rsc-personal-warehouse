@@ -24,6 +24,25 @@ def test_slow_process_startup_waits_for_real_lock_and_returns_immediately(clock)
     assert not future.done()
 
 
+def test_full_graph_startup_can_exceed_old_process_budget_but_still_requires_lock(clock):
+    future = Future()
+    observed = {"pid": 123, "blocked_by": 456}
+    result = probe.wait_for_migration_lock(
+        future, lambda: observed if clock[0] >= 185 else None,
+    )
+    assert result is observed
+    assert 185 <= clock[0] < 185.1
+    assert not future.done()
+
+
+def test_default_full_process_budget_is_finite_and_missing_lock_still_fails(clock):
+    future = Future()
+    with pytest.raises(TimeoutError, match="required database lock"):
+        probe.wait_for_migration_lock(future, lambda: False)
+    assert clock[0] == probe.ALEMBIC_COMMAND_TIMEOUT_SECONDS == 600
+    assert not future.done()
+
+
 def test_finished_child_is_not_a_lock_proof_even_when_observer_reports_one(clock):
     future = Future()
     future.set_result("completed")

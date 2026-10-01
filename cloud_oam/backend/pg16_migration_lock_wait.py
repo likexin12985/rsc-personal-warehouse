@@ -7,7 +7,12 @@ from typing import Callable, TypeVar
 
 
 Observation = TypeVar("Observation")
-ALEMBIC_COMMAND_TIMEOUT_SECONDS = 180
+# This bounds the whole Python process, including construction of the frozen
+# revision graph, not a SQL statement or lock SLA. The complete 164-revision
+# graph can exceed 180s on hosted runners before the first migration executes.
+# Match the existing native current-head runner; keep SQL/transaction timeouts
+# and the requirement to observe the exact database lock unchanged.
+ALEMBIC_COMMAND_TIMEOUT_SECONDS = 600
 
 
 def observe_projector_preflight_lock(connection, *, blocker_pid: int) -> bool:

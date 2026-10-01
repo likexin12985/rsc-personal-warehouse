@@ -28,6 +28,7 @@ def main(argv=None):
     from alembic.config import Config
     from alembic.script import ScriptDirectory
     from migration_script_cache import cache_migration_compilation
+    from pg16_legacy_migration_graph import historical_migration_graph
     config = Config(str(CLOUD/'alembic.ini'))
     config.set_main_option('script_location',str(CLOUD/'backend/alembic'))
     with cache_migration_compilation(CLOUD/'backend/alembic/versions'):
@@ -45,14 +46,15 @@ def main(argv=None):
                 environment=os.environ.copy()
                 environment.update(OAM_ENVIRONMENT='production',OAM_DATABASE_URL=owner.url.render_as_string(hide_password=False),
                     OAM_DATABASE_EXPECTED_MIGRATION_ROLE='star_oam_migrator',OAM_DATABASE_EXPECTED_RUNTIME_ROLE='star_oam_api')
-                def migrate(label,*command,success=True):
+                def migrate(label,*command,success=True,config_path=None):
                     path=directory/(label+'.log')
                     with path.open('wb') as log:
-                        result=subprocess.run([sys.executable,'-m','alembic','-c','alembic.ini',*command],cwd=CLOUD,
+                        result=subprocess.run([sys.executable,'-m','alembic','-c',str(config_path) if config_path else 'alembic.ini',*command],cwd=CLOUD,
                             env=environment,stdout=log,stderr=subprocess.STDOUT,timeout=300)
                     assert (result.returncode==0)==success,label
                     return path.read_text()
-                migrate('migration-0051','upgrade',LEGACY_REVISION)
+                with historical_migration_graph(CLOUD,revision=LEGACY_REVISION) as graph:
+                    migrate('migration-0051','upgrade',LEGACY_REVISION,config_path=graph.config_path)
                 evidence=seed_legacy_completion(owner,mutate_policy_after_completion=negative)
                 print('0051 frozen facts loaded with all later columns absent',flush=True)
                 if negative:

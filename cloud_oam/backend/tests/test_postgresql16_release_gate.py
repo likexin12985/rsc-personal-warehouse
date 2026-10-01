@@ -694,9 +694,10 @@ def _run_alembic(
     *arguments: str,
     expect_success: bool = True,
     database_name: str = DATABASE_NAME,
+    config_path: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     completed = subprocess.run(
-        [sys.executable, "-m", "alembic", "-c", "alembic.ini", *arguments],
+        [sys.executable, "-m", "alembic", "-c", str(config_path) if config_path else "alembic.ini", *arguments],
         cwd=CLOUD_ROOT,
         env=_migration_environment(database_name=database_name),
         capture_output=True,
@@ -6712,8 +6713,11 @@ def _seed_0051_observation_only_completion(
     # The shared frozen synthetic fixture executes only 0051-era columns.
     from pg16_legacy_opening_fixture import seed_legacy_completion
 
-    _run_alembic("upgrade", STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION,
-        database_name=database_name)
+    from pg16_legacy_migration_graph import historical_migration_graph
+    with historical_migration_graph(CLOUD_ROOT,
+            revision=STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION) as graph:
+        _run_alembic("upgrade", graph.revision, database_name=database_name,
+            config_path=graph.config_path)
     assert _isolated_current_revision(database_name) == STOCKTAKE_DIFFERENCE_AUTHORIZATION_HASH_REVISION
     engine = _legacy_backfill_engine(database_name)
     try:
