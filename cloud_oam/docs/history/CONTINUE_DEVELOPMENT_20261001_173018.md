@@ -4,7 +4,7 @@
 
 ## 工作位置与约束
 
-- 工作树：`/Users/lizhiwang/.codex/worktrees/06f6/oam`，分支`codex/notification-delivery-worker`，HEAD `9dff36f7feca44626b82ceb6e40297b3732a22f0`。
+- 工作树：`${RSC_REPO_ROOT}`，分支`codex/notification-delivery-worker`，HEAD `9dff36f7feca44626b82ceb6e40297b3732a22f0`。
 - 首先完整阅读根目录正式生产版需求与架构设计V1.0；保留全部未提交改动，禁止reset/revert/丢弃。必须收齐既定证据后才提交。
 - Python用`cloud_oam/.venv/bin/python`；从cloud目录运行pytest显式`-o pythonpath=backend`，先确认当前用例名称。系统Python3.9不适合。
 - 本地PG仅使用工具新建、归本任务所有的Unix socket测试库。二进制`artifacts/pg16-native-20260920/install/bin`。不得借用生产库或外部业务写入。

@@ -80,7 +80,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = '20261212_0163'
+HEAD_REVISION = '20261213_0164'
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -1067,6 +1067,12 @@ def _create_opening_backfill_database() -> str:
                 cursor.execute(
                     "GRANT USAGE ON SCHEMA public TO star_oam_api, "
                     "star_oam_backup, star_oam_projector"
+                )
+                # Extensions are database-local. Historical scratch databases
+                # upgrade to the current head and need the same separately
+                # provisioned private UUID dependency as the primary CI DB.
+                cursor.execute(
+                    (CLOUD_ROOT / "deployment/postgres-init/20-loss-uuid.sql").read_text()
                 )
     except BaseException as setup_error:
         try:

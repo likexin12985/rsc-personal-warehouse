@@ -54,7 +54,7 @@ def assert_current_runtime(owner, api):
 def release(engines, *, tracking, migrate, provision, scenario):
     if tracking not in ('quantity','serial') or scenario not in ('seals','http_sources'):
         raise ValueError('explicit correction request tracking and scenario required')
-    if HEAD_REVISION != '20261212_0163':
+    if HEAD_REVISION != '20261213_0164':
         raise ValueError('correction request gate requires review for the new migration head')
     owner,api = (engines[key] for key in ('star_oam_migrator','star_oam_api'))
     if scenario == 'seals':

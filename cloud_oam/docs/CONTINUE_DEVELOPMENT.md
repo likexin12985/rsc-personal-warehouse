@@ -1,8 +1,32 @@
 # RSC个人仓开发交接
 
+## 最新接续：0164 审计锁范围修复与门禁诊断（2026-10-02）
+
+本批提交前基线为 `cbd9223c9daf953e7feecf0e51180a9e54b029e4`，分支 `codex/notification-delivery-worker`。累计 0158–0163 已推送，本批 0164 及门禁修复已完成本地复验。当前提交和远端状态以 Git 及 `artifacts/authentication-fence-0164-next/main-application-v2/current.json` 为准；未部署生产。禁止 reset、revert 或丢弃改动。首次接续须完整读取根目录正式 V1.0 基线；完整上线目标仍未完成。
+
+### 已确认的问题与完成的工作
+
+- 客户端 CI 原因是 36 个文件包含本机路径。已修正版本化证据定位元数据、文档路径及 `dist-public` 忽略/门禁；原字节保存在 `artifacts/repository-safety-20261002/preserved/`。0161 SQL、权限及业务状态未改，仅同步证据目录元数据摘要。
+- 历史迁移临时数据库缺少私有 UUID 扩展。已在该临时库的 postgres 引导阶段安装已审查扩展脚本；主树聚焦 19 项及临时库/部署夹具 22 项通过。另已在新建 PG16 中实际调用共用 scratch helper：临时库私有 UUID 安装及重复引导通过，migrator 可生成 UUID、API 调用被拒绝，临时库删除后主库 projector CONNECT 恢复；正常停库终态见 `E/cache-and-scratch-native-verified.json`。
+- 主树 PG16.15 升 0163、降 0140、再升 0163，启动/ACL/UUID 漂移拒绝及恢复、9 项短信配置保护通过。旧期初历史三场景（逐级回填、直接升当前、历史规则漂移拒绝）均完成，原事实保留，进程退出且三个私有数据库正常停止；见 `repository-safety-20261002/legacy-opening-v2.log`。
+- 原 SHA 的登录及报损纠正/封存失败，均在认证审计 COMMIT 中等待库存头；控制数发布并发死锁也由 0161 守卫对独立授权审计取库存锁引起。根因是 `rsc_fence_loss_correction_seal_0161` 的审计域范围过大。0164 第二版现已完成候选门禁并应用主树，合并后的 83 项聚焦回归、仓库安全及 PG16 完整启动/权限/往返已通过；准确新 SHA 的 CI 及生产验收仍待完成。
+- 库存矩阵降至 0040 在 CI 超时。新建本地库复用真实短信单一持有者/进程中断夹具后，144.40 秒触发预期 `cannot downgrade 0041` 保留保护，head 保持 0163，正常停止。采样未见数据库锁阻塞，主要准备阶段数据库等待 Python 客户端；不能因此声称 CI 已通过或放宽 180 秒限制。性能剖析在继续。
+
+### 当前候选与准确接续入口
+
+`A=artifacts/authentication-fence-0164-next`，`E=artifacts/repository-safety-20261002`。主树已应用 0164 的 29 项变更（6 新增、23 修改），原字节保存在 `A/main-application-v2/preserved/`；同时保留已有路径、UUID 引导和缓存修复。提交前复验已全部结束，2336 文件无漂移，所有测试进程和私有 PG 正常退出。原始证据见 `A/main-application-v2/verified-v1.json`；最后交接说明更新仅涉及两个 Markdown 文件，另留文档差异及最终源码清单。
+
+- `A/source` 是第一版“仅规范认证审计”候选，原生迁移/权限证明通过，但不足以解决授权发布锁问题，已被取代。其聚焦测试 55 通过、1 个旧版本断言失败；保留全部失败证据。
+- **当前候选为 `A/source-v2`**，完整源码固定于 `A/broader-source-v1.json`（2335 文件）。仅对非库存/非需求审计跳过库存锁；三个报损逆向/审批/执行封存 aggregate 无论审计 stream 都仍受保护。0164 是前向迁移，核验精确前驱函数/权限/属主，保留全部业务行，更新当前版本准入及运行时冻结目录。
+- 新回归直接强制执行被修改的 0161 延迟约束，避免其他旧守卫掩盖缺陷；覆盖库存/需求审计、跨 authentication/authorization 的三种封存事件、脱离事实的伪造封存拒绝、私有触发器不可被 API 直接执行、RC/RR 认证与授权审计独立提交。原实际发布竞争由共用 control helper 验证。
+- 第二版聚焦 **56 项全部通过**，仓库安全 **2335 文件通过**。审计锁原生证明也已完成：RC/RR 登录各 1 组、授权各 1 组；8 组库存/封存锁保护、6 组脱离事实封存拒绝；精确前驱漂移拒绝、全启动/ACL、带数据往返保留全部通过，私有 PG 正常停止且 2335 文件摘要无漂移，见 `A/audit-domain-native-verified-v2.json`。`A/current.json` 保存原生迁移、控制数并发、数量/SN 报损纠正的当前会话句柄；其中数量/SN 两种模式 `restore_available` 均已完成真实原过账、反向冲销、独立审批、纠正提交、权限撤销回滚、精确回查及历史保留门禁，私有库正常停止，源码无漂移，见 `A/restore-both-verified-v2.json`；该进程已正常退出。control 整套共用业务检查已完成，包含发布竞争、对账、权限、真实 XLSX 导入、报表、请求恢复和历史保留；终态与正常停库见 `A/control-native-verified-v2.json`。三种纠正结果 × 数量/SN 六组也全部完成，见 `A/correction-matrix-verified-v2.json`。均固定于第二版源清单，不能替代合并后的主树或 GitHub 验证。
+- `E/inventory-downgrade/run-az3wsdqs/diagnostic.json` 与 `activity.json` 保存回退诊断。纯迁移图剖析已完成：163 版产生 102755 次 runpy 执行（编译缓存已启用，复用 102652 次），耗时 125.58 秒。`E/migration-graph-profile.json`/`.txt` 保存结果。独立缓存优化候选仅跳过同一源码文件重复 zip 探测及重复祖先路径解析，保留每次源码 SHA 校验、独立模块变量和执行；性能对比实测 83.57 秒（原 125.58 秒，均有并行负载，不作性能 SLA）；编译/复用次数完全一致。已保留原字节后应用主树两个文件，主树 8 项回归通过；原生回退复验已在原 180 秒限制内完成（88.83 秒，预期 0041 保留保护、head 保持 0163）；2075 个非文档源文件无漂移、私有库正常停止，见 `E/cache-and-scratch-native-verified.json` 与 `E/cache-main-application.json`。这仍不是新 SHA 的 CI 结果。准确句柄见 `E/current.json`。不接生产库，不重放任何外部业务写入。
+
+下一步：提交并推送本批修复，检查准确新 SHA 的 GitHub 门禁，然后继续正式基线缺口审计。主树已通过 83 项聚焦回归、2336 文件安全扫描、0164→0140→0164 原生往返、完整运行时 ACL、UUID 漂移拒绝及恢复和 9 项短信配置保护。候选六组报损纠正和完整控制数流程证据保持独立列示，不混称为生产验收。真实短信/微信、UAT、期初迁移、连续三天对账、性能与灾备，以及正式基线其他功能缺口仍分别待验收。下文是早期开发历史，以本节、Git 和当前机器回执为准。
+
 ## 最新接续（2026-10-02 03:39，主树0163本地复验完成）
 
-当前工作树`/Users/lizhiwang/.codex/worktrees/06f6/oam`、分支`codex/notification-delivery-worker`，本批提交前基线HEAD为`9dff36f7feca44626b82ceb6e40297b3732a22f0`。**主树已整合为2074源/0163并通过本批本地复验。实际提交以Git和机器回执为准，尚未完成GitHub或生产验收，未部署。** 应用81项（39新增、42修改、无删除）；覆盖前逐文件核对2035源摘要，全部原字节保留于`artifacts/loss-return-compensation-next/main-application-v1/preserved`。应用时主树与已验证的最终候选源字节完全一致；随后提交检查发现新SQLite DDL行尾空格，当前`main-application-v1/source-v2.json`仅含DDL空白及相应冻结SHA修正、Python/TS两处EOF空行清理。原字节保留于`formatting-v2/preserved`，PostgreSQL目录及运行逻辑未变，SQLite全迁移/ORM/降级复验1项通过（92.51秒），源摘要无漂移且进程退出，汇总见`main-application-v1/verified-v2.json`。
+当前工作树`${RSC_REPO_ROOT}`、分支`codex/notification-delivery-worker`，本批提交前基线HEAD为`9dff36f7feca44626b82ceb6e40297b3732a22f0`。**主树已整合为2074源/0163并通过本批本地复验。实际提交以Git和机器回执为准，尚未完成GitHub或生产验收，未部署。** 应用81项（39新增、42修改、无删除）；覆盖前逐文件核对2035源摘要，全部原字节保留于`artifacts/loss-return-compensation-next/main-application-v1/preserved`。应用时主树与已验证的最终候选源字节完全一致；随后提交检查发现新SQLite DDL行尾空格，当前`main-application-v1/source-v2.json`仅含DDL空白及相应冻结SHA修正、Python/TS两处EOF空行清理。原字节保留于`formatting-v2/preserved`，PostgreSQL目录及运行逻辑未变，SQLite全迁移/ORM/降级复验1项通过（92.51秒），源摘要无漂移且进程退出，汇总见`main-application-v1/verified-v2.json`。
 
 C=`artifacts/loss-return-compensation-next`；本批以下路径相对C。原2073源固定在`seal-work/source`，最终2074源在`uuid-namespace-ci-work/source`；不要把旧副本当成当前主树。
 
@@ -23,10 +47,10 @@ C=`artifacts/loss-return-compensation-next`；本批以下路径相对C。原207
 
 ## 接续入口与边界
 
-- 工作树：`/Users/lizhiwang/.codex/worktrees/06f6/oam`；分支：`codex/notification-delivery-worker`；HEAD：`9dff36f7feca44626b82ceb6e40297b3732a22f0`。
+- 工作树：`${RSC_REPO_ROOT}`；分支：`codex/notification-delivery-worker`；HEAD：`9dff36f7feca44626b82ceb6e40297b3732a22f0`。
 - 先完整阅读根目录 `docs/RSC个人仓与物资运营扩展系统_正式生产版需求与架构设计_V1.0.md`。本轮已读；所有后续开发遵循其正式范围。
 - 禁止 reset、revert 或丢弃未提交改动。既定证据全部收齐后才提交。不要将候选验证通过表述为主树、GitHub 或生产已通过。
-- Python：`cloud_oam/.venv/bin/python`，不得 resolve 解释器软链接；pytest 从 cloud 目录用 `-o pythonpath=backend`。Node：`/Users/lizhiwang/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin`。
+- Python：`cloud_oam/.venv/bin/python`，不得 resolve 解释器软链接；pytest 从 cloud 目录用 `-o pythonpath=backend`。Node：`${HOME}/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin`。
 - PG 16.15：`cloud_oam/artifacts/pg16-native-20260920/install/bin`。仅用任务创建、TCP 关闭的私有 Unix socket 测试库；不连接生产数据库或执行外部业务写入。
 - 公开首页知识查询，星星按钮到 `/xx`。小程序保持公开知识查询；飞书知识源优先级低。短信、微信、真实登录和生产验收分别核验。
 

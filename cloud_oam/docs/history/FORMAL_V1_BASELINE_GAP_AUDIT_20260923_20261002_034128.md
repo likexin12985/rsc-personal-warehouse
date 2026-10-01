@@ -1,6 +1,6 @@
 ## 最新接续（2026-10-02 03:39，主树0163本地复验完成）
 
-当前工作树`/Users/lizhiwang/.codex/worktrees/06f6/oam`、分支`codex/notification-delivery-worker`，本批提交前基线HEAD为`9dff36f7feca44626b82ceb6e40297b3732a22f0`。**主树已整合为2074源/0163并通过本批本地复验。实际提交以Git和机器回执为准，尚未完成GitHub或生产验收，未部署。** 应用81项（39新增、42修改、无删除）；覆盖前逐文件核对2035源摘要，全部原字节保留于`artifacts/loss-return-compensation-next/main-application-v1/preserved`。当前主树与已验证的最终候选源字节完全一致。
+当前工作树`${RSC_REPO_ROOT}`、分支`codex/notification-delivery-worker`，本批提交前基线HEAD为`9dff36f7feca44626b82ceb6e40297b3732a22f0`。**主树已整合为2074源/0163并通过本批本地复验。实际提交以Git和机器回执为准，尚未完成GitHub或生产验收，未部署。** 应用81项（39新增、42修改、无删除）；覆盖前逐文件核对2035源摘要，全部原字节保留于`artifacts/loss-return-compensation-next/main-application-v1/preserved`。当前主树与已验证的最终候选源字节完全一致。
 
 C=`artifacts/loss-return-compensation-next`；本批以下路径相对C。原2073源固定在`seal-work/source`，最终2074源在`uuid-namespace-ci-work/source`；不要把旧副本当成当前主树。
 

@@ -10,7 +10,7 @@ branch_labels = depends_on = None
 OLD_READY_HASH = '2cc36b88c9ed37179c33411ca35670d705a8c963fc2bbd37c3e5c5d2f815f0e3'
 NEW_READY_HASH = '4bc307952f65f5ea237bcdefbc850d160543690df2ec97aaad9595c3958fe403'
 FOLDER = Path(__file__).parent.parent / 'stock_loss_correction_seals_0161'
-CATALOG_SHA = 'f8d54fab6d88f195c8b72913387840b5eb6b65e4997425f8ca327810f651b611'
+CATALOG_SHA = 'b79b960823852cd9ad1474c0da78bdcfcfbe3c513253d5d9b255264f5ae5bc89'
 SQLITE_CATALOG_SHA = '073dc69ab861041c6db6f0eecc7c6506d8e2cbf96d4008fa10add711c395c340'
 
 @cache

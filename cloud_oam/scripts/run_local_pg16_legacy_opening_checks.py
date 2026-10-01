@@ -25,6 +25,15 @@ def main(argv=None):
     from pg16_legacy_opening_fixture import seed_legacy_completion,LEGACY_REVISION
     from pg16_legacy_opening_gate import snapshot,legacy_catalog,historical_facts,assert_backfill
     from sqlalchemy import text
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from migration_script_cache import cache_migration_compilation
+    config = Config(str(CLOUD/'alembic.ini'))
+    config.set_main_option('script_location',str(CLOUD/'backend/alembic'))
+    with cache_migration_compilation(CLOUD/'backend/alembic/versions'):
+        head = ScriptDirectory.from_config(config).get_current_head()
+    if head is None:
+        raise RuntimeError('current migration head required')
     out = CLOUD/'artifacts/opening-legacy-fixture-20260920/checks'
     report = None
     try:
@@ -70,7 +79,7 @@ def main(argv=None):
                     assert_backfill(owner,evidence)
                     assert historical_facts(owner,columns=before)==before
                     with owner.connect() as db:
-                        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261107_0128'
+                        assert db.scalar(text('SELECT version_num FROM alembic_version'))==head
                         assert db.scalar(text('SELECT opening_authorization_version FROM stocktake_tasks WHERE id=:id'),
                             {'id':evidence['task_id']}) is None
                     runpy.run_path(str(CLOUD/'backend/tests/conftest.py'))
@@ -79,7 +88,7 @@ def main(argv=None):
                         expected_migration_role='star_oam_migrator')
                     print('Current head: historical facts and unknown authorization preserved; API boundary PASS',flush=True)
                 result=dict(status='passed',actualPostgreSQL16=True,case=case,
-                    finalRevision=LEGACY_REVISION if negative else '20261107_0128',frozenLegacyFacts=True,
+                    finalRevision=LEGACY_REVISION if negative else head,frozenLegacyFacts=True,
                     noCurrentServiceUsed=True,fullReleaseGate=False,productionAcceptance=False)
                 (directory/'checks.json').write_text(json.dumps(result,indent=2)+'\n')
         return 0

@@ -5,7 +5,7 @@ unknown and must be checked with the original command and review digest.
 """
 from .process_entry import ProcessEntryError, run_owned_job
 
-REQUIRED_HEAD = '20261212_0163'
+REQUIRED_HEAD = '20261213_0164'
 
 
 def _worker(payload, expires):

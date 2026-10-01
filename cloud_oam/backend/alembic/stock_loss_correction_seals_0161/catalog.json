@@ -2,9 +2,9 @@
   "status": "proposal_from_passed_native_overlay",
   "previousRevision": "20261209_0160",
   "revision": "20261210_0161",
-  "evidenceDirectory": "/Users/lizhiwang/.codex/worktrees/06f6/oam/cloud_oam/artifacts/loss-correction-request-seals-next/source/cloud_oam/artifacts/local-correction-seal-overlay-pg16/run-681ltp32",
+  "evidenceDirectory": "cloud_oam/artifacts/loss-correction-request-seals-next/source/cloud_oam/artifacts/local-correction-seal-overlay-pg16/run-681ltp32",
   "tracking": "quantity",
-  "sourceJob": "/Users/lizhiwang/.codex/worktrees/06f6/oam/cloud_oam/artifacts/loss-correction-request-seals-next/native-quantity-v6",
+  "sourceJob": "cloud_oam/artifacts/loss-correction-request-seals-next/native-quantity-v6",
   "frozen0159Sha256": "29bee9907c271dfc9e8bc616e99c658f52de71261b9c6cbfc91b71ade6ec2d50",
   "frozen0160Sha256": "90142dbf0721f4dd1efff3bdfbb6d6633eef2536a49f44cbe276d4217bad4c7e",
   "before": {

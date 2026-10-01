@@ -175,7 +175,7 @@ def release(engines, *, tracking, migrate, provision):
         '0159 immutable business history requires retention')
     assert snapshot(owner)==before and catalog(owner)==before_catalog
     with owner.connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261212_0163'
+        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261213_0164'
     security()
     result.update(emptyRoundtrip=True,retainedSenderSealsBlockDowngrade=True,
         runtimeSecurityBeforeAndAfter=True,formalMigrationRegistered=True,productionAcceptance=False)

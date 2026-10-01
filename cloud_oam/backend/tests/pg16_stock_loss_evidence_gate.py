@@ -179,9 +179,9 @@ def run(engines, migrate):
             expected_failure='0143 loss evidence requires retention')
     assert facts(owner)==before
     with owner.connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261212_0163'
+        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261213_0164'
         assert db.scalar(text('SELECT count(*) FROM inventory_transactions'))==0
         assert db.scalar(text('SELECT count(*) FROM stock_operation_orders'))==0
     result.update(passed=True, retainedEvidenceBlocksDowngrade=True, inventoryWrites=0,
-        storageAdapter='in_memory_only', migrationHead='20261212_0163')
+        storageAdapter='in_memory_only', migrationHead='20261213_0164')
     return result

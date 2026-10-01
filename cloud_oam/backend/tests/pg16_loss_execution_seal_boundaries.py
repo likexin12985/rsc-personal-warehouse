@@ -93,7 +93,7 @@ def verify(context,command,flow):
         assert db.scalar(text('SELECT current_database()'))=='rsc_pg16_release_gate'
         assert db.scalar(text('SELECT current_user'))=='star_oam_migrator'
         assert int(db.scalar(text('SHOW server_version_num')))//10000==16
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261212_0163'
+        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261213_0164'
     before=snapshot(owner)
     with Session(api) as db:
         execute(db,context,fresh(command),flow)

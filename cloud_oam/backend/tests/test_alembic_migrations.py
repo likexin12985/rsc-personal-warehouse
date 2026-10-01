@@ -460,7 +460,7 @@ REVIEW_COMMAND_STATUS_REVISION = (
     / "versions"
     / "20260906_0063_review_command_status.py"
 )
-HEAD_REVISION = '20261212_0163'
+HEAD_REVISION = '20261213_0164'
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -1692,8 +1692,10 @@ def test_revision_history_has_single_current_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == "20261211_0162"
-    quality_head = script.get_revision(head.down_revision)
+    assert head.down_revision == "20261212_0163"
+    stop_head = script.get_revision(head.down_revision)
+    assert stop_head is not None and stop_head.down_revision == "20261211_0162"
+    quality_head = script.get_revision(stop_head.down_revision)
     assert quality_head is not None and quality_head.down_revision == "20261210_0161"
     correction_seal_head = script.get_revision(quality_head.down_revision)
     assert correction_seal_head is not None and correction_seal_head.down_revision == "20261209_0160"

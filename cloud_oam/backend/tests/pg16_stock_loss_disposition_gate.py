@@ -273,7 +273,7 @@ def release(engines,*,tracking,migrate,provision):
     from pg16_stock_loss_custody_gate import assert_original_retention
     assert_original_retention(engines['star_oam_migrator'])
     with engines['star_oam_migrator'].connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261212_0163'
+        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261213_0164'
     security()
     result.update(emptyRoundtrip=True,retainedDispositionBlocksDowngrade=True,
         custodyHistoryBlocksDowngrade=True,independent0150RetentionPreserved=True,runtimeSecurityBeforeAndAfter=True)

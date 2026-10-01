@@ -3,7 +3,7 @@ from pathlib import Path
 import hashlib,json
 from sqlalchemy import text
 RAW=(Path(__file__).with_suffix('.json')).read_bytes()
-if hashlib.sha256(RAW).hexdigest()!='4a5664b877a90188587784bea44389f422d777f82fc16e551e7a657281ebe0de':
+if hashlib.sha256(RAW).hexdigest()!='4c1b9f104ee481eec69d612db7a25bb5f1f6bd5602a9a15970022eea9e9d5c71':
     raise ValueError('0161 runtime catalog artifact digest mismatch')
 DATA=json.loads(RAW)
 TABLES=tuple(row['name'] for row in DATA['candidateTables'])

@@ -76,6 +76,7 @@ htmlcov/
 node_modules/
 .pnpm-store/
 dist/
+dist-public/
 dist-warehouse/
 coverage/
 *.tsbuildinfo

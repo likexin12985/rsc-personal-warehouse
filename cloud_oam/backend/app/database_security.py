@@ -4791,6 +4791,8 @@ from . import return_inbound_quality_security as _return_inbound_quality_catalog
 _return_inbound_quality_catalog.register(globals())
 from . import stock_loss_return_stop_security as _loss_return_stop_catalog
 _loss_return_stop_catalog.register(globals())
+from . import authentication_fence_security as _authentication_fence_catalog
+_authentication_fence_catalog.register(globals())
 
 _ROLE_EVIDENCE_SQL = text(
     """
@@ -7003,6 +7005,7 @@ def validate_production_database_security(
             _loss_correction_catalog.verify(connection)
             _return_inbound_quality_catalog.verify(connection)
             _loss_return_stop_catalog.verify(connection)
+            _authentication_fence_catalog.verify(connection)
             evidence = connection.execute(
                 _ROLE_EVIDENCE_SQL,
                 {"migration_role": expected_migration_role},

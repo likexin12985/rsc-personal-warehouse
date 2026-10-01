@@ -2,7 +2,7 @@
 
 ## 最新接续（2026-10-02 03:39，主树0163本地复验完成）
 
-当前工作树`/Users/lizhiwang/.codex/worktrees/06f6/oam`、分支`codex/notification-delivery-worker`，本批提交前基线HEAD为`9dff36f7feca44626b82ceb6e40297b3732a22f0`。**主树已整合为2074源/0163并通过本批本地复验。实际提交以Git和机器回执为准，尚未完成GitHub或生产验收，未部署。** 应用81项（39新增、42修改、无删除）；覆盖前逐文件核对2035源摘要，全部原字节保留于`artifacts/loss-return-compensation-next/main-application-v1/preserved`。当前主树与已验证的最终候选源字节完全一致。
+当前工作树`${RSC_REPO_ROOT}`、分支`codex/notification-delivery-worker`，本批提交前基线HEAD为`9dff36f7feca44626b82ceb6e40297b3732a22f0`。**主树已整合为2074源/0163并通过本批本地复验。实际提交以Git和机器回执为准，尚未完成GitHub或生产验收，未部署。** 应用81项（39新增、42修改、无删除）；覆盖前逐文件核对2035源摘要，全部原字节保留于`artifacts/loss-return-compensation-next/main-application-v1/preserved`。当前主树与已验证的最终候选源字节完全一致。
 
 C=`artifacts/loss-return-compensation-next`；本批以下路径相对C。原2073源固定在`seal-work/source`，最终2074源在`uuid-namespace-ci-work/source`；不要把旧副本当成当前主树。
 
@@ -23,10 +23,10 @@ C=`artifacts/loss-return-compensation-next`；本批以下路径相对C。原207
 
 ## 接续入口与边界
 
-- 工作树：`/Users/lizhiwang/.codex/worktrees/06f6/oam`；分支：`codex/notification-delivery-worker`；HEAD：`9dff36f7feca44626b82ceb6e40297b3732a22f0`。
+- 工作树：`${RSC_REPO_ROOT}`；分支：`codex/notification-delivery-worker`；HEAD：`9dff36f7feca44626b82ceb6e40297b3732a22f0`。
 - 先完整阅读根目录 `docs/RSC个人仓与物资运营扩展系统_正式生产版需求与架构设计_V1.0.md`。本轮已读；所有后续开发遵循其正式范围。
 - 禁止 reset、revert 或丢弃未提交改动。既定证据全部收齐后才提交。不要将候选验证通过表述为主树、GitHub 或生产已通过。
-- Python：`cloud_oam/.venv/bin/python`，不得 resolve 解释器软链接；pytest 从 cloud 目录用 `-o pythonpath=backend`。Node：`/Users/lizhiwang/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin`。
+- Python：`cloud_oam/.venv/bin/python`，不得 resolve 解释器软链接；pytest 从 cloud 目录用 `-o pythonpath=backend`。Node：`${HOME}/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin`。
 - PG 16.15：`cloud_oam/artifacts/pg16-native-20260920/install/bin`。仅用任务创建、TCP 关闭的私有 Unix socket 测试库；不连接生产数据库或执行外部业务写入。
 - 公开首页知识查询，星星按钮到 `/xx`。小程序保持公开知识查询；飞书知识源优先级低。短信、微信、真实登录和生产验收分别核验。
 

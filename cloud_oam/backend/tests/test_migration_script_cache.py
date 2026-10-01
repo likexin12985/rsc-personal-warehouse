@@ -85,3 +85,38 @@ def test_unsupported_interpreter_hook_falls_back_without_patch(tmp_path, monkeyp
     with cache_migration_compilation(tmp_path) as stats:
         assert runpy._get_code_from_file is alternative_loader
         assert not stats.enabled
+
+
+def test_direct_file_negative_finder_is_scoped_and_existing_entry_is_preserved(tmp_path):
+    import sys
+    script = tmp_path / "revision.py"
+    script.write_text("value = []\n")
+    key = str(script)
+    sys.path_importer_cache.pop(key, None)
+    with cache_migration_compilation(tmp_path):
+        first = runpy.run_path(key)
+        assert key in sys.path_importer_cache and sys.path_importer_cache[key] is None
+        second = runpy.run_path(key)
+        assert first["value"] is not second["value"]
+    assert key not in sys.path_importer_cache
+    sys.path_importer_cache[key] = None
+    try:
+        with cache_migration_compilation(tmp_path):
+            runpy.run_path(key)
+        assert key in sys.path_importer_cache and sys.path_importer_cache[key] is None
+    finally:
+        sys.path_importer_cache.pop(key, None)
+
+
+def test_symlink_outside_versions_is_never_cached(tmp_path):
+    versions = tmp_path / "versions"
+    versions.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_text("value = 1\n")
+    link = versions / "revision.py"
+    link.symlink_to(outside)
+    with cache_migration_compilation(versions) as stats:
+        assert runpy.run_path(str(link))["value"] == 1
+        outside.write_text("value = 2\n")
+        assert runpy.run_path(str(link))["value"] == 2
+    assert stats.compiled == stats.reused == 0

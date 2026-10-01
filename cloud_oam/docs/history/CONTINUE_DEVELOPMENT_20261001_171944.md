@@ -32,7 +32,7 @@
 
 ## 工作位置与约束
 
-- 工作树：`/Users/lizhiwang/.codex/worktrees/06f6/oam`；代码目录：`cloud_oam`。
+- 工作树：`${RSC_REPO_ROOT}`；代码目录：`cloud_oam`。
 - 分支：`codex/notification-delivery-worker`；HEAD：`9dff36f7feca44626b82ceb6e40297b3732a22f0`。本批未提交、推送、部署。
 - 继续前完整阅读根目录 [正式需求基线](../../docs/RSC个人仓与物资运营扩展系统_正式生产版需求与架构设计_V1.0.md)，检查当前 diff。禁止 reset、revert 或丢弃未提交改动。
 - 主树已应用正式0160多代集成包（58目标），另应用15目标：三个旧断言测试文件、审计批读及测试、六个处置HTTP接口及来源接口、新原生写HTTP辅助门禁。备份和回执：`artifacts/loss-multigeneration-main-integration-next/application.json`、`artifacts/loss-execution-command-http-next/main-application-v1/application.json`。

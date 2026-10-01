@@ -143,7 +143,7 @@ def exercise(context,*,correction_kind='restore_available'):
             db.rollback()
         else:raise AssertionError('late detached state contaminated committed recovery')
     assert stock_snapshot(owner)==stable
-    from pg16_loss_execution_auth_isolation import verify as verify_auth
+    from pg16_authentication_fence_gate import verify as verify_auth
     authentication=verify_auth(context['engines'],user_id=context['admin_id'])
     with owner.begin() as db:
         graph=db.scalar(sa.text('SELECT public.rsc_check_loss_history_graph_0159(:id)'),dict(id=root_id))
@@ -164,13 +164,13 @@ def run(engines,*,tracking,correction_kind='restore_available'):
     if tracking not in ('quantity','serial') or correction_kind not in ('restore_available','convert_used','convert_damaged'):
         raise ValueError('explicit correction tracking and disposition required')
     with engines['star_oam_migrator'].connect() as db:
-        assert tuple(db.scalars(sa.text('SELECT version_num FROM alembic_version')))==('20261212_0163',)
+        assert tuple(db.scalars(sa.text('SELECT version_num FROM alembic_version')))==('20261213_0164',)
     validate_production_database_security(engines['star_oam_api'],expected_runtime_role='star_oam_api',expected_migration_role='star_oam_migrator')
     from pg16_stock_loss_sources_gate import run as actual_sources
     result=actual_sources(engines,tracking=tracking,after_preview=lambda context:exercise(context,correction_kind=correction_kind))
     assert result['passed'] and result['submission']['passed']
     validate_production_database_security(engines['star_oam_api'],expected_runtime_role='star_oam_api',expected_migration_role='star_oam_migrator')
-    result.update(migrationHead='20261212_0163',formalMigrationBusinessComposition=True,
+    result.update(migrationHead='20261213_0164',formalMigrationBusinessComposition=True,
         correctionDisposition=correction_kind,permanentMigrationDbPrivileges=True,temporaryCorrectionDbGrants=False,
         businessPermissionsFixtureOnly=True,publicHttpAcceptance=False,productionAcceptance=False)
     return result
@@ -187,7 +187,7 @@ def release(engines,*,tracking,migrate,provision,correction_kind='restore_availa
     migrate('retained-correction-downgrade','downgrade','20261207_0158',
         '0161 immutable correction request history requires retention')
     with engines['star_oam_migrator'].connect() as db:
-        assert tuple(db.scalars(sa.text('SELECT version_num FROM alembic_version')))==('20261212_0163',)
+        assert tuple(db.scalars(sa.text('SELECT version_num FROM alembic_version')))==('20261213_0164',)
     validate_production_database_security(engines['star_oam_api'],expected_runtime_role='star_oam_api',expected_migration_role='star_oam_migrator')
     result.update(emptyCorrectionRoundtrip=True,retainedCorrectionBlocksDowngrade=True)
     return result

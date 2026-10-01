@@ -4,7 +4,7 @@
 
 ## 工作位置与约束
 
-- 工作树`/Users/lizhiwang/.codex/worktrees/06f6/oam`，分支`codex/notification-delivery-worker`，HEAD仍为`9dff36f7feca44626b82ceb6e40297b3732a22f0`。
+- 工作树`${RSC_REPO_ROOT}`，分支`codex/notification-delivery-worker`，HEAD仍为`9dff36f7feca44626b82ceb6e40297b3732a22f0`。
 - 根目录正式V1.0基线已完整阅读；接续工作仍须按该文件。禁止reset/revert/丢弃未提交改动；收齐既定证据后才提交。
 - Python用`cloud_oam/.venv/bin/python`，从cloud目录pytest显式`-o pythonpath=backend`。原生PG16.15在`artifacts/pg16-native-20260920/install/bin`，只使用本任务创建的私有Unix socket测试库。
 - 首页公开知识查询，星星按钮到`/xx`；小程序仅公开知识查询。飞书知识源低优先级；短信/微信真实渠道、JWT和生产验收独立。

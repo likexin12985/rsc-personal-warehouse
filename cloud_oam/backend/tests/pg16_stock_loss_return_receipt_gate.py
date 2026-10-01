@@ -239,5 +239,5 @@ def release(engines,*,tracking,migrate,provision):
     assert catalog(owner)==before
     security()
     result.update(runtimeSecurity=True,emptyMigrationRoundtripCatalogAndAclExact=True,retainedHistoryBlocksDowngrade=True,
-        privateProofExecutionDenied=True,migrationHead='20261212_0163',productionAcceptance=False)
+        privateProofExecutionDenied=True,migrationHead='20261213_0164',productionAcceptance=False)
     return result
