@@ -678,3 +678,8 @@ from .daily_reconciliation import mapping_models as _daily_mapping_models  # noq
 from .daily_reconciliation import cutoff_models as _daily_cutoff_models  # noqa: E402,F401
 from .daily_reconciliation import review_models as _daily_review_models  # noqa: E402,F401
 from .daily_reconciliation import recovery_models as _daily_recovery_models  # noqa: E402,F401
+
+# Declarative facts for the native loss inverse/correction flow. The global
+# request binding is database-owned and intentionally has no writable ORM model.
+from . import stock_loss_correction_models as _loss_correction_models  # noqa: E402,F401
+from . import stock_loss_return_stop_models as _loss_return_stop_models  # noqa: E402,F401

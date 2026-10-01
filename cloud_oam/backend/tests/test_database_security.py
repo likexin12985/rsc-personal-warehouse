@@ -571,7 +571,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         "stock_operation_shipments", "stock_operation_shipment_lines", "stock_operation_shipment_serials",
         "stock_operation_receipts", "stock_operation_receipt_lines", "stock_operation_receipt_serials", "stock_operation_receipt_exceptions",
         "stock_operation_orders", "stock_operation_lines", "stock_operation_serials", "stock_operation_cancellations",
-        "stock_loss_files", "stock_loss_request_seals", "stock_loss_review_request_seals", "stock_loss_regional_reviews", "stock_loss_headquarters_reviews", "stock_loss_headquarters_decisions", "stock_loss_dispositions",
+        "stock_loss_files", "stock_loss_request_seals", "stock_loss_review_request_seals", "stock_loss_disposition_request_seals", "stock_loss_regional_reviews", "stock_loss_headquarters_reviews", "stock_loss_headquarters_decisions", "stock_loss_dispositions",
         "outbound_postings", "outbound_posting_serials",
         "shipments", "shipment_lines", "shipment_serials",
         "logistics_events", "receipts", "receipt_lines", "receipt_serials", "receipt_exceptions", "oam_receipt_evidence", "inbound_orders", "inbound_postings",
@@ -585,6 +585,10 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
             "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements", "work_order_reversals", "work_order_reversal_items", "work_order_command_seals", "work_order_removed_serial_registrations",
             "stock_operation_return_inbounds", "stock_operation_return_inbound_lines", "stock_operation_return_inbound_serials", "stock_operation_return_inbound_postings",
     }
+    loss_correction_fact_tables = {
+        "stock_loss_disposition_reversals", "stock_loss_correction_decisions",
+        "stock_loss_correction_executions", "stock_loss_inverse_request_seals",
+    }
     assert RUNTIME_READ_TABLES - set(values["API_READ_TABLES"]) == (
         safe_posting_tables | daily_review_tables
         | {
@@ -597,7 +601,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         | material_request_read_tables
         | stocktake_close_read_tables
         | stocktake_start_tables
-        | allocation_tables
+        | allocation_tables | loss_correction_fact_tables | {"stock_loss_request_key_bindings"}
     )
     assert RUNTIME_INSERT_TABLES - set(values["API_INSERT_TABLES"]) == (
         safe_posting_tables | daily_review_tables
@@ -605,7 +609,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         | material_request_insert_tables
         | stocktake_close_insert_tables
         | stocktake_start_tables
-        | (allocation_tables - {"oam_receipt_evidence"})
+        | (allocation_tables - {"oam_receipt_evidence"}) | loss_correction_fact_tables
     )
     assert set(values["API_READ_TABLES"]) <= RUNTIME_READ_TABLES
     assert set(values["API_INSERT_TABLES"]) <= RUNTIME_INSERT_TABLES
@@ -1383,7 +1387,11 @@ def _transit_source_change(coordinate):
             'alembic/versions/20261204_0155_stock_loss_return_receipts.py'))
         receipt_old, receipt_new = receipt['_sources']()['public.rsc_require_opening_observation_account_0023()']
         assert return_new == receipt_old
-        return hashlib.sha256(old.encode()).hexdigest(), hashlib.sha256(receipt_new.encode()).hexdigest(), ((old,receipt_new,1),)
+        correction = runpy.run_path(str(Path(__file__).parents[1] /
+            'alembic/versions/20261208_0159_stock_loss_corrections.py'))
+        correction_old, correction_new = correction['_sources']()['public.rsc_require_opening_observation_account_0023()']
+        assert receipt_new == correction_old
+        return hashlib.sha256(old.encode()).hexdigest(), hashlib.sha256(correction_new.encode()).hexdigest(), ((old,correction_new,1),)
     migration = runpy.run_path(str(Path(__file__).parents[1] /
         "alembic/versions/20261012_0102_transit_opening_scopes.py"))
     return migration["SOURCE_CHANGES"].get(f"{coordinate[0]}({coordinate[1]})")
@@ -7319,7 +7327,47 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 461
+    assert len(triggers) == 577
+    # Compare the full new trigger tuple to the independently frozen migration,
+    # not just its count or the runtime registry's own values.
+    import json
+    frozen = json.loads((ROOT / 'backend/alembic/stock_loss_corrections_0159/frozen-catalog.json').read_text())
+    names = {row['name'] for row in frozen['triggers']}
+    assert len(names) == 92
+    assert {
+        (row['trigger_name'], row['table_name'], row['function_name'], row['enabled'],
+         row['trigger_type'], row['is_constraint_trigger'], row['is_deferrable'], row['is_initially_deferred'])
+        for row in triggers if row['trigger_name'] in names
+    } == {
+        (row['name'], row['table_name'], row['function_name'], row['tgenabled'],
+         row['tgtype'], 'CREATE CONSTRAINT TRIGGER' in row['definition'], row['tgdeferrable'], row['tginitdeferred'])
+        for row in frozen['triggers']
+    }
+    execution_seal_tables = {
+        'stock_loss_disposition_request_seals', 'stock_loss_dispositions',
+        'stock_operation_orders', 'inventory_transactions', 'shipments', 'receipts',
+        'audit_events', 'outbox_events', 'state_transition_events', 'notification_events',
+        'stock_operation_cancellations', 'stock_operation_outbounds',
+        'stock_operation_shipments', 'stock_operation_receipts',
+        'stock_operation_return_inbounds', 'stock_operation_command_seals',
+        'stock_operation_return_inbound_seals', 'stock_loss_request_seals',
+        'stock_loss_review_request_seals', 'stock_loss_regional_reviews',
+        'stock_loss_headquarters_reviews',
+    }
+    assert {
+        (row['trigger_name'], row['table_name'], row['function_name'], row['enabled'],
+         row['trigger_type'], row['is_constraint_trigger'], row['is_deferrable'], row['is_initially_deferred'])
+        for row in triggers if row['trigger_name'].endswith('_0158')
+    } == {
+        *((f'trg_{table}_execution_seal_0158', table, 'rsc_guard_loss_disposition_seal_0158',
+           'A', 5, True, True, True) for table in execution_seal_tables),
+        ('trg_loss_disposition_seal_lock_0158', 'stock_loss_disposition_request_seals',
+         'rsc_lock_loss_disposition_seal_0158', 'A', 7, False, False, False),
+        ('trg_loss_disposition_seal_immutable_0158', 'stock_loss_disposition_request_seals',
+         'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False),
+        ('trg_loss_disposition_seal_truncate_0158', 'stock_loss_disposition_request_seals',
+         'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False),
+    }
     assert {row['trigger_name'] for row in triggers if row['trigger_name'].endswith('_0156')} == {
         'trg_stock_loss_review_request_seals_review_seal_0156',
         'trg_stock_loss_regional_reviews_review_seal_0156',

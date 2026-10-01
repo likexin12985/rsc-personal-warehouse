@@ -235,9 +235,9 @@ def release(engines,*,tracking,migrate,provision):
     result=run_sources(engines,tracking)
     result['returnReceipt']=result.pop('submission')
     before=catalog(owner)
-    migrate('retained-receipt-downgrade','downgrade','20261203_0154','0155 loss receiving history requires retention')
+    migrate('retained-receipt-downgrade','downgrade','20261203_0154','0162 immutable condition-aware inbound history requires retention')
     assert catalog(owner)==before
     security()
     result.update(runtimeSecurity=True,emptyMigrationRoundtripCatalogAndAclExact=True,retainedHistoryBlocksDowngrade=True,
-        privateProofExecutionDenied=True,migrationHead='20261206_0157',productionAcceptance=False)
+        privateProofExecutionDenied=True,migrationHead='20261212_0163',productionAcceptance=False)
     return result

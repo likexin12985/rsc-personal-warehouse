@@ -20,7 +20,7 @@ class StockReturnInboundSubmitIn(ReturnInboundModel):
 
 
 class StockReturnInboundPreviewOut(ReturnInboundModel):
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["2.0"] = "2.0"
     planning_status: Literal["inbound_preview_only"] = "inbound_preview_only"
     receipt_id: UUID
     shipment_id: UUID

@@ -39,7 +39,10 @@ def verify_return_origin(db, *, actor, order):
     row = found[0]
     # This binds the whole immutable root/child/line/approval/ledger/event graph.
     # Current HQ grants intentionally play no role in a later physical return.
-    verified = dispositions.verified(db, row=row)
+    from .stock_loss_corrections.history_chain import verify_chain
+    from .stock_loss_corrections.return_posting_facts import payload
+    verify_chain(db, root_disposition_id=row.id)
+    verified = payload(row)
     if (row.disposition != 'return_to_region' or row.headquarters_decision_id != order.loss_headquarters_decision_id
             or verified['return_operation_id'] != str(order.id)):
         returns.invalid()
@@ -81,6 +84,10 @@ def authorize_return_fulfillment(db, *, actor, operation_id, action):
     current = authorize(db, actor, action)
     with db.no_autoflush:
         order = db.get(StockOperationOrder, operation_id, populate_existing=True)
+        if order is None or order.operation_type != 'return' or order.requester_id != current.person_id:
+            _not_found()
+        from .stock_loss_corrections.return_stop import require_open
+        require_open(db, operation_id=operation_id)
         origin = verify_return_origin(db, actor=current, order=order)
         at = datetime.now(timezone.utc)
         location = db.get(StockLocation, order.source_location_id, populate_existing=True)

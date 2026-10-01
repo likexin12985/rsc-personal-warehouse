@@ -124,13 +124,13 @@ def main(argv=None):
                 administrator.dispose()
             before = snapshot(api)
             migrate('retained-downgrade', 'downgrade', '20261127_0148',
-                error='0149 return inbound account admission history requires retention')
+                error='0162 immutable condition-aware inbound history requires retention')
             assert snapshot(api) == before and hashes() == new_hashes
             security()
             with owner.connect() as db:
-                assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261206_0157'
+                assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261212_0163'
             assert sources == manifest()
-            report = dict(migrationHead='20261206_0157', actualMigrationIntegration=True,
+            report = dict(migrationHead='20261212_0163', actualMigrationIntegration=True,
                 emptyRoundtrip=True, populatedDowngradeRetainsFactsAndCatalog=True,
                 hashesBefore=old_hashes, hashesAfter=new_hashes, checks=results,
                 runtimeSecurityBeforeAndAfter=True, sourceDrift=[], productionAcceptance=False, githubReleaseGate=False)

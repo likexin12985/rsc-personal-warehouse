@@ -8,6 +8,7 @@ one unified inventory transfer in the same database transaction.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 import uuid
 
 from sqlalchemy import select
@@ -25,7 +26,8 @@ from ..stock_operation_models import (
 )
 from . import inventory_posting as posting
 from .audit_chain import append_audit_event, lock_audit_chain_head
-from .stock_return_inbound_contract import ReturnInboundLine, build_return_inbound_command
+from .stock_return_inbound_contract import ReturnInboundLine
+from .stock_return_inbound_quality import build_quality_inbound_command
 from .stock_return_inbound_plan import plan_return_inbound, authorize_receipt, plan_document as _json_plan
 from .stock_return_commands import _fresh_request
 from .work_order_return_sources import _fail, _hash
@@ -122,14 +124,14 @@ def execute_return_inbound(
             material_id=uuid.UUID(line["material_id"]),
             condition_code=line["condition_code"],
             lot_id=uuid.UUID(line["lot_id"]) if line.get("lot_id") else None,
-            accepted_quantity=line["accepted_qty"],
+            accepted_quantity=Decimal(line["accepted_qty"]),
             serial_ids=tuple(uuid.UUID(value) for value in line.get("serial_ids", ())),
         )
         for line in plan["lines"]
     )
     from .stock_return_receipt_facts import verified_receipt_history
     verified_receipt = verified_receipt_history(db, fact=receipt)
-    command = build_return_inbound_command(
+    command = build_quality_inbound_command(
         receipt_id=receipt_id,
         inbound_id=inbound_id,
         effective_at=plan["checked_at"],

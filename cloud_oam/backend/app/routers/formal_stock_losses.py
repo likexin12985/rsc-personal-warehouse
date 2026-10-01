@@ -222,3 +222,24 @@ def seal_headquarters_review(payload: StockLossHeadquartersReviewSealIn, respons
 
 from .formal_loss_return_sending import router as sender_router
 router.include_router(sender_router)
+
+from .formal_loss_execution_recovery import router as execution_recovery_router
+router.include_router(execution_recovery_router)
+
+from .formal_loss_execution import router as execution_router
+router.include_router(execution_router)
+
+from .formal_loss_execution_sources import router as execution_sources_router
+router.include_router(execution_sources_router)
+
+from .formal_loss_corrections import router as correction_router
+router.include_router(correction_router)
+
+from .formal_loss_correction_sources import router as correction_sources_router
+router.include_router(correction_sources_router)
+
+from .formal_loss_return_history import router as return_history_router
+router.include_router(return_history_router)
+
+from .formal_loss_return_stops import router as return_stop_router
+router.include_router(return_stop_router)

@@ -309,7 +309,9 @@ def test_cli_database_preflight_refuses_other_targets_or_roles(cli, change):
 def test_cli_head_pin_tracks_alembic_graph(cli):
     from alembic.config import Config
     from alembic.script import ScriptDirectory
-    config = Config(); config.set_main_option('script_location', str(Path(__file__).parents[1]/'alembic'))
+    # Resolve the real head through the canonical configuration so the session
+    # can reuse its immutable graph instead of retaining a second full tree.
+    config = Config(str(Path(__file__).resolve().parents[2] / 'alembic.ini'))
     assert ScriptDirectory.from_config(config).get_heads() == [cli.REQUIRED_HEAD]
 
 

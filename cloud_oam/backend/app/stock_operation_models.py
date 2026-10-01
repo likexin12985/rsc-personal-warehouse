@@ -622,7 +622,7 @@ class StockOperationReturnInboundLine(CreatedAtMixin, Base):
     __tablename__ = "stock_operation_return_inbound_lines"
     __table_args__ = (
         UniqueConstraint("inbound_id", "line_no", name="uq_stock_operation_return_inbound_lines_order"),
-        UniqueConstraint("inbound_id", "receipt_line_id", name="uq_stock_operation_return_inbound_lines_origin"),
+        UniqueConstraint("inbound_id", "receipt_line_id", "condition_code", name="uq_stock_operation_return_inbound_lines_condition"),
         UniqueConstraint("id", "inbound_id", name="uq_stock_operation_return_inbound_lines_binding"),
         Index("ix_stock_operation_return_inbound_lines_receipt_line_id", "receipt_line_id"),
         CheckConstraint(
@@ -697,3 +697,38 @@ class StockOperationReturnInboundPosting(CreatedAtMixin, Base):
     inventory_transaction_id: Mapped[uuid.UUID] = mapped_column(
         UUID_TYPE, ForeignKey("inventory_transactions.id", ondelete="RESTRICT")
     )
+
+
+class StockLossDispositionRequestSeal(CreatedAtMixin, Base):
+    __tablename__ = 'stock_loss_disposition_request_seals'
+    __table_args__ = (
+        ForeignKeyConstraint(['operation_id','operation_type'],
+            ['stock_operation_orders.id','stock_operation_orders.operation_type'],name='fk_loss_disposition_seal_parent',ondelete='RESTRICT'),
+        UniqueConstraint('actor_user_id','request_id',name='uq_loss_disposition_seal_request'),
+        UniqueConstraint('actor_user_id','request_reference',name='uq_loss_disposition_seal_reference'),
+        UniqueConstraint('disposition_key_hash',name='uq_loss_disposition_seal_dkey'),
+        UniqueConstraint('return_key_hash',name='uq_loss_disposition_seal_rkey'),
+        CheckConstraint("operation_type='loss_report' AND flow IN ('disposition','return')",name='ck_loss_disposition_seal_kind'),
+        CheckConstraint('authorization_version>0 AND length(request_id) BETWEEN 8 AND 160',name='ck_loss_disposition_seal_context'),
+        CheckConstraint('length(request_hash)=64 AND length(plan_hash)=64 AND length(disposition_key_hash)=64 AND length(return_key_hash)=64',name='ck_loss_disposition_seal_hashes'),
+        CheckConstraint('disposition_key_hash<>return_key_hash',name='ck_loss_disposition_seal_distinct_keys'),
+        Index('ix_loss_disposition_seal_person_request','executor_person_id','request_id'),
+        Index('ix_loss_disposition_seal_person_hash','executor_person_id','request_hash'),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid4_value)
+    operation_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE)
+    operation_type: Mapped[str] = mapped_column(String(24))
+    line_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stock_operation_lines.id',ondelete='RESTRICT'))
+    headquarters_decision_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('stock_loss_headquarters_decisions.id',ondelete='RESTRICT'))
+    owner_org_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('organizations.id',ondelete='RESTRICT'))
+    flow: Mapped[str] = mapped_column(String(24))
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey('users.id',ondelete='RESTRICT'))
+    executor_person_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey('people.id',ondelete='RESTRICT'))
+    authorization_version: Mapped[int] = mapped_column(BigInteger)
+    request_id: Mapped[str] = mapped_column(String(160))
+    request_reference: Mapped[str] = mapped_column(String(100))
+    disposition_key_hash: Mapped[str] = mapped_column(String(64))
+    return_key_hash: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    plan_hash: Mapped[str] = mapped_column(String(64))
+    command_jsonb: Mapped[dict] = mapped_column(JSON_DOCUMENT)

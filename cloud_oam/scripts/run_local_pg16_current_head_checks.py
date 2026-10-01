@@ -20,7 +20,7 @@ from sqlalchemy.pool import NullPool
 
 
 CLOUD = Path(__file__).resolve().parents[1]
-HEAD = "20261206_0157"
+HEAD = '20261212_0163'
 
 
 def main(argv=None):
@@ -206,6 +206,9 @@ def main(argv=None):
                 # narrow identities must remain closed until provisioning.
                 closed = {"boundary_ok":False, "boundary_failures":"revision_and_binding"}
                 assert edge == closed and projector == closed
+                from pg16_loss_uuid_namespace_gate import run as check_uuid_namespace
+                uuid_namespace = check_uuid_namespace(admin, engines['star_oam_api'])
+                assert uuid_namespace['passed']
                 sms = run_sms_profile_gate(engines["star_oam_migrator"], engines["star_oam_api"], admin)
                 assert sms["status"] == "passed" and len(sms["cases"]) == 9
                 report_full_flow = None
@@ -262,7 +265,7 @@ def main(argv=None):
                           "edgeRole":"edge_inbox", "runtimeRole":"star_oam_api",
                           "scopeClosedUntilProvisioned":True,
                           "edgeBoundary":edge, "projectorBoundary":projector,
-                          "smsProfile":sms,
+                          "smsProfile":sms, "uuidNamespace":uuid_namespace,
                           "ciReleaseGate":False}
                 if report_full_flow is not None:
                     result["reportFullFlow"] = report_full_flow

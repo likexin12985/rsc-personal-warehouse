@@ -410,13 +410,41 @@ def _verify_audit_event_from_head(
     expected_head_id = head.last_event_id
     target: AuditEvent | None = None
     visited: set[uuid.UUID] = set()
+    # Stream coordinates only select candidates. Every event still has to
+    # match the linked hash, exact version and canonical payload below.
+    # A bounded batch avoids one SQL round trip per ancestor without caching
+    # any proof across calls, transactions or stream heads.
+    batch_size = 256
+    batch: dict[str, list[AuditEvent]] = {}
+    prefix = AuditEvent.__table__.alias("audit_prefix")
     for position in range(head.version):
-        rows = tuple(
-            db.scalars(
-                select(AuditEvent)
-                .where(AuditEvent.event_hash == expected_hash)
-            ).all()
-        )
+        if position % batch_size == 0:
+            upper = head.version - position
+            lower = max(1, upper - batch_size + 1)
+            hashes = select(prefix.c.event_hash).where(
+                prefix.c.stream_key == checked_stream_key,
+                prefix.c.stream_version.between(lower, upper),
+            )
+            # Resolve hashes globally, as the original walk did, so duplicate
+            # hashes in a corrupt database cannot be hidden by stream filters.
+            candidates = tuple(db.scalars(select(AuditEvent).where(
+                AuditEvent.event_hash.in_(hashes)).limit(batch_size + 1)))
+            if len(candidates) > batch_size:
+                raise AuditChainStateError("audit chain batch has ambiguous coordinates or hashes")
+            batch = {}
+            for candidate in candidates:
+                batch.setdefault(candidate.event_hash, []).append(candidate)
+        rows = batch.get(expected_hash)
+        if rows is None:
+            # A malformed link may point outside this coordinate window.
+            # Resolve it once for the same full validation and failure reason;
+            # valid chains never need this fallback query.
+            rows = tuple(
+                db.scalars(
+                    select(AuditEvent)
+                    .where(AuditEvent.event_hash == expected_hash)
+                ).all()
+            )
         if len(rows) != 1:
             raise AuditChainStateError(
                 "audit chain hash does not resolve to exactly one event"

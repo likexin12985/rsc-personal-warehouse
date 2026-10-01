@@ -41,6 +41,8 @@ def execute_loss_return(db, *, actor, request):
     posting._require_request_id(request.request_id)
     posting._lock_inventory_ledger_head_for_atomic_batch(db)
     current, order, origin, decision = approved.approved_line(db, actor=actor, request=request)
+    from .stock_loss_disposition_seals import require_unsealed
+    require_unsealed(db, actor=current, request=request, flow='return')
     if decision.disposition != 'return_to_region':
         sources._fail('stock_loss_return_decision_required', '必须使用原总部批准的退回决定', 412)
     posting_key = 'stock-loss-return:'+posting._require_idempotency_key(request.idempotency_key)

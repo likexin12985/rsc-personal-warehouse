@@ -441,7 +441,7 @@ def release(engines, *, tracking, migrate, provision):
     result=fixture.run_sources(engines,tracking=tracking,after_preview=exercise)
     assert result['passed'] and result['submission']['passed']
     owner=engines['star_oam_migrator'];before=snapshot(owner);before_catalog=catalog(owner)
-    migrate('retained-sender-seal-downgrade','downgrade','20261205_0156','0157 immutable loss sender seals require retention')
+    migrate('retained-sender-seal-downgrade','downgrade','20261205_0156','0159 immutable business history requires retention')
     assert snapshot(owner)==before and catalog(owner)==before_catalog
     security()
     result.update(emptyRoundtrip=True,retainedSenderSealsBlockDowngrade=True,

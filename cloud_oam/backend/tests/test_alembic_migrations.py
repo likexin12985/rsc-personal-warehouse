@@ -460,7 +460,7 @@ REVIEW_COMMAND_STATUS_REVISION = (
     / "versions"
     / "20260906_0063_review_command_status.py"
 )
-HEAD_REVISION = "20261206_0157"
+HEAD_REVISION = '20261212_0163'
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -734,7 +734,10 @@ EXPECTED_TABLES = (
         "inbound_postings",
         "work_order_material_operations", "work_order_material_lines", "work_order_material_serials", "work_order_replacement_pairs", "work_order_replacements", "work_order_reversals", "work_order_reversal_items", "work_order_command_seals", "work_order_removed_serial_registrations",
         "stock_operation_orders", "stock_operation_lines", "stock_operation_serials",
-        "stock_operation_cancellations", "stock_operation_command_seals", "stock_loss_files", "stock_loss_request_seals", "stock_loss_review_request_seals", "stock_loss_regional_reviews", "stock_loss_headquarters_reviews", "stock_loss_headquarters_decisions", "stock_loss_dispositions",
+        "stock_operation_cancellations", "stock_operation_command_seals", "stock_loss_files", "stock_loss_request_seals", "stock_loss_review_request_seals", "stock_loss_disposition_request_seals", "stock_loss_regional_reviews", "stock_loss_headquarters_reviews", "stock_loss_headquarters_decisions", "stock_loss_dispositions",
+        "stock_loss_disposition_reversals", "stock_loss_correction_decisions", "stock_loss_correction_executions",
+        "stock_loss_inverse_request_seals", "stock_loss_request_key_bindings", "stock_loss_return_stops",
+        "stock_loss_correction_approval_seals", "stock_loss_correction_execution_seals",
         "stock_operation_outbounds", "stock_operation_outbound_lines", "stock_operation_outbound_serials",
         "stock_operation_shipments", "stock_operation_shipment_lines", "stock_operation_shipment_serials",
         "stock_operation_receipts", "stock_operation_receipt_lines", "stock_operation_receipt_serials",
@@ -1689,8 +1692,20 @@ def test_revision_history_has_single_current_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == "20261205_0156"
-    review_seal_head = script.get_revision(head.down_revision)
+    assert head.down_revision == "20261211_0162"
+    quality_head = script.get_revision(head.down_revision)
+    assert quality_head is not None and quality_head.down_revision == "20261210_0161"
+    correction_seal_head = script.get_revision(quality_head.down_revision)
+    assert correction_seal_head is not None and correction_seal_head.down_revision == "20261209_0160"
+    generation_head = script.get_revision(correction_seal_head.down_revision)
+    assert generation_head is not None and generation_head.down_revision == "20261208_0159"
+    correction_head = script.get_revision(generation_head.down_revision)
+    assert correction_head is not None and correction_head.down_revision == "20261207_0158"
+    execution_seal_head = script.get_revision(correction_head.down_revision)
+    assert execution_seal_head is not None and execution_seal_head.down_revision == "20261206_0157"
+    sender_seal_head = script.get_revision(execution_seal_head.down_revision)
+    assert sender_seal_head is not None and sender_seal_head.down_revision == "20261205_0156"
+    review_seal_head = script.get_revision(sender_seal_head.down_revision)
     assert review_seal_head is not None and review_seal_head.down_revision == "20261204_0155"
     receipt_head = script.get_revision(review_seal_head.down_revision)
     assert receipt_head is not None and receipt_head.down_revision == "20261203_0154"
@@ -9436,7 +9451,8 @@ def test_0041_postgresql_offline_sql_covers_preflight_truncate_acl_and_pg_guards
     )
     command.upgrade(
         config,
-        f"{PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION}:{HEAD_REVISION}",
+        f"{PRE_SMS_DISPATCH_OWNERSHIP_HEAD_REVISION}:"
+        f"{SMS_DISPATCH_OWNERSHIP_REVISION_ID}",
         sql=True,
     )
     sql = output.getvalue()
@@ -12031,7 +12047,7 @@ def test_0009_preserves_legacy_material_and_balance_without_formal_backfill(
         downgraded_engine.dispose()
 
 
-def test_postgresql_offline_sql_preserves_type_boundary(monkeypatch) -> None:
+def test_postgresql_legacy_offline_sql_preserves_type_boundary(monkeypatch) -> None:
     from app.database_security import RUNTIME_FUNCTION_BODY_SHA256
 
     monkeypatch.delenv("OAM_DATABASE_URL", raising=False)
@@ -12041,7 +12057,10 @@ def test_postgresql_offline_sql_preserves_type_boundary(monkeypatch) -> None:
         output_buffer=output,
     )
 
-    command.upgrade(config, "head", sql=True)
+    # 0159 and later require online role/catalog/history evidence. The
+    # complete legacy SQL prefix is still checked here; current migrations
+    # are independently checked by offline refusal and native PG16 gates.
+    command.upgrade(config, "20261207_0158", sql=True)
 
     sql = output.getvalue()
     marker_0023 = (
@@ -12414,14 +12433,39 @@ def test_postgresql_offline_sql_preserves_type_boundary(monkeypatch) -> None:
     for (function_name, _argument_types), expected_hash in (
         RUNTIME_FUNCTION_BODY_SHA256.items()
     ):
-        function_start = sql.index(f"CREATE FUNCTION public.{function_name}(")
+        function_sql = sql
+        if (function_name, _argument_types) == (
+            "rsc_register_loss_request_binding_0159", "text, uuid, text"
+        ):
+            # This capability was introduced after the offline-capable prefix.
+            # Validate its frozen installation DDL instead of demanding that
+            # 0158 already contain it. Real installation/ACL is checked by PG16.
+            import runpy
+            frozen = runpy.run_path(str(
+                ROOT / "backend/alembic/stock_loss_corrections_0159/frozen_install.py"
+            ))
+            definitions = [row for row in frozen["DATA"]["newFunctions"]
+                           if row["proname"] == function_name]
+            assert len(definitions) == 1
+            definition = definitions[0]
+            argument_signature = ",".join(part.strip() for part in _argument_types.split(","))
+            assert definition["signature"] == f"{function_name}({argument_signature})"
+            assert hashlib.sha256(definition["prosrc"].encode()).hexdigest() == '3da9d66b735188992fe237d45a01f955933c07c821a7d4f1db9d1839bd7a98c9'
+            assert f"FUNCTION public.{function_name}(" not in sql
+            function_sql = definition["definition"]
+        declaration = re.search(
+            r"\bCREATE(?: OR REPLACE)? FUNCTION public\."
+            + re.escape(function_name) + r"\(", function_sql,
+        )
+        assert declaration is not None, function_name
+        function_start = declaration.start()
         # PostgreSQL permits both untagged and tagged dollar quotes. Match the
         # actual function's delimiter rather than the next unrelated AS $$.
-        body_delimiter = re.search(r"\bAS\s+(\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$)", sql[function_start:])
+        body_delimiter = re.search(r"\bAS\s+(\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$)", function_sql[function_start:])
         assert body_delimiter is not None, function_name
         body_start = function_start + body_delimiter.end()
-        body_end = sql.index(body_delimiter[1], body_start)
-        body = sql[body_start:body_end]
+        body_end = function_sql.index(body_delimiter[1], body_start)
+        body = function_sql[body_start:body_end]
         if function_name == "rsc_lock_opening_stocktake_start_reference_0027":
             # 0102 replaces this frozen 0027 body by exact CAS inside a DO
             # block. Verify both generations instead of comparing 0027 with
@@ -12444,10 +12488,14 @@ def test_postgresql_offline_sql_preserves_type_boundary(monkeypatch) -> None:
             body = body.replace(zero["LEGACY_FRAGMENT"], zero["FIXED_FRAGMENT"])
             assert zero["FIXED_HASH"] == expected_hash
             assert zero["LEGACY_HASH"] in sql and zero["FIXED_HASH"] in sql
-        assert (
-            hashlib.sha256(body.encode("utf-8")).hexdigest()
-            == expected_hash
-        )
+        if function_name == "rsc_register_loss_request_binding_0159":
+            from migration_source_expectations import current_source_hash
+            actual_hash = current_source_hash(
+                "20261208_0159", f"public.{function_name}({_argument_types})", body,
+            )
+        else:
+            actual_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        assert actual_hash == expected_hash
     assert sql_0027.count("SECURITY DEFINER") == 5
     assert sql_0027.count("SET search_path = pg_catalog, public") == 5
     assert sql_0027.count("VOLATILE") == 5

@@ -157,7 +157,7 @@ export default function FormalReturnReceiving({ identity, adapter, store: provid
       })}</ul><p>本次仅记录实物验收，提交后还需单独入库。</p></>}
       {prepared.plan && <><ul>{prepared.plan.lines.map(l => {
         const line = prepared.value.package.lines.find(s => s.shipment_line_id === l.shipment_line_id)!;
-        return <li key={l.receipt_line_id}>{line.sku_code} · {line.material_name} · {l.accepted_qty} · {conditionName[l.condition_code]}
+        return <li key={`${l.receipt_line_id}:${l.condition_code}`}>{line.sku_code} · {line.material_name} · {l.accepted_qty} · {conditionName[l.condition_code]}
           <SerialList label="本次入库 SN" ids={l.serial_ids} line={line} /></li>;
       })}</ul><p>只对本次验收已接受的物料入库，保留原成色；短少和拒收不会入账，破损异常仍需后续处理。</p></>}
       <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={e => setConfirmed(e.target.checked)} />已核对本次物料、数量、SN 和目标仓</label>

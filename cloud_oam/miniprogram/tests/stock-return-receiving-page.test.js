@@ -36,7 +36,7 @@ function harness(detail = true) {
       if (state.postHook) await state.postHook()
       const receipt = endpoint.split('/').at(-2)
       state.inboundResult = { schema_version: '1.0', inbound_id: f.id(51), inbound_no: 'RET-IN-TEST', receipt_id: receipt, shipment_id: f.id(2),
-        target_location_id: f.id(31), target_custody_assignment_id: f.id(32), status: 'posted', posting_transaction_id: f.id(52),
+        target_location_id: f.id(6), target_custody_assignment_id: f.id(7), status: 'posted', posting_transaction_id: f.id(52),
         request_id: body.request_id, request_hash: inboundContract.requestHash(receipt, body.expected_plan_hash, body.request_id), plan_hash: body.expected_plan_hash, replayed: false }
       state.inboundStates[receipt] = inboundState(receipt, true)
       return clone(state.inboundResult)
@@ -59,15 +59,15 @@ function harness(detail = true) {
 
 function inboundFixture() {
   return { schema_version: '1.0', planning_status: 'inbound_preview_only', receipt_id: f.id(21), shipment_id: f.id(2),
-    operator_person_id: f.id(1), authorization_version: 1, target_location_id: f.id(31), target_custody_assignment_id: f.id(32),
-    receipt_plan_hash: 'c'.repeat(64), plan_hash: 'd'.repeat(64), reason: '退回件入账', checked_at: '2026-09-14T01:02:03Z', ledger_cursor: 12,
+    operator_person_id: f.id(1), authorization_version: 1, target_location_id: f.id(6), target_custody_assignment_id: f.id(7),
+    receipt_plan_hash: 'b'.repeat(64), plan_hash: 'd'.repeat(64), reason: '退回件入账', checked_at: '2026-09-14T01:02:03Z', ledger_cursor: 12,
     lines: [{ receipt_line_id: f.id(211), shipment_line_id: f.id(8), source_account_id: f.id(41), target_account_id: f.id(42),
-      material_id: f.id(43), condition_code: 'used', lot_id: null, accepted_qty: '1.000', serial_ids: [] }] }
+      material_id: f.id(9), condition_code: 'used', lot_id: null, accepted_qty: '1.000', serial_ids: [f.id(10)] }] }
 }
 function inboundState(receiptId = f.id(21), posted = false) {
   return { schema_version: '1.0', receipt_id: receiptId, shipment_id: f.id(2), operator_person_id: f.id(1), authorization_version: 1,
     status: posted ? 'posted' : 'not_posted', ledger_cursor: posted ? 13 : 12, checked_at: '2026-09-14T01:02:05Z',
-    inbound: posted ? { inbound_id: f.id(51), inbound_no: 'RET-IN-TEST', target_location_id: f.id(31), posting_transaction_id: f.id(52), posted_at: '2026-09-14T01:02:04Z' } : null }
+    inbound: posted ? { inbound_id: f.id(51), inbound_no: 'RET-IN-TEST', target_location_id: f.id(6), posting_transaction_id: f.id(52), posted_at: '2026-09-14T01:02:04Z' } : null }
 }
 test('regional recipient reads exact partial history and selected abnormal receipt without any write', async () => {
   const { page, state } = harness(); await page.onShow()
@@ -137,7 +137,7 @@ test('a failed refresh clears prior confirmed quantities without presenting zero
 test('selected accepted receipt previews and posts independent return inbound', async () => {
   const { page, state } = harness(); state.inboundPreview = inboundFixture()
   state.inboundResult = { schema_version: '1.0', inbound_id: f.id(51), inbound_no: 'RET-IN-TEST', receipt_id: f.id(21), shipment_id: f.id(2),
-    target_location_id: f.id(31), target_custody_assignment_id: f.id(32), status: 'posted', posting_transaction_id: f.id(52),
+    target_location_id: f.id(6), target_custody_assignment_id: f.id(7), status: 'posted', posting_transaction_id: f.id(52),
     request_id: 'wxreq-' + 'a'.repeat(36), request_hash: 'e'.repeat(64), plan_hash: 'd'.repeat(64), replayed: false }
   state.history = f.history(true, [f.receipt(true)])
   await page.onShow(); await page.selectReceipt({ currentTarget: { dataset: { id: f.id(21) } } }); await page.beginInbound()
@@ -160,7 +160,7 @@ function sealedResult(marker) { return { schema_version: '1.0', lookup_status: '
   seal_id: f.id(71), receipt_id: marker.receipt_id, shipment_id: marker.shipment_id, request_id: marker.trace_request_id,
   request_hash: marker.request_hash, sealed_at: '2026-09-14T01:02:04Z' } } }
 function postedResult(marker) { return { schema_version: '1.0', inbound_id: f.id(51), inbound_no: 'RET-IN-TEST',
-  receipt_id: marker.receipt_id, shipment_id: marker.shipment_id, target_location_id: f.id(31), target_custody_assignment_id: f.id(32),
+  receipt_id: marker.receipt_id, shipment_id: marker.shipment_id, target_location_id: f.id(6), target_custody_assignment_id: f.id(7),
   status: 'posted', posting_transaction_id: f.id(52), request_id: marker.trace_request_id,
   request_hash: marker.request_hash, plan_hash: marker.plan_hash, replayed: false } }
 
@@ -324,4 +324,44 @@ test('loss parcel page posts new-condition inbound and recovers after hide using
   state.postHook = null; await page.onShow(); await choose(page); await page.recoverInbound()
   assert.equal(state.saved.size, 0); assert.equal(state.writes.length, 1)
   assert.equal(page.data.inboundStatus, 'posted')
+})
+
+
+for (const tracked of [false, true]) test(`quality preview binds actual receipt before an atomic post, tracked=${tracked}`, async () => {
+  const { page, state } = acceptedHarness()
+  const receipt = f.receipt(tracked, 'damaged')
+  if (!tracked) receipt.lines[0].damaged_qty = '0.125'
+  state.history = f.history(tracked, [receipt])
+  const row = state.inboundPreview.lines[0]
+  state.inboundPreview.schema_version = '2.0'
+  state.inboundPreview.lines = tracked ? [{ ...row, condition_code: 'damaged' }] : [
+    { ...row, accepted_qty: '0.250', serial_ids: [] },
+    { ...row, accepted_qty: '0.125', condition_code: 'damaged', serial_ids: [], target_account_id: f.id(44) }]
+  await page.onShow(); await choose(page); await page.beginInbound()
+  assert.equal(page.data.inboundConfirming, true)
+  assert.equal(page.data.inboundReview.rows.length, tracked ? 1 : 2)
+  assert.equal(page.data.inboundReview.rows.at(-1).condition, '坏件')
+  await confirm(page)
+  assert.equal(state.writes.length, 1)
+  assert.equal(state.saved.size, 0)
+  assert.equal(page.data.inboundStatus, 'posted')
+})
+
+test('receipt-bound preview rejects wrong quality, source digest, SN, quantity and missing acceptance without posting', async () => {
+  for (const damage of ['condition', 'digest', 'serial', 'quantity', 'receipt']) {
+    const { page, state } = acceptedHarness()
+    state.history = f.history(true, [f.receipt(true, 'damaged')])
+    state.inboundPreview.schema_version = '2.0'
+    state.inboundPreview.lines[0].condition_code = 'damaged'
+    await page.onShow(); await choose(page)
+    if (damage === 'condition') state.inboundPreview.lines[0].condition_code = 'used'
+    if (damage === 'digest') state.inboundPreview.receipt_plan_hash = 'e'.repeat(64)
+    if (damage === 'serial') state.inboundPreview.lines[0].serial_ids = [f.id(999)]
+    if (damage === 'quantity') state.inboundPreview.lines[0].accepted_qty = '0.500'
+    if (damage === 'receipt') state.history = f.history(true, [])
+    await page.beginInbound(); await confirm(page)
+    assert.equal(state.writes.length, 0, damage)
+    assert.equal(state.saved.size, 0, damage)
+    assert.equal(page.data.inboundConfirming, false, damage)
+  }
 })

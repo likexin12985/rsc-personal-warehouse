@@ -1,0 +1,38 @@
+.loss-execution-page { display: grid; gap: 20px; line-height: 1.6; min-width: 0; }
+.loss-execution-page .page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
+.loss-execution-page h1 { font-size: 27px; line-height: 1.3; margin-bottom: 8px; }
+.loss-execution-page h2 { font-size: 19px; overflow-wrap: anywhere; }
+.loss-execution-page .page-heading p, .loss-execution-page .panel > p { color: var(--muted); }
+.loss-execution-page .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 22px; display: grid; gap: 14px; min-width: 0; }
+.loss-execution-page button { border: 1px solid var(--line); border-radius: 6px; padding: 9px 14px; background: var(--surface); color: var(--ink); min-height: 42px; font-weight: 600; justify-self: start; }
+.loss-execution-page button:not(:disabled):hover { border-color: var(--teal); color: var(--teal); }
+.loss-execution-page button:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
+.loss-execution-page .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.loss-execution-page .toolbar span { flex: 1 1 240px; overflow-wrap: anywhere; }
+.loss-execution-page .table-scroll { overflow-x: auto; }
+.loss-execution-page table { width: 100%; min-width: 560px; }
+.loss-execution-page fieldset { min-width: 0; margin: 0; padding: 16px; border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 10px; background: var(--surface-soft); }
+.loss-execution-page legend { max-width: 100%; padding: 0 6px; font-weight: 650; overflow-wrap: anywhere; }
+.loss-execution-page fieldset p { overflow-wrap: anywhere; }
+.loss-execution-page label { display: grid; gap: 6px; }
+.loss-execution-page label:has(input[type="checkbox"]) { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.loss-execution-page input[type="checkbox"] { width: 18px; height: 18px; min-height: 18px; flex: 0 0 18px; margin: 4px 0 0; padding: 0; accent-color: var(--teal); }
+.loss-execution-page [aria-label="确认处置方案"] { border-color: var(--teal); }
+.loss-execution-page [aria-label="确认处置方案"] button:first-of-type { background: var(--teal); color: #fff; border-color: var(--teal); }
+.loss-execution-page .alert { border-left: 3px solid var(--teal); padding: 12px 16px; background: #edf6f6; border-radius: 4px; overflow-wrap: anywhere; }
+.loss-execution-page .alert-error { border-color: var(--red); background: #fcf0f0; color: #8d3030; }
+@media (max-width: 640px) {
+  .loss-execution-page { gap: 14px; }
+  .loss-execution-page .panel { padding: 14px; }
+  .loss-execution-page h1 { font-size: 24px; }
+  .loss-execution-page .page-heading { gap: 12px; }
+  .loss-execution-page .page-heading button { flex-shrink: 0; }
+  .loss-execution-page fieldset { padding: 12px; }
+  .loss-execution-page table { min-width: 0; }
+  .loss-execution-page thead { display: none; }
+  .loss-execution-page tbody, .loss-execution-page tr { display: block; }
+  .loss-execution-page tr + tr { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+  .loss-execution-page td { display: flex; align-items: center; gap: 12px; padding: 9px 0; border: 0; white-space: normal; }
+  .loss-execution-page td::before { content: attr(data-label); color: var(--muted); font-size: 12px; flex: 0 0 72px; }
+  .loss-execution-page td > span { min-width: 0; overflow-wrap: anywhere; }
+}

@@ -129,7 +129,7 @@ def shared_holds(context,first):
         # cover their sum. A MAX/per-document-only guard would accept this.
         amount=min(line.quantity for line in originals)
         post(db,(movement(frozen,context['account_id'],amount,held[:1] if tracked else ()),),'release')
-        with pytest.raises(DBAPIError,match='0150 unreleased loss quantities must remain frozen') as caught:db.commit()
+        with pytest.raises(DBAPIError,match='0159 original and restored loss quantities must remain frozen') as caught:db.commit()
         assert caught.value.orig.sqlstate=='23514';db.rollback()
     assert snapshot(owner)==before
     if tracked:
@@ -137,7 +137,7 @@ def shared_holds(context,first):
             # Keep pooled quantity constant while swapping one protected SN.
             post(db,(movement(frozen,context['account_id'],Decimal(1),held[:1]),
                 movement(context['account_id'],frozen,Decimal(1),(extras[1],))),'transfer')
-            with pytest.raises(DBAPIError,match='0150 exact unreleased loss serials must remain frozen') as caught:db.commit()
+            with pytest.raises(DBAPIError,match='0159 original and restored loss serial must remain frozen') as caught:db.commit()
             assert caught.value.orig.sqlstate=='23514';db.rollback()
         assert snapshot(owner)==before
     surplus=Decimal(1) if tracked else Decimal('0.125')

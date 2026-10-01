@@ -44,6 +44,29 @@ test('inbound recovery marker is distinct from acceptance and carries receipt id
   assert.throws(() => validateMarker({ ...marker, kind: 'stock_return' }))
 })
 
+test('version two shows distinct condition partitions without duplicating receipt quantity', () => {
+  const raw = preview(), expected = { receiptId: RECEIPT, shipmentId: SHIPMENT, personId: PERSON, authorizationVersion: 2 }
+  raw.schema_version = '2.0'
+  raw.lines[0].accepted_qty = '0.625'
+  raw.lines.push({ ...raw.lines[0], condition_code: 'damaged', target_account_id: TX, accepted_qty: '0.375' })
+  const receipt = { receipt_id: RECEIPT, shipment_id: SHIPMENT, plan_hash: raw.receipt_plan_hash,
+    target_location_id: LOC, target_custody_assignment_id: CUSTODY, recorded_at: raw.checked_at,
+    lines: [{ shipment_line_id: SHIPMENT, material_id: MATERIAL, lot_id: null, condition_code: 'used',
+      accepted_qty: '1.000', damaged_qty: '0.375', accepted_serials: [], damaged_serial_ids: [] }] }
+  assert.throws(() => contract.validatePreview(raw, expected))
+  expected.receipt = receipt
+  assert.equal(contract.validatePreview(raw, expected).lines.length, 2)
+  const changed = structuredClone(raw)
+  changed.lines[0].accepted_qty = '0.750'; changed.lines[1].accepted_qty = '0.250'
+  assert.throws(() => contract.validatePreview(changed, expected))
+  assert.throws(() => contract.validatePreview({ ...raw, receipt_plan_hash: 'e'.repeat(64) }, expected))
+  assert.throws(() => contract.validatePreview({ ...raw, lines: [raw.lines[0]] }, expected))
+
+  assert.throws(() => contract.validatePreview({ ...raw, schema_version: '1.0' }, expected))
+  assert.throws(() => contract.validatePreview({ ...raw, lines: [...raw.lines, raw.lines[1]] }, expected))
+  assert.throws(() => contract.validatePreview({ ...raw, lines: raw.lines.map(row => ({ ...row, target_account_id: TARGET })) }, expected))
+})
+
 test('posted and sealed lookup results require all original inbound coordinates', () => {
   const planHash = 'd'.repeat(64), marker = validateMarker({ v: 1, kind: contract.KIND, work_order_id: ORDER, shipment_id: SHIPMENT,
     receipt_id: RECEIPT, person_id: PERSON, authorization_version: 2, operation_type: contract.ACTION, trace_request_id: TRACE,

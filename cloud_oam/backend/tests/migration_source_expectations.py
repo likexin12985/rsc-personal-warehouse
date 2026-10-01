@@ -4,12 +4,16 @@ from functools import cache
 from pathlib import Path
 import runpy
 
+from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 
 @cache
 def _successor_paths(revision):
-    scripts=ScriptDirectory(str(Path(__file__).parents[1]/'alembic'))
+    # Use the same immutable graph as real migration commands in this test
+    # process; a second full graph retains another complete predecessor tree.
+    root = Path(__file__).resolve().parents[2]
+    scripts = ScriptDirectory.from_config(Config(str(root / 'alembic.ini')))
     return tuple((successor.revision, successor.path)
                  for successor in reversed(tuple(scripts.iterate_revisions('heads',revision))))
 

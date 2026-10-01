@@ -24,7 +24,9 @@ from ..stock_operation_models import (
 from . import inventory_posting as posting
 from . import inventory_query as inventory
 from . import stock_return_receipt_facts as receipt_facts, stock_return_receipt_plan as receipt_plan
-from .stock_return_inbound_contract import ReturnInboundLine, build_return_inbound_command
+from .stock_return_inbound_contract import ReturnInboundLine
+from .stock_return_inbound_quality import build_quality_inbound_command
+from .stock_return_inbound_partitions import receipt_parts
 from .work_order_return_sources import _fail, _hash
 
 
@@ -34,9 +36,9 @@ def _aware(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-def _target_account(db: Session, *, source: StockAccount, location: StockLocation, person_id: uuid.UUID) -> StockAccount:
+def _target_account(db: Session, *, source: StockAccount, location: StockLocation, person_id: uuid.UUID, condition_code: str) -> StockAccount:
     from .stock_return_inbound_accounts import resolve_target
-    return resolve_target(db, source=source, location=location, person_id=person_id)
+    return resolve_target(db, source=source, location=location, person_id=person_id, condition_code=condition_code)
 
 
 def authorize_receipt(db: Session, *, actor, receipt_id: uuid.UUID, action="receive_return"):
@@ -106,35 +108,27 @@ def _plan_return_inbound(db: Session, *, actor, receipt_id: uuid.UUID) -> dict:
         source = db.get(StockAccount, outbound_line.transit_stock_account_id, populate_existing=True) if outbound_line else None
         if receipt_line is None or shipment_line is None or outbound_line is None or source is None:
             receipt_facts.invalid()
-        target = _target_account(db, source=source, location=location, person_id=current.person_id)
-        serial_ids = tuple(db.scalars(select(StockOperationReceiptSerial.serial_id).where(
-            StockOperationReceiptSerial.line_id == receipt_line.id,
-            StockOperationReceiptSerial.result == "accepted",
-        ).order_by(StockOperationReceiptSerial.serial_id)))
-        movements.append(ReturnInboundLine(
-            receipt_line_id=receipt_line.id,
-            source_account_id=source.id,
-            target_account_id=target.id,
-            material_id=source.material_id,
-            condition_code=source.condition_code,
-            lot_id=source.lot_id,
-            accepted_quantity=accepted,
-            serial_ids=serial_ids,
-        ))
-        projected_lines.append({
-            "receipt_line_id": str(receipt_line.id),
-            "shipment_line_id": str(view.shipment_line_id),
-            "source_account_id": str(source.id),
-            "target_account_id": str(target.id),
-            "material_id": str(source.material_id),
-            "condition_code": source.condition_code,
-            "lot_id": str(source.lot_id) if source.lot_id else None,
-            "accepted_qty": format(accepted, ".3f"),
-            "serial_ids": [str(identifier) for identifier in serial_ids],
-        })
+        for part in receipt_parts(db, origin=receipt_line, source=source,
+                                  at=datetime.now(timezone.utc)):
+            target = _target_account(db, source=source, location=location,
+                person_id=current.person_id, condition_code=part.condition_code)
+            movements.append(ReturnInboundLine(
+                receipt_line_id=receipt_line.id, source_account_id=source.id,
+                target_account_id=target.id, material_id=source.material_id,
+                condition_code=part.condition_code, lot_id=source.lot_id,
+                accepted_quantity=part.quantity, serial_ids=part.serial_ids))
+            projected_lines.append({
+                "receipt_line_id": str(receipt_line.id),
+                "shipment_line_id": str(view.shipment_line_id),
+                "source_account_id": str(source.id), "target_account_id": str(target.id),
+                "material_id": str(source.material_id), "condition_code": part.condition_code,
+                "lot_id": str(source.lot_id) if source.lot_id else None,
+                "accepted_qty": format(part.quantity, ".3f"),
+                "serial_ids": [str(identifier) for identifier in part.serial_ids],
+            })
     if not movements:
         _fail("stock_return_inbound_no_accepted_lines", "该次退回验收没有可入账的接受数量", 409)
-    command = build_return_inbound_command(
+    command = build_quality_inbound_command(
         receipt_id=fact.id,
         effective_at=_aware(fact.created_at),
         lines=tuple(movements),
@@ -144,7 +138,7 @@ def _plan_return_inbound(db: Session, *, actor, receipt_id: uuid.UUID) -> dict:
     loss_origin = getattr(result, "origin", None)
     result = {
         **({"origin": loss_origin.model_dump(mode="json")} if loss_origin is not None else {}),
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "planning_status": "inbound_preview_only",
         "receipt_id": fact.id,
         "shipment_id": fact.shipment_id,

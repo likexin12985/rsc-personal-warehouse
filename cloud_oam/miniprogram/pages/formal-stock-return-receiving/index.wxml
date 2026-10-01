@@ -108,7 +108,7 @@
     <view wx:if="{{inboundConfirming && inboundReview}}" class="card confirm-card">
       <view class="heading">{{inboundReview.title}}</view><view>{{inboundReview.description}}</view>
       <view>验收事实：{{inboundReview.receiptId}}</view><view>目标账户位置：{{inboundReview.target}}</view>
-      <view wx:for="{{inboundReview.rows}}" wx:key="id" wx:for-item="row" class="row">验收明细 {{row.id}} · 入账 {{row.quantity}} · SN {{row.serialCount}} 件</view>
+      <view wx:for="{{inboundReview.rows}}" wx:key="id" wx:for-item="row" class="row">{{row.condition}} · 入账 {{row.quantity}} · SN {{row.serialCount}} 件</view>
       <button class="button button-primary" data-confirm="true" bindtap="confirmInbound">确认入账</button>
       <button class="button button-secondary" data-confirm="false" bindtap="confirmInbound">取消</button>
     </view>

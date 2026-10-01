@@ -80,7 +80,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = "20261206_0157"
+HEAD_REVISION = '20261212_0163'
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -662,6 +662,9 @@ def _bootstrap_roles() -> None:
             cursor.execute(
                 "ALTER DEFAULT PRIVILEGES FOR ROLE star_oam_migrator "
                 "IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC"
+            )
+            cursor.execute(
+                (CLOUD_ROOT / "deployment/postgres-init/20-loss-uuid.sql").read_text()
             )
 
 
@@ -7159,9 +7162,14 @@ def _head_function_body_hash(signature: str) -> str:
     return {**RUNTIME_FUNCTION_BODY_SHA256, **FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256}[coordinate]
 
 
+@cache
 def _head_account_admission_hash() -> str:
     import runpy
-    return hashlib.sha256(runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name("20261204_0155_stock_loss_return_receipts.py")))["_sources"]()["public.rsc_require_opening_observation_account_0023()"][1].encode()).hexdigest()
+    from migration_source_expectations import current_source_hash
+    migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
+        "20261204_0155_stock_loss_return_receipts.py")))
+    signature = "public.rsc_require_opening_observation_account_0023()"
+    return current_source_hash(migration["revision"], signature, migration["_sources"]()[signature][1])
 
 
 @cache
@@ -7173,10 +7181,11 @@ def _head_runtime_ready_hash() -> str:
     from migration_script_cache import cache_migration_compilation
     with cache_migration_compilation(STOCK_RESERVATIONS_MIGRATION_0069.parent):
         migration = runpy.run_path(str(STOCK_RESERVATIONS_MIGRATION_0069.with_name(
-            "20261206_0157_loss_return_sender_seals.py"
+            "20261210_0161_loss_correction_request_seals.py"
         )))
-    assert migration["revision"] == RUNTIME_READY_HEAD_REVISION
-    return migration["NEW_READY_HASH"]
+    from migration_source_expectations import current_source_hash
+    signature = "public.rsc_oam_runtime_binding_ready_0044()"
+    return current_source_hash(migration["revision"], signature, migration["_sources"]()[signature][1])
 
 
 def _assert_0058_review_terminal_catalog_state(
@@ -20468,6 +20477,9 @@ def _run_control_business_checks(api_engine, projector_engine, edge_engine):
     )
     try:
         from pg16_daily_review_runtime import run_with_capture_roles
+        from pg16_loss_uuid_namespace_gate import run as check_uuid_namespace
+        uuid_namespace = run_gate_phase('check_uuid_namespace', lambda: check_uuid_namespace(daily_admin_engine, api_engine))
+        assert uuid_namespace['passed'] and not any(uuid_namespace['admission'].values())
 
         def daily_downgrade(destination):
             result = run_gate_phase('_run_alembic', lambda: _run_alembic("downgrade", destination, expect_success=False))

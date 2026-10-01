@@ -4743,6 +4743,55 @@ EXPECTED_FORMAL_FILE_INDEXES['uq_loss_review_seal_key'] = {'table': 'stock_loss_
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256_THROUGH_0156 = dict(MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256)
 MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[('rsc_guard_stock_operation_seal_0101', '')] = 'fb21e5e08b5cf8301e70a768212de069aa9ae45748022b6c7c8bccb5743ebef8'
 
+# 0158 exact HQ execution seals; append-only table and private proofs.
+RUNTIME_READ_TABLES |= {'stock_loss_disposition_request_seals'}
+RUNTIME_INSERT_TABLES |= {'stock_loss_disposition_request_seals'}
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_lock_loss_disposition_seal_0158', '')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_lock_loss_disposition_seal_0158', '')] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_lock_loss_disposition_seal_0158', '')] = '75638e1001313c5ff5ac1dc5a9a2b20468d3deaf6dc935476210013fa8e26e28'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_check_loss_disposition_seal_0158', 'uuid')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_check_loss_disposition_seal_0158', 'uuid')] = ('f', 'void', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_check_loss_disposition_seal_0158', 'uuid')] = '0c43b185fd324fad498482ca0454369eb3ca8fa174718307d972de51665fc492'
+FORMAL_FILE_INTERNAL_FUNCTIONS[('rsc_guard_loss_disposition_seal_0158', '')] = ('v', True, 'plpgsql', ('search_path=pg_catalog, public',))
+FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[('rsc_guard_loss_disposition_seal_0158', '')] = ('f', 'trigger', False)
+FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_guard_loss_disposition_seal_0158', '')] = '3b011cc5ca232ca7a536002d646190cdfbef91afe60fcdc17acf3234ca2832e8'
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_loss_disposition_request_seals_execution_seal_0158'] = ('stock_loss_disposition_request_seals', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_loss_dispositions_execution_seal_0158'] = ('stock_loss_dispositions', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_operation_orders_execution_seal_0158'] = ('stock_operation_orders', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_inventory_transactions_execution_seal_0158'] = ('inventory_transactions', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_shipments_execution_seal_0158'] = ('shipments', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_receipts_execution_seal_0158'] = ('receipts', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_audit_events_execution_seal_0158'] = ('audit_events', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_AUDIT_TRIGGERS['trg_audit_events_execution_seal_0158'] = ('audit_events', 'rsc_guard_loss_disposition_seal_0158', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_outbox_events_execution_seal_0158'] = ('outbox_events', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_state_transition_events_execution_seal_0158'] = ('state_transition_events', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_notification_events_execution_seal_0158'] = ('notification_events', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_operation_cancellations_execution_seal_0158'] = ('stock_operation_cancellations', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_operation_outbounds_execution_seal_0158'] = ('stock_operation_outbounds', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_operation_shipments_execution_seal_0158'] = ('stock_operation_shipments', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_operation_receipts_execution_seal_0158'] = ('stock_operation_receipts', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_operation_return_inbounds_execution_seal_0158'] = ('stock_operation_return_inbounds', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_operation_command_seals_execution_seal_0158'] = ('stock_operation_command_seals', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_operation_return_inbound_seals_execution_seal_0158'] = ('stock_operation_return_inbound_seals', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_loss_request_seals_execution_seal_0158'] = ('stock_loss_request_seals', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_loss_review_request_seals_execution_seal_0158'] = ('stock_loss_review_request_seals', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_loss_regional_reviews_execution_seal_0158'] = ('stock_loss_regional_reviews', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_stock_loss_headquarters_reviews_execution_seal_0158'] = ('stock_loss_headquarters_reviews', 'rsc_guard_loss_disposition_seal_0158', 'A', 5, True, True, True)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_disposition_seal_lock_0158'] = ('stock_loss_disposition_request_seals', 'rsc_lock_loss_disposition_seal_0158', 'A', 7, False, False, False)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_disposition_seal_immutable_0158'] = ('stock_loss_disposition_request_seals', 'rsc_guard_work_order_facts_0090', 'A', 27, False, False, False)
+EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS['trg_loss_disposition_seal_truncate_0158'] = ('stock_loss_disposition_request_seals', 'rsc_guard_work_order_facts_0090', 'A', 34, False, False, False)
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_seal_request'] = {'table': 'stock_loss_disposition_request_seals', 'columns': ('actor_user_id', 'request_id'), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_seal_reference'] = {'table': 'stock_loss_disposition_request_seals', 'columns': ('actor_user_id', 'request_reference'), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_seal_dkey'] = {'table': 'stock_loss_disposition_request_seals', 'columns': ('disposition_key_hash',), 'predicate': None}
+EXPECTED_FORMAL_FILE_INDEXES['uq_loss_disposition_seal_rkey'] = {'table': 'stock_loss_disposition_request_seals', 'columns': ('return_key_hash',), 'predicate': None}
+
+from . import stock_loss_correction_security as _loss_correction_catalog
+_loss_correction_catalog.register(globals())
+from . import return_inbound_quality_security as _return_inbound_quality_catalog
+_return_inbound_quality_catalog.register(globals())
+from . import stock_loss_return_stop_security as _loss_return_stop_catalog
+_loss_return_stop_catalog.register(globals())
+
 _ROLE_EVIDENCE_SQL = text(
     """
 SELECT
@@ -6951,6 +7000,9 @@ def validate_production_database_security(
             validate_query_catalog(connection)
             _review_catalog.validate_review_catalog(connection)
             _daily_recovery_catalog.validate_recovery_catalog(connection)
+            _loss_correction_catalog.verify(connection)
+            _return_inbound_quality_catalog.verify(connection)
+            _loss_return_stop_catalog.verify(connection)
             evidence = connection.execute(
                 _ROLE_EVIDENCE_SQL,
                 {"migration_role": expected_migration_role},

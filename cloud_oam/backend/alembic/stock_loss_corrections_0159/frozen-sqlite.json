@@ -1,0 +1,232 @@
+{
+  "sourcePgCatalogSha256": "999aee59b520fc9e60f5751a555ec018fad152162aa55ccee6dc738e432cbf82",
+  "tables": [
+    {
+      "name": "stock_loss_disposition_reversals",
+      "create_sql": "CREATE TABLE stock_loss_disposition_reversals (\n\treversed_correction_id CHAR(32), \n\toriginal_transaction_id CHAR(32) NOT NULL, \n\toriginal_movement_id CHAR(32) NOT NULL, \n\tposting_transaction_id CHAR(32) NOT NULL, \n\tposting_movement_id CHAR(32) NOT NULL, \n\tsource_account_id CHAR(32), \n\ttarget_account_id CHAR(32) NOT NULL, \n\tcustody_assignment_id CHAR(32) NOT NULL, \n\tquantity NUMERIC(18, 3) NOT NULL, \n\tplan_hash VARCHAR(64) NOT NULL, \n\tplan_jsonb JSON NOT NULL, \n\tid CHAR(32) NOT NULL, \n\troot_disposition_id CHAR(32) NOT NULL, \n\tactor_user_id VARCHAR(36) NOT NULL, \n\tactor_person_id CHAR(32) NOT NULL, \n\tauthorization_version BIGINT NOT NULL, \n\trequest_id VARCHAR(160) NOT NULL, \n\tidempotency_key_hash VARCHAR(64) NOT NULL, \n\trequest_hash VARCHAR(64) NOT NULL, \n\treason TEXT NOT NULL, \n\tcommand_jsonb JSON NOT NULL, \n\tcreated_at DATETIME NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT uq_loss_inverse_request UNIQUE (actor_user_id, request_id), \n\tCONSTRAINT uq_loss_inverse_key UNIQUE (idempotency_key_hash), \n\tCONSTRAINT uq_loss_inverse_root UNIQUE (id, root_disposition_id), \n\tCONSTRAINT ck_loss_inverse_context CHECK (authorization_version > 0 AND length(reason) BETWEEN 1 AND 500), \n\tCONSTRAINT ck_loss_inverse_request CHECK (length(request_id) BETWEEN 8 AND 160 AND length(idempotency_key_hash)=64 AND length(request_hash)=64), \n\tCONSTRAINT fk_loss_inverse_correction_root FOREIGN KEY(reversed_correction_id, root_disposition_id) REFERENCES stock_loss_correction_executions (id, root_disposition_id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED, \n\tCONSTRAINT uq_loss_inverse_correction UNIQUE (reversed_correction_id), \n\tCONSTRAINT uq_loss_inverse_original_tx UNIQUE (original_transaction_id), \n\tCONSTRAINT uq_loss_inverse_original_move UNIQUE (original_movement_id), \n\tCONSTRAINT uq_loss_inverse_posted_tx UNIQUE (posting_transaction_id), \n\tCONSTRAINT uq_loss_inverse_posted_move UNIQUE (posting_movement_id), \n\tCONSTRAINT ck_loss_inverse_posting CHECK (quantity > 0 AND original_transaction_id <> posting_transaction_id AND original_movement_id <> posting_movement_id), \n\tCONSTRAINT ck_loss_inverse_accounts CHECK (source_account_id IS NULL OR source_account_id <> target_account_id), \n\tCONSTRAINT ck_loss_inverse_plan CHECK (length(plan_hash)=64), \n\tFOREIGN KEY(original_transaction_id) REFERENCES inventory_transactions (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(original_movement_id) REFERENCES inventory_movements (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(posting_transaction_id) REFERENCES inventory_transactions (id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED, \n\tFOREIGN KEY(posting_movement_id) REFERENCES inventory_movements (id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED, \n\tFOREIGN KEY(source_account_id) REFERENCES stock_accounts (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(target_account_id) REFERENCES stock_accounts (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(custody_assignment_id) REFERENCES custody_assignments (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(root_disposition_id) REFERENCES stock_loss_dispositions (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_user_id) REFERENCES users (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_person_id) REFERENCES people (id) ON DELETE RESTRICT\n)",
+      "columnNames": [
+        "reversed_correction_id",
+        "original_transaction_id",
+        "original_movement_id",
+        "posting_transaction_id",
+        "posting_movement_id",
+        "source_account_id",
+        "target_account_id",
+        "custody_assignment_id",
+        "quantity",
+        "plan_hash",
+        "plan_jsonb",
+        "id",
+        "root_disposition_id",
+        "actor_user_id",
+        "actor_person_id",
+        "authorization_version",
+        "request_id",
+        "idempotency_key_hash",
+        "request_hash",
+        "reason",
+        "command_jsonb",
+        "created_at"
+      ]
+    },
+    {
+      "name": "stock_loss_correction_decisions",
+      "create_sql": "CREATE TABLE stock_loss_correction_decisions (\n\treversal_id CHAR(32) NOT NULL, \n\texpected_reversal_hash VARCHAR(64) NOT NULL, \n\tdisposition VARCHAR(24) NOT NULL, \n\tid CHAR(32) NOT NULL, \n\troot_disposition_id CHAR(32) NOT NULL, \n\tactor_user_id VARCHAR(36) NOT NULL, \n\tactor_person_id CHAR(32) NOT NULL, \n\tauthorization_version BIGINT NOT NULL, \n\trequest_id VARCHAR(160) NOT NULL, \n\tidempotency_key_hash VARCHAR(64) NOT NULL, \n\trequest_hash VARCHAR(64) NOT NULL, \n\treason TEXT NOT NULL, \n\tcommand_jsonb JSON NOT NULL, \n\tcreated_at DATETIME NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT uq_loss_correction_decision_request UNIQUE (actor_user_id, request_id), \n\tCONSTRAINT uq_loss_correction_decision_key UNIQUE (idempotency_key_hash), \n\tCONSTRAINT uq_loss_correction_decision_root UNIQUE (id, root_disposition_id), \n\tCONSTRAINT ck_loss_correction_decision_context CHECK (authorization_version > 0 AND length(reason) BETWEEN 1 AND 500), \n\tCONSTRAINT ck_loss_correction_decision_request CHECK (length(request_id) BETWEEN 8 AND 160 AND length(idempotency_key_hash)=64 AND length(request_hash)=64), \n\tCONSTRAINT fk_loss_correction_decision_inverse_root FOREIGN KEY(reversal_id, root_disposition_id) REFERENCES stock_loss_disposition_reversals (id, root_disposition_id) ON DELETE RESTRICT, \n\tCONSTRAINT uq_loss_correction_decision_binding UNIQUE (id, root_disposition_id, reversal_id, disposition), \n\tCONSTRAINT ck_loss_correction_decision_kind CHECK (disposition IN ('restore_available','convert_used','convert_damaged','return_to_region','scrap')), \n\tCONSTRAINT ck_loss_correction_decision_hash CHECK (length(expected_reversal_hash)=64), \n\tFOREIGN KEY(root_disposition_id) REFERENCES stock_loss_dispositions (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_user_id) REFERENCES users (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_person_id) REFERENCES people (id) ON DELETE RESTRICT\n)",
+      "columnNames": [
+        "reversal_id",
+        "expected_reversal_hash",
+        "disposition",
+        "id",
+        "root_disposition_id",
+        "actor_user_id",
+        "actor_person_id",
+        "authorization_version",
+        "request_id",
+        "idempotency_key_hash",
+        "request_hash",
+        "reason",
+        "command_jsonb",
+        "created_at"
+      ]
+    },
+    {
+      "name": "stock_loss_correction_executions",
+      "create_sql": "CREATE TABLE stock_loss_correction_executions (\n\tcorrection_decision_id CHAR(32) NOT NULL, \n\treversal_id CHAR(32) NOT NULL, \n\tdisposition VARCHAR(24) NOT NULL, \n\treturn_operation_id CHAR(32), \n\tsource_account_id CHAR(32) NOT NULL, \n\ttarget_account_id CHAR(32), \n\tcustody_assignment_id CHAR(32) NOT NULL, \n\tquantity NUMERIC(18, 3) NOT NULL, \n\tposting_transaction_id CHAR(32) NOT NULL, \n\tposting_movement_id CHAR(32) NOT NULL, \n\tplan_hash VARCHAR(64) NOT NULL, \n\tplan_jsonb JSON NOT NULL, \n\tid CHAR(32) NOT NULL, \n\troot_disposition_id CHAR(32) NOT NULL, \n\tactor_user_id VARCHAR(36) NOT NULL, \n\tactor_person_id CHAR(32) NOT NULL, \n\tauthorization_version BIGINT NOT NULL, \n\trequest_id VARCHAR(160) NOT NULL, \n\tidempotency_key_hash VARCHAR(64) NOT NULL, \n\trequest_hash VARCHAR(64) NOT NULL, \n\treason TEXT NOT NULL, \n\tcommand_jsonb JSON NOT NULL, \n\tcreated_at DATETIME NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT uq_loss_correction_execution_request UNIQUE (actor_user_id, request_id), \n\tCONSTRAINT uq_loss_correction_execution_key UNIQUE (idempotency_key_hash), \n\tCONSTRAINT uq_loss_correction_execution_root UNIQUE (id, root_disposition_id), \n\tCONSTRAINT ck_loss_correction_execution_context CHECK (authorization_version > 0 AND length(reason) BETWEEN 1 AND 500), \n\tCONSTRAINT ck_loss_correction_execution_request CHECK (length(request_id) BETWEEN 8 AND 160 AND length(idempotency_key_hash)=64 AND length(request_hash)=64), \n\tCONSTRAINT fk_loss_correction_execution_decision FOREIGN KEY(correction_decision_id, root_disposition_id, reversal_id, disposition) REFERENCES stock_loss_correction_decisions (id, root_disposition_id, reversal_id, disposition) ON DELETE RESTRICT, \n\tCONSTRAINT uq_loss_correction_execution_inverse UNIQUE (reversal_id), \n\tCONSTRAINT uq_loss_correction_execution_decision UNIQUE (correction_decision_id), \n\tCONSTRAINT uq_loss_correction_execution_tx UNIQUE (posting_transaction_id), \n\tCONSTRAINT uq_loss_correction_execution_move UNIQUE (posting_movement_id), \n\tCONSTRAINT uq_loss_correction_execution_return UNIQUE (return_operation_id), \n\tCONSTRAINT ck_loss_correction_execution_kind CHECK (disposition IN ('restore_available','convert_used','convert_damaged','return_to_region','scrap')), \n\tCONSTRAINT ck_loss_correction_execution_accounts CHECK ((disposition='scrap' AND target_account_id IS NULL) OR (disposition<>'scrap' AND target_account_id IS NOT NULL AND source_account_id<>target_account_id)), \n\tCONSTRAINT ck_loss_correction_execution_return CHECK ((disposition='return_to_region' AND return_operation_id IS NOT NULL) OR (disposition<>'return_to_region' AND return_operation_id IS NULL)), \n\tCONSTRAINT ck_loss_correction_execution_plan CHECK (quantity > 0 AND length(plan_hash)=64), \n\tFOREIGN KEY(return_operation_id) REFERENCES stock_operation_orders (id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED, \n\tFOREIGN KEY(source_account_id) REFERENCES stock_accounts (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(target_account_id) REFERENCES stock_accounts (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(custody_assignment_id) REFERENCES custody_assignments (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(posting_transaction_id) REFERENCES inventory_transactions (id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED, \n\tFOREIGN KEY(posting_movement_id) REFERENCES inventory_movements (id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED, \n\tFOREIGN KEY(root_disposition_id) REFERENCES stock_loss_dispositions (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_user_id) REFERENCES users (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_person_id) REFERENCES people (id) ON DELETE RESTRICT\n)",
+      "columnNames": [
+        "correction_decision_id",
+        "reversal_id",
+        "disposition",
+        "return_operation_id",
+        "source_account_id",
+        "target_account_id",
+        "custody_assignment_id",
+        "quantity",
+        "posting_transaction_id",
+        "posting_movement_id",
+        "plan_hash",
+        "plan_jsonb",
+        "id",
+        "root_disposition_id",
+        "actor_user_id",
+        "actor_person_id",
+        "authorization_version",
+        "request_id",
+        "idempotency_key_hash",
+        "request_hash",
+        "reason",
+        "command_jsonb",
+        "created_at"
+      ]
+    },
+    {
+      "name": "stock_loss_inverse_request_seals",
+      "create_sql": "CREATE TABLE stock_loss_inverse_request_seals (\n\treversal_key_hash VARCHAR(64) NOT NULL, \n\tapproval_key_hash VARCHAR(64) NOT NULL, \n\tcorrection_key_hash VARCHAR(64) NOT NULL, \n\trequest_reference VARCHAR(100) NOT NULL, \n\tplan_hash VARCHAR(64) NOT NULL, \n\tid CHAR(32) NOT NULL, \n\troot_disposition_id CHAR(32) NOT NULL, \n\tactor_user_id VARCHAR(36) NOT NULL, \n\tactor_person_id CHAR(32) NOT NULL, \n\tauthorization_version BIGINT NOT NULL, \n\trequest_id VARCHAR(160) NOT NULL, \n\tidempotency_key_hash VARCHAR(64) NOT NULL, \n\trequest_hash VARCHAR(64) NOT NULL, \n\treason TEXT NOT NULL, \n\tcommand_jsonb JSON NOT NULL, \n\tcreated_at DATETIME NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT uq_loss_inverse_seal_request UNIQUE (actor_user_id, request_id), \n\tCONSTRAINT uq_loss_inverse_seal_key UNIQUE (idempotency_key_hash), \n\tCONSTRAINT uq_loss_inverse_seal_root UNIQUE (id, root_disposition_id), \n\tCONSTRAINT ck_loss_inverse_seal_context CHECK (authorization_version > 0 AND length(reason) BETWEEN 1 AND 500), \n\tCONSTRAINT ck_loss_inverse_seal_request CHECK (length(request_id) BETWEEN 8 AND 160 AND length(idempotency_key_hash)=64 AND length(request_hash)=64), \n\tCONSTRAINT uq_loss_inverse_seal_reversal_key UNIQUE (reversal_key_hash), \n\tCONSTRAINT uq_loss_inverse_seal_approval_key UNIQUE (approval_key_hash), \n\tCONSTRAINT uq_loss_inverse_seal_correction_key UNIQUE (correction_key_hash), \n\tCONSTRAINT ck_loss_inverse_seal_proof CHECK (length(reversal_key_hash)=64 AND length(approval_key_hash)=64 AND length(correction_key_hash)=64 AND length(plan_hash)=64 AND length(request_reference)=82), \n\tCONSTRAINT ck_loss_inverse_seal_action CHECK (idempotency_key_hash=reversal_key_hash), \n\tCONSTRAINT ck_loss_inverse_seal_distinct_keys CHECK (reversal_key_hash<>approval_key_hash AND reversal_key_hash<>correction_key_hash AND approval_key_hash<>correction_key_hash), \n\tFOREIGN KEY(root_disposition_id) REFERENCES stock_loss_dispositions (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_user_id) REFERENCES users (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_person_id) REFERENCES people (id) ON DELETE RESTRICT\n)",
+      "columnNames": [
+        "reversal_key_hash",
+        "approval_key_hash",
+        "correction_key_hash",
+        "request_reference",
+        "plan_hash",
+        "id",
+        "root_disposition_id",
+        "actor_user_id",
+        "actor_person_id",
+        "authorization_version",
+        "request_id",
+        "idempotency_key_hash",
+        "request_hash",
+        "reason",
+        "command_jsonb",
+        "created_at"
+      ]
+    },
+    {
+      "name": "stock_loss_request_key_bindings",
+      "create_sql": "CREATE TABLE stock_loss_request_key_bindings (\n\tfact_id CHAR(32) NOT NULL, \n\tbinding_kind VARCHAR(24) NOT NULL, \n\troot_disposition_id CHAR(32) NOT NULL, \n\tactor_user_id VARCHAR(36) NOT NULL, \n\trequest_id VARCHAR(160) NOT NULL, \n\trequest_hash VARCHAR(64) NOT NULL, \n\tkey_token VARCHAR(64) NOT NULL, \n\treversal_key_hash VARCHAR(64) NOT NULL, \n\tapproval_key_hash VARCHAR(64) NOT NULL, \n\tcorrection_key_hash VARCHAR(64) NOT NULL, \n\tinverse_id CHAR(32), \n\tapproval_id CHAR(32), \n\tcorrection_id CHAR(32), \n\tseal_id CHAR(32), \n\tcreated_at DATETIME NOT NULL, \n\tPRIMARY KEY (fact_id), \n\tCONSTRAINT uq_loss_request_binding_request UNIQUE (actor_user_id, request_id), \n\tCONSTRAINT stock_loss_request_key_bindings_key_token_key UNIQUE (key_token), \n\tCONSTRAINT stock_loss_request_key_bindings_reversal_key_hash_key UNIQUE (reversal_key_hash), \n\tCONSTRAINT stock_loss_request_key_bindings_approval_key_hash_key UNIQUE (approval_key_hash), \n\tCONSTRAINT stock_loss_request_key_bindings_correction_key_hash_key UNIQUE (correction_key_hash), \n\tCONSTRAINT fk_loss_request_binding_inverse FOREIGN KEY(inverse_id, root_disposition_id) REFERENCES stock_loss_disposition_reversals (id, root_disposition_id) ON DELETE RESTRICT, \n\tCONSTRAINT fk_loss_request_binding_approval FOREIGN KEY(approval_id, root_disposition_id) REFERENCES stock_loss_correction_decisions (id, root_disposition_id) ON DELETE RESTRICT, \n\tCONSTRAINT fk_loss_request_binding_correction FOREIGN KEY(correction_id, root_disposition_id) REFERENCES stock_loss_correction_executions (id, root_disposition_id) ON DELETE RESTRICT, \n\tCONSTRAINT fk_loss_request_binding_seal FOREIGN KEY(seal_id, root_disposition_id) REFERENCES stock_loss_inverse_request_seals (id, root_disposition_id) ON DELETE RESTRICT, \n\tCONSTRAINT ck_loss_request_binding_kind CHECK ((binding_kind='inverse' AND inverse_id=fact_id AND inverse_id IS NOT NULL AND approval_id IS NULL AND correction_id IS NULL AND seal_id IS NULL) OR (binding_kind='approval' AND approval_id=fact_id AND approval_id IS NOT NULL AND inverse_id IS NULL AND correction_id IS NULL AND seal_id IS NULL) OR (binding_kind='correction' AND correction_id=fact_id AND correction_id IS NOT NULL AND inverse_id IS NULL AND approval_id IS NULL AND seal_id IS NULL) OR (binding_kind='inverse_seal' AND seal_id=fact_id AND seal_id IS NOT NULL AND inverse_id IS NULL AND approval_id IS NULL AND correction_id IS NULL)), \n\tCONSTRAINT ck_loss_request_binding_digests CHECK ((length(request_hash)=64 AND request_hash NOT GLOB '*[^a-f0-9]*') AND (length(key_token)=64 AND key_token NOT GLOB '*[^a-f0-9]*') AND (length(reversal_key_hash)=64 AND reversal_key_hash NOT GLOB '*[^a-f0-9]*') AND (length(approval_key_hash)=64 AND approval_key_hash NOT GLOB '*[^a-f0-9]*') AND (length(correction_key_hash)=64 AND correction_key_hash NOT GLOB '*[^a-f0-9]*') AND reversal_key_hash<>approval_key_hash AND reversal_key_hash<>correction_key_hash AND approval_key_hash<>correction_key_hash), \n\tCONSTRAINT ck_loss_request_binding_request CHECK (length(request_id) BETWEEN 8 AND 160 AND request_id NOT GLOB '*[^A-Za-z0-9._:-]*'), \n\tFOREIGN KEY(root_disposition_id) REFERENCES stock_loss_dispositions (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_user_id) REFERENCES users (id) ON DELETE RESTRICT\n)",
+      "columnNames": [
+        "fact_id",
+        "binding_kind",
+        "root_disposition_id",
+        "actor_user_id",
+        "request_id",
+        "request_hash",
+        "key_token",
+        "reversal_key_hash",
+        "approval_key_hash",
+        "correction_key_hash",
+        "inverse_id",
+        "approval_id",
+        "correction_id",
+        "seal_id",
+        "created_at"
+      ]
+    }
+  ],
+  "indexes": {
+    "uq_loss_inverse_original_root": "CREATE UNIQUE INDEX uq_loss_inverse_original_root ON stock_loss_disposition_reversals (root_disposition_id) WHERE (reversed_correction_id IS NULL)"
+  },
+  "triggers": {
+    "trg_0159_sqlite_stock_loss_disposition_reversals_insert": {
+      "table": "stock_loss_disposition_reversals",
+      "event": "INSERT",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_disposition_reversals_insert\" BEFORE INSERT ON \"stock_loss_disposition_reversals\" BEGIN SELECT RAISE(ABORT,'0159 PostgreSQL correction proof required'); END"
+    },
+    "trg_0159_sqlite_stock_loss_disposition_reversals_update": {
+      "table": "stock_loss_disposition_reversals",
+      "event": "UPDATE",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_disposition_reversals_update\" BEFORE UPDATE ON \"stock_loss_disposition_reversals\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END"
+    },
+    "trg_0159_sqlite_stock_loss_disposition_reversals_delete": {
+      "table": "stock_loss_disposition_reversals",
+      "event": "DELETE",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_disposition_reversals_delete\" BEFORE DELETE ON \"stock_loss_disposition_reversals\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END"
+    },
+    "trg_0159_sqlite_stock_loss_correction_decisions_insert": {
+      "table": "stock_loss_correction_decisions",
+      "event": "INSERT",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_correction_decisions_insert\" BEFORE INSERT ON \"stock_loss_correction_decisions\" BEGIN SELECT RAISE(ABORT,'0159 PostgreSQL correction proof required'); END"
+    },
+    "trg_0159_sqlite_stock_loss_correction_decisions_update": {
+      "table": "stock_loss_correction_decisions",
+      "event": "UPDATE",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_correction_decisions_update\" BEFORE UPDATE ON \"stock_loss_correction_decisions\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END"
+    },
+    "trg_0159_sqlite_stock_loss_correction_decisions_delete": {
+      "table": "stock_loss_correction_decisions",
+      "event": "DELETE",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_correction_decisions_delete\" BEFORE DELETE ON \"stock_loss_correction_decisions\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END"
+    },
+    "trg_0159_sqlite_stock_loss_correction_executions_insert": {
+      "table": "stock_loss_correction_executions",
+      "event": "INSERT",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_correction_executions_insert\" BEFORE INSERT ON \"stock_loss_correction_executions\" BEGIN SELECT RAISE(ABORT,'0159 PostgreSQL correction proof required'); END"
+    },
+    "trg_0159_sqlite_stock_loss_correction_executions_update": {
+      "table": "stock_loss_correction_executions",
+      "event": "UPDATE",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_correction_executions_update\" BEFORE UPDATE ON \"stock_loss_correction_executions\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END"
+    },
+    "trg_0159_sqlite_stock_loss_correction_executions_delete": {
+      "table": "stock_loss_correction_executions",
+      "event": "DELETE",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_correction_executions_delete\" BEFORE DELETE ON \"stock_loss_correction_executions\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END"
+    },
+    "trg_0159_sqlite_stock_loss_inverse_request_seals_insert": {
+      "table": "stock_loss_inverse_request_seals",
+      "event": "INSERT",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_inverse_request_seals_insert\" BEFORE INSERT ON \"stock_loss_inverse_request_seals\" BEGIN SELECT RAISE(ABORT,'0159 PostgreSQL correction proof required'); END"
+    },
+    "trg_0159_sqlite_stock_loss_inverse_request_seals_update": {
+      "table": "stock_loss_inverse_request_seals",
+      "event": "UPDATE",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_inverse_request_seals_update\" BEFORE UPDATE ON \"stock_loss_inverse_request_seals\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END"
+    },
+    "trg_0159_sqlite_stock_loss_inverse_request_seals_delete": {
+      "table": "stock_loss_inverse_request_seals",
+      "event": "DELETE",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_inverse_request_seals_delete\" BEFORE DELETE ON \"stock_loss_inverse_request_seals\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END"
+    },
+    "trg_0159_sqlite_stock_loss_request_key_bindings_insert": {
+      "table": "stock_loss_request_key_bindings",
+      "event": "INSERT",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_request_key_bindings_insert\" BEFORE INSERT ON \"stock_loss_request_key_bindings\" BEGIN SELECT RAISE(ABORT,'0159 PostgreSQL correction proof required'); END"
+    },
+    "trg_0159_sqlite_stock_loss_request_key_bindings_update": {
+      "table": "stock_loss_request_key_bindings",
+      "event": "UPDATE",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_request_key_bindings_update\" BEFORE UPDATE ON \"stock_loss_request_key_bindings\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END"
+    },
+    "trg_0159_sqlite_stock_loss_request_key_bindings_delete": {
+      "table": "stock_loss_request_key_bindings",
+      "event": "DELETE",
+      "sql": "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_request_key_bindings_delete\" BEFORE DELETE ON \"stock_loss_request_key_bindings\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END"
+    }
+  },
+  "statements": [
+    "CREATE TABLE stock_loss_disposition_reversals (\n\treversed_correction_id CHAR(32), \n\toriginal_transaction_id CHAR(32) NOT NULL, \n\toriginal_movement_id CHAR(32) NOT NULL, \n\tposting_transaction_id CHAR(32) NOT NULL, \n\tposting_movement_id CHAR(32) NOT NULL, \n\tsource_account_id CHAR(32), \n\ttarget_account_id CHAR(32) NOT NULL, \n\tcustody_assignment_id CHAR(32) NOT NULL, \n\tquantity NUMERIC(18, 3) NOT NULL, \n\tplan_hash VARCHAR(64) NOT NULL, \n\tplan_jsonb JSON NOT NULL, \n\tid CHAR(32) NOT NULL, \n\troot_disposition_id CHAR(32) NOT NULL, \n\tactor_user_id VARCHAR(36) NOT NULL, \n\tactor_person_id CHAR(32) NOT NULL, \n\tauthorization_version BIGINT NOT NULL, \n\trequest_id VARCHAR(160) NOT NULL, \n\tidempotency_key_hash VARCHAR(64) NOT NULL, \n\trequest_hash VARCHAR(64) NOT NULL, \n\treason TEXT NOT NULL, \n\tcommand_jsonb JSON NOT NULL, \n\tcreated_at DATETIME NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT uq_loss_inverse_request UNIQUE (actor_user_id, request_id), \n\tCONSTRAINT uq_loss_inverse_key UNIQUE (idempotency_key_hash), \n\tCONSTRAINT uq_loss_inverse_root UNIQUE (id, root_disposition_id), \n\tCONSTRAINT ck_loss_inverse_context CHECK (authorization_version > 0 AND length(reason) BETWEEN 1 AND 500), \n\tCONSTRAINT ck_loss_inverse_request CHECK (length(request_id) BETWEEN 8 AND 160 AND length(idempotency_key_hash)=64 AND length(request_hash)=64), \n\tCONSTRAINT fk_loss_inverse_correction_root FOREIGN KEY(reversed_correction_id, root_disposition_id) REFERENCES stock_loss_correction_executions (id, root_disposition_id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED, \n\tCONSTRAINT uq_loss_inverse_correction UNIQUE (reversed_correction_id), \n\tCONSTRAINT uq_loss_inverse_original_tx UNIQUE (original_transaction_id), \n\tCONSTRAINT uq_loss_inverse_original_move UNIQUE (original_movement_id), \n\tCONSTRAINT uq_loss_inverse_posted_tx UNIQUE (posting_transaction_id), \n\tCONSTRAINT uq_loss_inverse_posted_move UNIQUE (posting_movement_id), \n\tCONSTRAINT ck_loss_inverse_posting CHECK (quantity > 0 AND original_transaction_id <> posting_transaction_id AND original_movement_id <> posting_movement_id), \n\tCONSTRAINT ck_loss_inverse_accounts CHECK (source_account_id IS NULL OR source_account_id <> target_account_id), \n\tCONSTRAINT ck_loss_inverse_plan CHECK (length(plan_hash)=64), \n\tFOREIGN KEY(original_transaction_id) REFERENCES inventory_transactions (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(original_movement_id) REFERENCES inventory_movements (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(posting_transaction_id) REFERENCES inventory_transactions (id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED, \n\tFOREIGN KEY(posting_movement_id) REFERENCES inventory_movements (id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED, \n\tFOREIGN KEY(source_account_id) REFERENCES stock_accounts (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(target_account_id) REFERENCES stock_accounts (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(custody_assignment_id) REFERENCES custody_assignments (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(root_disposition_id) REFERENCES stock_loss_dispositions (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_user_id) REFERENCES users (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_person_id) REFERENCES people (id) ON DELETE RESTRICT\n)",
+    "CREATE UNIQUE INDEX uq_loss_inverse_original_root ON stock_loss_disposition_reversals (root_disposition_id) WHERE (reversed_correction_id IS NULL)",
+    "CREATE TABLE stock_loss_correction_decisions (\n\treversal_id CHAR(32) NOT NULL, \n\texpected_reversal_hash VARCHAR(64) NOT NULL, \n\tdisposition VARCHAR(24) NOT NULL, \n\tid CHAR(32) NOT NULL, \n\troot_disposition_id CHAR(32) NOT NULL, \n\tactor_user_id VARCHAR(36) NOT NULL, \n\tactor_person_id CHAR(32) NOT NULL, \n\tauthorization_version BIGINT NOT NULL, \n\trequest_id VARCHAR(160) NOT NULL, \n\tidempotency_key_hash VARCHAR(64) NOT NULL, \n\trequest_hash VARCHAR(64) NOT NULL, \n\treason TEXT NOT NULL, \n\tcommand_jsonb JSON NOT NULL, \n\tcreated_at DATETIME NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT uq_loss_correction_decision_request UNIQUE (actor_user_id, request_id), \n\tCONSTRAINT uq_loss_correction_decision_key UNIQUE (idempotency_key_hash), \n\tCONSTRAINT uq_loss_correction_decision_root UNIQUE (id, root_disposition_id), \n\tCONSTRAINT ck_loss_correction_decision_context CHECK (authorization_version > 0 AND length(reason) BETWEEN 1 AND 500), \n\tCONSTRAINT ck_loss_correction_decision_request CHECK (length(request_id) BETWEEN 8 AND 160 AND length(idempotency_key_hash)=64 AND length(request_hash)=64), \n\tCONSTRAINT fk_loss_correction_decision_inverse_root FOREIGN KEY(reversal_id, root_disposition_id) REFERENCES stock_loss_disposition_reversals (id, root_disposition_id) ON DELETE RESTRICT, \n\tCONSTRAINT uq_loss_correction_decision_binding UNIQUE (id, root_disposition_id, reversal_id, disposition), \n\tCONSTRAINT ck_loss_correction_decision_kind CHECK (disposition IN ('restore_available','convert_used','convert_damaged','return_to_region','scrap')), \n\tCONSTRAINT ck_loss_correction_decision_hash CHECK (length(expected_reversal_hash)=64), \n\tFOREIGN KEY(root_disposition_id) REFERENCES stock_loss_dispositions (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_user_id) REFERENCES users (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_person_id) REFERENCES people (id) ON DELETE RESTRICT\n)",
+    "CREATE TABLE stock_loss_correction_executions (\n\tcorrection_decision_id CHAR(32) NOT NULL, \n\treversal_id CHAR(32) NOT NULL, \n\tdisposition VARCHAR(24) NOT NULL, \n\treturn_operation_id CHAR(32), \n\tsource_account_id CHAR(32) NOT NULL, \n\ttarget_account_id CHAR(32), \n\tcustody_assignment_id CHAR(32) NOT NULL, \n\tquantity NUMERIC(18, 3) NOT NULL, \n\tposting_transaction_id CHAR(32) NOT NULL, \n\tposting_movement_id CHAR(32) NOT NULL, \n\tplan_hash VARCHAR(64) NOT NULL, \n\tplan_jsonb JSON NOT NULL, \n\tid CHAR(32) NOT NULL, \n\troot_disposition_id CHAR(32) NOT NULL, \n\tactor_user_id VARCHAR(36) NOT NULL, \n\tactor_person_id CHAR(32) NOT NULL, \n\tauthorization_version BIGINT NOT NULL, \n\trequest_id VARCHAR(160) NOT NULL, \n\tidempotency_key_hash VARCHAR(64) NOT NULL, \n\trequest_hash VARCHAR(64) NOT NULL, \n\treason TEXT NOT NULL, \n\tcommand_jsonb JSON NOT NULL, \n\tcreated_at DATETIME NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT uq_loss_correction_execution_request UNIQUE (actor_user_id, request_id), \n\tCONSTRAINT uq_loss_correction_execution_key UNIQUE (idempotency_key_hash), \n\tCONSTRAINT uq_loss_correction_execution_root UNIQUE (id, root_disposition_id), \n\tCONSTRAINT ck_loss_correction_execution_context CHECK (authorization_version > 0 AND length(reason) BETWEEN 1 AND 500), \n\tCONSTRAINT ck_loss_correction_execution_request CHECK (length(request_id) BETWEEN 8 AND 160 AND length(idempotency_key_hash)=64 AND length(request_hash)=64), \n\tCONSTRAINT fk_loss_correction_execution_decision FOREIGN KEY(correction_decision_id, root_disposition_id, reversal_id, disposition) REFERENCES stock_loss_correction_decisions (id, root_disposition_id, reversal_id, disposition) ON DELETE RESTRICT, \n\tCONSTRAINT uq_loss_correction_execution_inverse UNIQUE (reversal_id), \n\tCONSTRAINT uq_loss_correction_execution_decision UNIQUE (correction_decision_id), \n\tCONSTRAINT uq_loss_correction_execution_tx UNIQUE (posting_transaction_id), \n\tCONSTRAINT uq_loss_correction_execution_move UNIQUE (posting_movement_id), \n\tCONSTRAINT uq_loss_correction_execution_return UNIQUE (return_operation_id), \n\tCONSTRAINT ck_loss_correction_execution_kind CHECK (disposition IN ('restore_available','convert_used','convert_damaged','return_to_region','scrap')), \n\tCONSTRAINT ck_loss_correction_execution_accounts CHECK ((disposition='scrap' AND target_account_id IS NULL) OR (disposition<>'scrap' AND target_account_id IS NOT NULL AND source_account_id<>target_account_id)), \n\tCONSTRAINT ck_loss_correction_execution_return CHECK ((disposition='return_to_region' AND return_operation_id IS NOT NULL) OR (disposition<>'return_to_region' AND return_operation_id IS NULL)), \n\tCONSTRAINT ck_loss_correction_execution_plan CHECK (quantity > 0 AND length(plan_hash)=64), \n\tFOREIGN KEY(return_operation_id) REFERENCES stock_operation_orders (id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED, \n\tFOREIGN KEY(source_account_id) REFERENCES stock_accounts (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(target_account_id) REFERENCES stock_accounts (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(custody_assignment_id) REFERENCES custody_assignments (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(posting_transaction_id) REFERENCES inventory_transactions (id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED, \n\tFOREIGN KEY(posting_movement_id) REFERENCES inventory_movements (id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED, \n\tFOREIGN KEY(root_disposition_id) REFERENCES stock_loss_dispositions (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_user_id) REFERENCES users (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_person_id) REFERENCES people (id) ON DELETE RESTRICT\n)",
+    "CREATE TABLE stock_loss_inverse_request_seals (\n\treversal_key_hash VARCHAR(64) NOT NULL, \n\tapproval_key_hash VARCHAR(64) NOT NULL, \n\tcorrection_key_hash VARCHAR(64) NOT NULL, \n\trequest_reference VARCHAR(100) NOT NULL, \n\tplan_hash VARCHAR(64) NOT NULL, \n\tid CHAR(32) NOT NULL, \n\troot_disposition_id CHAR(32) NOT NULL, \n\tactor_user_id VARCHAR(36) NOT NULL, \n\tactor_person_id CHAR(32) NOT NULL, \n\tauthorization_version BIGINT NOT NULL, \n\trequest_id VARCHAR(160) NOT NULL, \n\tidempotency_key_hash VARCHAR(64) NOT NULL, \n\trequest_hash VARCHAR(64) NOT NULL, \n\treason TEXT NOT NULL, \n\tcommand_jsonb JSON NOT NULL, \n\tcreated_at DATETIME NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT uq_loss_inverse_seal_request UNIQUE (actor_user_id, request_id), \n\tCONSTRAINT uq_loss_inverse_seal_key UNIQUE (idempotency_key_hash), \n\tCONSTRAINT uq_loss_inverse_seal_root UNIQUE (id, root_disposition_id), \n\tCONSTRAINT ck_loss_inverse_seal_context CHECK (authorization_version > 0 AND length(reason) BETWEEN 1 AND 500), \n\tCONSTRAINT ck_loss_inverse_seal_request CHECK (length(request_id) BETWEEN 8 AND 160 AND length(idempotency_key_hash)=64 AND length(request_hash)=64), \n\tCONSTRAINT uq_loss_inverse_seal_reversal_key UNIQUE (reversal_key_hash), \n\tCONSTRAINT uq_loss_inverse_seal_approval_key UNIQUE (approval_key_hash), \n\tCONSTRAINT uq_loss_inverse_seal_correction_key UNIQUE (correction_key_hash), \n\tCONSTRAINT ck_loss_inverse_seal_proof CHECK (length(reversal_key_hash)=64 AND length(approval_key_hash)=64 AND length(correction_key_hash)=64 AND length(plan_hash)=64 AND length(request_reference)=82), \n\tCONSTRAINT ck_loss_inverse_seal_action CHECK (idempotency_key_hash=reversal_key_hash), \n\tCONSTRAINT ck_loss_inverse_seal_distinct_keys CHECK (reversal_key_hash<>approval_key_hash AND reversal_key_hash<>correction_key_hash AND approval_key_hash<>correction_key_hash), \n\tFOREIGN KEY(root_disposition_id) REFERENCES stock_loss_dispositions (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_user_id) REFERENCES users (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_person_id) REFERENCES people (id) ON DELETE RESTRICT\n)",
+    "CREATE TABLE stock_loss_request_key_bindings (\n\tfact_id CHAR(32) NOT NULL, \n\tbinding_kind VARCHAR(24) NOT NULL, \n\troot_disposition_id CHAR(32) NOT NULL, \n\tactor_user_id VARCHAR(36) NOT NULL, \n\trequest_id VARCHAR(160) NOT NULL, \n\trequest_hash VARCHAR(64) NOT NULL, \n\tkey_token VARCHAR(64) NOT NULL, \n\treversal_key_hash VARCHAR(64) NOT NULL, \n\tapproval_key_hash VARCHAR(64) NOT NULL, \n\tcorrection_key_hash VARCHAR(64) NOT NULL, \n\tinverse_id CHAR(32), \n\tapproval_id CHAR(32), \n\tcorrection_id CHAR(32), \n\tseal_id CHAR(32), \n\tcreated_at DATETIME NOT NULL, \n\tPRIMARY KEY (fact_id), \n\tCONSTRAINT uq_loss_request_binding_request UNIQUE (actor_user_id, request_id), \n\tCONSTRAINT stock_loss_request_key_bindings_key_token_key UNIQUE (key_token), \n\tCONSTRAINT stock_loss_request_key_bindings_reversal_key_hash_key UNIQUE (reversal_key_hash), \n\tCONSTRAINT stock_loss_request_key_bindings_approval_key_hash_key UNIQUE (approval_key_hash), \n\tCONSTRAINT stock_loss_request_key_bindings_correction_key_hash_key UNIQUE (correction_key_hash), \n\tCONSTRAINT fk_loss_request_binding_inverse FOREIGN KEY(inverse_id, root_disposition_id) REFERENCES stock_loss_disposition_reversals (id, root_disposition_id) ON DELETE RESTRICT, \n\tCONSTRAINT fk_loss_request_binding_approval FOREIGN KEY(approval_id, root_disposition_id) REFERENCES stock_loss_correction_decisions (id, root_disposition_id) ON DELETE RESTRICT, \n\tCONSTRAINT fk_loss_request_binding_correction FOREIGN KEY(correction_id, root_disposition_id) REFERENCES stock_loss_correction_executions (id, root_disposition_id) ON DELETE RESTRICT, \n\tCONSTRAINT fk_loss_request_binding_seal FOREIGN KEY(seal_id, root_disposition_id) REFERENCES stock_loss_inverse_request_seals (id, root_disposition_id) ON DELETE RESTRICT, \n\tCONSTRAINT ck_loss_request_binding_kind CHECK ((binding_kind='inverse' AND inverse_id=fact_id AND inverse_id IS NOT NULL AND approval_id IS NULL AND correction_id IS NULL AND seal_id IS NULL) OR (binding_kind='approval' AND approval_id=fact_id AND approval_id IS NOT NULL AND inverse_id IS NULL AND correction_id IS NULL AND seal_id IS NULL) OR (binding_kind='correction' AND correction_id=fact_id AND correction_id IS NOT NULL AND inverse_id IS NULL AND approval_id IS NULL AND seal_id IS NULL) OR (binding_kind='inverse_seal' AND seal_id=fact_id AND seal_id IS NOT NULL AND inverse_id IS NULL AND approval_id IS NULL AND correction_id IS NULL)), \n\tCONSTRAINT ck_loss_request_binding_digests CHECK ((length(request_hash)=64 AND request_hash NOT GLOB '*[^a-f0-9]*') AND (length(key_token)=64 AND key_token NOT GLOB '*[^a-f0-9]*') AND (length(reversal_key_hash)=64 AND reversal_key_hash NOT GLOB '*[^a-f0-9]*') AND (length(approval_key_hash)=64 AND approval_key_hash NOT GLOB '*[^a-f0-9]*') AND (length(correction_key_hash)=64 AND correction_key_hash NOT GLOB '*[^a-f0-9]*') AND reversal_key_hash<>approval_key_hash AND reversal_key_hash<>correction_key_hash AND approval_key_hash<>correction_key_hash), \n\tCONSTRAINT ck_loss_request_binding_request CHECK (length(request_id) BETWEEN 8 AND 160 AND request_id NOT GLOB '*[^A-Za-z0-9._:-]*'), \n\tFOREIGN KEY(root_disposition_id) REFERENCES stock_loss_dispositions (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(actor_user_id) REFERENCES users (id) ON DELETE RESTRICT\n)",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_disposition_reversals_insert\" BEFORE INSERT ON \"stock_loss_disposition_reversals\" BEGIN SELECT RAISE(ABORT,'0159 PostgreSQL correction proof required'); END",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_disposition_reversals_update\" BEFORE UPDATE ON \"stock_loss_disposition_reversals\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_disposition_reversals_delete\" BEFORE DELETE ON \"stock_loss_disposition_reversals\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_correction_decisions_insert\" BEFORE INSERT ON \"stock_loss_correction_decisions\" BEGIN SELECT RAISE(ABORT,'0159 PostgreSQL correction proof required'); END",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_correction_decisions_update\" BEFORE UPDATE ON \"stock_loss_correction_decisions\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_correction_decisions_delete\" BEFORE DELETE ON \"stock_loss_correction_decisions\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_correction_executions_insert\" BEFORE INSERT ON \"stock_loss_correction_executions\" BEGIN SELECT RAISE(ABORT,'0159 PostgreSQL correction proof required'); END",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_correction_executions_update\" BEFORE UPDATE ON \"stock_loss_correction_executions\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_correction_executions_delete\" BEFORE DELETE ON \"stock_loss_correction_executions\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_inverse_request_seals_insert\" BEFORE INSERT ON \"stock_loss_inverse_request_seals\" BEGIN SELECT RAISE(ABORT,'0159 PostgreSQL correction proof required'); END",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_inverse_request_seals_update\" BEFORE UPDATE ON \"stock_loss_inverse_request_seals\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_inverse_request_seals_delete\" BEFORE DELETE ON \"stock_loss_inverse_request_seals\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_request_key_bindings_insert\" BEFORE INSERT ON \"stock_loss_request_key_bindings\" BEGIN SELECT RAISE(ABORT,'0159 PostgreSQL correction proof required'); END",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_request_key_bindings_update\" BEFORE UPDATE ON \"stock_loss_request_key_bindings\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END",
+    "CREATE TRIGGER \"trg_0159_sqlite_stock_loss_request_key_bindings_delete\" BEFORE DELETE ON \"stock_loss_request_key_bindings\" BEGIN SELECT RAISE(ABORT,'0159 immutable correction history'); END"
+  ],
+  "writePolicy": "all correction INSERT/UPDATE/DELETE blocked; PostgreSQL16 is required",
+  "fullPredecessorMigrationVerified": false,
+  "formalApplied": false,
+  "sqliteDdlOrigin": "SQLAlchemy declarative facts and unmapped request-binding table; SQLite remains write-blocked"
+}

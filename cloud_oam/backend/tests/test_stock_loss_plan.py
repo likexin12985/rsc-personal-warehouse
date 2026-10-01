@@ -128,7 +128,7 @@ def test_duplicate_evidence_is_not_a_second_proof(allowed, evidence):
         command(allowed,evidence,evidence_file_ids=(evidence[0].id,evidence[0].id))
 
 
-def test_http_preview_is_private_has_no_stock_effect_and_submit_stays_closed(db, allowed, evidence, client):
+def test_http_preview_is_private_and_incomplete_submit_never_writes(db, allowed, evidence, client, monkeypatch):
     before=counts(db),inventory(db)
     value=command(allowed,evidence).model_dump(mode='json')
     response=client.post(PATH+'/preview',json=value)
@@ -139,7 +139,21 @@ def test_http_preview_is_private_has_no_stock_effect_and_submit_stays_closed(db,
     invalid=client.post(PATH+'/preview',json={**value,'evidence_file_ids':[]})
     assert invalid.status_code==422
     private(invalid)
+    # Submission is registered; preview intent alone lacks the independent
+    # write coordinates and confirmed plan. Validation must stop before writes.
+    from app.formal_services import stock_loss_commands
+    invoked=[]
+    def unexpected_write(*args, **kwargs):
+        invoked.append(True)
+        raise AssertionError('Incomplete preview intent reached the write service')
+    monkeypatch.setattr(stock_loss_commands, 'submit_loss', unexpected_write)
     submit=client.post(PATH,json=value)
-    assert submit.status_code==404
+    assert submit.status_code==422,submit.text
+    assert {(tuple(item['loc']),item['type']) for item in submit.json()['detail']} == {
+        (('body','expected_plan_hash'),'missing'),
+        (('body','idempotency_key'),'missing'),
+        (('body','request_id'),'missing'),
+    }
+    assert invoked==[]
     private(submit)
     assert (counts(db),inventory(db))==before

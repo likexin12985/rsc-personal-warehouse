@@ -24,6 +24,8 @@ from . import stock_return_facts as shared, stock_return_receipt_facts as receip
 from .audit_chain import AuditChainError
 from .stock_return_inbound_contract import ReturnInboundLine, build_return_inbound_command
 from .stock_return_inbound_plan import authorize_receipt
+from .stock_return_inbound_quality import build_quality_inbound_command
+from .stock_return_inbound_partitions import receipt_parts
 from .work_order_evidence_snapshot import material_audit_cursor
 from .notification_events import target_manifest_hash
 from .work_order_query import _aware
@@ -130,6 +132,8 @@ def _proof(db, fact):
     if receipt is None or tx is None:invalid()
     original=receipts.verified_receipt_history(db,fact=receipt)
     plan=fact.plan_jsonb
+    version=plan.get('schema_version') if isinstance(plan,dict) else None
+    if version not in ('1.0','2.0'):invalid()
     if (set(plan)!={'schema_version','receipt_id','shipment_id','operator_person_id','authorization_version',
                 'target_location_id','target_custody_assignment_id','receipt_plan_hash','reason','ledger_cursor','lines'}
             or fact.actor_user_id!=receipt.actor_user_id or fact.operator_person_id!=receipt.operator_person_id
@@ -152,24 +156,41 @@ def _proof(db, fact):
             or custody.valid_to is not None and _aware(custody.valid_to)<=_aware(fact.created_at)):invalid()
     accepted=[line for line in _rows(db,StockOperationReceiptLine,StockOperationReceiptLine.receipt_id==receipt.id,
         order=StockOperationReceiptLine.line_no,limit=101) if line.accepted_qty>0]
-    lines=_rows(db,StockOperationReturnInboundLine,StockOperationReturnInboundLine.inbound_id==fact.id,order=StockOperationReturnInboundLine.line_no,limit=101)
-    if not 1<=len(lines)==len(accepted)<=100:invalid()
+    if not 1<=len(accepted)<=100:invalid()
+    # Version 1 preserves its original byte-exact request and historical rules.
+    # Version 2 independently reconstructs each condition from receipt evidence.
+    expected=[]
+    for origin in accepted:
+        if version=='1.0':
+            expected.append((origin,None))
+            continue
+        parcel=db.get(StockOperationShipmentLine,origin.shipment_line_id,populate_existing=True)
+        departed=db.get(StockOperationOutboundLine,parcel.outbound_line_id,populate_existing=True) if parcel else None
+        account=db.get(StockAccount,departed.transit_stock_account_id,populate_existing=True) if departed else None
+        if account is None:invalid()
+        expected.extend((origin,part) for part in receipt_parts(db,origin=origin,source=account,at=_aware(tx.effective_at)))
+    lines=_rows(db,StockOperationReturnInboundLine,StockOperationReturnInboundLine.inbound_id==fact.id,order=StockOperationReturnInboundLine.line_no,limit=201)
+    if not 1<=len(lines)==len(expected)<=200:invalid()
     moves=[];planned=[];seen=set()
-    for number,(line,origin) in enumerate(zip(lines,accepted),1):
+    for number,(line,(origin,part)) in enumerate(zip(lines,expected),1):
         parcel_line=db.get(StockOperationShipmentLine,origin.shipment_line_id,populate_existing=True)
         departure=db.get(StockOperationOutboundLine,parcel_line.outbound_line_id,populate_existing=True) if parcel_line else None
         source=db.get(StockAccount,line.source_account_id,populate_existing=True)
         target=db.get(StockAccount,line.target_account_id,populate_existing=True)
         if (departure is None or source is None or target is None or line.line_no!=number or line.receipt_line_id!=origin.id
-                or line.accepted_qty!=origin.accepted_qty or line.source_account_id!=departure.transit_stock_account_id
+                or line.accepted_qty!=(part.quantity if part else origin.accepted_qty) or line.source_account_id!=departure.transit_stock_account_id
                 or line.source_account_id==line.target_account_id or source.availability_bucket!='in_transit'
                 or target.availability_bucket!='available' or target.location_id!=location.id
                 or source.owner_org_id!=location.owner_org_id or target.owner_org_id!=source.owner_org_id
                 or target.custodian_person_id!=fact.operator_person_id
-                or any(getattr(account,key)!=getattr(line,key) for account in (source,target) for key in ('material_id','condition_code','lot_id'))
+                or any(getattr(account,key)!=getattr(line,key) for account in (source,target) for key in ('material_id','lot_id'))
+                or target.condition_code!=line.condition_code
+                or line.condition_code!=(part.condition_code if part else source.condition_code)
                 or _aware(line.created_at)!=_aware(fact.created_at)):invalid()
         selected=_rows(db,StockOperationReceiptSerial,StockOperationReceiptSerial.line_id==origin.id,
             StockOperationReceiptSerial.result=='accepted',order=StockOperationReceiptSerial.serial_id)
+        if part is not None:
+            selected=tuple(row for row in selected if row.serial_id in part.serial_ids)
         serials=_rows(db,StockOperationReturnInboundSerial,StockOperationReturnInboundSerial.line_id==line.id,
             order=StockOperationReturnInboundSerial.serial_id)
         if (len(serials)!=len(selected) or len(serials)>1000 or any(row.inbound_id!=fact.id or row.receipt_serial_id!=proof.id
@@ -195,12 +216,13 @@ def _proof(db, fact):
             target_account_id=str(target.id),material_id=str(line.material_id),condition_code=line.condition_code,
             lot_id=str(line.lot_id) if line.lot_id else None,accepted_qty=format(qty,'.3f'),serial_ids=[str(i) for i in ids]))
     if len(_rows(db,StockOperationReturnInboundSerial,StockOperationReturnInboundSerial.inbound_id==fact.id,limit=100001))!=len(seen):invalid()
-    expected_plan=dict(schema_version='1.0',receipt_id=str(receipt.id),shipment_id=str(receipt.shipment_id),
+    expected_plan=dict(schema_version=version,receipt_id=str(receipt.id),shipment_id=str(receipt.shipment_id),
         operator_person_id=str(fact.operator_person_id),authorization_version=fact.authorization_version,
         target_location_id=str(fact.target_location_id),target_custody_assignment_id=str(fact.target_custody_assignment_id),
         receipt_plan_hash=receipt.plan_hash,reason=receipt.reason,ledger_cursor=plan['ledger_cursor'],lines=planned)
     if plan!=expected_plan:invalid()
-    command=build_return_inbound_command(receipt_id=receipt.id,inbound_id=fact.id,effective_at=_aware(tx.effective_at),lines=tuple(moves),loss_origin=getattr(original,"origin",None))
+    builder=build_return_inbound_command if version=='1.0' else build_quality_inbound_command
+    command=builder(receipt_id=receipt.id,inbound_id=fact.id,effective_at=_aware(tx.effective_at),lines=tuple(moves),loss_origin=getattr(original,"origin",None))
     expected_command=dict(source_document_type=command.source_document_type,source_document_id=command.source_document_id,
         posting_key=command.posting_key,movement_type='transfer',effective_at=command.effective_at.isoformat(),movements=[dict(
             from_account_id=str(m.from_account_id),to_account_id=str(m.to_account_id),quantity=format(m.quantity,'.3f'),
@@ -216,7 +238,7 @@ def _proof(db, fact):
         (InventoryTransaction.posting_key==command.posting_key) |
         (InventoryTransaction.idempotency_key_hash==fact.idempotency_key_hash),limit=2)
     if len(related)!=1 or related[0].id!=tx.id:invalid()
-    actual=_rows(db,InventoryMovement,InventoryMovement.transaction_id==tx.id,order=InventoryMovement.line_no,limit=101)
+    actual=_rows(db,InventoryMovement,InventoryMovement.transaction_id==tx.id,order=InventoryMovement.line_no,limit=201)
     if len(actual)!=len(command.movements):invalid()
     for number,(row,wanted) in enumerate(zip(actual,command.movements),1):
         serials=_rows(db,InventoryMovementSerial,InventoryMovementSerial.movement_id==row.id,order=InventoryMovementSerial.serial_id)

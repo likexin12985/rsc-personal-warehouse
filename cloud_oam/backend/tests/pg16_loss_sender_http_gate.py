@@ -172,10 +172,10 @@ def release(engines, *, tracking, migrate, provision):
     owner=engines['star_oam_migrator']
     before=snapshot(owner);before_catalog=catalog(owner)
     migrate('retained-sender-downgrade','downgrade','20261205_0156',
-        '0157 immutable loss sender seals require retention')
+        '0159 immutable business history requires retention')
     assert snapshot(owner)==before and catalog(owner)==before_catalog
     with owner.connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261206_0157'
+        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261212_0163'
     security()
     result.update(emptyRoundtrip=True,retainedSenderSealsBlockDowngrade=True,
         runtimeSecurityBeforeAndAfter=True,formalMigrationRegistered=True,productionAcceptance=False)

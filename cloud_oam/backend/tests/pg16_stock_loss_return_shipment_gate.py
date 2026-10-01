@@ -470,7 +470,7 @@ def release(engines, *, tracking, migrate, provision):
     assert result['passed'] and result['returnShipment']['passed']
     before_facts, before = snapshot(owner), catalog(owner)
     migrate('retained-loss-shipment-downgrade', 'downgrade', '20261202_0153',
-        '0154 loss shipment history requires retention')
+        '0159 immutable business history requires retention')
     assert snapshot(owner) == before_facts and catalog(owner) == before
     security()
     with owner.connect() as db:

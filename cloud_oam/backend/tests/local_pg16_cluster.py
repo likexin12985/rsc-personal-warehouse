@@ -70,6 +70,10 @@ def _bootstrap(socket_directory):
             db.execute('ALTER DEFAULT PRIVILEGES FOR ROLE star_oam_migrator IN SCHEMA public REVOKE ALL ON '+object_type+' FROM PUBLIC')
             db.execute('ALTER DEFAULT PRIVILEGES FOR ROLE star_oam_migrator IN SCHEMA public GRANT SELECT ON '+object_type+' TO star_oam_backup')
         db.execute('ALTER DEFAULT PRIVILEGES FOR ROLE star_oam_migrator IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC')
+        # The private native UUID implementation is provisioned by this owned
+        # cluster's DBA, before non-superuser Alembic migrations execute.
+        bootstrap_sql=Path(__file__).resolve().parents[2]/'deployment/postgres-init/20-loss-uuid.sql'
+        db.execute(bootstrap_sql.read_text())
 
 
 @contextmanager

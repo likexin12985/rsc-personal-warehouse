@@ -157,7 +157,7 @@ def release(engines,*,tracking,migrate,provision):
     result['returnSubmission']=result.pop('submission')
     assert result['passed'] and result['returnSubmission']['passed']
     before_facts=snapshot(owner);before=catalog(owner)
-    migrate('retained-derived-return-downgrade','downgrade','20261130_0151','0152 derived-return provenance history requires retention')
+    migrate('retained-derived-return-downgrade','downgrade','20261130_0151','0159 immutable business history requires retention')
     assert snapshot(owner)==before_facts and catalog(owner)==before
     security()
     result.update(runtimeSecurityBeforeAndAfter=True,emptyMigrationRoundtripCatalogAndAclExact=True,

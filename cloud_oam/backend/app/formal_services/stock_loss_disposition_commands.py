@@ -36,6 +36,8 @@ def execute_disposition(db, *, actor, request):
     request = StockLossDispositionExecuteIn.model_validate(request.model_dump())
     posting._lock_inventory_ledger_head_for_atomic_batch(db)
     current, order, line, decision = plan.approved_line(db, actor=actor, request=request)
+    from .stock_loss_disposition_seals import require_unsealed
+    require_unsealed(db, actor=current, request=request, flow='disposition')
     posting_key = 'stock-loss-disposition:'+posting._require_idempotency_key(request.idempotency_key)
     key = posting._storage_hash(posting_key)
     document = dict(intent=plan.intent(request), request_id=request.request_id, expected_plan_hash=request.expected_plan_hash)

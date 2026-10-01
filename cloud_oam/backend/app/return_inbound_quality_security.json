@@ -1,0 +1,15 @@
+{
+  "patches": [
+    {
+      "signature": "public.rsc_check_stock_return_inbound_0106(uuid)",
+      "beforeSha256": "6eab04466449162f4b0595dab3b78ccd623af7efe2b49062d506725867f8e6c8",
+      "afterSha256": "671a9feff238b48a8cd877a92b89d8a569ac859222bf53804b9236fe7aeb7027"
+    },
+    {
+      "signature": "public.rsc_check_stock_return_inbound_0111(uuid)",
+      "beforeSha256": "544d67d9689ef1932e697b18d211d73b7f0a97255054d6a7cae9cea4408ede54",
+      "afterSha256": "47fc931978bc231d496bac2d0312f042a7f3ad2608397cbc5dd07d8d71bfdd3d"
+    }
+  ],
+  "newGuardSha256": "c1245b7632e7bf9c68b47925f0d1172b683cde5643ab08aa14875f24dcc67f46"
+}

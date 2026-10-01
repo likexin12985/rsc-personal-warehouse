@@ -5,8 +5,8 @@ export async function hash(value: unknown): Promise<string> {
   const result = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical(value)));
   return [...new Uint8Array(result)].map(n => n.toString(16).padStart(2, '0')).join('');
 }
-function basis(r: Record<string, unknown>, expected: Identity, receipt: Receipt): void {
-  if (r.schema_version !== '1.0' || id(r.receipt_id) !== receipt.receipt_id || id(r.shipment_id) !== receipt.shipment_id || id(r.operator_person_id) !== id(expected.person_id) || integer(r.authorization_version, 1) !== expected.authorization_version) fail('入库对象或当前身份已变化');
+function basis(r: Record<string, unknown>, expected: Identity, receipt: Receipt, versions = ['1.0']): void {
+  if (!versions.includes(String(r.schema_version)) || id(r.receipt_id) !== receipt.receipt_id || id(r.shipment_id) !== receipt.shipment_id || id(r.operator_person_id) !== id(expected.person_id) || integer(r.authorization_version, 1) !== expected.authorization_version) fail('入库对象或当前身份已变化');
   integer(r.ledger_cursor); timestamp(r.checked_at);
   if (micros(r.checked_at) < micros(receipt.recorded_at)) fail();
 }
@@ -24,29 +24,47 @@ export function state(value: unknown, expected: Identity, receipt: Receipt) {
 export function preview(value: unknown, expected: Identity, receipt: Receipt) {
   const loss = Object.hasOwn(receipt, 'origin');
   const r = object(value, ['schema_version', 'planning_status', 'receipt_id', 'shipment_id', 'operator_person_id', 'authorization_version', 'target_location_id', 'target_custody_assignment_id', 'receipt_plan_hash', 'plan_hash', 'reason', 'checked_at', 'ledger_cursor', 'lines', ...(loss ? ['origin'] : [])]);
-  basis(r, expected, receipt);
+  basis(r, expected, receipt, ['1.0', '2.0']);
+  const version = r.schema_version as '1.0' | '2.0';
   if (r.planning_status !== 'inbound_preview_only' || r.receipt_plan_hash !== receipt.plan_hash || r.target_location_id !== receipt.target_location_id || r.target_custody_assignment_id !== receipt.target_custody_assignment_id || (loss && !sameSource(r, receipt))) fail();
   const lines = list(r.lines, v => {
     const line = object(v, ['receipt_line_id', 'shipment_line_id', 'source_account_id', 'target_account_id', 'material_id', 'condition_code', 'lot_id', 'accepted_qty', 'serial_ids']);
     const original = receipt.lines.find(l => l.shipment_line_id === id(line.shipment_line_id));
-    if (!original || line.material_id !== original.material_id || line.lot_id !== original.lot_id || line.condition_code !== original.condition_code || units(line.accepted_qty) <= 0n) fail();
+    if (!original || line.material_id !== original.material_id || line.lot_id !== original.lot_id || !([original.condition_code, 'damaged'] as unknown[]).includes(line.condition_code) || units(line.accepted_qty) <= 0n) fail();
     const serial_ids = list(line.serial_ids, id, 1000); unique(serial_ids);
     if (original.accepted_serials.length ? units(line.accepted_qty) !== BigInt(serial_ids.length) * 1000n : serial_ids.length > 0) fail();
     if (serial_ids.some(sn => !original.accepted_serials.some(s => s.serial_id === sn))) fail();
     const source_account_id = id(line.source_account_id), target_account_id = id(line.target_account_id);
     if (source_account_id === target_account_id) fail();
     return { receipt_line_id: id(line.receipt_line_id), shipment_line_id: original.shipment_line_id, source_account_id, target_account_id, material_id: original.material_id, condition_code: line.condition_code as 'new' | 'used' | 'damaged', lot_id: original.lot_id, accepted_qty: quantity(line.accepted_qty), serial_ids };
-  }, 100);
-  unique(lines.map(l => l.receipt_line_id)); unique(lines.flatMap(l => l.serial_ids));
+  }, 200);
+  unique(lines.map(l => `${l.receipt_line_id}:${l.condition_code}`)); unique(lines.flatMap(l => l.serial_ids));
+  const origins = new Map<string, string>();
+  const targets = new Map<string, string>();
+  for (const l of lines) {
+    const key = canonical([l.material_id, l.lot_id, l.condition_code]);
+    if ((origins.has(l.receipt_line_id) && origins.get(l.receipt_line_id) !== l.shipment_line_id)
+      || (targets.has(l.target_account_id) && targets.get(l.target_account_id) !== key)) fail();
+    origins.set(l.receipt_line_id, l.shipment_line_id); targets.set(l.target_account_id, key);
+  }
   if (!lines.length) fail('此验收没有可入库的已接受物料');
   for (const original of receipt.lines) {
     const matches = lines.filter(l => l.shipment_line_id === original.shipment_line_id);
     if (matches.reduce((n, l) => n + units(l.accepted_qty), 0n) !== units(original.accepted_qty)) fail();
-    // This endpoint transfers custody with the original condition. A damage
-    // observation is not an authorized condition-conversion transaction.
+    if (matches.length > 2 || new Set(matches.map(l => l.receipt_line_id)).size > 1
+      || new Set(matches.map(l => l.source_account_id)).size > 1) fail();
+    unique(matches.map(l => l.condition_code));
+    const damaged = original.condition_code === 'damaged' ? units(original.accepted_qty) : units(original.damaged_qty);
+    if (matches.filter(l => l.condition_code === 'damaged').reduce((n, l) => n + units(l.accepted_qty), 0n) !== damaged) fail('破损验收必须进入对应坏件账户');
+    for (const part of matches) {
+      const expectedSerials = original.accepted_serials.filter(sn => original.condition_code === 'damaged'
+        || (part.condition_code === 'damaged') === original.damaged_serial_ids.includes(sn.serial_id)).map(sn => sn.serial_id).sort();
+      if (canonical([...part.serial_ids].sort()) !== canonical(expectedSerials)) fail('入库成色与验收SN不一致');
+    }
+    if (version === '1.0' && matches.length > 1) fail();
     if (canonical(matches.flatMap(l => l.serial_ids).sort()) !== canonical(original.accepted_serials.map(s => s.serial_id).sort())) fail();
   }
-  return { schema_version: '1.0' as const, planning_status: 'inbound_preview_only' as const, receipt_id: receipt.receipt_id, shipment_id: receipt.shipment_id, operator_person_id: expected.person_id, authorization_version: expected.authorization_version,
+  return { schema_version: version, planning_status: 'inbound_preview_only' as const, receipt_id: receipt.receipt_id, shipment_id: receipt.shipment_id, operator_person_id: expected.person_id, authorization_version: expected.authorization_version,
     target_location_id: receipt.target_location_id, target_custody_assignment_id: receipt.target_custody_assignment_id, receipt_plan_hash: receipt.plan_hash, plan_hash: digest(r.plan_hash), reason: text(r.reason, 500), checked_at: timestamp(r.checked_at), ledger_cursor: integer(r.ledger_cursor), lines, ...(loss ? source(receipt) : {}) };
 }
 export type InboundPreview = ReturnType<typeof preview>;

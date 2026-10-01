@@ -13,23 +13,26 @@ from ..inventory_models import StockAccount, StockLocation
 from .work_order_return_sources import _fail, _hash
 
 
-def dimensions(*, source: StockAccount, location: StockLocation, person_id: UUID) -> dict:
+def dimensions(*, source: StockAccount, location: StockLocation, person_id: UUID, condition_code: str | None = None) -> dict:
     if source.owner_org_id != location.owner_org_id:
         _fail('stock_return_inbound_owner_mismatch', '退回在途账户与接收仓组织不一致')
+    condition = source.condition_code if condition_code is None else condition_code
+    if condition not in (source.condition_code, 'damaged') or condition not in ('new', 'used', 'damaged'):
+        _fail('stock_return_inbound_condition_invalid', '验收入库仅允许保留原成色或转为坏件')
     return dict(owner_org_id=location.owner_org_id, custodian_person_id=person_id,
         location_id=location.id, material_id=source.material_id,
-        condition_code=source.condition_code, availability_bucket='available', lot_id=source.lot_id)
+        condition_code=condition, availability_bucket='available', lot_id=source.lot_id)
 
 
 def resolve_target(db: Session, *, source: StockAccount, location: StockLocation,
-                   person_id: UUID) -> StockAccount:
+                   person_id: UUID, condition_code: str | None = None) -> StockAccount:
     """Reuse the existing exact account, or return a transient proposed account.
 
     A stable, server-derived ID allows the existing plan hash and recovery
     contract to describe a not-yet-created dimension. Never add/flush it here.
     The location and custody have already been authorized by the caller.
     """
-    fields = dimensions(source=source, location=location, person_id=person_id)
+    fields = dimensions(source=source, location=location, person_id=person_id, condition_code=condition_code)
     with db.no_autoflush:
         rows = tuple(db.scalars(select(StockAccount).filter_by(**fields).limit(2)
             .execution_options(populate_existing=True)))
@@ -60,7 +63,7 @@ def materialize_targets(db: Session, *, plan: dict, created_at: datetime) -> Non
         if source is None:
             _fail('stock_return_inbound_target_invalid', '退回在途账户不存在')
         target = resolve_target(db, source=source, location=location,
-            person_id=plan['operator_person_id'])
+            person_id=plan['operator_person_id'], condition_code=line['condition_code'])
         if str(target.id) != line['target_account_id']:
             _fail('stock_return_inbound_plan_changed', '接收仓目标账户已变化，请重新核验')
         previous = resolved.get(target.id)

@@ -49,7 +49,7 @@ def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_a
     assert 'postgres:16-alpine@sha256:' in runtime
     assert '    strategy:\n      fail-fast: false\n      matrix:\n        tracking: [quantity, serial]\n' in loss
     assert 'RSC_PG16_LOSS_TRACKING: ${{ matrix.tracking }}' in loss
-    assert '        flow: [submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt, sender_http, sender_seals]\n' in loss
+    assert '        flow: [submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt, sender_http, sender_seals, execution_seals, correction_restore, correction_used, correction_damaged, correction_generations, correction_seal_retention, execution_http_disposition, execution_http_return, correction_request_seals, correction_http_sources, return_quality_whole, return_quality_mixed, return_stop_seals, return_stop_http, return_stop_negative, return_stop_seal_first, return_stop_execute_first, return_stop_stop_first, return_stop_outbound_first]\n' in loss
     assert 'RSC_PG16_LOSS_FLOW: ${{ matrix.flow }}' in loss
     assert 'python -m pytest -q -s tests/test_postgresql16_stock_loss_release_gate.py' in loss
     assert '        working-directory: cloud_oam/backend\n' in loss
@@ -237,11 +237,11 @@ def test_loss_gate_refuses_invalid_flow_before_database(monkeypatch):
     monkeypatch.setattr(loss_gate.gate,'_assert_fresh_disposable_postgresql16',unexpected_database_access)
     for flow in ('','both','submission,disposition','production'):
         monkeypatch.setenv('RSC_PG16_LOSS_FLOW',flow)
-        with pytest.raises(pytest.fail.Exception,match='explicit submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt, sender_http or sender_seals'):
+        with pytest.raises(pytest.fail.Exception,match='explicit submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt, sender_http, sender_seals, execution_seals, correction_restore, correction_used, correction_damaged, correction_generations, correction_seal_retention, execution_http_disposition, execution_http_return, correction_request_seals, correction_http_sources, return_quality_whole, return_quality_mixed, return_stop_seals, return_stop_http, return_stop_negative, return_stop_seal_first, return_stop_execute_first, return_stop_stop_first or return_stop_outbound_first'):
             loss_gate.test_postgresql16_stock_loss_release_gate()
 
 
-@pytest.mark.parametrize("flow", ("submission_http", "review_seals", "return_preview", "return_submission", "return_outbound", "return_shipment", "return_receipt", "sender_http", "sender_seals"))
+@pytest.mark.parametrize("flow", ("submission_http", "review_seals", "disposition", "return_preview", "return_submission", "return_outbound", "return_shipment", "return_receipt", "sender_http", "sender_seals", "execution_seals", "correction_restore", "correction_used", "correction_damaged", "correction_generations", "correction_seal_retention", "execution_http_disposition", "execution_http_return", "correction_request_seals", "correction_http_sources", "return_quality_whole", "return_quality_mixed", "return_stop_seals", "return_stop_http", "return_stop_negative", "return_stop_seal_first", "return_stop_execute_first", "return_stop_stop_first", "return_stop_outbound_first"))
 def test_return_leg_still_requires_the_real_disposable_database_boundary(monkeypatch, flow):
     import pytest
     import test_postgresql16_stock_loss_release_gate as loss_gate
@@ -271,7 +271,7 @@ def test_shared_return_preview_rejects_invalid_tracking_before_migration():
             release({}, tracking=tracking, migrate=forbidden, provision=forbidden)
 
 
-@pytest.mark.parametrize('name', ('pg16_loss_sender_http_gate','pg16_loss_sender_seal_gate'))
+@pytest.mark.parametrize('name', ('pg16_loss_sender_http_gate','pg16_loss_sender_seal_gate','pg16_loss_execution_seal_gate'))
 def test_sender_gate_invalid_tracking_is_rejected_before_migration(name):
     from importlib import import_module
     release=import_module(name).release
@@ -280,3 +280,71 @@ def test_sender_gate_invalid_tracking_is_rejected_before_migration(name):
     for tracking in ('','both','quantity,serial','production'):
         with pytest.raises(ValueError,match='tracking must be quantity or serial'):
             release({},tracking=tracking,migrate=forbidden,provision=forbidden)
+
+
+@pytest.mark.parametrize('flow,expected', [('disposition', 'disposition'), ('return_submission', 'return')])
+@pytest.mark.parametrize('tracking', ['quantity', 'serial'])
+def test_execution_matrix_includes_original_command_recovery(monkeypatch, flow, expected, tracking):
+    """Route both existing execution legs through the full recovery gate.
+
+    This is wiring proof only; disposable PG16 runs prove the actual stock,
+    permission and recovery checks in that shared driver.
+    """
+    from types import SimpleNamespace
+    import test_postgresql16_stock_loss_release_gate as loss_gate
+    import pg16_loss_disposition_recovery_gate as recovery
+
+    monkeypatch.setenv('RSC_PG16_LOSS_FLOW', flow)
+    monkeypatch.setenv('RSC_PG16_LOSS_TRACKING', tracking)
+    monkeypatch.setattr(loss_gate.gate, '_gate_enabled', lambda: True)
+    for name in ('_assert_fresh_disposable_postgresql16', '_bootstrap_roles', '_provision_edge_receiver_role'):
+        monkeypatch.setattr(loss_gate.gate, name, lambda: None)
+    monkeypatch.setattr(loss_gate.gate, '_role_password', lambda role: 'synthetic-only')
+    monkeypatch.setattr(loss_gate.gate, '_sqlalchemy_url', lambda **kwargs: kwargs['role'])
+    disposed = []
+    monkeypatch.setattr(loss_gate, 'create_engine', lambda role, **kwargs:
+        SimpleNamespace(dispose=lambda: disposed.append(role)))
+    called = []
+    def run(engines, **kwargs):
+        called.append((tuple(engines), kwargs['tracking'], kwargs['flow']))
+        assert callable(kwargs['migrate']) and callable(kwargs['provision'])
+        return {'passed': True}
+    monkeypatch.setattr(recovery, 'release', run)
+    loss_gate.test_postgresql16_stock_loss_release_gate()
+    roles = ('star_oam_migrator', 'star_oam_api', loss_gate.gate.EDGE_RECEIVER_ROLE)
+    assert called == [(roles, tracking, expected)]
+    assert tuple(disposed) == roles
+
+
+@pytest.mark.parametrize('tracking,flow', [('', 'return'), ('both', 'disposition'), ('serial', ''), ('quantity', 'submission')])
+def test_execution_recovery_rejects_invalid_leg_before_database(tracking, flow):
+    from pg16_loss_disposition_recovery_gate import release
+    def forbidden(*args, **kwargs):
+        raise AssertionError('invalid recovery leg reached database')
+    with pytest.raises(ValueError, match='explicit quantity/serial tracking and disposition/return flow required'):
+        release({}, tracking=tracking, flow=flow, migrate=forbidden, provision=forbidden)
+
+
+@pytest.mark.parametrize('tracking', ('quantity','serial'))
+def test_execution_seals_leg_invokes_its_gate_and_disposes_all_engines(monkeypatch,tracking):
+    from types import SimpleNamespace
+    import pg16_loss_execution_seal_gate as execution_seals
+    import test_postgresql16_stock_loss_release_gate as entry
+    monkeypatch.setenv('RSC_PG16_LOSS_TRACKING',tracking)
+    monkeypatch.setenv('RSC_PG16_LOSS_FLOW','execution_seals')
+    monkeypatch.setattr(entry.gate,'_gate_enabled',lambda:True)
+    for name in ('_assert_fresh_disposable_postgresql16','_bootstrap_roles','_provision_edge_receiver_role'):
+        monkeypatch.setattr(entry.gate,name,lambda:None)
+    monkeypatch.setattr(entry.gate,'_role_password',lambda role:'synthetic-fixture-only')
+    monkeypatch.setattr(entry.gate,'_sqlalchemy_url',lambda **kwargs:kwargs['role'])
+    disposed=[];observed=[]
+    monkeypatch.setattr(entry,'create_engine',lambda role,**kwargs:SimpleNamespace(dispose=lambda:disposed.append(role)))
+    def run(engines,**kwargs):
+        assert set(kwargs)=={'tracking','migrate','provision'}
+        assert callable(kwargs['migrate']) and callable(kwargs['provision'])
+        observed.append((tuple(engines),kwargs['tracking']))
+        return {'passed':True}
+    monkeypatch.setattr(execution_seals,'release',run)
+    entry.test_postgresql16_stock_loss_release_gate()
+    expected=('star_oam_migrator','star_oam_api',entry.gate.EDGE_RECEIVER_ROLE)
+    assert observed==[(expected,tracking)] and tuple(disposed)==expected

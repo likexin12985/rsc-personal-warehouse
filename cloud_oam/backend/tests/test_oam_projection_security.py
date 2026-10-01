@@ -1217,8 +1217,10 @@ def test_forward_readiness_manifests_match_head_hashes():
     # Compare the active readiness pin with the actual migration head. A
     # hard-coded historical manifest identity survives unnoticed when each
     # individual migration's hash remains correct but the head advances.
+    from alembic.config import Config
     from alembic.script import ScriptDirectory
-    scripts = ScriptDirectory(str(migration_root.parent))
+    # Preserve real HEAD resolution while reusing the canonical test graph.
+    scripts = ScriptDirectory.from_config(Config(str(migration_root.parents[2] / 'alembic.ini')))
     head = scripts.get_revision(scripts.get_current_head())
     # NEW_HASH can describe a separate function in a multi-function migration.
     # Prefer the explicitly named readiness pin; older readiness-only heads

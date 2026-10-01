@@ -57,6 +57,30 @@ describe('return receipt independent inbound', () => {
     await expect(original({ ...marker(), request_hash: 'a'.repeat(64) })).rejects.toThrow();
     await expect(original({ ...marker(), command: { ...marker().command, idempotency_key: 'bad' } })).rejects.toThrow();
   });
+  it('version two partitions mixed quantity acceptance into original and damaged conditions', () => {
+    const r = history(lossQuantity.after, lossQuantity.identity, lossQuantity.after.package.shipment_id).receipts[0];
+    r.lines[0].damaged_qty = '0.375';
+    const base = lossQuantity.inbound.preview, one = base.lines[0];
+    const v = { ...clone(base), schema_version: '2.0', lines: [
+      { ...one, accepted_qty: '0.625' },
+      { ...one, condition_code: 'damaged', target_account_id: other, accepted_qty: '0.375' },
+    ] };
+    expect(preview(v, lossQuantity.identity, r).lines).toEqual(v.lines);
+    const wrong = clone(v); wrong.lines[0].accepted_qty = '0.750'; wrong.lines[1].accepted_qty = '0.250';
+    expect(() => preview(wrong, lossQuantity.identity, r)).toThrow();
+    expect(() => preview({ ...v, schema_version: '1.0' }, lossQuantity.identity, r)).toThrow();
+    expect(() => preview({ ...v, lines: v.lines.map(l => ({ ...l, target_account_id: other })) }, lossQuantity.identity, r)).toThrow();
+  });
+  it('version two requires exactly the accepted damaged SN in the damaged account', () => {
+    const r = receipt();
+    r.lines[0].damaged_qty = r.lines[0].accepted_qty;
+    r.lines[0].damaged_serial_ids = r.lines[0].accepted_serials.map(s => s.serial_id);
+    const v = { ...clone(f.inbound.preview), schema_version: '2.0' };
+    v.lines[0].condition_code = 'damaged';
+    expect(preview(v, f.identity, r).lines[0].condition_code).toBe('damaged');
+    v.lines[0].condition_code = 'new';
+    expect(() => preview(v, f.identity, r)).toThrow();
+  });
   it('does not clear from a generic missing/pending response', () => {
     expect(() => lookup({ lookup_status: 'not_found' }, marker())).toThrow();
     expect(() => lookup(null, marker())).toThrow();

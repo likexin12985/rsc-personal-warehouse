@@ -1,5 +1,6 @@
 const origin = require('./loss-return-origin')
 const contract = require('./stock-return-inbound-contract')
+const { readHistory } = require('./stock-return-receipt-submit')
 const { validateMarker } = require('./work-order-recovery-store')
 const { originalResult } = require('./work-order-recovery')
 const { uuid } = require('./work-order-query-contract')
@@ -16,12 +17,15 @@ async function prepareInbound({ api, current, receiptId, shipmentId, personId, a
   const before = await current()
   const state = await readInboundState({ api, current, receiptId, shipmentId, personId, authorizationVersion })
   if (state.status === 'posted') return { state, preview: null, review: null }
+  const history = await readHistory({ api, current, shipmentId, personId, authorizationVersion })
+  const receipt = history.receipts.find(row => row.receipt_id === uuid(receiptId))
+  if (!receipt) throw new Error('原验收记录不可核验，请刷新。')
   const raw = await api.request(pathOf(receiptId) + '/preview', { ...contract.READ, method: 'POST' })
   if (await current() !== before) throw new Error('入账记录或权限已变化，请刷新。')
-  const preview = freeze(contract.validatePreview(raw, { receiptId, shipmentId, personId, authorizationVersion }))
+  const preview = freeze(contract.validatePreview(raw, { receiptId, shipmentId, personId, authorizationVersion, receipt }))
   return { preview, review: freeze({ title: '确认退回入账', description: '仅将已验收的退回数量从在途账户转入当前区域仓账户；不执行普通需求收货或 OAM 收货。',
     receiptId: preview.receipt_id, shipmentId: preview.shipment_id, target: preview.target_location_id,
-    rows: preview.lines.map(row => ({ id: row.receipt_line_id, quantity: row.accepted_qty, serialCount: row.serial_ids.length })) }) }
+    rows: preview.lines.map(row => ({ id: row.receipt_line_id + ':' + row.condition_code, condition: { new: '新件', used: '旧件', damaged: '坏件' }[row.condition_code], quantity: row.accepted_qty, serialCount: row.serial_ids.length })) }) }
 }
 async function submitInbound({ api, store, workOrderId, lossOrigin, receiptId, shipmentId, personId, authorizationVersion, expectedPlanHash, authorize, confirm }) {
   return store.withLease(origin.scope(workOrderId, lossOrigin, shipmentId), async lease => {

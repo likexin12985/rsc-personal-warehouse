@@ -12,7 +12,7 @@ import {
   UserCog,
   X,
 } from "lucide-react";
-import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   api,
   apiNoReplay,
@@ -42,6 +42,10 @@ import FormalDailyReconciliationsPage from "./pages/FormalDailyReconciliations";
 import FormalOpeningStocktakesPage from "./pages/FormalOpeningStocktakes";
 import FormalStocktakesPage from "./pages/FormalStocktakes";
 import FormalLossReviews from "./FormalLossReviews";
+import FormalLossExecution from "./FormalLossExecution";
+import FormalLossCorrection from "./FormalLossCorrection";
+import { createAdapter as createLossCorrectionAdapter } from "./lossCorrectionAdapter";
+import { createAdapter as createLossExecutionAdapter } from "./lossExecutionAdapter";
 import FormalReturnReceiving from "./FormalReturnReceivingPage";
 import FormalLossSubmissionPage from "./FormalLossSubmissionPage";
 import FormalLossSendingPage from "./FormalLossSendingPage";
@@ -346,6 +350,7 @@ function Shell({
     ...(hasFormalPermission(access, "access_context", "read") ? [{ to: "/notifications", label: "消息中心", icon: MessageSquareText }] : []),
     ...(hasFormalPermission(access, "stocktake", "read") ? [{ to: "/stocktakes", label: "日常盘点", icon: ClipboardCheck }] : []),
     ...(lossReviewStages(access).length ? [{ to: "/loss-reviews", label: "报损审批", icon: ClipboardCheck }] : []),
+    ...(lossReviewStages(access).includes("headquarters") ? [{ to: "/loss-execution", label: "报损处置", icon: ClipboardCheck }] : []),
     ...(canReadReturnReceiving(access) ? [{ to: "/return-receiving", label: "退回收货与入库", icon: Boxes }] : []),
     ...(canReadLossSubmission(access) ? [{ to: "/loss-reports/new", label: "本人报损", icon: ClipboardCheck }] : []),
     ...(canReadLossSubmission(access) ? [{ to: "/loss-returns/sending", label: "报损退回发件", icon: ClipboardCheck }] : []),
@@ -396,6 +401,21 @@ function lossReviewStages(access: AccessContext): LossReviewStage[] {
     ...(hasFormalRole(access, "provincial_manager") ? ["regional" as const] : []),
     ...(hasFormalRole(access, "admin") ? ["headquarters" as const] : []),
   ];
+}
+
+function FormalLossExecutionRoute({ access }: { access: AccessContext }) {
+  const navigate = useNavigate();
+  const adapter = useMemo(() => createLossExecutionAdapter(access.person_id, apiNoReplay), [access.person_id]);
+  return <FormalLossExecution identity={{ person_id: access.person_id, authorization_version: access.authorization_version }} adapter={adapter}
+    onOpenCorrection={root => navigate(`/loss-corrections/${root}`)} />;
+}
+
+function FormalLossCorrectionRoute({ access }: { access: AccessContext }) {
+  const { rootId = '' } = useParams();
+  const navigate = useNavigate();
+  const adapter = useMemo(() => createLossCorrectionAdapter(access.person_id, apiNoReplay), [access.person_id]);
+  return <FormalLossCorrection identity={{ person_id: access.person_id, authorization_version: access.authorization_version }}
+    rootId={rootId} adapter={adapter} onBack={() => navigate('/loss-execution')} />;
 }
 
 function FormalLossReviewsRoute({ access }: { access: AccessContext }) {
@@ -595,6 +615,12 @@ export default function App() {
         canRetryDelivery={canRetryNotificationDeliveries}
       /> : <Navigate to="/dashboard" replace />} />
       <Route path="/stocktakes" element={canReadStocktake ? <FormalStocktakesRoute access={access} /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/loss-execution" element={lossReviewStages(access).includes("headquarters") ? <FormalLossExecutionRoute
+        key={`${access.person_id}:${access.authorization_version}`} access={access}
+      /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/loss-corrections/:rootId" element={lossReviewStages(access).includes("headquarters") ? <FormalLossCorrectionRoute
+        key={`${access.person_id}:${access.authorization_version}`} access={access}
+      /> : <Navigate to="/dashboard" replace />} />
       <Route path="/loss-reviews" element={lossReviewStages(access).length ? <FormalLossReviewsRoute
         key={`${access.person_id}:${access.authorization_version}:${lossReviewStages(access).join(":")}`} access={access}
       /> : <Navigate to="/dashboard" replace />} />

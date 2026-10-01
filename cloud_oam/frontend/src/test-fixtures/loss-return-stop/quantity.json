@@ -1,0 +1,275 @@
+{
+  "source": {
+    "schema_version": "1.0",
+    "result_scope": "verified_loss_return_stop_references",
+    "stock_effect": "none",
+    "current_stock_verified": false,
+    "write_authorization_provided": false,
+    "person_id": "380a7e17-c339-4ef9-a701-1555b33a7253",
+    "authorization_version": 1,
+    "queried_at": "2026-10-01T18:49:03.721037Z",
+    "observed_ledger_cursor": 3,
+    "root_disposition_id": "9a980406-ca45-4f12-aad2-1d8e40b1c49a",
+    "report_operation_id": "124346ad-f1c3-4205-b4c9-58fde66d9c7e",
+    "report_line_id": "ed8530ec-d8d9-48a7-9181-1cdc913fde44",
+    "return_operation_id": "27c0d216-5c00-51ec-9dea-1d0ea518b1b4",
+    "return_line_id": "70bad6fe-c273-5dd8-acf1-042ebd5c9bd2",
+    "quantity": "0.250",
+    "serial_ids": [],
+    "state": "preview_required",
+    "preview_reference": {
+      "root_disposition_id": "9a980406-ca45-4f12-aad2-1d8e40b1c49a",
+      "expected_root_request_hash": "cf05611e72900f83b84a4b7af46d4a4d84287593d6f92479a2a3e289eed767f2",
+      "expected_submission_plan_hash": "3be4b71c5579c41c4d6323a9536f3e396109ce553e627a43fbe582a643dc464c",
+      "reversed_correction_id": null,
+      "expected_execution_request_hash": "cf05611e72900f83b84a4b7af46d4a4d84287593d6f92479a2a3e289eed767f2"
+    },
+    "stop": null
+  },
+  "preview": {
+    "planning_status": "preview_only",
+    "stock_effect": "none",
+    "root_disposition_id": "9a980406-ca45-4f12-aad2-1d8e40b1c49a",
+    "source_account_id": "b46f943e-4a8a-5015-91ac-ac3536826579",
+    "target_account_id": "3e768a54-c371-42c3-bd44-9936a41cf01b",
+    "source_condition": "new",
+    "target_condition": "new",
+    "quantity": "0.250",
+    "serial_ids": [],
+    "plan_hash": "335519108426008f05e9d8b78cc532a66eea83d0f1e384bba1bbc6a39709405e",
+    "checked_at": "2026-10-01T18:49:05.901243Z",
+    "original_execution_id": "9a980406-ca45-4f12-aad2-1d8e40b1c49a",
+    "original_transaction_id": "fc1e1115-afe1-4298-bf4e-7e1f4301c63a",
+    "original_movement_id": "5c90dfa5-de51-495f-b2bd-2ca8ec78d1a0",
+    "return_operation_id": "27c0d216-5c00-51ec-9dea-1d0ea518b1b4",
+    "return_line_id": "70bad6fe-c273-5dd8-acf1-042ebd5c9bd2",
+    "stop_scope": "whole_unshipped_return",
+    "planned_stock_effect": "return_pending_to_original_frozen"
+  },
+  "original": {
+    "root_disposition_id": "9a980406-ca45-4f12-aad2-1d8e40b1c49a",
+    "expected_root_request_hash": "cf05611e72900f83b84a4b7af46d4a4d84287593d6f92479a2a3e289eed767f2",
+    "expected_submission_plan_hash": "3be4b71c5579c41c4d6323a9536f3e396109ce553e627a43fbe582a643dc464c",
+    "reversed_correction_id": null,
+    "expected_execution_request_hash": "cf05611e72900f83b84a4b7af46d4a4d84287593d6f92479a2a3e289eed767f2",
+    "reason": "Explicit HTTP return stop",
+    "expected_plan_hash": "335519108426008f05e9d8b78cc532a66eea83d0f1e384bba1bbc6a39709405e",
+    "request_id": "efec1a6cd1de40adaf70de086a4a4556",
+    "idempotency_key": "0fca37167c58449a8dd3be2dde29ae8c"
+  },
+  "request_hash": "d25eef5114bc08001faec7bd367d91e5e895e969e343f32d7a14024c3bd15f58",
+  "missing": {
+    "retry_allowed": false,
+    "request_id": "efec1a6cd1de40adaf70de086a4a4556",
+    "request_hash": "d25eef5114bc08001faec7bd367d91e5e895e969e343f32d7a14024c3bd15f58",
+    "request_state": "not_found",
+    "result_scope": "unconfirmed_request",
+    "result": null
+  },
+  "found": {
+    "retry_allowed": false,
+    "request_id": "efec1a6cd1de40adaf70de086a4a4556",
+    "request_hash": "d25eef5114bc08001faec7bd367d91e5e895e969e343f32d7a14024c3bd15f58",
+    "request_state": "found",
+    "result_scope": "historical_original_posting",
+    "result": {
+      "root_disposition_id": "9a980406-ca45-4f12-aad2-1d8e40b1c49a",
+      "operation_id": "124346ad-f1c3-4205-b4c9-58fde66d9c7e",
+      "line_id": "ed8530ec-d8d9-48a7-9181-1cdc913fde44",
+      "original_headquarters_decision_id": "34067622-013a-48e8-a088-edfc9205ebe0",
+      "requester_person_id": "696bb65d-0aaf-4589-bd3f-62a9183954d4",
+      "actor_user_id": "ad2cee26-625e-4276-a4c4-40d39bd15627",
+      "actor_person_id": "380a7e17-c339-4ef9-a701-1555b33a7253",
+      "authorization_version": 1,
+      "reason": "Explicit HTTP return stop",
+      "request_id": "efec1a6cd1de40adaf70de086a4a4556",
+      "request_hash": "d25eef5114bc08001faec7bd367d91e5e895e969e343f32d7a14024c3bd15f58",
+      "posting_transaction_id": "8a04195d-604f-442d-95b8-f424dbfb8aea",
+      "posting_movement_id": "a3010f9f-e35e-4144-b71e-3b6072cc25ad",
+      "source_account_id": "b46f943e-4a8a-5015-91ac-ac3536826579",
+      "target_account_id": "3e768a54-c371-42c3-bd44-9936a41cf01b",
+      "quantity": "0.250",
+      "plan_hash": "335519108426008f05e9d8b78cc532a66eea83d0f1e384bba1bbc6a39709405e",
+      "status": "posted",
+      "reversal_id": "d71aadde-734c-45fe-a1fc-f8b028e88470",
+      "original_execution_id": "9a980406-ca45-4f12-aad2-1d8e40b1c49a",
+      "reversed_correction_id": null,
+      "original_transaction_id": "fc1e1115-afe1-4298-bf4e-7e1f4301c63a",
+      "original_movement_id": "5c90dfa5-de51-495f-b2bd-2ca8ec78d1a0",
+      "stock_effect": "restores_original_frozen_share"
+    }
+  },
+  "sealed_command": {
+    "root_disposition_id": "9a980406-ca45-4f12-aad2-1d8e40b1c49a",
+    "expected_root_request_hash": "cf05611e72900f83b84a4b7af46d4a4d84287593d6f92479a2a3e289eed767f2",
+    "expected_submission_plan_hash": "3be4b71c5579c41c4d6323a9536f3e396109ce553e627a43fbe582a643dc464c",
+    "reversed_correction_id": null,
+    "expected_execution_request_hash": "cf05611e72900f83b84a4b7af46d4a4d84287593d6f92479a2a3e289eed767f2",
+    "reason": "Explicit HTTP return stop",
+    "expected_plan_hash": "335519108426008f05e9d8b78cc532a66eea83d0f1e384bba1bbc6a39709405e",
+    "request_id": "7bc7f4460e414fe1bfdf94ac8f7af38b",
+    "idempotency_key": "4dcf8fa4c5424dcc91d98f5e6f664787"
+  },
+  "sealed": {
+    "retry_allowed": false,
+    "request_id": "7bc7f4460e414fe1bfdf94ac8f7af38b",
+    "request_hash": "6f08d37fe918a4a74bc371b34dee395471bb57816b1c4ce6e9424fef2c3e7e8a",
+    "request_state": "sealed",
+    "result_scope": "closed_original_request",
+    "result": null,
+    "seal": {
+      "seal_id": "111e6dbe-dede-4e1c-8e94-a2268659ba19",
+      "root_disposition_id": "9a980406-ca45-4f12-aad2-1d8e40b1c49a",
+      "sealed_at": "2026-10-01T18:49:08.086121Z",
+      "stock_effect": "none"
+    }
+  },
+  "after": {
+    "schema_version": "1.0",
+    "result_scope": "verified_loss_return_stop_references",
+    "stock_effect": "none",
+    "current_stock_verified": false,
+    "write_authorization_provided": false,
+    "person_id": "380a7e17-c339-4ef9-a701-1555b33a7253",
+    "authorization_version": 1,
+    "queried_at": "2026-10-01T18:49:21.172824Z",
+    "observed_ledger_cursor": 4,
+    "root_disposition_id": "9a980406-ca45-4f12-aad2-1d8e40b1c49a",
+    "report_operation_id": "124346ad-f1c3-4205-b4c9-58fde66d9c7e",
+    "report_line_id": "ed8530ec-d8d9-48a7-9181-1cdc913fde44",
+    "return_operation_id": "27c0d216-5c00-51ec-9dea-1d0ea518b1b4",
+    "return_line_id": "70bad6fe-c273-5dd8-acf1-042ebd5c9bd2",
+    "quantity": "0.250",
+    "serial_ids": [],
+    "state": "stopped",
+    "preview_reference": null,
+    "stop": {
+      "stop_id": "e35b5de0-3db5-47e0-94c3-f6553684144c",
+      "reversal_id": "d71aadde-734c-45fe-a1fc-f8b028e88470",
+      "posting_transaction_id": "8a04195d-604f-442d-95b8-f424dbfb8aea",
+      "stopped_at": "2026-10-01T18:49:14.009924Z",
+      "reason": "Explicit HTTP return stop",
+      "quantity": "0.250",
+      "serial_ids": [],
+      "evidence_fingerprint": "d7a1dd18f5f9c9d459e6f477308185b6ddf9975cd8f0810ba968ac9abe912fda",
+      "stop_scope": "whole_unshipped_return",
+      "historical_stock_effect": "return_pending_to_original_frozen"
+    }
+  },
+  "history_before": {
+    "schema_version": "1.0",
+    "result_scope": "verified_loss_return_history",
+    "stock_effect": "none",
+    "current_stock_verified": false,
+    "write_authorization_provided": false,
+    "root_disposition_id": "9a980406-ca45-4f12-aad2-1d8e40b1c49a",
+    "operation_id": "27c0d216-5c00-51ec-9dea-1d0ea518b1b4",
+    "observed_ledger_cursor": 3,
+    "evidence_fingerprint": "ccfd356d1b9008e0f22aca23620ebdaf343327b85d6347064916fc44355e12dc",
+    "coordinates": {
+      "outbounds": [],
+      "shipments": [],
+      "receipts": [],
+      "inbounds": []
+    },
+    "lines": [
+      {
+        "operation_line_id": "70bad6fe-c273-5dd8-acf1-042ebd5c9bd2",
+        "original_quantity": "0.250",
+        "shares": [
+          {
+            "stage": "not_outbound",
+            "quantity": "0.250",
+            "serial_ids": []
+          },
+          {
+            "stage": "outbound_not_shipped",
+            "quantity": "0",
+            "serial_ids": []
+          },
+          {
+            "stage": "shipped_unconfirmed",
+            "quantity": "0",
+            "serial_ids": []
+          },
+          {
+            "stage": "accepted_not_inbound",
+            "quantity": "0",
+            "serial_ids": []
+          },
+          {
+            "stage": "rejected",
+            "quantity": "0",
+            "serial_ids": []
+          },
+          {
+            "stage": "posted_inbound",
+            "quantity": "0",
+            "serial_ids": []
+          }
+        ],
+        "damaged_accepted_quantity": "0",
+        "shortage_observations": []
+      }
+    ],
+    "classification_exceptions": []
+  },
+  "history_after": {
+    "schema_version": "1.0",
+    "result_scope": "verified_loss_return_history",
+    "stock_effect": "none",
+    "current_stock_verified": false,
+    "write_authorization_provided": false,
+    "root_disposition_id": "9a980406-ca45-4f12-aad2-1d8e40b1c49a",
+    "operation_id": "27c0d216-5c00-51ec-9dea-1d0ea518b1b4",
+    "observed_ledger_cursor": 4,
+    "evidence_fingerprint": "ccfd356d1b9008e0f22aca23620ebdaf343327b85d6347064916fc44355e12dc",
+    "coordinates": {
+      "outbounds": [],
+      "shipments": [],
+      "receipts": [],
+      "inbounds": []
+    },
+    "lines": [
+      {
+        "operation_line_id": "70bad6fe-c273-5dd8-acf1-042ebd5c9bd2",
+        "original_quantity": "0.250",
+        "shares": [
+          {
+            "stage": "not_outbound",
+            "quantity": "0.250",
+            "serial_ids": []
+          },
+          {
+            "stage": "outbound_not_shipped",
+            "quantity": "0",
+            "serial_ids": []
+          },
+          {
+            "stage": "shipped_unconfirmed",
+            "quantity": "0",
+            "serial_ids": []
+          },
+          {
+            "stage": "accepted_not_inbound",
+            "quantity": "0",
+            "serial_ids": []
+          },
+          {
+            "stage": "rejected",
+            "quantity": "0",
+            "serial_ids": []
+          },
+          {
+            "stage": "posted_inbound",
+            "quantity": "0",
+            "serial_ids": []
+          }
+        ],
+        "damaged_accepted_quantity": "0",
+        "shortage_observations": []
+      }
+    ],
+    "classification_exceptions": []
+  }
+}

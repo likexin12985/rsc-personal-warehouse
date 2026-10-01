@@ -213,7 +213,7 @@ def run(context):
             with patch.object(posting,'_require_generic_reversal_origin',return_value=None):
                 posting.reverse_inventory_transaction(db,actor=load_formal_principal(db,context['admin_id']),
                     command=inverse,idempotency_key=uuid4().hex,request_id=uuid4().hex)
-            with pytest.raises(DBAPIError,match='0150 (exact approved disposition graph required|disposition requires its dedicated reversal)') as refused:
+            with pytest.raises(DBAPIError,match='0159 exact dedicated disposition inverse required') as refused:
                 db.commit()
             assert refused.value.orig.sqlstate=='23514';db.rollback()
         assert snapshot(owner)==before
@@ -229,7 +229,7 @@ def run(context):
             effective_at=datetime.now(timezone.utc),movements=(move,))
         posting.post_inventory_transaction(db,actor=load_formal_principal(db,context['engineer_id']),command=command,
             idempotency_key=uuid4().hex,request_id=uuid4().hex,permission_resource='stock_operation',permission_action='submit_loss')
-        with pytest.raises(DBAPIError,match='0150 unreleased loss quantities must remain frozen') as refused:db.commit()
+        with pytest.raises(DBAPIError,match='0159 original and restored loss quantities must remain frozen') as refused:db.commit()
         assert refused.value.orig.sqlstate=='23514';db.rollback()
     assert snapshot(owner)==before
     print('PG16 disposition '+context['tracking']+': unrelated shared hold retained and borrowing rolled back PASS',flush=True)
@@ -269,11 +269,11 @@ def release(engines,*,tracking,migrate,provision):
         validate_production_database_security(engines['star_oam_api'],expected_runtime_role='star_oam_api',expected_migration_role='star_oam_migrator')
     security()
     result=sources(engines,tracking=tracking,after_preview=run)
-    migrate('retained-disposition-downgrade','downgrade','20261128_0149','0151 disposition custody proof history requires retention')
+    migrate('retained-disposition-downgrade','downgrade','20261128_0149','0159 immutable business history requires retention')
     from pg16_stock_loss_custody_gate import assert_original_retention
     assert_original_retention(engines['star_oam_migrator'])
     with engines['star_oam_migrator'].connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261206_0157'
+        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261212_0163'
     security()
     result.update(emptyRoundtrip=True,retainedDispositionBlocksDowngrade=True,
         custodyHistoryBlocksDowngrade=True,independent0150RetentionPreserved=True,runtimeSecurityBeforeAndAfter=True)

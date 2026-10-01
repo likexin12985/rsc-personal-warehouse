@@ -1,0 +1,16 @@
+.loss-correction-page .correction-heading-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.loss-correction-page textarea { width: 100%; min-height: 100px; resize: vertical; }
+.loss-correction-page select { width: 100%; min-width: 0; }
+.loss-correction-page .correction-state { font-weight: 700; color: var(--ink); }
+.loss-correction-page [aria-label="确认纠正操作"] { border-color: var(--teal); }
+.loss-correction-page [aria-label="确认纠正操作"] button:first-of-type { background: var(--teal); color: #fff; border-color: var(--teal); }
+@media (max-width: 640px) {
+  .loss-correction-page .page-heading { flex-direction: column; }
+  .loss-correction-page .correction-heading-actions { width: 100%; }
+  .loss-correction-page .correction-heading-actions button { flex: 1; }
+}
+
+.loss-correction-page [aria-label="退回停止与恢复"] p { overflow-wrap: anywhere; }
+.loss-correction-page [aria-label="确认退回停止"],
+.loss-correction-page [aria-label="确认永久封存停止请求"] { margin-top: 16px; padding: 16px; border: 1px solid var(--teal); border-radius: 12px; }
+.loss-correction-page [aria-label="确认退回停止"] button:first-of-type { background: var(--teal); color: #fff; border-color: var(--teal); }
