@@ -1,0 +1,778 @@
+{
+  "functions": {
+    "rsc_claim_application_key_version_0180()": {
+      "acl": [
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "EXECUTE"
+        }
+      ],
+      "definition": "CREATE OR REPLACE FUNCTION public.rsc_claim_application_key_version_0180()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\nDECLARE provider_name text;\nBEGIN\n    IF current_user <> 'star_oam_migrator' OR session_user <> 'star_oam_migrator'\n       OR TG_TABLE_SCHEMA <> 'public'\n       OR TG_TABLE_NAME NOT IN ('kms_data_key_pins', 'openbao_data_key_pins')\n       OR TG_OP <> 'INSERT' OR TG_WHEN <> 'AFTER' THEN\n        RAISE EXCEPTION USING ERRCODE = '42501',\n            MESSAGE = 'Direct migrator key-pin insertion required';\n    END IF;\n    provider_name := CASE TG_TABLE_NAME WHEN 'kms_data_key_pins'\n        THEN 'aliyun_kms' ELSE 'openbao_transit_v1' END;\n    -- The immediate shared primary key arbitrates concurrent providers.\n    -- An ordinary INSERT is intentional: never ignore a conflicting claim.\n    INSERT INTO public.application_key_version_claims\n        (purpose, application_key_version, provider, ciphertext_sha256, created_at)\n    VALUES (NEW.purpose, NEW.application_key_version, provider_name,\n        NEW.ciphertext_sha256, NEW.created_at);\n    RETURN NEW;\nEND\n$function$\n",
+      "identity_arguments": "",
+      "owner": "star_oam_migrator",
+      "proconfig": [
+        "search_path=pg_catalog, public"
+      ],
+      "proisstrict": false,
+      "proleakproof": false,
+      "proname": "rsc_claim_application_key_version_0180",
+      "proparallel": "u",
+      "prosecdef": false,
+      "prosrc": "\nDECLARE provider_name text;\nBEGIN\n    IF current_user <> 'star_oam_migrator' OR session_user <> 'star_oam_migrator'\n       OR TG_TABLE_SCHEMA <> 'public'\n       OR TG_TABLE_NAME NOT IN ('kms_data_key_pins', 'openbao_data_key_pins')\n       OR TG_OP <> 'INSERT' OR TG_WHEN <> 'AFTER' THEN\n        RAISE EXCEPTION USING ERRCODE = '42501',\n            MESSAGE = 'Direct migrator key-pin insertion required';\n    END IF;\n    provider_name := CASE TG_TABLE_NAME WHEN 'kms_data_key_pins'\n        THEN 'aliyun_kms' ELSE 'openbao_transit_v1' END;\n    -- The immediate shared primary key arbitrates concurrent providers.\n    -- An ordinary INSERT is intentional: never ignore a conflicting claim.\n    INSERT INTO public.application_key_version_claims\n        (purpose, application_key_version, provider, ciphertext_sha256, created_at)\n    VALUES (NEW.purpose, NEW.application_key_version, provider_name,\n        NEW.ciphertext_sha256, NEW.created_at);\n    RETURN NEW;\nEND\n",
+      "provolatile": "v",
+      "signature": "rsc_claim_application_key_version_0180()"
+    },
+    "rsc_guard_application_key_version_claim_0180()": {
+      "acl": [
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "EXECUTE"
+        }
+      ],
+      "definition": "CREATE OR REPLACE FUNCTION public.rsc_guard_application_key_version_claim_0180()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\nBEGIN\n    IF current_user <> 'star_oam_migrator' OR session_user <> 'star_oam_migrator'\n       OR TG_TABLE_SCHEMA <> 'public' OR TG_TABLE_NAME <> 'application_key_version_claims'\n       OR TG_OP <> 'INSERT' OR TG_WHEN <> 'BEFORE' THEN\n        RAISE EXCEPTION USING ERRCODE = '42501',\n            MESSAGE = 'Direct migrator key-claim insertion required';\n    END IF;\n    IF NOT (\n        (NEW.provider = 'aliyun_kms' AND EXISTS (\n            SELECT 1 FROM public.kms_data_key_pins p\n             WHERE p.purpose = NEW.purpose\n               AND p.application_key_version = NEW.application_key_version\n               AND p.ciphertext_sha256 = NEW.ciphertext_sha256\n               AND p.created_at = NEW.created_at))\n        OR (NEW.provider = 'openbao_transit_v1' AND EXISTS (\n            SELECT 1 FROM public.openbao_data_key_pins p\n             WHERE p.purpose = NEW.purpose\n               AND p.application_key_version = NEW.application_key_version\n               AND p.ciphertext_sha256 = NEW.ciphertext_sha256\n               AND p.created_at = NEW.created_at))\n    ) THEN\n        RAISE EXCEPTION USING ERRCODE = '23514',\n            MESSAGE = 'Application key claim requires its exact existing pin';\n    END IF;\n    RETURN NEW;\nEND\n$function$\n",
+      "identity_arguments": "",
+      "owner": "star_oam_migrator",
+      "proconfig": [
+        "search_path=pg_catalog, public"
+      ],
+      "proisstrict": false,
+      "proleakproof": false,
+      "proname": "rsc_guard_application_key_version_claim_0180",
+      "proparallel": "u",
+      "prosecdef": false,
+      "prosrc": "\nBEGIN\n    IF current_user <> 'star_oam_migrator' OR session_user <> 'star_oam_migrator'\n       OR TG_TABLE_SCHEMA <> 'public' OR TG_TABLE_NAME <> 'application_key_version_claims'\n       OR TG_OP <> 'INSERT' OR TG_WHEN <> 'BEFORE' THEN\n        RAISE EXCEPTION USING ERRCODE = '42501',\n            MESSAGE = 'Direct migrator key-claim insertion required';\n    END IF;\n    IF NOT (\n        (NEW.provider = 'aliyun_kms' AND EXISTS (\n            SELECT 1 FROM public.kms_data_key_pins p\n             WHERE p.purpose = NEW.purpose\n               AND p.application_key_version = NEW.application_key_version\n               AND p.ciphertext_sha256 = NEW.ciphertext_sha256\n               AND p.created_at = NEW.created_at))\n        OR (NEW.provider = 'openbao_transit_v1' AND EXISTS (\n            SELECT 1 FROM public.openbao_data_key_pins p\n             WHERE p.purpose = NEW.purpose\n               AND p.application_key_version = NEW.application_key_version\n               AND p.ciphertext_sha256 = NEW.ciphertext_sha256\n               AND p.created_at = NEW.created_at))\n    ) THEN\n        RAISE EXCEPTION USING ERRCODE = '23514',\n            MESSAGE = 'Application key claim requires its exact existing pin';\n    END IF;\n    RETURN NEW;\nEND\n",
+      "provolatile": "v",
+      "signature": "rsc_guard_application_key_version_claim_0180()"
+    },
+    "rsc_reject_key_provider_binding_mutation_0180()": {
+      "acl": [
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "EXECUTE"
+        }
+      ],
+      "definition": "CREATE OR REPLACE FUNCTION public.rsc_reject_key_provider_binding_mutation_0180()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\nBEGIN\n    RAISE EXCEPTION USING ERRCODE = '55000',\n        MESSAGE = 'Application key provider bindings are immutable';\nEND\n$function$\n",
+      "identity_arguments": "",
+      "owner": "star_oam_migrator",
+      "proconfig": [
+        "search_path=pg_catalog, public"
+      ],
+      "proisstrict": false,
+      "proleakproof": false,
+      "proname": "rsc_reject_key_provider_binding_mutation_0180",
+      "proparallel": "u",
+      "prosecdef": false,
+      "prosrc": "\nBEGIN\n    RAISE EXCEPTION USING ERRCODE = '55000',\n        MESSAGE = 'Application key provider bindings are immutable';\nEND\n",
+      "provolatile": "v",
+      "signature": "rsc_reject_key_provider_binding_mutation_0180()"
+    }
+  },
+  "tables": {
+    "application_key_version_claims": {
+      "acl": [
+        {
+          "grantable": false,
+          "grantee": "star_oam_api",
+          "privilege": "SELECT"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_backup",
+          "privilege": "SELECT"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "DELETE"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "INSERT"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "REFERENCES"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "SELECT"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "TRIGGER"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "TRUNCATE"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "UPDATE"
+        }
+      ],
+      "columns": [
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "\"default\"",
+          "default_sql": null,
+          "name": "purpose",
+          "not_null": true,
+          "type": "character varying(64)"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "-",
+          "default_sql": null,
+          "name": "application_key_version",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "\"default\"",
+          "default_sql": null,
+          "name": "provider",
+          "not_null": true,
+          "type": "character varying(32)"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "\"default\"",
+          "default_sql": null,
+          "name": "ciphertext_sha256",
+          "not_null": true,
+          "type": "character varying(64)"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "-",
+          "default_sql": null,
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": [
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "CHECK (((length((ciphertext_sha256)::text) = 64) AND (length(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace((ciphertext_sha256)::text, '0'::text, ''::text), '1'::text, ''::text), '2'::text, ''::text), '3'::text, ''::text), '4'::text, ''::text), '5'::text, ''::text), '6'::text, ''::text), '7'::text, ''::text), '8'::text, ''::text), '9'::text, ''::text), 'a'::text, ''::text), 'b'::text, ''::text), 'c'::text, ''::text), 'd'::text, ''::text), 'e'::text, ''::text), 'f'::text, ''::text)) = 0)))",
+          "name": "ck_application_key_version_claims_hash_0180",
+          "type": "c"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "CHECK (((provider)::text = ANY ((ARRAY['aliyun_kms'::character varying, 'openbao_transit_v1'::character varying])::text[])))",
+          "name": "ck_application_key_version_claims_provider_0180",
+          "type": "c"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "CHECK (((purpose)::text = ANY ((ARRAY['authentication_idempotency'::character varying, 'material_request_contact'::character varying])::text[])))",
+          "name": "ck_application_key_version_claims_purpose_0180",
+          "type": "c"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "CHECK (((application_key_version >= 1) AND (application_key_version <= 2147483647)))",
+          "name": "ck_application_key_version_claims_version_0180",
+          "type": "c"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "PRIMARY KEY (purpose, application_key_version)",
+          "name": "pk_application_key_version_claims_0180",
+          "type": "p"
+        }
+      ],
+      "fk_guards": [],
+      "indexes": [
+        {
+          "definition": "CREATE UNIQUE INDEX pk_application_key_version_claims_0180 ON public.application_key_version_claims USING btree (purpose, application_key_version)",
+          "indimmediate": true,
+          "indisready": true,
+          "indisreplident": false,
+          "indisunique": true,
+          "indisvalid": true,
+          "name": "pk_application_key_version_claims_0180"
+        }
+      ],
+      "name": "application_key_version_claims",
+      "owner": "star_oam_migrator",
+      "relforcerowsecurity": false,
+      "relkind": "r",
+      "reloptions": null,
+      "relpersistence": "p",
+      "relreplident": "d",
+      "relrowsecurity": false,
+      "triggers": [
+        {
+          "definition": "CREATE TRIGGER trg_application_key_version_claims_immutable_0180 BEFORE DELETE OR UPDATE ON public.application_key_version_claims FOR EACH ROW EXECUTE FUNCTION rsc_reject_key_provider_binding_mutation_0180()",
+          "function_signature": "rsc_reject_key_provider_binding_mutation_0180()",
+          "name": "trg_application_key_version_claims_immutable_0180",
+          "tgdeferrable": false,
+          "tgenabled": "A",
+          "tginitdeferred": false,
+          "tgtype": 27
+        },
+        {
+          "definition": "CREATE TRIGGER trg_application_key_version_claims_insert_0180 BEFORE INSERT ON public.application_key_version_claims FOR EACH ROW EXECUTE FUNCTION rsc_guard_application_key_version_claim_0180()",
+          "function_signature": "rsc_guard_application_key_version_claim_0180()",
+          "name": "trg_application_key_version_claims_insert_0180",
+          "tgdeferrable": false,
+          "tgenabled": "A",
+          "tginitdeferred": false,
+          "tgtype": 7
+        },
+        {
+          "definition": "CREATE TRIGGER trg_application_key_version_claims_no_truncate_0180 BEFORE TRUNCATE ON public.application_key_version_claims FOR EACH STATEMENT EXECUTE FUNCTION rsc_reject_key_provider_binding_mutation_0180()",
+          "function_signature": "rsc_reject_key_provider_binding_mutation_0180()",
+          "name": "trg_application_key_version_claims_no_truncate_0180",
+          "tgdeferrable": false,
+          "tgenabled": "A",
+          "tginitdeferred": false,
+          "tgtype": 34
+        }
+      ]
+    },
+    "kms_data_key_pins": {
+      "acl": [
+        {
+          "grantable": false,
+          "grantee": "star_oam_api",
+          "privilege": "SELECT"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_backup",
+          "privilege": "SELECT"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "DELETE"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "INSERT"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "REFERENCES"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "SELECT"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "TRIGGER"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "TRUNCATE"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "UPDATE"
+        }
+      ],
+      "columns": [
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "\"default\"",
+          "default_sql": null,
+          "name": "purpose",
+          "not_null": true,
+          "type": "character varying(64)"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "\"default\"",
+          "default_sql": null,
+          "name": "kms_key_id",
+          "not_null": true,
+          "type": "character varying(256)"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "-",
+          "default_sql": null,
+          "name": "application_key_version",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "\"default\"",
+          "default_sql": null,
+          "name": "kms_key_version_id",
+          "not_null": true,
+          "type": "character varying(128)"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "\"default\"",
+          "default_sql": null,
+          "name": "ciphertext_sha256",
+          "not_null": true,
+          "type": "character varying(64)"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "-",
+          "default_sql": null,
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": [
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "CHECK ((((kms_key_id)::text = TRIM(BOTH FROM kms_key_id)) AND ((kms_key_version_id)::text = TRIM(BOTH FROM kms_key_version_id)) AND ((length((kms_key_id)::text) >= 3) AND (length((kms_key_id)::text) <= 256)) AND ((length((kms_key_version_id)::text) >= 8) AND (length((kms_key_version_id)::text) <= 128))))",
+          "name": "ck_kms_data_key_pins_coordinates_0040",
+          "type": "c"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "CHECK (((purpose)::text = ANY ((ARRAY['authentication_idempotency'::character varying, 'material_request_contact'::character varying])::text[])))",
+          "name": "ck_kms_data_key_pins_purpose_0040",
+          "type": "c"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "CHECK (((length((ciphertext_sha256)::text) = 64) AND (length(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace((ciphertext_sha256)::text, '0'::text, ''::text), '1'::text, ''::text), '2'::text, ''::text), '3'::text, ''::text), '4'::text, ''::text), '5'::text, ''::text), '6'::text, ''::text), '7'::text, ''::text), '8'::text, ''::text), '9'::text, ''::text), 'a'::text, ''::text), 'b'::text, ''::text), 'c'::text, ''::text), 'd'::text, ''::text), 'e'::text, ''::text), 'f'::text, ''::text)) = 0)))",
+          "name": "ck_kms_data_key_pins_sha256_0040",
+          "type": "c"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "CHECK (((application_key_version >= 1) AND (application_key_version <= 2147483647)))",
+          "name": "ck_kms_data_key_pins_version_0040",
+          "type": "c"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "PRIMARY KEY (purpose, kms_key_id, application_key_version)",
+          "name": "pk_kms_data_key_pins_coordinate_0040",
+          "type": "p"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "UNIQUE (ciphertext_sha256)",
+          "name": "uq_kms_data_key_pins_ciphertext_0040",
+          "type": "u"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "UNIQUE (purpose, application_key_version)",
+          "name": "uq_kms_data_key_pins_purpose_version_0040",
+          "type": "u"
+        }
+      ],
+      "fk_guards": [],
+      "indexes": [
+        {
+          "definition": "CREATE UNIQUE INDEX pk_kms_data_key_pins_coordinate_0040 ON public.kms_data_key_pins USING btree (purpose, kms_key_id, application_key_version)",
+          "indimmediate": true,
+          "indisready": true,
+          "indisreplident": false,
+          "indisunique": true,
+          "indisvalid": true,
+          "name": "pk_kms_data_key_pins_coordinate_0040"
+        },
+        {
+          "definition": "CREATE UNIQUE INDEX uq_kms_data_key_pins_ciphertext_0040 ON public.kms_data_key_pins USING btree (ciphertext_sha256)",
+          "indimmediate": true,
+          "indisready": true,
+          "indisreplident": false,
+          "indisunique": true,
+          "indisvalid": true,
+          "name": "uq_kms_data_key_pins_ciphertext_0040"
+        },
+        {
+          "definition": "CREATE UNIQUE INDEX uq_kms_data_key_pins_purpose_version_0040 ON public.kms_data_key_pins USING btree (purpose, application_key_version)",
+          "indimmediate": true,
+          "indisready": true,
+          "indisreplident": false,
+          "indisunique": true,
+          "indisvalid": true,
+          "name": "uq_kms_data_key_pins_purpose_version_0040"
+        }
+      ],
+      "name": "kms_data_key_pins",
+      "owner": "star_oam_migrator",
+      "relforcerowsecurity": false,
+      "relkind": "r",
+      "reloptions": null,
+      "relpersistence": "p",
+      "relreplident": "d",
+      "relrowsecurity": false,
+      "triggers": [
+        {
+          "definition": "CREATE TRIGGER trg_kms_data_key_pins_claim_0180 AFTER INSERT ON public.kms_data_key_pins FOR EACH ROW EXECUTE FUNCTION rsc_claim_application_key_version_0180()",
+          "function_signature": "rsc_claim_application_key_version_0180()",
+          "name": "trg_kms_data_key_pins_claim_0180",
+          "tgdeferrable": false,
+          "tgenabled": "A",
+          "tginitdeferred": false,
+          "tgtype": 5
+        },
+        {
+          "definition": "CREATE TRIGGER trg_kms_data_key_pins_immutable_0040 BEFORE DELETE OR UPDATE ON public.kms_data_key_pins FOR EACH ROW EXECUTE FUNCTION rsc_reject_kms_data_key_pin_mutation_0040()",
+          "function_signature": "rsc_reject_kms_data_key_pin_mutation_0040()",
+          "name": "trg_kms_data_key_pins_immutable_0040",
+          "tgdeferrable": false,
+          "tgenabled": "A",
+          "tginitdeferred": false,
+          "tgtype": 27
+        },
+        {
+          "definition": "CREATE TRIGGER trg_kms_data_key_pins_no_truncate_0040 BEFORE TRUNCATE ON public.kms_data_key_pins FOR EACH STATEMENT EXECUTE FUNCTION rsc_reject_kms_data_key_pin_mutation_0040()",
+          "function_signature": "rsc_reject_kms_data_key_pin_mutation_0040()",
+          "name": "trg_kms_data_key_pins_no_truncate_0040",
+          "tgdeferrable": false,
+          "tgenabled": "A",
+          "tginitdeferred": false,
+          "tgtype": 34
+        }
+      ]
+    },
+    "openbao_data_key_pins": {
+      "acl": [
+        {
+          "grantable": false,
+          "grantee": "star_oam_api",
+          "privilege": "SELECT"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_backup",
+          "privilege": "SELECT"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "DELETE"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "INSERT"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "REFERENCES"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "SELECT"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "TRIGGER"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "TRUNCATE"
+        },
+        {
+          "grantable": false,
+          "grantee": "star_oam_migrator",
+          "privilege": "UPDATE"
+        }
+      ],
+      "columns": [
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "\"default\"",
+          "default_sql": null,
+          "name": "purpose",
+          "not_null": true,
+          "type": "character varying(64)"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "\"default\"",
+          "default_sql": null,
+          "name": "environment",
+          "not_null": true,
+          "type": "character varying(16)"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "\"default\"",
+          "default_sql": null,
+          "name": "provider_instance_id",
+          "not_null": true,
+          "type": "character varying(63)"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "\"default\"",
+          "default_sql": null,
+          "name": "key_path",
+          "not_null": true,
+          "type": "character varying(128)"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "-",
+          "default_sql": null,
+          "name": "application_key_version",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "-",
+          "default_sql": null,
+          "name": "transit_key_version",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "\"default\"",
+          "default_sql": null,
+          "name": "ciphertext_sha256",
+          "not_null": true,
+          "type": "character varying(64)"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "\"default\"",
+          "default_sql": null,
+          "name": "context_sha256",
+          "not_null": true,
+          "type": "character varying(64)"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "\"default\"",
+          "default_sql": null,
+          "name": "associated_data_sha256",
+          "not_null": true,
+          "type": "character varying(64)"
+        },
+        {
+          "acl": [],
+          "attgenerated": "",
+          "attidentity": "",
+          "collation": "-",
+          "default_sql": null,
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": [
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "CHECK (((environment)::text = ANY ((ARRAY['development'::character varying, 'test'::character varying, 'staging'::character varying, 'production'::character varying])::text[])))",
+          "name": "ck_openbao_data_key_pins_environment_0180",
+          "type": "c"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "CHECK (((length((ciphertext_sha256)::text) = 64) AND (length(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace((ciphertext_sha256)::text, '0'::text, ''::text), '1'::text, ''::text), '2'::text, ''::text), '3'::text, ''::text), '4'::text, ''::text), '5'::text, ''::text), '6'::text, ''::text), '7'::text, ''::text), '8'::text, ''::text), '9'::text, ''::text), 'a'::text, ''::text), 'b'::text, ''::text), 'c'::text, ''::text), 'd'::text, ''::text), 'e'::text, ''::text), 'f'::text, ''::text)) = 0) AND (length((context_sha256)::text) = 64) AND (length(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace((context_sha256)::text, '0'::text, ''::text), '1'::text, ''::text), '2'::text, ''::text), '3'::text, ''::text), '4'::text, ''::text), '5'::text, ''::text), '6'::text, ''::text), '7'::text, ''::text), '8'::text, ''::text), '9'::text, ''::text), 'a'::text, ''::text), 'b'::text, ''::text), 'c'::text, ''::text), 'd'::text, ''::text), 'e'::text, ''::text), 'f'::text, ''::text)) = 0) AND (length((associated_data_sha256)::text) = 64) AND (length(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace((associated_data_sha256)::text, '0'::text, ''::text), '1'::text, ''::text), '2'::text, ''::text), '3'::text, ''::text), '4'::text, ''::text), '5'::text, ''::text), '6'::text, ''::text), '7'::text, ''::text), '8'::text, ''::text), '9'::text, ''::text), 'a'::text, ''::text), 'b'::text, ''::text), 'c'::text, ''::text), 'd'::text, ''::text), 'e'::text, ''::text), 'f'::text, ''::text)) = 0)))",
+          "name": "ck_openbao_data_key_pins_hashes_0180",
+          "type": "c"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "CHECK ((((length((provider_instance_id)::text) >= 3) AND (length((provider_instance_id)::text) <= 63)) AND (substr((provider_instance_id)::text, 1, 1) <> '-'::text) AND (length(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace((provider_instance_id)::text, 'a'::text, ''::text), 'b'::text, ''::text), 'c'::text, ''::text), 'd'::text, ''::text), 'e'::text, ''::text), 'f'::text, ''::text), 'g'::text, ''::text), 'h'::text, ''::text), 'i'::text, ''::text), 'j'::text, ''::text), 'k'::text, ''::text), 'l'::text, ''::text), 'm'::text, ''::text), 'n'::text, ''::text), 'o'::text, ''::text), 'p'::text, ''::text), 'q'::text, ''::text), 'r'::text, ''::text), 's'::text, ''::text), 't'::text, ''::text), 'u'::text, ''::text), 'v'::text, ''::text), 'w'::text, ''::text), 'x'::text, ''::text), 'y'::text, ''::text), 'z'::text, ''::text), '0'::text, ''::text), '1'::text, ''::text), '2'::text, ''::text), '3'::text, ''::text), '4'::text, ''::text), '5'::text, ''::text), '6'::text, ''::text), '7'::text, ''::text), '8'::text, ''::text), '9'::text, ''::text), '-'::text, ''::text)) = 0)))",
+          "name": "ck_openbao_data_key_pins_instance_0180",
+          "type": "c"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "CHECK (((((purpose)::text = 'authentication_idempotency'::text) AND ((key_path)::text = 'transit/keys/rsc-authentication-idempotency'::text)) OR (((purpose)::text = 'material_request_contact'::text) AND ((key_path)::text = 'transit/keys/rsc-material-request-contact'::text))))",
+          "name": "ck_openbao_data_key_pins_key_path_0180",
+          "type": "c"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "CHECK (((purpose)::text = ANY ((ARRAY['authentication_idempotency'::character varying, 'material_request_contact'::character varying])::text[])))",
+          "name": "ck_openbao_data_key_pins_purpose_0180",
+          "type": "c"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "CHECK ((((application_key_version >= 1) AND (application_key_version <= 2147483647)) AND ((transit_key_version >= 1) AND (transit_key_version <= 2147483647))))",
+          "name": "ck_openbao_data_key_pins_versions_0180",
+          "type": "c"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "PRIMARY KEY (purpose, application_key_version)",
+          "name": "pk_openbao_data_key_pins_0180",
+          "type": "p"
+        },
+        {
+          "condeferrable": false,
+          "condeferred": false,
+          "convalidated": true,
+          "definition": "UNIQUE (ciphertext_sha256)",
+          "name": "uq_openbao_data_key_pins_ciphertext_0180",
+          "type": "u"
+        }
+      ],
+      "fk_guards": [],
+      "indexes": [
+        {
+          "definition": "CREATE UNIQUE INDEX pk_openbao_data_key_pins_0180 ON public.openbao_data_key_pins USING btree (purpose, application_key_version)",
+          "indimmediate": true,
+          "indisready": true,
+          "indisreplident": false,
+          "indisunique": true,
+          "indisvalid": true,
+          "name": "pk_openbao_data_key_pins_0180"
+        },
+        {
+          "definition": "CREATE UNIQUE INDEX uq_openbao_data_key_pins_ciphertext_0180 ON public.openbao_data_key_pins USING btree (ciphertext_sha256)",
+          "indimmediate": true,
+          "indisready": true,
+          "indisreplident": false,
+          "indisunique": true,
+          "indisvalid": true,
+          "name": "uq_openbao_data_key_pins_ciphertext_0180"
+        }
+      ],
+      "name": "openbao_data_key_pins",
+      "owner": "star_oam_migrator",
+      "relforcerowsecurity": false,
+      "relkind": "r",
+      "reloptions": null,
+      "relpersistence": "p",
+      "relreplident": "d",
+      "relrowsecurity": false,
+      "triggers": [
+        {
+          "definition": "CREATE TRIGGER trg_openbao_data_key_pins_claim_0180 AFTER INSERT ON public.openbao_data_key_pins FOR EACH ROW EXECUTE FUNCTION rsc_claim_application_key_version_0180()",
+          "function_signature": "rsc_claim_application_key_version_0180()",
+          "name": "trg_openbao_data_key_pins_claim_0180",
+          "tgdeferrable": false,
+          "tgenabled": "A",
+          "tginitdeferred": false,
+          "tgtype": 5
+        },
+        {
+          "definition": "CREATE TRIGGER trg_openbao_data_key_pins_immutable_0180 BEFORE DELETE OR UPDATE ON public.openbao_data_key_pins FOR EACH ROW EXECUTE FUNCTION rsc_reject_key_provider_binding_mutation_0180()",
+          "function_signature": "rsc_reject_key_provider_binding_mutation_0180()",
+          "name": "trg_openbao_data_key_pins_immutable_0180",
+          "tgdeferrable": false,
+          "tgenabled": "A",
+          "tginitdeferred": false,
+          "tgtype": 27
+        },
+        {
+          "definition": "CREATE TRIGGER trg_openbao_data_key_pins_no_truncate_0180 BEFORE TRUNCATE ON public.openbao_data_key_pins FOR EACH STATEMENT EXECUTE FUNCTION rsc_reject_key_provider_binding_mutation_0180()",
+          "function_signature": "rsc_reject_key_provider_binding_mutation_0180()",
+          "name": "trg_openbao_data_key_pins_no_truncate_0180",
+          "tgdeferrable": false,
+          "tgenabled": "A",
+          "tginitdeferred": false,
+          "tgtype": 34
+        }
+      ]
+    }
+  }
+}

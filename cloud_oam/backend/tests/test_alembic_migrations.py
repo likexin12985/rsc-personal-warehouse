@@ -460,7 +460,7 @@ REVIEW_COMMAND_STATUS_REVISION = (
     / "versions"
     / "20260906_0063_review_command_status.py"
 )
-HEAD_REVISION = '20261228_0179'
+HEAD_REVISION = '20261229_0180'
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -722,7 +722,7 @@ CONDITION_ROLE_ACTIONS_0167 = {
         'withdraw_return_condition', 'execute_return_condition', 'release_return_condition',
         'review_return_condition_regional'},
 }
-EXPECTED_TABLES = ({'material_request_return_compensations', 'material_request_rejection_inbounds', 'material_request_rejection_inbound_parts', 'material_request_rejection_inbound_serials', 'material_request_rejection_receipts', 'material_request_rejection_receipt_serials', 'material_request_rejection_receipt_exceptions', 'material_request_rejection_progress', 'material_request_rejection_returns', 'material_request_rejection_return_serials', 'material_request_closures', 'material_request_remaining_cancellations', 'material_request_remaining_cancellation_lines'} | CONDITION_TABLES_0167 | SCRAP_TABLES_0165 |
+EXPECTED_TABLES = ({'openbao_data_key_pins', 'application_key_version_claims'} | {'material_request_return_compensations', 'material_request_rejection_inbounds', 'material_request_rejection_inbound_parts', 'material_request_rejection_inbound_serials', 'material_request_rejection_receipts', 'material_request_rejection_receipt_serials', 'material_request_rejection_receipt_exceptions', 'material_request_rejection_progress', 'material_request_rejection_returns', 'material_request_rejection_return_serials', 'material_request_closures', 'material_request_remaining_cancellations', 'material_request_remaining_cancellation_lines'} | CONDITION_TABLES_0167 | SCRAP_TABLES_0165 |
     {"opening_import_command_seals"} |
     {"daily_review_events", "daily_review_bindings", "daily_review_consumptions", "daily_review_request_seals"} |
     {'daily_comparison_mapping_decisions','daily_reconciliation_cutoffs'} |
@@ -1729,7 +1729,11 @@ def test_revision_history_has_single_current_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == '20261226_0177'
+    assert head.down_revision == '20261228_0179'
+    head = script.get_revision(head.down_revision)
+    assert head is not None and head.down_revision == '20261227_0178'
+    head = script.get_revision(head.down_revision)
+    assert head is not None and head.down_revision == '20261226_0177'
     head = script.get_revision('20261226_0177')
     assert head.down_revision == '20261225_0176'
     head = script.get_revision(head.down_revision)

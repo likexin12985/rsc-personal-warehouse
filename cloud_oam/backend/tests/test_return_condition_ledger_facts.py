@@ -15,7 +15,7 @@ from test_return_condition_submission import db, snapshot, command as quantity_c
 from test_return_condition_submission_serial import command as serial_command
 from test_return_condition_submission_source import (
     world,stock,allowed,evidence,regional,headquarters,approved,route,derived,ready,parcel,
-    acceptance,prepared,regional_opening,context,regional_source,ERRORS,
+    acceptance,prepared,regional_opening,reader_tables, context,regional_source,ERRORS,
 )
 
 

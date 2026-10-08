@@ -23,7 +23,7 @@ from test_return_condition_ledger_facts import db, quantity_command, serial_comm
 from test_return_condition_submission import snapshot
 from test_return_condition_submission_source import (
     world, stock, allowed, evidence, regional, headquarters, approved, route, derived,
-    ready, parcel, acceptance, prepared, regional_opening, context, regional_source, ERRORS, allow,
+    ready, parcel, acceptance, prepared, regional_opening, reader_tables, context, regional_source, ERRORS, allow,
 )
 from test_return_condition_evidence import create, finish
 from test_formal_files_service import FakeStorage

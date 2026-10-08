@@ -1,5 +1,7 @@
 # OpenBao Transit 追加式提供方契约准备（2026-10-08）
 
+> C1 接续：0180 不可变绑定、strict registry/pin reader 和真实隔离 PG16 已完成，见 [C1 证据](OPENBAO_C1_BINDING_EVIDENCE_20261008.md)。下文为前一阶段契约记录；其中“尚未有迁移/registry/DB读取”已由 C1 更新。Settings/factory/业务信封与正式 provider 激活仍未完成。
+
 范围：试点 MVP，不等同完整 V1。已完整重读正式 V1 基线；本文件只记录密钥托管替代方案的本地准备，不改变产品范围、安全要求、生产配置或发布门禁。
 
 **当前不是可切换的生产提供方。** 新模块没有被 Settings、factory、readiness、迁移或数据库安全目录注册；没有凭据发现、文件读取、默认网络客户端或 readiness 成功回执。当前 Aliyun 生产读取路径和历史 SQL 保留原状。没有访问真实云资源、生产密钥或生产数据库，也没有购买资源、提交或推送。

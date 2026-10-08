@@ -175,7 +175,7 @@ def main(argv=None):
                     run('formal-condition-upgrade', [sys.executable, '-m', 'alembic', '-c', 'alembic.ini',
                         'upgrade', 'head'], cwd=CLOUD, env=environment)
                     with owner.connect() as connection:
-                        assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '20261228_0179'
+                        assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '20261229_0180'
                         upgraded_rows = facts(connection, old_columns)
                         for table, rows in old_rows.items():
                             if table in ('permissions', 'role_permissions'):
@@ -312,11 +312,11 @@ def main(argv=None):
                     assert refused.returncode != 0 and '0167 immutable history requires retention:' in log_path.read_text()
                     with owner.connect() as connection:
                         assert facts(connection, retained_columns) == retained_rows
-                        assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '20261228_0179'
+                        assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '20261229_0180'
                     validate_production_database_security(api, expected_runtime_role='star_oam_api',
                         expected_migration_role='star_oam_migrator')
                     retained_downgrade = dict(refused=True, factsUnchanged=True,
-                        exactHead='20261228_0179', apiStartupAccepted=True)
+                        exactHead='20261229_0180', apiStartupAccepted=True)
                     print('formal retained business downgrade refused without changes PASS', flush=True)
                 assert sources == manifest()
                 result = dict(passed=True, tracking=tracking, actualOldApplication=old_proof,

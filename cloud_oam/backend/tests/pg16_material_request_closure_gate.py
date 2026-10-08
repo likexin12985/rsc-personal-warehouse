@@ -38,7 +38,7 @@ def run(engines, *, request_id, actor_id, directory):
     policy = runpy.run_path(str(folder / 'permission_policy.py'))
     identifier = UUID(request_id)
     with owner.begin() as db:
-        assert db.scalar(text('SELECT version_num FROM public.alembic_version')) == '20261228_0179'
+        assert db.scalar(text('SELECT version_num FROM public.alembic_version')) == '20261229_0180'
         policy_result=policy['install'](db)
         assert policy_result['createdPermissions']==0 and policy_result['createdGrants']==0
         assert policy_result['advancedUsers']==0
@@ -265,11 +265,11 @@ def run(engines, *, request_id, actor_id, directory):
         assert recovered.closure_id == original.closure_id and recovered.replayed
     with owner.connect() as db:
         assert db.scalar(select(text('count(*)')).select_from(closures)) == 1
-        assert db.scalar(text('SELECT version_num FROM public.alembic_version')) == '20261228_0179'
+        assert db.scalar(text('SELECT version_num FROM public.alembic_version')) == '20261229_0180'
         assert facts(db,columns)==business_before, 'closure changed pre-existing business facts'
     result = dict(candidate=False, requestId=request_id, closed=original.model_dump(mode='json'),
         concurrentWriterWaited=True, concurrentWriterRejected=True, rejected=rejected,
-        readOnlyRecovery=True, unchangedMigrationHead='20261228_0179',
+        readOnlyRecovery=True, unchangedMigrationHead='20261229_0180',
         insertRejections=insert_rejections, databaseInsertAuthorityCoverageAuditGuard=True,
         businessFactsUnchanged=True,permissionPolicy=policy_result,http=http_proof,
         httpSameKeyReplayed=True,httpChangedContentRejected=True,httpReadOnlyFactsUnchanged=True,

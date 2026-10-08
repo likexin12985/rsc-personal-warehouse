@@ -3,6 +3,8 @@
 Role/object OIDs and dropped-column tombstones are deliberately excluded.
 Visible column order, every ACL, FK guard and backing index remain checked.
 """
+import re
+
 from sqlalchemy import text
 
 
@@ -10,7 +12,19 @@ def rows(db, sql, **parameters):
     return [dict(row) for row in db.execute(text(sql), parameters).mappings()]
 
 
-def snapshot(db):
+def snapshot(db, *, table_names=None, function_names=None):
+    """Observe full catalogs, optionally scoped to explicitly named objects.
+
+    Scoped callers still receive all overloads, columns, ACLs and triggers for
+    the requested identities. Existing unscoped callers retain the full view.
+    """
+    for names in (table_names, function_names):
+        if names is not None and (type(names) is not tuple or not names
+                or len(set(names)) != len(names)
+                or any(type(name) is not str or re.fullmatch(r'[a-z][a-z0-9_]{0,62}', name) is None for name in names)):
+            raise ValueError('explicit catalog identity tuple required')
+    function_filter = '' if function_names is None else ' AND p.proname = ANY(:function_names)'
+    table_filter = '' if table_names is None else ' AND c.relname = ANY(:table_names)'
     functions = rows(db, """SELECT p.proname, p.proname||'('||oidvectortypes(p.proargtypes)||')' AS signature,
         pg_get_functiondef(p.oid) AS definition,p.prosrc,p.prosecdef,p.provolatile,p.proparallel,
         p.proisstrict,p.proleakproof,p.proconfig,pg_get_userbyid(p.proowner) AS owner,
@@ -21,7 +35,8 @@ def snapshot(db):
             ORDER BY CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
                 a.privilege_type,a.is_grantable) AS acl
         FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND p.prokind IN ('f','p')
-        ORDER BY p.proname,oidvectortypes(p.proargtypes)""")
+        """ + function_filter + " ORDER BY p.proname,oidvectortypes(p.proargtypes)",
+        **({} if function_names is None else dict(function_names=list(function_names))))
     tables = {}
     for table in rows(db, """SELECT c.relname AS name,pg_get_userbyid(c.relowner) AS owner,
         c.relkind,c.relpersistence,c.relrowsecurity,c.relforcerowsecurity,c.relreplident,c.reloptions,
@@ -31,7 +46,8 @@ def snapshot(db):
             ORDER BY CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
                 a.privilege_type,a.is_grantable) AS acl
         FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind IN ('r','p')
-        ORDER BY c.relname"""):
+        """ + table_filter + " ORDER BY c.relname",
+        **({} if table_names is None else dict(table_names=list(table_names)))):
         name = table['name']
         parameters = dict(table='public.' + name)
         table['columns'] = rows(db, """SELECT a.attname AS name,format_type(a.atttypid,a.atttypmod) AS type,

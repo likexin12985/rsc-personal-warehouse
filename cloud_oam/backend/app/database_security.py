@@ -4828,6 +4828,8 @@ from . import material_request_supply_capacity_security as _supply_capacity_cata
 _supply_capacity_catalog.overlay(_stock_scrap_readiness)
 from . import return_receipt_routing_security as _return_receipt_routing_catalog
 _return_receipt_routing_catalog.overlay(_stock_scrap_readiness)
+from . import key_provider_readiness_security as _key_provider_readiness_catalog
+_key_provider_readiness_catalog.overlay(_stock_scrap_readiness)
 _stock_scrap_catalog.register(globals())
 _stock_scrap_readiness.register(globals())
 from . import return_condition_security as _condition_catalog
@@ -4848,6 +4850,8 @@ from . import material_request_rejection_inbound_security as _rejection_inbound_
 _rejection_inbound_catalog.register(globals())
 from . import material_request_return_compensation_security as _return_compensation_catalog
 _return_compensation_catalog.register(globals())
+from . import key_provider_binding_security as _key_provider_binding_catalog
+_key_provider_binding_catalog.register(globals())
 _supply_allocation_catalog.register(globals())
 _supply_capacity_catalog.register(globals())
 _return_receipt_routing_catalog.register(globals())
@@ -7074,6 +7078,7 @@ def validate_production_database_security(
             _rejection_receipt_catalog.verify(connection)
             _rejection_inbound_catalog.verify(connection)
             _return_compensation_catalog.verify(connection)
+            _key_provider_binding_catalog.verify(connection)
             evidence = connection.execute(
                 _ROLE_EVIDENCE_SQL,
                 {"migration_role": expected_migration_role},

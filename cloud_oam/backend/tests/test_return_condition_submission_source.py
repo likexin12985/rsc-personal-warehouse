@@ -15,14 +15,17 @@ from app.formal_services.stock_loss_corrections import (
     return_condition_authority as authority, return_condition_submission_source as subject,
     return_condition_source as old_source, return_history,
 )
+# Imported fixtures must expose their dependencies in every consuming module;
+# pytest does not inherit the defining module's fixture namespace.
 from test_return_condition_authority import (
     db, world, stock, allowed, evidence, regional, headquarters, approved, route,
     derived, ready, parcel, acceptance, prepared, authority_template, regional_opening,
-    context, permission, ERRORS,
+    reader_tables, context, permission, ERRORS,
 )
 from test_stock_return_inbound import snapshot
 
 pytestmark = pytest.mark.parametrize('stock', ['quantity'], indirect=True)
+_REAL_AUTHORITY_TABLES = authority._tables
 
 
 def allow(db, role, resource, action):
@@ -42,8 +45,11 @@ def allow(db, role, resource, action):
 
 
 @pytest.fixture
-def regional_source(db, context):
+def regional_source(db, context, monkeypatch):
     c = context
+    # The shared authority fixture seeds isolated partial reader facts. Source
+    # and service flows must resolve the full tables used by their real writes.
+    monkeypatch.setattr(authority, '_tables', _REAL_AUTHORITY_TABLES)
     # The old receiver happened to have an HQ role. Explicitly revoke it so
     # this test cannot pass by silently retaining or impersonating HQ access.
     now = datetime.now(timezone.utc)

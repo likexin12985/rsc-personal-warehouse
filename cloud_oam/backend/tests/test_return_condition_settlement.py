@@ -22,7 +22,7 @@ from test_return_condition_ledger_facts import quantity_command, serial_command,
 from test_return_condition_decisions import start, make_request
 from test_return_condition_submission_source import (
     world, stock, allowed, evidence, regional, headquarters, approved, route, derived,
-    ready, parcel, acceptance, prepared, regional_opening, context, regional_source, ERRORS, allow,
+    ready, parcel, acceptance, prepared, regional_opening, reader_tables, context, regional_source, ERRORS, allow,
 )
 
 

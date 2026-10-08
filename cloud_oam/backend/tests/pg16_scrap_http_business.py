@@ -441,7 +441,7 @@ def exercise(context):
 def release(engines,*,tracking,migrate,provision):
     if tracking not in ('quantity','serial'):
         raise ValueError('tracking must be quantity or serial')
-    migrate('http-complete-0170','upgrade','20261228_0179');provision()
+    migrate('http-complete-0170','upgrade','20261229_0180');provision()
     validate_production_database_security(engines['star_oam_api'],expected_runtime_role='star_oam_api',expected_migration_role='star_oam_migrator')
     with engines['star_oam_migrator'].connect() as db:assert_fresh_defaults(db)
     proof=opening(engines,tracking=tracking,after_preview=exercise)['submission']

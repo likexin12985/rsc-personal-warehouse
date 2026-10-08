@@ -11,7 +11,7 @@ from app.formal_services.stock_loss_corrections import return_condition_request_
 from test_return_condition_submission import db,command,snapshot
 from test_return_condition_submission_source import (
     world,stock,allowed,evidence,regional,headquarters,approved,route,derived,ready,parcel,
-    acceptance,prepared,authority_template,regional_opening,context,regional_source,
+    acceptance,prepared,authority_template,regional_opening,reader_tables, context,regional_source,
 )
 
 pytestmark=pytest.mark.parametrize('stock',['quantity'],indirect=True)

@@ -33,7 +33,22 @@ def test_exact_function_and_readiness_chain():
     assert 'receipt_no' not in branch and 'command_jsonb' not in branch
     for catalog in (security._closure_catalog, security._remaining_cancel_catalog):
         assert catalog.DATA['functions'][signature]['after'] == DATA['barrier']['after']
-    assert security._stock_scrap_readiness.DATA['after'] == DATA['readiness']['after']
+    from app.key_provider_readiness_security import DATA as key_provider
+    frozen = json.loads((ROOT / 'alembic/key_provider_bindings_0180/functions.json').read_text())
+    assert key_provider == frozen
+    ready = key_provider['readiness']
+    assert key_provider['previousRevision'] == DATA['revision']
+    assert key_provider['revision'] == ready['revision'] == '20261229_0180'
+    assert ready['before'] == DATA['readiness']['after']
+    assert ready['beforeSha256'] == DATA['readiness']['afterSha256']
+    change = key_provider['functions']['rsc_oam_runtime_binding_ready_0044()']
+    for side in ('before', 'after'):
+        assert change[side] == ready[side]['prosrc']
+        assert sha256(change[side].encode()).hexdigest() == change[side+'Sha256'] == ready[side+'Sha256']
+    current_ready = security._stock_scrap_readiness.DATA
+    assert current_ready['revision'] == ready['revision']
+    assert current_ready['after'] == ready['after']
+    assert current_ready['afterSha256'] == ready['afterSha256']
     for signature, change in DATA['functions'].items():
         for side in ('before', 'after'):
             assert sha256(change[side].encode()).hexdigest() == change[side+'Sha256']

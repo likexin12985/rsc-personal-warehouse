@@ -66,7 +66,7 @@ def checked(response, status=200):
 def run(owner, api, *, original, source, directory):
     region = UUID(source['owner_org_id'])
     with Session(owner) as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261228_0179'
+        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261229_0180'
         roles = {r.code: r for r in db.scalars(select(Role))}
         receiver = db.get(User, original['receiverUserId'])
         existing = db.scalar(select(RoleAssignment).where(RoleAssignment.user_id == receiver.id,

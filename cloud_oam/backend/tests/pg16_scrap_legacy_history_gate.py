@@ -68,7 +68,7 @@ def release(engines, *, tracking, migrate, provision, historical_admission, popu
     migrate('upgrade-populated-0170', 'upgrade', '20261219_0170')
     with owner.connect() as db:
         assert facts(db, columns) == after_policy
-    migrate('upgrade-populated-0171', 'upgrade', '20261228_0179')
+    migrate('upgrade-populated-0171', 'upgrade', '20261229_0180')
     with owner.connect() as db:
         assert facts(db, columns) == after_policy
 
@@ -92,9 +92,9 @@ def release(engines, *, tracking, migrate, provision, historical_admission, popu
     old_runtime = historical_admission()
     with owner.connect() as db:
         assert facts(db, columns) == after_policy
-    migrate('reupgrade-old-history-0171', 'upgrade', '20261228_0179')
+    migrate('reupgrade-old-history-0171', 'upgrade', '20261229_0180')
     assert current() == reads
-    return dict(passed=True, tracking=tracking, scope='formal-populated-predecessor-upgrade', migrationHead='20261228_0179',
+    return dict(passed=True, tracking=tracking, scope='formal-populated-predecessor-upgrade', migrationHead='20261229_0180',
         oldFactCounts=history['factCounts'], retainedRows=sum(map(len, before.values())),
         retainedFunctionOids=len(old_function_oids), exactOldRequestsFound=reads,
         predecessorSource=predecessor['source'], predecessorRequestsSha256=predecessor['outputSha256'],

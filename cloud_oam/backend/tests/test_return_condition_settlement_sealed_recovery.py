@@ -16,7 +16,7 @@ from test_return_condition_submission import snapshot
 from test_return_condition_settlement import (
     db, initial_db, quantity_command, serial_command, authority_template, world, stock, allowed,
     evidence, regional, headquarters, approved, route, derived, ready, parcel, acceptance,
-    prepared, regional_opening, context, regional_source, ERRORS, allow,
+    prepared, regional_opening, reader_tables, context, regional_source, ERRORS, allow,
 )
 
 

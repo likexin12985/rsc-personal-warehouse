@@ -35,7 +35,7 @@ def run(engines, *, receipt_id, directory, mixed_split=False):
     frozen=runpy.run_path(str(root/'rejection_inbound_0175/transition.py'))
     from app import material_request_rejection_inbound_security as catalog
     with owner.connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261228_0179'
+        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261229_0180'
         catalog.verify(db)
         for table in (inbounds,parts,serials):
             for right in ('SELECT','INSERT'):
@@ -180,7 +180,7 @@ def run(engines, *, receipt_id, directory, mixed_split=False):
                     else:assert engine is owner and table is serials and not plan['serial_positions'] and operation!='TRUNCATE'
     with owner.connect() as db:
         assert facts(db,original_columns_only)==original
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261228_0179'
+        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261229_0180'
     rejected.extend(after_post(engines,posting_id=posted.inventory_transaction_id,token=token))
     tail=split_tail(engines,first=posted,actor_id=actor_id,token=token) if mixed_split else None
     with owner.connect() as db:

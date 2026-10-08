@@ -25,7 +25,7 @@ from app.formal_services.stock_loss_corrections import return_condition_business
 from app.formal_services.stock_loss_corrections import return_condition_posting_authority as permits
 from test_return_condition_submission_source import (
     world,stock,allowed,evidence,regional,headquarters,approved,route,derived,ready,parcel,
-    acceptance,prepared,authority_template,regional_opening,context,regional_source,ERRORS,
+    acceptance,prepared,authority_template,regional_opening,reader_tables, context,regional_source,ERRORS,
 )
 from test_return_condition_evidence import create,finish
 from test_formal_files_service import FakeStorage

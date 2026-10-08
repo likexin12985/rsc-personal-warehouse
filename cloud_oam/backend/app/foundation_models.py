@@ -2361,3 +2361,8 @@ class OpeningImportCommandSeal(Base):
     upload_key_hash: Mapped[str] = mapped_column(String(64))
     import_key_hash: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+# Migration-owned key identities; importing registers metadata only. Selecting
+# or enabling a production encryption provider remains a separate boundary.
+from .key_provider_models import ApplicationKeyVersionClaim, OpenBaoDataKeyPin  # noqa: E402,F401

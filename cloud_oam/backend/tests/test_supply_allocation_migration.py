@@ -26,8 +26,30 @@ def test_forward_catalog_matches_runtime_and_exact_predecessor():
     previous_ready = json.loads((ROOT / 'app/material_request_return_compensation_readiness.json').read_text())
     assert DATA['readiness']['before'] == previous_ready['after']
     from app.material_request_supply_capacity_security import DATA as next_catalog
-    assert next_catalog['readiness']['before'] == DATA['readiness']['after']
-    assert security._stock_scrap_readiness.DATA['after'] == next_catalog['readiness']['after']
+    from app.return_receipt_routing_security import DATA as routing
+    from app.key_provider_readiness_security import DATA as key_provider
+    predecessor = DATA['readiness']
+    for catalog, directory, expected_revision in (
+        (next_catalog, 'supply_capacity_0178', '20261227_0178'),
+        (routing, 'return_receipt_routing_0179', '20261228_0179'),
+        (key_provider, 'key_provider_bindings_0180', '20261229_0180'),
+    ):
+        frozen = json.loads((ROOT / 'alembic' / directory / 'functions.json').read_text())
+        assert catalog == frozen
+        ready = catalog['readiness']
+        assert catalog['revision'] == ready['revision'] == expected_revision
+        assert ready['before'] == predecessor['after']
+        assert ready['beforeSha256'] == predecessor['afterSha256']
+        change = catalog['functions']['rsc_oam_runtime_binding_ready_0044()']
+        for side in ('before', 'after'):
+            assert change[side] == ready[side]['prosrc']
+            assert sha256(change[side].encode()).hexdigest() == change[side+'Sha256'] == ready[side+'Sha256']
+        predecessor = ready
+    assert key_provider['previousRevision'] == routing['revision']
+    current_ready = security._stock_scrap_readiness.DATA
+    assert current_ready['revision'] == predecessor['revision']
+    assert current_ready['after'] == predecessor['after']
+    assert current_ready['afterSha256'] == predecessor['afterSha256']
     assert set(DATA['functions']) == {signature, 'rsc_oam_runtime_binding_ready_0044()',
                                     'rsc_guard_material_request_supply_task_0059()'}
     for signature, row in DATA['functions'].items():

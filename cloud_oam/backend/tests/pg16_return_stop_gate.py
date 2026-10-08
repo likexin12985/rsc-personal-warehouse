@@ -14,7 +14,7 @@ def release(engines, *, tracking, scenario, migrate, provision):
         raise ValueError('explicit return stop tracking and scenario required')
     # 0168 adds shipment projection after the 0167 condition facts/defaults;
     # existing history and empty roundtrip still use the actual current catalog.
-    if HEAD_REVISION != '20261228_0179':
+    if HEAD_REVISION != '20261229_0180':
         raise ValueError('return stop gate requires review for the new migration head')
     owner, api = (engines[k] for k in ('star_oam_migrator', 'star_oam_api'))
     migrate('return-stop-upgrade', 'upgrade', 'head')
