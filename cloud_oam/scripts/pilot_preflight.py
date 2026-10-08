@@ -111,7 +111,7 @@ def sms_sts_configured(environment: dict[str, str]) -> bool:
 
 
 def sms_default_credential_chain_configured(environment: dict[str, str]) -> bool:
-    """Require instance credentials without accepting any static secret input."""
+    """Require a default chain without injected SMS or SDK static/STS keys."""
 
     return (
         environment.get("OAM_SMS_CREDENTIAL_MODE", "").strip() == "default_chain"
@@ -122,6 +122,9 @@ def sms_default_credential_chain_configured(environment: dict[str, str]) -> bool
                 "OAM_SMS_ACCESS_KEY_SECRET",
                 "OAM_SMS_SECURITY_TOKEN",
                 "OAM_SMS_SECURITY_TOKEN_EXPIRES_AT",
+                "ALIBABA_CLOUD_ACCESS_KEY_ID",
+                "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
+                "ALIBABA_CLOUD_SECURITY_TOKEN",
             )
         )
     )

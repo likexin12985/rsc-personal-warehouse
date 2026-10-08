@@ -4,7 +4,7 @@
 # apk during the production image build.  The backup supervisor only needs
 # the Python standard library.
 FROM python:3.12-alpine@sha256:0687a6bc9716edc2a6ee0fbfb0f87e7ee358b262b67c9215de91bc9b2d38ba71 AS python_runtime
-FROM postgres:16-alpine
+FROM postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
 
 COPY --from=python_runtime /usr/local/bin/python3.12 /usr/local/bin/python3.12
 COPY --from=python_runtime /usr/local/bin/python3.12-config /usr/local/bin/python3.12-config

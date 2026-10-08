@@ -46,6 +46,14 @@ def test_pilot_preflight_requires_default_chain_without_static_values():
     })
 
 
+@pytest.mark.parametrize('key', ['ALIBABA_CLOUD_ACCESS_KEY_ID',
+    'ALIBABA_CLOUD_ACCESS_KEY_SECRET', 'ALIBABA_CLOUD_SECURITY_TOKEN'])
+def test_default_chain_does_not_accept_sdk_environment_key_bypass(key):
+    assert not sms_default_credential_chain_configured({
+        'OAM_SMS_CREDENTIAL_MODE': 'default_chain', key: 'synthetic-value',
+    })
+
+
 def _document(tmp_path: Path) -> tuple[dict, Path]:
     registry = tmp_path / "rsc-kms-data-keys.json"
     registry.write_text(json.dumps({
