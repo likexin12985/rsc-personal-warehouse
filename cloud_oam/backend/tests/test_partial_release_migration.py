@@ -1,4 +1,5 @@
 from hashlib import sha256
+from migration_source_expectations import current_source_body
 import json
 from pathlib import Path
 import runpy
@@ -34,7 +35,7 @@ def test_runtime_pins_new_guard_and_readiness_without_adding_privileges():
     from app.material_request_remaining_cancel_readiness import DATA as current
     assert current['before']==DATA['readiness']['after']
     from app.material_request_supply_allocation_security import DATA as latest
-    assert security._stock_scrap_readiness.DATA['after']['prosrc']==latest['functions']['rsc_oam_runtime_binding_ready_0044()']['after']
+    assert security._stock_scrap_readiness.DATA['after']['prosrc']==current_source_body(latest['revision'], 'public.rsc_oam_runtime_binding_ready_0044()', latest['functions']['rsc_oam_runtime_binding_ready_0044()']['after'])
 
 
 def test_sqlite_tooling_downgrade_refuses_late_release_history():

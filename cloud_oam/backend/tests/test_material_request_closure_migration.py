@@ -1,4 +1,5 @@
 """Closure tooling boundary and exact frozen migration/application schema."""
+from copy import copy
 from pathlib import Path
 import runpy
 
@@ -24,7 +25,7 @@ def test_frozen_closure_matches_production_metadata():
     dialect = postgresql.dialect()
     def shape(table):
         return ([str(CreateColumn(c).compile(dialect=dialect)) for c in table.columns],
-                sorted(str(AddConstraint(c).compile(dialect=dialect)) for c in table.constraints))
+                sorted(str(AddConstraint(copy(c)).compile(dialect=dialect)) for c in table.constraints))
     assert shape(frozen) == shape(closures) == shape(Base.metadata.tables['material_request_closures'])
 
 

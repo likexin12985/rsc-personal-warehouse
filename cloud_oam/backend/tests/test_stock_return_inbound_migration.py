@@ -15,6 +15,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from app.database import Base
+from app.return_condition_application_schema import predecessor_schema
 from app import database_security as security
 from app.oam_sync_scope_security import (OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0105,
     OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0106)
@@ -32,7 +33,8 @@ def db():
     engine = sa.create_engine("sqlite+pysqlite:///:memory:")
     @sa.event.listens_for(engine, "connect")
     def foreign_keys(connection, _record): connection.execute("PRAGMA foreign_keys=ON")
-    Base.metadata.create_all(engine, tables=[table for table in Base.metadata.tables.values()
+    metadata = predecessor_schema()
+    metadata.create_all(engine, tables=[table for table in metadata.tables.values()
         if table.name not in migration["TABLES"]])
     with engine.begin() as connection, Operations.context(MigrationContext.configure(connection)):
         migration["upgrade"]()

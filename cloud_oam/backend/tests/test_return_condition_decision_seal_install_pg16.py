@@ -5,6 +5,7 @@ history helper with a stub. Those dependency functions are deliberately not
 called here; full migrated business gates must precede release.
 """
 import hashlib
+import os
 import json
 from pathlib import Path
 import re
@@ -22,7 +23,7 @@ from local_pg16_cluster import native_cluster
 
 CLOUD = Path(__file__).resolve().parents[2]
 FOLDER = CLOUD/'backend/alembic/return_condition_candidate'
-BIN = CLOUD/'artifacts/pg16-native-20260920/install/bin'
+BIN = Path(os.environ.get('RSC_NATIVE_PG16_BIN', str(CLOUD/'artifacts/pg16-native-20260920/install/bin')))
 
 
 def test_native_installer_catalog_acl_and_transactional_rollback():

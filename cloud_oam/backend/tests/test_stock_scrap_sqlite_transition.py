@@ -53,7 +53,8 @@ def apply(db, *, up):
 
 
 def test_formal_alembic_revision_roundtrip_matches_registered_models(engine):
-    from app import models
+    from app.return_condition_application_schema import predecessor_schema
+    historical_metadata = predecessor_schema()
     from sqlalchemy import inspect
     config = Config(str(ROOT / 'alembic.ini'))
     config.set_main_option('sqlalchemy.url', engine.url.render_as_string(hide_password=False))
@@ -74,7 +75,7 @@ def test_formal_alembic_revision_roundtrip_matches_registered_models(engine):
             inspector = inspect(db)
             for name in (*DATA['parentTables'], *DATA['newTables']):
                 actual = {col['name']: col['nullable'] for col in inspector.get_columns(name)}
-                expected = {col.name: col.nullable for col in models.Base.metadata.tables[name].columns}
+                expected = {col.name: col.nullable for col in historical_metadata.tables[name].columns}
                 assert actual == expected, name
         command.downgrade(config, '20261213_0164')
         with engine.connect() as db:

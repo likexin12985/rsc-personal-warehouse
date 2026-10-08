@@ -10,6 +10,7 @@ import pytest
 
 from app import database_security, scrap_authentication_fence_security as runtime
 from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST
+from migration_source_expectations import current_source_hash
 
 BACKEND = Path(__file__).resolve().parents[1]
 
@@ -45,7 +46,7 @@ def test_exact_predecessors_and_unchanged_permissions():
     suffix = "    PERFORM 1 FROM public.inventory_ledger_heads WHERE stream_key='inventory' FOR UPDATE;"
     assert fence['before']['prosrc'].split(suffix,1)[1] == fence['after']['prosrc'].split(suffix,1)[1]
     assert database_security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[('rsc_fence_scrap_seals_0165','')] == fence['afterSha256']
-    assert OAM_SYNC_FUNCTION_MANIFEST['rsc_oam_runtime_binding_ready_0044()'][-1] == readiness['afterSha256']
+    assert OAM_SYNC_FUNCTION_MANIFEST['rsc_oam_runtime_binding_ready_0044()'][-1] == current_source_hash(migration['revision'], 'public.'+readiness['after']['signature'], readiness['after']['prosrc'])
 
 
 @pytest.mark.parametrize('damage', ['fence_body','fence_acl','readiness_body','readiness_digest'])

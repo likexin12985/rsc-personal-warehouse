@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import Column, MetaData, Table, select, text
+from sqlalchemy import Column, ForeignKeyConstraint, MetaData, Table, select, text
 
 from app.foundation_models import FileObject
 from app.formal_services.stock_loss_corrections import return_condition_event_files as subject
@@ -16,12 +16,19 @@ from test_return_condition_evidence import db, world, create, finish, proof
 
 
 @pytest.fixture
-def event_world(db, world):
+def event_world(db, world, monkeypatch):
     metadata=MetaData(); events, files=subject._tables()
     Table('files',metadata,Column('id',FileObject.__table__.c.id.type,primary_key=True))
-    event_copy=Table(events.name,metadata,*(Column(c.name,c.type,primary_key=c.name=='id',
+    event_copy=Table('reader_test_condition_events',metadata,*(Column(c.name,c.type,primary_key=c.name=='id',
         nullable=c.name!='id') for c in events.c))
-    file_copy=files.to_metadata(metadata)
+    file_copy=Table('reader_test_condition_event_files',metadata,
+        *(Column(c.name,c.type,primary_key=c.primary_key,nullable=c.nullable) for c in files.c),
+        ForeignKeyConstraint(['event_id'],['reader_test_condition_events.id']),
+        ForeignKeyConstraint(['file_id'],['files.id']))
+    # These were always partial reader fixtures. Give them their own tables
+    # rather than colliding with the newly registered formal event schema.
+    events, files = event_copy, file_copy
+    monkeypatch.setattr(subject, '_tables', lambda: (events, files))
     metadata.create_all(db.get_bind(),tables=[event_copy,file_copy])
     row=db.get(FileObject,create(db,world).file_id); finish(db,world,row)
     evidence=proof(world,row); event_id=uuid4(); at=datetime.now(timezone.utc)

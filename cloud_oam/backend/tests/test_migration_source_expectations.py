@@ -7,6 +7,9 @@ import migration_source_expectations as sources
 
 
 def chain(monkeypatch, patches):
+    # Synthetic revision numbers must never match real catalog directory suffixes.
+    monkeypatch.setattr(sources, '_catalog_source_patches', lambda *args: {})
+    monkeypatch.setattr(sources, '_catalog_source_key', lambda *args: False)
     monkeypatch.setattr(sources, '_successor_paths', lambda revision: tuple(
         (str(index), index) for index in range(len(patches))))
     monkeypatch.setattr(sources, '_source_patches', lambda path: patches[path])

@@ -50,7 +50,20 @@ def regional_opening(request, authority_template):
 
 
 @pytest.fixture
-def context(db, stock, request, authority_template):
+def reader_tables(monkeypatch):
+    # Isolate explicitly partial authority-reader facts from formal tables;
+    # actual identity, source, custody and permission queries remain unchanged.
+    metadata = MetaData()
+    originals = subject._tables()
+    tables = tuple(Table('reader_test_'+original.name, metadata,
+        *(Column(c.name, c.type, primary_key=c.name == 'id', nullable=c.name != 'id')
+          for c in original.columns)) for original in originals)
+    monkeypatch.setattr(subject, '_tables', lambda: tables)
+    return metadata
+
+
+@pytest.fixture
+def context(db, stock, request, authority_template, reader_tables):
     # Generate the complete old-service history once, then clone the SQLite
     # database for each independent test. Never reuse a Session or authority.
     if authority_template:
@@ -93,12 +106,8 @@ def context(db, stock, request, authority_template):
     hq_actor = load_formal_principal(db, hq_actor.user_id)
     # Full real identity/source tables; explicitly minimal correction facts.
     # Copy all column types so production SELECTs run without a mocked loader.
-    metadata = MetaData()
     cases, events = subject._tables()
-    for original in (cases, events):
-        Table(original.name, metadata, *(Column(c.name, c.type, primary_key=c.name == 'id',
-            nullable=c.name != 'id') for c in original.columns))
-    metadata.create_all(db.get_bind())
+    reader_tables.create_all(db.get_bind())
     custody = db.scalar(select(CustodyAssignment).where(CustodyAssignment.location_id == source.location_id,
         CustodyAssignment.custodian_person_id == source.custodian_person_id))
     db.commit()

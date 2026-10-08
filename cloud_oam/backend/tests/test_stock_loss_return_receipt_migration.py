@@ -23,7 +23,7 @@ def test_private_proof_catalog_and_source_chain(migration):
     m=migration
     assert m['down_revision']=='20261203_0154'
     for key,(args,result,body) in m['FUNCTIONS'].items():
-        assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[key]==hashlib.sha256(body.encode()).hexdigest()
+        assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[key]==current_source_hash(m['revision'], 'public.'+key[0]+'('+key[1]+')', body)
         assert security.FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[key]==('f',result,False)
         assert key not in security.RUNTIME_EXECUTE_FUNCTIONS
         parser.parse_plpgsql_json(f'CREATE FUNCTION guard({args}) RETURNS {result} LANGUAGE plpgsql AS $b${body}$b$')

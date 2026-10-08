@@ -12,6 +12,7 @@ from sqlalchemy import create_engine, text
 
 from app import database_security as security, oam_sync_scope_security as scope
 from migration_script_cache import cache_migration_compilation
+from migration_source_expectations import current_source_hash
 
 VERSIONS = Path(__file__).parents[1] / 'alembic/versions'
 
@@ -29,7 +30,7 @@ def test_private_file_functions_and_current_readiness_are_exact(migration):
         (m['AUTHORITY_FUNCTION'], m['AUTHORITY_SIGNATURE'], m['AUTHORITY_BODY'], 'void'),
         (m['COMMIT_FUNCTION'], '', m['COMMIT_BODY'], 'trigger'),
     ):
-        assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[(name,args)] == hashlib.sha256(body.encode()).hexdigest()
+        assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[(name,args)] == current_source_hash(m['revision'], 'public.'+name+'('+args+')', body)
         assert (name,args) not in security.RUNTIME_EXECUTE_FUNCTIONS
         declaration = 'actor_id text, actor_version bigint' if args else ''
         parser.parse_plpgsql_json(f'CREATE FUNCTION guard({declaration}) RETURNS {result} LANGUAGE plpgsql AS $b${body}$b$')

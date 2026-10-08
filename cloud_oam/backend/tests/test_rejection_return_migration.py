@@ -1,4 +1,5 @@
 """Formal 0172 frozen schema and schema-tooling refusal boundaries."""
+from copy import copy
 from pathlib import Path
 import json
 import runpy
@@ -32,7 +33,7 @@ def test_frozen_schema_matches_registered_metadata_and_forward_sources():
     dialect = postgresql.dialect()
     def shape(table):
         return ([str(CreateColumn(c).compile(dialect=dialect)) for c in table.columns],
-                sorted(str(AddConstraint(c).compile(dialect=dialect)) for c in table.constraints))
+                sorted(str(AddConstraint(copy(c)).compile(dialect=dialect)) for c in table.constraints))
     for table in (returns, return_serials):
         assert shape(table) == shape(Base.metadata.tables[table.name])
         assert table.name in security.RUNTIME_READ_TABLES and table.name in security.RUNTIME_INSERT_TABLES

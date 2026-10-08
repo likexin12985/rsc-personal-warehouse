@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.stock_scrap_schemas import ScrapExecute
-from app.stock_scrap_persistence_schema import build_schema
+from app.return_condition_application_schema import predecessor_schema
 from app.formal_services import stock_scrap_plan, stock_loss_sources
 from app.formal_services.stock_scrap.execution_bundle import build
 from test_stock_scrap_plan import (
@@ -20,7 +20,8 @@ def execution(preview, prepared):
 
 
 def check_bundle(bundle, *, prepared, corrected):
-    metadata, _, _ = build_schema()
+    # The 0165 bundle predates nullable condition-correction provenance.
+    metadata = predecessor_schema()
     transaction, movement = uuid4(), uuid4()
     rows = bundle.rows(transaction_id=transaction, movement_id=movement)
     for name, entries in rows.items():

@@ -90,6 +90,8 @@ def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_a
     assert '        working-directory: cloud_oam\n' in step
     assert step.split('        run: |\n',1)[1].strip() == (
         'python scripts/run_static_shard.py --index ${{ matrix.shard }} --count 3')
+    assert 'RSC_NATIVE_PG16_BIN: /usr/lib/postgresql/16/bin' in step
+    assert 'postgresql-16 postgresql-client-16 zsh' in static
     assert '-r cloud_oam/scripts/requirements-public-knowledge.txt' in static
     assert '    timeout-minutes: 360\n' in static
     assert '    if: ${{ always() }}\n' in aggregate

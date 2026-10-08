@@ -23,12 +23,8 @@ def test_runtime_catalog_is_exact_readonly_projection_of_frozen_migration():
     del expected['statements']
     expected['migrationCatalogSha256'] = sha256(raw).hexdigest()
     assert json.loads(scrap.RAW) == expected
-    # Runtime keeps the immutable 0165 source but applies the exact later fence.
-    from app.scrap_authentication_fence_security import DATA as fence
-    patch = fence['patches'][0]
-    key = patch['before']['signature']
-    assert expected['functions'][key]['after'] == patch['before']
-    expected['functions'][key]['after'] = deepcopy(patch['after'])
+    from forward_catalog_expectations import current_catalog
+    expected = current_catalog('20261214_0165', expected)
     assert scrap.DATA == expected
 
 
@@ -56,7 +52,8 @@ def test_forward_allowlists_and_independent_old_verifiers_remain_complete():
                     assert row['prosrc'] == change['after']['prosrc']
     # Forward registration is now the ordinary application import behavior.
     assert set(scrap.TABLES) <= old.RUNTIME_READ_TABLES
-    assert scope['RUNTIME_INSERT_TABLES'] == old.RUNTIME_INSERT_TABLES
+    assert scope['RUNTIME_INSERT_TABLES'] == predecessor('readiness')['RUNTIME_INSERT_TABLES']
+    assert scope['RUNTIME_INSERT_TABLES'] <= old.RUNTIME_INSERT_TABLES
 
 
 @pytest.mark.parametrize('tamper', ['digest', 'definition', 'column', 'trigger', 'repeat'])

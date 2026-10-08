@@ -58,8 +58,14 @@ def test_readiness_is_exact_frozen_revision_only_patch_and_default_registration(
     assert current_readiness.DATA['revision'] == '20261216_0167'
     assert current_readiness.DATA['before'] == runtime['after']
     assert current_readiness.DATA['beforeSha256'] == runtime['afterSha256']
-    assert live_readiness.DATA['after'] == current_readiness.DATA['after']
-    assert live_readiness.DATA['afterSha256'] == current_readiness.DATA['afterSha256']
+    from migration_source_expectations import current_source_body
+    expected = deepcopy(current_readiness.DATA['after'])
+    old_body = expected['prosrc']
+    expected['prosrc'] = current_source_body(current_readiness.DATA['revision'], 'public.'+expected['signature'], old_body)
+    assert expected['definition'].count(old_body) == 1
+    expected['definition'] = expected['definition'].replace(old_body, expected['prosrc'])
+    assert live_readiness.DATA['after'] == expected
+    assert live_readiness.DATA['afterSha256'] == sha256(expected['prosrc'].encode()).hexdigest()
     stop = scope['_loss_return_stop_catalog'].DATA
     assert next(r for r in stop['replacedFunctions'] if r['signature'] == after['signature'])['prosrc'] == after['prosrc']
     patches = scope['_authentication_fence_catalog'].DATA['patches']

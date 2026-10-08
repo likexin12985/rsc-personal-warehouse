@@ -16,7 +16,8 @@ def test_runtime_is_exact_readonly_projection_and_full_import_succeeds():
     expected = json.loads(raw)
     del expected['statements']
     expected['migrationCatalogSha256'] = sha256(raw).hexdigest()
-    assert condition.DATA == expected
+    from forward_catalog_expectations import current_catalog
+    assert condition.DATA == current_catalog('20261216_0167', expected)
     assert len(condition.TABLES) == 10
     assert set(condition.TABLES) <= runtime.RUNTIME_READ_TABLES
     assert len(condition.DATA['functions']) == 60
@@ -28,7 +29,9 @@ def test_runtime_is_exact_readonly_projection_and_full_import_succeeds():
                     'FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256', 'RUNTIME_FUNCTION_BODY_SHA256')
                    if coordinate in getattr(runtime, key)]
         assert matches == [sha256(row['prosrc'].encode()).hexdigest()]
-    assert runtime._stock_scrap_readiness.DATA['after'] == ready.DATA['after']
+    from migration_source_expectations import current_source_body
+    assert runtime._stock_scrap_readiness.DATA['after']['prosrc'] == current_source_body(
+        ready.DATA['revision'], 'public.'+ready.DATA['after']['signature'], ready.DATA['after']['prosrc'])
     assert "20261216_0167" in ready.DATA['after']['prosrc']
     assert oam.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0166 != oam.OAM_SYNC_FUNCTION_MANIFEST
 

@@ -1,4 +1,5 @@
 """Formal 0171 frozen schema and schema-tooling refusal boundaries."""
+from copy import copy
 from pathlib import Path
 import json
 import runpy
@@ -25,14 +26,8 @@ def test_frozen_schema_matches_registered_metadata_and_forward_sources():
     revision = runpy.run_path(str(ROOT / 'alembic/versions/20261220_0171_remaining_demand_cancellation.py'))
     assert revision['revision'] == '20261220_0171' and revision['down_revision'] == '20261219_0170'
     frozen = revision['_support']('transition')['DATA']
-    from copy import deepcopy
-    from app.material_request_rejection_return_security import DATA as successor
-    expected = deepcopy({k:v for k,v in frozen.items() if k != 'statements'})
-    for family in ('tables','functions'):
-        for name, change in successor[family].items():
-            if name in expected[family]:
-                assert expected[family][name]['after'] == change['before']
-                expected[family][name]['after'] = deepcopy(change['after'])
+    from forward_catalog_expectations import current_catalog
+    expected = current_catalog(revision['revision'], {k:v for k,v in frozen.items() if k != 'statements'})
     assert expected == runtime
     assert len(revision['_sources']()) == 3
     from migration_source_expectations import current_source_body
@@ -40,7 +35,7 @@ def test_frozen_schema_matches_registered_metadata_and_forward_sources():
     dialect = postgresql.dialect()
     def shape(table):
         return ([str(CreateColumn(c).compile(dialect=dialect)) for c in table.columns],
-                sorted(str(AddConstraint(c).compile(dialect=dialect)) for c in table.constraints))
+                sorted(str(AddConstraint(copy(c)).compile(dialect=dialect)) for c in table.constraints))
     for table in (cancellations, cancellation_lines):
         assert shape(table) == shape(Base.metadata.tables[table.name])
         assert table.name in security.RUNTIME_READ_TABLES and table.name in security.RUNTIME_INSERT_TABLES
