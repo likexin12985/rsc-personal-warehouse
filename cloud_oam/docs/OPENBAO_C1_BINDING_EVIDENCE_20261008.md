@@ -1,6 +1,6 @@
 # OpenBao C1 追加绑定与候选读取证据（2026-10-08）
 
-**试点 MVP，不等同完整 V1，仍未上线。** C1 追加绑定、候选读取和真实隔离 PG16 增量门禁已完成。当前候选源于本地 `5f59c3c` 后的改动；这不是生产 provider 激活或发布批准。精确提交状态以 Git 回执为准。
+**试点 MVP，不等同完整 V1，仍未上线。** C1 追加绑定、候选读取和真实隔离 PG16 增量门禁已完成。本批实现已提交为 `c4851de57bfd53237634ba06d3dce4b112460a83`（前序 `5f59c3c`）；本节终态交接随后单独提交。精确候选、推送与 CI 状态见 `artifacts/formal-0165-integration/key-provider-c1-20261008/candidate-final-receipt.json`，不构成生产 provider 激活或发布批准。
 
 已完整重读仓库正式 V1 基线，并保持用户缩减后的试点范围。本轮只推进密钥绑定兼容基础设施；不新增后置业务，不启用生产 OpenBao provider，不改写旧业务密文，也不购买云资源。此前隔离 OpenBao 原型的结果见 [隔离原型证据](OPENBAO_ISOLATED_EVIDENCE_20261008.md)；此前兼容设计见 [提供方兼容准备](OPENBAO_PROVIDER_COMPATIBILITY_20261008.md)。两份文件中“追加绑定尚未实施”的历史描述由本次 C1 进度补充，不能反过来把旧原型结果算作当前迁移门禁。
 
@@ -122,11 +122,13 @@ PYTHONPATH=backend .venv/bin/pytest -q backend/tests/test_key_provider_binding_s
 
 共享即时唯一索引对并发未提交冲突的等待规则见 [PostgreSQL 16 唯一性检查](https://www.postgresql.org/docs/16/index-unique-checks.html)；本次另有上述实际竞争回执，未只凭文档推断通过。
 
-精确新提交的 hosted PG16/Client 仍独立待验收。旧 SHA `14d0731` 的 run `37772507579` 在 22:40（Asia/Shanghai）为 **64 success / 9 failure / 1 in_progress**。static0 为 3791 passed / 5 skipped / 37 setup errors；static1 为 4058 passed / 4 skipped / 29 setup errors / 1 failed。66 个 setup errors 均缺 `reader_tables`，另 1 个失败是旧目录断言；不是数据库或生产登录失败。未取消余下 static2，也不连续推送触发取消。已有 hosted PG16 运行事实保持，不能继续笼统写成“没有 hosted DB”；新候选完整门禁仍未通过。
+精确新提交的 hosted PG16/Client 仍独立待验收。旧 SHA `14d0731` 的 run `37772507579` 已于 22:45:36 结束，22:49:20（Asia/Shanghai）准确回读：**64 个成功 job、10 个失败测试分片及 1 个失败汇总门禁**，无运行中分片。static0 为 3791 passed / 5 skipped / 37 setup errors；static1 为 4058 passed / 4 skipped / 29 setup errors / 1 failed；static2 为 3621 passed / 7 skipped / 18 setup errors / 1 failed。合计 84 个 setup errors 均缺 `reader_tables`；另两个失败是旧目录/迁移前序断言，均已有对应修复和精确本地节点通过证据。原始通过、跳过和失败保持各自旧 SHA 归属，未重跑旧成功套件。static2 分类及文件摘要见 `ci-14d0731/static2-classification-20261008T1450.json`。
 
-21 个直接消费夹具的测试模块显式补齐依赖，分别执行 setup-plan，覆盖 84 个唯一节点并包含上述全部 66 个错误；这是收集/依赖证明，**没有执行测试体，不能计作业务通过**。首次只选数量型、序列号型两个业务代表时，2 failed / 351.27s 暴露了 `authority._tables` 的隔离 reader 绑定泄漏到完整业务流程。修复仅在 `regional_source` 夹具中恢复收集时保存的真实解析函数，保留权限与断言；只重新运行这两项失败节点，**2 passed / 1350.49s / exit 0**；数量型 576.922s，序列号型 763.526s。原始 `decisions-quantity-serial-table-binding-repair.log` / `.xml`、`repair-receipt.json` 与 `final-source-manifest.json` 位于 `artifacts/formal-0165-integration/static0-reader-fixture-20261008/`；21 文件最终摘要全部回读一致。首次 2 failed 的原始日志/XML 保留。两项为业务代表复验，不声称 84 个节点或全部 hosted 分片已通过。
+旧 run 终态后才正常推送新候选，避免取消原运行。新 SHA 的 hosted PG16 和 Client 结果必须重新独立验收；不能以本地或同机隔离 PG16 证据代替。已有 hosted PG16 运行事实保持，不能再笼统写成“没有 hosted DB”。
 
-仓库安全扫描首次因合成诊断文本失败，修复后完整扫描 **PASS（3141 文件，76631641 bytes）**；后续候选文件和最终文档增量按同一规则验证，日志及精确文件摘要见 `repository-safety-delta.log` / `repository-safety-delta-receipt.json` 与 `repository-safety-final-docs.log` / `repository-safety-final-docs-receipt.json`。扫描证据位于 `key-provider-c1-20261008/repository-safety-repair.log`。当前 head 短信源码契约通过且明确 `releaseDecision=not_ready`；这不是发送或验证真实短信。
+21 个直接消费夹具的测试模块显式补齐依赖，分别执行 setup-plan，覆盖 84 个唯一节点并包含上述全部 84 个错误；这是收集/依赖证明，**没有执行测试体，不能计作业务通过**。首次只选数量型、序列号型两个业务代表时，2 failed / 351.27s 暴露了 `authority._tables` 的隔离 reader 绑定泄漏到完整业务流程。修复仅在 `regional_source` 夹具中恢复收集时保存的真实解析函数，保留权限与断言；只重新运行这两项失败节点，**2 passed / 1350.49s / exit 0**；数量型 576.922s，序列号型 763.526s。原始 `decisions-quantity-serial-table-binding-repair.log` / `.xml`、`repair-receipt.json` 与 `final-source-manifest.json` 位于 `artifacts/formal-0165-integration/static0-reader-fixture-20261008/`；21 文件最终摘要全部回读一致。首次 2 failed 的原始日志/XML 保留。两项为业务代表复验，不声称 84 个节点或全部 hosted 分片已通过。
+
+仓库安全扫描首次因合成诊断文本失败，修复后完整扫描 **PASS（3141 文件，76631641 bytes）**；后续候选文件和最终文档增量按同一规则验证，日志及精确文件摘要见 `repository-safety-delta.log` / `repository-safety-delta-receipt.json` 与 `repository-safety-final-docs.log` / `repository-safety-final-docs-receipt.json`。扫描证据位于 `key-provider-c1-20261008/repository-safety-repair.log`。旧 CI 终态后的三份交接更新另经同一安全规则验证，见 `repository-safety-terminal-handoff.log` 与同名 receipt。当前 head 短信源码契约通过且明确 `releaseDecision=not_ready`；这不是发送或验证真实短信。
 
 ## 5. C2 的具体待办
 
