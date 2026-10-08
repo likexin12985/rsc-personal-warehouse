@@ -1,0 +1,10 @@
+{
+  "path": {
+    "transit/decrypt/rsc-authentication-idempotency": {
+      "capabilities": ["update"]
+    },
+    "transit/decrypt/rsc-material-request-contact": {
+      "capabilities": ["update"]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "schema": "rsc.openbao.offline-template-review.v1",
+  "enabled": false,
+  "deploymentReady": false,
+  "selectedVersion": null,
+  "verifiedDistributionSha256": null,
+  "upstreamParserVerified": false,
+  "effectivePolicyVerified": false,
+  "actualListenersVerified": false,
+  "storageRestoreVerified": false,
+  "providerImplemented": false,
+  "keyMaterialGenerated": false
+}

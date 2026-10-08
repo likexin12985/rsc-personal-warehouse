@@ -131,7 +131,7 @@ def prepare_generic_receipt_parent(context):
     directory.mkdir(parents=True)
     result=fulfill(context['engines'],requester=context['engineer_id'],
         manager=context['manager_id'],admin=context['admin_id'],verifier=context['reviewer_id'],
-        directory=directory,tracking='quantity')
+        directory=directory,tracking='quantity',existing_target_location_id=context['location_id'])
     assert result['passed'] and not result['businessClosed']
     with Session(context['engines']['star_oam_api']) as db:
         context['generic_receipt_shipment_id']=db.scalars(select(ShipmentLine.shipment_id)

@@ -1,0 +1,15 @@
+{
+  "ui": false,
+  "raw_storage_endpoint": false,
+  "log_level": "warn",
+  "listener": [
+    {
+      "unix": {
+        "address": "/run/rsc-openbao/api.sock",
+        "socket_mode": "0660",
+        "socket_user": "rsc-openbao",
+        "socket_group": "rsc-key-client"
+      }
+    }
+  ]
+}

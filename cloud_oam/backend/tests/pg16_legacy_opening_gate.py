@@ -1,6 +1,49 @@
 """Readback for a 0051 historical fixture and atomic failed migration."""
+from copy import deepcopy
+
 from sqlalchemy import text
 from pg16_legacy_opening_fixture import load_fixture
+
+
+# Independent expectations reviewed against the three frozen additive policies.
+# Do not derive a version delta from the upgraded database or current ORM.
+AUTHORIZATION_POLICIES = (
+    ('20261214_0165', 'stock_operation', (
+        ('technician', 'submit_loss'),
+        ('provincial_manager', 'review_loss_regional'),
+        ('admin', 'finalize_loss'),
+        ('admin', 'dispose_loss'),
+        ('admin', 'reverse_loss'),
+        ('admin', 'approve_loss_correction'),
+        ('admin', 'correct_loss'),
+        ('technician', 'apply_scrap_recovery'),
+        ('provincial_manager', 'review_scrap_recovery_regional'),
+        ('admin', 'review_scrap_recovery_headquarters'),
+        ('admin', 'execute_scrap_recovery'),
+    )),
+    ('20261216_0167', 'stock_operation', (
+        ('provincial_manager', 'submit_return_condition'),
+        ('provincial_manager', 'supplement_return_condition'),
+        ('provincial_manager', 'withdraw_return_condition'),
+        ('provincial_manager', 'execute_return_condition'),
+        ('provincial_manager', 'release_return_condition'),
+        ('provincial_manager', 'review_return_condition_regional'),
+        ('admin', 'review_return_condition_headquarters'),
+        ('admin', 'cancel_return_condition_approval'),
+    )),
+    ('20261218_0169', 'material_request', (
+        ('admin', 'close'), ('provincial_manager', 'close'),
+    )),
+)
+AUTHORIZATION_ROLES = {
+    'admin': '10000000-0000-4000-8000-000000000001',
+    'provincial_manager': '10000000-0000-4000-8000-000000000002',
+    'technician': '10000000-0000-4000-8000-000000000003',
+}
+AUTHORIZATION_TABLES = ('roles', 'permissions', 'role_permissions')
+RECIPIENT_TECHNICIAN_SEED_ID = '21000000-0000-4000-8000-000000000105'
+RECIPIENT_FULFILL_PERMISSION_ID = '20000000-0000-4000-8000-000000000059'
+RECIPIENT_RECEIVE_PERMISSION_ID = '20000000-0000-4000-8000-000000000062'
 
 
 def snapshot(engine, *, tables=None, columns=None):
@@ -64,3 +107,131 @@ def assert_backfill(engine, evidence):
 
 def historical_facts(engine, *, columns=None):
     return snapshot(engine,tables=load_fixture()['tables'],columns=columns)
+
+
+def authorization_facts(engine, *, columns=None):
+    """Capture exact pre-upgrade role/definition/grant rows independently."""
+    return snapshot(engine, tables=AUTHORIZATION_TABLES, columns=columns)
+
+
+def _rows_by_id(facts, table):
+    rows = facts[table]['rows']
+    result = {row['id']: row for row in rows}
+    assert len(result) == len(rows), 'duplicate historical identities: ' + table
+    return result
+
+
+def additive_policy_authorization_version_plan(historical_before, authorization_before):
+    """Only 0165/0167/0169 invalidations, not a general 0051-to-head plan.
+
+    The policies retain either effect on an existing full-resource grant and
+    invalidate all assigned users, including inactive/expired assignments.
+    Several new grants or assigned roles must never multiply the same bump.
+    Only pre-upgrade facts enter this function.
+    """
+    roles = _rows_by_id(authorization_before, 'roles')
+    for code, identifier in AUTHORIZATION_ROLES.items():
+        role = roles.get(identifier)
+        assert (role is not None and role['code'] == code
+                and role['is_external'] is False
+                and role['status'] in ('active', 'inactive')), 'unreviewed role identity'
+    permissions = _rows_by_id(authorization_before, 'permissions')
+    natural = {(row['resource'], row['action'], row['field_code']): row['id']
+               for row in permissions.values()}
+    assert len(natural) == len(permissions), 'ambiguous historical permissions'
+    grants = _rows_by_id(authorization_before, 'role_permissions')
+    pairs = set()
+    for grant in grants.values():
+        assert grant['effect'] in ('allow', 'deny'), 'invalid historical grant effect'
+        assert grant['role_id'] in roles and grant['permission_id'] in permissions
+        pairs.add((grant['role_id'], grant['permission_id']))
+    assert len(pairs) == len(grants), 'ambiguous historical role grants'
+    users = _rows_by_id(historical_before, 'users')
+    assignments = _rows_by_id(historical_before, 'role_assignments')
+    assert all(row['user_id'] in users and row['role_id'] in roles
+               for row in assignments.values()), 'unbound historical assignment'
+    planned = {}
+    for revision, resource, defaults in AUTHORIZATION_POLICIES:
+        changed_roles = {
+            AUTHORIZATION_ROLES[code] for code, action in defaults
+            if (AUTHORIZATION_ROLES[code], natural.get((resource, action, ''))) not in pairs
+        }
+        planned[revision] = tuple(sorted({
+            row['user_id'] for row in assignments.values()
+            if row['role_id'] in changed_roles
+        }))
+    return planned
+
+
+def expected_additive_policy_facts(historical_before, authorization_before):
+    """Apply only the three additive policies, not earlier role transitions."""
+    planned = additive_policy_authorization_version_plan(historical_before, authorization_before)
+    expected = deepcopy(historical_before)
+    for user in expected['users']['rows']:
+        delta = sum(user['id'] in affected for affected in planned.values())
+        if delta:
+            version = user['authorization_version']
+            assert type(version) is int and 1 <= version < 2**63 - delta, 'version cannot advance'
+            user['authorization_version'] = version + delta
+    return expected
+
+
+def expected_0051_regional_upgrade(historical_before, authorization_before):
+    """Plan the frozen 0051 single-region fixture, including the 0083 seed swap.
+
+    0083 invalidates technician users. This fixture has exactly one regional
+    user and one regional assignment, so no earlier technician invalidation
+    applies. Refuse other fixture populations instead of claiming that the
+    later three-policy delta covers arbitrary historical users.
+    """
+    fixture = load_fixture()
+    frozen_users = [row['parameters'] for row in fixture['statements']
+                    if row['sql'].startswith('INSERT INTO users (')]
+    frozen_assignments = [row['parameters'] for row in fixture['statements']
+                          if row['sql'].startswith('INSERT INTO role_assignments (')]
+    assert len(frozen_users) == len(frozen_assignments) == 1, 'unreviewed frozen 0051 fixture'
+    user, assignment = frozen_users[0], frozen_assignments[0]
+    users = _rows_by_id(historical_before, 'users')
+    assignments = _rows_by_id(historical_before, 'role_assignments')
+    assert set(users) == {user['id']}, '0051 expectation requires the frozen regional user'
+    assert (users[user['id']]['role'], users[user['id']]['authorization_version']) == (
+        'provincial_manager', user['authorization_version']), '0051 regional identity changed'
+    assert set(assignments) == {assignment['id']['value']}, '0051 regional assignment changed'
+    actual_assignment = assignments[assignment['id']['value']]
+    assert (actual_assignment['user_id'], actual_assignment['role_id']) == (
+        user['id'], AUTHORIZATION_ROLES['provincial_manager']), '0051 regional assignment changed'
+
+    # Match the exact frozen 0083 precondition before deriving its one-column
+    # change. Explicit deny, custom timestamps and every other old row remain.
+    grants = _rows_by_id(authorization_before, 'role_permissions')
+    seed = grants.get(RECIPIENT_TECHNICIAN_SEED_ID)
+    assert seed is not None, '0083 technician seed missing'
+    assert (seed['role_id'], seed['permission_id']) == (
+        AUTHORIZATION_ROLES['technician'], RECIPIENT_FULFILL_PERMISSION_ID), (
+            '0083 technician seed binding changed')
+    assert seed['effect'] in ('allow', 'deny'), '0083 technician seed effect invalid'
+    permissions = _rows_by_id(authorization_before, 'permissions')
+    fulfill = permissions.get(RECIPIENT_FULFILL_PERMISSION_ID)
+    assert fulfill is not None and (fulfill['resource'], fulfill['action'], fulfill['field_code']) == (
+        'material_request', 'fulfill', ''), '0083 fulfill definition changed'
+    assert RECIPIENT_RECEIVE_PERMISSION_ID not in permissions and not any(
+        (row['resource'], row['action'], row['field_code']) == ('material_request', 'receive', '')
+        for row in permissions.values()), '0083 receive definition already exists'
+    expected_authorization = deepcopy(authorization_before)
+    _rows_by_id(expected_authorization, 'role_permissions')[RECIPIENT_TECHNICIAN_SEED_ID][
+        'permission_id'] = RECIPIENT_RECEIVE_PERMISSION_ID
+    expected_historical = expected_additive_policy_facts(historical_before, authorization_before)
+    return expected_historical, expected_authorization
+
+
+def assert_legacy_upgrade_readback(expected, actual, authorization_expected, authorization_after):
+    """Exact old facts and preplanned authorization rows; additions checked by their gates."""
+    assert actual == expected, 'historical upgrade changed unplanned facts'
+    assert set(authorization_expected) == set(authorization_after) == set(AUTHORIZATION_TABLES)
+    for table in AUTHORIZATION_TABLES:
+        assert authorization_after[table]['columns'] == authorization_expected[table]['columns']
+        old = _rows_by_id(authorization_expected, table)
+        new = _rows_by_id(authorization_after, table)
+        assert set(old) <= set(new), 'historical authorization rows removed: ' + table
+        assert all(new[key] == value for key, value in old.items()), (
+            'historical authorization rows changed: ' + table)

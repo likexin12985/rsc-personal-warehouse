@@ -6853,7 +6853,10 @@ def _assert_0052_isolated_legacy_catalog_state(
 
 
 def _assert_0052_legacy_backfill_and_atomic_rejection() -> None:
-    from pg16_legacy_opening_gate import snapshot, legacy_catalog, historical_facts
+    from pg16_legacy_opening_gate import (
+        snapshot, legacy_catalog, historical_facts, authorization_facts,
+        expected_0051_regional_upgrade, assert_legacy_upgrade_readback,
+    )
     migration = _load_opening_terminal_guard_execution_migration_0052()
 
     successful_database = _create_opening_backfill_database()
@@ -6868,13 +6871,25 @@ def _assert_0052_legacy_backfill_and_atomic_rejection() -> None:
             installed=False,
         )
         historical_before = historical_facts(success_engine)
+        authorization_before = authorization_facts(success_engine)
+        # Plan 0083's fixed technician seed conversion and 0165/0167/0169's
+        # regional invalidations before Alembic. The helper rejects populations
+        # beyond the frozen regional fixture; old evidence versions stay exact.
+        historical_expected, authorization_expected = expected_0051_regional_upgrade(
+            historical_before, authorization_before,
+        )
         _run_alembic(
             "upgrade",
             HEAD_REVISION,
             database_name=successful_database,
         )
         assert _isolated_current_revision(successful_database) == HEAD_REVISION
-        assert historical_facts(success_engine, columns=historical_before) == historical_before
+        assert_legacy_upgrade_readback(
+            historical_expected,
+            historical_facts(success_engine, columns=historical_before),
+            authorization_expected,
+            authorization_facts(success_engine, columns=authorization_before),
+        )
         _assert_0052_isolated_legacy_catalog_state(
             successful_database,
             installed=True,

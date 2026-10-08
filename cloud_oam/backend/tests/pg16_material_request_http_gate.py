@@ -30,11 +30,16 @@ from pg16_opening_publication_fixture import prepare_stocktake_inventory
 from pg16_personal_stock_fixture import establish_personal_stock
 
 
-def run(engines, *, requester, manager, admin, verifier, directory, tracking, browser_tail=None, partial_release=False, rejected_receipt=False, rejection_split=False, mixed_return=False, unfulfilled_return=False, supply_allocation_recovery=False, supply_upgrade_check=None, supply_browser=None, supply_create_browser=None):
+def run(engines, *, requester, manager, admin, verifier, directory, tracking, browser_tail=None, partial_release=False, rejected_receipt=False, rejection_split=False, mixed_return=False, unfulfilled_return=False, supply_allocation_recovery=False, supply_upgrade_check=None, supply_browser=None, supply_create_browser=None, existing_target_location_id=None):
     api=engines['star_oam_api']; owner=engines['star_oam_migrator']
     assert tracking in ('quantity','serial')
     assert not rejection_split or rejected_receipt
     assert not rejected_receipt or (browser_tail is None and not partial_release)
+    assert existing_target_location_id is None or (
+        tracking == 'quantity' and browser_tail is None and not any((partial_release,
+        rejected_receipt, rejection_split, mixed_return, unfulfilled_return,
+        supply_allocation_recovery, supply_upgrade_check, supply_browser, supply_create_browser))
+    ), 'existing target is reserved for the ordinary quantity key-probe fixture'
     fixture=prepare_stocktake_inventory(owner,engines['edge_inbox'],actor_user_id=admin,assignee_user_id=manager,control_material=tracking)
     assert not mixed_return or (rejected_receipt and not rejection_split)
     assert not unfulfilled_return or mixed_return
@@ -84,16 +89,25 @@ def run(engines, *, requester, manager, admin, verifier, directory, tracking, br
             row=StockAccount(id=uuid4(),availability_bucket=bucket,**dimensions)
             db.add(row); db.flush(); accounts[bucket]=row.id
             db.add(StockBalance(stock_account_id=row.id,quantity=Decimal(0),version=0,ledger_cursor=0))
-        target=StockLocation(id=uuid4(),code='VISIBLE-PERSONAL-'+uuid4().hex,name='合成工程师个人仓',
-            location_type='personal',owner_org_id=fixture['region_org_id'],parent_id=fixture['difference_peer_location_id'],
-            custodian_person_id=person,status='active')
-        db.add(target);db.flush(); target_id=target.id
-        db.add(CustodyAssignment(id=uuid4(),location_id=target_id,custodian_person_id=person,valid_from=datetime.now(timezone.utc)-timedelta(days=1)))
+        if existing_target_location_id is None:
+            target=StockLocation(id=uuid4(),code='VISIBLE-PERSONAL-'+uuid4().hex,name='合成工程师个人仓',
+                location_type='personal',owner_org_id=fixture['region_org_id'],parent_id=fixture['difference_peer_location_id'],
+                custodian_person_id=person,status='active')
+            db.add(target);db.flush(); target_id=target.id
+            db.add(CustodyAssignment(id=uuid4(),location_id=target_id,custodian_person_id=person,valid_from=datetime.now(timezone.utc)-timedelta(days=1)))
+        else:
+            from pg16_personal_target_fixture import existing_personal_target
+            target_id=existing_personal_target(db,person_id=person,region_id=fixture['region_org_id'],
+                location_id=existing_target_location_id,now=datetime.now(timezone.utc))
         db.commit()
-    from test_postgresql16_release_gate import _establish_multiround_stocktake_location
-    target_opening=_establish_multiround_stocktake_location(api,fixture={**fixture,'recount_location_id':target_id},
-        actor_user_id=admin,assignee_user_id=manager,count_user_id=requester,expected_snapshot_line_count=0)
-    print('Visible fulfillment target zero opening independently reviewed and closed',flush=True)
+    target_opening=None
+    if existing_target_location_id is None:
+        from test_postgresql16_release_gate import _establish_multiround_stocktake_location
+        target_opening=_establish_multiround_stocktake_location(api,fixture={**fixture,'recount_location_id':target_id},
+            actor_user_id=admin,assignee_user_id=manager,count_user_id=requester,expected_snapshot_line_count=0)
+        print('Visible fulfillment target zero opening independently reviewed and closed',flush=True)
+    else:
+        print('Visible fulfillment reuses existing personal target; actual receipt/inbound still enforce opening',flush=True)
     def actor(db,identifier):return load_formal_principal(db,identifier)
     http_commands=[]
     def post(route,body,label,identifier,expected_status=201):
@@ -411,7 +425,8 @@ def run(engines, *, requester, manager, admin, verifier, directory, tracking, br
         assert sum((line.posted_qty for line in coverage), Decimal(0)) == Decimal(1)
     readback = verify_readback_and_guards(engines, request_id=request_id, actor_id=admin, key=token+'-ship', directory=directory)
     result=dict(readback=readback, requestId=str(request_id),personId=str(person),targetLocationId=str(target_id),materialId=str(fixture['material_id']),
-        tracking=tracking,sourceOpeningPosted=True,targetZeroOpeningId=str(target_opening),personalQuantity='1.000',passed=True,syntheticData=True,realPostgreSQL=True,
+        tracking=tracking,sourceOpeningPosted=True,targetZeroOpeningId=str(target_opening) if target_opening is not None else None,
+        targetExistingOpeningReused=existing_target_location_id is not None,personalQuantity='1.000',passed=True,syntheticData=True,realPostgreSQL=True,
         scope='formal API-role transactions; synthetic identities and external evidence; not UAT',
         fulfillmentHttp=True,httpCommands=http_commands,browserCommands=browser_tail is not None,stages=stages,
         inboundCoverageVerified=True,finalApprovalHistoryVerified=True,businessClosed=False,

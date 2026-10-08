@@ -6,32 +6,26 @@ import json
 import time
 from uuid import UUID, uuid4
 
-import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy import select, text
-from sqlalchemy.orm import Session
-
-from app.config import get_settings
-from app.database import get_db
-from app.database_security import validate_production_database_security
-from app.daily_reconciliation import review_core as core, review_entry, review_service
 from app.daily_reconciliation.process_entry import run_owned_job, ProcessOutcomeUnknown
-from app.foundation_models import FileObject,Person,Role,RoleAssignment
-from app.models import User
-from app.routers import formal_daily_reconciliation, formal_files
-from pg16_daily_review_fixture import prepare
-from test_formal_files_service import FakeStorage
-from test_formal_access import assign
 
 
 def snapshot(owner, tables):
+    from sqlalchemy import text
+
     with owner.connect() as db:
         return {name:db.scalar(text('SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),\'[]\'::jsonb) FROM public.'+name+' t')) for name in tables}
 
 
 @contextmanager
 def http_client(api):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sqlalchemy.orm import Session
+    from app.config import get_settings
+    from app.database import get_db
+    from app.routers import formal_daily_reconciliation, formal_files
+    from test_formal_files_service import FakeStorage
+
     app=FastAPI()
     app.include_router(formal_daily_reconciliation.router,prefix='/api')
     app.include_router(formal_files.router,prefix='/api')
@@ -49,12 +43,37 @@ def http_client(api):
 
 
 def _lose_committed_response(payload, expires):
+    # spawn imports this module inside the same eight-second deadline. Keep
+    # unrelated HTTP/fixture imports in the parent-only helpers below/above.
+    from app.daily_reconciliation import review_entry
+
     result=review_entry._review_worker(payload,expires)
-    assert result['outcome']=='observed' and result['receipt']['recorded']
+    receipt=result.get('receipt')
+    if result.get('outcome')!='observed' or not isinstance(receipt,dict) or receipt.get('recorded') is not True:
+        # The supervisor converts exceptions to unknown. Returning an actual
+        # rejection preserves its safe code/status and must fail this scenario.
+        return result
     time.sleep(60)  # The real fixed supervisor must kill this owned worker.
 
 
+def _require_response_loss(payload):
+    try:
+        result=run_owned_job(_lose_committed_response,payload,maximum_seconds=8)
+    except ProcessOutcomeUnknown:
+        return  # Only the subsequent exact recovery can establish COMMIT.
+    raise AssertionError(('daily_review_response_loss_not_injected',result))
+
+
 def run(engines, readers, *, check_retention=None):
+    from sqlalchemy import select, text
+    from sqlalchemy.orm import Session
+    from app.database_security import validate_production_database_security
+    from app.daily_reconciliation import review_core as core, review_service
+    from app.foundation_models import FileObject,Person,Role,RoleAssignment
+    from app.models import User
+    from pg16_daily_review_fixture import prepare
+    from test_formal_access import assign
+
     owner,api,edge=(engines[name] for name in ('star_oam_migrator','star_oam_api','edge_inbox'))
     identities,cutoffs=prepare(owner,edge,readers)
     # A headquarters employee may hold the explicit regional-manager scope.
@@ -205,8 +224,9 @@ def run(engines, readers, *, check_retention=None):
         lost=command('open',source=third)
         payload=dict(database_url=api.url.render_as_string(hide_password=False),command=lost.model_dump(mode='json'),
             access_token=identities['region']['token'],expected_authorization_version=1,recover=False)
-        with pytest.raises(ProcessOutcomeUnknown):run_owned_job(_lose_committed_response,payload,maximum_seconds=8)
-        recovered=recover(lost);assert recovered['outcome']=='found' and recovered['receipt']['version']==1
+        _require_response_loss(payload)
+        recovered=recover(lost)
+        assert recovered['outcome']=='found' and recovered['receipt']['version']==1,recovered
         assert post(lost)['receipt']==recovered['receipt']
         passed('commit-response-loss-recovers-once-through-fixed-process-supervisor')
         with owner.begin() as db:
