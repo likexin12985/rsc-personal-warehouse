@@ -1,3 +1,11 @@
+## 2026-10-08 22:58 接续：本地候选已提交，GitHub HTTPS 传输阻塞
+
+C1 实现为 `c4851de57bfd53237634ba06d3dce4b112460a83`，旧 CI 终态交接为 `eeba5aa89a11b4acead6fd0fbce7641c1565084b`；本次仅追加传输状态记录。旧 run 已结束，执行一次正常 push 后 60 秒超时，没有盲目重推。两次 GitHub API 精确回读均确认远端仍为 `14d0731`，新候选 workflow 数为0，本机已无残留 Git 传输进程。
+
+只读诊断中 `github.com` HTTPS 12 秒内未建立 TCP/TLS，默认与 HTTP/1.1 的 Git refs 查询也超时；GitHub API 仍可读。当前是 Git 传输阻塞，未证明凭据失效，不要求重复登录。没有改远端、代理或全局 Git 配置，没有 force-push。证据见 `artifacts/formal-0165-integration/key-provider-c1-20261008/candidate-push-receipt.json`、`candidate-push-authoritative-readback.json`、`git-transport-read-diagnostic.json`、`git-http1-read-diagnostic.json`。
+
+接续时先回读远端和当前候选 workflow，确认传输恢复后正常推送最新本地候选，再验收该 SHA 的 hosted PG16/Client。359 个聚焦节点、2 个业务代表复验及隔离 PG16 的已有终态不重跑；新版本完整远端门禁仍未通过。C2 最小落点已写入 [C1 交接](OPENBAO_C1_BINDING_EVIDENCE_20261008.md)，生产身份、私有 OSS、真实短信/UAT/部署回滚门禁保持。**试点 MVP，不等同完整 V1，仍未上线。**
+
 ## 2026-10-08 22:53 接续：C1 不可变密钥绑定与隔离 PG16 完成
 
 **试点 MVP，不等同完整 V1，仍未上线。** 本节覆盖下方密钥绑定尚未实施的历史状态。本批实现已提交 `c4851de57bfd53237634ba06d3dce4b112460a83`；旧 CI 已终态，本次交接更新后一次正常推送新候选。准确提交、推送和 CI 以 `artifacts/formal-0165-integration/key-provider-c1-20261008/candidate-final-receipt.json` 为准。详细实现、全部失败保留、源码及证据索引见 [C1 绑定与候选读取交接](OPENBAO_C1_BINDING_EVIDENCE_20261008.md)。
