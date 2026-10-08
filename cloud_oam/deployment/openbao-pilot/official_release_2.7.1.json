@@ -1,0 +1,26 @@
+{
+  "version": "2.7.1",
+  "releasePublishedAt": "2026-10-01T14:03:19Z",
+  "releaseUrl": "https://github.com/openbao/openbao/releases/tag/v2.7.1",
+  "officialFingerprintSource": "https://openbao.org/docs/install/",
+  "primaryFingerprint": "66D15FDD87287219C8E15478D200CD702853E6D0",
+  "signingSubkeyFingerprint": "E617DCD4065C2AFC0B2CF7A7BA8BC08C0F691F94",
+  "checksumsSha256": "95ad62d532df64dea20463ce513f0a56f792530bbefeb4e89525bc1eb773b750",
+  "detachedSignatureVerified": true,
+  "verifier": "PGPy 0.6.0",
+  "signatureAssurance": "cryptographic signature plus pinned published primary and signing-subkey fingerprints",
+  "revocationStatusFromExternalKeyserverVerified": false,
+  "artifacts": {
+    "darwin_arm64": {
+      "archive": "openbao_2.7.1_darwin_arm64.tar.gz",
+      "archive_sha256": "15625b5f69aee5bb4578b4e76e856a2141647342b0f8e5969a8875b44e0fbf91",
+      "binary_sha256": "50c3588e64271171cc2147bddeace8ec2b6742f94fd3fe53baa60f6d938cda0c"
+    },
+    "linux_amd64": {
+      "archive": "openbao_2.7.1_linux_amd64.tar.gz",
+      "archive_sha256": "0e2f1ce10d124e03112b50dd2fbec6b78003783253bc3a91587938f39d1e2243",
+      "binary_sha256": "535cf827b13753046757f5ec8b97ae0ef21f10a40ffe673f0d5e75616170f5ea"
+    }
+  },
+  "productionReady": false
+}
