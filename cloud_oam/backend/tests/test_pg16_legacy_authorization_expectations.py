@@ -11,6 +11,8 @@ from pg16_legacy_opening_gate import (
     RECIPIENT_TECHNICIAN_SEED_ID,
     RECIPIENT_FULFILL_PERMISSION_ID,
     RECIPIENT_RECEIVE_PERMISSION_ID,
+    FULFILLMENT_SEED_ROLES,
+    assert_0051_authorization_additions,
     assert_legacy_upgrade_readback,
     additive_policy_authorization_version_plan,
     expected_additive_policy_facts,
@@ -182,12 +184,35 @@ def _frozen_region_before(effect='allow'):
         authorization_version=1, name=user['name'])])
     historical['role_assignments'] = _table([dict(id=assignment['id']['value'],
         user_id=user['id'], role_id=assignment['role_id']['value'], status='active')])
-    authorization['permissions'] = _table([dict(id=RECIPIENT_FULFILL_PERMISSION_ID,
-        resource='material_request', action='fulfill', field_code='', description='old fulfill')])
-    authorization['role_permissions'] = _table([dict(id=RECIPIENT_TECHNICIAN_SEED_ID,
-        role_id=AUTHORIZATION_ROLES['technician'], permission_id=RECIPIENT_FULFILL_PERMISSION_ID,
-        effect=effect, created_at='2026-09-01T00:00:00+00:00')])
+    # Preserve real 0051 stock/count facts, including the unverified observation.
+    # No 0076 fulfillment or 0083 recipient seed exists in this predecessor.
+    for table in ('stock_accounts', 'stock_balances', 'stocktake_count_lines',
+                  'stocktake_count_observations', 'stocktake_scope_count_completions'):
+        rows = [row['parameters'] for row in fixture['statements']
+                if row['sql'].startswith('INSERT INTO ' + table + ' (')]
+        historical[table] = _table([{key: value['value'] if isinstance(value, dict)
+                                    and set(value) == {'type', 'value'} else value
+                                    for key, value in row.items()} for row in rows])
+    historical['inventory_transactions'] = _table([], ('id', 'quantity'))
+    _grant(authorization, 'provincial_manager', 'inventory', 'read', effect=effect)
+    authorization['permissions']['rows'][0]['created_at'] = '2026-08-30T00:00:00+00:00'
+    authorization['role_permissions']['rows'][0]['created_at'] = '2026-08-30T00:00:00+00:00'
     return historical, authorization
+
+
+def _upgraded_authorization(authorization):
+    result = deepcopy(authorization)
+    for identifier, action, created_at in (
+            (RECIPIENT_FULFILL_PERMISSION_ID, 'fulfill', '2026-09-16T00:00:00+00:00'),
+            (RECIPIENT_RECEIVE_PERMISSION_ID, 'receive', '2026-09-23T00:00:00+00:00')):
+        result['permissions']['rows'].append(dict(id=identifier, resource='material_request',
+            action=action, field_code='', description=action, created_at=created_at))
+    for identifier, role in FULFILLMENT_SEED_ROLES.items():
+        result['role_permissions']['rows'].append(dict(id=identifier, role_id=role,
+            permission_id=(RECIPIENT_RECEIVE_PERMISSION_ID if identifier == RECIPIENT_TECHNICIAN_SEED_ID
+                           else RECIPIENT_FULFILL_PERMISSION_ID), effect='allow',
+            created_at='2026-09-16T00:00:00+00:00'))
+    return result
 
 
 def test_0083_seed_coordinates_match_frozen_migration():
@@ -200,42 +225,48 @@ def test_0083_seed_coordinates_match_frozen_migration():
 
 
 @pytest.mark.parametrize('effect', ('allow', 'deny'))
-def test_0051_regional_plan_applies_only_exact_0083_seed_change_before_upgrade(effect):
+def test_0051_regional_plan_preserves_pre0076_rows_and_observations(effect):
     historical, authorization = _frozen_region_before(effect)
     original = deepcopy((historical, authorization))
     expected, authorization_expected = expected_0051_regional_upgrade(historical, authorization)
     assert expected['users']['rows'][0]['authorization_version'] == 4
     assert expected['stocktake_scope_count_completions'] == historical['stocktake_scope_count_completions']
-    precise_authorization = deepcopy(authorization)
-    precise_authorization['role_permissions']['rows'][0]['permission_id'] = RECIPIENT_RECEIVE_PERMISSION_ID
-    assert authorization_expected == precise_authorization
+    assert authorization_expected == authorization
     assert authorization_expected['role_permissions']['rows'][0]['effect'] == effect
+    assert expected['stock_balances']['rows'][0]['quantity'] == '0'
+    assert expected['stocktake_count_lines']['rows'][0]['counted_qty'] == '0.000'
+    assert expected['stocktake_count_observations']['rows'][0]['counted_qty'] == '1'
+    assert expected['stocktake_count_observations']['rows'][0]['serial_id'] is None
+    assert expected['stocktake_count_observations']['rows'][0]['verification_status'] == 'pending_verification'
+    assert expected['inventory_transactions']['rows'] == expected['inventory_movements']['rows'] == []
+    for table in historical.keys() - {'users'}:
+        assert expected[table] == historical[table]
     assert (historical, authorization) == original
-    assert_legacy_upgrade_readback(expected, deepcopy(expected), authorization_expected,
-                                  deepcopy(authorization_expected))
-    with pytest.raises(AssertionError, match='historical authorization rows changed'):
-        assert_legacy_upgrade_readback(expected, expected, authorization_expected, authorization)
+    upgraded = _upgraded_authorization(authorization)
+    assert_legacy_upgrade_readback(expected, deepcopy(expected), authorization_expected, upgraded)
+    assert_0051_authorization_additions(upgraded)
 
 
-@pytest.mark.parametrize('case', ('missing_seed', 'wrong_seed_role', 'wrong_seed_permission',
-                                 'wrong_seed_effect', 'changed_fulfill', 'existing_receive'))
-def test_0051_regional_plan_rejects_unreviewed_0083_predecessor(case):
+@pytest.mark.parametrize('identifier', tuple(FULFILLMENT_SEED_ROLES))
+def test_0051_regional_plan_rejects_future_0076_grant_id_even_on_old_permission(identifier):
     historical, authorization = _frozen_region_before()
-    seed = authorization['role_permissions']['rows'][0]
-    if case == 'missing_seed':
-        authorization['role_permissions']['rows'].clear()
-    elif case == 'wrong_seed_role':
-        seed['role_id'] = AUTHORIZATION_ROLES['admin']
-    elif case == 'wrong_seed_permission':
-        seed['permission_id'] = RECIPIENT_RECEIVE_PERMISSION_ID
-    elif case == 'wrong_seed_effect':
-        seed['effect'] = 'unknown'
-    elif case == 'changed_fulfill':
-        authorization['permissions']['rows'][0]['action'] = 'unreviewed'
+    authorization['role_permissions']['rows'][0]['id'] = identifier
+    with pytest.raises(AssertionError, match='0051 contains a future 0076 grant'):
+        expected_0051_regional_upgrade(historical, authorization)
+
+
+@pytest.mark.parametrize('action', ('fulfill', 'receive'))
+@pytest.mark.parametrize('collision', ('identity', 'natural_key'))
+def test_0051_regional_plan_rejects_future_permission_identity_or_natural_key(action, collision):
+    historical, authorization = _frozen_region_before()
+    permission = authorization['permissions']['rows'][0]
+    if collision == 'identity':
+        permission['id'] = (RECIPIENT_FULFILL_PERMISSION_ID if action == 'fulfill'
+                            else RECIPIENT_RECEIVE_PERMISSION_ID)
+        authorization['role_permissions']['rows'][0]['permission_id'] = permission['id']
     else:
-        authorization['permissions']['rows'].append(dict(id=RECIPIENT_RECEIVE_PERMISSION_ID,
-            resource='material_request', action='receive', field_code='', description='unexpected'))
-    with pytest.raises(AssertionError, match='0083'):
+        permission.update(resource='material_request', action=action, field_code='')
+    with pytest.raises(AssertionError, match='0051 contains a future 0076/0083 permission'):
         expected_0051_regional_upgrade(historical, authorization)
 
 
@@ -265,10 +296,59 @@ def test_0051_regional_plan_refuses_general_or_mixed_historical_populations(case
 
 @pytest.mark.parametrize('field,value', (('effect', 'allow'), ('created_at', 'changed'),
                                       ('role_id', AUTHORIZATION_ROLES['admin'])))
-def test_0051_0083_seed_readback_rejects_any_change_beyond_permission_id(field, value):
+def test_0051_readback_preserves_every_old_grant_field_after_future_seeds_are_added(field, value):
     historical, authorization = _frozen_region_before('deny')
     expected, authorization_expected = expected_0051_regional_upgrade(historical, authorization)
-    actual = deepcopy(authorization_expected)
+    actual = _upgraded_authorization(authorization_expected)
     actual['role_permissions']['rows'][0][field] = value
+    assert_0051_authorization_additions(actual)
     with pytest.raises(AssertionError, match='historical authorization rows changed'):
         assert_legacy_upgrade_readback(expected, expected, authorization_expected, actual)
+
+
+def test_0051_future_seed_coordinates_match_the_creation_and_conversion_migrations():
+    directory = Path(__file__).resolve().parents[1] / 'alembic' / 'versions'
+    creation = runpy.run_path(str(directory / '20260916_0076_material_request_fulfillment_permission.py'))
+    conversion = runpy.run_path(str(directory / '20260923_0083_recipient_receipt_permission.py'))
+    assert {str(identifier): str(role) for identifier, role in creation['ROLE_PERMISSION_ROWS']} == FULFILLMENT_SEED_ROLES
+    assert str(creation['PERMISSION_ID']) == str(conversion['FULFILL_PERMISSION_ID']) == RECIPIENT_FULFILL_PERMISSION_ID
+    assert str(conversion['PERMISSION_ID']) == RECIPIENT_RECEIVE_PERMISSION_ID
+    assert str(conversion['TECHNICIAN_SEED_ID']) == RECIPIENT_TECHNICIAN_SEED_ID
+
+
+@pytest.mark.parametrize('case', ('missing_fulfill', 'missing_receive', 'wrong_definition',
+                                 'duplicate_definition', 'missing_admin', 'missing_region',
+                                 'missing_technician', 'wrong_role', 'technician_still_fulfill',
+                                 'region_receive', 'deny_new_seed', 'changed_creation_time'))
+def test_0051_upgrade_requires_exact_future_seed_additions(case):
+    _, before = _frozen_region_before('deny')
+    actual = _upgraded_authorization(before)
+    permissions = actual['permissions']['rows']
+    grants = actual['role_permissions']['rows']
+    by_id = {row['id']: row for row in grants}
+    if case in ('missing_fulfill', 'missing_receive'):
+        identifier = RECIPIENT_FULFILL_PERMISSION_ID if case == 'missing_fulfill' else RECIPIENT_RECEIVE_PERMISSION_ID
+        permissions[:] = [row for row in permissions if row['id'] != identifier]
+    elif case == 'wrong_definition':
+        permissions[-1]['field_code'] = 'private_field'
+    elif case == 'duplicate_definition':
+        permissions.append(dict(permissions[-1], id='unexpected-natural-key-duplicate'))
+    elif case.startswith('missing_'):
+        role = {'missing_admin': 'admin', 'missing_region': 'provincial_manager',
+                'missing_technician': 'technician'}[case]
+        identifier = next(key for key, value in FULFILLMENT_SEED_ROLES.items() if value == AUTHORIZATION_ROLES[role])
+        grants[:] = [row for row in grants if row['id'] != identifier]
+    elif case == 'wrong_role':
+        by_id[RECIPIENT_TECHNICIAN_SEED_ID]['role_id'] = AUTHORIZATION_ROLES['admin']
+    elif case == 'technician_still_fulfill':
+        by_id[RECIPIENT_TECHNICIAN_SEED_ID]['permission_id'] = RECIPIENT_FULFILL_PERMISSION_ID
+    elif case == 'region_receive':
+        identifier = next(key for key, value in FULFILLMENT_SEED_ROLES.items()
+                          if value == AUTHORIZATION_ROLES['provincial_manager'])
+        by_id[identifier]['permission_id'] = RECIPIENT_RECEIVE_PERMISSION_ID
+    elif case == 'deny_new_seed':
+        by_id[RECIPIENT_TECHNICIAN_SEED_ID]['effect'] = 'deny'
+    else:
+        by_id[RECIPIENT_TECHNICIAN_SEED_ID]['created_at'] = '2026-09-23T00:00:00+00:00'
+    with pytest.raises(AssertionError, match='0051 upgrade'):
+        assert_0051_authorization_additions(actual)

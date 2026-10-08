@@ -1,3 +1,13 @@
+## 2026-10-08 23:54 接续：CI 共因修复，候选待新 SHA 验收
+
+**试点 MVP，不等同完整 V1，仍未上线。** `9f7ae10` 的 Client 已成功，PG16 run `37799249651` 已失败终态（75 job：71 failure / 4 success）。全部失败日志已归因，不取消或重跑旧 run。本批只修 0180 显式 `public`、SQLite 新约束的解析深度、0051 夹具时间线及漏列的两张只读表期望；PG 冻结 SQL/权限及001–0179保持。
+
+- 0051 专用单测31 passed；SQLite/ACL受影响组17 passed；Linux两套DDL共180组输入边界通过。Linux SQLite3.46.1未复现旧Ubuntu构建的parser overflow，不能以此冒称同runner已恢复，仍须新SHA CI。
+- 真实隔离PG16单次空库→0180升级、完整绑定目录/ACL、pg_catalog优先路径的升降级/回填/外层回滚回读通过。旧C1的0→0179、0179→0180分段证据原样保留，不能视为早已覆盖该连续路径。
+- 0051真实历史正例仍未通过：0052旧校验查询触发临时PG512MiB上限；恢复后精确只读回读确认head0051及全部历史行/旧授权未变，没有部分提交。该门禁待hosted环境继续验证，不伪造通过。各次临时容器、目录已清理，原六个业务容器保持。
+
+完整修复、失败保留、源码/证据绑定、验证限制及后续清单见 [9f7ae10 CI修复交接](CI_9F7AE10_REPAIR_20261008.md)。完成候选审查与安全扫描后一次正常提交/推送，新SHA CI以 `artifacts/formal-0165-integration/ci-9f7ae10/candidate-receipt.json` 记录。C2业务加密接入、真实运行身份/私有OSS、短信登录与角色/真机UAT、HTTPS/API和备份恢复/回滚继续独立待验。
+
 # OpenBao C1 追加绑定与候选读取证据（2026-10-08）
 
 **试点 MVP，不等同完整 V1，仍未上线。** C1 追加绑定、候选读取和真实隔离 PG16 增量门禁已完成。本批实现已提交为 `c4851de57bfd53237634ba06d3dce4b112460a83`（前序 `5f59c3c`）；本节终态交接随后单独提交。精确候选、推送与 CI 状态见 `artifacts/formal-0165-integration/key-provider-c1-20261008/candidate-final-receipt.json`，不构成生产 provider 激活或发布批准。

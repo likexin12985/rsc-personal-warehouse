@@ -616,6 +616,8 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
             "document_attachments",
             "file_jobs",
             "kms_data_key_pins",
+            "openbao_data_key_pins",
+            "application_key_version_claims",
             "sms_challenge_dispatches",
         }
         | material_request_read_tables

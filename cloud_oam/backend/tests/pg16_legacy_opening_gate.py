@@ -44,6 +44,11 @@ AUTHORIZATION_TABLES = ('roles', 'permissions', 'role_permissions')
 RECIPIENT_TECHNICIAN_SEED_ID = '21000000-0000-4000-8000-000000000105'
 RECIPIENT_FULFILL_PERMISSION_ID = '20000000-0000-4000-8000-000000000059'
 RECIPIENT_RECEIVE_PERMISSION_ID = '20000000-0000-4000-8000-000000000062'
+FULFILLMENT_SEED_ROLES = {
+    '21000000-0000-4000-8000-000000000103': AUTHORIZATION_ROLES['admin'],
+    '21000000-0000-4000-8000-000000000104': AUTHORIZATION_ROLES['provincial_manager'],
+    RECIPIENT_TECHNICIAN_SEED_ID: AUTHORIZATION_ROLES['technician'],
+}
 
 
 def snapshot(engine, *, tables=None, columns=None):
@@ -177,12 +182,13 @@ def expected_additive_policy_facts(historical_before, authorization_before):
 
 
 def expected_0051_regional_upgrade(historical_before, authorization_before):
-    """Plan the frozen 0051 single-region fixture, including the 0083 seed swap.
+    """Plan only rows that exist in the frozen 0051 single-region fixture.
 
     0083 invalidates technician users. This fixture has exactly one regional
     user and one regional assignment, so no earlier technician invalidation
-    applies. Refuse other fixture populations instead of claiming that the
-    later three-policy delta covers arbitrary historical users.
+    applies. 0076 creates the fulfillment seeds later; 0083 changes one of
+    those new rows. Neither migration may change the pre-0051 authorization
+    snapshot. Refuse other fixture populations and future seed identities.
     """
     fixture = load_fixture()
     frozen_users = [row['parameters'] for row in fixture['statements']
@@ -201,27 +207,40 @@ def expected_0051_regional_upgrade(historical_before, authorization_before):
     assert (actual_assignment['user_id'], actual_assignment['role_id']) == (
         user['id'], AUTHORIZATION_ROLES['provincial_manager']), '0051 regional assignment changed'
 
-    # Match the exact frozen 0083 precondition before deriving its one-column
-    # change. Explicit deny, custom timestamps and every other old row remain.
+    # This snapshot precedes 0076, not merely 0083. Never inject a future seed
+    # to satisfy the later migration's guard or silently accept its collision.
     grants = _rows_by_id(authorization_before, 'role_permissions')
-    seed = grants.get(RECIPIENT_TECHNICIAN_SEED_ID)
-    assert seed is not None, '0083 technician seed missing'
-    assert (seed['role_id'], seed['permission_id']) == (
-        AUTHORIZATION_ROLES['technician'], RECIPIENT_FULFILL_PERMISSION_ID), (
-            '0083 technician seed binding changed')
-    assert seed['effect'] in ('allow', 'deny'), '0083 technician seed effect invalid'
+    assert not set(FULFILLMENT_SEED_ROLES).intersection(grants), '0051 contains a future 0076 grant'
     permissions = _rows_by_id(authorization_before, 'permissions')
-    fulfill = permissions.get(RECIPIENT_FULFILL_PERMISSION_ID)
-    assert fulfill is not None and (fulfill['resource'], fulfill['action'], fulfill['field_code']) == (
-        'material_request', 'fulfill', ''), '0083 fulfill definition changed'
-    assert RECIPIENT_RECEIVE_PERMISSION_ID not in permissions and not any(
-        (row['resource'], row['action'], row['field_code']) == ('material_request', 'receive', '')
-        for row in permissions.values()), '0083 receive definition already exists'
-    expected_authorization = deepcopy(authorization_before)
-    _rows_by_id(expected_authorization, 'role_permissions')[RECIPIENT_TECHNICIAN_SEED_ID][
-        'permission_id'] = RECIPIENT_RECEIVE_PERMISSION_ID
+    assert not {RECIPIENT_FULFILL_PERMISSION_ID, RECIPIENT_RECEIVE_PERMISSION_ID}.intersection(
+        permissions), '0051 contains a future 0076/0083 permission identity'
+    assert not any((row['resource'], row['action'], row['field_code']) in (
+        ('material_request', 'fulfill', ''), ('material_request', 'receive', ''))
+        for row in permissions.values()), '0051 contains a future 0076/0083 permission definition'
     expected_historical = expected_additive_policy_facts(historical_before, authorization_before)
-    return expected_historical, expected_authorization
+    return expected_historical, deepcopy(authorization_before)
+
+
+def assert_0051_authorization_additions(authorization_after):
+    """Check newly created 0076/0083 rows only after the real upgrade."""
+    permissions = _rows_by_id(authorization_after, 'permissions')
+    for identifier, action in ((RECIPIENT_FULFILL_PERMISSION_ID, 'fulfill'),
+                               (RECIPIENT_RECEIVE_PERMISSION_ID, 'receive')):
+        row = permissions.get(identifier)
+        key = ('material_request', action, '')
+        assert row is not None and (row['resource'], row['action'], row['field_code']) == key, (
+            '0051 upgrade missing or changed 0076/0083 permission')
+        assert sum((item['resource'], item['action'], item['field_code']) == key
+                   for item in permissions.values()) == 1, '0051 upgrade ambiguous 0076/0083 permission'
+    grants = _rows_by_id(authorization_after, 'role_permissions')
+    for identifier, role in FULFILLMENT_SEED_ROLES.items():
+        seed = grants.get(identifier)
+        permission = (RECIPIENT_RECEIVE_PERMISSION_ID if identifier == RECIPIENT_TECHNICIAN_SEED_ID
+                      else RECIPIENT_FULFILL_PERMISSION_ID)
+        assert seed is not None and (seed['role_id'], seed['permission_id'], seed['effect']) == (
+            role, permission, 'allow'), '0051 upgrade missing or changed 0076/0083 grant'
+        assert seed['created_at'] == permissions[RECIPIENT_FULFILL_PERMISSION_ID]['created_at'], (
+            '0051 upgrade changed 0076 seed creation time')
 
 
 def assert_legacy_upgrade_readback(expected, actual, authorization_expected, authorization_after):

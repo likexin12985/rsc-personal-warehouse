@@ -78,6 +78,34 @@ def _rows(engine, table):
         return [dict(row) for row in db.execute(sa.text(f"SELECT * FROM {table} ORDER BY purpose,application_key_version")).mappings()]
 
 
+@pytest.mark.parametrize("dialect, expected_schema", [("postgresql", "public"), ("sqlite", None)])
+def test_binding_table_ddl_targets_only_the_intended_schema(monkeypatch, dialect, expected_schema):
+    migration = _module("20261229_0180_openbao_data_key_pins.py")
+    statements = []
+    connection = sa.create_mock_engine(
+        dialect + "://", lambda statement, *_args, **_kwargs: statements.append(statement)
+    )
+    # Compile only DDL here; guards and real PG role checks are separate evidence.
+    monkeypatch.setattr(migration, "_preflight", lambda _up: dialect)
+    monkeypatch.setattr(migration, "_downgrade_blocked", lambda: False)
+    monkeypatch.setattr(migration, "_replace_readiness", lambda _up: None)
+    with Operations.context(MigrationContext.configure(connection)):
+        migration._create_tables()
+        migration.downgrade()
+    creates = [statement for statement in statements if isinstance(statement, sa.schema.CreateTable)]
+    drops = [statement for statement in statements if isinstance(statement, sa.schema.DropTable)]
+    assert [statement.element.name for statement in creates] == [PINS, CLAIMS]
+    assert [statement.element.name for statement in drops] == [CLAIMS, PINS]
+    for statement in creates + drops:
+        assert statement.element.schema == expected_schema
+        compiled = str(statement.compile(dialect=connection.dialect))
+        target = ("public." if expected_schema else "") + statement.element.name
+        operation = "CREATE TABLE" if isinstance(statement, sa.schema.CreateTable) else "DROP TABLE"
+        assert compiled.strip().startswith(operation + " " + target)
+        assert "pg_catalog." not in compiled
+    assert not any("search_path" in str(statement) for statement in statements)
+
+
 def test_backfill_is_exact_legacy_fact_and_models_match_migration(structural_db):
     from app.key_provider_models import ApplicationKeyVersionClaim, OpenBaoDataKeyPin
 
@@ -95,7 +123,9 @@ def test_backfill_is_exact_legacy_fact_and_models_match_migration(structural_db)
         assert [column["name"] for column in inspector.get_columns(model.__tablename__)] == list(model.__table__.columns.keys())
         assert all(not column["nullable"] for column in inspector.get_columns(model.__tablename__))
         actual = {row["name"]: row["sqltext"] for row in inspector.get_check_constraints(model.__tablename__)}
-        expected = {constraint.name: str(constraint.sqltext) for constraint in model.__table__.constraints if isinstance(constraint, sa.CheckConstraint)}
+        expected = {constraint.name: str(constraint.sqltext) for constraint in model.__table__.constraints
+                    if isinstance(constraint, sa.CheckConstraint)
+                    and (constraint._ddl_if is None or constraint._ddl_if.dialect == engine.dialect.name)}
         assert actual == expected
         assert inspector.get_pk_constraint(model.__tablename__)["constrained_columns"] == ["purpose", "application_key_version"]
 
