@@ -1,4 +1,5 @@
 const session = require('../../utils/session')
+const capabilities = require('../../utils/client-capabilities')
 const adapterModule = require('../../utils/material-request-adapter')
 const contract = require('../../utils/material-request-contract')
 const materialCatalog = require('../../utils/material-catalog-contract')
@@ -419,9 +420,9 @@ function presentDetail(detail, access, lifecycleBlocked = false) {
     canSubmit: editable && detail.allowed_actions.includes('submit'),
     canWithdraw: !lifecycleBlocked && access.can_withdraw && actions.has('withdraw'),
     canCancel: !lifecycleBlocked && access.can_cancel && actions.has('cancel'),
-    canCreateSupply: access.can_manage_supply && actions.has('create_supply_task'),
+    canCreateSupply: capabilities.supplyPlanning && access.can_manage_supply && actions.has('create_supply_task'),
     supplyTaskViews: detail.supply_tasks.map((task) => Object.assign({}, task, {
-      canManage: access.can_manage_supply && task.allowed_actions.length > 0
+      canManage: capabilities.supplyPlanning && access.can_manage_supply && task.allowed_actions.length > 0
     })),
     canProcessInternal: !!(
       step &&
@@ -872,6 +873,7 @@ function editContextIsCurrent(page, generation, identity, detail) {
 
 Page({
   data: {
+    capabilities,
     loading: true,
     busy: false,
     accessAllowed: false,
@@ -2518,6 +2520,7 @@ Page({
   },
 
   openSupplyForm(event) {
+    if (!capabilities.supplyPlanning) return
     if (this.data.busy || this.supplyWriteBlocked() || this._lifecycleRecoveryBlocked) return
     const detail = this.data.detail
     if (!detail || !this._access || !this._access.can_manage_supply) return
@@ -2584,6 +2587,7 @@ Page({
   },
 
   async submitSupply() {
+    if (!capabilities.supplyPlanning) return
     if (this.data.busy || this.supplyWriteBlocked() || this._lifecycleRecoveryBlocked) return
     const before = this.data.detail
     const form = this.data.supplyForm

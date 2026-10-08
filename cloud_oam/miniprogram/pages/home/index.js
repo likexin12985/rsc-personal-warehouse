@@ -1,5 +1,6 @@
 const api = require('../../utils/api')
 const session = require('../../utils/session')
+const capabilities = require('../../utils/client-capabilities')
 const {
   formalRoleCodes,
   hasFormalPermission,
@@ -100,7 +101,7 @@ Page({
         access.access_mode === 'active' &&
         hasFormalPermission(access, 'material_request', 'read')
       )
-      const stocktakeAccessAllowed = (
+      const stocktakeAccessAllowed = capabilities.stocktake && (
         String(access.person_id || '').toLowerCase() ===
           String(user.person_id || '').toLowerCase() &&
         Number.isSafeInteger(user.authorization_version) &&
@@ -115,8 +116,8 @@ Page({
         materialRequestAccessAllowed,
         stocktakeAccessAllowed,
         inventoryAccessAllowed: decision.allowed,
-        workOrderAccessAllowed: decision.allowed && hasFormalPermission(access, 'work_order_material', 'read'),
-        returnReceivingAccessAllowed: decision.allowed && hasFormalPermission(access, 'stock_operation', 'read')
+        workOrderAccessAllowed: capabilities.workOrderMaterial && decision.allowed && hasFormalPermission(access, 'work_order_material', 'read'),
+        returnReceivingAccessAllowed: capabilities.stockReturn && decision.allowed && hasFormalPermission(access, 'stock_operation', 'read')
           && formalRoleCodes(user).some(role => ['admin', 'provincial_manager'].includes(role)),
         notificationAccessAllowed: (
           access.access_mode === 'active' &&

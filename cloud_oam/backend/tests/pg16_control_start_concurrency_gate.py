@@ -170,12 +170,16 @@ def assert_return_event_locks_retained(owner, api, world):
                 assert db.scalar(text('SELECT current_user'))=='star_oam_api'
                 db.execute(text("SET LOCAL statement_timeout='15s'"))
                 pids['worker'] = db.scalar(text('SELECT pg_backend_pid()'))
-                append_audit_event(db,stream_key='material_request',actor_user_id=world.actor.user_id,
-                    action='synthetic.detached_proof',aggregate_type=aggregate,aggregate_id=str(uuid4()),
-                    request_id=uuid4().hex,before_jsonb={},after_jsonb={},occurred_at=datetime.now(timezone.utc))
+                # Current head also has an immediate INSERT fence. Signal
+                # before append/flush so the observer can see that wait, not
+                # only waits reached later during deferred commit checks.
                 ready.set()
                 try:
-                    with pytest.raises(DBAPIError) as error: db.commit()
+                    with pytest.raises(DBAPIError) as error:
+                        append_audit_event(db,stream_key='material_request',actor_user_id=world.actor.user_id,
+                            action='synthetic.detached_proof',aggregate_type=aggregate,aggregate_id=str(uuid4()),
+                            request_id=uuid4().hex,before_jsonb={},after_jsonb={},occurred_at=datetime.now(timezone.utc))
+                        db.commit()
                     assert error.value.orig.sqlstate=='23514'
                     assert expected in str(error.value.orig)
                 finally: db.rollback()
@@ -184,7 +188,7 @@ def assert_return_event_locks_retained(owner, api, world):
             holder.execute(text("SELECT id FROM inventory_ledger_heads WHERE stream_key='inventory' FOR UPDATE"))
             worker = pool.submit(commit_detached)
             try:
-                assert ready.wait(10), 'detached event did not reach commit'
+                assert ready.wait(10), 'detached event writer did not reach append'
                 deadline = time.monotonic()+5
                 with owner.connect() as observer:
                     while time.monotonic()<deadline:

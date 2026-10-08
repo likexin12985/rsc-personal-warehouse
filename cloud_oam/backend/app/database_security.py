@@ -4826,6 +4826,8 @@ from . import material_request_supply_allocation_security as _supply_allocation_
 _supply_allocation_catalog.overlay(_stock_scrap_readiness)
 from . import material_request_supply_capacity_security as _supply_capacity_catalog
 _supply_capacity_catalog.overlay(_stock_scrap_readiness)
+from . import return_receipt_routing_security as _return_receipt_routing_catalog
+_return_receipt_routing_catalog.overlay(_stock_scrap_readiness)
 _stock_scrap_catalog.register(globals())
 _stock_scrap_readiness.register(globals())
 from . import return_condition_security as _condition_catalog
@@ -4848,6 +4850,7 @@ from . import material_request_return_compensation_security as _return_compensat
 _return_compensation_catalog.register(globals())
 _supply_allocation_catalog.register(globals())
 _supply_capacity_catalog.register(globals())
+_return_receipt_routing_catalog.register(globals())
 
 _ROLE_EVIDENCE_SQL = text(
     """

@@ -44,6 +44,6 @@
     </view>
 
     <button class="button button-danger logout-button" bindtap="logout">退出登录</button>
-    <view class="version">RSC个人仓 · V1.0 生产迁移</view>
+    <view class="version">RSC个人仓 · 试点 MVP</view>
   </block>
 </view>

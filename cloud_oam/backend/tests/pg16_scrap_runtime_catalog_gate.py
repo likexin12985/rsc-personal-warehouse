@@ -31,10 +31,10 @@ def release(engines, *, tracking, migrate, provision, historical_admission=None)
     with owner.connect() as db:
         TRANSITION['verify'](db, 'before')
         READY['verify'](db, 'before')
-    migrate('formal-upgrade-0170', 'upgrade', '20261227_0178')
+    migrate('formal-upgrade-0170', 'upgrade', '20261228_0179')
     provision()
     with owner.connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261227_0178'
+        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261228_0179'
         security._stock_scrap_readiness.verify(db)
         permission_proof = assert_fresh_defaults(db)
     forward_admission(engines)
@@ -117,7 +117,7 @@ def release(engines, *, tracking, migrate, provision, historical_admission=None)
         pass
     else:
         raise AssertionError('new application admitted an old schema')
-    migrate('formal-reupgrade-0170', 'upgrade', '20261227_0178')
+    migrate('formal-reupgrade-0170', 'upgrade', '20261228_0179')
     assert catalog(owner) == before
     forward_admission(engines)
     print('formal empty downgrade restores 0164 and reupgrade restores default admission PASS', flush=True)

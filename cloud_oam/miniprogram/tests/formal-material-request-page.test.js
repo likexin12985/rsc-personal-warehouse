@@ -995,13 +995,33 @@ function uploadFixture(fileIds = {}) {
   return { module, state }
 }
 
-function loadWith(transport, uploadModule = formalFileUpload) {
+function loadWith(transport, uploadModule = formalFileUpload, capabilities = { supplyPlanning: true }) {
+  // Retain the deferred full-V1 contract tests with an explicit test-only
+  // capability. The shipping trial default is tested separately below.
   return loadPage('../pages/formal-material-requests/index', {
+    '../utils/client-capabilities': capabilities,
     '../utils/session': { ensureLogin: () => true },
     '../utils/material-request-adapter': adapterStub(transport),
     '../utils/formal-file-upload': uploadModule
   })
 }
+
+test('trial MVP hides supply blocks and refuses direct supply handlers', async (context) => {
+  globals()
+  const capabilities = require('../utils/client-capabilities')
+  const loaded = loadWith(fakeTransport(), formalFileUpload, capabilities)
+  context.after(() => { loaded.restore(); delete global.wx })
+  const instance = pageInstance(loaded.definition)
+  instance.setData({ detail: supplyApprovedDetail(), supplyForm: null })
+  instance._access = { can_manage_supply: true }
+  instance.supplyWriteBlocked = () => { throw new Error('deferred handler reached') }
+  instance.openSupplyForm({ currentTarget: { dataset: {} } })
+  await instance.submitSupply()
+  assert.equal(instance.data.supplyForm, null)
+  const source = fs.readFileSync(path.join(__dirname, '../pages/formal-material-requests/index.wxml'), 'utf8')
+  assert.match(source, /wx:if="{{capabilities.supplyPlanning}}" class="section"/)
+  assert.match(source, /wx:if="{{capabilities.supplyPlanning && supplyForm}}"/)
+})
 
 test('preserved private page is unregistered and retains the reviewed formal transport', async (context) => {
   globals()
@@ -1023,7 +1043,8 @@ test('preserved private page is unregistered and retains the reviewed formal tra
     'utf8'
   )
   assert.equal(app.pages.includes('pages/formal-material-requests/index'), false)
-  assert.match(wxml, /生产写入仍受服务端写 gate 与 runtime ACL 控制/)
+  assert.match(wxml, /试点 MVP/ )
+  assert.match(wxml, /收货与个人仓入账分别确认/)
   assert.equal(instance.data.accessAllowed, true)
   assert.deepEqual(calls, ['access', 'list'])
 })

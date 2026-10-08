@@ -32,6 +32,8 @@ def snapshot(engine):
 
 
 def run(context):
+    from pg16_stock_loss_seal_gate import prepare_generic_receipt_parent
+    prepare_generic_receipt_parent(context)
     owner,api=(context['engines'][key] for key in ('star_oam_migrator','star_oam_api'))
     with Session(api) as db:
         actor=load_formal_principal(db,context['engineer_id'])

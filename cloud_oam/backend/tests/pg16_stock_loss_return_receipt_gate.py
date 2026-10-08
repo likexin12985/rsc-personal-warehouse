@@ -46,6 +46,45 @@ def exercise(context):
     with Session(owner) as db:
         target=db.get(StockLocation,shipped.destination.target_location_id)
         receiver_id=db.scalars(select(User.id).where(User.person_id==target.custodian_person_id)).one()
+    # Shared headers do not waive the independent typed acceptance proof.
+    # With a real return parcel, INSERT is allowed; an orphan header must fail
+    # at COMMIT, and a number prefix alone must never bypass ordinary roots.
+    from app.inventory_models import Receipt, Shipment
+    with owner.connect() as db:
+        headers_before=db.scalar(text('SELECT count(*) FROM receipts'))
+    with Session(api) as db:
+        at=datetime.now(timezone.utc)
+        db.add(Receipt(id=uuid4(),receipt_no='RET-RCV-'+uuid4().hex,
+            shipment_id=shipped.shipment_id,status='accepted',received_at=at,
+            receiver_person_id=target.custodian_person_id,request_hash='a'*64,
+            idempotency_key_hash=_hash(uuid4().hex),created_at=at))
+        db.flush()
+        with pytest.raises(DBAPIError) as missing_typed:db.commit()
+        assert missing_typed.value.orig.sqlstate=='23514'
+        assert '0105' in str(missing_typed.value.orig)
+        db.rollback()
+    with owner.connect() as db:
+        assert db.scalar(text('SELECT count(*) FROM receipts'))==headers_before
+    with Session(api) as db:
+        original=db.get(Shipment,shipped.shipment_id)
+        orphan=Shipment(id=uuid4(),shipment_no='SYNTHETIC-ORPHAN-'+uuid4().hex,
+            **{name:getattr(original,name) for name in (
+                'source_location_id','target_location_id','target_person_id','carrier',
+                'tracking_no','status','shipped_at','request_hash','actor_user_id',
+                'actor_person_id','authorization_version','created_at')},
+            idempotency_key_hash=_hash(uuid4().hex))
+        db.add(orphan);db.flush()
+        db.add(Receipt(id=uuid4(),receipt_no='RET-RCV-'+uuid4().hex,
+            shipment_id=orphan.id,status='accepted',received_at=at,
+            receiver_person_id=target.custodian_person_id,request_hash='a'*64,
+            idempotency_key_hash=_hash(uuid4().hex),created_at=at))
+        with pytest.raises(DBAPIError) as unproved_root:db.flush()
+        assert unproved_root.value.orig.sqlstate=='23503'
+        assert '0169 fulfillment request reference missing' in str(unproved_root.value.orig)
+        db.rollback()
+    with owner.connect() as db:
+        assert db.scalar(text('SELECT count(*) FROM receipts'))==headers_before
+    print('PG16 typed return header requires full acceptance at COMMIT PASS',flush=True)
     def request_for(db):
         actor=load_formal_principal(db,receiver_id)
         _,detail=plan.authorize(db,actor,shipped.shipment_id)

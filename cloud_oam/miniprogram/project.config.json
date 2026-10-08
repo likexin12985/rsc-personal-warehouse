@@ -450,6 +450,14 @@
       {
         "type": "file",
         "value": "utils/loss-return-origin.js"
+      },
+      {
+        "type": "folder",
+        "value": "pages/pilot-entry"
+      },
+      {
+        "type": "file",
+        "value": "utils/client-capabilities.js"
       }
     ],
     "include": []

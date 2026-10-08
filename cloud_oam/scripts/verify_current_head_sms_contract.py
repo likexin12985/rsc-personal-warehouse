@@ -20,7 +20,7 @@ import sys
 
 CLOUD = Path(__file__).resolve().parents[1]
 ROOT = CLOUD.parent
-EXPECTED_HEAD = "20261227_0178"
+EXPECTED_HEAD = "20261228_0179"
 EXPECTED_SCOPE = "trial-mvp"
 EXPECTED_FLAGS = (
     "allowSupplyPlanning: false",

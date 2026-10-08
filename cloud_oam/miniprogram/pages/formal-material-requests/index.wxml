@@ -1,13 +1,14 @@
 <view class="page">
   <view>
     <view class="page-title">需求提报</view>
-    <view class="page-subtitle">正式 V1.0 纵切；列表和详情只展示脱敏收货信息。</view>
+    <view class="page-subtitle">试点 MVP · 申请、审批进度与本人收货入账</view>
   </view>
 
-  <view class="notice info">正式 V1.0 客户端路由已接线；生产写入仍受服务端写 gate 与 runtime ACL 控制。写入只在响应契约与同一需求详情精确回读一致后确认；明文草稿仅驻留当前页面内存。</view>
+  <view class="notice info">提交后请以核验后的申请状态为准。收货与个人仓入账分别确认。</view>
   <view wx:if="{{notice}}" class="notice info">{{notice}}</view>
   <view wx:if="{{lifecycleRecoveryMessage}}" class="notice warning">{{lifecycleRecoveryMessage}}</view>
-  <view wx:if="{{supplyRecoveryMessage}}" class="notice warning">{{supplyRecoveryMessage}}<button class="button button-secondary" disabled="{{busy || loading}}" bindtap="recoverSupply">只读核验供给结果</button></view>
+  <view wx:if="{{supplyRecoveryMessage && capabilities.supplyPlanning}}" class="notice warning">{{supplyRecoveryMessage}}<button class="button button-secondary" disabled="{{busy || loading}}" bindtap="recoverSupply">只读核验供给结果</button></view>
+  <view wx:if="{{supplyBlocked && !capabilities.supplyPlanning}}" class="notice warning">有待管理员核验的历史操作，暂时无法继续提交。请保留当前记录。</view>
   <view wx:if="{{loading}}" class="loading">正在校验身份、权限与正式需求契约</view>
 
   <block wx:else>
@@ -166,7 +167,7 @@
         <view class="action-grid"><button class="button button-secondary" disabled="{{busy}}" bindtap="cancelApprovalProcess">取消</button><button class="button button-primary" disabled="{{busy || (processing.kind === 'external_registration' && (externalUploadBlocking || !externalUploadFiles.length)) || (processing.kind === 'external_verification' && !processing.evidence)}}" bindtap="submitApprovalProcess">确认处理</button></view>
       </view>
 
-      <view class="section">
+      <view wx:if="{{capabilities.supplyPlanning}}" class="section">
         <text class="section-title">供给计划</text>
         <view class="small muted section-note">供给任务只是计划/参考，不代表已分配、出库、发运、签收或入库。</view>
         <button wx:if="{{detail.canCreateSupply}}" class="button button-secondary" disabled="{{busy || supplyBlocked}}" bindtap="openSupplyForm">新建供给计划</button>
@@ -178,7 +179,7 @@
         </view>
         <view wx:if="{{!detail.supply_tasks.length}}" class="empty"><text class="empty-title">暂无供给计划</text></view>
       </view>
-      <view wx:if="{{supplyForm}}" class="card">
+      <view wx:if="{{capabilities.supplyPlanning && supplyForm}}" class="card">
         <text class="section-title">{{supplyForm.taskId ? '跟进供给计划' : '新建供给计划'}}</text>
         <view wx:if="{{!supplyForm.taskId}}">
           <view class="field-label">选择已批准明细</view>

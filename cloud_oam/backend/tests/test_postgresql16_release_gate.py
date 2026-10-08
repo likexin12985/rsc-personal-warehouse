@@ -80,7 +80,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = '20261227_0178'
+HEAD_REVISION = '20261228_0179'
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -1069,6 +1069,24 @@ def _create_opening_backfill_database() -> str:
                     "GRANT USAGE ON SCHEMA public TO star_oam_api, "
                     "star_oam_backup, star_oam_projector"
                 )
+                # Default ACLs are database-local, just like extensions. A
+                # scratch legacy database must start with the same reviewed
+                # bootstrap as the main CI database before creating tables.
+                # Do not repair frozen migration catalogs to accept the
+                # missing backup grant after upgrading the historical facts.
+                for statement in (
+                    "ALTER DEFAULT PRIVILEGES FOR ROLE star_oam_migrator "
+                    "IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC",
+                    "ALTER DEFAULT PRIVILEGES FOR ROLE star_oam_migrator "
+                    "IN SCHEMA public GRANT SELECT ON TABLES TO star_oam_backup",
+                    "ALTER DEFAULT PRIVILEGES FOR ROLE star_oam_migrator "
+                    "IN SCHEMA public REVOKE ALL ON SEQUENCES FROM PUBLIC",
+                    "ALTER DEFAULT PRIVILEGES FOR ROLE star_oam_migrator "
+                    "IN SCHEMA public GRANT SELECT ON SEQUENCES TO star_oam_backup",
+                    "ALTER DEFAULT PRIVILEGES FOR ROLE star_oam_migrator "
+                    "IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC",
+                ):
+                    cursor.execute(statement)
                 # Extensions are database-local. Historical scratch databases
                 # upgrade to the current head and need the same separately
                 # provisioned private UUID dependency as the primary CI DB.

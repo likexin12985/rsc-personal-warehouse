@@ -6,9 +6,10 @@ Page({
     query: '', categories: ['全部分类'], categoryIndex: 0, results: [], total: 0,
     page: 1, pageCount: 1, ready: false, verifiedDate: ''
   },
-  onLoad() {
+  onLoad(options = {}) {
     const ready = catalog.status === 'ready' && catalog.items.length > 0
     this.setData({
+      query: String(options.query || '').slice(0, 160),
       ready,
       categories: ['全部分类', ...new Set(ready ? catalog.items.map((item) => item.category).sort() : [])],
       verifiedDate: ready && catalog.verifiedAt ? catalog.verifiedAt.slice(0, 10) : ''

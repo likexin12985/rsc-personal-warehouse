@@ -30,6 +30,7 @@ from app.formal_services import stock_loss_disposition_recovery as recovery
 from app.formal_services import stock_loss_disposition_commands as dispositions
 from app.formal_services import stock_loss_return_commands as returns
 from pg16_stock_loss_disposition_gate import snapshot as original_snapshot
+from test_postgresql16_release_gate import HEAD_REVISION
 
 
 def snapshot(owner):
@@ -93,7 +94,7 @@ def verify(context,command,flow):
         assert db.scalar(text('SELECT current_database()'))=='rsc_pg16_release_gate'
         assert db.scalar(text('SELECT current_user'))=='star_oam_migrator'
         assert int(db.scalar(text('SHOW server_version_num')))//10000==16
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261213_0164'
+        assert db.scalar(text('SELECT version_num FROM alembic_version'))==HEAD_REVISION
     before=snapshot(owner)
     with Session(api) as db:
         execute(db,context,fresh(command),flow)

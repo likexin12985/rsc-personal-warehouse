@@ -45,7 +45,8 @@ def _assert_reservation_catalog(api_engine, security_engine):
         validate()
 
     # Real catalogs, with restoration even when a negative unexpectedly passes.
-    for name, binding in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items():
+    for coordinate, binding in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items():
+        name = coordinate[1] if isinstance(coordinate, tuple) else coordinate
         if name.endswith("_0069"):
             rejected(f"ALTER TABLE public.{binding[0]} DISABLE TRIGGER {name}",
                      f"ALTER TABLE public.{binding[0]} ENABLE ALWAYS TRIGGER {name}")

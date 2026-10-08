@@ -1,0 +1,21 @@
+<view class="page pilot-entry">
+  <view class="hero">
+    <text class="eyebrow">RSC · 个人使用记录</text>
+    <text class="hero-title">交流备件知识大全</text>
+    <text class="hero-note">查询备件资料，记录本人申请、收货与保管情况。</text>
+  </view>
+  <view class="card">
+    <text class="section-title">查找备件资料</text>
+    <input class="input" placeholder="物料编码、备件名称或型号" value="{{query}}" bindinput="input" bindconfirm="search" confirm-type="search" />
+    <button class="button button-primary" bindtap="search">查询</button>
+    <text class="note">知识资料仍在整理，当前查询可能没有条目。</text>
+  </view>
+  <view class="card">
+    <text class="section-title">我的个人仓</text>
+    <text class="description">已获授权的试点人员可提交申请、查看进度，并分别确认本人收货与个人仓入账。</text>
+    <button class="button button-secondary" bindtap="enterWarehouse">进入个人仓</button>
+    <text class="note">进入后使用手机验证码核验身份。</text>
+  </view>
+  <button class="admin-link" bindtap="openPc">★ 后台管理 · 复制 rscwz.cn/xx</button>
+  <text class="footnote">试点 MVP，不等同完整 V1。功能可用状态以实际服务为准。</text>
+</view>

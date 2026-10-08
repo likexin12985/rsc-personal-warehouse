@@ -12,7 +12,6 @@ from unittest.mock import patch
 from sqlalchemy.orm import Session
 from app.inventory_models import InventorySerial
 import pg16_stock_loss_sources_gate as sources
-import pg16_personal_stock_fixture as opening
 import pg16_stock_loss_return_preview_gate as preview
 import pg16_stock_loss_return_shipment_gate as shipment
 
@@ -43,14 +42,8 @@ def two_serials(business):
             proofs=tuple(dict(serial_id=sn.id,sku_code=fixture['concurrency_material_sku_code'],
                 serial_no=sn.serial_no,qr_code=sn.qr_code) for sn in (old,extra))
             db.commit()
-        return dict(fixture,quality_serial_proofs=proofs,quality_serial_nos=tuple(p['serial_no'] for p in proofs))
-    opening_fn=modified(opening.establish_personal_stock,[
-        ("physical_observations=(count.OpeningPhysicalObservationInput", "physical_observations=tuple(count.OpeningPhysicalObservationInput"),
-        ("serial_no_raw=fixture.get('selected_serial_no')", "serial_no_raw=serial_no"),
-        ("serial_identifier_type='serial_no' if fixture.get('selected_serial_no') else None, count_method='manual'),)",
-         "serial_identifier_type='serial_no', count_method='manual') for serial_no in fixture['quality_serial_nos'])"),
-        ("posted.total_quantity==Decimal(1)","posted.total_quantity==Decimal(2)"),
-    ])
+        return dict(fixture,quality_serial_proofs=proofs,
+            selected_serial_nos=tuple(p['serial_no'] for p in proofs),physical_count=2)
     source_fn=modified(sources.run,[
         ("choices.items[0].quantity=='1.000'","choices.items[0].quantity=='2.000'"),
         ("quantity='1' if tracking=='serial' else '0.250'","quantity='2' if tracking=='serial' else '0.250'"),
@@ -71,5 +64,5 @@ def two_serials(business):
         ("first_quantity = Decimal('1') if context['tracking']=='serial' else Decimal('.100')", "first_quantity = Decimal('2') if context['tracking']=='serial' else Decimal('.100')"),
     ],{'preview':preview_fn,'sender_read_gate':sender_fn})
     with patch.object(sources,'prepare_stocktake_inventory',prepare),patch.object(sources,'run',source_fn), \
-            patch.object(opening,'establish_personal_stock',opening_fn),patch.object(business,'prepare_departures',departure_fn):
+            patch.object(business,'prepare_departures',departure_fn):
         yield

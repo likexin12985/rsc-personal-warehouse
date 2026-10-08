@@ -15,6 +15,30 @@ from run_local_pg16_scrap_business_checks import manifest
 CLOUD = Path(__file__).resolve().parents[1]
 
 
+def expected_authorization_versions(versions, assignments, existing_grants):
+    """Independent expectation for the two additive policies after 0166.
+
+    Existing grants, including explicit denies, are retained. Each migration
+    bumps each affected user once, even if several of their roles change.
+    """
+    policies = (
+        [('provincial_manager', 'stock_operation', action) for action in (
+            'submit_return_condition', 'supplement_return_condition',
+            'withdraw_return_condition', 'execute_return_condition',
+            'release_return_condition', 'review_return_condition_regional')]
+        + [('admin', 'stock_operation', action) for action in (
+            'review_return_condition_headquarters', 'cancel_return_condition_approval')],
+        [(role, 'material_request', 'close') for role in ('admin', 'provincial_manager')],
+    )
+    expected = dict(versions)
+    for policy in policies:
+        changed_roles = {role for role, resource, action in policy
+                         if (role, resource, action) not in existing_grants}
+        for user in {user for user, role in assignments if role in changed_roles}:
+            expected[user] += 1
+    return expected
+
+
 def predecessor(path):
     source = Path(path).resolve()
     root = source.parent.parent
@@ -142,10 +166,16 @@ def main(argv=None):
                         old_columns['users'].remove('authorization_version')
                         old_rows = facts(connection, old_columns)
                         old_versions = dict(connection.execute(text('SELECT id,authorization_version FROM users')).all())
+                        assignments = connection.execute(text('SELECT a.user_id,r.code FROM role_assignments a '
+                            'JOIN roles r ON r.id=a.role_id')).all()
+                        grants = set(connection.execute(text('SELECT r.code,p.resource,p.action FROM role_permissions g '
+                            'JOIN roles r ON r.id=g.role_id JOIN permissions p ON p.id=g.permission_id '
+                            "WHERE p.field_code=''" )).all())
+                        expected_versions = expected_authorization_versions(old_versions, assignments, grants)
                     run('formal-condition-upgrade', [sys.executable, '-m', 'alembic', '-c', 'alembic.ini',
                         'upgrade', 'head'], cwd=CLOUD, env=environment)
                     with owner.connect() as connection:
-                        assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '20261227_0178'
+                        assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '20261228_0179'
                         upgraded_rows = facts(connection, old_columns)
                         for table, rows in old_rows.items():
                             if table in ('permissions', 'role_permissions'):
@@ -154,10 +184,10 @@ def main(argv=None):
                                 assert rows == upgraded_rows[table], 'formal upgrade changed old facts: '+table
                         new_versions = dict(connection.execute(text('SELECT id,authorization_version FROM users')).all())
                         assert set(old_versions) == set(new_versions)
-                        assert all(new_versions[key]-value in (0,1) for key,value in old_versions.items())
+                        assert new_versions == expected_versions, 'authorization version changes differ from 0167/0169 policies'
                     migration_retention = dict(oldTableCount=len(old_rows),
                         oldRowCount=sum(map(len,old_rows.values())), immutableOldColumnsUnchanged=True,
-                        priorPermissionRowsRetained=True, authorizationVersionDeltaAtMostOne=True)
+                        priorPermissionRowsRetained=True, authorizationVersionsMatchAdditivePolicies=True)
                     print('formal condition upgrade preserves old facts PASS', flush=True)
                 validate_production_database_security(api, expected_runtime_role='star_oam_api',
                     expected_migration_role='star_oam_migrator')
@@ -282,11 +312,11 @@ def main(argv=None):
                     assert refused.returncode != 0 and '0167 immutable history requires retention:' in log_path.read_text()
                     with owner.connect() as connection:
                         assert facts(connection, retained_columns) == retained_rows
-                        assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '20261227_0178'
+                        assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '20261228_0179'
                     validate_production_database_security(api, expected_runtime_role='star_oam_api',
                         expected_migration_role='star_oam_migrator')
                     retained_downgrade = dict(refused=True, factsUnchanged=True,
-                        exactHead='20261227_0178', apiStartupAccepted=True)
+                        exactHead='20261228_0179', apiStartupAccepted=True)
                     print('formal retained business downgrade refused without changes PASS', flush=True)
                 assert sources == manifest()
                 result = dict(passed=True, tracking=tracking, actualOldApplication=old_proof,

@@ -115,12 +115,42 @@ def commit_before_waiting_seal(writer,context,value):
         assert db.scalar(select(Seal.id).where(Seal.request_id==value.request_id)) is None
 
 
+def prepare_generic_receipt_parent(context):
+    """Establish a real open request/parcel before taking negative snapshots.
+
+    The 0169 immediate root guard must run for receipt key probes too. Reuse
+    the actual reviewed opening and fulfillment lifecycle, never insert fake
+    outbound parents or disable its constraints.
+    """
+    from pathlib import Path
+    from uuid import UUID
+    from app.inventory_models import ShipmentLine, OutboundPosting
+    from pg16_material_request_http_gate import run as fulfill
+
+    directory=Path(__file__).resolve().parents[2]/'artifacts'/'loss-key-parent'/uuid4().hex
+    directory.mkdir(parents=True)
+    result=fulfill(context['engines'],requester=context['engineer_id'],
+        manager=context['manager_id'],admin=context['admin_id'],verifier=context['reviewer_id'],
+        directory=directory,tracking='quantity')
+    assert result['passed'] and not result['businessClosed']
+    with Session(context['engines']['star_oam_api']) as db:
+        context['generic_receipt_shipment_id']=db.scalars(select(ShipmentLine.shipment_id)
+            .join(OutboundPosting,OutboundPosting.id==ShipmentLine.outbound_posting_id)
+            .where(OutboundPosting.request_id==UUID(result['requestId'])).distinct()).one()
+
+
 def generic_probe(db,context,value,kind):
     """Build an intentionally incomplete key-fence probe, never commit it."""
     from app.inventory_models import Shipment,Receipt,StockLocation
     actor=load_formal_principal(db,context['engineer_id']);at=datetime.now(timezone.utc)
     target=db.scalar(select(StockLocation.id).where(StockLocation.id!=context['location_id']).limit(1))
     key=posting._storage_hash(value.idempotency_key)
+    if kind=='receipts':
+        db.add(Receipt(id=uuid4(),receipt_no='SYNTHETIC-KEY-'+uuid4().hex,
+            shipment_id=context['generic_receipt_shipment_id'],
+            status='accepted',received_at=at,receiver_person_id=context['person_id'],
+            request_hash='b'*64,idempotency_key_hash=key,created_at=at));db.flush()
+        return
     shipment=Shipment(id=uuid4(),shipment_no='SYNTHETIC-KEY-'+uuid4().hex,
         source_location_id=context['location_id'],target_location_id=target,target_person_id=context['person_id'],
         carrier='synthetic',tracking_no=uuid4().hex,status='shipped',shipped_at=at,
@@ -128,10 +158,6 @@ def generic_probe(db,context,value,kind):
         request_hash='a'*64,actor_user_id=actor.user_id,actor_person_id=actor.person_id,
         authorization_version=actor.authorization_version,created_at=at)
     db.add(shipment);db.flush()
-    if kind=='receipts':
-        db.add(Receipt(id=uuid4(),receipt_no='SYNTHETIC-KEY-'+uuid4().hex,shipment_id=shipment.id,
-            status='accepted',received_at=at,receiver_person_id=context['person_id'],
-            request_hash='b'*64,idempotency_key_hash=key,created_at=at));db.flush()
 
 
 def generic_key_checks(context,value):

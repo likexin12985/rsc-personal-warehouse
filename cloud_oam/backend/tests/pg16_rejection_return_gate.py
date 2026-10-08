@@ -26,7 +26,7 @@ def run(engines,*,request_id,directory):
     folder=Path(__file__).parents[1]/'alembic'
     from app import material_request_rejection_return_security as catalog
     with owner.connect() as db:
-        assert db.scalar(text('SELECT version_num FROM public.alembic_version')) == '20261227_0178'
+        assert db.scalar(text('SELECT version_num FROM public.alembic_version')) == '20261228_0179'
         catalog.verify(db)
     with owner.connect() as db:
         columns={k:v for k,v in original_columns(db).items() if not k.startswith('audit_') and not k.startswith('material_request_rejection_return')}

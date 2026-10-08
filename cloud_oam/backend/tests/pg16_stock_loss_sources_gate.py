@@ -172,6 +172,7 @@ def run(engines, *, tracking, after_preview=None):
             db.get(RolePermission, grant_id).effect = 'allow'
             db.commit()
         result['submission'] = after_preview(dict(engines=engines, tracking=tracking,
-            engineer_id=engineer_id, admin_id=admin_id, person_id=person_id, account_id=account_id,
+            engineer_id=engineer_id, admin_id=admin_id, manager_id=manager_id,
+            reviewer_id=fixture['reconciliation_reviewer_id'], person_id=person_id, account_id=account_id,
             location_id=location.id, grant_id=grant_id, request=command_request))
     return result

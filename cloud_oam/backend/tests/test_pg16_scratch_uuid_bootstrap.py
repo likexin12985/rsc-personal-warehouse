@@ -50,6 +50,23 @@ def test_scratch_database_provisions_uuid_as_its_own_dba(monkeypatch, bootstrap_
     assert scratch.startswith(gate.OPENING_BACKFILL_DATABASE_PREFIX)
     assert scratch != gate.DATABASE_NAME
     assert parameters['autocommit'] is True
+    # A valid historical upgrade needs the backup reader's default grants in
+    # this database, not merely in the primary CI service. Also preserve the
+    # private-function default and never grant API writes to future tables.
+    defaults = [(params, statement) for params, statement in calls
+                if isinstance(statement, str) and statement.startswith('ALTER DEFAULT PRIVILEGES')]
+    assert len(defaults) == 5
+    assert all(params == parameters for params, _ in defaults)
+    prefix = 'ALTER DEFAULT PRIVILEGES FOR ROLE star_oam_migrator IN SCHEMA public '
+    assert {statement.removeprefix(prefix) for _, statement in defaults} == {
+        'REVOKE ALL ON TABLES FROM PUBLIC',
+        'GRANT SELECT ON TABLES TO star_oam_backup',
+        'REVOKE ALL ON SEQUENCES FROM PUBLIC',
+        'GRANT SELECT ON SEQUENCES TO star_oam_backup',
+        'REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC',
+    }
+    assert calls.index(defaults[-1]) < next(i for i, (_, statement) in enumerate(calls)
+                                         if statement == bootstrap)
     if bootstrap_fails:
         assert dropped == [scratch]
     else:

@@ -1,5 +1,6 @@
 const api = require('../../utils/api')
 const session = require('../../utils/session')
+const capabilities = require('../../utils/client-capabilities')
 const {
   formalRoleCodes,
   hasFormalPermission,
@@ -83,7 +84,7 @@ Page({
           ? `v${access.authorization_version}`
           : '未验证',
         inventoryStatus: decision.allowed ? '正在读取' : '不可访问',
-        workOrderAccessAllowed: decision.allowed && hasFormalPermission(access, 'work_order_material', 'read'),
+        workOrderAccessAllowed: capabilities.workOrderMaterial && decision.allowed && hasFormalPermission(access, 'work_order_material', 'read'),
         inventoryStatusTone: decision.allowed ? 'neutral' : 'danger',
         inventoryAccessMessage: decision.allowed ? '库存权限已验证，正在读取正式个人仓。' : decision.message
       })

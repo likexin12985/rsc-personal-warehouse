@@ -25,7 +25,9 @@ def test_forward_catalog_matches_runtime_and_exact_predecessor():
     assert DATA['functions'][signature]['before'] == previous['functions'][signature]['after']
     previous_ready = json.loads((ROOT / 'alembic/supply_allocation_0177/functions.json').read_text())
     assert DATA['readiness']['before'] == previous_ready['readiness']['after']
-    assert security._stock_scrap_readiness.DATA['after'] == DATA['readiness']['after']
+    from app.return_receipt_routing_security import DATA as routing
+    assert routing['readiness']['before'] == DATA['readiness']['after']
+    assert security._stock_scrap_readiness.DATA['after'] == routing['readiness']['after']
     assert set(DATA['functions']) == {signature, 'rsc_oam_runtime_binding_ready_0044()',
                                     'rsc_guard_material_request_supply_task_0059()'}
     for signature, row in DATA['functions'].items():

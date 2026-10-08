@@ -37,7 +37,7 @@ def run(engines, *, inbound_id, directory, admin_id, mixed=False, unfulfilled=Fa
     snapshot = frozen['probe'].snapshot
     ddl = frozen['DATA']['statements']
     with owner.connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261227_0178'
+        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261228_0179'
         frozen['verify'](db, 'after')
         after_catalog = snapshot(db)
         for signature, change in frozen['DATA']['functions'].items():

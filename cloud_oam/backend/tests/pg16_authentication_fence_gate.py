@@ -58,8 +58,10 @@ def verify(engines, *, user_id):
         independent.append(dict(isolation=isolation, committedWhileLedgerLocked=True,
                                 auditVerified=True, inventoryAndNotificationsUnchanged=True))
 
-    # Force this specific deferred constraint, so another older stock fence
-    # cannot accidentally make the changed 0161 fence appear to be working.
+    # Current head may fence the insert before deferred 0161 is reachable.
+    # Record that phase honestly; only claim an exact deferred check when the
+    # insert reached it. The immediate gate must still identify a reviewed
+    # condition seal lock, not any arbitrary database error.
     cases = [('inventory', 'synthetic_stock_fact'), ('material_request', 'synthetic_request')]
     cases += [(stream, seal) for stream in ('authentication', 'authorization') for seal in SEALS]
     fenced = []
@@ -71,20 +73,25 @@ def verify(engines, *, user_id):
             with Session(api) as db:
                 db.execute(text("SET LOCAL lock_timeout='500ms'"))
                 db.execute(text("SET LOCAL statement_timeout='10s'"))
-                append_audit_event(db, **values)
-                db.flush()
+                phase = 'insert'
                 try:
+                    append_audit_event(db, **values)
+                    db.flush()
+                    phase = 'deferred'
                     db.execute(text('SET CONSTRAINTS trg_correction_closure_0161_0 IMMEDIATE'))
                 except DBAPIError as error:
                     assert error.orig.sqlstate == '55P03', (stream, aggregate)
-                    assert 'rsc_fence_loss_correction_seal_0161' in str(error.orig)
+                    allowed = ('rsc_fence_loss_correction_seal_0161',) if phase == 'deferred' else (
+                        'rsc_condition_decision_seal_lock', 'rsc_condition_seal_lock')
+                    assert any(name + '()' in str(error.orig) for name in allowed)
                     assert 'inventory_ledger_heads' in str(error.orig)
                     db.rollback()
                 else:
                     raise AssertionError('stock/seal audit bypassed inventory fence')
             held.rollback()
         assert _audit_state(owner) == before
-        fenced.append(dict(stream=stream, aggregate=aggregate))
+        fenced.append(dict(stream=stream, aggregate=aggregate, blockedAt=phase,
+                           exactDeferredConstraintForced=phase == 'deferred'))
 
     rejected = []
     for stream in ('authentication', 'authorization'):
