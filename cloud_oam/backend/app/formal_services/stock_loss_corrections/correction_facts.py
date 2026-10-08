@@ -41,6 +41,12 @@ def verify_plan(db, *, correction_execution_id, proved_inverse_ids):
     with db.no_autoflush:
         start = _bound(db)
         row = db.get(Execution, correction_execution_id, populate_existing=True)
+        if row is not None and row.disposition == 'scrap':
+            from ..stock_scrap.historical_facts import verify as verify_scrap
+            proof = verify_scrap(db, fact=row, proved_inverse_ids=proved_inverse_ids)
+            _need(_bound(db) == start)
+            return HistoricalCorrection(row.id, proof.root_disposition_id, proof.posting_transaction_id,
+                proof.posting_cursor, proof.observed_ledger_cursor, proof.plan_hash)
         _need(row is not None and row.disposition in {'restore_available', 'convert_used', 'convert_damaged'})
         root = db.get(StockLossDisposition, row.root_disposition_id, populate_existing=True)
         inverse = db.get(Inverse, row.reversal_id, populate_existing=True)

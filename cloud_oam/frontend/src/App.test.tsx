@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 
 import { api, ApiError } from "./api";
@@ -12,6 +12,19 @@ vi.mock("./api", async (loadOriginal) => {
   const original = await loadOriginal<typeof import("./api")>();
   return { ...original, api: vi.fn() };
 });
+
+// Navigation assertions exercise real route modules and permissions. Resolve their
+// cold transforms before rendering so the DOM query timeout measures UI updates.
+beforeAll(async () => {
+  await Promise.all([
+    import("./pages/ControlConfiguration"),
+    import("./pages/FormalOpeningStocktakes"),
+    import("./pages/FormalOpeningReconciliations"),
+    import("./pages/FormalDailyReconciliations"),
+    import("./FormalOperationRoutes"),
+    import("./pages/FormalMaterialRequests"),
+  ]);
+}, 30_000);
 
 afterEach(cleanup);
 
@@ -252,8 +265,14 @@ describe("formal opening stocktake navigation", () => {
       throw new Error("unexpected test request");
     });
     render(<MemoryRouter initialEntries={["/opening-stocktakes"]}><App /></MemoryRouter>);
-    await screen.findByRole("heading", { name: "盘点中心" });
-    expect(screen.queryByLabelText("期初盘点准备（只读）") !== null).toBe(visible);
+    if (role === "technician") {
+      await screen.findByText("李珂鑫，欢迎进入 RSC 个人仓");
+      expect(screen.queryByRole("heading", { name: "盘点中心" })).toBeNull();
+      expect(screen.queryByRole("link", { name: "盘点中心" })).toBeNull();
+    } else {
+      await screen.findByRole("heading", { name: "盘点中心" });
+      expect(screen.queryByLabelText("期初盘点准备（只读）") !== null).toBe(visible);
+    }
     expect(vi.mocked(api).mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
   });
 
@@ -300,6 +319,67 @@ describe("formal opening stocktake navigation", () => {
     expect(screen.queryAllByRole("link", { name: "盘点中心" })).toHaveLength(0);
     expect(screen.queryAllByRole("link", { name: "日常盘点" })).toHaveLength(0);
     expect(vi.mocked(api).mock.calls.some(([path]) => String(path).startsWith("/v1/stocktakes/opening"))).toBe(false);
+  });
+});
+
+describe("technician-only post-MVP route guard", () => {
+  beforeEach(() => {
+    vi.mocked(api).mockReset();
+  });
+
+  it.each([
+    "/inventory",
+    "/reports/material-requests",
+    "/notifications",
+    "/stocktakes",
+    "/loss-execution",
+    "/scrap-recovery",
+    "/loss-scraps",
+    "/loss-correction-scraps",
+    "/loss-corrections/root-1",
+    "/loss-reviews",
+    "/return-receiving",
+    "/return-condition-corrections",
+    "/rejection-return-receiving",
+    "/loss-reports/new",
+    "/loss-returns/sending",
+    "/opening-stocktakes",
+    "/opening-reconciliations",
+    "/daily-reconciliations",
+    "/provincial-managers",
+    "/control-configuration",
+  ])("redirects a technician-only direct URL away from post-MVP route %s", async path => {
+    const user: AuthenticatedUser = { ...authenticatedUser, role_codes: ["technician"] };
+    const access: AccessContext = {
+      ...accessContext,
+      role_codes: ["technician"],
+      permissions: [
+        { resource: "material_request", action: "read", field_code: "" },
+        { resource: "material_request", action: "create", field_code: "" },
+        { resource: "inventory", action: "read", field_code: "" },
+        { resource: "stocktake", action: "read", field_code: "" },
+        { resource: "reconciliation", action: "read", field_code: "" },
+        { resource: "access_context", action: "read", field_code: "" },
+        { resource: "role_assignment", action: "manage_provincial", field_code: "" },
+      ],
+    };
+    vi.mocked(api).mockImplementation(async requestPath => {
+      if (requestPath === "/auth/me") return user;
+      if (requestPath === "/access/context") return access;
+      throw new Error(`unexpected technician route request: ${requestPath}`);
+    });
+
+    render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>);
+
+    expect(await screen.findByText("李珂鑫，欢迎进入 RSC 个人仓")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "库存中心" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "消息中心" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "盘点中心" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "控制账对账" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "报损登记" })).toBeNull();
+    const visibleNavLabels = screen.getAllByRole("link").map(link => link.textContent?.trim()).filter(Boolean);
+    expect(new Set(visibleNavLabels)).toEqual(new Set(["首页", "需求提报"]));
+    expect(vi.mocked(api).mock.calls.some(([requestPath]) => String(requestPath).startsWith("/v1/"))).toBe(false);
   });
 });
 
@@ -458,9 +538,9 @@ describe("formal material-request navigation", () => {
 
     expect(await screen.findByRole("heading", { name: "需求提报" })).toBeTruthy();
     expect(screen.getAllByRole("link", { name: "需求提报" })).toHaveLength(2);
-    expect(await screen.findByText("暂无可见需求")).toBeTruthy();
+    expect(await screen.findByText("暂无可查看的需求")).toBeTruthy();
     expect(screen.getByRole("button", { name: "新建需求" })).toBeTruthy();
-    expect(screen.getByText(/明文草稿仅驻留当前页面内存/)).toBeTruthy();
+    expect(screen.getByText(/未保存的草稿仅保留在当前页面/)).toBeTruthy();
   });
 
   it("redirects a direct demand URL and sends no demand request without read permission", async () => {

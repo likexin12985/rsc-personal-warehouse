@@ -34,9 +34,29 @@ services:
     image: ${RSC_API_IMAGE:-star-oam-api:0.9.0}
     build: ./backend
     restart: "no"
-    command: ["alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
+    # The migration is a one-shot release step. Keep it from starving the
+    # existing web/API/SSH services while it compiles the historical graph.
+    init: true
+    # Keep the default conservative for shared hosts. A release operator may
+    # raise these explicitly for the one-shot migration after checking host
+    # capacity, for example OAM_MIGRATION_MEM_LIMIT=1536m.
+    mem_limit: ${OAM_MIGRATION_MEM_LIMIT:-1g}
+    cpus: ${OAM_MIGRATION_CPUS:-1.00}
+    pids_limit: 256
+    stop_grace_period: 60s
+    command: ["python", "/app/migration_runner.py", "--config", "/app/alembic.ini", "head"]
     environment:
       OAM_ENVIRONMENT: production
+      # Alembic is installed as a console script, so its interpreter does not
+      # automatically put the image workdir on sys.path.  Keep the migration
+      # helper importable without changing the reviewed migration source.
+      PYTHONPATH: /app
+      # Reuse immutable predecessor definitions while Alembic discovers the
+      # graph. Upgrade bodies still run with fresh globals.
+      OAM_MIGRATION_CACHE_EXECUTION: ${OAM_MIGRATION_CACHE_EXECUTION:-1}
+      OAM_MIGRATION_EXECUTION_CACHE_MAX_SOURCE_BYTES: ${OAM_MIGRATION_EXECUTION_CACHE_MAX_SOURCE_BYTES:-8388608}
+      OAM_MIGRATION_EXECUTION_CACHE_MAX_FILE_BYTES: ${OAM_MIGRATION_EXECUTION_CACHE_MAX_FILE_BYTES:-262144}
+      OAM_MIGRATION_EXECUTION_CACHE_MAX_ENTRIES: ${OAM_MIGRATION_EXECUTION_CACHE_MAX_ENTRIES:-96}
       OAM_DATABASE_URL: postgresql+psycopg://star_oam_migrator:${OAM_DB_MIGRATOR_PASSWORD}@db:5432/${POSTGRES_DB}
       OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
       OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api
@@ -113,6 +133,7 @@ services:
     restart: unless-stopped
     environment:
       OAM_ENVIRONMENT: production
+      OAM_RELEASE_SCOPE: ${OAM_RELEASE_SCOPE:-production-v1}
       OAM_DATABASE_URL: postgresql+psycopg://star_oam_api:${OAM_DB_API_PASSWORD}@db:5432/${POSTGRES_DB}
       OAM_DATABASE_EXPECTED_RUNTIME_ROLE: star_oam_api
       OAM_DATABASE_EXPECTED_MIGRATION_ROLE: star_oam_migrator
@@ -180,6 +201,7 @@ services:
       OAM_PASSWORD_LOGIN_ENABLED: ${OAM_PASSWORD_LOGIN_ENABLED:-false}
       OAM_SMS_LOGIN_ENABLED: ${OAM_SMS_LOGIN_ENABLED:-false}
       OAM_SMS_PROVIDER: ${OAM_SMS_PROVIDER:-disabled}
+      OAM_SMS_CREDENTIAL_MODE: ${OAM_SMS_CREDENTIAL_MODE:-default_chain}
       OAM_SMS_ACCESS_KEY_ID: ${OAM_SMS_ACCESS_KEY_ID:-}
       OAM_SMS_ACCESS_KEY_SECRET: ${OAM_SMS_ACCESS_KEY_SECRET:-}
       OAM_SMS_SECURITY_TOKEN: ${OAM_SMS_SECURITY_TOKEN:-}

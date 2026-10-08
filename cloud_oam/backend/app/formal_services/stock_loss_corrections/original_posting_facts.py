@@ -40,6 +40,9 @@ def posting_command(row):
 
 
 def payload(row):
+    if row.disposition == 'scrap':
+        from ..stock_scrap.request_facts import original_payload
+        return original_payload(row)
     if row.disposition == "return_to_region":
         from app.formal_services.stock_loss_return_facts import payload as return_payload
         return return_payload(row)
@@ -87,6 +90,10 @@ def _verify_at_posting(db, row):
     its posting and domain events, and the cursor-bound shared hold history.
     Return-child cancellations remain closed until compensation is supported.
     """
+    if row.disposition == 'scrap':
+        from ..stock_scrap.historical_facts import verify as verify_scrap
+        verify_scrap(db, fact=row)
+        return payload(row)
     if row.disposition == "return_to_region":
         from .return_posting_facts import _verify_at_posting as verify_return
         return verify_return(db, row)

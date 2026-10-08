@@ -48,3 +48,14 @@ it('opens correction history with the exact original disposition identifier',asy
   expect(open).toHaveBeenCalledExactlyOnceWith(fixture.after.decisions[0].original_posting!.disposition_id);
   expect(w.adapter.execute).not.toHaveBeenCalled();
 });
+
+it('opens scrap from its exact approved source and exposes a separate original-request entry',async()=>{
+  const w=await world(),source=structuredClone(fixture.source),open=vi.fn();
+  source.decisions[0].disposition='scrap';source.report.headquarters_review!.decisions[0].disposition='scrap';
+  vi.mocked(w.adapter.read).mockResolvedValue(source);render(<FormalLossExecution {...w.props} onOpenScrap={open}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'查看处置明细'}));
+  fireEvent.click(await screen.findByRole('button',{name:'办理报废'}));
+  expect(open).toHaveBeenLastCalledWith(source.report.operation_id,source.decisions[0].headquarters_decision_id);
+  fireEvent.click(screen.getByRole('button',{name:'报废请求回查'}));expect(open).toHaveBeenLastCalledWith();
+  expect(w.adapter.execute).not.toHaveBeenCalled();
+});

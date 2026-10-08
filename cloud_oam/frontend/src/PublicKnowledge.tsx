@@ -21,7 +21,7 @@ export default function PublicKnowledge({ data = catalog }: { data?: KnowledgeCa
         <a href="/" className="knowledge-brand"><span aria-hidden="true">交</span>交流备件知识大全</a>
         <div className="knowledge-header-actions">
           <span className="knowledge-edition">备件资料 · 公开查询</span>
-          <a className="knowledge-admin-link" href="/xx">星星后台管理</a>
+          <a className="knowledge-admin-link" href="https://rscwz.cn/xx">星星后台管理</a>
         </div>
       </header>
       <main id="main-content">

@@ -67,6 +67,7 @@ def _verify(rows,keys,token,actor,request,kind,identifier):
     expected=dict(fact_id=identifier,binding_kind=kind,root_disposition_id=request.root_disposition_id,
         actor_user_id=actor.user_id,request_id=request.request_id,request_hash=binding.request_hash,
         key_token=token,reversal_key_hash=keys[0],approval_key_hash=keys[1],correction_key_hash=keys[2],
+        recovery_key_hash=None,scrap_key_hash=None,
         fact_record_id=identifier,fact_root_id=request.root_disposition_id,fact_actor=actor.user_id,
         fact_person=actor.person_id,fact_request=request.request_id,fact_request_hash=binding.request_hash,
         fact_key=binding.key_hash)

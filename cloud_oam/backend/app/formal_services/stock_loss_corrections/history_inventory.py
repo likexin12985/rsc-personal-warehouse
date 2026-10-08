@@ -71,6 +71,11 @@ def inverse_command(row):
 
 
 def correction_command(row, serials):
+    if row.disposition == 'scrap':
+        from ..stock_scrap.request_facts import posting_command as scrap_command
+        command = scrap_command(row)
+        _need(command.movements[0].serial_ids == serials, 'scrap_serial_command_mismatch')
+        return command
     movement = {'restore_available':'unfreeze','convert_used':'status_change',
         'convert_damaged':'status_change','return_to_region':'reserve','scrap':'scrap'}[row.disposition]
     return posting.InventoryPostingCommand(transaction_no='INV-LOSS-CORR-' + row.idempotency_key_hash[:20].upper(),

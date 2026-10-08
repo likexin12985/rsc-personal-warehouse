@@ -142,7 +142,12 @@ def test_fresh_database_initializer_creates_distinct_non_superuser_roles() -> No
         assert f"ALTER ROLE {role} WITH LOGIN" in normalized
     assert normalized.count(
         "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
-    ) == 4
+    ) == 5
+    assert "CREATE ROLE star_oam_edge NOLOGIN" in normalized
+    assert (
+        "ALTER ROLE star_oam_edge WITH NOLOGIN NOSUPERUSER NOCREATEDB "
+        "NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+    ) in normalized
     assert "ALTER SCHEMA public OWNER TO star_oam_migrator" in normalized
     assert (
         "GRANT USAGE ON SCHEMA public TO star_oam_api, star_oam_backup, "

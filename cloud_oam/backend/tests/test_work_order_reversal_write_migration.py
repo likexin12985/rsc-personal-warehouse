@@ -10,6 +10,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 from app import database_security as security
+from migration_source_expectations import current_source_hash
 from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0098 as OAM_SYNC_FUNCTION_MANIFEST
 
 MIGRATION = Path(__file__).parents[1] / "alembic/versions/20261008_0098_work_order_reversals.py"
@@ -26,7 +27,7 @@ def test_reversal_head_pins_full_sources_and_minimum_append_only_permissions():
         if result == "void": assert key in security.MATERIAL_REQUEST_APPROVAL_VOID_FUNCTIONS
     for signature, (_, body) in m["_sources"]().items():
         name, args = signature.removeprefix("public.").split("(")
-        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[name,args[:-1]] == hashlib.sha256(body.encode()).hexdigest()
+        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[name,args[:-1]] == current_source_hash(m["revision"], signature, body)
     for name, (table, _, function, bits, deferred) in m["TRIGGERS"].items():
         assert security.EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS[name] == (table,function,"A",bits,deferred,deferred,deferred)
     for table in m["TABLES"]:

@@ -157,6 +157,7 @@ def exercise(context):
 def release(engines, *, tracking, migrate, provision):
     if tracking not in ('quantity','serial'):
         raise ValueError('tracking must be quantity or serial')
+    from test_postgresql16_release_gate import HEAD_REVISION
     from app.database_security import validate_production_database_security
     from pg16_stock_loss_derived_return_gate import catalog
     migrate('initial-upgrade','upgrade','head')
@@ -175,7 +176,7 @@ def release(engines, *, tracking, migrate, provision):
         '0159 immutable business history requires retention')
     assert snapshot(owner)==before and catalog(owner)==before_catalog
     with owner.connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261213_0164'
+        assert db.scalars(text('SELECT version_num FROM alembic_version')).all()==[HEAD_REVISION]
     security()
     result.update(emptyRoundtrip=True,retainedSenderSealsBlockDowngrade=True,
         runtimeSecurityBeforeAndAfter=True,formalMigrationRegistered=True,productionAcceptance=False)

@@ -113,6 +113,14 @@ def rebuild_serial_states(
             continue
         if row["movement_type"] == "reversal" and row["source_document_type"] == "work_order_material":
             raise SerialLedgerError("SN 工单冲销缺少完整父命令与原操作关联")
+        if previous.lifecycle_status == 'scrapped' and row['movement_type'] == 'reversal':
+            from .stock_scrap.recovery_serial_proof import require as require_scrap_recovery
+            original = observed_movements.get((previous.last_movement_id, row['serial_id']))
+            prior = before_movement.get((previous.last_movement_id, row['serial_id']))
+            require_scrap_recovery(db, movement=row, previous=previous, original=original, prior=prior)
+            states[row['serial_id']] = replace(prior, stock_account_id=row['to_account_id'],
+                last_movement_id=row['movement_id'], ledger_cursor=row['ledger_cursor'])
+            continue
         controlled_recovery = (
             previous.lifecycle_status == "consumed"
             and row["movement_type"] == "inbound"
@@ -140,7 +148,9 @@ def rebuild_serial_states(
                 raise SerialLedgerError("SN 消耗缺少原工单库存事实")
             lifecycle = "consumed"
         elif row["movement_type"] == "scrap":
-            raise SerialLedgerError("SN 报废缺少受控生命周期事实")
+            from .stock_scrap.serial_proof import require_scrap_serial
+            require_scrap_serial(db, movement=row, previous=previous)
+            lifecycle = "scrapped"
         states[row["serial_id"]] = SerialLedgerState(
             stock_account_id=row["to_account_id"],
             last_movement_id=row["movement_id"],

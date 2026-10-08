@@ -10,13 +10,13 @@ from app import stock_operation_models as module
 
 TABLES = {
  'header': (module.StockOperationOrder.__table__,
-  ('id','operation_type','oam_work_order_id','loss_headquarters_decision_id','source_location_id','target_location_id','transit_location_id','target_custody_assignment_id'),
+  ('id','operation_type','oam_work_order_id','loss_headquarters_decision_id','loss_correction_decision_id','source_location_id','target_location_id','transit_location_id','target_custody_assignment_id'),
   ('ck_stock_operation_orders_locations', 'uq_stock_operation_orders_loss_decision')),
  'line': (module.StockOperationLine.__table__,
   ('id','operation_id','operation_type','source_recovery_line_id','source_loss_line_id','stock_account_id','reserved_account_id','target_condition'),
   ('ck_stock_operation_lines_dimensions','ck_stock_operation_lines_loss_origin_not_self','uq_stock_operation_lines_loss_origin')),
  'disposition': (module.StockLossDisposition.__table__,
-  ('id','operation_id','disposition','return_operation_id'),
+  ('id','operation_id','disposition','return_operation_id','scrap_operation_id'),
   ('ck_loss_disposition_kind','uq_loss_disposition_return_operation')),
 }
 

@@ -18,7 +18,7 @@ function response() {
     can_post: true, next_after_id: null, items: [{ receipt_id: RECEIPT, status: 'pending', message: '待入账', detail: {
       receipt_no: 'RCT-TEST', receipt_request_hash: 'b'.repeat(64), shipment_id: SHIPMENT, shipment_no: 'SHP-TEST', target_location_name: '测试个人仓', received_at: NOW,
       inbound_no: null, inventory_transaction_id: null, posted_at: null,
-      lines: [{ receipt_line_id: LINE, sku_code: 'SKU-TEST', material_name: '测试物料', base_unit: '个', accepted_qty: '1.000', rejected_qty: '0.000', accepted_serials: [{ serial_id: SERIAL, serial_no: 'SN-TEST' }] }] } }] }
+      lines: [{ receipt_line_id: LINE, sku_code: 'SKU-TEST', material_name: '测试物料', base_unit: '个', accepted_qty: '1.000', rejected_qty: '0.000', condition: 'normal', tracking_mode: 'serial', rejected_serials: [], accepted_serials: [{ serial_id: SERIAL, serial_no: 'SN-TEST' }] }] } }] }
 }
 function body() { return command.payload(command.validateCandidates(response(), REQUEST, PERSON), response().items[0]) }
 function marker(payload = body()) {

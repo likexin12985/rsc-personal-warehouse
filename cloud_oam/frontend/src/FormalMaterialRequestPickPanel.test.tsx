@@ -13,6 +13,14 @@ function props(serial = false): any {
     pickCommandStatusNoReplay: vi.fn().mockResolvedValue({ ...pickResult(serial), idempotency_replayed: true }) },
     access: access(), detail: afterReservation(), store: createPickStore(), otherWriteBusy: false, otherWriteBlocked: () => false, onBlocking: vi.fn(), onDetail: vi.fn() };
 }
+it("keeps picking out of the personal-warehouse user interface", () => {
+  const p = props();
+  p.access = { ...access(), can_read_allocation_options: false };
+  render(<FormalMaterialRequestPickPanel {...p} />);
+  expect(screen.queryByRole("region", { name: "库存拣货" })).toBeNull();
+  expect(p.adapter.listPickOptions).not.toHaveBeenCalled();
+  expect(p.adapter.createPick).not.toHaveBeenCalled();
+});
 async function select() {
   fireEvent.click(screen.getByRole("button", { name: "查看明细 1 可拣货占用" }));
   fireEvent.click(await screen.findByRole("button", { name: "选择拣货" }));

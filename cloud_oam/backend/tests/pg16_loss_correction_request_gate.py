@@ -48,13 +48,15 @@ def assert_current_runtime(owner, api):
     with api.connect() as db:
         assert db.scalar(text('SELECT current_user')) == 'star_oam_api'
     with owner.connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version')) == HEAD_REVISION
+        assert db.scalars(text('SELECT version_num FROM alembic_version')).all() == [HEAD_REVISION]
 
 
 def release(engines, *, tracking, migrate, provision, scenario):
     if tracking not in ('quantity','serial') or scenario not in ('seals','http_sources'):
         raise ValueError('explicit correction request tracking and scenario required')
-    if HEAD_REVISION != '20261213_0164':
+    # 0168 adds shipment projection after the 0167 condition facts/defaults;
+    # existing history and empty roundtrip still use the actual current catalog.
+    if HEAD_REVISION != '20261227_0178':
         raise ValueError('correction request gate requires review for the new migration head')
     owner,api = (engines[key] for key in ('star_oam_migrator','star_oam_api'))
     if scenario == 'seals':

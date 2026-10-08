@@ -18,7 +18,10 @@ class InboundCandidateLineOut(StrictModel):
     base_unit: str
     accepted_qty: str
     rejected_qty: str
+    condition: Literal['normal', 'shortage', 'damaged', 'wrong_material', 'wrong_serial', 'rejected']
+    tracking_mode: Literal['none', 'lot', 'serial', 'lot_and_serial']
     accepted_serials: tuple[InboundSerialOut, ...]
+    rejected_serials: tuple[InboundSerialOut, ...]
 
 
 class InboundCandidateDetailOut(StrictModel):

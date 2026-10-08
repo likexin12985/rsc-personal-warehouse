@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import App from './App';
 import { api, apiNoReplay } from './api';
@@ -18,6 +18,10 @@ vi.mock('./FormalLossSubmissionPage', () => ({ default: (props: Props) => {
   return <section aria-label="报损路由测试">{props.identity.person_id}</section>;
 } }));
 
+// Load the real route wrapper before permission assertions; keep page mocks and
+// no-replay adapter checks intact without timing cold transforms as UI updates.
+beforeAll(async () => { await import('./FormalOperationRoutes'); }, 30_000);
+
 const person = '10000000-0000-4000-8000-000000000001';
 beforeEach(() => { vi.mocked(api).mockReset(); vi.mocked(apiNoReplay).mockReset(); observed.page.mockClear(); });
 afterEach(cleanup);
@@ -28,7 +32,7 @@ it.each([
   { roles: ['admin', 'provincial_manager'], read: true, allowed: true },
   { roles: ['admin'], read: false, allowed: false },
   { roles: ['provincial_manager'], read: false, allowed: false },
-  { roles: ['technician'], read: true, allowed: true },
+  { roles: ['technician'], read: true, allowed: false },
   { roles: ['star_headquarters_approver'], read: true, allowed: false },
 ])('gates direct URL and navigation for $roles with read=$read', async ({ roles, read, allowed }) => {
   const identity: AuthenticatedUser = {

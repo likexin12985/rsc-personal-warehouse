@@ -20,7 +20,7 @@ from sqlalchemy.pool import NullPool
 
 
 CLOUD = Path(__file__).resolve().parents[1]
-HEAD = '20261213_0164'
+HEAD = '20261227_0178'
 
 
 def main(argv=None):
@@ -157,6 +157,14 @@ def main(argv=None):
                     assert validate_capture_roles(connection)
                 validate_production_database_security(engines["star_oam_api"],
                     expected_runtime_role="star_oam_api", expected_migration_role="star_oam_migrator")
+                from pg16_scrap_capture_runtime_gate import run as check_scrap_capture
+                capture_regression = check_scrap_capture(admin, engines["star_oam_api"])
+                (directory / "capture-regression.json").write_text(
+                    json.dumps(capture_regression, indent=2) + "\n")
+                from pg16_capture_migration_gate import run as check_capture_migration
+                capture_migration = check_capture_migration(engines, admin, command=command, head=HEAD)
+                (directory / "capture-migration.json").write_text(
+                    json.dumps(capture_migration, indent=2) + "\n")
                 with engines["star_oam_api"].connect() as connection:
                     report_job_acl = connection.execute(text("""
                         SELECT has_table_privilege(current_user, 'public.file_jobs', 'SELECT'),
@@ -251,6 +259,8 @@ def main(argv=None):
                     import_retention = {"nonemptyDowngradeRejected":True,
                         "jobsAndCountFactsUnchanged":True, "filesUnchanged":True, "sealsUnchanged":True, "runtimeCatalogUnchanged":True}
                 result = {"status":"passed", "head":HEAD, "captureRoles":sorted(ROLES),
+                          "captureRuntimeRegression":capture_regression,
+                          "captureMigration":capture_migration,
                           "importJobEmptyMigrationRoundtrip":args.import_job_roundtrip,
                           "importJobRetention":import_retention,
                           "importPopulatedFixture":populated_import_fixture,
@@ -277,8 +287,15 @@ def main(argv=None):
             finally:
                 admin.dispose()
     except BaseException as error:
+        causes, cause = [], error.__cause__
+        while cause is not None and len(causes) < 8:
+            causes.append({"errorType": type(cause).__name__,
+                "frames": [{"file": frame.filename, "line": frame.lineno, "function": frame.name}
+                           for frame in traceback.extract_tb(cause.__traceback__)]})
+            cause = cause.__cause__
         failure = {"status":"failed", "errorType":type(error).__name__,
                    "evidenceDirectory":str(directory) if directory else None,
+                   "causes":causes,
                    "frames":[{"file":frame.filename,"line":frame.lineno,"function":frame.name}
                              for frame in traceback.extract_tb(error.__traceback__)]}
         if directory is not None:

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   Boxes,
@@ -12,10 +12,9 @@ import {
   UserCog,
   X,
 } from "lucide-react";
-import { Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import {
   api,
-  apiNoReplay,
   ApiError,
   jsonBody,
   mutationHeaders,
@@ -31,32 +30,35 @@ import {
   roleLabel,
 } from "./clientPolicy";
 import { validateInventorySummary } from "./formalInventory";
-import { createFormalMaterialRequestAdapter } from "./formalMaterialRequestAdapter";
-import { createFormalStocktakeAdapter } from "./formalStocktakeAdapter";
-import ProvincialManagersPage from "./pages/ProvincialManagers";
-import FormalInventoryPage from "./pages/FormalInventory";
-import FormalMaterialRequestsPage from "./pages/FormalMaterialRequests";
-import FormalNotificationsPage from "./pages/FormalNotifications";
-import FormalOpeningReconciliationsPage from "./pages/FormalOpeningReconciliations";
-import FormalDailyReconciliationsPage from "./pages/FormalDailyReconciliations";
-import FormalOpeningStocktakesPage from "./pages/FormalOpeningStocktakes";
-import FormalStocktakesPage from "./pages/FormalStocktakes";
-import FormalLossReviews from "./FormalLossReviews";
-import FormalLossExecution from "./FormalLossExecution";
-import FormalLossCorrection from "./FormalLossCorrection";
-import { createAdapter as createLossCorrectionAdapter } from "./lossCorrectionAdapter";
-import { createAdapter as createLossExecutionAdapter } from "./lossExecutionAdapter";
-import FormalReturnReceiving from "./FormalReturnReceivingPage";
-import FormalLossSubmissionPage from "./FormalLossSubmissionPage";
-import FormalLossSendingPage from "./FormalLossSendingPage";
-import { createAdapter as createLossSendingAdapter } from "./lossSenderAdapter";
-import { createAdapter as createLossSubmissionAdapter } from "./lossSubmissionAdapter";
-import { createAdapter as createReturnReceivingAdapter } from "./returnReceivingAdapter";
-import { createAdapter as createLossReviewAdapter } from "./lossReviewAdapter";
-import type { Stage as LossReviewStage } from "./formalLossReview";
-import ControlConfigurationPage from "./pages/ControlConfiguration";
+import { canReadMaterialRequestOverview } from "./materialRequestOverviewClient";
 import type { AccessContext, AuthenticatedUser, FormalUser, InventorySummary } from "./types";
 import { Button, Field, Loading, showError } from "./ui";
+
+import RouteLoadBoundary from "./RouteLoadBoundary";
+import { lossReviewStages, scrapRecoveryStages } from "./formalOperationScopes";
+
+const ProvincialManagersPage = lazy(() => import("./pages/ProvincialManagers"));
+const FormalInventoryPage = lazy(() => import("./pages/FormalInventory"));
+const FormalNotificationsPage = lazy(() => import("./pages/FormalNotifications"));
+const FormalOpeningReconciliationsPage = lazy(() => import("./pages/FormalOpeningReconciliations"));
+const FormalDailyReconciliationsPage = lazy(() => import("./pages/FormalDailyReconciliations"));
+const FormalOpeningStocktakesPage = lazy(() => import("./pages/FormalOpeningStocktakes"));
+const ControlConfigurationPage = lazy(() => import("./pages/ControlConfiguration"));
+const MaterialRequestOverviewRoute = lazy(() => import("./pages/MaterialRequestOverview"));
+const FormalMaterialRequestsRoute = lazy(() => import("./FormalOperationRoutes").then(m => ({ default: m.FormalMaterialRequestsRoute })));
+const FormalStocktakesRoute = lazy(() => import("./FormalOperationRoutes").then(m => ({ default: m.FormalStocktakesRoute })));
+const FormalLossExecutionRoute = lazy(() => import("./FormalOperationRoutes").then(m => ({ default: m.FormalLossExecutionRoute })));
+const FormalScrapRecoveryRoute = lazy(() => import("./FormalOperationRoutes").then(m => ({ default: m.FormalScrapRecoveryRoute })));
+const FormalOriginalScrapRoute = lazy(() => import("./FormalOperationRoutes").then(m => ({ default: m.FormalOriginalScrapRoute })));
+const FormalCorrectionScrapRoute = lazy(() => import("./FormalOperationRoutes").then(m => ({ default: m.FormalCorrectionScrapRoute })));
+const FormalLossCorrectionRoute = lazy(() => import("./FormalOperationRoutes").then(m => ({ default: m.FormalLossCorrectionRoute })));
+const FormalReturnConditionRoute = lazy(() => import("./FormalOperationRoutes").then(m => ({ default: m.FormalReturnConditionRoute })));
+const FormalReturnConditionInboxRoute = lazy(() => import("./FormalOperationRoutes").then(m => ({ default: m.FormalReturnConditionInboxRoute })));
+const FormalLossReviewsRoute = lazy(() => import("./FormalOperationRoutes").then(m => ({ default: m.FormalLossReviewsRoute })));
+const FormalLossSubmissionRoute = lazy(() => import("./FormalOperationRoutes").then(m => ({ default: m.FormalLossSubmissionRoute })));
+const FormalLossSendingRoute = lazy(() => import("./FormalOperationRoutes").then(m => ({ default: m.FormalLossSendingRoute })));
+const FormalReturnReceivingRoute = lazy(() => import("./FormalOperationRoutes").then(m => ({ default: m.FormalReturnReceivingRoute })));
+const FormalRejectionWarehouseRoute = lazy(() => import("./FormalOperationRoutes").then(m => ({ default: m.FormalRejectionWarehouseRoute })));
 
 const BRAND_ICON_SRC = "/brand/rsc-personal-warehouse-blue.png";
 
@@ -123,7 +125,14 @@ export function Login({ onLogin }: { onLogin: (user: FormalUser) => void }) {
 
   useEffect(() => {
     api<typeof options>("/auth/login-options")
-      .then(setOptions)
+      .then((value) => setOptions({
+        // Older response fields are intentionally ignored: the client has a
+        // single SMS-only authentication surface.
+        sms_enabled: value?.sms_enabled === true,
+        sms_interval_seconds: Number.isFinite(value?.sms_interval_seconds)
+          ? Math.max(30, Number(value.sms_interval_seconds))
+          : 60,
+      }))
       .catch(() => undefined);
   }, []);
 
@@ -260,7 +269,8 @@ function FormalHome({ user, access }: { user: FormalUser; access: AccessContext 
   const [inventory, setInventory] = useState<InventorySummary | null>(null);
   const [inventoryError, setInventoryError] = useState("");
   const [inventoryLoading, setInventoryLoading] = useState(false);
-  const canReadInventory = hasFormalPermission(access, "inventory", "read");
+  const technicianOnly = isTechnicianOnly(access);
+  const canReadInventory = !technicianOnly && hasFormalPermission(access, "inventory", "read");
 
   useEffect(() => {
     if (!canReadInventory) {
@@ -296,7 +306,7 @@ function FormalHome({ user, access }: { user: FormalUser; access: AccessContext 
       <article className="metric"><div><span>所属组织</span><strong>{user.organization_name || "正式组织"}</strong></div></article>
       <article className="metric"><div><span>权限版本</span><strong>v{access.authorization_version}</strong></div></article>
     </div>
-    <section className="content-section formal-inventory-status" aria-label="正式库存账状态">
+    {!technicianOnly && <section className="content-section formal-inventory-status" aria-label="正式库存账状态">
       <div className="content-title">
         <div><h2>正式库存账</h2><p>只读 V1 账本投影；不读取 v0.9 余额，不将 OAM 控制数计入个人仓</p></div>
         {inventory && <span className={`status ${openingEstablished ? "status-approved" : "status-pending"}`}>
@@ -318,7 +328,7 @@ function FormalHome({ user, access }: { user: FormalUser; access: AccessContext 
             : "单笔 opening 流水不能证明期初完整建立。首次盘点、区域负责人复核和蔚来总部管理员复核完成前，全部库存数量保持空值。"}
         </div>
       </>}
-    </section>
+    </section>}
     <div className="alert alert-info">
       正式模块仅使用 V1 权限与接口。审批、分配、占用、出库、发货、物流签收、OAM 收货、个人仓入库、通知送达和对账同步保持独立；控制账对账只消费云端已校验快照，不借用 v0.9 页面或回写 OAM。
     </div>
@@ -343,23 +353,27 @@ function Shell({
   const [open, setOpen] = useState(false);
   const location = useLocation();
   useEffect(() => setOpen(false), [location.pathname]);
+  const technicianOnly = isTechnicianOnly(access);
   const nav = useMemo(() => [
     { to: "/dashboard", label: "首页", icon: BarChart3 },
-    ...(hasFormalPermission(access, "inventory", "read") ? [{ to: "/inventory", label: "库存账户", icon: Boxes }] : []),
+    ...(!technicianOnly && hasFormalPermission(access, "inventory", "read") ? [{ to: "/inventory", label: "库存账户", icon: Boxes }] : []),
     ...(hasFormalPermission(access, "material_request", "read") ? [{ to: "/material-requests", label: "需求提报", icon: ClipboardList }] : []),
-    ...(hasFormalPermission(access, "access_context", "read") ? [{ to: "/notifications", label: "消息中心", icon: MessageSquareText }] : []),
-    ...(hasFormalPermission(access, "stocktake", "read") ? [{ to: "/stocktakes", label: "日常盘点", icon: ClipboardCheck }] : []),
-    ...(lossReviewStages(access).length ? [{ to: "/loss-reviews", label: "报损审批", icon: ClipboardCheck }] : []),
-    ...(lossReviewStages(access).includes("headquarters") ? [{ to: "/loss-execution", label: "报损处置", icon: ClipboardCheck }] : []),
-    ...(canReadReturnReceiving(access) ? [{ to: "/return-receiving", label: "退回收货与入库", icon: Boxes }] : []),
-    ...(canReadLossSubmission(access) ? [{ to: "/loss-reports/new", label: "本人报损", icon: ClipboardCheck }] : []),
-    ...(canReadLossSubmission(access) ? [{ to: "/loss-returns/sending", label: "报损退回发件", icon: ClipboardCheck }] : []),
-    ...(hasFormalPermission(access, "stocktake", "read") ? [{ to: "/opening-stocktakes", label: "盘点中心", icon: ClipboardCheck }] : []),
-    ...(hasFormalPermission(access, "reconciliation", "read") ? [{ to: "/opening-reconciliations", label: "控制账对账", icon: Scale }] : []),
-    ...(hasFormalPermission(access, "reconciliation", "read") ? [{ to: "/daily-reconciliations", label: "日终对账", icon: Scale }] : []),
-    ...(hasFormalPermission(access, "role_assignment", "manage_provincial") ? [{ to: "/provincial-managers", label: "省负责人", icon: UserCog }] : []),
+    ...(!technicianOnly && canReadMaterialRequestOverview(access) ? [{ to: "/reports/material-requests", label: "需求履约概览", icon: BarChart3 }] : []),
+    ...(!technicianOnly && hasFormalPermission(access, "access_context", "read") ? [{ to: "/notifications", label: "消息中心", icon: MessageSquareText }] : []),
+    ...(!technicianOnly && hasFormalPermission(access, "stocktake", "read") ? [{ to: "/stocktakes", label: "日常盘点", icon: ClipboardCheck }] : []),
+    ...(!technicianOnly && scrapRecoveryStages(access).length ? [{ to: "/scrap-recovery", label: "报废物资找回", icon: ClipboardCheck }] : []),
+    ...(!technicianOnly && lossReviewStages(access).length ? [{ to: "/loss-reviews", label: "报损审批", icon: ClipboardCheck }] : []),
+    ...(!technicianOnly && lossReviewStages(access).includes("headquarters") ? [{ to: "/loss-execution", label: "报损处置", icon: ClipboardCheck }] : []),
+    ...(!technicianOnly && canReadReturnReceiving(access) ? [{ to: "/return-receiving", label: "退回收货与入库", icon: Boxes }] : []),
+    ...(!technicianOnly && canReadReturnReceiving(access) && hasFormalPermission(access, "inventory", "read") ? [{ to: "/return-condition-corrections", label: "成色纠正案件", icon: ClipboardCheck }] : []),
+    ...(!technicianOnly && canReadLossSubmission(access) ? [{ to: "/loss-reports/new", label: "本人报损", icon: ClipboardCheck }] : []),
+    ...(!technicianOnly && canReadLossSubmission(access) ? [{ to: "/loss-returns/sending", label: "报损退回发件", icon: ClipboardCheck }] : []),
+    ...(!technicianOnly && hasFormalPermission(access, "stocktake", "read") ? [{ to: "/opening-stocktakes", label: "盘点中心", icon: ClipboardCheck }] : []),
+    ...(!technicianOnly && hasFormalPermission(access, "reconciliation", "read") ? [{ to: "/opening-reconciliations", label: "控制账对账", icon: Scale }] : []),
+    ...(!technicianOnly && hasFormalPermission(access, "reconciliation", "read") ? [{ to: "/daily-reconciliations", label: "日终对账", icon: Scale }] : []),
+    ...(!technicianOnly && hasFormalPermission(access, "role_assignment", "manage_provincial") ? [{ to: "/provincial-managers", label: "省负责人", icon: UserCog }] : []),
     ...(hasFormalRole(access, "admin") && hasFormalPermission(access, "inventory_control", "authorize") ? [{ to: "/control-configuration", label: "来源配置", icon: UserCog }] : []),
-  ], [access]);
+  ], [access, technicianOnly]);
 
   return <div className="app-shell">
     <header className="mobile-header"><button className="icon-button" aria-label="菜单" onClick={() => setOpen(true)}><Menu size={22} /></button><div className="mobile-brand"><Logo /><strong>RSC个人仓</strong></div><BrandAvatar className="mobile-account-avatar" label={`${user.name}账号`} /></header>
@@ -379,51 +393,6 @@ function Shell({
   </div>;
 }
 
-function FormalMaterialRequestsRoute({ access }: { access: AccessContext }) {
-  const adapter = useMemo(() => createFormalMaterialRequestAdapter({
-    person_id: access.person_id,
-    authorization_version: access.authorization_version,
-  }), [access.person_id, access.authorization_version]);
-  return <FormalMaterialRequestsPage adapter={adapter} />;
-}
-
-function FormalStocktakesRoute({ access }: { access: AccessContext }) {
-  const adapter = useMemo(() => createFormalStocktakeAdapter({
-    person_id: access.person_id,
-    authorization_version: access.authorization_version,
-  }, api, apiNoReplay, apiNoReplay), [access.person_id, access.authorization_version]);
-  return <FormalStocktakesPage adapter={adapter} />;
-}
-
-function lossReviewStages(access: AccessContext): LossReviewStage[] {
-  if (!hasFormalPermission(access, "stock_operation", "read")) return [];
-  return [
-    ...(hasFormalRole(access, "provincial_manager") ? ["regional" as const] : []),
-    ...(hasFormalRole(access, "admin") ? ["headquarters" as const] : []),
-  ];
-}
-
-function FormalLossExecutionRoute({ access }: { access: AccessContext }) {
-  const navigate = useNavigate();
-  const adapter = useMemo(() => createLossExecutionAdapter(access.person_id, apiNoReplay), [access.person_id]);
-  return <FormalLossExecution identity={{ person_id: access.person_id, authorization_version: access.authorization_version }} adapter={adapter}
-    onOpenCorrection={root => navigate(`/loss-corrections/${root}`)} />;
-}
-
-function FormalLossCorrectionRoute({ access }: { access: AccessContext }) {
-  const { rootId = '' } = useParams();
-  const navigate = useNavigate();
-  const adapter = useMemo(() => createLossCorrectionAdapter(access.person_id, apiNoReplay), [access.person_id]);
-  return <FormalLossCorrection identity={{ person_id: access.person_id, authorization_version: access.authorization_version }}
-    rootId={rootId} adapter={adapter} onBack={() => navigate('/loss-execution')} />;
-}
-
-function FormalLossReviewsRoute({ access }: { access: AccessContext }) {
-  const adapter = useMemo(() => createLossReviewAdapter(access.person_id, apiNoReplay), [access.person_id]);
-  return <FormalLossReviews identity={{ person_id: access.person_id, authorization_version: access.authorization_version }}
-    stages={lossReviewStages(access)} adapter={adapter} />;
-}
-
 function canReadReturnReceiving(access: AccessContext): boolean {
   return hasFormalPermission(access, "stock_operation", "read")
     && (hasFormalRole(access, "admin") || hasFormalRole(access, "provincial_manager"));
@@ -431,28 +400,17 @@ function canReadReturnReceiving(access: AccessContext): boolean {
 
 function canReadLossSubmission(access: AccessContext): boolean {
   return hasFormalPermission(access, "stock_operation", "read")
-    && (["admin", "provincial_manager", "technician"] as const).some(role => hasFormalRole(access, role));
+    && (["admin", "provincial_manager"] as const).some(role => hasFormalRole(access, role));
 }
 
-function FormalLossSubmissionRoute({ access }: { access: AccessContext }) {
-  const adapter = useMemo(() => createLossSubmissionAdapter(access.person_id, apiNoReplay), [access.person_id]);
-  return <FormalLossSubmissionPage identity={{ person_id: access.person_id, authorization_version: access.authorization_version }} adapter={adapter} />;
-}
-
-function FormalLossSendingRoute({ access }: { access: AccessContext }) {
-  const adapters = useMemo(() => ({
-    outbound_return: createLossSendingAdapter(access.person_id, "outbound_return", apiNoReplay),
-    ship_return: createLossSendingAdapter(access.person_id, "ship_return", apiNoReplay),
-  }), [access.person_id]);
-  return <FormalLossSendingPage identity={{ person_id: access.person_id, authorization_version: access.authorization_version }} adapters={adapters} />;
-}
-
-function FormalReturnReceivingRoute({ access }: { access: AccessContext }) {
-  const adapter = useMemo(() => createReturnReceivingAdapter(access.person_id, apiNoReplay), [access.person_id]);
-  return <FormalReturnReceiving identity={{ person_id: access.person_id, authorization_version: access.authorization_version }} adapter={adapter} />;
+function isTechnicianOnly(access: AccessContext): boolean {
+  return hasFormalRole(access, "technician")
+    && !hasFormalRole(access, "admin")
+    && !hasFormalRole(access, "provincial_manager");
 }
 
 export default function App() {
+  const location = useLocation();
   const [user, setUser] = useState<FormalUser | null>(null);
   const [access, setAccess] = useState<AccessContext | null>(null);
   const [accessLoading, setAccessLoading] = useState(true);
@@ -581,19 +539,21 @@ export default function App() {
     onLogout={logout}
   />;
 
-  const canManageProvincial = hasFormalPermission(access, "role_assignment", "manage_provincial");
-  const canConfigureControl = hasFormalRole(access, "admin") && hasFormalPermission(access, "inventory_control", "authorize");
-  const canReadInventory = hasFormalPermission(access, "inventory", "read");
+  const technicianOnly = isTechnicianOnly(access);
+  const canManageProvincial = !technicianOnly && hasFormalPermission(access, "role_assignment", "manage_provincial");
+  const canConfigureControl = !technicianOnly && hasFormalRole(access, "admin") && hasFormalPermission(access, "inventory_control", "authorize");
+  const canReadInventory = !technicianOnly && hasFormalPermission(access, "inventory", "read");
   const canReadMaterialRequests = hasFormalPermission(access, "material_request", "read");
-  const canReadNotifications = hasFormalPermission(access, "access_context", "read");
-  const canReadNotificationDeliveries = hasFormalPermission(access, "notification_delivery", "read");
-  const canRetryNotificationDeliveries = hasFormalPermission(access, "notification_delivery", "retry");
-  const canReadStocktake = hasFormalPermission(access, "stocktake", "read");
-  const canPrepareOpeningStocktake = (hasFormalRole(access, "admin") || hasFormalRole(access, "provincial_manager"))
+  const canReadNotifications = !technicianOnly && hasFormalPermission(access, "access_context", "read");
+  const canReadNotificationDeliveries = !technicianOnly && hasFormalPermission(access, "notification_delivery", "read");
+  const canRetryNotificationDeliveries = !technicianOnly && hasFormalPermission(access, "notification_delivery", "retry");
+  const canReadStocktake = !technicianOnly && hasFormalPermission(access, "stocktake", "read");
+  const canPrepareOpeningStocktake = !technicianOnly && (hasFormalRole(access, "admin") || hasFormalRole(access, "provincial_manager"))
     && hasFormalPermission(access, "stocktake", "manage");
-  const canReadReconciliation = hasFormalPermission(access, "reconciliation", "read");
+  const canReadReconciliation = !technicianOnly && hasFormalPermission(access, "reconciliation", "read");
   const canCreateOpeningReconciliation = canReadStocktake
     && hasFormalPermission(access, "reconciliation", "create_opening");
+  const canReadMaterialRequestOverviewPage = !technicianOnly && canReadMaterialRequestOverview(access);
 
   return <Shell
     user={user}
@@ -602,7 +562,7 @@ export default function App() {
     logoutPending={logoutPending}
     onLogout={logout}
   >
-    <Routes>
+    <RouteLoadBoundary key={location.pathname}><Suspense fallback={<Loading label="正在加载页面" />}><Routes>
       <Route path="/dashboard" element={<FormalHome user={user} access={access} />} />
       <Route path="/inventory" element={canReadInventory ? <FormalInventoryPage
         canExport={hasFormalPermission(access, "report", "export")}
@@ -610,6 +570,7 @@ export default function App() {
         authorizationVersion={access.authorization_version}
       /> : <Navigate to="/dashboard" replace />} />
       <Route path="/material-requests" element={canReadMaterialRequests ? <FormalMaterialRequestsRoute access={access} /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/reports/material-requests" element={canReadMaterialRequestOverviewPage ? <MaterialRequestOverviewRoute key={`${access.person_id}:${access.authorization_version}`} /> : <Navigate to="/dashboard" replace />} />
       <Route path="/notifications" element={canReadNotifications ? <FormalNotificationsPage
         canReadDeliveryRecords={canReadNotificationDeliveries}
         canRetryDelivery={canRetryNotificationDeliveries}
@@ -618,13 +579,29 @@ export default function App() {
       <Route path="/loss-execution" element={lossReviewStages(access).includes("headquarters") ? <FormalLossExecutionRoute
         key={`${access.person_id}:${access.authorization_version}`} access={access}
       /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/scrap-recovery" element={scrapRecoveryStages(access).length ? <FormalScrapRecoveryRoute
+        key={`${access.person_id}:${access.authorization_version}:${scrapRecoveryStages(access).join(":")}`} access={access}
+      /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/loss-scraps/:operationId?/:decisionId?" element={lossReviewStages(access).includes("headquarters") ? <FormalOriginalScrapRoute
+        key={`${access.person_id}:${access.authorization_version}`} access={access}
+      /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/loss-correction-scraps/:rootId?/:decisionId?" element={lossReviewStages(access).includes("headquarters") ? <FormalCorrectionScrapRoute
+        key={`${access.person_id}:${access.authorization_version}`} access={access}
+      /> : <Navigate to="/dashboard" replace />} />
       <Route path="/loss-corrections/:rootId" element={lossReviewStages(access).includes("headquarters") ? <FormalLossCorrectionRoute
         key={`${access.person_id}:${access.authorization_version}`} access={access}
       /> : <Navigate to="/dashboard" replace />} />
       <Route path="/loss-reviews" element={lossReviewStages(access).length ? <FormalLossReviewsRoute
         key={`${access.person_id}:${access.authorization_version}:${lossReviewStages(access).join(":")}`} access={access}
       /> : <Navigate to="/dashboard" replace />} />
-      <Route path="/return-receiving" element={canReadReturnReceiving(access) ? <FormalReturnReceivingRoute
+      <Route path="/return-receiving" element={!technicianOnly && canReadReturnReceiving(access) ? <FormalReturnReceivingRoute
+        key={`${access.person_id}:${access.authorization_version}`} access={access}
+      /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/return-condition-corrections" element={!technicianOnly && canReadReturnReceiving(access) && canReadInventory ? <FormalReturnConditionInboxRoute key={`${access.person_id}:${access.authorization_version}`} access={access} /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/rejection-return-receiving" element={!technicianOnly && canReadReturnReceiving(access) && canReadInventory ? <FormalRejectionWarehouseRoute
+        key={`${access.person_id}:${access.authorization_version}`} access={access}
+      /> : <Navigate to="/dashboard" replace />} />
+      <Route path="/return-condition-corrections/:inboundLineId" element={!technicianOnly && canReadReturnReceiving(access) && canReadInventory ? <FormalReturnConditionRoute
         key={`${access.person_id}:${access.authorization_version}`} access={access}
       /> : <Navigate to="/dashboard" replace />} />
       <Route path="/loss-reports/new" element={canReadLossSubmission(access) ? <FormalLossSubmissionRoute
@@ -647,6 +624,6 @@ export default function App() {
         actor={{ person_id: access.person_id, authorization_version: access.authorization_version }}
       /> : <Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
-    </Routes>
+    </Routes></Suspense></RouteLoadBoundary>
   </Shell>;
 }

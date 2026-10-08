@@ -101,7 +101,7 @@ function formatDate(value: string) {
 
 function UsersTable({ rows }: { rows: User[] }) {
   if (!rows.length) return <Empty title="暂无账号" />;
-  return <><div className="alert alert-info">正式客户端仅支持微信或手机验证码登录；账号开通请通过唯一 OAM 人员映射。</div><section className="content-section table-section"><div className="table-wrap"><table><thead><tr><th>姓名</th><th>手机号</th><th>角色</th><th>省份</th><th>登录方式</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{row.name}</strong></td><td className="mono">{row.mobile}</td><td>{roleLabel(row.role)}</td><td>{row.province || "全国"}</td><td>微信 / 手机验证码</td></tr>)}</tbody></table></div></section></>;
+  return <><div className="alert alert-info">正式客户端仅支持手机验证码登录；账号开通请通过唯一 OAM 人员映射。</div><section className="content-section table-section"><div className="table-wrap"><table><thead><tr><th>姓名</th><th>手机号</th><th>角色</th><th>省份</th><th>登录方式</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{row.name}</strong></td><td className="mono">{row.mobile}</td><td>{roleLabel(row.role)}</td><td>{row.province || "全国"}</td><td>手机验证码</td></tr>)}</tbody></table></div></section></>;
 }
 
 function WarehousesTable({ rows }: { rows: Warehouse[] }) {

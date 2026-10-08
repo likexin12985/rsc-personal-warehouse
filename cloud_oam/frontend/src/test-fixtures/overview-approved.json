@@ -1,0 +1,123 @@
+{
+  "metric": "current_request_counts",
+  "observed_at": "2026-10-06T04:30:00+08:00",
+  "created_from": null,
+  "created_before": null,
+  "organization_id": null,
+  "matched_requests": 1,
+  "counts": {
+    "request_status": {
+      "draft": 0,
+      "submitted": 0,
+      "approval_in_progress": 0,
+      "returned": 0,
+      "partially_approved": 0,
+      "approved": 1,
+      "rejected": 0,
+      "withdrawn": 0,
+      "cancellation_pending": 0,
+      "cancelled": 0
+    },
+    "allocation_status": {
+      "not_allocated": 1,
+      "partially_allocated": 0,
+      "allocated": 0,
+      "shortage": 0
+    },
+    "reservation_status": {
+      "not_reserved": 1,
+      "pending": 0,
+      "reserved": 0,
+      "partially_released": 0,
+      "released": 0,
+      "fulfilled": 0
+    },
+    "outbound_status": {
+      "not_started": 1,
+      "pending_pick": 0,
+      "picked": 0,
+      "outbound": 0
+    },
+    "shipment_status": {
+      "not_started": 1,
+      "pending_handover": 0,
+      "shipped": 0,
+      "in_transit": 0,
+      "exception": 0
+    },
+    "logistics_signature_status": {
+      "not_signed": 1,
+      "signed": 0,
+      "refused": 0,
+      "exception": 0
+    },
+    "oam_receipt_status": {
+      "not_occurred": 1,
+      "synced": 0,
+      "exception": 0
+    },
+    "personal_inbound_status": {
+      "pending_acceptance": 0,
+      "partially_accepted": 0,
+      "accepted": 0,
+      "posted": 0,
+      "not_started": 1
+    },
+    "notification_status": {
+      "not_started": 1,
+      "queued": 0,
+      "sent": 0,
+      "delivered": 0,
+      "read": 0,
+      "failed": 0
+    },
+    "reconciliation_status": {
+      "pending": 0,
+      "staged": 0,
+      "validated": 0,
+      "reconciled": 0,
+      "conflict": 0,
+      "failed": 0,
+      "not_started": 1
+    },
+    "approval_level_1": {
+      "not_started": 0,
+      "pending": 0,
+      "open": 0,
+      "awaiting_external_evidence": 0,
+      "evidence_pending_verification": 0,
+      "approved": 1,
+      "partially_approved": 0,
+      "rejected": 0,
+      "returned": 0,
+      "cancelled": 0,
+      "superseded": 0
+    },
+    "approval_level_2": {
+      "not_started": 0,
+      "pending": 0,
+      "open": 0,
+      "awaiting_external_evidence": 0,
+      "evidence_pending_verification": 0,
+      "approved": 1,
+      "partially_approved": 0,
+      "rejected": 0,
+      "returned": 0,
+      "cancelled": 0,
+      "superseded": 0
+    },
+    "approval_level_3": {
+      "not_started": 0,
+      "pending": 0,
+      "open": 0,
+      "awaiting_external_evidence": 0,
+      "evidence_pending_verification": 0,
+      "approved": 1,
+      "partially_approved": 0,
+      "rejected": 0,
+      "returned": 0,
+      "cancelled": 0,
+      "superseded": 0
+    }
+  }
+}

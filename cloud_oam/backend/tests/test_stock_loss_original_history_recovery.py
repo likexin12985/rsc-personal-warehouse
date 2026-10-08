@@ -22,6 +22,8 @@ from app.formal_services.stock_loss_corrections import original_recovery as hist
 pytestmark = pytest.mark.parametrize('execution', ['restore_available'], indirect=True)
 
 def bind_fixture(db, row, request, kind):
+    from scrap_lookup_binding_fixture import create
+    create(db)
     keys = _keys(request)
     selected = {'inverse': 'inverse_id', 'approval': 'approval_id', 'correction': 'correction_id'}[kind]
     value = dict(fact_id=row.id, binding_kind=kind, root_disposition_id=row.root_disposition_id, actor_user_id=row.actor_user_id, request_id=row.request_id, request_hash=row.request_hash, key_token=hashlib.sha256(('cloud_oam.loss.correction.key.v1\x00' + request.idempotency_key).encode()).hexdigest(), reversal_key_hash=keys[0], approval_key_hash=keys[1], correction_key_hash=keys[2], created_at=row.created_at)

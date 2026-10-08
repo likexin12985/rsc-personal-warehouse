@@ -27,10 +27,10 @@ import uuid
 from urllib.parse import urlsplit
 
 if __package__:
-    from .pilot_preflight import checks_for, strict_object, PILOT_PROJECT_RE, IMAGE_TAG_RE
+    from .pilot_preflight import checks_for, strict_object, PILOT_PROJECT_RE, IMAGE_TAG_RE, PILOT_MVP_SCOPE
     from .pilot_network_preflight import check_networks
 else:
-    from pilot_preflight import checks_for, strict_object, PILOT_PROJECT_RE, IMAGE_TAG_RE
+    from pilot_preflight import checks_for, strict_object, PILOT_PROJECT_RE, IMAGE_TAG_RE, PILOT_MVP_SCOPE
     from pilot_network_preflight import check_networks
 
 ID = re.compile(r"sha256:[0-9a-f]{64}$")
@@ -214,6 +214,8 @@ class Release:
         self.environment = {key:value for key,value in os.environ.items() if not key.startswith('COMPOSE_')}
         self.environment.update(RSC_RELEASE_PROFILE='pilot', RSC_API_IMAGE='rsc-pilot-api:'+self.tag,
             RSC_WEB_IMAGE='rsc-pilot-web:'+self.tag, RSC_DB_IMAGE='rsc-pilot-db:'+self.tag,
+            OAM_RELEASE_SCOPE=PILOT_MVP_SCOPE,
+            SMOKE_EXPECTED_RELEASE_SCOPE=PILOT_MVP_SCOPE,
             OAM_EDGE_DB_NETWORK=self.project+'_edge_db', COMPOSE_DISABLE_ENV_FILE='1',
             COMPOSE_PARALLEL_LIMIT='1')
         self.lock = None

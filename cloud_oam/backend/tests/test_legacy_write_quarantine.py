@@ -51,6 +51,7 @@ def test_production_cannot_reenable_legacy_writes():
             legacy_prototype_writes_enabled=True,
             sms_login_enabled=True,
             sms_provider="aliyun_pnvs",
+            sms_credential_mode="static",
             sms_access_key_id="key",
             sms_access_key_secret="secret",
             sms_sign_name="sign",

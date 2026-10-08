@@ -67,7 +67,7 @@ function completion() {
 
 
 describe("formal private-file PC upload", () => {
-  it.each(["receipt_exception_evidence", "daily_reconciliation_evidence", "stock_loss_evidence"] as const)("keeps %s purpose through upload and refuses another purpose at completion", async purpose => {
+  it.each(["receipt_exception_evidence", "daily_reconciliation_evidence", "stock_loss_evidence", "return_condition_evidence"] as const)("keeps %s purpose through upload and refuses another purpose at completion", async purpose => {
     const prepared = await prepareFormalFileUpload(file(), purpose, { digest });
     for (const completionPurpose of [purpose, "request_attachment"]) {
       const requester = vi.fn(async (path: string) => path.endsWith("/complete")

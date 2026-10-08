@@ -80,7 +80,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = '20261213_0164'
+HEAD_REVISION = '20261227_0178'
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -12931,6 +12931,11 @@ def _assert_0045_raw_projection_bypass_and_formal_approval(
     assert verified.request_status == "approved"
     assert verified.instance_status == "completed"
     assert dict(verified.state_axes) == MATERIAL_REQUEST_NEUTRAL_AXES
+    from pg16_material_request_overview_gate import assert_material_request_overview_gate
+    assert_material_request_overview_gate(
+        api_engine, request_id=request_id, manager_user_id=manager_user_id,
+        expected_status="approved",
+    )
     with Session(api_engine) as session:
         request = session.get(MaterialRequest, request_id)
         line = session.get(MaterialRequestLine, line_id)

@@ -184,17 +184,14 @@ test('successful refresh persists a non-sensitive sentinel before transport and 
   }
 })
 
-test('SMS and WeChat login persist a non-sensitive login sentinel before wx.request and clear it after a verified session write', async (context) => {
+test('SMS login persists a non-sensitive login sentinel before wx.request and clears it after a verified session write', async (context) => {
   const storage = authenticatedStorage()
   const sentinelAtTransport = []
   let loginSequence = 0
   const wxValue = storageWx(storage, {
     request(options) {
       const pathname = new URL(options.url).pathname.replace(/^\/api/, '')
-      assert.ok([
-        '/auth/miniprogram/sms-login',
-        '/auth/miniprogram/wechat-login'
-      ].includes(pathname))
+      assert.equal(pathname, '/auth/miniprogram/sms-login')
       sentinelAtTransport.push(storage.get(SENTINEL_KEY))
       loginSequence += 1
       options.success({
@@ -220,28 +217,18 @@ test('SMS and WeChat login persist a non-sensitive login sentinel before wx.requ
   await api.establishExplicitSession(smsResult)
   assert.equal(storage.has(SENTINEL_KEY), false)
 
-  const wechatResult = await api.post('/auth/miniprogram/wechat-login', {
-    login_code: 'wechat-code-sensitive',
-    phone_code: 'phone-code-sensitive',
-    device_id: 'device-sensitive'
-  })
-  assert.equal(storage.get(SENTINEL_KEY), LOGIN_SENTINEL_VALUE)
-  await api.establishExplicitSession(wechatResult)
-
-  assert.deepEqual(sentinelAtTransport, [LOGIN_SENTINEL_VALUE, LOGIN_SENTINEL_VALUE])
+  assert.deepEqual(sentinelAtTransport, [LOGIN_SENTINEL_VALUE])
   assert.equal(storage.has(SENTINEL_KEY), false)
-  assert.equal(storage.get(TOKEN_KEY), 'explicit-access-2')
-  assert.equal(storage.get(REFRESH_TOKEN_KEY), 'explicit-refresh-2')
-  assert.equal(storage.get(SESSION_KEY), 'explicit-session-2')
+  assert.equal(storage.get(TOKEN_KEY), 'explicit-access-1')
+  assert.equal(storage.get(REFRESH_TOKEN_KEY), 'explicit-refresh-1')
+  assert.equal(storage.get(SESSION_KEY), 'explicit-session-1')
   const serializedSentinels = JSON.stringify(sentinelAtTransport)
   for (const sensitive of [
     '13800000000',
     '246810',
-    'wechat-code-sensitive',
-    'phone-code-sensitive',
     'device-sensitive',
-    'explicit-access-2',
-    'explicit-refresh-2'
+    'explicit-access-1',
+    'explicit-refresh-1'
   ]) {
     assert.equal(serializedSentinels.includes(sensitive), false)
   }
@@ -293,9 +280,9 @@ test('an uncertain explicit-login transport keeps the pending sentinel and start
   const api = require('../utils/api')
 
   await assert.rejects(
-    api.post('/auth/miniprogram/wechat-login', {
-      login_code: 'uncertain-code',
-      phone_code: null,
+    api.post('/auth/miniprogram/sms-login', {
+      mobile: '13800000000',
+      code: 'uncertain-code',
       device_id: 'device-sensitive'
     }),
     (error) => error.status === 0
@@ -521,7 +508,7 @@ test('an explicit formal login and confirmed local logout both clear a stale sen
   assert.equal(app.globalData.user, null)
 })
 
-test('a late successful refresh cannot overwrite an explicit SMS or WeChat login session', async (context) => {
+test('a late successful refresh cannot overwrite an explicit SMS login session', async (context) => {
   const storage = authenticatedStorage()
   let releaseRefresh
   let reLaunchCount = 0

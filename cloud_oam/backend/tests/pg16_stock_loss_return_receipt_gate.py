@@ -4,6 +4,8 @@ from uuid import UUID, uuid4
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+from math import ceil
+from time import monotonic
 import pytest
 from sqlalchemy import select, text, event
 from sqlalchemy.orm import Session
@@ -57,6 +59,7 @@ def exercise(context):
         return actor,StockReturnReceiptSubmitIn(**value.model_dump(),expected_plan_hash=preview.plan_hash,request_id=uuid4().hex,idempotency_key=uuid4().hex),preview
     # The receipt COMMIT proof must hold current identity and custody locks.
     locked=[]
+    receipt_started = monotonic()
     with Session(api) as holder:
         actor,request,_=request_for(holder)
         accepted=commands.execute_receipt(holder,actor=actor,shipment_id=shipped.shipment_id,request=request)
@@ -72,11 +75,16 @@ def exercise(context):
                 with pytest.raises(DBAPIError) as error:contender.execute(text(sql),{'id':identifier})
                 assert error.value.orig.sqlstate=='55P03';contender.rollback();locked.append(label)
         holder.rollback()
+    receipt_preparation_seconds = monotonic() - receipt_started
+    # Exercise expiration between execution and COMMIT, not accidentally
+    # during the repeated source proofs. Measure the same real command above;
+    # keep both database-clock assertions and the actual expired COMMIT below.
+    expiry_window_seconds = max(30, ceil(receipt_preparation_seconds * 2 + 10))
     print('PG16 loss receipt '+context['tracking']+': checked receiver/custody locks PASS',flush=True)
     with Session(owner) as db:
         assignment=db.scalars(select(RoleAssignment).where(RoleAssignment.user_id==receiver_id)).one()
         assignment_id,old_end=assignment.id,assignment.valid_to
-        expiry=db.scalar(text('SELECT clock_timestamp()'))+timedelta(seconds=30)
+        expiry=db.scalar(text('SELECT clock_timestamp()'))+timedelta(seconds=expiry_window_seconds)
         assignment.valid_to=expiry;db.commit()
     try:
         with Session(api) as db:
@@ -84,6 +92,7 @@ def exercise(context):
             commands.execute_receipt(db,actor=actor,shipment_id=shipped.shipment_id,request=request)
             now=db.scalar(text('SELECT clock_timestamp()'));assert now<expiry
             db.execute(text('SELECT pg_sleep(:delay)'),{'delay':(expiry-now).total_seconds()+.1})
+            assert db.scalar(text('SELECT clock_timestamp()')) > expiry
             with pytest.raises(DBAPIError) as error:db.commit()
             assert error.value.orig.sqlstate=='23514';db.rollback()
     finally:
@@ -200,6 +209,7 @@ def exercise(context):
         assert facts.verified_receipt_history(db,fact=db.get(StockOperationReceipt,accepted.receipt_id))==accepted
     with Session(owner) as db:db.execute(text('SELECT public.rsc_check_loss_receipt_0155(:id,false)'),{'id':accepted.receipt_id})
     return dict(passed=True,tracking=context['tracking'],stockNeutralReceipt=True,independentInbound=True,
+        receiptPreparationSeconds=round(receipt_preparation_seconds, 3),receiverExpiryWindowSeconds=expiry_window_seconds,
         firstNewConditionAccountCreated=True,malformedInboundRollbacks=inbound_rejected,concurrentAcceptanceSingleWinner=True,concurrentExactReplay=True,currentReceiverExpiryAtCommit=True,checkedLocks=locked,inboundRequestRecovery=True,inboundSealPreventsLateWrite=True,malformedRollbacks=rejected,exactReplay=True,receiptRequestRecovery=True,receiptSealPreventsLateWrite=True,historyAfterInbound=True)
 
 
@@ -219,6 +229,7 @@ def run_sources(engines,tracking):
 def release(engines,*,tracking,migrate,provision):
     from app.database_security import validate_production_database_security
     from pg16_stock_loss_derived_return_gate import catalog
+    from test_postgresql16_release_gate import HEAD_REVISION
     owner,api=engines['star_oam_migrator'],engines['star_oam_api']
     def security():validate_production_database_security(api,expected_runtime_role='star_oam_api',expected_migration_role='star_oam_migrator')
     migrate('initial-upgrade','upgrade','head');provision();security()
@@ -238,6 +249,9 @@ def release(engines,*,tracking,migrate,provision):
     migrate('retained-receipt-downgrade','downgrade','20261203_0154','0162 immutable condition-aware inbound history requires retention')
     assert catalog(owner)==before
     security()
+    with owner.connect() as db:
+        installed_revisions = db.scalars(text('SELECT version_num FROM alembic_version')).all()
+    assert installed_revisions == [HEAD_REVISION], installed_revisions
     result.update(runtimeSecurity=True,emptyMigrationRoundtripCatalogAndAclExact=True,retainedHistoryBlocksDowngrade=True,
-        privateProofExecutionDenied=True,migrationHead='20261213_0164',productionAcceptance=False)
+        privateProofExecutionDenied=True,migrationHead=installed_revisions[0],productionAcceptance=False)
     return result

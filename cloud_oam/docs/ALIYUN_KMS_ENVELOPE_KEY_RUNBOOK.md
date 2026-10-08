@@ -34,6 +34,57 @@ OAM、RSC、Workflow、飞书或生产数据库，也不替代 PostgreSQL 16、�
 
 ## 3. RAM 最小权限与配置
 
+### 2026-10-05 采购与网络前置核查
+
+当前账号杭州 KMS 3.0 软件实例列表为空，用户主密钥列表为 0；此结论仅覆盖已核查地域。
+由控制台“创建实例”链接打开的报价页默认显示 `¥4,997.00`、一个实例、一个月，
+包含 1000 个主密钥、100 个数据密钥、100 个凭据、1 个访问管理数量及 1000 GB 日志容量；
+自动续费未勾选。仅查看报价，没有提交订单或接受协议。此数额是默认组合报价，不是项目最低费用。
+
+[官方计费 FAQ](https://help.aliyun.com/zh/kms/key-management-service/product-overview/faq-2)
+列出中国内地软件实例基础价 2499 元/月，并称 KMS 3.0 只支持包年包月；另一个
+[按量付费文档](https://help.aliyun.com/zh/kms/key-management-service/pay-as-you-go)
+列出软件实例 30 元/天及密钥、调用等费用，两者口径冲突。本账号当前报价页只观察到按月/年时长，
+不能把按量文档当作本账号可购买证明，也不能把基础价当作完整部署总价。采购前须确认准确 SKU、
+附加项用途、网络接入和最终报价。现有 `GenerateDataKey` 信封加密返回值不能仅凭名称就认定
+必须采购“数据密钥”托管配额；须按具体 API/实例规格验证。用户尚未授权新增持续费用。
+
+基线要求 KMS/密钥托管；当前代码只实现 `aliyun_kms`。低成本替代仅为待评估选择，尚未设计、
+实现或验收，不能通过改 provider、明文环境变量、mock 或取消 pin 校验来绕过上线门禁。
+
+低成本候选的进一步只读核查（2026-10-05）：
+
+- [腾讯云中国站当前定价](https://cloud.tencent.com/document/product/573/34388)明确标准版于
+  2023-03-17 停止新购、基础版于 2025-03-14 停止新购；旧版按密钥/调用量计费价格不能作为
+  本项目新账号可用方案。当前页面专业版为 7699 元/月，未访问或开通腾讯云账号。
+- [华为云 DEW 按需文档](https://support.huaweicloud.com/price-dew/dew_03_0005.html)仍描述按密钥
+  使用时间与 API 请求计费，可以作为进一步评估候选；文中示例金额不是本账号/目标地域报价。
+  尚未核验账号资格、地域最终价格、跨云网络时延、凭据注入、容量及实际解密，不称为已选定替代。
+  [DecryptData 文档](https://support.huaweicloud.com/api-dew/DecryptData.html)的响应示例只有
+  key_id 和明文字段，不能据此伪造当前 Aliyun 适配器强制要求的 KeyVersionId。采用其他 provider
+  前必须重新证明用途 context、不可变密文 pin、历史版本可解密、身份最小权限和故障失败关闭；
+  不能将配置里的版本原样填回响应当作供应商证明。
+- [阿里云托管数据密钥说明](https://help.aliyun.com/zh/kms/key-management-service/user-guide/managed-data-key)
+  区分 `GetManagedDataKey` 托管凭据与 `GenerateDataKey` 返回值。当前代码只使用后者生成的
+  密文注册表加 `Decrypt`，没有调用 `GetManagedDataKey`；因此报价页数据密钥托管配额需按
+  具体商品另行核实，不应因字段同名就视作应用必需项。本轮未调整报价页或提交订单。
+
+[官方公网访问说明](https://help.aliyun.com/zh/kms/key-management-service/user-guide/access-keys-of-a-kms-instance-over-the-internet)
+说明实例密钥默认只允许 VPC 网络访问。当前适配器使用 RAM 默认凭据链及 OpenAPI `Decrypt`，
+配置 `kms.cn-hangzhou.aliyuncs.com` 前须核验目标实例已允许该公网密码运算路径，并准备最小权限身份。
+开放访问是独立的安全配置动作，本轮未执行。若选择实例专属 VPC 端点，还需验证网络连通、SDK
+契约及实例 CA 信任；当前适配器没有部署级 CA 配置，不能仅替换 endpoint 就宣称接入完成，
+更不能关闭 TLS 校验。最终必须用真实 Decrypt、pin gate 和 readiness 回读证明可用。
+
+当前目标是轻量应用服务器，不能直接把 ECS 的实例角色操作当作已可用的部署步骤。
+[ECS 实例角色文档](https://help.aliyun.com/zh/ecs/user-guide/attach-an-instance-ram-role-to-an-ecs-instance)
+描述的是通过 ECS IMDS 获取临时凭据；
+[轻量服务器服务关联角色文档](https://help.aliyun.com/zh/simple-application-server/service-association-role)
+描述的 `AliyunServiceRoleForSwas` 则供轻量服务访问 VPC 等资源，不是本应用的 KMS 解密身份。
+本轮未找到足以证明目标轻量实例支持应用 IMDS 角色的证据，故该接入方式保持未验证；不得
+通过创建服务关联角色或授予主账号权限来“补齐”应用身份。实际运行身份、SDK 凭据链来源、
+临时凭据刷新和两个精确 Key 的只读解密权限必须在目标部署中分别验证，且不得输出凭据值。
+
 运行角色仅授予两个精确 KMS Key 的 `Decrypt` 权限，并用资源和 EncryptionContext 条件进一步
 约束；不得授予创建、删除、禁用或轮换主密钥的权限。部署环境至少配置：
 
@@ -54,7 +105,7 @@ OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION=1
 
 1. 先关闭全部旧版短信写入口并等待未过期挑战自然到期，再以 `star_oam_migrator` 执行
    Alembic `upgrade head`，确认数据库到达仓库发布清单与 README 标明的当前唯一 head
-   （本文修订时为 `20260905_0058`）。`0040`/`0041` 只是 KMS 与短信账本的历史最低迁移
+   （2026-10-05 工作树为 `20261214_0165`；实际发布仍须重新核对）。`0040`/`0041` 只是 KMS 与短信账本的历史最低迁移
    边界，不得把数据库停留在 `20260902_0041`。`0040` 创建空的不可变 pin 账本及最小
    ACL；随后 `0041` 对旧短信证据执行失败关闭预检并创建单 owner dispatch 账本。
    未过期歧义、已验证但无发送引用、重复引用或旧接受审计不完整时必须停止，禁止猜测回填。
@@ -207,6 +258,16 @@ readiness 的缓存成功不授权任何业务写入。短信、认证、联系�
 `CheckSmsVerifyCode`，不是标准 `dysmsapi` 短信发送接口。用户购买的 1000 条标准短信套餐不当然
 适用于 PNVS；必须先以非敏感产品/账单证据确认套餐所属产品、接口、签名、模板、有效期及计费
 口径，再决定沿用 PNVS 或另行开发标准短信适配器。任何套餐购买信息都不代表已经完成生产联调。
+
+2026-10-05 控制台只读复核补充：刷新 `dypns.console.aliyun.com/smsServiceOverview` 后，
+当前账号明确显示“短信认证套餐包”，可用余量 1000 次、剩余 100%。在短信认证参数页，
+赠送签名 `恒创联众` 状态为“通过”，赠送登录/注册模板为 `100001`，参数是 `code` 和 `min`。
+因此本次看到的套餐属于 PNVS；此前套餐产品归属不明的疑点已解除，不需要仅为这个疑点开发
+`dysmsapi` 适配器。可准备的非敏感配置为 `OAM_SMS_PROVIDER=aliyun_pnvs`、
+`OAM_SMS_SIGN_NAME=恒创联众`、`OAM_SMS_TEMPLATE_CODE=100001`。本次没有改服务器配置、
+绑定手机号、发送短信或读取 AccessKey；余量不证明套餐有效期、实际扣费或联调通过。
+独立 PNVS 运行身份、KMS/pin、实际发送引用、验证码核验和应用登录回读仍需分别验证，
+不得仅根据控制台可用签名和模板启用正式流量。
 
 完成上述验收仍不代表允许投产；须与 PostgreSQL 16 真实迁移/并发、正式身份、短信产品接口、
 真实 KMS/RAM、WAF/ALB、私有 OSS、备份恢复、监控告警、UAT 和回滚演练一并签字放行。

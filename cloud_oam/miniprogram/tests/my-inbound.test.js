@@ -48,7 +48,7 @@ test('read-only, already-posted, rejected-only and unknown rows cannot submit', 
     if (mode === 'readonly') raw.can_post = false
     else row.status = mode
     if (mode === 'posted') Object.assign(row.detail, { inbound_no: 'INB-OLD', inventory_transaction_id: f.LINE, posted_at: f.NOW })
-    if (mode === 'no_accepted') Object.assign(row.detail.lines[0], { accepted_qty: '0.000', rejected_qty: '1.000', accepted_serials: [] })
+    if (mode === 'no_accepted') Object.assign(row.detail.lines[0], { accepted_qty: '0.000', rejected_qty: '1.000', condition: 'rejected', rejected_serials: row.detail.lines[0].accepted_serials, accepted_serials: [] })
     if (mode === 'blocked') row.detail = null
     const h = f.harness({ response: () => raw }); await h.page.onShow(); await h.page.submit(event)
     assert.equal(h.page.data.state, 'ready'); assert.equal(posts(h).length, 0)
@@ -154,4 +154,29 @@ test('revocation after data load and late reads after hide never expose stale ro
   const late = f.harness({ request: () => { fetched.resolve(); return response.promise } })
   const pending = late.page.onShow(); await fetched.promise; late.page.onHide(); response.resolve(f.response()); await pending
   assert.equal(late.page.data.state, 'idle'); assert.equal(late.page.data.items.length, 0)
+})
+
+test('rejected SN and condition survive refresh, stay separate and never trigger inbound', async () => {
+  const raw = f.response(), row = raw.items[0], line = row.detail.lines[0]
+  Object.assign(line, { condition: 'rejected', rejected_qty: '1.000', accepted_qty: '0.000', rejected_serials: line.accepted_serials, accepted_serials: [] })
+  row.status = 'no_accepted'
+  const h = f.harness({ response: () => f.clone(raw) })
+  await h.page.onShow(); await h.page.refresh()
+  const shown = h.page.data.items[0].detail.lines[0]
+  assert.equal(shown.conditionLabel, '拒收')
+  assert.equal(shown.rejectedSerials[0].serial_no, 'SN-TEST')
+  assert.equal(shown.serialCount, 0)
+  await h.page.submit(event); assert.equal(posts(h).length, 0)
+  for (const mutate of [x => x.rejected_serials = [], x => x.tracking_mode = 'none', x => x.condition = 'normal',
+    x => x.rejected_serials[0].source_account_id = f.LINE]) {
+    const bad = f.clone(raw); mutate(bad.items[0].detail.lines[0]); assert.throws(() => c.validateCandidates(bad, f.REQUEST, f.PERSON))
+  }
+})
+
+test('mixed acceptance requires distinct SN groups with exact quantities', () => {
+  const raw = f.response(), line = raw.items[0].detail.lines[0]
+  Object.assign(line, { condition: 'shortage', rejected_qty: '1.000', rejected_serials: [{ serial_id: f.FILE, serial_no: 'REJECTED-SN' }] })
+  assert.equal(c.validateCandidates(raw, f.REQUEST, f.PERSON).items[0].detail.lines[0].rejected_serials[0].serial_no, 'REJECTED-SN')
+  line.rejected_serials[0].serial_id = f.SERIAL
+  assert.throws(() => c.validateCandidates(raw, f.REQUEST, f.PERSON))
 })

@@ -99,8 +99,19 @@ def _capture(db, root):
     rows('inbound_serials', models.StockOperationReturnInboundSerial, or_(
         models.StockOperationReturnInboundSerial.inbound_id.in_(inbounds), models.StockOperationReturnInboundSerial.line_id.in_(incoming)))
     rows('inbound_postings', models.StockOperationReturnInboundPosting, models.StockOperationReturnInboundPosting.inbound_id.in_(inbounds))
-    raw = {name: [{column.key: getattr(row, column.key) for column in row.__table__.columns}
-        for row in values] for name, values in groups.items()}
+    # Forward schema columns need not be ORM attributes. Read every persisted
+    # column directly rather than dropping unmapped ancestry from the digest.
+    raw = {}
+    for name, values in groups.items():
+        if not values:
+            raw[name] = []
+            continue
+        table = values[0].__table__
+        ids = tuple(row.id for row in values)
+        raw[name] = [dict(row) for row in db.execute(select(table).where(
+            table.c.id.in_(ids)).order_by(table.c.id)).mappings()]
+        if tuple(row['id'] for row in raw[name]) != ids:
+            invalid()
     fingerprint = hashlib.sha256(json.dumps(raw, sort_keys=True, default=str, separators=(',', ':')).encode()).hexdigest()
     return groups, fingerprint
 

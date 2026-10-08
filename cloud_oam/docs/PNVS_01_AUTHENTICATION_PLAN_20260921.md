@@ -34,7 +34,7 @@ PC/H5 与小程序通过本系统后端认证；公开根首页继续查询，�
 | 范围 | 已有实现 | PNVS-01 待补或复核 |
 | --- | --- | --- |
 | 供应商适配 | `backend/app/sms.py` 已有 `AliyunPnvsProvider`，调用两个 PNVS API；平台生成验证码、不返回明文、准确匹配 OutId/BizId，并关闭 SDK 和供应商自动重试。依赖已固定 `alibabacloud_dypnsapi20170525==2.0.0` | 沿用并复核 SDK 契约；不能把现状写成“尚未接 PNVS”，也不另建普通 `SendSms` 冒充认证 |
-| 配置及凭证 | `backend/app/config.py` 已有启停、签名、模板、场景、有效期、间隔、手机号/IP 次数、失败次数及并发配置；`sms.py` 目前显式读取服务端 AK/SK | 设计 RAM 最小权限、云角色/STS 凭证链、轮换和失效处理；当前短信代码的云角色能力尚未完成。所有凭证只由服务端安全注入，禁止进入客户端、仓库和日志 |
+| 配置及凭证 | `backend/app/config.py` 已有启停、签名、模板、场景、有效期、间隔、手机号/IP 次数、失败次数及并发配置；生产 `sms.py` 已通过 Alibaba SDK 默认凭证链读取目标 ECS RAM 角色/实例凭证 | 仍需完成 RAM 最小权限、来源限制、真实回执和轮换/失效验收；静态/STS 仅保留隔离测试兼容，生产拒绝。所有凭证只由服务端安全注入，禁止进入客户端、仓库和日志 |
 | 挑战生命周期 | `foundation_models.LoginChallenge` 已区分 `local_hash`、`provider_managed`、`legacy_unknown`；平台模式要求 `code_hash IS NULL`。`formal_services/authentication_challenge.py` 已有用途、端类型、有效期、尝试上限、消费、独占 dispatch 及未知发送隔离 | 明确各历史模式的切换与退出策略，禁止伪造 code_hash、重开已消费挑战或把未知旧记录认定为已验证 |
 | HTTP 与会话 | `routers/auth.py` 已接正式发送/校验、幂等结果恢复、挑战消费和会话事务；`authentication_session.py`、`authentication_session_admin.py`、`auth_sessions.py` 已有设备会话、刷新与撤销链 | 复核供应商校验成功但本地提交失败、响应丢失和重放的恢复边界；用当前代码完成客户端及 PG16 回归 |
 | 身份与停用 | `authentication_identity.py` 只解析唯一正式身份，调用权限主体解析，允许基线规定的 `restricted_handover` 受限主体 | 验收本地账号、手机号、微信及 OAM 人员唯一关系；零匹配、多匹配不授业务权限，停用/离职仅保留应有交接能力，禁止自动猜测或注册 |

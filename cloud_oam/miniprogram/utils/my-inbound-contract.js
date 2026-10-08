@@ -1,5 +1,5 @@
 const { uuid } = require('./my-receiving-contract')
-const { canonical, quantity, units, time } = require('./my-receipt-command')
+const { canonical, quantity, units, time, CONDITIONS, LABELS: CONDITION_LABELS } = require('./my-receipt-command')
 const { sha256Hex } = require('./formal-file-upload')
 const LABELS = { pending: '待入账', posted: '已入账', no_accepted: '无合格数量', blocked: '待核验' }
 function fail() { throw new Error('本人入账数据未通过核验，请保留原记录并刷新。') }
@@ -29,7 +29,7 @@ function validateCandidates(raw, requestId, personId, afterId = null) {
     const lineIds = new Set(), serialIds = new Set()
     let acceptedTotal = 0n
     for (const line of d.lines) {
-      exact(line, ['receipt_line_id', 'sku_code', 'material_name', 'base_unit', 'accepted_qty', 'rejected_qty', 'accepted_serials'])
+      exact(line, ['receipt_line_id', 'sku_code', 'material_name', 'base_unit', 'accepted_qty', 'rejected_qty', 'condition', 'tracking_mode', 'accepted_serials', 'rejected_serials'])
       const lineId = uuid(line.receipt_line_id)
       if (lineIds.has(lineId)) fail()
       lineIds.add(lineId)
@@ -37,13 +37,18 @@ function validateCandidates(raw, requestId, personId, afterId = null) {
       const accepted = units(line.accepted_qty), rejected = units(line.rejected_qty)
       if (quantity(line.accepted_qty) !== line.accepted_qty || quantity(line.rejected_qty) !== line.rejected_qty || accepted + rejected <= 0n) fail()
       acceptedTotal += accepted
-      if (!Array.isArray(line.accepted_serials) || line.accepted_serials.length > 1000) fail()
-      if (line.accepted_serials.length && BigInt(line.accepted_serials.length) * 1000n !== accepted) fail()
-      for (const serial of line.accepted_serials) {
-        exact(serial, ['serial_id', 'serial_no'])
-        const sid = uuid(serial.serial_id); text(serial.serial_no)
-        if (serialIds.has(sid)) fail()
-        serialIds.add(sid)
+      if (!CONDITIONS.includes(line.condition) || !['none', 'lot', 'serial', 'lot_and_serial'].includes(line.tracking_mode)) fail()
+      if (line.condition === 'normal' && rejected !== 0n) fail()
+      if (['damaged', 'wrong_material', 'wrong_serial', 'rejected'].includes(line.condition) && accepted !== 0n) fail()
+      const tracked = ['serial', 'lot_and_serial'].includes(line.tracking_mode)
+      for (const [group, qty] of [[line.accepted_serials, accepted], [line.rejected_serials, rejected]]) {
+        if (!Array.isArray(group) || group.length > 1000 || (tracked ? BigInt(group.length) * 1000n !== qty : group.length !== 0)) fail()
+        for (const serial of group) {
+          exact(serial, ['serial_id', 'serial_no'])
+          const sid = uuid(serial.serial_id); text(serial.serial_no)
+          if (serialIds.has(sid)) fail()
+          serialIds.add(sid)
+        }
       }
     }
     if ((row.status === 'no_accepted') !== (acceptedTotal === 0n)) fail()
@@ -84,4 +89,4 @@ function validateLookup(raw, marker) {
   if (raw.lookup_status !== 'confirmed') fail()
   return validateResult(raw.command, marker)
 }
-module.exports = { canonical, hash, version, validateCandidates, payload, requestHash, validateResult, validateLookup }
+module.exports = { conditionLabel: condition => CONDITION_LABELS[CONDITIONS.indexOf(condition)], canonical, hash, version, validateCandidates, payload, requestHash, validateResult, validateLookup }

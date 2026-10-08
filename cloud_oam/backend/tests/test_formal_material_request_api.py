@@ -359,7 +359,31 @@ def test_detail_preserves_scope_safe_404(api_client, monkeypatch):
         "category": "not_found",
         "message": "需求单不存在",
     }
+    assert response.headers["cache-control"] == "no-store, max-age=0"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["referrer-policy"] == "no-referrer"
     db.commit.assert_not_called()
+
+
+def test_list_service_failure_keeps_private_error_boundary(api_client, monkeypatch):
+    client, db, _principal_box, _cipher, _settings_value = api_client
+
+    def unavailable(*_args, **_kwargs):
+        raise query_service.MaterialRequestReadError(
+            "material_request_query_unavailable",
+            "service_unavailable",
+            "需求单查询暂时不可用",
+        )
+
+    monkeypatch.setattr(query_service, "list_material_requests", unavailable)
+    response = client.get("/api/v1/material-requests")
+
+    assert response.status_code == 503
+    assert response.headers["cache-control"] == "no-store, max-age=0"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    db.commit.assert_not_called()
+    db.rollback.assert_not_called()
 
 
 def test_editable_draft_is_owner_only_no_store_and_read_only(
@@ -462,6 +486,9 @@ def test_create_protects_plaintext_before_domain_service_and_never_returns_pii(
     )
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store, max-age=0"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["referrer-policy"] == "no-referrer"
     assert response.headers["Idempotency-Replayed"] == "false"
     response_text = json.dumps(response.json(), ensure_ascii=False)
     assert "王小明" not in response_text
@@ -512,6 +539,9 @@ def test_request_validation_response_never_echoes_plaintext_contact(
     )
 
     assert response.status_code == 422
+    assert response.headers["cache-control"] == "no-store, max-age=0"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["referrer-policy"] == "no-referrer"
     assert response.json()["detail"] == {
         "code": "material_request_request_invalid",
         "category": "invalid_request",
@@ -525,6 +555,56 @@ def test_request_validation_response_never_echoes_plaintext_contact(
     assert cipher.version_calls == 0
     db.commit.assert_not_called()
     db.rollback.assert_not_called()
+
+
+def test_main_middleware_keeps_framework_errors_private_for_material_requests(monkeypatch):
+    api = FastAPI()
+    api.middleware("http")(main_module.block_legacy_prototype_writes)
+
+    @api.get("/api/v1/material-requests/{request_id}/missing")
+    def missing_route(request_id: uuid.UUID):
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="missing")
+
+    monkeypatch.setattr(main_module.settings, "environment", "test")
+    monkeypatch.setattr(main_module.settings, "legacy_prototype_writes_enabled", False)
+    with TestClient(api) as client:
+        response = client.get(f"/api/v1/material-requests/{REQUEST_ID}/missing")
+
+    assert response.status_code == 404
+    assert response.headers["cache-control"] == "private, no-store, max-age=0"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["referrer-policy"] == "no-referrer"
+
+
+def test_main_middleware_keeps_retired_auth_early_return_private(monkeypatch):
+    api = FastAPI()
+    api.middleware("http")(main_module.block_legacy_prototype_writes)
+    monkeypatch.setattr(main_module.settings, "environment", "production")
+
+    with TestClient(api) as client:
+        response = client.post("/api/auth/retired-password-login", json={})
+
+    assert response.status_code == 410
+    assert response.headers["cache-control"] == "private, no-store, max-age=0"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["referrer-policy"] == "no-referrer"
+
+
+def test_main_middleware_keeps_legacy_auth_write_early_return_private(monkeypatch):
+    api = FastAPI()
+    api.middleware("http")(main_module.block_legacy_prototype_writes)
+    monkeypatch.setattr(main_module.settings, "environment", "test")
+    monkeypatch.setattr(main_module.settings, "legacy_prototype_writes_enabled", False)
+
+    with TestClient(api) as client:
+        response = client.post("/api/auth/login", json={})
+
+    assert response.status_code == 410
+    assert response.headers["cache-control"] == "private, no-store, max-age=0"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["referrer-policy"] == "no-referrer"
 
 
 def test_replace_is_full_put_and_reprotects_contact_for_exact_path_id(
@@ -553,6 +633,9 @@ def test_replace_is_full_put_and_reprotects_contact_for_exact_path_id(
     )
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store, max-age=0"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["referrer-policy"] == "no-referrer"
     assert response.headers["Idempotency-Replayed"] == "true"
     assert captured["material_request_id"] == REQUEST_ID
     assert captured["expected_version"] == 0
@@ -590,6 +673,9 @@ def test_submit_maps_frozen_three_stage_coordinates_without_advancing_other_axes
     )
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store, max-age=0"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["referrer-policy"] == "no-referrer"
     body = response.json()
     assert body["approval_instance_id"] == str(INSTANCE_ID)
     assert body["current_step_id"] == str(STEP_1_ID)
@@ -641,6 +727,10 @@ def test_internal_approval_maps_both_levels_and_exact_line_decisions(
     )
 
     assert first.status_code == second.status_code == 200
+    for response in (first, second):
+        assert response.headers["cache-control"] == "no-store, max-age=0"
+        assert response.headers["pragma"] == "no-cache"
+        assert response.headers["referrer-policy"] == "no-referrer"
     assert first.json()["current_step_id"] == str(STEP_2_ID)
     assert second.json()["current_step_id"] == str(STEP_3_ID)
     assert [call["approval_step_id"] for call in calls] == [STEP_1_ID, STEP_2_ID]
@@ -719,6 +809,10 @@ def test_external_registration_and_distinct_verifier_are_mapped_as_two_commands(
     )
 
     assert registered.status_code == verified.status_code == 200
+    for response in (registered, verified):
+        assert response.headers["cache-control"] == "no-store, max-age=0"
+        assert response.headers["pragma"] == "no-cache"
+        assert response.headers["referrer-policy"] == "no-referrer"
     assert captured["register"]["actor"] is registrar
     assert captured["verify"]["actor"] is verifier
     assert captured["verify"]["registration_id"] == REGISTRATION_ID
@@ -950,8 +1044,11 @@ def _production_settings(**overrides) -> Settings:
         "auth_login_rate_limit_hmac_secret": "production-login-limit-secret-at-least-thirty-two",
         "sms_login_enabled": True,
         "sms_provider": "aliyun_pnvs",
-        "sms_access_key_id": "test-access-id",
-        "sms_access_key_secret": "test-access-secret",
+        # Production PNVS must resolve through the ECS/RAM default chain;
+        # static AccessKey material is intentionally absent from fixtures.
+        "sms_credential_mode": "default_chain",
+        "sms_access_key_id": "",
+        "sms_access_key_secret": "",
         "sms_sign_name": "test-sign",
         "sms_template_code": "SMS_TEST",
         "sms_scheme_name": "test-scheme",

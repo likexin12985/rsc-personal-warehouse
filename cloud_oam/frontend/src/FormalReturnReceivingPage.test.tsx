@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import FormalReturnReceiving from './FormalReturnReceivingPage';
 import ReturnReceiptForm from './ReturnReceiptForm';
@@ -13,7 +13,7 @@ import type { FormalFileUploadClient } from './FormalFileUploadField';
 const other = '11111111-1111-4111-8111-111111111111';
 const now = () => new Date().toISOString();
 beforeEach(async () => { const { webcrypto } = await vi.importActual<{ webcrypto: Crypto }>('node:crypto'); vi.stubGlobal('crypto', webcrypto); });
-afterEach(() => { cleanup(); localStorage.clear(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 function setup(f: typeof quantity | typeof serial = quantity) {
   const identity = f.identity, before = history(f.before, identity, f.before.package.shipment_id);
   let current = before, observed: unknown, posted = false;
@@ -139,4 +139,73 @@ it('independent inbound confirmation lists accepted serials before posting', asy
   expect(within(region).getByText(`本次入库 SN：${serial.command.lines[0].accepted_serial_verifications[0].serial_no}`)).toBeTruthy();
   expect((within(region).getByRole('button', { name: '确认独立入库' }) as HTMLButtonElement).disabled).toBe(true);
   expect(w.adapter.submit).not.toHaveBeenCalled();
+});
+
+async function openReceiptPrint(f: typeof quantity | typeof serial = quantity) {
+  const w = setup(f), current = history(f.after, w.identity, f.after.package.shipment_id);
+  w.setCurrent(current);
+  w.adapter.context = vi.fn(async () => ({ ...w.identity, can_read: true, can_write: false, authority_hash: 'c'.repeat(64) }));
+  const printed = vi.spyOn(window, 'print').mockImplementation(() => {});
+  const page = render(<FormalReturnReceiving {...w} uploader={w.upload} />);
+  fireEvent.click(await screen.findByText('查看包裹'));
+  const button = await screen.findByText(`打印收货单 ${f.receipt.receipt_no}`);
+  await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false)); fireEvent.click(button);
+  const dialog = await screen.findByRole('dialog', { name: '退回收货单打印预览' });
+  return { ...w, current, printed, page, dialog };
+}
+
+it.each([quantity, serial])('prints only a freshly rechecked receipt without requiring stock-write permission', async f => {
+  const w = await openReceiptPrint(f);
+  expect(w.dialog.textContent).toContain('本单仅记录本次实物验收，不作为库存入库证明');
+  expect(w.dialog.textContent).toContain(w.current.package.target_location_name);
+  expect(w.dialog.textContent).toContain(w.current.receipts[0].receipt_no);
+  for (const line of w.current.receipts[0].lines) {
+    expect(w.dialog.textContent).toContain(line.sku_code);
+    for (const sn of [...line.accepted_serials, ...line.rejected_serials, ...line.shortage_serials]) expect(w.dialog.textContent).toContain(sn.serial_no);
+  }
+  expect(w.printed).not.toHaveBeenCalled();
+  fireEvent.click(within(w.dialog).getByText('打印本收货单'));
+  await waitFor(() => expect(w.printed).toHaveBeenCalledTimes(1));
+  expect(w.adapter.read).toHaveBeenCalledTimes(3);
+  expect(w.adapter.submit).not.toHaveBeenCalled(); expect(w.adapter.preview).not.toHaveBeenCalled(); expect(w.adapter.seal).not.toHaveBeenCalled();
+  expect(w.store.list(w.identity.person_id)).toEqual([]);
+});
+
+it('blocks printing when read access is revoked after the print preview opened', async () => {
+  const w = await openReceiptPrint();
+  w.adapter.context = vi.fn(async () => ({ ...w.identity, can_read: false, can_write: false, authority_hash: 'd'.repeat(64) }));
+  fireEvent.click(within(w.dialog).getByText('打印本收货单'));
+  await within(w.dialog).findByRole('alert'); expect(w.printed).not.toHaveBeenCalled();
+});
+
+it.each(['receipt', 'package'])('blocks printing when the %s differs from the selected historical document', async kind => {
+  const w = await openReceiptPrint(), changed = structuredClone(w.current);
+  if (kind === 'receipt') changed.receipts[0].reason += ' changed'; else changed.package.tracking_no += ' changed';
+  w.setCurrent(changed);
+  fireEvent.click(within(w.dialog).getByText('打印本收货单'));
+  expect((await within(w.dialog).findByRole('alert')).textContent).toContain('收货单或包裹信息变化'); expect(w.printed).not.toHaveBeenCalled();
+});
+
+it.each(['close', 'unmount'])('ignores late print verification after %s', async mode => {
+  const w = await openReceiptPrint(); let finish!: (value: History) => void;
+  w.adapter.read = vi.fn(() => new Promise<History>(resolve => { finish = resolve; }));
+  fireEvent.click(within(w.dialog).getByText('打印本收货单'));
+  await waitFor(() => expect(w.adapter.read).toHaveBeenCalled());
+  if (mode === 'close') fireEvent.click(within(w.dialog).getByText('关闭打印预览')); else w.page.unmount();
+  await act(async () => { finish(w.current); });
+  expect(w.printed).not.toHaveBeenCalled(); expect(screen.queryByRole('dialog')).toBeNull();
+});
+it('links a posted damaged loss receipt to its exact condition history without a write', async () => {
+  const w = setup(), current = history(quantity.after, w.identity, quantity.after.package.shipment_id);
+  current.receipts[0].lines[0].damaged_qty = current.receipts[0].lines[0].accepted_qty;
+  w.setCurrent(current); w.setPosted(true);
+  const readConditionReceipt = vi.fn(async () => []), onOpenCondition = vi.fn();
+  render(<FormalReturnReceiving {...w} uploader={w.upload} readConditionReceipt={readConditionReceipt} onOpenCondition={onOpenCondition} />);
+  fireEvent.click(await screen.findByText('查看包裹'));
+  const button = await screen.findByRole('button', { name: '核查本次入库成色' });
+  await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+  expect(readConditionReceipt).not.toHaveBeenCalled(); fireEvent.click(button);
+  await screen.findByText('本次核验未发现按新件或旧件入账的历史破损份额。');
+  expect(readConditionReceipt).toHaveBeenCalledExactlyOnceWith(current.receipts[0].receipt_id, current.package.shipment_id, current.package.origin!.disposition_id);
+  expect(w.adapter.submit).not.toHaveBeenCalled(); expect(w.adapter.preview).not.toHaveBeenCalled();
 });

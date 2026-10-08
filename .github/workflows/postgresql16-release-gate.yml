@@ -109,7 +109,7 @@ jobs:
       fail-fast: false
       matrix:
         tracking: [quantity, serial]
-        flow: [submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt, sender_http, sender_seals, execution_seals, correction_restore, correction_used, correction_damaged, correction_generations, correction_seal_retention, execution_http_disposition, execution_http_return, correction_request_seals, correction_http_sources, return_quality_whole, return_quality_mixed, return_stop_seals, return_stop_http, return_stop_negative, return_stop_seal_first, return_stop_execute_first, return_stop_stop_first, return_stop_outbound_first]
+        flow: [submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt, sender_http, sender_seals, execution_seals, correction_restore, correction_used, correction_damaged, correction_generations, correction_seal_retention, execution_http_disposition, execution_http_return, correction_request_seals, correction_http_sources, return_quality_whole, return_quality_mixed, return_stop_seals, return_stop_http, return_stop_negative, return_stop_seal_first, return_stop_execute_first, return_stop_stop_first, return_stop_outbound_first, scrap_http]
     timeout-minutes: 180
     services:
       postgres:
@@ -178,6 +178,87 @@ jobs:
         run: |
           python -m pytest -q -s tests/test_postgresql16_stock_loss_release_gate.py
 
+  pg16_condition:
+    name: Business and history ${{ matrix.flow }} (${{ matrix.tracking }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        tracking: [quantity, serial]
+        flow: [condition_http, legacy_history, fulfillment_http]
+    env:
+      OAM_MIGRATION_CACHE_EXECUTION: "1"
+    steps:
+      - name: Check out reviewed source and pinned predecessor history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12.13"
+
+      - name: Install hash-locked backend dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --require-hashes \
+            -r cloud_oam/backend/requirements-build.lock
+          python -m pip install --disable-pip-version-check --no-build-isolation --require-hashes \
+            -r cloud_oam/backend/requirements-linux-amd64.lock
+          python -m pip uninstall --yes setuptools wheel
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: \
+            -r cloud_oam/backend/requirements-ci-test.lock
+          python -m pip check
+
+      - name: Install PostgreSQL 16 for a newly owned private socket cluster
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-16
+          /usr/lib/postgresql/16/bin/postgres --version
+          /usr/lib/postgresql/16/bin/initdb --version
+
+      - name: Verify and prepare exact reviewed historical source
+        if: ${{ matrix.flow != 'fulfillment_http' }}
+        run: |
+          case '${{ matrix.flow }}' in
+            condition_http) revision=0157 ;;
+            legacy_history) revision=0164 ;;
+            *) exit 1 ;;
+          esac
+          python cloud_oam/scripts/prepare_condition_predecessor.py \
+            --repository "$GITHUB_WORKSPACE" \
+            --revision "$revision" \
+            --destination "$GITHUB_WORKSPACE/cloud_oam/artifacts/condition-ci-predecessor-$revision"
+          if [ "$revision" = 0164 ]; then
+            python cloud_oam/scripts/prepare_condition_predecessor.py \
+              --repository "$GITHUB_WORKSPACE" --revision 0164 --rollback-compatibility \
+              --destination "$GITHUB_WORKSPACE/cloud_oam/artifacts/condition-ci-rollback-0164"
+          fi
+
+      - name: Run selected migration and business gate
+        working-directory: cloud_oam
+        run: |
+          case '${{ matrix.flow }}' in
+            condition_http)
+              python scripts/run_local_pg16_return_condition_checks.py \
+                --postgres-bin /usr/lib/postgresql/16/bin \
+                --predecessor-source "$GITHUB_WORKSPACE/cloud_oam/artifacts/condition-ci-predecessor-0157/source/cloud_oam" \
+                --formal-http --tracking ${{ matrix.tracking }} ;;
+            legacy_history)
+              python scripts/run_local_pg16_scrap_business_checks.py \
+                --postgres-bin /usr/lib/postgresql/16/bin \
+                --predecessor-source "$GITHUB_WORKSPACE/cloud_oam/artifacts/condition-ci-predecessor-0164/source/cloud_oam" \
+                --rollback-source "$GITHUB_WORKSPACE/cloud_oam/artifacts/condition-ci-rollback-0164/source/cloud_oam" \
+                --legacy-history-only --tracking ${{ matrix.tracking }} ;;
+            fulfillment_http)
+              python scripts/run_local_pg16_fulfillment_checks.py \
+                --postgres-bin /usr/lib/postgresql/16/bin \
+                --tracking ${{ matrix.tracking }} ;;
+            *) exit 1 ;;
+          esac
+
   static_safety:
     runs-on: ubuntu-24.04
     # A prior single-job complete run exceeded six hours before its last file.
@@ -229,7 +310,7 @@ jobs:
 
   postgresql16-release-gate:
     if: ${{ always() }}
-    needs: [pg16_runtime, pg16_loss, static_safety]
+    needs: [pg16_runtime, pg16_loss, pg16_condition, static_safety]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -237,8 +318,10 @@ jobs:
         env:
           RUNTIME_RESULT: ${{ needs.pg16_runtime.result }}
           LOSS_RESULT: ${{ needs.pg16_loss.result }}
+          CONDITION_RESULT: ${{ needs.pg16_condition.result }}
           STATIC_RESULT: ${{ needs.static_safety.result }}
         run: |
           test "$RUNTIME_RESULT" = success
           test "$LOSS_RESULT" = success
+          test "$CONDITION_RESULT" = success
           test "$STATIC_RESULT" = success

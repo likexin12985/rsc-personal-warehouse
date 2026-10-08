@@ -36,3 +36,7 @@
   .loss-execution-page td::before { content: attr(data-label); color: var(--muted); font-size: 12px; flex: 0 0 72px; }
   .loss-execution-page td > span { min-width: 0; overflow-wrap: anywhere; }
 }
+
+.scrap-recovery-page li, .scrap-recovery-page section > p { overflow-wrap: anywhere; }
+.scrap-recovery-page nav { display: flex; flex-wrap: wrap; gap: 8px; }
+.scrap-recovery-page button { max-width: 100%; overflow-wrap: anywhere; }

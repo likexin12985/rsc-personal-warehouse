@@ -101,8 +101,14 @@ def verify(db,cloud=None,*,runtime=True):
         invalid=db.scalar(text('''SELECT EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid=to_regclass(:table)
             AND (NOT i.indisvalid OR NOT i.indisready OR NOT i.indisunique OR NOT i.indimmediate))'''),args)
         if invalid:raise ValueError('0159 invalid backing index: '+name)
+        # PostgreSQL keeps inaccessible attribute slots after ADD/DROP COLUMN
+        # migrations. The exact visible columns/constraints above still reject
+        # removal of any required field. Permit only canonical dropped slots,
+        # and continue rejecting every column ACL or malformed catalog slot.
         table_flags=db.execute(text('''SELECT pg_get_userbyid(c.relowner),c.relkind,c.relpersistence,c.relrowsecurity,c.relforcerowsecurity,
-            EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND (a.attisdropped OR a.attacl IS NOT NULL))
+            EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND
+                (a.attacl IS NOT NULL OR (a.attisdropped AND
+                    (a.atttypid<>0 OR a.attnotnull OR a.attidentity<>'' OR a.attgenerated<>''))))
             FROM pg_class c WHERE c.oid=to_regclass(:table)'''),args).one()
         if tuple(table_flags)!=('star_oam_migrator','r','p',False,False,False):raise ValueError('0159 table security metadata mismatch: '+name)
         acl=db.execute(text('''SELECT CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,

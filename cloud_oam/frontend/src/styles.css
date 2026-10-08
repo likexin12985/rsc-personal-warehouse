@@ -207,6 +207,12 @@ tbody tr:hover { background: #fbfcfc; }
 .opening-detail-section > header { min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .opening-detail-section > header h3 { font-size: 16px; }
 .opening-detail-section > header p { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.completion-lines { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 12px; margin: 12px 0; }
+.completion-line { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.completion-line h4 { margin: 0 0 10px; }
+.completion-line dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
+.completion-line dt { color: var(--muted); font-size: 12px; }
+.completion-line dd { margin: 4px 0 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .opening-command-section { padding-bottom: 18px; }
 .opening-command-buttons { min-height: 48px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .opening-no-action { color: var(--muted); }
@@ -640,6 +646,23 @@ tbody tr:hover { background: #fbfcfc; }
 .return-receiving-page input[type="checkbox"] { width: auto; min-height: auto; margin-right: .5rem; vertical-align: middle; }
 .return-receiving-page fieldset { margin-block: 1rem; padding: 1rem; border: 1px solid var(--border, #d9e0e7); border-radius: .5rem; }
 .return-receiving-page label { display: block; margin-block: .5rem; }
+.rejection-warehouse-page .page-heading { flex-wrap: wrap; }
+.rejection-warehouse-page h3 { overflow-wrap: anywhere; }
+.rejection-warehouse-page > button { justify-self: start; }
+.rejection-warehouse-page .rejection-quantity-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-block: 20px; }
+.rejection-quantity-grid > div { min-width: 0; padding: 14px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 10px; }
+.rejection-quantity-grid dt { font-size: 13px; color: var(--muted); }
+.rejection-quantity-grid dd { margin: 6px 0 0; font-weight: 650; font-size: 20px; overflow-wrap: anywhere; }
+.rejection-quantity-grid small { display: block; margin-top: 4px; font-weight: 400; font-size: 12px; color: var(--muted); }
+.rejection-warehouse-page input:not([type="checkbox"]), .rejection-warehouse-page textarea, .rejection-warehouse-page select { display: block; box-sizing: border-box; width: 100%; min-width: 0; min-height: 42px; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; }
+.rejection-warehouse-page textarea { min-height: 84px; resize: vertical; }
+.rejection-warehouse-page .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.rejection-warehouse-page button:disabled { opacity: .55; cursor: not-allowed; }
+@media (max-width: 600px) {
+  .rejection-warehouse-page .rejection-quantity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .rejection-warehouse-page .form-grid { grid-template-columns: 1fr; }
+  .rejection-warehouse-page button { min-height: 44px; }
+}
 .loss-submission-page .formal-file-upload .table-action { width: 100%; min-width: 0; white-space: normal; }
 .loss-submission-page input[type="file"] { display: block; width: 100%; max-width: 100%; margin-top: 8px; }
 .loss-submission-page .formal-file-upload article > div { min-width: 0; overflow-wrap: anywhere; }
@@ -674,3 +697,56 @@ tbody tr:hover { background: #fbfcfc; }
 .loss-sending-page input:not([type=checkbox]), .loss-sending-page textarea { display: block; max-width: 100%; box-sizing: border-box; width: 100%; min-height: 40px; margin-top: 6px; }
 .loss-sending-page h3,.loss-sending-page strong,.loss-sending-page p { overflow-wrap: anywhere; }
 @media(max-width:600px) { .loss-sending-page fieldset { padding:10px; } }
+
+/* One history table serves PC and H5; mobile rows retain their field labels. */
+[aria-label="收货验收"] .table-wrap td:nth-child(3),
+[aria-label="个人仓入账"] .table-wrap td:nth-child(3) { white-space: nowrap; }
+@media (max-width: 760px) {
+  [aria-label="收货验收"] .table-wrap,
+  [aria-label="个人仓入账"] .table-wrap { overflow: visible; }
+  [aria-label="收货验收"] .table-wrap table,
+  [aria-label="个人仓入账"] .table-wrap table { display: block; min-width: 0; }
+  [aria-label="收货验收"] .table-wrap thead,
+  [aria-label="个人仓入账"] .table-wrap thead {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  [aria-label="收货验收"] .table-wrap tbody,
+  [aria-label="个人仓入账"] .table-wrap tbody { display: grid; gap: 12px; }
+  [aria-label="收货验收"] .table-wrap tr,
+  [aria-label="个人仓入账"] .table-wrap tr {
+    display: grid; min-width: 0; border: 1px solid var(--line);
+    border-radius: 8px; background: #fff; padding: 8px 12px;
+  }
+  [aria-label="收货验收"] .table-wrap td,
+  [aria-label="个人仓入账"] .table-wrap td {
+    display: grid; grid-template-columns: 5em minmax(0, 1fr); gap: 10px;
+    min-width: 0; min-height: 0; padding: 8px 0; border: 0;
+    overflow-wrap: anywhere; white-space: normal; font-family: inherit;
+  }
+  [aria-label="收货验收"] .table-wrap td::before,
+  [aria-label="个人仓入账"] .table-wrap td::before { color: var(--muted); font-weight: 500; }
+  [aria-label="收货验收"] .table-wrap td:nth-child(1)::before { content: "收货单"; }
+  [aria-label="收货验收"] .table-wrap td:nth-child(2)::before { content: "发运单"; }
+  [aria-label="收货验收"] .table-wrap td:nth-child(3)::before,
+  [aria-label="个人仓入账"] .table-wrap td:nth-child(3)::before { content: "状态"; }
+  [aria-label="收货验收"] .table-wrap td:nth-child(4)::before { content: "异常数"; }
+  [aria-label="个人仓入账"] .table-wrap td:nth-child(1)::before { content: "入账单"; }
+  [aria-label="个人仓入账"] .table-wrap td:nth-child(2)::before { content: "收货单"; }
+  [aria-label="个人仓入账"] .table-wrap td:nth-child(4)::before { content: "库存事务"; }
+  [aria-label="个人仓入账"] .table-wrap td:nth-child(5)::before { content: "操作"; }
+  [aria-label="个人仓入账"] .table-wrap td:nth-child(5):empty { display: none; }
+}
+
+/* Closure is a separate fact; keep its title and evidence readable on H5. */
+[aria-label="业务关闭"] .alert-info,
+[aria-label="取消剩余需求"] .alert-info { display: block; }
+[aria-label="业务关闭"] .alert-info strong,
+[aria-label="取消剩余需求"] .alert-info strong { display: block; }
+[aria-label="业务关闭"] .alert-info p,
+[aria-label="取消剩余需求"] .alert-info p { margin-top: 6px; }
+
+.personal-fulfillment .alert { display: block; }
+.personal-fulfillment fieldset, .personal-package, .personal-command-review { min-width: 0; margin: 14px 0; padding: 14px; border: 1px solid var(--line, #d8e0e5); border-radius: 8px; overflow-wrap: anywhere; }
+.personal-serials { max-height: 320px; overflow-y: auto; }
+.personal-fulfillment .form-actions { flex-wrap: wrap; }

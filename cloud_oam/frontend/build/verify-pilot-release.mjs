@@ -9,6 +9,48 @@ import { validatePublicCatalog } from './public-catalog.mjs';
 // remains the default Docker profile and still requires a reviewed catalog.
 const publicDir = new URL('../dist/', import.meta.url);
 const warehouseDir = new URL('../dist-warehouse/', import.meta.url);
+const scopeSource = readFileSync(new URL('../src/trialMvpScope.ts', import.meta.url), 'utf8');
+const requestPageSource = readFileSync(new URL('../src/pages/FormalMaterialRequests.tsx', import.meta.url), 'utf8');
+assert.ok(requestPageSource.includes('import { TRIAL_MVP_UI_SCOPE } from "../trialMvpScope";'), 'PILOT_UI_SCOPE_NOT_BOUND_TO_REQUEST_PAGE');
+assert.match(
+  requestPageSource,
+  /const canOperateFulfillment = access\?\.can_read === true\s*\n?\s*&& access\.can_read_allocation_options === true;/,
+  'PILOT_FULFILLMENT_CAPABILITY_NOT_EXPLICIT',
+);
+// Every operator-only panel must stay behind the same capability boundary.
+// The personal receipt/inbound panel is intentionally excluded: it is the
+// technician-facing part of the frozen pilot MVP.
+for (const panel of [
+  'FormalMaterialRequestSupplyPanel',
+  'FormalMaterialRequestReservationPanel',
+  'FormalMaterialRequestOutboundPanel',
+  'FormalMaterialRequestShipmentPanel',
+  'FormalMaterialRequestReceiptPanel',
+  'FormalMaterialRequestInboundPanel',
+  'FormalMaterialRequestPickPanel',
+  'FormalMaterialRequestFulfillmentPreparationPanel',
+]) {
+  const renderLines = requestPageSource
+    .split('\n')
+    .filter((line) => line.includes(`<${panel}`));
+  assert.ok(renderLines.length > 0, `PILOT_PANEL_MISSING: ${panel}`);
+  assert.ok(
+    renderLines.every((line) => line.includes('canOperateFulfillment')),
+    `PILOT_PANEL_NOT_CAPABILITY_GATED: ${panel}`,
+  );
+}
+for (const flag of [
+  'allowSupplyPlanning: false',
+  'allowLogisticsEvents: false',
+  'showOamReceipt: false',
+  'showReturnOperations: false',
+  'showReleaseOperations: false',
+  'showComplexLifecycle: false',
+]) {
+  assert.match(scopeSource, new RegExp(flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `PILOT_UI_SCOPE_OPEN: ${flag}`);
+  assert.ok(requestPageSource.includes(`TRIAL_MVP_UI_SCOPE.${flag.split(':')[0]}`), `PILOT_UI_SCOPE_UNUSED: ${flag}`);
+}
+assert.match(scopeSource, /Object\.freeze\(/, 'PILOT_UI_SCOPE_NOT_FROZEN');
 const sourceCatalog = readFileSync(new URL('../src/knowledge-catalog.json', import.meta.url));
 const builtCatalog = readFileSync(new URL('../dist/knowledge-catalog.json', import.meta.url));
 assert.ok(sourceCatalog.equals(builtCatalog), 'PUBLIC_CATALOG_BUILD_STALE: rebuild after changing the catalog');

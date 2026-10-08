@@ -2,6 +2,10 @@
 
 日期：2026-09-22。工作树仍为 `06f6/oam`，分支 `codex/notification-delivery-worker`，HEAD `f713999`；本批未提交、推送、部署或执行生产迁移。用户已将飞书知识源暂缓，公开目录保持 `pending / 0`，个人仓 `/xx` 开发继续。
 
+## PNVS 运行身份约束（2026-10-07）
+
+生产候选必须设置 `OAM_SMS_CREDENTIAL_MODE=default_chain`。API 通过阿里云 SDK 默认凭证链解析目标 ECS 的 RAM 角色/实例元数据；不得在 `.env`、Compose 覆盖文件、命令行、聊天、日志或提交中填写 AccessKey/Secret/STS 值。若目标轻量服务器不能提供受支持的实例角色/默认凭证链，保持 `OAM_SMS_LOGIN_ENABLED=false`，不要改回静态凭证模式；需由运维先完成获批的运行身份绑定和只读身份核对，再进入真实 PNVS/UAT。
+
 ## 修复内容
 
 - 部署入口必须显式使用 `rsc-pilot-*` 项目及合法候选标签。解析后的卷/网络名称必须归属本项目，拒绝外部共享资源、固定容器名和数据库目录 bind；API/Web/DB、迁移和 KMS gate 的实际镜像必须匹配本次候选。

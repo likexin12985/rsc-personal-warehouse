@@ -66,7 +66,12 @@ const permittedSteps = [
   { 'working-directory': 'cloud_oam/frontend', run: 'pnpm exec tsc -b' },
   { 'working-directory': 'cloud_oam/frontend', run: 'pnpm exec vite build' },
   { 'working-directory': 'cloud_oam/frontend', run: 'pnpm exec vite build --mode warehouse' },
+  { 'working-directory': 'cloud_oam/frontend', run: 'pnpm run verify:pilot-release' },
   { run: 'node cloud_oam/scripts/verify_public_entry.mjs' },
+  {
+    if: '${{ github.event_name == \'pull_request\' || github.ref == \'refs/heads/main\' || github.ref == \'refs/heads/codex/production-readiness-gates\' }}',
+    run: 'node cloud_oam/scripts/verify_public_entry.mjs --release'
+  },
   { 'working-directory': 'cloud_oam/miniprogram', run: 'node --test tests/*.test.js' },
   { run: 'node cloud_oam/scripts/sync_opening_start_core.mjs --check' }
 ]

@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from pydantic import ValidationError
+
 from app.kms_readiness import KmsReadinessGate
 from app.database import (
     HEALTH_DATABASE_CONNECT_TIMEOUT_SECONDS,
@@ -11,6 +14,7 @@ from app.database import (
 )
 from app.kms_readiness import DEFAULT_PROBE_BUDGET_SECONDS
 import app.main as main
+from app.config import Settings
 
 
 AUTH_COORDINATE = (
@@ -83,6 +87,7 @@ def test_readiness_database_failure_is_desensitized_and_skips_kms(
         "status": "not_ready",
         "service": "star-oam-cloud",
         "version": main.APP_VERSION,
+        "release_scope": main.settings.release_scope,
     }
     assert kms_calls == 0
 
@@ -112,7 +117,27 @@ def test_production_readiness_uses_ttl_kms_gate_after_database(
 
     assert first.status_code == second.status_code == 200
     assert _body(first)["status"] == "ready"
+    assert _body(first)["release_scope"] == main.settings.release_scope
     assert kms_calls == 1
+
+
+def test_health_reports_the_isolated_trial_scope_without_secrets(monkeypatch) -> None:
+    monkeypatch.setattr(main.settings, "release_scope", "trial-mvp")
+    response = main._health_response(ready=True, status="ready")
+
+    assert _body(response) == {
+        "ok": True,
+        "status": "ready",
+        "service": "star-oam-cloud",
+        "version": main.APP_VERSION,
+        "release_scope": "trial-mvp",
+    }
+    assert "secret" not in response.body.decode("utf-8").lower()
+
+
+def test_settings_rejects_an_unreviewed_release_scope() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, environment="test", database_url="sqlite+pysqlite:///:memory:", release_scope="formal-v1")
 
 
 def test_production_readiness_never_exposes_kms_failure(monkeypatch) -> None:

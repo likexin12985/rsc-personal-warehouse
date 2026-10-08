@@ -3,6 +3,34 @@
 本记录依据 V1.0 第 1.8、2.3、3.5、3.7 节，限定为已经过验收的收货单到个人仓过账，
 不代表整个履约域、工单物料域或生产发布已经完成。
 
+## 2026-10-06 长期 PostgreSQL 浏览器联验入口
+
+`scripts/run_local_pg16_fulfillment_checks.py` 已纳入可选 `--browser-tail`。
+默认仍是数量/SN无人值守 HTTP 门禁；浏览器模式必须明确选择一个 tracking，不接受外部 DSN，
+只在新建的隔离库里注入测试身份，运行真实应用/API数据库角色。先完成 warehouse 构建，然后在
+`cloud_oam` 目录执行：
+
+```sh
+.venv/bin/python scripts/run_local_pg16_fulfillment_checks.py \
+  --postgres-bin artifacts/pg16-native-20260920/install/bin \
+  --tracking quantity --browser-tail
+```
+
+脚本先完成受控期初、审批和五步实际履约 HTTP，待 `browser-ready.json` 出现后打开其 URL。
+在指定测试需求中登记收货、建立待入账单并过账；三个浏览器 POST 必须依次为201/201/200。
+完成页面刷新、原请求回读和证据保存后，在该次运行目录创建 `STOP-BROWSER` 文件，脚本才继续
+最终库存/SN回读、权限、历史保留拒降和停库检查。不要用新命令重放未知结果。
+
+入口仅监听127.0.0.1:18087，限制Host、同源POST、当前测试需求的收货/入账及必要读取；
+拒绝跨站访问、其他需求写入及其他业务动作。默认20分钟等待，`--browser-timeout`可设置60–3600秒；
+超时失败并停止服务。真实源码、前端源码和构建均记录哈希并在结束前核验。
+前端预览有测试身份提示，不能当持续上线入口或用户UAT。无需浏览器交互时不要传该选项。
+
+新增内部 `material_request_inbound_history` 从不可变命令、审计链和实际库存移动证明入账，
+`material_request_closure_coverage` 按明细计算批准−取消−已过账。长期真库门禁也核验这两个模块，
+但它们不是关闭接口：剩余量取消事实、关闭权限/迁移及并发约束仍待完成。
+最新逐次终态以 `CONTINUE_DEVELOPMENT.md` 和对应运行目录为准；下文保留早期验收范围，不累加为当前全量通过。
+
 ## 本批修复
 
 此前入账命令将已经属于本账的在途账户作为来源，却使用仅允许外部进入的库存类型

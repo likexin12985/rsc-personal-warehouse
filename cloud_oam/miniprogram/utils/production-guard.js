@@ -25,6 +25,7 @@ const LEGACY_REQUEST_PREFIXES = [
   '/auth/login',
   '/auth/change-password',
   '/auth/miniprogram/password-login',
+  '/auth/miniprogram/wechat-login',
   '/auth/users',
   '/dashboard',
   '/inventory',

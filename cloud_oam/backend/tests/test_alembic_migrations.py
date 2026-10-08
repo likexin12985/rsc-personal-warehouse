@@ -460,7 +460,7 @@ REVIEW_COMMAND_STATUS_REVISION = (
     / "versions"
     / "20260906_0063_review_command_status.py"
 )
-HEAD_REVISION = '20261213_0164'
+HEAD_REVISION = '20261227_0178'
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -697,7 +697,32 @@ MATERIAL_REQUEST_APPROVAL_TABLES = {
     "substitution_decisions",
     "supply_tasks",
 }
-EXPECTED_TABLES = (
+SCRAP_TABLES_0165 = {
+    'stock_scrap_lines', 'stock_scrap_serials', 'stock_scrap_files',
+    'stock_scrap_recovery_requests', 'stock_scrap_recovery_files',
+    'stock_scrap_recovery_regional_reviews', 'stock_scrap_recovery_headquarters_reviews',
+    'stock_scrap_recovery_executions', 'stock_scrap_request_key_bindings', 'stock_scrap_request_seals',
+}
+SCRAP_ROLE_ACTIONS_0165 = {
+    'admin': {'finalize_loss', 'dispose_loss', 'reverse_loss', 'approve_loss_correction',
+              'correct_loss', 'review_scrap_recovery_headquarters', 'execute_scrap_recovery'},
+    'provincial_manager': {'review_loss_regional', 'review_scrap_recovery_regional'},
+    'technician': {'submit_loss', 'apply_scrap_recovery'},
+}
+CONDITION_TABLES_0167 = {
+    'stock_condition_cases', 'stock_condition_serials', 'stock_condition_files',
+    'stock_condition_events', 'stock_condition_decision_seals',
+    'stock_condition_settlement_requests', 'stock_condition_settlement_scans',
+    'stock_condition_request_key_bindings', 'stock_condition_request_seals',
+    'stock_condition_submission_requests',
+}
+CONDITION_ROLE_ACTIONS_0167 = {
+    'admin': {'review_return_condition_headquarters', 'cancel_return_condition_approval'},
+    'provincial_manager': {'submit_return_condition', 'supplement_return_condition',
+        'withdraw_return_condition', 'execute_return_condition', 'release_return_condition',
+        'review_return_condition_regional'},
+}
+EXPECTED_TABLES = ({'material_request_return_compensations', 'material_request_rejection_inbounds', 'material_request_rejection_inbound_parts', 'material_request_rejection_inbound_serials', 'material_request_rejection_receipts', 'material_request_rejection_receipt_serials', 'material_request_rejection_receipt_exceptions', 'material_request_rejection_progress', 'material_request_rejection_returns', 'material_request_rejection_return_serials', 'material_request_closures', 'material_request_remaining_cancellations', 'material_request_remaining_cancellation_lines'} | CONDITION_TABLES_0167 | SCRAP_TABLES_0165 |
     {"opening_import_command_seals"} |
     {"daily_review_events", "daily_review_bindings", "daily_review_consumptions", "daily_review_request_seals"} |
     {'daily_comparison_mapping_decisions','daily_reconciliation_cutoffs'} |
@@ -819,6 +844,11 @@ EXPECTED_PERMISSIONS = [
     ("work_order_material", "read"),
 ]
 
+EXPECTED_PERMISSIONS = sorted(EXPECTED_PERMISSIONS + [('material_request', 'close')] + [
+    ('stock_operation', action) for defaults in (SCRAP_ROLE_ACTIONS_0165, CONDITION_ROLE_ACTIONS_0167)
+    for actions in defaults.values() for action in actions
+])
+
 EXPECTED_ROLE_PERMISSIONS = {
     "admin": {
         ("reconciliation", "create_daily"), ("reconciliation", "approve_daily"),
@@ -920,6 +950,13 @@ EXPECTED_ROLE_PERMISSIONS = {
     },
 }
 
+for defaults in (SCRAP_ROLE_ACTIONS_0165, CONDITION_ROLE_ACTIONS_0167):
+    for role, actions in defaults.items():
+        EXPECTED_ROLE_PERMISSIONS[role].update(('stock_operation', action) for action in actions)
+
+
+for role in ('admin', 'provincial_manager'):
+    EXPECTED_ROLE_PERMISSIONS[role].add(('material_request', 'close'))
 
 def _config(database_url: str, *, output_buffer=None) -> Config:
     config = Config(str(ALEMBIC_INI), output_buffer=output_buffer)
@@ -1692,8 +1729,46 @@ def test_revision_history_has_single_current_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == "20261212_0163"
-    stop_head = script.get_revision(head.down_revision)
+    assert head.down_revision == '20261226_0177'
+    head = script.get_revision('20261226_0177')
+    assert head.down_revision == '20261225_0176'
+    head = script.get_revision(head.down_revision)
+    assert head is not None
+    assert head.down_revision == '20261224_0175'
+    head = script.get_revision(head.down_revision)
+    assert head is not None
+    assert head.down_revision == '20261223_0174'
+    head = script.get_revision(head.down_revision)
+    assert head is not None
+    assert head.down_revision == '20261222_0173'
+    head = script.get_revision(head.down_revision)
+    assert head is not None
+    assert head.down_revision == '20261221_0172'
+    head = script.get_revision(head.down_revision)
+    assert head is not None
+    assert head.down_revision == '20261220_0171'
+    head = script.get_revision(head.down_revision)
+    assert head is not None
+    assert head.down_revision == '20261219_0170'
+    head = script.get_revision(head.down_revision)
+    assert head is not None
+    assert head.down_revision == '20261218_0169'
+    head = script.get_revision(head.down_revision)
+    assert head is not None
+    assert head.down_revision == '20261217_0168'
+    head = script.get_revision(head.down_revision)
+    assert head is not None
+    assert head.down_revision == '20261216_0167'
+    head = script.get_revision(head.down_revision)
+    assert head is not None
+    assert head.down_revision == "20261215_0166"
+    authentication_head = script.get_revision(head.down_revision)
+    assert authentication_head is not None and authentication_head.down_revision == "20261214_0165"
+    scrap_head = script.get_revision(authentication_head.down_revision)
+    assert scrap_head is not None and scrap_head.down_revision == "20261213_0164"
+    fence_head = script.get_revision(scrap_head.down_revision)
+    assert fence_head is not None and fence_head.down_revision == "20261212_0163"
+    stop_head = script.get_revision(fence_head.down_revision)
     assert stop_head is not None and stop_head.down_revision == "20261211_0162"
     quality_head = script.get_revision(stop_head.down_revision)
     assert quality_head is not None and quality_head.down_revision == "20261210_0161"
@@ -10557,7 +10632,7 @@ def test_upgrade_head_matches_current_orm_and_downgrades(
                 "JOIN roles ON roles.id = role_permissions.role_id "
                 "JOIN permissions ON permissions.id = role_permissions.permission_id"
             ).all()
-            assert len(role_permission_rows) == 106
+            assert len(role_permission_rows) == 127
             assert {row[3] for row in role_permission_rows} == {"allow"}
             actual_role_permissions = {
                 role_code: {
@@ -11278,10 +11353,27 @@ def test_current_role_assignment_scope_is_unique_until_explicitly_closed(
             ).scalar_one() == "20260830_0003"
             assert connection.exec_driver_sql(
                 "SELECT count(*) FROM permissions"
-            ).scalar_one() == 12
+            ).scalar_one() == 32
             assert connection.exec_driver_sql(
                 "SELECT count(*) FROM role_permissions"
-            ).scalar_one() == 26
+            ).scalar_one() == 47
+            retained_loss_grants = connection.exec_driver_sql(
+                "SELECT r.code, p.action, rp.effect FROM role_permissions rp "
+                "JOIN roles r ON r.id=rp.role_id JOIN permissions p ON p.id=rp.permission_id "
+                "WHERE p.resource='stock_operation'"
+            ).all()
+            assert set(retained_loss_grants) == {
+                (role, action, 'allow')
+                for matrix in (SCRAP_ROLE_ACTIONS_0165, CONDITION_ROLE_ACTIONS_0167)
+                for role, actions in matrix.items() for action in actions
+            }
+            # Forward migrations preserve permission identities on downgrade;
+            # removing grants is a separately audited authorization operation.
+            assert set(connection.exec_driver_sql(
+                "SELECT r.code, rp.effect FROM role_permissions rp "
+                "JOIN roles r ON r.id=rp.role_id JOIN permissions p ON p.id=rp.permission_id "
+                "WHERE p.resource='material_request' AND p.action='close' AND p.field_code=''"
+            ).all()) == {('admin', 'allow'), ('provincial_manager', 'allow')}
             assert connection.exec_driver_sql(
                 "SELECT count(*) FROM role_assignments"
             ).scalar_one() == 3
@@ -12432,6 +12524,8 @@ def test_postgresql_legacy_offline_sql_preserves_type_boundary(monkeypatch) -> N
             f"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC, star_oam_api"
             in sql_0027
         )
+    import runpy
+    condition = runpy.run_path(str(ROOT / 'backend/alembic/return_condition_0167/transition.py'))['DATA']
     for (function_name, _argument_types), expected_hash in (
         RUNTIME_FUNCTION_BODY_SHA256.items()
     ):
@@ -12455,6 +12549,28 @@ def test_postgresql_legacy_offline_sql_preserves_type_boundary(monkeypatch) -> N
             assert hashlib.sha256(definition["prosrc"].encode()).hexdigest() == '3da9d66b735188992fe237d45a01f955933c07c821a7d4f1db9d1839bd7a98c9'
             assert f"FUNCTION public.{function_name}(" not in sql
             function_sql = definition["definition"]
+        if function_name.endswith('_0165'):
+            # The legacy offline prefix ends at 0158. New capabilities are
+            # installed only by the digest-checked, online 0165 transition.
+            import runpy
+            frozen = runpy.run_path(str(ROOT / 'backend/alembic/stock_scrap_0165/transition.py'))
+            signature = function_name+'('+', '.join(part.strip() for part in _argument_types.split(','))+')'
+            change = frozen['DATA']['functions'][signature]
+            assert change['before'] is None
+            definition = change['after']
+            assert hashlib.sha256(definition['prosrc'].encode()).hexdigest() == expected_hash
+            assert f'FUNCTION public.{function_name}(' not in sql
+            function_sql = definition['definition']
+        # Condition correction capabilities also postdate the offline prefix.
+        # Read their digest-checked frozen catalog, retaining exact signature,
+        # original absence, body and current successor checks.
+        signature = function_name+'('+', '.join(part.strip() for part in _argument_types.split(','))+')'
+        change = condition['functions'].get(signature)
+        if change is not None and change['before'] is None:
+            assert f'FUNCTION public.{function_name}(' not in sql
+            from migration_source_expectations import current_source_hash
+            assert current_source_hash('20261216_0167', 'public.'+signature, change['after']['prosrc']) == expected_hash
+            function_sql = change['after']['definition']
         declaration = re.search(
             r"\bCREATE(?: OR REPLACE)? FUNCTION public\."
             + re.escape(function_name) + r"\(", function_sql,

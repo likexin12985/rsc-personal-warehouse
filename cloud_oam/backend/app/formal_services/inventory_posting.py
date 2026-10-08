@@ -1052,6 +1052,12 @@ def _post_inventory_transaction(
 
     checked_actor = _validate_supplied_actor(actor)
     checked_command = _validate_posting_command(command)
+    # The condition writer calls the private atomic entry with a live permit.
+    # Refuse the generic entry before replay lookup too: knowing an old key is
+    # not authority to bypass the exact condition request recovery contract.
+    if checked_command.source_document_type == 'stock_condition_event':
+        _fail('condition_posting_authority_invalid', 'precondition_failed',
+              '成色纠正冻结必须由专用服务绑定本次事务与准确原入库')
     if checked_command.movement_type == "opening":
         _fail(
             "inventory_opening_requires_approved_stocktake",
@@ -1118,6 +1124,14 @@ def _require_generic_reversal_origin(db: Session, command: InventoryReversalComm
         StockOperationOutbound, StockOperationReturnInbound)
 
     original = db.get(InventoryTransaction, command.original_transaction_id, populate_existing=True)
+    if (command.source_document_type == 'material_request_rejection_inbound'
+            or (original is not None and original.source_document_type == 'material_request_rejection_inbound')):
+        _fail('rejection_inbound_reversal_requires_command', 'precondition_failed',
+              '拒收退回入账必须保留原验收和需求补偿依据，不能使用通用库存冲销')
+    if (command.source_document_type == 'stock_condition_event'
+            or (original is not None and original.source_document_type == 'stock_condition_event')):
+        _fail('condition_reversal_requires_command', 'precondition_failed',
+              '成色纠正库存必须绑定原单决策处理，不能使用通用库存冲销')
     if (command.source_document_type == "stock_loss_disposition"
             or (original is not None and original.source_document_type == "stock_loss_disposition")):
         _fail("stock_loss_disposition_reversal_requires_command", "precondition_failed",
@@ -1303,6 +1317,9 @@ def _post_new_transaction(
     occurred_at: datetime | None = None,
     prelocked_reference_graph: _PrelockedInventoryGraphProof | None = None,
     receipt_authority: object | None = None,
+    scrap_authority: object | None = None,
+    scrap_recovery_authority: object | None = None,
+    condition_authority: object | None = None,
 ) -> _InventoryPostingCommit:
     # Production row-lock order is fixed and must remain identical for every
     # posting: ledger head -> account UUIDs -> location UUIDs -> material UUIDs
@@ -1326,6 +1343,26 @@ def _post_new_transaction(
             "库存账本游标未正确初始化",
         )
     current_ledger_cursor = head.next_cursor - 1
+    scrap_recovery_states = None
+    original_for_recovery = db.get(InventoryTransaction, reversed_transaction_id) if reversed_transaction_id else None
+    if (scrap_recovery_authority is not None or (original_for_recovery is not None and original_for_recovery.movement_type == 'scrap')
+            or any(m.from_account_id is None and m.external_boundary_code == 'stock_operation_scrap' for m in command.movements)):
+        from .stock_scrap.recovery_posting_authority import require as require_recovery_authority
+        scrap_recovery_states = require_recovery_authority(db, actor=actor, command=command, permit=scrap_recovery_authority,
+            permission_resource=permission_resource, permission_action=permission_action,
+            reversed_transaction_id=reversed_transaction_id, opening_task_id=opening_task_id,
+            current_cursor=current_ledger_cursor, idempotency_key_hash=idempotency_key_hash, request_hash=request_hash,
+            request_reference=request_reference, occurred_at=occurred_at, event_suffix=event_suffix,
+            receipt_authority=receipt_authority, scrap_authority=scrap_authority)
+    scrap_plan = None
+    if command.movement_type == "scrap" or scrap_authority is not None:
+        from .stock_scrap.posting_authority import require as require_scrap_authority
+        scrap_plan = require_scrap_authority(db, actor=actor, command=command, permit=scrap_authority,
+            permission_resource=permission_resource, permission_action=permission_action,
+            reversed_transaction_id=reversed_transaction_id, opening_task_id=opening_task_id,
+            current_cursor=current_ledger_cursor, idempotency_key_hash=idempotency_key_hash,
+            request_hash=request_hash, request_reference=request_reference, occurred_at=occurred_at,
+            event_suffix=event_suffix, receipt_authority=receipt_authority)
 
     account_ids = _command_account_ids(command)
     (
@@ -1352,7 +1389,16 @@ def _post_new_transaction(
             command=command,
             proof=active_reference_graph,
         )
-    if receipt_authority is None:
+    if command.source_document_type == 'stock_condition_event' or condition_authority is not None:
+        from .stock_loss_corrections.return_condition_posting_dispatch import require as require_condition_authority
+        accounts = require_condition_authority(db, actor=actor, command=command, permit=condition_authority,
+            permission_resource=permission_resource, permission_action=permission_action,
+            reversed_transaction_id=reversed_transaction_id, opening_task_id=opening_task_id,
+            current_cursor=current_ledger_cursor, idempotency_key_hash=idempotency_key_hash,
+            request_hash=request_hash, request_reference=request_reference, occurred_at=occurred_at,
+            event_suffix=event_suffix, receipt_authority=receipt_authority, scrap_authority=scrap_authority,
+            scrap_recovery_authority=scrap_recovery_authority)
+    elif receipt_authority is None:
         accounts = _authorize_account_ids(db, actor, account_ids,
             action=permission_action, lock_rows=True, resource=permission_resource)
     else:
@@ -1388,8 +1434,8 @@ def _post_new_transaction(
     # pure validation and remains strictly before the balance phase.
     _validate_tracking_rules(command, accounts, policies)
 
-    reversal_states = {}
-    if reversed_transaction_id is not None:
+    reversal_states = scrap_recovery_states or {}
+    if reversed_transaction_id is not None and scrap_recovery_states is None:
         from .work_order_reversal_proof import require_reversal_posting
         reversal_states = require_reversal_posting(db, actor=actor, command=command,
             original_transaction_id=reversed_transaction_id)
@@ -1400,6 +1446,7 @@ def _post_new_transaction(
         policies=policies,
         prelocked_reference_graph=active_reference_graph,
         reversal_states=reversal_states,
+        scrap_plan=scrap_plan,
     )
 
     if opening_task_id is None or prelocked_reference_graph is None:
@@ -1535,6 +1582,9 @@ def _post_new_transaction(
                     serials[serial_id].updated_at = now
             elif command.movement_type == "consume":
                 serials[serial_id].lifecycle_status = "consumed"
+                serials[serial_id].updated_at = now
+            elif command.movement_type == "scrap" and scrap_plan is not None:
+                serials[serial_id].lifecycle_status = "scrapped"
                 serials[serial_id].updated_at = now
             elif command.movement_type == "inbound" and serials[serial_id].lifecycle_status == "consumed":
                 # Validation has bound this reentry to the exact paired recovery.
@@ -6943,6 +6993,7 @@ def _lock_and_validate_serials(
     policies: dict[uuid.UUID, MaterialInventoryPolicy],
     prelocked_reference_graph: _PrelockedInventoryGraphProof | None = None,
     reversal_states=None,
+    scrap_plan=None,
 ) -> tuple[
     dict[uuid.UUID, InventorySerial], dict[uuid.UUID, SerialCurrentPosition]
 ]:
@@ -7029,7 +7080,18 @@ def _lock_and_validate_serials(
                     "precondition_failed",
                     "非 active SN 必须有与本次操作一致的配对回收证明",
                 )
-            if command.movement_type == "scrap" or (
+            if command.movement_type == "scrap":
+                expected = next((item for item in (scrap_plan or {}).get('serials', ())
+                    if item['serial_id'] == str(serial_id)), None)
+                state = states[serial_id]
+                if (expected is None or expected['previous_movement_id'] != str(state.last_movement_id)
+                        or expected['admission_movement_id'] != str(state.admission_movement_id)
+                        or state.stock_account_id != movement.from_account_id
+                        or movement.to_account_id is not None
+                        or movement.external_boundary_code != 'stock_operation_scrap'):
+                    _fail('stock_scrap_serial_authority_invalid', 'precondition_failed',
+                        '报废 SN 与本次加锁复核的前序流水不一致')
+            if (command.movement_type == "scrap" and scrap_plan is None) or (
                 command.movement_type == "consume" and (
                     command.source_document_type != "work_order_material"
                     or movement.external_boundary_code != "work_order_material_consume"
@@ -7399,7 +7461,11 @@ def _decimal_scale(value: Decimal) -> int:
 
 
 def _canonical_decimal(value: Decimal) -> str:
-    return format(value.normalize(), "f")
+    # normalize() applies the caller's Decimal context and can silently round
+    # a valid numeric(18,3) before hashing it. Formatting preserves its exact
+    # coefficient; only insignificant fractional zeros are removed.
+    rendered = format(value, "f")
+    return rendered.rstrip("0").rstrip(".") if "." in rendered else rendered
 
 
 def _canonical_timestamp(value: datetime) -> str:

@@ -12,6 +12,13 @@ from app.stocktake_models import FormalStocktakeTask, FormalStocktakeScope, Stoc
 
 def establish_personal_stock(api, fixture, *, admin, manager, engineer, reviewer):
     token = uuid4().hex
+    quantity = Decimal(fixture.get('physical_count', 1))
+    serials = tuple(fixture.get('selected_serial_nos', ())) or ((fixture['selected_serial_no'],) if fixture.get('selected_serial_no') else ())
+    observations = tuple(count.OpeningPhysicalObservationInput(material_identifier_raw=fixture['material_sku_code'],
+        material_identifier_type='sku_code', condition_code='new', availability_bucket='available',
+        counted_qty=Decimal(1) if serials else quantity, serial_no_raw=serial,
+        serial_identifier_type='serial_no' if serial else None, count_method='manual') for serial in (serials or (None,)))
+    if serials: assert quantity == len(serials)
     def write(service, actor_id, command, step):
         with Session(api, expire_on_commit=False) as db:
             result = service(db, actor=load_formal_principal(db, actor_id), command=command,
@@ -29,10 +36,7 @@ def establish_personal_stock(api, fixture, *, admin, manager, engineer, reviewer
         scope = db.scalar(select(FormalStocktakeScope.id).where(FormalStocktakeScope.task_id==started.task_id))
     counted = write(count.submit_opening_stocktake_scope_count, engineer, count.SubmitOpeningStocktakeScopeCountCommand(
         task_id=started.task_id, round_id=started.initial_round_id, scope_id=scope,
-        physical_observations=(count.OpeningPhysicalObservationInput(material_identifier_raw=fixture['material_sku_code'],
-            material_identifier_type='sku_code', condition_code='new', availability_bucket='available',
-            counted_qty=Decimal(1), serial_no_raw=fixture.get('selected_serial_no'),
-            serial_identifier_type='serial_no' if fixture.get('selected_serial_no') else None, count_method='manual'),)), 'count')
+        physical_observations=observations), 'count')
     assert counted.round_sealed and counted.task_status=='submitted'
     with Session(api) as db:
         differences = list(db.scalars(select(StocktakeDifference).where(StocktakeDifference.task_id==started.task_id)))
@@ -49,7 +53,7 @@ def establish_personal_stock(api, fixture, *, admin, manager, engineer, reviewer
         version = db.get(FormalStocktakeTask, started.task_id).version
     posted = write(final.post_approved_opening_stocktake, admin,
         final.PostOpeningStocktakeCommand(task_id=started.task_id, expected_version=version), 'post')
-    assert posted.total_quantity==Decimal(1) and posted.pending_control_difference_count==1
+    assert posted.total_quantity==quantity and posted.pending_control_difference_count==1
     run = write(reconciliation.start_opening_control_reconciliation, admin,
         reconciliation.StartOpeningControlReconciliationCommand(task_id=started.task_id,
             expected_task_version=posted.task_version), 'reconciliation-start')

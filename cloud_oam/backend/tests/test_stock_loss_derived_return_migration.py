@@ -133,7 +133,9 @@ def test_current_catalog_exactly_matches_private_proof_and_patches(candidate):
     from pglast import parser
     from app import database_security as security, oam_sync_scope_security as scope
     m=candidate;key=(m['FUNCTION'],'uuid, boolean')
-    assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[key]==m['CHECK_HASH']
+    assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256_THROUGH_0152[key]==m['CHECK_HASH']
+    assert security.FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[key]==current_source_hash(
+        m['revision'], 'public.'+m['FUNCTION']+'(uuid, boolean)', m['CHECK_BODY'])
     assert key in security.FORMAL_FILE_INTERNAL_FUNCTIONS and key not in security.RUNTIME_EXECUTE_FUNCTIONS
     assert security.FORMAL_FILE_INTERNAL_FUNCTION_SHAPES[key]==('f','void',False)
     parser.parse_plpgsql_json('CREATE FUNCTION guard(checked_fact uuid,require_current boolean) RETURNS void LANGUAGE plpgsql AS $b$'+m['CHECK_BODY']+'$b$')

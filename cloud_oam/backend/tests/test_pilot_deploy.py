@@ -183,6 +183,33 @@ def mutations(calls):
     return [c['stage'] for c in calls if c['stage'] in {'build','database','migration','kms_pin_gate','application','smoke'}]
 
 
+def test_migration_container_has_helper_module_and_console_script_path():
+    """Keep the production Alembic container importable outside the worktree."""
+
+    dockerfile = (ROOT / 'backend' / 'Dockerfile').read_text()
+    compose = (ROOT / 'docker-compose.yml').read_text()
+    assert 'COPY migration_script_cache.py ./migration_script_cache.py' in dockerfile
+    assert 'COPY migration_runner.py ./migration_runner.py' in dockerfile
+    migrate_block = compose.split('\n  migrate:\n', 1)[1].split('\n  kms-pin-plan:\n', 1)[0]
+    assert 'PYTHONPATH: /app' in migrate_block
+    assert 'command: ["python", "/app/migration_runner.py", "--config", "/app/alembic.ini", "head"]' in migrate_block
+    assert 'mem_limit: ${OAM_MIGRATION_MEM_LIMIT:-1g}' in migrate_block
+    assert 'cpus: ${OAM_MIGRATION_CPUS:-1.00}' in migrate_block
+    assert 'OAM_MIGRATION_CACHE_EXECUTION: ${OAM_MIGRATION_CACHE_EXECUTION:-1}' in migrate_block
+    assert 'OAM_MIGRATION_EXECUTION_CACHE_MAX_SOURCE_BYTES: ${OAM_MIGRATION_EXECUTION_CACHE_MAX_SOURCE_BYTES:-8388608}' in migrate_block
+    assert 'pids_limit: 256' in migrate_block
+
+
+def test_release_scope_marker_is_api_only_in_production_compose():
+    """Keep the trial marker scoped to the candidate release wrapper."""
+
+    compose = (ROOT / 'docker-compose.yml').read_text()
+    api_block = compose.split('\n  api:\n', 1)[1].split('\n  web:\n', 1)[0]
+    assert 'OAM_RELEASE_SCOPE: ${OAM_RELEASE_SCOPE:-production-v1}' in api_block
+    kms_block = compose.split('\n  kms-pin-gate:\n', 1)[1].split('\n  api:\n', 1)[0]
+    assert 'OAM_RELEASE_SCOPE' not in kms_block
+
+
 def test_start_requires_prepare_before_any_docker_call(tmp_path):
     deploy=Deployment(tmp_path);result,calls=deploy.run('start')
     assert result.returncode==2 and 'prepare_receipt_required' in result.stderr

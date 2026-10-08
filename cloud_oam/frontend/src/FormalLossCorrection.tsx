@@ -1,5 +1,6 @@
 import FormalLossReturnStop from './FormalLossReturnStop';
 import FormalLossReturnHistory from './FormalLossReturnHistory';
+import ConditionRequestRecovery from './ConditionRequestRecovery';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Identity } from './formalLossReview';
 import { DISPOSITIONS, type Flow, type Pending } from './lossCorrectionContracts';
@@ -14,9 +15,9 @@ const states = { active_execution: '已有有效处置', awaiting_approval: '已
 const kinds = { original_execution: '原处置记账', inverse: '冲销记账', approval: '纠正批准（不改变库存）', correction_execution: '纠正记账' };
 const noRights = { inverses: false, approvals: false, executions: false };
 const message = (e: unknown) => e instanceof Error ? e.message : '结果未确认，请保留原请求并回查';
-type Props = { identity: Identity; rootId: string; adapter: Adapter; store?: Store; onBack(): void };
+type Props = { identity: Identity; rootId: string; adapter: Adapter; store?: Store; onBack(): void; onOpenScrap?(decision?: string): void; onOpenCondition?(inbound: string): void };
 
-export default function FormalLossCorrection({ identity, rootId, adapter, store: supplied, onBack }: Props) {
+export default function FormalLossCorrection({ identity, rootId, adapter, store: supplied, onBack, onOpenScrap, onOpenCondition }: Props) {
   const store = useMemo(() => supplied ?? browserStore(), [supplied]);
   const [detail, setDetail] = useState<Detail | null>(null), [pending, setPending] = useState<Pending[]>([]);
   const [rights, setRights] = useState(noRights), [storageReady, setStorageReady] = useState(false);
@@ -79,9 +80,10 @@ export default function FormalLossCorrection({ identity, rootId, adapter, store:
   const blocked = busy || !storageReady || !!pending.length || !why.trim();
   return <section className="page-stack loss-execution-page loss-correction-page">
     <div className="page-heading"><div><h1>报损纠正</h1><p>冲销、独立审批和纠正执行分别确认，所有历史记录保留。</p></div>
-      <div className="correction-heading-actions"><button disabled={busy} onClick={onBack}>返回报损处置</button><button disabled={busy} onClick={() => void load()}>刷新</button></div></div>
+      <div className="correction-heading-actions">{onOpenScrap && <button disabled={busy} onClick={() => onOpenScrap()}>纠正报废请求回查</button>}<button disabled={busy} onClick={onBack}>返回报损处置</button><button disabled={busy} onClick={() => void load()}>刷新</button></div></div>
     {error && <p className="alert alert-error" role="alert">{error}</p>}{notice && <p className="alert" role="status">{notice}</p>}
     {busy && <p role="status">正在核验，请稍候…</p>}
+    {adapter.conditionRecovery && <ConditionRequestRecovery identity={identity} transport={adapter.conditionRecovery} />}
     {!storageReady && <p role="alert">原请求存储不可用，已停止新操作。请保留浏览器数据。</p>}
     {!!pending.length && <section className="panel"><h2>本单原请求待核验</h2><p>中断后先回查；不会自动重发，也不会自动封存。</p>
       {pending.map(p => <div className="toolbar" key={p.command.request_id}><span>{actions[p.flow]}请求</span>
@@ -106,21 +108,22 @@ export default function FormalLossCorrection({ identity, rootId, adapter, store:
           {source.approval_reference && <fieldset disabled={busy}><legend>独立纠正审批</legend><p>批准仅形成纠正决定，不改变库存。</p>
             <label>纠正处置<select value={disposition} onChange={e => { setDisposition(e.target.value); resetPreparation(); }}><option value="">请选择处置</option>
               {DISPOSITIONS.map(d => <option key={d} value={d}>{names[d]}</option>)}</select></label>
-            {(disposition === 'return_to_region' || disposition === 'scrap') && <p>此处只批准决定；相应执行流程尚未开放，批准后仍保持待执行。</p>}
+            {disposition === 'return_to_region' && <p>此处只批准决定；相应执行流程尚未开放，批准后仍保持待执行。</p>}
+            {disposition === 'scrap' && <p>批准后仍保持冻结，需要单独上传报废证据、预览并确认执行。</p>}
             <button disabled={blocked || !rights.approvals || !disposition} onClick={() => void preview('approvals')}>核对审批决定</button>{!rights.approvals && <p>当前没有纠正审批权限。</p>}
           </fieldset>}
           {!!source.approval_choices.length && <fieldset disabled={busy}><legend>执行已批准的纠正</legend><p>请选择准确审批决定，系统不会自动选择最新一条。</p>
             <label>已批准的纠正决定<select value={decision} onChange={e => { setDecision(e.target.value); resetPreparation(); }}><option value="">请选择审批决定</option>
               {source.approval_choices.map((c, n) => <option value={c.correction_decision_id} key={c.correction_decision_id}>{n + 1}. {names[c.disposition]} · {c.reason}</option>)}</select></label>
             {selected && <p>选择的审批：{names[selected.disposition]} · {selected.reason}</p>}
-            {selected?.execution_mode === 'dedicated_flow_required' ? <p>该批准需要专门的退回或报废执行流程，本页暂不能执行，物资仍保持冻结。</p> :
+            {selected?.disposition === 'scrap' && onOpenScrap ? <button disabled={busy || !storageReady || !!pending.length || !rights.executions} onClick={() => onOpenScrap(selected.correction_decision_id)}>办理纠正报废</button> : selected?.execution_mode === 'dedicated_flow_required' ? <p>该批准需要专门的退回或报废执行流程，本页暂不能执行，物资仍保持冻结。</p> :
               <button disabled={blocked || !rights.executions || !selected} onClick={() => void preview('executions')}>预览纠正执行</button>}
             {!rights.executions && <p>当前没有纠正执行权限。</p>}
           </fieldset>}
         </section>}
       {originalReturn && <>
         <FormalLossReturnStop identity={identity} rootId={rootId} line={detail.line} adapter={adapter.returnStop} onSettled={load} />
-        <FormalLossReturnHistory identity={identity} rootId={rootId} line={detail.line} read={adapter.history} />
+        <FormalLossReturnHistory identity={identity} rootId={rootId} line={detail.line} read={adapter.history} readCondition={adapter.conditionHistory} onOpenCondition={onOpenCondition} />
       </>}
       <section className="panel" aria-label="纠正历史"><h2>完整纠正历史</h2><div className="table-scroll"><table><thead><tr><th>事实</th><th>处置 / 数量</th><th>时间</th></tr></thead><tbody>
         {source.history.map(h => <tr key={h.fact_id}><td data-label="事实"><span>{kinds[h.kind]}</span></td><td data-label="处置 / 数量"><span>{h.disposition ? names[h.disposition] : '恢复冻结'}{h.quantity ? ` · ${h.quantity}` : ''}</span></td>

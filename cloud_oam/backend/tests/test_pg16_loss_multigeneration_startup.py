@@ -3,8 +3,8 @@ import pytest
 import pg16_loss_multigeneration_gate as gate
 
 
-@pytest.mark.parametrize('revision', [gate.HEAD, gate.PREVIOUS])
-def test_startup_checks_revision_as_migrator_without_expanding_api_access(monkeypatch, revision):
+@pytest.mark.parametrize('revisions', [[gate.HEAD], [gate.PREVIOUS], [], [gate.HEAD, gate.PREVIOUS]])
+def test_startup_checks_revision_as_migrator_without_expanding_api_access(monkeypatch, revisions):
     observed, validations = [], []
 
     class Connection:
@@ -25,8 +25,13 @@ def test_startup_checks_revision_as_migrator_without_expanding_api_access(monkey
             if sql == 'SELECT version_num FROM alembic_version':
                 if self.role != 'star_oam_migrator':
                     raise PermissionError('API cannot read alembic_version')
-                return revision
+                return revisions
             raise AssertionError('unexpected startup query')
+
+        def scalars(self, query):
+            from types import SimpleNamespace
+            values = self.scalar(query)
+            return SimpleNamespace(all=lambda: values)
 
         def connect(self):
             return self
@@ -38,7 +43,7 @@ def test_startup_checks_revision_as_migrator_without_expanding_api_access(monkey
         validations.append(kwargs)
 
     monkeypatch.setattr(gate, 'validate_production_database_security', validate)
-    if revision == gate.HEAD:
+    if revisions == [gate.HEAD]:
         gate.assert_current_runtime(owner, api)
     else:
         with pytest.raises(AssertionError):

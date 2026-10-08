@@ -14,6 +14,7 @@ const PURPOSES = new Set([
   "daily_reconciliation_evidence",
   "receipt_exception_evidence",
   "stock_loss_evidence",
+  "return_condition_evidence",
 ]);
 
 
@@ -23,7 +24,8 @@ export type FormalFilePurpose =
   | "stocktake_evidence"
   | "daily_reconciliation_evidence"
   | "receipt_exception_evidence"
-  | "stock_loss_evidence";
+  | "stock_loss_evidence"
+  | "return_condition_evidence";
 
 export type FormalUploadFile = Blob & Readonly<{ name: string; type: string }>;
 

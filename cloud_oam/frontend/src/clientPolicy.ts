@@ -92,6 +92,7 @@ export function blockedClientWriteReason(path: string, method = "GET"): string |
     "/auth/login",
     "/auth/change-password",
     "/auth/miniprogram/password-login",
+    "/auth/miniprogram/wechat-login",
     "/auth/users",
     "/dashboard",
     "/inventory",

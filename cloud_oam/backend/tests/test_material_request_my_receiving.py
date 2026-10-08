@@ -12,7 +12,8 @@ from app.formal_access import load_formal_principal
 from app.formal_services import material_request_my_receiving as receiving
 from app.formal_services import material_request_shipment as shipping
 from app.formal_services.material_request_query import MaterialRequestReadError
-from app.foundation_models import Permission, Person, Role, RolePermission
+from app.material_request_shipment_schemas import ShipmentTargetOptionsOut
+from app.foundation_models import Permission, Person, Role, RoleAssignment, RolePermission
 from app.inventory_models import CustodyAssignment, Receipt, ReceiptLine, Shipment, ShipmentLine, StockAccount, StockLocation
 from app.models import User
 from test_material_request_draft_service import SECRET
@@ -52,6 +53,320 @@ def receiving_world(outbound_world):
 def read(world, **kwargs):
     db, actor, request, *_ = world
     return receiving.list_my_receiving(db, actor=actor, request_id=request.id, **kwargs)
+
+
+def test_shipment_targets_project_the_requesters_unique_personal_location(receiving_world):
+    db, _, request, location, *_ = receiving_world
+    admin_user_id = db.scalar(select(RoleAssignment.user_id).join(Role, Role.id == RoleAssignment.role_id).where(Role.code == "admin"))
+    operator = load_formal_principal(db, admin_user_id)
+    result = shipping.list_shipment_targets(db, actor=operator, request_id=request.id)
+    assert result["request_id"] == request.id
+    assert result["request_version"] == request.version
+    assert result["items"] == ({
+        "location_id": location.id,
+        "location_code": location.code,
+        "location_name": location.name,
+        "person_id": request.requester_person_id,
+    },)
+    assert ShipmentTargetOptionsOut(**result).items[0].location_id == location.id
+
+
+def test_shipment_targets_http_is_read_only_and_no_store(receiving_world):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.database import get_db
+    from app.dependencies import get_formal_principal
+    from app.routers import formal_material_requests
+
+    db, _, request, location, *_ = receiving_world
+    admin_user_id = db.scalar(select(RoleAssignment.user_id).join(Role, Role.id == RoleAssignment.role_id).where(Role.code == "admin"))
+    actor = load_formal_principal(db, admin_user_id)
+    app = FastAPI()
+    app.include_router(formal_material_requests.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_formal_principal] = lambda: actor
+    before = request.version
+    with TestClient(app) as client:
+        response = client.get(f"/api/v1/material-requests/{request.id}/shipment-targets")
+        assert response.status_code == 200, response.text
+        assert response.headers["cache-control"].startswith("no-store")
+        assert response.json()["items"][0]["location_id"] == str(location.id)
+        assert client.post(f"/api/v1/material-requests/{request.id}/shipment-targets", json={}).status_code == 405
+    assert request.version == before
+
+
+def test_technician_cannot_read_backend_shipment_targets(receiving_world):
+    db, actor, request, *_ = receiving_world
+    with pytest.raises(shipping.ShipmentError) as error:
+        shipping.list_shipment_targets(db, actor=actor, request_id=request.id)
+    assert error.value.code == "fulfillment_forbidden"
+    assert error.value.category == "forbidden"
+
+
+def test_technician_http_shipment_targets_is_forbidden_without_mutation(receiving_world):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.database import get_db
+    from app.dependencies import get_formal_principal
+    from app.routers import formal_material_requests
+
+    db, actor, request, *_ = receiving_world
+    app = FastAPI()
+    app.include_router(formal_material_requests.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_formal_principal] = lambda: actor
+    before = request.version
+    with TestClient(app) as client:
+        response = client.get(f"/api/v1/material-requests/{request.id}/shipment-targets")
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"]["code"] == "fulfillment_forbidden"
+    assert response.headers["cache-control"].startswith("no-store")
+    assert request.version == before
+
+
+@pytest.mark.parametrize(
+    ("path", "headers"),
+    [
+        ("shipment-options", {}),
+        ("shipments", {}),
+        ("shipment-command-status", {"Idempotency-Key": "technician-shipment-read-001"}),
+    ],
+)
+def test_technician_cannot_read_backend_shipment_paths(receiving_world, path, headers):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.database import get_db
+    from app.dependencies import get_formal_principal
+    from app.routers import formal_material_requests
+
+    db, actor, request, *_ = receiving_world
+    app = FastAPI()
+    app.include_router(formal_material_requests.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_formal_principal] = lambda: actor
+    before = request.version
+    with TestClient(app) as client:
+        response = client.get(f"/api/v1/material-requests/{request.id}/{path}", headers=headers)
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"]["code"] == "fulfillment_forbidden"
+    assert response.headers["cache-control"].startswith("no-store")
+    assert request.version == before
+
+
+@pytest.mark.parametrize("path", [
+    "remaining-fulfillment",
+    "fulfillment-preparation?request_line_id={line_id}",
+    "reservation-release-options?request_line_id={line_id}",
+    "reservation-pick-options?request_line_id={line_id}",
+    "outbound-options?request_line_id={line_id}",
+    "supply-planning-capacity",
+    "remaining-cancellation",
+    "closure",
+    "rejection-returns/candidates",
+    "rejection-returns/{return_id}/progress",
+    "return-compensations/candidates",
+])
+def test_technician_cannot_read_source_fulfillment_coordinates(receiving_world, path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.database import get_db
+    from app.dependencies import get_formal_principal
+    from app.routers import formal_material_requests
+
+    db, actor, request, *_ = receiving_world
+    app = FastAPI()
+    app.include_router(formal_material_requests.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_formal_principal] = lambda: actor
+    before = request.version
+    target = path.format(line_id=uuid4(), return_id=uuid4())
+    with TestClient(app) as client:
+        response = client.get(f"/api/v1/material-requests/{request.id}/{target}")
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"]["code"] == "fulfillment_forbidden"
+    assert response.headers["cache-control"].startswith("no-store")
+    assert request.version == before
+
+
+@pytest.mark.parametrize("path", [
+    "cancel-remaining-command-status",
+    "close-command-status",
+    "rejection-returns/command-status",
+    "rejection-returns/{return_id}/progress/command-status",
+    "return-compensations/command-status",
+])
+def test_technician_cannot_recover_post_fulfillment_commands(receiving_world, path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.database import get_db
+    from app.dependencies import get_formal_principal
+    from app.routers import formal_material_requests
+
+    db, actor, request, *_ = receiving_world
+    app = FastAPI()
+    app.include_router(formal_material_requests.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_formal_principal] = lambda: actor
+    before = request.version
+    target = path.format(return_id=uuid4())
+    with TestClient(app) as client:
+        response = client.get(f"/api/v1/material-requests/{request.id}/{target}")
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"]["code"] == "fulfillment_forbidden"
+    assert response.headers["cache-control"].startswith("no-store")
+    assert request.version == before
+
+
+def test_backend_write_routes_reject_technician_before_any_runtime_or_header_work():
+    """The trial-MVP operator boundary must be the first route-side check."""
+    import inspect
+    from fastapi import HTTPException, Response
+    from app.routers import formal_material_requests as router
+
+    technician = SimpleNamespace(role_codes=("technician",))
+    route_names = (
+        "create_formal_material_request_allocation",
+        "create_formal_material_request_reservation",
+        "create_formal_material_request_release",
+        "cancel_remaining_formal_material_request",
+        "close_formal_material_request",
+        "create_formal_rejection_return",
+        "create_formal_rejection_progress",
+        "create_formal_return_compensation",
+        "create_formal_material_request_pick",
+        "create_formal_material_request_outbound",
+        "create_formal_material_request_shipment",
+        "create_formal_material_request_logistics_event",
+        "create_formal_material_request_receipt",
+        "create_formal_material_request_inbound_order",
+        "post_formal_material_request_inbound_order",
+        "create_formal_supply_task",
+        "update_formal_supply_task",
+    )
+    for name in route_names:
+        fn = getattr(router, name)
+        kwargs = {}
+        for parameter in inspect.signature(fn).parameters.values():
+            if parameter.name == "principal":
+                kwargs[parameter.name] = technician
+            elif parameter.name == "response":
+                kwargs[parameter.name] = Response()
+            elif parameter.name in {"db", "runtime_settings"}:
+                kwargs[parameter.name] = object()
+            elif parameter.name == "payload":
+                kwargs[parameter.name] = object()
+            elif parameter.name.endswith("_id"):
+                kwargs[parameter.name] = uuid4()
+            elif parameter.name in {"idempotency_key", "request_id"}:
+                kwargs[parameter.name] = None
+        with pytest.raises(HTTPException) as error:
+            fn(**kwargs)
+        assert error.value.status_code == 403, name
+        assert error.value.detail["code"] == "fulfillment_forbidden", name
+        assert error.value.headers["Cache-Control"].startswith("no-store"), name
+
+
+@pytest.mark.parametrize("path", [
+    "material-request-reservation-release-command-status",
+    "material-request-reservation-pick-command-status",
+    "material-request-outbound-command-status",
+])
+def test_technician_cannot_recover_source_fulfillment_commands(receiving_world, path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.database import get_db
+    from app.dependencies import get_formal_principal
+    from app.routers import formal_material_requests
+
+    db, actor, request, *_ = receiving_world
+    app = FastAPI()
+    app.include_router(formal_material_requests.command_status_router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_formal_principal] = lambda: actor
+    before = request.version
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/v1/{path}", headers={"X-Request-ID": "technician-source-recovery-001"}
+        )
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"]["code"] == "fulfillment_forbidden"
+    assert response.headers["cache-control"].startswith("no-store")
+    assert request.version == before
+
+
+@pytest.mark.parametrize("path,headers", [
+    ("logistics-events", {}),
+    ("logistics-command-status", {"Idempotency-Key": "technician-logistics-read-001"}),
+])
+def test_technician_cannot_read_backend_logistics_paths(receiving_world, path, headers):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.database import get_db
+    from app.dependencies import get_formal_principal
+    from app.routers import formal_material_requests
+
+    db, actor, request, _, shipment, _ = receiving_world
+    app = FastAPI()
+    app.include_router(formal_material_requests.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_formal_principal] = lambda: actor
+    before = request.version
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/v1/material-requests/{request.id}/shipments/{shipment.id}/{path}",
+            headers=headers,
+        )
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"]["code"] == "fulfillment_forbidden"
+    assert response.headers["cache-control"].startswith("no-store")
+    assert request.version == before
+
+
+@pytest.mark.parametrize("path,headers", [
+    ("receipts", {}),
+    ("receipt-command-status", {"Idempotency-Key": "technician-receipt-read-001"}),
+    ("inbound-orders", {}),
+])
+def test_technician_cannot_read_backend_receipt_or_inbound_paths(receiving_world, path, headers):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.database import get_db
+    from app.dependencies import get_formal_principal
+    from app.routers import formal_material_requests
+
+    db, actor, request, *_ = receiving_world
+    app = FastAPI()
+    app.include_router(formal_material_requests.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_formal_principal] = lambda: actor
+    before = request.version
+    with TestClient(app) as client:
+        response = client.get(f"/api/v1/material-requests/{request.id}/{path}", headers=headers)
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"]["code"] == "fulfillment_forbidden"
+    assert response.headers["cache-control"].startswith("no-store")
+    assert request.version == before
+
+
+def test_technician_cannot_read_backend_oam_receipt_evidence(receiving_world):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.database import get_db
+    from app.dependencies import get_formal_principal
+    from app.routers import formal_material_requests
+
+    db, actor, request, *_ = receiving_world
+    app = FastAPI()
+    app.include_router(formal_material_requests.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_formal_principal] = lambda: actor
+    before = request.version
+    with TestClient(app) as client:
+        response = client.get(f"/api/v1/material-requests/{request.id}/oam-receipt-evidence")
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"]["code"] == "fulfillment_forbidden"
+    assert response.headers["cache-control"].startswith("no-store")
+    assert request.version == before
 
 
 def test_recipient_reads_own_package_without_source_permissions_or_writes(receiving_world):

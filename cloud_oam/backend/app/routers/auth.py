@@ -131,6 +131,11 @@ from ..wechat import WechatLoginIdentity, WechatProviderError, get_wechat_provid
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
 ALLOWED_ROLES = set(FORMAL_ROLE_CODES)
+_RETIRED_AUTH_HEADERS = {
+    "Cache-Control": "no-store, max-age=0",
+    "Pragma": "no-cache",
+    "Referrer-Policy": "no-referrer",
+}
 
 SMS_REQUEST_MESSAGE = "如账号已开通，验证码将发送至该手机号"
 _SMS_PROVIDER_CAPACITY = threading.BoundedSemaphore(
@@ -1106,8 +1111,10 @@ def _create_miniprogram_session(
 
 
 def _authenticate_password(payload: LoginIn, db: Session) -> User:
-    if not settings.password_login_enabled:
-        raise HTTPException(status_code=403, detail="密码登录已关闭")
+    # Password fields remain on the historical User contract, but public
+    # business authentication is permanently SMS-only for this release.
+    # Return a non-enumerating response before touching the user table.
+    raise HTTPException(status_code=404, detail="登录方式不可用", headers=_RETIRED_AUTH_HEADERS)
     user = db.scalar(select(User).where(User.mobile == payload.mobile.strip()))
     if not user or not user.is_active or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="手机号或密码错误")
@@ -1317,11 +1324,14 @@ def _complete_formal_sms_dispatch(
 
 
 @router.get("/login-options", response_model=LoginOptionsOut)
-def login_options():
+def login_options(response: Response):
+    response.headers.update(_RETIRED_AUTH_HEADERS)
     return LoginOptionsOut(
         sms_enabled=settings.sms_configuration_ready(),
-        password_enabled=settings.password_login_enabled,
-        wechat_enabled=settings.wechat_configuration_ready(),
+        # Keep the response fields for older clients, but never advertise or
+        # reopen the retired channels.
+        password_enabled=False,
+        wechat_enabled=False,
         sms_valid_seconds=settings.sms_valid_seconds,
         sms_interval_seconds=settings.sms_interval_seconds,
         session_ttl_days=settings.session_ttl_days,
@@ -2130,6 +2140,12 @@ def miniprogram_wechat_login(
     request: Request,
     db: Session = Depends(get_db),
 ):
+    # The endpoint stays present for migration compatibility and returns a
+    # stable non-enumerating failure without calling WeChat or mutating state.
+    raise HTTPException(status_code=404, detail="登录方式不可用", headers=_RETIRED_AUTH_HEADERS)
+
+    # Unreachable legacy implementation intentionally retained below until the
+    # historical schema/contracts are retired in a later migration.
     if _production():
         _require_formal_session_ip(request)
         _formal_request_id(request)
@@ -2874,6 +2890,11 @@ def change_password(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # Password change is part of the retired public password surface.  Keep
+    # the historical password columns and admin provisioning contract, but do
+    # not permit a business user to mutate them through this endpoint.
+    raise HTTPException(status_code=404, detail="登录方式不可用", headers=_RETIRED_AUTH_HEADERS)
+
     if not verify_password(payload.current_password, user.password_hash):
         raise HTTPException(status_code=400, detail="当前密码不正确")
     if payload.current_password == payload.new_password:
@@ -2908,6 +2929,12 @@ def create_user(
     actor: User = Depends(require_roles("admin")),
     db: Session = Depends(get_db),
 ):
+    # Historical admin provisioning accepted a temporary password.  Keep the
+    # request model and stored password columns for migration compatibility,
+    # but make the route non-operational under the SMS-only policy so it cannot
+    # create a password-capable business account in a non-production profile.
+    raise HTTPException(status_code=404, detail="登录方式不可用", headers=_RETIRED_AUTH_HEADERS)
+
     mobile = payload.mobile.strip()
     name = payload.name.strip()
     province = payload.province.strip() if payload.province else None

@@ -10,7 +10,7 @@ import pg16_loss_multigeneration_business as business
 import pg16_loss_multigeneration_races as races
 
 
-HEAD = '20261213_0164'
+from test_postgresql16_release_gate import HEAD_REVISION as HEAD
 PREVIOUS = '20261208_0159'
 RETENTION_ERROR = '0161 immutable correction request history requires retention'
 
@@ -22,7 +22,7 @@ def assert_current_runtime(owner, api):
         assert db.scalar(text('SELECT current_user')) == 'star_oam_api'
     # The runtime deliberately has no direct access to migration metadata.
     with owner.connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version')) == HEAD
+        assert db.scalars(text('SELECT version_num FROM alembic_version')).all() == [HEAD]
 
 
 def release(engines, *, tracking, migrate, provision, scenario='generations'):

@@ -3,19 +3,47 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib, hmac, json, uuid
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError, DBAPIError
 from ..demand_models import MaterialRequest
+from ..foundation_models import Person
 from ..foundation_models import OutboxEvent
-from ..inventory_models import OutboundPosting, OutboundPostingSerial, Shipment, ShipmentLine, ShipmentSerial, StockAccount, InventorySerial
+from ..inventory_models import CustodyAssignment, OutboundPosting, OutboundPostingSerial, Shipment, ShipmentLine, ShipmentSerial, StockAccount, InventorySerial, StockLocation
 from . import material_request_outbound as outbound
 from . import material_request_reservation as reserve
 from . import material_request_query
+from . import inventory_query
 from .audit_chain import append_audit_event, AuditChainError
 from .notification_events import record_shipment_handover_notification
 
 class ShipmentError(Exception):
-    def __init__(self, code, category, message): self.code,self.category,self.message=code,category,message
+    _HTTP_STATUS_BY_CATEGORY = {
+        "invalid_request": 422,
+        "forbidden": 403,
+        "not_found": 404,
+        "conflict": 409,
+        "precondition_failed": 412,
+        "service_unavailable": 503,
+    }
+
+    def __init__(self, code, category, message):
+        if category not in self._HTTP_STATUS_BY_CATEGORY:
+            raise ValueError(f"unsupported error category: {category}")
+        super().__init__(message)
+        self.code, self.category, self.message = code, category, message
+
+    @property
+    def http_status_code(self):
+        return self._HTTP_STATUS_BY_CATEGORY[self.category]
+
+    def as_detail(self):
+        return {"code": self.code, "category": self.category, "message": self.message}
+
+_BACKEND_FULFILLMENT_ROLES = frozenset({"admin", "provincial_manager"})
+
+def _require_backend_fulfillment(actor) -> None:
+    if not set(actor.role_codes).intersection(_BACKEND_FULFILLMENT_ROLES):
+        _fail("fulfillment_forbidden", "forbidden", "当前账号没有后台人工履约权限")
 
 def _fail(code, cat, msg): raise ShipmentError(code,cat,msg)
 def _text(q): return format(Decimal(q), '.3f')
@@ -23,6 +51,7 @@ def _hash(value): return hashlib.sha256(value.encode()).hexdigest()
 
 def create_shipment(db, *, actor, request_id, expected_version, target_location_id, target_person_id,
                     carrier, tracking_no, shipped_at, lines, idempotency_key, secret, trace_request_id):
+    _require_backend_fulfillment(actor)
     if not isinstance(secret, bytes): secret=secret.encode()
     if len(secret)<32: _fail('secret_invalid','service_unavailable','发运幂等配置不可用')
     if not carrier.strip() or not tracking_no.strip(): _fail('metadata_invalid','invalid_request','承运商和运单号不能为空')
@@ -100,6 +129,7 @@ def shipment_command_status(db, *, actor, request_id, idempotency_key, secret):
     is returned only after the current actor, request visibility, authorization
     version, and every bound source account have been revalidated.
     """
+    _require_backend_fulfillment(actor)
     if not isinstance(secret, bytes):
         secret = secret.encode()
     if len(secret) < 32:
@@ -129,7 +159,7 @@ def shipment_command_status(db, *, actor, request_id, idempotency_key, secret):
         fact = db.get(OutboundPosting, line.outbound_posting_id)
         if fact is None or fact.request_id != request_id:
             _fail('history_invalid', 'service_unavailable', '发运历史证据不完整，保留原请求继续核验')
-        outbound.verified_outbound_history(db, fact=fact, request=request)
+        outbound.verified_outbound_history(db, fact=fact, request=request, lock_audit=False)
         source = db.get(StockAccount, fact.source_stock_account_id)
         if source is None:
             _fail('history_invalid', 'service_unavailable', '发运来源账户不存在')
@@ -137,6 +167,7 @@ def shipment_command_status(db, *, actor, request_id, idempotency_key, secret):
     return {'request_hash': shipment.request_hash, 'command': _result(db, shipment, request, replayed=True)}
 
 def list_shipments(db, *, actor, request_id):
+    _require_backend_fulfillment(actor)
     context = material_request_query._load_read_context(db, actor=actor, now=None)
     request = db.scalar(select(MaterialRequest).where(
         MaterialRequest.id == request_id,
@@ -158,6 +189,7 @@ def list_shipments(db, *, actor, request_id):
 
 def list_shipment_options(db, *, actor, request_id):
     """Read each immutable outbound posting with its remaining shippable quantity."""
+    _require_backend_fulfillment(actor)
     context = material_request_query._load_read_context(db, actor=actor, now=None)
     request = db.scalar(select(MaterialRequest).where(
         MaterialRequest.id == request_id,
@@ -167,7 +199,7 @@ def list_shipment_options(db, *, actor, request_id):
     postings = tuple(db.scalars(select(OutboundPosting).where(OutboundPosting.request_id == request_id).order_by(OutboundPosting.created_at, OutboundPosting.id)).all())
     items = []
     for fact in postings:
-        outbound.verified_outbound_history(db, fact=fact, request=request)
+        outbound.verified_outbound_history(db, fact=fact, request=request, lock_audit=False)
         used = Decimal(db.scalar(select(func.coalesce(func.sum(ShipmentLine.shipped_qty), 0)).where(ShipmentLine.outbound_posting_id == fact.id)) or 0)
         remaining = fact.outbound_qty - used
         if remaining <= 0: continue
@@ -183,3 +215,61 @@ def list_shipment_options(db, *, actor, request_id):
                       'shippable_qty': _text(remaining), 'serial_ids': tuple(serials),
                       'serials': tuple({'serial_id': s, 'serial_no': names.get(s, str(s))} for s in serials)})
     return {'request_id': request.id, 'request_version': request.version, 'items': tuple(items)}
+
+
+def list_shipment_targets(db, *, actor, request_id):
+    """Return the requester's unique, topology-validated personal warehouse.
+
+    Shipment creation still receives the immutable UUID coordinates in its
+    existing contract. This read-only projection prevents operators from
+    having to copy opaque UUIDs and refuses ambiguous or malformed personal
+    warehouse bindings before the handover form is shown.
+    """
+    context = material_request_query._load_read_context(db, actor=actor, now=None)
+    request = db.scalar(select(MaterialRequest).where(
+        MaterialRequest.id == request_id,
+        material_request_query._visible_request_predicate(context),
+    ))
+    if request is None:
+        _fail('not_found', 'not_found', '需求单不存在')
+    _require_backend_fulfillment(actor)
+    try:
+        inventory_query._require_inventory_read(db, actor)
+    except inventory_query.InventoryReadError as exc:
+        category = {403: 'forbidden', 404: 'not_found', 409: 'conflict', 412: 'precondition_failed'}.get(exc.status_code, 'service_unavailable')
+        _fail(exc.code, category, exc.public_message)
+    locations = tuple(db.scalars(select(StockLocation).where(
+        StockLocation.location_type == 'personal',
+        StockLocation.custodian_person_id == request.requester_person_id,
+        StockLocation.status == 'active',
+    ).order_by(StockLocation.id).limit(3)).all())
+    if len(locations) > 1:
+        _fail('target_location_not_unique', 'conflict', '申请人的个人仓位置不唯一，已停止发运')
+    if not locations:
+        return {'schema_version': '1.0', 'request_id': request.id,
+                'request_version': request.version, 'items': ()}
+    location = locations[0]
+    requester = db.get(Person, request.requester_person_id)
+    if requester is None:
+        _fail('target_person_invalid', 'conflict', '申请人身份不存在')
+    if not context.organizations.descends_from(
+        requester.organization_id, location.owner_org_id, require_active_path=True,
+    ):
+        _fail('target_location_invalid', 'conflict', '申请人的个人仓所属组织无效')
+    if db.scalar(select(StockLocation.id).where(StockLocation.parent_id == location.id).limit(1)) is not None:
+        _fail('target_location_invalid', 'conflict', '申请人的个人仓不是叶子库位')
+    now = datetime.now(timezone.utc)
+    custody = tuple(db.scalars(select(CustodyAssignment).where(
+        CustodyAssignment.location_id == location.id,
+        CustodyAssignment.valid_from <= now,
+        or_(CustodyAssignment.valid_to.is_(None), CustodyAssignment.valid_to > now),
+    )).all())
+    if len(custody) != 1 or custody[0].custodian_person_id != request.requester_person_id:
+        _fail('target_custody_invalid', 'conflict', '申请人的个人仓保管责任未确认')
+    return {'schema_version': '1.0', 'request_id': request.id,
+            'request_version': request.version, 'items': ({
+                'location_id': location.id,
+                'location_code': location.code,
+                'location_name': location.name,
+                'person_id': request.requester_person_id,
+            },)}

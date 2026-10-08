@@ -683,3 +683,36 @@ from .daily_reconciliation import recovery_models as _daily_recovery_models  # n
 # request binding is database-owned and intentionally has no writable ORM model.
 from . import stock_loss_correction_models as _loss_correction_models  # noqa: E402,F401
 from . import stock_loss_return_stop_models as _loss_return_stop_models  # noqa: E402,F401
+
+# The shared application metadata includes every immutable scrap/recovery
+# fact, both registries and its parent bindings. Database installation remains
+# exclusively in the independently frozen Alembic migration.
+from . import stock_scrap_schema as _stock_scrap_schema  # noqa: E402
+_stock_scrap_schema.register(Base.metadata)
+
+# Complete condition facts and both request recovery paths share the formal
+# metadata. Frozen Alembic owns installation and all database permissions.
+from . import return_condition_application_schema as _condition_schema  # noqa: E402
+_condition_schema.register(Base.metadata)
+
+from . import material_request_closure_schema as _material_request_closure_schema  # noqa: E402
+_material_request_closure_schema.define(Base.metadata)
+
+# Forward compensation facts share the formal migration-owned metadata.
+from .material_request_remaining_cancel_schema import define as _define_remaining_cancellation
+_define_remaining_cancellation(Base.metadata)
+
+from .material_request_rejection_return_schema import define as _define_rejection_return
+_define_rejection_return(Base.metadata)
+
+from .material_request_rejection_progress_schema import define as _define_rejection_progress
+_define_rejection_progress(Base.metadata)
+
+from .material_request_rejection_receipt_schema import define as _define_rejection_receipt
+_define_rejection_receipt(Base.metadata)
+
+from .material_request_rejection_inbound_schema import define as _define_rejection_inbound
+_define_rejection_inbound(Base.metadata)
+
+from .material_request_return_compensation_schema import define as _define_return_compensation
+_define_return_compensation(Base.metadata)

@@ -283,6 +283,31 @@ describe("formal material-request PC transport", () => {
     }, makeRequester(async () => managerContext)).loadAccess()).resolves.toMatchObject({
       can_read_allocation_options: true,
     });
+
+    const managerWithoutInventoryRead = accessContext();
+    managerWithoutInventoryRead.role_codes = ["provincial_manager"];
+    managerWithoutInventoryRead.permissions = managerWithoutInventoryRead.permissions.filter(
+      (permission) => !(permission.resource === "inventory" && permission.action === "read" && permission.field_code === ""),
+    );
+    await expect(createFormalMaterialRequestAdapter({
+      person_id: PERSON_ID,
+      authorization_version: 7,
+    }, makeRequester(async () => managerWithoutInventoryRead)).loadAccess()).resolves.toMatchObject({
+      can_read_allocation_options: false,
+    });
+
+    const managerWithoutRequestRead = accessContext();
+    managerWithoutRequestRead.role_codes = ["provincial_manager"];
+    managerWithoutRequestRead.permissions = managerWithoutRequestRead.permissions.filter(
+      (permission) => !(permission.resource === "material_request" && permission.action === "read" && permission.field_code === ""),
+    );
+    await expect(createFormalMaterialRequestAdapter({
+      person_id: PERSON_ID,
+      authorization_version: 7,
+    }, makeRequester(async () => managerWithoutRequestRead)).loadAccess()).resolves.toMatchObject({
+      can_read: false,
+      can_read_allocation_options: false,
+    });
   });
 
   it("fails closed on identity, authorization-version and permission-shape drift", async () => {
@@ -630,4 +655,29 @@ describe("formal material-request PC transport", () => {
       cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
     }]);
   });
+});
+
+
+it("uses only no-replay transport for posted return sources and exact recovery", async () => {
+  const ordinary = makeRequester(async () => { throw new Error("ordinary transport forbidden"); });
+  const page = { schema_version: "1.0", request_id: REQUEST_ID, request_version: 9, items: [] };
+  const noReplay = makeRequester(async (path) => path.endsWith("/candidates") ? page : { lookup_status: "not_observed", command: null });
+  const client = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, ordinary, noReplay);
+  await expect(client.returnCompensationCandidates!(REQUEST_ID)).resolves.toEqual(page);
+  await expect(client.returnCompensationStatusNoReplay!(REQUEST_ID, "return-compensation-transport-0001", "a".repeat(64))).resolves.toEqual({ lookup_status: "not_observed", command: null });
+  expect(ordinary).not.toHaveBeenCalled();
+  expect(noReplay.mock.calls.every(([, init]) => init?.cache === "no-store")).toBe(true);
+  expect(noReplay.mock.calls[1][1]?.headers).toMatchObject({ "X-Request-Fingerprint": "a".repeat(64) });
+});
+
+it("uses exact no-replay routes for rejection sources and original progress recovery", async () => {
+  const ordinary = makeRequester(async () => { throw new Error("ordinary transport forbidden"); });
+  const page = { schema_version: "1.0", request_id: REQUEST_ID, request_version: 9, items: [], next_after_id: null };
+  const noReplay = makeRequester(async path => path.includes("/candidates") ? page : { lookup_status: "not_observed", command: null });
+  const client = createFormalMaterialRequestAdapter({ person_id: PERSON_ID, authorization_version: 7 }, ordinary, noReplay);
+  await expect(client.rejectionCandidates!(REQUEST_ID, null)).resolves.toEqual(page);
+  await client.rejectionStatusNoReplay!(REQUEST_ID, STEP_ID, "rejection-transport-key-0001", "a".repeat(64));
+  expect(noReplay.mock.calls[1][0]).toBe(`/v1/material-requests/${REQUEST_ID}/rejection-returns/${STEP_ID}/progress/command-status`);
+  expect(noReplay.mock.calls[1][1]?.headers).toMatchObject({ "X-Request-Fingerprint": "a".repeat(64) });
+  expect(noReplay.mock.calls.every(([, init]) => init?.cache === "no-store")).toBe(true); expect(ordinary).not.toHaveBeenCalled();
 });

@@ -11,8 +11,8 @@ function utc(value: unknown): string {
   const t = micros(value), seconds = t >= 0n ? t / 1000000n : (t - 999999n) / 1000000n;
   return new Date(Number(seconds * 1000n)).toISOString().slice(0, 19) + '.' + String(t - seconds * 1000000n).padStart(6, '0') + 'Z';
 }
-export function line(value: unknown) {
-  const r = object(value, ['shipment_line_id', 'accepted_qty', 'rejected_qty', 'damaged_qty', 'shortage_qty', 'accepted_serial_verifications', 'damaged_serial_ids', 'rejected_serial_ids', 'shortage_serial_ids', 'exceptions']);
+export function amounts(value: unknown) {
+  const r = object(value, ['accepted_qty', 'rejected_qty', 'damaged_qty', 'shortage_qty', 'accepted_serial_verifications', 'damaged_serial_ids', 'rejected_serial_ids', 'shortage_serial_ids', 'exceptions']);
   const accepted_serial_verifications = list(r.accepted_serial_verifications, v => {
     const s = object(v, ['serial_id', 'sku_code', 'serial_no', 'qr_code']);
     return { serial_id: id(s.serial_id), sku_code: text(s.sku_code, 80), serial_no: text(s.serial_no, 200), qr_code: text(s.qr_code, 250) };
@@ -23,7 +23,12 @@ export function line(value: unknown) {
   if (damaged_serial_ids.some(sn => !accepted_serial_verifications.some(s => s.serial_id === sn))) fail();
   const accepted_qty = quantity(r.accepted_qty), rejected_qty = quantity(r.rejected_qty), damaged_qty = quantity(r.damaged_qty), shortage_qty = quantity(r.shortage_qty), types = exceptions.map(e => e.exception_type);
   if (units(damaged_qty) > units(accepted_qty) || units(accepted_qty) + units(rejected_qty) + units(shortage_qty) <= 0n || Boolean(units(shortage_qty)) !== types.includes('shortage') || Boolean(units(damaged_qty)) !== types.includes('damaged') || Boolean(units(rejected_qty)) !== types.some(t => ['wrong_material', 'wrong_serial', 'rejected'].includes(t))) fail('异常数量需要对应说明和已上传的有效凭证');
-  return { shipment_line_id: id(r.shipment_line_id), accepted_qty, rejected_qty, damaged_qty, shortage_qty, accepted_serial_verifications, damaged_serial_ids, rejected_serial_ids, shortage_serial_ids, exceptions };
+  return { accepted_qty, rejected_qty, damaged_qty, shortage_qty, accepted_serial_verifications, damaged_serial_ids, rejected_serial_ids, shortage_serial_ids, exceptions };
+}
+export function line(value: unknown) {
+  const r = object(value, ['shipment_line_id', 'accepted_qty', 'rejected_qty', 'damaged_qty', 'shortage_qty', 'accepted_serial_verifications', 'damaged_serial_ids', 'rejected_serial_ids', 'shortage_serial_ids', 'exceptions']);
+  const { shipment_line_id, ...body } = r;
+  return { shipment_line_id: id(shipment_line_id), ...amounts(body) };
 }
 export function input(value: unknown, person: string) {
   const r = object(value, ['operator_person_id', 'received_at', 'reason', 'lines']);

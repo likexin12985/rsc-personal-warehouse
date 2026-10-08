@@ -62,3 +62,33 @@ def test_cli_accepts_no_existing_database_coordinates(script):
     with pytest.raises(SystemExit) as error:
         module.main(['--postgres-bin', '/unused', '--database-url', 'postgresql://existing'])
     assert error.value.code == 2
+
+
+def test_function_profiling_requires_explicit_boolean_before_start(monkeypatch, tmp_path):
+    def forbidden(*args, **kwargs):
+        raise AssertionError('invalid profiling value reached server setup')
+    monkeypatch.setattr(harness, '_checked_bin', forbidden)
+    for value in ('all', 'false', 1, None):
+        with pytest.raises(ValueError, match='function profiling must be an explicit boolean'):
+            with harness.native_cluster(postgres_bin=tmp_path, artifact_root=tmp_path, profile_functions=value):
+                raise AssertionError('invalid profiling started a cluster')
+
+
+@pytest.mark.parametrize('version,accepted', [
+    ('16.6', True), ('16.6 (Ubuntu 16.6-0ubuntu0.24.04.1)', True),
+    ('16.6 (Debian 16.6-1.pgdg120+1)', True),
+    ('15.6', False), ('17.1', False), ('16beta1', False),
+    ('16.6\npostgres (PostgreSQL) 17.1', False), ('16.6 (unfinished', False),
+])
+def test_checked_binaries_accept_distribution_label_without_weakening_major_pin(tmp_path, monkeypatch, version, accepted):
+    for name in ('postgres', 'initdb'):
+        p = tmp_path / name; p.write_text('fixture'); p.chmod(0o700)
+    def inspect(command, **kwargs):
+        assert command[1:] == ['--version']
+        return SimpleNamespace(stdout=Path(command[0]).name + ' (PostgreSQL) ' + version + '\n')
+    monkeypatch.setattr(harness.subprocess, 'run', inspect)
+    if accepted:
+        assert harness._checked_bin(tmp_path) == tmp_path.resolve()
+    else:
+        with pytest.raises(ValueError, match='real PostgreSQL 16 required'):
+            harness._checked_bin(tmp_path)

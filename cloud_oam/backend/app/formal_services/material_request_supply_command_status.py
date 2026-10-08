@@ -166,7 +166,10 @@ def _fresh_manager(db: Session, supplied: FormalPrincipal, now: datetime) -> For
     return current
 
 
-def _verify_current_history(db: Session, *, request, requested_command, requested_result) -> int:
+def _verify_current_history(
+    db: Session, *, request, requested_command, requested_result,
+    allow_later_fulfillment: bool = False,
+) -> int:
     current_version = request.version
     revisions = _rows(db, select(MaterialRequestRevision).where(
         MaterialRequestRevision.request_id == request.id,
@@ -186,17 +189,28 @@ def _verify_current_history(db: Session, *, request, requested_command, requeste
     if not commands or requested_command.id not in {row.id for row in commands}:
         _invalid()
     cancellation_audit = None
+    allocation_audits = ()
+    allocation_frames = None
+    verified_updated_at = commands[-1].occurred_at
     if request.status == "cancelled":
         request, current_lines, cancellation_audit = _verified_cancellation_predecessor(
             db, request=request, last_supply_command=commands[-1],
         )
+    elif supply._fulfillment_axes(request) != supply._NEUTRAL_AXES:
+        from .material_request_supply_allocation_history import allocation_history
+        allocation_frames, allocation_audits, verified_updated_at = allocation_history(
+            db, request=request, lines=current_lines, supply_commands=commands,
+            allow_later_fulfillment=allow_later_fulfillment)
     graph = supply._LockedSupplyGraph(request, revision, current_lines, instances[-1], (), tasks)
-    try:
-        supply._require_final_approval_graph(graph)
-    except supply.MaterialRequestSupplyError:
+    if allocation_frames is None or not allow_later_fulfillment:
+        try:
+            supply._require_final_approval_graph(graph, allow_allocated=allocation_frames is not None)
+        except supply.MaterialRequestSupplyError:
+            _invalid()
+    elif request.status not in {"approved", "partially_approved"}:
         _invalid()
     versions = tuple(row.target_version for row in commands)
-    if len(versions) != request.version - versions[0] + 1 or any(version != versions[0] + index for index, version in enumerate(versions)):
+    if allocation_frames is None and (len(versions) != request.version - versions[0] + 1 or any(version != versions[0] + index for index, version in enumerate(versions))):
         _invalid()
     audits = _rows(db, select(AuditEvent).where(
         AuditEvent.aggregate_id == str(request.id),
@@ -227,7 +241,7 @@ def _verify_current_history(db: Session, *, request, requested_command, requeste
             or result.revision_no != revision.revision_no
             or result.approval_instance_id != instances[-1].id
             or result.approval_attempt_no != instances[-1].attempt_no
-            or dict(result.state_axes) != {"request_status": request.status, **supply._fulfillment_axes(request)}
+            or dict(result.state_axes) != {"request_status": request.status, **(allocation_frames[command.target_version] if allocation_frames is not None else supply._fulfillment_axes(request))}
             or result.request_line_id not in {row.id for row in current_lines}
             or (previous_time is not None and supply._as_utc(command.occurred_at) < previous_time)
         ):
@@ -263,6 +277,8 @@ def _verify_current_history(db: Session, *, request, requested_command, requeste
         if cancellation_audit.stream_version <= previous_audit_version:
             _invalid()
         verified_audits += (cancellation_audit,)
+    if allocation_audits:
+        verified_audits += allocation_audits
     _verify_audit_links(db, verified_audits)
     if {row.id for row in events} != used_events or {row.id for row in tasks} != set(previous_by_task):
         _invalid()
@@ -271,7 +287,8 @@ def _verify_current_history(db: Session, *, request, requested_command, requeste
         first_command, first = first_by_task[task.id]
         last_command = last_commands[task.id]
         _verify_task(task, first_command, first, last_command, result)
-    if not supply._same_timestamp(request.updated_at, commands[-1].occurred_at):
+    if not (allow_later_fulfillment and allocation_frames is not None) \
+            and not supply._same_timestamp(request.updated_at, verified_updated_at):
         _invalid()
     if requested_result != _command_result(requested_command):
         _invalid()

@@ -19,14 +19,16 @@ def test_postgresql16_stock_loss_release_gate():
     if tracking not in ("quantity", "serial"):
         pytest.fail("loss gate requires an explicit quantity or serial matrix leg")
     flow = os.getenv("RSC_PG16_LOSS_FLOW", "")
-    if flow not in ("submission", "submission_http", "review_seals", "disposition", "return_preview", "return_submission", "return_outbound", "return_shipment", "return_receipt", "sender_http", "sender_seals", "execution_seals", "correction_restore", "correction_used", "correction_damaged", "correction_generations", "correction_seal_retention", "execution_http_disposition", "execution_http_return", "correction_request_seals", "correction_http_sources", "return_quality_whole", "return_quality_mixed", "return_stop_seals", "return_stop_http", "return_stop_negative", "return_stop_seal_first", "return_stop_execute_first", "return_stop_stop_first", "return_stop_outbound_first"):
-        pytest.fail("loss gate requires an explicit submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt, sender_http, sender_seals, execution_seals, correction_restore, correction_used, correction_damaged, correction_generations, correction_seal_retention, execution_http_disposition, execution_http_return, correction_request_seals, correction_http_sources, return_quality_whole, return_quality_mixed, return_stop_seals, return_stop_http, return_stop_negative, return_stop_seal_first, return_stop_execute_first, return_stop_stop_first or return_stop_outbound_first matrix leg")
+    if flow not in ("submission", "submission_http", "review_seals", "disposition", "return_preview", "return_submission", "return_outbound", "return_shipment", "return_receipt", "sender_http", "sender_seals", "execution_seals", "correction_restore", "correction_used", "correction_damaged", "correction_generations", "correction_seal_retention", "execution_http_disposition", "execution_http_return", "correction_request_seals", "correction_http_sources", "return_quality_whole", "return_quality_mixed", "return_stop_seals", "return_stop_http", "return_stop_negative", "return_stop_seal_first", "return_stop_execute_first", "return_stop_stop_first", "return_stop_outbound_first", "scrap_http"):
+        pytest.fail("loss gate requires an explicit submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt, sender_http, sender_seals, execution_seals, correction_restore, correction_used, correction_damaged, correction_generations, correction_seal_retention, execution_http_disposition, execution_http_return, correction_request_seals, correction_http_sources, return_quality_whole, return_quality_mixed, return_stop_seals, return_stop_http, return_stop_negative, return_stop_seal_first, return_stop_execute_first, return_stop_stop_first return_stop_outbound_first or scrap_http matrix leg")
     gate._assert_fresh_disposable_postgresql16()
     gate._bootstrap_roles()
     gate._provision_edge_receiver_role()
 
     if flow in ("submission", "review_seals"):
         from pg16_stock_loss_release_checks import run
+    elif flow == "scrap_http":
+        from pg16_scrap_http_business import release as run
     elif flow == "submission_http":
         from pg16_stock_loss_write_http_gate import release as run
     elif flow == "disposition":

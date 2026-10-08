@@ -12,7 +12,8 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.formal_access import load_formal_principal
-from app.foundation_models import Permission, Role, RolePermission, RoleAssignment
+from app.foundation_models import RoleAssignment
+from pg16_stock_operation_permission_policy import require_formal_grant
 from app.stock_operation_models import StockLossReviewRequestSeal as Seal
 from app.stock_loss_schemas import StockLossReviewRequestLookupIn
 from app.stock_loss_review_seal_schemas import StockLossRegionalReviewSealIn, StockLossHeadquartersReviewSealIn
@@ -24,13 +25,7 @@ from pg16_stock_loss_submit_gate import snapshot
 def run(engines, *, stage, reviewer_id, assignment_id, command, service):
     owner, api = (engines[k] for k in ('star_oam_migrator','star_oam_api'))
     with Session(owner) as db:
-        permission = db.scalar(select(Permission).where(Permission.resource=='stock_operation',Permission.action=='read',Permission.field_code==''))
-        if permission is None:
-            permission=Permission(resource='stock_operation',action='read',field_code='',description='Synthetic approval seal');db.add(permission);db.flush()
-        role = db.scalar(select(Role.id).where(Role.code==('provincial_manager' if stage=='regional' else 'admin')))
-        grant = db.scalar(select(RolePermission).where(RolePermission.role_id==role,RolePermission.permission_id==permission.id))
-        if grant is None:db.add(RolePermission(role_id=role,permission_id=permission.id,effect='allow'))
-        else:assert grant.effect=='allow'
+        require_formal_grant(db,role_code=('provincial_manager' if stage=='regional' else 'admin'),action='read')
         db.commit()
     with Session(api) as db:actor=load_formal_principal(db,reviewer_id)
     schema = StockLossRegionalReviewSealIn if stage=='regional' else StockLossHeadquartersReviewSealIn

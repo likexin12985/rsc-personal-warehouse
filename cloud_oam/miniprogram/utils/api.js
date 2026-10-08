@@ -68,8 +68,7 @@ function isFormalBusinessWriteRequest(path, method) {
 function isExplicitLoginRequest(path, method) {
   const cleanPath = normalizedPath(path)
   return String(method || 'GET').toUpperCase() === 'POST' && (
-    cleanPath === '/auth/miniprogram/sms-login' ||
-    cleanPath === '/auth/miniprogram/wechat-login'
+    cleanPath === '/auth/miniprogram/sms-login'
   )
 }
 

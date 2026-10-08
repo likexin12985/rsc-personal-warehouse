@@ -153,7 +153,7 @@ test('lifecycle command-status GET preserves only the supplied trace request id'
   assert.equal(requests[0].method, 'GET')
 })
 
-test('all authentication writes use safe idempotency keys without sensitive values', async (context) => {
+test('SMS-only authentication writes use safe idempotency keys without sensitive values', async (context) => {
   const requests = []
   const storage = new Map()
   let loginSequence = 0
@@ -174,10 +174,7 @@ test('all authentication writes use safe idempotency keys without sensitive valu
     request(options) {
       requests.push(options)
       const pathname = new URL(options.url).pathname.replace(/^\/api/, '')
-      if (
-        pathname === '/auth/miniprogram/sms-login' ||
-        pathname === '/auth/miniprogram/wechat-login'
-      ) {
+      if (pathname === '/auth/miniprogram/sms-login') {
         loginSequence += 1
         options.success({
           statusCode: 200,
@@ -217,20 +214,14 @@ test('all authentication writes use safe idempotency keys without sensitive valu
   await api.post('/auth/sms/request', { mobile }, { idempotencyKey: retryableKey })
   const smsLogin = await api.post('/auth/miniprogram/sms-login', { mobile, code })
   await api.establishExplicitSession(smsLogin)
-  const wechatLogin = await api.post('/auth/miniprogram/wechat-login', {
-    login_code: 'wechat-login-code',
-    phone_code: 'wechat-phone-code',
-    device_id: device
-  })
-  await api.establishExplicitSession(wechatLogin)
   await api.post('/auth/miniprogram/refresh', { refresh_token: token, device_id: device })
   await api.post('/auth/miniprogram/logout', { refresh_token: token })
   await api.post(`/auth/sessions/${sessionId}/revoke`)
   await api.get('/auth/login-options')
   await api.post('/access/provincial-managers/assignments', { reason: 'test' })
 
-  assert.equal(requests.length, 9)
-  const writeHeaders = requests.slice(0, 7).map((request) => request.header)
+  assert.equal(requests.length, 8)
+  const writeHeaders = requests.slice(0, 6).map((request) => request.header)
   const requestIds = writeHeaders.map((header) => header['X-Request-ID'])
   assert.equal(new Set(requestIds).size, requestIds.length)
   for (const requestId of requestIds) {
@@ -256,9 +247,9 @@ test('all authentication writes use safe idempotency keys without sensitive valu
       assert.equal(key.includes(sensitive), false)
     }
   }
-  assert.equal(requests[7].header['X-Request-ID'], undefined)
+  assert.equal(requests[6].header['X-Request-ID'], undefined)
+  assert.equal(requests[6].header['Idempotency-Key'], undefined)
   assert.equal(requests[7].header['Idempotency-Key'], undefined)
-  assert.equal(requests[8].header['Idempotency-Key'], undefined)
 })
 
 test('SMS request wrapper generates an idempotency key when the caller omits one', async (context) => {

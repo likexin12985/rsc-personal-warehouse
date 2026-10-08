@@ -1,5 +1,8 @@
 import { createStopAdapter, type StopAdapter } from './lossReturnStopAdapter';
 import { returnHistory, type ReturnHistory } from './lossReturnHistory';
+import { conditionHistory, type ConditionHistory } from './returnConditionHistory';
+import { createConditionAdapter } from './returnConditionAdapter';
+import type { Transport as ConditionTransport } from './returnConditionRecovery';
 import { canonical, hash, id, identity, object, type Queue, type Report, type LossLine } from './formalLossReview';
 import { fail, flow, intentFor, prepare, sources, type Flow, type Pending, type Sources } from './lossCorrectionContracts';
 import { createAdapter as createExecutionAdapter } from './lossExecutionAdapter';
@@ -9,6 +12,8 @@ export type Detail = { source: Sources; report: Report; line: LossLine };
 export type Adapter = Transport & { returnStop: StopAdapter; list(after?: string | null): Promise<Queue>;
   read(root: string): Promise<Sources>; describe(root: string): Promise<Detail>;
   history(root: string): Promise<ReturnHistory>;
+  conditionHistory?(root: string, inbound: string): Promise<ConditionHistory>;
+  conditionRecovery?: ConditionTransport;
   prepare(root: string, action: Flow, reason: string, choice?: string): Promise<Pending> };
 const base = '/v1/stock-operations/loss-reports/corrections';
 const headers = { 'Cache-Control': 'no-store', Pragma: 'no-cache' };
@@ -52,6 +57,7 @@ export function createAdapter(personId: string, requestNoReplay: Requester): Ada
   }
   return {
     context, source, returnStop: createStopAdapter(expectedPerson, requestNoReplay, context),
+    conditionRecovery: createConditionAdapter(expectedPerson, requestNoReplay),
     async list(after = null) { const c = await checked(), page = await origins.list(after); await stable(c); return page; },
     async read(root) { const c = await checked(), s = await source(root, c); await stable(c); return s; },
     async describe(root) {
@@ -60,6 +66,14 @@ export function createAdapter(personId: string, requestNoReplay: Requester): Ada
       const line = origin.report.lines.find(l => l.line_id === s.line_id);
       if (!decision || decision.line_id !== s.line_id || !line || line.quantity !== s.quantity || canonical(line.serials.map(sn => sn.serial_id).sort()) !== canonical([...s.serial_ids].sort())) fail('原处置与报损明细不能对应，请刷新核验');
       await stable(c); return { source: s, report: origin.report, line };
+    },
+    async conditionHistory(root, inbound) {
+      const c = await checked(), s = await source(root, c), origin = await origins.read(s.operation_id);
+      const line = origin.report.lines.find(line => line.line_id === s.line_id);
+      if (!line || line.quantity !== s.quantity || canonical(line.serials.map(sn => sn.serial_id).sort()) !== canonical([...s.serial_ids].sort())) fail('原报损物料与成色纠正来源不一致');
+      const value = conditionHistory(await requestNoReplay(`/v1/stock-operations/loss-reports/return-condition-corrections/history/${id(inbound)}`, noCache),
+        { inbound, root, material: line.material_id });
+      await stable(c); return value;
     },
     async history(root) {
       const c = await checked(), s = await source(root, c);

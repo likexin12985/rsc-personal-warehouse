@@ -24,6 +24,15 @@ def test_registers_package_against_posting_without_second_inventory_movement(out
     assert before==after
     assert db.scalar(select(func.count()).select_from(InventoryTransaction))==tx_before
     assert db.scalar(select(func.count()).select_from(Shipment))==1
+    # The package is an actual carrier handover. The request's independent
+    # shipment projection must report it without inventing signature, OAM
+    # receipt, personal posting, or channel delivery.
+    db.refresh(request)
+    assert request.shipment_status == 'shipped'
+    assert request.logistics_signature_status == 'not_signed'
+    assert request.oam_receipt_status == 'not_occurred'
+    assert request.personal_inbound_status == 'pending_acceptance'
+    assert request.notification_status == 'not_started'
 
 
 def test_cannot_ship_more_than_posted(outbound_world):
@@ -33,7 +42,7 @@ def test_cannot_ship_more_than_posted(outbound_world):
         shipment.create_shipment(db,actor=actor,request_id=request.id,expected_version=request.version,target_location_id=uuid4(),target_person_id=actor.person_id,carrier='人工承运',tracking_no='TEST-002',shipped_at='2026-09-09T10:00:00+08:00',lines=(type('L',(),{'outbound_posting_id':UUID(first['posting_id']),'shipped_qty':Decimal(first['outbound_qty'])+Decimal('0.001'),'serial_ids':tuple(serials[:1])})(),),idempotency_key='shipment-command-0002',secret=SECRET,trace_request_id='trace-shipment-command-0002')
 
 
-def test_shipment_command_status_recovers_exact_idempotent_result(outbound_world):
+def test_shipment_command_status_recovers_exact_idempotent_result(outbound_world, monkeypatch):
     db, actor, request, fact, serials, calls, target_id = outbound_world
     first = create_outbound(outbound_world)
     key = 'shipment-command-recovery-001'
@@ -49,6 +58,11 @@ def test_shipment_command_status_recovers_exact_idempotent_result(outbound_world
         trace_request_id='trace-shipment-recovery-001',
     )
     db.flush()
+    from app.formal_services import audit_chain
+    def forbid_write_lock(*args, **kwargs):
+        raise AssertionError("shipment reads must not acquire the audit writer lock")
+    monkeypatch.setattr(audit_chain, "lock_audit_chain_head", forbid_write_lock)
+    assert shipment.list_shipment_options(db, actor=actor, request_id=request.id)['items'] == ()
     recovered = shipment.shipment_command_status(
         db, actor=actor, request_id=request.id, idempotency_key=key, secret=SECRET,
     )

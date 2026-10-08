@@ -547,7 +547,7 @@ test('older account load cannot overwrite a newer account result', async (contex
   assert.deepEqual(installedUsers, [newerUser])
 })
 
-test('SMS and WeChat login responses use the explicit-session barrier', async (context) => {
+test('SMS login uses the explicit-session barrier and the retired WeChat entry is absent', async (context) => {
   const formalUser = {
     person_id: '00000000-0000-4000-8000-000000000004',
     name: '竞态测试工程师',
@@ -595,14 +595,10 @@ test('SMS and WeChat login responses use the explicit-session barrier', async (c
     code: '246810'
   })
   await instance.submit()
-  instance.getWechatLoginCode = async () => 'wechat-login-code'
-  await instance.loginWithWechat('wechat-phone-code')
 
-  assert.deepEqual(postedPaths, [
-    '/auth/miniprogram/sms-login',
-    '/auth/miniprogram/wechat-login'
-  ])
-  assert.equal(established.length, 2)
+  assert.deepEqual(postedPaths, ['/auth/miniprogram/sms-login'])
+  assert.equal(typeof instance.loginWithWechat, 'undefined')
+  assert.equal(typeof instance.getWechatLoginCode, 'undefined')
+  assert.equal(established.length, 1)
   assert.equal(established[0].access_token, '/auth/miniprogram/sms-login-access')
-  assert.equal(established[1].access_token, '/auth/miniprogram/wechat-login-access')
 })

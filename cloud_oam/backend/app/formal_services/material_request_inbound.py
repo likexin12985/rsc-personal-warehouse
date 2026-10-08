@@ -17,6 +17,13 @@ class InboundError(InventoryPostingError):
     """Stable inbound failure using the inventory HTTP error contract."""
 def _fail(c, k, m): raise InboundError(c, k, m)
 
+_BACKEND_FULFILLMENT_ROLES = frozenset({"admin", "provincial_manager"})
+
+def _require_backend_fulfillment(actor) -> None:
+    roles = getattr(actor, "role_codes", None)
+    if roles is not None and not set(roles).intersection(_BACKEND_FULFILLMENT_ROLES):
+        _fail("fulfillment_forbidden", "forbidden", "当前账号没有后台人工履约权限")
+
 def _validate_inbound_target(shipment, target_location_id, target_person_id):
     """The inbound target must remain the immutable shipment destination."""
     if (shipment.target_location_id != target_location_id
@@ -25,6 +32,7 @@ def _validate_inbound_target(shipment, target_location_id, target_person_id):
         _fail("target_mismatch", "conflict", "个人仓入账目标必须与发运事实一致")
 
 def create_inbound_order(db, *, actor, request_id, expected_version, receipt_id, target_location_id, target_person_id, trace_request_id):
+    _require_backend_fulfillment(actor)
     request = db.scalar(select(MaterialRequest).where(MaterialRequest.id == request_id).with_for_update())
     if request is None: _fail("not_found", "not_found", "需求单不存在")
     if request.version != expected_version: _fail("version_conflict", "conflict", "需求版本已变化，请重新读取")
@@ -156,6 +164,7 @@ def _order_posting_command(db, order, *, create_missing=False):
 
 
 def post_inbound_order(db, *, actor, inbound_order_id, material_request_id, idempotency_key, request_id):
+    _require_backend_fulfillment(actor)
     return _post_inbound_order(db, actor=actor, inbound_order_id=inbound_order_id,
         material_request_id=material_request_id, idempotency_key=idempotency_key, request_id=request_id)
 
@@ -255,6 +264,7 @@ def _post_inbound_order(db, *, actor, inbound_order_id, material_request_id, ide
     return {"inbound_order_id": order.id, "inventory_transaction_id": result.transaction_id, "replayed": result.replayed}
 
 def list_inbound_orders(db, *, actor, request_id):
+    _require_backend_fulfillment(actor)
     with db.no_autoflush:
         return _list_inbound_orders(db, actor=actor, request_id=request_id)
 

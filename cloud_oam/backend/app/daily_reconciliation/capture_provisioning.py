@@ -4,7 +4,7 @@ from psycopg import sql
 from .capture_role_contract import ALL_TABLES, ROLES
 from .capture_security import validate_capture_roles, CaptureRoleSecurityError
 
-REQUIRED_HEAD = '20261213_0164'
+REQUIRED_HEAD = '20261227_0178'
 
 def require_bootstrap(connection, database):
     identity=connection.execute(text("SELECT current_database(),current_user,session_user,"

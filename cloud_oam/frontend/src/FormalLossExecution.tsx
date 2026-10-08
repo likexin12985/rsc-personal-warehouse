@@ -7,8 +7,8 @@ import './lossExecution.css';
 
 const names={restore_available:'恢复可用',convert_used:'转旧件',convert_damaged:'转坏件',return_to_region:'退回区域仓',scrap:'报废'};
 const message=(e:unknown)=>e instanceof Error?e.message:'结果未确认，请保留原请求并回查';
-type Props={identity:Identity;adapter:Adapter;store?:Store;onOpenCorrection?:(root:string)=>void};
-export default function FormalLossExecution({identity,adapter,store:provided,onOpenCorrection}:Props){
+type Props={identity:Identity;adapter:Adapter;store?:Store;onOpenCorrection?:(root:string)=>void;onOpenScrap?:(operation?:string,decision?:string)=>void};
+export default function FormalLossExecution({identity,adapter,store:provided,onOpenCorrection,onOpenScrap}:Props){
   const store=useMemo(()=>provided??browserStore(),[provided]);
   const [rows,setRows]=useState<Report[]>([]),[next,setNext]=useState<string|null>(null),[source,setSource]=useState<Sources|null>(null);
   const [pending,setPending]=useState<Pending[]>([]),[prepared,setPrepared]=useState<Pending|null>(null),[sealTarget,setSealTarget]=useState<Pending|null>(null);
@@ -45,7 +45,7 @@ export default function FormalLossExecution({identity,adapter,store:provided,onO
     finally{if(valid(captured)){local(captured);setBusy(false);}}
   }
   return <section className="page-stack loss-execution-page">
-    <div className="page-heading"><div><h1>报损处置</h1><p>依据总部批准逐项执行。退回单还需单独完成发货、收货和入库。</p></div><button disabled={busy} onClick={()=>void load()}>刷新</button></div>
+    <div className="page-heading"><div><h1>报损处置</h1><p>依据总部批准逐项执行。退回单还需单独完成发货、收货和入库。</p></div><button disabled={busy} onClick={()=>void load()}>刷新</button>{onOpenScrap&&<button disabled={busy} onClick={()=>onOpenScrap()}>报废请求回查</button>}</div>
     {error&&<p className="alert alert-error" role="alert">{error}</p>}{notice&&<p className="alert" role="status">{notice}</p>}
     {busy&&<p role="status">正在核验，请稍候…</p>}
     {!storageReady&&<p role="alert">原请求存储不可用，已停止新处置。请保留浏览器数据。</p>}
@@ -64,7 +64,7 @@ export default function FormalLossExecution({identity,adapter,store:provided,onO
     {source&&<section className="panel" aria-label="处置明细"><h2>{source.report.operation_no}</h2><p>{source.report.requester_name} · {source.report.source_location_name}</p><p>原报损原因：{source.report.reason}</p>
       {source.decisions.map(d=>{const line=source.report.lines.find(l=>l.line_id===d.line_id)!;const unresolved=pending.some(p=>p.command.headquarters_decision_id===d.headquarters_decision_id);return <fieldset key={d.headquarters_decision_id} disabled={busy}><legend>{line.sku_code} · {line.material_name}</legend>
         <p>{line.quantity} {line.base_unit} · 批准处置：{names[d.disposition]}</p><p>逐行批准理由：{d.reason}</p>{!!line.serials.length&&<p>SN：{line.serials.map(s=>s.serial_no).join('、')}</p>}
-        {d.original_posting?<><p>原处置已记账（历史事实，不代表当前库存）。{d.original_posting.return_operation_id&&'原处置已生成退回单；本页不证明已经发货、收货或入库。'}</p>{onOpenCorrection&&<button disabled={busy} onClick={()=>onOpenCorrection(d.original_posting!.disposition_id)}>查看纠正与历史</button>}</>:unresolved?<p>已有原请求待核验，请使用上方回查入口。</p>:d.disposition==='scrap'?<p>报废执行尚未开放，此项保持待处置。</p>:<>
+        {d.original_posting?<><p>原处置已记账（历史事实，不代表当前库存）。{d.original_posting.return_operation_id&&'原处置已生成退回单；本页不证明已经发货、收货或入库。'}</p>{onOpenCorrection&&<button disabled={busy} onClick={()=>onOpenCorrection(d.original_posting!.disposition_id)}>查看纠正与历史</button>}</>:unresolved?<p>已有原请求待核验，请使用上方回查入口。</p>:d.disposition==='scrap'?(onOpenScrap?<button disabled={busy||!canWrite} onClick={()=>onOpenScrap(source.report.operation_id,d.headquarters_decision_id)}>办理报废</button>:<p>请从报废执行页办理此项批准。</p>):<>
           {d.disposition==='return_to_region'&&(source.return_routes_status==='available'?<label>退回路线<select aria-label={`退回路线 ${line.sku_code}`} value={routes[d.headquarters_decision_id]??''} onChange={e=>{setRoutes(old=>({...old,[d.headquarters_decision_id]:e.target.value}));setPrepared(null);setConfirmed(false);}}><option value="">请选择</option>{source.return_routes.map(r=><option key={r.target_location_id+':'+r.transit_location_id} value={r.target_location_id+':'+r.transit_location_id}>{r.target_location_name} · {r.transit_location_name}</option>)}</select></label>:<p>{source.return_routes_reason??'当前退回路线无法核验。'}</p>)}
           <button disabled={busy||!canWrite||!storageReady||(d.disposition==='return_to_region'&&!routes[d.headquarters_decision_id])} onClick={()=>void preview(d.headquarters_decision_id)}>预览处置</button>
         </>}

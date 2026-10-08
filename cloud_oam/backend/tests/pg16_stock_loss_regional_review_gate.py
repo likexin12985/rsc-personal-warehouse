@@ -14,13 +14,14 @@ from sqlalchemy.orm import Session
 from app.formal_access import load_formal_principal
 from app.formal_services import stock_loss_regional_reviews as reviews, stock_loss_facts as facts
 from app.formal_services import stock_loss_sources as sources, inventory_posting as posting
-from app.foundation_models import Organization, Permission, Role, RolePermission, RoleAssignment, OutboxEvent, StateTransitionEvent
+from app.foundation_models import Organization, Role, RolePermission, RoleAssignment, OutboxEvent, StateTransitionEvent
 from app.inventory_models import StockLocation
 from app.models import User
 from app.stock_operation_models import StockOperationOrder as Order, StockLossRegionalReview as Review
 from app.stock_loss_schemas import StockLossRegionalReviewIn
 from pg16_stock_loss_submit_gate import snapshot
 from test_formal_access import make_user, assign
+from pg16_stock_operation_permission_policy import require_formal_grant
 
 
 def run(engines, *, check_seals=False):
@@ -34,10 +35,8 @@ def run(engines, *, check_seals=False):
         user,person=make_user(db,db.get(Organization,owner_id),name='Synthetic regional loss reviewer')
         role=db.scalar(select(Role).where(Role.code=='provincial_manager'))
         assignment=assign(db,user,role,scope_type='organization',scope_id=str(owner_id))
-        permission=Permission(resource='stock_operation',action=reviews.ACTION,field_code='',description='Synthetic review only')
-        db.add(permission);db.flush()
-        grant=RolePermission(role_id=role.id,permission_id=permission.id,effect='allow')
-        db.add(grant);db.commit()
+        grant=require_formal_grant(db,role_code='provincial_manager',action=reviews.ACTION)
+        db.commit()
         reviewer_id,person_id,assignment_id,grant_id=user.id,person.id,assignment.id,grant.id
     def state():
         values=snapshot(owner)

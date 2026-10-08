@@ -22,7 +22,11 @@ def frozen(tmp_path, request):
     def enable_foreign_keys(db, _):
         db.execute("PRAGMA foreign_keys=" + ("ON" if request.param else "OFF"))
 
-    Base.metadata.create_all(engine)
+    # 0165 descendants require composite keys absent from frozen 0159.
+    # This synthetic predecessor must not include those future child tables.
+    predecessor_tables = [table for table in Base.metadata.tables.values()
+                          if not table.name.startswith('stock_scrap_')]
+    Base.metadata.create_all(engine, tables=predecessor_tables)
     with engine.begin() as db:
         for table in reversed(support["TABLES"]):
             db.exec_driver_sql('DROP TABLE "' + table + '"')

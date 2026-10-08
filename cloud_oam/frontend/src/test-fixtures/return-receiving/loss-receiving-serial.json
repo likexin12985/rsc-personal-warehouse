@@ -1,43 +1,43 @@
 {
   "identity": {
-    "person_id": "b865db90-0536-46b2-9145-3f26b6914745",
+    "person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
     "authorization_version": 7
   },
   "directory": {
     "schema_version": "1.0",
-    "person_id": "b865db90-0536-46b2-9145-3f26b6914745",
+    "person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
     "authorization_version": 7,
     "ledger_cursor": 7,
-    "queried_at": "2026-09-30T05:41:28.545401Z",
+    "queried_at": "2026-10-02T00:25:55.597098Z",
     "items": [
       {
         "verification_status": "verified",
-        "shipment_id": "1062c4d2-1922-48ac-a37e-8fde6300e2d5",
-        "shipment_no": "RET-SHP-5263BA26E31F5F40DDE8D3E9",
-        "operation_id": "60a3baf0-22ea-5248-922a-eae5de426601",
-        "operation_no": "LOSS-RET-84118A815117033062E0525A",
+        "shipment_id": "e4fbf61f-9416-4ab3-9630-26b47ebf27d9",
+        "shipment_no": "RET-SHP-0DE5AA53A8A57ED1777A320A",
+        "operation_id": "f0a40ee6-7d05-5b9b-b325-968885859ffc",
+        "operation_no": "LOSS-RET-51A7E94E1032EC630576AC63",
         "origin": {
           "origin_kind": "loss_report",
-          "loss_operation_id": "0ebbd9ef-2596-4b59-b1a6-54f62b9a04ad",
-          "loss_line_id": "18db9a05-2150-4558-bae1-4a6c4fa9d006",
-          "headquarters_decision_id": "615774f0-e5b5-4cc6-8c87-07ab09814238",
-          "disposition_id": "e933ec38-f4ec-4435-919f-b47b9cc5c005"
+          "loss_operation_id": "6f27ddab-6c23-411c-9778-3ad8502cdb38",
+          "loss_line_id": "2b57f7a1-da7e-4116-b884-c0e1445630b5",
+          "headquarters_decision_id": "9377a2cf-a7d6-444d-8a70-2b49875bc609",
+          "disposition_id": "991e28b1-be03-4742-9eea-8e8e7524fe9c"
         },
-        "sender_person_id": "a0f8b515-6061-4d80-93c3-85ebea51bf54",
-        "receiver_person_id": "b865db90-0536-46b2-9145-3f26b6914745",
-        "target_location_id": "9515af60-5dbb-44af-8a18-92b58bf3b164",
+        "sender_person_id": "dc0e8bae-7fc6-442e-bf47-d0b34405eb34",
+        "receiver_person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
+        "target_location_id": "f34e2d74-4bd5-4a43-a999-f06078ba29e2",
         "target_location_name": "测试区域仓",
-        "custody_assignment_id": "7a6472f1-ae5c-4ef8-a18b-8420480d5039",
+        "custody_assignment_id": "05ab6ad7-8cab-42c9-9011-cfae07aa07da",
         "carrier": "Synthetic carrier",
-        "tracking_no": "SYNTHETIC-87e520a00af44fdfb1d173eb49e1ebc9",
-        "shipped_at": "2026-09-30T05:41:23.897142Z",
-        "recorded_at": "2026-09-30T05:41:26.101676Z",
+        "tracking_no": "SYNTHETIC-acceb63fe2224728b25169b6f9dae0b7",
+        "shipped_at": "2026-10-02T00:25:44.010905Z",
+        "recorded_at": "2026-10-02T00:25:51.193094Z",
         "lines": [
           {
-            "shipment_line_id": "6c5a79d9-aba6-4471-8693-d8deb324041a",
-            "outbound_no": "RET-OUT-4D0508E978A602CBFF899E7F",
-            "material_id": "e7b2c949-1d2d-4e00-b07d-f6a2e3b34467",
-            "sku_code": "SKU-03095d7aa5c7",
+            "shipment_line_id": "3eacbdec-358f-4e78-8957-9a163c812bbc",
+            "outbound_no": "RET-OUT-428BD70EFF9199273030F35A",
+            "material_id": "0c0e17d9-d634-45e3-bf98-c528e71f02a7",
+            "sku_code": "SKU-68607b41cb02",
             "material_name": "测试物料",
             "base_unit": "件",
             "condition_code": "new",
@@ -46,7 +46,7 @@
             "shipped_quantity": "1.000",
             "serials": [
               {
-                "serial_id": "4ff6456c-7fd6-4947-abe7-d56272e2e791",
+                "serial_id": "d13376eb-5f19-437c-bd19-fa1a84f63246",
                 "serial_no": "OPTIONS-SN-3"
               }
             ]
@@ -58,38 +58,38 @@
   },
   "before": {
     "schema_version": "1.0",
-    "person_id": "b865db90-0536-46b2-9145-3f26b6914745",
+    "person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
     "authorization_version": 7,
     "ledger_cursor": 7,
-    "queried_at": "2026-09-30T05:41:29.707040Z",
+    "queried_at": "2026-10-02T00:25:58.941554Z",
     "package": {
       "verification_status": "verified",
-      "shipment_id": "1062c4d2-1922-48ac-a37e-8fde6300e2d5",
-      "shipment_no": "RET-SHP-5263BA26E31F5F40DDE8D3E9",
-      "operation_id": "60a3baf0-22ea-5248-922a-eae5de426601",
-      "operation_no": "LOSS-RET-84118A815117033062E0525A",
+      "shipment_id": "e4fbf61f-9416-4ab3-9630-26b47ebf27d9",
+      "shipment_no": "RET-SHP-0DE5AA53A8A57ED1777A320A",
+      "operation_id": "f0a40ee6-7d05-5b9b-b325-968885859ffc",
+      "operation_no": "LOSS-RET-51A7E94E1032EC630576AC63",
       "origin": {
         "origin_kind": "loss_report",
-        "loss_operation_id": "0ebbd9ef-2596-4b59-b1a6-54f62b9a04ad",
-        "loss_line_id": "18db9a05-2150-4558-bae1-4a6c4fa9d006",
-        "headquarters_decision_id": "615774f0-e5b5-4cc6-8c87-07ab09814238",
-        "disposition_id": "e933ec38-f4ec-4435-919f-b47b9cc5c005"
+        "loss_operation_id": "6f27ddab-6c23-411c-9778-3ad8502cdb38",
+        "loss_line_id": "2b57f7a1-da7e-4116-b884-c0e1445630b5",
+        "headquarters_decision_id": "9377a2cf-a7d6-444d-8a70-2b49875bc609",
+        "disposition_id": "991e28b1-be03-4742-9eea-8e8e7524fe9c"
       },
-      "sender_person_id": "a0f8b515-6061-4d80-93c3-85ebea51bf54",
-      "receiver_person_id": "b865db90-0536-46b2-9145-3f26b6914745",
-      "target_location_id": "9515af60-5dbb-44af-8a18-92b58bf3b164",
+      "sender_person_id": "dc0e8bae-7fc6-442e-bf47-d0b34405eb34",
+      "receiver_person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
+      "target_location_id": "f34e2d74-4bd5-4a43-a999-f06078ba29e2",
       "target_location_name": "测试区域仓",
-      "custody_assignment_id": "7a6472f1-ae5c-4ef8-a18b-8420480d5039",
+      "custody_assignment_id": "05ab6ad7-8cab-42c9-9011-cfae07aa07da",
       "carrier": "Synthetic carrier",
-      "tracking_no": "SYNTHETIC-87e520a00af44fdfb1d173eb49e1ebc9",
-      "shipped_at": "2026-09-30T05:41:23.897142Z",
-      "recorded_at": "2026-09-30T05:41:26.101676Z",
+      "tracking_no": "SYNTHETIC-acceb63fe2224728b25169b6f9dae0b7",
+      "shipped_at": "2026-10-02T00:25:44.010905Z",
+      "recorded_at": "2026-10-02T00:25:51.193094Z",
       "lines": [
         {
-          "shipment_line_id": "6c5a79d9-aba6-4471-8693-d8deb324041a",
-          "outbound_no": "RET-OUT-4D0508E978A602CBFF899E7F",
-          "material_id": "e7b2c949-1d2d-4e00-b07d-f6a2e3b34467",
-          "sku_code": "SKU-03095d7aa5c7",
+          "shipment_line_id": "3eacbdec-358f-4e78-8957-9a163c812bbc",
+          "outbound_no": "RET-OUT-428BD70EFF9199273030F35A",
+          "material_id": "0c0e17d9-d634-45e3-bf98-c528e71f02a7",
+          "sku_code": "SKU-68607b41cb02",
           "material_name": "测试物料",
           "base_unit": "件",
           "condition_code": "new",
@@ -98,7 +98,7 @@
           "shipped_quantity": "1.000",
           "serials": [
             {
-              "serial_id": "4ff6456c-7fd6-4947-abe7-d56272e2e791",
+              "serial_id": "d13376eb-5f19-437c-bd19-fa1a84f63246",
               "serial_no": "OPTIONS-SN-3"
             }
           ]
@@ -108,7 +108,7 @@
     "receipts": [],
     "lines": [
       {
-        "shipment_line_id": "6c5a79d9-aba6-4471-8693-d8deb324041a",
+        "shipment_line_id": "3eacbdec-358f-4e78-8957-9a163c812bbc",
         "shipped_qty": "1.000",
         "accepted_qty": "0.000",
         "rejected_qty": "0.000",
@@ -116,7 +116,7 @@
         "unconfirmed_qty": "1.000",
         "unconfirmed_serials": [
           {
-            "serial_id": "4ff6456c-7fd6-4947-abe7-d56272e2e791",
+            "serial_id": "d13376eb-5f19-437c-bd19-fa1a84f63246",
             "serial_no": "OPTIONS-SN-3"
           }
         ]
@@ -126,42 +126,42 @@
   "preview": {
     "schema_version": "1.0",
     "planning_status": "preview_only",
-    "shipment_id": "1062c4d2-1922-48ac-a37e-8fde6300e2d5",
-    "operation_id": "60a3baf0-22ea-5248-922a-eae5de426601",
-    "operator_person_id": "b865db90-0536-46b2-9145-3f26b6914745",
+    "shipment_id": "e4fbf61f-9416-4ab3-9630-26b47ebf27d9",
+    "operation_id": "f0a40ee6-7d05-5b9b-b325-968885859ffc",
+    "operator_person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
     "authorization_version": 7,
-    "received_at": "2026-09-30T05:41:26.996000Z",
+    "received_at": "2026-10-02T00:25:54.403000Z",
     "reason": "核验报损退回实物，验收独立于入库",
-    "checked_at": "2026-09-30T05:41:32.410803Z",
+    "checked_at": "2026-10-02T00:26:08.935870Z",
     "ledger_cursor": 7,
     "package": {
       "verification_status": "verified",
-      "shipment_id": "1062c4d2-1922-48ac-a37e-8fde6300e2d5",
-      "shipment_no": "RET-SHP-5263BA26E31F5F40DDE8D3E9",
-      "operation_id": "60a3baf0-22ea-5248-922a-eae5de426601",
-      "operation_no": "LOSS-RET-84118A815117033062E0525A",
+      "shipment_id": "e4fbf61f-9416-4ab3-9630-26b47ebf27d9",
+      "shipment_no": "RET-SHP-0DE5AA53A8A57ED1777A320A",
+      "operation_id": "f0a40ee6-7d05-5b9b-b325-968885859ffc",
+      "operation_no": "LOSS-RET-51A7E94E1032EC630576AC63",
       "origin": {
         "origin_kind": "loss_report",
-        "loss_operation_id": "0ebbd9ef-2596-4b59-b1a6-54f62b9a04ad",
-        "loss_line_id": "18db9a05-2150-4558-bae1-4a6c4fa9d006",
-        "headquarters_decision_id": "615774f0-e5b5-4cc6-8c87-07ab09814238",
-        "disposition_id": "e933ec38-f4ec-4435-919f-b47b9cc5c005"
+        "loss_operation_id": "6f27ddab-6c23-411c-9778-3ad8502cdb38",
+        "loss_line_id": "2b57f7a1-da7e-4116-b884-c0e1445630b5",
+        "headquarters_decision_id": "9377a2cf-a7d6-444d-8a70-2b49875bc609",
+        "disposition_id": "991e28b1-be03-4742-9eea-8e8e7524fe9c"
       },
-      "sender_person_id": "a0f8b515-6061-4d80-93c3-85ebea51bf54",
-      "receiver_person_id": "b865db90-0536-46b2-9145-3f26b6914745",
-      "target_location_id": "9515af60-5dbb-44af-8a18-92b58bf3b164",
+      "sender_person_id": "dc0e8bae-7fc6-442e-bf47-d0b34405eb34",
+      "receiver_person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
+      "target_location_id": "f34e2d74-4bd5-4a43-a999-f06078ba29e2",
       "target_location_name": "测试区域仓",
-      "custody_assignment_id": "7a6472f1-ae5c-4ef8-a18b-8420480d5039",
+      "custody_assignment_id": "05ab6ad7-8cab-42c9-9011-cfae07aa07da",
       "carrier": "Synthetic carrier",
-      "tracking_no": "SYNTHETIC-87e520a00af44fdfb1d173eb49e1ebc9",
-      "shipped_at": "2026-09-30T05:41:23.897142Z",
-      "recorded_at": "2026-09-30T05:41:26.101676Z",
+      "tracking_no": "SYNTHETIC-acceb63fe2224728b25169b6f9dae0b7",
+      "shipped_at": "2026-10-02T00:25:44.010905Z",
+      "recorded_at": "2026-10-02T00:25:51.193094Z",
       "lines": [
         {
-          "shipment_line_id": "6c5a79d9-aba6-4471-8693-d8deb324041a",
-          "outbound_no": "RET-OUT-4D0508E978A602CBFF899E7F",
-          "material_id": "e7b2c949-1d2d-4e00-b07d-f6a2e3b34467",
-          "sku_code": "SKU-03095d7aa5c7",
+          "shipment_line_id": "3eacbdec-358f-4e78-8957-9a163c812bbc",
+          "outbound_no": "RET-OUT-428BD70EFF9199273030F35A",
+          "material_id": "0c0e17d9-d634-45e3-bf98-c528e71f02a7",
+          "sku_code": "SKU-68607b41cb02",
           "material_name": "测试物料",
           "base_unit": "件",
           "condition_code": "new",
@@ -170,20 +170,20 @@
           "shipped_quantity": "1.000",
           "serials": [
             {
-              "serial_id": "4ff6456c-7fd6-4947-abe7-d56272e2e791",
+              "serial_id": "d13376eb-5f19-437c-bd19-fa1a84f63246",
               "serial_no": "OPTIONS-SN-3"
             }
           ]
         }
       ]
     },
-    "request_hash": "4fddff2c9bee8c86e221f2431f12a241e55b3e86f5d5fc87217f86fbd95538ea",
-    "plan_hash": "ba5eb2ff0c0e4df77b260d9a80edba029404c275755a5358853a9e22d1293912",
+    "request_hash": "3fac895939c90381359d41afea5413f526da44948661867b8178f804d9395869",
+    "plan_hash": "b9834debd87a8750cedde2aac841e998e02e7c976a6ab4abacc56c64d2f31de8",
     "lines": [
       {
-        "shipment_line_id": "6c5a79d9-aba6-4471-8693-d8deb324041a",
-        "material_id": "e7b2c949-1d2d-4e00-b07d-f6a2e3b34467",
-        "sku_code": "SKU-03095d7aa5c7",
+        "shipment_line_id": "3eacbdec-358f-4e78-8957-9a163c812bbc",
+        "material_id": "0c0e17d9-d634-45e3-bf98-c528e71f02a7",
+        "sku_code": "SKU-68607b41cb02",
         "material_name": "测试物料",
         "base_unit": "件",
         "condition_code": "new",
@@ -199,7 +199,7 @@
         "shortage_qty": "0.000",
         "accepted_serials": [
           {
-            "serial_id": "4ff6456c-7fd6-4947-abe7-d56272e2e791",
+            "serial_id": "d13376eb-5f19-437c-bd19-fa1a84f63246",
             "serial_no": "OPTIONS-SN-3"
           }
         ],
@@ -211,27 +211,27 @@
     ],
     "origin": {
       "origin_kind": "loss_report",
-      "loss_operation_id": "0ebbd9ef-2596-4b59-b1a6-54f62b9a04ad",
-      "loss_line_id": "18db9a05-2150-4558-bae1-4a6c4fa9d006",
-      "headquarters_decision_id": "615774f0-e5b5-4cc6-8c87-07ab09814238",
-      "disposition_id": "e933ec38-f4ec-4435-919f-b47b9cc5c005"
+      "loss_operation_id": "6f27ddab-6c23-411c-9778-3ad8502cdb38",
+      "loss_line_id": "2b57f7a1-da7e-4116-b884-c0e1445630b5",
+      "headquarters_decision_id": "9377a2cf-a7d6-444d-8a70-2b49875bc609",
+      "disposition_id": "991e28b1-be03-4742-9eea-8e8e7524fe9c"
     }
   },
   "command": {
     "reason": "核验报损退回实物，验收独立于入库",
-    "operator_person_id": "b865db90-0536-46b2-9145-3f26b6914745",
-    "received_at": "2026-09-30T05:41:26.996000Z",
+    "operator_person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
+    "received_at": "2026-10-02T00:25:54.403000Z",
     "lines": [
       {
-        "shipment_line_id": "6c5a79d9-aba6-4471-8693-d8deb324041a",
+        "shipment_line_id": "3eacbdec-358f-4e78-8957-9a163c812bbc",
         "accepted_qty": "1.000",
         "rejected_qty": "0.000",
         "damaged_qty": "0.000",
         "shortage_qty": "0.000",
         "accepted_serial_verifications": [
           {
-            "serial_id": "4ff6456c-7fd6-4947-abe7-d56272e2e791",
-            "sku_code": "SKU-03095d7aa5c7",
+            "serial_id": "d13376eb-5f19-437c-bd19-fa1a84f63246",
+            "sku_code": "SKU-68607b41cb02",
             "serial_no": "OPTIONS-SN-3",
             "qr_code": "OPTIONS-QR-3"
           }
@@ -242,31 +242,31 @@
         "exceptions": []
       }
     ],
-    "expected_plan_hash": "ba5eb2ff0c0e4df77b260d9a80edba029404c275755a5358853a9e22d1293912",
-    "request_id": "73a81dddfc154d65a667137b96a75444",
-    "idempotency_key": "6b60f07ca73a4214a0a3d7842d76a72e"
+    "expected_plan_hash": "b9834debd87a8750cedde2aac841e998e02e7c976a6ab4abacc56c64d2f31de8",
+    "request_id": "ad91f5b5ab28483d99b17c21f7a66026",
+    "idempotency_key": "f708f907724f42bb85b4e333445159bc"
   },
   "receipt": {
     "schema_version": "1.0",
-    "receipt_id": "060cbab6-43bf-4ada-92ac-04254df04194",
-    "receipt_no": "RET-RCV-B075A420C942AED59376C8A8",
-    "shipment_id": "1062c4d2-1922-48ac-a37e-8fde6300e2d5",
-    "operation_id": "60a3baf0-22ea-5248-922a-eae5de426601",
-    "operator_person_id": "b865db90-0536-46b2-9145-3f26b6914745",
+    "receipt_id": "769d267d-6c27-43d2-8ffb-045d2a4ed87a",
+    "receipt_no": "RET-RCV-3D7D9447A69A26969376E459",
+    "shipment_id": "e4fbf61f-9416-4ab3-9630-26b47ebf27d9",
+    "operation_id": "f0a40ee6-7d05-5b9b-b325-968885859ffc",
+    "operator_person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
     "status": "accepted",
-    "received_at": "2026-09-30T05:41:26.996000Z",
-    "recorded_at": "2026-09-30T05:41:33.673745Z",
+    "received_at": "2026-10-02T00:25:54.403000Z",
+    "recorded_at": "2026-10-02T00:26:14.906464Z",
     "reason": "核验报损退回实物，验收独立于入库",
-    "request_id": "73a81dddfc154d65a667137b96a75444",
-    "request_hash": "4fddff2c9bee8c86e221f2431f12a241e55b3e86f5d5fc87217f86fbd95538ea",
-    "plan_hash": "ba5eb2ff0c0e4df77b260d9a80edba029404c275755a5358853a9e22d1293912",
-    "target_location_id": "9515af60-5dbb-44af-8a18-92b58bf3b164",
-    "target_custody_assignment_id": "7a6472f1-ae5c-4ef8-a18b-8420480d5039",
+    "request_id": "ad91f5b5ab28483d99b17c21f7a66026",
+    "request_hash": "3fac895939c90381359d41afea5413f526da44948661867b8178f804d9395869",
+    "plan_hash": "b9834debd87a8750cedde2aac841e998e02e7c976a6ab4abacc56c64d2f31de8",
+    "target_location_id": "f34e2d74-4bd5-4a43-a999-f06078ba29e2",
+    "target_custody_assignment_id": "05ab6ad7-8cab-42c9-9011-cfae07aa07da",
     "lines": [
       {
-        "shipment_line_id": "6c5a79d9-aba6-4471-8693-d8deb324041a",
-        "material_id": "e7b2c949-1d2d-4e00-b07d-f6a2e3b34467",
-        "sku_code": "SKU-03095d7aa5c7",
+        "shipment_line_id": "3eacbdec-358f-4e78-8957-9a163c812bbc",
+        "material_id": "0c0e17d9-d634-45e3-bf98-c528e71f02a7",
+        "sku_code": "SKU-68607b41cb02",
         "material_name": "测试物料",
         "base_unit": "件",
         "condition_code": "new",
@@ -282,7 +282,7 @@
         "shortage_qty": "0.000",
         "accepted_serials": [
           {
-            "serial_id": "4ff6456c-7fd6-4947-abe7-d56272e2e791",
+            "serial_id": "d13376eb-5f19-437c-bd19-fa1a84f63246",
             "serial_no": "OPTIONS-SN-3"
           }
         ],
@@ -294,46 +294,46 @@
     ],
     "origin": {
       "origin_kind": "loss_report",
-      "loss_operation_id": "0ebbd9ef-2596-4b59-b1a6-54f62b9a04ad",
-      "loss_line_id": "18db9a05-2150-4558-bae1-4a6c4fa9d006",
-      "headquarters_decision_id": "615774f0-e5b5-4cc6-8c87-07ab09814238",
-      "disposition_id": "e933ec38-f4ec-4435-919f-b47b9cc5c005"
+      "loss_operation_id": "6f27ddab-6c23-411c-9778-3ad8502cdb38",
+      "loss_line_id": "2b57f7a1-da7e-4116-b884-c0e1445630b5",
+      "headquarters_decision_id": "9377a2cf-a7d6-444d-8a70-2b49875bc609",
+      "disposition_id": "991e28b1-be03-4742-9eea-8e8e7524fe9c"
     }
   },
   "after": {
     "schema_version": "1.0",
-    "person_id": "b865db90-0536-46b2-9145-3f26b6914745",
+    "person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
     "authorization_version": 7,
     "ledger_cursor": 7,
-    "queried_at": "2026-09-30T05:41:34.885288Z",
+    "queried_at": "2026-10-02T00:26:20.753442Z",
     "package": {
       "verification_status": "verified",
-      "shipment_id": "1062c4d2-1922-48ac-a37e-8fde6300e2d5",
-      "shipment_no": "RET-SHP-5263BA26E31F5F40DDE8D3E9",
-      "operation_id": "60a3baf0-22ea-5248-922a-eae5de426601",
-      "operation_no": "LOSS-RET-84118A815117033062E0525A",
+      "shipment_id": "e4fbf61f-9416-4ab3-9630-26b47ebf27d9",
+      "shipment_no": "RET-SHP-0DE5AA53A8A57ED1777A320A",
+      "operation_id": "f0a40ee6-7d05-5b9b-b325-968885859ffc",
+      "operation_no": "LOSS-RET-51A7E94E1032EC630576AC63",
       "origin": {
         "origin_kind": "loss_report",
-        "loss_operation_id": "0ebbd9ef-2596-4b59-b1a6-54f62b9a04ad",
-        "loss_line_id": "18db9a05-2150-4558-bae1-4a6c4fa9d006",
-        "headquarters_decision_id": "615774f0-e5b5-4cc6-8c87-07ab09814238",
-        "disposition_id": "e933ec38-f4ec-4435-919f-b47b9cc5c005"
+        "loss_operation_id": "6f27ddab-6c23-411c-9778-3ad8502cdb38",
+        "loss_line_id": "2b57f7a1-da7e-4116-b884-c0e1445630b5",
+        "headquarters_decision_id": "9377a2cf-a7d6-444d-8a70-2b49875bc609",
+        "disposition_id": "991e28b1-be03-4742-9eea-8e8e7524fe9c"
       },
-      "sender_person_id": "a0f8b515-6061-4d80-93c3-85ebea51bf54",
-      "receiver_person_id": "b865db90-0536-46b2-9145-3f26b6914745",
-      "target_location_id": "9515af60-5dbb-44af-8a18-92b58bf3b164",
+      "sender_person_id": "dc0e8bae-7fc6-442e-bf47-d0b34405eb34",
+      "receiver_person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
+      "target_location_id": "f34e2d74-4bd5-4a43-a999-f06078ba29e2",
       "target_location_name": "测试区域仓",
-      "custody_assignment_id": "7a6472f1-ae5c-4ef8-a18b-8420480d5039",
+      "custody_assignment_id": "05ab6ad7-8cab-42c9-9011-cfae07aa07da",
       "carrier": "Synthetic carrier",
-      "tracking_no": "SYNTHETIC-87e520a00af44fdfb1d173eb49e1ebc9",
-      "shipped_at": "2026-09-30T05:41:23.897142Z",
-      "recorded_at": "2026-09-30T05:41:26.101676Z",
+      "tracking_no": "SYNTHETIC-acceb63fe2224728b25169b6f9dae0b7",
+      "shipped_at": "2026-10-02T00:25:44.010905Z",
+      "recorded_at": "2026-10-02T00:25:51.193094Z",
       "lines": [
         {
-          "shipment_line_id": "6c5a79d9-aba6-4471-8693-d8deb324041a",
-          "outbound_no": "RET-OUT-4D0508E978A602CBFF899E7F",
-          "material_id": "e7b2c949-1d2d-4e00-b07d-f6a2e3b34467",
-          "sku_code": "SKU-03095d7aa5c7",
+          "shipment_line_id": "3eacbdec-358f-4e78-8957-9a163c812bbc",
+          "outbound_no": "RET-OUT-428BD70EFF9199273030F35A",
+          "material_id": "0c0e17d9-d634-45e3-bf98-c528e71f02a7",
+          "sku_code": "SKU-68607b41cb02",
           "material_name": "测试物料",
           "base_unit": "件",
           "condition_code": "new",
@@ -342,7 +342,7 @@
           "shipped_quantity": "1.000",
           "serials": [
             {
-              "serial_id": "4ff6456c-7fd6-4947-abe7-d56272e2e791",
+              "serial_id": "d13376eb-5f19-437c-bd19-fa1a84f63246",
               "serial_no": "OPTIONS-SN-3"
             }
           ]
@@ -352,25 +352,25 @@
     "receipts": [
       {
         "schema_version": "1.0",
-        "receipt_id": "060cbab6-43bf-4ada-92ac-04254df04194",
-        "receipt_no": "RET-RCV-B075A420C942AED59376C8A8",
-        "shipment_id": "1062c4d2-1922-48ac-a37e-8fde6300e2d5",
-        "operation_id": "60a3baf0-22ea-5248-922a-eae5de426601",
-        "operator_person_id": "b865db90-0536-46b2-9145-3f26b6914745",
+        "receipt_id": "769d267d-6c27-43d2-8ffb-045d2a4ed87a",
+        "receipt_no": "RET-RCV-3D7D9447A69A26969376E459",
+        "shipment_id": "e4fbf61f-9416-4ab3-9630-26b47ebf27d9",
+        "operation_id": "f0a40ee6-7d05-5b9b-b325-968885859ffc",
+        "operator_person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
         "status": "accepted",
-        "received_at": "2026-09-30T05:41:26.996000Z",
-        "recorded_at": "2026-09-30T05:41:33.673745Z",
+        "received_at": "2026-10-02T00:25:54.403000Z",
+        "recorded_at": "2026-10-02T00:26:14.906464Z",
         "reason": "核验报损退回实物，验收独立于入库",
-        "request_id": "73a81dddfc154d65a667137b96a75444",
-        "request_hash": "4fddff2c9bee8c86e221f2431f12a241e55b3e86f5d5fc87217f86fbd95538ea",
-        "plan_hash": "ba5eb2ff0c0e4df77b260d9a80edba029404c275755a5358853a9e22d1293912",
-        "target_location_id": "9515af60-5dbb-44af-8a18-92b58bf3b164",
-        "target_custody_assignment_id": "7a6472f1-ae5c-4ef8-a18b-8420480d5039",
+        "request_id": "ad91f5b5ab28483d99b17c21f7a66026",
+        "request_hash": "3fac895939c90381359d41afea5413f526da44948661867b8178f804d9395869",
+        "plan_hash": "b9834debd87a8750cedde2aac841e998e02e7c976a6ab4abacc56c64d2f31de8",
+        "target_location_id": "f34e2d74-4bd5-4a43-a999-f06078ba29e2",
+        "target_custody_assignment_id": "05ab6ad7-8cab-42c9-9011-cfae07aa07da",
         "lines": [
           {
-            "shipment_line_id": "6c5a79d9-aba6-4471-8693-d8deb324041a",
-            "material_id": "e7b2c949-1d2d-4e00-b07d-f6a2e3b34467",
-            "sku_code": "SKU-03095d7aa5c7",
+            "shipment_line_id": "3eacbdec-358f-4e78-8957-9a163c812bbc",
+            "material_id": "0c0e17d9-d634-45e3-bf98-c528e71f02a7",
+            "sku_code": "SKU-68607b41cb02",
             "material_name": "测试物料",
             "base_unit": "件",
             "condition_code": "new",
@@ -386,7 +386,7 @@
             "shortage_qty": "0.000",
             "accepted_serials": [
               {
-                "serial_id": "4ff6456c-7fd6-4947-abe7-d56272e2e791",
+                "serial_id": "d13376eb-5f19-437c-bd19-fa1a84f63246",
                 "serial_no": "OPTIONS-SN-3"
               }
             ],
@@ -398,16 +398,16 @@
         ],
         "origin": {
           "origin_kind": "loss_report",
-          "loss_operation_id": "0ebbd9ef-2596-4b59-b1a6-54f62b9a04ad",
-          "loss_line_id": "18db9a05-2150-4558-bae1-4a6c4fa9d006",
-          "headquarters_decision_id": "615774f0-e5b5-4cc6-8c87-07ab09814238",
-          "disposition_id": "e933ec38-f4ec-4435-919f-b47b9cc5c005"
+          "loss_operation_id": "6f27ddab-6c23-411c-9778-3ad8502cdb38",
+          "loss_line_id": "2b57f7a1-da7e-4116-b884-c0e1445630b5",
+          "headquarters_decision_id": "9377a2cf-a7d6-444d-8a70-2b49875bc609",
+          "disposition_id": "991e28b1-be03-4742-9eea-8e8e7524fe9c"
         }
       }
     ],
     "lines": [
       {
-        "shipment_line_id": "6c5a79d9-aba6-4471-8693-d8deb324041a",
+        "shipment_line_id": "3eacbdec-358f-4e78-8957-9a163c812bbc",
         "shipped_qty": "1.000",
         "accepted_qty": "1.000",
         "rejected_qty": "0.000",
@@ -420,89 +420,89 @@
   "inbound": {
     "before": {
       "schema_version": "1.0",
-      "receipt_id": "060cbab6-43bf-4ada-92ac-04254df04194",
-      "shipment_id": "1062c4d2-1922-48ac-a37e-8fde6300e2d5",
-      "operator_person_id": "b865db90-0536-46b2-9145-3f26b6914745",
+      "receipt_id": "769d267d-6c27-43d2-8ffb-045d2a4ed87a",
+      "shipment_id": "e4fbf61f-9416-4ab3-9630-26b47ebf27d9",
+      "operator_person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
       "authorization_version": 7,
       "status": "not_posted",
       "inbound": null,
       "ledger_cursor": 7,
-      "checked_at": "2026-09-30T05:41:36.577193Z"
+      "checked_at": "2026-10-02T00:26:26.584715Z"
     },
     "preview": {
-      "schema_version": "1.0",
+      "schema_version": "2.0",
       "planning_status": "inbound_preview_only",
-      "receipt_id": "060cbab6-43bf-4ada-92ac-04254df04194",
-      "shipment_id": "1062c4d2-1922-48ac-a37e-8fde6300e2d5",
-      "operator_person_id": "b865db90-0536-46b2-9145-3f26b6914745",
+      "receipt_id": "769d267d-6c27-43d2-8ffb-045d2a4ed87a",
+      "shipment_id": "e4fbf61f-9416-4ab3-9630-26b47ebf27d9",
+      "operator_person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
       "authorization_version": 7,
-      "target_location_id": "9515af60-5dbb-44af-8a18-92b58bf3b164",
-      "target_custody_assignment_id": "7a6472f1-ae5c-4ef8-a18b-8420480d5039",
-      "receipt_plan_hash": "ba5eb2ff0c0e4df77b260d9a80edba029404c275755a5358853a9e22d1293912",
-      "plan_hash": "b41a77a06568f3b5f7cf0317388fc585f9ef5f72476cab860d356262f7072c24",
+      "target_location_id": "f34e2d74-4bd5-4a43-a999-f06078ba29e2",
+      "target_custody_assignment_id": "05ab6ad7-8cab-42c9-9011-cfae07aa07da",
+      "receipt_plan_hash": "b9834debd87a8750cedde2aac841e998e02e7c976a6ab4abacc56c64d2f31de8",
+      "plan_hash": "ab1fd0f70e5ea7416419108fa7075d8724012ac2443c23590bfac109a0301af2",
       "reason": "核验报损退回实物，验收独立于入库",
-      "checked_at": "2026-09-30T05:41:40.558108Z",
+      "checked_at": "2026-10-02T00:26:36.358837Z",
       "ledger_cursor": 7,
       "lines": [
         {
-          "receipt_line_id": "c38fb94c-9b8c-4dac-8bb6-460db7beb46d",
-          "shipment_line_id": "6c5a79d9-aba6-4471-8693-d8deb324041a",
-          "source_account_id": "6853824e-a143-47c1-860f-6bcedadec7ff",
-          "target_account_id": "3912c3e0-9014-412a-8de4-ae9084b027a3",
-          "material_id": "e7b2c949-1d2d-4e00-b07d-f6a2e3b34467",
+          "receipt_line_id": "10c4a239-07a8-4d80-bd74-81432f7526d6",
+          "shipment_line_id": "3eacbdec-358f-4e78-8957-9a163c812bbc",
+          "source_account_id": "a6906eaf-de02-412e-95d5-a7240573470f",
+          "target_account_id": "081001cf-745a-4d9f-83c3-73fe2ae19f4b",
+          "material_id": "0c0e17d9-d634-45e3-bf98-c528e71f02a7",
           "condition_code": "new",
           "lot_id": null,
           "accepted_qty": "1.000",
           "serial_ids": [
-            "4ff6456c-7fd6-4947-abe7-d56272e2e791"
+            "d13376eb-5f19-437c-bd19-fa1a84f63246"
           ]
         }
       ],
       "origin": {
         "origin_kind": "loss_report",
-        "loss_operation_id": "0ebbd9ef-2596-4b59-b1a6-54f62b9a04ad",
-        "loss_line_id": "18db9a05-2150-4558-bae1-4a6c4fa9d006",
-        "headquarters_decision_id": "615774f0-e5b5-4cc6-8c87-07ab09814238",
-        "disposition_id": "e933ec38-f4ec-4435-919f-b47b9cc5c005"
+        "loss_operation_id": "6f27ddab-6c23-411c-9778-3ad8502cdb38",
+        "loss_line_id": "2b57f7a1-da7e-4116-b884-c0e1445630b5",
+        "headquarters_decision_id": "9377a2cf-a7d6-444d-8a70-2b49875bc609",
+        "disposition_id": "991e28b1-be03-4742-9eea-8e8e7524fe9c"
       }
     },
     "command": {
-      "operator_person_id": "b865db90-0536-46b2-9145-3f26b6914745",
-      "expected_plan_hash": "b41a77a06568f3b5f7cf0317388fc585f9ef5f72476cab860d356262f7072c24",
-      "request_id": "1ce73ccb3d9c41e0915a706dec22f5e6",
-      "idempotency_key": "e6f3374146e04ac2850320f7b534490c"
+      "operator_person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
+      "expected_plan_hash": "ab1fd0f70e5ea7416419108fa7075d8724012ac2443c23590bfac109a0301af2",
+      "request_id": "41a1e92cdb2f45b2bc213d222d3e0c23",
+      "idempotency_key": "c4fdce1f6172496095d4fa2c51706333"
     },
     "posted": {
       "schema_version": "1.0",
-      "inbound_id": "4bb20ff8-63bc-4557-8f15-ee6992daf366",
-      "inbound_no": "RET-IN-4BB20FF863BC45578F15",
-      "receipt_id": "060cbab6-43bf-4ada-92ac-04254df04194",
-      "shipment_id": "1062c4d2-1922-48ac-a37e-8fde6300e2d5",
-      "target_location_id": "9515af60-5dbb-44af-8a18-92b58bf3b164",
-      "target_custody_assignment_id": "7a6472f1-ae5c-4ef8-a18b-8420480d5039",
+      "inbound_id": "a248d843-92d1-4208-b24e-f36468a0cf75",
+      "inbound_no": "RET-IN-A248D84392D14208B24E",
+      "receipt_id": "769d267d-6c27-43d2-8ffb-045d2a4ed87a",
+      "shipment_id": "e4fbf61f-9416-4ab3-9630-26b47ebf27d9",
+      "target_location_id": "f34e2d74-4bd5-4a43-a999-f06078ba29e2",
+      "target_custody_assignment_id": "05ab6ad7-8cab-42c9-9011-cfae07aa07da",
       "status": "posted",
-      "posting_transaction_id": "a0027f0b-332d-4ab8-b659-5fb7837f4456",
-      "request_id": "1ce73ccb3d9c41e0915a706dec22f5e6",
-      "request_hash": "5e80c4eea6a6f39a8e4ba61c16247688de97c6999797cc4cb429a26a2838a007",
-      "plan_hash": "b41a77a06568f3b5f7cf0317388fc585f9ef5f72476cab860d356262f7072c24",
+      "posting_transaction_id": "d55ae2d6-6e77-4ab3-bd0d-c8ebba243bec",
+      "request_id": "41a1e92cdb2f45b2bc213d222d3e0c23",
+      "request_hash": "32f591e7b83f1d1be4a002fc0b2ab40e29dae1242676a1c53a8862791b02561a",
+      "plan_hash": "ab1fd0f70e5ea7416419108fa7075d8724012ac2443c23590bfac109a0301af2",
       "replayed": false
     },
     "after": {
       "schema_version": "1.0",
-      "receipt_id": "060cbab6-43bf-4ada-92ac-04254df04194",
-      "shipment_id": "1062c4d2-1922-48ac-a37e-8fde6300e2d5",
-      "operator_person_id": "b865db90-0536-46b2-9145-3f26b6914745",
+      "receipt_id": "769d267d-6c27-43d2-8ffb-045d2a4ed87a",
+      "shipment_id": "e4fbf61f-9416-4ab3-9630-26b47ebf27d9",
+      "operator_person_id": "61a76960-858b-44ca-842f-03f6c4660d9f",
       "authorization_version": 7,
       "status": "posted",
       "inbound": {
-        "inbound_id": "4bb20ff8-63bc-4557-8f15-ee6992daf366",
-        "inbound_no": "RET-IN-4BB20FF863BC45578F15",
-        "target_location_id": "9515af60-5dbb-44af-8a18-92b58bf3b164",
-        "posting_transaction_id": "a0027f0b-332d-4ab8-b659-5fb7837f4456",
-        "posted_at": "2026-09-30T05:41:45.326124Z"
+        "inbound_id": "a248d843-92d1-4208-b24e-f36468a0cf75",
+        "inbound_no": "RET-IN-A248D84392D14208B24E",
+        "target_location_id": "f34e2d74-4bd5-4a43-a999-f06078ba29e2",
+        "posting_transaction_id": "d55ae2d6-6e77-4ab3-bd0d-c8ebba243bec",
+        "posted_at": "2026-10-02T00:26:45.561077Z"
       },
       "ledger_cursor": 8,
-      "checked_at": "2026-09-30T05:41:48.908511Z"
+      "checked_at": "2026-10-02T00:26:58.937818Z"
     }
   }
 }

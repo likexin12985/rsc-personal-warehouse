@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import App from './App';
 import { api, apiNoReplay } from './api';
@@ -17,6 +17,10 @@ vi.mock('./FormalLossCorrection', () => ({ default: (props: Props) => {
   observed.page(props);
   return <section aria-label="纠正路由测试">纠正</section>;
 } }));
+
+// Load the real route wrapper before permission assertions; keep page mocks and
+// no-replay adapter checks intact without timing cold transforms as UI updates.
+beforeAll(async () => { await import('./FormalOperationRoutes'); }, 30_000);
 
 const person = '10000000-0000-4000-8000-000000000001';
 beforeEach(() => { vi.mocked(api).mockReset(); vi.mocked(apiNoReplay).mockReset(); observed.page.mockClear(); });

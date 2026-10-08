@@ -178,15 +178,20 @@ def api_world(monkeypatch: pytest.MonkeyPatch):
         "identity_hash_version": 1,
         "sms_login_enabled": True,
         "sms_provider": SMS_PROVIDER,
-        "sms_access_key_id": "formal-test-access-key-id",
-        "sms_access_key_secret": "formal-test-access-key-secret",
+        # Production PNVS resolves through ECS/RAM default credentials; keep
+        # static AccessKey material out of the formal fixture.
+        "sms_credential_mode": "default_chain",
+        "sms_access_key_id": "",
+        "sms_access_key_secret": "",
         "sms_sign_name": "RSC个人仓",
         "sms_template_code": "SMS_FORMAL_TEST",
         "sms_scheme_name": "RSC个人仓登录",
-        "wechat_login_enabled": True,
-        "wechat_provider": "wechat",
-        "wechat_app_id": WECHAT_APP_ID,
-        "wechat_app_secret": "formal-test-wechat-secret",
+        # The production contract is SMS-only.  Retired WeChat coverage below
+        # remains as explicitly skipped historical documentation.
+        "wechat_login_enabled": False,
+        "wechat_provider": "disabled",
+        "wechat_app_id": "",
+        "wechat_app_secret": "",
         "auth_idempotency_ttl_seconds": 90,
         "auth_idempotency_hmac_secret": AUTH_IDEMPOTENCY_HMAC_SECRET,
         "auth_idempotency_encryption_provider": "aliyun_kms",
@@ -1452,9 +1457,6 @@ def test_kms_preflight_failure_precedes_login_limits_codes_and_providers(
     api_world: ApiWorld,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    wechat_provider = FakeWechatProvider(openid="kms-must-precede-this-openid")
-    monkeypatch.setattr(auth, "get_wechat_provider", lambda: wechat_provider)
-
     def _unavailable_cipher():
         raise AuthenticationEncryptionKeyUnavailable("test KMS unavailable")
 
@@ -1475,29 +1477,15 @@ def test_kms_preflight_failure_precedes_login_limits_codes_and_providers(
             request_id="auth-api-kms-before-mini-login-0001",
             idempotency_key="formal-kms-before-mini-login-key-0001",
         ),
-        api_world.client.post(
-            "/api/auth/miniprogram/wechat-login",
-            json={
-                "login_code": "kms-must-precede-this-login-code",
-                "device_id": "kms-before-wechat-device-0001",
-                "device_name": "KMS 前置验证设备",
-            },
-            headers=_formal_mutation_headers(
-                request_id="auth-api-kms-before-wechat-login-0001",
-                idempotency_key="formal-kms-before-wechat-login-key-0001",
-            ),
-        ),
     ]
 
-    assert [response.status_code for response in responses] == [503, 503, 503]
+    assert [response.status_code for response in responses] == [503, 503]
     assert all(
         response.json()["detail"]["code"]
         == "authentication_idempotency_encryption_unavailable"
         for response in responses
     )
     assert api_world.sms_provider.verify_calls == []
-    assert wechat_provider.login_calls == []
-    assert wechat_provider.phone_calls == []
     with api_world.session_factory() as db:
         for model in (
             AuthLoginRateLimitBucket,
@@ -1584,6 +1572,7 @@ def test_missing_authentication_chain_head_fails_before_sms_provider_send(
         assert db.scalar(select(func.count()).select_from(AuditEvent)) == 0
 
 
+@pytest.mark.skip(reason="试点 MVP 为短信-only；微信登录列为后续真实渠道迭代")
 def test_wechat_login_requires_one_exact_formal_openid_identity(
     api_world: ApiWorld,
     monkeypatch: pytest.MonkeyPatch,
@@ -1632,6 +1621,7 @@ def test_wechat_login_requires_one_exact_formal_openid_identity(
         assert "authentication.session.created" in actions
 
 
+@pytest.mark.skip(reason="试点 MVP 为短信-only；微信登录列为后续真实渠道迭代")
 def test_wechat_pre_provider_rate_rejection_writes_no_idempotency_or_audit(
     api_world: ApiWorld,
     monkeypatch: pytest.MonkeyPatch,
@@ -1676,6 +1666,7 @@ def test_wechat_pre_provider_rate_rejection_writes_no_idempotency_or_audit(
         assert db.scalar(select(func.count()).select_from(AuthSession)) == 0
 
 
+@pytest.mark.skip(reason="试点 MVP 为短信-only；微信登录列为后续真实渠道迭代")
 def test_wechat_login_same_key_replays_exact_tokens_without_provider_reuse(
     api_world: ApiWorld,
     monkeypatch: pytest.MonkeyPatch,
@@ -1758,6 +1749,7 @@ def test_wechat_login_same_key_replays_exact_tokens_without_provider_reuse(
         )
 
 
+@pytest.mark.skip(reason="试点 MVP 为短信-only；微信登录列为后续真实渠道迭代")
 def test_wechat_provider_runs_only_after_committed_pending_owner(
     api_world: ApiWorld,
     monkeypatch: pytest.MonkeyPatch,
@@ -1810,6 +1802,7 @@ def test_wechat_provider_runs_only_after_committed_pending_owner(
     assert provider.login_calls == ["formal-wechat-owner-before-provider-code"]
 
 
+@pytest.mark.skip(reason="试点 MVP 为短信-only；微信登录列为后续真实渠道迭代")
 def test_wechat_provider_failure_is_one_replayable_terminal_operation_and_audit(
     api_world: ApiWorld,
     monkeypatch: pytest.MonkeyPatch,
@@ -1871,6 +1864,7 @@ def test_wechat_provider_failure_is_one_replayable_terminal_operation_and_audit(
         assert db.scalar(select(func.count()).select_from(AuthSession)) == 0
 
 
+@pytest.mark.skip(reason="试点 MVP 为短信-only；微信登录列为后续真实渠道迭代")
 def test_wechat_never_falls_back_to_unionid_legacy_binding_or_phone_code(
     api_world: ApiWorld,
     monkeypatch: pytest.MonkeyPatch,
@@ -2656,9 +2650,6 @@ def test_production_authentication_mutations_reject_missing_trace_headers(
     api_world: ApiWorld,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    wechat_provider = FakeWechatProvider(openid="header-test-openid")
-    monkeypatch.setattr(auth, "get_wechat_provider", lambda: wechat_provider)
-
     no_request_id = api_world.client.post(
         "/api/auth/sms/request",
         json={"mobile": MOBILE},
@@ -2689,17 +2680,17 @@ def test_production_authentication_mutations_reject_missing_trace_headers(
     assert no_login_idempotency_key.status_code == 422
     assert no_login_idempotency_key.json()["detail"] == "缺少有效的幂等键"
 
-    no_wechat_request_id = api_world.client.post(
+    disabled_wechat_request = api_world.client.post(
         "/api/auth/miniprogram/wechat-login",
         json={
             "login_code": "header-test-login-code",
             "device_id": "header-test-device-0001",
         },
     )
-    assert no_wechat_request_id.status_code == 422
-    assert no_wechat_request_id.json()["detail"] == "缺少有效的请求标识"
+    assert disabled_wechat_request.status_code == 404
+    assert disabled_wechat_request.json()["detail"] == "登录方式不可用"
 
-    no_wechat_idempotency_key = api_world.client.post(
+    disabled_wechat_idempotency = api_world.client.post(
         "/api/auth/miniprogram/wechat-login",
         json={
             "login_code": "header-test-login-code",
@@ -2707,8 +2698,8 @@ def test_production_authentication_mutations_reject_missing_trace_headers(
         },
         headers={"X-Request-ID": "auth-api-header-wechat-idem-0001"},
     )
-    assert no_wechat_idempotency_key.status_code == 422
-    assert no_wechat_idempotency_key.json()["detail"] == "缺少有效的幂等键"
+    assert disabled_wechat_idempotency.status_code == 404
+    assert disabled_wechat_idempotency.json()["detail"] == "登录方式不可用"
 
     no_refresh_request_id = api_world.client.post(
         "/api/auth/miniprogram/refresh",
@@ -2755,8 +2746,6 @@ def test_production_authentication_mutations_reject_missing_trace_headers(
 
     assert api_world.sms_provider.send_calls == []
     assert api_world.sms_provider.verify_calls == []
-    assert wechat_provider.login_calls == []
-    assert wechat_provider.phone_calls == []
     with api_world.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(LoginChallenge)) == 0
         assert db.scalar(select(func.count()).select_from(AuthSession)) == 0

@@ -30,6 +30,14 @@ SECRET_NAMES = (
 REGISTRY_SCHEMA = "rsc.kms.encrypted-data-key-registry.v1"
 AUTH_PURPOSE = "authentication_idempotency"
 CONTACT_PURPOSE = "material_request_contact"
+PILOT_MVP_SCOPE = "trial-mvp"
+# Reviewed non-sensitive PNVS coordinates for the pilot login contract.  These
+# values identify the approved signature/template/scheme; they do not prove
+# that a provider account, RAM identity, source restriction, callback, or
+# isolated test-number round trip is configured.
+PILOT_SMS_SIGN_NAME = "恒创联众"
+PILOT_SMS_TEMPLATE_CODE = "100001"
+PILOT_SMS_SCHEME_NAME = "RSC个人仓登录"
 REGION_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
 BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")
 KMS_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:@+-]{2,255}$")
@@ -78,6 +86,14 @@ def configured(value: object, minimum: int = 1) -> bool:
     return not any(marker in lowered for marker in PLACEHOLDERS)
 
 
+def positive_integer(value: object, *, minimum: int = 1, maximum: int = 1_000_000) -> bool:
+    """Validate bounded numeric auth limits without coercing deployment data."""
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]+", value.strip()):
+        return False
+    parsed = int(value)
+    return minimum <= parsed <= maximum
+
+
 def sms_sts_configured(environment: dict[str, str]) -> bool:
     token = environment.get("OAM_SMS_SECURITY_TOKEN", "").strip()
     expiry = environment.get("OAM_SMS_SECURITY_TOKEN_EXPIRES_AT", "").strip()
@@ -91,6 +107,23 @@ def sms_sts_configured(environment: dict[str, str]) -> bool:
         return False
     return instant.tzinfo is not None and instant.astimezone(timezone.utc) > (
         datetime.now(timezone.utc) + timedelta(seconds=60)
+    )
+
+
+def sms_default_credential_chain_configured(environment: dict[str, str]) -> bool:
+    """Require instance credentials without accepting any static secret input."""
+
+    return (
+        environment.get("OAM_SMS_CREDENTIAL_MODE", "").strip() == "default_chain"
+        and not any(
+            environment.get(key, "").strip()
+            for key in (
+                "OAM_SMS_ACCESS_KEY_ID",
+                "OAM_SMS_ACCESS_KEY_SECRET",
+                "OAM_SMS_SECURITY_TOKEN",
+                "OAM_SMS_SECURITY_TOKEN_EXPIRES_AT",
+            )
+        )
     )
 
 
@@ -264,8 +297,13 @@ def checks_for(document: dict[str, object], compose_file: Path, *,
         check("smoke_target_matches_origin", smoke_base_url in {origin, origin + "/"}
               and smoke_private_path == "/xx/")
     check("production_environment", api_env.get("OAM_ENVIRONMENT") == "production")
+    # A pilot candidate must carry an explicit scope marker.  This keeps the
+    # frozen trial-MVP boundary machine-checkable at the deployment edge; it
+    # does not claim the broader formal V1 is complete.
+    check("pilot_mvp_scope", api_env.get("OAM_RELEASE_SCOPE") == PILOT_MVP_SCOPE)
     check("alembic_schema", api_env.get("OAM_DATABASE_SCHEMA_MODE") == "alembic")
     check("password_login_disabled", bool_value(api_env.get("OAM_PASSWORD_LOGIN_ENABLED")) is False)
+    check("wechat_login_disabled", bool_value(api_env.get("OAM_WECHAT_LOGIN_ENABLED")) is False)
     check("secure_cookie", bool_value(api_env.get("OAM_COOKIE_SECURE")) is True)
     check("legacy_writes_disabled", bool_value(api_env.get("OAM_LEGACY_PROTOTYPE_WRITES_ENABLED")) is False)
     check("bootstrap_credentials_empty", not any(api_env.get(key, "").strip() for key in (
@@ -279,11 +317,21 @@ def checks_for(document: dict[str, object], compose_file: Path, *,
         services.get("kms-pin-gate"), database_name, "star_oam_api", runtime_password))
 
     check("h5_sms_login", bool_value(api_env.get("OAM_SMS_LOGIN_ENABLED")) is True
-          and api_env.get("OAM_SMS_PROVIDER") == "aliyun_pnvs"
+          and api_env.get("OAM_SMS_PROVIDER") in {"aliyun_dypns", "aliyun_pnvs"}
+          and sms_default_credential_chain_configured(api_env)
           and all(configured(api_env.get(key)) for key in (
-              "OAM_SMS_ACCESS_KEY_ID", "OAM_SMS_ACCESS_KEY_SECRET", "OAM_SMS_SIGN_NAME",
-              "OAM_SMS_TEMPLATE_CODE", "OAM_SMS_SCHEME_NAME"))
+              "OAM_SMS_SIGN_NAME", "OAM_SMS_TEMPLATE_CODE", "OAM_SMS_SCHEME_NAME"))
+          and api_env.get("OAM_SMS_SIGN_NAME") == PILOT_SMS_SIGN_NAME
+          and api_env.get("OAM_SMS_TEMPLATE_CODE") == PILOT_SMS_TEMPLATE_CODE
+          and api_env.get("OAM_SMS_SCHEME_NAME") == PILOT_SMS_SCHEME_NAME
           and sms_sts_configured(api_env))
+    check("sms_static_credentials_empty", sms_default_credential_chain_configured(api_env))
+    check("sms_login_rate_limits", configured(
+        api_env.get("OAM_AUTH_LOGIN_RATE_LIMIT_HMAC_SECRET"), 32
+    ) and positive_integer(api_env.get("OAM_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS"), minimum=10, maximum=3600)
+          and positive_integer(api_env.get("OAM_AUTH_LOGIN_RATE_LIMIT_GLOBAL_LIMIT"))
+          and positive_integer(api_env.get("OAM_AUTH_LOGIN_RATE_LIMIT_IP_LIMIT"))
+          and positive_integer(api_env.get("OAM_AUTH_LOGIN_RATE_LIMIT_IDENTITY_LIMIT")))
 
     all_secrets = [db_env.get(key, "") for key in SECRET_NAMES[:5]] + [api_env.get(key, "") for key in SECRET_NAMES[5:]]
     check("required_secrets", all(configured(value, 32) for value in all_secrets))
@@ -396,7 +444,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             checks.append({"name": "compose_resolution", "ok": False})
     errors = [item["name"] for item in checks if not item["ok"]]
-    output = {"check": "pilot-preflight", "status": "fail" if errors else "pass", "deploymentReady": False, "errors": errors, "checks": checks, "unverified": ["target engine/images", "HTTPS certificate and proxy peer", "SMS send/verify", "KMS decrypt and persisted pins", "OSS policy/access", "database migration/roles", "identity/opening data", "backup restore and business UAT"], "scope": "configuration only; no container, network or business writes"}
+    output = {"check": "pilot-preflight", "status": "fail" if errors else "pass", "deploymentReady": False, "errors": errors, "checks": checks, "unverified": ["target engine/images", "HTTPS certificate and proxy peer", "SMS send/verify", "KMS decrypt and persisted pins", "OSS policy/access", "database migration/roles", "identity/opening data", "backup restore and business UAT"], "pilotScope": PILOT_MVP_SCOPE, "scope": "configuration only; no container, network or business writes"}
     print(json.dumps(output, ensure_ascii=False, separators=(",", ":")))
     return 1 if errors else 0
 

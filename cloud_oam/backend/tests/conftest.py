@@ -10,13 +10,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from local_test_runtime import DATABASE_PATH, UPLOAD_PATH
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
 os.environ.update(
     {
         "OAM_ENVIRONMENT": "test",
-        "OAM_DATABASE_URL": f"sqlite+pysqlite:///{ROOT / '.test_oam.db'}",
+        "OAM_DATABASE_URL": f"sqlite+pysqlite:///{DATABASE_PATH}",
         "OAM_DATABASE_SCHEMA_MODE": "bootstrap_with_seed",
         "OAM_LEGACY_PROTOTYPE_WRITES_ENABLED": "true",
         "OAM_JWT_SECRET": "test-secret-with-at-least-thirty-two-characters",
@@ -24,15 +26,17 @@ os.environ.update(
         "OAM_ADMIN_MOBILE": "18660255681",
         "OAM_ADMIN_NAME": "系统管理员",
         "OAM_ADMIN_INITIAL_PASSWORD": "Temporary-Admin-Password-2026!",
-        "OAM_UPLOAD_DIR": str(ROOT / ".test_uploads"),
-        "OAM_PASSWORD_LOGIN_ENABLED": "true",
+        "OAM_UPLOAD_DIR": str(UPLOAD_PATH),
+        # The formal client is SMS-only; historical password fields remain in
+        # the schema but test runtime must not enable the retired channel.
+        "OAM_PASSWORD_LOGIN_ENABLED": "false",
         "OAM_SMS_LOGIN_ENABLED": "true",
         "OAM_SMS_PROVIDER": "mock",
         "OAM_SMS_TEST_CODE": "246810",
-        "OAM_WECHAT_LOGIN_ENABLED": "true",
-        "OAM_WECHAT_PROVIDER": "mock",
-        "OAM_WECHAT_APP_ID": "wx-test-rsc",
-        "OAM_WECHAT_TEST_MOBILE": "18660255681",
+        "OAM_WECHAT_LOGIN_ENABLED": "false",
+        "OAM_WECHAT_PROVIDER": "disabled",
+        "OAM_WECHAT_APP_ID": "",
+        "OAM_WECHAT_TEST_MOBILE": "",
         "OAM_EDGE_SYNC_ENABLED": "true",
         "OAM_EDGE_SYNC_SECRET": (
             "edge-sync-test-secret-with-at-least-32-characters"

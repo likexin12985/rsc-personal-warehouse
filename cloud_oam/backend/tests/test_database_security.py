@@ -72,6 +72,7 @@ from app.database_security import (
     FORMAL_FILE_INTERNAL_FUNCTIONS,
     FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256,
     FORMAL_FILE_INTERNAL_FUNCTION_SHAPES,
+    FORMAL_FILE_INTERNAL_SET_FUNCTIONS,
     RUNTIME_INSERT_TABLES,
     RUNTIME_READ_TABLES,
     RUNTIME_UPDATE_TABLES,
@@ -565,6 +566,11 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
     stocktake_start_tables = {"stocktake_start_completions", "opening_start_command_seals", "opening_import_command_seals"}
     daily_review_tables = {"daily_review_events","daily_review_bindings","daily_review_consumptions","daily_review_request_seals"}
     allocation_tables = {
+        "material_request_closures", "material_request_remaining_cancellations",
+        "material_request_remaining_cancellation_lines", "material_request_rejection_returns",
+        "material_request_rejection_return_serials", "material_request_rejection_progress",
+        "material_request_rejection_receipts", "material_request_rejection_receipt_serials", "material_request_rejection_receipt_exceptions",
+        "material_request_rejection_inbounds", "material_request_rejection_inbound_parts", "material_request_rejection_inbound_serials", "material_request_return_compensations",
         "stock_operation_return_inbound_seals",
         "stock_operation_command_seals",
         "stock_operation_outbounds", "stock_operation_outbound_lines", "stock_operation_outbound_serials",
@@ -588,6 +594,20 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
     loss_correction_fact_tables = {
         "stock_loss_disposition_reversals", "stock_loss_correction_decisions",
         "stock_loss_correction_executions", "stock_loss_inverse_request_seals",
+        "stock_loss_correction_approval_seals", "stock_loss_correction_execution_seals",
+        "stock_loss_return_stops",
+    }
+    scrap_fact_tables = {
+        'stock_scrap_lines', 'stock_scrap_serials', 'stock_scrap_files',
+        'stock_scrap_recovery_requests', 'stock_scrap_recovery_files',
+        'stock_scrap_recovery_regional_reviews', 'stock_scrap_recovery_headquarters_reviews',
+        'stock_scrap_recovery_executions',
+    }
+    condition_fact_tables = {
+        'stock_condition_cases', 'stock_condition_serials', 'stock_condition_files',
+        'stock_condition_events', 'stock_condition_decision_seals',
+        'stock_condition_settlement_requests', 'stock_condition_settlement_scans',
+        'stock_condition_submission_requests',
     }
     assert RUNTIME_READ_TABLES - set(values["API_READ_TABLES"]) == (
         safe_posting_tables | daily_review_tables
@@ -602,6 +622,8 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         | stocktake_close_read_tables
         | stocktake_start_tables
         | allocation_tables | loss_correction_fact_tables | {"stock_loss_request_key_bindings"}
+        | scrap_fact_tables | {'stock_scrap_request_key_bindings', 'stock_scrap_request_seals'}
+        | condition_fact_tables | {'stock_condition_request_key_bindings', 'stock_condition_request_seals'}
     )
     assert RUNTIME_INSERT_TABLES - set(values["API_INSERT_TABLES"]) == (
         safe_posting_tables | daily_review_tables
@@ -610,6 +632,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
         | stocktake_close_insert_tables
         | stocktake_start_tables
         | (allocation_tables - {"oam_receipt_evidence"}) | loss_correction_fact_tables
+        | scrap_fact_tables | (condition_fact_tables - {'stock_condition_decision_seals'})
     )
     assert set(values["API_READ_TABLES"]) <= RUNTIME_READ_TABLES
     assert set(values["API_INSERT_TABLES"]) <= RUNTIME_INSERT_TABLES
@@ -753,6 +776,7 @@ def test_runtime_acl_verifier_matches_base_manifest_through_0047(
             "allocation_status",
             "reservation_status",
             "outbound_status",
+            "shipment_status",
             "personal_inbound_status",
             "version",
             "updated_at",
@@ -901,6 +925,8 @@ def test_0036_formal_file_runtime_manifest_and_function_bodies_are_exact() -> No
             loss_evidence = runpy.run_path(str(FORMAL_FILE_MIGRATION_0036.with_name('20261122_0143_stock_loss_evidence_purpose.py')))
             assert body == loss_evidence['OLD_BODY']
             body = loss_evidence['NEW_BODY']
+        from migration_source_expectations import current_source_body
+        body = current_source_body('20261122_0143', f'public.{function_name}()', body)
         assert hashlib.sha256(body.encode("utf-8")).hexdigest() == (
             FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256[coordinate]
         )
@@ -1185,6 +1211,9 @@ def _assert_0069_function_body_matches_runtime_manifest(
         assert latest_body.count(old) == 1 and new not in latest_body
         latest_body = latest_body.replace(old, new)
         assert hashlib.sha256(latest_body.encode()).hexdigest() == own_inbound["APPROVAL_NEW_HASH"]
+    from migration_source_expectations import current_source_body
+    latest_body = current_source_body('20260929_0089',
+        f'public.{coordinate[0]}({coordinate[1]})', latest_body)
     assert MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[coordinate] == hashlib.sha256(latest_body.encode()).hexdigest()
     assert current_hash != historical_hash
     for old, new in reversed(replacements):
@@ -1367,31 +1396,11 @@ def _transit_source_change(coordinate):
         successor = runpy.run_path(str(Path(__file__).parents[1] /
             "alembic/versions/20261013_0103_stock_return_outbounds.py"))
         old, new = successor["_sources"]()["public.rsc_require_opening_observation_account_0023()"]
-        loss = runpy.run_path(str(Path(__file__).parents[1] /
-            "alembic/versions/20261124_0145_stock_loss_submission_proof.py"))
-        loss_old, loss_new = loss['_sources']()['public.rsc_require_opening_observation_account_0023()']
-        assert new == loss_old
-        inbound = runpy.run_path(str(Path(__file__).parents[1] /
-            "alembic/versions/20261128_0149_stock_return_inbound_account_admission.py"))
-        inbound_old, inbound_new = inbound['_sources']()['public.rsc_require_opening_observation_account_0023()']
-        assert loss_new == inbound_old
-        disposition = runpy.run_path(str(Path(__file__).parents[1] /
-            "alembic/versions/20261129_0150_stock_loss_disposition.py"))
-        disposition_old, disposition_new = disposition['_sources']()['public.rsc_require_opening_observation_account_0023()']
-        assert inbound_new == disposition_old
-        derived_return = runpy.run_path(str(Path(__file__).parents[1] /
-            'alembic/versions/20261201_0152_stock_loss_derived_returns.py'))
-        return_old, return_new = derived_return['_sources']()['public.rsc_require_opening_observation_account_0023()']
-        assert disposition_new == return_old
-        receipt = runpy.run_path(str(Path(__file__).parents[1] /
-            'alembic/versions/20261204_0155_stock_loss_return_receipts.py'))
-        receipt_old, receipt_new = receipt['_sources']()['public.rsc_require_opening_observation_account_0023()']
-        assert return_new == receipt_old
-        correction = runpy.run_path(str(Path(__file__).parents[1] /
-            'alembic/versions/20261208_0159_stock_loss_corrections.py'))
-        correction_old, correction_new = correction['_sources']()['public.rsc_require_opening_observation_account_0023()']
-        assert receipt_new == correction_old
-        return hashlib.sha256(old.encode()).hexdigest(), hashlib.sha256(correction_new.encode()).hexdigest(), ((old,correction_new,1),)
+        from migration_source_expectations import current_source_body
+        current = current_source_body(successor['revision'],
+            'public.rsc_require_opening_observation_account_0023()', new)
+        return (hashlib.sha256(old.encode()).hexdigest(),
+                hashlib.sha256(current.encode()).hexdigest(), ((old, current, 1),))
     migration = runpy.run_path(str(Path(__file__).parents[1] /
         "alembic/versions/20261012_0102_transit_opening_scopes.py"))
     return migration["SOURCE_CHANGES"].get(f"{coordinate[0]}({coordinate[1]})")
@@ -2303,6 +2312,7 @@ def test_0051_difference_completion_function_guard_rejects_legacy_body_and_acl(
         patcher.setattr(database_security, "RUNTIME_EXECUTE_FUNCTIONS", {})
         patcher.setattr(database_security, "RUNTIME_FUNCTION_SHAPES", {})
         patcher.setattr(database_security, "RUNTIME_FUNCTION_BODY_SHA256", {})
+        patcher.setattr(database_security, "FORMAL_FILE_INTERNAL_SET_FUNCTIONS", {})
         patcher.setattr(
             database_security,
             "FORMAL_FILE_INTERNAL_FUNCTIONS",
@@ -3040,6 +3050,7 @@ def test_0052_opening_terminal_startup_rejects_function_security_body_and_acl_dr
         patcher.setattr(database_security, "RUNTIME_EXECUTE_FUNCTIONS", {})
         patcher.setattr(database_security, "RUNTIME_FUNCTION_SHAPES", {})
         patcher.setattr(database_security, "RUNTIME_FUNCTION_BODY_SHA256", {})
+        patcher.setattr(database_security, "FORMAL_FILE_INTERNAL_SET_FUNCTIONS", {})
         patcher.setattr(
             database_security,
             "FORMAL_FILE_INTERNAL_FUNCTIONS",
@@ -5184,9 +5195,9 @@ def test_runtime_function_acl_rejects_execute_or_wrong_owner(
             "argument_types": argument_types,
             "function_kind": function_shapes[(function_name, argument_types)][0],
             "result_type": function_shapes[(function_name, argument_types)][1],
-            "returns_set": False,
+            "returns_set": (function_name, argument_types) in FORMAL_FILE_INTERNAL_SET_FUNCTIONS,
             "variadic_type": 0,
-            "argument_modes": None,
+            "argument_modes": FORMAL_FILE_INTERNAL_SET_FUNCTIONS.get((function_name, argument_types)),
             "argument_default_count": 0,
             "is_strict": function_shapes[(function_name, argument_types)][2],
             "source_body": fixture_source_body,
@@ -5563,7 +5574,7 @@ def test_0057_difference_replay_runtime_and_guard_manifests_are_exact() -> None:
 def _valid_audit_trigger_rows() -> list[dict[str, object]]:
     return [
         {
-            "trigger_name": name,
+            "trigger_name": name[1] if isinstance(name, tuple) else name,
             "table_name": table_name,
             "function_name": function_name,
             "function_schema": "public",
@@ -5572,7 +5583,13 @@ def _valid_audit_trigger_rows() -> list[dict[str, object]]:
             "is_constraint_trigger": is_constraint_trigger,
             "is_deferrable": is_deferrable,
             "is_initially_deferred": is_initially_deferred,
-            "has_when_clause": False,
+            "has_when_clause": name in {
+                ("audit_events", "rsc_closure_audit_0169"),
+                ("audit_events", "rsc_remaining_cancel_audit_0171"),
+                ("audit_events", "rsc_rejection_return_complete_0172"),
+                ("audit_events", "rsc_rejection_progress_complete_0173"),
+                ("audit_events", "rsc_rejection_receipt_complete_0174"), ('inventory_transactions', 'rsc_rejection_inbound_complete_0175'), ('audit_events', 'rsc_rejection_inbound_complete_0175'), ('outbox_events', 'rsc_rejection_inbound_complete_0175'), ('notification_events', 'rsc_rejection_inbound_complete_0175'), ('audit_events', 'rsc_return_compensation_complete_0176'),
+            },
             "has_column_filter": False,
         }
         for name, (
@@ -5583,7 +5600,7 @@ def _valid_audit_trigger_rows() -> list[dict[str, object]]:
             is_deferrable,
             is_initially_deferred,
         ) in sorted(
-            EXPECTED_AUDIT_TRIGGERS.items()
+            EXPECTED_AUDIT_TRIGGERS.items(), key=lambda item: (item[1][0], str(item[0]))
         )
     ]
 
@@ -5907,7 +5924,9 @@ def test_audit_trigger_guard_requires_exact_enabled_bindings() -> None:
         ("has_column_filter", True),
     ):
         rows = _valid_audit_trigger_rows()
-        rows[0][field] = value
+        # The first row may now be a deferred constraint trigger. Always
+        # change the actual value rather than setting True to existing True.
+        rows[0][field] = not rows[0][field] if isinstance(value, bool) else value
         with pytest.raises(DatabaseSecurityBoundaryError, match="trigger"):
             _assert_audit_trigger_guards(rows)
     missing_rows = _valid_audit_trigger_rows()
@@ -6104,7 +6123,7 @@ def test_material_request_cancellation_catalog_uses_postgresql_identifier(
         == POSTGRESQL_MATERIAL_REQUEST_CANCELLATION_FACT_GRAPH_TRIGGER_0037
     )
     assert all(
-        len(name.encode("utf-8")) <= 63
+        len((name[1] if isinstance(name, tuple) else name).encode("utf-8")) <= 63
         for name in migration._postgresql_triggers()
     )
     assert source_name not in EXPECTED_MATERIAL_REQUEST_CANCELLATION_TRIGGERS
@@ -7149,7 +7168,7 @@ def _valid_material_request_approval_trigger_rows(
 ) -> list[dict[str, object]]:
     return [
         {
-            "trigger_name": name,
+            "trigger_name": name[1] if isinstance(name, tuple) else name,
             "table_name": table_name,
             "function_name": function_name,
             "function_schema": "public",
@@ -7158,7 +7177,13 @@ def _valid_material_request_approval_trigger_rows(
             "is_constraint_trigger": is_constraint,
             "is_deferrable": is_deferrable,
             "is_initially_deferred": is_initially_deferred,
-            "has_when_clause": False,
+            "has_when_clause": name in {
+                ("audit_events", "rsc_closure_audit_0169"),
+                ("audit_events", "rsc_remaining_cancel_audit_0171"),
+                ("audit_events", "rsc_rejection_return_complete_0172"),
+                ("audit_events", "rsc_rejection_progress_complete_0173"),
+                ("audit_events", "rsc_rejection_receipt_complete_0174"), ('inventory_transactions', 'rsc_rejection_inbound_complete_0175'), ('audit_events', 'rsc_rejection_inbound_complete_0175'), ('outbox_events', 'rsc_rejection_inbound_complete_0175'), ('notification_events', 'rsc_rejection_inbound_complete_0175'), ('audit_events', 'rsc_return_compensation_complete_0176'),
+            },
             "has_column_filter": False,
         }
         for name, (
@@ -7169,7 +7194,7 @@ def _valid_material_request_approval_trigger_rows(
             is_constraint,
             is_deferrable,
             is_initially_deferred,
-        ) in sorted(EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items())
+        ) in sorted(EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items(), key=lambda item: (item[1][0], str(item[0])))
     ]
 
 
@@ -7327,7 +7352,68 @@ def test_0046_material_request_guard_catalog_accepts_exact_manifest(
     triggers = _valid_material_request_approval_trigger_rows()
     functions = _valid_material_request_approval_function_rows(monkeypatch)
 
-    assert len(triggers) == 577
+    # 0159's 577 plus seal/quality/stop, 153 scrap and 313 condition bindings.
+    # Compare independent frozen tuples below, not just the total count.
+    assert len(triggers) == 577 + 37 + 1 + 10 + 153 + 313 + 21 + 9 + 9 + 5 + 13 + 17 + 5
+    import json
+    scrap = json.loads((ROOT / 'backend/alembic/stock_scrap_0165/catalog.json').read_text())
+    new_scrap_triggers = []
+    for table, change in scrap['tables'].items():
+        before = {row['name'] for row in (change['before'] or {}).get('triggers', ())}
+        new_scrap_triggers.extend((table, row) for row in change['after']['triggers'] if row['name'] not in before)
+    assert len(new_scrap_triggers) == 153
+    condition = json.loads((ROOT / 'backend/alembic/return_condition_0167/catalog.json').read_text())
+    new_condition_triggers = []
+    for table, change in condition['tables'].items():
+        before = {row['name'] for row in (change['before'] or {}).get('triggers', ())}
+        new_condition_triggers.extend((table, row) for row in change['after']['triggers'] if row['name'] not in before)
+    assert len(new_condition_triggers) == 313
+    new_scrap_triggers += new_condition_triggers
+    for folder, count in (('request_closure_0169', 21), ('remaining_cancel_0171', 9), ('rejection_return_0172', 9), ('rejection_progress_0173', 5), ('rejection_receipt_0174', 13), ('rejection_inbound_0175', 17), ('return_compensation_0176', 5)):
+        forward = json.loads((ROOT / 'backend/alembic' / folder / 'catalog.json').read_text())
+        added = []
+        for table, change in forward['tables'].items():
+            before = {row['name'] for row in (change['before'] or {}).get('triggers', ())}
+            added.extend((table, row) for row in change['after']['triggers'] if row['name'] not in before)
+        assert len(added) == count
+        new_scrap_triggers += added
+
+    coordinates = {(table, row['name']) for table, row in new_scrap_triggers}
+    assert {
+        (row['table_name'], row['trigger_name'], row['function_name'], row['enabled'],
+         row['trigger_type'], row['is_constraint_trigger'], row['is_deferrable'], row['is_initially_deferred'])
+        for row in triggers if (row['table_name'], row['trigger_name']) in coordinates
+    } == {
+        (table, row['name'], row['function_signature'].split('(', 1)[0], row['tgenabled'],
+         row['tgtype'], row['definition'].startswith('CREATE CONSTRAINT TRIGGER '), row['tgdeferrable'], row['tginitdeferred'])
+        for table, row in new_scrap_triggers
+    }
+    later_triggers = []
+    for folder, key, count in (
+        ('stock_loss_correction_seals_0161', 'addedTriggers', 37),
+        ('stock_loss_return_stops_0163', 'triggers', 10),
+    ):
+        catalog = json.loads((ROOT / 'backend/alembic' / folder / 'catalog.json').read_text())
+        assert len(catalog[key]) == count
+        later_triggers.extend(catalog[key])
+    later_names = {row['name'] for row in later_triggers}
+    assert len(later_names) == 47
+    assert {
+        (row['trigger_name'], row['table_name'], row['function_name'], row['enabled'],
+         row['trigger_type'], row['is_constraint_trigger'], row['is_deferrable'], row['is_initially_deferred'])
+        for row in triggers if row['trigger_name'] in later_names
+    } == {
+        (row['name'], row['table_name'], row['function_name'], row['tgenabled'],
+         row['tgtype'], 'CREATE CONSTRAINT TRIGGER' in row['definition'], row['tgdeferrable'], row['tginitdeferred'])
+        for row in later_triggers
+    }
+    quality = [row for row in triggers if row['trigger_name'] == 'trg_return_inbound_quality_0162']
+    assert len(quality) == 1
+    assert tuple(quality[0][key] for key in (
+        'table_name', 'function_name', 'enabled', 'trigger_type',
+        'is_constraint_trigger', 'is_deferrable', 'is_initially_deferred',
+    )) == ('stock_operation_return_inbounds', 'rsc_require_return_inbound_quality_0162',
+           'A', 7, False, False, False)
     # Compare the full new trigger tuple to the independently frozen migration,
     # not just its count or the runtime registry's own values.
     import json
@@ -7485,7 +7571,7 @@ def test_0045_material_request_approval_trigger_catalog_rejects_shape_drift(
 
 def test_0045_material_request_approval_trigger_names_fit_postgresql() -> None:
     assert all(
-        len(name.encode("utf-8")) <= 63
+        len((name[1] if isinstance(name, tuple) else name).encode("utf-8")) <= 63
         for name in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS
     )
 
@@ -7708,7 +7794,7 @@ def test_0045_material_request_approval_migration_bindings_match_manifest(
     manifest_bindings = {
         name: expected[0]
         for name, expected in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items()
-        if name.endswith(("_0029", "_0030", "_0045"))
+        if isinstance(name, str) and name.endswith(("_0029", "_0030", "_0045"))
     }
     migration_bindings = {
         trigger_name: table_name
@@ -7752,7 +7838,8 @@ def test_0045_material_request_approval_migration_bindings_match_manifest(
     }
     assert all(
         expected[2] == "A"
-        for expected in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.values()
+        for name, expected in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items()
+        if isinstance(name, str) and name.endswith("_0045")
     )
 
 
@@ -7850,7 +7937,7 @@ def test_0046_material_request_content_bindings_match_manifest() -> None:
     manifest_bindings = {
         name: expected[0]
         for name, expected in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items()
-        if name.endswith("_0046")
+        if isinstance(name, str) and name.endswith("_0046")
     }
     migration_bindings = {
         trigger_name: table_name

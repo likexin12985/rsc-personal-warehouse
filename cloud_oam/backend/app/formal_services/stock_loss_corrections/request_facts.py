@@ -33,6 +33,14 @@ def verify_request_fact(*, row, root, order, reversed_execution=None, reversal=N
     Correctness of those parents' stock/audit facts is the composed verifier's
     responsibility. This check alone is not a complete historical proof.
     """
+    if type(row) is Inverse and row.source_account_id is None:
+        from ..stock_scrap.recovery_history import request_fact
+        request_fact(row=row, root=root, order=order, reversed_execution=reversed_execution)
+        return {'request_hash': row.request_hash, 'action': 'execute_scrap_recovery'}
+    if type(row) is Execution and row.disposition == 'scrap':
+        from ..stock_scrap.request_facts import verify as verify_scrap
+        verify_scrap(row=row, root=root, order=order, reversal=reversal, decision=decision)
+        return {'request_hash': row.request_hash, 'action': 'scrap'}
     schema = SCHEMAS.get(type(row))
     _need(schema is not None and type(row.command_jsonb) is dict)
     document = row.command_jsonb

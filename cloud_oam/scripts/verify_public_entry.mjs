@@ -21,6 +21,7 @@ assert.match(warehouseHtml, /href="\/xx\/assets\//);
 const scripts = readdirSync(path.join(publicDir, 'assets')).filter((name) => name.endsWith('.js'));
 const publicCode = scripts.map((name) => read(path.join(publicDir, 'assets', name))).join('\n');
 assert.match(publicCode, /资料待更新/);
+assert.match(publicCode, /https:\/\/rscwz\.cn\/xx/);
 assert.match(publicCode, /豫ICP备2026043964号-1/);
 assert.match(publicCode, /https:\/\/beian\.miit\.gov\.cn\//);
 assert.doesNotMatch(publicCode, /验证码登录|\/auth\/me|\/auth\/refresh|\/auth\/sms|cloud-oam-auth-refresh|inventory-transactions/);

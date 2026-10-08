@@ -23,9 +23,14 @@ from .work_order_return_sources import _fail
 
 def _authorize(db, actor):
     current = posting._require_current_actor(db, actor)
-    if (not {"admin", "provincial_manager"}.intersection(current.role_codes)
-            or not current.allows(db, "stock_operation", "read",
-                target_scope_type="person", target_scope_id=str(current.person_id))):
+    # A regional custodian may belong to headquarters while holding an explicit
+    # current regional assignment. Gate on those operational scopes, not their
+    # home organization via a person target. _locations still checks the exact
+    # owner, both read permissions and unique live custody for every result.
+    scopes = {(g.scope_type, g.scope_id) for g in current.assignments
+        if g.role_code in {"admin", "provincial_manager"}}
+    if not any(current.allows(db, "stock_operation", "read",
+            target_scope_type=kind, target_scope_id=identifier) for kind, identifier in scopes):
         _fail("stock_return_receiving_forbidden", "没有区域仓退回接收查询权限", 403)
     return current
 

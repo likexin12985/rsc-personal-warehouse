@@ -1,0 +1,275 @@
+{
+  "scope": "synthetic-backend-command-contracts-not-business-facts",
+  "samples": [
+    {
+      "kind": "original",
+      "variant": "standard",
+      "person_id": "dda26a90-6dcf-4949-b861-caf85bd399d5",
+      "authorization_version": 7,
+      "original": {
+        "request_id": "synthetic-request-1",
+        "idempotency_key": "PRIVATE-original-key-1",
+        "source": {
+          "kind": "original",
+          "headquarters_decision_id": "05bcb8ac-8a78-4abf-8125-9254f57ab353",
+          "expected_headquarters_review_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+          "expected_submission_plan_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "execution_reason": "Synthetic client request contract",
+        "evidence_file_ids": [
+          "35291de1-102b-4aaf-b23d-9f8e1df98b07",
+          "297e9954-c65a-43e0-ad53-4e7f0c699ae4"
+        ],
+        "expected_plan_hash": "5555555555555555555555555555555555555555555555555555555555555555"
+      },
+      "request_hash": "59d78e8b118d788c597087b16bee4b06444618ca89a0bf9e16e2883c9a5b9cad"
+    },
+    {
+      "kind": "original",
+      "variant": "unicode_and_order",
+      "person_id": "9a4384ed-29d7-439a-9e7b-0c6a668ca4ae",
+      "authorization_version": 7,
+      "original": {
+        "request_id": "synthetic-request-1",
+        "idempotency_key": "PRIVATE-original-key-1",
+        "source": {
+          "kind": "original",
+          "headquarters_decision_id": "29a74868-e4c5-49eb-b693-9c8eb8689c2d",
+          "expected_headquarters_review_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+          "expected_submission_plan_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "execution_reason": "现场证据已复核；原请求保持不变 🌟\n第二行\t核实",
+        "evidence_file_ids": [
+          "9464666d-1b61-4b54-a01d-1e90fb6cc6cd",
+          "35ef9f89-8339-4645-a3ce-e0b981764e2f"
+        ],
+        "expected_plan_hash": "5555555555555555555555555555555555555555555555555555555555555555"
+      },
+      "request_hash": "55d92bcde1387ace36bb690f655992e4a0a4083bd32d6beb73f91eae881a314a"
+    },
+    {
+      "kind": "correction",
+      "variant": "standard",
+      "person_id": "9cd23165-617e-4610-956f-276b0cac24f0",
+      "authorization_version": 7,
+      "original": {
+        "request_id": "synthetic-request-1",
+        "idempotency_key": "PRIVATE-original-key-1",
+        "source": {
+          "kind": "correction",
+          "root_disposition_id": "0c602ec0-9660-4f44-928d-064cfc6d541d",
+          "expected_root_request_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+          "expected_submission_plan_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+          "reversal_id": "b3bb6fc1-8982-4e71-bec7-edb8f12af988",
+          "expected_reversal_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "correction_decision_id": "90a42fc3-e210-4867-a49a-0ce7ef823f09",
+          "expected_correction_decision_hash": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "execution_reason": "Synthetic client request contract",
+        "evidence_file_ids": [
+          "a0418d03-8562-483f-8d4e-107b61a7f2e9",
+          "3ab416f5-abbc-41ea-a8fd-69507f0e9dae"
+        ],
+        "expected_plan_hash": "5555555555555555555555555555555555555555555555555555555555555555"
+      },
+      "request_hash": "b90989ceeb6df17b794f8533650d91d9b93ede58049d192c34122dee149b6be9"
+    },
+    {
+      "kind": "correction",
+      "variant": "unicode_and_order",
+      "person_id": "feae1a27-7f14-4d0f-a3d6-02696fd9477b",
+      "authorization_version": 7,
+      "original": {
+        "request_id": "synthetic-request-1",
+        "idempotency_key": "PRIVATE-original-key-1",
+        "source": {
+          "kind": "correction",
+          "root_disposition_id": "5c68f022-8552-4d7f-b8f7-512f46a66048",
+          "expected_root_request_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+          "expected_submission_plan_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+          "reversal_id": "b12fd7d4-17e8-4c2e-8d99-d20ece6e6c3c",
+          "expected_reversal_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "correction_decision_id": "21c59c62-2282-4220-b75f-d15090e8f7ee",
+          "expected_correction_decision_hash": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "execution_reason": "现场证据已复核；原请求保持不变 🌟\n第二行\t核实",
+        "evidence_file_ids": [
+          "993e8dad-4659-4efb-bb40-da79542696e7",
+          "17ca5280-822d-45ac-91a1-f8bebf6e7260"
+        ],
+        "expected_plan_hash": "5555555555555555555555555555555555555555555555555555555555555555"
+      },
+      "request_hash": "85f14c97e567cf38f6fe92d24df196bf5af370a7b5eadb4483fb5a1c7343377f"
+    },
+    {
+      "kind": "apply",
+      "variant": "standard",
+      "person_id": "e299792d-14cf-4c58-bd03-7ecb7b1597ad",
+      "authorization_version": 7,
+      "original": {
+        "request_id": "synthetic-request-1",
+        "idempotency_key": "PRIVATE-original-key-1",
+        "action": "apply_scrap_recovery",
+        "source": {
+          "scrap_line_id": "541065a2-25d3-4575-b283-7469a9aee0b8",
+          "expected_scrap_request_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "reason": "Synthetic client request contract",
+        "evidence_file_ids": [
+          "bbebb945-853c-41ae-9e34-4298466cc70c",
+          "2bbec6c0-986e-432a-8d80-c23f10dceccf"
+        ]
+      },
+      "request_hash": "ef9ac531f60754de08fed011e38034fab6db4dcf0c8c6aa72fec5de6ce26370c"
+    },
+    {
+      "kind": "apply",
+      "variant": "unicode_and_order",
+      "person_id": "d589d36d-5ff0-48a0-98c6-634d196d02d9",
+      "authorization_version": 7,
+      "original": {
+        "request_id": "synthetic-request-1",
+        "idempotency_key": "PRIVATE-original-key-1",
+        "action": "apply_scrap_recovery",
+        "source": {
+          "scrap_line_id": "56daa37a-d9a8-4bb3-9983-13aaed6fafbd",
+          "expected_scrap_request_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "reason": "现场证据已复核；原请求保持不变 🌟\n第二行\t核实",
+        "evidence_file_ids": [
+          "8699c38e-bb12-45cf-bf72-3191a0109f19",
+          "5973c0b2-ff3a-4f84-8e34-e0fa5fab5320"
+        ]
+      },
+      "request_hash": "dc439d36c0e47558e81616fbe791549a431c427dcf5a178d4fb45e14a566c288"
+    },
+    {
+      "kind": "regional",
+      "variant": "standard",
+      "person_id": "e0516390-1422-4e33-9424-8e2b2656dd05",
+      "authorization_version": 7,
+      "original": {
+        "request_id": "synthetic-request-1",
+        "idempotency_key": "PRIVATE-original-key-1",
+        "source": {
+          "scrap_line_id": "143ce381-d3e3-4cc5-bd76-630f53c76fac",
+          "expected_scrap_request_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "recovery_request_id": "5ae124ed-0aaa-405b-b5ee-e14a75e357cf",
+        "expected_request_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+        "action": "review_scrap_recovery_region",
+        "decision": "verified",
+        "reason": "Synthetic client request contract"
+      },
+      "request_hash": "30b8074d279411617534f47418f5d2408acffcdb65657f5222d7feefe18db4a7"
+    },
+    {
+      "kind": "regional",
+      "variant": "unicode_and_order",
+      "person_id": "fea933f0-5a5f-4de2-beb2-e84b59a08538",
+      "authorization_version": 7,
+      "original": {
+        "request_id": "synthetic-request-1",
+        "idempotency_key": "PRIVATE-original-key-1",
+        "source": {
+          "scrap_line_id": "e1c38cf6-1af2-4d82-a50a-a84ae3b04f98",
+          "expected_scrap_request_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "recovery_request_id": "32875047-3ff4-4d0b-9eac-848575c2b193",
+        "expected_request_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+        "action": "review_scrap_recovery_region",
+        "decision": "verified",
+        "reason": "现场证据已复核；原请求保持不变 🌟\n第二行\t核实"
+      },
+      "request_hash": "c5b55a6140073c82dfeadca119e32925f31ecfa8b464d61e7b1fa6c3ef281f89"
+    },
+    {
+      "kind": "headquarters",
+      "variant": "standard",
+      "person_id": "d800a181-0663-4e04-b397-8f06fe54387d",
+      "authorization_version": 7,
+      "original": {
+        "request_id": "synthetic-request-1",
+        "idempotency_key": "PRIVATE-original-key-1",
+        "source": {
+          "scrap_line_id": "f59220cb-74ed-4e81-b8c1-9869006b14ec",
+          "expected_scrap_request_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "recovery_request_id": "c72d5b12-4947-4be7-be71-74b3bc54b6c0",
+        "expected_request_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+        "action": "review_scrap_recovery_headquarters",
+        "regional_review_id": "0ce6fa9a-33f1-4139-87e1-72bf4e07fdf8",
+        "expected_regional_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "decision": "approve",
+        "reason": "Synthetic client request contract"
+      },
+      "request_hash": "f191aa52b6e7d8c53fc783efdca9f2d661ee68c360d25cadd143157b4a1f17b4"
+    },
+    {
+      "kind": "headquarters",
+      "variant": "unicode_and_order",
+      "person_id": "3dc4d392-1234-4cbd-8c46-5cfad35ef8c1",
+      "authorization_version": 7,
+      "original": {
+        "request_id": "synthetic-request-1",
+        "idempotency_key": "PRIVATE-original-key-1",
+        "source": {
+          "scrap_line_id": "b413e6a9-d29d-4515-a4f6-ebc05b5099a7",
+          "expected_scrap_request_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "recovery_request_id": "bc9da8f6-6cf3-49f2-8b24-1cc927a21016",
+        "expected_request_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+        "action": "review_scrap_recovery_headquarters",
+        "regional_review_id": "9f3401b0-c0a9-4a8f-bf9e-aea51c988c8d",
+        "expected_regional_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "decision": "approve",
+        "reason": "现场证据已复核；原请求保持不变 🌟\n第二行\t核实"
+      },
+      "request_hash": "f42218eaaca2a9027ae4e428536f3e53006309a88f3c1a1d980dbcea266a860f"
+    },
+    {
+      "kind": "execute",
+      "variant": "standard",
+      "person_id": "51ccbb3b-09c2-4271-8beb-b387ffa3ca2c",
+      "authorization_version": 7,
+      "original": {
+        "request_id": "synthetic-request-1",
+        "idempotency_key": "PRIVATE-original-key-1",
+        "source": {
+          "scrap_line_id": "ff2b5429-dc1e-41da-811e-de1c5a72a567",
+          "expected_scrap_request_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "recovery_request_id": "7485b029-b5f9-4f94-bdb6-3b96f92f8064",
+        "expected_request_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+        "headquarters_review_id": "38ffc70a-5b7c-4079-b084-fbdc8514a1c1",
+        "expected_headquarters_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+        "reason": "Synthetic client request contract",
+        "action": "execute_scrap_recovery",
+        "expected_plan_hash": "5555555555555555555555555555555555555555555555555555555555555555"
+      },
+      "request_hash": "3fce51d029a61314da7f759933ef86e9211e58bf07f205e583a7e6fe47b7a4bb"
+    },
+    {
+      "kind": "execute",
+      "variant": "unicode_and_order",
+      "person_id": "7bdb152d-7040-4540-a30b-37f8be3b0723",
+      "authorization_version": 7,
+      "original": {
+        "request_id": "synthetic-request-1",
+        "idempotency_key": "PRIVATE-original-key-1",
+        "source": {
+          "scrap_line_id": "82662a1f-5575-4fef-bcba-76a1e480d47b",
+          "expected_scrap_request_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "recovery_request_id": "854823b8-70a1-4332-aac2-b88210855983",
+        "expected_request_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+        "headquarters_review_id": "c5b2d4fc-6c24-4764-913e-a8ea6b2c7d89",
+        "expected_headquarters_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+        "reason": "现场证据已复核；原请求保持不变 🌟\n第二行\t核实",
+        "action": "execute_scrap_recovery",
+        "expected_plan_hash": "5555555555555555555555555555555555555555555555555555555555555555"
+      },
+      "request_hash": "cbf75f8b13dd38c603e0c0894d82ba0e71f02a4356da5fdb0ce67daec0212448"
+    }
+  ]
+}

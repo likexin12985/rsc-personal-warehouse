@@ -285,7 +285,8 @@ def test_scope_masking_stable_pagination_and_fixed_batch_query_count(db: Session
             event.remove(engine, "before_cursor_execute", before_cursor)
         counts.append(count)
     assert counts[0] == counts[1]
-    assert counts[0] <= 20
+    # One additional bounded presence query covers formal return/inbound compensation.
+    assert counts[0] <= 21
 
 
 def test_current_candidate_actions_self_review_and_stale_principal(db: Session) -> None:
@@ -847,7 +848,6 @@ def test_terminal_supply_tasks_never_reopen_and_do_not_consume_plan_capacity(
 
 
 @pytest.mark.parametrize("axis, advanced_status", [
-    ("allocation_status", "allocated"),
     ("reservation_status", "reserved"),
     ("outbound_status", "outbound"),
     ("shipment_status", "shipped"),
@@ -867,3 +867,16 @@ def test_supply_commands_are_hidden_when_any_independent_state_is_advanced(
     detail = material_request_detail(db, actor=admin, request_id=request.id, now=NOW)
     assert detail.allowed_actions == ()
     assert detail.supply_tasks[0].allowed_actions == ()
+
+
+@pytest.mark.parametrize("allocation_status", ["partially_allocated", "allocated"])
+def test_existing_supply_plan_can_be_managed_after_allocation_but_new_plan_is_hidden(
+    db: Session, allocation_status: str
+) -> None:
+    _world, request, line, admin = _supply_query_world(db, key="query-supply-allocated")
+    _supply_projection(db, line=line, admin=admin, quantity="1.000")
+    request.allocation_status = allocation_status
+    db.commit()
+    detail = material_request_detail(db, actor=admin, request_id=request.id, now=NOW)
+    assert "create_supply_task" not in detail.allowed_actions
+    assert detail.supply_tasks[0].allowed_actions == ("update_supply_task", "cancel_supply_task")

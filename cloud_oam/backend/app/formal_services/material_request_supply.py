@@ -526,12 +526,18 @@ def _create_supply_task_impl(
         return replace(replay, replayed=True)
 
     _require_exact_request_version(graph.request, request_version)
-    _require_final_approval_graph(graph)
+    _require_final_approval_graph(graph, allow_allocated=True, allow_post_fulfillment=True)
     line = _require_current_approved_line(graph, prepared.request_line_id)
     _require_no_active_substitution(graph, line.id)
-    _require_original_quantity_capacity(
-        line, graph.supply_tasks, prepared.expected_qty
-    )
+    # The request and principal graph are already locked. Prove every prior
+    # approval, allocation and plan before admitting another expected supply.
+    from .material_request_supply_capacity import planning_capacity
+    capacity = planning_capacity(db, actor=actor_context.principal, request_id=request.id)
+    available = next(row.quantities.new_plan_qty for row in capacity.lines
+                     if row.request_line_id == line.id)
+    if prepared.expected_qty > available:
+        _fail("material_request_supply_quantity_exceeds_approved", "conflict",
+              "新增计划数量超过尚未分配且未被活动计划覆盖的批准余量")
 
     task_id = uuid.uuid4()
     task_no = _task_number(now, task_id)
@@ -611,7 +617,7 @@ def _create_supply_task_impl(
         trace_request_id=trace_id,
         occurred_at=now,
     )
-    _assert_live_projection(graph, task, result)
+    _assert_live_projection(graph, task, result, allow_post_fulfillment=True)
     db.flush()
     return result
 
@@ -693,7 +699,12 @@ def _update_supply_task_impl(
         return replace(replay, replayed=True)
 
     _require_exact_request_version(graph.request, request_version)
-    _require_final_approval_graph(graph)
+    _require_final_approval_graph(graph, allow_allocated=True, allow_post_fulfillment=True)
+    # A status update must reread the same verified capacity boundary as a
+    # create. This prevents an apparently harmless plan update from bypassing
+    # downstream reservation/release/shipment evidence.
+    from .material_request_supply_capacity import planning_capacity
+    planning_capacity(db, actor=actor_context.principal, request_id=graph.request.id)
     task = _require_current_task(db, graph, task_id)
     _require_original_task_integrity(task)
     if task.version != task_version:
@@ -796,7 +807,7 @@ def _update_supply_task_impl(
         trace_request_id=trace_id,
         occurred_at=now,
     )
-    _assert_live_projection(graph, task, result)
+    _assert_live_projection(graph, task, result, allow_post_fulfillment=True)
     db.flush()
     return result
 
@@ -1009,7 +1020,10 @@ def _lock_supply_graph(
     )
 
 
-def _require_final_approval_graph(graph: _LockedSupplyGraph) -> None:
+def _require_final_approval_graph(
+    graph: _LockedSupplyGraph, *, allow_allocated: bool = False,
+    allow_post_fulfillment: bool = False,
+) -> None:
     request = graph.request
     revision = graph.revision
     instance = graph.approval_instance
@@ -1047,6 +1061,16 @@ def _require_final_approval_graph(graph: _LockedSupplyGraph) -> None:
             "需求单最终审批因果锚点无效",
         )
     axes = _fulfillment_axes(request)
+    if allow_allocated and axes['allocation_status'] in {'partially_allocated', 'allocated'}:
+        axes = {**axes, 'allocation_status': 'not_allocated'}
+    if allow_post_fulfillment:
+        if axes['allocation_status'] not in {'not_allocated', 'partially_allocated', 'allocated'}:
+            _fail(
+                "material_request_supply_fulfillment_started",
+                "precondition_failed",
+                "需求单履约状态无效，不能由供给计划命令改写",
+            )
+        return
     if axes != _NEUTRAL_AXES:
         _fail(
             "material_request_supply_fulfillment_started",
@@ -1166,8 +1190,17 @@ def _require_original_quantity_capacity(
         ),
         Decimal("0.000"),
     )
-    remaining = line.final_approved_qty - line.cancelled_qty
-    if active_total < Decimal("0.000") or active_total + new_quantity > remaining:
+    # The current create route still requires neutral fulfillment axes. Share
+    # exact planning math with the proved post-allocation capacity reader;
+    # opening that write additionally requires the forward database contract.
+    from .material_request_supply_capacity import quantity_capacity
+    try:
+        capacity = quantity_capacity(approved=line.final_approved_qty,
+            cancelled=line.cancelled_qty, allocated=Decimal("0.000"), planned=active_total)
+    except ValueError:
+        _fail("material_request_supply_quantity_projection_invalid", "service_unavailable",
+              "供给计划数量事实与最终批准余量不一致")
+    if new_quantity > capacity.new_plan_qty:
         _fail(
             "material_request_supply_quantity_exceeds_approved",
             "conflict",
@@ -1646,8 +1679,12 @@ def _assert_live_projection(
     graph: _LockedSupplyGraph,
     task: SupplyTask,
     result: SupplyTaskCommandResult,
+    *,
+    allow_post_fulfillment: bool = False,
 ) -> None:
-    _require_final_approval_graph(graph)
+    _require_final_approval_graph(
+        graph, allow_allocated=True, allow_post_fulfillment=allow_post_fulfillment
+    )
     if (
         graph.request.id != result.request_id
         or graph.request.request_no != result.request_no
@@ -2257,7 +2294,18 @@ def _strict_fulfillment_axes(value: object) -> dict[str, str]:
     if not isinstance(value, Mapping) or set(value) != set(_NEUTRAL_AXES):
         raise ValueError
     axes = {key: _strict_string(value, key) for key in _NEUTRAL_AXES}
-    if axes != _NEUTRAL_AXES:
+    allowed = {
+        "allocation_status": {"not_allocated", "partially_allocated", "allocated", "shortage"},
+        "reservation_status": {"not_reserved", "pending", "reserved", "partially_released", "released", "fulfilled"},
+        "outbound_status": {"not_started", "pending_pick", "picked", "outbound"},
+        "shipment_status": {"not_started", "pending_handover", "shipped", "in_transit", "exception"},
+        "logistics_signature_status": {"not_signed", "signed", "refused", "exception"},
+        "oam_receipt_status": {"not_occurred", "synced", "exception"},
+        "personal_inbound_status": {"not_started", "pending_acceptance", "partially_accepted", "accepted", "posted"},
+        "notification_status": {"not_started", "queued", "sent", "delivered", "read", "failed"},
+        "reconciliation_status": {"not_started", "pending", "staged", "validated", "reconciled", "conflict", "failed"},
+    }
+    if any(axes[key] not in values for key, values in allowed.items()):
         raise ValueError
     return axes
 

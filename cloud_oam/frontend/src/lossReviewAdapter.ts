@@ -40,10 +40,10 @@ export function createAdapter(personId:string,requestNoReplay:Requester):Adapter
     lookup(p){const c=p.command,o=c.original;return post(p,'/request-lookup',{operation_id:o.operation_id,operator_person_id:p.person_id,expected_submission_plan_hash:o.expected_submission_plan_hash,request_id:o.request_id,idempotency_key:o.idempotency_key,request_hash:c.request_hash});},
     submit(p){return post(p,'',p.command);},
     seal(p){return post(p,'/request-seal',p.command);},
-    async download(stage,file){const before=await checked(stage);const r=object(await requestNoReplay(`/v1/files/${id(file.file_id)}/download-intent`,{...noCache,headers:{...headers,'X-Request-ID':crypto.randomUUID()}}),['file_id','purpose','download']);
-      if(r.file_id!==file.file_id||r.purpose!=='stock_loss_evidence')fail();const d=object(r.download,['url','expires_at']);
-      if(typeof d.url!=='string'||typeof d.expires_at!=='string')fail();const url=new URL(d.url),expiry=Date.parse(d.expires_at);
-      if(url.protocol!=='https:'||!url.hostname||url.username||url.password||url.hash||!Number.isFinite(expiry)||expiry<=Date.now()||expiry>Date.now()+630000)fail('照片临时链接无效，请重新申请');await stable(before);return {url:d.url,expires_at:d.expires_at};
+    async download(stage,file){const before=await checked(stage);const r=object(await requestNoReplay(`/v1/files/${id(file.file_id)}/download-intent`,{...noCache,headers:{...headers,'X-Request-ID':crypto.randomUUID()}}),['schema_version','file_id','purpose','status','download']);
+      if(r.schema_version!=='1.0'||r.file_id!==file.file_id||r.purpose!=='stock_loss_evidence'||r.status!=='available')fail();const d=object(r.download,['method','url','expires_at']);
+      if(d.method!=='GET'||typeof d.url!=='string'||d.url.length>8192||typeof d.expires_at!=='string')fail();const url=new URL(d.url),expiry=Date.parse(d.expires_at);await stable(before);
+      if(url.protocol!=='https:'||!url.hostname||url.username||url.password||url.hash||!Number.isFinite(expiry)||expiry<=Date.now()||expiry>Date.now()+630000)fail('照片临时链接无效，请重新申请');return {url:d.url,expires_at:d.expires_at};
     },
   };
 }

@@ -273,7 +273,21 @@ def list_material_requests(
             return MaterialRequestPageOut(items=(), next_after_id=None)
         snapshots = _snapshots(page_rows)
         graphs = _load_request_graphs(db, page_rows)
-        items = tuple(_summary(context, graph) for graph in graphs)
+        # Independent cancellation facts stop new fulfillment without rewriting
+        # the approval state or historical allocated/reserved quantities.
+        from .material_request_remaining_cancel import verified_remaining_cancellations_for_page
+        compensated = verified_remaining_cancellations_for_page(db, requests=page_rows)
+        from .material_request_return_compensation import verified_return_compensations_for_page
+        returned_by_request = verified_return_compensations_for_page(db, requests=page_rows)
+        items = []
+        for graph in graphs:
+            returned = returned_by_request.get(graph.request.id, {})
+            totals = _cancellation_totals(graph, compensated.get(graph.request.id, {}), returned)
+            summary = _summary(context, graph)
+            actions = _actions_after_cancellation(graph, summary.allowed_actions, totals,
+                remaining_cancelled=graph.request.id in compensated)
+            items.append(summary.model_copy(update={'allowed_actions': actions}))
+        items = tuple(items)
         _ensure_requests_current(db, snapshots)
         _ensure_authorization_current(db, context.principal)
         return _validate_output(
@@ -317,7 +331,25 @@ def material_request_detail(
             )
         snapshot = _snapshots((request,))
         graph = _load_request_graphs(db, (request,))[0]
-        output = _detail(context, graph)
+        from .material_request_remaining_cancel import verified_remaining_cancelled_quantities
+        compensated = verified_remaining_cancelled_quantities(db, request=request)
+        from .material_request_return_compensation import verified_return_compensated_quantities
+        returned = verified_return_compensated_quantities(db, request=request)
+        totals = _cancellation_totals(graph, compensated, returned)
+        supply_quantities = None
+        if request.allocation_status != "not_allocated" and _supply_management_allowed(context, graph, allow_allocated=True):
+            from .material_request_supply_capacity import planning_capacity
+            from .material_request_supply import MaterialRequestSupplyError
+            try:
+                capacity = planning_capacity(db, actor=context.principal, request_id=request.id)
+            except MaterialRequestSupplyError:
+                # Keep the existing detail readable, but do not advertise a
+                # new write when its independent history cannot be proved.
+                pass
+            else:
+                supply_quantities = {row.request_line_id: row.quantities.new_plan_qty for row in capacity.lines}
+        output = _detail(context, graph, compensated=totals, remaining_cancelled=bool(compensated),
+                         supply_quantities=supply_quantities)
         _ensure_requests_current(db, snapshot)
         _ensure_authorization_current(db, context.principal)
         return output
@@ -759,7 +791,34 @@ def _summary(context: _ReadContext, graph: _RequestGraph) -> MaterialRequestSumm
     )
 
 
-def _detail(context: _ReadContext, graph: _RequestGraph) -> MaterialRequestDetailOut:
+def _cancellation_totals(graph, remaining, returned):
+    """Independent immutable facts; never overwrite the original line projection."""
+    totals = {key: remaining.get(key, Decimal(0)) + returned.get(key, Decimal(0))
+              for key in remaining.keys() | returned.keys()}
+    lines = {line.id: line for line in graph.current_lines}
+    if totals and (any(line.cancelled_qty != 0 for line in lines.values())
+            or set(totals) - set(lines)
+            or any(not value.is_finite() or value <= 0 or value > lines[key].final_approved_qty
+                   for key, value in totals.items() if key in lines)):
+        _fail('material_request_cancel_projection_conflict', 'service_unavailable',
+              '原取消投影、退回补偿与当前批准明细不一致')
+    return totals
+
+
+def _actions_after_cancellation(graph, original_actions, totals, *, remaining_cancelled):
+    if remaining_cancelled:
+        return ()
+    actions = set(original_actions)
+    if totals:
+        actions.discard('cancel')  # The direct whole-request cancellation is no longer applicable.
+        if not any(_unplanned_supply_quantity(graph, line) - totals.get(line.id, Decimal(0)) > 0
+                   for line in graph.current_lines if _supply_line_is_current(graph, line)
+                   and not _supply_line_has_active_substitution(graph, line.id)):
+            actions.discard('create_supply_task')
+    return tuple(action for action in original_actions if action in actions)
+
+
+def _detail(context: _ReadContext, graph: _RequestGraph, *, compensated=None, remaining_cancelled=False, supply_quantities=None) -> MaterialRequestDetailOut:
     current = graph.current_revision
     lines = graph.lines_by_revision.get(current.id, ())
     revisions = tuple(
@@ -776,16 +835,15 @@ def _detail(context: _ReadContext, graph: _RequestGraph) -> MaterialRequestDetai
         _approval_instance(context, graph, instance)
         for instance in graph.instances
     )
+    common = _common(context, graph, approval_history=approval_history, supply_quantities=supply_quantities)
     return _validate_output(
         MaterialRequestDetailOut,
         {
-            **_common(
-                context,
-                graph,
-                approval_history=approval_history,
-            ),
+            **common,
             "schema_version": "1.0",
-            "lines": tuple(_line(line) for line in lines),
+            "lines": tuple(_line(line, cancelled_qty=(compensated or {}).get(line.id)) for line in lines),
+            "allowed_actions": _actions_after_cancellation(graph, common["allowed_actions"], compensated or {},
+                remaining_cancelled=remaining_cancelled),
             "revision_history": revisions,
             "approval_history": approval_history,
             "supply_tasks": tuple(
@@ -800,6 +858,7 @@ def _common(
     graph: _RequestGraph,
     *,
     approval_history: tuple[MaterialRequestApprovalInstanceOut, ...] | None = None,
+    supply_quantities=None,
 ) -> dict[str, Any]:
     request = graph.request
     revision = graph.current_revision
@@ -844,7 +903,7 @@ def _common(
         "approval_mode": revision.approval_mode,
         "states": _states(request),
         "approval_instance": latest,
-        "allowed_actions": _allowed_actions(context, graph),
+        "allowed_actions": _allowed_actions(context, graph, supply_quantities=supply_quantities),
         "created_at": _aware(request.created_at),
         "updated_at": _aware(request.updated_at),
         "submitted_at": _aware_optional(request.submitted_at),
@@ -872,7 +931,7 @@ def _revision_summary(
     )
 
 
-def _line(line: MaterialRequestLine) -> MaterialRequestLineOut:
+def _line(line: MaterialRequestLine, *, cancelled_qty=None) -> MaterialRequestLineOut:
     return _validate_output(
         MaterialRequestLineOut,
         {
@@ -886,7 +945,7 @@ def _line(line: MaterialRequestLine) -> MaterialRequestLineOut:
             "suggested_substitute_material_id": line.suggested_substitute_material_id,
             "note": line.note,
             "final_approved_qty": line.final_approved_qty,
-            "cancelled_qty": line.cancelled_qty,
+            "cancelled_qty": line.cancelled_qty if cancelled_qty is None else cancelled_qty,
             "status": line.status,
             "version": line.version,
         },
@@ -1109,6 +1168,7 @@ def _supply_task(
 def _allowed_actions(
     context: _ReadContext,
     graph: _RequestGraph,
+    *, supply_quantities=None,
 ) -> tuple[str, ...]:
     request = graph.request
     revision = graph.current_revision
@@ -1181,8 +1241,9 @@ def _allowed_actions(
     ):
         actions.add("cancel")
 
-    if _supply_management_allowed(context, graph) and any(
-        _unplanned_supply_quantity(graph, line) > 0
+    if _supply_management_allowed(context, graph, allow_allocated=supply_quantities is not None) and any(
+        (supply_quantities.get(line.id, Decimal("0.000")) if supply_quantities is not None
+         else _unplanned_supply_quantity(graph, line)) > 0
         for line in graph.current_lines
         if _supply_line_is_current(graph, line)
         and not _supply_line_has_active_substitution(graph, line.id)
@@ -1260,7 +1321,7 @@ def _allowed_actions(
     return tuple(action for action in _ACTION_ORDER if action in actions)
 
 
-def _supply_management_allowed(context: _ReadContext, graph: _RequestGraph) -> bool:
+def _supply_management_allowed(context: _ReadContext, graph: _RequestGraph, *, allow_allocated: bool = False) -> bool:
     """Mirror the supply command's current national-admin authority.
 
     A national role and a permission granted through an unrelated assignment
@@ -1272,7 +1333,14 @@ def _supply_management_allowed(context: _ReadContext, graph: _RequestGraph) -> b
     if (
         request.status not in {"approved", "partially_approved"}
         or not graph.instances
-        or not _state_axes_are_neutral(request)
+        or not (_state_axes_are_neutral(request) or (allow_allocated
+            and request.allocation_status in {"partially_allocated", "allocated"}
+            and all(getattr(request, axis) == neutral for axis, neutral in {
+                "reservation_status": "not_reserved", "outbound_status": "not_started",
+                "shipment_status": "not_started", "logistics_signature_status": "not_signed",
+                "oam_receipt_status": "not_occurred", "personal_inbound_status": "not_started",
+                "notification_status": "not_started", "reconciliation_status": "not_started",
+            }.items())))
     ):
         return False
     revision = graph.current_revision
@@ -1349,7 +1417,7 @@ def _supply_task_allowed_actions(
 ) -> tuple[str, ...]:
     if (
         task.status not in _ACTIVE_SUPPLY_STATUSES
-        or not _supply_management_allowed(context, graph)
+        or not _supply_management_allowed(context, graph, allow_allocated=True)
     ):
         return ()
     line = next((row for row in graph.current_lines if row.id == task.request_line_id), None)

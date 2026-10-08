@@ -105,6 +105,7 @@ def exercise_import_deadline(api, *, actor, source, data, command, snapshot):
     observations = []
 
     def supervise(target, identifier, binding, *, expected_phase=None):
+        started_at = time.monotonic()
         application_name = "pg16-import-owned-" + uuid4().hex
         rx, tx = mp.get_context("spawn").Pipe(duplex=False)
         payload = {"database_url": database_url, "job_id": str(identifier),
@@ -196,6 +197,17 @@ def exercise_import_deadline(api, *, actor, source, data, command, snapshot):
             assert result["job_id"] == str(identifier) and result["status"] == "awaiting_confirmation"
             assert type(result["recovered"]) is bool
             return OpeningImportWorkerResult(identifier, result["status"], result["recovered"])
+        except ProcessOutcomeUnknown:
+            raise
+        except BaseException as error:
+            # Safe native-gate diagnostics: no input cells, identifiers, DSN,
+            # credentials or raw exception text leave the owned fixture.
+            print(json.dumps({"gate": "opening_import_owned_deadline",
+                "errorType": type(error).__name__, "expectedPhase": expected_phase,
+                "events": [message["event"] for message in messages],
+                "phaseObserved": phase_observed, "outcomeUnknown": unknown,
+                "elapsedSeconds": round(time.monotonic() - started_at, 3)}), flush=True)
+            raise
         finally:
             tx.close()
             rx.close()

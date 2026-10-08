@@ -24,10 +24,10 @@ from ..foundation_models import AuditEvent, StateTransitionEvent
 from ..inventory_models import (
     InventoryMovement, InventoryMovementSerial, InventoryTransaction,
     StockBalance, StockReservation, StockReservationSerial,
-    StockReservationRelease, StockReservationReleaseSerial,
+    StockReservationRelease, StockReservationReleaseSerial, StockReservationPick, StockReservationPickSerial,
 )
 from . import inventory_query, material_request_query, material_request_reservation as reserve
-from .audit_chain import AuditChainError, append_audit_event, verify_audit_event_in_stream
+from .audit_chain import AuditChainError, append_audit_event, verify_audit_event_in_stream, verify_audit_event_in_read_snapshot
 from .inventory_posting import (
     InventoryMovementCommand, InventoryPostingCommand, InventoryPostingError,
     _authorize_account_ids, _lock_inventory_ledger_head_for_atomic_batch,
@@ -86,6 +86,39 @@ def released_quantity(db: Session, reservation_id: uuid.UUID) -> Decimal:
     return Decimal(db.scalar(select(func.coalesce(func.sum(StockReservationRelease.released_qty), 0)).where(
         StockReservationRelease.reservation_id == reservation_id,
     )) or ZERO)
+
+
+def unpicked_remainder(db, *, request, reservation):
+    """Verify each consumed slice before allowing any release of the remainder."""
+    from .material_request_picking import verified_pick_history
+    groups = []
+    for model, quantity_field, verify, tx_field in (
+        (StockReservationRelease, 'released_qty', verified_release_history, 'release_transaction_id'),
+        (StockReservationPick, 'picked_qty', verified_pick_history, 'pick_transaction_id'),
+    ):
+        records = tuple(db.scalars(select(model).where(model.reservation_id == reservation.id)
+            .order_by(model.request_version, model.id).limit(1001).execution_options(populate_existing=True)))
+        if len(records) > 1000:
+            _fail('history_limit', 'precondition_failed', '占用使用记录超过完整核验上限')
+        for fact in records:
+            if (fact.request_id != request.id or fact.request_line_id != reservation.request_line_id
+                    or fact.allocation_id != reservation.allocation_id or fact.revision_id != reservation.revision_id
+                    or not reservation.request_version < fact.request_version <= request.version):
+                _history_invalid()
+            verify(db, fact=fact, request=request, lock_audit=False)
+            if db.scalar(select(InventoryTransaction.id).where(
+                    InventoryTransaction.reversed_transaction_id == getattr(fact, tx_field)).limit(1)) is not None:
+                _fail('reversed_history', 'precondition_failed', '占用使用记录已有冲销，请先核验补偿链')
+        groups.append(sum((getattr(row, quantity_field) for row in records), ZERO))
+    released, picked = groups
+    remaining = reservation.reserved_qty - released - picked
+    if remaining < 0:
+        _history_invalid()
+    used_sets = [set(db.scalars(select(model.serial_id).where(model.reservation_id == reservation.id)))
+        for model in (StockReservationReleaseSerial, StockReservationPickSerial)]
+    if used_sets[0] & used_sets[1]:
+        _history_invalid()
+    return remaining, released, used_sets[0] | used_sets[1]
 
 
 def authorize_release_accounts(db, actor, source_id, target_id):
@@ -228,7 +261,7 @@ def _create(db, *, actor, request_id, expected_version, value, key, secret, trac
         return _recover(db, actor=actor, fact=existing, request=request)
     if request.version != expected_version:
         _fail("version_conflict", "conflict", "需求版本已变化，请重新读取")
-    if request.status not in {"approved", "partially_approved"} or request.outbound_status != "not_started":
+    if request.status not in {"approved", "partially_approved"}:
         _fail("state_invalid", "precondition_failed", "当前需求状态不允许直接释放占用")
     original = db.scalar(select(StockReservation).where(
         StockReservation.id == value.reservation_id, StockReservation.request_id == request_id,
@@ -238,14 +271,13 @@ def _create(db, *, actor, request_id, expected_version, value, key, secret, trac
         _fail("reservation_not_found", "not_found", "原占用记录不存在")
     reserve._verified_history(db, fact=original, request=request)
     authorize_release_accounts(db, actor, original.stock_account_id, original.source_stock_account_id)
-    remaining = original.reserved_qty - released_quantity(db, original.id)
+    remaining, _, used = unpicked_remainder(db, request=request, reservation=original)
     if quantity > remaining:
-        _fail("quantity_exceeded", "precondition_failed", "释放数量超过本笔占用余量")
+        _fail("quantity_exceeded", "precondition_failed", "释放数量超过本笔尚未拣货的占用余量")
     bound = set(db.scalars(select(StockReservationSerial.serial_id).where(StockReservationSerial.reservation_id == original.id)).all())
-    used = set(db.scalars(select(StockReservationReleaseSerial.serial_id).where(StockReservationReleaseSerial.reservation_id == original.id)).all())
     if ((bound and (quantity != len(value.serial_ids) or not set(value.serial_ids) <= bound - used))
         or (not bound and value.serial_ids)):
-        _fail("serial_mismatch", "precondition_failed", "释放 SN 必须属于本笔占用且尚未释放")
+        _fail("serial_mismatch", "precondition_failed", "释放 SN 必须属于本笔占用且尚未释放或拣货")
     balance = db.scalar(select(StockBalance).where(StockBalance.stock_account_id == original.stock_account_id).execution_options(populate_existing=True))
     if balance is None or (balance.version, balance.ledger_cursor) != (value.source_balance_version, value.source_ledger_cursor):
         _fail("source_stale", "conflict", "占用账户余额版本已变化，请重新读取")
@@ -336,21 +368,21 @@ def _release_command_status(db: Session, *, actor: FormalPrincipal, trace_reques
         material_request_query._visible_request_predicate(context)).execution_options(populate_existing=True))
     if request is None:
         _fail("not_found", "not_found", "需求单不存在")
-    return _recover(db, actor=actor, fact=fact, request=request)
+    return _recover(db, actor=actor, fact=fact, request=request, lock_audit=False)
 
 
 def _history_invalid():
     _fail("history_invalid", "service_unavailable", "释放历史证据不完整，保留原请求继续核验")
 
 
-def _recover(db, *, actor, fact, request):
+def _recover(db, *, actor, fact, request, lock_audit=True):
     if (fact.actor_user_id, fact.actor_person_id, fact.authorization_version) != (actor.user_id, actor.person_id, actor.authorization_version):
         _fail("authorization_changed", "precondition_failed", "原释放授权已变化")
     authorize_release_accounts(db, actor, fact.source_stock_account_id, fact.target_stock_account_id)
-    return verified_release_history(db, fact=fact, request=request)
+    return verified_release_history(db, fact=fact, request=request, lock_audit=lock_audit)
 
 
-def verified_release_history(db, *, fact, request):
+def verified_release_history(db, *, fact, request, lock_audit=True):
     """Prove immutable release evidence after the caller authorizes its read.
 
     Hashes bind the historical actor. Current readers need not be that actor;
@@ -429,9 +461,10 @@ def verified_release_history(db, *, fact, request):
         or (serial_ids and fact.released_qty != len(serial_ids))
     ):
         _history_invalid()
-    reserve._verified_history(db, fact=original, request=request)
+    reserve._verified_history(db, fact=original, request=request, lock_audit=lock_audit)
     try:
-        verify_audit_event_in_stream(db, stream_key="material_request", event_id=audit.id)
+        verifier = verify_audit_event_in_stream if lock_audit else verify_audit_event_in_read_snapshot
+        verifier(db, stream_key="material_request", event_id=audit.id)
     except AuditChainError:
         _history_invalid()
     return _public_result(result, request, replayed=True)

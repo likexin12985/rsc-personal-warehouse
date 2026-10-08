@@ -8,6 +8,7 @@ import re
 
 from alibabacloud_dypnsapi20170525 import models as dypns_models
 from alibabacloud_dypnsapi20170525.client import Client as DypnsClient
+from alibabacloud_credentials.client import Client as CredentialClient
 from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_tea_util import models as util_models
 
@@ -72,7 +73,7 @@ def sms_dispatch_request_profile_sha256(
     return hashlib.sha256(encoded).hexdigest()
 
 
-class AliyunPnvsProvider:
+class AliyunDypnsProvider:
     def __init__(self) -> None:
         settings = get_settings().model_copy(deep=True)
         if not settings.sms_sts_credential_ready(minimum_validity_seconds=60):
@@ -80,12 +81,24 @@ class AliyunPnvsProvider:
         client: DypnsClient | None = None
         silence_aliyun_sdk_loggers()
         try:
-            config = open_api_models.Config(
-                access_key_id=settings.sms_access_key_id,
-                access_key_secret=settings.sms_access_key_secret,
-                security_token=settings.sms_security_token or None,
-                endpoint="dypnsapi.aliyuncs.com",
-            )
+            if settings.sms_credential_mode == "default_chain":
+                # The Alibaba credentials SDK resolves the instance role from
+                # its default provider chain (including ECS RAM role/IMDS).
+                # Do not copy credentials into this process's settings or
+                # include them in the generated OpenAPI config.
+                config = open_api_models.Config(
+                    credential=CredentialClient(),
+                    endpoint="dypnsapi.aliyuncs.com",
+                )
+            elif settings.sms_credential_mode in {"static", "sts"}:
+                config = open_api_models.Config(
+                    access_key_id=settings.sms_access_key_id,
+                    access_key_secret=settings.sms_access_key_secret,
+                    security_token=settings.sms_security_token or None,
+                    endpoint="dypnsapi.aliyuncs.com",
+                )
+            else:
+                raise SmsProviderError("短信服务暂时不可用")
             client = DypnsClient(config)
         except Exception:
             pass
@@ -216,10 +229,15 @@ class MockSmsProvider:
         return code == self.settings.sms_test_code
 
 
-def get_sms_provider() -> AliyunPnvsProvider | MockSmsProvider:
+AliyunPnvsProvider = AliyunDypnsProvider
+
+
+def get_sms_provider() -> AliyunDypnsProvider | MockSmsProvider:
     settings = get_settings()
     if not settings.sms_configuration_ready():
         raise SmsProviderError("短信验证码登录尚未启用")
     if settings.sms_provider == "mock":
         return MockSmsProvider()
-    return AliyunPnvsProvider()
+    if settings.sms_provider in {"aliyun_dypns", "aliyun_pnvs"}:
+        return AliyunDypnsProvider()
+    raise SmsProviderError("短信验证码登录尚未启用")

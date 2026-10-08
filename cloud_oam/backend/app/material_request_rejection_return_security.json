@@ -1,0 +1,3123 @@
+{
+  "functions": {
+    "rsc_assert_rejection_return_authority_0172(uuid, text, uuid, uuid, bigint)": {
+      "after": {
+        "acl": [
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "EXECUTE"
+          }
+        ],
+        "definition": "CREATE OR REPLACE FUNCTION public.rsc_assert_rejection_return_authority_0172(checked_request_id uuid, actor_id text, checked_person_id uuid, assignment_id uuid, auth_version bigint)\n RETURNS void\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\nDECLARE r public.material_requests%ROWTYPE; checked_now timestamptz; eligible bigint;\n    ancestors uuid[]; invalid_tree boolean; tree_before jsonb; tree_after jsonb;\nBEGIN\n    PERFORM public.rsc_lock_formal_principal_graph_0026(ARRAY[actor_id]::text[]);\n    SELECT * INTO STRICT r FROM public.material_requests WHERE id=checked_request_id;\n    IF r.created_by_user_id<>actor_id OR r.requester_user_id<>actor_id OR r.requester_person_id<>checked_person_id OR NOT EXISTS(\n        SELECT 1 FROM public.users u JOIN public.people p ON p.id=u.person_id\n        JOIN public.organizations org ON org.id=p.organization_id\n        WHERE u.id=actor_id AND p.id=checked_person_id AND u.authorization_version=auth_version\n          AND u.account_status='active' AND p.employment_status='active' AND org.status='active'\n          AND EXISTS(SELECT 1 FROM public.auth_identities i WHERE i.user_id=u.id\n            AND i.verified_at IS NOT NULL AND i.revoked_at IS NULL)) THEN\n        RAISE EXCEPTION '0172 rejection return current original requester required' USING ERRCODE='42501';\n    END IF;\n    WITH RECURSIVE chain AS (\n        SELECT id,parent_id,status,ARRAY[id] path,false cycle FROM public.organizations WHERE id=(SELECT organization_id FROM public.people WHERE id=checked_person_id)\n        UNION ALL SELECT o.id,o.parent_id,o.status,c.path||o.id,o.id=ANY(c.path)\n        FROM chain c JOIN public.organizations o ON o.id=c.parent_id WHERE NOT c.cycle AND cardinality(c.path)<512\n    ) SELECT array_agg(id),bool_or(cycle OR status<>'active' OR cardinality(path)>=512),\n        jsonb_agg(jsonb_build_array(id,parent_id,status) ORDER BY id) INTO ancestors,invalid_tree,tree_before FROM chain;\n    IF ancestors IS NULL OR invalid_tree THEN\n        RAISE EXCEPTION '0172 rejection return requester organization invalid' USING ERRCODE='42501';\n    END IF;\n    PERFORM 1 FROM public.organizations WHERE id=ANY(ancestors) ORDER BY id FOR SHARE;\n    SELECT jsonb_agg(jsonb_build_array(id,parent_id,status) ORDER BY id) INTO tree_after FROM public.organizations WHERE id=ANY(ancestors);\n    IF tree_before IS DISTINCT FROM tree_after THEN\n        RAISE EXCEPTION '0172 rejection return requester organization changed' USING ERRCODE='40001';\n    END IF;\n    checked_now:=clock_timestamp();\n    IF EXISTS(SELECT 1 FROM public.role_assignments a JOIN public.roles role ON role.id=a.role_id\n        JOIN public.role_permissions rp ON rp.role_id=role.id JOIN public.permissions p ON p.id=rp.permission_id\n        WHERE a.user_id=actor_id AND a.status IN ('scheduled','active') AND a.revoked_at IS NULL\n          AND a.valid_from<=checked_now AND (a.valid_to IS NULL OR a.valid_to>checked_now)\n          AND role.status='active' AND ((p.resource='material_request' AND p.action='read') OR (p.resource='stock_operation' AND p.action='submit_return'))\n          AND p.field_code='' AND rp.effect='deny' AND ((a.scope_type='national' AND a.scope_id='*')\n            OR (a.scope_type='person' AND lower(replace(a.scope_id,'-',''))=replace(checked_person_id::text,'-',''))\n            OR (a.scope_type='organization' AND lower(replace(a.scope_id,'-','')) IN\n              (SELECT replace(v::text,'-','') FROM unnest(ancestors) v)))) THEN\n        RAISE EXCEPTION '0172 rejection return explicit requester deny' USING ERRCODE='42501';\n    END IF;\n    SELECT count(*) INTO eligible FROM public.role_assignments a JOIN public.roles role ON role.id=a.role_id\n        WHERE a.user_id=actor_id AND a.status IN ('scheduled','active') AND a.revoked_at IS NULL\n          AND a.valid_from<=checked_now AND (a.valid_to IS NULL OR a.valid_to>checked_now)\n          AND role.status='active' AND NOT role.is_external AND role.code='technician'\n          AND a.scope_type='person' AND lower(replace(a.scope_id,'-',''))=replace(checked_person_id::text,'-','')\n          AND EXISTS(SELECT 1 FROM public.role_permissions rp JOIN public.permissions p ON p.id=rp.permission_id\n            WHERE rp.role_id=role.id AND rp.effect='allow' AND p.resource='stock_operation' AND p.action='submit_return' AND p.field_code='');\n    IF eligible<>1 OR NOT EXISTS(SELECT 1 FROM public.role_assignments a JOIN public.roles role ON role.id=a.role_id\n        WHERE a.id=assignment_id AND a.user_id=actor_id AND a.status IN ('scheduled','active') AND a.revoked_at IS NULL\n          AND a.valid_from<=checked_now AND (a.valid_to IS NULL OR a.valid_to>checked_now)\n          AND role.status='active' AND NOT role.is_external AND role.code='technician'\n          AND a.scope_type='person' AND lower(replace(a.scope_id,'-',''))=replace(checked_person_id::text,'-','')\n          AND EXISTS(SELECT 1 FROM public.role_permissions rp JOIN public.permissions p ON p.id=rp.permission_id\n            WHERE rp.role_id=role.id AND rp.effect='allow' AND p.resource='stock_operation' AND p.action='submit_return' AND p.field_code='')\n          AND EXISTS(SELECT 1 FROM public.role_permissions rp JOIN public.permissions p ON p.id=rp.permission_id\n            WHERE rp.role_id=role.id AND rp.effect='allow' AND p.resource='material_request' AND p.action='read' AND p.field_code='')) THEN\n        RAISE EXCEPTION '0172 rejection return unique current requester grant required' USING ERRCODE='42501';\n    END IF;\nEND;\n$function$\n",
+        "identity_arguments": "checked_request_id uuid, actor_id text, checked_person_id uuid, assignment_id uuid, auth_version bigint",
+        "owner": "star_oam_migrator",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "proisstrict": false,
+        "proleakproof": false,
+        "proname": "rsc_assert_rejection_return_authority_0172",
+        "proparallel": "u",
+        "prosecdef": true,
+        "prosrc": "\nDECLARE r public.material_requests%ROWTYPE; checked_now timestamptz; eligible bigint;\n    ancestors uuid[]; invalid_tree boolean; tree_before jsonb; tree_after jsonb;\nBEGIN\n    PERFORM public.rsc_lock_formal_principal_graph_0026(ARRAY[actor_id]::text[]);\n    SELECT * INTO STRICT r FROM public.material_requests WHERE id=checked_request_id;\n    IF r.created_by_user_id<>actor_id OR r.requester_user_id<>actor_id OR r.requester_person_id<>checked_person_id OR NOT EXISTS(\n        SELECT 1 FROM public.users u JOIN public.people p ON p.id=u.person_id\n        JOIN public.organizations org ON org.id=p.organization_id\n        WHERE u.id=actor_id AND p.id=checked_person_id AND u.authorization_version=auth_version\n          AND u.account_status='active' AND p.employment_status='active' AND org.status='active'\n          AND EXISTS(SELECT 1 FROM public.auth_identities i WHERE i.user_id=u.id\n            AND i.verified_at IS NOT NULL AND i.revoked_at IS NULL)) THEN\n        RAISE EXCEPTION '0172 rejection return current original requester required' USING ERRCODE='42501';\n    END IF;\n    WITH RECURSIVE chain AS (\n        SELECT id,parent_id,status,ARRAY[id] path,false cycle FROM public.organizations WHERE id=(SELECT organization_id FROM public.people WHERE id=checked_person_id)\n        UNION ALL SELECT o.id,o.parent_id,o.status,c.path||o.id,o.id=ANY(c.path)\n        FROM chain c JOIN public.organizations o ON o.id=c.parent_id WHERE NOT c.cycle AND cardinality(c.path)<512\n    ) SELECT array_agg(id),bool_or(cycle OR status<>'active' OR cardinality(path)>=512),\n        jsonb_agg(jsonb_build_array(id,parent_id,status) ORDER BY id) INTO ancestors,invalid_tree,tree_before FROM chain;\n    IF ancestors IS NULL OR invalid_tree THEN\n        RAISE EXCEPTION '0172 rejection return requester organization invalid' USING ERRCODE='42501';\n    END IF;\n    PERFORM 1 FROM public.organizations WHERE id=ANY(ancestors) ORDER BY id FOR SHARE;\n    SELECT jsonb_agg(jsonb_build_array(id,parent_id,status) ORDER BY id) INTO tree_after FROM public.organizations WHERE id=ANY(ancestors);\n    IF tree_before IS DISTINCT FROM tree_after THEN\n        RAISE EXCEPTION '0172 rejection return requester organization changed' USING ERRCODE='40001';\n    END IF;\n    checked_now:=clock_timestamp();\n    IF EXISTS(SELECT 1 FROM public.role_assignments a JOIN public.roles role ON role.id=a.role_id\n        JOIN public.role_permissions rp ON rp.role_id=role.id JOIN public.permissions p ON p.id=rp.permission_id\n        WHERE a.user_id=actor_id AND a.status IN ('scheduled','active') AND a.revoked_at IS NULL\n          AND a.valid_from<=checked_now AND (a.valid_to IS NULL OR a.valid_to>checked_now)\n          AND role.status='active' AND ((p.resource='material_request' AND p.action='read') OR (p.resource='stock_operation' AND p.action='submit_return'))\n          AND p.field_code='' AND rp.effect='deny' AND ((a.scope_type='national' AND a.scope_id='*')\n            OR (a.scope_type='person' AND lower(replace(a.scope_id,'-',''))=replace(checked_person_id::text,'-',''))\n            OR (a.scope_type='organization' AND lower(replace(a.scope_id,'-','')) IN\n              (SELECT replace(v::text,'-','') FROM unnest(ancestors) v)))) THEN\n        RAISE EXCEPTION '0172 rejection return explicit requester deny' USING ERRCODE='42501';\n    END IF;\n    SELECT count(*) INTO eligible FROM public.role_assignments a JOIN public.roles role ON role.id=a.role_id\n        WHERE a.user_id=actor_id AND a.status IN ('scheduled','active') AND a.revoked_at IS NULL\n          AND a.valid_from<=checked_now AND (a.valid_to IS NULL OR a.valid_to>checked_now)\n          AND role.status='active' AND NOT role.is_external AND role.code='technician'\n          AND a.scope_type='person' AND lower(replace(a.scope_id,'-',''))=replace(checked_person_id::text,'-','')\n          AND EXISTS(SELECT 1 FROM public.role_permissions rp JOIN public.permissions p ON p.id=rp.permission_id\n            WHERE rp.role_id=role.id AND rp.effect='allow' AND p.resource='stock_operation' AND p.action='submit_return' AND p.field_code='');\n    IF eligible<>1 OR NOT EXISTS(SELECT 1 FROM public.role_assignments a JOIN public.roles role ON role.id=a.role_id\n        WHERE a.id=assignment_id AND a.user_id=actor_id AND a.status IN ('scheduled','active') AND a.revoked_at IS NULL\n          AND a.valid_from<=checked_now AND (a.valid_to IS NULL OR a.valid_to>checked_now)\n          AND role.status='active' AND NOT role.is_external AND role.code='technician'\n          AND a.scope_type='person' AND lower(replace(a.scope_id,'-',''))=replace(checked_person_id::text,'-','')\n          AND EXISTS(SELECT 1 FROM public.role_permissions rp JOIN public.permissions p ON p.id=rp.permission_id\n            WHERE rp.role_id=role.id AND rp.effect='allow' AND p.resource='stock_operation' AND p.action='submit_return' AND p.field_code='')\n          AND EXISTS(SELECT 1 FROM public.role_permissions rp JOIN public.permissions p ON p.id=rp.permission_id\n            WHERE rp.role_id=role.id AND rp.effect='allow' AND p.resource='material_request' AND p.action='read' AND p.field_code='')) THEN\n        RAISE EXCEPTION '0172 rejection return unique current requester grant required' USING ERRCODE='42501';\n    END IF;\nEND;\n",
+        "provolatile": "v",
+        "signature": "rsc_assert_rejection_return_authority_0172(uuid, text, uuid, uuid, bigint)"
+      },
+      "before": null
+    },
+    "rsc_dispatch_rejection_return_0172()": {
+      "after": {
+        "acl": [
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "EXECUTE"
+          }
+        ],
+        "definition": "CREATE OR REPLACE FUNCTION public.rsc_dispatch_rejection_return_0172()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\nBEGIN\n    IF TG_TABLE_NAME='material_request_rejection_returns' THEN\n        PERFORM public.rsc_validate_rejection_return_0172(NEW.id);\n    ELSIF TG_TABLE_NAME='material_request_rejection_return_serials' THEN\n        PERFORM public.rsc_validate_rejection_return_0172(NEW.return_id);\n    ELSE\n        IF NEW.action<>'material_request.register_rejection_return' OR NEW.aggregate_type<>'material_request_rejection_return' THEN\n            RAISE EXCEPTION '0172 return audit type mismatch' USING ERRCODE='23514'; END IF;\n        PERFORM public.rsc_validate_rejection_return_0172(NEW.aggregate_id::uuid);\n    END IF;\n    RETURN NULL;\nEND;\n$function$\n",
+        "identity_arguments": "",
+        "owner": "star_oam_migrator",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "proisstrict": false,
+        "proleakproof": false,
+        "proname": "rsc_dispatch_rejection_return_0172",
+        "proparallel": "u",
+        "prosecdef": true,
+        "prosrc": "\nBEGIN\n    IF TG_TABLE_NAME='material_request_rejection_returns' THEN\n        PERFORM public.rsc_validate_rejection_return_0172(NEW.id);\n    ELSIF TG_TABLE_NAME='material_request_rejection_return_serials' THEN\n        PERFORM public.rsc_validate_rejection_return_0172(NEW.return_id);\n    ELSE\n        IF NEW.action<>'material_request.register_rejection_return' OR NEW.aggregate_type<>'material_request_rejection_return' THEN\n            RAISE EXCEPTION '0172 return audit type mismatch' USING ERRCODE='23514'; END IF;\n        PERFORM public.rsc_validate_rejection_return_0172(NEW.aggregate_id::uuid);\n    END IF;\n    RETURN NULL;\nEND;\n",
+        "provolatile": "v",
+        "signature": "rsc_dispatch_rejection_return_0172()"
+      },
+      "before": null
+    },
+    "rsc_guard_rejection_return_insert_0172()": {
+      "after": {
+        "acl": [
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "EXECUTE"
+          }
+        ],
+        "definition": "CREATE OR REPLACE FUNCTION public.rsc_guard_rejection_return_insert_0172()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\nDECLARE r public.material_requests%ROWTYPE; receipt public.receipts%ROWTYPE;\n    line public.receipt_lines%ROWTYPE; ship public.shipment_lines%ROWTYPE;\n    outbound public.outbound_postings%ROWTYPE; reservation public.stock_reservations%ROWTYPE;\n    source public.stock_accounts%ROWTYPE; transit public.stock_accounts%ROWTYPE;\n    policy public.material_inventory_policies%ROWTYPE; expected_origin jsonb; input jsonb; expected jsonb;\n    selected_serials jsonb; original_serials jsonb; tracked boolean; origin_count bigint;\nBEGIN\n    PERFORM public.rsc_require_request_open_0169(NEW.request_id);\n    SELECT * INTO STRICT r FROM public.material_requests WHERE id=NEW.request_id;\n    PERFORM public.rsc_assert_rejection_return_authority_0172(NEW.request_id,NEW.actor_user_id,\n        NEW.actor_person_id,NEW.actor_role_assignment_id,NEW.authorization_version);\n    IF r.status NOT IN ('approved','partially_approved') OR NEW.request_version<>r.version\n       OR EXISTS(SELECT 1 FROM public.material_request_remaining_cancellations WHERE request_id=r.id)\n       OR NEW.id='00000000-0000-0000-0000-000000000000'::uuid\n       OR NEW.occurred_at<>CURRENT_TIMESTAMP OR NEW.created_at<>NEW.occurred_at\n       OR NEW.return_no !~ '^RJR-[A-F0-9]{32}$' OR NEW.reason<>btrim(NEW.reason) OR NEW.reason ~ '[[:cntrl:]]'\n       OR NEW.idempotency_key_hash !~ '^[a-f0-9]{64}$'\n       OR NEW.trace_request_id !~ '^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,159}$' THEN\n        RAISE EXCEPTION '0172 return request state or coordinate mismatch' USING ERRCODE='23514'; END IF;\n    SELECT * INTO STRICT receipt FROM public.receipts WHERE id=NEW.receipt_id;\n    SELECT * INTO STRICT line FROM public.receipt_lines WHERE id=NEW.receipt_line_id FOR UPDATE;\n    SELECT * INTO STRICT ship FROM public.shipment_lines WHERE id=line.shipment_line_id;\n    SELECT * INTO STRICT outbound FROM public.outbound_postings WHERE id=ship.outbound_posting_id;\n    SELECT * INTO STRICT reservation FROM public.stock_reservations WHERE id=outbound.reservation_id;\n    SELECT * INTO STRICT source FROM public.stock_accounts WHERE id=reservation.source_stock_account_id;\n    SELECT * INTO STRICT transit FROM public.stock_accounts WHERE id=outbound.target_stock_account_id;\n    IF receipt.receiver_person_id<>NEW.actor_person_id OR receipt.id<>line.receipt_id\n       OR receipt.shipment_id<>ship.shipment_id OR receipt.request_hash<>NEW.receipt_request_hash\n       OR line.condition='normal' OR line.rejected_qty<=0 OR NEW.quantity>line.rejected_qty\n       OR outbound.request_id<>r.id OR NEW.revision_id<>outbound.revision_id\n       OR NEW.shipment_line_id<>ship.id OR NEW.outbound_posting_id<>outbound.id\n       OR NEW.reservation_id<>reservation.id OR NEW.in_transit_account_id<>transit.id\n       OR NEW.return_source_account_id<>source.id OR source.availability_bucket<>'available'\n       OR transit.availability_bucket<>'in_transit' OR source.material_id<>transit.material_id\n       OR source.owner_org_id<>transit.owner_org_id\n       OR NOT EXISTS(SELECT 1 FROM public.shipments s WHERE s.id=receipt.shipment_id AND s.target_person_id=NEW.actor_person_id) THEN\n        RAISE EXCEPTION '0172 original rejection provenance mismatch' USING ERRCODE='23514'; END IF;\n    SELECT count(*) INTO origin_count FROM public.material_inventory_policies p\n      WHERE p.material_id=source.material_id AND p.effective_from<=receipt.received_at\n        AND (p.effective_to IS NULL OR p.effective_to>receipt.received_at);\n    IF origin_count<>1 THEN RAISE EXCEPTION '0172 original policy unavailable' USING ERRCODE='23514'; END IF;\n    SELECT * INTO STRICT policy FROM public.material_inventory_policies p\n      WHERE p.material_id=source.material_id AND p.effective_from<=receipt.received_at\n        AND (p.effective_to IS NULL OR p.effective_to>receipt.received_at);\n    tracked:=policy.tracking_mode IN ('serial','lot_and_serial');\n    IF EXISTS(SELECT 1 FROM unnest(ARRAY[line.accepted_qty,line.rejected_qty,NEW.quantity]) q\n      WHERE q<>round(q,policy.quantity_scale) OR (NOT policy.allow_fraction AND q<>trunc(q))) THEN\n        RAISE EXCEPTION '0172 original quantity precision required' USING ERRCODE='23514'; END IF;\n    SELECT coalesce(jsonb_agg(serial_id::text ORDER BY serial_id),'[]') INTO original_serials\n      FROM public.receipt_serials WHERE receipt_line_id=line.id AND NOT accepted;\n    IF (tracked AND jsonb_array_length(original_serials)<>line.rejected_qty)\n       OR (NOT tracked AND original_serials<>'[]') THEN\n        RAISE EXCEPTION '0172 original rejected serial count mismatch' USING ERRCODE='23514'; END IF;\n    IF (SELECT coalesce(sum(quantity),0) FROM public.material_request_rejection_returns WHERE receipt_line_id=line.id)+NEW.quantity>line.rejected_qty THEN\n        RAISE EXCEPTION '0172 cumulative return exceeds rejection' USING ERRCODE='23514'; END IF;\n    input:=NEW.evidence_jsonb->'input';\n    selected_serials:=input->'serial_ids';\n    IF jsonb_typeof(selected_serials) IS DISTINCT FROM 'array' THEN\n        RAISE EXCEPTION '0172 selected serial array required' USING ERRCODE='23514'; END IF;\n    IF jsonb_array_length(selected_serials)>1000 OR (tracked AND jsonb_array_length(selected_serials)<>NEW.quantity)\n       OR (NOT tracked AND selected_serials<>'[]')\n       OR selected_serials IS DISTINCT FROM (SELECT coalesce(jsonb_agg(v ORDER BY v),'[]') FROM (SELECT DISTINCT value v FROM jsonb_array_elements(selected_serials)) s)\n       OR EXISTS(SELECT 1 FROM jsonb_array_elements(selected_serials) v WHERE NOT original_serials @> jsonb_build_array(v)) THEN\n        RAISE EXCEPTION '0172 selected return serials mismatch' USING ERRCODE='23514'; END IF;\n    IF input IS DISTINCT FROM jsonb_build_object('expected_request_version',NEW.request_version,'receipt_id',receipt.id::text,\n        'receipt_line_id',line.id::text,'receipt_request_hash',receipt.request_hash,'quantity',NEW.quantity::text,\n        'serial_ids',selected_serials,'reason',NEW.reason) THEN\n        RAISE EXCEPTION '0172 exact input required' USING ERRCODE='23514'; END IF;\n    expected_origin:=jsonb_build_object('request_id',r.id::text,'revision_id',outbound.revision_id::text,\n        'receipt_id',receipt.id::text,'receipt_line_id',line.id::text,'receipt_request_hash',receipt.request_hash,\n        'shipment_line_id',ship.id::text,'outbound_posting_id',outbound.id::text,'reservation_id',reservation.id::text,\n        'in_transit_account_id',transit.id::text,'return_source_account_id',source.id::text,'rejected_qty',line.rejected_qty::text,\n        'condition',line.condition,'tracking_mode',policy.tracking_mode,\n        'quantity_scale',policy.quantity_scale,'allow_fraction',policy.allow_fraction,'rejected_serial_ids',original_serials);\n    expected:=jsonb_build_object('schema','rsc.material_request_rejection_return.v1','input',input,'origin',expected_origin);\n    IF NEW.evidence_jsonb IS DISTINCT FROM expected OR NEW.evidence_sha256 IS DISTINCT FROM\n       encode(sha256(convert_to(public.rsc_canonical_reconciliation_json_0026(expected),'UTF8')),'hex')\n       OR NEW.request_hash IS DISTINCT FROM encode(sha256(convert_to(public.rsc_canonical_reconciliation_json_0026(\n         jsonb_build_object('request_id',r.id::text,'actor_user_id',NEW.actor_user_id,'actor_person_id',NEW.actor_person_id::text,'input',input)),'UTF8')),'hex') THEN\n        RAISE EXCEPTION '0172 rejection return evidence mismatch' USING ERRCODE='23514'; END IF;\n    RETURN NEW;\nEND;\n$function$\n",
+        "identity_arguments": "",
+        "owner": "star_oam_migrator",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "proisstrict": false,
+        "proleakproof": false,
+        "proname": "rsc_guard_rejection_return_insert_0172",
+        "proparallel": "u",
+        "prosecdef": true,
+        "prosrc": "\nDECLARE r public.material_requests%ROWTYPE; receipt public.receipts%ROWTYPE;\n    line public.receipt_lines%ROWTYPE; ship public.shipment_lines%ROWTYPE;\n    outbound public.outbound_postings%ROWTYPE; reservation public.stock_reservations%ROWTYPE;\n    source public.stock_accounts%ROWTYPE; transit public.stock_accounts%ROWTYPE;\n    policy public.material_inventory_policies%ROWTYPE; expected_origin jsonb; input jsonb; expected jsonb;\n    selected_serials jsonb; original_serials jsonb; tracked boolean; origin_count bigint;\nBEGIN\n    PERFORM public.rsc_require_request_open_0169(NEW.request_id);\n    SELECT * INTO STRICT r FROM public.material_requests WHERE id=NEW.request_id;\n    PERFORM public.rsc_assert_rejection_return_authority_0172(NEW.request_id,NEW.actor_user_id,\n        NEW.actor_person_id,NEW.actor_role_assignment_id,NEW.authorization_version);\n    IF r.status NOT IN ('approved','partially_approved') OR NEW.request_version<>r.version\n       OR EXISTS(SELECT 1 FROM public.material_request_remaining_cancellations WHERE request_id=r.id)\n       OR NEW.id='00000000-0000-0000-0000-000000000000'::uuid\n       OR NEW.occurred_at<>CURRENT_TIMESTAMP OR NEW.created_at<>NEW.occurred_at\n       OR NEW.return_no !~ '^RJR-[A-F0-9]{32}$' OR NEW.reason<>btrim(NEW.reason) OR NEW.reason ~ '[[:cntrl:]]'\n       OR NEW.idempotency_key_hash !~ '^[a-f0-9]{64}$'\n       OR NEW.trace_request_id !~ '^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,159}$' THEN\n        RAISE EXCEPTION '0172 return request state or coordinate mismatch' USING ERRCODE='23514'; END IF;\n    SELECT * INTO STRICT receipt FROM public.receipts WHERE id=NEW.receipt_id;\n    SELECT * INTO STRICT line FROM public.receipt_lines WHERE id=NEW.receipt_line_id FOR UPDATE;\n    SELECT * INTO STRICT ship FROM public.shipment_lines WHERE id=line.shipment_line_id;\n    SELECT * INTO STRICT outbound FROM public.outbound_postings WHERE id=ship.outbound_posting_id;\n    SELECT * INTO STRICT reservation FROM public.stock_reservations WHERE id=outbound.reservation_id;\n    SELECT * INTO STRICT source FROM public.stock_accounts WHERE id=reservation.source_stock_account_id;\n    SELECT * INTO STRICT transit FROM public.stock_accounts WHERE id=outbound.target_stock_account_id;\n    IF receipt.receiver_person_id<>NEW.actor_person_id OR receipt.id<>line.receipt_id\n       OR receipt.shipment_id<>ship.shipment_id OR receipt.request_hash<>NEW.receipt_request_hash\n       OR line.condition='normal' OR line.rejected_qty<=0 OR NEW.quantity>line.rejected_qty\n       OR outbound.request_id<>r.id OR NEW.revision_id<>outbound.revision_id\n       OR NEW.shipment_line_id<>ship.id OR NEW.outbound_posting_id<>outbound.id\n       OR NEW.reservation_id<>reservation.id OR NEW.in_transit_account_id<>transit.id\n       OR NEW.return_source_account_id<>source.id OR source.availability_bucket<>'available'\n       OR transit.availability_bucket<>'in_transit' OR source.material_id<>transit.material_id\n       OR source.owner_org_id<>transit.owner_org_id\n       OR NOT EXISTS(SELECT 1 FROM public.shipments s WHERE s.id=receipt.shipment_id AND s.target_person_id=NEW.actor_person_id) THEN\n        RAISE EXCEPTION '0172 original rejection provenance mismatch' USING ERRCODE='23514'; END IF;\n    SELECT count(*) INTO origin_count FROM public.material_inventory_policies p\n      WHERE p.material_id=source.material_id AND p.effective_from<=receipt.received_at\n        AND (p.effective_to IS NULL OR p.effective_to>receipt.received_at);\n    IF origin_count<>1 THEN RAISE EXCEPTION '0172 original policy unavailable' USING ERRCODE='23514'; END IF;\n    SELECT * INTO STRICT policy FROM public.material_inventory_policies p\n      WHERE p.material_id=source.material_id AND p.effective_from<=receipt.received_at\n        AND (p.effective_to IS NULL OR p.effective_to>receipt.received_at);\n    tracked:=policy.tracking_mode IN ('serial','lot_and_serial');\n    IF EXISTS(SELECT 1 FROM unnest(ARRAY[line.accepted_qty,line.rejected_qty,NEW.quantity]) q\n      WHERE q<>round(q,policy.quantity_scale) OR (NOT policy.allow_fraction AND q<>trunc(q))) THEN\n        RAISE EXCEPTION '0172 original quantity precision required' USING ERRCODE='23514'; END IF;\n    SELECT coalesce(jsonb_agg(serial_id::text ORDER BY serial_id),'[]') INTO original_serials\n      FROM public.receipt_serials WHERE receipt_line_id=line.id AND NOT accepted;\n    IF (tracked AND jsonb_array_length(original_serials)<>line.rejected_qty)\n       OR (NOT tracked AND original_serials<>'[]') THEN\n        RAISE EXCEPTION '0172 original rejected serial count mismatch' USING ERRCODE='23514'; END IF;\n    IF (SELECT coalesce(sum(quantity),0) FROM public.material_request_rejection_returns WHERE receipt_line_id=line.id)+NEW.quantity>line.rejected_qty THEN\n        RAISE EXCEPTION '0172 cumulative return exceeds rejection' USING ERRCODE='23514'; END IF;\n    input:=NEW.evidence_jsonb->'input';\n    selected_serials:=input->'serial_ids';\n    IF jsonb_typeof(selected_serials) IS DISTINCT FROM 'array' THEN\n        RAISE EXCEPTION '0172 selected serial array required' USING ERRCODE='23514'; END IF;\n    IF jsonb_array_length(selected_serials)>1000 OR (tracked AND jsonb_array_length(selected_serials)<>NEW.quantity)\n       OR (NOT tracked AND selected_serials<>'[]')\n       OR selected_serials IS DISTINCT FROM (SELECT coalesce(jsonb_agg(v ORDER BY v),'[]') FROM (SELECT DISTINCT value v FROM jsonb_array_elements(selected_serials)) s)\n       OR EXISTS(SELECT 1 FROM jsonb_array_elements(selected_serials) v WHERE NOT original_serials @> jsonb_build_array(v)) THEN\n        RAISE EXCEPTION '0172 selected return serials mismatch' USING ERRCODE='23514'; END IF;\n    IF input IS DISTINCT FROM jsonb_build_object('expected_request_version',NEW.request_version,'receipt_id',receipt.id::text,\n        'receipt_line_id',line.id::text,'receipt_request_hash',receipt.request_hash,'quantity',NEW.quantity::text,\n        'serial_ids',selected_serials,'reason',NEW.reason) THEN\n        RAISE EXCEPTION '0172 exact input required' USING ERRCODE='23514'; END IF;\n    expected_origin:=jsonb_build_object('request_id',r.id::text,'revision_id',outbound.revision_id::text,\n        'receipt_id',receipt.id::text,'receipt_line_id',line.id::text,'receipt_request_hash',receipt.request_hash,\n        'shipment_line_id',ship.id::text,'outbound_posting_id',outbound.id::text,'reservation_id',reservation.id::text,\n        'in_transit_account_id',transit.id::text,'return_source_account_id',source.id::text,'rejected_qty',line.rejected_qty::text,\n        'condition',line.condition,'tracking_mode',policy.tracking_mode,\n        'quantity_scale',policy.quantity_scale,'allow_fraction',policy.allow_fraction,'rejected_serial_ids',original_serials);\n    expected:=jsonb_build_object('schema','rsc.material_request_rejection_return.v1','input',input,'origin',expected_origin);\n    IF NEW.evidence_jsonb IS DISTINCT FROM expected OR NEW.evidence_sha256 IS DISTINCT FROM\n       encode(sha256(convert_to(public.rsc_canonical_reconciliation_json_0026(expected),'UTF8')),'hex')\n       OR NEW.request_hash IS DISTINCT FROM encode(sha256(convert_to(public.rsc_canonical_reconciliation_json_0026(\n         jsonb_build_object('request_id',r.id::text,'actor_user_id',NEW.actor_user_id,'actor_person_id',NEW.actor_person_id::text,'input',input)),'UTF8')),'hex') THEN\n        RAISE EXCEPTION '0172 rejection return evidence mismatch' USING ERRCODE='23514'; END IF;\n    RETURN NEW;\nEND;\n",
+        "provolatile": "v",
+        "signature": "rsc_guard_rejection_return_insert_0172()"
+      },
+      "before": null
+    },
+    "rsc_guard_rejection_return_serial_0172()": {
+      "after": {
+        "acl": [
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "EXECUTE"
+          }
+        ],
+        "definition": "CREATE OR REPLACE FUNCTION public.rsc_guard_rejection_return_serial_0172()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\nDECLARE parent public.material_request_rejection_returns%ROWTYPE;\nBEGIN\n    SELECT * INTO STRICT parent FROM public.material_request_rejection_returns WHERE id=NEW.return_id;\n    PERFORM 1 FROM public.material_requests WHERE id=parent.request_id FOR UPDATE;\n    IF NEW.receipt_line_id<>parent.receipt_line_id OR NOT parent.evidence_jsonb->'input'->'serial_ids' @> to_jsonb(ARRAY[NEW.serial_id::text])\n       OR NOT EXISTS(SELECT 1 FROM public.receipt_serials WHERE receipt_line_id=NEW.receipt_line_id AND serial_id=NEW.serial_id AND NOT accepted) THEN\n        RAISE EXCEPTION '0172 return serial origin mismatch' USING ERRCODE='23514'; END IF;\n    RETURN NEW;\nEND;\n$function$\n",
+        "identity_arguments": "",
+        "owner": "star_oam_migrator",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "proisstrict": false,
+        "proleakproof": false,
+        "proname": "rsc_guard_rejection_return_serial_0172",
+        "proparallel": "u",
+        "prosecdef": true,
+        "prosrc": "\nDECLARE parent public.material_request_rejection_returns%ROWTYPE;\nBEGIN\n    SELECT * INTO STRICT parent FROM public.material_request_rejection_returns WHERE id=NEW.return_id;\n    PERFORM 1 FROM public.material_requests WHERE id=parent.request_id FOR UPDATE;\n    IF NEW.receipt_line_id<>parent.receipt_line_id OR NOT parent.evidence_jsonb->'input'->'serial_ids' @> to_jsonb(ARRAY[NEW.serial_id::text])\n       OR NOT EXISTS(SELECT 1 FROM public.receipt_serials WHERE receipt_line_id=NEW.receipt_line_id AND serial_id=NEW.serial_id AND NOT accepted) THEN\n        RAISE EXCEPTION '0172 return serial origin mismatch' USING ERRCODE='23514'; END IF;\n    RETURN NEW;\nEND;\n",
+        "provolatile": "v",
+        "signature": "rsc_guard_rejection_return_serial_0172()"
+      },
+      "before": null
+    },
+    "rsc_validate_rejection_return_0172(uuid)": {
+      "after": {
+        "acl": [
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "EXECUTE"
+          }
+        ],
+        "definition": "CREATE OR REPLACE FUNCTION public.rsc_validate_rejection_return_0172(checked_id uuid)\n RETURNS void\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\nDECLARE parent public.material_request_rejection_returns%ROWTYPE; actual jsonb; expected jsonb; total bigint; matches bigint;\nBEGIN\n    SELECT * INTO STRICT parent FROM public.material_request_rejection_returns WHERE id=checked_id;\n    SELECT coalesce(jsonb_agg(serial_id::text ORDER BY serial_id),'[]') INTO actual\n      FROM public.material_request_rejection_return_serials WHERE return_id=parent.id;\n    IF actual IS DISTINCT FROM parent.evidence_jsonb->'input'->'serial_ids' THEN\n        RAISE EXCEPTION '0172 complete return serial facts required' USING ERRCODE='23514'; END IF;\n    expected:=jsonb_build_object('id',parent.id::text,'request_id',parent.request_id::text,'receipt_id',parent.receipt_id::text,\n        'receipt_line_id',parent.receipt_line_id::text,'actor_person_id',parent.actor_person_id::text,\n        'actor_role_assignment_id',parent.actor_role_assignment_id::text,'return_no',parent.return_no,\n        'request_version',parent.request_version,'authorization_version',parent.authorization_version,\n        'idempotency_key_hash',parent.idempotency_key_hash,'request_hash',parent.request_hash,\n        'evidence_sha256',parent.evidence_sha256,'quantity',parent.quantity::text);\n    SELECT count(*),count(*) FILTER(WHERE stream_key='material_request' AND action='material_request.register_rejection_return'\n      AND actor_user_id=parent.actor_user_id AND request_id=parent.trace_request_id\n      AND occurred_at=parent.occurred_at AND created_at=parent.created_at\n      AND before_jsonb=jsonb_build_object('rejection_return','not_registered') AND after_jsonb=expected)\n      INTO total,matches FROM public.audit_events WHERE aggregate_type='material_request_rejection_return' AND aggregate_id=parent.id::text;\n    IF total<>1 OR matches<>1 THEN RAISE EXCEPTION '0172 exact return audit required' USING ERRCODE='23514'; END IF;\nEND;\n$function$\n",
+        "identity_arguments": "checked_id uuid",
+        "owner": "star_oam_migrator",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "proisstrict": false,
+        "proleakproof": false,
+        "proname": "rsc_validate_rejection_return_0172",
+        "proparallel": "u",
+        "prosecdef": true,
+        "prosrc": "\nDECLARE parent public.material_request_rejection_returns%ROWTYPE; actual jsonb; expected jsonb; total bigint; matches bigint;\nBEGIN\n    SELECT * INTO STRICT parent FROM public.material_request_rejection_returns WHERE id=checked_id;\n    SELECT coalesce(jsonb_agg(serial_id::text ORDER BY serial_id),'[]') INTO actual\n      FROM public.material_request_rejection_return_serials WHERE return_id=parent.id;\n    IF actual IS DISTINCT FROM parent.evidence_jsonb->'input'->'serial_ids' THEN\n        RAISE EXCEPTION '0172 complete return serial facts required' USING ERRCODE='23514'; END IF;\n    expected:=jsonb_build_object('id',parent.id::text,'request_id',parent.request_id::text,'receipt_id',parent.receipt_id::text,\n        'receipt_line_id',parent.receipt_line_id::text,'actor_person_id',parent.actor_person_id::text,\n        'actor_role_assignment_id',parent.actor_role_assignment_id::text,'return_no',parent.return_no,\n        'request_version',parent.request_version,'authorization_version',parent.authorization_version,\n        'idempotency_key_hash',parent.idempotency_key_hash,'request_hash',parent.request_hash,\n        'evidence_sha256',parent.evidence_sha256,'quantity',parent.quantity::text);\n    SELECT count(*),count(*) FILTER(WHERE stream_key='material_request' AND action='material_request.register_rejection_return'\n      AND actor_user_id=parent.actor_user_id AND request_id=parent.trace_request_id\n      AND occurred_at=parent.occurred_at AND created_at=parent.created_at\n      AND before_jsonb=jsonb_build_object('rejection_return','not_registered') AND after_jsonb=expected)\n      INTO total,matches FROM public.audit_events WHERE aggregate_type='material_request_rejection_return' AND aggregate_id=parent.id::text;\n    IF total<>1 OR matches<>1 THEN RAISE EXCEPTION '0172 exact return audit required' USING ERRCODE='23514'; END IF;\nEND;\n",
+        "provolatile": "v",
+        "signature": "rsc_validate_rejection_return_0172(uuid)"
+      },
+      "before": null
+    }
+  },
+  "tables": {
+    "audit_events": {
+      "after": {
+        "acl": [
+          {
+            "grantable": false,
+            "grantee": "star_oam_api",
+            "privilege": "INSERT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_api",
+            "privilege": "SELECT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_backup",
+            "privilege": "SELECT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "DELETE"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "INSERT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "REFERENCES"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "SELECT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "TRIGGER"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "TRUNCATE"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "UPDATE"
+          }
+        ],
+        "columns": [
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "actor_user_id",
+            "not_null": false,
+            "type": "character varying(36)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "action",
+            "not_null": true,
+            "type": "character varying(100)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "aggregate_type",
+            "not_null": true,
+            "type": "character varying(80)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "aggregate_id",
+            "not_null": true,
+            "type": "character varying(64)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "before_jsonb",
+            "not_null": false,
+            "type": "jsonb"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "after_jsonb",
+            "not_null": false,
+            "type": "jsonb"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "request_id",
+            "not_null": true,
+            "type": "character varying(160)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "previous_hash",
+            "not_null": false,
+            "type": "character varying(64)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "event_hash",
+            "not_null": true,
+            "type": "character varying(64)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "occurred_at",
+            "not_null": true,
+            "type": "timestamp with time zone"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "created_at",
+            "not_null": true,
+            "type": "timestamp with time zone"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "stream_key",
+            "not_null": true,
+            "type": "character varying(160)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "stream_version",
+            "not_null": true,
+            "type": "bigint"
+          }
+        ],
+        "constraints": [
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (actor_user_id) REFERENCES users(id)",
+            "name": "audit_events_actor_user_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "PRIMARY KEY (id)",
+            "name": "audit_events_pkey",
+            "type": "p"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "CHECK (((stream_key)::text = ANY ((ARRAY['authorization'::character varying, 'authentication'::character varying, 'inventory'::character varying, 'material_request'::character varying])::text[])))",
+            "name": "ck_audit_events_stream_key_0017",
+            "type": "c"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "CHECK ((stream_version > 0))",
+            "name": "ck_audit_events_stream_version_0017",
+            "type": "c"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (stream_key) REFERENCES audit_chain_heads(stream_key) ON UPDATE RESTRICT ON DELETE RESTRICT",
+            "name": "fk_audit_events_stream_key_0017",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "UNIQUE (event_hash)",
+            "name": "uq_audit_events_event_hash",
+            "type": "u"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "UNIQUE (stream_key, stream_version)",
+            "name": "uq_audit_events_stream_version_0017",
+            "type": "u"
+          }
+        ],
+        "fk_guards": [
+          {
+            "constraint_name": "audit_events_actor_user_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "audit_events",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "audit_events_actor_user_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "audit_events",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "audit_events_actor_user_id_fkey",
+            "function_name": "RI_FKey_noaction_del",
+            "table_name": "users",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "audit_events_actor_user_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "users",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "fk_audit_events_stream_key_0017",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "audit_chain_heads",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "fk_audit_events_stream_key_0017",
+            "function_name": "RI_FKey_restrict_upd",
+            "table_name": "audit_chain_heads",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "fk_audit_events_stream_key_0017",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "audit_events",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "fk_audit_events_stream_key_0017",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "audit_events",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          }
+        ],
+        "indexes": [
+          {
+            "definition": "CREATE UNIQUE INDEX audit_events_pkey ON public.audit_events USING btree (id)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "audit_events_pkey"
+          },
+          {
+            "definition": "CREATE INDEX ix_audit_events_action ON public.audit_events USING btree (action)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": false,
+            "indisvalid": true,
+            "name": "ix_audit_events_action"
+          },
+          {
+            "definition": "CREATE INDEX ix_audit_events_actor_user_id ON public.audit_events USING btree (actor_user_id)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": false,
+            "indisvalid": true,
+            "name": "ix_audit_events_actor_user_id"
+          },
+          {
+            "definition": "CREATE INDEX ix_audit_events_aggregate ON public.audit_events USING btree (aggregate_type, aggregate_id)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": false,
+            "indisvalid": true,
+            "name": "ix_audit_events_aggregate"
+          },
+          {
+            "definition": "CREATE INDEX ix_audit_events_occurred_at ON public.audit_events USING btree (occurred_at)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": false,
+            "indisvalid": true,
+            "name": "ix_audit_events_occurred_at"
+          },
+          {
+            "definition": "CREATE INDEX ix_audit_events_request_id ON public.audit_events USING btree (request_id)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": false,
+            "indisvalid": true,
+            "name": "ix_audit_events_request_id"
+          },
+          {
+            "definition": "CREATE UNIQUE INDEX uq_audit_events_event_hash ON public.audit_events USING btree (event_hash)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "uq_audit_events_event_hash"
+          },
+          {
+            "definition": "CREATE UNIQUE INDEX uq_audit_events_material_request_request_id_0039 ON public.audit_events USING btree (request_id) WHERE (((stream_key)::text = 'material_request'::text) AND ((action)::text = ANY ((ARRAY['material_request.withdraw'::character varying, 'material_request.cancel'::character varying])::text[])))",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "uq_audit_events_material_request_request_id_0039"
+          },
+          {
+            "definition": "CREATE UNIQUE INDEX uq_audit_events_notification_retry_request_id_0108 ON public.audit_events USING btree (request_id) WHERE (((stream_key)::text = 'material_request'::text) AND ((action)::text = 'notification_delivery.retry'::text))",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "uq_audit_events_notification_retry_request_id_0108"
+          },
+          {
+            "definition": "CREATE UNIQUE INDEX uq_audit_events_stream_version_0017 ON public.audit_events USING btree (stream_key, stream_version)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "uq_audit_events_stream_version_0017"
+          }
+        ],
+        "name": "audit_events",
+        "owner": "star_oam_migrator",
+        "relforcerowsecurity": false,
+        "relkind": "r",
+        "reloptions": null,
+        "relpersistence": "p",
+        "relreplident": "d",
+        "relrowsecurity": false,
+        "triggers": [
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER condition_decision_seal_fence AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_condition_decision_seal_fence()",
+            "function_signature": "rsc_condition_decision_seal_fence()",
+            "name": "condition_decision_seal_fence",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE TRIGGER condition_decision_seal_lock BEFORE INSERT OR DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_condition_decision_seal_lock()",
+            "function_signature": "rsc_condition_decision_seal_lock()",
+            "name": "condition_decision_seal_lock",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 31
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER condition_effect_complete AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_condition_effect_fence()",
+            "function_signature": "rsc_condition_effect_fence()",
+            "name": "condition_effect_complete",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE TRIGGER condition_effect_lock BEFORE INSERT OR DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_condition_effect_lock()",
+            "function_signature": "rsc_condition_effect_lock()",
+            "name": "condition_effect_lock",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 31
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER condition_seal_fence AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_condition_seal_fence()",
+            "function_signature": "rsc_condition_seal_fence()",
+            "name": "condition_seal_fence",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE TRIGGER condition_seal_lock BEFORE INSERT OR DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_condition_seal_lock()",
+            "function_signature": "rsc_condition_seal_lock()",
+            "name": "condition_seal_lock",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 31
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER rsc_closure_audit_0169 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((((new.action)::text = 'material_request.close'::text) OR ((new.aggregate_type)::text = 'material_request_closure'::text))) EXECUTE FUNCTION rsc_dispatch_closure_audit_0169()",
+            "function_signature": "rsc_dispatch_closure_audit_0169()",
+            "name": "rsc_closure_audit_0169",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER rsc_rejection_return_complete_0172 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((((new.action)::text = 'material_request.register_rejection_return'::text) OR ((new.aggregate_type)::text = 'material_request_rejection_return'::text))) EXECUTE FUNCTION rsc_dispatch_rejection_return_0172()",
+            "function_signature": "rsc_dispatch_rejection_return_0172()",
+            "name": "rsc_rejection_return_complete_0172",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER rsc_remaining_cancel_audit_0171 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((((new.action)::text = 'material_request.cancel_remaining'::text) OR ((new.aggregate_type)::text = 'material_request_remaining_cancellation'::text))) EXECUTE FUNCTION rsc_dispatch_remaining_cancel_0171()",
+            "function_signature": "rsc_dispatch_remaining_cancel_0171()",
+            "name": "rsc_remaining_cancel_audit_0171",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_approval_projection_0045 AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_material_request_approval_projection_0045()",
+            "function_signature": "rsc_dispatch_material_request_approval_projection_0045()",
+            "name": "trg_audit_events_approval_projection_0045",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_cancellation_graph_0037 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_require_material_request_cancellation_graph_0037()",
+            "function_signature": "rsc_require_material_request_cancellation_graph_0037()",
+            "name": "trg_audit_events_cancellation_graph_0037",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_commit_binding_0017 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_require_audit_event_commit_binding_0017()",
+            "function_signature": "rsc_require_audit_event_commit_binding_0017()",
+            "name": "trg_audit_events_commit_binding_0017",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_execution_seal_0158 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_disposition_seal_0158()",
+            "function_signature": "rsc_guard_loss_disposition_seal_0158()",
+            "name": "trg_audit_events_execution_seal_0158",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE TRIGGER trg_audit_events_immutable_0015 BEFORE DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_reject_audit_event_mutation_0015()",
+            "function_signature": "rsc_reject_audit_event_mutation_0015()",
+            "name": "trg_audit_events_immutable_0015",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 27
+          },
+          {
+            "definition": "CREATE TRIGGER trg_audit_events_immutable_truncate_0015 BEFORE TRUNCATE ON public.audit_events FOR EACH STATEMENT EXECUTE FUNCTION rsc_reject_audit_event_mutation_0015()",
+            "function_signature": "rsc_reject_audit_event_mutation_0015()",
+            "name": "trg_audit_events_immutable_truncate_0015",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 34
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_loss_disposition_0150 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_disposition_0150()",
+            "function_signature": "rsc_guard_loss_disposition_0150()",
+            "name": "trg_audit_events_loss_disposition_0150",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_loss_headquarters_0148 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_headquarters_review_0148()",
+            "function_signature": "rsc_guard_loss_headquarters_review_0148()",
+            "name": "trg_audit_events_loss_headquarters_0148",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_loss_regional_0147 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_regional_review_0147()",
+            "function_signature": "rsc_guard_loss_regional_review_0147()",
+            "name": "trg_audit_events_loss_regional_0147",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_loss_seal_0146 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_seal_0146()",
+            "function_signature": "rsc_guard_loss_seal_0146()",
+            "name": "trg_audit_events_loss_seal_0146",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE TRIGGER trg_audit_events_nonopening_stocktake_close_guard_0038 BEFORE INSERT ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_guard_nonopening_stocktake_close_event_0038()",
+            "function_signature": "rsc_guard_nonopening_stocktake_close_event_0038()",
+            "name": "trg_audit_events_nonopening_stocktake_close_guard_0038",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 7
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_opening_commit_0022 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_require_opening_terminal_graph_0022()",
+            "function_signature": "rsc_require_opening_terminal_graph_0022()",
+            "name": "trg_audit_events_opening_commit_0022",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_opening_graph_0052 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_require_opening_live_graph_0052()",
+            "function_signature": "rsc_require_opening_live_graph_0052()",
+            "name": "trg_audit_events_opening_graph_0052",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_proof_0111 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_stock_return_inbound_0111()",
+            "function_signature": "rsc_dispatch_stock_return_inbound_0111()",
+            "name": "trg_audit_events_proof_0111",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_request_0110 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_return_inbound_seal_0110()",
+            "function_signature": "rsc_guard_return_inbound_seal_0110()",
+            "name": "trg_audit_events_request_0110",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_return_0100 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_stock_return_0100()",
+            "function_signature": "rsc_dispatch_stock_return_0100()",
+            "name": "trg_audit_events_return_0100",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_return_outbound_0103 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_stock_return_outbound_0103()",
+            "function_signature": "rsc_dispatch_stock_return_outbound_0103()",
+            "name": "trg_audit_events_return_outbound_0103",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_return_receipt_0105 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_stock_return_receipt_0105()",
+            "function_signature": "rsc_dispatch_stock_return_receipt_0105()",
+            "name": "trg_audit_events_return_receipt_0105",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_return_shipment_0104 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_stock_return_shipment_0104()",
+            "function_signature": "rsc_dispatch_stock_return_shipment_0104()",
+            "name": "trg_audit_events_return_shipment_0104",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_review_seal_0156 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_review_seal_0156()",
+            "function_signature": "rsc_guard_loss_review_seal_0156()",
+            "name": "trg_audit_events_review_seal_0156",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_scrap_recovery_0165 AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_recovery_events_0165()",
+            "function_signature": "rsc_fence_scrap_recovery_events_0165()",
+            "name": "trg_audit_events_scrap_recovery_0165",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_stock_operation_seal_0101 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_stock_operation_seal_0101()",
+            "function_signature": "rsc_guard_stock_operation_seal_0101()",
+            "name": "trg_audit_events_stock_operation_seal_0101",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_stocktake_start_causality_0047 AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_nonopening_stocktake_start_causality_0047()",
+            "function_signature": "rsc_dispatch_nonopening_stocktake_start_causality_0047()",
+            "name": "trg_audit_events_stocktake_start_causality_0047",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE TRIGGER trg_audit_events_stocktake_start_sealed_0047 BEFORE INSERT OR DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_guard_stocktake_start_completion_0047()",
+            "function_signature": "rsc_guard_stocktake_start_completion_0047()",
+            "name": "trg_audit_events_stocktake_start_sealed_0047",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 31
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_supply_causality_0059 AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_material_request_supply_causality_0059()",
+            "function_signature": "rsc_dispatch_material_request_supply_causality_0059()",
+            "name": "trg_audit_events_supply_causality_0059",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_correction_closure_0161_0 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_loss_correction_seal_0161()",
+            "function_signature": "rsc_fence_loss_correction_seal_0161()",
+            "name": "trg_correction_closure_0161_0",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_daily_review_audit_commit_0132 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_daily_review_audit_0132()",
+            "function_signature": "rsc_guard_daily_review_audit_0132()",
+            "name": "trg_daily_review_audit_commit_0132",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE TRIGGER trg_daily_review_audit_facts_0132 BEFORE INSERT ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_guard_daily_review_audit_0132()",
+            "function_signature": "rsc_guard_daily_review_audit_0132()",
+            "name": "trg_daily_review_audit_facts_0132",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 7
+          },
+          {
+            "definition": "CREATE TRIGGER trg_daily_review_seal_audit_0134 BEFORE INSERT ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_guard_daily_review_seal_0134()",
+            "function_signature": "rsc_guard_daily_review_seal_0134()",
+            "name": "trg_daily_review_seal_audit_0134",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 7
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_daily_review_seal_audit_commit_0134 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_daily_review_seal_0134()",
+            "function_signature": "rsc_guard_daily_review_seal_0134()",
+            "name": "trg_daily_review_seal_audit_commit_0134",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_inverse_seal_fence_21 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_loss_inverse_seal_0159()",
+            "function_signature": "rsc_fence_loss_inverse_seal_0159()",
+            "name": "trg_inverse_seal_fence_21",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_loss_correction_business_commit_6 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_correction_commit_0159()",
+            "function_signature": "rsc_guard_loss_correction_commit_0159()",
+            "name": "trg_loss_correction_business_commit_6",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_loss_return_stop_audit_0163 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_return_stop_0163()",
+            "function_signature": "rsc_guard_loss_return_stop_0163()",
+            "name": "trg_loss_return_stop_audit_0163",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_opening_start_seal_audit_0128 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_opening_start_seal_0128()",
+            "function_signature": "rsc_guard_opening_start_seal_0128()",
+            "name": "trg_opening_start_seal_audit_0128",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE TRIGGER trg_reconciliation_audit_effect_guard_0026 BEFORE INSERT OR DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_guard_reconciliation_effect_0026()",
+            "function_signature": "rsc_guard_reconciliation_effect_0026()",
+            "name": "trg_reconciliation_audit_effect_guard_0026",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 31
+          },
+          {
+            "definition": "CREATE TRIGGER trg_reconciliation_audit_effect_no_truncate_0026 BEFORE TRUNCATE ON public.audit_events FOR EACH STATEMENT EXECUTE FUNCTION rsc_guard_reconciliation_effect_0026()",
+            "function_signature": "rsc_guard_reconciliation_effect_0026()",
+            "name": "trg_reconciliation_audit_effect_no_truncate_0026",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 34
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_execution_evidence_0165 AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_execution_evidence_0165()",
+            "function_signature": "rsc_fence_scrap_execution_evidence_0165()",
+            "name": "trg_scrap_execution_evidence_0165",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+            "function_signature": "rsc_fence_scrap_seals_0165()",
+            "name": "trg_scrap_seal_fence_0165",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          }
+        ]
+      },
+      "before": {
+        "acl": [
+          {
+            "grantable": false,
+            "grantee": "star_oam_api",
+            "privilege": "INSERT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_api",
+            "privilege": "SELECT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_backup",
+            "privilege": "SELECT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "DELETE"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "INSERT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "REFERENCES"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "SELECT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "TRIGGER"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "TRUNCATE"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "UPDATE"
+          }
+        ],
+        "columns": [
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "actor_user_id",
+            "not_null": false,
+            "type": "character varying(36)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "action",
+            "not_null": true,
+            "type": "character varying(100)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "aggregate_type",
+            "not_null": true,
+            "type": "character varying(80)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "aggregate_id",
+            "not_null": true,
+            "type": "character varying(64)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "before_jsonb",
+            "not_null": false,
+            "type": "jsonb"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "after_jsonb",
+            "not_null": false,
+            "type": "jsonb"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "request_id",
+            "not_null": true,
+            "type": "character varying(160)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "previous_hash",
+            "not_null": false,
+            "type": "character varying(64)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "event_hash",
+            "not_null": true,
+            "type": "character varying(64)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "occurred_at",
+            "not_null": true,
+            "type": "timestamp with time zone"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "created_at",
+            "not_null": true,
+            "type": "timestamp with time zone"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "stream_key",
+            "not_null": true,
+            "type": "character varying(160)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "stream_version",
+            "not_null": true,
+            "type": "bigint"
+          }
+        ],
+        "constraints": [
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (actor_user_id) REFERENCES users(id)",
+            "name": "audit_events_actor_user_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "PRIMARY KEY (id)",
+            "name": "audit_events_pkey",
+            "type": "p"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "CHECK (((stream_key)::text = ANY ((ARRAY['authorization'::character varying, 'authentication'::character varying, 'inventory'::character varying, 'material_request'::character varying])::text[])))",
+            "name": "ck_audit_events_stream_key_0017",
+            "type": "c"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "CHECK ((stream_version > 0))",
+            "name": "ck_audit_events_stream_version_0017",
+            "type": "c"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (stream_key) REFERENCES audit_chain_heads(stream_key) ON UPDATE RESTRICT ON DELETE RESTRICT",
+            "name": "fk_audit_events_stream_key_0017",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "UNIQUE (event_hash)",
+            "name": "uq_audit_events_event_hash",
+            "type": "u"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "UNIQUE (stream_key, stream_version)",
+            "name": "uq_audit_events_stream_version_0017",
+            "type": "u"
+          }
+        ],
+        "fk_guards": [
+          {
+            "constraint_name": "audit_events_actor_user_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "audit_events",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "audit_events_actor_user_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "audit_events",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "audit_events_actor_user_id_fkey",
+            "function_name": "RI_FKey_noaction_del",
+            "table_name": "users",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "audit_events_actor_user_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "users",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "fk_audit_events_stream_key_0017",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "audit_chain_heads",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "fk_audit_events_stream_key_0017",
+            "function_name": "RI_FKey_restrict_upd",
+            "table_name": "audit_chain_heads",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "fk_audit_events_stream_key_0017",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "audit_events",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "fk_audit_events_stream_key_0017",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "audit_events",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          }
+        ],
+        "indexes": [
+          {
+            "definition": "CREATE UNIQUE INDEX audit_events_pkey ON public.audit_events USING btree (id)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "audit_events_pkey"
+          },
+          {
+            "definition": "CREATE INDEX ix_audit_events_action ON public.audit_events USING btree (action)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": false,
+            "indisvalid": true,
+            "name": "ix_audit_events_action"
+          },
+          {
+            "definition": "CREATE INDEX ix_audit_events_actor_user_id ON public.audit_events USING btree (actor_user_id)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": false,
+            "indisvalid": true,
+            "name": "ix_audit_events_actor_user_id"
+          },
+          {
+            "definition": "CREATE INDEX ix_audit_events_aggregate ON public.audit_events USING btree (aggregate_type, aggregate_id)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": false,
+            "indisvalid": true,
+            "name": "ix_audit_events_aggregate"
+          },
+          {
+            "definition": "CREATE INDEX ix_audit_events_occurred_at ON public.audit_events USING btree (occurred_at)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": false,
+            "indisvalid": true,
+            "name": "ix_audit_events_occurred_at"
+          },
+          {
+            "definition": "CREATE INDEX ix_audit_events_request_id ON public.audit_events USING btree (request_id)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": false,
+            "indisvalid": true,
+            "name": "ix_audit_events_request_id"
+          },
+          {
+            "definition": "CREATE UNIQUE INDEX uq_audit_events_event_hash ON public.audit_events USING btree (event_hash)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "uq_audit_events_event_hash"
+          },
+          {
+            "definition": "CREATE UNIQUE INDEX uq_audit_events_material_request_request_id_0039 ON public.audit_events USING btree (request_id) WHERE (((stream_key)::text = 'material_request'::text) AND ((action)::text = ANY ((ARRAY['material_request.withdraw'::character varying, 'material_request.cancel'::character varying])::text[])))",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "uq_audit_events_material_request_request_id_0039"
+          },
+          {
+            "definition": "CREATE UNIQUE INDEX uq_audit_events_notification_retry_request_id_0108 ON public.audit_events USING btree (request_id) WHERE (((stream_key)::text = 'material_request'::text) AND ((action)::text = 'notification_delivery.retry'::text))",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "uq_audit_events_notification_retry_request_id_0108"
+          },
+          {
+            "definition": "CREATE UNIQUE INDEX uq_audit_events_stream_version_0017 ON public.audit_events USING btree (stream_key, stream_version)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "uq_audit_events_stream_version_0017"
+          }
+        ],
+        "name": "audit_events",
+        "owner": "star_oam_migrator",
+        "relforcerowsecurity": false,
+        "relkind": "r",
+        "reloptions": null,
+        "relpersistence": "p",
+        "relreplident": "d",
+        "relrowsecurity": false,
+        "triggers": [
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER condition_decision_seal_fence AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_condition_decision_seal_fence()",
+            "function_signature": "rsc_condition_decision_seal_fence()",
+            "name": "condition_decision_seal_fence",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE TRIGGER condition_decision_seal_lock BEFORE INSERT OR DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_condition_decision_seal_lock()",
+            "function_signature": "rsc_condition_decision_seal_lock()",
+            "name": "condition_decision_seal_lock",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 31
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER condition_effect_complete AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_condition_effect_fence()",
+            "function_signature": "rsc_condition_effect_fence()",
+            "name": "condition_effect_complete",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE TRIGGER condition_effect_lock BEFORE INSERT OR DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_condition_effect_lock()",
+            "function_signature": "rsc_condition_effect_lock()",
+            "name": "condition_effect_lock",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 31
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER condition_seal_fence AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_condition_seal_fence()",
+            "function_signature": "rsc_condition_seal_fence()",
+            "name": "condition_seal_fence",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE TRIGGER condition_seal_lock BEFORE INSERT OR DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_condition_seal_lock()",
+            "function_signature": "rsc_condition_seal_lock()",
+            "name": "condition_seal_lock",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 31
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER rsc_closure_audit_0169 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((((new.action)::text = 'material_request.close'::text) OR ((new.aggregate_type)::text = 'material_request_closure'::text))) EXECUTE FUNCTION rsc_dispatch_closure_audit_0169()",
+            "function_signature": "rsc_dispatch_closure_audit_0169()",
+            "name": "rsc_closure_audit_0169",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER rsc_remaining_cancel_audit_0171 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((((new.action)::text = 'material_request.cancel_remaining'::text) OR ((new.aggregate_type)::text = 'material_request_remaining_cancellation'::text))) EXECUTE FUNCTION rsc_dispatch_remaining_cancel_0171()",
+            "function_signature": "rsc_dispatch_remaining_cancel_0171()",
+            "name": "rsc_remaining_cancel_audit_0171",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_approval_projection_0045 AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_material_request_approval_projection_0045()",
+            "function_signature": "rsc_dispatch_material_request_approval_projection_0045()",
+            "name": "trg_audit_events_approval_projection_0045",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_cancellation_graph_0037 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_require_material_request_cancellation_graph_0037()",
+            "function_signature": "rsc_require_material_request_cancellation_graph_0037()",
+            "name": "trg_audit_events_cancellation_graph_0037",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_commit_binding_0017 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_require_audit_event_commit_binding_0017()",
+            "function_signature": "rsc_require_audit_event_commit_binding_0017()",
+            "name": "trg_audit_events_commit_binding_0017",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_execution_seal_0158 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_disposition_seal_0158()",
+            "function_signature": "rsc_guard_loss_disposition_seal_0158()",
+            "name": "trg_audit_events_execution_seal_0158",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE TRIGGER trg_audit_events_immutable_0015 BEFORE DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_reject_audit_event_mutation_0015()",
+            "function_signature": "rsc_reject_audit_event_mutation_0015()",
+            "name": "trg_audit_events_immutable_0015",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 27
+          },
+          {
+            "definition": "CREATE TRIGGER trg_audit_events_immutable_truncate_0015 BEFORE TRUNCATE ON public.audit_events FOR EACH STATEMENT EXECUTE FUNCTION rsc_reject_audit_event_mutation_0015()",
+            "function_signature": "rsc_reject_audit_event_mutation_0015()",
+            "name": "trg_audit_events_immutable_truncate_0015",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 34
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_loss_disposition_0150 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_disposition_0150()",
+            "function_signature": "rsc_guard_loss_disposition_0150()",
+            "name": "trg_audit_events_loss_disposition_0150",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_loss_headquarters_0148 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_headquarters_review_0148()",
+            "function_signature": "rsc_guard_loss_headquarters_review_0148()",
+            "name": "trg_audit_events_loss_headquarters_0148",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_loss_regional_0147 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_regional_review_0147()",
+            "function_signature": "rsc_guard_loss_regional_review_0147()",
+            "name": "trg_audit_events_loss_regional_0147",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_loss_seal_0146 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_seal_0146()",
+            "function_signature": "rsc_guard_loss_seal_0146()",
+            "name": "trg_audit_events_loss_seal_0146",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE TRIGGER trg_audit_events_nonopening_stocktake_close_guard_0038 BEFORE INSERT ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_guard_nonopening_stocktake_close_event_0038()",
+            "function_signature": "rsc_guard_nonopening_stocktake_close_event_0038()",
+            "name": "trg_audit_events_nonopening_stocktake_close_guard_0038",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 7
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_opening_commit_0022 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_require_opening_terminal_graph_0022()",
+            "function_signature": "rsc_require_opening_terminal_graph_0022()",
+            "name": "trg_audit_events_opening_commit_0022",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_opening_graph_0052 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_require_opening_live_graph_0052()",
+            "function_signature": "rsc_require_opening_live_graph_0052()",
+            "name": "trg_audit_events_opening_graph_0052",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_proof_0111 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_stock_return_inbound_0111()",
+            "function_signature": "rsc_dispatch_stock_return_inbound_0111()",
+            "name": "trg_audit_events_proof_0111",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_request_0110 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_return_inbound_seal_0110()",
+            "function_signature": "rsc_guard_return_inbound_seal_0110()",
+            "name": "trg_audit_events_request_0110",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_return_0100 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_stock_return_0100()",
+            "function_signature": "rsc_dispatch_stock_return_0100()",
+            "name": "trg_audit_events_return_0100",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_return_outbound_0103 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_stock_return_outbound_0103()",
+            "function_signature": "rsc_dispatch_stock_return_outbound_0103()",
+            "name": "trg_audit_events_return_outbound_0103",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_return_receipt_0105 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_stock_return_receipt_0105()",
+            "function_signature": "rsc_dispatch_stock_return_receipt_0105()",
+            "name": "trg_audit_events_return_receipt_0105",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_return_shipment_0104 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_stock_return_shipment_0104()",
+            "function_signature": "rsc_dispatch_stock_return_shipment_0104()",
+            "name": "trg_audit_events_return_shipment_0104",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_review_seal_0156 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_review_seal_0156()",
+            "function_signature": "rsc_guard_loss_review_seal_0156()",
+            "name": "trg_audit_events_review_seal_0156",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_scrap_recovery_0165 AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_recovery_events_0165()",
+            "function_signature": "rsc_fence_scrap_recovery_events_0165()",
+            "name": "trg_audit_events_scrap_recovery_0165",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_stock_operation_seal_0101 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_stock_operation_seal_0101()",
+            "function_signature": "rsc_guard_stock_operation_seal_0101()",
+            "name": "trg_audit_events_stock_operation_seal_0101",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_stocktake_start_causality_0047 AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_nonopening_stocktake_start_causality_0047()",
+            "function_signature": "rsc_dispatch_nonopening_stocktake_start_causality_0047()",
+            "name": "trg_audit_events_stocktake_start_causality_0047",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE TRIGGER trg_audit_events_stocktake_start_sealed_0047 BEFORE INSERT OR DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_guard_stocktake_start_completion_0047()",
+            "function_signature": "rsc_guard_stocktake_start_completion_0047()",
+            "name": "trg_audit_events_stocktake_start_sealed_0047",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 31
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_audit_events_supply_causality_0059 AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_material_request_supply_causality_0059()",
+            "function_signature": "rsc_dispatch_material_request_supply_causality_0059()",
+            "name": "trg_audit_events_supply_causality_0059",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_correction_closure_0161_0 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_loss_correction_seal_0161()",
+            "function_signature": "rsc_fence_loss_correction_seal_0161()",
+            "name": "trg_correction_closure_0161_0",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_daily_review_audit_commit_0132 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_daily_review_audit_0132()",
+            "function_signature": "rsc_guard_daily_review_audit_0132()",
+            "name": "trg_daily_review_audit_commit_0132",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE TRIGGER trg_daily_review_audit_facts_0132 BEFORE INSERT ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_guard_daily_review_audit_0132()",
+            "function_signature": "rsc_guard_daily_review_audit_0132()",
+            "name": "trg_daily_review_audit_facts_0132",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 7
+          },
+          {
+            "definition": "CREATE TRIGGER trg_daily_review_seal_audit_0134 BEFORE INSERT ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_guard_daily_review_seal_0134()",
+            "function_signature": "rsc_guard_daily_review_seal_0134()",
+            "name": "trg_daily_review_seal_audit_0134",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 7
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_daily_review_seal_audit_commit_0134 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_daily_review_seal_0134()",
+            "function_signature": "rsc_guard_daily_review_seal_0134()",
+            "name": "trg_daily_review_seal_audit_commit_0134",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_inverse_seal_fence_21 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_loss_inverse_seal_0159()",
+            "function_signature": "rsc_fence_loss_inverse_seal_0159()",
+            "name": "trg_inverse_seal_fence_21",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_loss_correction_business_commit_6 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_correction_commit_0159()",
+            "function_signature": "rsc_guard_loss_correction_commit_0159()",
+            "name": "trg_loss_correction_business_commit_6",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_loss_return_stop_audit_0163 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_loss_return_stop_0163()",
+            "function_signature": "rsc_guard_loss_return_stop_0163()",
+            "name": "trg_loss_return_stop_audit_0163",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_opening_start_seal_audit_0128 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_guard_opening_start_seal_0128()",
+            "function_signature": "rsc_guard_opening_start_seal_0128()",
+            "name": "trg_opening_start_seal_audit_0128",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE TRIGGER trg_reconciliation_audit_effect_guard_0026 BEFORE INSERT OR DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION rsc_guard_reconciliation_effect_0026()",
+            "function_signature": "rsc_guard_reconciliation_effect_0026()",
+            "name": "trg_reconciliation_audit_effect_guard_0026",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 31
+          },
+          {
+            "definition": "CREATE TRIGGER trg_reconciliation_audit_effect_no_truncate_0026 BEFORE TRUNCATE ON public.audit_events FOR EACH STATEMENT EXECUTE FUNCTION rsc_guard_reconciliation_effect_0026()",
+            "function_signature": "rsc_guard_reconciliation_effect_0026()",
+            "name": "trg_reconciliation_audit_effect_no_truncate_0026",
+            "tgdeferrable": false,
+            "tgenabled": "A",
+            "tginitdeferred": false,
+            "tgtype": 34
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_execution_evidence_0165 AFTER INSERT OR DELETE OR UPDATE ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_execution_evidence_0165()",
+            "function_signature": "rsc_fence_scrap_execution_evidence_0165()",
+            "name": "trg_scrap_execution_evidence_0165",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 29
+          },
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+            "function_signature": "rsc_fence_scrap_seals_0165()",
+            "name": "trg_scrap_seal_fence_0165",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          }
+        ]
+      }
+    },
+    "material_request_rejection_return_serials": {
+      "after": {
+        "acl": [
+          {
+            "grantable": false,
+            "grantee": "star_oam_api",
+            "privilege": "INSERT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_api",
+            "privilege": "SELECT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_backup",
+            "privilege": "SELECT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "DELETE"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "INSERT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "REFERENCES"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "SELECT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "TRIGGER"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "TRUNCATE"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "UPDATE"
+          }
+        ],
+        "columns": [
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "return_id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "receipt_line_id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "serial_id",
+            "not_null": true,
+            "type": "uuid"
+          }
+        ],
+        "constraints": [
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (return_id, receipt_line_id) REFERENCES material_request_rejection_returns(id, receipt_line_id) ON DELETE RESTRICT",
+            "name": "material_request_rejection_retur_return_id_receipt_line_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "PRIMARY KEY (return_id, serial_id)",
+            "name": "material_request_rejection_return_serials_pkey",
+            "type": "p"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (serial_id) REFERENCES inventory_serials(id) ON DELETE RESTRICT",
+            "name": "material_request_rejection_return_serials_serial_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "UNIQUE (receipt_line_id, serial_id)",
+            "name": "uq_rejection_return_serial_origin",
+            "type": "u"
+          }
+        ],
+        "fk_guards": [
+          {
+            "constraint_name": "material_request_rejection_retur_return_id_receipt_line_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "material_request_rejection_return_serials",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "material_request_rejection_retur_return_id_receipt_line_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "material_request_rejection_return_serials",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_retur_return_id_receipt_line_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_retur_return_id_receipt_line_id_fkey",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "material_request_rejection_return_serials_serial_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "inventory_serials",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_return_serials_serial_id_fkey",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "inventory_serials",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "material_request_rejection_return_serials_serial_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "material_request_rejection_return_serials",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "material_request_rejection_return_serials_serial_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "material_request_rejection_return_serials",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          }
+        ],
+        "indexes": [
+          {
+            "definition": "CREATE UNIQUE INDEX material_request_rejection_return_serials_pkey ON public.material_request_rejection_return_serials USING btree (return_id, serial_id)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "material_request_rejection_return_serials_pkey"
+          },
+          {
+            "definition": "CREATE UNIQUE INDEX uq_rejection_return_serial_origin ON public.material_request_rejection_return_serials USING btree (receipt_line_id, serial_id)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "uq_rejection_return_serial_origin"
+          }
+        ],
+        "name": "material_request_rejection_return_serials",
+        "owner": "star_oam_migrator",
+        "relforcerowsecurity": false,
+        "relkind": "r",
+        "reloptions": null,
+        "relpersistence": "p",
+        "relreplident": "d",
+        "relrowsecurity": false,
+        "triggers": [
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER rsc_rejection_return_complete_0172 AFTER INSERT ON public.material_request_rejection_return_serials DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_rejection_return_0172()",
+            "function_signature": "rsc_dispatch_rejection_return_0172()",
+            "name": "rsc_rejection_return_complete_0172",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE TRIGGER rsc_rejection_return_immutable_0172 BEFORE DELETE OR UPDATE ON public.material_request_rejection_return_serials FOR EACH ROW EXECUTE FUNCTION rsc_guard_closure_immutable_0169()",
+            "function_signature": "rsc_guard_closure_immutable_0169()",
+            "name": "rsc_rejection_return_immutable_0172",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 27
+          },
+          {
+            "definition": "CREATE TRIGGER rsc_rejection_return_insert_0172 BEFORE INSERT ON public.material_request_rejection_return_serials FOR EACH ROW EXECUTE FUNCTION rsc_guard_rejection_return_serial_0172()",
+            "function_signature": "rsc_guard_rejection_return_serial_0172()",
+            "name": "rsc_rejection_return_insert_0172",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 7
+          },
+          {
+            "definition": "CREATE TRIGGER rsc_rejection_return_truncate_0172 BEFORE TRUNCATE ON public.material_request_rejection_return_serials FOR EACH STATEMENT EXECUTE FUNCTION rsc_guard_closure_immutable_0169()",
+            "function_signature": "rsc_guard_closure_immutable_0169()",
+            "name": "rsc_rejection_return_truncate_0172",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 34
+          }
+        ]
+      },
+      "before": null
+    },
+    "material_request_rejection_returns": {
+      "after": {
+        "acl": [
+          {
+            "grantable": false,
+            "grantee": "star_oam_api",
+            "privilege": "INSERT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_api",
+            "privilege": "SELECT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_backup",
+            "privilege": "SELECT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "DELETE"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "INSERT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "REFERENCES"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "SELECT"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "TRIGGER"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "TRUNCATE"
+          },
+          {
+            "grantable": false,
+            "grantee": "star_oam_migrator",
+            "privilege": "UPDATE"
+          }
+        ],
+        "columns": [
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "return_no",
+            "not_null": true,
+            "type": "character varying(100)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "request_id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "revision_id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "request_version",
+            "not_null": true,
+            "type": "bigint"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "receipt_id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "receipt_line_id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "shipment_line_id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "outbound_posting_id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "reservation_id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "in_transit_account_id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "return_source_account_id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "actor_user_id",
+            "not_null": true,
+            "type": "character varying(36)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "actor_person_id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "actor_role_assignment_id",
+            "not_null": true,
+            "type": "uuid"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "authorization_version",
+            "not_null": true,
+            "type": "bigint"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "quantity",
+            "not_null": true,
+            "type": "numeric(18,3)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "receipt_request_hash",
+            "not_null": true,
+            "type": "character varying(64)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "idempotency_key_hash",
+            "not_null": true,
+            "type": "character varying(64)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "request_hash",
+            "not_null": true,
+            "type": "character varying(64)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "evidence_sha256",
+            "not_null": true,
+            "type": "character varying(64)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "trace_request_id",
+            "not_null": true,
+            "type": "character varying(160)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "\"default\"",
+            "default_sql": null,
+            "name": "reason",
+            "not_null": true,
+            "type": "character varying(500)"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "evidence_jsonb",
+            "not_null": true,
+            "type": "jsonb"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "occurred_at",
+            "not_null": true,
+            "type": "timestamp with time zone"
+          },
+          {
+            "acl": [],
+            "attgenerated": "",
+            "attidentity": "",
+            "collation": "-",
+            "default_sql": null,
+            "name": "created_at",
+            "not_null": true,
+            "type": "timestamp with time zone"
+          }
+        ],
+        "constraints": [
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "CHECK ((in_transit_account_id <> return_source_account_id))",
+            "name": "ck_rejection_returns_accounts",
+            "type": "c"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "CHECK (((quantity > (0)::numeric) AND (request_version > 0) AND (authorization_version > 0)))",
+            "name": "ck_rejection_returns_quantity_version",
+            "type": "c"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "CHECK ((length(TRIM(BOTH FROM reason)) > 0))",
+            "name": "ck_rejection_returns_reason",
+            "type": "c"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "CHECK ((created_at = occurred_at))",
+            "name": "ck_rejection_returns_time",
+            "type": "c"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (actor_role_assignment_id) REFERENCES role_assignments(id) ON DELETE RESTRICT",
+            "name": "material_request_rejection_return_actor_role_assignment_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (return_source_account_id) REFERENCES stock_accounts(id) ON DELETE RESTRICT",
+            "name": "material_request_rejection_return_return_source_account_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (actor_person_id) REFERENCES people(id) ON DELETE RESTRICT",
+            "name": "material_request_rejection_returns_actor_person_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE RESTRICT",
+            "name": "material_request_rejection_returns_actor_user_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "UNIQUE (idempotency_key_hash)",
+            "name": "material_request_rejection_returns_idempotency_key_hash_key",
+            "type": "u"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (in_transit_account_id) REFERENCES stock_accounts(id) ON DELETE RESTRICT",
+            "name": "material_request_rejection_returns_in_transit_account_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (outbound_posting_id) REFERENCES outbound_postings(id) ON DELETE RESTRICT",
+            "name": "material_request_rejection_returns_outbound_posting_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "PRIMARY KEY (id)",
+            "name": "material_request_rejection_returns_pkey",
+            "type": "p"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (receipt_id) REFERENCES receipts(id) ON DELETE RESTRICT",
+            "name": "material_request_rejection_returns_receipt_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (receipt_line_id) REFERENCES receipt_lines(id) ON DELETE RESTRICT",
+            "name": "material_request_rejection_returns_receipt_line_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (request_id) REFERENCES material_requests(id) ON DELETE RESTRICT",
+            "name": "material_request_rejection_returns_request_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (reservation_id) REFERENCES stock_reservations(id) ON DELETE RESTRICT",
+            "name": "material_request_rejection_returns_reservation_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "UNIQUE (return_no)",
+            "name": "material_request_rejection_returns_return_no_key",
+            "type": "u"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (revision_id) REFERENCES material_request_revisions(id) ON DELETE RESTRICT",
+            "name": "material_request_rejection_returns_revision_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "FOREIGN KEY (shipment_line_id) REFERENCES shipment_lines(id) ON DELETE RESTRICT",
+            "name": "material_request_rejection_returns_shipment_line_id_fkey",
+            "type": "f"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "UNIQUE (id, receipt_line_id)",
+            "name": "uq_rejection_returns_binding",
+            "type": "u"
+          },
+          {
+            "condeferrable": false,
+            "condeferred": false,
+            "convalidated": true,
+            "definition": "UNIQUE (actor_user_id, trace_request_id)",
+            "name": "uq_rejection_returns_trace",
+            "type": "u"
+          }
+        ],
+        "fk_guards": [
+          {
+            "constraint_name": "material_request_rejection_return_actor_role_assignment_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "material_request_rejection_return_actor_role_assignment_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_return_actor_role_assignment_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "role_assignments",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_return_actor_role_assignment_id_fkey",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "role_assignments",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "material_request_rejection_return_return_source_account_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "material_request_rejection_return_return_source_account_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_return_return_source_account_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "stock_accounts",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_return_return_source_account_id_fkey",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "stock_accounts",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_actor_person_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_actor_person_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_actor_person_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "people",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_actor_person_id_fkey",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "people",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_actor_user_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_actor_user_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_actor_user_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "users",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_actor_user_id_fkey",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "users",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_in_transit_account_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_in_transit_account_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_in_transit_account_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "stock_accounts",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_in_transit_account_id_fkey",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "stock_accounts",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_outbound_posting_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_outbound_posting_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_outbound_posting_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "outbound_postings",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_outbound_posting_id_fkey",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "outbound_postings",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_receipt_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_receipt_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_receipt_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "receipts",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_receipt_id_fkey",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "receipts",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_receipt_line_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_receipt_line_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_receipt_line_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "receipt_lines",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_receipt_line_id_fkey",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "receipt_lines",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_request_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_request_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_request_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "material_requests",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_request_id_fkey",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "material_requests",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_reservation_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_reservation_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_reservation_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "stock_reservations",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_reservation_id_fkey",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "stock_reservations",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_revision_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_revision_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_revision_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "material_request_revisions",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_revision_id_fkey",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "material_request_revisions",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_shipment_line_id_fkey",
+            "function_name": "RI_FKey_check_ins",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 5
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_shipment_line_id_fkey",
+            "function_name": "RI_FKey_check_upd",
+            "table_name": "material_request_rejection_returns",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_shipment_line_id_fkey",
+            "function_name": "RI_FKey_noaction_upd",
+            "table_name": "shipment_lines",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 17
+          },
+          {
+            "constraint_name": "material_request_rejection_returns_shipment_line_id_fkey",
+            "function_name": "RI_FKey_restrict_del",
+            "table_name": "shipment_lines",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 9
+          }
+        ],
+        "indexes": [
+          {
+            "definition": "CREATE INDEX ix_rejection_returns_request ON public.material_request_rejection_returns USING btree (request_id, receipt_line_id)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": false,
+            "indisvalid": true,
+            "name": "ix_rejection_returns_request"
+          },
+          {
+            "definition": "CREATE UNIQUE INDEX material_request_rejection_returns_idempotency_key_hash_key ON public.material_request_rejection_returns USING btree (idempotency_key_hash)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "material_request_rejection_returns_idempotency_key_hash_key"
+          },
+          {
+            "definition": "CREATE UNIQUE INDEX material_request_rejection_returns_pkey ON public.material_request_rejection_returns USING btree (id)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "material_request_rejection_returns_pkey"
+          },
+          {
+            "definition": "CREATE UNIQUE INDEX material_request_rejection_returns_return_no_key ON public.material_request_rejection_returns USING btree (return_no)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "material_request_rejection_returns_return_no_key"
+          },
+          {
+            "definition": "CREATE UNIQUE INDEX uq_rejection_returns_binding ON public.material_request_rejection_returns USING btree (id, receipt_line_id)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "uq_rejection_returns_binding"
+          },
+          {
+            "definition": "CREATE UNIQUE INDEX uq_rejection_returns_trace ON public.material_request_rejection_returns USING btree (actor_user_id, trace_request_id)",
+            "indimmediate": true,
+            "indisready": true,
+            "indisreplident": false,
+            "indisunique": true,
+            "indisvalid": true,
+            "name": "uq_rejection_returns_trace"
+          }
+        ],
+        "name": "material_request_rejection_returns",
+        "owner": "star_oam_migrator",
+        "relforcerowsecurity": false,
+        "relkind": "r",
+        "reloptions": null,
+        "relpersistence": "p",
+        "relreplident": "d",
+        "relrowsecurity": false,
+        "triggers": [
+          {
+            "definition": "CREATE CONSTRAINT TRIGGER rsc_rejection_return_complete_0172 AFTER INSERT ON public.material_request_rejection_returns DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_dispatch_rejection_return_0172()",
+            "function_signature": "rsc_dispatch_rejection_return_0172()",
+            "name": "rsc_rejection_return_complete_0172",
+            "tgdeferrable": true,
+            "tgenabled": "A",
+            "tginitdeferred": true,
+            "tgtype": 5
+          },
+          {
+            "definition": "CREATE TRIGGER rsc_rejection_return_immutable_0172 BEFORE DELETE OR UPDATE ON public.material_request_rejection_returns FOR EACH ROW EXECUTE FUNCTION rsc_guard_closure_immutable_0169()",
+            "function_signature": "rsc_guard_closure_immutable_0169()",
+            "name": "rsc_rejection_return_immutable_0172",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 27
+          },
+          {
+            "definition": "CREATE TRIGGER rsc_rejection_return_insert_0172 BEFORE INSERT ON public.material_request_rejection_returns FOR EACH ROW EXECUTE FUNCTION rsc_guard_rejection_return_insert_0172()",
+            "function_signature": "rsc_guard_rejection_return_insert_0172()",
+            "name": "rsc_rejection_return_insert_0172",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 7
+          },
+          {
+            "definition": "CREATE TRIGGER rsc_rejection_return_truncate_0172 BEFORE TRUNCATE ON public.material_request_rejection_returns FOR EACH STATEMENT EXECUTE FUNCTION rsc_guard_closure_immutable_0169()",
+            "function_signature": "rsc_guard_closure_immutable_0169()",
+            "name": "rsc_rejection_return_truncate_0172",
+            "tgdeferrable": false,
+            "tgenabled": "O",
+            "tginitdeferred": false,
+            "tgtype": 34
+          }
+        ]
+      },
+      "before": null
+    }
+  }
+}

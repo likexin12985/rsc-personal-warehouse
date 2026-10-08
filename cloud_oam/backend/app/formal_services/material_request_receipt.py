@@ -13,7 +13,38 @@ from . import material_request_query
 from .formal_files import is_available_formal_file_for_purpose
 
 class ReceiptError(Exception):
-    def __init__(self, code, category, message): self.code, self.category, self.message = code, category, message
+    _HTTP_STATUS_BY_CATEGORY = {
+        "invalid_request": 422,
+        "forbidden": 403,
+        "not_found": 404,
+        "conflict": 409,
+        "precondition_failed": 412,
+        "service_unavailable": 503,
+    }
+
+    def __init__(self, code, category, message):
+        if category not in self._HTTP_STATUS_BY_CATEGORY:
+            raise ValueError(f"unsupported error category: {category}")
+        super().__init__(message)
+        self.code, self.category, self.message = code, category, message
+
+    @property
+    def http_status_code(self):
+        return self._HTTP_STATUS_BY_CATEGORY[self.category]
+
+    def as_detail(self):
+        return {"code": self.code, "category": self.category, "message": self.message}
+
+
+_BACKEND_FULFILLMENT_ROLES = frozenset({"admin", "provincial_manager"})
+
+
+def _require_backend_fulfillment(actor) -> None:
+    roles = getattr(actor, "role_codes", None)
+    if roles is not None and not set(roles).intersection(_BACKEND_FULFILLMENT_ROLES):
+        _fail("fulfillment_forbidden", "forbidden", "当前账号没有后台人工履约权限")
+
+
 def _fail(code, category, message): raise ReceiptError(code, category, message)
 def _qty(v): return format(Decimal(v), ".3f")
 
@@ -44,6 +75,7 @@ def _validate_evidence_file(db, file_id, *, receiver_person_id=None, required=Fa
         _fail("evidence_already_bound", "conflict", "异常证据文件已绑定其他验收")
 
 def create_receipt(db, *, actor, request_id, expected_version, receiver_person_id, received_at, lines, idempotency_key, secret, trace_request_id):
+    _require_backend_fulfillment(actor)
     if not isinstance(secret, bytes): secret = secret.encode()
     if len(secret) < 32: _fail("secret_invalid", "service_unavailable", "收货幂等配置不可用")
     try: when = datetime.fromisoformat(received_at.replace("Z", "+00:00"))
@@ -130,6 +162,7 @@ def receipt_command_status(db, *, actor, request_id, idempotency_key, secret):
     only after the request visibility, receipt-line scope, immutable outbound
     history, and current inventory read authorization have all been rechecked.
     """
+    _require_backend_fulfillment(actor)
     if not isinstance(secret, bytes):
         secret = secret.encode()
     if len(secret) < 32:
@@ -181,6 +214,7 @@ def receipt_command_status(db, *, actor, request_id, idempotency_key, secret):
     return {"request_hash": receipt.request_hash, "command": _result(db, receipt, replayed=True)}
 
 def list_receipts(db, *, actor, request_id):
+    _require_backend_fulfillment(actor)
     context = material_request_query._load_read_context(db, actor=actor, now=None)
     request = db.scalar(select(MaterialRequest).where(
         MaterialRequest.id == request_id,

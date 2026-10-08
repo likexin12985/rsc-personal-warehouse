@@ -63,6 +63,9 @@ its original time. Current master active status is not historical authority.
         start = _bound(db)
         row = db.get(Inverse, reversal_id, populate_existing=True)
         _need(row is not None)
+        if row.source_account_id is None:
+            from ..stock_scrap.recovery_history import verify_plan as verify_recovery
+            return verify_recovery(db, inverse=row, proved_execution_ids=proved_execution_ids)
         root = db.get(StockLossDisposition, row.root_disposition_id, populate_existing=True)
         _need(root is not None)
         execution = db.get(Execution, row.reversed_correction_id, populate_existing=True) if row.reversed_correction_id else root

@@ -1,0 +1,503 @@
+{
+  "boundary": "Synthetic commands through actual Python canonical functions; no business posting or authority evidence",
+  "source": {
+    "app/formal_services/stock_loss_corrections/return_condition_request_inputs.py": "2ab6670815e6f96dc0aedce6e36db4d1935e235f1655936b73c15764b232b08f",
+    "app/formal_services/stock_loss_corrections/return_condition_decision_seal_admission.py": "937dca030b7eec6d58aaab4444a5256a1fc562ad260bd407668be3283668a137",
+    "app/formal_services/stock_loss_corrections/return_condition_settlement_inputs.py": "facf7c3c48962a62d13a4684e77a8b399836f49c0d545f1ec3ab12002bbca376",
+    "app/formal_services/inventory_posting.py": "b3e4c751d1aee55a02f5f0897e2533043622b1835eb6a6b2757b5b28aaa33544"
+  },
+  "samples": [
+    {
+      "kind": "submit",
+      "person_id": "00000000-0000-0000-0000-000000000032",
+      "authorization_version": 1,
+      "inbound_line_id": "00000000-0000-0000-0000-000000000001",
+      "original": {
+        "request_id": "condition-client-submit",
+        "idempotency_key": "SYNTHETIC-PRIVATE-submit",
+        "action": "submit_return_condition",
+        "inbound_line_id": "00000000-0000-0000-0000-000000000001",
+        "expected_source_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "quantity": "2.000",
+        "serial_verifications": [
+          {
+            "serial_id": "00000000-0000-0000-0000-000000000016",
+            "sku_code": "SYNTHETIC-MAT",
+            "serial_no": "SN-22",
+            "qr_code": "QR-22"
+          },
+          {
+            "serial_id": "00000000-0000-0000-0000-000000000015",
+            "sku_code": "SYNTHETIC-MAT",
+            "serial_no": "SN-21",
+            "qr_code": "QR-21"
+          }
+        ],
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001d",
+          "00000000-0000-0000-0000-00000000001c"
+        ],
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧"
+      },
+      "canonical": {
+        "schema_version": "condition_input/1",
+        "action": "submit_return_condition",
+        "inbound_line_id": "00000000-0000-0000-0000-000000000001",
+        "expected_source_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "quantity": "2",
+        "serial_verifications": [
+          {
+            "serial_id": "00000000-0000-0000-0000-000000000015",
+            "sku_code": "SYNTHETIC-MAT",
+            "serial_no": "SN-21",
+            "qr_code": "QR-21"
+          },
+          {
+            "serial_id": "00000000-0000-0000-0000-000000000016",
+            "sku_code": "SYNTHETIC-MAT",
+            "serial_no": "SN-22",
+            "qr_code": "QR-22"
+          }
+        ],
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001c",
+          "00000000-0000-0000-0000-00000000001d"
+        ],
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "request_id": "condition-client-submit",
+        "idempotency_key_hash": "a5c396a15d784f1620ad45b29765947b2c2f866ef9d491b0fd96db5134cf1f49"
+      },
+      "original_input_hash": "a8285ad37ca9e9f8d294d835f8501270726988f3898518d40ff9edb82ac0f1e6"
+    },
+    {
+      "kind": "supplement",
+      "person_id": "00000000-0000-0000-0000-000000000032",
+      "authorization_version": 1,
+      "inbound_line_id": "00000000-0000-0000-0000-000000000001",
+      "original": {
+        "request_id": "condition-client-supplement",
+        "idempotency_key": "SYNTHETIC-PRIVATE-supplement",
+        "action": "supplement",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001d",
+          "00000000-0000-0000-0000-00000000001c"
+        ]
+      },
+      "canonical": {
+        "request_id": "condition-client-supplement",
+        "action": "supplement",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001c",
+          "00000000-0000-0000-0000-00000000001d"
+        ],
+        "schema_version": "condition_decision_input/1",
+        "idempotency_key_hash": "756ebb6276f1730d81c95373ec6f58aa00acc260a96066f98ee771cded2baa2e"
+      },
+      "original_input_hash": "763d1cdc6549e9559704782f6dad1fb77dc3a095dd764110a076e677a2382c6c"
+    },
+    {
+      "kind": "withdraw",
+      "person_id": "00000000-0000-0000-0000-000000000032",
+      "authorization_version": 1,
+      "inbound_line_id": "00000000-0000-0000-0000-000000000001",
+      "original": {
+        "request_id": "condition-client-withdraw",
+        "idempotency_key": "SYNTHETIC-PRIVATE-withdraw",
+        "action": "withdraw",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001d",
+          "00000000-0000-0000-0000-00000000001c"
+        ]
+      },
+      "canonical": {
+        "request_id": "condition-client-withdraw",
+        "action": "withdraw",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001c",
+          "00000000-0000-0000-0000-00000000001d"
+        ],
+        "schema_version": "condition_decision_input/1",
+        "idempotency_key_hash": "684f3ebcdd4694395cda82bc3136419ba2e26af85fafd5c1431df0f8d7e08d13"
+      },
+      "original_input_hash": "086ae32cb6a029350a2d6df781fc8bb9decf9917a3696763f1b441ef7e723955"
+    },
+    {
+      "kind": "execute",
+      "person_id": "00000000-0000-0000-0000-000000000032",
+      "authorization_version": 1,
+      "inbound_line_id": "00000000-0000-0000-0000-000000000001",
+      "original": {
+        "request_id": "condition-client-execute",
+        "idempotency_key": "SYNTHETIC-PRIVATE-execute",
+        "action": "execute",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "serial_verifications": [
+          {
+            "serial_id": "00000000-0000-0000-0000-000000000016",
+            "sku_code": "SYNTHETIC-MAT",
+            "serial_no": "SN-22",
+            "qr_code": "QR-22"
+          },
+          {
+            "serial_id": "00000000-0000-0000-0000-000000000015",
+            "sku_code": "SYNTHETIC-MAT",
+            "serial_no": "SN-21",
+            "qr_code": "QR-21"
+          }
+        ],
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001d",
+          "00000000-0000-0000-0000-00000000001c"
+        ]
+      },
+      "canonical": {
+        "schema_version": "condition_settlement_input/1",
+        "action": "execute",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "request_id": "condition-client-execute",
+        "idempotency_key_hash": "4f0f3095d54a838a26f17340d203ea7eae500a6fb9e3d4fd6986df22018ba30e",
+        "serial_verifications": [
+          {
+            "serial_id": "00000000-0000-0000-0000-000000000015",
+            "sku_code": "SYNTHETIC-MAT",
+            "serial_no": "SN-21",
+            "qr_code": "QR-21"
+          },
+          {
+            "serial_id": "00000000-0000-0000-0000-000000000016",
+            "sku_code": "SYNTHETIC-MAT",
+            "serial_no": "SN-22",
+            "qr_code": "QR-22"
+          }
+        ],
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001c",
+          "00000000-0000-0000-0000-00000000001d"
+        ]
+      },
+      "original_input_hash": "ae438e502d41762cc0ce0543c464b5c73f9f5b2f4543af929fe0c84e6404233e"
+    },
+    {
+      "kind": "release",
+      "person_id": "00000000-0000-0000-0000-000000000032",
+      "authorization_version": 1,
+      "inbound_line_id": "00000000-0000-0000-0000-000000000001",
+      "original": {
+        "request_id": "condition-client-release",
+        "idempotency_key": "SYNTHETIC-PRIVATE-release",
+        "action": "release",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "serial_verifications": [
+          {
+            "serial_id": "00000000-0000-0000-0000-000000000016",
+            "sku_code": "SYNTHETIC-MAT",
+            "serial_no": "SN-22",
+            "qr_code": "QR-22"
+          },
+          {
+            "serial_id": "00000000-0000-0000-0000-000000000015",
+            "sku_code": "SYNTHETIC-MAT",
+            "serial_no": "SN-21",
+            "qr_code": "QR-21"
+          }
+        ],
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001d",
+          "00000000-0000-0000-0000-00000000001c"
+        ]
+      },
+      "canonical": {
+        "schema_version": "condition_settlement_input/1",
+        "action": "release",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "request_id": "condition-client-release",
+        "idempotency_key_hash": "a911f293a7d436c42e2d2f983e2748f11c486b7c3a5fd2b499768a4ad4937e3e",
+        "serial_verifications": [
+          {
+            "serial_id": "00000000-0000-0000-0000-000000000015",
+            "sku_code": "SYNTHETIC-MAT",
+            "serial_no": "SN-21",
+            "qr_code": "QR-21"
+          },
+          {
+            "serial_id": "00000000-0000-0000-0000-000000000016",
+            "sku_code": "SYNTHETIC-MAT",
+            "serial_no": "SN-22",
+            "qr_code": "QR-22"
+          }
+        ],
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001c",
+          "00000000-0000-0000-0000-00000000001d"
+        ]
+      },
+      "original_input_hash": "4237c32625d0fe58fccae37c662b2e1b92508ec9b73302ec9361c8c5c4588552"
+    },
+    {
+      "kind": "verify_region",
+      "person_id": "00000000-0000-0000-0000-000000000032",
+      "authorization_version": 1,
+      "inbound_line_id": "00000000-0000-0000-0000-000000000001",
+      "original": {
+        "request_id": "condition-client-verify_region",
+        "idempotency_key": "SYNTHETIC-PRIVATE-verify_region",
+        "action": "verify_region",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001d",
+          "00000000-0000-0000-0000-00000000001c"
+        ]
+      },
+      "canonical": {
+        "request_id": "condition-client-verify_region",
+        "action": "verify_region",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001c",
+          "00000000-0000-0000-0000-00000000001d"
+        ],
+        "schema_version": "condition_decision_input/1",
+        "idempotency_key_hash": "3a5aec00ab84505478b86b847725c83a7d0766cbae76cd42c6451c214ca6d7f1"
+      },
+      "original_input_hash": "42fe1678a13fd3818775434e9943d3c75a528497ebfa676b482900c93cd01666"
+    },
+    {
+      "kind": "return_evidence",
+      "person_id": "00000000-0000-0000-0000-000000000032",
+      "authorization_version": 1,
+      "inbound_line_id": "00000000-0000-0000-0000-000000000001",
+      "original": {
+        "request_id": "condition-client-return_evidence",
+        "idempotency_key": "SYNTHETIC-PRIVATE-return_evidence",
+        "action": "return_evidence",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001d",
+          "00000000-0000-0000-0000-00000000001c"
+        ]
+      },
+      "canonical": {
+        "request_id": "condition-client-return_evidence",
+        "action": "return_evidence",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001c",
+          "00000000-0000-0000-0000-00000000001d"
+        ],
+        "schema_version": "condition_decision_input/1",
+        "idempotency_key_hash": "39fe24afed5c76b940d946f3507e22602dceadfde83b9328cc5a0f279de4ce37"
+      },
+      "original_input_hash": "638f6178916c97dc917c2dcd80060e43bbeb79af3bdfab9b4653d4aaacb03449"
+    },
+    {
+      "kind": "reject_region",
+      "person_id": "00000000-0000-0000-0000-000000000032",
+      "authorization_version": 1,
+      "inbound_line_id": "00000000-0000-0000-0000-000000000001",
+      "original": {
+        "request_id": "condition-client-reject_region",
+        "idempotency_key": "SYNTHETIC-PRIVATE-reject_region",
+        "action": "reject_region",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001d",
+          "00000000-0000-0000-0000-00000000001c"
+        ]
+      },
+      "canonical": {
+        "request_id": "condition-client-reject_region",
+        "action": "reject_region",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001c",
+          "00000000-0000-0000-0000-00000000001d"
+        ],
+        "schema_version": "condition_decision_input/1",
+        "idempotency_key_hash": "18810245723ab87e6b78f2dccbd04b75223b0d9e883a792db3dec76cb988c1a8"
+      },
+      "original_input_hash": "0f10a250781ea8c4a49c1ef85351548e6c9564fc331ff1000fcf1201e80a8185"
+    },
+    {
+      "kind": "return_region",
+      "person_id": "00000000-0000-0000-0000-000000000032",
+      "authorization_version": 1,
+      "inbound_line_id": "00000000-0000-0000-0000-000000000001",
+      "original": {
+        "request_id": "condition-client-return_region",
+        "idempotency_key": "SYNTHETIC-PRIVATE-return_region",
+        "action": "return_region",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001d",
+          "00000000-0000-0000-0000-00000000001c"
+        ]
+      },
+      "canonical": {
+        "request_id": "condition-client-return_region",
+        "action": "return_region",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001c",
+          "00000000-0000-0000-0000-00000000001d"
+        ],
+        "schema_version": "condition_decision_input/1",
+        "idempotency_key_hash": "518da516b61ff1103c6628925eb8633b430526228c6d9abb2f3b95c518b6ae36"
+      },
+      "original_input_hash": "eeb92100532477becbe94c7ebe1b6ec7a5303bed7c9fb5da9d53e5d90030b5bf"
+    },
+    {
+      "kind": "reject_hq",
+      "person_id": "00000000-0000-0000-0000-000000000032",
+      "authorization_version": 1,
+      "inbound_line_id": "00000000-0000-0000-0000-000000000001",
+      "original": {
+        "request_id": "condition-client-reject_hq",
+        "idempotency_key": "SYNTHETIC-PRIVATE-reject_hq",
+        "action": "reject_hq",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001d",
+          "00000000-0000-0000-0000-00000000001c"
+        ]
+      },
+      "canonical": {
+        "request_id": "condition-client-reject_hq",
+        "action": "reject_hq",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001c",
+          "00000000-0000-0000-0000-00000000001d"
+        ],
+        "schema_version": "condition_decision_input/1",
+        "idempotency_key_hash": "1608b37d909e2f587cde540ab41039eae277a9de331e991cc3c3ce6906152aed"
+      },
+      "original_input_hash": "8d63414bdf34e8ea0f0239d76aaa11cede5ce3bed99e4cf2102175ca77701860"
+    },
+    {
+      "kind": "approve_hq",
+      "person_id": "00000000-0000-0000-0000-000000000032",
+      "authorization_version": 1,
+      "inbound_line_id": "00000000-0000-0000-0000-000000000001",
+      "original": {
+        "request_id": "condition-client-approve_hq",
+        "idempotency_key": "SYNTHETIC-PRIVATE-approve_hq",
+        "action": "approve_hq",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001d",
+          "00000000-0000-0000-0000-00000000001c"
+        ]
+      },
+      "canonical": {
+        "request_id": "condition-client-approve_hq",
+        "action": "approve_hq",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001c",
+          "00000000-0000-0000-0000-00000000001d"
+        ],
+        "schema_version": "condition_decision_input/1",
+        "idempotency_key_hash": "e93dc9ecd4239ce39a2fc9a07eac277cf728d36466f02de80e734780f5249d81"
+      },
+      "original_input_hash": "2d5960584814170c1135a477ab6d6e5af30a3846ea7348011a6546701171deb3"
+    },
+    {
+      "kind": "cancel_approved",
+      "person_id": "00000000-0000-0000-0000-000000000032",
+      "authorization_version": 1,
+      "inbound_line_id": "00000000-0000-0000-0000-000000000001",
+      "original": {
+        "request_id": "condition-client-cancel_approved",
+        "idempotency_key": "SYNTHETIC-PRIVATE-cancel_approved",
+        "action": "cancel_approved",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001d",
+          "00000000-0000-0000-0000-00000000001c"
+        ]
+      },
+      "canonical": {
+        "request_id": "condition-client-cancel_approved",
+        "action": "cancel_approved",
+        "case_id": "00000000-0000-0000-0000-000000000005",
+        "expected_event_id": "00000000-0000-0000-0000-000000000006",
+        "expected_event_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reason": "现场核验：旧成色 → 坏件\n保留原请求 🔧",
+        "evidence_file_ids": [
+          "00000000-0000-0000-0000-00000000001c",
+          "00000000-0000-0000-0000-00000000001d"
+        ],
+        "schema_version": "condition_decision_input/1",
+        "idempotency_key_hash": "c64ef2cbb8387dc852a6acc2fdcf2dc3fbc1a0345b14f09de45dc442c6227d94"
+      },
+      "original_input_hash": "09894d783e93f73c5583012ee24e2c60902b9228ec4a3b0043ef63d4dbc6322e"
+    }
+  ]
+}

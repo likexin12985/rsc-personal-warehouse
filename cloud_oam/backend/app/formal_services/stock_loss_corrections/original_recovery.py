@@ -12,6 +12,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.stock_loss_correction_models import stock_loss_request_key_bindings as bindings
 from app.stock_operation_models import StockLossDisposition
+from app.stock_scrap_binding_schema import ALIASES
 from app.formal_services import stock_loss_disposition_facts as original
 from app.formal_services import stock_loss_sources as sources
 from app.formal_services.work_order_query import _aware
@@ -35,7 +36,7 @@ adding an otherwise unrepresented binding cannot hide it from the proof.
 Permanent request seals describe other unexecuted commands, not stock edges.
 """
     coordinates = [bindings.c.root_disposition_id.in_(tuple(roots))
-        & (bindings.c.binding_kind != 'inverse_seal')]
+        & bindings.c.binding_kind.not_in(('inverse_seal', 'approval_seal', 'correction_seal'))]
     coordinates.extend((bindings.c.fact_id == row.id)
         | ((bindings.c.actor_user_id == row.actor_user_id)
            & (bindings.c.request_id == row.request_id)) for _, row in facts)
@@ -51,12 +52,22 @@ Permanent request seals describe other unexecuted commands, not stock edges.
         values = dict(binding_kind=kind, root_disposition_id=fact.root_disposition_id,
             actor_user_id=fact.actor_user_id, request_id=fact.request_id, request_hash=fact.request_hash)
         values.update({column: fact.id if column == columns[kind] else None
-            for column in ('inverse_id', 'approval_id', 'correction_id', 'seal_id')})
-        digests = tuple(binding[column] for column in keys.values())
+            for column in ('inverse_id', 'approval_id', 'correction_id', 'seal_id',
+                'approval_seal_id', 'correction_seal_id')})
+        # Select the action from the already-proved immutable fact, never from
+        # an optional registry alias which could disguise a different request.
+        special = ('recovery_key_hash' if kind == 'inverse'
+            and fact.command_jsonb.get('action') == 'execute_scrap_recovery'
+            else 'scrap_key_hash' if kind == 'correction' and fact.disposition == 'scrap' else None)
+        selected = special or keys[kind]
+        values.update({column: fact.idempotency_key_hash if column == special else None
+            for column in ALIASES[3:]})
+        digests = tuple(binding[column] for column in ALIASES
+            if column in keys.values() or column == special)
         if (any(binding[column] != value for column, value in values.items())
-                or binding[keys[kind]] != fact.idempotency_key_hash
+                or binding[selected] != fact.idempotency_key_hash
                 or _aware(binding['created_at']) != _aware(fact.created_at)
-                or len(set(digests)) != 3
+                or len(set(digests)) != len(digests)
                 or any(not isinstance(value, str) or re.fullmatch('[a-f0-9]{64}', value) is None
                     for value in (*digests, binding['key_token'], binding['request_hash']))):
             _unknown()
@@ -64,8 +75,17 @@ Permanent request seals describe other unexecuted commands, not stock edges.
         # accepted just because the selected action's hash is well formed.
         collisions = tuple(db.scalars(select(bindings.c.fact_id).where(or_(
             bindings.c.key_token == binding['key_token'],
-            *(bindings.c[column].in_(digests) for column in keys.values()))).limit(3)))
+            *(bindings.c[column].in_(digests) for column in ALIASES))).limit(3)))
         if collisions != (fact.id,):
+            _unknown()
+        # Original scrap and recovery review commands live in a second native
+        # registry. None may borrow this successor's request coordinates.
+        from app.formal_services.stock_scrap.binding_reads import REGISTRY
+        foreign = db.scalar(select(REGISTRY.c.fact_id).where(or_(
+            REGISTRY.c.fact_id == fact.id, REGISTRY.c.key_token == binding['key_token'],
+            (REGISTRY.c.actor_user_id == fact.actor_user_id) & (REGISTRY.c.request_id == fact.request_id),
+            *(REGISTRY.c[column].in_(digests) for column in ALIASES))).limit(1))
+        if foreign is not None:
             _unknown()
     return rows
 

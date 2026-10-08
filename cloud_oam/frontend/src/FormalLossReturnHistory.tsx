@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Identity, LossLine } from './formalLossReview';
 import type { ReturnHistory, Share } from './lossReturnHistory';
+import ReturnConditionHistory from './FormalReturnConditionHistory';
+import type { ConditionHistory } from './returnConditionHistory';
 
 const labels: Record<Share['stage'], string> = { not_outbound: '尚未出库', outbound_not_shipped: '已出库，未发运',
   shipped_unconfirmed: '已发运，未确认收货', accepted_not_inbound: '已接受，未入库', rejected: '已拒收', posted_inbound: '已入库' };
-type Props = { identity: Identity; rootId: string; line: LossLine; read(root: string): Promise<ReturnHistory> };
+type Props = { identity: Identity; rootId: string; line: LossLine; read(root: string): Promise<ReturnHistory>;
+  readCondition?(root: string, inbound: string): Promise<ConditionHistory>; onOpenCondition?(inbound: string): void };
 
-export default function FormalLossReturnHistory({ identity, rootId, line, read }: Props) {
+export default function FormalLossReturnHistory({ identity, rootId, line, read, readCondition, onOpenCondition }: Props) {
   const [history, setHistory] = useState<ReturnHistory | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const epoch = useRef(0), inFlight = useRef(false);
@@ -49,6 +52,9 @@ export default function FormalLossReturnHistory({ identity, rootId, line, read }
         <ul>{history.classification_exceptions.map(issue => <li key={issue.inbound_line_id}>
           {issue.affected_quantity} {line.base_unit}：记录为{issue.recorded_condition === 'new' ? '新件' : '旧件'}，按验收应为坏件。
           {!!issue.affected_serial_ids.length && <span> SN：{names(issue.affected_serial_ids)}</span>}
+          {onOpenCondition && <button disabled={busy} onClick={() => onOpenCondition(issue.inbound_line_id)}>办理成色纠正</button>}
+          {readCondition && <ReturnConditionHistory identity={identity} rootId={rootId} inboundId={issue.inbound_line_id}
+            unit={line.base_unit} read={readCondition} />}
         </li>)}</ul></div>}
     </>}
   </section>;

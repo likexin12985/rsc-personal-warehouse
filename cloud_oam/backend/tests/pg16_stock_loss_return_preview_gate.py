@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import event, select, text
 from sqlalchemy.orm import Session
+from pg16_stock_operation_permission_policy import uses_migrated_loss_policy
 
 from app.formal_access import load_formal_principal
 from app.foundation_models import Organization, Permission, Role, RolePermission
@@ -61,12 +62,26 @@ def run(context):
         assign(db, manager, roles['provincial_manager'], scope_type='organization', scope_id=str(source.owner_org_id))
         grant_id = None
         for action, role in ((regional.ACTION, 'provincial_manager'), (headquarters.ACTION, 'admin'), ('dispose_loss', 'admin')):
-            permission = Permission(resource='stock_operation', action=action, field_code='', description='Synthetic loss-return preview gate')
-            db.add(permission)
-            db.flush()
-            grant = RolePermission(role_id=roles[role].id, permission_id=permission.id, effect='allow')
-            db.add(grant)
-            db.flush()
+            permission = db.scalar(select(Permission).where(
+                Permission.resource == 'stock_operation', Permission.action == action,
+                Permission.field_code == ''))
+            if permission is None:
+                assert not uses_migrated_loss_policy(db), 'formal loss permission missing'
+                permission = Permission(resource='stock_operation', action=action, field_code='',
+                    description='Synthetic loss-return preview gate')
+                db.add(permission)
+                db.flush()
+            # Head migrations seed these grants. Reuse their exact definition;
+            # never turn a migrated deny into an allow to make the gate pass.
+            grant = db.scalar(select(RolePermission).where(
+                RolePermission.role_id == roles[role].id,
+                RolePermission.permission_id == permission.id))
+            if grant is None:
+                assert not uses_migrated_loss_policy(db), 'formal loss grant missing'
+                grant = RolePermission(role_id=roles[role].id, permission_id=permission.id, effect='allow')
+                db.add(grant)
+                db.flush()
+            assert grant.effect == 'allow', (action, role)
             if action == 'dispose_loss':
                 grant_id = grant.id
         # The source opening fixture already establishes the regional custodian.

@@ -36,10 +36,11 @@ def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_a
                 'codex/notification-delivery-worker',
             ]
     jobs=_jobs()
-    assert set(jobs)=={'pg16_runtime','pg16_loss','static_safety','postgresql16-release-gate'}
+    assert set(jobs)=={'pg16_runtime','pg16_loss','pg16_condition','static_safety','postgresql16-release-gate'}
     runtime,static,aggregate=(jobs[key] for key in ('pg16_runtime','static_safety','postgresql16-release-gate'))
     loss=jobs['pg16_loss']
-    assert not re.search(r'^    (needs|if|continue-on-error):',runtime+'\n'+static+'\n'+loss,re.MULTILINE)
+    condition=jobs['pg16_condition']
+    assert not re.search(r'^    (needs|if|continue-on-error):',runtime+'\n'+static+'\n'+loss+'\n'+condition,re.MULTILINE)
     assert 'python -m pytest -q tests/test_postgresql16_release_gate.py -s' in runtime
     assert '    timeout-minutes: 360\n' in runtime
     assert '    strategy:\n      fail-fast: false\n      matrix:\n        suite: [migrations, inventory, control]\n' in runtime
@@ -49,7 +50,7 @@ def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_a
     assert 'postgres:16-alpine@sha256:' in runtime
     assert '    strategy:\n      fail-fast: false\n      matrix:\n        tracking: [quantity, serial]\n' in loss
     assert 'RSC_PG16_LOSS_TRACKING: ${{ matrix.tracking }}' in loss
-    assert '        flow: [submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt, sender_http, sender_seals, execution_seals, correction_restore, correction_used, correction_damaged, correction_generations, correction_seal_retention, execution_http_disposition, execution_http_return, correction_request_seals, correction_http_sources, return_quality_whole, return_quality_mixed, return_stop_seals, return_stop_http, return_stop_negative, return_stop_seal_first, return_stop_execute_first, return_stop_stop_first, return_stop_outbound_first]\n' in loss
+    assert '        flow: [submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt, sender_http, sender_seals, execution_seals, correction_restore, correction_used, correction_damaged, correction_generations, correction_seal_retention, execution_http_disposition, execution_http_return, correction_request_seals, correction_http_sources, return_quality_whole, return_quality_mixed, return_stop_seals, return_stop_http, return_stop_negative, return_stop_seal_first, return_stop_execute_first, return_stop_stop_first, return_stop_outbound_first, scrap_http]\n' in loss
     assert 'RSC_PG16_LOSS_FLOW: ${{ matrix.flow }}' in loss
     assert 'python -m pytest -q -s tests/test_postgresql16_stock_loss_release_gate.py' in loss
     assert '        working-directory: cloud_oam/backend\n' in loss
@@ -61,6 +62,27 @@ def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_a
             '      RSC_PG16_LOSS_TRACKING: ${{ matrix.tracking }}\n','').replace(
             '      RSC_PG16_LOSS_FLOW: ${{ matrix.flow }}\n',''))
     assert 'RSC_PG16_GATE_' not in static and 'services:' not in static
+    assert 'tracking: [quantity, serial]' in condition
+    assert 'flow: [condition_http, legacy_history, fulfillment_http]' in condition
+    assert 'fetch-depth: 0' in condition and 'persist-credentials: false' in condition
+    assert 'prepare_condition_predecessor.py' in condition
+    assert 'run_local_pg16_return_condition_checks.py' in condition
+    assert '--formal-http --tracking ${{ matrix.tracking }}' in condition
+    assert '--legacy-history-only --tracking ${{ matrix.tracking }}' in condition
+    assert 'run_local_pg16_scrap_business_checks.py' in condition
+    assert 'run_local_pg16_fulfillment_checks.py' in condition
+    assert "if: ${{ matrix.flow != 'fulfillment_http' }}" in condition
+    business_step = condition.split('      - name: Run selected migration and business gate\n', 1)[1]
+    assert '        if:' not in business_step
+    assert 'fulfillment_http)' in business_step
+    assert 'condition_http) revision=0157' in condition
+    assert 'legacy_history) revision=0164' in condition
+    assert '--revision 0164 --rollback-compatibility' in condition
+    assert '--rollback-source "$GITHUB_WORKSPACE/cloud_oam/artifacts/condition-ci-rollback-0164/source/cloud_oam"' in condition
+    assert '--postgres-bin /usr/lib/postgresql/16/bin' in condition
+    assert 'postgresql-16' in condition and 'services:' not in condition
+    assert 'continue-on-error:' not in condition and 'exclude:' not in condition
+    assert 'RSC_PG16_GATE_HOST' not in condition
     # The three matrix legs must run the same dynamically discovered file set
     # with disjoint assignments. The named aggregate requires every leg.
     assert '    strategy:\n      fail-fast: false\n      matrix:\n        shard: [0, 1, 2]\n' in static
@@ -71,9 +93,10 @@ def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_a
     assert '-r cloud_oam/scripts/requirements-public-knowledge.txt' in static
     assert '    timeout-minutes: 360\n' in static
     assert '    if: ${{ always() }}\n' in aggregate
-    assert '    needs: [pg16_runtime, pg16_loss, static_safety]\n' in aggregate
+    assert '    needs: [pg16_runtime, pg16_loss, pg16_condition, static_safety]\n' in aggregate
     assert 'RUNTIME_RESULT: ${{ needs.pg16_runtime.result }}' in aggregate
     assert 'LOSS_RESULT: ${{ needs.pg16_loss.result }}' in aggregate
+    assert 'CONDITION_RESULT: ${{ needs.pg16_condition.result }}' in aggregate
     assert 'STATIC_RESULT: ${{ needs.static_safety.result }}' in aggregate
     assert 'continue-on-error:' not in aggregate
 
@@ -175,7 +198,7 @@ def test_runtime_suite_proves_fresh_database_before_bootstrap(monkeypatch, suite
 
 def test_pg16_and_static_jobs_install_the_image_runtime_hash_lock():
     jobs=_jobs()
-    for name in ('pg16_runtime','pg16_loss','static_safety'):
+    for name in ('pg16_runtime','pg16_loss','pg16_condition','static_safety'):
         job=jobs[name]
         assert '-r cloud_oam/backend/requirements-build.lock' in job
         assert '-r cloud_oam/backend/requirements-linux-amd64.lock' in job
@@ -192,10 +215,10 @@ def test_aggregate_shell_rejects_every_incomplete_or_failed_combination():
     source=_jobs()['postgresql16-release-gate'].split('        run: |\n',1)[1]
     script='\n'.join(line[10:] for line in source.splitlines() if line.strip())
     statuses=('success','failure','cancelled','skipped','timed_out','in_progress','')
-    for runtime,loss,static in product(statuses,repeat=3):
+    for runtime,loss,condition,static in product(statuses,repeat=4):
         result=subprocess.run(['bash','-e','-c',script],env={
-            'RUNTIME_RESULT':runtime,'LOSS_RESULT':loss,'STATIC_RESULT':static},capture_output=True,check=False)
-        assert (result.returncode==0)==(runtime==loss==static=='success'),(runtime,loss,static)
+            'RUNTIME_RESULT':runtime,'LOSS_RESULT':loss,'CONDITION_RESULT':condition,'STATIC_RESULT':static},capture_output=True,check=False)
+        assert (result.returncode==0)==(runtime==loss==condition==static=='success'),(runtime,loss,condition,static)
 
 
 def test_loss_gate_refuses_unacknowledged_or_incorrect_hosted_context_before_database(monkeypatch):
@@ -237,11 +260,11 @@ def test_loss_gate_refuses_invalid_flow_before_database(monkeypatch):
     monkeypatch.setattr(loss_gate.gate,'_assert_fresh_disposable_postgresql16',unexpected_database_access)
     for flow in ('','both','submission,disposition','production'):
         monkeypatch.setenv('RSC_PG16_LOSS_FLOW',flow)
-        with pytest.raises(pytest.fail.Exception,match='explicit submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt, sender_http, sender_seals, execution_seals, correction_restore, correction_used, correction_damaged, correction_generations, correction_seal_retention, execution_http_disposition, execution_http_return, correction_request_seals, correction_http_sources, return_quality_whole, return_quality_mixed, return_stop_seals, return_stop_http, return_stop_negative, return_stop_seal_first, return_stop_execute_first, return_stop_stop_first or return_stop_outbound_first'):
+        with pytest.raises(pytest.fail.Exception,match='explicit submission, submission_http, review_seals, disposition, return_preview, return_submission, return_outbound, return_shipment, return_receipt, sender_http, sender_seals, execution_seals, correction_restore, correction_used, correction_damaged, correction_generations, correction_seal_retention, execution_http_disposition, execution_http_return, correction_request_seals, correction_http_sources, return_quality_whole, return_quality_mixed, return_stop_seals, return_stop_http, return_stop_negative, return_stop_seal_first, return_stop_execute_first, return_stop_stop_first return_stop_outbound_first or scrap_http'):
             loss_gate.test_postgresql16_stock_loss_release_gate()
 
 
-@pytest.mark.parametrize("flow", ("submission_http", "review_seals", "disposition", "return_preview", "return_submission", "return_outbound", "return_shipment", "return_receipt", "sender_http", "sender_seals", "execution_seals", "correction_restore", "correction_used", "correction_damaged", "correction_generations", "correction_seal_retention", "execution_http_disposition", "execution_http_return", "correction_request_seals", "correction_http_sources", "return_quality_whole", "return_quality_mixed", "return_stop_seals", "return_stop_http", "return_stop_negative", "return_stop_seal_first", "return_stop_execute_first", "return_stop_stop_first", "return_stop_outbound_first"))
+@pytest.mark.parametrize("flow", ("submission_http", "review_seals", "disposition", "return_preview", "return_submission", "return_outbound", "return_shipment", "return_receipt", "sender_http", "sender_seals", "execution_seals", "correction_restore", "correction_used", "correction_damaged", "correction_generations", "correction_seal_retention", "execution_http_disposition", "execution_http_return", "correction_request_seals", "correction_http_sources", "return_quality_whole", "return_quality_mixed", "return_stop_seals", "return_stop_http", "return_stop_negative", "return_stop_seal_first", "return_stop_execute_first", "return_stop_stop_first", "return_stop_outbound_first", "scrap_http"))
 def test_return_leg_still_requires_the_real_disposable_database_boundary(monkeypatch, flow):
     import pytest
     import test_postgresql16_stock_loss_release_gate as loss_gate

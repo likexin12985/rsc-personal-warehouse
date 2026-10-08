@@ -110,7 +110,9 @@ def verify(engines, *, user_id):
             db.rollback()
         else:
             raise AssertionError('private trigger became API executable')
-    return dict(status='passed', authenticationIsolation=positive,
+    from pg16_scrap_authentication_fence_gate import verify as verify_scrap_fence
+    scrap_fence = verify_scrap_fence(engines, user_id=user_id)
+    return dict(status='passed', scrapSealFence=scrap_fence, authenticationIsolation=positive,
                 authorizationIsolation=independent, stockAndSealAuditsFenced=fenced,
                 detachedSealAuditsRejected=rejected, failedRowsRolledBack=True,
                 privateTriggerExecutionDenied=True, productionAcceptance=False)

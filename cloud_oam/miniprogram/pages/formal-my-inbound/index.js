@@ -58,7 +58,7 @@ Page({
       if (!current()) return
       this._candidate = candidate; this._session = s; this._version = candidate.requestVersion; this._next = candidate.nextAfterId
       this.setData({ state: 'ready', requestNo: candidate.requestNo, canPost: candidate.canPost,
-        items: candidate.items.map(item => ({ ...item, detail: item.detail && { ...item.detail, lines: item.detail.lines.map(line => ({ ...line, shownSerials: line.accepted_serials.slice(0, 20), serialCount: line.accepted_serials.length })) } })),
+        items: candidate.items.map(item => ({ ...item, detail: item.detail && { ...item.detail, lines: item.detail.lines.map(line => ({ ...line, conditionLabel: contract.conditionLabel(line.condition), shownSerials: line.accepted_serials.slice(0, 20), serialCount: line.accepted_serials.length, rejectedSerials: line.rejected_serials, rejectedSerialCount: line.rejected_serials.length })) } })),
         hasNext: !!this._next, hasPrevious: this._cursors.length > 1, pageNumber: this._cursors.length,
         message: candidate.canPost ? '按每次验收独立入账，仅合格数量及合格 SN 转入本人个人仓。拒收及异常继续单独处理。' : '当前仅可查看验收和入账记录，暂不能新增入账。' })
     } catch (error) {

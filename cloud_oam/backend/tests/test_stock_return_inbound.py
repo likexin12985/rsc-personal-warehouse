@@ -79,19 +79,20 @@ def prefix(context):
     return f"/api/v1/stock-returns/my-receiving/{context.receipt.receipt_id}/inbound"
 
 
-def assert_mini_contract(view, original, actor):
+def assert_mini_contract(view, original, actor, receipt):
     """Validate actual HTTP data with the shipped mini-program parser."""
     script = """const fs = require('node:fs');
 const c = require('./utils/stock-return-inbound-contract');
-const { view, original, person, version } = JSON.parse(fs.readFileSync(0, 'utf8'));
-c.validatePreview(view, { receiptId: view.receipt_id, shipmentId: view.shipment_id, personId: person, authorizationVersion: version });
+const { view, original, person, version, receipt } = JSON.parse(fs.readFileSync(0, 'utf8'));
+c.validatePreview(view, { receiptId: view.receipt_id, shipmentId: view.shipment_id, personId: person, authorizationVersion: version, receipt });
 const marker = { receipt_id: view.receipt_id, shipment_id: view.shipment_id,
   trace_request_id: original.request_id, plan_hash: original.plan_hash,
   request_hash: c.requestHash(view.receipt_id, original.plan_hash, original.request_id) };
 c.validateLookup(original, marker);
 """
     checked = subprocess.run([shutil.which("node") or "node", "-e", script],
-        input=json.dumps(dict(view=view, original=original, person=str(actor.person_id), version=actor.authorization_version)),
+        input=json.dumps(dict(view=view, original=original, person=str(actor.person_id),
+            version=actor.authorization_version, receipt=receipt)),
         text=True, capture_output=True, timeout=30,
         cwd=Path(__file__).resolve().parents[2] / "miniprogram")
     assert checked.returncode == 0, checked.stderr
@@ -160,7 +161,8 @@ def test_completed_inbound_seal_returns_exact_original_http_result(db, accepted)
         assert response.status_code == 200, response.text
         assert response.json() == original.json()
         assert "no-store" in response.headers["cache-control"]
-        assert_mini_contract(view, original.json(), accepted.actor)
+        assert_mini_contract(view, original.json(), accepted.actor,
+            accepted.receipt.model_dump(mode="json"))
     assert snapshot(db) == before
 
 

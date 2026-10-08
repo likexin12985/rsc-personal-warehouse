@@ -47,6 +47,7 @@ PURPOSES: Final[frozenset[str]] = frozenset(
         "opening_count_import",
         "opening_count_import_error",
         "stock_loss_evidence",
+        "return_condition_evidence",
     }
 )
 
@@ -68,7 +69,7 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 _STORAGE_KEY = re.compile(
-    r"^formal-files/v1/(request_attachment|external_approval_evidence|stocktake_evidence|receipt_exception_evidence|source_configuration_evidence|daily_reconciliation_evidence|inventory_report_export|opening_count_import|opening_count_import_error|stock_loss_evidence)/[0-9a-f]{2}/[0-9a-f]{32}$"
+    r"^formal-files/v1/(request_attachment|external_approval_evidence|stocktake_evidence|receipt_exception_evidence|source_configuration_evidence|daily_reconciliation_evidence|inventory_report_export|opening_count_import|opening_count_import_error|stock_loss_evidence|return_condition_evidence)/[0-9a-f]{2}/[0-9a-f]{32}$"
 )
 
 

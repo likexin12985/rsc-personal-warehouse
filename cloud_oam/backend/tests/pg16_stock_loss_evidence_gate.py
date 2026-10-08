@@ -1,6 +1,6 @@
 """Real API-role loss-file authority on an owned, empty PostgreSQL 16 cluster.
 
-Permissions and identities are synthetic local fixtures. Object storage is an
+Permissions must come from migrations; identities are synthetic local fixtures. Object storage is an
 in-memory adapter; these checks never upload to OSS or activate production.
 """
 from datetime import datetime, timedelta, timezone
@@ -14,9 +14,11 @@ from sqlalchemy.orm import Session
 
 from app.formal_access import load_formal_principal
 from app.formal_services import formal_files
-from app.foundation_models import AuthIdentity, FileObject, Permission, Role, RoleAssignment, RolePermission
+from app.foundation_models import AuthIdentity, FileObject, Role, RoleAssignment, RolePermission
 from test_formal_access import make_organization, make_user, assign
 from test_formal_files_service import FakeStorage, SECRET
+from pg16_stock_operation_permission_policy import assert_fresh_defaults, require_formal_grant
+from test_postgresql16_release_gate import HEAD_REVISION
 
 PURPOSE = 'stock_loss_evidence'
 
@@ -56,8 +58,9 @@ def run(engines, migrate):
         assert db.scalar(text('SELECT current_user'))=='star_oam_migrator'
         assert int(db.scalar(text('SHOW server_version_num')))//10000==16
         assert not db.scalar(text('SELECT EXISTS(SELECT 1 FROM users)'))
-        assert not db.scalar(text("SELECT EXISTS(SELECT 1 FROM permissions WHERE resource='stock_operation' AND action IN ('submit_loss','review_loss_regional','finalize_loss','reverse_loss'))"))
-    result = dict(passed=False, productionAcceptance=False, syntheticPermissionOnly=True)
+        assert db.scalars(text('SELECT version_num FROM alembic_version')).all()==[HEAD_REVISION]
+        policy = assert_fresh_defaults(db)
+    result = dict(passed=False, productionAcceptance=False, syntheticPermissionOnly=False, **policy)
     cases = [('technician','submit_loss'),('provincial_manager','review_loss_regional'),('admin','finalize_loss')]
     identities = []
     with Session(owner) as db:
@@ -69,10 +72,7 @@ def run(engines, migrate):
             scope_type, scope_id = ('national','*') if role_code=='admin' else (
                 ('organization',str(region.id)) if role_code=='provincial_manager' else ('person',str(person.id)))
             assignment = assign(db,user,roles[role_code],scope_type=scope_type,scope_id=scope_id)
-            permission = Permission(resource='stock_operation',action=action,field_code='',description='Synthetic local loss evidence permission')
-            db.add(permission);db.flush()
-            binding = RolePermission(role_id=roles[role_code].id,permission_id=permission.id,effect='allow')
-            db.add(binding);db.flush()
+            binding = require_formal_grant(db,role_code=role_code,action=action)
             identities.append(dict(user=user.id,assignment=assignment.id,grant=binding.id,action=action))
         db.commit()
     storage = FakeStorage()
@@ -111,7 +111,7 @@ def run(engines, migrate):
         for signature in ('public.rsc_assert_stock_loss_file_authority_0143(text,bigint)',
                           'public.rsc_guard_stock_loss_file_commit_0143()'):
             assert not db.scalar(text('SELECT has_function_privilege(current_user,:signature,\'EXECUTE\')'),dict(signature=signature))
-    # A fully formed SQL insert passes under the valid synthetic permission.
+    # A fully formed SQL insert passes under the valid migrated permission.
     # Roll it back: it is an adversarial SQL control, not a file-service event.
     with Session(api) as db:
         _raw_pending_copy(db,template)
@@ -179,9 +179,10 @@ def run(engines, migrate):
             expected_failure='0143 loss evidence requires retention')
     assert facts(owner)==before
     with owner.connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261213_0164'
+        revisions = db.scalars(text('SELECT version_num FROM alembic_version')).all()
+        assert revisions==[HEAD_REVISION]
         assert db.scalar(text('SELECT count(*) FROM inventory_transactions'))==0
         assert db.scalar(text('SELECT count(*) FROM stock_operation_orders'))==0
     result.update(passed=True, retainedEvidenceBlocksDowngrade=True, inventoryWrites=0,
-        storageAdapter='in_memory_only', migrationHead='20261213_0164')
+        storageAdapter='in_memory_only', migrationHead=revisions[0])
     return result

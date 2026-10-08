@@ -29,6 +29,8 @@ EDGE_RESERVED_DATABASE_ROLES = frozenset(
 )
 OSS_REGION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
 OSS_BUCKET_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")
+SMS_PROVIDER_ALIASES = frozenset({"aliyun_dypns", "aliyun_pnvs"})
+SMS_CREDENTIAL_MODES = frozenset({"default_chain", "static", "sts"})
 
 
 def _is_configured_secret(value: str, *, min_length: int = 1) -> bool:
@@ -46,6 +48,11 @@ class Settings(BaseSettings):
     environment: Literal["development", "test", "staging", "production"] = (
         "production"
     )
+    # Deployment health responses expose this non-secret scope marker so an
+    # isolated trial cannot be mistaken for the complete formal V1 profile.
+    # The pilot wrapper supplies ``trial-mvp``; the ordinary Compose default
+    # remains ``production-v1``.
+    release_scope: Literal["production-v1", "trial-mvp"] = "production-v1"
     database_url: str = ""
     database_expected_runtime_role: str = "star_oam_api"
     database_expected_migration_role: str = "star_oam_migrator"
@@ -172,10 +179,16 @@ class Settings(BaseSettings):
     password_login_enabled: bool = False
     sms_login_enabled: bool = False
     sms_provider: str = "disabled"
+    # Production PNVS must resolve credentials through the Alibaba SDK default
+    # chain (ECS RAM role/IMDS on the target host).  The static and STS modes
+    # remain parseable for isolated compatibility tests and controlled
+    # migration tooling, but production startup rejects them.
+    sms_credential_mode: Literal["default_chain", "static", "sts"] = "default_chain"
     sms_access_key_id: str = ""
     sms_access_key_secret: str = ""
-    # Dedicated PNVS STS triplet. It never falls back to the KMS/OSS default
-    # credential chain; deployment rotates all three values together.
+    # Legacy static/STS fields retained for isolated compatibility tests only;
+    # production uses sms_credential_mode=default_chain and leaves all four
+    # values empty.
     sms_security_token: str = ""
     sms_security_token_expires_at: str = ""
     sms_sign_name: str = ""
@@ -218,6 +231,15 @@ class Settings(BaseSettings):
     def validate_runtime_security_boundary(self) -> "Settings":
         errors: list[str] = []
 
+        # Business-user authentication is deliberately SMS-only.  Keep the
+        # historical password/WeChat fields for schema and migration
+        # compatibility, but reject an attempt to enable either channel at
+        # settings construction time in every environment.
+        if self.password_login_enabled:
+            errors.append("password login is disabled by the SMS-only policy")
+        if self.wechat_login_enabled:
+            errors.append("WeChat login is disabled by the SMS-only policy")
+
         try:
             self.trusted_proxy_ip_set()
         except ValueError as exc:
@@ -246,8 +268,6 @@ class Settings(BaseSettings):
                 )
             if self.legacy_prototype_writes_enabled:
                 errors.append("legacy prototype writes are forbidden in production")
-            if self.password_login_enabled:
-                errors.append("password login is forbidden in production")
             if self.database_schema_mode != "alembic":
                 errors.append(
                     "production schema changes must use Alembic; startup bootstrap "
@@ -445,15 +465,18 @@ class Settings(BaseSettings):
                     "idempotency HMAC secret of at least 32 characters"
                 )
         sms_ready = self.sms_configuration_ready()
-        wechat_ready = self.wechat_configuration_ready()
         if self.sms_login_enabled and not sms_ready:
             errors.append("enabled production SMS login is not fully configured")
-        if self.wechat_login_enabled and not wechat_ready:
-            errors.append("enabled production WeChat login is not fully configured")
-        if not (sms_ready or wechat_ready):
+        if self.wechat_login_enabled:
+            errors.append("WeChat login is disabled by the SMS-only policy")
+        if not sms_ready:
             errors.append(
-                "production requires at least one fully configured passwordless "
-                "login channel (SMS or WeChat)"
+                "production requires one fully configured SMS login channel"
+            )
+        if self.sms_provider in SMS_PROVIDER_ALIASES and self.sms_credential_mode != "default_chain":
+            errors.append(
+                "production PNVS requires the Alibaba default credential chain; "
+                "static and STS credential modes are not permitted"
             )
         if errors:
             raise ValueError("; ".join(errors))
@@ -499,25 +522,69 @@ class Settings(BaseSettings):
             return False
         if self.sms_provider == "mock":
             return self.environment != "production" and bool(self.sms_test_code)
-        if self.sms_provider != "aliyun_pnvs":
+        if self.sms_provider not in SMS_PROVIDER_ALIASES:
             return False
-        if not self.sms_sts_credential_ready(minimum_validity_seconds=60):
+        if self.sms_credential_mode not in SMS_CREDENTIAL_MODES:
+            return False
+        if self.sms_credential_mode == "default_chain":
+            # Do not silently fall back to an injected static key when the
+            # deployment declares the instance default chain.  The SDK will
+            # resolve ECS RAM role credentials only when the provider is
+            # constructed on the target host.
+            if any(
+                value.strip()
+                for value in (
+                    self.sms_access_key_id,
+                    self.sms_access_key_secret,
+                    self.sms_security_token,
+                    self.sms_security_token_expires_at,
+                )
+            ):
+                return False
+        elif self.sms_credential_mode == "static":
+            if not (_is_configured_secret(self.sms_access_key_id) and _is_configured_secret(self.sms_access_key_secret)):
+                return False
+            if self.sms_security_token.strip() or self.sms_security_token_expires_at.strip():
+                return False
+        elif not self.sms_sts_credential_ready(minimum_validity_seconds=60):
             return False
         return all(
-            value.strip()
+            _is_configured_secret(value)
             for value in (
-                self.sms_access_key_id,
-                self.sms_access_key_secret
-                if _is_configured_secret(self.sms_access_key_secret)
-                else "",
                 self.sms_sign_name,
                 self.sms_template_code,
                 self.sms_scheme_name,
             )
+        ) and _is_configured_secret(
+            self.auth_login_rate_limit_hmac_secret, min_length=32
         )
 
     def sms_sts_credential_ready(self, *, minimum_validity_seconds: int = 0) -> bool:
-        """Reject partial or near-expired dedicated STS credentials."""
+        """Validate the legacy dedicated STS triplet when that mode is used."""
+        if self.sms_credential_mode == "default_chain":
+            return not any(
+                value.strip()
+                for value in (
+                    self.sms_access_key_id,
+                    self.sms_access_key_secret,
+                    self.sms_security_token,
+                    self.sms_security_token_expires_at,
+                )
+            )
+        if self.sms_credential_mode == "static":
+            return (
+                _is_configured_secret(self.sms_access_key_id)
+                and _is_configured_secret(self.sms_access_key_secret)
+                and not self.sms_security_token.strip()
+                and not self.sms_security_token_expires_at.strip()
+            )
+        if self.sms_credential_mode != "sts":
+            return False
+        if not (
+            _is_configured_secret(self.sms_access_key_id)
+            and _is_configured_secret(self.sms_access_key_secret)
+        ):
+            return False
         token = self.sms_security_token.strip()
         expiry = self.sms_security_token_expires_at.strip()
         if not token and not expiry:
@@ -533,14 +600,9 @@ class Settings(BaseSettings):
         )
 
     def wechat_configuration_ready(self) -> bool:
-        if not self.wechat_login_enabled:
-            return False
-        if self.wechat_provider == "mock":
-            return self.environment != "production" and bool(self.wechat_test_mobile)
-        return self.wechat_provider == "wechat" and bool(
-            self.wechat_app_id.strip()
-            and _is_configured_secret(self.wechat_app_secret)
-        )
+        # The provider fields remain in the settings/data contract for
+        # migration compatibility, but the public product is SMS-only.
+        return False
 
     def authentication_idempotency_kms_configuration_ready(self) -> bool:
         """Return whether formal authentication replay encryption is KMS-bound."""

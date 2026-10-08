@@ -12,7 +12,9 @@ SCENARIOS = ('seals', 'http', 'negative', 'seal_first', 'execute_first', 'stop_f
 def release(engines, *, tracking, scenario, migrate, provision):
     if tracking not in ('quantity', 'serial') or scenario not in SCENARIOS:
         raise ValueError('explicit return stop tracking and scenario required')
-    if HEAD_REVISION != '20261213_0164':
+    # 0168 adds shipment projection after the 0167 condition facts/defaults;
+    # existing history and empty roundtrip still use the actual current catalog.
+    if HEAD_REVISION != '20261227_0178':
         raise ValueError('return stop gate requires review for the new migration head')
     owner, api = (engines[k] for k in ('star_oam_migrator', 'star_oam_api'))
     migrate('return-stop-upgrade', 'upgrade', 'head')

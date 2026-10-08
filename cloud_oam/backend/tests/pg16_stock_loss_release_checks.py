@@ -8,6 +8,7 @@ from sqlalchemy import text
 from app.database_security import validate_production_database_security
 from pg16_stock_loss_sources_gate import run as sources
 from pg16_stock_loss_submit_gate import run as submit
+from test_postgresql16_release_gate import HEAD_REVISION
 
 
 def run(engines, *, tracking, migrate, provision, check_review_seals=False):
@@ -31,21 +32,21 @@ def run(engines, *, tracking, migrate, provision, check_review_seals=False):
         "0146 immutable loss seal history requires retention",
     )
     with engines["star_oam_migrator"].connect() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == '20261213_0164'
+        assert db.scalars(text("SELECT version_num FROM alembic_version")).all() == [HEAD_REVISION]
     from pg16_stock_loss_regional_review_gate import run as regional_reviews
     result['regionalReview'] = regional_reviews(engines,check_seals=check_review_seals)
     migrate('retained-regional-downgrade', 'downgrade', '20261125_0146',
         '0156 immutable approval seal history requires retention' if check_review_seals else
         '0147 immutable regional review history requires retention')
     with engines['star_oam_migrator'].connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261213_0164'
+        assert db.scalars(text('SELECT version_num FROM alembic_version')).all() == [HEAD_REVISION]
     from pg16_stock_loss_headquarters_review_gate import run as headquarters_reviews
     result['headquartersReview'] = headquarters_reviews(engines,check_seals=check_review_seals)
     migrate('retained-headquarters-downgrade', 'downgrade', '20261126_0147',
         '0156 immutable approval seal history requires retention' if check_review_seals else
         '0148 immutable headquarters review history requires retention')
     with engines['star_oam_migrator'].connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261213_0164'
+        assert db.scalars(text('SELECT version_num FROM alembic_version')).all() == [HEAD_REVISION]
     security()
     result.update(
         emptyRoundtrip=True, retainedLossBlocksDowngrade=True,

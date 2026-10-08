@@ -2,13 +2,13 @@
 from datetime import datetime, timezone
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from ..demand_models import MaterialRequest, MaterialRequestCommand
 from ..foundation_models import AuditEvent
 from ..inventory_models import (FormalMaterial, InboundOrder, InventoryMovement,
     InventoryMovementSerial, InventorySerial, InventoryTransaction, OutboundPosting,
-    Receipt, Shipment, ShipmentLine, StockAccount)
+    MaterialInventoryPolicy, Receipt, Shipment, ShipmentLine, StockAccount)
 from ..material_request_my_inbound_candidates_schemas import (InboundCandidateDetailOut,
     InboundCandidateLineOut, InboundCandidateOut, InboundSerialOut, MyInboundCandidatesOut)
 from . import inventory_posting as inventory
@@ -84,18 +84,33 @@ def _item(db, context, request, receipt):
         material = db.get(FormalMaterial, source.material_id)
         if material is None:
             _invalid()
-        serials = []
+        policies = tuple(db.scalars(select(MaterialInventoryPolicy).where(
+            MaterialInventoryPolicy.material_id == material.id,
+            MaterialInventoryPolicy.effective_from <= original.received_at,
+            or_(MaterialInventoryPolicy.effective_to.is_(None),
+                MaterialInventoryPolicy.effective_to > original.received_at))))
+        if len(policies) != 1:
+            _invalid()
+        tracked = policies[0].tracking_mode in {'serial', 'lot_and_serial'}
+        for quantity, ids in ((line.accepted_qty, line.accepted_serial_ids),
+                              (line.rejected_qty, line.rejected_serial_ids)):
+            if (tracked and quantity != len(ids)) or (not tracked and ids):
+                _invalid()
+        all_ids = line.accepted_serial_ids + line.rejected_serial_ids
         # One bounded query per receipt line, rather than a query for every SN.
         serial_rows = {row.id: row for row in db.scalars(select(InventorySerial).where(
-            InventorySerial.id.in_(line.accepted_serial_ids)))} if line.accepted_serial_ids else {}
-        for serial_id in line.accepted_serial_ids:
+            InventorySerial.id.in_(all_ids)))} if all_ids else {}
+        for serial_id in all_ids:
             serial = serial_rows.get(serial_id)
             if serial is None or serial.material_id != material.id:
                 _invalid()
-            serials.append(InboundSerialOut(serial_id=serial.id, serial_no=serial.serial_no))
+        def details(ids):
+            return tuple(InboundSerialOut(serial_id=sid, serial_no=serial_rows[sid].serial_no) for sid in ids)
         lines.append(InboundCandidateLineOut(receipt_line_id=line.receipt_line_id, sku_code=material.sku_code,
             material_name=material.name, base_unit=material.base_unit, accepted_qty=format(line.accepted_qty, '.3f'),
-            rejected_qty=format(line.rejected_qty, '.3f'), accepted_serials=tuple(serials)))
+            rejected_qty=format(line.rejected_qty, '.3f'), condition=line.condition,
+            tracking_mode=policies[0].tracking_mode, accepted_serials=details(line.accepted_serial_ids),
+            rejected_serials=details(line.rejected_serial_ids)))
     order = db.scalar(select(InboundOrder).where(InboundOrder.receipt_id == receipt.id))
     tx = None
     if order is not None:

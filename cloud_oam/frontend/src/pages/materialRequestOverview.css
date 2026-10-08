@@ -1,0 +1,14 @@
+.material-request-overview { display: grid; gap: 20px; min-width: 0; }
+.material-request-overview .section-header { margin-bottom: 0; }
+.material-request-overview .panel { background: var(--surface, #fff); border: 1px solid var(--line, #e2e8f0); border-radius: 14px; padding: 20px; min-width: 0; }
+.material-request-overview .panel h2 { font-size: 19px; margin-bottom: 12px; }
+.material-request-overview .panel p { margin: 8px 0; line-height: 1.65; }
+.material-request-overview form label { display: grid; gap: 8px; flex: 1 1 220px; min-width: 0; }
+.material-request-overview input { min-width: 0; width: 100%; }
+.material-request-overview dl > div + div { border-top: 1px solid var(--line, #e2e8f0); }
+.material-request-overview dd { flex-shrink: 0; }
+@media (max-width: 600px) {
+  .material-request-overview { gap: 14px; }
+  .material-request-overview .panel { padding: 16px; }
+  .material-request-overview form label { flex-basis: 100%; }
+}

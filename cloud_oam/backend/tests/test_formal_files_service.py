@@ -1086,8 +1086,11 @@ def _production_settings(**overrides) -> Settings:
         "auth_login_rate_limit_hmac_secret": "production-login-limit-secret-at-least-thirty-two",
         "sms_login_enabled": True,
         "sms_provider": "aliyun_pnvs",
-        "sms_access_key_id": "test-access-id",
-        "sms_access_key_secret": "test-access-secret",
+        # Production PNVS resolves through ECS/RAM default credentials;
+        # static AccessKey material is intentionally absent from fixtures.
+        "sms_credential_mode": "default_chain",
+        "sms_access_key_id": "",
+        "sms_access_key_secret": "",
         "sms_sign_name": "test-sign",
         "sms_template_code": "SMS_TEST",
         "sms_scheme_name": "test-scheme",

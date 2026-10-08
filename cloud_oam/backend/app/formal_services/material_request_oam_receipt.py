@@ -14,7 +14,24 @@ from . import material_request_query
 
 class OamReceiptEvidenceError(Exception):
     def __init__(self, code, category, message):
+        if category not in {
+            "invalid_request", "forbidden", "not_found", "conflict",
+            "precondition_failed", "service_unavailable",
+        }:
+            raise ValueError(f"unsupported error category: {category}")
+        super().__init__(message)
         self.code, self.category, self.message = code, category, message
+
+    @property
+    def http_status_code(self):
+        return {
+            "invalid_request": 422, "forbidden": 403, "not_found": 404,
+            "conflict": 409, "precondition_failed": 412,
+            "service_unavailable": 503,
+        }[self.category]
+
+    def as_detail(self):
+        return {"code": self.code, "category": self.category, "message": self.message}
 
 
 def _fail(code, category, message):
@@ -76,6 +93,9 @@ def _result(row):
 
 
 def list_oam_receipt_evidence(db, *, actor, request_id):
+    roles = getattr(actor, "role_codes", None)
+    if roles is not None and not set(roles).intersection({"admin", "provincial_manager"}):
+        _fail("fulfillment_forbidden", "forbidden", "当前账号没有后台人工履约权限")
     context = material_request_query._load_read_context(db, actor=actor, now=None)
     request = db.scalar(select(MaterialRequest).where(
         MaterialRequest.id == request_id,

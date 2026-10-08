@@ -194,6 +194,9 @@ export function validateSupplyMutationResult(
     shipment_status: "not_started", logistics_signature_status: "not_signed", oam_receipt_status: "not_occurred",
     personal_inbound_status: "not_started", notification_status: "not_started", reconciliation_status: "not_started",
   })) {
+    if (axis === "allocation_status"
+        && (base.action !== "create_supply_task" || base.states.allocation_status === "partially_allocated")
+        && ["partially_allocated", "allocated"].includes(base.states.allocation_status)) continue;
     if (base.states[axis as keyof typeof base.states] !== initial) return fail("供给计划响应不得推进独立履约状态");
   }
   if ((base.action === "cancel_supply_task") !== (taskStatus === "cancelled")) return fail("供给取消响应不一致");

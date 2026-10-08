@@ -1,0 +1,468 @@
+{
+  "revision": "20261215_0166",
+  "previousRevision": "20261214_0165",
+  "patches": [
+    {
+      "before": {
+        "proname": "rsc_fence_scrap_seals_0165",
+        "signature": "rsc_fence_scrap_seals_0165()",
+        "definition": "CREATE OR REPLACE FUNCTION public.rsc_fence_scrap_seals_0165()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\nDECLARE raw jsonb:=to_jsonb(NEW); item public.stock_scrap_request_seals%ROWTYPE; keys text[]; body jsonb;\nBEGIN\n    IF TG_OP<>'INSERT' OR TG_TABLE_SCHEMA<>'public' OR current_setting('transaction_isolation')<>'read committed' THEN\n        RAISE EXCEPTION '0165 seal insert fence requires read committed' USING ERRCODE='23514'; END IF;\n    PERFORM 1 FROM public.inventory_ledger_heads WHERE stream_key='inventory' FOR UPDATE;\n    IF NOT FOUND THEN RAISE EXCEPTION '0165 seal ledger lock required' USING ERRCODE='23514'; END IF;\n    IF TG_TABLE_NAME='stock_scrap_request_seals' THEN\n        PERFORM public.rsc_check_scrap_seal_0165((raw->>'id')::uuid);\n        PERFORM public.rsc_scrap_seal_authority_0165(raw->>'actor_user_id',(raw->>'authorization_version')::bigint,\n            (raw->>'actor_person_id')::uuid,raw->>'kind',raw->'command_jsonb');\n    ELSIF raw->>'aggregate_type'='stock_scrap_request_seal' OR raw->>'action'='seal_scrap_request' THEN\n        PERFORM public.rsc_check_scrap_seal_0165((raw->>'aggregate_id')::uuid);\n    END IF;\n    keys:=array_remove(ARRAY[raw->>'idempotency_key_hash',raw->>'reversal_key_hash',raw->>'approval_key_hash',\n        raw->>'correction_key_hash',raw->>'recovery_key_hash',raw->>'scrap_key_hash'],NULL);\n    body:=COALESCE(raw->'after_jsonb',raw->'metadata_jsonb',raw->'payload_jsonb','{}'::jsonb);\n    FOR item IN SELECT * FROM public.stock_scrap_request_seals s WHERE s.key_token=raw->>'key_token'\n        OR (s.actor_user_id=raw->>'actor_user_id' AND s.request_id=raw->>'request_id')\n        OR s.reversal_key_hash=ANY(keys) OR s.approval_key_hash=ANY(keys) OR s.correction_key_hash=ANY(keys)\n        OR s.recovery_key_hash=ANY(keys) OR s.scrap_key_hash=ANY(keys)\n        OR s.id::text=raw->>'aggregate_id' OR s.id::text=raw->>'business_id'\n        OR s.request_id=body->>'request_id' OR s.id::text=body->>'id'\n        OR (raw->>'actor_user_id'=s.actor_user_id AND raw->>'request_id'='inventory-request-'||\n            encode(sha256(convert_to('cloud_oam.inventory.request.v1','UTF8')||decode('00','hex')\n                ||convert_to(s.request_id,'UTF8')),'hex'))\n        OR body->>'request_reference'='inventory-request-'||encode(sha256(\n            convert_to('cloud_oam.inventory.request.v1','UTF8')||decode('00','hex')||convert_to(s.request_id,'UTF8')),'hex')\n    LOOP PERFORM public.rsc_check_scrap_seal_0165(item.id); END LOOP;\n    RETURN NULL;\nEND;\n$function$\n",
+        "prosrc": "\nDECLARE raw jsonb:=to_jsonb(NEW); item public.stock_scrap_request_seals%ROWTYPE; keys text[]; body jsonb;\nBEGIN\n    IF TG_OP<>'INSERT' OR TG_TABLE_SCHEMA<>'public' OR current_setting('transaction_isolation')<>'read committed' THEN\n        RAISE EXCEPTION '0165 seal insert fence requires read committed' USING ERRCODE='23514'; END IF;\n    PERFORM 1 FROM public.inventory_ledger_heads WHERE stream_key='inventory' FOR UPDATE;\n    IF NOT FOUND THEN RAISE EXCEPTION '0165 seal ledger lock required' USING ERRCODE='23514'; END IF;\n    IF TG_TABLE_NAME='stock_scrap_request_seals' THEN\n        PERFORM public.rsc_check_scrap_seal_0165((raw->>'id')::uuid);\n        PERFORM public.rsc_scrap_seal_authority_0165(raw->>'actor_user_id',(raw->>'authorization_version')::bigint,\n            (raw->>'actor_person_id')::uuid,raw->>'kind',raw->'command_jsonb');\n    ELSIF raw->>'aggregate_type'='stock_scrap_request_seal' OR raw->>'action'='seal_scrap_request' THEN\n        PERFORM public.rsc_check_scrap_seal_0165((raw->>'aggregate_id')::uuid);\n    END IF;\n    keys:=array_remove(ARRAY[raw->>'idempotency_key_hash',raw->>'reversal_key_hash',raw->>'approval_key_hash',\n        raw->>'correction_key_hash',raw->>'recovery_key_hash',raw->>'scrap_key_hash'],NULL);\n    body:=COALESCE(raw->'after_jsonb',raw->'metadata_jsonb',raw->'payload_jsonb','{}'::jsonb);\n    FOR item IN SELECT * FROM public.stock_scrap_request_seals s WHERE s.key_token=raw->>'key_token'\n        OR (s.actor_user_id=raw->>'actor_user_id' AND s.request_id=raw->>'request_id')\n        OR s.reversal_key_hash=ANY(keys) OR s.approval_key_hash=ANY(keys) OR s.correction_key_hash=ANY(keys)\n        OR s.recovery_key_hash=ANY(keys) OR s.scrap_key_hash=ANY(keys)\n        OR s.id::text=raw->>'aggregate_id' OR s.id::text=raw->>'business_id'\n        OR s.request_id=body->>'request_id' OR s.id::text=body->>'id'\n        OR (raw->>'actor_user_id'=s.actor_user_id AND raw->>'request_id'='inventory-request-'||\n            encode(sha256(convert_to('cloud_oam.inventory.request.v1','UTF8')||decode('00','hex')\n                ||convert_to(s.request_id,'UTF8')),'hex'))\n        OR body->>'request_reference'='inventory-request-'||encode(sha256(\n            convert_to('cloud_oam.inventory.request.v1','UTF8')||decode('00','hex')||convert_to(s.request_id,'UTF8')),'hex')\n    LOOP PERFORM public.rsc_check_scrap_seal_0165(item.id); END LOOP;\n    RETURN NULL;\nEND;\n",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proparallel": "u",
+        "proisstrict": false,
+        "proleakproof": false,
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "owner": "star_oam_migrator",
+        "identity_arguments": "",
+        "acl": [
+          {
+            "grantee": "star_oam_migrator",
+            "grantable": false,
+            "privilege": "EXECUTE"
+          }
+        ]
+      },
+      "after": {
+        "proname": "rsc_fence_scrap_seals_0165",
+        "signature": "rsc_fence_scrap_seals_0165()",
+        "definition": "CREATE OR REPLACE FUNCTION public.rsc_fence_scrap_seals_0165()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\nDECLARE raw jsonb:=to_jsonb(NEW); item public.stock_scrap_request_seals%ROWTYPE; keys text[]; body jsonb;\nBEGIN\n    IF TG_OP<>'INSERT' OR TG_TABLE_SCHEMA<>'public' THEN\n        RAISE EXCEPTION '0166 exact insert fence required' USING ERRCODE='23514'; END IF;\n    body:=COALESCE(raw->'after_jsonb',raw->'metadata_jsonb',raw->'payload_jsonb','{}'::jsonb);\n    -- Independent domains must exit before inventory isolation/locking. A\n    -- stock stream, explicit seal aggregate/action or business alias cannot\n    -- use the authentication envelope to evade the retained seal proof.\n    IF NOT (raw ?| ARRAY['key_token','idempotency_key_hash','reversal_key_hash','approval_key_hash',\n            'correction_key_hash','recovery_key_hash','scrap_key_hash','request_reference'])\n       AND NOT (body ?| ARRAY['key_token','idempotency_key_hash','reversal_key_hash','approval_key_hash',\n            'correction_key_hash','recovery_key_hash','scrap_key_hash','request_reference']) THEN\n        IF TG_TABLE_NAME='audit_events'\n           AND raw->>'stream_key' NOT IN ('inventory','material_request')\n           AND COALESCE(raw->>'aggregate_type','')<>'stock_scrap_request_seal'\n           AND COALESCE(raw->>'action','')<>'seal_scrap_request' THEN\n            RETURN NULL; END IF;\n        IF TG_TABLE_NAME='state_transition_events' AND COALESCE(\n            raw->>'aggregate_type' IN ('authentication_attempt','login_challenge','sms_dispatch','auth_session')\n            AND body->>'operation'='formal_authentication_state_transition'\n            AND body->>'request_id' ~ '^authreq-[a-f0-9]{64}$',false) THEN\n            RETURN NULL; END IF;\n    END IF;\n    IF current_setting('transaction_isolation')<>'read committed' THEN\n        RAISE EXCEPTION '0165 seal insert fence requires read committed' USING ERRCODE='23514'; END IF;\n    PERFORM 1 FROM public.inventory_ledger_heads WHERE stream_key='inventory' FOR UPDATE;\n    IF NOT FOUND THEN RAISE EXCEPTION '0165 seal ledger lock required' USING ERRCODE='23514'; END IF;\n    IF TG_TABLE_NAME='stock_scrap_request_seals' THEN\n        PERFORM public.rsc_check_scrap_seal_0165((raw->>'id')::uuid);\n        PERFORM public.rsc_scrap_seal_authority_0165(raw->>'actor_user_id',(raw->>'authorization_version')::bigint,\n            (raw->>'actor_person_id')::uuid,raw->>'kind',raw->'command_jsonb');\n    ELSIF raw->>'aggregate_type'='stock_scrap_request_seal' OR raw->>'action'='seal_scrap_request' THEN\n        PERFORM public.rsc_check_scrap_seal_0165((raw->>'aggregate_id')::uuid);\n    END IF;\n    keys:=array_remove(ARRAY[raw->>'idempotency_key_hash',raw->>'reversal_key_hash',raw->>'approval_key_hash',\n        raw->>'correction_key_hash',raw->>'recovery_key_hash',raw->>'scrap_key_hash'],NULL);\n    body:=COALESCE(raw->'after_jsonb',raw->'metadata_jsonb',raw->'payload_jsonb','{}'::jsonb);\n    FOR item IN SELECT * FROM public.stock_scrap_request_seals s WHERE s.key_token=raw->>'key_token'\n        OR (s.actor_user_id=raw->>'actor_user_id' AND s.request_id=raw->>'request_id')\n        OR s.reversal_key_hash=ANY(keys) OR s.approval_key_hash=ANY(keys) OR s.correction_key_hash=ANY(keys)\n        OR s.recovery_key_hash=ANY(keys) OR s.scrap_key_hash=ANY(keys)\n        OR s.id::text=raw->>'aggregate_id' OR s.id::text=raw->>'business_id'\n        OR s.request_id=body->>'request_id' OR s.id::text=body->>'id'\n        OR (raw->>'actor_user_id'=s.actor_user_id AND raw->>'request_id'='inventory-request-'||\n            encode(sha256(convert_to('cloud_oam.inventory.request.v1','UTF8')||decode('00','hex')\n                ||convert_to(s.request_id,'UTF8')),'hex'))\n        OR body->>'request_reference'='inventory-request-'||encode(sha256(\n            convert_to('cloud_oam.inventory.request.v1','UTF8')||decode('00','hex')||convert_to(s.request_id,'UTF8')),'hex')\n    LOOP PERFORM public.rsc_check_scrap_seal_0165(item.id); END LOOP;\n    RETURN NULL;\nEND;\n$function$\n",
+        "prosrc": "\nDECLARE raw jsonb:=to_jsonb(NEW); item public.stock_scrap_request_seals%ROWTYPE; keys text[]; body jsonb;\nBEGIN\n    IF TG_OP<>'INSERT' OR TG_TABLE_SCHEMA<>'public' THEN\n        RAISE EXCEPTION '0166 exact insert fence required' USING ERRCODE='23514'; END IF;\n    body:=COALESCE(raw->'after_jsonb',raw->'metadata_jsonb',raw->'payload_jsonb','{}'::jsonb);\n    -- Independent domains must exit before inventory isolation/locking. A\n    -- stock stream, explicit seal aggregate/action or business alias cannot\n    -- use the authentication envelope to evade the retained seal proof.\n    IF NOT (raw ?| ARRAY['key_token','idempotency_key_hash','reversal_key_hash','approval_key_hash',\n            'correction_key_hash','recovery_key_hash','scrap_key_hash','request_reference'])\n       AND NOT (body ?| ARRAY['key_token','idempotency_key_hash','reversal_key_hash','approval_key_hash',\n            'correction_key_hash','recovery_key_hash','scrap_key_hash','request_reference']) THEN\n        IF TG_TABLE_NAME='audit_events'\n           AND raw->>'stream_key' NOT IN ('inventory','material_request')\n           AND COALESCE(raw->>'aggregate_type','')<>'stock_scrap_request_seal'\n           AND COALESCE(raw->>'action','')<>'seal_scrap_request' THEN\n            RETURN NULL; END IF;\n        IF TG_TABLE_NAME='state_transition_events' AND COALESCE(\n            raw->>'aggregate_type' IN ('authentication_attempt','login_challenge','sms_dispatch','auth_session')\n            AND body->>'operation'='formal_authentication_state_transition'\n            AND body->>'request_id' ~ '^authreq-[a-f0-9]{64}$',false) THEN\n            RETURN NULL; END IF;\n    END IF;\n    IF current_setting('transaction_isolation')<>'read committed' THEN\n        RAISE EXCEPTION '0165 seal insert fence requires read committed' USING ERRCODE='23514'; END IF;\n    PERFORM 1 FROM public.inventory_ledger_heads WHERE stream_key='inventory' FOR UPDATE;\n    IF NOT FOUND THEN RAISE EXCEPTION '0165 seal ledger lock required' USING ERRCODE='23514'; END IF;\n    IF TG_TABLE_NAME='stock_scrap_request_seals' THEN\n        PERFORM public.rsc_check_scrap_seal_0165((raw->>'id')::uuid);\n        PERFORM public.rsc_scrap_seal_authority_0165(raw->>'actor_user_id',(raw->>'authorization_version')::bigint,\n            (raw->>'actor_person_id')::uuid,raw->>'kind',raw->'command_jsonb');\n    ELSIF raw->>'aggregate_type'='stock_scrap_request_seal' OR raw->>'action'='seal_scrap_request' THEN\n        PERFORM public.rsc_check_scrap_seal_0165((raw->>'aggregate_id')::uuid);\n    END IF;\n    keys:=array_remove(ARRAY[raw->>'idempotency_key_hash',raw->>'reversal_key_hash',raw->>'approval_key_hash',\n        raw->>'correction_key_hash',raw->>'recovery_key_hash',raw->>'scrap_key_hash'],NULL);\n    body:=COALESCE(raw->'after_jsonb',raw->'metadata_jsonb',raw->'payload_jsonb','{}'::jsonb);\n    FOR item IN SELECT * FROM public.stock_scrap_request_seals s WHERE s.key_token=raw->>'key_token'\n        OR (s.actor_user_id=raw->>'actor_user_id' AND s.request_id=raw->>'request_id')\n        OR s.reversal_key_hash=ANY(keys) OR s.approval_key_hash=ANY(keys) OR s.correction_key_hash=ANY(keys)\n        OR s.recovery_key_hash=ANY(keys) OR s.scrap_key_hash=ANY(keys)\n        OR s.id::text=raw->>'aggregate_id' OR s.id::text=raw->>'business_id'\n        OR s.request_id=body->>'request_id' OR s.id::text=body->>'id'\n        OR (raw->>'actor_user_id'=s.actor_user_id AND raw->>'request_id'='inventory-request-'||\n            encode(sha256(convert_to('cloud_oam.inventory.request.v1','UTF8')||decode('00','hex')\n                ||convert_to(s.request_id,'UTF8')),'hex'))\n        OR body->>'request_reference'='inventory-request-'||encode(sha256(\n            convert_to('cloud_oam.inventory.request.v1','UTF8')||decode('00','hex')||convert_to(s.request_id,'UTF8')),'hex')\n    LOOP PERFORM public.rsc_check_scrap_seal_0165(item.id); END LOOP;\n    RETURN NULL;\nEND;\n",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proparallel": "u",
+        "proisstrict": false,
+        "proleakproof": false,
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "owner": "star_oam_migrator",
+        "identity_arguments": "",
+        "acl": [
+          {
+            "grantee": "star_oam_migrator",
+            "grantable": false,
+            "privilege": "EXECUTE"
+          }
+        ]
+      },
+      "beforeSha256": "ea231c3ee945724a2b319af3254c0ee9f3ecf6205adc8736c1f9ce9abda4ea9b",
+      "afterSha256": "bb0a93522ee79c2a2beac4326f806cc4bcbdef478ca14c9b08ecb9e7e4d07880"
+    },
+    {
+      "before": {
+        "signature": "rsc_oam_runtime_binding_ready_0044()",
+        "proname": "rsc_oam_runtime_binding_ready_0044",
+        "definition": "CREATE OR REPLACE FUNCTION public.rsc_oam_runtime_binding_ready_0044()\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO 'pg_catalog'\nAS $function$\n    SELECT (\n        SELECT pg_catalog.count(*) = 1\n           AND pg_catalog.min(version_num) = '20261214_0165'\n          FROM public.alembic_version\n    ) AND CASE session_user::text\n        WHEN 'edge_inbox' THEN EXISTS (\n            SELECT 1\n              FROM public.oam_sync_scope_bindings AS ingress\n             WHERE ingress.enabled\n               AND ingress.principal_name = session_user::text\n               AND ingress.capability = 'edge_ingress'\n               AND (\n                   ingress.entity_type <> 'work_order'\n                   OR EXISTS (\n                       SELECT 1\n                         FROM public.source_systems AS source\n                        WHERE source.code = ingress.source_system\n                          AND source.mode = 'read_only'\n                          AND source.enabled\n                          AND source.configuration_jsonb =\n                              pg_catalog.jsonb_build_object(\n                                  'projection_schema',\n                                  'rsc.oam_work_order_projection.v1',\n                                  'edge_source_instance', ingress.source_instance,\n                                  'work_order_company_id', ingress.company_id,\n                                  'work_order_org_code', ingress.org_code,\n                                  'work_order_scope_key', ingress.scope_key\n                              )\n                   )\n               )\n        )\n        WHEN 'star_oam_projector' THEN EXISTS (\n            SELECT 1\n              FROM public.oam_sync_scope_bindings AS write_work_order\n              JOIN public.oam_sync_scope_bindings AS read_work_order\n                ON read_work_order.source_system = write_work_order.source_system\n               AND read_work_order.source_instance = write_work_order.source_instance\n               AND read_work_order.scope_key = write_work_order.scope_key\n               AND read_work_order.company_id = write_work_order.company_id\n               AND read_work_order.org_code = write_work_order.org_code\n               AND read_work_order.enabled\n               AND read_work_order.principal_name = write_work_order.principal_name\n               AND read_work_order.capability = 'projector_read'\n               AND read_work_order.entity_type = 'work_order'\n              JOIN public.oam_sync_scope_bindings AS read_employee\n                ON read_employee.source_system = write_work_order.source_system\n               AND read_employee.source_instance = write_work_order.source_instance\n               AND read_employee.scope_key = write_work_order.scope_key\n               AND read_employee.company_id = write_work_order.company_id\n               AND read_employee.org_code = write_work_order.org_code\n               AND read_employee.enabled\n               AND read_employee.principal_name = write_work_order.principal_name\n               AND read_employee.capability = 'projector_read'\n               AND read_employee.entity_type = 'employee'\n              JOIN public.source_systems AS source\n                ON source.code = write_work_order.source_system\n               AND source.mode = 'read_only'\n               AND source.enabled\n               AND source.configuration_jsonb = pg_catalog.jsonb_build_object(\n                   'projection_schema', 'rsc.oam_work_order_projection.v1',\n                   'edge_source_instance', write_work_order.source_instance,\n                   'work_order_company_id', write_work_order.company_id,\n                   'work_order_org_code', write_work_order.org_code,\n                   'work_order_scope_key', write_work_order.scope_key\n               )\n             WHERE write_work_order.enabled\n               AND write_work_order.principal_name = session_user::text\n               AND write_work_order.capability = 'projector_write'\n               AND write_work_order.entity_type = 'work_order'\n        ) AND (\n            SELECT pg_catalog.count(*) = 3\n              FROM public.oam_sync_scope_bindings AS binding\n             WHERE binding.enabled\n               AND binding.principal_name = session_user::text\n        )\n        ELSE false\n    END\n$function$\n",
+        "prosrc": "\n    SELECT (\n        SELECT pg_catalog.count(*) = 1\n           AND pg_catalog.min(version_num) = '20261214_0165'\n          FROM public.alembic_version\n    ) AND CASE session_user::text\n        WHEN 'edge_inbox' THEN EXISTS (\n            SELECT 1\n              FROM public.oam_sync_scope_bindings AS ingress\n             WHERE ingress.enabled\n               AND ingress.principal_name = session_user::text\n               AND ingress.capability = 'edge_ingress'\n               AND (\n                   ingress.entity_type <> 'work_order'\n                   OR EXISTS (\n                       SELECT 1\n                         FROM public.source_systems AS source\n                        WHERE source.code = ingress.source_system\n                          AND source.mode = 'read_only'\n                          AND source.enabled\n                          AND source.configuration_jsonb =\n                              pg_catalog.jsonb_build_object(\n                                  'projection_schema',\n                                  'rsc.oam_work_order_projection.v1',\n                                  'edge_source_instance', ingress.source_instance,\n                                  'work_order_company_id', ingress.company_id,\n                                  'work_order_org_code', ingress.org_code,\n                                  'work_order_scope_key', ingress.scope_key\n                              )\n                   )\n               )\n        )\n        WHEN 'star_oam_projector' THEN EXISTS (\n            SELECT 1\n              FROM public.oam_sync_scope_bindings AS write_work_order\n              JOIN public.oam_sync_scope_bindings AS read_work_order\n                ON read_work_order.source_system = write_work_order.source_system\n               AND read_work_order.source_instance = write_work_order.source_instance\n               AND read_work_order.scope_key = write_work_order.scope_key\n               AND read_work_order.company_id = write_work_order.company_id\n               AND read_work_order.org_code = write_work_order.org_code\n               AND read_work_order.enabled\n               AND read_work_order.principal_name = write_work_order.principal_name\n               AND read_work_order.capability = 'projector_read'\n               AND read_work_order.entity_type = 'work_order'\n              JOIN public.oam_sync_scope_bindings AS read_employee\n                ON read_employee.source_system = write_work_order.source_system\n               AND read_employee.source_instance = write_work_order.source_instance\n               AND read_employee.scope_key = write_work_order.scope_key\n               AND read_employee.company_id = write_work_order.company_id\n               AND read_employee.org_code = write_work_order.org_code\n               AND read_employee.enabled\n               AND read_employee.principal_name = write_work_order.principal_name\n               AND read_employee.capability = 'projector_read'\n               AND read_employee.entity_type = 'employee'\n              JOIN public.source_systems AS source\n                ON source.code = write_work_order.source_system\n               AND source.mode = 'read_only'\n               AND source.enabled\n               AND source.configuration_jsonb = pg_catalog.jsonb_build_object(\n                   'projection_schema', 'rsc.oam_work_order_projection.v1',\n                   'edge_source_instance', write_work_order.source_instance,\n                   'work_order_company_id', write_work_order.company_id,\n                   'work_order_org_code', write_work_order.org_code,\n                   'work_order_scope_key', write_work_order.scope_key\n               )\n             WHERE write_work_order.enabled\n               AND write_work_order.principal_name = session_user::text\n               AND write_work_order.capability = 'projector_write'\n               AND write_work_order.entity_type = 'work_order'\n        ) AND (\n            SELECT pg_catalog.count(*) = 3\n              FROM public.oam_sync_scope_bindings AS binding\n             WHERE binding.enabled\n               AND binding.principal_name = session_user::text\n        )\n        ELSE false\n    END\n",
+        "prosecdef": true,
+        "provolatile": "s",
+        "proparallel": "u",
+        "proisstrict": false,
+        "proleakproof": false,
+        "proconfig": [
+          "search_path=pg_catalog"
+        ],
+        "owner": "star_oam_migrator",
+        "identity_arguments": "",
+        "acl": [
+          {
+            "grantee": "star_oam_migrator",
+            "privilege": "EXECUTE",
+            "grantable": false
+          },
+          {
+            "grantee": "star_oam_projector",
+            "privilege": "EXECUTE",
+            "grantable": false
+          },
+          {
+            "grantee": "edge_inbox",
+            "privilege": "EXECUTE",
+            "grantable": false
+          }
+        ]
+      },
+      "after": {
+        "signature": "rsc_oam_runtime_binding_ready_0044()",
+        "proname": "rsc_oam_runtime_binding_ready_0044",
+        "definition": "CREATE OR REPLACE FUNCTION public.rsc_oam_runtime_binding_ready_0044()\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO 'pg_catalog'\nAS $function$\n    SELECT (\n        SELECT pg_catalog.count(*) = 1\n           AND pg_catalog.min(version_num) = '20261215_0166'\n          FROM public.alembic_version\n    ) AND CASE session_user::text\n        WHEN 'edge_inbox' THEN EXISTS (\n            SELECT 1\n              FROM public.oam_sync_scope_bindings AS ingress\n             WHERE ingress.enabled\n               AND ingress.principal_name = session_user::text\n               AND ingress.capability = 'edge_ingress'\n               AND (\n                   ingress.entity_type <> 'work_order'\n                   OR EXISTS (\n                       SELECT 1\n                         FROM public.source_systems AS source\n                        WHERE source.code = ingress.source_system\n                          AND source.mode = 'read_only'\n                          AND source.enabled\n                          AND source.configuration_jsonb =\n                              pg_catalog.jsonb_build_object(\n                                  'projection_schema',\n                                  'rsc.oam_work_order_projection.v1',\n                                  'edge_source_instance', ingress.source_instance,\n                                  'work_order_company_id', ingress.company_id,\n                                  'work_order_org_code', ingress.org_code,\n                                  'work_order_scope_key', ingress.scope_key\n                              )\n                   )\n               )\n        )\n        WHEN 'star_oam_projector' THEN EXISTS (\n            SELECT 1\n              FROM public.oam_sync_scope_bindings AS write_work_order\n              JOIN public.oam_sync_scope_bindings AS read_work_order\n                ON read_work_order.source_system = write_work_order.source_system\n               AND read_work_order.source_instance = write_work_order.source_instance\n               AND read_work_order.scope_key = write_work_order.scope_key\n               AND read_work_order.company_id = write_work_order.company_id\n               AND read_work_order.org_code = write_work_order.org_code\n               AND read_work_order.enabled\n               AND read_work_order.principal_name = write_work_order.principal_name\n               AND read_work_order.capability = 'projector_read'\n               AND read_work_order.entity_type = 'work_order'\n              JOIN public.oam_sync_scope_bindings AS read_employee\n                ON read_employee.source_system = write_work_order.source_system\n               AND read_employee.source_instance = write_work_order.source_instance\n               AND read_employee.scope_key = write_work_order.scope_key\n               AND read_employee.company_id = write_work_order.company_id\n               AND read_employee.org_code = write_work_order.org_code\n               AND read_employee.enabled\n               AND read_employee.principal_name = write_work_order.principal_name\n               AND read_employee.capability = 'projector_read'\n               AND read_employee.entity_type = 'employee'\n              JOIN public.source_systems AS source\n                ON source.code = write_work_order.source_system\n               AND source.mode = 'read_only'\n               AND source.enabled\n               AND source.configuration_jsonb = pg_catalog.jsonb_build_object(\n                   'projection_schema', 'rsc.oam_work_order_projection.v1',\n                   'edge_source_instance', write_work_order.source_instance,\n                   'work_order_company_id', write_work_order.company_id,\n                   'work_order_org_code', write_work_order.org_code,\n                   'work_order_scope_key', write_work_order.scope_key\n               )\n             WHERE write_work_order.enabled\n               AND write_work_order.principal_name = session_user::text\n               AND write_work_order.capability = 'projector_write'\n               AND write_work_order.entity_type = 'work_order'\n        ) AND (\n            SELECT pg_catalog.count(*) = 3\n              FROM public.oam_sync_scope_bindings AS binding\n             WHERE binding.enabled\n               AND binding.principal_name = session_user::text\n        )\n        ELSE false\n    END\n$function$\n",
+        "prosrc": "\n    SELECT (\n        SELECT pg_catalog.count(*) = 1\n           AND pg_catalog.min(version_num) = '20261215_0166'\n          FROM public.alembic_version\n    ) AND CASE session_user::text\n        WHEN 'edge_inbox' THEN EXISTS (\n            SELECT 1\n              FROM public.oam_sync_scope_bindings AS ingress\n             WHERE ingress.enabled\n               AND ingress.principal_name = session_user::text\n               AND ingress.capability = 'edge_ingress'\n               AND (\n                   ingress.entity_type <> 'work_order'\n                   OR EXISTS (\n                       SELECT 1\n                         FROM public.source_systems AS source\n                        WHERE source.code = ingress.source_system\n                          AND source.mode = 'read_only'\n                          AND source.enabled\n                          AND source.configuration_jsonb =\n                              pg_catalog.jsonb_build_object(\n                                  'projection_schema',\n                                  'rsc.oam_work_order_projection.v1',\n                                  'edge_source_instance', ingress.source_instance,\n                                  'work_order_company_id', ingress.company_id,\n                                  'work_order_org_code', ingress.org_code,\n                                  'work_order_scope_key', ingress.scope_key\n                              )\n                   )\n               )\n        )\n        WHEN 'star_oam_projector' THEN EXISTS (\n            SELECT 1\n              FROM public.oam_sync_scope_bindings AS write_work_order\n              JOIN public.oam_sync_scope_bindings AS read_work_order\n                ON read_work_order.source_system = write_work_order.source_system\n               AND read_work_order.source_instance = write_work_order.source_instance\n               AND read_work_order.scope_key = write_work_order.scope_key\n               AND read_work_order.company_id = write_work_order.company_id\n               AND read_work_order.org_code = write_work_order.org_code\n               AND read_work_order.enabled\n               AND read_work_order.principal_name = write_work_order.principal_name\n               AND read_work_order.capability = 'projector_read'\n               AND read_work_order.entity_type = 'work_order'\n              JOIN public.oam_sync_scope_bindings AS read_employee\n                ON read_employee.source_system = write_work_order.source_system\n               AND read_employee.source_instance = write_work_order.source_instance\n               AND read_employee.scope_key = write_work_order.scope_key\n               AND read_employee.company_id = write_work_order.company_id\n               AND read_employee.org_code = write_work_order.org_code\n               AND read_employee.enabled\n               AND read_employee.principal_name = write_work_order.principal_name\n               AND read_employee.capability = 'projector_read'\n               AND read_employee.entity_type = 'employee'\n              JOIN public.source_systems AS source\n                ON source.code = write_work_order.source_system\n               AND source.mode = 'read_only'\n               AND source.enabled\n               AND source.configuration_jsonb = pg_catalog.jsonb_build_object(\n                   'projection_schema', 'rsc.oam_work_order_projection.v1',\n                   'edge_source_instance', write_work_order.source_instance,\n                   'work_order_company_id', write_work_order.company_id,\n                   'work_order_org_code', write_work_order.org_code,\n                   'work_order_scope_key', write_work_order.scope_key\n               )\n             WHERE write_work_order.enabled\n               AND write_work_order.principal_name = session_user::text\n               AND write_work_order.capability = 'projector_write'\n               AND write_work_order.entity_type = 'work_order'\n        ) AND (\n            SELECT pg_catalog.count(*) = 3\n              FROM public.oam_sync_scope_bindings AS binding\n             WHERE binding.enabled\n               AND binding.principal_name = session_user::text\n        )\n        ELSE false\n    END\n",
+        "prosecdef": true,
+        "provolatile": "s",
+        "proparallel": "u",
+        "proisstrict": false,
+        "proleakproof": false,
+        "proconfig": [
+          "search_path=pg_catalog"
+        ],
+        "owner": "star_oam_migrator",
+        "identity_arguments": "",
+        "acl": [
+          {
+            "grantee": "star_oam_migrator",
+            "privilege": "EXECUTE",
+            "grantable": false
+          },
+          {
+            "grantee": "star_oam_projector",
+            "privilege": "EXECUTE",
+            "grantable": false
+          },
+          {
+            "grantee": "edge_inbox",
+            "privilege": "EXECUTE",
+            "grantable": false
+          }
+        ]
+      },
+      "beforeSha256": "cd6e47de1d65058b77bcb13ecc0ecc38dcd2de1638864c60a9e85f3ebe4f7465",
+      "afterSha256": "42d2830f8b0abc68cf90263d9ae5f606d0315b704faef5d349a1b27c1316a921"
+    }
+  ],
+  "triggers": [
+    {
+      "table_name": "audit_events",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.audit_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "inventory_transactions",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.inventory_transactions DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "notification_events",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.notification_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "outbox_events",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.outbox_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "receipts",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.receipts DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "shipments",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.shipments DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "state_transition_events",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.state_transition_events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_loss_correction_approval_seals",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_loss_correction_approval_seals DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_loss_correction_decisions",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_loss_correction_decisions DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_loss_correction_execution_seals",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_loss_correction_execution_seals DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_loss_correction_executions",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_loss_correction_executions DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_loss_disposition_request_seals",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_loss_disposition_request_seals DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_loss_disposition_reversals",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_loss_disposition_reversals DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_loss_dispositions",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_loss_dispositions DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_loss_headquarters_reviews",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_loss_headquarters_reviews DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_loss_inverse_request_seals",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_loss_inverse_request_seals DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_loss_regional_reviews",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_loss_regional_reviews DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_loss_request_key_bindings",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_loss_request_key_bindings DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_loss_request_seals",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_loss_request_seals DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_loss_review_request_seals",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_loss_review_request_seals DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_operation_cancellations",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_operation_cancellations DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_operation_command_seals",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_operation_command_seals DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_operation_orders",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_operation_orders DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_operation_outbounds",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_operation_outbounds DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_operation_receipts",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_operation_receipts DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_operation_return_inbound_seals",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_operation_return_inbound_seals DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_operation_return_inbounds",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_operation_return_inbounds DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_operation_shipments",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_operation_shipments DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_scrap_recovery_executions",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_scrap_recovery_executions DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_scrap_recovery_headquarters_reviews",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_scrap_recovery_headquarters_reviews DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_scrap_recovery_regional_reviews",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_scrap_recovery_regional_reviews DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_scrap_recovery_requests",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_scrap_recovery_requests DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_scrap_request_key_bindings",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_scrap_request_key_bindings DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    },
+    {
+      "table_name": "stock_scrap_request_seals",
+      "name": "trg_scrap_seal_fence_0165",
+      "definition": "CREATE CONSTRAINT TRIGGER trg_scrap_seal_fence_0165 AFTER INSERT ON public.stock_scrap_request_seals DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rsc_fence_scrap_seals_0165()",
+      "tgenabled": "A",
+      "tgtype": 5,
+      "tgdeferrable": true,
+      "tginitdeferred": true,
+      "function_signature": "rsc_fence_scrap_seals_0165()"
+    }
+  ]
+}

@@ -15,6 +15,18 @@ from test_pilot_deploy import Deployment, mutations
 from scripts.pilot_release import Release, atomic_receipt, decoded_config, tree_digest
 
 
+def test_candidate_release_environment_pins_trial_mvp_scope(tmp_path, monkeypatch):
+    deploy = Deployment(tmp_path)
+    monkeypatch.setenv("PILOT_COMPOSE_PROJECT", "rsc-pilot-test")
+    monkeypatch.setenv("PILOT_IMAGE_TAG", "test-candidate")
+    monkeypatch.setenv("PILOT_ENV_FILE", str(deploy.root / ".env"))
+    monkeypatch.setenv("PILOT_COMPOSE_FILE", str(deploy.root / "docker-compose.yml"))
+    monkeypatch.setenv("PILOT_STATE_DIR", str(tmp_path / "private-state"))
+    release = Release(deploy.root, "prepare")
+    assert release.environment["OAM_RELEASE_SCOPE"] == "trial-mvp"
+    assert release.environment["SMOKE_EXPECTED_RELEASE_SCOPE"] == "trial-mvp"
+
+
 def test_successful_receipt_cannot_be_overwritten(tmp_path):
     deploy=Deployment(tmp_path);deploy.prepare();original=deploy.receipt.read_bytes()
     result,calls=deploy.run('prepare')

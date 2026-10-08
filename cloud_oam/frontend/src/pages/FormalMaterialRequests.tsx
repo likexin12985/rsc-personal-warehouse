@@ -1,3 +1,15 @@
+import FormalMaterialRequestRejectionPanel from "../FormalMaterialRequestRejectionPanel";
+import { createRejectionStore } from "../materialRequestRejectionRecovery";
+import FormalMaterialRequestReturnCompensationPanel from "../FormalMaterialRequestReturnCompensationPanel";
+import { createReturnCompensationStore } from "../materialRequestReturnCompensationRecovery";
+import FormalPersonalFulfillmentPanel from "../FormalPersonalFulfillmentPanel";
+import { createPersonalStore, type PersonalStore } from "../myFulfillmentRecovery";
+import FormalMaterialRequestRemainingCancellationPanel from "../FormalMaterialRequestRemainingCancellationPanel";
+import { createRemainingCancellationStore, type RemainingCancellationStore } from "../materialRequestRemainingCancellationRecovery";
+import FormalMaterialRequestClosurePanel from "../FormalMaterialRequestClosurePanel";
+import { createClosureStore, type ClosureStore } from "../materialRequestClosureRecovery";
+import { createInboundStore, type InboundStore } from "../materialRequestInboundRecovery";
+import { createReceiptStore, type ReceiptStore } from "../materialRequestReceiptRecovery";
 import { createShipmentStore, type ShipmentStore } from "../materialRequestShipmentRecovery";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Edit3, Eye, Plus, RefreshCw, Send, Trash2 } from "lucide-react";
@@ -54,6 +66,7 @@ import FormalMaterialRequestShipmentPanel from "../FormalMaterialRequestShipment
 import FormalMaterialRequestInboundPanel from "../FormalMaterialRequestInboundPanel";
 import FormalMaterialRequestReceiptPanel from "../FormalMaterialRequestReceiptPanel";
 import FormalMaterialRequestOamReceiptPanel from "../FormalMaterialRequestOamReceiptPanel";
+import FormalMaterialRequestCompletionPanel from "../FormalMaterialRequestCompletionPanel";
 import { createOutboundStore, type OutboundStore } from "../materialRequestOutbound";
 import FormalMaterialRequestPickPanel from "../FormalMaterialRequestPickPanel";
 import { createPickStore, type PickStore } from "../materialRequestReservationPick";
@@ -64,9 +77,10 @@ import { createReservationRecoveryStore, type ReservationRecoveryStore } from ".
 import FormalMaterialRequestSupplyPanel from "../FormalMaterialRequestSupplyPanel";
 import { createSupplyRecoveryStore, supplyRecoveryBlocked, type SupplyRecoveryStore } from "../materialRequestSupplyRecovery";
 import { createAllocationRecoveryStore, type AllocationRecoveryStore } from "../materialRequestAllocationRecovery";
+import { TRIAL_MVP_UI_SCOPE } from "../trialMvpScope";
 import { Button, Empty, Field, Loading, Modal, SectionHeader, showError } from "../ui";
 
-const REQUEST_STATUS_LABELS: Record<string, string> = {
+const REQUEST_STATUS_LABELS: Record<MaterialRequestDetail["states"]["request_status"], string> = {
   draft: "草稿",
   submitted: "已提交",
   approval_in_progress: "审批中",
@@ -78,6 +92,27 @@ const REQUEST_STATUS_LABELS: Record<string, string> = {
   cancellation_pending: "取消处理中",
   cancelled: "已取消",
 };
+const STATE_LABELS: { [K in keyof MaterialRequestDetail["states"]]: Record<MaterialRequestDetail["states"][K], string> } = {
+  request_status: REQUEST_STATUS_LABELS,
+  allocation_status: { not_allocated: "未分配", partially_allocated: "部分分配", allocated: "已分配", shortage: "缺货" },
+  reservation_status: { not_reserved: "未占用", pending: "待占用", reserved: "已占用", partially_released: "部分释放", released: "已释放", fulfilled: "已履约" },
+  outbound_status: { not_started: "未开始出库", pending_pick: "待拣货", picked: "已拣货", outbound: "已出库" },
+  shipment_status: { not_started: "未开始发运", pending_handover: "待交运", shipped: "已发货", in_transit: "运输中", exception: "发运异常" },
+  logistics_signature_status: { not_signed: "未签收", signed: "已签收", refused: "拒收", exception: "签收异常" },
+  oam_receipt_status: { not_occurred: "未发生", synced: "已同步", exception: "OAM收货异常" },
+  personal_inbound_status: { not_started: "未开始入库", pending_acceptance: "待验收", partially_accepted: "部分验收", accepted: "已验收", posted: "已过账" },
+  notification_status: { not_started: "未开始通知", queued: "排队中", sent: "已发送", delivered: "已送达", read: "已读", failed: "发送失败" },
+  reconciliation_status: { not_started: "未开始对账", pending: "待同步", staged: "已暂存", validated: "已校验", reconciled: "已对账", conflict: "存在冲突", failed: "同步失败" },
+};
+const URGENCY_LABELS: Record<MaterialRequestDetail["urgency"], string> = { normal: "普通", urgent: "紧急", emergency: "特急" };
+const APPROVAL_SOURCE_LABELS = { internal: "内部审批", external_registration: "外部登记", direct_star: "星星总部直接审批" };
+const APPROVAL_STEP_LABELS: Record<NonNullable<MaterialRequestDetail["approval_instance"]>["steps"][number]["status"], string> = {
+  pending: "待开启", open: "待审批", awaiting_external_evidence: "待登记外部审批证据", evidence_pending_verification: "待独立复核",
+  approved: "已批准", partially_approved: "部分批准", rejected: "已驳回", returned: "已退回", cancelled: "已取消", superseded: "已被新审批替代",
+};
+function stateLabel<K extends keyof MaterialRequestDetail["states"]>(key: K, value: MaterialRequestDetail["states"][K]): string {
+  return STATE_LABELS[key][value];
+}
 const NONZERO_UUID = /^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const AWARE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 const SAFE_EXTERNAL_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,199}$/;
@@ -603,10 +638,16 @@ function DetailPanel({
     </div>
 
     <div className="alert alert-info">{approvalNotice(detail)}</div>
+
+    <div className="opening-lifecycle" aria-label="需求十个独立状态轴">
+      {AXIS_LABELS.map(([key, label]) => <div key={key}>
+        <span>{label}</span><strong>{stateLabel(key, detail.states[key])}</strong>
+      </div>)}
+    </div>
     <dl className="detail-grid">
       <div><dt>工单</dt><dd className="mono">{detail.work_order_id || "未关联"}</dd></div>
       <div><dt>用途</dt><dd>{detail.purpose}</dd></div>
-      <div><dt>紧急程度</dt><dd>{detail.urgency}</dd></div>
+      <div><dt>紧急程度</dt><dd>{URGENCY_LABELS[detail.urgency]}</dd></div>
       <div><dt>期望日期</dt><dd>{detail.expected_date || "未填写"}</dd></div>
       <div><dt>联系人（脱敏）</dt><dd>{detail.contact_masked.name_masked} · {detail.contact_masked.mobile_masked}</dd></div>
       <div><dt>收货地址（脱敏）</dt><dd>{detail.address_snapshot.province_name}{detail.address_snapshot.city_name}{detail.address_snapshot.district_name}{detail.address_snapshot.detail_masked}</dd></div>
@@ -614,17 +655,11 @@ function DetailPanel({
       <div><dt>附件</dt><dd>{detail.attachment_refs.length
         ? detail.attachment_refs.map((file) => file.display_name).join("、")
         : "无"}</dd></div>
-      <div><dt>审批模式</dt><dd>{detail.approval_mode}</dd></div>
+      <div><dt>审批模式</dt><dd>{APPROVAL_SOURCE_LABELS[detail.approval_mode]}</dd></div>
     </dl>
 
-    <div className="opening-lifecycle" aria-label="需求十个独立状态轴">
-      {AXIS_LABELS.map(([key, label]) => <div key={key}>
-        <span>{label}</span><strong>{detail.states[key]}</strong>
-      </div>)}
-    </div>
-
     <section className="opening-detail-section" aria-label="需求完整明细">
-      <header><div><h3>物料明细</h3><p>数量为 Decimal(18,3) 定点字符串</p></div></header>
+      <header><div><h3>物料明细</h3><p>申请数量与批准、取消数量分别保留</p></div></header>
       <div className="table-wrap"><table>
         <thead><tr><th>行</th><th>物料 ID</th><th>申请数量</th><th>需用日期</th><th>建议替代物料</th><th>备注</th><th>批准/取消</th></tr></thead>
         <tbody>{detail.lines.map((line) => <tr key={line.request_line_id}>
@@ -636,11 +671,11 @@ function DetailPanel({
     </section>
 
     <section className="opening-detail-section" aria-label="审批进度与处理">
-      <header><div><h3>审批进度与处理</h3><p>两级内部逐行审批 + 外部证据登记/独立复核；权限或证据缺失时失败关闭</p></div></header>
+      <header><div><h3>审批进度与处理</h3><p>依次由区域、蔚来总部、星星总部审批；外部登记结果须经另一名总部管理员复核</p></div></header>
       {detail.approval_instance ? <div className="table-wrap"><table>
         <thead><tr><th>步骤</th><th>来源</th><th>状态</th><th>版本</th></tr></thead>
         <tbody>{detail.approval_instance.steps.map((step) => <tr key={step.step_id}>
-          <td>{step.step_no}</td><td>{step.source_mode}</td><td>{step.status}</td><td>{step.version}</td>
+          <td>{step.step_no}</td><td>{APPROVAL_SOURCE_LABELS[step.source_mode]}</td><td>{APPROVAL_STEP_LABELS[step.status]}</td><td>{step.version}</td>
         </tr>)}</tbody>
       </table></div> : <Empty title="尚未产生审批实例" detail="草稿提交前不会创建审批事实" />}
       {(canProcessInternal || canRegisterExternal || canVerifyExternal) && <div className="form-actions">
@@ -658,7 +693,7 @@ function DetailPanel({
       {canWithdraw && <Button tone="secondary" disabled={busy || lifecycleBlocked} onClick={() => onLifecycle("withdraw")}>撤回申请</Button>}
       {canCancel && <Button tone="secondary" disabled={busy || lifecycleBlocked} onClick={() => onLifecycle("cancel")}>安全取消</Button>}
       {!((editableDraft && (actions.has("update") || actions.has("submit"))) || canWithdraw || canCancel)
-        && <span className="opening-no-action">当前主体没有可执行的提报动作</span>}
+        && <span className="opening-no-action">当前没有可操作的提报事项</span>}
     </div>
   </section>;
 }
@@ -1038,6 +1073,11 @@ export default function FormalMaterialRequestsPage({
   pickRecoveryStore,
   outboundRecoveryStore,
   shipmentRecoveryStore,
+  receiptRecoveryStore,
+  inboundRecoveryStore,
+  closureRecoveryStore,
+  remainingCancellationRecoveryStore,
+  personalRecoveryStore,
 }: {
   adapter: FormalMaterialRequestAdapter;
   fileUploadClient?: FormalFileUploadClient;
@@ -1049,6 +1089,11 @@ export default function FormalMaterialRequestsPage({
   pickRecoveryStore?: PickStore;
   outboundRecoveryStore?: OutboundStore;
   shipmentRecoveryStore?: ShipmentStore;
+  receiptRecoveryStore?: ReceiptStore;
+  inboundRecoveryStore?: InboundStore;
+  closureRecoveryStore?: ClosureStore;
+  remainingCancellationRecoveryStore?: RemainingCancellationStore;
+  personalRecoveryStore?: PersonalStore;
 }) {
   const recoveryStore = useRef(
     lifecycleRecoveryStore ?? createMaterialRequestLifecycleRecoveryStore(),
@@ -1063,11 +1108,49 @@ export default function FormalMaterialRequestsPage({
   const reservationStore = useRef(reservationRecoveryStore ?? createReservationRecoveryStore());
   const [reservationBlocked, setReservationBlocked] = useState(() => reservationStore.current.read().kind !== "missing");
   const reservationBlockingRef = useRef(reservationBlocked);
+  const closureStore = useRef(closureRecoveryStore ?? createClosureStore());
+  const rejectionStore = useRef(createRejectionStore());
+  const [rejectionBlocked, setRejectionBlocked] = useState(() => rejectionStore.current.read().kind !== "missing");
+  const rejectionBlockingRef = useRef(rejectionBlocked);
+  function onRejectionBlocking(value: boolean) { rejectionBlockingRef.current = value; setRejectionBlocked(value); }
+  function rejectionWriteBlocked() { return rejectionBlockingRef.current || rejectionStore.current.read().kind !== "missing"; }
+  const returnCompensationStore = useRef(createReturnCompensationStore());
+  const [returnCompensationBlocked, setReturnCompensationBlocked] = useState(() => returnCompensationStore.current.read().kind !== "missing");
+  const returnCompensationBlockingRef = useRef(returnCompensationBlocked);
+  function onReturnCompensationBlocking(value: boolean) { returnCompensationBlockingRef.current = value; setReturnCompensationBlocked(value); }
+  function returnCompensationWriteBlocked() { return returnCompensationBlockingRef.current || returnCompensationStore.current.read().kind !== "missing"; }
+  const cancelStore = useRef(remainingCancellationRecoveryStore ?? createRemainingCancellationStore());
+  const personalStore = useRef(personalRecoveryStore ?? createPersonalStore());
+  const [personalBlocked, setPersonalBlocked] = useState(() => personalStore.current.read().kind !== "missing");
+  const personalBlockingRef = useRef(personalBlocked);
+  function onPersonalBlocking(value: boolean) { personalBlockingRef.current = value; setPersonalBlocked(value); }
+  const [cancelBlocked, setCancelBlocked] = useState(() => cancelStore.current.read().kind !== "missing");
+  const cancelBlockingRef = useRef(cancelBlocked);
+  const [remainingCancelled, setRemainingCancelled] = useState(false);
+  const remainingCancelledRef = useRef(false);
+  function onCancelBlocking(value: boolean) { cancelBlockingRef.current = value; setCancelBlocked(value); }
+  function onRemainingCancelled(value: boolean) { remainingCancelledRef.current = value; setRemainingCancelled(value); }
+  const [rawClosureBlocked, setClosureBlocked] = useState(() => closureStore.current.read().kind !== "missing");
+  const closureBlocked = rejectionBlocked || returnCompensationBlocked || rawClosureBlocked || cancelBlocked || remainingCancelled || personalBlocked;
+  const closureBlockingRef = useRef(rawClosureBlocked);
+  const [closedRequestId, setClosedRequestId] = useState<string | null>(null);
+  function onClosureBlocking(value: boolean) { closureBlockingRef.current = value; setClosureBlocked(value); }
+  function closureWriteBlocked() { return rejectionWriteBlocked() || returnCompensationWriteBlocked() || personalBlockingRef.current || personalStore.current.read().kind !== "missing" || closureBlockingRef.current || cancelBlockingRef.current || remainingCancelledRef.current || cancelStore.current.read().kind !== "missing" || closureStore.current.read().kind !== "missing"; }
+  const inboundStore = useRef(inboundRecoveryStore ?? createInboundStore());
+  const [inboundBlocked, setInboundBlocked] = useState(() => inboundStore.current.read().kind !== "missing");
+  const inboundBlockingRef = useRef(inboundBlocked);
+  function onInboundBlocking(value: boolean) { inboundBlockingRef.current = value; setInboundBlocked(value); }
+  function inboundWriteBlocked() { return closureWriteBlocked() || inboundBlockingRef.current || inboundStore.current.read().kind !== "missing"; }
+  const receiptStore = useRef(receiptRecoveryStore ?? createReceiptStore());
+  const [receiptBlocked, setReceiptBlocked] = useState(() => receiptStore.current.read().kind !== "missing");
+  const receiptBlockingRef = useRef(receiptBlocked);
+  function onReceiptBlocking(value: boolean) { receiptBlockingRef.current = value; setReceiptBlocked(value); }
+  function receiptWriteBlocked() { return inboundWriteBlocked() || receiptBlockingRef.current || receiptStore.current.read().kind !== "missing"; }
   const shipmentStore = useRef(shipmentRecoveryStore ?? createShipmentStore());
   const [shipmentBlocked, setShipmentBlocked] = useState(() => shipmentStore.current.read().kind !== "missing");
   const shipmentBlockingRef = useRef(shipmentBlocked);
   function onShipmentBlocking(value: boolean) { shipmentBlockingRef.current = value; setShipmentBlocked(value); }
-  function shipmentWriteBlocked() { return shipmentBlockingRef.current || shipmentStore.current.read().kind !== "missing"; }
+  function shipmentWriteBlocked() { return receiptWriteBlocked() || shipmentBlockingRef.current || shipmentStore.current.read().kind !== "missing"; }
   const outboundStore = useRef(outboundRecoveryStore ?? createOutboundStore());
   const [outboundBlocked, setOutboundBlocked] = useState(() => outboundStore.current.read().kind !== "missing");
   const outboundBlockingRef = useRef(outboundBlocked);
@@ -1096,7 +1179,7 @@ export default function FormalMaterialRequestsPage({
   const [baseBusy, setBaseBusy] = useState(false);
   const baseBusyRef = useRef(false);
   function setBusy(value: boolean) { baseBusyRef.current = value; setBaseBusy(value); }
-  const busy = shipmentBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked;
+  const busy = closureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked;
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [detail, setDetail] = useState<MaterialRequestDetail | null>(null);
@@ -1130,7 +1213,26 @@ export default function FormalMaterialRequestsPage({
   }> | null>(null);
 
   const lifecycleWritesBlocked = lifecycleRecovery.phase === "checking"
-    || lifecycleRecovery.phase === "blocked" || shipmentBlocked || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked;
+    || lifecycleRecovery.phase === "blocked" || closureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked;
+  const canOperateFulfillment = access?.can_read === true
+    && access.can_read_allocation_options === true;
+  const showTrialRejection = canOperateFulfillment
+    && (TRIAL_MVP_UI_SCOPE.showReturnOperations || rejectionBlocked);
+  const showTrialReturnCompensation = canOperateFulfillment
+    && (TRIAL_MVP_UI_SCOPE.showReturnOperations || returnCompensationBlocked);
+  const showTrialReleaseOperations = canOperateFulfillment
+    && (TRIAL_MVP_UI_SCOPE.showReleaseOperations || releaseBlocked);
+  const showTrialRemainingCancellation = canOperateFulfillment
+    && (TRIAL_MVP_UI_SCOPE.showComplexLifecycle || cancelBlocked || remainingCancelled);
+  const showTrialClosure = canOperateFulfillment
+    && (TRIAL_MVP_UI_SCOPE.showComplexLifecycle || rawClosureBlocked);
+  // Keep the post-fulfillment recovery facts visible as a generic stop for
+  // technicians, while the corresponding operator panels remain capability
+  // gated below.  The backend guards and recovery stores stay intact.
+  const postFulfillmentBlocked = rejectionBlocked || returnCompensationBlocked || cancelBlocked
+    || remainingCancelled || rawClosureBlocked || supplyBlocked || allocationBlocked
+    || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked
+    || shipmentBlocked || receiptBlocked || inboundBlocked;
   const draftWritePending = Boolean(
     formMode?.kind === "create"
       ? createRegistry.current.get()
@@ -2282,14 +2384,14 @@ export default function FormalMaterialRequestsPage({
   return <>
     <SectionHeader
       title="需求提报"
-      subtitle="正式 V1.0 客户端纵切；审批、供给和十个业务状态轴分别展示"
+      subtitle="申请物资，跟踪审批、发运、收货与个人仓入账"
       actions={<>
         <Button tone="secondary" icon={<RefreshCw size={17} />} disabled={loading || !access?.can_read} onClick={() => void loadList()}>刷新</Button>
         {access?.can_create && <Button icon={<Plus size={17} />} disabled={busy} onClick={startCreate}>新建需求</Button>}
       </>}
     />
 
-    <div className="alert alert-info">正式 V1.0 客户端路由已接线；生产写入仍受服务端写 gate 与 runtime ACL 控制。每次写入只在响应契约与同一需求详情精确回读一致后确认；明文草稿仅驻留当前页面内存。</div>
+    <div className="alert alert-info">审批通过后仍需分配和履约，物流签收与个人仓入账分别确认。未保存的草稿仅保留在当前页面，关闭或刷新前请先保存。</div>
     {error && <div className="alert alert-error">{error}</div>}
     {notice && <div className="alert alert-info">{notice}</div>}
     {(lifecycleRecovery.phase === "checking" || lifecycleRecovery.phase === "blocked") && <div className="alert alert-warning" role="status">
@@ -2305,100 +2407,191 @@ export default function FormalMaterialRequestsPage({
     </div>}
 
     <section className="content-section" aria-label="正式需求列表">
-      <div className="content-title"><div><h2>我的需求</h2><p>列表和详情只接受脱敏地址、脱敏联系人</p></div></div>
-      {loading ? <Loading label="正在校验身份、权限与正式需求契约" /> : items.length ? <>
+      <div className="content-title"><div><h2>我的需求</h2><p>查看申请进度；联系人和收货地址已脱敏</p></div></div>
+      {loading ? <Loading label="正在加载可查看的需求" /> : items.length ? <>
         <div className="table-wrap"><table>
           <thead><tr><th>需求单</th><th>用途/工单</th><th>紧急程度</th><th>期望日期</th><th>脱敏收货信息</th><th>申请状态</th><th>明细</th><th>详情</th></tr></thead>
           <tbody>{items.map((item) => <tr key={item.request_id}>
             <td><strong>{item.request_no}</strong><span className="cell-subtitle mono">{item.request_id}</span></td>
             <td>{item.purpose}<span className="cell-subtitle mono">{item.work_order_id || "未关联工单"}</span></td>
-            <td>{item.urgency}</td><td>{item.expected_date || "-"}</td>
+            <td>{URGENCY_LABELS[item.urgency]}</td><td>{item.expected_date || "-"}</td>
             <td>{item.contact_masked.name_masked} · {item.contact_masked.mobile_masked}<span className="cell-subtitle">{item.address_snapshot.detail_masked}</span></td>
             <td><span className={`status status-${item.states.request_status}`}>{REQUEST_STATUS_LABELS[item.states.request_status] || item.states.request_status}</span></td>
             <td>{item.line_count}</td>
-            <td><button className="table-action" disabled={busy} onClick={() => void openDetail(item.request_id)}><Eye size={16} />查看</button></td>
+            <td><button className="table-action" disabled={loading || lifecycleRecovery.phase === "checking"} onClick={() => void openDetail(item.request_id)}><Eye size={16} />查看</button></td>
           </tr>)}</tbody>
         </table></div>
         {canLoadMore && <div className="form-actions" style={{ padding: 14 }}><Button tone="secondary" disabled={loading} onClick={() => void loadList(nextAfterId)}>加载更多</Button></div>}
-      </> : <Empty title={access?.can_read ? "暂无可见需求" : "需求读取已失败关闭"} detail="不会回退非正式业务接口或猜测权限" />}
+      </> : <Empty title={access?.can_read ? "暂无可查看的需求" : "暂时无法读取需求"} detail="请确认当前账号具备需求查看权限，或稍后刷新重试" />}
     </section>
 
-    {!detail && shipmentBlocked && <FormalMaterialRequestShipmentPanel detail={null} adapter={adapter} access={access} store={shipmentStore.current}
-        otherWriteBusy={baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-        otherWriteBlocked={() => baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || pickBlockingRef.current || outboundBlockingRef.current || [recoveryStore.current, supplyStore.current, allocationStore.current, reservationStore.current, releaseStore.current, pickStore.current, outboundStore.current].some(s => s.read().kind !== "missing")}
+    {!detail && personalBlocked && <div className="alert alert-warning" role="status">
+      有本人收货或入账结果待核验，暂时停止其他写入。
+      <Button disabled={baseBusy || !access?.can_read || personalStore.current.read().kind !== "valid"} onClick={() => {
+        const pending = personalStore.current.read();
+        if (pending.kind === "valid") void openDetail(pending.value.request_id);
+      }}>打开待核验本人履约</Button>
+      {personalStore.current.read().kind !== "valid" && <p>原记录无法读取，请保留浏览器数据并联系管理员核验。</p>}
+    </div>}
+    {!detail && canOperateFulfillment && rejectionBlocked && <div className="alert alert-warning" role="status">
+      有拒收退回结果待核验，暂时停止其他写入。
+      <Button disabled={baseBusy || !access?.can_read || rejectionStore.current.read().kind !== "valid"} onClick={() => {
+        const pending = rejectionStore.current.read();
+        if (pending.kind === "valid") void openDetail(pending.value.request_id);
+      }}>打开待核验退回</Button>
+      {rejectionStore.current.read().kind !== "valid" && <p>原退回记录无法读取，请保留浏览器数据并联系管理员核验。</p>}
+    </div>}
+    {!detail && canOperateFulfillment && returnCompensationBlocked && <div className="alert alert-warning" role="status">
+      有退回补偿结果待核验，暂时停止其他写入。
+      <Button disabled={baseBusy || !access?.can_read || returnCompensationStore.current.read().kind !== "valid"} onClick={() => {
+        const pending = returnCompensationStore.current.read();
+        if (pending.kind === "valid") void openDetail(pending.value.request_id);
+      }}>打开待核验补偿</Button>
+      {returnCompensationStore.current.read().kind !== "valid" && <p>原补偿记录无法读取，请保留浏览器数据并联系管理员核验。</p>}
+    </div>}
+    {!detail && canOperateFulfillment && cancelBlocked && <div className="alert alert-warning" role="status">
+      有剩余需求取消结果待核验，暂时停止其他写入。
+      <Button disabled={baseBusy || !access?.can_read || cancelStore.current.read().kind !== "valid"} onClick={() => {
+        const pending = cancelStore.current.read();
+        if (pending.kind === "valid") void openDetail(pending.value.request_id);
+      }}>打开待核验取消</Button>
+      {cancelStore.current.read().kind !== "valid" && <p>原取消记录无法读取，请保留浏览器数据并联系管理员核验。</p>}
+    </div>}
+    {!detail && canOperateFulfillment && rawClosureBlocked && <div className="alert alert-warning" role="status">
+      有业务关闭结果待核验，暂时停止其他写入。
+      <Button disabled={baseBusy || !access?.can_read || closureStore.current.read().kind !== "valid"} onClick={() => {
+        const pending = closureStore.current.read();
+        if (pending.kind === "valid") void openDetail(pending.value.request_id);
+      }}>打开待核验关闭</Button>
+      {closureStore.current.read().kind !== "valid" && <p>原关闭记录无法读取，请保留浏览器数据并联系管理员核验。</p>}
+    </div>}
+    {!detail && canOperateFulfillment && inboundBlocked && <div className="alert alert-warning" role="status">
+      有个人仓入账结果待核验，暂时停止其他写入。
+      <Button disabled={baseBusy || !access?.can_read || inboundStore.current.read().kind !== "valid"} onClick={() => {
+        const pending = inboundStore.current.read();
+        if (pending.kind === "valid") void openDetail(pending.value.request_id);
+      }}>打开待核验入账</Button>
+      {inboundStore.current.read().kind !== "valid" && <p>原入账记录无法读取，请保留浏览器数据并联系管理员核验。</p>}
+    </div>}
+    {!detail && canOperateFulfillment && receiptBlocked && <div className="alert alert-warning" role="status">
+      有收货结果待核验，暂时停止其他写入。请打开原需求，只读核验后继续。
+      <Button disabled={baseBusy || !access?.can_read || receiptStore.current.read().kind !== "valid"} onClick={() => {
+        const pending = receiptStore.current.read();
+        if (pending.kind === "valid") void openDetail(pending.value.request_id);
+      }}>打开待核验收货</Button>
+      {receiptStore.current.read().kind !== "valid" && <p>原收货记录无法读取，请保留浏览器数据并联系管理员核验。</p>}
+    </div>}
+    {!detail && !canOperateFulfillment && postFulfillmentBlocked && <div className="alert alert-warning" role="status">
+      有后台履约结果待核验，已隐藏后台操作区并暂停新的写入；请由区域/总部仓库账号继续核验。
+    </div>}
+    {!detail && canOperateFulfillment && shipmentBlocked && <FormalMaterialRequestShipmentPanel detail={null} adapter={adapter} access={access} store={shipmentStore.current} allowLogisticsEvents={TRIAL_MVP_UI_SCOPE.allowLogisticsEvents}
+        otherWriteBusy={closureBlocked || inboundBlocked || receiptBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => closureWriteBlocked() || receiptWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || pickBlockingRef.current || outboundBlockingRef.current || [recoveryStore.current, supplyStore.current, allocationStore.current, reservationStore.current, releaseStore.current, pickStore.current, outboundStore.current].some(s => s.read().kind !== "missing")}
         onBlocking={onShipmentBlocking} onDetail={setDetail} />}
-    {!detail && <FormalMaterialRequestSupplyPanel
+    {!detail && canOperateFulfillment && <FormalMaterialRequestSupplyPanel
       adapter={adapter} access={access} detail={null} store={supplyStore.current}
       registry={mutationRegistry.current}
       allocationRecoveryStore={allocationStore.current}
-      otherWriteBusy={shipmentBlocked || outboundBlocked || pickBlocked || baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking" || allocationBlocked || reservationBlocked}
-      otherWriteBlocked={() => reservationWriteBlocked()}
+      allowSupplyPlanning={TRIAL_MVP_UI_SCOPE.allowSupplyPlanning}
+      otherWriteBusy={closureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || outboundBlocked || pickBlocked || baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking" || allocationBlocked || reservationBlocked}
+      otherWriteBlocked={() => closureWriteBlocked() || reservationWriteBlocked()}
       onBlocking={onSupplyBlocking} onAllocationBlocking={onAllocationBlocking} onDetail={setDetail}
     />}
-    {!detail && <FormalMaterialRequestReservationPanel
+    {!detail && canOperateFulfillment && <FormalMaterialRequestReservationPanel
       adapter={adapter} access={access} detail={null} store={reservationStore.current}
-      otherWriteBusy={shipmentBlocked || outboundBlocked || pickBlocked || releaseBlocked || baseBusy || supplyBlocked || allocationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-      otherWriteBlocked={() => releaseWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
+      otherWriteBusy={closureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || outboundBlocked || pickBlocked || releaseBlocked || baseBusy || supplyBlocked || allocationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+      otherWriteBlocked={() => closureWriteBlocked() || releaseWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
       onBlocking={onReservationBlocking} onDetail={setDetail}
     />}
-    {!detail && <FormalMaterialRequestReleasePanel adapter={adapter} access={access} detail={null} store={releaseStore.current}
-      otherWriteBusy={shipmentBlocked || outboundBlocked || pickBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-      otherWriteBlocked={() => pickWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
+    {!detail && showTrialReleaseOperations && <FormalMaterialRequestReleasePanel adapter={adapter} access={access} detail={null} store={releaseStore.current}
+      otherWriteBusy={closureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || outboundBlocked || pickBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+      otherWriteBlocked={() => closureWriteBlocked() || pickWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
       onBlocking={onReleaseBlocking} onDetail={setDetail} />}
-    {!detail && <FormalMaterialRequestOutboundPanel adapter={adapter} access={access} detail={null} store={outboundStore.current}
-      otherWriteBusy={shipmentBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-      otherWriteBlocked={() => shipmentWriteBlocked() || pickBlockingRef.current || pickStore.current.read().kind !== "missing" || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || releaseStore.current.read().kind !== "missing" || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
+    {!detail && canOperateFulfillment && <FormalMaterialRequestOutboundPanel adapter={adapter} access={access} detail={null} store={outboundStore.current}
+      otherWriteBusy={closureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+      otherWriteBlocked={() => closureWriteBlocked() || shipmentWriteBlocked() || pickBlockingRef.current || pickStore.current.read().kind !== "missing" || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || releaseStore.current.read().kind !== "missing" || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
       onBlocking={onOutboundBlocking} onDetail={setDetail} />}
-    {!detail && <FormalMaterialRequestPickPanel adapter={adapter} access={access} detail={null} store={pickStore.current}
-      otherWriteBusy={shipmentBlocked || outboundBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-      otherWriteBlocked={() => outboundWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || releaseStore.current.read().kind !== "missing" || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
+    {!detail && canOperateFulfillment && <FormalMaterialRequestPickPanel adapter={adapter} access={access} detail={null} store={pickStore.current}
+      otherWriteBusy={closureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || outboundBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+      otherWriteBlocked={() => closureWriteBlocked() || outboundWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || releaseStore.current.read().kind !== "missing" || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
       onBlocking={onPickBlocking} onDetail={setDetail} />}
     {detail && access && <Modal title="正式需求详情" wide onClose={() => {
-      if (!approvalProcess && !lifecycleProcess && !supplyBlocked && !allocationBlocked && !reservationWriteBlocked()) {
+      // Receipt/inbound/closure sentinels survive closing; the list retains their recovery entries.
+      if (!approvalProcess && !lifecycleProcess && !supplyBlocked && !allocationBlocked
+          && !reservationBlockingRef.current && !releaseBlockingRef.current && !pickBlockingRef.current
+          && !outboundBlockingRef.current && !shipmentBlockingRef.current
+          && [reservationStore.current, releaseStore.current, pickStore.current, outboundStore.current, shipmentStore.current].every(s => s.read().kind === "missing")) {
         editRecoveryGeneration.current += 1;
         setBusy(false);
         setDetail(null);
       }
     }}>
-      <FormalMaterialRequestReservationPanel
-        adapter={adapter} access={access} detail={detail} store={reservationStore.current}
-        otherWriteBusy={shipmentBlocked || outboundBlocked || pickBlocked || releaseBlocked || baseBusy || supplyBlocked || allocationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-        otherWriteBlocked={() => releaseWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
-        onBlocking={onReservationBlocking} onDetail={setDetail}
-      />
-      <FormalMaterialRequestReleasePanel adapter={adapter} access={access} detail={detail} store={releaseStore.current}
-        otherWriteBusy={shipmentBlocked || outboundBlocked || pickBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-        otherWriteBlocked={() => pickWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
-        onBlocking={onReleaseBlocking} onDetail={setDetail} />
-      <FormalMaterialRequestOutboundPanel adapter={adapter} access={access} detail={detail} store={outboundStore.current}
-      otherWriteBusy={shipmentBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-      otherWriteBlocked={() => shipmentWriteBlocked() || pickBlockingRef.current || pickStore.current.read().kind !== "missing" || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || releaseStore.current.read().kind !== "missing" || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
-      onBlocking={onOutboundBlocking} onDetail={setDetail} />
-      <FormalMaterialRequestShipmentPanel detail={detail} adapter={adapter} access={access} store={shipmentStore.current}
-        otherWriteBusy={baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-        otherWriteBlocked={() => baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || pickBlockingRef.current || outboundBlockingRef.current || [recoveryStore.current, supplyStore.current, allocationStore.current, reservationStore.current, releaseStore.current, pickStore.current, outboundStore.current].some(s => s.read().kind !== "missing")}
-        onBlocking={onShipmentBlocking} onDetail={setDetail} />
-      <fieldset disabled={shipmentBlocked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-        <FormalMaterialRequestReceiptPanel adapter={adapter} detail={detail} />
-        <FormalMaterialRequestOamReceiptPanel adapter={adapter} detail={detail} />
-        <FormalMaterialRequestInboundPanel adapter={adapter} detail={detail} />
-      </fieldset>
-      <FormalMaterialRequestPickPanel adapter={adapter} access={access} detail={detail} store={pickStore.current}
-      otherWriteBusy={shipmentBlocked || outboundBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-      otherWriteBlocked={() => outboundWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || releaseStore.current.read().kind !== "missing" || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
-      onBlocking={onPickBlocking} onDetail={setDetail} />
       <DetailPanel detail={detail} access={access} busy={busy} lifecycleBlocked={lifecycleWritesBlocked} onEdit={() => void startEdit()} onSubmit={() => setSubmitConfirm(true)} onProcess={startApprovalProcess} onLifecycle={startLifecycleProcess} />
-      <FormalMaterialRequestFulfillmentPreparationPanel adapter={adapter} access={access} detail={detail}
-        otherWriteBusy={shipmentBlocked || outboundBlocked || pickBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
-        otherWriteBlocked={() => pickWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationWriteBlocked() || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"} />
-      <FormalMaterialRequestSupplyPanel
+      {canOperateFulfillment && <FormalMaterialRequestReservationPanel
+        adapter={adapter} access={access} detail={detail} store={reservationStore.current}
+        otherWriteBusy={closureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || outboundBlocked || pickBlocked || releaseBlocked || baseBusy || supplyBlocked || allocationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => closureWriteBlocked() || releaseWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
+        onBlocking={onReservationBlocking} onDetail={setDetail}
+      />}
+      {showTrialReleaseOperations && <FormalMaterialRequestReleasePanel adapter={adapter} access={access} detail={detail} store={releaseStore.current}
+        otherWriteBusy={closureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || outboundBlocked || pickBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => closureWriteBlocked() || pickWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
+        onBlocking={onReleaseBlocking} onDetail={setDetail} />}
+      {canOperateFulfillment && <FormalMaterialRequestOutboundPanel adapter={adapter} access={access} detail={detail} store={outboundStore.current}
+      otherWriteBusy={closureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+      otherWriteBlocked={() => closureWriteBlocked() || shipmentWriteBlocked() || pickBlockingRef.current || pickStore.current.read().kind !== "missing" || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || releaseStore.current.read().kind !== "missing" || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
+      onBlocking={onOutboundBlocking} onDetail={setDetail} />}
+      {canOperateFulfillment && (access?.can_read_allocation_options || shipmentStore.current.read().kind !== "missing") && <FormalMaterialRequestShipmentPanel detail={detail} adapter={adapter} access={access} store={shipmentStore.current} allowLogisticsEvents={TRIAL_MVP_UI_SCOPE.allowLogisticsEvents}
+        otherWriteBusy={closureBlocked || inboundBlocked || receiptBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => closureWriteBlocked() || receiptWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || pickBlockingRef.current || outboundBlockingRef.current || [recoveryStore.current, supplyStore.current, allocationStore.current, reservationStore.current, releaseStore.current, pickStore.current, outboundStore.current].some(s => s.read().kind !== "missing")}
+        onBlocking={onShipmentBlocking} onDetail={setDetail} />}
+      {canOperateFulfillment && <FormalMaterialRequestReceiptPanel adapter={adapter} detail={detail} access={access} store={receiptStore.current}
+        onBlocking={onReceiptBlocking} onDetail={setDetail}
+        otherWriteBusy={closureBlocked || inboundBlocked || shipmentBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => closureWriteBlocked() || inboundWriteBlocked() || baseBusyRef.current || shipmentBlockingRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || pickBlockingRef.current || outboundBlockingRef.current || [recoveryStore.current, shipmentStore.current, supplyStore.current, allocationStore.current, reservationStore.current, releaseStore.current, pickStore.current, outboundStore.current].some(s => s.read().kind !== "missing")} />}
+      {canOperateFulfillment && TRIAL_MVP_UI_SCOPE.showOamReceipt && <FormalMaterialRequestOamReceiptPanel adapter={adapter} detail={detail} />}
+      {access && <FormalPersonalFulfillmentPanel adapter={adapter} detail={detail} access={access} store={personalStore.current}
+        uploadClient={fileUploadClient} onBlocking={onPersonalBlocking} onDetail={setDetail}
+        otherWriteBusy={rejectionBlocked || returnCompensationBlocked || rawClosureBlocked || cancelBlocked || remainingCancelled || inboundBlocked || receiptBlocked || shipmentBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => rejectionWriteBlocked() || returnCompensationWriteBlocked() || closureBlockingRef.current || cancelBlockingRef.current || remainingCancelledRef.current || baseBusyRef.current || inboundBlockingRef.current || receiptBlockingRef.current || shipmentBlockingRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || pickBlockingRef.current || outboundBlockingRef.current || [closureStore.current, cancelStore.current, recoveryStore.current, inboundStore.current, receiptStore.current, shipmentStore.current, supplyStore.current, allocationStore.current, reservationStore.current, releaseStore.current, pickStore.current, outboundStore.current].some(s => s.read().kind !== "missing")} />}
+      {showTrialRejection && <FormalMaterialRequestRejectionPanel adapter={adapter} detail={detail} access={access} store={rejectionStore.current}
+        onBlocking={onRejectionBlocking} onDetail={setDetail}
+        otherWriteBusy={returnCompensationBlocked || cancelBlocked || remainingCancelled || personalBlocked || rawClosureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => returnCompensationWriteBlocked() || cancelBlockingRef.current || remainingCancelledRef.current || cancelStore.current.read().kind !== "missing" || personalBlockingRef.current || personalStore.current.read().kind !== "missing" || closureBlockingRef.current || baseBusyRef.current || inboundBlockingRef.current || receiptBlockingRef.current || shipmentBlockingRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || pickBlockingRef.current || outboundBlockingRef.current || [closureStore.current, recoveryStore.current, inboundStore.current, receiptStore.current, shipmentStore.current, supplyStore.current, allocationStore.current, reservationStore.current, releaseStore.current, pickStore.current, outboundStore.current].some(s => s.read().kind !== "missing")} />}
+      {showTrialReturnCompensation && <FormalMaterialRequestReturnCompensationPanel adapter={adapter} detail={detail} access={access} store={returnCompensationStore.current}
+        onBlocking={onReturnCompensationBlocking} onDetail={setDetail}
+        otherWriteBusy={rejectionBlocked || cancelBlocked || remainingCancelled || personalBlocked || rawClosureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => rejectionWriteBlocked() || cancelBlockingRef.current || remainingCancelledRef.current || cancelStore.current.read().kind !== "missing" || personalBlockingRef.current || personalStore.current.read().kind !== "missing" || closureBlockingRef.current || baseBusyRef.current || inboundBlockingRef.current || receiptBlockingRef.current || shipmentBlockingRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || pickBlockingRef.current || outboundBlockingRef.current || [closureStore.current, recoveryStore.current, inboundStore.current, receiptStore.current, shipmentStore.current, supplyStore.current, allocationStore.current, reservationStore.current, releaseStore.current, pickStore.current, outboundStore.current].some(s => s.read().kind !== "missing")} />}
+      {showTrialRemainingCancellation && <FormalMaterialRequestRemainingCancellationPanel adapter={adapter} detail={detail} access={access} store={cancelStore.current}
+        onBlocking={onCancelBlocking} onCancelled={onRemainingCancelled} onDetail={setDetail}
+        otherWriteBusy={rejectionBlocked || returnCompensationBlocked || personalBlocked || rawClosureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => rejectionWriteBlocked() || returnCompensationWriteBlocked() || personalBlockingRef.current || personalStore.current.read().kind !== "missing" || closureBlockingRef.current || baseBusyRef.current || inboundBlockingRef.current || receiptBlockingRef.current || shipmentBlockingRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || pickBlockingRef.current || outboundBlockingRef.current || [closureStore.current, recoveryStore.current, inboundStore.current, receiptStore.current, shipmentStore.current, supplyStore.current, allocationStore.current, reservationStore.current, releaseStore.current, pickStore.current, outboundStore.current].some(s => s.read().kind !== "missing")} />}
+      {showTrialClosure && <FormalMaterialRequestClosurePanel adapter={adapter} detail={detail} access={access} store={closureStore.current}
+        onBlocking={onClosureBlocking} onDetail={setDetail}
+        onClosed={closed => setClosedRequestId(closed ? detail.request_id : null)}
+        otherWriteBusy={rejectionBlocked || returnCompensationBlocked || personalBlocked || cancelBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => rejectionWriteBlocked() || returnCompensationWriteBlocked() || personalBlockingRef.current || personalStore.current.read().kind !== "missing" || cancelBlockingRef.current || cancelStore.current.read().kind !== "missing" || baseBusyRef.current || inboundBlockingRef.current || receiptBlockingRef.current || shipmentBlockingRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || pickBlockingRef.current || outboundBlockingRef.current || [inboundStore.current, receiptStore.current, shipmentStore.current, recoveryStore.current, supplyStore.current, allocationStore.current, reservationStore.current, releaseStore.current, pickStore.current, outboundStore.current].some(s => s.read().kind !== "missing")} />}
+      <FormalMaterialRequestCompletionPanel adapter={adapter} detail={detail} access={access} closed={closedRequestId === detail.request_id} />
+      {canOperateFulfillment && <FormalMaterialRequestInboundPanel adapter={adapter} detail={detail} access={access} store={inboundStore.current}
+        onBlocking={onInboundBlocking} onDetail={setDetail}
+        otherWriteBusy={closureBlocked || receiptBlocked || shipmentBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || pickBlocked || outboundBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => closureWriteBlocked() || receiptBlockingRef.current || baseBusyRef.current || shipmentBlockingRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || pickBlockingRef.current || outboundBlockingRef.current || [receiptStore.current, recoveryStore.current, shipmentStore.current, supplyStore.current, allocationStore.current, reservationStore.current, releaseStore.current, pickStore.current, outboundStore.current].some(s => s.read().kind !== "missing")} />}
+      {canOperateFulfillment && <FormalMaterialRequestPickPanel adapter={adapter} access={access} detail={detail} store={pickStore.current}
+      otherWriteBusy={closureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || outboundBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+      otherWriteBlocked={() => closureWriteBlocked() || outboundWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationBlockingRef.current || releaseBlockingRef.current || releaseStore.current.read().kind !== "missing" || reservationStore.current.read().kind !== "missing" || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"}
+      onBlocking={onPickBlocking} onDetail={setDetail} />}
+      {canOperateFulfillment && <FormalMaterialRequestFulfillmentPreparationPanel adapter={adapter} access={access} detail={detail}
+        otherWriteBusy={closureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || outboundBlocked || pickBlocked || baseBusy || supplyBlocked || allocationBlocked || reservationBlocked || releaseBlocked || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking"}
+        otherWriteBlocked={() => closureWriteBlocked() || pickWriteBlocked() || baseBusyRef.current || supplyBlockingRef.current || allocationBlockingRef.current || reservationWriteBlocked() || supplyStore.current.read().kind !== "missing" || allocationStore.current.read().kind !== "missing" || recoveryStore.current.read().kind !== "missing"} />}
+      {canOperateFulfillment && <FormalMaterialRequestSupplyPanel
         adapter={adapter} access={access} detail={detail} store={supplyStore.current}
         registry={mutationRegistry.current}
         allocationRecoveryStore={allocationStore.current}
-        otherWriteBusy={shipmentBlocked || outboundBlocked || pickBlocked || baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking" || allocationBlocked || reservationBlocked}
-        otherWriteBlocked={() => reservationWriteBlocked()}
+        allowSupplyPlanning={TRIAL_MVP_UI_SCOPE.allowSupplyPlanning}
+        otherWriteBusy={closureBlocked || inboundBlocked || receiptBlocked || shipmentBlocked || outboundBlocked || pickBlocked || baseBusy || lifecycleRecovery.phase === "blocked" || lifecycleRecovery.phase === "checking" || allocationBlocked || reservationBlocked}
+        otherWriteBlocked={() => closureWriteBlocked() || reservationWriteBlocked()}
         onBlocking={onSupplyBlocking} onAllocationBlocking={onAllocationBlocking} onDetail={setDetail}
-      />
+      />}
     </Modal>}
 
     {formMode && <Modal title={formMode.kind === "create" ? "新建需求草稿" : "编辑需求草稿"} wide onClose={cancelRawForm}>

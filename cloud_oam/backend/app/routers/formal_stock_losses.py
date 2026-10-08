@@ -243,3 +243,12 @@ router.include_router(return_history_router)
 
 from .formal_loss_return_stops import router as return_stop_router
 router.include_router(return_stop_router)
+
+from .formal_stock_scrap import router as scrap_router
+router.include_router(scrap_router)
+
+from .formal_return_conditions import router as return_conditions_router
+router.include_router(return_conditions_router)
+
+from .formal_return_condition_history import router as return_condition_history_router
+router.include_router(return_condition_history_router)

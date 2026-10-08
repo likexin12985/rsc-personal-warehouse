@@ -1,7 +1,7 @@
 """Approved loss releases through real API-role PG16 transactions.
 
 Only fresh owned clusters and synthetic identities/storage are accepted by
-our callers; none of these grants are shipped to production.
+our callers; the formal role grants must come from the actual migrations.
 """
 from uuid import UUID, uuid4
 from dataclasses import replace
@@ -16,7 +16,7 @@ import threading
 import time
 from sqlalchemy.orm import Session
 from app.formal_access import load_formal_principal
-from app.foundation_models import Organization, Permission, Role, RolePermission, FileObject, StateTransitionEvent, OutboxEvent, RoleAssignment
+from app.foundation_models import Organization, Role, FileObject, StateTransitionEvent, OutboxEvent, RoleAssignment
 from app.inventory_models import StockAccount, StockBalance, SerialCurrentPosition, InventoryMovement
 from app.stock_operation_models import StockOperationLine, StockLossHeadquartersDecision, StockLossDisposition, StockOperationSerial
 from app.stock_loss_schemas import (StockLossSubmitIn, StockLossRegionalReviewIn,
@@ -28,6 +28,8 @@ from app.formal_services import (formal_files, stock_loss_plan, stock_loss_comma
 from test_formal_access import make_user, assign
 from test_formal_files_service import FakeStorage, SECRET
 from pg16_stock_loss_submit_gate import snapshot as stock_snapshot
+from pg16_stock_operation_permission_policy import require_formal_grant
+from test_postgresql16_release_gate import HEAD_REVISION
 
 
 def snapshot(owner):
@@ -47,9 +49,7 @@ def run(context):
         roles={r.code:r for r in db.scalars(select(Role))}
         assign(db,manager,roles['provincial_manager'],scope_type='organization',scope_id=str(source.owner_org_id))
         for action,role in ((regional.ACTION,'provincial_manager'),(headquarters.ACTION,'admin'),(plan.ACTION,'admin')):
-            permission=Permission(resource='stock_operation',action=action,field_code='',description='Synthetic owned PG16 disposition gate')
-            db.add(permission);db.flush()
-            db.add(RolePermission(role_id=roles[role].id,permission_id=permission.id,effect='allow'))
+            require_formal_grant(db,role_code=role,action=action)
         db.commit();manager_id=manager.id
     request=context['request'];results=[]
     for kind in ('restore_available','convert_used','convert_damaged'):
@@ -273,7 +273,7 @@ def release(engines,*,tracking,migrate,provision):
     from pg16_stock_loss_custody_gate import assert_original_retention
     assert_original_retention(engines['star_oam_migrator'])
     with engines['star_oam_migrator'].connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261213_0164'
+        assert db.scalars(text('SELECT version_num FROM alembic_version')).all()==[HEAD_REVISION]
     security()
     result.update(emptyRoundtrip=True,retainedDispositionBlocksDowngrade=True,
         custodyHistoryBlocksDowngrade=True,independent0150RetentionPreserved=True,runtimeSecurityBeforeAndAfter=True)

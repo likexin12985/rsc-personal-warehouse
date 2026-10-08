@@ -3,11 +3,14 @@ import { apiNoReplay } from './api';
 import { executeFormalFileUpload, prepareFormalFileUpload } from './formalFileUpload';
 import type { FormalFileUploadClient } from './FormalFileUploadField';
 import ReturnReceiptForm from './ReturnReceiptForm';
+import ReturnReceiptPrint, { type ReceiptDocument } from './ReturnReceiptPrint';
 import { canonical, fail, units, type History, type Identity, type Receipt } from './formalReturnReceiving';
 import * as acceptance from './formalReturnReceipt';
 import * as inbound from './formalReturnInbound';
 import { browserStore, pending, recover, seal, submit, type Context, type Pending, type Store } from './returnReceivingRecovery';
 import type { Adapter } from './returnReceivingAdapter';
+import ReceiptConditionSources from './ReceiptConditionSources';
+import type { ConditionAdapter } from './returnConditionAdapter';
 type Item = Awaited<ReturnType<Adapter['list']>>['items'][number];
 type InboundState = ReturnType<typeof inbound.state>;
 const errorText = (e: unknown) => e instanceof Error ? e.message : '结果暂未确认，请保留原请求';
@@ -19,8 +22,9 @@ function SerialList({ label, ids, line }: { label: string; ids: string[]; line: 
 }
 type Prepared = { value: Pending; body?: acceptance.Input; plan?: inbound.InboundPreview };
 
-export default function FormalReturnReceiving({ identity, adapter, store: provided, uploader: suppliedUploader }: {
+export default function FormalReturnReceiving({ identity, adapter, store: provided, uploader: suppliedUploader, readConditionReceipt, onOpenCondition }: {
   identity: Identity; adapter: Adapter; store?: Store; uploader?: FormalFileUploadClient;
+  readConditionReceipt?: ConditionAdapter['receipt']; onOpenCondition?(inbound: string): void;
 }) {
   const store = useMemo(() => provided ?? browserStore(), [provided]);
   const [items, setItems] = useState<Item[]>([]), [next, setNext] = useState<string | null>(null), [selected, setSelected] = useState<History | null>(null);
@@ -28,6 +32,9 @@ export default function FormalReturnReceiving({ identity, adapter, store: provid
   const [requests, setRequests] = useState<Pending[]>([]), [storageReady, setStorageReady] = useState(false), [canWrite, setCanWrite] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState(''), [prepared, setPrepared] = useState<Prepared | null>(null), [confirmed, setConfirmed] = useState(false), [sealTarget, setSealTarget] = useState<Pending | null>(null);
   const session = useRef(0), working = useRef(false);
+  const [printDocument, setPrintDocument] = useState<ReceiptDocument | null>(null);
+  const printGeneration = useRef(0);
+  function closePrint() { printGeneration.current++; setPrintDocument(null); }
   function currentAccess(value: Context, write = false) {
     if (value.person_id !== identity.person_id || value.authorization_version !== identity.authorization_version || !value.can_read || (write && !value.can_write)) fail('当前身份或权限已变化，请重新进入接收页');
     return value;
@@ -69,7 +76,7 @@ export default function FormalReturnReceiving({ identity, adapter, store: provid
   }
   useEffect(() => {
     const epoch = ++session.current; working.current = false;
-    setItems([]); setNext(null); setSelected(null); setInbounds({}); setPrepared(null); setSealTarget(null); setConfirmed(false); setNotice(''); setCanWrite(false); setRequests([]); local(epoch);
+    closePrint(); setItems([]); setNext(null); setSelected(null); setInbounds({}); setPrepared(null); setSealTarget(null); setConfirmed(false); setNotice(''); setCanWrite(false); setRequests([]); local(epoch);
     void action(async n => list(n));
     return () => { session.current++; };
   }, [adapter, store, identity.person_id, identity.authorization_version]);
@@ -123,6 +130,25 @@ export default function FormalReturnReceiving({ identity, adapter, store: provid
   }
   const unresolved = selected && requests.some(p => p.package.shipment_id === selected.package.shipment_id);
   const hasRemaining = selected?.lines.some(l => units(l.unconfirmed_qty) > 0n);
+  async function receiptDocument(value: ReceiptDocument): Promise<ReceiptDocument> {
+    const before = currentAccess(await adapter.context());
+    const current = await adapter.read(value.history.package.shipment_id), original = current.receipts.find(r => r.receipt_id === value.receipt.receipt_id);
+    if (current.person_id !== identity.person_id || current.authorization_version !== identity.authorization_version || !original
+        || canonical(original) !== canonical(value.receipt) || canonical(current.package) !== canonical(value.history.package)) fail('收货单或包裹信息变化，请关闭预览后重新查看');
+    const after = currentAccess(await adapter.context());
+    if (canonical(before) !== canonical(after)) fail('打印核验期间权限变化，请重新进入');
+    return { history: current, receipt: original };
+  }
+  async function preparePrint(receipt: Receipt) {
+    if (!selected) return;
+    const value = { history: selected, receipt }, generation = ++printGeneration.current;
+    await action(async (_epoch, valid) => { const document = await receiptDocument(value); if (valid() && printGeneration.current === generation) setPrintDocument(document); });
+  }
+  async function printReceipt() {
+    if (!printDocument) return;
+    const value = printDocument, generation = printGeneration.current;
+    await action(async (_epoch, valid) => { await receiptDocument(value); if (valid() && printGeneration.current === generation) window.print(); });
+  }
   return <section className="page-stack return-receiving-page">
     <div className="page-heading"><div><h1>退回收货与入库</h1><p>核验送达区域仓的报损退回或工单旧坏件。实物验收与库存入库分别确认。</p></div><button disabled={busy} onClick={() => void refresh()}>刷新包裹</button></div>
     {error && <div className="alert alert-error" role="alert">{error}</div>}{notice && <div className="alert" role="status">{notice}</div>}
@@ -140,7 +166,11 @@ export default function FormalReturnReceiving({ identity, adapter, store: provid
         const proof = inbounds[r.receipt_id], posted = proof?.state?.status === 'posted';
         return <article className="return-receipt" key={r.receipt_id}><h4>{r.receipt_no}</h4><p>实物验收：{r.status === 'exception' ? '有异常' : '已接受'} · {new Date(r.received_at).toLocaleString('zh-CN')} · {r.reason}</p><ul>{r.lines.map(l => <li key={l.shipment_line_id}>{l.material_name}：接受 {l.accepted_qty}、拒收 {l.rejected_qty}、短少 {l.shortage_qty}、接受中破损 {l.damaged_qty}{l.exceptions.map(e => <p key={e.exception_type}>异常说明：{e.description}（凭证已关联）</p>)}</li>)}</ul>
           <p>库存入库：{posted ? '已过账' : proof?.state?.status === 'not_posted' ? '尚未入库' : '待核验'}</p>{proof?.error && <p role="alert">{proof.error}</p>}
+          <button disabled={busy} onClick={() => void preparePrint(r)}>打印收货单 {r.receipt_no}</button>
           {posted && <p>库存交易：{proof.state!.inbound!.posting_transaction_id}</p>}
+          {posted && selected.package.origin && r.lines.some(l => units(l.damaged_qty) > 0n) && readConditionReceipt && onOpenCondition
+            && <ReceiptConditionSources identity={identity} receipt={r.receipt_id} shipment={selected.package.shipment_id}
+              root={selected.package.origin.disposition_id} read={readConditionReceipt} onOpen={onOpenCondition} disabled={busy} />}
           {!posted && proof?.state?.status === 'not_posted' && r.lines.some(l => units(l.accepted_qty) > 0n) && <button disabled={busy || !canWrite || !storageReady || !!unresolved || !!prepared} onClick={() => void prepareInbound(r)}>预览入库 {r.receipt_no}</button>}
         </article>;
       })}
@@ -163,5 +193,6 @@ export default function FormalReturnReceiving({ identity, adapter, store: provid
       <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={e => setConfirmed(e.target.checked)} />已核对本次物料、数量、SN 和目标仓</label>
       <div className="toolbar"><button disabled={busy || !confirmed || !storageReady || !canWrite} onClick={() => void send()}>{prepared.value.kind === 'receipt' ? '确认提交验收' : '确认独立入库'}</button><button disabled={busy} onClick={() => { setPrepared(null); setConfirmed(false); }}>返回修改</button></div>
     </section>}
+    {printDocument && <ReturnReceiptPrint document={printDocument} busy={busy} error={error} onPrint={() => void printReceipt()} onClose={closePrint} />}
   </section>;
 }

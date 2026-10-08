@@ -1,12 +1,13 @@
 """Loss-source checks over real API-role personal opening facts on owned PG16.
 
-The caller must provide a fresh disposable cluster. The future loss permission
-is a synthetic fixture; this does not seed or authorize production operation.
+The caller must provide a fresh disposable cluster. Reuse migrated permission
+rows; historical pre-policy gates may install their explicit fixture grant.
 """
 import datetime
 import pytest
 from sqlalchemy import select, text, event
 from sqlalchemy.orm import Session
+from pg16_stock_operation_permission_policy import uses_migrated_loss_policy
 from app.foundation_models import Role
 from app.formal_access import load_formal_principal
 from pg16_opening_publication_fixture import prepare_stocktake_inventory
@@ -67,12 +68,23 @@ def run(engines, *, tracking, after_preview=None):
             custodian_person_id=person_id, location_id=location.id, material_id=fixture['material_id'],
             condition_code='new', availability_bucket='available')
         db.add(account)
-        permission = Permission(resource='stock_operation', action='submit_loss', field_code='',
-            description='Synthetic future loss permission; local test database only')
-        db.add(permission); db.flush()
-        grant = RolePermission(role_id=db.scalar(select(Role.id).where(Role.code=='technician')),
-            permission_id=permission.id, effect='allow')
-        db.add(grant); db.commit()
+        permission = db.scalar(select(Permission).where(Permission.resource=='stock_operation',
+            Permission.action=='submit_loss', Permission.field_code==''))
+        migrated_permission = permission is not None
+        if permission is None:
+            assert not uses_migrated_loss_policy(db), 'formal loss permission missing'
+            permission = Permission(resource='stock_operation', action='submit_loss', field_code='',
+                description='Synthetic historical loss permission; local test database only')
+            db.add(permission); db.flush()
+        role_id = db.scalar(select(Role.id).where(Role.code=='technician'))
+        grant = db.scalar(select(RolePermission).where(RolePermission.role_id==role_id,
+            RolePermission.permission_id==permission.id))
+        if grant is None:
+            assert not uses_migrated_loss_policy(db), 'formal loss grant missing'
+            grant = RolePermission(role_id=role_id,permission_id=permission.id,effect='allow')
+            db.add(grant)
+        assert grant.effect=='allow', 'fixture must not override a reviewed deny'
+        db.commit()
         account_id, grant_id = account.id, grant.id
         fixture = dict(fixture, difference_peer_location_id=location.id,
             difference_peer_account_id=account_id, reconciliation_reviewer_id=reviewer.id)
@@ -154,7 +166,7 @@ def run(engines, *, tracking, after_preview=None):
     result['liveGrantRevocationRejected'] = True
     assert all_reconciliation_facts(owner)==before
     result.update(passed=True, factsUnchanged=True, migrationHead=gate.HEAD_REVISION,
-                  syntheticPermissionOnly=True, snPG16PreviewProved=tracking=='serial')
+                  syntheticPermissionOnly=not migrated_permission, snPG16PreviewProved=tracking=='serial')
     if after_preview is not None:
         with Session(owner) as db:
             db.get(RolePermission, grant_id).effect = 'allow'

@@ -52,8 +52,9 @@ def verify_historical_original(db, *, root_disposition_id):
             if identifier == root_disposition_id: root_tx = tx
             holds = read_hold_snapshot(db, source_account_id=row.source_account_id,
                 through_cursor=tx.ledger_cursor - 1)
-            if (holds.observed_ledger_cursor != start[0]
-                    or row.plan_jsonb['holds'] != holds.legacy_basis()):
+            actual_basis = holds.plan_basis() if row.disposition == 'scrap' else holds.legacy_basis()
+            recorded_basis = row.plan_jsonb.get('frozen_holds_before') if row.disposition == 'scrap' else row.plan_jsonb['holds']
+            if holds.observed_ledger_cursor != start[0] or recorded_basis != actual_basis:
                 raise InvalidChain('original_historical_hold_mismatch')
             seen.add(identifier)
             # Re-prove the full earlier original graph iteratively, including

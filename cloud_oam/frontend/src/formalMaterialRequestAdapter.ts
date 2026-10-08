@@ -1,15 +1,25 @@
+import { type RejectionPage, type RejectionCommand, type RejectionResult, type ProgressResult, type RejectionStatus,
+  rejectionPage, rejectionCommand, rejectionResult, progressResult, rejectionStatus } from "./materialRequestRejection";
+import { type ReturnCompensationInput, type ReturnCompensation, type ReturnCompensationCandidates, type ReturnCompensationStatus,
+  validateReturnCompensationInput, validateReturnCompensation, validateReturnCompensationCandidates, validateReturnCompensationStatus } from "./materialRequestReturnCompensation";
+import { type RemainingCancelInput, type RemainingCancellation, type RemainingCancellationState, type RemainingCancellationStatus,
+  validateRemainingCancelInput, validateRemainingCancellation, validateRemainingCancellationState, validateRemainingCancellationStatus } from "./materialRequestRemainingCancellation";
+import { type VersionedMaterialRequestRemainder, validateVersionedMaterialRequestRemainder } from "./materialRequestRemainder";
+import { type CloseInput, type ClosureResult, type ClosureState, type ClosureStatus, validateCloseInput, validateClosureResult, validateClosureState, validateClosureStatus } from "./materialRequestClosure";
 import { type ShipmentCommandStatus, validateShipmentCommandStatus } from "./materialRequestShipmentRecovery";
 import { type ReceiptCommandStatus, validateReceiptCommandStatus } from "./materialRequestReceiptRecovery";
 import { type LogisticsCommandStatus, validateLogisticsCommandStatus } from "./materialRequestLogisticsRecovery";
 import { api, apiNoReplay, ApiError, jsonBody } from "./api";
+import { createMyFulfillmentAdapter } from "./myFulfillmentAdapter";
 import { formalMaterialCatalogQuery } from "./formalMaterialCatalog";
 import { validateMaterialRequestWorkOrderOptionQuery } from "./formalMaterialRequestOptions";
 import { validateMaterialRequestAllocationOptionPage, type MaterialRequestAllocationOptionPage } from "./formalMaterialRequestAllocationOptions";
 import { validateMaterialRequestAllocationCommandStatus, validateMaterialRequestAllocationMutationResult, type MaterialRequestAllocationCommandStatus, type MaterialRequestAllocationMutationResult } from "./formalMaterialRequestAllocationCommandStatus";
 import { validateMaterialRequestReservationCommandStatus, validateMaterialRequestReservationMutationResult, type MaterialRequestReservationCommandStatus, type MaterialRequestReservationMutationResult } from "./formalMaterialRequestReservationCommandStatus";
 import { type PickInput, type PickPage, type PickResult, validatePickInput, validatePickPage, validatePickResult, validatePickStatus } from "./materialRequestReservationPick";
-import { type ShipmentInput, type ShipmentResult, type ShipmentOptions, type InboundOrderInput, type InboundOrderResult, type InboundPostingResult, type LogisticsEventResult, type LogisticsEventInput, type ReceiptInput, type ReceiptResult, validateShipmentInput, validateShipmentResult, validateShipmentOptions, validateInboundOrderInput, validateInboundOrderResult, validateInboundPostingResult, validateLogisticsEventResult, validateLogisticsEventInput, validateReceiptInput, validateReceiptResult } from "./materialRequestShipment";
+import { type ShipmentInput, type ShipmentResult, type ShipmentOptions, type ShipmentTargetOptions, type InboundOrderInput, type InboundOrderResult, type InboundPostingResult, type LogisticsEventResult, type LogisticsEventInput, type ReceiptInput, type ReceiptResult, validateShipmentInput, validateShipmentResult, validateShipmentOptions, validateShipmentTargetOptions, validateInboundOrderInput, validateInboundOrderResult, validateInboundPostingResult, validateLogisticsEventResult, validateLogisticsEventInput, validateReceiptInput, validateReceiptResult } from "./materialRequestShipment";
 import { type OamReceiptEvidenceResult, validateOamReceiptEvidence } from "./materialRequestOamReceipt";
+import { type MaterialRequestCompletion, validateMaterialRequestCompletion } from "./materialRequestCompletion";
 import { type OutboundInput, type OutboundPage, type OutboundResult, validateOutboundInput, validateOutboundPage, validateOutboundResult, validateOutboundStatus } from "./materialRequestOutbound";
 import { type ReleaseInput, type ReleasePage, type ReleaseResult, validateReleaseInput, validateReleasePage, validateReleaseResult, validateReleaseStatus } from "./materialRequestReservationRelease";
 import { validateMaterialRequestReservationOptionPage, type MaterialRequestReservationOptionPage } from "./formalMaterialRequestReservationOptions";
@@ -93,10 +103,12 @@ export type MaterialRequestReservationCreateInput = Readonly<{
 }>;
 
 export interface FormalMaterialRequestAdapter {
+  personalFulfillment?: import("./myFulfillmentAdapter").MyFulfillmentAdapter;
   loadIdentity(): Promise<unknown>;
   loadAccess(): Promise<unknown>;
   lifecycleCommandStatus(xRequestId: string): Promise<unknown>;
   supplyCommandStatus(xRequestId: string): Promise<unknown>;
+  supplyPlanningCapacity?(requestId: string): Promise<unknown>;
   allocationCommandStatus(xRequestId: string): Promise<MaterialRequestAllocationCommandStatus>;
   allocationCommandStatusNoReplay?(xRequestId: string): Promise<MaterialRequestAllocationCommandStatus>;
   reservationCommandStatus?(xRequestId: string): Promise<MaterialRequestReservationCommandStatus>;
@@ -117,8 +129,23 @@ export interface FormalMaterialRequestAdapter {
   createReceipt?(requestId: string, input: ReceiptInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ReceiptResult>;
   listReceipts?(requestId: string): Promise<readonly ReceiptResult[]>;
   listOamReceiptEvidence?(requestId: string): Promise<readonly OamReceiptEvidenceResult[]>;
+  remainingFulfillment?(requestId: string): Promise<VersionedMaterialRequestRemainder>;
+  completionQuantities?(requestId: string): Promise<MaterialRequestCompletion>;
+  rejectionCandidates?(requestId: string, afterId: string | null): Promise<RejectionPage>;
+  rejectionStatusNoReplay?(requestId: string, returnId: string | null, key: string, fingerprint: string): Promise<RejectionStatus>;
+  recordRejection?(requestId: string, command: RejectionCommand, headers: Readonly<{ "Idempotency-Key": string; "X-Request-ID": string }>): Promise<RejectionResult | ProgressResult>;
+  returnCompensationCandidates?(requestId: string): Promise<ReturnCompensationCandidates>;
+  returnCompensationStatusNoReplay?(requestId: string, key: string, fingerprint: string): Promise<ReturnCompensationStatus>;
+  compensateReturned?(requestId: string, input: ReturnCompensationInput, headers: Readonly<{ "Idempotency-Key": string; "X-Request-ID": string }>): Promise<ReturnCompensation>;
+  remainingCancellationState?(requestId: string): Promise<RemainingCancellationState>;
+  remainingCancellationStatusNoReplay?(requestId: string, key: string, fingerprint: string): Promise<RemainingCancellationStatus>;
+  cancelRemaining?(requestId: string, input: RemainingCancelInput, headers: Readonly<{ "Idempotency-Key": string; "X-Request-ID": string }>): Promise<RemainingCancellation>;
+  closureState?(requestId: string): Promise<ClosureState>;
+  closureCommandStatusNoReplay?(requestId: string, key: string, fingerprint: string): Promise<ClosureStatus>;
+  closeRequest?(requestId: string, input: CloseInput, headers: Readonly<{ "Idempotency-Key": string; "X-Request-ID": string }>): Promise<ClosureResult>;
   listInboundOrders?(requestId: string): Promise<readonly InboundOrderResult[]>;
   listShipmentOptions?(requestId: string): Promise<ShipmentOptions>;
+  listShipmentTargets?(requestId: string): Promise<ShipmentTargetOptions>;
   createShipment?(requestId: string, input: ShipmentInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<ShipmentResult>;
   createInboundOrder?(requestId: string, input: InboundOrderInput, headers: Readonly<{ "X-Request-ID": string }>): Promise<InboundOrderResult>;
   postInboundOrder?(requestId: string, inboundOrderId: string, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>): Promise<InboundPostingResult>;
@@ -485,7 +512,13 @@ function projectAccessContext(
     can_withdraw: canRead && permissionKeys.includes("material_request\u0000withdraw\u0000"),
     can_cancel: canRead && permissionKeys.includes("material_request\u0000cancel\u0000"),
     can_read_material_catalog: permissionKeys.includes("inventory\u0000read\u0000"),
-    can_read_allocation_options: roleCodes.some((role) => role === "admin" || role === "provincial_manager"),
+    // The backend allocation directory requires both a regional/HQ role and
+    // the current inventory read grant.  Keep the UI capability projection
+    // aligned so an explicit inventory deny hides the entire post-fulfillment
+    // surface instead of exposing controls that the API will reject.
+    can_read_allocation_options: canRead
+      && roleCodes.some((role) => role === "admin" || role === "provincial_manager")
+      && permissionKeys.includes("inventory\u0000read\u0000"),
     can_approve_region: permissionKeys.includes("material_request\u0000approve_region\u0000approval_decision"),
     can_approve_headquarters: permissionKeys.includes("material_request\u0000approve_headquarters\u0000approval_decision"),
     can_register_external: permissionKeys.includes("material_request\u0000register_external\u0000approval_evidence"),
@@ -514,7 +547,7 @@ export function validateFormalMaterialRequestAccess(value: unknown): FormalMater
   if (capabilityFields.some((field) => typeof object[field] !== "boolean")) {
     return adapterError("正式需求访问授权无效");
   }
-  if ((object.can_create || object.can_withdraw || object.can_cancel) && !object.can_read) {
+  if ((object.can_create || object.can_withdraw || object.can_cancel || object.can_read_allocation_options) && !object.can_read) {
     return adapterError("正式需求写权限缺少必需的读取回验权限");
   }
   return Object.freeze({
@@ -670,6 +703,7 @@ export function createFormalMaterialRequestAdapter(
     ),
   });
   return Object.freeze({
+    personalFulfillment: createMyFulfillmentAdapter((path, init) => requireNoReplayRequester()(path, init)),
     async loadIdentity() {
       return projectFreshIdentity(await requester<unknown>("/auth/me", {
         cache: "no-store",
@@ -707,6 +741,11 @@ export function createFormalMaterialRequestAdapter(
           "Cache-Control": "no-store",
           Pragma: "no-cache",
         },
+      });
+    },
+    supplyPlanningCapacity(requestId: string) {
+      return requester(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/supply-planning-capacity`, {
+        method: "GET", cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
       });
     },
     supplyCommandStatus(xRequestId: string) {
@@ -941,11 +980,115 @@ export function createFormalMaterialRequestAdapter(
     listOamReceiptEvidence(requestId: string) {
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/oam-receipt-evidence`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(value => { if (!Array.isArray(value)) throw new ApiError(502, "OAM收货证据查询响应无效"); return value.map(validateOamReceiptEvidence); });
     },
+    rejectionCandidates(requestId: string, afterId: string | null) {
+      const id = requiredUuid(requestId, "request_id");
+      const query = afterId === null ? "" : `?after_id=${requiredUuid(afterId, "after_id")}`;
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${id}/rejection-returns/candidates${query}`,
+        { cache: "no-store", headers: { "Cache-Control": "no-store" } }).then(value => rejectionPage(value, id, afterId));
+    },
+    rejectionStatusNoReplay(requestId: string, returnId: string | null, key: string, fingerprint: string) {
+      const id = requiredUuid(requestId, "request_id");
+      if (!/^[A-Za-z0-9._:-]{16,128}$/.test(key) || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new ApiError(400, "原退回请求坐标无效");
+      const suffix = returnId === null ? "" : `/${requiredUuid(returnId, "return_id")}/progress`;
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${id}/rejection-returns${suffix}/command-status`, {
+        cache: "no-store", headers: { "Cache-Control": "no-store", "Idempotency-Key": key, "X-Request-Fingerprint": fingerprint },
+      }).then(value => rejectionStatus(value, id, returnId));
+    },
+    recordRejection(requestId: string, command: RejectionCommand, headers: Readonly<{ "Idempotency-Key": string; "X-Request-ID": string }>) {
+      const id = requiredUuid(requestId, "request_id"), checked = rejectionCommand(command);
+      const suffix = checked.kind === "register" ? "" : `/${checked.return_id}/progress`;
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${id}/rejection-returns${suffix}`, {
+        method: "POST", headers: validateWriteHeaders(headers, headers["Idempotency-Key"]), ...jsonBody(checked.input),
+      }).then(value => checked.kind === "register" ? rejectionResult(value, id) : progressResult(value, id, checked.return_id));
+    },
+    returnCompensationCandidates(requestId: string) {
+      const id = requiredUuid(requestId, "request_id");
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${id}/return-compensations/candidates`, { cache: "no-store", headers: { "Cache-Control": "no-store" } }).then(value => {
+        const result = validateReturnCompensationCandidates(value);
+        if (result.request_id !== id) throw new ApiError(502, "退回来源不属于当前需求");
+        return result;
+      });
+    },
+    returnCompensationStatusNoReplay(requestId: string, key: string, fingerprint: string) {
+      if (!/^[A-Za-z0-9._:-]{16,128}$/.test(key) || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new ApiError(400, "原补偿请求坐标无效");
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/return-compensations/command-status`, {
+        cache: "no-store", headers: { "Cache-Control": "no-store", "Idempotency-Key": key, "X-Request-Fingerprint": fingerprint },
+      }).then(validateReturnCompensationStatus);
+    },
+    compensateReturned(requestId: string, input: ReturnCompensationInput, headers: Readonly<{ "Idempotency-Key": string; "X-Request-ID": string }>) {
+      const body = validateReturnCompensationInput(input), checked = validateWriteHeaders(headers, headers["Idempotency-Key"]);
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/return-compensations`, {
+        method: "POST", headers: checked, ...jsonBody(body),
+      }).then(validateReturnCompensation);
+    },
+    remainingCancellationState(requestId: string) {
+      const id = requiredUuid(requestId, "request_id");
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${id}/remaining-cancellation`, { cache: "no-store", headers: { "Cache-Control": "no-store" } }).then(value => {
+        const result = validateRemainingCancellationState(value);
+        if (result.request_id !== id) throw new ApiError(502, "取消记录不属于当前需求");
+        return result;
+      });
+    },
+    remainingCancellationStatusNoReplay(requestId: string, key: string, fingerprint: string) {
+      if (!/^[A-Za-z0-9._:-]{16,128}$/.test(key) || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new ApiError(400, "原取消请求坐标无效");
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/cancel-remaining-command-status`, {
+        cache: "no-store", headers: { "Cache-Control": "no-store", "Idempotency-Key": key, "X-Request-Fingerprint": fingerprint },
+      }).then(validateRemainingCancellationStatus);
+    },
+    cancelRemaining(requestId: string, input: RemainingCancelInput, headers: Readonly<{ "Idempotency-Key": string; "X-Request-ID": string }>) {
+      const body = validateRemainingCancelInput(input), checked = validateWriteHeaders(headers, headers["Idempotency-Key"]);
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/cancel-remaining`, {
+        method: "POST", headers: checked, ...jsonBody(body),
+      }).then(validateRemainingCancellation);
+    },
+    closureState(requestId: string) {
+      const id = requiredUuid(requestId, "request_id");
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${id}/closure`, { cache: "no-store", headers: { "Cache-Control": "no-store" } }).then(value => {
+        const result = validateClosureState(value);
+        if (result.request_id !== id) throw new ApiError(502, "关闭记录不属于当前需求");
+        return result;
+      });
+    },
+    closureCommandStatusNoReplay(requestId: string, key: string, fingerprint: string) {
+      if (!/^[A-Za-z0-9._:-]{16,128}$/.test(key) || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new ApiError(400, "原关闭请求坐标无效");
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/close-command-status`, {
+        cache: "no-store", headers: { "Cache-Control": "no-store", "Idempotency-Key": key, "X-Request-Fingerprint": fingerprint },
+      }).then(validateClosureStatus);
+    },
+    closeRequest(requestId: string, input: CloseInput, headers: Readonly<{ "Idempotency-Key": string; "X-Request-ID": string }>) {
+      const body = validateCloseInput(input), checked = validateWriteHeaders(headers, headers["Idempotency-Key"]);
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/close`, {
+        method: "POST", headers: checked, ...jsonBody(body),
+      }).then(validateClosureResult);
+    },
+    remainingFulfillment(requestId: string) {
+      const checkedId = requiredUuid(requestId, "request_id");
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${checkedId}/remaining-fulfillment`, {
+        cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+      }).then(value => {
+        const checked = validateVersionedMaterialRequestRemainder(value);
+        if (checked.request_id !== checkedId) throw new ApiError(502, "剩余履约核对不属于当前需求");
+        return checked;
+      });
+    },
+    completionQuantities(requestId: string) {
+      const checkedId = requiredUuid(requestId, "request_id");
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${checkedId}/completion-quantities`, {
+        cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+      }).then(value => {
+        const checked = validateMaterialRequestCompletion(value);
+        if (checked.request_id !== checkedId) throw new ApiError(502, "结单核对结果不属于当前需求");
+        return checked;
+      });
+    },
     listInboundOrders(requestId: string) {
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/inbound-orders`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(value => { if (!Array.isArray(value)) throw new ApiError(502, "入账查询响应无效"); return value.map(validateInboundOrderResult); });
     },
     listShipmentOptions(requestId: string) {
       return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipment-options`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(validateShipmentOptions);
+    },
+    listShipmentTargets(requestId: string) {
+      return requireNoReplayRequester()<unknown>(`/v1/material-requests/${requiredUuid(requestId, "request_id")}/shipment-targets`, { cache: "no-store", headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }).then(validateShipmentTargetOptions);
     },
     createShipment(requestId: string, input: ShipmentInput, headers: Readonly<{ "X-Request-ID": string; "Idempotency-Key": string }>) {
       const body = validateShipmentInput(input);

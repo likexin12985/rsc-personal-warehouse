@@ -12,7 +12,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..config import get_settings
+from ..config import SMS_PROVIDER_ALIASES, get_settings
 from ..foundation_models import AuthIdentity, Organization, Person, Permission, Role, RoleAssignment, RolePermission
 from ..models import User, WechatIdentity
 from .authentication_identity import AuthenticationIdentityError, compute_identity_hash, find_active_formal_identity, normalize_mobile
@@ -29,7 +29,7 @@ class IdentityPolicy:
 def identity_policy() -> IdentityPolicy:
     settings=get_settings()
     return IdentityPolicy(settings.identity_hash_secret,settings.identity_hash_version,
-        settings.sms_provider if settings.sms_provider=="aliyun_pnvs" else None,
+        settings.sms_provider if settings.sms_provider in SMS_PROVIDER_ALIASES else None,
         settings.wechat_app_id if settings.wechat_provider=="wechat" and settings.wechat_app_id else None)
 
 

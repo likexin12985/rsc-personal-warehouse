@@ -61,6 +61,22 @@ class ShipmentOptionsOut(BaseModel):
     request_version: int
     items: tuple[dict, ...]
 
+
+class ShipmentTargetOptionOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    location_id: UUID
+    location_code: str = Field(min_length=1, max_length=100)
+    location_name: str = Field(min_length=1, max_length=200)
+    person_id: UUID
+
+
+class ShipmentTargetOptionsOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["1.0"] = "1.0"
+    request_id: UUID
+    request_version: StrictInt = Field(ge=0)
+    items: tuple[ShipmentTargetOptionOut, ...] = Field(max_length=1)
+
 class ShipmentCommandStatusOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: str = "1.0"

@@ -17,6 +17,7 @@ FilePurpose = Literal[
     "source_configuration_evidence",
     "daily_reconciliation_evidence",
     "stock_loss_evidence",
+    "return_condition_evidence",
 ]
 
 

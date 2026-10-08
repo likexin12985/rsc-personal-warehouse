@@ -18,6 +18,11 @@ import re
 from typing import Annotated, Any
 from uuid import UUID
 
+from ..formal_services import material_request_remaining_cancel as remaining_cancel_service
+from ..material_request_remaining_cancel_schemas import (
+    MaterialRequestCancelRemainingIn, MaterialRequestRemainingCancellationOut,
+    MaterialRequestRemainingCancellationStateOut, MaterialRequestRemainingCancellationStatusOut)
+
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
@@ -51,6 +56,24 @@ from ..formal_services import material_request_draft as draft_service
 from ..formal_services import material_request_edit as edit_service
 from ..formal_services import material_request_lifecycle as lifecycle_service
 from ..formal_services import material_request_query as query_service
+from ..formal_services import material_request_completion as completion_service
+from ..material_request_completion_schemas import MaterialRequestCompletionOut
+from ..formal_services import material_request_return_compensation as return_compensation_service
+from ..formal_services import material_request_rejection_return as rejection_return_service
+from ..formal_services import material_request_rejection_progress as rejection_progress_service
+from ..formal_services import material_request_rejection_candidates as rejection_candidates_service
+from ..material_request_rejection_return_schemas import RejectionReturnIn, RejectionReturnOut
+from ..material_request_rejection_progress_schemas import RejectionProgressIn, RejectionProgressOut, RejectionProgressStateOut
+from ..material_request_rejection_http_schemas import (
+    RejectionReturnCandidatesOut, RejectionReturnCommandStatusOut, RejectionProgressCommandStatusOut)
+from ..material_request_return_compensation_schemas import (
+    ReturnCompensationIn, ReturnCompensationOut, ReturnCompensationStatusOut, ReturnCompensationCandidatesOut,
+)
+from ..formal_services import material_request_return_quantities as remainder_service
+from ..material_request_return_compensation_schemas import ReturnedRemainderAssessmentOut
+from ..formal_services import material_request_closure as closure_service
+from ..material_request_closure_schemas import (MaterialRequestCloseIn, MaterialRequestClosureOut,
+    MaterialRequestClosureStateOut, MaterialRequestClosureCommandStatusOut)
 from ..formal_services import material_request_supply as supply_service
 from ..formal_services import material_request_supply_command_status as supply_status_service
 from ..formal_services import material_request_reservation as reservation_service
@@ -64,7 +87,7 @@ from ..formal_services.inventory_posting import InventoryPostingError
 from ..formal_services import material_request_logistics as logistics_service
 from ..formal_services import material_request_oam_receipt as oam_receipt_service
 from ..material_request_outbound_schemas import OutboundOptionsOut, OutboundIn, OutboundOut, OutboundStatusOut
-from ..material_request_shipment_schemas import ShipmentIn, ShipmentOut, ShipmentOptionsOut, ShipmentCommandStatusOut
+from ..material_request_shipment_schemas import ShipmentIn, ShipmentOut, ShipmentOptionsOut, ShipmentTargetOptionsOut, ShipmentCommandStatusOut
 from ..material_request_receipt_schemas import ReceiptIn, ReceiptOut, ReceiptCommandStatusOut
 from ..material_request_inbound_schemas import InboundOrderIn, InboundOrderOut, InboundPostingOut
 from ..formal_services import material_request_my_receiving as my_receiving_service
@@ -139,12 +162,33 @@ command_status_router = APIRouter(
 
 _SAFE_HEADER_VALUE = re.compile(r"^[A-Za-z0-9._:-]+$")
 _PLACEHOLDERS = ("replace-with", "replace_me", "replace-me", "change-me", "changeme")
+_BACKEND_FULFILLMENT_ROLES = frozenset({"admin", "provincial_manager"})
 
 
 def _set_read_no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Referrer-Policy"] = "no-referrer"
+
+
+def _require_backend_fulfillment(principal: FormalPrincipal) -> None:
+    """Keep source-side fulfillment coordinates behind the operator boundary.
+
+    The production principal always carries role codes.  A missing attribute
+    is tolerated for the small legacy router fixtures; those fixtures do not
+    represent an authenticated production principal.
+    """
+    roles = getattr(principal, "role_codes", None)
+    if roles is not None and not set(roles).intersection(_BACKEND_FULFILLMENT_ROLES):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "fulfillment_forbidden",
+                "category": "forbidden",
+                "message": "当前账号没有后台人工履约权限",
+            },
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
 
 
 @command_status_router.get(
@@ -157,10 +201,11 @@ def formal_material_request_allocation_command_status(
     db: Session = Depends(get_db),
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
-    checked_request_id = _required_safe_header(
-        "X-Request-ID", request_id, minimum=8, maximum=160
-    )
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    checked_request_id = _required_safe_header(
+        "X-Request-ID", request_id, minimum=8, maximum=160, no_store=True
+    )
     try:
         result = allocation_service.allocation_command_status(
             db, actor=principal, trace_request_id=checked_request_id
@@ -218,10 +263,11 @@ def formal_material_request_reservation_command_status(
     db: Session = Depends(get_db),
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
-    checked_request_id = _required_safe_header(
-        "X-Request-ID", request_id, minimum=8, maximum=160
-    )
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    checked_request_id = _required_safe_header(
+        "X-Request-ID", request_id, minimum=8, maximum=160, no_store=True
+    )
     try:
         result = reservation_service.reservation_command_status(
             db, actor=principal, trace_request_id=checked_request_id
@@ -286,11 +332,13 @@ def formal_material_request_lifecycle_command_status(
     db: Session = Depends(get_db),
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
     checked_request_id = _required_safe_header(
         "X-Request-ID",
         request_id,
         minimum=8,
         maximum=160,
+        no_store=True,
     )
     try:
         result = command_status_service.material_request_lifecycle_command_status(
@@ -319,7 +367,7 @@ def formal_material_request_lifecycle_command_status(
             command=command,
         )
     except lifecycle_service.MaterialRequestLifecycleError as exc:
-        _raise_service_error(exc)
+        _raise_service_error(exc, no_store=True)
     except ValidationError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -328,11 +376,15 @@ def formal_material_request_lifecycle_command_status(
                 "category": "service_unavailable",
                 "message": "生命周期命令状态响应投影无效",
             },
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+                "Referrer-Policy": "no-referrer",
+            },
         ) from None
     except DBAPIError:
         db.rollback()
-        _raise_database_unavailable(read_only=True)
-    _set_read_no_store(response)
+        _raise_database_unavailable(read_only=True, no_store=True)
     return output
 
 
@@ -346,6 +398,8 @@ def formal_supply_command_status(
     principal: FormalPrincipal = Depends(require_permission("supply_task", "manage")),
     db: Session = Depends(get_db),
 ):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     try:
         result = supply_status_service.material_request_supply_command_status(
             db, actor=principal, trace_request_id=trace_request_id,
@@ -362,15 +416,19 @@ def formal_supply_command_status(
             lookup_status=result.lookup_status, command=command,
         )
     except supply_service.MaterialRequestSupplyError as exc:
-        _raise_service_error(exc)
+        _raise_service_error(exc, no_store=True)
     except SQLAlchemyError:
-        _raise_database_unavailable(read_only=True)
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
     except ValidationError:
         raise HTTPException(status_code=503, detail={
             "code": "material_request_supply_command_projection_invalid",
             "category": "service_unavailable", "message": "供给历史命令投影无效，保持结果待核验",
+        }, headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+            "Referrer-Policy": "no-referrer",
         }) from None
-    _set_read_no_store(response)
     return output
 
 
@@ -419,9 +477,30 @@ async def formal_material_request_validation_exception_handler(
     if is_return_path(request.url.path):
         return JSONResponse(status_code=422, headers={"Cache-Control": "private, no-store"},
             content={"detail": {"code": "stock_return_request_invalid", "message": "退回请求字段无效，请重新核验输入"}})
+    if request.url.path == "/api/v1/material-request-supply-command-status":
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+                "Referrer-Policy": "no-referrer",
+            },
+            content={
+                "detail": {
+                    "code": "trace_request_id_invalid",
+                    "category": "invalid_request",
+                    "message": "trace_request_id 必须是 8-160 位安全字符",
+                }
+            },
+        )
     if request.url.path.startswith("/api/v1/material-requests"):
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+                "Referrer-Policy": "no-referrer",
+            },
             content={
                 "detail": {
                     "code": "material_request_request_invalid",
@@ -477,6 +556,7 @@ def list_formal_material_requests(
     ),
     db: Session = Depends(get_db),
 ):
+    _set_read_no_store(response)
     try:
         output = query_service.list_material_requests(
             db,
@@ -489,7 +569,6 @@ def list_formal_material_requests(
     except DBAPIError:
         db.rollback()
         _raise_database_unavailable(read_only=True)
-    _set_read_no_store(response)
     return output
 
 
@@ -510,6 +589,7 @@ def formal_material_request_allocation_options(
 
     # Set before service evaluation so fail-closed errors are non-cacheable too.
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     try:
         output = allocation_options_service.list_allocation_options(
             db,
@@ -538,6 +618,7 @@ def formal_material_request_reservation_options(
 ):
     """Return actual allocation candidates without creating inventory facts."""
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     try:
         return reservation_options_service.list_reservation_options(
             db, actor=principal, material_request_id=material_request_id,
@@ -565,6 +646,8 @@ def create_formal_material_request_allocation(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     checked_key, checked_request_id = _required_write_headers(
         idempotency_key=idempotency_key, request_id=request_id,
     )
@@ -630,6 +713,8 @@ def create_formal_material_request_reservation(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     checked_key, checked_request_id = _required_write_headers(
         idempotency_key=idempotency_key, request_id=request_id
     )
@@ -690,8 +775,9 @@ def formal_material_request_release_status(
     db: Session = Depends(get_db),
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
-    trace = _required_safe_header("X-Request-ID", request_id, minimum=8, maximum=160)
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    trace = _required_safe_header("X-Request-ID", request_id, minimum=8, maximum=160, no_store=True)
     try:
         result = release_service.release_command_status(db, actor=principal, trace_request_id=trace)
         return ReservationReleaseStatusOut(lookup_status="confirmed" if result else "not_observed", command=result)
@@ -709,10 +795,400 @@ def formal_material_request_release_options(
     db: Session = Depends(get_db),
 ):
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     try:
         return release_options_service.list_release_options(db, actor=principal,
             material_request_id=material_request_id, request_line_id=request_line_id)
     except reservation_service.MaterialRequestReservationError as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.get("/{material_request_id}/remaining-cancellation", response_model=MaterialRequestRemainingCancellationStateOut)
+def formal_material_request_remaining_cancellation(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    try:
+        return remaining_cancel_service.read_remaining_cancellation(db, actor=principal, request_id=material_request_id)
+    except (query_service.MaterialRequestReadError, remaining_cancel_service.lifecycle.MaterialRequestLifecycleError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.get("/{material_request_id}/cancel-remaining-command-status", response_model=MaterialRequestRemainingCancellationStatusOut)
+def formal_material_request_remaining_cancellation_command_status(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_fingerprint: Annotated[str | None, Header(alias="X-Request-Fingerprint")] = None,
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128)
+    fingerprint = _required_safe_header("X-Request-Fingerprint", request_fingerprint, minimum=64, maximum=64)
+    if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        raise HTTPException(status_code=422, detail="取消请求指纹无效", headers={"Cache-Control": "no-store"})
+    try:
+        result = remaining_cancel_service.remaining_cancellation_command_status(db, actor=principal,
+            request_id=material_request_id, idempotency_key=key, request_fingerprint=fingerprint,
+            secret=_require_lifecycle_idempotency_secret(runtime_settings))
+        return MaterialRequestRemainingCancellationStatusOut(lookup_status="confirmed" if result else "not_observed", command=result)
+    except (query_service.MaterialRequestReadError, _MaterialRequestAdapterError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.post("/{material_request_id}/cancel-remaining", response_model=MaterialRequestRemainingCancellationOut, status_code=201)
+def cancel_remaining_formal_material_request(
+    material_request_id: UUID, payload: MaterialRequestCancelRemainingIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
+    try:
+        result = remaining_cancel_service.cancel_remaining_demand(db, actor=principal, request_id=material_request_id,
+            payload=payload, idempotency_key=key, trace_request_id=trace,
+            secret=_require_lifecycle_write_runtime(runtime_settings), _include_returns=True)
+        output = MaterialRequestRemainingCancellationOut.model_validate(result)
+        db.commit()
+    except (query_service.MaterialRequestReadError, remaining_cancel_service.lifecycle.MaterialRequestLifecycleError) as exc:
+        db.rollback()
+        _raise_service_error(exc, no_store=True)
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+    _set_replay_header(response, output.replayed)
+    return output
+
+
+@router.get("/{material_request_id}/closure", response_model=MaterialRequestClosureStateOut)
+def formal_material_request_closure(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    try:
+        return closure_service.read_closure(db, actor=principal, request_id=material_request_id)
+    except query_service.MaterialRequestReadError as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.get("/{material_request_id}/close-command-status", response_model=MaterialRequestClosureCommandStatusOut)
+def formal_material_request_close_command_status(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_fingerprint: Annotated[str | None, Header(alias="X-Request-Fingerprint")] = None,
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128)
+    fingerprint = _required_safe_header("X-Request-Fingerprint", request_fingerprint, minimum=64, maximum=64)
+    if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        raise HTTPException(status_code=422, detail="关闭请求指纹无效", headers={"Cache-Control": "no-store"})
+    try:
+        result = closure_service.closure_command_status(db, actor=principal, request_id=material_request_id,
+            idempotency_key=key, secret=_require_lifecycle_idempotency_secret(runtime_settings),
+            request_fingerprint=fingerprint)
+        return MaterialRequestClosureCommandStatusOut(lookup_status="confirmed" if result else "not_observed", command=result)
+    except (query_service.MaterialRequestReadError, _MaterialRequestAdapterError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.post("/{material_request_id}/close", response_model=MaterialRequestClosureOut, status_code=201)
+def close_formal_material_request(
+    material_request_id: UUID, payload: MaterialRequestCloseIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
+    try:
+        result = closure_service.close_material_request(db, actor=principal, request_id=material_request_id,
+            payload=payload, idempotency_key=key, trace_request_id=trace,
+            secret=_require_lifecycle_write_runtime(runtime_settings), _include_returns=True)
+        output = MaterialRequestClosureOut.model_validate(result)
+        db.commit()
+    except query_service.MaterialRequestReadError as exc:
+        db.rollback()
+        _raise_service_error(exc, no_store=True)
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+    _set_replay_header(response, output.replayed)
+    return output
+
+
+def _rejection_lookup_headers(key, trace, fingerprint):
+    if (key is None) == (trace is None):
+        raise HTTPException(status_code=422, detail="请提供唯一原退回请求坐标", headers={"Cache-Control": "no-store"})
+    fingerprint = _required_safe_header("X-Request-Fingerprint", fingerprint, minimum=64, maximum=64)
+    if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        raise HTTPException(status_code=422, detail="原退回请求指纹无效", headers={"Cache-Control": "no-store"})
+    return (
+        _required_safe_header("Idempotency-Key", key, minimum=16, maximum=128) if key is not None else None,
+        _required_safe_header("X-Original-Request-ID", trace, minimum=8, maximum=160) if trace is not None else None,
+        fingerprint,
+    )
+
+
+@router.get("/{material_request_id}/rejection-returns/candidates", response_model=RejectionReturnCandidatesOut)
+def formal_rejection_return_candidates(
+    material_request_id: UUID, response: Response, limit: int = Query(default=5, ge=1, le=20), after_id: UUID | None = None,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")), db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    try:
+        return rejection_candidates_service.candidates(db, actor=principal, request_id=material_request_id, limit=limit, after_id=after_id)
+    except (query_service.MaterialRequestReadError, lifecycle_service.MaterialRequestLifecycleError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.get("/{material_request_id}/rejection-returns/{return_id}/progress", response_model=RejectionProgressStateOut)
+def formal_rejection_progress_state(
+    material_request_id: UUID, return_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")), db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    try:
+        return rejection_progress_service.rejection_progress_state(db, actor=principal, request_id=material_request_id, return_id=return_id)
+    except (query_service.MaterialRequestReadError, lifecycle_service.MaterialRequestLifecycleError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.post("/{material_request_id}/rejection-returns", response_model=RejectionReturnOut, status_code=201)
+def create_formal_rejection_return(
+    material_request_id: UUID, payload: RejectionReturnIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
+    try:
+        result = rejection_return_service.register_rejection_return(db, actor=principal, request_id=material_request_id,
+            payload=payload, idempotency_key=key, trace_request_id=trace,
+            secret=_require_lifecycle_write_runtime(runtime_settings))
+        output = RejectionReturnOut.model_validate(result)
+        db.commit()
+    except (query_service.MaterialRequestReadError, lifecycle_service.MaterialRequestLifecycleError) as exc:
+        db.rollback()
+        _raise_service_error(exc, no_store=True)
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+    _set_replay_header(response, output.replayed)
+    return output
+
+
+@router.get("/{material_request_id}/rejection-returns/command-status", response_model=RejectionReturnCommandStatusOut)
+def formal_rejection_return_command_status(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    original_request_id: Annotated[str | None, Header(alias="X-Original-Request-ID")] = None,
+    request_fingerprint: Annotated[str | None, Header(alias="X-Request-Fingerprint")] = None,
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    key, trace, fingerprint = _rejection_lookup_headers(idempotency_key, original_request_id, request_fingerprint)
+    try:
+        result = rejection_return_service.rejection_return_command_status(db, actor=principal, request_id=material_request_id,
+            idempotency_key=key, trace_request_id=trace, request_fingerprint=fingerprint,
+            secret=_require_lifecycle_idempotency_secret(runtime_settings) if key is not None else None)
+        return RejectionReturnCommandStatusOut(lookup_status="confirmed" if result is not None else "not_observed", command=result)
+    except (query_service.MaterialRequestReadError, lifecycle_service.MaterialRequestLifecycleError, _MaterialRequestAdapterError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.post("/{material_request_id}/rejection-returns/{return_id}/progress", response_model=RejectionProgressOut, status_code=201)
+def create_formal_rejection_progress(
+    material_request_id: UUID, return_id: UUID, payload: RejectionProgressIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
+    try:
+        result = rejection_progress_service.record_rejection_progress(db, actor=principal, request_id=material_request_id, return_id=return_id,
+            payload=payload, idempotency_key=key, trace_request_id=trace,
+            secret=_require_lifecycle_write_runtime(runtime_settings))
+        output = RejectionProgressOut.model_validate(result)
+        db.commit()
+    except (query_service.MaterialRequestReadError, lifecycle_service.MaterialRequestLifecycleError) as exc:
+        db.rollback()
+        _raise_service_error(exc, no_store=True)
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+    _set_replay_header(response, output.replayed)
+    return output
+
+
+@router.get("/{material_request_id}/rejection-returns/{return_id}/progress/command-status", response_model=RejectionProgressCommandStatusOut)
+def formal_rejection_progress_command_status(
+    material_request_id: UUID, return_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    original_request_id: Annotated[str | None, Header(alias="X-Original-Request-ID")] = None,
+    request_fingerprint: Annotated[str | None, Header(alias="X-Request-Fingerprint")] = None,
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    key, trace, fingerprint = _rejection_lookup_headers(idempotency_key, original_request_id, request_fingerprint)
+    try:
+        result = rejection_progress_service.rejection_progress_command_status(db, actor=principal, request_id=material_request_id, return_id=return_id,
+            idempotency_key=key, trace_request_id=trace, request_fingerprint=fingerprint,
+            secret=_require_lifecycle_idempotency_secret(runtime_settings) if key is not None else None)
+        return RejectionProgressCommandStatusOut(lookup_status="confirmed" if result is not None else "not_observed", command=result)
+    except (query_service.MaterialRequestReadError, lifecycle_service.MaterialRequestLifecycleError, _MaterialRequestAdapterError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.get("/{material_request_id}/return-compensations/candidates", response_model=ReturnCompensationCandidatesOut)
+def formal_return_compensation_candidates(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    try:
+        return return_compensation_service.candidates(db, actor=principal, request_id=material_request_id)
+    except (query_service.MaterialRequestReadError, lifecycle_service.MaterialRequestLifecycleError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.post("/{material_request_id}/return-compensations", response_model=ReturnCompensationOut, status_code=201)
+def create_formal_return_compensation(
+    material_request_id: UUID, payload: ReturnCompensationIn, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
+    try:
+        result = return_compensation_service.cancel_returned_demand(db, actor=principal, request_id=material_request_id,
+            payload=payload, idempotency_key=key, trace_request_id=trace,
+            secret=_require_lifecycle_write_runtime(runtime_settings))
+        output = ReturnCompensationOut.model_validate(result)
+        db.commit()
+    except (query_service.MaterialRequestReadError, lifecycle_service.MaterialRequestLifecycleError) as exc:
+        db.rollback()
+        _raise_service_error(exc, no_store=True)
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+    _set_replay_header(response, output.replayed)
+    return output
+
+
+@router.get("/{material_request_id}/return-compensations/command-status", response_model=ReturnCompensationStatusOut)
+def formal_return_compensation_command_status(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    original_request_id: Annotated[str | None, Header(alias="X-Original-Request-ID")] = None,
+    request_fingerprint: Annotated[str | None, Header(alias="X-Request-Fingerprint")] = None,
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    if (idempotency_key is None) == (original_request_id is None):
+        raise HTTPException(status_code=422, detail="请提供唯一原补偿请求坐标", headers={"Cache-Control": "no-store"})
+    fingerprint = _required_safe_header("X-Request-Fingerprint", request_fingerprint, minimum=64, maximum=64)
+    if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        raise HTTPException(status_code=422, detail="原补偿请求指纹无效", headers={"Cache-Control": "no-store"})
+    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128) if idempotency_key is not None else None
+    trace = _required_safe_header("X-Original-Request-ID", original_request_id, minimum=8, maximum=160) if original_request_id is not None else None
+    try:
+        result = return_compensation_service.command_status(db, actor=principal, request_id=material_request_id,
+            idempotency_key=key, trace_request_id=trace, request_fingerprint=fingerprint,
+            secret=_require_lifecycle_idempotency_secret(runtime_settings) if key is not None else None)
+        return ReturnCompensationStatusOut(lookup_status="confirmed" if result is not None else "not_observed", command=result)
+    except (query_service.MaterialRequestReadError, _MaterialRequestAdapterError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.get("/{material_request_id}/remaining-fulfillment", response_model=ReturnedRemainderAssessmentOut)
+def formal_material_request_remaining_fulfillment(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    try:
+        return remainder_service.remaining_with_returns(db, actor=principal, request_id=material_request_id)
+    except query_service.MaterialRequestReadError as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
+
+
+@router.get("/{material_request_id}/completion-quantities", response_model=MaterialRequestCompletionOut)
+def formal_material_request_completion_quantities(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    try:
+        return completion_service.completion_quantities(db, actor=principal, request_id=material_request_id, _include_returns=True)
+    except query_service.MaterialRequestReadError as exc:
         _raise_service_error(exc, no_store=True)
     except (DBAPIError, ValidationError):
         db.rollback()
@@ -726,6 +1202,7 @@ def formal_material_request_fulfillment_preparation(
     db: Session = Depends(get_db),
 ):
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     try:
         return preparation_service.list_fulfillment_preparation(db, actor=principal,
             material_request_id=material_request_id, request_line_id=request_line_id)
@@ -744,6 +1221,8 @@ def create_formal_material_request_release(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
     try:
         secret = _require_lifecycle_write_runtime(runtime_settings)
@@ -755,7 +1234,6 @@ def create_formal_material_request_release(
         db.commit()
     except Exception as exc:
         _rollback_and_raise(db, exc)
-    _set_read_no_store(response)
     _set_replay_header(response, output.idempotency_replayed)
     return output
 
@@ -767,6 +1245,7 @@ def formal_material_request_picking_options(
     db: Session = Depends(get_db),
 ):
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     try:
         return picking_options_service.list_picking_options(db, actor=principal,
             material_request_id=material_request_id, request_line_id=request_line_id)
@@ -785,6 +1264,8 @@ def create_formal_material_request_pick(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
     try:
         secret = _require_lifecycle_write_runtime(runtime_settings)
@@ -796,7 +1277,6 @@ def create_formal_material_request_pick(
         db.commit()
     except Exception as exc:
         _rollback_and_raise(db, exc)
-    _set_read_no_store(response)
     _set_replay_header(response, output.idempotency_replayed)
     return output
 
@@ -808,8 +1288,9 @@ def formal_material_request_pick_status(
     db: Session = Depends(get_db),
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
-    trace = _required_safe_header("X-Request-ID", request_id, minimum=8, maximum=160)
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    trace = _required_safe_header("X-Request-ID", request_id, minimum=8, maximum=160, no_store=True)
     try:
         result = picking_service.pick_command_status(db, actor=principal, trace_request_id=trace)
         return ReservationPickStatusOut(lookup_status="confirmed" if result else "not_observed", command=result)
@@ -827,6 +1308,7 @@ def formal_material_request_outbound_options(
     db: Session = Depends(get_db),
 ):
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     try:
         return outbound_options_service.list_outbound_options(db, actor=principal,
             material_request_id=material_request_id, request_line_id=request_line_id)
@@ -845,6 +1327,8 @@ def create_formal_material_request_outbound(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
     try:
         secret = _require_lifecycle_write_runtime(runtime_settings)
@@ -856,7 +1340,6 @@ def create_formal_material_request_outbound(
         db.commit()
     except Exception as exc:
         _rollback_and_raise(db, exc)
-    _set_read_no_store(response)
     _set_replay_header(response, output.idempotency_replayed)
     return output
 
@@ -868,8 +1351,9 @@ def formal_material_request_outbound_status(
     db: Session = Depends(get_db),
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
-    trace = _required_safe_header("X-Request-ID", request_id, minimum=8, maximum=160)
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    trace = _required_safe_header("X-Request-ID", request_id, minimum=8, maximum=160, no_store=True)
     try:
         result = outbound_service.outbound_command_status(db, actor=principal, trace_request_id=trace)
         return OutboundStatusOut(lookup_status="confirmed" if result else "not_observed", command=result)
@@ -889,6 +1373,8 @@ def create_formal_material_request_shipment(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
     try:
         secret = _require_lifecycle_write_runtime(runtime_settings)
@@ -912,8 +1398,11 @@ def list_formal_material_request_shipments(
     db: Session = Depends(get_db),
 ):
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     try:
         return [ShipmentOut(**row) for row in shipment_service.list_shipments(db, actor=principal, request_id=material_request_id)]
+    except shipment_service.ShipmentError as exc:
+        _raise_service_error(exc, no_store=True)
     except Exception as exc:
         _rollback_and_raise(db, exc)
 
@@ -924,8 +1413,29 @@ def list_formal_material_request_shipment_options(
     db: Session = Depends(get_db),
 ):
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     try:
         return shipment_service.list_shipment_options(db, actor=principal, request_id=material_request_id)
+    except shipment_service.ShipmentError as exc:
+        _raise_service_error(exc, no_store=True)
+    except Exception as exc:
+        _rollback_and_raise(db, exc)
+
+@router.get("/{material_request_id}/shipment-targets", response_model=ShipmentTargetOptionsOut)
+def list_formal_material_request_shipment_targets(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    try:
+        return shipment_service.list_shipment_targets(db, actor=principal, request_id=material_request_id)
+    except (shipment_service.ShipmentError, query_service.MaterialRequestReadError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except DBAPIError:
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)
     except Exception as exc:
         _rollback_and_raise(db, exc)
 
@@ -937,8 +1447,9 @@ def shipment_command_status(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
     """Read-only recovery probe for a timed-out shipment submission."""
-    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128)
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128, no_store=True)
     try:
         secret = _require_lifecycle_idempotency_secret(runtime_settings)
         result = shipment_service.shipment_command_status(
@@ -966,6 +1477,8 @@ def create_formal_material_request_logistics_event(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
     try:
         secret = _require_lifecycle_write_runtime(runtime_settings)
@@ -986,8 +1499,11 @@ def list_formal_material_request_logistics_events(
     db: Session = Depends(get_db),
 ):
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     try:
         return [LogisticsEventOut(**row) for row in logistics_service.list_events(db, actor=principal, request_id=material_request_id, shipment_id=shipment_id)]
+    except logistics_service.LogisticsEventError as exc:
+        _raise_service_error(exc, no_store=True)
     except Exception as exc:
         _rollback_and_raise(db, exc)
 
@@ -998,8 +1514,9 @@ def logistics_command_status(
     db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
-    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128)
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128, no_store=True)
     try:
         result = logistics_service.logistics_command_status(
             db, actor=principal, request_id=material_request_id, shipment_id=shipment_id,
@@ -1025,6 +1542,7 @@ def list_formal_material_request_oam_receipt_evidence(
 ):
     """Read-only OAM receipt evidence; it never changes local receipt or inbound state."""
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     try:
         return [OamReceiptEvidenceOut(**row) for row in oam_receipt_service.list_oam_receipt_evidence(
             db, actor=principal, request_id=material_request_id,
@@ -1083,8 +1601,8 @@ def create_my_material_request_receipt(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
-    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
     _set_read_no_store(response)
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
     try:
         secret = _require_lifecycle_write_runtime(runtime_settings)
         result = my_receipt_service.create_my_receipt(db, actor=principal, request_id=material_request_id,
@@ -1107,8 +1625,8 @@ def my_material_request_receipt_command_status(
     db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
-    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128)
     _set_read_no_store(response)
+    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128, no_store=True)
     try:
         result = my_receipt_service.my_receipt_command_status(db, actor=principal, request_id=material_request_id,
             idempotency_key=key, secret=_require_lifecycle_idempotency_secret(runtime_settings))
@@ -1131,8 +1649,8 @@ def my_material_request_receipt_trace_status(
     db: Session = Depends(get_db),
     original_request_id: Annotated[str | None, Header(alias="X-Original-Request-ID")] = None,
 ):
-    trace = _required_safe_header("X-Original-Request-ID", original_request_id, minimum=8, maximum=160)
     _set_read_no_store(response)
+    trace = _required_safe_header("X-Original-Request-ID", original_request_id, minimum=8, maximum=160, no_store=True)
     try:
         result = my_receipt_service.my_receipt_trace_status(db, actor=principal, request_id=material_request_id,
             trace_request_id=trace)
@@ -1175,8 +1693,8 @@ def create_my_material_request_inbound(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
-    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
     _set_read_no_store(response)
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
     try:
         secret = _require_lifecycle_write_runtime(runtime_settings)
         result = my_inbound_service.create_my_inbound(db, actor=principal, request_id=material_request_id,
@@ -1199,8 +1717,8 @@ def my_material_request_inbound_command_status(
     db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
-    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128)
     _set_read_no_store(response)
+    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128, no_store=True)
     try:
         result = my_inbound_service.my_inbound_command_status(db, actor=principal, request_id=material_request_id,
             idempotency_key=key, secret=_require_lifecycle_idempotency_secret(runtime_settings))
@@ -1223,8 +1741,8 @@ def my_material_request_inbound_trace_status(
     db: Session = Depends(get_db),
     original_request_id: Annotated[str | None, Header(alias="X-Original-Request-ID")] = None,
 ):
-    trace = _required_safe_header("X-Original-Request-ID", original_request_id, minimum=8, maximum=160)
     _set_read_no_store(response)
+    trace = _required_safe_header("X-Original-Request-ID", original_request_id, minimum=8, maximum=160, no_store=True)
     try:
         result = my_inbound_service.my_inbound_trace_status(db, actor=principal, request_id=material_request_id,
             trace_request_id=trace)
@@ -1248,6 +1766,8 @@ def create_formal_material_request_receipt(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
     try:
         secret = _require_lifecycle_write_runtime(runtime_settings)
@@ -1268,8 +1788,11 @@ def list_formal_material_request_receipts(
     db: Session = Depends(get_db),
 ):
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     try:
         return [ReceiptOut(**row) for row in receipt_service.list_receipts(db, actor=principal, request_id=material_request_id)]
+    except receipt_service.ReceiptError as exc:
+        _raise_service_error(exc, no_store=True)
     except Exception as exc:
         _rollback_and_raise(db, exc)
 
@@ -1281,8 +1804,9 @@ def receipt_command_status(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
     """Read-only recovery probe for a timed-out receipt submission."""
-    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128)
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    key = _required_safe_header("Idempotency-Key", idempotency_key, minimum=16, maximum=128, no_store=True)
     try:
         secret = _require_lifecycle_idempotency_secret(runtime_settings)
         result = receipt_service.receipt_command_status(
@@ -1309,8 +1833,9 @@ def create_formal_material_request_inbound_order(
     db: Session = Depends(get_db), runtime_settings: Settings = Depends(get_settings),
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
-    trace = _required_safe_header("X-Request-ID", request_id, minimum=8, maximum=160)
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    trace = _required_safe_header("X-Request-ID", request_id, minimum=8, maximum=160)
     try:
         _require_lifecycle_write_runtime(runtime_settings)
         output = InboundOrderOut(**inbound_service.create_inbound_order(db, actor=principal, request_id=material_request_id, expected_version=payload.expected_request_version, receipt_id=payload.receipt_id, target_location_id=payload.target_location_id, target_person_id=payload.target_person_id, trace_request_id=trace)); db.commit(); _set_read_no_store(response); return output
@@ -1324,8 +1849,11 @@ def list_formal_material_request_inbound_orders(
     db: Session = Depends(get_db),
 ):
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     try:
         return [InboundOrderOut(**row) for row in inbound_service.list_inbound_orders(db, actor=principal, request_id=material_request_id)]
+    except inbound_service.InboundError as exc:
+        _raise_service_error(exc, no_store=True)
     except Exception as exc:
         _rollback_and_raise(db, exc)
 
@@ -1337,8 +1865,9 @@ def post_formal_material_request_inbound_order(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
-    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
     _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    key, trace = _required_write_headers(idempotency_key=idempotency_key, request_id=request_id)
     try:
         _require_lifecycle_write_runtime(runtime_settings)
         result = inbound_service.post_inbound_order(db, actor=principal, inbound_order_id=inbound_order_id, material_request_id=material_request_id, idempotency_key=key, request_id=trace)
@@ -1355,6 +1884,7 @@ def formal_material_request_detail(
     ),
     db: Session = Depends(get_db),
 ):
+    _set_read_no_store(response)
     try:
         output = query_service.material_request_detail(
             db,
@@ -1366,7 +1896,6 @@ def formal_material_request_detail(
     except DBAPIError:
         db.rollback()
         _raise_database_unavailable(read_only=True)
-    _set_read_no_store(response)
     return output
 
 
@@ -1386,6 +1915,7 @@ def formal_material_request_editable_draft(
 ):
     """Return plaintext only to the exact current requester for active edit."""
 
+    _set_read_no_store(response)
     try:
         _require_write_runtime(runtime_settings, contact_cipher)
         output = edit_service.material_request_editable_draft(
@@ -1403,7 +1933,6 @@ def formal_material_request_editable_draft(
         )
     except Exception as exc:
         _rollback_and_raise(db, exc)
-    _set_read_no_store(response)
     return output
 
 
@@ -1422,6 +1951,7 @@ def create_formal_material_request(
     ] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
     checked_key, checked_request_id = _required_write_headers(
         idempotency_key=idempotency_key,
         request_id=request_id,
@@ -1479,6 +2009,7 @@ def replace_formal_material_request_draft(
     ] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
     checked_key, checked_request_id = _required_write_headers(
         idempotency_key=idempotency_key,
         request_id=request_id,
@@ -1539,6 +2070,7 @@ def submit_formal_material_request(
     ] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
     checked_key, checked_request_id = _required_write_headers(
         idempotency_key=idempotency_key,
         request_id=request_id,
@@ -1591,6 +2123,7 @@ def withdraw_formal_material_request(
     ] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
     checked_key, checked_request_id = _required_write_headers(
         idempotency_key=idempotency_key,
         request_id=request_id,
@@ -1633,6 +2166,7 @@ def cancel_formal_material_request(
     ] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
     checked_key, checked_request_id = _required_write_headers(
         idempotency_key=idempotency_key,
         request_id=request_id,
@@ -1685,6 +2219,7 @@ def decide_formal_material_request_approval(
     ] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
     checked_key, checked_request_id = _required_write_headers(
         idempotency_key=idempotency_key,
         request_id=request_id,
@@ -1744,6 +2279,7 @@ def register_formal_material_request_external_evidence(
     ] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
     checked_key, checked_request_id = _required_write_headers(
         idempotency_key=idempotency_key,
         request_id=request_id,
@@ -1816,6 +2352,7 @@ def verify_formal_material_request_external_evidence(
     ] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
     checked_key, checked_request_id = _required_write_headers(
         idempotency_key=idempotency_key,
         request_id=request_id,
@@ -1870,6 +2407,8 @@ def create_formal_supply_task(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     checked_key, checked_request_id = _required_write_headers(
         idempotency_key=idempotency_key, request_id=request_id,
     )
@@ -1916,6 +2455,8 @@ def update_formal_supply_task(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
 ):
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
     checked_key, checked_request_id = _required_write_headers(
         idempotency_key=idempotency_key, request_id=request_id,
     )
@@ -2241,6 +2782,7 @@ def _required_safe_header(
     *,
     minimum: int,
     maximum: int,
+    no_store: bool = False,
 ) -> str:
     if (
         value is None
@@ -2254,6 +2796,15 @@ def _required_safe_header(
                 "category": "invalid_request",
                 "message": f"{name} 必须是 {minimum}-{maximum} 位安全字符",
             },
+            headers=(
+                {
+                    "Cache-Control": "no-store, max-age=0",
+                    "Pragma": "no-cache",
+                    "Referrer-Policy": "no-referrer",
+                }
+                if no_store
+                else None
+            ),
         )
     return value
 
@@ -2272,9 +2823,12 @@ def _rollback_and_raise(db: Session, exc: Exception) -> None:
             supply_service.MaterialRequestSupplyError,
             InventoryPostingError,
             _MaterialRequestAdapterError,
+            shipment_service.ShipmentError,
+            logistics_service.LogisticsEventError,
+            receipt_service.ReceiptError,
         ),
     ):
-        _raise_service_error(exc)
+        _raise_service_error(exc, no_store=True)
     if isinstance(exc, MaterialRequestContactProtectionError):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2282,6 +2836,11 @@ def _rollback_and_raise(db: Session, exc: Exception) -> None:
                 "code": "material_request_contact_protection_unavailable",
                 "category": "service_unavailable",
                 "message": "联系人加密保护不可用，本次操作未完成",
+            },
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+                "Referrer-Policy": "no-referrer",
             },
         ) from None
     if isinstance(exc, ValidationError):
@@ -2292,13 +2851,18 @@ def _rollback_and_raise(db: Session, exc: Exception) -> None:
                 "category": "service_unavailable",
                 "message": "需求单响应投影无效，本次操作未完成",
             },
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+                "Referrer-Policy": "no-referrer",
+            },
         ) from None
     if isinstance(exc, SQLAlchemyError):
-        _raise_database_unavailable(read_only=False)
+        _raise_database_unavailable(read_only=False, no_store=True)
     raise exc
 
 
-def _raise_database_unavailable(*, read_only: bool, no_store: bool = False) -> None:
+def _raise_database_unavailable(*, read_only: bool, no_store: bool = True) -> None:
     message = "需求单查询暂时不可用" if read_only else "数据库暂时不可用，本次需求单操作未完成"
     headers = (
         {
@@ -2320,7 +2884,7 @@ def _raise_database_unavailable(*, read_only: bool, no_store: bool = False) -> N
     ) from None
 
 
-def _raise_service_error(exc: Any, *, no_store: bool = False) -> None:
+def _raise_service_error(exc: Any, *, no_store: bool = True) -> None:
     headers = None
     if no_store:
         headers = {
@@ -2345,3 +2909,30 @@ __all__ = [
     "install_formal_material_request_validation_exception_handler",
     "router",
 ]
+
+
+from app.material_request_supply_capacity_schemas import SupplyPlanningCapacityOut
+
+@router.get("/{material_request_id}/supply-planning-capacity", response_model=SupplyPlanningCapacityOut)
+def formal_supply_planning_capacity(
+    material_request_id: UUID, response: Response,
+    principal: FormalPrincipal = Depends(require_permission("material_request", "read")),
+    db: Session = Depends(get_db),
+):
+    from dataclasses import asdict
+    from app.material_request_supply_capacity_schemas import SupplyPlanningCapacityOut
+    from app.formal_services import material_request_supply as supply
+    from app.formal_services.material_request_supply_capacity import planning_capacity
+    _set_read_no_store(response)
+    _require_backend_fulfillment(principal)
+    try:
+        result = planning_capacity(db, actor=principal, request_id=material_request_id)
+        return SupplyPlanningCapacityOut(request_id=result.request_id, request_version=result.request_version,
+            lines=[dict(request_line_id=line.request_line_id, **{
+                key: format(value, '.3f') for key, value in asdict(line.quantities).items()
+            }) for line in result.lines])
+    except (supply.MaterialRequestSupplyError, query_service.MaterialRequestReadError) as exc:
+        _raise_service_error(exc, no_store=True)
+    except (DBAPIError, ValidationError):
+        db.rollback()
+        _raise_database_unavailable(read_only=True, no_store=True)

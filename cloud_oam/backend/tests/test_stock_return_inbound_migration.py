@@ -6,6 +6,7 @@ full migration chain and cannot prove PostgreSQL deferred guards or role ACLs.
 from io import StringIO
 from pathlib import Path
 import runpy
+import hashlib
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
@@ -18,6 +19,7 @@ from app import database_security as security
 from app.oam_sync_scope_security import (OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0105,
     OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0106)
 from app.stock_operation_models import StockOperationReturnInbound
+from migration_source_expectations import current_source_hash
 from test_stock_return_inbound import (world, stock, recovered, destination, prepared, parcel,
     incoming, acceptance, inbound_accounts, accepted, command, commands, snapshot)
 
@@ -78,9 +80,11 @@ def test_0106_current_manifest_acl_and_postgresql_function_syntax():
         assert table not in security.RUNTIME_UPDATE_TABLES | security.RUNTIME_DELETE_TABLES
     parser = pytest.importorskip("pglast.parser")
     for key, digest in migration["FUNCTION_HASHES"].items():
-        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key] == digest
-        assert key in security.MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
         args, result, body = migration["FUNCTIONS"][key]
+        assert hashlib.sha256(body.encode()).hexdigest() == digest
+        assert security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[key] == current_source_hash(
+            migration['revision'], 'public.'+key[0]+'('+key[1]+')', body)
+        assert key in security.MATERIAL_REQUEST_APPROVAL_SECURITY_DEFINER_FUNCTIONS
         parser.parse_plpgsql_json(f"CREATE FUNCTION {key[0]}({args}) RETURNS {result} LANGUAGE plpgsql AS $body${body}$body$")
     for action in ("upgrade", "downgrade"):
         output = StringIO()

@@ -41,8 +41,9 @@ def production_settings(**overrides) -> Settings:
         "password_login_enabled": False,
         "sms_login_enabled": True,
         "sms_provider": "aliyun_pnvs",
-        "sms_access_key_id": "test-access-key-id",
-        "sms_access_key_secret": "test-access-key-secret",
+        "sms_credential_mode": "default_chain",
+        "sms_access_key_id": "",
+        "sms_access_key_secret": "",
         "sms_sign_name": "test-sign",
         "sms_template_code": "SMS_TEST",
         "sms_scheme_name": "test-scheme",
@@ -94,33 +95,39 @@ def test_security_sensitive_defaults_are_fail_closed_and_identity_neutral():
 
 
 def test_production_requires_a_complete_passwordless_login_channel():
-    with pytest.raises(ValueError, match="passwordless login channel"):
+    with pytest.raises(ValueError, match="SMS login channel"):
         production_settings(
             sms_login_enabled=False,
             sms_provider="disabled",
         ).validate_api_startup()
 
     with pytest.raises(ValueError, match="SMS login is not fully configured"):
-        production_settings(sms_access_key_secret="").validate_api_startup()
+        production_settings(
+            sms_access_key_id="synthetic-static-id",
+            sms_access_key_secret="",
+        ).validate_api_startup()
 
-    settings = production_settings(
-        sms_login_enabled=False,
-        sms_provider="disabled",
-        wechat_login_enabled=True,
-        wechat_provider="wechat",
-        wechat_app_id="wx-production-test",
-        wechat_app_secret="wechat-production-test-secret",
-    )
-    settings.validate_api_startup()
-    assert settings.wechat_configuration_ready() is True
+    with pytest.raises(ValueError, match="WeChat login is disabled"):
+        production_settings(
+            sms_login_enabled=False,
+            sms_provider="disabled",
+            wechat_login_enabled=True,
+            wechat_provider="wechat",
+            wechat_app_id="wx-production-test",
+            wechat_app_secret="wechat-production-test-secret",
+        ).validate_api_startup()
 
 
 def test_pnvs_sts_requires_complete_unexpired_dedicated_triplet():
     future = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
-    valid = production_settings(sms_security_token="synthetic-token-" + "x" * 32,
+    valid = Settings(_env_file=None, environment="test", sms_login_enabled=True,
+        sms_provider="aliyun_pnvs", sms_credential_mode="sts",
+        sms_access_key_id="synthetic-sts-id", sms_access_key_secret="synthetic-sts-secret",
+        sms_sign_name="test-sign", sms_template_code="SMS_TEST", sms_scheme_name="test-scheme",
+        auth_login_rate_limit_hmac_secret="a" * 32,
+        sms_security_token="synthetic-token-" + "x" * 32,
         sms_security_token_expires_at=future)
     assert valid.sms_configuration_ready()
-    valid.validate_api_startup()
     for change in (
         {"sms_security_token_expires_at":""},
         {"sms_security_token":""},
@@ -129,8 +136,19 @@ def test_pnvs_sts_requires_complete_unexpired_dedicated_triplet():
     ):
         candidate = valid.model_copy(update=change)
         assert not candidate.sms_configuration_ready()
-        with pytest.raises(ValueError, match="SMS login is not fully configured"):
-            candidate.validate_api_startup()
+
+
+def test_production_rejects_static_and_sts_pnvs_credential_modes():
+    with pytest.raises(ValueError, match="default credential chain"):
+        production_settings(sms_credential_mode="static").validate_api_startup()
+    with pytest.raises(ValueError, match="default credential chain"):
+        production_settings(
+            sms_credential_mode="sts",
+            sms_access_key_id="synthetic-sts-id",
+            sms_access_key_secret="synthetic-sts-secret",
+            sms_security_token="synthetic-token-" + "x" * 32,
+            sms_security_token_expires_at=(datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+        ).validate_api_startup()
 
 
 def test_sms_dispatch_lease_preserves_provider_call_safety_window() -> None:
@@ -307,7 +325,7 @@ def test_production_authentication_secrets_must_be_pairwise_distinct(overrides):
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
-        ({"password_login_enabled": True}, "password login is forbidden"),
+        ({"password_login_enabled": True}, "password login is disabled by the SMS-only policy"),
         ({"database_schema_mode": "bootstrap"}, "startup bootstrap is forbidden"),
         (
             {"database_url": "sqlite+pysqlite:///:memory:"},
@@ -514,7 +532,7 @@ async def run():
         async with lifespan(None):
             pass
     except ValueError as error:
-        assert "passwordless login channel" in str(error)
+        assert "SMS login channel" in str(error)
         return
     raise AssertionError("production API startup unexpectedly succeeded")
 

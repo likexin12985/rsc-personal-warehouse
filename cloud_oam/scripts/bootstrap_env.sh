@@ -35,6 +35,7 @@ printf '%s\n' \
   "OAM_PASSWORD_LOGIN_ENABLED=false" \
   "OAM_SMS_LOGIN_ENABLED=false" \
   "OAM_SMS_PROVIDER=disabled" \
+  "OAM_SMS_CREDENTIAL_MODE=default_chain" \
   "OAM_SMS_ACCESS_KEY_ID=" \
   "OAM_SMS_ACCESS_KEY_SECRET=" \
   "OAM_SMS_SIGN_NAME=" \
@@ -46,4 +47,4 @@ printf '%s\n' \
   "OAM_WECHAT_APP_SECRET=" > "$TMP_FILE"
 install -m 600 "$TMP_FILE" "$ENV_FILE"
 printf 'env_created=%s\n' "$ENV_FILE"
-printf '%s\n' 'next_step=enable and fully configure SMS or WeChat login before starting production'
+printf '%s\n' 'next_step=enable and fully configure SMS-only PNVS/Dypnsapi login before starting production'

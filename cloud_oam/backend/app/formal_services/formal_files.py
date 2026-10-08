@@ -91,6 +91,7 @@ _AUDIT_STREAM_BY_PURPOSE: Final[dict[str, str]] = {
     "source_configuration_evidence": "authorization",
     "daily_reconciliation_evidence": "authorization",
     "stock_loss_evidence": "inventory",
+    "return_condition_evidence": "inventory",
 }
 _SAFE_TRACE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,159}$", re.ASCII)
 _SAFE_IDEMPOTENCY = re.compile(r"^[\x21-\x7e]{1,200}$", re.ASCII)
@@ -451,6 +452,9 @@ def _authorize_download(
     row: FileObject,
     purpose: str,
 ) -> dict[str, Any]:
+    if purpose == "return_condition_evidence":
+        from .stock_loss_corrections.return_condition_file_download import authorize_download
+        return authorize_download(db, actor=actor, row=row)
     if purpose == "opening_count_import_error":
         _fail("file_purpose_forbidden", "forbidden", "请通过原导入任务申请错误报告下载")
     if purpose == "daily_reconciliation_evidence":
@@ -703,6 +707,10 @@ def _require_upload_permission(
     actor: FormalPrincipal,
     purpose: str,
 ) -> None:
+    if purpose == "return_condition_evidence":
+        from .stock_loss_corrections.return_condition_evidence import require_upload_permission
+        require_upload_permission(db, actor)
+        return
     if purpose == "stock_loss_evidence":
         from .stock_loss_evidence import require_upload_permission
         require_upload_permission(db, actor)

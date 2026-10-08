@@ -448,19 +448,21 @@ def _create_allocation_impl(
     request.version = resulting_request_version
     request.updated_at = now
     db.flush()
-    db.add(StateTransitionEvent(
-        aggregate_type="material_request", aggregate_id=str(request_id), from_status=previous_status,
-        to_status=request.allocation_status, reason="material_request_allocation_created", actor_id=actor.user_id,
-        idempotency_key=f"allocation-state-{key_hash}", occurred_at=now,
-        metadata_jsonb={
-            "allocation_id": str(allocation_id),
-            "allocated_qty": _quantity_text(allocation.allocated_qty),
-            "command_id": str(allocation_command.id),
-            "idempotency_key_hash": key_hash,
-            "request_version": resulting_request_version,
-        },
-        created_at=now,
-    ))
+    # Each allocation is a fact; only a changed axis is a state transition.
+    if previous_status != request.allocation_status:
+        db.add(StateTransitionEvent(
+            aggregate_type="material_request", aggregate_id=str(request_id), from_status=previous_status,
+            to_status=request.allocation_status, reason="material_request_allocation_created", actor_id=actor.user_id,
+            idempotency_key=f"allocation-state-{key_hash}", occurred_at=now,
+            metadata_jsonb={
+                "allocation_id": str(allocation_id),
+                "allocated_qty": _quantity_text(allocation.allocated_qty),
+                "command_id": str(allocation_command.id),
+                "idempotency_key_hash": key_hash,
+                "request_version": resulting_request_version,
+            },
+            created_at=now,
+        ))
     append_audit_event(
         db, stream_key="material_request", actor_user_id=actor.user_id, action="material_request_allocation_created",
         aggregate_type="stock_allocation", aggregate_id=str(allocation_id),

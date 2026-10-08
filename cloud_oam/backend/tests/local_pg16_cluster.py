@@ -32,7 +32,7 @@ def _checked_bin(directory):
         program=directory/name
         if not program.is_file() or not os.access(program,os.X_OK):raise ValueError('native PostgreSQL binaries required')
         result=subprocess.run([str(program),'--version'],capture_output=True,text=True,check=True,timeout=10)
-        if not re.fullmatch(name+r' \(PostgreSQL\) 16\.\d+\n',result.stdout):raise ValueError('real PostgreSQL 16 required')
+        if not re.fullmatch(name+r' \(PostgreSQL\) 16\.\d+(?: \([^()\r\n]+\))?\n',result.stdout):raise ValueError('real PostgreSQL 16 required')
     return directory
 
 
@@ -77,7 +77,9 @@ def _bootstrap(socket_directory):
 
 
 @contextmanager
-def native_cluster(*,postgres_bin,artifact_root):
+def native_cluster(*,postgres_bin,artifact_root,profile_functions=False):
+    if type(profile_functions) is not bool:
+        raise ValueError("function profiling must be an explicit boolean")
     # libpq environment must never redirect a supposedly local connection.
     if any(key.startswith('PG') for key in os.environ):
         raise ValueError('local PG16 checks require an unconfigured libpq environment')
@@ -92,7 +94,7 @@ def native_cluster(*,postgres_bin,artifact_root):
     os.chmod(directory,0o700);os.chmod(socket_directory,0o700)
     state=dict(scope='local-development-checks',githubReleaseGate=False,createdAt=datetime.now(timezone.utc).isoformat(),
         binarySha256=hashlib.sha256((binaries/'postgres').read_bytes()).hexdigest(),runDirectory=str(directory),
-        socketDirectory=str(socket_directory),dataDirectory=str(data),status='initializing')
+        socketDirectory=str(socket_directory),dataDirectory=str(data),status='initializing',functionProfiling=profile_functions)
     def save(): (directory/'cluster-state.json').write_text(json.dumps(state,indent=2)+'\n')
     save();process=None;engines={}
     try:
@@ -103,7 +105,8 @@ def native_cluster(*,postgres_bin,artifact_root):
         with (directory/'postgres.log').open('wb') as output:
             process=subprocess.Popen([str(binaries/'postgres'),'-D',str(data),'-c','listen_addresses=',
                 '-c','unix_socket_directories='+str(socket_directory),'-c','unix_socket_permissions=0700',
-                '-c','log_statement=none','-c','log_min_error_statement=panic'],stdout=output,stderr=subprocess.STDOUT)
+                '-c','log_statement=none','-c','log_min_error_statement=panic',
+                *(['-c','track_functions=all'] if profile_functions else [])],stdout=output,stderr=subprocess.STDOUT)
         deadline=time.monotonic()+30
         while True:
             if process.poll() is not None:raise RuntimeError('new PostgreSQL server stopped before startup')

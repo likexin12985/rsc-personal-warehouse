@@ -83,8 +83,18 @@
           "run": "pnpm exec vite build --mode warehouse"
         },
         {
-          "name": "Verify public and private entry artifacts",
+          "name": "Verify frozen trial MVP scope and /xx artifact",
+          "working-directory": "cloud_oam/frontend",
+          "run": "pnpm run verify:pilot-release"
+        },
+        {
+          "name": "Verify pilot public and private entry artifacts",
           "run": "node cloud_oam/scripts/verify_public_entry.mjs"
+        },
+        {
+          "name": "Verify complete public catalog on release refs",
+          "if": "${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/production-readiness-gates' }}",
+          "run": "node cloud_oam/scripts/verify_public_entry.mjs --release"
         },
         {
           "name": "Run WeChat mini-program and gate contract tests",

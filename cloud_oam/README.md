@@ -18,6 +18,13 @@
 `dist-warehouse`；详细命令、未完成的飞书数据导入、验证证据和部署边界见
 [公开首页接续记录](docs/PUBLIC_KNOWLEDGE_ENTRY_20260919.md)。以下段落保留各批历史状态。
 
+## 当前认证边界（2026-10-06）
+
+当前试点 MVP 的业务登录为 SMS-only：网页和小程序只显示手机验证码，密码、改密、临时密码登录和微信入口均已服务端硬关闭；历史字段和路由保留用于迁移兼容。短信只有在真实 provider、签名/模板/方案、凭证及独立限流密钥齐全时才会开放。现有代码已确认阿里云 PNVS/Dypnsapi 适配器（SendSmsVerifyCode/CheckSmsVerifyCode），控制台余量 1000 条；仍须完成方案/签名/模板、RAM 最小权限、真实隔离号码回执和登录回读，因此不能宣称真实短信 UAT 或上线。
+
+生产 PNVS 凭证模式已收口为 `OAM_SMS_CREDENTIAL_MODE=default_chain`：适配器使用阿里云 SDK 默认凭证链解析目标 ECS RAM 角色/实例元数据；静态 AccessKey/STS 模式仅保留给隔离测试，生产启动和试点预检均拒绝，不在聊天、代码、日志或文档中放置任何密钥值。
+
+
 ## 当前开发状态
 
 8.14 已新增可复用日终 PG16 夹具与审核门禁模块。停止线前启动的 59233 已退出 0：8 个实际场景、7 条审核事件和 1 份终结证明核验，既有库存数量保持，自有实例已停止。模块尚未接入 GitHub runtime，CI 空库路径及完整门禁仍缺；额度已到剩余 10%，停止新增开发，见[整体进度与停止交接](docs/PRODUCTION_HANDOFF_QUOTA_STOP_20260921.md)。
@@ -609,8 +616,8 @@ GitHub 精确候选门禁状态见 [交接说明](docs/ACCOUNT_HANDOFF.md)，未
   并严格校验响应契约；期初未建立时不显示数量。已验收的“省负责人”页面初始不预置任何
   人员，并隔离受限交接、外部审批及未知身份。客户端对 v0.9 业务路径的 GET 与写请求均阻断，
   库存明细、工单、调拨、审计和旧设置页在正式 API 完成前不挂载。
-- 生产启动不执行 DDL、不创建默认管理员、禁止密码登录，并要求至少一个完整配置的
-  微信或短信无密码登录通道。数据库固定分为仅初始化使用的 `star_oam_bootstrap`、非超级用户
+- 生产启动不执行 DDL、不创建默认管理员、禁止密码登录，并要求完整配置的
+  手机短信无密码登录通道。数据库固定分为仅初始化使用的 `star_oam_bootstrap`、非超级用户
   迁移所有者 `star_oam_migrator`、最小权限运行账号 `star_oam_api` 和只读备份账号
   `star_oam_backup`；API 启动前只读核验真实 PostgreSQL 角色、owner、成员关系、schema/DDL、
   搜索路径、临时表、会话复制模式、数据库/schema/table/sequence 授权选项、列级残留授权、
@@ -629,9 +636,9 @@ GitHub 精确候选门禁状态见 [交接说明](docs/ACCOUNT_HANDOFF.md)，未
   ACL 漂移都拒绝启动。
 - 生产主 API 不再挂载任何 v0.9 业务读写路由；旧账号管理接口返回 `410`。开发/测试
   环境仍保留兼容路由用于迁移回归，并由集中式默认拒绝门禁阻止外部角色和空范围越权。
-- 生产短信/微信登录已改为 `identity_type + provider_key + hash_version + HMAC-SHA256`
-  精确匹配；不再读取旧 `users.mobile` 或 `wechat_identities`，也不允许微信手机号授权在
-  首次登录时自助绑定。短信挑战只保存手机号/IP 哈希，阿里云托管验证码保持
+- 生产短信登录已改为 `identity_type + provider_key + hash_version + HMAC-SHA256`
+  精确匹配；不再读取旧 `users.mobile` 或 `wechat_identities`，也不允许历史微信身份路由
+  在首次登录时自助绑定。短信挑战只保存手机号/IP 哈希，阿里云托管验证码保持
   `code_hash=NULL`，请求、发送、失败、尝试、锁定、验证和消费分别留存状态与链式审计。
   登录挑战与设备会话使用不同 HMAC 域，禁止跨表关联；生产登录、刷新、列表和缓存响应重放
   均要求当前版本的会话 IP 证据，缺少客户端 IP 或发现明文、旧版、跨域证据时在 provider、
@@ -640,14 +647,14 @@ GitHub 精确候选门禁状态见 [交接说明](docs/ACCOUNT_HANDOFF.md)，未
   事务撤销整条设备会话。生产 `/auth/me`、登录与刷新响应只返回 `person_id`、人员/组织、
   账号状态、权限版本和正式多角色，不返回内部用户 ID、手机号、旧角色或旧省份。
 - Web 使用 HttpOnly `auth_device_id` 维持同一浏览器设备身份；生产会话中的 IP 仅保存域隔离
-  HMAC。缺少或无效刷新令牌、短信/微信身份拒绝、provider 故障和确认的 refresh replay
-  均追加脱敏认证证据，公开响应不泄露内部失败细节。微信登录会在兑换一次性 code 前短事务
-  提交唯一 `pending` 幂等 owner；同键并发只能在 provider 前失败关闭。provider 失败审计与
+  HMAC。缺少或无效刷新令牌、短信身份拒绝、provider 故障和确认的 refresh replay
+  均追加脱敏认证证据，公开响应不泄露内部失败细节。历史微信登录路由在兑换 provider code
+  前直接失败；短信登录会先提交唯一 `pending` 幂等 owner；同键并发只能在 provider 前失败关闭。provider 失败审计与
   同一加密失败终态在后续事务原子提交，不再生成脱离幂等操作的独立失败证据。
 - 总部全国管理员且具有 `auth_session/manage` 权限时，可读取正式脱敏设备会话并以请求 ID
   和幂等键强制下线整个刷新令牌族；撤销事实时点、状态事件和认证审计在同一事务提交，
   同键同请求返回原证据并标记 `Idempotency-Replayed`。
-- 正式短信/微信登录、Web/小程序刷新和退出均强制使用独立的 `Idempotency-Key`。账本只保存
+- 正式短信登录、Web/小程序刷新和退出均强制使用独立的 `Idempotency-Key`。账本只保存
   域隔离 HMAC、引用和 KMS/AES-256-GCM 密文；同键同请求在 30–120 秒受控窗口内返回原始
   成功或失败结果，同键异请求返回 `409`。刷新成功、旧令牌消费、新令牌链、审计和密文在
   同一事务提交；相同键的网络重放不会误触发令牌家族吊销，不同键再次提交已消费令牌仍会
@@ -655,8 +662,8 @@ GitHub 精确候选门禁状态见 [交接说明](docs/ACCOUNT_HANDOFF.md)，未
   第二次 KMS 抖动回滚已确认的令牌家族吊销。密文过期、篡改、权限已变化或密钥不可用均
   失败关闭，不生成第二套凭据。
 - 正式登录的新幂等键先完成 KMS 预检，并用独立短事务按
-  `hash-version guard -> global -> IP` 消费数据库桶；微信随后短事务提交唯一幂等 owner，
-  再由 owner 调用 provider，返回可信 appid/openid 后独立消费 identity 桶。限流证据不保存原 IP、手机号、code、
+  `hash-version guard -> global -> IP` 消费数据库桶；短信随后短事务提交唯一幂等 owner，
+  再由 owner 调用 Dypnsapi provider，返回可信 out_id/biz_id 后独立消费 identity 桶。限流证据不保存原 IP、手机号、code、
   openid 或 unionid。终态同键同请求先只读核对并继续返回原幂等结果，不会在桶满后变成
   `429`；随机新键受统一 `429 + Retry-After` 约束。同键异请求仍返回 `409`。hash version、
   HMAC secret 或窗口长度变更在旧窗口仍活跃时失败关闭，避免静默获得第二份额度。

@@ -10,7 +10,39 @@ from . import material_request_outbound as outbound
 from . import material_request_query
 
 class LogisticsEventError(Exception):
-    def __init__(self, code, category, message): self.code, self.category, self.message = code, category, message
+    _HTTP_STATUS_BY_CATEGORY = {
+        "invalid_request": 422,
+        "forbidden": 403,
+        "not_found": 404,
+        "conflict": 409,
+        "precondition_failed": 412,
+        "service_unavailable": 503,
+    }
+
+    def __init__(self, code, category, message):
+        if category not in self._HTTP_STATUS_BY_CATEGORY:
+            raise ValueError(f"unsupported error category: {category}")
+        super().__init__(message)
+        self.code, self.category, self.message = code, category, message
+
+    @property
+    def http_status_code(self):
+        return self._HTTP_STATUS_BY_CATEGORY[self.category]
+
+    def as_detail(self):
+        return {"code": self.code, "category": self.category, "message": self.message}
+
+
+_BACKEND_FULFILLMENT_ROLES = frozenset({"admin", "provincial_manager"})
+
+
+def _require_backend_fulfillment(actor) -> None:
+    # Production FormalPrincipal always carries role_codes.  Keep the
+    # lightweight read-only route doubles used by the legacy contract tests
+    # compatible without weakening the real principal boundary.
+    roles = getattr(actor, "role_codes", None)
+    if roles is not None and not set(roles).intersection(_BACKEND_FULFILLMENT_ROLES):
+        _fail("fulfillment_forbidden", "forbidden", "当前账号没有后台人工履约权限")
 
 def _fail(code, category, message): raise LogisticsEventError(code, category, message)
 
@@ -29,6 +61,7 @@ def _validate_evidence_file(db, file_id):
         _fail("evidence_file_unavailable", "precondition_failed", "物流证据文件不存在或尚未完成上传")
 
 def create_event(db, *, actor, request_id, shipment_id, event_type, event_at, source, evidence_file_id, external_ref, idempotency_key, secret, trace_request_id):
+    _require_backend_fulfillment(actor)
     if not isinstance(secret, bytes): secret = secret.encode()
     if len(secret) < 32: _fail("secret_invalid", "service_unavailable", "物流事件幂等配置不可用")
     try: when = datetime.fromisoformat(event_at.replace("Z", "+00:00"))
@@ -67,6 +100,7 @@ def _result(row, replayed):
 
 def logistics_command_status(db, *, actor, request_id, shipment_id, idempotency_key, secret):
     """Read only the original actor/path/key-bound event; absence permits no replay."""
+    _require_backend_fulfillment(actor)
     if not isinstance(secret, bytes):
         secret = secret.encode()
     if len(secret) < 32:
@@ -101,6 +135,7 @@ def logistics_command_status(db, *, actor, request_id, shipment_id, idempotency_
     return _result(event, True)
 
 def list_events(db, *, actor, request_id, shipment_id):
+    _require_backend_fulfillment(actor)
     context = material_request_query._load_read_context(db, actor=actor, now=None)
     request = db.scalar(select(MaterialRequest).where(
         MaterialRequest.id == request_id,

@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 from sqlalchemy import event, select
 
-from app.inventory_models import Receipt, InventoryMovement
+from app.inventory_models import Receipt, InventoryMovement, InventorySerial, MaterialInventoryPolicy
 from app.formal_services import material_request_my_inbound_candidates as service
 from app.formal_services.material_request_query import MaterialRequestReadError
 from test_material_request_my_inbound import world, receipt_world, receiving_world, outbound_world, post, facts
@@ -35,6 +35,7 @@ def test_pending_projection_has_exact_accepted_details_without_creating_stock_ac
     row = result.items[0]
     assert row.receipt_id == value.receipt_id and row.detail.receipt_request_hash == value.receipt_request_hash
     assert row.detail.lines and all(line.accepted_qty != '0.000' for line in row.detail.lines)
+    assert all(line.condition == 'normal' and not line.rejected_serials for line in row.detail.lines)
     assert row.detail.inventory_transaction_id is None and row.detail.posted_at is None
     raw = result.model_dump_json()
     for field in ('from_account_id', 'to_account_id', 'stock_account_id', 'owner_org_id', 'idempotency_key', 'source_location_id'):
@@ -77,8 +78,32 @@ def test_rejected_only_receipt_stays_outside_inbound(receipt_world):
     line.update(condition='rejected', rejected_qty=line['accepted_qty'], accepted_qty='0.000',
         rejected_serial_ids=line['accepted_serial_ids'], accepted_serial_ids=(), exception_evidence_file_id=file.id)
     accept(receipt_world, value)
+    before = facts(receipt_world[0])
     row = listing(receipt_world).items[0]
     assert row.status == 'no_accepted' and all(line.accepted_qty == '0.000' for line in row.detail.lines)
+    projected = row.detail.lines[0]
+    assert projected.condition == 'rejected' and projected.accepted_serials == ()
+    assert projected.rejected_qty == str(line['rejected_qty'])
+    assert {s.serial_id: s.serial_no for s in projected.rejected_serials} == {
+        sid: receipt_world[0].get(InventorySerial, sid).serial_no for sid in line['rejected_serial_ids']}
+    assert (projected.tracking_mode in {'serial', 'lot_and_serial'}) == bool(line['rejected_serial_ids'])
+    assert listing(receipt_world) == listing(receipt_world) and facts(receipt_world[0]) == before
+
+
+def test_history_uses_policy_at_acceptance_and_blocks_missing_historical_policy(world):
+    from datetime import datetime, timezone
+    db, *_ = world
+    original = listing(world)
+    policies = tuple(db.scalars(select(MaterialInventoryPolicy)))
+    for policy in policies:
+        policy.effective_to = datetime(2026, 9, 11, tzinfo=timezone.utc)
+    db.flush()
+    assert listing(world) == original
+    for policy in policies:
+        policy.effective_to = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    db.flush()
+    row = listing(world).items[0]
+    assert row.status == 'blocked' and row.detail is None
 
 
 def test_no_receive_permission_still_reads_own_inbound(world, monkeypatch):

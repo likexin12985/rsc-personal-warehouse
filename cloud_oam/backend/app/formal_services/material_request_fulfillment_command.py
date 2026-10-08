@@ -55,6 +55,10 @@ def record_fulfillment_command(db, *, request, actor, operation, fact, request_r
             "result_hash": command.result_hash, "permission_action": permission_action},
         request_id=f"fulfillment-version-{command.id}", occurred_at=occurred_at, created_at=occurred_at)
     request.personal_inbound_status = state
+    if operation == 'shipment':
+        # A partial package is a carrier handover, not proof of signature or
+        # full receipt. Keep the original immutable command result schema.
+        request.shipment_status = 'shipped'
     request.version = target
     request.updated_at = occurred_at
     db.flush()

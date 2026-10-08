@@ -3,7 +3,7 @@ import { createShipmentStore, recoverShipment, shipmentRequestHash, validateShip
 import { shipmentInput, shipmentResult, shipmentSentinel, shipmentPage, ID } from "./materialRequestShipmentTestFixtures";
 import { afterOutbound } from "./materialRequestOutboundTestFixtures";
 import { access, identity } from "./materialRequestReservationTestFixtures";
-import { shipmentLineSelection, shipmentUnits, validateShipmentOptions } from "./materialRequestShipment";
+import { shipmentLineSelection, shipmentUnits, validateShipmentOptions, validateShipmentTargetOptions } from "./materialRequestShipment";
 import { createFormalMaterialRequestAdapter } from "./formalMaterialRequestAdapter";
 function setup() {
   const items = new Map<string, string>();
@@ -70,6 +70,14 @@ it("selects decimal partial packages without floating point and rejects invalid 
   expect(shipmentLineSelection(serial, "1", [serial.serial_ids[1]]).serial_ids).toEqual([serial.serial_ids[1]]);
   expect(() => validateShipmentOptions({ ...shipmentPage(), items: [{ ...option, shippable_qty: "3.000" }] })).toThrow();
   expect(() => validateShipmentOptions({ ...shipmentPage(true), items: [{ ...serial, serials: [{ ...serial.serials[0], serial_id: ID(99) }, serial.serials[1]] }] })).toThrow();
+});
+it("accepts only one unique, version-bound shipment target per person", () => {
+  const value = validateShipmentTargetOptions({ schema_version: "1.0", request_id: afterOutbound().request_id, request_version: 6,
+    items: [{ location_id: ID(1), location_code: "PERSONAL-001", location_name: "本人个人仓", person_id: ID(2) }] });
+  expect(value.items[0]).toMatchObject({ location_id: ID(1), person_id: ID(2) });
+  expect(() => validateShipmentTargetOptions({ ...value, items: [{ ...value.items[0], person_id: ID(3) }, value.items[0]] })).toThrow();
+  expect(() => validateShipmentTargetOptions({ ...value, request_version: 0 })).not.toThrow();
+  expect(() => validateShipmentTargetOptions({ ...value, schema_version: "0.9" })).toThrow();
 });
 it("matches a fixed Python request hash including Chinese and a surrogate-pair emoji", async () => {
   const input = { ...shipmentInput(), carrier: "人工承运🚚", tracking_no: "SF-中文-001" };

@@ -28,6 +28,8 @@ import {
 } from "./materialRequestAllocationRecovery";
 import { Button, Field, Modal, showError } from "./ui";
 
+import { type SupplyPlanningCapacity, validateSupplyPlanningCapacity } from "./materialRequestSupplyCapacity";
+
 const TYPES: Record<SupplyCreateInput["supply_type"], string> = {
   cross_region_transfer: "跨区域供给计划", headquarters_replenishment: "总部补货计划",
   star_replenishment: "星星补货计划", external_procurement_reference: "外部采购参考",
@@ -37,7 +39,7 @@ const STATUSES: Record<SupplyUpdateInput["status"], string> = {
   cancelled: "计划已取消", closed_no_supply: "无供应结束",
 };
 type Form = {
-  action: SupplyAction; before: MaterialRequestDetail; task: MaterialRequestSupplyTask | null;
+  action: SupplyAction; before: MaterialRequestDetail; capacity: SupplyPlanningCapacity | null; task: MaterialRequestSupplyTask | null;
   lineId: string; supplyType: SupplyCreateInput["supply_type"]; quantity: string;
   referenceNo: string; expectedDate: string; comment: string; status: SupplyUpdateInput["status"];
 };
@@ -50,12 +52,10 @@ type AllocationForm = Readonly<{
   serialIds: string;
 }>;
 function units(value: string): bigint { return BigInt(value.replace(".", "")); }
-function remaining(detail: MaterialRequestDetail, lineId: string): bigint {
-  const line = detail.lines.find((row) => row.request_line_id === lineId);
-  if (!line || !["approved", "partially_approved"].includes(line.status)) return 0n;
-  return units(line.final_approved_qty) - units(line.cancelled_qty) - detail.supply_tasks
-    .filter((task) => task.request_line_id === lineId && !["cancelled", "closed_no_supply"].includes(task.status))
-    .reduce((total, task) => total + units(task.original_equivalent_qty), 0n);
+function remaining(detail: MaterialRequestDetail, lineId: string, capacity?: SupplyPlanningCapacity | null): bigint {
+  if (!capacity || capacity.request_id !== detail.request_id || capacity.request_version !== detail.request_version) return 0n;
+  const line = capacity.lines.find((row) => row.request_line_id === lineId);
+  return line ? units(line.new_plan_qty) : 0n;
 }
 function quantityText(value: string): string {
   if (!/^(?:0|[1-9]\d{0,14})(?:\.\d{1,3})?$/.test(value)) throw new Error("计划数量最多保留三位小数");
@@ -123,7 +123,7 @@ function allocationRecoveryAvailable(adapter: FormalMaterialRequestAdapter): boo
 
 export default function FormalMaterialRequestSupplyPanel({
   adapter, access, detail, store, registry, otherWriteBusy, otherWriteBlocked, onBlocking, onDetail,
-  allocationRecoveryStore, onAllocationBlocking = () => {},
+  allocationRecoveryStore, onAllocationBlocking = () => {}, allowSupplyPlanning = true,
 }: {
   adapter: FormalMaterialRequestAdapter; access: FormalMaterialRequestAccess | null; detail: MaterialRequestDetail | null;
   store: SupplyRecoveryStore; registry: MaterialRequestIntentRegistry; otherWriteBusy: boolean;
@@ -131,12 +131,16 @@ export default function FormalMaterialRequestSupplyPanel({
   onBlocking: (blocked: boolean) => void; onDetail: (detail: MaterialRequestDetail) => void;
   allocationRecoveryStore?: AllocationRecoveryStore;
   onAllocationBlocking?: (blocked: boolean) => void;
+  /** Trial MVP keeps minimum allocation visible while deferring supply planning UI. */
+  allowSupplyPlanning?: boolean;
 }) {
   const allocationStoreRef = useRef<AllocationRecoveryStore | null>(null);
   if (!allocationStoreRef.current) {
     allocationStoreRef.current = allocationRecoveryStore ?? createAllocationRecoveryStore();
   }
   const allocationStore = allocationStoreRef.current;
+  const currentDetail = useRef(detail);
+  currentDetail.current = detail;
   const [form, setForm] = useState<Form | null>(null);
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState("");
@@ -155,7 +159,8 @@ export default function FormalMaterialRequestSupplyPanel({
   const blocked = read.kind !== "missing";
   const allocationRead = allocationStore.read();
   const allocationBlocked = allocationRead.kind !== "missing";
-  const canCreate = Boolean(detail?.allowed_actions.includes("create_supply_task"));
+  const planningVisible = allowSupplyPlanning !== false;
+  const canCreate = planningVisible && Boolean(detail?.allowed_actions.includes("create_supply_task"));
   const canReadAllocationOptions = Boolean(access?.can_read_allocation_options);
 
   async function showAllocationOptions(lineId: string) {
@@ -459,20 +464,30 @@ export default function FormalMaterialRequestSupplyPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adapter, store, access?.person_id, access?.authorization_version]);
 
-  function open(action: SupplyAction, task: MaterialRequestSupplyTask | null = null) {
+  async function open(action: SupplyAction, task: MaterialRequestSupplyTask | null = null) {
     if (!detail || !access || otherWriteBusy || otherWriteBlocked?.() || blocked || running || registry.get(detail.request_id)) {
-      setError("当前需求存在待核验操作，请先完成结果核验");
-      return;
+      setError("当前需求存在待核验操作，请先完成结果核验"); return;
     }
     if (action === "create_supply_task" ? !canCreate : !task?.allowed_actions.includes(action)) return;
-    const line = detail.lines.find((row) => remaining(detail, row.request_line_id) > 0n);
-    if (action === "create_supply_task" && !line) { setError("当前需求已无可新增的供给计划数量"); return; }
-    setError("");
-    setMessage("");
-    setForm({ action, before: detail, task, lineId: task?.request_line_id || line!.request_line_id,
-      supplyType: task?.supply_type || "star_replenishment", quantity: task?.expected_qty || "1",
-      referenceNo: task?.reference_no || "", expectedDate: task?.expected_date || "", comment: "",
-      status: action === "cancel_supply_task" ? "cancelled" : task?.status || "open" });
+    const before = detail, currentGeneration = generation.current;
+    setError(""); setMessage(""); setRunning(true);
+    try {
+      let capacity: SupplyPlanningCapacity | null = null;
+      if (action === "create_supply_task") {
+        if (!adapter.supplyPlanningCapacity) throw new Error("当前客户端缺少供给余量核验通道");
+        capacity = validateSupplyPlanningCapacity(await adapter.supplyPlanningCapacity(before.request_id), before);
+      }
+      if (currentGeneration !== generation.current || currentDetail.current?.request_id !== before.request_id
+          || currentDetail.current.request_version !== before.request_version) return;
+      const line = before.lines.find((row) => remaining(before, row.request_line_id, capacity) > 0n);
+      if (action === "create_supply_task" && !line) throw new Error("当前需求已无可新增的供给计划数量");
+      setForm({ action, before, capacity, task, lineId: task?.request_line_id || line!.request_line_id,
+        supplyType: task?.supply_type || "star_replenishment", quantity: task?.expected_qty ||
+          editableQuantity(remaining(before, line!.request_line_id, capacity)),
+        referenceNo: task?.reference_no || "", expectedDate: task?.expected_date || "", comment: "",
+        status: action === "cancel_supply_task" ? "cancelled" : task?.status || "open" });
+    } catch (caught) { if (currentGeneration === generation.current) setError(showError(caught)); }
+    finally { if (currentGeneration === generation.current) setRunning(false); }
   }
 
   async function submit() {
@@ -499,7 +514,7 @@ export default function FormalMaterialRequestSupplyPanel({
         expected_date: form.action === "cancel_supply_task" ? form.task!.expected_date : form.expectedDate || null,
         comment: form.comment.trim(),
       }, form.action);
-      if ("request_line_id" in body && units(body.expected_qty) > remaining(before, body.request_line_id)) {
+      if ("request_line_id" in body && units(body.expected_qty) > remaining(before, body.request_line_id, form.capacity)) {
         throw new Error("计划数量超过当前明细未安排的批准余量");
       }
       const identity = validateFormalMaterialRequestFreshIdentity(await adapter.loadIdentity());
@@ -512,6 +527,13 @@ export default function FormalMaterialRequestSupplyPanel({
           || (form.action === "create_supply_task" ? !fresh.allowed_actions.includes(form.action)
             : freshTask?.version !== form.task!.version || !freshTask.allowed_actions.includes(form.action))) {
         throw new Error("需求或供给任务已变化，请返回详情重新检查");
+      }
+      if ("request_line_id" in body) {
+        if (!adapter.supplyPlanningCapacity) throw new Error("当前客户端缺少供给余量核验通道");
+        const checked = validateSupplyPlanningCapacity(await adapter.supplyPlanningCapacity(before.request_id), fresh);
+        if (units(body.expected_qty) > remaining(fresh, body.request_line_id, checked)) {
+          throw new Error("可新增计划数量已变化，请重新核对");
+        }
       }
       if (currentGeneration !== generation.current || otherWriteBlocked?.()) return;
       const intent = registry.begin({ requestId: before.request_id, action: form.action,
@@ -596,8 +618,10 @@ export default function FormalMaterialRequestSupplyPanel({
   const allocationField = <K extends keyof AllocationForm>(key: K, value: AllocationForm[K]) => {
     setAllocationForm((current) => current ? { ...current, [key]: value } : current);
   };
-  return <section className="opening-detail-section" aria-label="供给计划">
-    <header><div><h3>供给计划</h3><p>登记补货或跨区域供给计划、参考号和预计日期；实际分配、发运及收货分别跟踪。</p></div>
+  return <section className="opening-detail-section" aria-label={planningVisible ? "供给计划" : "货源分配"}>
+    <header><div><h3>{planningVisible ? "供给计划" : "最小货源分配"}</h3><p>{planningVisible
+      ? "登记补货或跨区域供给计划、参考号和预计日期；实际分配、发运及收货分别跟踪。"
+      : "读取已批准需求的可用货源并建立最小分配事实；占用、发运、收货和个人仓入账分别处理。"}</p></div>
       {canCreate && <Button disabled={otherWriteBusy || running || blocked || allocationBlocked || allocationRunning} onClick={() => open("create_supply_task")}>新建供给计划</Button>}
     </header>
     {message && <div className="alert alert-info">{message}</div>}
@@ -611,7 +635,7 @@ export default function FormalMaterialRequestSupplyPanel({
       <Button disabled={allocationRunning || allocationRead.kind !== "valid"} onClick={() => void recoverAllocation()}>{allocationRunning ? "正在核验" : "核验原分配操作"}</Button>
     </div>}
     {detail && <div className="alert alert-info">当前分配状态：{ALLOCATION_STATUS_LABELS[detail.states.allocation_status]}。分配只记录货源事实，不会自动推进占用、拣货、出库、发运、签收、收货或入库。</div>}
-    {detail?.supply_tasks.length ? <div className="table-wrap"><table>
+    {planningVisible && (detail?.supply_tasks.length ? <div className="table-wrap"><table>
       <thead><tr><th>任务</th><th>明细</th><th>计划类型</th><th>计划数量</th><th>参考号</th><th>预计日期</th><th>状态</th><th>操作</th></tr></thead>
       <tbody>{detail.supply_tasks.map((task) => <tr key={task.id}>
         <td>{task.task_no}</td><td>{detail.lines.find((line) => line.request_line_id === task.request_line_id)?.line_no}</td>
@@ -620,10 +644,10 @@ export default function FormalMaterialRequestSupplyPanel({
           {task.allowed_actions.includes("update_supply_task") && <Button disabled={otherWriteBusy || running || blocked || allocationBlocked || allocationRunning} onClick={() => open("update_supply_task", task)}>更新计划</Button>}
           {task.allowed_actions.includes("cancel_supply_task") && <Button tone="secondary" disabled={otherWriteBusy || running || blocked || allocationBlocked || allocationRunning} onClick={() => open("cancel_supply_task", task)}>取消计划</Button>}
         </td></tr>)}</tbody>
-    </table></div> : <p>{detail ? "暂无供给计划" : "选择需求查看供给计划"}</p>}
+    </table></div> : <p>{detail ? "暂无供给计划" : "选择需求查看供给计划"}</p>)}
     {detail && canReadAllocationOptions && <section aria-label="货源候选" className="opening-detail-subsection">
       <header><div><h4>可用货源与分配</h4><p>先读取当前库存投影，再选择一个货源建立独立分配事实；占用和后续履约不会被自动推进。</p></div></header>
-      <div className="table-wrap"><table><thead><tr><th>明细</th><th>物料</th><th>批准余量</th><th>操作</th></tr></thead><tbody>
+      <div className="table-wrap"><table><thead><tr><th>明细</th><th>物料</th><th>批准数量</th><th>操作</th></tr></thead><tbody>
         {detail.lines.filter((line) => ["approved", "partially_approved"].includes(line.status)).map((line) => <tr key={line.request_line_id}>
           <td>{line.line_no}</td><td>{line.material_id}</td><td>{line.final_approved_qty}</td><td>
             <Button tone="secondary" disabled={allocationLoading || allocationRunning || blocked || allocationBlocked || otherWriteBusy || otherWriteBlocked?.()} onClick={() => void showAllocationOptions(line.request_line_id)}>{allocationLoading ? "正在读取" : "查看可用货源"}</Button>
@@ -654,17 +678,21 @@ export default function FormalMaterialRequestSupplyPanel({
         </div>
       </div>
     </Modal>}
-    {form && <Modal title={form.action === "create_supply_task" ? "新建供给计划" : form.action === "cancel_supply_task" ? "取消供给计划" : "更新供给计划"}
+    {planningVisible && form && <Modal title={form.action === "create_supply_task" ? "新建供给计划" : form.action === "cancel_supply_task" ? "取消供给计划" : "更新供给计划"}
       onClose={() => { if (!running && !blocked && !allocationBlocked) setForm(null); }}>
       <div className="form-stack">
         <p>需求 {form.before.request_no} · 本次操作仅修改供给计划。</p>
         {error && <div className="alert alert-error">{error}</div>}
         <Field label="需求明细"><select aria-label="供给需求明细" disabled={running || blocked || allocationBlocked || Boolean(form.task)} value={form.lineId} onChange={(event) => field("lineId", event.target.value)}>
-          {form.before.lines.filter((line) => form.task || remaining(form.before, line.request_line_id) > 0n).map((line) => <option key={line.request_line_id} value={line.request_line_id}>明细 {line.line_no} · 已批准 {line.final_approved_qty}</option>)}
+          {form.before.lines.filter((line) => form.task || remaining(form.before, line.request_line_id, form.capacity) > 0n).map((line) => <option key={line.request_line_id} value={line.request_line_id}>明细 {line.line_no} · 已批准 {line.final_approved_qty}</option>)}
         </select></Field>
         <Field label="供给类型"><select aria-label="供给类型" disabled={running || blocked || allocationBlocked || Boolean(form.task)} value={form.supplyType} onChange={(event) => field("supplyType", event.target.value as Form["supplyType"])}>
           {Object.entries(TYPES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></Field>
+        {form.capacity && <div className="alert alert-info">{(() => {
+          const amount = form.capacity.lines.find((line) => line.request_line_id === form.lineId)!;
+          return `已分配 ${amount.allocated_qty}；活动计划 ${amount.active_planned_qty}；可新增计划 ${amount.new_plan_qty}；旧计划重叠 ${amount.existing_overlap_qty}。预计计划不计入实物库存。`;
+        })()}</div>}
         <Field label="计划数量"><input aria-label="供给计划数量" inputMode="decimal" disabled={running || blocked || allocationBlocked || Boolean(form.task)} value={form.quantity} onChange={(event) => field("quantity", event.target.value)} /></Field>
         <Field label="参考号"><input aria-label="供给参考号" maxLength={160} disabled={running || blocked || allocationBlocked || form.action === "cancel_supply_task"} value={form.referenceNo} onChange={(event) => field("referenceNo", event.target.value)} /></Field>
         <Field label="预计日期"><input aria-label="供给预计日期" type="date" disabled={running || blocked || allocationBlocked || form.action === "cancel_supply_task"} value={form.expectedDate} onChange={(event) => field("expectedDate", event.target.value)} /></Field>

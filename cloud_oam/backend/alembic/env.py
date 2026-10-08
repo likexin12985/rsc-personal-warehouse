@@ -8,6 +8,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool, text
 from sqlalchemy.engine import make_url
 from migration_script_cache import cache_migration_compilation
+from migration_capture_roles import maintain_capture_permissions
 
 
 config = context.config
@@ -217,8 +218,9 @@ def run_migrations_online() -> None:
                 connection.execute(
                     text("LOCK TABLE public.alembic_version IN ACCESS EXCLUSIVE MODE")
                 )
-            with cache_migration_compilation(Path(__file__).with_name("versions")):
-                context.run_migrations()
+            with maintain_capture_permissions(connection):
+                with cache_migration_compilation(Path(__file__).with_name("versions")):
+                    context.run_migrations()
 
 
 if context.is_offline_mode():

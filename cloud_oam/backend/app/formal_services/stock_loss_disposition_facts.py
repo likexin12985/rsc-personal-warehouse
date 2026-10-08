@@ -32,6 +32,9 @@ def invalid():
 
 
 def posting_command(row):
+    if row.disposition == 'scrap':
+        from .stock_scrap.request_facts import posting_command as scrap_command
+        return scrap_command(row)
     return posting.InventoryPostingCommand(transaction_no='INV-LOSS-D-'+row.idempotency_key_hash[:20].upper(),
         movement_type=row.plan_jsonb['movement_type'], source_document_type=AGGREGATE, source_document_id=str(row.id),
         posting_key=f'stock-loss:dispose_loss:{row.id}:{row.idempotency_key_hash}', effective_at=_aware(row.created_at),
@@ -40,6 +43,9 @@ def posting_command(row):
 
 
 def payload(row):
+    if row.disposition == 'scrap':
+        from .stock_scrap.request_facts import original_payload
+        return original_payload(row)
     if row.disposition == "return_to_region":
         from .stock_loss_return_facts import payload as return_payload
         return return_payload(row)
@@ -69,6 +75,13 @@ def historical_hold_basis(db, source_id, cursor):
 
 
 def _verify(db, row):
+    if row.disposition == 'scrap':
+        if db.scalar(select(InventoryTransaction.id).where(
+                InventoryTransaction.reversed_transaction_id == row.posting_transaction_id).limit(1)):
+            invalid()
+        from .stock_loss_corrections.history_chain import verify_chain
+        verify_chain(db, root_disposition_id=row.id)
+        return payload(row)
     if row.disposition == "return_to_region":
         from .stock_loss_return_facts import _verify as verify_return
         return verify_return(db, row)
@@ -220,6 +233,10 @@ def verified(db, *, row, _proof_cache=None):
             if fact.id in cache:
                 continue
             cache[fact.id] = _verify(db, fact)
+            if fact.disposition == 'scrap':
+                # verify_chain already discovers and proves sibling original
+                # roots and every successor. A scrap plan uses the v2 basis.
+                continue
             for item in fact.plan_jsonb['holds']:
                 if item['disposition_id'] is not None:
                     prior_id = UUID(item['disposition_id'])

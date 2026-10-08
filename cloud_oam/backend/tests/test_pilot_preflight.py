@@ -10,7 +10,14 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from scripts.pilot_preflight import checks_for, sms_sts_configured  # noqa: E402
+from scripts.pilot_preflight import (  # noqa: E402
+    PILOT_SMS_SCHEME_NAME,
+    PILOT_SMS_SIGN_NAME,
+    PILOT_SMS_TEMPLATE_CODE,
+    checks_for,
+    sms_default_credential_chain_configured,
+    sms_sts_configured,
+)
 
 
 def test_pilot_preflight_rejects_partial_or_expiring_pnvs_sts():
@@ -26,6 +33,17 @@ def test_pilot_preflight_rejects_partial_or_expiring_pnvs_sts():
          "OAM_SMS_SECURITY_TOKEN_EXPIRES_AT":datetime.now(timezone.utc).isoformat()},
     ):
         assert not sms_sts_configured(values)
+
+
+def test_pilot_preflight_requires_default_chain_without_static_values():
+    assert sms_default_credential_chain_configured({"OAM_SMS_CREDENTIAL_MODE": "default_chain"})
+    assert not sms_default_credential_chain_configured({
+        "OAM_SMS_CREDENTIAL_MODE": "default_chain",
+        "OAM_SMS_ACCESS_KEY_ID": "synthetic-id",
+    })
+    assert not sms_default_credential_chain_configured({
+        "OAM_SMS_CREDENTIAL_MODE": "static",
+    })
 
 
 def _document(tmp_path: Path) -> tuple[dict, Path]:
@@ -81,18 +99,25 @@ def _document(tmp_path: Path) -> tuple[dict, Path]:
             **{key: secrets[key] for key in list(secrets)[5:]},
             "OAM_APP_ORIGIN": "https://rscwz.cn",
             "OAM_ENVIRONMENT": "production",
+            "OAM_RELEASE_SCOPE": "trial-mvp",
             "OAM_DATABASE_SCHEMA_MODE": "alembic",
             "OAM_PASSWORD_LOGIN_ENABLED": "false",
+            "OAM_WECHAT_LOGIN_ENABLED": "false",
             "OAM_COOKIE_SECURE": "true",
             "OAM_LEGACY_PROTOTYPE_WRITES_ENABLED": "false",
             "OAM_DATABASE_URL": "postgresql+psycopg://star_oam_api:api-" + "c" * 32 + "@db:5432/star_oam",
             "OAM_SMS_LOGIN_ENABLED": "true",
             "OAM_SMS_PROVIDER": "aliyun_pnvs",
-            "OAM_SMS_ACCESS_KEY_ID": "sms-access-id",
-            "OAM_SMS_ACCESS_KEY_SECRET": "sms-secret-value",
-            "OAM_SMS_SIGN_NAME": "RSC",
-            "OAM_SMS_TEMPLATE_CODE": "SMS_123456",
-            "OAM_SMS_SCHEME_NAME": "RSC登录",
+            "OAM_SMS_CREDENTIAL_MODE": "default_chain",
+            "OAM_SMS_ACCESS_KEY_ID": "",
+            "OAM_SMS_ACCESS_KEY_SECRET": "",
+            "OAM_SMS_SIGN_NAME": PILOT_SMS_SIGN_NAME,
+            "OAM_SMS_TEMPLATE_CODE": PILOT_SMS_TEMPLATE_CODE,
+            "OAM_SMS_SCHEME_NAME": PILOT_SMS_SCHEME_NAME,
+            "OAM_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS": "60",
+            "OAM_AUTH_LOGIN_RATE_LIMIT_GLOBAL_LIMIT": "300",
+            "OAM_AUTH_LOGIN_RATE_LIMIT_IP_LIMIT": "20",
+            "OAM_AUTH_LOGIN_RATE_LIMIT_IDENTITY_LIMIT": "8",
             "OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER": "aliyun_kms",
             "OAM_AUTH_IDEMPOTENCY_KMS_KEY_ID": "kms-auth-key",
             "OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION": "1",
@@ -138,15 +163,37 @@ def test_valid_pilot_configuration_passes_without_external_io(tmp_path):
     assert checks and all(item["ok"] for item in checks), checks
 
 
-def test_pilot_preflight_binds_pnvs_sts_expiry_to_login_gate(tmp_path):
+def test_pilot_preflight_rejects_legacy_sts_values_for_default_chain(tmp_path):
     document, compose_file = _document(tmp_path)
     environment = document["services"]["api"]["environment"]
     environment["OAM_SMS_SECURITY_TOKEN"] = "synthetic-pnvs-token-" + "x" * 32
     environment["OAM_SMS_SECURITY_TOKEN_EXPIRES_AT"] = (
         datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
-    assert {item["name"]: item["ok"] for item in checks_for(document, compose_file)}["h5_sms_login"]
+    assert not {item["name"]: item["ok"] for item in checks_for(document, compose_file)}["h5_sms_login"]
     environment["OAM_SMS_SECURITY_TOKEN_EXPIRES_AT"] = datetime.now(timezone.utc).isoformat()
     assert not {item["name"]: item["ok"] for item in checks_for(document, compose_file)}["h5_sms_login"]
+
+
+def test_pilot_preflight_rejects_static_credentials_even_when_coordinates_match(tmp_path):
+    document, compose_file = _document(tmp_path)
+    environment = document["services"]["api"]["environment"]
+    environment["OAM_SMS_CREDENTIAL_MODE"] = "static"
+    environment["OAM_SMS_ACCESS_KEY_ID"] = "synthetic-id"
+    environment["OAM_SMS_ACCESS_KEY_SECRET"] = "synthetic-secret"
+    checks = {item["name"]: item["ok"] for item in checks_for(document, compose_file)}
+    assert checks["h5_sms_login"] is False
+    assert checks["sms_static_credentials_empty"] is False
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["OAM_SMS_SIGN_NAME", "OAM_SMS_TEMPLATE_CODE", "OAM_SMS_SCHEME_NAME"],
+)
+def test_pilot_preflight_rejects_unreviewed_sms_coordinates(tmp_path, key):
+    document, compose_file = _document(tmp_path)
+    document["services"]["api"]["environment"][key] += "-drift"
+    checks = {item["name"]: item["ok"] for item in checks_for(document, compose_file)}
+    assert checks["h5_sms_login"] is False
 
 
 def test_pilot_preflight_rejects_password_login_and_writable_registry(tmp_path):
@@ -157,6 +204,23 @@ def test_pilot_preflight_rejects_password_login_and_writable_registry(tmp_path):
     assert checks["password_login_disabled"] is False
     assert checks["kms_registry_readonly_mount"] is False
     assert checks["kms_registry_structure_and_active_keys"] is False
+
+
+def test_pilot_preflight_rejects_wechat_login_and_invalid_sms_limits(tmp_path):
+    document, compose_file = _document(tmp_path)
+    environment = document["services"]["api"]["environment"]
+    environment["OAM_WECHAT_LOGIN_ENABLED"] = "true"
+    environment["OAM_AUTH_LOGIN_RATE_LIMIT_IP_LIMIT"] = "0"
+    checks = {item["name"]: item["ok"] for item in checks_for(document, compose_file)}
+    assert checks["wechat_login_disabled"] is False
+    assert checks["sms_login_rate_limits"] is False
+
+
+def test_pilot_preflight_rejects_a_non_mvp_release_scope(tmp_path):
+    document, compose_file = _document(tmp_path)
+    document["services"]["api"]["environment"]["OAM_RELEASE_SCOPE"] = "formal-v1"
+    checks = {item["name"]: item["ok"] for item in checks_for(document, compose_file)}
+    assert checks["pilot_mvp_scope"] is False
 
 
 def test_pilot_preflight_rejects_short_database_url_password(tmp_path):

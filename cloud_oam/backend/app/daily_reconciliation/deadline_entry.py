@@ -11,6 +11,7 @@ from sqlalchemy import event,text
 from sqlalchemy.orm import Session
 from psycopg.pq import TransactionStatus
 from . import cutoff_service as service
+from .capture_provisioning import REQUIRED_HEAD
 
 class DeadlineExceeded(RuntimeError):pass
 class OutcomeUnknown(RuntimeError):pass
@@ -72,7 +73,7 @@ def execute_ready(*,owner,source,ledger,command,access_token,expected_authorizat
   transaction=owner.begin()
   event.listen(owner,'before_cursor_execute',limit)
   with Session(bind=owner,autoflush=False) as db:
-   if tuple(db.scalars(text('SELECT version_num FROM alembic_version'))) != ('20261213_0164',):
+   if tuple(db.scalars(text('SELECT version_num FROM alembic_version'))) != (REQUIRED_HEAD,):
     raise EntryError('daily_capture_migration_head_mismatch')
    if operation in ('preview','recover'):
     from .capture_security import validate_capture_roles

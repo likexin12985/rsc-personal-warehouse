@@ -1,5 +1,6 @@
 """Recipient-only acceptance and exact-command recovery; never posts inventory."""
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from decimal import Decimal
 import hashlib
 import hmac
@@ -12,13 +13,13 @@ from ..demand_models import MaterialRequest, MaterialRequestLine
 from ..formal_access import lock_formal_principal_graph
 from ..foundation_models import AuditEvent, FileObject, OutboxEvent
 from ..inventory_models import (
-    InventorySerial, MaterialInventoryPolicy, OutboundPosting, OutboundPostingSerial, Receipt, ReceiptException, ReceiptLine,
+    CustodyAssignment, InventorySerial, MaterialInventoryPolicy, OutboundPosting, OutboundPostingSerial, Receipt, ReceiptException, ReceiptLine,
     ReceiptSerial, Shipment, ShipmentLine, ShipmentSerial, StockAccount,
 )
 from ..material_request_my_receipt_schemas import MyReceiptIn, MyReceiptLineOut, MyReceiptOut
 from . import material_request_my_receiving as receiving
 from . import material_request_query as query
-from .audit_chain import append_audit_event
+from .audit_chain import append_audit_event, verify_audit_event_in_read_snapshot, AuditChainError
 from .material_request_fulfillment_command import record_fulfillment_command, verify_fulfillment_command
 from .formal_files import is_available_formal_file_for_purpose
 from .notification_events import record_business_notification
@@ -87,6 +88,11 @@ def _package(db, context, request, shipment_id):
     if shipment is None or shipment.target_person_id != context.principal.person_id:
         _fail("shipment_not_found", "not_found", "本人包裹不存在")
     receiving._location(db, context=context, shipment=shipment, now=datetime.now(timezone.utc))
+    return _package_facts(db, request, shipment)
+
+
+def _package_facts(db, request, shipment):
+    """Immutable package/outbound associations; the caller authorizes access."""
     rows = tuple(db.scalars(select(ShipmentLine).where(ShipmentLine.shipment_id == shipment.id).order_by(ShipmentLine.id).limit(101)).all())
     if not 1 <= len(rows) <= 100:
         _fail("history_invalid", "service_unavailable", "包裹明细不完整")
@@ -225,21 +231,70 @@ def create_my_receipt(db, *, actor, request_id, payload, idempotency_key, secret
     return _result(db, context, request, receipt, replayed=False)
 
 
+@dataclass(frozen=True)
+class _ReceiptSubject:
+    """Historical identity coordinates only, deliberately not an authenticated principal."""
+    user_id: str
+    person_id: uuid.UUID
+
+
 def _result(db, context, request, receipt, *, replayed):
     shipment, rows = _package(db, context, request, receipt.shipment_id)
-    if receipt.receiver_person_id != context.principal.person_id or receipt.status not in {"accepted", "exception"}:
+    result = _receipt_result(db, context.principal, request, receipt, shipment, rows, replayed=replayed)
+    latest = query._load_read_context(db, actor=context.principal, now=None)
+    if latest.principal != context.principal:
+        _fail("context_changed", "precondition_failed", "验收期间权限已变化")
+    return result
+
+
+def verified_receipt_history(db, *, request, receipt):
+    """Verify original-requester acceptance for an independently authorized reader.
+
+    This internal fact verifier grants no access and cannot write. Warehouse
+    callers must authorize their own current scope first; the old engineer need
+    not retain a login, role assignment or current personal-warehouse custody.
+    """
+    with db.no_autoflush:
+        subject = _ReceiptSubject(request.requester_user_id, request.requester_person_id)
+        shipment = db.get(Shipment, receipt.shipment_id, populate_existing=True)
+        if shipment is None or shipment.target_person_id != subject.person_id:
+            _fail("history_invalid", "service_unavailable", "原包裹未绑定原申请人")
+        # Custody is checked at registration time, not against today's assignee.
+        at = receipt.created_at
+        custody = tuple(db.scalars(select(CustodyAssignment).where(
+            CustodyAssignment.location_id == shipment.target_location_id,
+            CustodyAssignment.valid_from <= at,
+            or_(CustodyAssignment.valid_to.is_(None), CustodyAssignment.valid_to > at),
+        ).limit(2)))
+        if len(custody) != 1 or custody[0].custodian_person_id != subject.person_id:
+            _fail("history_invalid", "service_unavailable", "原验收时点的保管责任证据不唯一")
+        shipment, rows = _package_facts(db, request, shipment)
+        return _receipt_result(db, subject, request, receipt, shipment, rows, replayed=True)
+
+
+def _receipt_result(db, subject, request, receipt, shipment, rows, *, replayed):
+    if receipt.receiver_person_id != subject.person_id or receipt.status not in {"accepted", "exception"}:
         _fail("history_invalid", "service_unavailable", "验收结果未绑定当前人员")
     audit = tuple(db.scalars(select(AuditEvent).where(AuditEvent.action == "my_receipt_registered", AuditEvent.aggregate_type == "receipt", AuditEvent.aggregate_id == str(receipt.id))).all())
-    if len(audit) != 1 or audit[0].actor_user_id != context.principal.user_id or audit[0].after_jsonb.get("request_hash") != receipt.request_hash or audit[0].after_jsonb.get("request_id") != str(request.id):
+    if len(audit) != 1 or audit[0].actor_user_id != subject.user_id or audit[0].after_jsonb.get("request_hash") != receipt.request_hash or audit[0].after_jsonb.get("request_id") != str(request.id):
         _fail("history_invalid", "service_unavailable", "原验收请求证据不完整")
     try:
         original = MyReceiptIn.model_validate(audit[0].after_jsonb["command"])
     except (ValueError, KeyError, TypeError):
         _fail("history_invalid", "service_unavailable", "原验收请求证据不完整")
-    if request_hash(request.id, context.principal.person_id, original) != receipt.request_hash or original.shipment_id != shipment.id:
+    if request_hash(request.id, subject.person_id, original) != receipt.request_hash or original.shipment_id != shipment.id:
         _fail("history_invalid", "service_unavailable", "验收请求指纹不一致")
-    verify_fulfillment_command(db, request=request, actor=context.principal, operation="receipt", fact=receipt,
+    command = verify_fulfillment_command(db, request=request, actor=subject, operation="receipt", fact=receipt,
         request_reference=f"/api/v1/material-requests/{request.id}/my-receipts", expected_version=original.expected_request_version + 1)
+    if command.target_version > request.version:
+        _fail("history_invalid", "service_unavailable", "原验收版本超出当前需求历史")
+    version_audit = db.scalar(select(AuditEvent).where(AuditEvent.action == "fulfillment_version_recorded",
+        AuditEvent.aggregate_type == "receipt", AuditEvent.aggregate_id == str(receipt.id)))
+    try:
+        for event in (audit[0], version_audit):
+            verify_audit_event_in_read_snapshot(db, stream_key="material_request", event_id=event.id)
+    except AuditChainError:
+        _fail("history_invalid", "service_unavailable", "原验收审计链不完整")
     original_at = datetime.fromisoformat(original.received_at.replace("Z", "+00:00"))
     stored_at = receipt.received_at.replace(tzinfo=timezone.utc) if receipt.received_at.tzinfo is None else receipt.received_at
     if original_at != stored_at:
@@ -259,10 +314,7 @@ def _result(db, context, request, receipt, *, replayed):
     normalized = lambda line: {**line.model_dump(mode="json", exclude={"receipt_line_id"}), "accepted_serial_ids": sorted(str(s) for s in line.accepted_serial_ids), "rejected_serial_ids": sorted(str(s) for s in line.rejected_serial_ids)}
     if [normalized(x) for x in output] != [normalized(x) for x in sorted(original.lines, key=lambda x: str(x.shipment_line_id))]:
         _fail("history_invalid", "service_unavailable", "验收明细与原请求不一致")
-    latest = query._load_read_context(db, actor=context.principal, now=None)
-    if latest.principal != context.principal:
-        _fail("context_changed", "precondition_failed", "验收期间权限已变化")
-    return MyReceiptOut(request_id=request.id, person_id=context.principal.person_id, receipt_id=receipt.id, receipt_no=receipt.receipt_no, shipment_id=shipment.id, received_at=receipt.received_at.replace(tzinfo=timezone.utc) if receipt.received_at.tzinfo is None else receipt.received_at, status=receipt.status, request_hash=receipt.request_hash, lines=tuple(output), idempotency_replayed=replayed)
+    return MyReceiptOut(request_id=request.id, person_id=subject.person_id, receipt_id=receipt.id, receipt_no=receipt.receipt_no, shipment_id=shipment.id, received_at=receipt.received_at.replace(tzinfo=timezone.utc) if receipt.received_at.tzinfo is None else receipt.received_at, status=receipt.status, request_hash=receipt.request_hash, lines=tuple(output), idempotency_replayed=replayed)
 
 
 def my_receipt_command_status(db, *, actor, request_id, idempotency_key, secret):

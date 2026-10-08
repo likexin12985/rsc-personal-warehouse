@@ -1,0 +1,447 @@
+{
+  "provenance": {
+    "native_directory": "artifacts/local-fulfillment-http-pg16/run-_igena1g",
+    "synthetic_identity_and_files": true,
+    "actual_http_pg16": true
+  },
+  "acceptance": {
+    "schema_version": "1.0",
+    "source": {
+      "return_id": "d973d4dc-2ba3-4969-a556-71a3a483cb96",
+      "return_no": "RJR-CBB08A3B22F34711B802F8A1A55C1857",
+      "request_id": "865337f0-b002-4a35-8279-d9e6d7d4039f",
+      "request_version": 11,
+      "registration_request_hash": "852e96bd750c7d4120be4fc11aefabd149d5095546b7ba0b9696c5183173d13a",
+      "handover_id": "de693ca8-2f9f-44f1-a058-c372437967c5",
+      "handover_request_hash": "9b8b6bd08b56463fa87c655b2bab45700621cf6f1b0788dc9e38271f15a61abe",
+      "handed_over_at": "2026-10-06T09:35:15.339768Z",
+      "carrier": "合成承运商",
+      "tracking_no": "RETURN-native-progress-ab3ef0ca1945429d96153646370af721",
+      "quantity": "3.000",
+      "material_id": "aeb9c027-6dec-472a-a762-cf613f06c27e",
+      "sku_code": "PG16-STK-SKU-F97EC79503104B7796B429FFF422E204",
+      "material_name": "Synthetic opening quantity",
+      "base_unit": "piece",
+      "lot_id": null,
+      "source_condition": "new",
+      "original_exception": "rejected",
+      "serials": [],
+      "target_location_id": "22f01b9e-dc59-4f3d-9b7d-d8b04c29c453",
+      "target_location_name": "PostgreSQL 16 差异回放锁序空仓",
+      "custody_assignment_id": "4f94d8bc-99e3-45ee-a21c-fd934d990169",
+      "receiver_person_id": "dac1ebff-a568-4b76-be6f-e33c1d2ad1a9",
+      "authorization_version": 1,
+      "status": "handed_over",
+      "tracking_mode": "none",
+      "quantity_scale": 3,
+      "allow_fraction": true
+    },
+    "accepted_qty": "2.000",
+    "rejected_qty": "0.000",
+    "damaged_qty": "1.000",
+    "unconfirmed_qty": "1.000",
+    "posted_qty": "0.000",
+    "pending_inbound_qty": "2.000",
+    "unconfirmed_serials": [],
+    "receive_permitted": false,
+    "receipts": [
+      {
+        "receipt": {
+          "receipt_id": "7528fbaf-09bc-4874-b548-556ef937333c",
+          "return_id": "d973d4dc-2ba3-4969-a556-71a3a483cb96",
+          "request_id": "865337f0-b002-4a35-8279-d9e6d7d4039f",
+          "request_version": 11,
+          "receiver_person_id": "dac1ebff-a568-4b76-be6f-e33c1d2ad1a9",
+          "target_location_id": "22f01b9e-dc59-4f3d-9b7d-d8b04c29c453",
+          "custody_assignment_id": "4f94d8bc-99e3-45ee-a21c-fd934d990169",
+          "handover_id": "de693ca8-2f9f-44f1-a058-c372437967c5",
+          "received_at": "2026-10-06T09:35:15.339768Z",
+          "recorded_at": "2026-10-06T09:35:40.125394Z",
+          "amounts": {
+            "accepted_qty": "0.000",
+            "rejected_qty": "0.000",
+            "damaged_qty": "0.000",
+            "shortage_qty": "3.000",
+            "accepted_serial_verifications": [],
+            "damaged_serial_ids": [],
+            "rejected_serial_ids": [],
+            "shortage_serial_ids": [],
+            "exceptions": [
+              {
+                "exception_type": "shortage",
+                "description": "本次实物未到，短少不核销待收数量",
+                "evidence_file_id": "d86d2b01-5cce-4194-9271-358157919c65"
+              }
+            ]
+          },
+          "reason": "来源仓实物验收独立事实",
+          "observed_sku_code": null,
+          "request_hash": "a9b25f0799dffc67d1ed9e68f2abd016b8cfb6a336646d3dcda5f1c86960206b",
+          "replayed": true
+        },
+        "inbound": null,
+        "post_permitted": false
+      },
+      {
+        "receipt": {
+          "receipt_id": "b7f5f1d9-b2e7-47de-bdbc-acc92e108840",
+          "return_id": "d973d4dc-2ba3-4969-a556-71a3a483cb96",
+          "request_id": "865337f0-b002-4a35-8279-d9e6d7d4039f",
+          "request_version": 11,
+          "receiver_person_id": "dac1ebff-a568-4b76-be6f-e33c1d2ad1a9",
+          "target_location_id": "22f01b9e-dc59-4f3d-9b7d-d8b04c29c453",
+          "custody_assignment_id": "4f94d8bc-99e3-45ee-a21c-fd934d990169",
+          "handover_id": "de693ca8-2f9f-44f1-a058-c372437967c5",
+          "received_at": "2026-10-06T09:35:15.339768Z",
+          "recorded_at": "2026-10-06T09:35:40.436562Z",
+          "amounts": {
+            "accepted_qty": "2.000",
+            "rejected_qty": "0.000",
+            "damaged_qty": "1.000",
+            "shortage_qty": "0.000",
+            "accepted_serial_verifications": [],
+            "damaged_serial_ids": [],
+            "rejected_serial_ids": [],
+            "shortage_serial_ids": [],
+            "exceptions": [
+              {
+                "exception_type": "damaged",
+                "description": "实物破损验收，尚未独立坏件入库",
+                "evidence_file_id": "48f0517a-d29c-47a9-8ecf-0e172d0a2619"
+              }
+            ]
+          },
+          "reason": "来源仓实物验收独立事实",
+          "observed_sku_code": "PG16-STK-SKU-F97EC79503104B7796B429FFF422E204",
+          "request_hash": "2365b05e9ff4b86511e57c982b1e5ecc7e9e6eb4017504d03c7860c8f65aa7d2",
+          "replayed": true
+        },
+        "inbound": null,
+        "post_permitted": false
+      }
+    ]
+  },
+  "posted": {
+    "schema_version": "1.0",
+    "source": {
+      "return_id": "d973d4dc-2ba3-4969-a556-71a3a483cb96",
+      "return_no": "RJR-CBB08A3B22F34711B802F8A1A55C1857",
+      "request_id": "865337f0-b002-4a35-8279-d9e6d7d4039f",
+      "request_version": 11,
+      "registration_request_hash": "852e96bd750c7d4120be4fc11aefabd149d5095546b7ba0b9696c5183173d13a",
+      "handover_id": "de693ca8-2f9f-44f1-a058-c372437967c5",
+      "handover_request_hash": "9b8b6bd08b56463fa87c655b2bab45700621cf6f1b0788dc9e38271f15a61abe",
+      "handed_over_at": "2026-10-06T09:35:15.339768Z",
+      "carrier": "合成承运商",
+      "tracking_no": "RETURN-native-progress-ab3ef0ca1945429d96153646370af721",
+      "quantity": "3.000",
+      "material_id": "aeb9c027-6dec-472a-a762-cf613f06c27e",
+      "sku_code": "PG16-STK-SKU-F97EC79503104B7796B429FFF422E204",
+      "material_name": "Synthetic opening quantity",
+      "base_unit": "piece",
+      "lot_id": null,
+      "source_condition": "new",
+      "original_exception": "rejected",
+      "serials": [],
+      "target_location_id": "22f01b9e-dc59-4f3d-9b7d-d8b04c29c453",
+      "target_location_name": "PostgreSQL 16 差异回放锁序空仓",
+      "custody_assignment_id": "4f94d8bc-99e3-45ee-a21c-fd934d990169",
+      "receiver_person_id": "dac1ebff-a568-4b76-be6f-e33c1d2ad1a9",
+      "authorization_version": 1,
+      "status": "handed_over",
+      "tracking_mode": "none",
+      "quantity_scale": 3,
+      "allow_fraction": true
+    },
+    "accepted_qty": "2.000",
+    "rejected_qty": "0.000",
+    "damaged_qty": "1.000",
+    "unconfirmed_qty": "1.000",
+    "posted_qty": "2.000",
+    "pending_inbound_qty": "0.000",
+    "unconfirmed_serials": [],
+    "receive_permitted": false,
+    "receipts": [
+      {
+        "receipt": {
+          "receipt_id": "7528fbaf-09bc-4874-b548-556ef937333c",
+          "return_id": "d973d4dc-2ba3-4969-a556-71a3a483cb96",
+          "request_id": "865337f0-b002-4a35-8279-d9e6d7d4039f",
+          "request_version": 11,
+          "receiver_person_id": "dac1ebff-a568-4b76-be6f-e33c1d2ad1a9",
+          "target_location_id": "22f01b9e-dc59-4f3d-9b7d-d8b04c29c453",
+          "custody_assignment_id": "4f94d8bc-99e3-45ee-a21c-fd934d990169",
+          "handover_id": "de693ca8-2f9f-44f1-a058-c372437967c5",
+          "received_at": "2026-10-06T09:35:15.339768Z",
+          "recorded_at": "2026-10-06T09:35:40.125394Z",
+          "amounts": {
+            "accepted_qty": "0.000",
+            "rejected_qty": "0.000",
+            "damaged_qty": "0.000",
+            "shortage_qty": "3.000",
+            "accepted_serial_verifications": [],
+            "damaged_serial_ids": [],
+            "rejected_serial_ids": [],
+            "shortage_serial_ids": [],
+            "exceptions": [
+              {
+                "exception_type": "shortage",
+                "description": "本次实物未到，短少不核销待收数量",
+                "evidence_file_id": "d86d2b01-5cce-4194-9271-358157919c65"
+              }
+            ]
+          },
+          "reason": "来源仓实物验收独立事实",
+          "observed_sku_code": null,
+          "request_hash": "a9b25f0799dffc67d1ed9e68f2abd016b8cfb6a336646d3dcda5f1c86960206b",
+          "replayed": true
+        },
+        "inbound": null,
+        "post_permitted": false
+      },
+      {
+        "receipt": {
+          "receipt_id": "b7f5f1d9-b2e7-47de-bdbc-acc92e108840",
+          "return_id": "d973d4dc-2ba3-4969-a556-71a3a483cb96",
+          "request_id": "865337f0-b002-4a35-8279-d9e6d7d4039f",
+          "request_version": 11,
+          "receiver_person_id": "dac1ebff-a568-4b76-be6f-e33c1d2ad1a9",
+          "target_location_id": "22f01b9e-dc59-4f3d-9b7d-d8b04c29c453",
+          "custody_assignment_id": "4f94d8bc-99e3-45ee-a21c-fd934d990169",
+          "handover_id": "de693ca8-2f9f-44f1-a058-c372437967c5",
+          "received_at": "2026-10-06T09:35:15.339768Z",
+          "recorded_at": "2026-10-06T09:35:40.436562Z",
+          "amounts": {
+            "accepted_qty": "2.000",
+            "rejected_qty": "0.000",
+            "damaged_qty": "1.000",
+            "shortage_qty": "0.000",
+            "accepted_serial_verifications": [],
+            "damaged_serial_ids": [],
+            "rejected_serial_ids": [],
+            "shortage_serial_ids": [],
+            "exceptions": [
+              {
+                "exception_type": "damaged",
+                "description": "实物破损验收，尚未独立坏件入库",
+                "evidence_file_id": "48f0517a-d29c-47a9-8ecf-0e172d0a2619"
+              }
+            ]
+          },
+          "reason": "来源仓实物验收独立事实",
+          "observed_sku_code": "PG16-STK-SKU-F97EC79503104B7796B429FFF422E204",
+          "request_hash": "2365b05e9ff4b86511e57c982b1e5ecc7e9e6eb4017504d03c7860c8f65aa7d2",
+          "replayed": true
+        },
+        "inbound": {
+          "inbound_id": "26a3f60e-9aff-4930-b083-f30af8bc4025",
+          "receipt_id": "b7f5f1d9-b2e7-47de-bdbc-acc92e108840",
+          "return_id": "d973d4dc-2ba3-4969-a556-71a3a483cb96",
+          "request_id": "865337f0-b002-4a35-8279-d9e6d7d4039f",
+          "inventory_transaction_id": "4f74d4d1-4fad-4ce6-9adb-5d88685a9590",
+          "target_location_id": "22f01b9e-dc59-4f3d-9b7d-d8b04c29c453",
+          "request_hash": "914838d8a02a384422d3e0938291d4e20e49576a0acd2351391b7d37ea262264",
+          "plan_hash": "986de4ace675c3edf942b9a0ea3fc860711c54081509083aa0aa36bb00c2c198",
+          "replayed": true
+        },
+        "post_permitted": false
+      }
+    ]
+  },
+  "inbox": {
+    "schema_version": "1.0",
+    "person_id": "dac1ebff-a568-4b76-be6f-e33c1d2ad1a9",
+    "authorization_version": 1,
+    "items": [
+      {
+        "return_id": "d973d4dc-2ba3-4969-a556-71a3a483cb96",
+        "verification_status": "verified",
+        "message": "交运、逐次验收和独立入账已核验",
+        "detail": {
+          "schema_version": "1.0",
+          "source": {
+            "return_id": "d973d4dc-2ba3-4969-a556-71a3a483cb96",
+            "return_no": "RJR-CBB08A3B22F34711B802F8A1A55C1857",
+            "request_id": "865337f0-b002-4a35-8279-d9e6d7d4039f",
+            "request_version": 11,
+            "registration_request_hash": "852e96bd750c7d4120be4fc11aefabd149d5095546b7ba0b9696c5183173d13a",
+            "handover_id": "de693ca8-2f9f-44f1-a058-c372437967c5",
+            "handover_request_hash": "9b8b6bd08b56463fa87c655b2bab45700621cf6f1b0788dc9e38271f15a61abe",
+            "handed_over_at": "2026-10-06T09:35:15.339768Z",
+            "carrier": "合成承运商",
+            "tracking_no": "RETURN-native-progress-ab3ef0ca1945429d96153646370af721",
+            "quantity": "3.000",
+            "material_id": "aeb9c027-6dec-472a-a762-cf613f06c27e",
+            "sku_code": "PG16-STK-SKU-F97EC79503104B7796B429FFF422E204",
+            "material_name": "Synthetic opening quantity",
+            "base_unit": "piece",
+            "lot_id": null,
+            "source_condition": "new",
+            "original_exception": "rejected",
+            "serials": [],
+            "target_location_id": "22f01b9e-dc59-4f3d-9b7d-d8b04c29c453",
+            "target_location_name": "PostgreSQL 16 差异回放锁序空仓",
+            "custody_assignment_id": "4f94d8bc-99e3-45ee-a21c-fd934d990169",
+            "receiver_person_id": "dac1ebff-a568-4b76-be6f-e33c1d2ad1a9",
+            "authorization_version": 1,
+            "status": "handed_over",
+            "tracking_mode": "none",
+            "quantity_scale": 3,
+            "allow_fraction": true
+          },
+          "accepted_qty": "2.000",
+          "rejected_qty": "0.000",
+          "damaged_qty": "1.000",
+          "unconfirmed_qty": "1.000",
+          "posted_qty": "0.000",
+          "pending_inbound_qty": "2.000",
+          "unconfirmed_serials": [],
+          "receive_permitted": false,
+          "receipts": [
+            {
+              "receipt": {
+                "receipt_id": "7528fbaf-09bc-4874-b548-556ef937333c",
+                "return_id": "d973d4dc-2ba3-4969-a556-71a3a483cb96",
+                "request_id": "865337f0-b002-4a35-8279-d9e6d7d4039f",
+                "request_version": 11,
+                "receiver_person_id": "dac1ebff-a568-4b76-be6f-e33c1d2ad1a9",
+                "target_location_id": "22f01b9e-dc59-4f3d-9b7d-d8b04c29c453",
+                "custody_assignment_id": "4f94d8bc-99e3-45ee-a21c-fd934d990169",
+                "handover_id": "de693ca8-2f9f-44f1-a058-c372437967c5",
+                "received_at": "2026-10-06T09:35:15.339768Z",
+                "recorded_at": "2026-10-06T09:35:40.125394Z",
+                "amounts": {
+                  "accepted_qty": "0.000",
+                  "rejected_qty": "0.000",
+                  "damaged_qty": "0.000",
+                  "shortage_qty": "3.000",
+                  "accepted_serial_verifications": [],
+                  "damaged_serial_ids": [],
+                  "rejected_serial_ids": [],
+                  "shortage_serial_ids": [],
+                  "exceptions": [
+                    {
+                      "exception_type": "shortage",
+                      "description": "本次实物未到，短少不核销待收数量",
+                      "evidence_file_id": "d86d2b01-5cce-4194-9271-358157919c65"
+                    }
+                  ]
+                },
+                "reason": "来源仓实物验收独立事实",
+                "observed_sku_code": null,
+                "request_hash": "a9b25f0799dffc67d1ed9e68f2abd016b8cfb6a336646d3dcda5f1c86960206b",
+                "replayed": true
+              },
+              "inbound": null,
+              "post_permitted": false
+            },
+            {
+              "receipt": {
+                "receipt_id": "b7f5f1d9-b2e7-47de-bdbc-acc92e108840",
+                "return_id": "d973d4dc-2ba3-4969-a556-71a3a483cb96",
+                "request_id": "865337f0-b002-4a35-8279-d9e6d7d4039f",
+                "request_version": 11,
+                "receiver_person_id": "dac1ebff-a568-4b76-be6f-e33c1d2ad1a9",
+                "target_location_id": "22f01b9e-dc59-4f3d-9b7d-d8b04c29c453",
+                "custody_assignment_id": "4f94d8bc-99e3-45ee-a21c-fd934d990169",
+                "handover_id": "de693ca8-2f9f-44f1-a058-c372437967c5",
+                "received_at": "2026-10-06T09:35:15.339768Z",
+                "recorded_at": "2026-10-06T09:35:40.436562Z",
+                "amounts": {
+                  "accepted_qty": "2.000",
+                  "rejected_qty": "0.000",
+                  "damaged_qty": "1.000",
+                  "shortage_qty": "0.000",
+                  "accepted_serial_verifications": [],
+                  "damaged_serial_ids": [],
+                  "rejected_serial_ids": [],
+                  "shortage_serial_ids": [],
+                  "exceptions": [
+                    {
+                      "exception_type": "damaged",
+                      "description": "实物破损验收，尚未独立坏件入库",
+                      "evidence_file_id": "48f0517a-d29c-47a9-8ecf-0e172d0a2619"
+                    }
+                  ]
+                },
+                "reason": "来源仓实物验收独立事实",
+                "observed_sku_code": "PG16-STK-SKU-F97EC79503104B7796B429FFF422E204",
+                "request_hash": "2365b05e9ff4b86511e57c982b1e5ecc7e9e6eb4017504d03c7860c8f65aa7d2",
+                "replayed": true
+              },
+              "inbound": null,
+              "post_permitted": false
+            }
+          ]
+        }
+      }
+    ],
+    "next_after_id": null
+  },
+  "preview": {
+    "schema_version": "1.0",
+    "return_id": "d973d4dc-2ba3-4969-a556-71a3a483cb96",
+    "receipt_id": "b7f5f1d9-b2e7-47de-bdbc-acc92e108840",
+    "request_id": "865337f0-b002-4a35-8279-d9e6d7d4039f",
+    "request_version": 11,
+    "person_id": "dac1ebff-a568-4b76-be6f-e33c1d2ad1a9",
+    "authorization_version": 1,
+    "receipt_request_hash": "2365b05e9ff4b86511e57c982b1e5ecc7e9e6eb4017504d03c7860c8f65aa7d2",
+    "plan_hash": "986de4ace675c3edf942b9a0ea3fc860711c54081509083aa0aa36bb00c2c198",
+    "target_location_id": "22f01b9e-dc59-4f3d-9b7d-d8b04c29c453",
+    "target_location_name": "PostgreSQL 16 差异回放锁序空仓",
+    "sku_code": "PG16-STK-SKU-F97EC79503104B7796B429FFF422E204",
+    "material_name": "Synthetic opening quantity",
+    "parts": [
+      {
+        "condition_code": "new",
+        "quantity": "1.000",
+        "serials": []
+      },
+      {
+        "condition_code": "damaged",
+        "quantity": "1.000",
+        "serials": []
+      }
+    ]
+  },
+  "identity": {
+    "person_id": "dac1ebff-a568-4b76-be6f-e33c1d2ad1a9",
+    "authorization_version": 1
+  },
+  "receipt_command": {
+    "expected_request_version": 11,
+    "reason": "来源仓实物验收独立事实",
+    "registration_request_hash": "852e96bd750c7d4120be4fc11aefabd149d5095546b7ba0b9696c5183173d13a",
+    "handover_id": "de693ca8-2f9f-44f1-a058-c372437967c5",
+    "handover_request_hash": "9b8b6bd08b56463fa87c655b2bab45700621cf6f1b0788dc9e38271f15a61abe",
+    "custody_assignment_id": "4f94d8bc-99e3-45ee-a21c-fd934d990169",
+    "received_at": "2026-10-06T09:35:15.339768Z",
+    "amounts": {
+      "accepted_qty": "2.000",
+      "rejected_qty": "0.000",
+      "damaged_qty": "1.000",
+      "shortage_qty": "0.000",
+      "accepted_serial_verifications": [],
+      "damaged_serial_ids": [],
+      "rejected_serial_ids": [],
+      "shortage_serial_ids": [],
+      "exceptions": [
+        {
+          "exception_type": "damaged",
+          "description": "实物破损验收，尚未独立坏件入库",
+          "evidence_file_id": "48f0517a-d29c-47a9-8ecf-0e172d0a2619"
+        }
+      ]
+    },
+    "observed_sku_code": "PG16-STK-SKU-F97EC79503104B7796B429FFF422E204"
+  },
+  "inbound_command": {
+    "expected_request_version": 11,
+    "reason": "来源仓已验收实物独立入账",
+    "receipt_request_hash": "2365b05e9ff4b86511e57c982b1e5ecc7e9e6eb4017504d03c7860c8f65aa7d2",
+    "expected_plan_hash": "986de4ace675c3edf942b9a0ea3fc860711c54081509083aa0aa36bb00c2c198"
+  },
+  "receipt_fingerprint": "5f7a7e3586762f4a0a7defe8e9055f2ac8dafd2b68ad899cb6c254592ca954f0",
+  "inbound_fingerprint": "c1450dad9c769c971db64ed133a49e9705e84033510b2341706b46dac4a444db"
+}

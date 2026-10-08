@@ -15,6 +15,9 @@ RUN pip install --no-cache-dir --no-build-isolation --require-hashes --index-url
 RUN pip uninstall -y setuptools wheel
 COPY app ./app
 COPY formal_file_integrity.py ./formal_file_integrity.py
+COPY migration_script_cache.py ./migration_script_cache.py
+COPY migration_runner.py ./migration_runner.py
+COPY migration_capture_roles.py ./migration_capture_roles.py
 RUN mkdir -p /data/uploads
 
 EXPOSE 8000

@@ -9,9 +9,9 @@ PRIVATE_PATH=${SMOKE_PRIVATE_PATH:-/xx/}
 CURL_CONNECT_TIMEOUT=${SMOKE_CURL_CONNECT_TIMEOUT:-3}
 CURL_MAX_TIME=${SMOKE_CURL_MAX_TIME:-10}
 case "$PRIVATE_PATH" in
-  /*) ;;
+  /xx/) ;;
   *)
-    printf '%s\n' 'SMOKE_PRIVATE_PATH must begin with /' >&2
+    printf '%s\n' 'SMOKE_PRIVATE_PATH must be exactly /xx/' >&2
     exit 2
     ;;
 esac
@@ -34,22 +34,35 @@ curl_readonly() {
 }
 
 HEALTH=$(curl_readonly -fsS "$BASE_URL/api/health")
+HEALTH_LIVE=$(curl_readonly -fsS "$BASE_URL/api/health/live")
+HEALTH_READY=$(curl_readonly -fsS "$BASE_URL/api/health/ready")
+HEALTH_HEADERS=$(curl_readonly -fsS -D - -o /dev/null "$BASE_URL/api/health")
+HEALTH_LIVE_HEADERS=$(curl_readonly -fsS -D - -o /dev/null "$BASE_URL/api/health/live")
+HEALTH_READY_HEADERS=$(curl_readonly -fsS -D - -o /dev/null "$BASE_URL/api/health/ready")
 PUBLIC_HOME=$(curl_readonly -fsS --max-filesize 262144 "$BASE_URL/")
 PUBLIC_LOGIN_ALIAS=$(curl_readonly -fsS --max-filesize 262144 "$BASE_URL/login")
 PRIVATE_HOME=$(curl_readonly -fsS --max-filesize 262144 "$BASE_URL$PRIVATE_PATH")
 OPTIONS=$(curl_readonly -fsS "$BASE_URL/api/auth/login-options")
+OPTIONS_HEADERS=$(curl_readonly -fsS -D - -o /dev/null "$BASE_URL/api/auth/login-options")
 AUTH_GUARD_STATUS=$(curl_readonly -sS -o /dev/null -w '%{http_code}' \
   "$BASE_URL/api/auth/me")
+AUTH_GUARD_HEADERS=$(curl_readonly -sS -D - -o /dev/null \
+  "$BASE_URL/api/auth/me")
+EXPECTED_RELEASE_SCOPE=${SMOKE_EXPECTED_RELEASE_SCOPE:-}
 
-python3 - "$HEALTH" "$PUBLIC_HOME" "$PUBLIC_LOGIN_ALIAS" "$PRIVATE_HOME" "$OPTIONS" "$AUTH_GUARD_STATUS" <<'PY'
+python3 - "$HEALTH" "$HEALTH_LIVE" "$HEALTH_READY" "$HEALTH_HEADERS" "$HEALTH_LIVE_HEADERS" "$HEALTH_READY_HEADERS" "$PUBLIC_HOME" "$PUBLIC_LOGIN_ALIAS" "$PRIVATE_HOME" "$OPTIONS" "$OPTIONS_HEADERS" "$AUTH_GUARD_STATUS" "$AUTH_GUARD_HEADERS" "$EXPECTED_RELEASE_SCOPE" <<'PY'
 import json
 import re
 import sys
 
-health = json.loads(sys.argv[1])
-public_home, public_login_alias, private_home = sys.argv[2:5]
-options = json.loads(sys.argv[5])
-auth_guard_status = int(sys.argv[6])
+health, health_live, health_ready = (json.loads(value) for value in sys.argv[1:4])
+health_headers, health_live_headers, health_ready_headers = sys.argv[4:7]
+public_home, public_login_alias, private_home = sys.argv[7:10]
+options = json.loads(sys.argv[10])
+options_headers = sys.argv[11]
+auth_guard_status = int(sys.argv[12])
+auth_guard_headers = sys.argv[13]
+expected_release_scope = sys.argv[14]
 
 def public_entry(document):
     return (len(document) <= 262144
@@ -62,12 +75,26 @@ def private_entry(document):
             and re.search(r'<title>\s*RSC个人仓\s*</title>', document) is not None
             and re.search(r'<script\b[^>]*\bsrc="/xx/assets/[^\"]+"', document) is not None)
 
-assert health.get("ok") is True, health
+assert health.get("ok") is True and health.get("status") == "ready", health
+assert health_live.get("ok") is True and health_live.get("status") == "live", health_live
+assert health_ready.get("ok") is True and health_ready.get("status") == "ready", health_ready
+for headers in (health_headers, health_live_headers, health_ready_headers):
+    assert "cache-control: no-store, max-age=0" in headers.lower(), headers
+assert "cache-control: no-store, max-age=0" in options_headers.lower(), options_headers
+assert "pragma: no-cache" in options_headers.lower(), options_headers
+assert "referrer-policy: no-referrer" in options_headers.lower(), options_headers
+assert "cache-control: private, no-store, max-age=0" in auth_guard_headers.lower(), auth_guard_headers
+assert "pragma: no-cache" in auth_guard_headers.lower(), auth_guard_headers
+assert "referrer-policy: no-referrer" in auth_guard_headers.lower(), auth_guard_headers
+if expected_release_scope:
+    for probe in (health, health_live, health_ready):
+        assert probe.get("release_scope") == expected_release_scope, probe
 assert public_entry(public_home), "public_home_not_knowledge_entry"
 assert public_entry(public_login_alias), "login_alias_not_public_entry"
 assert private_entry(private_home), "private_home_not_warehouse_entry"
 assert options.get("password_enabled") is False, options
-assert options.get("sms_enabled") is True or options.get("wechat_enabled") is True, options
+assert options.get("wechat_enabled") is False, options
+assert options.get("sms_enabled") is True, options
 assert auth_guard_status == 401, auth_guard_status
 PY
 
@@ -86,7 +113,13 @@ curl_readonly -fsS --max-filesize 1048576 "$BASE_URL$PUBLIC_BUNDLE_PATH" | pytho
 import sys
 
 bundle = sys.stdin.buffer.read(1048577)
-required = ("资料待更新", "星星后台管理", "豫ICP备2026043964号-1", "https://beian.miit.gov.cn/")
+required = (
+    "资料待更新",
+    "星星后台管理",
+    "https://rscwz.cn/xx",
+    "豫ICP备2026043964号-1",
+    "https://beian.miit.gov.cn/",
+)
 forbidden = ("验证码登录", "/auth/me", "/auth/refresh", "/auth/sms", "cloud-oam-auth-refresh", "inventory-transactions")
 assert 0 < len(bundle) <= 1048576 and all(value.encode() in bundle for value in required) and not any(value.encode() in bundle for value in forbidden), "public_bundle_invalid"
 '

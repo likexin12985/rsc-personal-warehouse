@@ -14,7 +14,7 @@ it("opens the public homepage without authentication, session reads or network c
   const storage = vi.spyOn(Storage.prototype, "getItem");
   render(<PublicKnowledge data={{ ...catalog, status: "pending", verifiedAt: null, sourceSha256: null, items: [] }} />);
   expect(screen.getByText("资料待更新")).toBeTruthy();
-  expect(screen.getByRole("link", { name: "星星后台管理" }).getAttribute("href")).toBe("/xx");
+  expect(screen.getByRole("link", { name: "星星后台管理" }).getAttribute("href")).toBe("https://rscwz.cn/xx");
   expect(screen.getByText("豫ICP备2026043964号-1")).toBeTruthy();
   expect(screen.getByRole("link", { name: "工业和信息化部备案管理系统" }).getAttribute("href")).toBe("https://beian.miit.gov.cn/");
   expect(screen.queryByText(/登录|验证码|个人仓/)).toBeNull();

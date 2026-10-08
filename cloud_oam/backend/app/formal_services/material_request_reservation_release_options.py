@@ -7,7 +7,7 @@ from sqlalchemy import select
 from ..demand_models import MaterialRequest
 from ..inventory_models import (
     InventorySerial, SerialCurrentPosition, StockAccount, StockReservation,
-    StockReservationSerial, StockReservationReleaseSerial,
+    StockReservationSerial,
 )
 from ..material_request_reservation_release_schemas import ReservationReleaseOptionsOut
 from . import inventory_query, material_request_query, material_request_reservation as reserve
@@ -38,7 +38,7 @@ def _list(db, *, actor, request_id, line_id):
         release._fail("line_not_found", "not_found", "需求明细不存在")
     if line.revision_id != view.current_revision_id or line.revision_no != view.current_revision_no:
         release._fail("revision_stale", "conflict", "需求明细版本已变化")
-    if view.states.request_status not in {"approved", "partially_approved"} or view.states.outbound_status != "not_started":
+    if view.states.request_status not in {"approved", "partially_approved"}:
         release._fail("state_invalid", "precondition_failed", "当前需求状态不允许直接释放占用")
     inventory_query._require_inventory_read(db, actor)
     facts = tuple(db.scalars(select(StockReservation).where(
@@ -69,9 +69,8 @@ def _list(db, *, actor, request_id, line_id):
     total_serials = 0
     for fact in visible:
         release.authorize_release_accounts(db, actor, fact.stock_account_id, fact.source_stock_account_id)
-        reserve._verified_history(db, fact=fact, request=request)
-        used = release.released_quantity(db, fact.id)
-        remaining = fact.reserved_qty - used
+        reserve._verified_history(db, fact=fact, request=request, lock_audit=False)
+        remaining, used, used_serials = release.unpicked_remainder(db, request=request, reservation=fact)
         if remaining < 0: release._history_invalid()
         if remaining == 0: continue
         row = rows[fact.stock_account_id]
@@ -86,12 +85,11 @@ def _list(db, *, actor, request_id, line_id):
         capacity = min(remaining, row.balance.quantity)
         if capacity <= 0: continue
         policy = inventory_query._effective_policy(db, row.account.material_id)
-        released_serials = select(StockReservationReleaseSerial.serial_id).where(StockReservationReleaseSerial.reservation_id == fact.id)
         serials = db.execute(select(InventorySerial.id, InventorySerial.serial_no)
             .join(StockReservationSerial, StockReservationSerial.serial_id == InventorySerial.id)
             .join(SerialCurrentPosition, SerialCurrentPosition.serial_id == InventorySerial.id)
             .where(StockReservationSerial.reservation_id == fact.id,
-                InventorySerial.id.not_in(released_serials), InventorySerial.lifecycle_status == "active",
+                InventorySerial.id.not_in(used_serials), InventorySerial.lifecycle_status == "active",
                 SerialCurrentPosition.stock_account_id == fact.stock_account_id)
             .order_by(InventorySerial.id).limit(1001)).all()
         total_serials += len(serials)

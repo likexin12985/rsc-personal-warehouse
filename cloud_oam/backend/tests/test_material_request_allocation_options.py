@@ -17,6 +17,8 @@ from app.database import get_db
 from app.dependencies import get_formal_principal
 from app.formal_services import material_request_allocation_options as service
 from app.formal_services import material_request_allocation as allocation_service
+from app.formal_services import material_request_reservation as reservation_service
+from app.formal_services import material_request_supply_command_status as supply_status_service
 from app.formal_services import inventory_query, material_request_query
 from app.material_request_allocation_option_schemas import (
     MaterialRequestAllocationOptionPageOut,
@@ -210,10 +212,12 @@ def test_router_allocation_options_is_get_only_and_no_store_on_success_and_error
             return True
 
     class DB:
+        commit = Mock()
         rollback = Mock()
 
     api.dependency_overrides[get_formal_principal] = lambda: Principal()
-    api.dependency_overrides[get_db] = lambda: DB()
+    db = DB()
+    api.dependency_overrides[get_db] = lambda: db
     output = MaterialRequestAllocationOptionPageOut(
         request_id=_id(700), request_line_id=_id(701), request_version=4,
         current_revision_id=_id(702), current_revision_no=2, material_id=_id(1),
@@ -320,10 +324,12 @@ def test_router_allocation_command_status_is_read_only_and_no_store(monkeypatch)
             return True
 
     class DB:
+        commit = Mock()
         rollback = Mock()
 
     api.dependency_overrides[get_formal_principal] = lambda: Principal()
-    api.dependency_overrides[get_db] = lambda: DB()
+    db = DB()
+    api.dependency_overrides[get_db] = lambda: db
     mocked = Mock(return_value=None)
     monkeypatch.setattr(allocation_service, "allocation_command_status", mocked)
     with TestClient(api) as client:
@@ -360,3 +366,142 @@ def test_router_allocation_command_status_is_read_only_and_no_store(monkeypatch)
     assert confirmed_response.json()["lookup_status"] == "confirmed"
     assert confirmed_response.json()["command"]["allocated_qty"] == "1.000"
     assert confirmed_response.json()["command"]["idempotency_replayed"] is True
+
+
+def test_command_status_keeps_fact_status_separate_from_aggregate_state_axes(monkeypatch):
+    """A recovered fact must not flatten the independent request projections."""
+    api = FastAPI()
+    api.include_router(formal_material_requests.command_status_router, prefix="/api")
+
+    class Principal:
+        user_id = "user-axes"
+        person_id = _id(920)
+        authorization_version = 4
+        role_codes = ("admin",)
+
+        def allows(self, *_args, **_kwargs):
+            return True
+
+    class DB:
+        commit = Mock()
+        rollback = Mock()
+
+    api.dependency_overrides[get_formal_principal] = lambda: Principal()
+    db = DB()
+    api.dependency_overrides[get_db] = lambda: db
+    axes = {
+        "request_status": "approved",
+        "allocation_status": "partially_allocated",
+        "reservation_status": "pending",
+        "outbound_status": "not_started",
+        "shipment_status": "not_started",
+        "logistics_signature_status": "not_signed",
+        "oam_receipt_status": "not_occurred",
+        "personal_inbound_status": "not_started",
+        "notification_status": "not_started",
+        "reconciliation_status": "not_started",
+    }
+    allocation = allocation_service.AllocationCommandResult(
+        request_id=_id(921), allocation_id=_id(922), allocation_no="AL-AXES",
+        request_version=5, revision_id=_id(923), revision_no=1,
+        request_line_id=_id(924), source_stock_account_id=_id(925),
+        source_balance_version=7, source_ledger_cursor=9,
+        allocated_qty=Decimal("1.000"), allocation_status="allocated",
+        request_status="approved", state_axes=axes,
+    )
+    reservation = reservation_service.ReservationCommandResult(
+        request_id=_id(926), reservation_id=_id(927), reservation_no="RS-AXES",
+        request_version=6, revision_id=_id(928), revision_no=1,
+        request_line_id=_id(929), allocation_id=_id(922),
+        source_stock_account_id=_id(925), stock_account_id=_id(930),
+        reserve_transaction_id=_id(931), reserve_transaction_no="INV-AXES",
+        reserved_qty=Decimal("1.000"), reservation_status="reserved",
+        request_status="approved", state_axes=axes, source_balance_version=7,
+        source_ledger_cursor=9, serial_ids=(),
+    )
+    allocation_lookup = Mock(return_value=allocation)
+    reservation_lookup = Mock(return_value=reservation)
+    monkeypatch.setattr(allocation_service, "allocation_command_status", allocation_lookup)
+    monkeypatch.setattr(reservation_service, "reservation_command_status", reservation_lookup)
+
+    with TestClient(api) as client:
+        allocation_response = client.get(
+            "/api/v1/material-request-allocation-command-status",
+            headers={"X-Request-ID": "allocation-axes-trace"},
+        )
+        reservation_response = client.get(
+            "/api/v1/material-request-reservation-command-status",
+            headers={"X-Request-ID": "reservation-axes-trace"},
+        )
+
+    assert allocation_response.status_code == reservation_response.status_code == 200
+    assert allocation_response.headers["Cache-Control"].startswith("no-store")
+    assert reservation_response.headers["Cache-Control"].startswith("no-store")
+    allocation_body = allocation_response.json()["command"]
+    reservation_body = reservation_response.json()["command"]
+    assert allocation_body["allocation_status"] == "allocated"
+    assert allocation_body["state_axes"]["allocation_status"] == "partially_allocated"
+    assert allocation_body["state_axes"]["reservation_status"] == "pending"
+    assert reservation_body["reservation_status"] == "reserved"
+    assert reservation_body["state_axes"]["reservation_status"] == "pending"
+    assert reservation_body["state_axes"]["allocation_status"] == "partially_allocated"
+    allocation_lookup.assert_called_once()
+    reservation_lookup.assert_called_once()
+    db.commit.assert_not_called()
+    db.rollback.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("path", "service_module", "service_name"),
+    [
+        (
+            "/api/v1/material-request-allocation-command-status",
+            allocation_service,
+            "allocation_command_status",
+        ),
+        (
+            "/api/v1/material-request-reservation-command-status",
+            reservation_service,
+            "reservation_command_status",
+        ),
+        (
+            "/api/v1/material-request-supply-command-status?trace_request_id=supply-axes-trace",
+            supply_status_service,
+            "material_request_supply_command_status",
+        ),
+    ],
+)
+def test_technician_command_recovery_is_rejected_before_headers_or_service(
+    monkeypatch, path, service_module, service_name
+):
+    api = FastAPI()
+    api.include_router(formal_material_requests.command_status_router, prefix="/api")
+
+    class Principal:
+        user_id = "technician-axes"
+        person_id = _id(940)
+        authorization_version = 4
+        role_codes = ("technician",)
+
+        def allows(self, *_args, **_kwargs):
+            return True
+
+    class DB:
+        commit = Mock()
+        rollback = Mock()
+
+    db = DB()
+    api.dependency_overrides[get_formal_principal] = lambda: Principal()
+    api.dependency_overrides[get_db] = lambda: db
+    lookup = Mock(side_effect=AssertionError("technician reached source recovery service"))
+    monkeypatch.setattr(service_module, service_name, lookup)
+
+    with TestClient(api) as client:
+        response = client.get(path, headers={"X-Request-ID": "x"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "fulfillment_forbidden"
+    assert response.headers["Cache-Control"].startswith("no-store")
+    lookup.assert_not_called()
+    db.commit.assert_not_called()
+    db.rollback.assert_not_called()

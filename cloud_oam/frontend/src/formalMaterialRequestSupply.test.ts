@@ -118,6 +118,20 @@ describe("supply command wire contracts", () => {
     expect(() => validateSupplyCommandStatus({ ...status, lookup_status: "not_observed" })).toThrow();
     expect(() => validateSupplyCommandStatus({ ...status, command: { ...status.command, idempotency_key: "forbidden" } })).toThrow();
   });
+  it.each(["partially_allocated", "allocated"])("accepts existing plan changes at %s without treating them as new supply", (allocationStatus) => {
+    const advanced = { ...states(), allocation_status: allocationStatus };
+    const expected = { requestId: REQUEST, previousVersion: 8, taskId: TASK, previousTaskVersion: 2 };
+    for (const [action, taskStatus] of [["update_supply_task", "awaiting_supply"], ["cancel_supply_task", "cancelled"]] as const) {
+      const result = { ...response(), action, task_status: taskStatus, task_version: 3, states: advanced };
+      expect(validateSupplyMutationResult(result, { ...expected, action }).states).toEqual(advanced);
+      expect(() => validateSupplyMutationResult({ ...result, states: { ...advanced, reservation_status: "reserved" } }, { ...expected, action })).toThrow();
+    }
+    const create = () => validateSupplyMutationResult({ ...response(), states: advanced }, {
+      requestId: REQUEST, action: "create_supply_task", previousVersion: 8,
+    });
+    if (allocationStatus === "allocated") expect(create).toThrow();
+    else expect(create().states.allocation_status).toBe("partially_allocated");
+  });
   it("requires post-write reread to preserve approval, all axes and the exact new plan", () => {
     const before: any = { request_id: REQUEST, request_version: 8, current_revision_id: REVISION, current_revision_no: 1,
       approval_instance: { instance_id: INSTANCE, attempt_no: 1 }, approval_history: [], lines: [], states: states(), supply_tasks: [] };

@@ -3,6 +3,7 @@ import lossQuantity from './test-fixtures/return-receiving/loss-receiving-quanti
 import lossSerial from './test-fixtures/return-receiving/loss-receiving-serial.json';
 import workQuantity from './test-fixtures/return-receiving/work-order-receiving-quantity.json';
 import workSerial from './test-fixtures/return-receiving/work-order-receiving-serial.json';
+import legacyLossSerial from './test-fixtures/return-receiving/loss-receiving-serial-v1.json';
 import { history } from './formalReturnReceiving';
 import { hash, lookup, original, preview, result, state, type Original } from './formalReturnInbound';
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -10,6 +11,16 @@ const other = '11111111-1111-4111-8111-111111111111';
 beforeAll(async () => { const { webcrypto } = await vi.importActual<{ webcrypto: Crypto }>('node:crypto'); vi.stubGlobal('crypto', webcrypto); });
 
 describe('return receipt independent inbound', () => {
+  it('retains the original version-one request hash and posted-result recovery', async () => {
+    const f = legacyLossSerial, v = f.inbound;
+    const receipt = history(f.after, f.identity, f.after.package.shipment_id).receipts[0];
+    expect(v.preview.schema_version).toBe('1.0');
+    expect(preview(v.preview, f.identity, receipt)).toEqual(v.preview);
+    const expected = await original({ receipt_id: receipt.receipt_id, shipment_id: receipt.shipment_id,
+      target_location_id: receipt.target_location_id, target_custody_assignment_id: receipt.target_custody_assignment_id,
+      command: v.command, request_hash: v.posted.request_hash });
+    expect(lookup(v.posted, expected)).toEqual({ status: 'posted', inbound: v.posted });
+  });
   for (const [name, f] of Object.entries({ lossQuantity, lossSerial, workQuantity, workSerial })) {
     it(`${name}: exact real preview, original hash and posting proof match`, async () => {
       const receipt = history(f.after, f.identity, f.after.package.shipment_id).receipts[0], v = f.inbound;

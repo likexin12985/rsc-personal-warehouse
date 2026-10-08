@@ -76,3 +76,13 @@ def test_new_serial_has_no_position_and_empty_selection_does_not_query(db, histo
     state = rebuild_serial_states(db, [history.serial.id])[history.serial.id]
     assert (state.lifecycle_status, state.stock_account_id, state.last_movement_id, state.ledger_cursor) == ("active", None, None, 0)
     assert rebuild_serial_states(None, []) == {}
+
+
+@pytest.mark.parametrize('document', ['unrelated', 'stock_loss_disposition'])
+def test_scrap_without_dedicated_facts_cannot_change_lifecycle(db, history, document):
+    occupy(db, history)
+    append(db, history, 3, 'scrap', history.reserved.id, None,
+        document=document, boundary='stock_operation_scrap')
+    with pytest.raises(SerialLedgerError):
+        rebuild_serial_states(db, [history.serial.id])
+    assert history.serial.lifecycle_status == 'active'

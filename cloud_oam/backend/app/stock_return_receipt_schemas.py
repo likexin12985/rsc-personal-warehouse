@@ -28,8 +28,8 @@ class StockReturnReceiptExceptionIn(StrictInput):
         return value
 
 
-class StockReturnReceiptLineIn(StrictInput):
-    shipment_line_id: UUID
+class ReceiptAmountsIn(StrictInput):
+    """Shared precise quantity, scan and exception contract for one parcel origin."""
     accepted_qty: Decimal = Decimal(0)
     rejected_qty: Decimal = Decimal(0)
     damaged_qty: Decimal = Decimal(0)
@@ -66,6 +66,10 @@ class StockReturnReceiptLineIn(StrictInput):
                 or bool(self.rejected_qty) != bool(set(types) & {"rejected", "wrong_material", "wrong_serial"})):
             raise ValueError("短少、破损及拒收数量必须各有对应的异常说明和证据")
         return self
+
+
+class StockReturnReceiptLineIn(ReceiptAmountsIn):
+    shipment_line_id: UUID
 
 
 class StockReturnReceiptPreviewIn(ReturnReason):

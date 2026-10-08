@@ -69,7 +69,7 @@ def test_empty_sqlite_schema_roundtrip_matches_model_and_cannot_execute(migratio
     try:
         with engine.connect() as db,Operations.context(MigrationContext.configure(db)):
             migration['upgrade']()
-            assert {c['name'] for c in sa.inspect(db).get_columns(migration['TABLE'])}==set(StockLossDisposition.__table__.columns.keys())-{'return_operation_id'}
+            assert {c['name'] for c in sa.inspect(db).get_columns(migration['TABLE'])}==set(StockLossDisposition.__table__.columns.keys())-{'return_operation_id', 'scrap_operation_id'}
             db.commit()
             with pytest.raises(sa.exc.DBAPIError,match='0150 PostgreSQL disposition proof required'):
                 db.execute(sa.text('INSERT INTO stock_loss_dispositions DEFAULT VALUES'))

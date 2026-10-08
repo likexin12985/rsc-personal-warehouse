@@ -18,9 +18,15 @@ def test_release_guard_sources_match_runtime_and_parse(monkeypatch):
     migration["_create_postgresql_guards"]()
     migration["_replace_functions"](upgrade=True)
     migration["_replace_functions"](upgrade=False)
+    from app.material_request_partial_release_security import DATA
     for name, (arguments, _, body) in migration["FUNCTIONS"].items():
         signature = ", ".join(part.split()[-1] for part in arguments.split(", ")) if arguments else ""
-        assert hashlib.sha256(body.encode()).hexdigest() == MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[(name, signature)]
+        successor = DATA['functions'].get(f'{name}({signature})')
+        if successor:
+            assert body == successor['before']
+            assert successor['afterSha256'] == MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[(name, signature)]
+        else:
+            assert hashlib.sha256(body.encode()).hexdigest() == MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[(name, signature)]
     parser = pytest.importorskip("pglast.parser")
     for statement in statements:
         assert not sa.text(statement)._bindparams

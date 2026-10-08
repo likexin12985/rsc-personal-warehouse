@@ -30,6 +30,30 @@ async function fill(quantity = "1") {
   for (const [name, value] of [["目标位置 ID", ID(1)], ["目标人员 ID（可选）", ID(2)], ["承运商", "人工承运"], ["本包运单号", "TRACK-01"]]) fireEvent.change(screen.getByRole("textbox", { name }), { target: { value } });
 }
 const submit = () => fireEvent.click(screen.getByRole("button", { name: "登记本包发运" }));
+it("trial MVP keeps shipment recording but hides logistics event controls and reads", async () => {
+  const p = props();
+  p.adapter.listShipments = vi.fn(async () => [shipmentResult()]);
+  p.adapter.listLogisticsEvents = vi.fn(async () => []);
+  render(<FormalMaterialRequestShipmentPanel {...p} allowLogisticsEvents={false} />);
+  await screen.findByText("SHP-001");
+  expect(screen.queryByText("物流事件历史")).toBeNull();
+  expect(screen.queryByRole("button", { name: /登记 SHP-001 物流事件/ })).toBeNull();
+  expect(p.adapter.listLogisticsEvents).not.toHaveBeenCalled();
+});
+it("uses the verified personal-warehouse target candidate instead of opaque UUID fields", async () => {
+  const p = props();
+  p.adapter.listShipmentTargets = vi.fn(async () => ({ schema_version: "1.0", request_id: afterOutbound().request_id, request_version: 6,
+    items: [{ location_id: ID(1), location_code: "PERSONAL-001", location_name: "本人个人仓", person_id: ID(2) }] }));
+  render(<FormalMaterialRequestShipmentPanel {...p} />);
+  expect((await screen.findByRole("combobox", { name: "目标个人仓" }) as HTMLSelectElement).value).toBe(ID(1));
+  expect(screen.queryByRole("textbox", { name: "目标位置 ID" })).toBeNull();
+  fireEvent.change(await screen.findByRole("textbox", { name: "本包数量 OUT-001" }), { target: { value: "1" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "承运商" }), { target: { value: "人工承运" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "本包运单号" }), { target: { value: "TRACK-01" } });
+  submit();
+  await waitFor(() => expect(p.adapter.createShipment).toHaveBeenCalledTimes(1));
+  expect(p.adapter.createShipment.mock.calls[0][1]).toMatchObject({ target_location_id: ID(1), target_person_id: ID(2) });
+});
 it("registers selected partial quantity then refreshes remaining quantity and package history", async () => {
   const p = props(); render(<FormalMaterialRequestShipmentPanel {...p} />); await fill("0.125"); submit();
   await waitFor(() => expect(p.onDetail).toHaveBeenCalled()); expect(p.adapter.createShipment).toHaveBeenCalledTimes(1);

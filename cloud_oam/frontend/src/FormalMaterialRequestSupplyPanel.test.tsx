@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import FormalMaterialRequestSupplyPanel from "./FormalMaterialRequestSupplyPanel";
+import { MaterialRequestIntentRegistry, validateMaterialRequestDetail } from "./formalMaterialRequests";
 
 const REQUEST_ID = "20000000-0000-4000-8000-000000000001";
 const LINE_ID = "30000000-0000-4000-8000-000000000001";
@@ -204,6 +205,114 @@ function allocationAdapter(overrides: Record<string, unknown> = {}) {
 }
 
 describe("material request source candidate panel", () => {
+  it("trial MVP hides deferred supply planning while retaining allocation entry", () => {
+    const before = validateMaterialRequestDetail({ ...approvedDetail(), allowed_actions: ["create_supply_task"] });
+    const adapter = allocationAdapter({ listAllocationOptions: vi.fn() });
+    const store = allocationStore();
+    render(<FormalMaterialRequestSupplyPanel adapter={adapter} access={access() as any} detail={before}
+      store={store} allocationRecoveryStore={allocationStore()} registry={new MaterialRequestIntentRegistry()}
+      allowSupplyPlanning={false} otherWriteBusy={false} onBlocking={vi.fn()} onDetail={vi.fn()} />);
+    expect(screen.getByRole("heading", { name: "最小货源分配" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "货源候选" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "新建供给计划" })).toBeNull();
+    expect(screen.queryByText("暂无供给计划")).toBeNull();
+  });
+
+  it.each([false, true])("creates only the verified remaining plan after allocation; stale capacity=%s", async (stale) => {
+    const before = validateMaterialRequestDetail({ ...approvedDetail(5, "partially_allocated"), allowed_actions: ["create_supply_task"] });
+    const taskId = "95000000-0000-4000-8000-000000000001";
+    const task = { id: taskId, task_no: "SUPPLY-REMAINING", request_line_id: LINE_ID,
+      substitution_decision_id: null, supply_type: "star_replenishment", reference_no: null,
+      expected_qty: "1.000", original_equivalent_qty: "1.000", expected_date: null,
+      status: "open", version: 0, created_at: "2026-09-01T08:35:00+08:00",
+      updated_at: "2026-09-01T08:35:00+08:00", allowed_actions: ["update_supply_task", "cancel_supply_task"] };
+    const after = validateMaterialRequestDetail({ ...before, request_version: 6, supply_tasks: [task], allowed_actions: [] });
+    const capacity = { schema_version: "1.0", request_id: REQUEST_ID, request_version: stale ? 4 : 5,
+      lines: [{ request_line_id: LINE_ID, approved_qty: "2.000", cancelled_qty: "0.000", allocated_qty: "1.000",
+        active_planned_qty: "0.000", unallocated_qty: "1.000", existing_overlap_qty: "0.000", new_plan_qty: "1.000" }] };
+    const adapter = allocationAdapter({ supplyPlanningCapacity: vi.fn().mockResolvedValue(capacity),
+      detail: vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(after),
+      mutate: vi.fn().mockResolvedValue({ schema_version: "1.0", request_id: REQUEST_ID, action: "create_supply_task", request_version: 6,
+        revision_id: REVISION_ID, revision_no: 1, approval_instance_id: INSTANCE_ID, approval_attempt_no: 1,
+        current_step_id: null, states: before.states, idempotency_replayed: false,
+        supply_task_id: taskId, task_no: task.task_no, task_status: "open", task_version: 0 }) });
+    const store = allocationStore(), onDetail = vi.fn();
+    render(<FormalMaterialRequestSupplyPanel adapter={adapter} access={access() as any} detail={before}
+      store={store} allocationRecoveryStore={allocationStore()} registry={new MaterialRequestIntentRegistry()}
+      otherWriteBusy={false} onBlocking={vi.fn()} onDetail={onDetail} />);
+    fireEvent.click(screen.getByRole("button", { name: "新建供给计划" }));
+    if (stale) {
+      expect(await screen.findByText(/余量尚未核实/)).toBeTruthy();
+      expect(adapter.mutate).not.toHaveBeenCalled();
+      expect(store.persist).not.toHaveBeenCalled();
+      return;
+    }
+    await screen.findByRole("dialog", { name: "新建供给计划" });
+    expect(screen.getByText(/已分配 1.000；活动计划 0.000；可新增计划 1.000/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "确认保存供给计划" }));
+    await waitFor(() => expect(onDetail).toHaveBeenCalledWith(after));
+    expect(adapter.supplyPlanningCapacity).toHaveBeenCalledTimes(2);
+    expect(adapter.mutate).toHaveBeenCalledTimes(1);
+    expect(adapter.mutate.mock.calls[0][0].body.expected_qty).toBe("1.000");
+    expect(store.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([["update_supply_task", false], ["cancel_supply_task", false], ["update_supply_task", true]] as const)("submits %s after allocation and recovers a lost response: %s", async (action, lostResponse) => {
+    const taskId = "95000000-0000-4000-8000-000000000001";
+    const task = { id: taskId, task_no: "SUPPLY-001", request_line_id: LINE_ID,
+      substitution_decision_id: null, supply_type: "star_replenishment", reference_no: null,
+      expected_qty: "2.000", original_equivalent_qty: "2.000", expected_date: null,
+      status: "open", version: 0, created_at: "2026-09-01T08:35:00+08:00",
+      updated_at: "2026-09-01T08:35:00+08:00", allowed_actions: ["update_supply_task", "cancel_supply_task"] };
+    const before = validateMaterialRequestDetail({ ...approvedDetail(5, "partially_allocated"), supply_tasks: [task], allowed_actions: [] });
+    const status = action === "cancel_supply_task" ? "cancelled" : "awaiting_supply";
+    const after = validateMaterialRequestDetail({ ...before, request_version: 6, supply_tasks: [{ ...task, version: 1, status,
+      updated_at: "2026-09-01T08:40:00+08:00", allowed_actions: status === "cancelled" ? [] : task.allowed_actions }] });
+    const store = allocationStore();
+    const result = { schema_version: "1.0", request_id: REQUEST_ID, action, request_version: 6,
+        revision_id: REVISION_ID, revision_no: 1, approval_instance_id: INSTANCE_ID, approval_attempt_no: 1,
+        current_step_id: null, states: before.states, idempotency_replayed: false,
+        supply_task_id: taskId, task_no: task.task_no, task_status: status, task_version: 1 };
+    const mutate = vi.fn(async () => {
+      expect(store.read().kind).toBe("valid");
+      if (lostResponse) throw new Error("响应丢失");
+      return result;
+    });
+    const adapter = allocationAdapter({ mutate, detail: vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(after) });
+    const onDetail = vi.fn();
+    render(<FormalMaterialRequestSupplyPanel adapter={adapter} access={access() as any} detail={before}
+      store={store} allocationRecoveryStore={allocationStore()} registry={new MaterialRequestIntentRegistry()}
+      otherWriteBusy={false} onBlocking={vi.fn()} onDetail={onDetail} />);
+    expect(screen.queryByRole("button", { name: "新建供给计划" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: action === "cancel_supply_task" ? "取消计划" : "更新计划" }));
+    if (action === "update_supply_task") fireEvent.change(screen.getByLabelText("供给计划状态"), { target: { value: status } });
+    fireEvent.change(screen.getByLabelText("供给处理说明"), { target: { value: "分配后核对计划" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认保存供给计划" }));
+    if (lostResponse) {
+      await screen.findAllByText(/响应丢失/);
+      expect(store.read().kind).toBe("valid");
+      expect(store.clear).not.toHaveBeenCalled();
+      cleanup();
+      const later = validateMaterialRequestDetail({ ...after, request_version: 7,
+        states: { ...after.states, allocation_status: "allocated" } });
+      const { schema_version: _schema, idempotency_replayed: _replay, ...command } = result;
+      adapter.supplyCommandStatus.mockResolvedValue({ schema_version: "1.0", lookup_status: "confirmed",
+        command: { ...command, occurred_at: "2026-09-01T08:40:00+08:00" } });
+      adapter.detail.mockReset().mockResolvedValue(later);
+      render(<FormalMaterialRequestSupplyPanel adapter={adapter} access={access() as any} detail={later}
+        store={store} allocationRecoveryStore={allocationStore()} registry={new MaterialRequestIntentRegistry()}
+        otherWriteBusy={false} onBlocking={vi.fn()} onDetail={onDetail} />);
+      await waitFor(() => expect(onDetail).toHaveBeenCalledWith(later));
+      expect(mutate).toHaveBeenCalledTimes(1);
+      expect(store.clear).toHaveBeenCalledTimes(1);
+      return;
+    }
+    await waitFor(() => expect(onDetail).toHaveBeenCalledWith(after));
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(store.clear).toHaveBeenCalledTimes(1);
+    expect(after.states).toEqual(before.states);
+  });
+
   it("reads candidates without creating a fulfilment write", async () => {
     const listAllocationOptions = vi.fn().mockResolvedValue(page);
     const mutate = vi.fn();

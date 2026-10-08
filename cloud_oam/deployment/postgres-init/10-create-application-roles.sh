@@ -47,6 +47,16 @@ WHERE NOT EXISTS (
     SELECT 1 FROM pg_roles WHERE rolname = 'star_oam_projector'
 ) \gexec
 
+-- Migration ACLs refer to the edge receiver principal even when the receiver
+-- is disabled.  Provision it before Alembic runs, but keep it permanently
+-- non-login and without a password; the edge container uses its own reviewed
+-- database role contract and never authenticates as this ACL-only principal.
+SELECT 'CREATE ROLE star_oam_edge NOLOGIN NOSUPERUSER NOCREATEDB '
+       'NOCREATEROLE NOREPLICATION NOBYPASSRLS'
+WHERE NOT EXISTS (
+    SELECT 1 FROM pg_roles WHERE rolname = 'star_oam_edge'
+) \gexec
+
 SELECT format(
     'ALTER ROLE star_oam_migrator WITH LOGIN PASSWORD %L '
     'NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS',
@@ -67,6 +77,8 @@ SELECT format(
     'NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS',
     :'projector_password'
 ) \gexec
+ALTER ROLE star_oam_edge WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+    NOREPLICATION NOBYPASSRLS;
 
 SELECT format(
     'REVOKE ALL ON DATABASE %I FROM PUBLIC',

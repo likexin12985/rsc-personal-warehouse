@@ -108,8 +108,15 @@ def test_send_disables_provider_and_sdk_retries_and_requires_exact_echo() -> Non
     request, runtime_options = provider.client.calls[0]
     assert request.phone_number == MOBILE
     assert request.out_id == OUT_ID
+    assert request.country_code == "86"
+    assert request.sign_name == "RSC个人仓"
+    assert request.template_code == "SMS_FORMAL_TEST"
+    assert request.scheme_name == "RSC个人仓登录"
     assert request.auto_retry == 0
     assert runtime_options.autoretry is False
+    assert runtime_options.max_attempts == 1
+    assert runtime_options.connect_timeout == 5000
+    assert runtime_options.read_timeout == 8000
 
 
 @pytest.mark.parametrize(
@@ -174,10 +181,14 @@ def test_verify_disables_sdk_retries_and_binds_exact_out_id() -> None:
     assert len(provider.client.verify_calls) == 1
     request, runtime_options = provider.client.verify_calls[0]
     assert request.phone_number == MOBILE
+    assert request.country_code == "86"
     assert request.verify_code == "246810"
     assert request.out_id == OUT_ID
+    assert request.scheme_name == "RSC个人仓登录"
     assert runtime_options.autoretry is False
     assert runtime_options.max_attempts == 1
+    assert runtime_options.connect_timeout == 5000
+    assert runtime_options.read_timeout == 8000
 
 
 @pytest.mark.parametrize(
@@ -243,7 +254,7 @@ def test_request_profile_uses_actual_provider_settings_without_global_lookup(mon
     from app import sms
     from app.config import Settings
 
-    sent_settings = Settings(_env_file=None, sms_provider="aliyun_pnvs", sms_scheme_name="sent-scheme")
+    sent_settings = Settings(_env_file=None, sms_provider="aliyun_pnvs", sms_credential_mode="default_chain", sms_scheme_name="sent-scheme")
     expected = sms.sms_dispatch_request_profile_sha256(
         mobile_hash="a" * 64, provider_settings=sent_settings,
     )
@@ -259,7 +270,7 @@ def test_provider_keeps_same_configuration_for_profile_and_actual_call(monkeypat
     from app import sms
     from app.config import Settings
 
-    original = Settings(_env_file=None, sms_provider="aliyun_pnvs", sms_scheme_name="sent-scheme")
+    original = Settings(_env_file=None, sms_provider="aliyun_pnvs", sms_credential_mode="default_chain", sms_scheme_name="sent-scheme")
     recording = _RecordingClient(response=_verify_response())
     monkeypatch.setattr(sms, "get_settings", lambda: original)
     monkeypatch.setattr(sms, "DypnsClient", lambda _: recording)
@@ -272,11 +283,109 @@ def test_provider_keeps_same_configuration_for_profile_and_actual_call(monkeypat
     assert sms.sms_dispatch_request_profile_sha256(mobile_hash="a" * 64, provider_settings=provider.settings) == profile
 
 
+def test_default_chain_provider_passes_only_sdk_credential_object(monkeypatch) -> None:
+    from app import sms
+    from app.config import Settings
+
+    settings = Settings(
+        _env_file=None,
+        sms_provider="aliyun_pnvs",
+        sms_credential_mode="default_chain",
+        sms_sign_name="RSC个人仓",
+        sms_template_code="SMS_FORMAL_TEST",
+        sms_scheme_name="RSC个人仓登录",
+        auth_login_rate_limit_hmac_secret="a" * 32,
+    )
+    credential = object()
+    captured = []
+    monkeypatch.setattr(sms, "get_settings", lambda: settings)
+    monkeypatch.setattr(sms, "CredentialClient", lambda: credential)
+    monkeypatch.setattr(
+        sms,
+        "DypnsClient",
+        lambda config: captured.append(config) or _RecordingClient(),
+    )
+
+    provider = sms.AliyunPnvsProvider()
+
+    assert provider.settings.sms_credential_mode == "default_chain"
+    assert captured[0].credential is credential
+    assert captured[0].access_key_id is None
+    assert captured[0].access_key_secret is None
+    assert captured[0].security_token is None
+
+
+def test_default_chain_rejects_any_injected_static_or_sts_value() -> None:
+    from app.config import Settings
+
+    settings = Settings(
+        _env_file=None,
+        sms_login_enabled=True,
+        sms_provider="aliyun_pnvs",
+        sms_credential_mode="default_chain",
+        sms_access_key_id="synthetic-stray-id",
+        sms_sign_name="RSC个人仓",
+        sms_template_code="SMS_FORMAL_TEST",
+        sms_scheme_name="RSC个人仓登录",
+        auth_login_rate_limit_hmac_secret="a" * 32,
+    )
+
+    assert settings.sms_configuration_ready() is False
+
+
+def test_default_chain_constructor_failure_fails_closed_without_exception_context(monkeypatch) -> None:
+    from app import sms
+    from app.config import Settings
+
+    settings = Settings(
+        _env_file=None,
+        sms_provider="aliyun_pnvs",
+        sms_credential_mode="default_chain",
+        sms_sign_name="RSC个人仓",
+        sms_template_code="SMS_FORMAL_TEST",
+        sms_scheme_name="RSC个人仓登录",
+        auth_login_rate_limit_hmac_secret="a" * 32,
+    )
+    monkeypatch.setattr(sms, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        sms,
+        "CredentialClient",
+        lambda: (_ for _ in ()).throw(RuntimeError("credential-bearing diagnostic")),
+    )
+    monkeypatch.setattr(sms, "DypnsClient", lambda _: pytest.fail("SDK must not be constructed"))
+
+    with pytest.raises(SmsProviderError) as captured:
+        sms.AliyunDypnsProvider()
+
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+
+
+def test_sts_mode_requires_the_complete_legacy_triplet() -> None:
+    from datetime import datetime, timedelta, timezone
+    from app.config import Settings
+
+    settings = Settings(
+        _env_file=None,
+        sms_login_enabled=True,
+        sms_provider="aliyun_pnvs",
+        sms_credential_mode="sts",
+        sms_sign_name="RSC个人仓",
+        sms_template_code="SMS_FORMAL_TEST",
+        sms_scheme_name="RSC个人仓登录",
+        auth_login_rate_limit_hmac_secret="a" * 32,
+        sms_security_token="synthetic-pnvs-token-" + "t" * 32,
+        sms_security_token_expires_at=(datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+    )
+
+    assert settings.sms_configuration_ready() is False
+
+
 def test_request_profile_allows_credential_rotation_without_changing_sms_contract() -> None:
     from app import sms
     from app.config import Settings
 
-    original = Settings(_env_file=None, sms_provider="aliyun_pnvs", sms_scheme_name="same-scheme")
+    original = Settings(_env_file=None, sms_provider="aliyun_pnvs", sms_credential_mode="static", sms_access_key_id="synthetic-original-id", sms_access_key_secret="synthetic-original-secret", sms_scheme_name="same-scheme")
     rotated = original.model_copy(update={"sms_access_key_id": "synthetic-new-id", "sms_access_key_secret": "synthetic-new-secret"})
     assert sms.sms_dispatch_request_profile_sha256(mobile_hash="a" * 64, provider_settings=original) == sms.sms_dispatch_request_profile_sha256(mobile_hash="a" * 64, provider_settings=rotated)
 
@@ -287,7 +396,7 @@ def test_dedicated_sts_triplet_reaches_sdk_without_changing_sms_profile(monkeypa
     from app.config import Settings
 
     expiry = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
-    settings = Settings(_env_file=None, sms_provider="aliyun_pnvs",
+    settings = Settings(_env_file=None, sms_provider="aliyun_pnvs", sms_credential_mode="sts",
         sms_access_key_id="synthetic-sts-id", sms_access_key_secret="synthetic-sts-secret",
         sms_security_token="synthetic-pnvs-token-" + "t" * 32,
         sms_security_token_expires_at=expiry)
@@ -312,7 +421,7 @@ def test_expired_sts_stops_before_paid_send_or_verify(monkeypatch) -> None:
     from app import sms
     from app.config import Settings
 
-    settings = Settings(_env_file=None, sms_provider="aliyun_pnvs",
+    settings = Settings(_env_file=None, sms_provider="aliyun_pnvs", sms_credential_mode="sts",
         sms_access_key_id="synthetic-sts-id", sms_access_key_secret="synthetic-sts-secret",
         sms_security_token="synthetic-pnvs-token-" + "t" * 32,
         sms_security_token_expires_at=(datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat())

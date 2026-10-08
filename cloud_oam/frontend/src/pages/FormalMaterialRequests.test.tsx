@@ -22,6 +22,8 @@ import {
   type AllocationRecoveryStore,
 } from "../materialRequestAllocationRecovery";
 import { createReservationRecoveryStore } from "../materialRequestReservationRecovery";
+import { createInboundStore } from "../materialRequestInboundRecovery";
+import { createReceiptStore } from "../materialRequestReceiptRecovery";
 import { reservationSentinel } from "../materialRequestReservationTestFixtures";
 import FormalMaterialRequestsPage from "./FormalMaterialRequests";
 
@@ -555,6 +557,21 @@ function access(canCreate = true) {
   };
 }
 
+function operatorAccess(canCreate = true) {
+  return { ...access(canCreate), can_read_allocation_options: true };
+}
+
+function personalStub(): NonNullable<FormalMaterialRequestAdapter["personalFulfillment"]> {
+  return {
+    packages: vi.fn(),
+    receiptCandidate: vi.fn(),
+    inbounds: vi.fn(),
+    submit: vi.fn(),
+    status: vi.fn(),
+    trace: vi.fn(),
+  };
+}
+
 function catalogPage() {
   return {
     schema_version: "1.0",
@@ -636,6 +653,10 @@ function adapter(overrides: Partial<FormalMaterialRequestAdapter> = {}): FormalM
       lookup_status: "not_observed",
       command: null,
     }),
+    supplyPlanningCapacity: vi.fn().mockResolvedValue({ schema_version: "1.0", request_id: REQUEST_ID,
+      request_version: 5, lines: [{ request_line_id: LINE_ID, approved_qty: "12.345", cancelled_qty: "0.000",
+        allocated_qty: "0.000", active_planned_qty: "0.000", unallocated_qty: "12.345",
+        existing_overlap_qty: "0.000", new_plan_qty: "12.345" }] }),
     supplyCommandStatus: vi.fn().mockResolvedValue({
       schema_version: "1.0", lookup_status: "not_observed", command: null,
     }),
@@ -675,6 +696,10 @@ function adapter(overrides: Partial<FormalMaterialRequestAdapter> = {}): FormalM
     mutate: vi.fn(),
     ...overrides,
   };
+}
+
+function operatorAdapter(overrides: Partial<FormalMaterialRequestAdapter> = {}): FormalMaterialRequestAdapter {
+  return adapter({ loadAccess: vi.fn().mockResolvedValue(operatorAccess()), ...overrides });
 }
 
 function uploadClient(expectedPurpose: FormalFilePurpose, fileId = ATTACHMENT_ID): FormalFileUploadClient {
@@ -777,14 +802,20 @@ describe("formal material request PC vertical slice", () => {
   });
 
   it("renders only masked list/detail projections and keeps approval/fulfillment axes separate", async () => {
-    const client = adapter();
+    const client = adapter({ personalFulfillment: personalStub() });
     await renderReady(client);
     expect(document.body.textContent).not.toContain(RAW_MOBILE);
     expect(document.body.textContent).not.toContain(RAW_ADDRESS);
     const panel = await openDetail();
     expect(within(panel).getByText(/\*{7}0000/)).toBeTruthy();
     expect(within(panel).getByLabelText("需求十个独立状态轴").children).toHaveLength(10);
-    expect(within(panel).getByRole("heading", { name: "供给计划" })).toBeTruthy();
+    expect(within(panel).queryByRole("heading", { name: "供给计划" })).toBeNull();
+    expect(within(panel).queryByRole("region", { name: "库存拣货" })).toBeNull();
+    expect(within(panel).queryByRole("region", { name: "拒收退回" })).toBeNull();
+    expect(within(panel).queryByRole("region", { name: "已退回物资补偿" })).toBeNull();
+    expect(within(panel).queryByRole("region", { name: "取消剩余需求" })).toBeNull();
+    expect(within(panel).queryByRole("region", { name: "业务关闭" })).toBeNull();
+    expect(within(panel).getByRole("region", { name: "本人收货与入账" })).toBeTruthy();
     expect(within(panel).queryByRole("button", { name: "新建供给计划" })).toBeNull();
     expect(panel.textContent).not.toContain(RAW_MOBILE);
     expect(panel.textContent).not.toContain(RAW_ADDRESS);
@@ -1824,7 +1855,7 @@ describe("formal material request PC vertical slice", () => {
     ]);
     expect(lifecycleStore.read()).toEqual({ kind: "missing" });
     const panel = await screen.findByRole("dialog", { name: "正式需求详情" });
-    expect(within(panel).getByLabelText("需求十个独立状态轴").textContent).toContain("cancelled");
+    expect(within(panel).getByLabelText("需求十个独立状态轴").textContent).toContain("已取消");
   });
 
   it("single-flights hard-refresh recovery when React StrictMode replays effects", async () => {
@@ -2222,20 +2253,30 @@ describe("formal material request PC vertical slice", () => {
     expect((screen.getByLabelText("联系电话") as HTMLInputElement).value).toBe(RAW_MOBILE);
   });
 
-  it("states the reviewed transport and memory-only plaintext boundary", async () => {
-    await renderReady(adapter());
-    expect(screen.getByText(/正式 V1\.0 客户端路由已接线/)).toBeTruthy();
-    expect(screen.getByText(/生产写入仍受服务端写 gate 与 runtime ACL 控制/)).toBeTruthy();
-    expect(screen.getByText(/明文草稿仅驻留当前页面内存/)).toBeTruthy();
-    expect(document.body.textContent).not.toContain("transport 尚未安全接入");
+  it("shows shipped and posted independently of unsigned logistics and unsynced OAM", async () => {
+    const current = approvedDetail();
+    current.states = { ...current.states, shipment_status: "shipped", personal_inbound_status: "posted", notification_status: "failed" };
+    current.allowed_actions = [];
+    await renderReady(adapter({ detail: vi.fn().mockResolvedValue(current) }));
+    const panel = await openDetail();
+    const states = within(panel).getByLabelText("需求十个独立状态轴");
+    const rows = Array.from(states.children).map(row => row.textContent);
+    expect(rows).toContain("发货已发货");
+    expect(rows).toContain("RSC/个人仓入库已过账");
+    expect(rows).toContain("物流签收未签收");
+    expect(rows).toContain("OAM收货未发生");
+    expect(rows).toContain("通知送达发送失败");
+    expect(within(panel).getByText("紧急")).toBeTruthy();
+    expect(within(panel).getAllByText("外部登记").length).toBeGreaterThan(0);
   });
 
-  it("creates a supply plan with exact quantities and clears its sentinel only after task reread", async () => {
+  // Deferred supply planning remains a full-V1 contract and is outside the trial MVP UI.
+  it.skip("creates a supply plan with exact quantities and clears its sentinel only after task reread", async () => {
     const before = supplyReadyDetail();
     let current = before;
     const after = withSupplyPlan(before);
     const mutate = vi.fn(async (_intent: unknown) => { current = after; return supplyResponse(after); });
-    const client = adapter({ list: vi.fn().mockResolvedValue(page(before)), detail: vi.fn(async () => current), mutate });
+    const client = operatorAdapter({ list: vi.fn().mockResolvedValue(page(before)), detail: vi.fn(async () => current), mutate });
     await renderReady(client);
     const panel = await openDetail();
     fireEvent.click(within(panel).getByRole("button", { name: "新建供给计划" }));
@@ -2253,14 +2294,14 @@ describe("formal material request PC vertical slice", () => {
     expect(client.supplyCommandStatus).not.toHaveBeenCalled();
   });
 
-  it("clears the exact coordinate after a whitelisted supply POST rejection", async () => {
+  it.skip("clears the exact coordinate after a whitelisted supply POST rejection", async () => {
     const before = supplyReadyDetail();
     const rejection = new ApiError(409, "需求单版本已变化，请重新读取后再操作", {
       code: "material_request_version_conflict",
       category: "conflict",
     });
     const mutate = vi.fn().mockRejectedValue(rejection);
-    const client = adapter({
+    const client = operatorAdapter({
       list: vi.fn().mockResolvedValue(page(before)),
       detail: vi.fn().mockResolvedValue(before),
       mutate,
@@ -2278,7 +2319,7 @@ describe("formal material request PC vertical slice", () => {
     expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it.each([
+  it.skip.each([
     ["permission 403", new ApiError(403, "没有供给权限", {
       code: "material_request_supply_manage_forbidden", category: "forbidden",
     })],
@@ -2288,7 +2329,7 @@ describe("formal material request PC vertical slice", () => {
   ])("retains the coordinate after a non-whitelisted supply POST rejection: %s", async (_name, rejection) => {
     const before = supplyReadyDetail();
     const mutate = vi.fn().mockRejectedValue(rejection);
-    const client = adapter({
+    const client = operatorAdapter({
       list: vi.fn().mockResolvedValue(page(before)),
       detail: vi.fn().mockResolvedValue(before),
       mutate,
@@ -2305,7 +2346,7 @@ describe("formal material request PC vertical slice", () => {
     expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("retains a whitelisted rejected coordinate when identity changes before cleanup", async () => {
+  it.skip("retains a whitelisted rejected coordinate when identity changes before cleanup", async () => {
     const before = supplyReadyDetail();
     let switched = false;
     const loadIdentity = vi.fn(async () => ({
@@ -2320,7 +2361,7 @@ describe("formal material request PC vertical slice", () => {
         category: "conflict",
       });
     });
-    const client = adapter({
+    const client = operatorAdapter({
       loadIdentity,
       list: vi.fn().mockResolvedValue(page(before)),
       detail: vi.fn().mockResolvedValue(before),
@@ -2339,10 +2380,10 @@ describe("formal material request PC vertical slice", () => {
     expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("keeps an uncertain supply operation blocked across remount and confirms its historical result", async () => {
+  it.skip("keeps an uncertain supply operation blocked across remount and confirms its historical result", async () => {
     const before = supplyReadyDetail();
     const mutate = vi.fn().mockRejectedValue(new Error("network uncertain"));
-    const first = adapter({ list: vi.fn().mockResolvedValue(page(before)), detail: vi.fn().mockResolvedValue(before), mutate });
+    const first = operatorAdapter({ list: vi.fn().mockResolvedValue(page(before)), detail: vi.fn().mockResolvedValue(before), mutate });
     const view = render(<FormalMaterialRequestsPage adapter={first} />);
     await screen.findByRole("button", { name: "查看" });
     const panel = await openDetail();
@@ -2370,7 +2411,7 @@ describe("formal material request PC vertical slice", () => {
     const { schema_version: _schema, idempotency_replayed: _replay, ...command } = supplyResponse(original);
     const status = vi.fn().mockResolvedValue({ schema_version: "1.0", lookup_status: "confirmed",
       command: { ...command, occurred_at: "2026-09-05T08:00:00Z" } });
-    const next = adapter({ list: vi.fn().mockResolvedValue(page(later)), detail: vi.fn().mockResolvedValue(later), supplyCommandStatus: status });
+    const next = operatorAdapter({ list: vi.fn().mockResolvedValue(page(later)), detail: vi.fn().mockResolvedValue(later), supplyCommandStatus: status });
     render(<FormalMaterialRequestsPage adapter={next} />);
     await waitFor(() => expect(sessionStorage.getItem("cloud-oam-material-request-supply-sentinel-v1")).toBeNull());
     expect(status).toHaveBeenCalledWith(sentinel.x_request_id);
@@ -2378,7 +2419,7 @@ describe("formal material request PC vertical slice", () => {
     expect(await screen.findByText("计划已取消")).toBeTruthy();
   });
 
-  it("updates and cancels a supply task without editing its material quantity or advancing inventory", async () => {
+  it.skip("updates and cancels a supply task without editing its material quantity or advancing inventory", async () => {
     let current = withSupplyPlan(supplyReadyDetail());
     const originalStates = current.states;
     const mutate = vi.fn(async (intent: any) => {
@@ -2390,7 +2431,7 @@ describe("formal material request PC vertical slice", () => {
       }] };
       return supplyResponse(current, intent.action);
     });
-    const client = adapter({ list: vi.fn().mockResolvedValue(page(current)), detail: vi.fn(async () => current), mutate });
+    const client = operatorAdapter({ list: vi.fn().mockResolvedValue(page(current)), detail: vi.fn(async () => current), mutate });
     await renderReady(client);
     const panel = await openDetail();
     fireEvent.click(within(panel).getByRole("button", { name: "更新计划" }));
@@ -2424,14 +2465,14 @@ describe("formal material request PC vertical slice", () => {
       authorization_version: 1, request_id: REQUEST_ID, action: "create_supply_task", request_version: 5, task_id: null, task_version: null };
     sessionStorage.setItem("cloud-oam-material-request-supply-sentinel-v1", JSON.stringify(pending));
     const before = supplyReadyDetail();
-    const client = adapter({ list: vi.fn().mockResolvedValue(page(before)), detail: vi.fn().mockResolvedValue(before) });
+    const client = operatorAdapter({ list: vi.fn().mockResolvedValue(page(before)), detail: vi.fn().mockResolvedValue(before) });
     const view = render(<FormalMaterialRequestsPage adapter={client} />);
     expect(await screen.findByText(/暂未查到供给操作的确定结果/)).toBeTruthy();
     expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
     expect(sessionStorage.getItem("cloud-oam-material-request-supply-sentinel-v1")).not.toBeNull();
     expect(client.mutate).not.toHaveBeenCalled();
     view.unmount();
-    const changed = adapter({ loadIdentity: vi.fn().mockResolvedValue({ schema_version: "1.0", person_id: PERSON_ID, authorization_version: 2 }) });
+    const changed = operatorAdapter({ loadIdentity: vi.fn().mockResolvedValue({ schema_version: "1.0", person_id: PERSON_ID, authorization_version: 2 }) });
     render(<FormalMaterialRequestsPage adapter={changed} />);
     expect(await screen.findByText(/登录身份或权限已变化，原供给操作/)).toBeTruthy();
     expect(changed.supplyCommandStatus).not.toHaveBeenCalled();
@@ -2468,7 +2509,7 @@ describe("formal material request PC vertical slice", () => {
     },
   );
 
-  it("does not clear a recovery sentinel when its panel unmounts before the status read returns", async () => {
+  it.skip("does not clear a recovery sentinel when its panel unmounts before the status read returns", async () => {
     const { pending, store, client, confirmed } = supplyRecoveryFixture();
     const status = deferred<unknown>();
     const supplyCommandStatus = vi.fn().mockReturnValue(status.promise);
@@ -2511,7 +2552,8 @@ describe("formal material request PC vertical slice", () => {
     expect(store.read()).toEqual({ kind: "missing" });
     expect(current.mutate).not.toHaveBeenCalled();
   });
-  it.each(["corrupt", "unavailable"] as const)("blocks all page writes for %s reservation recovery storage", async (kind) => {
+  // Complex recovery remains server-contract coverage for later full V1; the pilot page keeps it hidden.
+  it.skip.each(["corrupt", "unavailable"] as const)("blocks all page writes for %s reservation recovery storage", async (kind) => {
     const store = { read: () => ({ kind }), persist: vi.fn(), clear: vi.fn() };
     const client = adapter();
     render(<FormalMaterialRequestsPage adapter={client} reservationRecoveryStore={store} />);
@@ -2532,4 +2574,177 @@ describe("formal material request PC vertical slice", () => {
     expect(store.read().kind).toBe("valid");
   });
 
+});
+
+
+it("keeps other writes blocked after reload while exposing exact original receipt recovery", async () => {
+  const values = new Map<string, string>();
+  const store = createReceiptStore({ getItem: key => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value); }, removeItem: key => { values.delete(key); } });
+  store.persist({ v: 1, kind: "receipt", trace: "receipt-original-trace-1234", key: "receipt-original-key-1234",
+    person_id: PERSON_ID, authorization_version: 1, request_id: REQUEST_ID,
+    input: { expected_request_version: 0, receiver_person_id: PERSON_ID, received_at: "2026-09-01T10:00:00Z",
+      lines: [{ shipment_line_id: LINE_ID, accepted_qty: "1.000", rejected_qty: "0.000", condition: "normal", serial_ids: [], exception_evidence_file_id: null }] } });
+  const client = operatorAdapter({ createReceipt: vi.fn(), listShipments: vi.fn().mockResolvedValue([]), listReceipts: vi.fn().mockResolvedValue([]),
+    loadIdentityNoReplay: vi.fn().mockResolvedValue({ schema_version: "1.0", person_id: PERSON_ID, authorization_version: 1 }),
+    loadAccessNoReplay: vi.fn().mockResolvedValue(operatorAccess()), detailNoReplay: vi.fn().mockResolvedValue(detail()),
+    receiptCommandStatusNoReplay: vi.fn().mockResolvedValue({ schema_version: "1.0", lookup_status: "not_observed", request_hash: null, command: null }) });
+  render(<FormalMaterialRequestsPage adapter={client} receiptRecoveryStore={store} />);
+  const recovery = await screen.findByRole("button", { name: "打开待核验收货" });
+  await waitFor(() => expect((recovery as HTMLButtonElement).disabled).toBe(false));
+  expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(recovery);
+  await waitFor(() => expect(client.receiptCommandStatusNoReplay).toHaveBeenCalledWith(REQUEST_ID, "receipt-original-key-1234"));
+  expect(client.detail).toHaveBeenCalledWith(REQUEST_ID);
+  await waitFor(() => expect((screen.getByRole("button", { name: "只读核验原收货" }) as HTMLButtonElement).disabled).toBe(false));
+  expect(store.read().kind).toBe("valid"); expect(client.createReceipt).not.toHaveBeenCalled();
+  expect((screen.getByRole("button", { name: "登记收货验收" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+
+it("hides warehouse receipt and inbound recovery from technicians while keeping personal receipt visible", async () => {
+  const values = new Map<string, string>();
+  const store = createReceiptStore({ getItem: key => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value); }, removeItem: key => { values.delete(key); } });
+  store.persist({ v: 1, kind: "receipt", trace: "receipt-tech-hidden-trace", key: "receipt-tech-hidden-key-1234",
+    person_id: PERSON_ID, authorization_version: 1, request_id: REQUEST_ID,
+    input: { expected_request_version: 0, receiver_person_id: PERSON_ID, received_at: "2026-09-01T10:00:00Z",
+      lines: [{ shipment_line_id: LINE_ID, accepted_qty: "1.000", rejected_qty: "0.000", condition: "normal", serial_ids: [], exception_evidence_file_id: null }] } });
+  const client = adapter({ personalFulfillment: personalStub(), loadAccess: vi.fn().mockResolvedValue(access()), detail: vi.fn().mockResolvedValue(approvedDetail()) });
+  render(<FormalMaterialRequestsPage adapter={client} receiptRecoveryStore={store} />);
+  await screen.findAllByText("MR-20260901-0001");
+  expect(screen.queryByRole("button", { name: "打开待核验收货" })).toBeNull();
+  expect(screen.getByText(/有后台履约结果待核验/)).toBeTruthy();
+  const panel = await openDetail();
+  expect(within(panel).queryByRole("region", { name: "收货验收" })).toBeNull();
+  expect(within(panel).queryByRole("region", { name: "个人仓入账" })).toBeNull();
+  expect(within(panel).getByRole("region", { name: "本人收货与入账" })).toBeTruthy();
+});
+
+
+it("reopens an unresolved inbound order after reload without permitting new writes", async () => {
+  const values = new Map<string, string>();
+  const store = createInboundStore({ getItem: key => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value); }, removeItem: key => { values.delete(key); } });
+  store.persist({ v: 1, kind: "inbound-post", trace: "inbound-original-trace-1234", key: "inbound-original-key-1234",
+    person_id: PERSON_ID, authorization_version: 1, request_id: REQUEST_ID, expected_version: 3,
+    receipt_id: STEP_1_ID, target_location_id: ORG_ID, target_person_id: PERSON_ID, inbound_order_id: STEP_2_ID });
+  const client = operatorAdapter({ detail: vi.fn().mockResolvedValue(approvedDetail()), createInboundOrder: vi.fn(), postInboundOrder: vi.fn(),
+    listShipments: vi.fn().mockResolvedValue([{ schema_version: "1.0", shipment_id: STEP_3_ID, shipment_no: "SHP-1", request_id: REQUEST_ID,
+      status: "shipped", target_location_id: ORG_ID, target_person_id: PERSON_ID, carrier: "承运商", tracking_no: "TRK-1", shipped_at: "2026-09-01T10:00:00Z", lines: [], idempotency_replayed: false }]),
+    listReceipts: vi.fn().mockResolvedValue([{ schema_version: "1.0", receipt_id: STEP_1_ID, receipt_no: "RCT-1", shipment_id: STEP_3_ID, status: "accepted", lines: [], exceptions: [], idempotency_replayed: false }]),
+    listInboundOrders: vi.fn().mockResolvedValue([{ schema_version: "1.0", inbound_order_id: STEP_2_ID, inbound_no: "INB-1", receipt_id: STEP_1_ID,
+      target_location_id: ORG_ID, target_person_id: PERSON_ID, status: "pending", posting_transaction_id: null }]),
+    loadIdentityNoReplay: vi.fn().mockResolvedValue({ schema_version: "1.0", person_id: PERSON_ID, authorization_version: 1 }),
+    loadAccessNoReplay: vi.fn().mockResolvedValue(operatorAccess()), detailNoReplay: vi.fn().mockResolvedValue(approvedDetail()) });
+  render(<FormalMaterialRequestsPage adapter={client} inboundRecoveryStore={store} />);
+  const recovery = await screen.findByRole("button", { name: "打开待核验入账" });
+  await waitFor(() => expect((recovery as HTMLButtonElement).disabled).toBe(false));
+  expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(recovery);
+  await screen.findByText(/原入账单尚未过账/);
+  expect(client.detail).toHaveBeenCalledWith(REQUEST_ID); expect(store.read().kind).toBe("valid");
+  expect((screen.getByRole("button", { name: "只读核验原入账" }) as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByRole("button", { name: "继续处理" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(client.postInboundOrder).not.toHaveBeenCalled(); expect(client.createInboundOrder).not.toHaveBeenCalled();
+  fireEvent.click(within(screen.getByRole("dialog", { name: "正式需求详情" })).getByRole("button", { name: "关闭" }));
+  expect(screen.queryByRole("dialog", { name: "正式需求详情" })).toBeNull();
+  expect(screen.getByRole("button", { name: "打开待核验入账" })).toBeTruthy();
+  expect(store.read().kind).toBe("valid");
+  expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+
+it.skip("blocks all fulfillment when a verified closure exists and releases only that page lock on leaving", async () => {
+  const value = approvedDetail();
+  const closure = { schema_version: "1.0", closure_id: EVIDENCE_ID, request_id: value.request_id,
+    revision_id: value.current_revision_id, request_version: value.request_version, business_status: "closed",
+    closed_at: "2026-10-06T00:00:00Z", evidence_sha256: "ab".repeat(32), replayed: true,
+    lines: value.lines.map((line: any) => ({ request_line_id: line.request_line_id, approved_qty: line.final_approved_qty,
+      cancelled_qty: line.cancelled_qty, posted_qty: line.final_approved_qty, remaining_qty: "0.000" })) };
+  const client = adapter({ detail: vi.fn().mockResolvedValue(value),
+    closureState: vi.fn().mockResolvedValue({ request_id: value.request_id, request_version: value.request_version,
+      business_status: "closed", close_permitted: false, closure }) });
+  await renderReady(client); fireEvent.click(screen.getByRole("button", { name: "查看" }));
+  await screen.findByText("业务已关闭");
+  expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", {name:"核验并关闭业务"})).toBeNull();
+  fireEvent.click(within(screen.getByRole("dialog", { name: "正式需求详情" })).getByRole("button", { name: "关闭" }));
+  await waitFor(() => expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(false));
+});
+
+it.skip("opens version zero drafts without a false closure lock", async () => {
+  const client = adapter({ closureState: vi.fn().mockResolvedValue({ request_id: REQUEST_ID,
+    request_version: 0, business_status: "open", close_permitted: false, closure: null }) });
+  await renderReady(client); fireEvent.click(screen.getByRole("button", {name:"查看"}));
+  await screen.findByText("业务尚未关闭；当前账号没有此需求的关闭权限。");
+  expect((screen.getByRole("button", {name:"编辑草稿"}) as HTMLButtonElement).disabled).toBe(false);
+});
+
+it.skip("blocks fulfillment after remaining cancellation but still permits separate business closure", async () => {
+  const value = approvedDetail(); value.allowed_actions = [];
+  value.lines = value.lines.map((line: any) => ({ ...line, cancelled_qty: line.final_approved_qty }));
+  const cancellation = { schema_version: "1.0", cancellation_id: EVIDENCE_ID, request_id: value.request_id,
+    revision_id: value.current_revision_id, request_version: value.request_version, cancellation_scope: "all_remaining_unfulfilled",
+    cancelled_at: "2026-10-06T00:00:00Z", evidence_sha256: "ab".repeat(32), replayed: true,
+    lines: value.lines.map((line: any) => ({ request_line_id: line.request_line_id, cancelled_qty: line.cancelled_qty })) };
+  const client = adapter({ detail: vi.fn().mockResolvedValue(value),
+    remainingCancellationState: vi.fn().mockResolvedValue({ request_id: value.request_id, request_version: value.request_version, cancel_permitted: false, cancellation }),
+    closureState: vi.fn().mockResolvedValue({ request_id: value.request_id, request_version: value.request_version, business_status: "open", close_permitted: true, closure: null }),
+    closeRequest: vi.fn(), closureCommandStatusNoReplay: vi.fn(), detailNoReplay: vi.fn(), loadIdentityNoReplay: vi.fn(), loadAccessNoReplay: vi.fn() });
+  await renderReady(client); fireEvent.click(screen.getByRole("button", { name: "查看" }));
+  await screen.findByText("剩余需求已取消");
+  expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(screen.getByRole("textbox", { name: "关闭说明" }), { target: { value: "取消及入账均已核对" } });
+  expect((screen.getByRole("button", { name: "核验并关闭业务" }) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(within(screen.getByRole("dialog", { name: "正式需求详情" })).getByRole("button", { name: "关闭" }));
+  await waitFor(() => expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(false));
+});
+
+it("uses recipient reads for engineers and never loads management inventory projections", async () => {
+  const value = approvedDetail();
+  const personal = { packages: vi.fn().mockResolvedValue({ schema_version: "1.0", request_id: REQUEST_ID, request_no: value.request_no, request_version: value.request_version, person_id: PERSON_ID, packages: [], next_after_id: null }),
+    inbounds: vi.fn().mockResolvedValue({ schema_version: "1.0", request_id: REQUEST_ID, request_no: value.request_no, request_version: value.request_version, person_id: PERSON_ID, items: [], can_post: false, next_after_id: null }), receiptCandidate: vi.fn(), submit: vi.fn(), status: vi.fn(), trace: vi.fn() };
+  const client = adapter({ personalFulfillment: personal, detail: vi.fn().mockResolvedValue(value),
+    loadIdentityNoReplay: vi.fn().mockResolvedValue({ schema_version: "1.0", person_id: PERSON_ID, authorization_version: 1 }),
+    loadAccessNoReplay: vi.fn().mockResolvedValue(access()), listShipments: vi.fn(), listReceipts: vi.fn(), listInboundOrders: vi.fn(), listOamReceiptEvidence: vi.fn() });
+  await renderReady(client); fireEvent.click(screen.getByRole("button", { name: "查看" }));
+  await screen.findByText("暂无发给本人的包裹。"); expect(screen.getByRole("region", { name: "本人收货与入账" })).toBeTruthy();
+  expect(client.listShipments).not.toHaveBeenCalled(); expect(client.listReceipts).not.toHaveBeenCalled(); expect(client.listInboundOrders).not.toHaveBeenCalled(); expect(client.listOamReceiptEvidence).not.toHaveBeenCalled();
+});
+
+
+it("preserves pending return compensation across opening and closing its demand", async () => {
+  const { createReturnCompensationStore } = await import("../materialRequestReturnCompensationRecovery");
+  const store = createReturnCompensationStore();
+  store.persist({ v: 1, key: "return-compensation-parent-0001", trace: "return-compensation-parent-trace", person_id: PERSON_ID,
+    authorization_version: 1, request_id: REQUEST_ID, fingerprint: "a".repeat(64), input: { expected_request_version: 9,
+      inbound_id: EVIDENCE_ID, inbound_request_hash: "b".repeat(64), inbound_plan_hash: "c".repeat(64), cancelled_qty: "1.000", reason: "不再补发" } });
+  const value = approvedDetail();
+  const client = adapter({ loadAccess: vi.fn().mockResolvedValue(operatorAccess()), detail: vi.fn().mockResolvedValue(value), returnCompensationCandidates: vi.fn().mockResolvedValue({
+    schema_version: "1.0", request_id: REQUEST_ID, request_version: value.request_version, items: [] }), compensateReturned: vi.fn() });
+  await renderReady(client);
+  const open = await screen.findByRole("button", { name: "打开待核验补偿" });
+  expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(open); await screen.findByRole("button", { name: "只读核验原补偿" });
+  expect(store.read().kind).toBe("valid"); expect(client.compensateReturned).not.toHaveBeenCalled();
+  fireEvent.click(within(screen.getByRole("dialog", { name: "正式需求详情" })).getByRole("button", { name: "关闭" }));
+  expect(screen.getByRole("button", { name: "打开待核验补偿" })).toBeTruthy();
+  expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it("preserves pending rejection return across opening and closing the original demand", async () => {
+  const { createRejectionStore } = await import("../materialRequestRejectionRecovery");
+  const store = createRejectionStore();
+  store.persist({ v: 1, key: "rejection-parent-key-0001", trace: "rejection-parent-trace", person_id: PERSON_ID,
+    authorization_version: 1, request_id: REQUEST_ID, fingerprint: "a".repeat(64), command: { kind: "register", input: { expected_request_version: 9,
+      receipt_id: EVIDENCE_ID, receipt_line_id: EVIDENCE_ID, receipt_request_hash: "b".repeat(64), quantity: "1.000", serial_ids: [], reason: "拒收退回" } } });
+  const value = approvedDetail();
+  const client = adapter({ loadAccess: vi.fn().mockResolvedValue(operatorAccess()), detail: vi.fn().mockResolvedValue(value), rejectionCandidates: vi.fn().mockResolvedValue({
+    schema_version: "1.0", request_id: REQUEST_ID, request_version: value.request_version, items: [], next_after_id: null }), recordRejection: vi.fn() });
+  await renderReady(client);
+  const open = await screen.findByRole("button", { name: "打开待核验退回" });
+  expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(open); await screen.findByRole("button", { name: "只读核验原退回" });
+  expect(store.read().kind).toBe("valid"); expect(client.recordRejection).not.toHaveBeenCalled();
+  fireEvent.click(within(screen.getByRole("dialog", { name: "正式需求详情" })).getByRole("button", { name: "关闭" }));
+  expect(screen.getByRole("button", { name: "打开待核验退回" })).toBeTruthy();
+  expect((screen.getByRole("button", { name: "新建需求" }) as HTMLButtonElement).disabled).toBe(true);
 });

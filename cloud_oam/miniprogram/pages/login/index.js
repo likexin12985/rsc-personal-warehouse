@@ -11,7 +11,7 @@ Page({
   data: {
     loading: false,
     checking: true,
-    options: { wechat_enabled: false, sms_enabled: false, sms_interval_seconds: 60 },
+    options: { sms_enabled: false, sms_interval_seconds: 60 },
     mode: 'unavailable',
     mobile: '',
     code: '',
@@ -22,25 +22,16 @@ Page({
     try {
       const options = await api.get('/auth/login-options')
       const formalOptions = {
-        wechat_enabled: !!options.wechat_enabled,
         sms_enabled: !!options.sms_enabled,
         sms_interval_seconds: options.sms_interval_seconds || 60
       }
-      const mode = formalOptions.wechat_enabled ? 'wechat' : formalOptions.sms_enabled ? 'sms' : 'unavailable'
+      const mode = formalOptions.sms_enabled ? 'sms' : 'unavailable'
       this.setData({ options: formalOptions, mode })
       if (session.getToken() || session.getRefreshToken()) {
         const user = await api.get('/auth/me')
         if (!getApp().setUser(user)) return
         this.routeAfterLogin(user)
         return
-      }
-      if (options.wechat_enabled) {
-        try {
-          await this.loginWithWechat()
-          return
-        } catch (error) {
-          if (error.status !== 428 && error.status !== 401) this.showError(error)
-        }
       }
     } catch (error) {
       if (error.status !== 401) this.showError(error)
@@ -51,10 +42,6 @@ Page({
 
   onUnload() {
     if (this.timer) clearInterval(this.timer)
-  },
-
-  setMode(event) {
-    this.setData({ mode: event.currentTarget.dataset.mode })
   },
 
   bindField(event) {
@@ -92,9 +79,8 @@ Page({
 
   async submit() {
     const { mobile, code, mode } = this.data
-    if (mode === 'wechat') return
     if (mode !== 'sms') {
-      wx.showToast({ title: '微信和验证码登录均未启用', icon: 'none' })
+      wx.showToast({ title: '手机验证码登录尚未启用', icon: 'none' })
       return
     }
     if (!/^1[3-9]\d{9}$/.test(mobile)) {
@@ -118,50 +104,8 @@ Page({
     }
   },
 
-  async wechatPhoneLogin(event) {
-    const phoneCode = event.detail && event.detail.code
-    if (!phoneCode) {
-      wx.showToast({ title: '未授权手机号，可改用验证码登录', icon: 'none' })
-      if (this.data.options.sms_enabled) this.setData({ mode: 'sms' })
-      return
-    }
-    this.setData({ loading: true })
-    try {
-      await this.loginWithWechat(phoneCode)
-    } catch (error) {
-      this.showError(error)
-    } finally {
-      this.setData({ loading: false })
-    }
-  },
-
-  async loginWithWechat(phoneCode = '') {
-    const loginCode = await this.getWechatLoginCode()
-    const result = await api.post('/auth/miniprogram/wechat-login', Object.assign({
-      login_code: loginCode,
-      phone_code: phoneCode || null
-    }, this.clientMetadata()))
-    await api.establishExplicitSession(result)
-    this.routeAfterLogin(result.user)
-  },
-
-  getWechatLoginCode() {
-    return new Promise((resolve, reject) => {
-      wx.login({
-        timeout: 10000,
-        success(result) {
-          if (result.code) resolve(result.code)
-          else reject(new Error('微信登录凭证获取失败'))
-        },
-        fail(error) {
-          reject(new Error(error.errMsg || '微信登录凭证获取失败'))
-        }
-      })
-    })
-  },
-
   clientMetadata() {
-    let deviceName = '微信小程序'
+    let deviceName = 'RSC个人仓小程序'
     try {
       const info = wx.getDeviceInfo ? wx.getDeviceInfo() : wx.getSystemInfoSync()
       deviceName = [info.brand, info.model].filter(Boolean).join(' ') || deviceName

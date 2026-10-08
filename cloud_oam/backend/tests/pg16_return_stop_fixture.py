@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import DBAPIError
 from app.stock_loss_return_stop_models import StockLossReturnStop as Stop
 from app.formal_access import load_formal_principal
-from app.foundation_models import Permission,Role,RolePermission
+from pg16_stock_operation_permission_policy import require_formal_grant
 from app.inventory_models import CustodyAssignment,StockLocation,StockBalance
 from app.stock_operation_models import StockOperationOrder,StockLossDisposition,StockLossHeadquartersDecision,StockLossHeadquartersReview
 from app.stock_loss_return_schemas import StockLossReturnExecuteIn
@@ -24,14 +24,8 @@ def prepare(context):
         source=db.get(StockLocation,context['location_id']); receiver=db.get(StockLocation,source.parent_id)
         db.add(CustodyAssignment(location_id=receiver.id,custodian_person_id=receiver.custodian_person_id,
             valid_from=datetime.now(timezone.utc)))
-        role=db.scalar(select(Role).where(Role.code=='admin'))
         for action in ('reverse_loss','read'):
-            permission=db.scalar(select(Permission).where(Permission.resource=='stock_operation',Permission.action==action,Permission.field_code==''))
-            if permission is None:
-                permission=Permission(resource='stock_operation',action=action,field_code='',description='Synthetic native stop probe only')
-                db.add(permission);db.flush()
-            if not db.scalar(select(RolePermission.id).where(RolePermission.role_id==role.id,RolePermission.permission_id==permission.id)):
-                db.add(RolePermission(role_id=role.id,permission_id=permission.id,effect='allow'))
+            require_formal_grant(db,role_code='admin',action=action)
         db.commit()
     with Session(api) as db:
         decision=db.scalars(select(StockLossHeadquartersDecision)).one();review=db.get(StockLossHeadquartersReview,decision.review_id)

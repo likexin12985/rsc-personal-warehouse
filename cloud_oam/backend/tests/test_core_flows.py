@@ -4,13 +4,12 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = ROOT / ".test_oam.db"
-UPLOAD_PATH = ROOT / ".test_uploads"
+from local_test_runtime import DATABASE_PATH as DB_PATH, UPLOAD_PATH
 
 os.environ["OAM_DATABASE_URL"] = f"sqlite+pysqlite:///{DB_PATH}"
 os.environ["OAM_JWT_SECRET"] = "test-secret-with-at-least-thirty-two-characters"
@@ -22,14 +21,14 @@ os.environ["OAM_UPLOAD_DIR"] = str(UPLOAD_PATH)
 os.environ["OAM_ENVIRONMENT"] = "test"
 os.environ["OAM_DATABASE_SCHEMA_MODE"] = "bootstrap_with_seed"
 os.environ["OAM_LEGACY_PROTOTYPE_WRITES_ENABLED"] = "true"
-os.environ["OAM_PASSWORD_LOGIN_ENABLED"] = "true"
+os.environ["OAM_PASSWORD_LOGIN_ENABLED"] = "false"
 os.environ["OAM_SMS_LOGIN_ENABLED"] = "true"
 os.environ["OAM_SMS_PROVIDER"] = "mock"
 os.environ["OAM_SMS_TEST_CODE"] = "246810"
-os.environ["OAM_WECHAT_LOGIN_ENABLED"] = "true"
-os.environ["OAM_WECHAT_PROVIDER"] = "mock"
-os.environ["OAM_WECHAT_APP_ID"] = "wx-test-rsc"
-os.environ["OAM_WECHAT_TEST_MOBILE"] = "18660255681"
+os.environ["OAM_WECHAT_LOGIN_ENABLED"] = "false"
+os.environ["OAM_WECHAT_PROVIDER"] = "disabled"
+os.environ["OAM_WECHAT_APP_ID"] = ""
+os.environ["OAM_WECHAT_TEST_MOBILE"] = ""
 os.environ["OAM_EDGE_SYNC_ENABLED"] = "true"
 os.environ["OAM_EDGE_SYNC_SECRET"] = "edge-sync-test-secret-with-at-least-32-characters"
 os.environ["OAM_EDGE_SYNC_LEGACY_BATCHES_ENABLED"] = "true"
@@ -44,6 +43,7 @@ from app.models import (  # noqa: E402
     ExternalSyncCurrentRecord,
     ExternalSyncSnapshot,
     OamPersonnelBinding,
+    SmsLoginChallenge,
     User,
 )
 from app.security import hash_password  # noqa: E402
@@ -86,6 +86,70 @@ def records_sha256(records: list[dict]) -> str:
     return hashlib.sha256(canonical_bytes(records)).hexdigest()
 
 
+def sms_login(client, mobile: str, *, device_id: str | None = None):
+    """Authenticate the current core-flow fixture through the live SMS-only path."""
+    # The legacy core-flow test switches identities several times in one
+    # process.  Age only this test fixture's previous challenge so the
+    # production 60-second resend guard remains unchanged.
+    with SessionLocal() as db:
+        cooldown_cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+        previous_challenges = db.scalars(select(SmsLoginChallenge)).all()
+        for previous in previous_challenges:
+            previous.created_at = cooldown_cutoff
+        if previous_challenges:
+            db.commit()
+    requested = client.post("/api/auth/sms/request", json={"mobile": mobile})
+    assert requested.status_code == 200, requested.text
+    if device_id is None:
+        response = client.post(
+            "/api/auth/sms/login", json={"mobile": mobile, "code": "246810"}
+        )
+    else:
+        response = client.post(
+            "/api/auth/miniprogram/sms-login",
+            json={
+                "mobile": mobile,
+                "code": "246810",
+                "device_id": device_id,
+                "device_name": "测试手机",
+            },
+        )
+    assert response.status_code == 200, response.text
+    return response
+
+
+def create_sms_user(
+    mobile: str,
+    name: str,
+    *,
+    role: str = "technician",
+    province: str | None = None,
+) -> dict:
+    """Seed a user directly; the production provisioning route is retired."""
+    with SessionLocal() as db:
+        user = User(
+            mobile=mobile,
+            name=name,
+            password_hash=hash_password("disabled-test-password"),
+            role=role,
+            province=province,
+            is_active=True,
+            require_password_change=False,
+            account_status="active",
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        return {
+            "id": user.id,
+            "mobile": user.mobile,
+            "name": user.name,
+            "role": user.role,
+            "province": user.province,
+            "require_password_change": user.require_password_change,
+        }
+
+
 def test_inventory_transfer_and_stocktake_flow():
     DB_PATH.unlink(missing_ok=True)
     with TestClient(app) as client:
@@ -112,8 +176,8 @@ def test_inventory_transfer_and_stocktake_flow():
         options = client.get("/api/auth/login-options")
         assert options.status_code == 200
         assert options.json()["sms_enabled"] is True
-        assert options.json()["password_enabled"] is True
-        assert options.json()["wechat_enabled"] is True
+        assert options.json()["password_enabled"] is False
+        assert options.json()["wechat_enabled"] is False
         assert options.json()["session_ttl_days"] == 30
 
         requested = client.post(
@@ -130,12 +194,12 @@ def test_inventory_transfer_and_stocktake_flow():
             json={"mobile": "18660255681", "code": "000000"},
         )
         assert wrong_code.status_code == 401
-        sms_login = client.post(
+        initial_sms_login = client.post(
             "/api/auth/sms/login",
             json={"mobile": "18660255681", "code": "246810"},
         )
-        assert sms_login.status_code == 200, sms_login.text
-        assert sms_login.json()["require_password_change"] is False
+        assert initial_sms_login.status_code == 200, initial_sms_login.text
+        assert initial_sms_login.json()["require_password_change"] is False
         current_identity = client.get("/api/auth/me")
         assert current_identity.status_code == 200
         assert (
@@ -162,28 +226,15 @@ def test_inventory_transfer_and_stocktake_flow():
         )
         assert unknown_login.status_code == 401
 
-        login = client.post(
-            "/api/auth/login",
-            json={
-                "mobile": "18660255681",
-                "password": "Temporary-Admin-Password-2026!",
-            },
-        )
-        assert login.status_code == 200, login.text
+        login = sms_login(client, "18660255681")
         web_refresh = client.post("/api/auth/refresh")
         assert web_refresh.status_code == 200, web_refresh.text
         assert client.get("/api/auth/me").status_code == 200
 
-        mini_login = client.post(
-            "/api/auth/miniprogram/password-login",
-            json={
-                "mobile": "18660255681",
-                "password": "Temporary-Admin-Password-2026!",
-                "device_id": "test-mini-device-001",
-                "device_name": "测试手机",
-            },
+        client.post("/api/auth/logout")
+        mini_login = sms_login(
+            client, "18660255681", device_id="test-mini-device-001"
         )
-        assert mini_login.status_code == 200, mini_login.text
         token = mini_login.json()["access_token"]
         assert mini_login.json()["token_type"] == "bearer"
         assert mini_login.json()["expires_in"] > 0
@@ -217,7 +268,7 @@ def test_inventory_transfer_and_stocktake_flow():
             },
         ).status_code == 401
 
-        binding_required = client.post(
+        disabled_wechat = client.post(
             "/api/auth/miniprogram/wechat-login",
             json={
                 "login_code": "wechat-user-001",
@@ -225,66 +276,32 @@ def test_inventory_transfer_and_stocktake_flow():
                 "device_name": "微信测试手机",
             },
         )
-        assert binding_required.status_code == 428
-        wechat_login = client.post(
-            "/api/auth/miniprogram/wechat-login",
-            json={
-                "login_code": "wechat-user-001",
-                "phone_code": "wechat-phone-001",
-                "device_id": "wechat-device-001",
-                "device_name": "微信测试手机",
-            },
-        )
-        assert wechat_login.status_code == 200, wechat_login.text
-        wechat_session = wechat_login.json()
-        silent_wechat_login = client.post(
-            "/api/auth/miniprogram/wechat-login",
-            json={
-                "login_code": "wechat-user-001",
-                "device_id": "wechat-device-001",
-                "device_name": "微信测试手机",
-            },
-        )
-        assert silent_wechat_login.status_code == 200, silent_wechat_login.text
-        wechat_session = silent_wechat_login.json()
-
-        login = client.post(
-            "/api/auth/login",
-            json={
-                "mobile": "18660255681",
-                "password": "Temporary-Admin-Password-2026!",
-            },
-        )
-        assert login.status_code == 200, login.text
+        assert disabled_wechat.status_code == 404
+        login = sms_login(client, "18660255681")
 
         active_sessions = client.get("/api/auth/sessions")
         assert active_sessions.status_code == 200, active_sessions.text
         assert any(row["client_type"] == "miniprogram" for row in active_sessions.json())
         revoked = client.post(
-            f"/api/auth/sessions/{wechat_session['session_id']}/revoke"
+            f"/api/auth/sessions/{refreshed_data['session_id']}/revoke"
         )
         assert revoked.status_code == 200, revoked.text
         assert client.get(
             "/api/auth/me",
-            headers={"Authorization": f"Bearer {wechat_session['access_token']}"},
+            headers={"Authorization": f"Bearer {refreshed_data['access_token']}"},
         ).status_code == 401
 
         materials = client.get("/api/materials?limit=500").json()
         warehouses = client.get("/api/warehouses").json()
         users = client.get("/api/auth/users").json()
 
-        new_user = client.post(
-            "/api/auth/users",
-            json={
-                "mobile": "13800000001",
-                "name": "测试区域负责人",
-                "role": "provincial_manager",
-                "province": "江苏省",
-                "temporary_password": "Warehouse-Test-2026!",
-            },
+        new_user = create_sms_user(
+            "13800000001",
+            "测试区域负责人",
+            role="provincial_manager",
+            province="江苏省",
         )
-        assert new_user.status_code == 200, new_user.text
-        assert new_user.json()["require_password_change"] is True
+        assert new_user["require_password_change"] is False
 
         new_warehouse = client.post(
             "/api/warehouses",
@@ -403,18 +420,10 @@ def test_inventory_transfer_and_stocktake_flow():
         assert closed.status_code == 200, closed.text
         assert closed.json()["status"] == "closed"
 
-        technician = client.post(
-            "/api/auth/users",
-            json={
-                "mobile": "13800000002",
-                "name": "测试工程师",
-                "role": "technician",
-                "province": "江苏省",
-                "temporary_password": "Technician-Test-2026!",
-            },
+        technician = create_sms_user(
+            "13800000002", "测试工程师", province="江苏省"
         )
-        assert technician.status_code == 200, technician.text
-        technician_id = technician.json()["id"]
+        technician_id = technician["id"]
 
         employee_warehouse = client.post(
             "/api/warehouses",
@@ -475,14 +484,7 @@ def test_inventory_transfer_and_stocktake_flow():
         assert hq_new_material_adjustment.status_code == 200, hq_new_material_adjustment.text
 
         client.post("/api/auth/logout")
-        technician_login = client.post(
-            "/api/auth/login",
-            json={
-                "mobile": "13800000002",
-                "password": "Technician-Test-2026!",
-            },
-        )
-        assert technician_login.status_code == 200, technician_login.text
+        technician_login = sms_login(client, "13800000002")
         mismatched_personal_request = client.post(
             "/api/transfers",
             json={
@@ -540,14 +542,7 @@ def test_inventory_transfer_and_stocktake_flow():
         ).status_code == 403
 
         client.post("/api/auth/logout")
-        admin_login = client.post(
-            "/api/auth/login",
-            json={
-                "mobile": "18660255681",
-                "password": "Temporary-Admin-Password-2026!",
-            },
-        )
-        assert admin_login.status_code == 200, admin_login.text
+        admin_login = sms_login(client, "18660255681")
         approved = client.post(
             f"/api/transfers/{request_id}/approve",
             json={"source_warehouse_id": headquarters["id"]},
@@ -560,13 +555,7 @@ def test_inventory_transfer_and_stocktake_flow():
         ).status_code == 200
 
         client.post("/api/auth/logout")
-        client.post(
-            "/api/auth/login",
-            json={
-                "mobile": "13800000002",
-                "password": "Technician-Test-2026!",
-            },
-        )
+        sms_login(client, "13800000002")
         manual_receive = client.post(f"/api/transfers/{request_id}/receive")
         assert manual_receive.status_code == 200, manual_receive.text
         personal_inventory = client.get("/api/inventory?mine=true").json()
@@ -705,13 +694,7 @@ def test_inventory_transfer_and_stocktake_flow():
         bad_return_id = bad_return.json()["id"]
 
         client.post("/api/auth/logout")
-        client.post(
-            "/api/auth/login",
-            json={
-                "mobile": "18660255681",
-                "password": "Temporary-Admin-Password-2026!",
-            },
-        )
+        sms_login(client, "18660255681")
         assert client.post(
             f"/api/transfers/{bad_return_id}/dispatch",
             json={"logistics_company": "内部配送", "tracking_number": "TEST-BAD-1"},
@@ -822,14 +805,7 @@ def test_edge_sync_signature_idempotency_and_staging():
         assert updated.status_code == 200, updated.text
         assert updated.json()["updated"] == 1
 
-        login = client.post(
-            "/api/auth/login",
-            json={
-                "mobile": "18660255681",
-                "password": "Temporary-Admin-Password-2026!",
-            },
-        )
-        assert login.status_code == 200, login.text
+        login = sms_login(client, "18660255681")
         status_response = client.get("/api/integrations/oam/edge/status")
         assert status_response.status_code == 200, status_response.text
         assert status_response.json()["configured"] is True
@@ -1056,14 +1032,7 @@ def test_oam_personnel_mapping_enables_sms_login_and_revokes_on_disable():
             assert db.scalar(select(User).where(User.mobile == "13800000021")) is None
             binding_id = binding.id
 
-        admin_login = client.post(
-            "/api/auth/login",
-            json={
-                "mobile": "18660255681",
-                "password": "Temporary-Admin-Password-2026!",
-            },
-        )
-        assert admin_login.status_code == 200, admin_login.text
+        admin_login = sms_login(client, "18660255681")
         directory = client.get("/api/integrations/oam/personnel")
         assert directory.status_code == 200, directory.text
         assert directory.json()["summary"]["loginEligible"] == 1
@@ -1160,14 +1129,7 @@ def test_oam_personnel_mapping_enables_sms_login_and_revokes_on_disable():
         assert own_orders.json()["items"][0]["lines"][0]["materialCode"] == "ADQCPN0090"
 
         client.cookies.clear()
-        admin_login = client.post(
-            "/api/auth/login",
-            json={
-                "mobile": "18660255681",
-                "password": "Temporary-Admin-Password-2026!",
-            },
-        )
-        assert admin_login.status_code == 200, admin_login.text
+        admin_login = sms_login(client, "18660255681")
         disabled = client.post(
             f"/api/integrations/oam/personnel/{binding_id}/disable"
         )
@@ -1369,14 +1331,7 @@ def test_work_order_mirror_list_detail_and_person_scope():
             )
             db.commit()
 
-        admin_login = client.post(
-            "/api/auth/login",
-            json={
-                "mobile": "18660255681",
-                "password": "Temporary-Admin-Password-2026!",
-            },
-        )
-        assert admin_login.status_code == 200, admin_login.text
+        admin_login = sms_login(client, "18660255681")
         listed = client.get("/api/work-orders")
         assert listed.status_code == 200, listed.text
         assert listed.json()["summary"] == {
@@ -1403,14 +1358,7 @@ def test_work_order_mirror_list_detail_and_person_scope():
         assert client.get("/api/work-orders/WT-OTHER-001").status_code == 409
 
         client.cookies.clear()
-        technician_login = client.post(
-            "/api/auth/login",
-            json={
-                "mobile": "13800000031",
-                "password": "Technician-Test-2026!",
-            },
-        )
-        assert technician_login.status_code == 200, technician_login.text
+        technician_login = sms_login(client, "13800000031")
         scoped = client.get("/api/work-orders")
         assert scoped.status_code == 200, scoped.text
         assert scoped.json()["summary"]["available"] == 1

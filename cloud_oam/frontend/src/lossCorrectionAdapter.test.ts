@@ -3,6 +3,7 @@ import { expect, it, vi } from 'vitest';
 import { ACTIONS, verifyPending } from './lossCorrectionContracts';
 import { createAdapter } from './lossCorrectionAdapter';
 import { fixtures, saved } from './lossCorrectionFixtures';
+import { conditionFixture } from './returnConditionHistoryFixtures';
 
 function harness(f: typeof fixtures[number]) {
   const who = { person_id: f.data.source.person_id, authorization_version: f.data.source.authorization_version,
@@ -24,6 +25,27 @@ function harness(f: typeof fixtures[number]) {
   });
   return { request, access, me, adapter: createAdapter(who.person_id, request) };
 }
+
+it.each(['success', 'revoked', 'wrong-root', 'network'] as const)('condition history %s is scoped and never writes', async mode => {
+  const f = fixtures.find(f => f.flow === 'inverses')!, h = harness(f), original = h.request.getMockImplementation()!;
+  const value = conditionFixture(), root = f.data.source.root_disposition_id;
+  value.root_disposition_id = root;
+  value.material_id = f.data.origin.report.lines.find(line => line.line_id === f.data.source.line_id)!.material_id;
+  h.access.permissions = h.access.permissions.filter(p => p.action === 'read');
+  h.request.mockImplementation(async (url, init) => {
+    if (!url.includes('/return-condition-corrections/history/')) return original(url, init);
+    expect(init?.cache).toBe('no-store'); expect(init?.method ?? 'GET').toBe('GET');
+    if (mode === 'network') throw new Error('unavailable');
+    if (mode === 'revoked') h.access.permissions = [];
+    if (mode === 'wrong-root') value.root_disposition_id = value.inbound_line_id;
+    return value;
+  });
+  const task = h.adapter.conditionHistory!(root, value.inbound_line_id);
+  if (mode === 'success') expect((await task).root_disposition_id).toBe(root);
+  else await expect(task).rejects.toThrow();
+  expect(h.request.mock.calls.filter(([url]) => url.includes('/return-condition-corrections/history/'))).toHaveLength(1);
+  expect(h.request.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0);
+});
 
 it.each(fixtures)('$name prepares only from verified references and does not issue a business write', async f => {
   const h = harness(f), original = f.data.original;

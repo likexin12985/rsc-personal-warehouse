@@ -95,6 +95,23 @@ it('does not auto-select approval, and unsupported dedicated flows cannot be exe
   expect(w.adapter.prepare).not.toHaveBeenCalled(); expect(w.adapter.execute).not.toHaveBeenCalled();
 });
 
+it('opens only the explicitly selected scrap approval and keeps request recovery reachable without write rights', async () => {
+  const w = await world('executions'), s = structuredClone(w.p.source), open = vi.fn();
+  const choice = s.approval_choices[0]; choice.disposition = 'scrap'; choice.execution_mode = 'dedicated_flow_required'; choice.preview_reference = null;
+  w.setSource(s); const view = render(<FormalLossCorrection {...w.props} onOpenScrap={open} />);
+  await screen.findByRole('region', { name: '原报损明细' });
+  expect(screen.queryByRole('button', { name: '办理纠正报废' })).toBeNull();
+  fireEvent.change(screen.getByRole('combobox', { name: '已批准的纠正决定' }), { target: { value: choice.correction_decision_id } });
+  const button = screen.getByRole('button', { name: '办理纠正报废' });
+  expect((button as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(button); expect(open).toHaveBeenCalledExactlyOnceWith(choice.correction_decision_id);
+  expect(w.adapter.prepare).not.toHaveBeenCalled(); expect(w.adapter.execute).not.toHaveBeenCalled();
+  view.unmount(); w.context.can_write.executions = false; open.mockClear();
+  render(<FormalLossCorrection {...w.props} onOpenScrap={open} />);
+  await screen.findByRole('region', { name: '原报损明细' });
+  fireEvent.click(screen.getByRole('button', { name: '纠正报废请求回查' })); expect(open).toHaveBeenCalledExactlyOnceWith();
+});
+
 it('discards a late preview after identity changes', async () => {
   const w = await world(); let resolve!: (p: Pending) => void;
   vi.mocked(w.adapter.prepare).mockImplementation(() => new Promise(r => { resolve = r; }));
@@ -124,11 +141,16 @@ it('opens the read-only return history panel from the matching original return d
   history.lines[0].original_quantity = source.quantity; history.lines[0].shares[5].quantity = source.quantity;
   vi.mocked(w.adapter.history).mockResolvedValue(returnHistory(history,
     { root: w.props.rootId, quantity: source.quantity, serials: source.serial_ids }));
-  render(<FormalLossCorrection {...w.props} />);
+  const openCondition = vi.fn(); render(<FormalLossCorrection {...w.props} onOpenCondition={openCondition} />);
   const query = await screen.findByRole('button', { name: '查询退回历史' });
+  await waitFor(() => expect(screen.queryByText('正在核验，请稍候…')).toBeNull());
   expect(screen.getByRole('region', { name: '退回停止与恢复' })).toBeTruthy();
-  expect(w.adapter.history).not.toHaveBeenCalled(); fireEvent.click(query);
+  expect(query).toBeTruthy();
+  expect(w.adapter.history).not.toHaveBeenCalled(); fireEvent.click(screen.getByRole('button', { name: '查询退回历史' }));
+  await waitFor(() => expect(w.adapter.history).toHaveBeenCalledExactlyOnceWith(w.props.rootId));
   await screen.findByText('历史入库成色需要核查');
+  fireEvent.click(screen.getByRole('button', { name: '办理成色纠正' }));
+  expect(openCondition).toHaveBeenCalledExactlyOnceWith(history.classification_exceptions[0].inbound_line_id);
   expect(w.adapter.history).toHaveBeenCalledExactlyOnceWith(w.props.rootId);
   expect(w.adapter.prepare).not.toHaveBeenCalled(); expect(w.adapter.execute).not.toHaveBeenCalled();
 });

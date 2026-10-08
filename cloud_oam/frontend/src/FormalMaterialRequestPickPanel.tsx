@@ -27,6 +27,7 @@ export default function FormalMaterialRequestPickPanel({ adapter, access, detail
     generation.current += 1; context.current = { adapter, access, store, requestId: detail?.request_id, requestVersion: detail?.request_version };
   }
   const stored = store.read(), blocked = stored.kind !== "missing";
+  const canOperate = access?.can_read_allocation_options === true;
   const otherBlocked = () => otherWriteBusy || otherWriteBlocked();
   const canWrite = hasPickRecovery(adapter) && typeof adapter.createPick === "function" && typeof adapter.listPickOptions === "function";
   async function recover() {
@@ -45,12 +46,12 @@ export default function FormalMaterialRequestPickPanel({ adapter, access, detail
   useEffect(() => {
     setPage(null); setSelection(null); setLoading(false); setRunning(false);
     const current = store.read(); onBlocking(current.kind !== "missing");
-    if (current.kind === "valid" && access && !active.current) void recover();
+    if (current.kind === "valid" && canOperate && !active.current) void recover();
     else if (current.kind === "corrupt" || current.kind === "unavailable") setError("拣货核验存储不可用，写入保持暂停；保留原请求记录");
     return () => { generation.current += 1; onBlocking(store.read().kind !== "missing"); };
     // Recovery is always read-only and remains anchored to the original context.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adapter, store, accessSignature, detail?.request_id, detail?.request_version]);
+  }, [adapter, store, accessSignature, detail?.request_id, detail?.request_version, canOperate]);
   async function load(lineId: string) {
     if (!detail || !access?.can_read_allocation_options || !adapter.listPickOptions || !canWrite || active.current || loading || blocked || otherBlocked()) return;
     const turn = generation.current; setLoading(true); setError("");
@@ -61,6 +62,11 @@ export default function FormalMaterialRequestPickPanel({ adapter, access, detail
     } catch (caught) { if (turn === generation.current) setError(showError(caught)); }
     finally { if (turn === generation.current) setLoading(false); }
   }
+  // Personal-warehouse users follow the visible request → shipment → receipt →
+  // personal-inbound path. Picking remains a backend/manual warehouse action;
+  // keep any unresolved sentinel blocking writes, but do not expose a picking
+  // panel or operation controls to this audience.
+  if (!canOperate) return null;
   async function submit() {
     if (!selection || !access || !hasPickRecovery(adapter) || !adapter.createPick || !adapter.listPickOptions || active.current || blocked || otherBlocked()) return;
     const turn = generation.current, { before, page: originalPage, option } = selection;

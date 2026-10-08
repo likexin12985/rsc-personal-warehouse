@@ -416,6 +416,7 @@ RUNTIME_UPDATE_COLUMNS = {
             "allocation_status",
             "reservation_status",
             "outbound_status",
+            "shipment_status",
             "personal_inbound_status",
             "version",
             "updated_at",
@@ -4087,6 +4088,10 @@ FORMAL_FILE_INTERNAL_FUNCTIONS = {
         ("search_path=pg_catalog, public",),
     ),
 }
+# Only explicitly registered internal helpers may return a typed row set.
+# Every other function retains the scalar, input-only calling convention.
+FORMAL_FILE_INTERNAL_SET_FUNCTIONS: dict[tuple[str, str], tuple[str, ...]] = {}
+
 FORMAL_FILE_INTERNAL_FUNCTION_SHAPES = {
     coordinate: (
         "f",
@@ -4793,6 +4798,56 @@ from . import stock_loss_return_stop_security as _loss_return_stop_catalog
 _loss_return_stop_catalog.register(globals())
 from . import authentication_fence_security as _authentication_fence_catalog
 _authentication_fence_catalog.register(globals())
+from . import stock_scrap_security as _stock_scrap_catalog
+from . import stock_scrap_readiness as _stock_scrap_readiness
+from . import scrap_authentication_fence_security as _scrap_authentication_fence_catalog
+_scrap_authentication_fence_catalog.overlay(_stock_scrap_catalog, _stock_scrap_readiness)
+from . import return_condition_readiness as _condition_readiness
+_condition_readiness.overlay(_stock_scrap_readiness)
+from . import shipment_projection_security as _shipment_projection_catalog
+_shipment_projection_catalog.overlay(_stock_scrap_readiness)
+from . import material_request_closure_readiness as _closure_readiness
+_closure_readiness.overlay(_stock_scrap_readiness)
+from . import material_request_partial_release_security as _partial_release_catalog
+_partial_release_catalog.overlay(_stock_scrap_readiness)
+from . import material_request_remaining_cancel_readiness as _remaining_cancel_readiness
+_remaining_cancel_readiness.overlay(_stock_scrap_readiness)
+from . import material_request_rejection_return_readiness as _rejection_return_readiness
+_rejection_return_readiness.overlay(_stock_scrap_readiness)
+from . import material_request_rejection_progress_readiness as _rejection_progress_readiness
+_rejection_progress_readiness.overlay(_stock_scrap_readiness)
+from . import material_request_rejection_receipt_readiness as _rejection_receipt_readiness
+_rejection_receipt_readiness.overlay(_stock_scrap_readiness)
+from . import material_request_rejection_inbound_readiness as _rejection_inbound_readiness
+_rejection_inbound_readiness.overlay(_stock_scrap_readiness)
+from . import material_request_return_compensation_readiness as _return_compensation_readiness
+_return_compensation_readiness.overlay(_stock_scrap_readiness)
+from . import material_request_supply_allocation_security as _supply_allocation_catalog
+_supply_allocation_catalog.overlay(_stock_scrap_readiness)
+from . import material_request_supply_capacity_security as _supply_capacity_catalog
+_supply_capacity_catalog.overlay(_stock_scrap_readiness)
+_stock_scrap_catalog.register(globals())
+_stock_scrap_readiness.register(globals())
+from . import return_condition_security as _condition_catalog
+_condition_catalog.register(globals())
+_shipment_projection_catalog.register(globals())
+from . import material_request_closure_security as _closure_catalog
+_closure_catalog.register(globals())
+_partial_release_catalog.register(globals())
+from . import material_request_remaining_cancel_security as _remaining_cancel_catalog
+_remaining_cancel_catalog.register(globals())
+from . import material_request_rejection_return_security as _rejection_return_catalog
+_rejection_return_catalog.register(globals())
+from . import material_request_rejection_progress_security as _rejection_progress_catalog
+_rejection_progress_catalog.register(globals())
+from . import material_request_rejection_receipt_security as _rejection_receipt_catalog
+_rejection_receipt_catalog.register(globals())
+from . import material_request_rejection_inbound_security as _rejection_inbound_catalog
+_rejection_inbound_catalog.register(globals())
+from . import material_request_return_compensation_security as _return_compensation_catalog
+_return_compensation_catalog.register(globals())
+_supply_allocation_catalog.register(globals())
+_supply_capacity_catalog.register(globals())
 
 _ROLE_EVIDENCE_SQL = text(
     """
@@ -7006,6 +7061,16 @@ def validate_production_database_security(
             _return_inbound_quality_catalog.verify(connection)
             _loss_return_stop_catalog.verify(connection)
             _authentication_fence_catalog.verify(connection)
+            _stock_scrap_catalog.verify(connection)
+            _stock_scrap_readiness.verify(connection)
+            _condition_catalog.verify(connection)
+            _closure_catalog.verify(connection)
+            _remaining_cancel_catalog.verify(connection)
+            _rejection_return_catalog.verify(connection)
+            _rejection_progress_catalog.verify(connection)
+            _rejection_receipt_catalog.verify(connection)
+            _rejection_inbound_catalog.verify(connection)
+            _return_compensation_catalog.verify(connection)
             evidence = connection.execute(
                 _ROLE_EVIDENCE_SQL,
                 {"migration_role": expected_migration_role},
@@ -7551,11 +7616,13 @@ def _assert_runtime_function_acl(
             failures.append(f"{label}.kind")
         if row.get("result_type") != result_type:
             failures.append(f"{label}.result_type")
-        if row.get("returns_set") is not False:
+        set_modes = FORMAL_FILE_INTERNAL_SET_FUNCTIONS.get(coordinate) if expected_internal is not None else None
+        if row.get("returns_set") is not (set_modes is not None):
             failures.append(f"{label}.returns_set")
         if row.get("variadic_type") != 0:
             failures.append(f"{label}.variadic_type")
-        if row.get("argument_modes") is not None:
+        actual_modes = row.get("argument_modes")
+        if (tuple(actual_modes) if actual_modes is not None else None) != set_modes:
             failures.append(f"{label}.argument_modes")
         if row.get("argument_default_count") != 0:
             failures.append(f"{label}.argument_defaults")
@@ -7607,6 +7674,7 @@ def _assert_runtime_function_acl(
         != set(FORMAL_FILE_INTERNAL_FUNCTIONS)
         or set(FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256)
         != set(FORMAL_FILE_INTERNAL_FUNCTIONS)
+        or not set(FORMAL_FILE_INTERNAL_SET_FUNCTIONS) <= set(FORMAL_FILE_INTERNAL_FUNCTIONS)
         or oam_sync_seen != OAM_SYNC_RUNTIME_FUNCTIONS
         or set(OAM_SYNC_RUNTIME_FUNCTION_DEFINITIONS)
         != OAM_SYNC_RUNTIME_FUNCTIONS
@@ -7625,14 +7693,24 @@ def _assert_runtime_function_acl(
 
 def _assert_audit_trigger_guards(rows: list[Mapping[str, Any]]) -> None:
     failures: list[str] = []
-    actual: dict[str, Mapping[str, Any]] = {}
+    actual: dict[tuple[str, str], Mapping[str, Any]] = {}
     for row in rows:
         name = row.get("trigger_name")
-        if not isinstance(name, str) or name in actual:
+        table = row.get("table_name")
+        coordinate = (table, name)
+        if not isinstance(name, str) or not isinstance(table, str) or coordinate in actual:
             failures.append("trigger_identity")
             continue
-        actual[name] = row
-    expected_names = set(EXPECTED_AUDIT_TRIGGERS)
+        actual[coordinate] = row
+    expected_triggers = {}
+    for key, expected in EXPECTED_AUDIT_TRIGGERS.items():
+        coordinate = (expected[0], key) if isinstance(key, str) else key
+        if (not isinstance(coordinate, tuple) or len(coordinate) != 2
+                or coordinate[0] != expected[0] or coordinate in expected_triggers):
+            failures.append("expected_trigger_identity")
+            continue
+        expected_triggers[coordinate] = expected
+    expected_names = set(expected_triggers)
     actual_names = set(actual)
     missing_names = sorted(expected_names - actual_names)
     unexpected_names = sorted(actual_names - expected_names)
@@ -7640,7 +7718,7 @@ def _assert_audit_trigger_guards(rows: list[Mapping[str, Any]]) -> None:
         failures.append(f"trigger_set.missing={missing_names}")
     if unexpected_names:
         failures.append(f"trigger_set.unexpected={unexpected_names}")
-    for name, (
+    for coordinate, (
         table_name,
         function_name,
         trigger_type,
@@ -7648,10 +7726,13 @@ def _assert_audit_trigger_guards(rows: list[Mapping[str, Any]]) -> None:
         is_deferrable,
         is_initially_deferred,
     ) in (
-        EXPECTED_AUDIT_TRIGGERS.items()
+        expected_triggers.items()
     ):
-        row = actual.get(name)
+        name = coordinate[1]
+        row = actual.get(coordinate)
         if row is None:
+            if any(key[1] == name and key not in expected_triggers for key in actual):
+                failures.append(f"{name}.table")
             continue
         if row.get("table_name") != table_name:
             failures.append(f"{name}.table")
@@ -7670,7 +7751,10 @@ def _assert_audit_trigger_guards(rows: list[Mapping[str, Any]]) -> None:
             failures.append(f"{name}.deferrable")
         if row.get("is_initially_deferred") is not is_initially_deferred:
             failures.append(f"{name}.initially_deferred")
-        if row.get("has_when_clause") is not False:
+        # This condition is byte-exact in _closure_catalog.verify above;
+        # checking presence here does not admit an arbitrary audit filter.
+        expected_when = coordinate in {('audit_events', 'rsc_closure_audit_0169'), ('audit_events', 'rsc_remaining_cancel_audit_0171'), ('audit_events', 'rsc_rejection_return_complete_0172'), ('audit_events', 'rsc_rejection_progress_complete_0173'), ('audit_events', 'rsc_rejection_receipt_complete_0174'), ('inventory_transactions', 'rsc_rejection_inbound_complete_0175'), ('audit_events', 'rsc_rejection_inbound_complete_0175'), ('outbox_events', 'rsc_rejection_inbound_complete_0175'), ('notification_events', 'rsc_rejection_inbound_complete_0175'), ('audit_events', 'rsc_return_compensation_complete_0176')}
+        if row.get("has_when_clause") is not expected_when:
             failures.append(f"{name}.when")
         if row.get("has_column_filter") is not False:
             failures.append(f"{name}.columns")
@@ -8401,18 +8485,33 @@ def _assert_material_request_approval_guards(
     """Prove the complete 0029/0030/0045/0046 request guard catalog."""
 
     failures: list[str] = []
-    actual_triggers: dict[str, Mapping[str, Any]] = {}
+    actual_triggers: dict[tuple[str, str], Mapping[str, Any]] = {}
     for row in triggers:
         name = row.get("trigger_name")
-        if not isinstance(name, str) or name in actual_triggers:
+        table = row.get("table_name")
+        coordinate = (table, name)
+        if not isinstance(name, str) or not isinstance(table, str) or coordinate in actual_triggers:
             failures.append("trigger_identity")
             continue
-        actual_triggers[name] = row
-    if set(actual_triggers) != set(EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS):
+        actual_triggers[coordinate] = row
+    # PostgreSQL trigger names are unique within a table, not a schema.
+    # Keep historical string registrations while supporting exact coordinates.
+    expected_triggers = {}
+    for key, expected in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items():
+        coordinate = (expected[0], key) if isinstance(key, str) else key
+        if (not isinstance(coordinate, tuple) or len(coordinate) != 2
+                or coordinate[0] != expected[0] or coordinate in expected_triggers):
+            failures.append("expected_trigger_identity")
+            continue
+        expected_triggers[coordinate] = expected
+    if set(actual_triggers) != set(expected_triggers):
         failures.append("trigger_set")
-    for name, expected in EXPECTED_MATERIAL_REQUEST_APPROVAL_TRIGGERS.items():
-        row = actual_triggers.get(name)
+    for coordinate, expected in expected_triggers.items():
+        name = coordinate[1]
+        row = actual_triggers.get(coordinate)
         if row is None:
+            if any(key[1] == name and key not in expected_triggers for key in actual_triggers):
+                failures.append(f"{name}.table_name")
             continue
         (
             table_name,
@@ -8432,7 +8531,7 @@ def _assert_material_request_approval_guards(
             "is_constraint_trigger": is_constraint,
             "is_deferrable": is_deferrable,
             "is_initially_deferred": is_initially_deferred,
-            "has_when_clause": False,
+            "has_when_clause": coordinate in {("audit_events", "rsc_closure_audit_0169"), ("audit_events", "rsc_remaining_cancel_audit_0171"), ("audit_events", "rsc_rejection_return_complete_0172"), ("audit_events", "rsc_rejection_progress_complete_0173"), ("audit_events", "rsc_rejection_receipt_complete_0174"), ('inventory_transactions', 'rsc_rejection_inbound_complete_0175'), ('audit_events', 'rsc_rejection_inbound_complete_0175'), ('outbox_events', 'rsc_rejection_inbound_complete_0175'), ('notification_events', 'rsc_rejection_inbound_complete_0175'), ('audit_events', 'rsc_return_compensation_complete_0176')},
             "has_column_filter": False,
         }
         for field, value in expected_values.items():

@@ -17,6 +17,7 @@ from app.formal_services.stock_loss_corrections.request_contracts import Reversa
 from app.models import User
 from app.database_security import validate_production_database_security
 from test_formal_access import make_user,assign
+from pg16_stock_operation_permission_policy import require_formal_grant, uses_migrated_loss_policy
 import pg16_loss_correction_bindings as binding_boundaries
 import pg16_loss_correction_recovery as recovery_checks
 
@@ -27,15 +28,23 @@ def stock_snapshot(owner):
                 ('serial_current_positions','serial_id'),('audit_chain_heads','stream_key'),
                 ('stock_loss_disposition_reversals','id'),('stock_loss_correction_decisions','id'),('stock_loss_correction_executions','id'))}
 
-def exercise(context,*,correction_kind='restore_available'):
+def exercise(context,*,correction_kind='restore_available', approved_disposition='restore_available', after_approval=None):
+    if approved_disposition not in ('restore_available', 'scrap'):
+        raise ValueError('explicit original disposition fixture required')
+    if approved_disposition == 'scrap' and after_approval is None:
+        raise ValueError('scrap requires its dedicated fixture continuation')
     owner, api = (context['engines'][key] for key in ('star_oam_migrator','star_oam_api'))
     with Session(owner) as db:
         location = db.get(StockLocation, context['location_id'])
         manager,_ = make_user(db,db.get(Organization,location.owner_org_id),name='Synthetic inverse regional reviewer')
         roles = {row.code:row for row in db.scalars(sa.select(Role))}
         assign(db,manager,roles['provincial_manager'],scope_type='organization',scope_id=str(location.owner_org_id))
+        migrated_policy = uses_migrated_loss_policy(db)
         for action,role in ((regional.ACTION,'provincial_manager'),(headquarters.ACTION,'admin'),
             ('dispose_loss','admin'),('read','admin'),('reverse_loss','admin'),('approve_loss_correction','admin'),('correct_loss','admin')):
+            if migrated_policy:
+                require_formal_grant(db,role_code=role,action=action)
+                continue
             permission = db.scalar(sa.select(Permission).where(Permission.resource=='stock_operation',Permission.action==action,Permission.field_code==''))
             if permission is None:
                 permission=Permission(resource='stock_operation',action=action,field_code='',description='Synthetic native transaction gate only')
@@ -60,10 +69,14 @@ def exercise(context,*,correction_kind='restore_available'):
         approved=headquarters.approve_headquarters_loss(db,actor=actor,request=StockLossHeadquartersReviewIn(
             operation_id=submitted.operation_id,expected_submission_plan_hash=preview.plan_hash,regional_review_id=reviewed.review_id,
             expected_regional_review_hash=reviewed.request_hash,
-            decisions=(dict(line_id=line.id,disposition='restore_available',reason='Synthetic reviewed normal disposition'),),
+            decisions=(dict(line_id=line.id,disposition=approved_disposition,reason='Synthetic independently reviewed disposition'),),
             comment='Synthetic independent HQ approval',request_id=uuid4().hex,idempotency_key=uuid4().hex))
         db.commit()
         decision=db.scalars(sa.select(StockLossHeadquartersDecision).where(StockLossHeadquartersDecision.review_id==approved.review_id)).one()
+        if after_approval is not None:
+            return after_approval(dict(headquarters_decision_id=decision.id,
+                expected_headquarters_review_hash=approved.request_hash,
+                expected_submission_plan_hash=preview.plan_hash))
         command=StockLossDispositionExecuteIn(headquarters_decision_id=decision.id,expected_headquarters_review_hash=approved.request_hash,
             expected_submission_plan_hash=preview.plan_hash,expected_plan_hash='0'*64,request_id=uuid4().hex,idempotency_key=uuid4().hex)
         command=command.model_copy(update={'expected_plan_hash':original_plan.preview_disposition(db,actor=actor,request=command)['plan_hash']})

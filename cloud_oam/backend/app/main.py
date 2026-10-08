@@ -27,6 +27,8 @@ from .routers import (
     formal_material_catalog,
     formal_material_request_options,
     formal_material_requests,
+    formal_rejection_warehouse,
+    formal_material_request_overview,
     formal_notifications,
     formal_control_configuration,
     formal_work_order_material,
@@ -104,6 +106,11 @@ PRIVATE_COMMAND_RECOVERY_PATHS = frozenset(
 PRIVATE_MATERIAL_REQUEST_OPTION_PREFIX = "/api/v1/material-request-options"
 PRIVATE_OPENING_START_OPTION_PREFIX = "/api/v1/stocktakes/opening/start-options"
 PRIVATE_NOTIFICATION_PREFIX = "/api/v1/notifications"
+AUTH_PRIVATE_HEADERS = {
+    "Cache-Control": "private, no-store, max-age=0",
+    "Pragma": "no-cache",
+    "Referrer-Policy": "no-referrer",
+}
 
 
 def is_production_auth_path(method: str, path: str) -> bool:
@@ -234,6 +241,7 @@ async def block_legacy_prototype_writes(request, call_next):
     ):
         return JSONResponse(
             status_code=410,
+            headers=AUTH_PRIVATE_HEADERS,
             content={"detail": "v0.9账号管理接口未进入正式身份与RBAC白名单"},
         )
     if (
@@ -242,6 +250,12 @@ async def block_legacy_prototype_writes(request, call_next):
     ):
         return JSONResponse(
             status_code=410,
+            headers=(
+                AUTH_PRIVATE_HEADERS
+                if request.url.path == "/api/auth"
+                or request.url.path.startswith("/api/auth/")
+                else None
+            ),
             content={
                 "detail": (
                     "v0.9原型写接口已冻结；请使用V1.0正式业务接口，"
@@ -250,6 +264,11 @@ async def block_legacy_prototype_writes(request, call_next):
             },
         )
     response = await call_next(request)
+    if request.url.path == "/api/auth" or request.url.path.startswith("/api/auth/"):
+        # Authentication outcomes, including framework-generated failures,
+        # carry session and identity decisions and must never be cached or
+        # reflected as a referrer.
+        response.headers.update(AUTH_PRIVATE_HEADERS)
     if formal_stock_returns.is_return_path(request.url.path):
         # Include authentication, validation and unmatched-method failures.
         response.headers["Cache-Control"] = "private, no-store, max-age=0"
@@ -275,12 +294,14 @@ async def block_legacy_prototype_writes(request, call_next):
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Content-Type-Options"] = "nosniff"
     if request.url.path.startswith((
+        '/api/v1/material-requests',
         PRIVATE_MATERIAL_REQUEST_OPTION_PREFIX,
         PRIVATE_OPENING_START_OPTION_PREFIX,
         PRIVATE_NOTIFICATION_PREFIX,
         '/api/v1/inventory-control/configuration',
         '/api/v1/reconciliations/daily',
         '/api/v1/reports/inventory-balances',
+        '/api/v1/reports/material-requests',
         '/api/v1/stock-operations/loss-reports',
     )):
         # Picker rows are live authorization decisions. Apply this to
@@ -336,6 +357,8 @@ app.include_router(formal_material_request_options.router, prefix="/api")
 # independently fail-closed behind their explicit feature/configuration gate
 # and request-scoped KMS cipher dependency.
 app.include_router(formal_material_requests.router, prefix="/api")
+app.include_router(formal_rejection_warehouse.router, prefix="/api")
+app.include_router(formal_material_request_overview.router, prefix="/api")
 app.include_router(formal_notifications.router, prefix="/api")
 app.include_router(formal_control_configuration.router, prefix="/api")
 app.include_router(formal_work_order_material.router, prefix="/api")
@@ -400,6 +423,7 @@ def _health_response(*, ready: bool, status: str) -> JSONResponse:
             "status": status,
             "service": "star-oam-cloud",
             "version": APP_VERSION,
+            "release_scope": settings.release_scope,
         },
     )
     response.headers["Cache-Control"] = "no-store, max-age=0"

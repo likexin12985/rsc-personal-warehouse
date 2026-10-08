@@ -28,7 +28,10 @@ def readonly(api, context, request):
         db.execute(text('SET TRANSACTION READ ONLY'))
         assert db.scalar(text('SELECT current_user')) == 'star_oam_api'
         actor = load_formal_principal(db, context['admin_id'])
-        result = recovery.lookup(db, actor=actor, request=request)
+        reader = recovery
+        if context.get('scrap_candidate_request_lookup'):
+            from app.formal_services.stock_scrap import legacy_request_lookup as reader
+        result = reader.lookup(db, actor=actor, request=request)
         assert not db.new and not db.dirty and not db.deleted
         return result
 
@@ -37,11 +40,17 @@ def stock_only(owner):
     return {key: value for key, value in stock_snapshot(owner).items() if key != 'audit_chain_heads'}
 
 
-def run(context, original, *, seal_only=False, after_correction=None):
+def run(context, original, *, seal_only=False, after_correction=None, after_seal=None):
     owner, api = (context['engines'][key] for key in ('star_oam_migrator', 'star_oam_api'))
     requests = []
     with owner.connect() as db:
-        originals = db.execute(text('SELECT to_jsonb(t) FROM public.stock_loss_dispositions t ORDER BY id')).scalars().all()
+        # A continuation may install a forward schema between generations.
+        # Compare every retained old column, without treating newly appended
+        # nullable columns as a rewrite of the original business fact.
+        original_columns = db.execute(text("SELECT quote_ident(attname) FROM pg_attribute "
+            "WHERE attrelid='public.stock_loss_dispositions'::regclass AND attnum>0 AND NOT attisdropped ORDER BY attnum")).scalars().all()
+        original_query = text('SELECT ' + ','.join(original_columns) + ' FROM public.stock_loss_dispositions ORDER BY id')
+        originals = db.execute(original_query).all()
     with Session(api) as db:
         root = db.get(StockLossDisposition, original['root_id'])
         selected_id, selected_hash = root.id, root.request_hash
@@ -121,7 +130,7 @@ def run(context, original, *, seal_only=False, after_correction=None):
         if after_correction is not None:
             after_correction(generation, command, result)
         with owner.connect() as db:
-            assert db.execute(text('SELECT to_jsonb(t) FROM public.stock_loss_dispositions t ORDER BY id')).scalars().all() == originals
+            assert db.execute(original_query).all() == originals
         print('native generation ' + str(generation + 1) + ' approval/correction COMMIT and bound recovery PASS', flush=True)
     before = stock_snapshot(owner)
     for command, expected in requests:
@@ -151,7 +160,18 @@ def run(context, original, *, seal_only=False, after_correction=None):
     with Session(api) as db:
         sealed = commands.seal(db, actor=load_formal_principal(db, context['admin_id']), request=command); db.commit()
     assert sealed['request_state'] == 'sealed' and sealed['retry_allowed'] is False
-    assert stock_only(owner) == stable and readonly(api, context, command) == sealed
+    if after_seal is not None:
+        after_seal()
+        current = stock_only(owner)
+        assert current.keys() == stable.keys()
+        for table, rows in stable.items():
+            assert len(rows) == len(current[table])
+            for before_row, after_row in zip(rows, current[table]):
+                assert before_row.keys() <= after_row.keys()
+                assert {k: after_row[k] for k in before_row} == before_row
+    else:
+        assert stock_only(owner) == stable
+    assert readonly(api, context, command) == sealed
     before = stock_snapshot(owner)
     with Session(api) as db:
         try:

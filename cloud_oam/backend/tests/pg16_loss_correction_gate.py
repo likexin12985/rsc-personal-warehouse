@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import DBAPIError
 from app.formal_access import load_formal_principal
-from app.foundation_models import Organization,Permission,Role,RolePermission,StateTransitionEvent
+from app.foundation_models import Organization,Role,StateTransitionEvent
 from app.inventory_models import StockLocation,StockBalance
 from app.stock_operation_models import StockLossDisposition,StockOperationOrder,StockOperationLine,StockLossHeadquartersDecision
 from app.stock_loss_schemas import StockLossSubmitIn,StockLossRegionalReviewIn,StockLossHeadquartersReviewIn,StockLossDispositionExecuteIn
@@ -21,6 +21,8 @@ from app.formal_services.stock_loss_corrections.request_contracts import Reversa
 from app.models import User
 from app.database_security import validate_production_database_security
 from test_formal_access import make_user,assign
+from pg16_stock_operation_permission_policy import require_formal_grant
+from test_postgresql16_release_gate import HEAD_REVISION
 import pg16_loss_correction_bindings as binding_boundaries
 import pg16_loss_correction_recovery as recovery_checks
 
@@ -40,12 +42,7 @@ def exercise(context,*,correction_kind='restore_available'):
         assign(db,manager,roles['provincial_manager'],scope_type='organization',scope_id=str(location.owner_org_id))
         for action,role in ((regional.ACTION,'provincial_manager'),(headquarters.ACTION,'admin'),
             ('dispose_loss','admin'),('read','admin'),('reverse_loss','admin'),('approve_loss_correction','admin'),('correct_loss','admin')):
-            permission = db.scalar(sa.select(Permission).where(Permission.resource=='stock_operation',Permission.action==action,Permission.field_code==''))
-            if permission is None:
-                permission=Permission(resource='stock_operation',action=action,field_code='',description='Synthetic native transaction gate only')
-                db.add(permission);db.flush()
-            if db.scalar(sa.select(RolePermission).where(RolePermission.role_id==roles[role].id,RolePermission.permission_id==permission.id)) is None:
-                db.add(RolePermission(role_id=roles[role].id,permission_id=permission.id,effect='allow'))
+            require_formal_grant(db,role_code=role,action=action)
         db.commit();manager_id=manager.id
     with Session(api) as db:
         actor=load_formal_principal(db,context['engineer_id'])
@@ -164,15 +161,16 @@ def run(engines,*,tracking,correction_kind='restore_available'):
     if tracking not in ('quantity','serial') or correction_kind not in ('restore_available','convert_used','convert_damaged'):
         raise ValueError('explicit correction tracking and disposition required')
     with engines['star_oam_migrator'].connect() as db:
-        assert tuple(db.scalars(sa.text('SELECT version_num FROM alembic_version')))==('20261213_0164',)
+        assert tuple(db.scalars(sa.text('SELECT version_num FROM alembic_version')))==(HEAD_REVISION,)
     validate_production_database_security(engines['star_oam_api'],expected_runtime_role='star_oam_api',expected_migration_role='star_oam_migrator')
     from pg16_stock_loss_sources_gate import run as actual_sources
     result=actual_sources(engines,tracking=tracking,after_preview=lambda context:exercise(context,correction_kind=correction_kind))
     assert result['passed'] and result['submission']['passed']
     validate_production_database_security(engines['star_oam_api'],expected_runtime_role='star_oam_api',expected_migration_role='star_oam_migrator')
-    result.update(migrationHead='20261213_0164',formalMigrationBusinessComposition=True,
+    assert result['migrationHead'] == HEAD_REVISION
+    result.update(migrationHead=result['migrationHead'],formalMigrationBusinessComposition=True,
         correctionDisposition=correction_kind,permanentMigrationDbPrivileges=True,temporaryCorrectionDbGrants=False,
-        businessPermissionsFixtureOnly=True,publicHttpAcceptance=False,productionAcceptance=False)
+        businessPermissionsFixtureOnly=False,publicHttpAcceptance=False,productionAcceptance=False)
     return result
 
 
@@ -187,7 +185,7 @@ def release(engines,*,tracking,migrate,provision,correction_kind='restore_availa
     migrate('retained-correction-downgrade','downgrade','20261207_0158',
         '0161 immutable correction request history requires retention')
     with engines['star_oam_migrator'].connect() as db:
-        assert tuple(db.scalars(sa.text('SELECT version_num FROM alembic_version')))==('20261213_0164',)
+        assert tuple(db.scalars(sa.text('SELECT version_num FROM alembic_version')))==(HEAD_REVISION,)
     validate_production_database_security(engines['star_oam_api'],expected_runtime_role='star_oam_api',expected_migration_role='star_oam_migrator')
     result.update(emptyCorrectionRoundtrip=True,retainedCorrectionBlocksDowngrade=True)
     return result

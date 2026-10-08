@@ -46,9 +46,9 @@ def test_catalog_and_both_parameter_styles_parse():
     assert len(CONTROL_TABLES)==27 and len(LEDGER_TABLES)==6
 
 def test_cli_head_tracks_alembic_and_fixed_readers_share_contract():
-    from app.daily_reconciliation import capture_provisioning as provisioning,control_source,ledger_capture
+    from app.daily_reconciliation import capture_provisioning as provisioning,control_source,ledger_capture,deadline_entry,mapping_entry
     from test_alembic_migrations import HEAD_REVISION
-    assert provisioning.REQUIRED_HEAD==HEAD_REVISION
+    assert provisioning.REQUIRED_HEAD==deadline_entry.REQUIRED_HEAD==mapping_entry.REQUIRED_HEAD==HEAD_REVISION
     assert control_source.TABLES==CONTROL_TABLES and ledger_capture.TABLES==LEDGER_TABLES
 
 def test_cli_does_not_echo_credentials_from_errors(monkeypatch,capsys):
