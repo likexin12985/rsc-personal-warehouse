@@ -1,3 +1,11 @@
+## 2026-10-08 23:14 接续：GitHub 代理已恢复，继续推送候选
+
+用户明确 GitHub 必须经代理访问。本机系统当前 HTTP/HTTPS 代理为 `http://127.0.0.1:11304`；已实测 GitHub HTTPS 200、经代理的 `git ls-remote` 成功。此前 shell 未设置代理，Git 也未继承 macOS 系统代理；原连接超时不能视为凭据失效。
+
+本仓库已设置本地 Git 配置 `http.https://github.com.proxy`，仅作用于 GitHub HTTPS；`gh` 的 GitHub 请求使用同一代理的进程环境。后续先读取 `scutil --proxy` 核对当前有效端口，不沿用过期代理或改为直连重试。现有身份继续复用，不读取或输出 token，不要求重复登录。
+
+准确回读远端仍为 `14d0731`，上次未知 push 未到达；旧 PG16 run `37772507579` 已完成。当前实现、来源摘要和既有测试证据再次核对一致，本轮不重跑终态测试。完成本节交接提交后执行一次正常推送，并回读远端 SHA 与新 SHA 的 PG16/Client runs；最终结果见 `artifacts/formal-0165-integration/key-provider-c1-20261008/proxy-candidate-final-receipt.json`。旧传输失败记录保留作历史，新的远端验收不以本地通过替代。**试点 MVP，不等同完整 V1，仍未上线。**
+
 ## 2026-10-08 22:58 接续：本地候选已提交，GitHub HTTPS 传输阻塞
 
 C1 实现为 `c4851de57bfd53237634ba06d3dce4b112460a83`，旧 CI 终态交接为 `eeba5aa89a11b4acead6fd0fbce7641c1565084b`；本次仅追加传输状态记录。旧 run 已结束，执行一次正常 push 后 60 秒超时，没有盲目重推。两次 GitHub API 精确回读均确认远端仍为 `14d0731`，新候选 workflow 数为0，本机已无残留 Git 传输进程。

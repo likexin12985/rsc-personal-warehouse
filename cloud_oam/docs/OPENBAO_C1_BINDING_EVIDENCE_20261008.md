@@ -4,6 +4,10 @@
 
 已完整重读仓库正式 V1 基线，并保持用户缩减后的试点范围。本轮只推进密钥绑定兼容基础设施；不新增后置业务，不启用生产 OpenBao provider，不改写旧业务密文，也不购买云资源。此前隔离 OpenBao 原型的结果见 [隔离原型证据](OPENBAO_ISOLATED_EVIDENCE_20261008.md)；此前兼容设计见 [提供方兼容准备](OPENBAO_PROVIDER_COMPATIBILITY_20261008.md)。两份文件中“追加绑定尚未实施”的历史描述由本次 C1 进度补充，不能反过来把旧原型结果算作当前迁移门禁。
 
+### 23:14 GitHub 代理恢复
+
+用户明确 GitHub 经代理访问。读取当前系统代理后，为本仓库 GitHub HTTPS 配置 `http://127.0.0.1:11304`，经代理网页和 Git refs 读取均通过；旧 run 已终态，准确远端回读确认上次 push 未到达。既有源码/PG16/测试证据不变，后续一次正常推送并验收新 SHA；实际远端和 CI 回执见 `key-provider-c1-20261008/proxy-candidate-final-receipt.json`。下述直连失败是保留的历史，不再作为未解决代理配置问题。
+
 ### 22:58 Git 传输终态补充
 
 实现 `c4851de` 与终态交接 `eeba5aa` 均已本地提交。一轮正常 push 超时后，已准确确认远端仍为 `14d0731`、新 workflow 数为0、无残留 Git 传输进程；未盲重推。`github.com` TCP/TLS 连接超时，而 GitHub API 可读，不能据此宣告登录失效。传输恢复后先回读再推送最新候选；完整新 SHA 门禁继续待验收。证据和接续步骤见 [当前交接](CONTINUE_DEVELOPMENT.md)，最终候选回执继续绑定精确源码和状态。
