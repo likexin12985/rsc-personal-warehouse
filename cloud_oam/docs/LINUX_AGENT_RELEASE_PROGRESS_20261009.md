@@ -64,15 +64,25 @@ provider 接线独立复核未发现新增明确代码阻塞：启动先校验 D
 
 北京时间 2026-10-09 17:43:29 的精确快照：75 jobs 中 56 success / 5 failure / 14 running / 0 queued，尚非全局终态。四个 loss submission/review_seals（quantity/serial）失败均已完整日志确认为同一 0146/0168 预期共因，第五个是上述 static Path 补丁作用域问题；截至该快照没有第三类根因。快照 `candidate-ci-2a49cbc/20261009T094329Z-pg16.json` 仅对应 `2a49cbc`，不能替本地修复提交验收。
 
+北京时间 2026-10-09 18:05:07 的新快照为 **66 success / 5 failure / 4 running**；新完成的 quantity correction_generations 为 success，未出现第三类失败。余下 migrations、inventory、static_safety (0)/(2) 仍运行。回执 `candidate-ci-2a49cbc/20261009T100503Z-bounded-readback-report.json`（SHA-256 `40c0832c8de65cf314b4290ba5e79cde30916053217c205eb8062e9ed911d741`）只覆盖旧已发候选；没有重跑终态节点或推送新候选。
+
+北京时间 18:17:49 再次有界回读仍为 66 success / 5 failure / 4 running，没有新增状态变化；不能据此断言剩余任务卡住或超时。最终全局结论仍待；快照 `candidate-ci-2a49cbc/20261009T101744Z-pg16.json` 与回读报告已保存，没有反复下载旧失败日志。
+
 GitHub 传输使用当前系统代理 `127.0.0.1:7890`。第一次 generic `http.proxy` 覆盖未生效，仓库旧 URL 专用代理 `11304` 优先而连接拒绝；精确回读确认远端未变后，使用单次 `http.https://github.com.proxy` 覆盖正常推送成功。未改变永久代理配置，后续仍须先核对当前有效代理。原失败和成功/远端 SHA 回执分别保留。
 
 ## 官方 Agent template 的独立有限实验
 
 锁定 OpenBao 2.7.1 与实际依赖 openbao-template v1.0.1 的只读源码审查表明，可以复用官方 template 投影 OIDC JWT；OSS/PNVS 必须使用两份独立 auto-auth entity/Agent，单 Agent 两个模板不会产生独立 subject。template 使用无 leaf 前缀的临时文件，与当前已验证的 file-sink 临时文件合同不同，不能直接扩大白名单。研究和固定来源见 `artifacts/agent-template-oidc-review-20261009/assessment.md`；这是方案可行性，不是正式部署证据。
 
-随后执行三轮有界合成实验，**没有一项 template 运行检查通过，模板 Agent 尚未启动**：第一轮 `cbc9de3aa044` 在目录初始化失败，先 chown 后 chmod 与 keeper 无 FOWNER 的边界冲突；仅改为 chmod→chown，不加 capabilities。第二轮 `258346e7b70c` 已实际完成目录准备和合成 Bao 初始化/解封，停在合成身份准备；首次固定失败码未保留端点信息，不能猜测具体原因。第三轮 `2cbfdded5078` 仅补非密白名单 method/path/status，明确定位为 `PUT /v1/sys/audit/template → HTTP 400`；此前初始化/解封/健康请求为 200。官方固定 SDK 也使用 PUT，因此不得把方法错误当作已证根因，具体审计拒绝原因仍待下一批安全诊断。不取消审计、放宽权限或将这次失败说成模板不支持。
+随后执行三轮有界合成实验，**没有一项 template 运行检查通过，模板 Agent 尚未启动**：第一轮 `cbc9de3aa044` 在目录初始化失败，先 chown 后 chmod 与 keeper 无 FOWNER 的边界冲突；仅改为 chmod→chown，不加 capabilities。第二轮 `258346e7b70c` 已实际完成目录准备和合成 Bao 初始化/解封，停在合成身份准备；首次固定失败码未保留端点信息，不能猜测具体原因。第三轮 `2cbfdded5078` 仅补非密白名单 method/path/status，明确定位为 `PUT /v1/sys/audit/template → HTTP 400`；此前初始化/解封/健康请求为 200。官方固定 SDK 也使用 PUT，因此不得把方法错误当作已证根因，当时具体审计拒绝原因待后续安全诊断；新源码定位见下一段。不取消审计、放宽权限或将这次失败说成模板不支持。
+
+后续对同一固定 commit 的只读源码与冻结配置交叉核验，已确定一个先行静态阻断：`UnsafeAllowAPIAuditCreation` 默认为 false，本实验未开启；`handleEnableAudit` 在 file backend 的 Factory/open/test 之前直接拒绝，错误映射为 HTTP 400。该证据能解释已观测结果，但原 attempt-03 的服务端错误正文仍未采集，不补写为已读原始原因。下一实验候选采用独立 `template-server.json` 的声明式 file/template 审计，并显式保持 unsafe 开关 false；controller 去掉 API enable，先用受控 GET 列表及审计文件元数据确认设备实际可用再启动身份/Agent。固定来源在 `artifacts/agent-template-oidc-review-20261009/audit-endpoint-static-20261009/source-receipt.json`；新 JSON 是草案，不算运行通过。
+
+最小修复随后已形成候选 04：新增 19 项离线检查通过（含纯函数、模拟元数据负例和 AST/接线，不能与旧 19 项真实 Linux sink 证明混计），61 个冻结输入经独立及协调任务只读复核一致。`source-freeze-04.json` SHA-256 为 `50538a530d065e76d88c609f1c2b319ea73fb89375f62e3f58e6eeed13df2683`；原三轮源码和回执保持。后续运行结果必须另记，静态检查不提升 template/OSS/PNVS readiness。
 
 三轮临时容器/卷和上传目录都已精确清理并独立回读，原六个服务的 ID、StartedAt、health 和 OOM 状态保持；各轮源摘要稳定，诊断文件均为空，合成秘密仅使用内存/私有管道/tmpfs。没有正式初始化、云端资源操作或第四次启动。实验源全部位于 ignored artifact，不修改产品配置；原 sink 的 19 项终态证明未重跑。完整收尾为 `artifacts/agent-template-oidc-review-20261009/experiment/outcome.md` 与 `bounded-outcome.json`（SHA-256 `526ec41a61dd0045503367421da81fd73d3a48bd6c0c9e1f867d09fdfc3ca111`）。正式 OIDC 投影、真实 RAM→STS→OSS/PNVS、短信/UAT 门禁仍未通过。
+
+候选 04 随后单次有界执行为 `64d47c8f1705`，**26.822 秒、exit 1、0 项通过**；停在 `server_start / server_deadline`，20 秒等待期未得到就绪回执，尚未进入初始化、声明式审计、身份或 Agent。没有保存足以判定根因的启动状态/错误正文，不能把它归因为配置解析或声称前一 API 400 已在运行中解决。2 个容器、5 个卷与上传目录都已精确清理，原六服务的 ID、StartedAt、health/OOM 前后一致，61 个冻结输入稳定。原三轮证据没有覆盖；本轮源与关闭回执保存于 `experiment/attempt-04/`，`terminal-receipt.json` SHA-256 `4ce24b9bd4a1754dd3cb5e46dbd48ee12231a93cabae0a743dfadff48758bb3a`。后续只读核对未发现可确定根因的新静态问题：新配置上传/hash/只读挂载/启动路径一致，二进制匹配原官方清单。当前缺少启动时的白名单容器退出/OOM 状态、UDS 元数据和连接 errno；detached Bao 的日志关闭，通用轮询吞并错误，不能从空 RPC 回执区分这些原因。最小诊断方案已存 `experiment/startup-diagnostic-plan-04.md`（SHA-256 `19f69f5b7e9c609532ef3f6a79b724e8955d720dd2ea04efdbb0030d85d91329`），后续仅到启动/seal-status，原始输出只在内存分类；不初始化/解封/建身份，不自动第五次启动，不扩权限或关闭审计。
 
 ## 用户恢复安排与现场依赖
 
@@ -84,17 +94,31 @@ GitHub 传输使用当前系统代理 `127.0.0.1:7890`。第一次 generic `http
 
 后续磁盘工具应用授权实际生效，GUI 在已核验原目录中创建此前不存在的 `RSC-recovery.dmg`，报告操作成功。实际为 **100 MB、AES-256、Journaled HFS+、UDRW**；大小由 GUI 切换格式后变为 100 MB，不再记为原计划 64 MiB。仅该新映像被精确卸载，物理希捷盘和其他映像未卸载。关闭后 `isencrypted` 返回 `encrypted=true`，`imageinfo` 独立返回 `CEncryptedEncoding / AES-256`，冻结 helper 的只读 `status` 返回 `encrypted_detached`，两次 SHA-256 一致为 `d204aa49c2ec72b7c7da52d1c85274ecf3e1cec9c976ee271f77c3c68cb668eb`。挂载时 `isencrypted` 曾返回资源暂时不可用，关闭后成功；这不是未加密证据。映像宗卷 UUID 为 `67A771D2-90A4-3F23-B837-F2EB70BFC7F8`。
 
-**密码设置与保管过程未观察到，正在等待用户确认并实际重开解锁；正式恢复材料仍未生成。** 不把 GUI 成功、加密头或 passphrase-count 当作用户持有密码的证明，不读取钥匙串或要求聊天发送密码。新证据在 `artifacts/linux-agent-runtime-20261009/recovery-vault-01/gui-{image-diagnostic,closed-verification,frozen-status}.json`；外盘另存不含秘密的 `gui-creation-receipt.json`，原失败 receipt 未覆盖。后续每次写入并关闭后须重记摘要，当前摘要仅对应空容器。
+**首次 GUI 创建时没有观察到密码设置与保管过程，当时待用户确认并实际重开解锁；未生成正式恢复材料。** 不把 GUI 成功、加密头或 passphrase-count 当作用户持有密码的证明，不读取钥匙串或要求聊天发送密码。新证据在 `artifacts/linux-agent-runtime-20261009/recovery-vault-01/gui-{image-diagnostic,closed-verification,frozen-status}.json`；外盘另存不含秘密的 `gui-creation-receipt.json`，原失败 receipt 未覆盖。后续每次写入并关闭后须重记摘要，当前摘要仅对应空容器。
 
 随后通过磁盘工具精确打开同一文件，系统重新挂载为相同宗卷 UUID，但仍未观察到密码窗口/本人输入。此处只证明当前系统会话能够重新打开，**不能证明保管人持有密码或冷恢复可用**。再次仅卸载该映像后，加密头仍为 true，新的封闭摘要为 `fd9a84e061039721b06951f483a8a64c67adbd8b78ae472bf205cde0bacaf4e3`，覆盖初次关闭摘要作为当前字节身份；挂载生命周期导致摘要变化不作内容被篡改的推断。回执 `recovery-vault-01/gui-reopen-observation.json` 和外盘 `gui-reopen-receipt.json` 保留这一边界；映像当前关闭，仍没有正式材料。
 
-阿里云 RAM 角色页在原 Mac Edge 的 9224 兼容入口实际返回 `ConsoleNeedLogin`。角色清单为未知，不能把错误页的空表当零角色。已请用户在原 Edge 刷新登录；没有导出凭据、创建云资源或发送短信。SSH 连接成功与 GitHub 代理可用分别核验，不要求为此重登 SSH/GitHub。
+用户随后明确确认密码已经设置并由本人保管，并按交接命令报告已完成加强密码修改；未提供、读取或保存任何密码值。改密后 `status` 仍为 `encrypted_detached`，摘要为 `17d788a36051bdb1a10970b1a741a2045198ba59c60d6de8a752dc189c6a6125`。GUI 随后重新打开同一宗卷 UUID，系统自动解锁，仍不能算本人独立输入新密码的恢复证明；精确关闭后摘要为 `60b3472fcdc673f541ef79d967270ed9c17fb6f736f0a24e45c73ab133bbbd68`。已交由本人在自己的终端用 `hdiutil attach -readonly -stdinpass` 直接交互输入新密码（无管道/参数/聊天传密码）；该系统选项在 tty 使用 `readpassphrase(3)`，不由代理读取 stdin。实际输入成功及只读挂载回读仍待完成。证据 `recovery-vault-01/password-{custody-handoff,change-readback,change-gui-reopen}.json`；正式材料仍未生成。
+
+本人随后回复“新密码解锁成功”，并澄清对“关闭”是否指终端窗口存在理解差异。协调任务的精确回读为目标映像匹配数 0、目标挂载点不存在，冻结 helper 为 `encrypted_detached`；加密头与上次关闭摘要 `60b3472f…bbbd68` 保持。本人反馈保留，但没有取得成功时终端非密结果和只读挂载后态，因此手动解锁/只读挂载验收继续为未核验，不能直接升级为通过，也不推断密码错误。未重放 attach、未新建/覆盖映像、未读取密码；下一步仅核对本人终端末尾非密码输出。回执 `recovery-vault-01/manual-unlock-reconciliation.json`。
+
+此前阿里云 RAM 角色页返回 `ConsoleNeedLogin`，当时的角色清单未知。用户随后确认原 Edge 已登录；重新验证原资料/9224 归属并刷新同一 RAM 页后，北京时间 **18:04:30** 实际列出 3 个服务关联角色（SmartService、ResourceMetaCenter、DNS），总数 3、1/1 页，无 RSC 专用角色，错误提示已消失。这确认 RAM 会话恢复，不代表 OIDC/OSS/PNVS 已配置。原始脱敏 DOM 回执 `recovery-vault-01/ram-session-restored-20261009.json`（SHA-256 `518804dd79c20780d3141c0ed8d33b20560b91eda659f42c1ac146abdd3553bc`）；没有导出凭据、创建云资源或发送短信。
+
+北京时间 18:13:02 同一 RAM SSO 页已切换并精确回读 OIDC 标签，列表为“没有数据”、1/1 页且无登录错误。故本账号当前没有可见的 OIDC 身份提供商；不能把“已登录”当作云身份已接通。非密回执 `recovery-vault-01/ram-oidc-provider-readback.json` SHA-256 为 `6609a022a98d99b32ccaaa478a613546f7f08fb82ba09cc8fd0aac075f3d9bcb`，没有创建任何身份提供商/角色。
+
+### 本人新密码解锁与空映像只读挂载已验收
+
+本人最初提供的终端输出实际为 `hdiutil chpass`，前述“没有挂载”来自尚未执行 attach，并非密码错误。随后本人在自己的终端运行 `hdiutil attach -readonly -stdinpass` 并提供正常设备/挂载输出。协调任务精确回读唯一目标映像，宗卷 UUID 为 `67A771D2-90A4-3F23-B837-F2EB70BFC7F8`，`Writable=false`，内核 `ST_RDONLY=true`。
+
+确认父设备属于同一映像且不是物理外盘后，仅关闭该映像。关闭后状态为 `encrypted_detached`，希捷外盘仍挂载且 UUID 保持；映像摘要前后均为 `60b3472fcdc673f541ef79d967270ed9c17fb6f736f0a24e45c73ab133bbbd68`。没有读取或保存密码，没有生成正式恢复材料。
+
+本次回执为 `recovery-vault-01/manual-unlock-verified.json`，SHA-256 `af9e6eed2e3873f9f1de5cdf43b05629ece611c40923ceeaa3fe954dba041e6a`；外盘同目录保存同摘要的非密 `manual-unlock-verification-receipt.json`。上文密码/挂载“待验证”均保留为历史中间态，由本节覆盖。**空容器的本人密码解锁和只读挂载验证已通过**；正式材料封存、受控重启/离机恢复、第二副本、UAT 和上线仍需各自验收。
 
 ## 后续执行顺序
 
 1. 已推送的 `2a49cbc` 客户端及 0181 hosted leg 已成功；收齐该候选 PG16 全局终态，完成新增 loss 测试守卫修复的聚焦验证和独立审查。旧 run 结束后再推送下一候选，不以局部通过放行。
-2. 在加密恢复容器实际可用且解锁验证后初始化正式 Bao、登记恢复材料、正式两用途 wrapped registry/pins 和运行身份；完成封存、受控重启、离机恢复演练。
-3. 恢复阿里云会话后核验或配置公开 issuer/JWKS、精确信任的 RAM OIDC、独立 PNVS/OSS 角色和私有 Bucket，实测身份回读、跨窗口刷新及拒绝边界。配置解析不是云身份通过。
+2. 空加密恢复容器的本人解锁和只读挂载已验收；先解决并验收 Bao 启动及正式运行配置，再初始化正式 Bao、登记恢复材料及两用途 wrapped registry/pins/运行身份，完成封存、受控重启和离机恢复演练。
+3. 利用已恢复的原 Edge 阿里云会话核验或配置公开 issuer/JWKS、精确信任的 RAM OIDC、独立 PNVS/OSS 角色和私有 Bucket，实测身份回读、跨窗口刷新及拒绝边界。配置解析不是云身份通过。
 4. 最后完成真实 SMS-only 登录、正式人员唯一映射、分角色/真机主链 UAT、附件私有访问、DB/密钥/附件恢复及发布回滚，证据绑定后执行 prepare/start 和域名切换。
 
 范围保持申请/提交→审批→最小货源分配/占用→后台人工履约并记录发运→本人收货→个人仓入账。拣货和全部已延期后置区块保持隐藏，保留底层迁移/契约/依赖。真实短信登录为首发必要项；短信/微信/飞书业务通知及投递运维仍属后续迭代，不因本次部署扩大业务范围。

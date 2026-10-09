@@ -11,6 +11,12 @@
 
 最小方案是在此盘创建一个全新专用目录，里面只放一个 **AES-256 加密、Journaled HFS+ 的小型单文件读写磁盘映像**和不含秘密的 JSON 回执。CLI 原计划 64 MiB；后来 GUI 实际成功创建 100 MB，仍小于检查器 128 MiB 上限。HFS+ 仅用于这个小容器，不改现有整盘 APFS。新容器先保持空白且卸载，正式恢复材料须在后续受控初始化/导入和恢复验证中单独处理。
 
+## 当前验收状态
+
+本人已完成改密，并在自己的终端输入新密码执行 `hdiutil attach -readonly -stdinpass`。协调任务回读确认唯一目标映像、同一宗卷 UUID、`Writable=false` 和内核 `ST_RDONLY=true`，随后仅精确关闭该映像；希捷移动硬盘仍挂载，加密头及映像摘要保持。**空恢复容器的本人密码解锁与只读挂载已通过。**
+
+证据为 `artifacts/linux-agent-runtime-20261009/recovery-vault-01/manual-unlock-verified.json`，外盘同目录的非密 `manual-unlock-verification-receipt.json` 与其摘要一致。下文尚待密码/解锁的文字属于历史中间态，已被本次证据覆盖。正式恢复材料仍未生成，正式备份恢复、受控重启/离机恢复及第二副本尚未验收；不因空容器通过而放行部署。
+
 ## 密码边界
 
 脚本只调用系统 `/usr/bin/hdiutil ... -encryption AES-256 -agentpass`。该选项请求系统处理密码提示，但**不保证出现图形密码窗口**；脚本断开 stdin，也不提供交互终端。脚本不询问、读取、复制、输出或存储密码，没有 AppleScript 收集、`-stdinpass`、密码命令参数、密码环境变量、剪贴板或 Keychain 导出。
@@ -21,9 +27,11 @@
 
 随后应用授权实际生效，GUI 在同一已核验目录创建此前不存在的 `RSC-recovery.dmg`，报告成功；系统 `imageinfo` 返回 `CEncryptedEncoding / AES-256 / UDRW`。精确卸载本映像后 `isencrypted` 返回 `encrypted=true`，冻结脚本 `status` 返回 `encrypted_detached`。实际映像宗卷 UUID 为 `67A771D2-90A4-3F23-B837-F2EB70BFC7F8`，大小 `100016640` 字节，关闭摘要 `d204aa49c2ec72b7c7da52d1c85274ecf3e1cec9c976ee271f77c3c68cb668eb`。未卸载物理硬盘或其他映像，原失败 `receipt.json` 未覆盖，另有不含秘密的 `gui-creation-receipt.json`。
 
-**当前仍待用户确认密码保管并实际重开解锁，正式恢复材料尚未生成。** GUI 密码输入过程未观察到；加密头和成功提示不能替代密码保管/恢复证明。脚本 `status` 的 `passwordHandledBy` 是静态 CLI 实现标签，不能据此推断本次 GUI 密码来源。不要自动重建、覆盖、读取钥匙串或要求用户在聊天发送密码。
+**首次 GUI 创建时，密码保管和实际重开解锁尚待确认，正式恢复材料未生成。** GUI 密码输入过程未观察到；加密头和成功提示不能替代密码保管/恢复证明。脚本 `status` 的 `passwordHandledBy` 是静态 CLI 实现标签，不能据此推断本次 GUI 密码来源。不要自动重建、覆盖、读取钥匙串或要求用户在聊天发送密码。
 
 后续已用磁盘工具重新打开同一映像并核对相同宗卷 UUID，然后再次精确卸载。未观察到密码窗口或用户输入，因此仅是当前系统会话可重开，不算保管人独立解锁/冷恢复通过。当前关闭后的摘要更新为 `fd9a84e061039721b06951f483a8a64c67adbd8b78ae472bf205cde0bacaf4e3`，回执 `gui-reopen-receipt.json`；原初次关闭摘要保留为历史，正式材料仍为空。
+
+2026-10-09 后续用户已确认密码设置和本人保管，并报告已在本机完成加强密码修改。只读状态复核仍为加密且关闭；GUI 重开同一宗卷 UUID 成功，但没有密码提示，不能证明本人独立解锁。已交由本人在自己的终端直接运行 `/usr/bin/hdiutil attach -readonly -stdinpass` 加精确映像路径，按提示输入新密码；该人工 tty 命令使用系统 `readpassphrase(3)`，不是工具收集密码，也不得通过 echo/管道/参数/环境变量传入。完成后须回读宗卷 UUID、实际只读挂载并关闭归属映像。此刻没有正式恢复材料；旧失败与各次关闭摘要保留，最新回执见 `artifacts/linux-agent-runtime-20261009/recovery-vault-01/password-change-gui-reopen.json`。
 
 ## 命令
 
