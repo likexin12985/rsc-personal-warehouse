@@ -121,7 +121,7 @@ def test_compose_worker_isolated_from_application_and_database_configuration():
     assert service['profiles']==['ops'] and service['restart']=='no'
     assert service['read_only'] is True and service['cap_drop']==['ALL']
     assert service['security_opt']==['no-new-privileges:true']
-    assert set(service['environment'])=={'OSS_ACCESS_KEY_ID','OSS_ACCESS_KEY_SECRET','OSS_SESSION_TOKEN','PYTHONPATH'}
+    assert set(service['environment'])=={'PYTHONPATH'}
     assert all(':?' not in value for value in service['environment'].values())
     assert service['networks']==['backup_egress'] and config['networks']['backup_egress']=={}
     assert service['environment']['PYTHONPATH']=='/app'

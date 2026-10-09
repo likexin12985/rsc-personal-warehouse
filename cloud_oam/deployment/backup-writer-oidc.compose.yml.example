@@ -1,0 +1,74 @@
+# Draft: apply with the reviewed base Compose, never as an app identity.
+# Proposed Agent 23208:23218; archive worker 23209:23219 + read group 23218.
+# Real accounts, immutable image, trust policy, RO tmpfs and controlled handoff
+# of the writer-owned 0600 bundle / 0700 state directory remain deployment gates.
+# No scheduler or automatic PUT. Default prints supervisor help only.
+services:
+  joint-backup-archive:
+    image: ${RSC_API_IMAGE:-star-oam-api:0.9.0}
+    profiles: [ops]
+    restart: "no"
+    init: true
+    user: "23209:23219"
+    group_add: ["23218"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 512m
+    working_dir: /opt/rsc-backup-worker
+    entrypoint: [python, /opt/rsc-backup-worker/deadline_runner.py]
+    command: [--help]
+    environment:
+      PYTHONPATH: /app:/opt/rsc-release-guards
+      ALIBABA_CLOUD_CREDENTIALS_FILE: /dev/null
+      ALIBABA_CLOUD_ECS_METADATA_DISABLED: "true"
+      RSC_BACKUP_WRITER_ACCOUNT_ID: "1934673129483837"
+      RSC_BACKUP_WRITER_ROLE_ARN: acs:ram::1934673129483837:role/rsc-pilot-backup-writer
+      RSC_BACKUP_WRITER_PROVIDER_ARN: ${RSC_BACKUP_WRITER_PROVIDER_ARN:-}
+      RSC_BACKUP_WRITER_SESSION_NAME: ${RSC_BACKUP_WRITER_SESSION_NAME:-}
+      RSC_BACKUP_WRITER_TOKEN_FILE: /run/rsc-backup-writer/oidc.jwt
+      RSC_BACKUP_WRITER_WRITER: openbao_agent_template_v1
+      RSC_BACKUP_WRITER_PROJECTOR_UID: "23208"
+      RSC_BACKUP_WRITER_SHARED_GID: "23218"
+      RSC_BACKUP_WRITER_WORKER_UID: "23209"
+      RSC_BACKUP_WRITER_WORKER_GID: "23219"
+    volumes:
+      - type: bind
+        source: ./deployment/backup-worker
+        target: /opt/rsc-backup-worker
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${RSC_BACKUP_WRITER_HOST_DIRECTORY:-/run/rsc-backup-writer-not-configured}
+        target: /run/rsc-backup-writer
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${RSC_BACKUP_ARCHIVE_INPUT_DIRECTORY:-/run/rsc-archive-input-not-configured}
+        target: /archive-input
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${RSC_BACKUP_ARCHIVE_STATE_DIRECTORY:-/run/rsc-archive-state-not-configured}
+        target: /archive-state
+        read_only: false
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./scripts/pilot_release.py
+        target: /opt/rsc-release-guards/pilot_release.py
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./scripts/pilot_preflight.py
+        target: /opt/rsc-release-guards/pilot_preflight.py
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./scripts/pilot_network_preflight.py
+        target: /opt/rsc-release-guards/pilot_network_preflight.py
+        read_only: true
+        bind: {create_host_path: false}
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks: [backup_egress]

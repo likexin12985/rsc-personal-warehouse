@@ -10,6 +10,7 @@ import pytest
 from scripts import pilot_release as release
 from scripts import pilot_preflight as preflight
 from test_pilot_live_mounts import document, coordinator, projected
+from pilot_projection_test_support import projection_test_base, safe_projection_root
 
 
 def peer():

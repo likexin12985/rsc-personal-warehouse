@@ -1,0 +1,46 @@
+# Draft only. Dedicated source-reader Agent 23206:23216 and worker
+# 23207:23217 + read group 23216 are proposed, not created identities.
+# No API/gate membership changes, no archive-writer role, no static credentials.
+# backup_steps.sh runs as the host caller: that caller and its private job files
+# must already have this exact non-root worker UID/GID. Root cron is not ready.
+# Apply explicitly through reviewed Compose files / COMPOSE_FILE; base ops alone
+# fails closed. No variables become mandatory for ordinary app startup.
+services:
+  object-backup:
+    user: "${RSC_BACKUP_READER_WORKER_UID:-65534}:${RSC_BACKUP_READER_WORKER_GID:-65534}"
+    group_add: ["${RSC_BACKUP_READER_SHARED_GID:-65534}"]
+    environment:
+      PYTHONPATH: /app:/opt/rsc-release-guards
+      RSC_BACKUP_READER_ACCOUNT_ID: ${RSC_BACKUP_READER_ACCOUNT_ID:-}
+      RSC_BACKUP_READER_ROLE_ARN: ${RSC_BACKUP_READER_ROLE_ARN:-}
+      RSC_BACKUP_READER_PROVIDER_ARN: ${RSC_BACKUP_READER_PROVIDER_ARN:-}
+      RSC_BACKUP_READER_SESSION_NAME: ${RSC_BACKUP_READER_SESSION_NAME:-}
+      RSC_BACKUP_READER_SOURCE_BUCKET: ${RSC_BACKUP_READER_SOURCE_BUCKET:-}
+      RSC_BACKUP_READER_PREFIX: ${RSC_BACKUP_READER_PREFIX:-}
+      RSC_BACKUP_READER_TOKEN_FILE: ${RSC_BACKUP_READER_TOKEN_FILE:-}
+      RSC_BACKUP_READER_WRITER: ${RSC_BACKUP_READER_WRITER:-}
+      RSC_BACKUP_READER_PROJECTOR_UID: ${RSC_BACKUP_READER_PROJECTOR_UID:-}
+      RSC_BACKUP_READER_SHARED_GID: ${RSC_BACKUP_READER_SHARED_GID:-}
+      RSC_BACKUP_READER_WORKER_UID: ${RSC_BACKUP_READER_WORKER_UID:-}
+      RSC_BACKUP_READER_WORKER_GID: ${RSC_BACKUP_READER_WORKER_GID:-}
+    volumes:
+      - type: bind
+        source: ${RSC_BACKUP_READER_HOST_DIRECTORY:-/run/rsc-backup-reader-not-configured}
+        target: /run/rsc-backup-reader
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./scripts/pilot_release.py
+        target: /opt/rsc-release-guards/pilot_release.py
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./scripts/pilot_preflight.py
+        target: /opt/rsc-release-guards/pilot_preflight.py
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./scripts/pilot_network_preflight.py
+        target: /opt/rsc-release-guards/pilot_network_preflight.py
+        read_only: true
+        bind: {create_host_path: false}

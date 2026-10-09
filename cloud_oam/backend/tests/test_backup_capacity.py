@@ -81,15 +81,16 @@ def test_preflight_missing_credentials_precedes_export(empty_job,monkeypatch):
     assert list(empty_job.iterdir())==[]
 
 
-def test_preflight_with_synthetic_sdk_credentials_makes_no_network_call(empty_job,monkeypatch):
+def test_preflight_rejects_legacy_static_credentials_without_network(empty_job,monkeypatch):
     import socket
     monkeypatch.setenv('OSS_ACCESS_KEY_ID','SYNTHETIC_TEST_ID')
     monkeypatch.setenv('OSS_ACCESS_KEY_SECRET','synthetic-not-a-live-secret')
     def forbidden(*args,**kwargs):raise AssertionError('preflight must not contact storage')
     monkeypatch.setattr(socket,'create_connection',forbidden)
     monkeypatch.setattr(socket.socket,'connect',forbidden)
-    result=worker.preflight(empty_job,region='cn-hangzhou',bucket='synthetic-backup',maximum_bytes=1048576)
-    assert result['status']=='preflight_passed' and list(empty_job.iterdir())==[]
+    with pytest.raises(worker.ObjectBackupError,match='object_reader_unavailable'):
+        worker.preflight(empty_job,region='cn-hangzhou',bucket='synthetic-backup',maximum_bytes=1048576)
+    assert list(empty_job.iterdir())==[]
 
 
 @pytest.mark.parametrize('oversized',[False,True])

@@ -10,6 +10,7 @@ import stat
 import pytest
 
 from scripts import pilot_release as release
+from pilot_projection_test_support import projection_test_base, safe_projection_root
 
 
 def document():
@@ -78,14 +79,35 @@ def test_unsafe_or_unreviewed_live_mount_declarations_are_not_exempted(mutation)
 
 
 @pytest.fixture
-def projected(tmp_path, monkeypatch):
-    directory = tmp_path / 'projection'; directory.mkdir(mode=0o750)
+def projected(safe_projection_root, monkeypatch):
+    directory = safe_projection_root / 'projection'; directory.mkdir(mode=0o750)
     directory.chmod(0o750)
     token = directory / 'token'; token.write_bytes(b'synthetic-sensitive-token-one'); token.chmod(0o440)
     row = dict(kind='openbao_token', owner=os.geteuid(), group=os.getegid(), leaf='token',
                source=str(directory.resolve()), target='/run/rsc-test/token')
     monkeypatch.setattr(release, 'linux_tmpfs_mount', lambda path: ['synthetic-tmpfs', 'nosuid,nodev'])
     return row, directory, token
+
+
+@pytest.mark.parametrize('mode', [0o770, 0o777])
+def test_real_writable_ancestor_is_rejected_before_reading_leaf(projected, monkeypatch, mode):
+    row, directory, token = projected
+    parent = directory.parent
+    original_mode = stat.S_IMODE(parent.stat().st_mode)
+    original = os.stat
+    seen_leaf = []
+    def observe(path, *args, **kwargs):
+        if path == token.name and kwargs.get('dir_fd') is not None:
+            seen_leaf.append(path)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(os, 'stat', observe)
+    parent.chmod(mode)
+    try:
+        with pytest.raises(release.Refused, match='^runtime_projection_ancestor_invalid$'):
+            release.live_directory_metadata(row)
+        assert seen_leaf == []
+    finally:
+        parent.chmod(original_mode)
 
 
 def test_real_file_rotation_keeps_fingerprint_without_opening_or_hashing_token(projected, monkeypatch):

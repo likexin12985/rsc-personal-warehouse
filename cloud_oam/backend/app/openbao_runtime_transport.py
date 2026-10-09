@@ -10,8 +10,11 @@ Deployment must also drop Linux capabilities and prohibit privilege escalation;
 UID and POSIX mode checks alone do not establish those process restrictions.
 
 Opaque token bytes cannot prove policy, TTL, renewal or revocation. Deployment
-must establish a short-lived decrypt-only API token, never a root token; actual
-authorization is checked by OpenBao. This component creates no identity, loads
+must establish the reviewed periodic service token, never a root token. Its
+policy permits only the two purpose-specific decrypt paths and self lookup /
+renewal; the API holds that same token and can therefore renew its own token.
+This transport itself calls only decrypt; actual authorization is checked by
+OpenBao. This component creates no identity, loads
 no environment credentials, and caches neither tokens nor connections.
 """
 

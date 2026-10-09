@@ -1,6 +1,92 @@
 # 2026-10-09 Linux Agent 与上线条件接续
 
+## 2026-10-09 22:42 接续：正式 Bao 已初始化、解封及完成 auth/OIDC 配置，发布仍未就绪
+
+**试点 MVP，不等同完整 V1；`not_ready`，未上线。** 本节按精确结果与只读后态更新；下方“尚未初始化”“issuer 写入结果未知”及旧 CI 运行中记录保留为当时事实，不再代表当前状态。正式 Bao 初始化完成不等于应用数据密钥、DB pin、完整 registry、常驻 Agent 或真实云身份已经接通。
+
+| 阶段 | 已确认后态 | 当前证据 |
+| --- | --- | --- |
+| 正式初始化与恢复材料封存 | `formal-init-01` exit 0；初始化后精确查询为 initialized=true、sealed=true。恢复材料在本人加密映像内，目录0700、三文件0600、单硬链接、同设备及属主校验通过；密文/私钥 fsync 后回读验证，恢复 share/root 的解密仅在内存中验证。 | `artifacts/openbao-runtime-20261009/formal-init-01/result.json`、`poststate.json` |
+| 正式解封 | `formal-unseal-01` exit 0，精确状态 initialized=true、sealed=false；未将此步骤计作 Agent 启动或配置完成。 | `artifacts/openbao-runtime-20261009/formal-unseal-01/result.json` |
+| AppRole / auth 配置 | `formal-configure-auth-01` 写入结果与独立只读 readback 均为 `phase_verified`，业务与 self ACL、三个独立 entity 绑定已核验；该阶段未创建 SecretID、未启动 Agent。 | `artifacts/openbao-runtime-20261009/formal-configure-auth-01/result.json`、`readback.json` |
+| OIDC 配置 | `formal-configure-oidc-02` 于22:39:09/19两次回执均为 `phase_verified`；已配置 issuer/key/OSS、PNVS role，预期 JWT issuer 为 `https://rscwz.cn/v1/identity/oidc`、TTL600秒。未签发 JWT、未配置云信任。 | `artifacts/openbao-runtime-20261009/formal-configure-oidc-02/result.json`、`readback.json` |
+
+恢复保管仍为**本人单人、单介质**。本次已封存实际恢复材料并做内存解密检查，但**尚未完成含实际恢复材料的冷关闭、重新打开及恢复演练**；此前空加密映像的密码/只读挂载验证不能替代该门禁。恢复/PITR/回滚与 RPO/RTO 不因 init 或 unseal 成功而通过。
+
+OIDC 首轮 `formal-configure-oidc-01/result.json` 的 `failed_or_unknown` 原样保留。随后仅精确 GET 确认 issuer 配置已写、key/两个 role 尚不存在，没有盲目重放；固定官方成功 POST 的已知 warning + `data:null` 被旧 helper 误判。最小响应修复已通过11项本地聚焦（10新增、1直接受影响）及根审，只接受该精确成功形状，GET/错误/未知仍失败关闭。然后按已存在 issuer 只读核验、仅创建缺失对象完成02后态；不把11项模拟检查写成实际云身份通过。对应 `configure-post-response-fix-01/focused-01-receipt.json`、`configure-independent-review-root-02.json`；旧 unknown 与 `formal-configure-oidc-01/exact-readonly-01.json` 保留。02结果 SHA-256 `35aeabf32518306ea3eff2154e7c6d9421d9b46ac8d95c55384dd74f3dcd570b`，只读回执 SHA-256 `90b52a2efde5f4749217863af3e5b605fb9ee284a6275778db1040770b239a34`。
+
+旧候选 `2a49cbc0f9d7715f492719affd8d659433ed9a6c` 的 GitHub PG16 run `37908563226` **已全终态失败**：75个工作 job 为 **67 success / 8 failure**，加失败的 aggregate 共76个；static0 job `113747886599` 于北京时间21:21:42失败，aggregate `113839045344` 于21:21:48失败，22:41只读元数据再次确认所有 job 已完成。本次没有重跑、取消或推送。
+
+通过既有7890代理取得的新 static0 完整日志给出 **4316 passed / 1 failed / 1 error / 5 skipped / 15 subtests passed，15556.94秒**。两个节点都是准备阶段 `command.upgrade(head)` 被 `0181 exact SQLite predecessor guard required: trg_material_requests_update_guard_0029` 拒绝：通知恢复迁移的 setup error，以及入库履约边界 `[downgrade]` 的 failure；后者尚未进入其降级故障注入。此共同根因与已完成 static2 修复的旧0029更新触发器目录完全同源，当前目录绑定已改为独立真实0→0180捕获值，既有73项本地聚焦包含0181往返和严格漂移拒绝。**已观察共同根因已有本地修复；这两个节点未在新候选单独复验，新候选 hosted PG16 仍未通过。** 本次只核来源与已有回执，没有重复旧测试。单一诊断入口 `artifacts/current-candidate-ci-20261009/static0-final-01/assessment.json`，SHA-256 `ff08beaf5594e5f174610a2d0887862f99fbd89d95291cd5bb3c1018a6ace366`；其中绑定精确 run/job/jobs 元数据、完整日志与既有修复来源。首个日志 API 下载失败已留回执，随后官方 `gh run view --job --log` 成功，未推断为登录失效。
+
+接续先核正式 Agent / SecretID 单次交付与常驻身份、应用密钥版本/DB pin/registry，完成公开 OIDC metadata、RAM provider/role 绑定和真实 STS/对象权限；再做短信认证、分角色 MVP UAT、备份恢复/回滚及当前候选 hosted PG16。六份 RAM policy 已创建与两个私有 OSS Bucket 已配置的事实继续成立，但不等于角色绑定、实际请求或上线验收完成。保留原 Linux 模板证明中“瞬时0600未观察到”的限制；没有因本轮进展把该项改为实测通过。
+
+## 本轮正式接线准备与云资源最新后态
+
+**试点 MVP，不等同完整 V1；`not_ready`，未上线。** 本轮代码基于 `2849fd0` 继续，正式运行身份、恢复材料初始化、真实 STS/短信、分角色 UAT、恢复/回滚和新候选 hosted PG16 仍分别待验。下方旧记录保留各自时点，本节覆盖“投影守卫未适配”和“附件 Bucket 尚未建立”的旧状态；不覆盖旧失败与证据限制。
+
+目标机两个旧候选数据库已独立只读盘点，不能直接当作当前上线库：`rsc-pilot-20261004-fc7c926-dirty-db-1` 的 `rsc_check` 为 PostgreSQL 16.15、HEAD `20261214_0165`，仅有 `kms_data_key_pins`，缺少 `application_key_version_claims/openbao_data_key_pins`；`rsc-preproduction-db-db-1` 使用容器自身配置的非秘密 `POSTGRES_USER` 成功连接，真实角色为 `rsc_preprod_bootstrap`、PG16.15，`postgres/rsc_preproduction` 均无上述三表及 `public.alembic_version`（不据此断言全库为空）。所有查询为有界只读事务，容器完整 ID/image/PID/StartedAt 与规范化挂载前后一致，未读取密码、业务密文，未修改 `star-oam` 数据库；没有迁移、建库、选正式库或选密钥版本。原 `postgres` 角色不存在的失败已保留，此后态明确不是登录失效。回执 `artifacts/candidate-db-inventory-20261009/discovery-02/public-readback.json` SHA-256 `5dcc92994fa31aa04f9f9c62e003491e91d40eec78ef174cd5520d862adaea9a`，`preproduction-configured-user-01/public-readback.json` SHA-256 `74077b9e762bb6068f9a00a567fae7d05c609b4ebfd0235d3bc009b97cb90dd6`。正式部署仍须先绑定当前候选 PG16/迁移/运行身份，再核所有 provider 版本占用及历史引用，不能用旧库或 synthetic gate 库猜选版本。
+
+
+正式初始化后需要的 C1/C2 与 D 工具已完成本地聚焦和独立审查，但均未执行正式操作：C1/C2 的 12 项新增检查通过，复用生产坐标及包装契约，要求显式应用版本，原始 wrapped 响应封存后才形成 pin 提案和 registry entry；独审 `openbao-runtime-20261009/transit-independent-review-ci-01.json` SHA-256 `310d8464ee23681ddf5a086eaf882c25e31c0c2cc26b71366dca10bfa9a8b018`。D 的 16 个不同新增节点最新通过，首次独立 writer/短期单次 SecretID 交付使用两端操作标记，未知不重发；独审 `bootstrap-independent-review-ci-01.json` SHA-256 `965b769006a57eeb5bf374bd02ade222d9c574cfb42e569c34e0bdee52653799`。这些部署目录 unittest 尚不由现有 hosted static 收集，不能写成 CI 已覆盖；实际初始化、正式应用版本选择、独立 DB pin 和完整 registry 安装仍未完成。
+
+
+正式发布器已为 OSS/PNVS 的精确 `openbao_agent_template_v1` 声明补入有界临时文件检查：只接纳已绑定的独立目录/UID/GID、规范 uint32 十进制临时名和严格文件元数据，最多四次只读检查，持续残留或异常即拒绝；不读取、复制、摘要或删除临时令牌，不扩大原 file-sink 语法。新增 **48 项本地聚焦通过**并完成独立源审，真实挂载查询在本地测试中被模拟。固定 Go/renderer 来源支持 0600 创建至 0440 的时序；旧 Linux 模板证明没有采到瞬时 0600，仍不得写为现场已观察。证据 `artifacts/oidc-template-reader-20261009/freeze-receipt.json`。
+
+本轮 hosted static2 暴露的当前候选缺口也已最小修复：0181 迁移目录/目录 hash、head 断言及 Linux 安全祖先夹具；实际本地 SQLite 0180 前驱→0181→0180 回归和 0770/0777 拒绝等 **73 项通过，20.566 秒（3 新增、70 直接受影响）**。其中重新验证了被夹具修正影响的原 48 项读取守卫测试，原源与回执另存 `static2-repair-20261009/before`，不能声称旧48源码仍为当前不变版本。生产守卫未因此放宽；新候选 hosted PG16 尚未重验。冻结 `artifacts/static2-repair-20261009/freeze-receipt.json` SHA-256 `988712010f016903d7d68e16a49debc204a56efa94f75e270d329ec3fc4ef9b9`；独立根审 SHA-256 `63432c60e248574ff3691fbfd044d448eff27e0ea70a657b18ba04df17aa74e4`。
+
+新增 `scripts/sts_runtime_preflight.py`，可在后续已审正式 API 身份/只读挂载下分别检查 OSS 或 PNVS 的一次身份；固定杭州 HTTPS STS 端点，仅允许必要的 OIDC 换取和 GetCallerIdentity 各一次，禁重试/重定向，输出只有闭集状态。阶段一 **34 项**、阶段二 **9 项（6 新增＋3 直接受影响）**为本地模拟证据。独立审查发现旧 mock 把返回 ARN 错写为 `role`；已依官方 `assumed-role` 契约修正，阶段三仅 **10 项（4 新增＋6 直接受影响）通过**，旧源码/回执完整保留，不能叠加成一次全套通过。尚未调用真实 STS 或发送短信；身份、续期、对象权限、issuer/投影、SMS/UAT 和 releaseReady 保持分别未验。新冻结 `artifacts/sts-runtime-preflight-20261009/freeze-receipt-03.json`，实际入口和后续顺序见同目录 `acceptance-entrypoints-03.md`。
+
+阿里云 OSS 已实际开通，未购容量包、前付 0 元，按量计费。杭州附件 Bucket `rsc-pilot-attachments-1934673129483837` 已创建；控制台回读为私有、阻止公共访问、AES256、版本控制未开通。HTTPS 策略保存后刷新精确回读一致，仅拒绝 `SecureTransport=false`，不是全量拒绝。证据 `artifacts/pilot-launch-20261009/formal-cloud-01/`；这属于控制台资源/配置事实，真实 OIDC/STS 身份、Bucket API 检查和对象权限仍未通过。CORS 保存后刷新并重新打开唯一规则精确回读：仅 `https://rscwz.cn`，GET/PUT/HEAD，四个上传所需 header，暴露 ETag/request-id，maxAge 300、VaryOrigin=true；实际浏览器上传仍未验。备份资源及正式身份继续按独立回执验收。
+
+RAM policy `rsc-pilot-attachments` v1 已创建，三个已批准附件 prefix 的 PUT/Get 与 HTTPS 条件源码回读精确一致；尚未绑定角色、没有真实权限通过证据。RAM Beta 摘要同时提示 OSS 无效授权/无有效资源，原提示保留；官方资源语法允许 bucket_owner_id，未因此扩大资源范围，必须由后续真实 STS 正反例判定。回执 `formal-cloud-01/ram-attachments-policy-created.json`，SHA-256 `bbafde9a89261a36c76a786e29bdd96ba48b8f5540d585c5b62ec27f132a6fb5`。
+
+正式 Bao 容器已实际启动，精确只读状态为 `initialized=false`、`sealed=true`；正式 preinit peer/mount 检查通过，但没有 init、未启用常驻 unit，也未生成恢复材料。回执 `artifacts/openbao-runtime-20261009/host-start-01/formal-preinit-status.json`，SHA-256 `dfc7dd1d81947eed4399c513c7d1484cffd70f772ca2b42308eb1bf2a2198141`。独立备份桶 `rsc-pilot-backups-1934673129483837` 已创建，控制台为杭州 Standard/LRS、私有、BPA、AES256、版本控制开通；付费附加未开通，未配置自动删除历史版本，未上传对象。回执 `formal-cloud-01/backup-bucket-created-readback.json`，SHA-256 `6d028510dab34cd910efaa274c465ce4c007da373ebe3a7fdc4a96c75d332022`；HTTPS 策略已保存并刷新后精确 JSON 回读，`backup-https-policy-readback.json` SHA-256 `b8ffeabf6688d332f82fee68d7fb73fc8bdd08e71d4159f40672ccf0e9b25563`；没有 HTTP 负例或对象上传证据，未配置 CORS/生命周期。
+
+备份源读取身份也已补最小接线：复用已审显式 OIDC provider 和目录守卫，固定独立 `rsc-pilot-backup-reader`、非 root worker、只读投影和 `formal-files/v1/` 完整对象键语法，拒绝 API 角色及旧静态凭据。新增 55 项接线/负例加 4 项直接受影响节点，共 **59 项本地通过**，未运行旧备份核心或真实云请求。`RSC_OSS_BACKUP_BUCKET` 仍是附件源桶；联合包当前只落本地；远端备份目的上传的新候选见下文，尚未实际上传。新增 Agent `23206:23216`、worker `23207:23217` 加读取组 `23216` 仅为无仓库冲突的公开计划，真实账号/角色/挂载待建立；root cron 不豁免，正式执行需实际非 root 备份身份及同属主私有 job 目录。冻结 `artifacts/backup-reader-oidc-20261009/freeze-receipt.json` 已独立只读终审，25 项来源与 59 项回执一致；`independent-review-ci.json` SHA-256 为 `81660f1b658f7f2b27b37b8fb4730ba2503e304c23cfb292a0e3d24b3dd633ea`。
+
+独立远端联合归档候选已新增，复用既有 `verify_joint`，不改备份核心。固定目的桶 `joint/v1/<唯一 backup-id>/verified-joint.tar`、独立 backup-writer OIDC/只读投影，试点单 PUT 上限 1 GiB；上传前精确 HEAD 与持久化 journal，未知后只读同 key，不重 PUT。精确版本 HEAD/GET 验证实际 SHA/size/AES256；归档通过仍不等于恢复/PITR/回滚通过。新增 **74 个不同本地节点分阶段通过**：首轮 51/18，SDK 公开包装修复后 7/18，响应 Date 夹具修正后 6/17，CRC iterable 夹具续验 17 passed，最后仅 2 个新反例通过。原失败、源码及分阶段回执保留，未重复旧备份核心/运行证明、未云写，不能合称一次全套真实通过。冻结 `artifacts/backup-archive-oidc-20261009/freeze-receipt.json` 已独立源审，52 来源和各阶段74最新通过节点一致；`independent-review-root.json` SHA-256 为 `4ded6d94517a7f469062477d8ecda98c18ed7a302b7db23f74c518f24b21755f`。Agent `23208:23218` 与 worker `23209:23219` 加 `23218` 仍为公开计划，真实身份、可信投影及 reader→writer 私有包交接未建立；目的版本读权还须精确 `oss:GetObjectVersion`，没有扩大源桶权限。
+
+
+已补独立备份桶/恢复读取候选：`scripts/backup_bucket_preflight.py` 对备份桶要求明确 `Enabled`，保留附件桶原 `never_enabled` 契约；只执行四种设置 GET。`recover_joint.py` 从独立批准摘要的私有 verified journal 绑定实际对象 version，仅一次 HEAD/GET，校验 AES256/ETag/size/SHA 后写入0600文件/0700新目录，并复用既有 `verify_joint`；未知或失败保留私有 partial，不自动重放，不进行数据库/对象恢复。独立 `rsc-pilot-backup-recovery` 身份、Agent `23210:23220` 与 worker `23211:23221` 加读取组23220仍是部署草案，目标机 UID/GID 冲突及真实身份尚未核验，禁止复用 writer/API 凭据。新增 **81 项本地聚焦通过，1.06 秒**，使用锁定 OSS SDK 与合成传输，验包器仅验证新交接、不重跑旧备份核心；没有真实云请求或恢复。冻结 `artifacts/backup-recovery-boundaries-20261009/freeze-receipt.json` SHA-256 `e00ab7f2d1ba0c44bfdf84f8e64773300e2f6d2de0f23ef5ac230e555c2cd29b`，26 输入；首次独审核对81项及243个阶段通过，但发现下述实际SDK附加头签名缺口，原冻结不能作为签名验收。打包回执曾因诊断插件路径写错在冻结前失败，已保留并纠正，测试证据和源码未因此重跑/修改。实际命令草案见 `deployment/backup-recovery.env.example`；恢复/PITR/回滚与 RPO/RTO 继续单列阻断。
+
+独立审查按锁定 OSS SDK 1.3.2 确认：普通 `Config.additional_headers` 没有进入 `SigningContext`，旧81/74阶段仅证明请求头存在、版本与摘要保护，不能声称附加头已签。最小修复使恢复下载复用既有 `formal_object_backup.sdk_client` 的只读 signer，归档使用相同官方 `SignerV4` 注入模式并继续限制 HEAD/GET/单次PUT；精确key/次数边界不变。仅新增 **5 项实际SDK＋合成传输签名检查通过，0.49秒（归档3、恢复2）**，断言实际Authorization包含 `accept-encoding;if-match` 且恢复PUT/归档DELETE及第二次PUT被拒；旧81/74没有重跑、旧源已保存，不能重复相加。归档小修冻结 `artifacts/backup-archive-signing-20261009/freeze-receipt.json` SHA-256 `eeed2ac5fb8102e4b9d60228929ac6b618ed8b7c7a9c310d3896b7e9f75b98ca`（20输入）；恢复新冻结 `artifacts/backup-recovery-boundaries-20261009/freeze-receipt-02.json` SHA-256 `9526f4d4f35d65e932fa775a9c068f5e34addb3c83b3fb86058c07e019748f7f`（43输入），两份独立终审已通过，20＋43来源及旧源码归档一致，关闭本次接线缺口。归档独审 `backup-archive-signing-20261009/independent-review-ci-01.json` SHA-256 `5ce004bae8bc9a703a924e5ba7fe2677f00529ea19e005175e28d12e820c996b`；恢复独审 `backup-recovery-boundaries-20261009/independent-review-ci-02.json` SHA-256 `87314162b2b798a1ea868b1de835987185e3ec913468d13dd7c08629cbc429fa`。5个共享新节点只计一次，81/74历史组未重跑；真实云签名/权限/下载和恢复仍未验。
+
+RAM `rsc-pilot-backup-writer` v1 已于2026-10-09 21:09:23创建，并完成全部策略源码回读：仅目的备份桶 `joint/v1/*` 的 `PutObject/GetObject/GetObjectVersion` 与 TLS=true；未绑定角色、没有真实 STS 或上传。回执 `formal-cloud-01/ram-backup-writer-policy-created.json` SHA-256 `45bb42be915a86749d916c31f5079948cd54f7b639cb53cff92715ae81f8aca6`。RAM Beta摘要仍显示无效授权，语法0错误且带owner-id资源ARN符合官方契约；保留警告等待真实权限正反例，未放宽资源范围。
+
+RAM `rsc-pilot-backup-reader` v1 已于21:16:53创建，仅允许附件源桶 `formal-files/v1/*` 的 GetObject 与 TLS=true；尚未绑定角色/STS。回执 `formal-cloud-01/ram-backup-reader-policy-created.json` SHA-256 `6d9cc849c9b51987ba1d492fdf933f0d7bfb39439191a9b09a635f810d482318`。控制台将单元素 Action/Resource 数组都规范为字符串，最终精确语义匹配；首轮本地只处理Resource，因Action规范化被拒，未重复外部提交。Beta无效授权警告保留；官方再次核验资源ARN支持accountId，不擅自放宽通配资源。
+
+官方 Agent 的 1200 秒周期 service-token 证明已终态通过：run `3f1ec7b5c062`，真实 Linux、4 项、exit 0、1247.763 秒。仅一次 Agent 登录，同 token 越过初始1205秒，审计2次 renew-self（基线600秒后至少1次自然续期），没有人工 renew/login；4容器/3卷/上传目录精确清理，原6服务保持。回执 `artifacts/periodic-service-token-20261009/attempt-01/terminal-receipt.json` SHA-256 `fc2646dac1a9b665a354ef503bc12f1418daa333b6bac8d54e9e7e9599a07a0a`。此为隔离合成证明，正式运行配置、停止后过期与真实 STS 续期没有因此通过；本终态不重跑。
+
+PNVS 最小 RAM policy `rsc-pilot-pnvs` 已在本人完成阿里云安全验证后精确回读为 created v1（20:58:44）；仅 Send/Check 两 action 与 HTTPS 条件，尚未绑定角色或发送短信。控制台把单元素 `Resource: ["*"]` 规范为标量 `"*"`，其他字段完全相同，记录为语义等价而非字节相等；回执 `formal-cloud-01/ram-pnvs-policy-created.json` SHA-256 `19289c9ad6f47840014612fa114f34a7ee2e0dd22826fe97d99463b42a5ea8a0`。旧安全验证 `pending/unknown` 证据保留，没有盲目重提；真实短信认证仍未完成。
+
+本人完成第二轮平台安全验证后，`rsc-pilot-backup-recovery` 只读 RAM policy 已精确回读为 created v1（2026-10-09 21:29:01）。完整37行源码与批准计划语义匹配，仅四种备份桶设置 GET、目的桶 `joint/v1/*` 的 `GetObject/GetObjectVersion` 与 TLS=true；只将单元素Resource数组规范为字符串，未扩大权限。回执 `formal-cloud-01/ram-backup-recovery-policy-created.json` SHA-256 `b6723fdd86165465e47746aea65b66026631e9069aa45539e27814c1eb5295ca`。首次虚拟滚动读回未齐，随后精确补齐五份重叠分段；独立只读核对所有来源hash、37个连续行位、重叠文本及最终JSON均一致，独审 `ram-backup-recovery-policy-independent-review-01.json` SHA-256 `075075c2ff508829b26fd9240f211bec547802a9d677820f877a03924dcd5403`。仅提交一次，没有重提；旧安全验证 `pending/unknown` 回执 `ram-backup-recovery-policy-pending.json`（SHA-256 `67a8624ae01db0f6886bf74fb6bbec120ca87b43b895b099401f1349079e8200`）完整保留，已不代表当前创建状态。
+
+该policy仍未绑定角色、未通过真实STS或对象权限检验。控制台摘要现显示OSS及Bucket ARN，但仍提示一个或多个资源无匹配操作；警告保留，待实际权限正反例核验，不放宽资源。
+
+附件桶独立审计policy `rsc-pilot-bucket-audit` v1 已于21:35:28创建，无新增MFA；仅附件桶四种设置GET和TLS条件，不含对象操作。22行完整源码与批准计划语义匹配，created回执 `formal-cloud-01/ram-bucket-audit-policy-created.json` SHA-256 `0c4f0793a89af9ba8544dd5b23c9987238bf570401e483ae5dbcc5767b2656e4`。独立只读核对两段重叠读回的全部hash、22个连续行位及JSON一致，独审 `ram-bucket-audit-policy-independent-review-01.json` SHA-256 `43e1893b0259ec555dffec9cc5d14bc1729375221176c2cf67570ed6069c574a`。当前摘要无警告仅适用于该policy，不能覆盖其他四份OSS policy的历史警告。至此本轮计划的六份policy均已创建，均未绑定角色；RAM角色和OIDC provider尚未建立，真实STS/权限仍未验。 六份已创建策略的单一汇总入口为 `artifacts/pilot-launch-20261009/formal-cloud-01/ram-policies-poststate-01.json`，SHA-256 `42aa3127aef68d8ca85e02c02c84a73055f0125b61b4b270c772f7b8e12a648f`；逐份真实回执均与计划在单元素Action/Resource规范化后匹配，roles/provider/STS及releaseReady保持false。
+
+21:34:14（13:34:14 UTC）精确native `hdiutil` 回读仍为 `exactImageAttachments=[]`，没有目标挂载，正式init未执行。历史21:20空挂载及本人密码/只读解锁证明保留，但均不表示此刻已挂载或已封存正式材料。
+
+当前试点可执行的最小备份/恢复顺序已只读归档为 `artifacts/pilot-launch-20261009/minimum-backup-restore-chain.md`：联合包是plain SQL、须保留角色/ACL，按批准journal精确版本验包后仍需独立隔离PG16、恢复对象写身份/目的桶及Bao材料恢复。每日全备不替代RPO≤5分钟/RTO≤2小时；未自动放宽基线或执行导入。
+
+接下来先验收正式常驻配置，再完成正式密钥/恢复材料、公开 issuer/JWKS、RAM 信任及分用途角色；用新只读入口核对真实 STS 身份，之后推进独立续期/OSS 对象权限、真实短信登录、试点主链 UAT、恢复/回滚和新候选 PG16，全部证据齐全才切换。既有 14/19 项终态 Linux 证明与无关业务套件没有重跑，MVP 范围及所有已延期后置区块保持。
+
+读取守卫首次本地命令缺少诊断插件的 PYTHONPATH，收集前退出且未执行测试；原失败回执保留，纠正运行入口后才获得 48 项通过，不将其写成业务失败。
+
+读取守卫冻结 SHA-256 为 `4f6557cf3bd731161bce0bc2ac151c1ecdc6c38368c46050023ed70bf6e41dce`；独立审查回执 SHA-256 为 `8e9f601376758b14d6d23e02d1f713f44d2dfbb4d2ff220899bf69ab7c13da8b`，22 项绑定证据一致。新增测试已进入现有 static shard 1/3，无需重复原套件或改变 CI 范围。
+
+STS 最新冻结 SHA-256 为 `ba0599fff02602d3697e07e6026f5f04e7ffb9364bc1d440c787ff62f0fb1338`，42 项输入；此前 `freeze-receipt.json` 的独审 ARN 阻断及原 34/9 回执保留，来源分别归档 revision-01/revision-02。修复只派生同账号/角色/会话的 `assumed-role` ARN，测试使用独立字面样例；[阿里云官方身份回读说明](https://www.alibabacloud.com/help/en/cli/configure-credentials)支持这一契约。最新 10 项只是直接修复验收，仍为模拟传输；公开文档读取不等于真实云 API 调用。新源码已通过独立终审，42 项输入和 10 项阶段三回执匹配；回执 `independent-review-ci-03.json` SHA-256 为 `164be7f177f8e5bb29defd3f1e892ab8e822edd5139c527e838d502f8c87ebe3`，未新增测试或网络请求。
+
+PNVS 实际锁定 SDK 的 public default wrapper 及 `Client.get_credential()` 不保留 expiry，本工具不私读 SDK 内部属性，也不以两次取值代替续期。另一个 1200 秒 Agent 周期证明只覆盖 Agent 生命周期，不能替代云 STS 续期。CLI 的每次 unknown 由外层独立回执保留并精确核对，不自动重放。
+
+附件 HTTPS 策略的刷新后回读 `attachment-https-policy-readback.json` SHA-256 为 `dc842772f5b1b9e6df54c0c1f1f32d8d70f840955dd4fddc7e854d19322db6b7`，`readOnly=true`；原六服务、正式 Bao/Agent 启用与否等运行状态不能从 OSS 页面推断。资源创建不等于应用对象读写或备份恢复已验收。
+
 **试点 MVP，不等同完整 V1；`not_ready`，未切换生产。** 工作树为 `06f6/oam`，分支 `codex/notification-delivery-worker`；本批起点 HEAD 为 `041cb6974d20d352e1a5149701fa2e9ab4d4b3e3`。候选已提交并推送为 `2a49cbc0f9d7715f492719affd8d659433ed9a6c`，原有改动全部保留并纳入候选；后续门禁修复与文档更新另行验收。本文中的本地、真实 Linux 隔离、hosted CI 和正式部署是分别验收的对象。
+
+附件 CORS 回执 `formal-cloud-01/attachment-cors-readback.json` SHA-256 为 `11e13e1f83035d57c0167d717f3ed0c01ae275a731370b6257f93d783bbfb4c1`；允许 header 精确为 content-type、x-oss-meta-sha256、x-oss-meta-file-id、x-oss-forbid-overwrite，暴露 ETag、x-oss-request-id。取消只读回看表单，没有再次保存，也未以配置回读声称完成真实上传。
+
+备份 reader 冻结 SHA-256 为 `423ce4c4e351482e5c2c58b6cd5db924c3e9aa41aea793d34e347fe228e15774`，25 项输入。新测试进入 static shard 2/3，复用的旧读取守卫源码保持；没有增加 API/gate 组权限或改流式包、数据库快照、租约/期限和容量核心。既有 `verify_joint` 只做包完整性/解包，不等于 PostgreSQL/OSS 恢复；联合包不包含 Bao 恢复秘密、Raft 或完整 registry/pins/镜像身份，恢复链须分别绑定。每日 03:20 调度和本地 14 天清理不证明基线 RPO≤5 分钟/RTO≤2 小时；独立远端归档和真实恢复/回滚继续阻断。
 
 ## 已完成的真实 Linux 运行边界
 
@@ -70,7 +156,7 @@ provider 接线独立复核未发现新增明确代码阻塞：启动先校验 D
 
 北京时间 **2026-10-09 18:44:40** 的一次有界精确回读仍为 **66 success / 5 failure / 4 running**，run `37908563226` 为 `in_progress`；与 18:17 快照无 job 状态变化，没有新增失败，仍不能推断剩余任务卡死或超时。余下 migrations、inventory、static_safety (0)/(2) 尚未终态。原始快照 `candidate-ci-2a49cbc/20261009T104433Z-pg16.json`，有界报告 `20261009T104433Z-bounded-readback-report.json`（SHA-256 `97490a5b4cff2328236fe9effaff05e2901fe14c15f20b2d5be9e9fde9f31092`）绑定 `2a49cbc0f9d7715f492719affd8d659433ed9a6c`；没有重下旧日志、取消、重跑或推送，不替本地修复提交验收。
 
-北京时间 **2026-10-09 19:29:50** 的 PG16 精确回读为 **67 success / 6 failure / 2 running**，run `37908563226` 仍为 `in_progress`：migrations 新近成功，inventory 新增失败，仅 static_safety (0)/(2) 尚未终态。新失败是直接耦合入库负例已被 0169 守卫拒绝，而测试仍只期待旧错误码；原日志有精确消息，23503 由未改动的固定 SQL 源码确认，不能说日志已直接打印 SQLSTATE。仅测试侧改为精确 `23503` + 完整 `diag.message_primary`，保留 raises、rollback 和事实回读。新增 **14 项 mock 聚焦通过、6.82 秒**，真实诊断插件 42 个阶段通过；冻结回执 `candidate-ci-2a49cbc/inventory-receipt-boundary-fix/freeze-receipt.json`（SHA-256 `977e737f03cd472e7cddf610054dfeadac8ed3dcd063a86fd8a2979c1ceade30`）已双审。没有重跑旧 inventory 全链或修改生产守卫；新候选真实 PG16 仍待验收。最新 CI 回读报告 `20261009T112943Z-bounded-readback-report.json` 的 SHA-256 为 `11bc15d5e0166d37d204786bfada903990a02f269ba9f2f6844d25ab0f3c989e`；不取消旧 run、不在其终态前推送。
+历史快照（最新全终态见顶部）：北京时间 **2026-10-09 19:29:50** 的 PG16 精确回读为 **67 success / 6 failure / 2 running**，run `37908563226` 仍为 `in_progress`：migrations 新近成功，inventory 新增失败，仅 static_safety (0)/(2) 尚未终态。新失败是直接耦合入库负例已被 0169 守卫拒绝，而测试仍只期待旧错误码；原日志有精确消息，23503 由未改动的固定 SQL 源码确认，不能说日志已直接打印 SQLSTATE。仅测试侧改为精确 `23503` + 完整 `diag.message_primary`，保留 raises、rollback 和事实回读。新增 **14 项 mock 聚焦通过、6.82 秒**，真实诊断插件 42 个阶段通过；冻结回执 `candidate-ci-2a49cbc/inventory-receipt-boundary-fix/freeze-receipt.json`（SHA-256 `977e737f03cd472e7cddf610054dfeadac8ed3dcd063a86fd8a2979c1ceade30`）已双审。没有重跑旧 inventory 全链或修改生产守卫；新候选真实 PG16 仍待验收。最新 CI 回读报告 `20261009T112943Z-bounded-readback-report.json` 的 SHA-256 为 `11bc15d5e0166d37d204786bfada903990a02f269ba9f2f6844d25ab0f3c989e`；不取消旧 run、不在其终态前推送。
 
 GitHub 传输使用当前系统代理 `127.0.0.1:7890`。第一次 generic `http.proxy` 覆盖未生效，仓库旧 URL 专用代理 `11304` 优先而连接拒绝；精确回读确认远端未变后，使用单次 `http.https://github.com.proxy` 覆盖正常推送成功。未改变永久代理配置，后续仍须先核对当前有效代理。原失败和成功/远端 SHA 回执分别保留。
 
@@ -133,8 +219,8 @@ GitHub 传输使用当前系统代理 `127.0.0.1:7890`。第一次 generic `http
 ## 后续执行顺序
 
 1. 已推送的 `2a49cbc` 客户端及 0181 hosted leg 已成功；保留本地 `122e5b8` 的 24+1 项直接证据、本批库存修复的 14 项 mock 与各自双审，收齐旧候选 PG16 全局终态后再推送下一候选，验收新 SHA 的独立 hosted 结果，不重跑无关终态检查或以局部通过放行。
-2. 空加密恢复容器的本人解锁和只读挂载已验收；保留已通过的 startup-only 和合成 template 证据，完成正式投影读取守卫适配与正式运行配置验收，再初始化正式 Bao、登记恢复材料及两用途 wrapped registry/pins/运行身份，完成封存、受控重启和离机恢复演练。
-3. 利用已恢复的原 Edge 阿里云会话核验或配置公开 issuer/JWKS、精确信任的 RAM OIDC、独立 PNVS/OSS 角色和私有 Bucket，实测身份回读、跨窗口刷新及拒绝边界。配置解析不是云身份通过。
+2. 空加密恢复容器的本人解锁和只读挂载已验收；保留已通过的 startup-only 和合成 template 证据，保留已完成的投影读取守卫本地证据，完成正式运行配置验收，再初始化正式 Bao、登记恢复材料及两用途 wrapped registry/pins/运行身份，完成封存、受控重启和离机恢复演练。
+3. 利用已恢复的原 Edge 阿里云会话核验或配置公开 issuer/JWKS、精确信任的 RAM OIDC、独立 PNVS/OSS 角色，并验收已建立附件 Bucket 的实际 API/对象权限和后续备份资源，实测身份回读、跨窗口刷新及拒绝边界。配置解析不是云身份通过。
 4. 最后完成真实 SMS-only 登录、正式人员唯一映射、分角色/真机主链 UAT、附件私有访问、DB/密钥/附件恢复及发布回滚，证据绑定后执行 prepare/start 和域名切换。
 
 范围保持申请/提交→审批→最小货源分配/占用→后台人工履约并记录发运→本人收货→个人仓入账。拣货和全部已延期后置区块保持隐藏，保留底层迁移/契约/依赖。真实短信登录为首发必要项；短信/微信/飞书业务通知及投递运维仍属后续迭代，不因本次部署扩大业务范围。

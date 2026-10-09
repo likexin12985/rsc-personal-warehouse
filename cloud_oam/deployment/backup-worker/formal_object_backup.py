@@ -19,7 +19,7 @@ from tempfile import TemporaryDirectory
 from formal_file_integrity import FileObject, StoredObjectHead
 from formal_file_integrity import (
     _head_manifest_sha256, _validate_file_row, _validate_intent_metadata,
-    _validate_object_head,
+    _validate_object_head, _STORAGE_KEY,
 )
 
 
@@ -69,20 +69,27 @@ class OssBackupReader:
     @classmethod
     def from_environment(cls, *, region, bucket):
         import alibabacloud_oss_v2 as oss
-        # Caller supplies the dedicated read-only backup role environment.
+        from backup_reader_identity import credentials_from_environment
+        # This bucket is the attachment source, never the archive destination.
         cls(None, region=region, bucket=bucket)
+        value = None
         try:
             config = oss.Config(region=region, signature_version="v4",
-                credentials_provider=oss.credentials.EnvironmentVariableCredentialsProvider(),
+                credentials_provider=credentials_from_environment(region=region, bucket=bucket),
                 disable_ssl=False, insecure_skip_verify=False, enabled_redirect=False,
                 retry_max_attempts=1, connect_timeout=5, readwrite_timeout=30,
                 additional_headers=["if-match", "accept-encoding"])
-            return cls(sdk_client(config), region=region, bucket=bucket)
+            value = cls(sdk_client(config), region=region, bucket=bucket)
         except Exception:
-            raise ObjectBackupError("object_reader_unavailable") from None
+            pass
+        if value is None:
+            raise ObjectBackupError("object_reader_unavailable")
+        return value
 
     def head(self, key):
         import alibabacloud_oss_v2 as oss
+        if type(key) is not str or _STORAGE_KEY.fullmatch(key) is None:
+            raise ObjectBackupError("backup_reader_prefix_forbidden")
         try:
             return self.client.head_object(oss.HeadObjectRequest(bucket=self.bucket, key=key))
         except Exception:
@@ -91,6 +98,8 @@ class OssBackupReader:
     @contextmanager
     def download(self, key, *, etag, version_id):
         import alibabacloud_oss_v2 as oss
+        if type(key) is not str or _STORAGE_KEY.fullmatch(key) is None:
+            raise ObjectBackupError("backup_reader_prefix_forbidden")
         result = None
         try:
             result = self.client.get_object(oss.GetObjectRequest(bucket=self.bucket, key=key,

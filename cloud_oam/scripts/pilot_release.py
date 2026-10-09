@@ -49,6 +49,7 @@ SKIP_DIRS = {'.git', '.venv', 'node_modules', 'artifacts', 'dist', 'dist-warehou
              '__pycache__', '.pytest_cache', '.test_uploads', 'coverage', 'runtime',
              'tmp', 'exports', 'backups', 'outbox', 'inbox', 'quarantine', 'uploads'}
 SCHEMA = 'rsc.pilot.prepare-receipt.v1'
+OIDC_TEMPLATE_WRITER = 'openbao_agent_template_v1'
 
 class Refused(RuntimeError):
     pass
@@ -209,6 +210,20 @@ def live_bind_specs(document):
     api = services.get('api', {})
     environment = api.get('environment', {})
     specs = {}
+    oss_declared = environment.get('OAM_FILE_STORAGE_CREDENTIAL_MODE') == 'oidc_role_arn'
+    pnvs_declared = any(pnvs_oidc_declared(service.get('environment', {})) for service in services.values())
+    writers = {}
+    for kind, key, declared in (
+        ('oss_oidc', 'RSC_OSS_OIDC_WRITER', oss_declared),
+        ('pnvs_oidc', 'RSC_PNVS_OIDC_WRITER', pnvs_declared),
+    ):
+        require(all(name == 'api' or service.get('environment', {}).get(key, '') == ''
+                    for name, service in services.items()), 'runtime_oidc_writer_unbound')
+        writer = environment.get(key, '')
+        require(writer in ('', OIDC_TEMPLATE_WRITER), 'runtime_oidc_writer_invalid')
+        require(not writer or declared, 'runtime_oidc_writer_unbound')
+        if writer:
+            writers[kind] = writer
     def add(name, target, kind, owner, group):
         service = services.get(name, {})
         require(restricted_process_configuration(service), 'runtime_process_isolation_required')
@@ -221,6 +236,8 @@ def live_bind_specs(document):
                 'runtime_projection_source_invalid')
         row = dict(kind=kind, owner=owner, group=group, leaf=source_file.name,
                    source=str(source), target=str(Path(target).parent))
+        if kind in writers:
+            row['writer'] = writers[kind]
         require((name, row['target']) not in specs, 'runtime_projection_overlap')
         specs[name, row['target']] = row
     bao_declared = any(environment.get(key, '') not in ('', '0')
@@ -244,14 +261,14 @@ def live_bind_specs(document):
             add(name, settings.token_file, 'openbao_token', settings.token_projector_uid, settings.shared_gid)
         for target in (str(Path(settings.socket_path).parent), str(Path(settings.token_file).parent)):
             require(specs['api', target] == specs['kms-pin-gate', target], 'runtime_gate_mount_mismatch')
-    if environment.get('OAM_FILE_STORAGE_CREDENTIAL_MODE') == 'oidc_role_arn':
+    if oss_declared:
         require(private_oss_oidc_configured(api), 'runtime_oss_configuration_invalid')
         raw = [environment.get(key, '') for key in
                ('RSC_OSS_OIDC_PROJECTOR_UID', 'RSC_OSS_OIDC_SHARED_GID')]
         require(all(re.fullmatch(r'[1-9][0-9]{0,9}', str(v)) and int(v) <= 2_147_483_647 for v in raw),
                 'runtime_oss_identity_declaration_required')
         add('api', environment['OAM_FILE_STORAGE_OIDC_TOKEN_FILE'], 'oss_oidc', *map(int, raw))
-    if any(pnvs_oidc_declared(service.get('environment', {})) for service in services.values()):
+    if pnvs_declared:
         require(all(pnvs_oidc_configuration_checks(document).values()), 'runtime_pnvs_configuration_invalid')
         add('api', environment['RSC_PNVS_OIDC_TOKEN_FILE'], 'pnvs_oidc',
             int(environment['RSC_PNVS_OIDC_PROJECTOR_UID']), int(environment['RSC_PNVS_OIDC_SHARED_GID']))
@@ -304,6 +321,10 @@ def linux_tmpfs_mount(path):
 
 def live_directory_metadata(row):
     """Check real dirfd metadata; token bytes/inode/mtime/size are not bound."""
+    writer = row.get('writer', '')
+    require(writer in ('', OIDC_TEMPLATE_WRITER)
+            and (not writer or row['kind'] in ('oss_oidc', 'pnvs_oidc')),
+            'runtime_oidc_writer_invalid')
     source = Path(row['source'])
     require(source.is_absolute() and source == source.resolve(), 'runtime_projection_path_invalid')
     mount_before = linux_tmpfs_mount(source)
@@ -325,38 +346,50 @@ def live_directory_metadata(row):
         info = os.fstat(descriptor)
         require(info.st_uid == row['owner'] and info.st_gid == row['group']
                 and stat.S_IMODE(info.st_mode) == 0o750, 'runtime_projection_directory_invalid')
-        leaf = os.stat(row['leaf'], dir_fd=descriptor, follow_symlinks=False)
         socket_type = row['kind'] == 'openbao_socket'
-        require((stat.S_ISSOCK(leaf.st_mode) if socket_type else stat.S_ISREG(leaf.st_mode))
-                and leaf.st_uid == row['owner'] and leaf.st_gid == row['group']
-                and stat.S_IMODE(leaf.st_mode) == (0o660 if socket_type else 0o440)
-                and leaf.st_nlink == 1 and (socket_type or 10 <= leaf.st_size <= (4096 if row['kind']=='openbao_token' else 16384)),
-                'runtime_projection_leaf_invalid')
+        def check_leaf():
+            leaf = os.stat(row['leaf'], dir_fd=descriptor, follow_symlinks=False)
+            require((stat.S_ISSOCK(leaf.st_mode) if socket_type else stat.S_ISREG(leaf.st_mode))
+                    and leaf.st_uid == row['owner'] and leaf.st_gid == row['group']
+                    and stat.S_IMODE(leaf.st_mode) == (0o660 if socket_type else 0o440)
+                    and leaf.st_nlink == 1 and (socket_type or 10 <= leaf.st_size <= (4096 if row['kind']=='openbao_token' else 16384)),
+                    'runtime_projection_leaf_invalid')
+        check_leaf()
         # Official OpenBao 2.7.1 file sink creates <leaf>.tmp.<UUID first
         # eight hex characters> at configured mode before atomic rename. Only
         # that exact single temporary shape can trigger a bounded metadata
-        # recheck. It never becomes an admitted persistent extra file.
+        # recheck. The separately declared template writer uses Go CreateTemp
+        # with an empty pattern: a bare uint32 decimal name, initially 0600,
+        # then configured 0440 before rename. These are distinct contracts;
+        # no temporary contents or metadata enter the durable fingerprint.
         for attempt in range(4):
             extras = set(os.listdir(descriptor)) - {row['leaf']}
             if not extras:
                 break
-            require(row['kind'] == 'openbao_token' and len(extras) == 1,
-                    'runtime_projection_extra_file')
+            require(len(extras) == 1, 'runtime_projection_extra_file')
             temporary = next(iter(extras))
-            require(re.fullmatch(re.escape(row['leaf']) + r'\.tmp\.[0-9a-f]{8}', temporary),
-                    'runtime_projection_extra_file')
+            if row['kind'] == 'openbao_token':
+                require(re.fullmatch(re.escape(row['leaf']) + r'\.tmp\.[0-9a-f]{8}', temporary),
+                        'runtime_projection_extra_file')
+                modes, maximum = (0o440,), 4096
+            else:
+                require(writer == OIDC_TEMPLATE_WRITER
+                        and re.fullmatch(r'(?:0|[1-9][0-9]{0,9})', temporary)
+                        and int(temporary) <= 4_294_967_295, 'runtime_projection_extra_file')
+                modes, maximum = (0o600, 0o440), 16384
             try:
                 info = os.stat(temporary, dir_fd=descriptor, follow_symlinks=False)
             except FileNotFoundError:
                 continue  # concurrent rename/remove, no object contents read
             require(stat.S_ISREG(info.st_mode) and info.st_uid == row['owner']
-                    and info.st_gid == row['group'] and stat.S_IMODE(info.st_mode) == 0o440
-                    and info.st_nlink == 1 and 0 <= info.st_size <= 4096,
+                    and info.st_gid == row['group'] and stat.S_IMODE(info.st_mode) in modes
+                    and info.st_nlink == 1 and 0 <= info.st_size <= maximum,
                     'runtime_projection_temporary_invalid')
             require(attempt < 3, 'runtime_projection_rotation_pending')
             time.sleep(0.025)
         else:
             raise Refused('runtime_projection_rotation_pending')
+        check_leaf()  # A concurrent rename must still leave a valid final file.
         require(root == stable(os.fstat(fds[0])), 'runtime_projection_directory_changed')
         for parent, name, current, expected in chain:
             require(stable(os.fstat(current)) == expected

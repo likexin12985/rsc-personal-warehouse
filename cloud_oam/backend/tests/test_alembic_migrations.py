@@ -1729,7 +1729,9 @@ def test_revision_history_has_single_current_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == '20261228_0179'
+    assert head.down_revision == '20261229_0180'
+    head = script.get_revision(head.down_revision)
+    assert head is not None and head.down_revision == '20261228_0179'
     head = script.get_revision(head.down_revision)
     assert head is not None and head.down_revision == '20261227_0178'
     head = script.get_revision(head.down_revision)

@@ -516,11 +516,8 @@ services:
     entrypoint: [python, /opt/rsc-backup-worker/backup_worker.py]
     environment:
       PYTHONPATH: /app
-      # Empty values fail in the worker when this ops service is explicitly run.
-      # Do not make inactive ops credentials mandatory for ordinary app startup.
-      OSS_ACCESS_KEY_ID: ${RSC_OSS_BACKUP_ACCESS_KEY_ID:-}
-      OSS_ACCESS_KEY_SECRET: ${RSC_OSS_BACKUP_ACCESS_KEY_SECRET:-}
-      OSS_SESSION_TOKEN: ${RSC_OSS_BACKUP_SESSION_TOKEN:-}
+      # Explicit backup-reader OIDC projection is supplied by its reviewed
+      # overlay. The inactive ops profile has no static credentials/fallback.
     volumes:
       - ./deployment/backup-worker:/opt/rsc-backup-worker:ro
     tmpfs:

@@ -20,7 +20,7 @@ FOLDER = Path(__file__).parents[1] / 'contact_envelope_0181'
 RAW = (FOLDER / 'catalog.json').read_bytes()
 # This digest is replaced only when the independently captured predecessor and
 # reviewed candidate are frozen, never inferred from the database being tested.
-CATALOG_SHA256 = 'd4bab569c99db684fc8f588c2c350d628fa81f218163c5e5a64e1dc4cd00e32e'
+CATALOG_SHA256 = 'bcaaf6c1458fa077339201c431d092c530b3ffbce8504dad1ab5a15b7671a9fe'
 if sha256(RAW).hexdigest() != CATALOG_SHA256:
     raise ValueError('0181 frozen contact catalog changed')
 DATA = json.loads(RAW)
