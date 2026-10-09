@@ -13,6 +13,49 @@ report_failure() {
   failures=$((failures + 1))
 }
 
+# Reviewed public implementation files only.  Runtime state and any future
+# source need separate review; this does not bypass the checks below.
+is_reviewed_openbao_runtime_source() {
+  case "$1" in
+    cloud_oam/deployment/openbao-pilot/runtime/README.md|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_application_overlay.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_bootstrap.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_bootstrap_README.md|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_bootstrap_plan.md|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_bootstrap_remote.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_bootstrap_writer.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_bundle.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_configure.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_configure_README.md|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_configure_remote.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_init.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_init_remote.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_install.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_preflight.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_transit.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_transit_README.md|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_transit_contract.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_transit_remote.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_unseal.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/runtime_unseal_remote.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/test_runtime_bootstrap.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/test_runtime_bootstrap_writer.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/test_runtime_bundle.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/test_runtime_bytecode_boundary.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/test_runtime_caddy_copy.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/test_runtime_configure.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/test_runtime_init.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/test_runtime_native_protocol.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/test_runtime_transit.py|\
+    cloud_oam/deployment/openbao-pilot/runtime/test_runtime_unseal.py)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ -z "$repo_root" ]]; then
   printf 'repository-safety: no Git repository found\n' >&2
@@ -73,12 +116,20 @@ while IFS= read -r -d '' path; do
     */.npmrc|*/.netrc|*/.pypirc|*/id_rsa*|*/id_ed25519*|*/.aws/*|*/.ssh/*|*/.secrets/*|\
     */node_modules/*|*/.pnpm-store/*|*/.venv/*|*/dist/*|*/dist-public/*|*/dist-warehouse/*|*/__pycache__/*|*/.pytest_cache/*|\
     */.demo_uploads/*|*/.qa_uploads/*|*/.test_uploads/*|*/.uploads/*|*/uploads/*|\
-    */artifacts/*|*/exports/*|*/backups/*|*/outbox/*|*/inbox/*|*/quarantine/*|*/runtime/*|*/tmp/*|\
+    */artifacts/*|*/exports/*|*/backups/*|*/outbox/*|*/inbox/*|*/quarantine/*|*/tmp/*|\
     *.db|*.db-*|*.sqlite|*.sqlite-*|*.sqlite3|*.sqlite3-*|*.log|*.pid|\
     *.pem|*.key|*.p12|*.pfx|*.crt|*.cer|*.jks|*.kdbx|*.mobileprovision|\
     *.zip|*.tar|*.tar.gz|*.tgz|*.7z|*.csv|*.tsv|*.xlsx|*.xls|*.jsonl|*.parquet|\
     *.dump|*.backup|*.bak|*.har)
       report_failure "forbidden runtime, credential, or business-data artifact is Git-visible: $path"
+      ;;
+  esac
+
+  case "$path" in
+    */runtime/*)
+      if ! is_reviewed_openbao_runtime_source "$path"; then
+        report_failure "forbidden runtime, credential, or business-data artifact is Git-visible: $path"
+      fi
       ;;
   esac
 

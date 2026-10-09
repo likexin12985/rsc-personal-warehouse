@@ -1,3 +1,35 @@
+## 2026-10-09 23:18 后态：公开 OIDC 元数据已验，仓库安全门禁已最小修复
+
+**试点 MVP，不等同完整 V1；`not_ready`，未上线。** 本节更新下方23:00快照，原失败、旧候选和隔离证明均保留，不把本地检查或公开元数据通过写成完整上线通过。
+
+正式公开 issuer 入口于23:13:37完成真实验收：`https://rscwz.cn/v1/identity/oidc` 的两个精确 discovery/JWKS GET 均为200、预期 issuer及仅公开RSA字段匹配；POST、HEAD、带query、上级路径及token路径等8个负例均为404。原首页和www行为未改变。`artifacts/openbao-runtime-20261009/formal-public-issuer-02/result.json` 明确 `public_metadata_ingress_verified`，但 **`containerLayerChangeOnly=true`、`durableImageIntegrationCompleted=false`**：当前容器配置已生效，持久镜像集成尚未完成，不能据此宣称重建后仍保持。首次01因预设root身份不符而停止；只读定位实际1001:118且既有digest一致后，按已审最小02修复成功，旧失败未覆盖。RAM provider刚完成一次创建并在控制台列表精确命中，完整详情仍在核对；角色尚未建立、真实STS及对象权限未验，不能把列表记录当作完整信任验收。
+
+`a429f01` 的 Client run `37948354943` / job `113880408227` 已明确失败于 **Check repository safety**：全局 `*/runtime/*` 拒绝了31个已审公开源码路径，没有凭据或个人macOS路径诊断，前端检查未据此通过。诊断单入口 `artifacts/current-candidate-ci-20261009/client-a429f01-safety-01/assessment.json`。该不合格候选的PG16 run `37948354919` 在queued时由根任务主动停止，后续精确回读为 **completed/cancelled**、HEAD仍为 `a429f01`，更新时间23:09；不是PG16通过，也不是重新执行旧终态测试。下一次门禁必须绑定修复后的新候选。
+
+最小代码修复仅为31个完整公开源码路径增加显式允许项，其余runtime/数据仍拒绝；所有内容、密钥特征、个人路径、符号链接和10MiB检查仍执行，不改`.gitignore`或workflow，不移动源码。新增独立真实Git仓 **13项通过**（39阶段、0失败/错误/跳过），包括允许路径内的秘密特征、个人路径、符号链接及超大文件拒绝。第一轮因本地执行缺少`scripts`的PYTHONPATH而在13个setup停止、0个call，失败回执保留；补齐既有执行环境后通过，生产源未再改。真实当前仓安全门禁仅执行1次，**PASS：3272文件、78712461字节、120.73秒**。冻结 `artifacts/client-safety-public-source-fix-20261009/source-freeze-01.json` 及 `root-independent-review-01.json` 已完成根独审；这是本地证据，新的hosted Client/PG16仍待新候选验证。
+
+三个正式Agent首次登录、最终0440投影和实际内核身份的后态继续有效；正式模板瞬时0600未采到，API/gate消费者只读挂载、自然轮换/续期、应用密钥/DB pin/完整registry、真实STS/OSS、短信登录、分角色MVP UAT、实际材料冷关闭再开恢复、备份/PITR/回滚仍分别待验。本人单人单介质保管限制保留。先完成持久入口及云信任/正式应用接线，再由精确候选的门禁和真实验收决定部署，不扩大已冻结MVP范围。
+
+## 2026-10-09 23:00 后态：三个正式 Agent 已登录并投影，新候选已推送
+
+**试点 MVP，不等同完整 V1；`not_ready`，未上线。** 新候选 `a429f01d31069523b553fe46eb97b3426e938826` 已按66个精确文件提交并推送，远端 HEAD 精确回读一致。此节记录提交后的真实运行后态，保持为未提交文档更新，不再次推送打断该候选门禁。下方22:42快照及各旧回执仍保留。
+
+正式 Transit、OSS、PNVS 三个独立 Agent 已分别完成单次私管道 SecretID 交付、首次启动及只读后态核验。每用途 writer 的 prepare→issue→delivered 容器ID、属主和 fsync 结果一致；实际 Agent 与 writer 是不同容器，不能混为运行身份。每用途审计均有**1次请求/响应配对成功登录**，entity、AppRole、policy 精确匹配；没有未配对请求或匹配身份错误响应，SecretID 文件已不存在。最终投影均为单硬链接、0440、对应实际UID/GID，未读取或输出令牌内容。
+
+| 正式用途 | 实测 Agent UID:GID | 最新只读回执时间（北京时间） | 已确认范围 |
+| --- | --- | --- | --- |
+| Transit | 23102:23110 | 22:55:04 | 首次登录、SecretID 文件消费、`api.token` 最终权限与运行身份 |
+| OSS | 23202:23212 | 22:56:40 | 首次登录、独立 `oidc.jwt` 最终权限与运行身份 |
+| PNVS | 23203:23213 | 22:57:08 | 首次登录、独立 `oidc.jwt` 最终权限与运行身份 |
+
+启动与后态快照绑定同一完整容器ID/image/StartedAt/PID。内核实际身份、capEff=0、no-new-privileges、seccomp及精确挂载已核对：Agent 的 bootstrap/投影目录按写入需要为 RW tmpfs，UDS、配置和二进制为 RO；**正式 API/gate 消费者的只读挂载和读取尚未验收**。三个已退出的临时 writer 已按精确ID清理，bootstrap目录和操作标记保留，原运行服务未因此停止。证据为 `artifacts/openbao-runtime-20261009/formal-bootstrap-{transit,oss,pnvs}-01/` 中的 issue、service-start、poststart 及 writer-cleanup 回执。
+
+metadata 服务也已真实启动：独立非root身份23205:23205、私有内部网络、无主机端口、只读配置/UDS/二进制。内部读取返回预期 issuer `https://rscwz.cn/v1/identity/oidc` 和固定 JWKS URL，JWKS 为2个仅公开字段的 RSA/RS256 key；**公网 HTTPS metadata、RAM provider/role信任及真实 STS 尚未通过**。证据为 `formal-metadata-start-01/service-start-readback.json` 与 `internal-readback.json`，后者明确 `publicHttpsVerified=false`。
+
+独立只读汇审已核14项 poststart 来源冻结及42份来源/回执绑定，未运行测试、远端调用或读取真实凭据；`artifacts/openbao-runtime-20261009/combined-live-runtime-review-01.json` SHA-256 `48edb636fa2fde1e56ba5a3b540be8e508d393056f8976b729370c5a1bbefe11`。本次仅证明上述时点的首次登录、最终投影元数据与运行边界，**没有观察到正式模板瞬时0600，也没有证明正式自然轮换/续期、JWT签名/claims、API读取或STS**。既有隔离模板/1200秒证明保持原范围，不替代这些正式验收。应用数据密钥、当前候选DB pin/完整registry、OSS对象权限、真实短信、分角色UAT、实际材料冷关闭再开恢复、备份/PITR/回滚继续单列，单人单介质保管限制保留。
+
+GitHub首次push因仓库per-URL仍指向本机旧11304代理而退出，未据此判断登录失效；本次命令使用已确认7890代理后push成功，未修改永久Git配置。23:00:49精确回读确认远端HEAD为 `a429f01`：新 PG16 run `37948354919` 当时为 queued，新 Client run `37948354943` 已失败，失败原因仍在定位；不能沿用旧Client成功回执。推送与回读分别见 `artifacts/candidate-intended-files-20261009/push-result-05.json`、`push-exact-readback-05.json`。新候选门禁没有因此通过；后续只沿同一run读取真实结果，不自动重跑旧终态。
+
 ## 2026-10-09 22:42 接续：正式 Bao 已初始化、解封及完成 auth/OIDC 配置，发布仍未就绪
 
 **试点 MVP，不等同完整 V1；`not_ready`，未上线。** 本节按精确结果与只读后态更新；下方“尚未初始化”“issuer 写入结果未知”及旧 CI 运行中记录保留为当时事实，不再代表当前状态。正式 Bao 初始化完成不等于应用数据密钥、DB pin、完整 registry、常驻 Agent 或真实云身份已经接通。
