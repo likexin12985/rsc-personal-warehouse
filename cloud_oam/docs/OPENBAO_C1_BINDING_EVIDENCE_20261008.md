@@ -1,3 +1,9 @@
+## 2026-10-09 C2 接续校正
+
+本文件第 5 节及其“C2 第一片已核实的最小落点”保留为 2026-10-08 的历史 C1 交接基线。接续工作已新增默认关闭的 C2 additive composition：联系人新信封/旧信封双读、认证 replay provider 分流以及显式 OpenBao readiness 组合；相关聚焦证据为组合/registry/transit **149 passed**，受影响 C2 回归 **262 passed**，回执见 `artifacts/openbao-c2-20261009/production-openbao-composition-receipt.json`。
+
+该组合尚未注册到 `Settings`、`main` 或生产工厂，`productionReady=false`；真实运行身份、数据库 ACL、投影 token、Transit/STS、私有 OSS、hosted PostgreSQL 16、短信/UAT、恢复和部署证据仍待验证。第 5 节只描述历史待办基线，不应再理解为“代码尚未实现”，也不能理解为生产已接入或可上线。
+
 ## 2026-10-08 23:54 接续：CI 共因修复，候选待新 SHA 验收
 
 **试点 MVP，不等同完整 V1，仍未上线。** `9f7ae10` 的 Client 已成功，PG16 run `37799249651` 已失败终态（75 job：71 failure / 4 success）。全部失败日志已归因，不取消或重跑旧 run。本批只修 0180 显式 `public`、SQLite 新约束的解析深度、0051 夹具时间线及漏列的两张只读表期望；PG 冻结 SQL/权限及001–0179保持。

@@ -228,7 +228,7 @@ def api_world(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         auth,
         "_configured_authentication_response_cipher",
-        lambda: authentication_response_cipher,
+        lambda _request: authentication_response_cipher,
         raising=False,
     )
 
@@ -1425,7 +1425,7 @@ def test_kms_preflight_failure_precedes_sms_and_all_persistent_side_effects(
     api_world: ApiWorld,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def _unavailable_cipher():
+    def _unavailable_cipher(_request):
         raise AuthenticationEncryptionKeyUnavailable("test KMS unavailable")
 
     monkeypatch.setattr(
@@ -1457,7 +1457,7 @@ def test_kms_preflight_failure_precedes_login_limits_codes_and_providers(
     api_world: ApiWorld,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def _unavailable_cipher():
+    def _unavailable_cipher(_request):
         raise AuthenticationEncryptionKeyUnavailable("test KMS unavailable")
 
     monkeypatch.setattr(
@@ -1513,7 +1513,7 @@ def test_login_preflight_cipher_is_reused_by_idempotency_begin(
 
     factory_calls = 0
 
-    def _new_cipher():
+    def _new_cipher(_request):
         nonlocal factory_calls
         factory_calls += 1
         return create_authentication_response_cipher(
@@ -2014,7 +2014,7 @@ def test_refresh_same_key_replays_exact_rotation_but_different_key_revokes_famil
     monkeypatch.setattr(
         auth,
         "_configured_authentication_response_cipher",
-        lambda: create_configured_authentication_response_cipher(
+        lambda _request: create_configured_authentication_response_cipher(
             settings=auth.settings,
             kms_key_loader=fail_after_preflight,
         ),
@@ -2429,7 +2429,7 @@ def test_kms_unavailable_fails_before_code_verification_or_session_mutation(
     monkeypatch.setattr(
         auth,
         "_configured_authentication_response_cipher",
-        lambda: create_configured_authentication_response_cipher(
+        lambda _request: create_configured_authentication_response_cipher(
             settings=auth.settings,
             kms_key_loader=None,
         ),
@@ -2616,7 +2616,7 @@ def test_web_logout_kms_failure_clears_local_session_but_does_not_claim_revoke(
     monkeypatch.setattr(
         auth,
         "_configured_authentication_response_cipher",
-        lambda: create_configured_authentication_response_cipher(
+        lambda _request: create_configured_authentication_response_cipher(
             settings=auth.settings,
             kms_key_loader=None,
         ),

@@ -21,16 +21,16 @@ from pg16_stock_scrap_structure_gate import original_columns, facts
 from test_stock_scrap_plan import _upload
 
 def release(engines, *, tracking, migrate, provision):
-    migrate('upgrade-complete-0170', 'upgrade', '20261229_0180')
+    migrate('upgrade-complete-0170', 'upgrade', '20261230_0181')
     provision()
     owner, api = (engines[name] for name in ('star_oam_migrator', 'star_oam_api'))
     validate_production_database_security(api, expected_runtime_role='star_oam_api',
         expected_migration_role='star_oam_migrator')
     with owner.connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261229_0180'
+        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261230_0181'
         from pg16_stock_operation_permission_policy import assert_fresh_defaults
         permission_proof = assert_fresh_defaults(db)
-    transition_proof = dict(formalRevision='20261229_0180', defaultApiAdmission=True,
+    transition_proof = dict(formalRevision='20261230_0181', defaultApiAdmission=True,
         formalPermissionDefaults=permission_proof)
     print('formal complete 0168 Alembic and default API admission PASS', flush=True)
     captured = {}

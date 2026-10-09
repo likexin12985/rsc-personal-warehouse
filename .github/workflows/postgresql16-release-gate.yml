@@ -29,12 +29,12 @@ concurrency:
 jobs:
   pg16_runtime:
     runs-on: ubuntu-24.04
-    # Every leg has its own fresh database; all three are required by the
+    # Every leg has its own fresh database; all four are required by the
     # aggregate. Preserve each dependency chain within its selected suite.
     strategy:
       fail-fast: false
       matrix:
-        suite: [migrations, inventory, control]
+        suite: [migrations, inventory, control, contact_envelope]
     timeout-minutes: 360
     services:
       postgres:

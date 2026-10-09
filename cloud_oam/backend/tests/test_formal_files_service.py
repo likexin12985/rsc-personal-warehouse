@@ -1178,11 +1178,13 @@ def test_production_adapter_uses_env_credentials_v4_and_overwrite_bound_headers(
         def __init__(self, config):
             calls["config"] = config
 
-        def presign(self, request, options):
+        def presign(self, request, **options):
             calls.setdefault("presign", []).append((request, options))
+            expiration = datetime.now(timezone.utc) + options["expires"]
             if request.kind == "put":
                 return SimpleNamespace(
                     url="https://bucket.oss-cn-shanghai.aliyuncs.com/key?put=1",
+                    expiration=expiration,
                     signed_headers={
                         "Content-Type": request.kwargs["content_type"],
                         "x-oss-meta-sha256": request.kwargs["metadata"]["sha256"],
@@ -1192,6 +1194,7 @@ def test_production_adapter_uses_env_credentials_v4_and_overwrite_bound_headers(
                 )
             return SimpleNamespace(
                 url="https://bucket.oss-cn-shanghai.aliyuncs.com/key?get=1",
+                expiration=expiration,
                 signed_headers={},
             )
 
@@ -1223,7 +1226,6 @@ def test_production_adapter_uses_env_credentials_v4_and_overwrite_bound_headers(
         PutObjectRequest=lambda **kwargs: Request("put", **kwargs),
         GetObjectRequest=lambda **kwargs: Request("get", **kwargs),
         HeadObjectRequest=lambda **kwargs: Request("head", **kwargs),
-        PresignOptions=lambda **kwargs: SimpleNamespace(**kwargs),
     )
     monkeypatch.setitem(sys.modules, "alibabacloud_oss_v2", fake_sdk)
     adapter = AliyunOssV2StorageAdapter(

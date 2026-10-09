@@ -1,0 +1,50 @@
+# Requires Docker Compose >= 2.24.4 for exact security-list replacement.
+# Merge with the reviewed candidate and OSS/OpenBao overlays before deployment.
+# API decrypts through OpenBao; this SDK default chain is PNVS-only. This file
+# never creates an issuer, projector, role or policy and never sends SMS.
+services:
+  api:
+    user: ${RSC_API_UID:?reviewed API uid required}:${RSC_API_GID:?reviewed API gid required}
+    cap_drop: !override [ALL]
+    cap_add: !override []
+    privileged: false
+    security_opt: !override ["no-new-privileges:true"]
+    group_add:
+      - ${RSC_PNVS_OIDC_SHARED_GID:?reviewed PNVS projection read group required}
+    environment:
+      OAM_SMS_CREDENTIAL_MODE: default_chain
+      # Separate role/entity/audience/token directory from OSS. The two roles
+      # may trust the same RAM OIDC provider for the same controlled issuer.
+      RSC_PNVS_OIDC_ROLE_ARN: ${RSC_PNVS_OIDC_ROLE_ARN:?reviewed PNVS role required}
+      RSC_PNVS_OIDC_PROVIDER_ARN: ${RSC_PNVS_OIDC_PROVIDER_ARN:?reviewed RAM OIDC provider required}
+      RSC_PNVS_OIDC_TOKEN_FILE: /run/rsc-identity/pnvs/oidc.jwt
+      RSC_PNVS_OIDC_SESSION_NAME: rsc-pilot-pnvs
+      RSC_PNVS_OIDC_PROJECTOR_UID: ${RSC_PNVS_OIDC_PROJECTOR_UID:?reviewed independent projector uid required}
+      RSC_PNVS_OIDC_SHARED_GID: ${RSC_PNVS_OIDC_SHARED_GID:?reviewed projection read group required}
+      RSC_PNVS_OIDC_SUBJECT: ${RSC_PNVS_OIDC_SUBJECT:?reviewed PNVS entity UUID required}
+      RSC_PNVS_OIDC_AUDIENCE: ${RSC_PNVS_OIDC_AUDIENCE:?reviewed PNVS audience required}
+      RSC_OIDC_EXPECTED_ACCOUNT_ID: ${RSC_OIDC_EXPECTED_ACCOUNT_ID:?reviewed RAM account required}
+      RSC_OIDC_ISSUER_URL: ${RSC_OIDC_ISSUER_URL:?reviewed OpenBao issuer required}
+      # Official alibabacloud-credentials 1.0.12 default-chain environment.
+      ALIBABA_CLOUD_ROLE_ARN: ${RSC_PNVS_OIDC_ROLE_ARN:?reviewed PNVS role required}
+      ALIBABA_CLOUD_OIDC_PROVIDER_ARN: ${RSC_PNVS_OIDC_PROVIDER_ARN:?reviewed RAM OIDC provider required}
+      ALIBABA_CLOUD_OIDC_TOKEN_FILE: /run/rsc-identity/pnvs/oidc.jwt
+      ALIBABA_CLOUD_ROLE_SESSION_NAME: rsc-pilot-pnvs
+      ALIBABA_CLOUD_STS_REGION: ${RSC_PNVS_STS_REGION:?reviewed STS region required}
+      ALIBABA_CLOUD_VPC_ENDPOINT_ENABLED: "false"
+      ALIBABA_CLOUD_CLI_PROFILE_DISABLED: "true"
+      ALIBABA_CLOUD_CREDENTIALS_FILE: /dev/null
+      ALIBABA_CLOUD_PROFILE: ""
+      ALIBABA_CLOUD_ECS_METADATA_DISABLED: "true"
+      ALIBABA_CLOUD_ECS_METADATA: ""
+      ALIBABA_CLOUD_CREDENTIALS_URI: ""
+      # Do not place AK/STS values in any file. Resolved configuration checks
+      # reject all four static namespaces; this overlay never blanks a key to
+      # hide an unsafe declaration in the source configuration.
+    volumes:
+      - type: bind
+        source: ${RSC_PNVS_OIDC_HOST_DIR:?reviewed PNVS tmpfs projection required}
+        target: /run/rsc-identity/pnvs
+        read_only: true
+        bind:
+          create_host_path: false

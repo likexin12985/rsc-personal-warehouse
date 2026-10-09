@@ -1,0 +1,13 @@
+{
+  "ui": false,
+  "raw_storage_endpoint": false,
+  "disable_mlock": true,
+  "log_level": "error",
+  "api_addr": "http://127.0.0.1:1",
+  "cluster_addr": "https://127.0.0.1:19201",
+  "storage": {"raft": {"path": "/state/raft", "node_id": "linux-agent-synthetic"}},
+  "listener": [
+    {"unix": {"address": "/run/rsc-bao/api.sock", "socket_mode": "0660", "socket_user": "23101", "socket_group": "23110"}},
+    {"tcp": {"address": "127.0.0.1:19200", "cluster_address": "127.0.0.1:19201", "tls_disable": true, "telemetry": {"metrics_only": true, "unauthenticated_metrics_access": false}}}
+  ]
+}

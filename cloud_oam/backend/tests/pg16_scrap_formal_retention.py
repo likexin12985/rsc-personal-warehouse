@@ -13,7 +13,7 @@ def refuse_history(engines, *, migrate, seal_only=False):
         before = facts(db, columns)
         function_definitions = functions(db)
         version = db.scalar(text('SELECT version_num FROM alembic_version'))
-        assert version == '20261229_0180'
+        assert version == '20261230_0181'
         assert before['stock_scrap_request_seals'], 'real committed seal required'
         if seal_only:
             assert not before['stock_scrap_lines'] and not before['stock_scrap_recovery_executions']

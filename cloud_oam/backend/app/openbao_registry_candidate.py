@@ -1,6 +1,6 @@
-"""Strict file registry loader for the unregistered OpenBao candidate only.
+"""Strict file registry loader used by the explicit OpenBao production runtime.
 
-No Settings/factory/readiness/database/credential integration exists here.
+This low-level loader does not read Settings, a database or credentials.
 Callers supply a physical absolute path (for example resolve their OWN trusted
 temporary directory before calling; this loader never resolves input symlinks),
 independently reviewed pins, expected scope and an explicit transport.

@@ -80,7 +80,7 @@ STOCKTAKE_POSTING_REQUEST_COORDINATE_REVISION = "20260906_0066"
 STOCKTAKE_POSTING_SEAL_RACE_REVISION = "20260907_0067"
 STOCK_ALLOCATIONS_REVISION = "20260908_0068"
 STOCK_RESERVATIONS_REVISION = "20260909_0069"
-HEAD_REVISION = '20261229_0180'
+HEAD_REVISION = '20261230_0181'
 RUNTIME_READY_REVISION = STOCKTAKE_REVIEW_COMMAND_STATUS_REVISION
 RUNTIME_READY_HEAD_REVISION = HEAD_REVISION
 RUNTIME_READY_STABLE_REVISIONS = frozenset(
@@ -732,6 +732,7 @@ def _retention_chain_blocker(destination, *, blocking_revision, blocker, retaine
         raise ValueError("retention guard must be crossed by the requested downgrade")
     candidates = [(required, blocker)]
     for name, revision, message in (
+        ('shipment_projections', '20261217_0168', '0168 downgrade blocked: shipment projection facts exist'),
         ('loss_dispositions', '20261130_0151', '0151 disposition custody proof history requires retention'),
         ('return_inbounds', '20261128_0149', '0149 return inbound account admission history requires retention'),
         ('opening_seals', '20261107_0128', '0128 downgrade blocked: original request seals must be retained'),
@@ -745,6 +746,54 @@ def _retention_chain_blocker(destination, *, blocking_revision, blocker, retaine
         if retained.get(name, False) and number(revision) > required:
             candidates.append((number(revision), message))
     return max(candidates, key=lambda item: item[0])[1]
+
+
+def _shipment_retention_snapshot():
+    """Read exact shipment/inbound facts and their catalog without writing.
+
+    The aggregate has no concurrent fixture writer at a retention boundary.
+    Hash each full row before sorting so ciphertext and personal fields never
+    enter assertion output, while changed values (not only counts) are caught.
+    """
+    tables = ('material_requests', 'material_request_revisions',
+        'material_request_commands', 'shipments', 'shipment_lines',
+        'shipment_serials', 'outbound_postings', 'outbound_posting_serials',
+        'receipts', 'receipt_lines', 'receipt_serials', 'inbound_orders',
+        'inbound_postings', 'stock_accounts', 'stock_balances',
+        'inventory_transactions', 'inventory_movements',
+        'inventory_movement_serials', 'serial_current_positions',
+        'inventory_ledger_heads', 'audit_events', 'outbox_events',
+        'notification_events')
+    path = CLOUD_ROOT / 'backend/alembic/contact_envelope_0181/catalog_probe.py'
+    spec = importlib.util.spec_from_file_location('retention_catalog_probe', path)
+    assert spec is not None and spec.loader is not None
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    engine = create_engine(_sqlalchemy_url(
+        role='star_oam_migrator', password=_role_password('star_oam_migrator')),
+        pool_size=1, max_overflow=0, pool_timeout=5)
+    try:
+        with engine.connect() as connection:
+            connection.execute(text('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY'))
+            facts = {}
+            for table in tables:
+                rows = connection.execute(text(f'SELECT to_jsonb(fact)::text FROM public.{table} AS fact'))
+                digests = sorted(hashlib.sha256(row[0].encode()).digest() for row in rows)
+                facts[table] = (len(digests), hashlib.sha256(b''.join(digests)).hexdigest())
+            catalog = probe.snapshot(connection, table_names=tables)
+            return {'facts': facts, 'catalog': hashlib.sha256(
+                json.dumps(catalog, sort_keys=True, separators=(',', ':')).encode()).hexdigest()}
+    finally:
+        engine.dispose()
+
+
+def _assert_shipment_retention_failure(completed):
+    # 0168 deliberately raises Python ValueError before its first replacement;
+    # it has no SQLSTATE. A source line mentioning this text is not proof.
+    expected = 'ValueError: 0168 downgrade blocked: shipment projection facts exist'
+    lines = [line.strip() for line in completed.stderr.splitlines() if line.strip()]
+    assert completed.returncode != 0 and lines and lines[-1] == expected, (
+        'expected the exact terminal 0168 retention ValueError')
 
 
 def _assert_retention_downgrade(
@@ -764,6 +813,7 @@ def _assert_retention_downgrade(
     with psycopg.connect(**_connection_parameters(
         role="star_oam_migrator", password=_role_password("star_oam_migrator"),
     )) as connection:
+        shipment_projections = connection.execute("SELECT EXISTS (SELECT 1 FROM public.material_requests WHERE shipment_status <> 'not_started')").fetchone()[0]
         loss_dispositions = connection.execute("SELECT EXISTS (SELECT 1 FROM public.stock_loss_dispositions)").fetchone()[0]
         return_inbounds = connection.execute("SELECT EXISTS (SELECT 1 FROM public.stock_operation_return_inbounds)").fetchone()[0]
         opening_seals = connection.execute("SELECT EXISTS (SELECT 1 FROM public.opening_start_command_seals)").fetchone()[0]
@@ -774,14 +824,21 @@ def _assert_retention_downgrade(
         control_facts = connection.execute("SELECT EXISTS (SELECT 1 FROM public.inventory_control_preparations)").fetchone()[0]
         sealed = connection.execute("SELECT EXISTS (SELECT 1 FROM public.notification_events WHERE target_manifest_sha256 IS NOT NULL)").fetchone()[0]
     chain_blocker = _retention_chain_blocker(destination, blocking_revision=blocking_revision,
-        blocker=blocker, retained=dict(loss_dispositions=loss_dispositions,
+        blocker=blocker, retained=dict(shipment_projections=shipment_projections,
+            loss_dispositions=loss_dispositions,
             return_inbounds=return_inbounds, opening_seals=opening_seals,
             opening_actors=opening_actors, zero_openings=zero_openings,
             published_controls=published_controls, source_files=source_files,
             control_facts=control_facts, sealed=sealed))
+    shipment_boundary = chain_blocker == '0168 downgrade blocked: shipment projection facts exist'
+    shipment_before = _shipment_retention_snapshot() if shipment_boundary else None
     completed = _run_alembic("downgrade", destination, expect_success=False)
     output = completed.stdout + completed.stderr
     assert chain_blocker in output, f"expected first retention boundary: {chain_blocker}"
+    if shipment_boundary:
+        _assert_shipment_retention_failure(completed)
+        assert _current_revision() == HEAD_REVISION
+        assert _shipment_retention_snapshot() == shipment_before, '0168 refusal changed facts or catalog'
     if chain_blocker != blocker:
         if retention_guard is None:
             files = tuple((CLOUD_ROOT / "backend/alembic/versions").glob(f"{blocking_revision}_*.py"))
@@ -809,6 +866,8 @@ def _assert_retention_downgrade(
                     transaction.rollback()
         finally:
             engine.dispose()
+        if shipment_boundary:
+            assert _shipment_retention_snapshot() == shipment_before, 'independent guard changed facts or catalog'
         print(f"PG16 retention: current chain refusal and independent {blocking_revision} refusal PASS", flush=True)
     assert _current_revision() == HEAD_REVISION
 
@@ -19454,7 +19513,12 @@ def _assert_0061_empty_event_key_downgrade_and_reupgrade() -> None:
     assert legacy_bindings == bindings
     for index, (fixed, old) in enumerate(zip(before, legacy, strict=True)):
         assert fixed[:-1] == old[:-1]
-        if index in (0, 1, 4):
+        # The head now includes the additive supply-allocation/capacity
+        # hardening migrations 0177/0178.  Their downgrade to the 0060
+        # security revision must restore the 0060 body, while the head
+        # catalog legitimately carries the 0178 body for this same trigger.
+        # Keep the other entries byte-for-byte stable across the downgrade.
+        if index in (0, 1, 3, 4):
             assert fixed[-1] != old[-1]
         else:
             assert fixed == old
@@ -19687,8 +19751,8 @@ def _assert_0091_work_order_account_migration_roundtrip():
 
 def _selected_runtime_suite():
     suite = os.getenv("RSC_PG16_RUNTIME_SUITE", "")
-    if suite not in ("migrations", "inventory", "control"):
-        raise ValueError("runtime gate requires an explicit migrations, inventory or control suite")
+    if suite not in ("migrations", "inventory", "control", "contact_envelope"):
+        raise ValueError("runtime gate requires an explicit migrations, inventory, control or contact_envelope suite")
     return suite
 
 
@@ -19701,6 +19765,31 @@ def _prepare_runtime_suite():
     assert _current_revision() == HEAD_REVISION
     run_gate_phase('_provision_and_verify_deployment_acl', lambda: _provision_and_verify_deployment_acl())
     run_gate_phase('_provision_and_verify_oam_work_order_source', lambda: _provision_and_verify_oam_work_order_source())
+
+
+def _run_contact_envelope_suite():
+    """Independent 0180 predecessor, not the populated inventory fixture."""
+    run_gate_phase('_assert_fresh_disposable_postgresql16', lambda: _assert_fresh_disposable_postgresql16())
+    run_gate_phase('_bootstrap_roles', lambda: _bootstrap_roles())
+    run_gate_phase('_provision_edge_receiver_role', lambda: _provision_edge_receiver_role())
+    run_gate_phase('_run_alembic', lambda: _run_alembic('upgrade', '20261229_0180'))
+    assert _current_revision() == '20261229_0180'
+    run_gate_phase('_provision_and_verify_deployment_acl', lambda: _provision_and_verify_deployment_acl())
+    run_gate_phase('_provision_and_verify_oam_work_order_source', lambda: _provision_and_verify_oam_work_order_source())
+    from pg16_contact_envelope_gate import run
+    engines = {role: create_engine(_sqlalchemy_url(role=role, password=_role_password(role)),
+        pool_size=2, max_overflow=0, pool_timeout=5, hide_parameters=True)
+        for role in ('star_oam_migrator', 'star_oam_api')}
+    try:
+        report = run_gate_phase('contact_envelope_0181', lambda: run(
+            engines['star_oam_migrator'], engines['star_oam_api'],
+            upgrade_to_head=lambda: _run_alembic('upgrade', HEAD_REVISION),
+            validate_runtime=lambda: _validate_runtime_security(engines['star_oam_api'])))
+        assert report['result'] == 'passed' and report['finalHead'] == HEAD_REVISION
+        print(json.dumps(report, sort_keys=True), flush=True)
+    finally:
+        for engine in engines.values():
+            engine.dispose()
 
 
 def _run_migration_suite():
@@ -20596,11 +20685,12 @@ def _run_control_business_checks(api_engine, projector_engine, edge_engine):
 
 def test_postgresql16_migration_acl_concurrency_and_kill_gate():
     # Missing/unknown selection must fail before bootstrap, never turn into a
-    # partial green run. The workflow aggregate requires all three fresh legs.
+    # partial green run. The workflow aggregate requires all four fresh legs.
     if not _gate_enabled():
         pytest.fail("runtime gate requires an acknowledged disposable hosted database")
     suite = _selected_runtime_suite()
     operation = {"migrations": _run_migration_suite,
                  "inventory": _run_inventory_suite,
-                 "control": _run_control_suite}[suite]
+                 "control": _run_control_suite,
+                 "contact_envelope": _run_contact_envelope_suite}[suite]
     run_gate_phase('runtime_' + suite, operation)

@@ -99,7 +99,7 @@ def test_real_sdk_serializes_exact_four_read_only_calls(probe):
     assert transport.calls == ["acl", "versioning", "encryption", "publicAccessBlock"]
 
 
-def test_default_client_uses_bounded_verified_transport_with_synthetic_identity(probe, monkeypatch):
+def test_default_client_rejects_static_identity_without_cloud_calls(probe, monkeypatch):
     transport = Transport()
     def transport_factory(**kwargs):
         assert kwargs == dict(connect_timeout=3, readwrite_timeout=5,
@@ -110,8 +110,9 @@ def test_default_client_uses_bounded_verified_transport_with_synthetic_identity(
     monkeypatch.setenv('OSS_SESSION_TOKEN', 'synthetic-token')
     monkeypatch.setattr(oss.transport, 'RequestsHttpClient', transport_factory)
     checks = probe.inspect_bucket(REGION, BUCKET, OWNER)
-    assert all(value == 'passed' for value in checks.values())
-    assert transport.calls == ['acl', 'versioning', 'encryption', 'publicAccessBlock']
+    assert checks['oidc_identity_configuration'] == 'unknown'
+    assert checks['private_acl'] == 'unknown'
+    assert transport.calls == []
 
 
 def test_pinned_sdk_namespace_limitation_remains_unknown(probe):

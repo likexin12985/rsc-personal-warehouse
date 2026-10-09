@@ -24,7 +24,8 @@ import xml.etree.ElementTree as ET
 
 SDK_VERSION = "1.3.2"
 CHECKS = ("coordinates_valid", "sdk_version", "bucket_owner", "private_acl",
-          "versioning_never_enabled", "sse_oss_aes256", "bucket_public_access_block")
+          "versioning_never_enabled", "sse_oss_aes256", "bucket_public_access_block",
+          "oidc_identity_configuration")
 STATES = frozenset(("passed", "failed", "unknown"))
 WORKER_SECONDS = 45
 
@@ -92,6 +93,35 @@ def quiet_sdk():
         logging.disable(previous)
 
 
+def oidc_credentials(region, expected_owner):
+    """Explicit audit identity; never consult an environment AK/default chain.
+
+    Supply the four Bucket-GET permissions through an independently reviewed
+    audit role. The application object role need not receive those permissions.
+    Only this explicit inspection path imports the SDK adapter; --help remains
+    independent of credentials, token files and application startup.
+    """
+    if (os.environ.get("OAM_FILE_STORAGE_CREDENTIAL_MODE") != "oidc_role_arn"
+            or any(os.environ.get(key) for key in (
+                "OAM_FILE_STORAGE_ACCESS_KEY_ID", "OAM_FILE_STORAGE_ACCESS_KEY_SECRET",
+                "OAM_FILE_STORAGE_SESSION_TOKEN"))):
+        raise ValueError("OSS audit identity unavailable")
+    backend = str(Path(__file__).resolve().parents[1] / "backend")
+    if backend not in sys.path:
+        sys.path.insert(0, backend)
+    from app.oss_runtime_credentials import OssOidcCredentialsProvider, OssOidcIdentity
+    identity = OssOidcIdentity(
+        role_arn=os.environ.get("OAM_FILE_STORAGE_OIDC_ROLE_ARN", ""),
+        provider_arn=os.environ.get("OAM_FILE_STORAGE_OIDC_PROVIDER_ARN", ""),
+        token_file=os.environ.get("OAM_FILE_STORAGE_OIDC_TOKEN_FILE", ""),
+        region=region,
+        session_name=os.environ.get("OAM_FILE_STORAGE_OIDC_SESSION_NAME", "rsc-pilot-files"),
+    )
+    if identity.role_arn.split(":")[3] != expected_owner:
+        raise ValueError("OSS audit identity unavailable")
+    return OssOidcCredentialsProvider(identity)
+
+
 def inspect_bucket(region, bucket, expected_owner, *, sdk=None, client_factory=None,
                    version_reader=version):
     """Worker entry; factories support offline tests with the real pinned SDK."""
@@ -113,10 +143,12 @@ def inspect_bucket(region, bucket, expected_owner, *, sdk=None, client_factory=N
                 import alibabacloud_oss_v2 as sdk
             checks["sdk_version"] = "passed"
             if client_factory is None:
-                # An independently provisioned audit identity is supplied only
-                # to this explicit inspection process. No profile/IMDS fallback.
+                # Reuse the production explicit, refreshable OIDC provider.
+                # Its constructor rejects static SDK/OSS keys as well.
+                credentials = oidc_credentials(region, expected_owner)
+                checks["oidc_identity_configuration"] = "passed"
                 config = sdk.Config(region=region, signature_version="v4",
-                    credentials_provider=sdk.credentials.EnvironmentVariableCredentialsProvider(),
+                    credentials_provider=credentials,
                     http_client=guarded(sdk.transport.RequestsHttpClient(connect_timeout=3,
                         readwrite_timeout=5, enabled_redirect=False, insecure_skip_verify=False)),
                     disable_ssl=False, insecure_skip_verify=False, enabled_redirect=False,
@@ -124,6 +156,8 @@ def inspect_bucket(region, bucket, expected_owner, *, sdk=None, client_factory=N
                 client = sdk.Client(config)
             else:
                 client = client_factory(sdk, region, guarded)
+                # Test-only injection; this hook is not exposed by the CLI.
+                checks["oidc_identity_configuration"] = "passed"
         except Exception:
             return checks
 
@@ -215,7 +249,7 @@ class SafeParser(argparse.ArgumentParser):
 
 def main(argv=None):
     parser = SafeParser(description=__doc__)
-    parser.add_argument("--inspect", action="store_true", help="Explicitly permit four read-only OSS API calls")
+    parser.add_argument("--inspect", action="store_true", help="Permit four read-only OSS API calls using an explicit audit OIDC role")
     parser.add_argument("--region", help="OSS region, or OAM_FILE_STORAGE_REGION")
     parser.add_argument("--bucket", help="Exact bucket, or OAM_FILE_STORAGE_BUCKET")
     parser.add_argument("--expected-owner", help="Expected account ID, or RSC_OSS_PREFLIGHT_OWNER_ID")

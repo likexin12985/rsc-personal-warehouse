@@ -1,10 +1,9 @@
-"""Isolated OpenBao Transit contract candidate; NOT a production provider.
+"""Pure OpenBao Transit binding and decrypt contract.
 
-No Settings/factory/readiness registration, files, credentials, default network
-client, database access or release-readiness result exists here. The caller
-must supply independently reviewed immutable pins and an explicit transport.
-This prepares a future additive provider contract without reinterpreting any
-Aliyun row, response, application envelope or historical migration.
+No files, credentials, default network client, database access or release
+readiness result exists here. The production composition caller supplies
+independently reviewed immutable pins and an explicit transport. Aliyun rows,
+responses and historical envelopes retain their original provider bindings.
 """
 
 from __future__ import annotations

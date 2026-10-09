@@ -45,6 +45,11 @@ def test_exact_function_and_readiness_chain():
     for side in ('before', 'after'):
         assert change[side] == ready[side]['prosrc']
         assert sha256(change[side].encode()).hexdigest() == change[side+'Sha256'] == ready[side+'Sha256']
+    from app.material_request_contact_envelope_security import DATA as contact
+    assert contact['previousRevision'] == ready['revision']
+    assert contact['readiness']['before'] == ready['after']
+    assert contact['readiness']['beforeSha256'] == ready['afterSha256']
+    ready = contact['readiness']
     current_ready = security._stock_scrap_readiness.DATA
     assert current_ready['revision'] == ready['revision']
     assert current_ready['after'] == ready['after']

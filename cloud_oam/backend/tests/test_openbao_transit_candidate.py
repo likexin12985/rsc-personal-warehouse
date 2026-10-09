@@ -243,16 +243,25 @@ def test_metadata_is_immutable_and_secret_representations_are_hidden():
         entry.transit_key_version = 2
 
 
-def test_candidate_has_no_production_registration_or_credential_io():
+def test_candidate_remains_pure_and_provider_defaults_stay_disabled():
+    from app.config import Settings
+
     root = Path(__file__).resolve().parents[1] / "app"
-    for relative in ("config.py", "production_adapters.py", "kms_readiness.py", "kms_pin_gate.py"):
-        assert "openbao_transit_candidate" not in (root / relative).read_text()
+    for field in (
+        "auth_idempotency_encryption_provider",
+        "material_request_contact_encryption_provider",
+    ):
+        assert Settings.model_fields[field].default == "disabled"
     source = (root / "openbao_transit_candidate.py").read_text()
     tree = ast.parse(source)
     imported = {
-        alias.name for node in ast.walk(tree) if isinstance(node, ast.Import)
+        alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import)
         for alias in node.names
-    } | {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
-    assert not imported.intersection({"os", "socket", "http", "requests", "httpx", "config", "production_adapters"})
+    } | {(node.module or "").split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    assert not imported.intersection({
+        "os", "socket", "http", "requests", "httpx", "config", "database", "sqlalchemy",
+        "foundation_models", "formal_services", "production_adapters", "production_key_runtime",
+        "openbao_runtime_transport", "openbao_registry_candidate",
+    })
     assert "releaseReady" not in source
     assert "kms_key_version_id" not in source

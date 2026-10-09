@@ -1,8 +1,8 @@
 """Private object-storage boundary for formal file intents.
 
-The production implementation imports Alibaba Cloud OSS SDK V2 lazily and
-uses only its environment credential provider.  No access-key setting or
-plaintext credential fallback exists in the application configuration.
+The implementation imports Alibaba Cloud OSS SDK V2 lazily. An explicitly
+composed OIDC provider preserves temporary credential expiration; the existing
+environment path remains available for separately reviewed legacy deployments.
 """
 
 from __future__ import annotations
@@ -11,14 +11,55 @@ import base64
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from typing import Mapping, Protocol
 import uuid
 
 from formal_file_integrity import OPENING_IMPORT_ERROR_MAX_BYTES, StoredObjectHead
+from ..oss_runtime_credentials import OssOidcCredentialsProvider
 
 
 class FileStorageError(RuntimeError):
     """Stable adapter failure whose original SDK detail must not reach HTTP."""
+
+
+_PUBLIC_FAILURES = frozenset({
+    "OSS storage coordinates are incomplete", "OSS credential provider is invalid",
+    "OSS storage adapter is unavailable", "OSS signature lifetime exceeds credential lifetime",
+    "OSS signature lifetime is unavailable", "OSS upload signature omitted a required bound header",
+    "OSS upload intent is unavailable", "OSS object verification is unavailable",
+    "opening count source identity is invalid", "opening count source binding is invalid",
+    "opening count source HEAD verification failed", "opening count source GET verification failed",
+    "opening count source stream is invalid", "opening count source exceeds declared size",
+    "opening count source content verification failed", "OSS opening count source is unavailable",
+    "OSS opening count source close failed", "report object identity is invalid",
+    "report object content or key is invalid", "OSS report object verification failed",
+    "OSS download intent is unavailable",
+})
+
+
+def _public_storage_boundary(fallback: str):
+    """Drop SDK exception graphs, including implicit context, at public exits.
+
+    Existing validation messages remain fixed. Arbitrary SDK text (even an
+    exception presented as FileStorageError) is never copied into the result.
+    The original operation and its exact-HEAD recovery run once, unchanged.
+    """
+    def decorate(action):
+        @wraps(action)
+        def protected(*args, **kwargs):
+            message = fallback
+            try:
+                return action(*args, **kwargs)
+            except Exception as error:
+                if (type(error) is FileStorageError and len(error.args) == 1
+                        and type(error.args[0]) is str and error.args[0] in _PUBLIC_FAILURES):
+                    message = error.args[0]
+            # Raising outside the handler is necessary: ``from None`` alone
+            # still retains the credential-bearing exception in __context__.
+            raise FileStorageError(message)
+        return protected
+    return decorate
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,17 +121,21 @@ class AliyunOssV2StorageAdapter:
     _REPORT_MAX_BYTES = 20 * 1024 * 1024
     _OPENING_COUNT_MAX_BYTES = 8 * 1024 * 1024
 
-    def __init__(self, *, region: str, bucket: str) -> None:
+    @_public_storage_boundary("OSS storage adapter is unavailable")
+    def __init__(self, *, region: str, bucket: str,
+                 runtime_credentials: OssOidcCredentialsProvider | None = None) -> None:
         checked_region = region.strip()
         checked_bucket = bucket.strip()
         if not checked_region or not checked_bucket:
             raise FileStorageError("OSS storage coordinates are incomplete")
+        if runtime_credentials is not None and type(runtime_credentials) is not OssOidcCredentialsProvider:
+            raise FileStorageError("OSS credential provider is invalid")
         try:
             import alibabacloud_oss_v2 as oss
 
-            credentials_provider = (
-                oss.credentials.EnvironmentVariableCredentialsProvider()
-            )
+            credentials_provider = runtime_credentials
+            if credentials_provider is None:
+                credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
             config = oss.config.load_default()
             config.credentials_provider = credentials_provider
             config.region = checked_region
@@ -103,7 +148,30 @@ class AliyunOssV2StorageAdapter:
         self._oss = oss
         self._client = client
         self._bucket = checked_bucket
+        self._region = checked_region
+        self._runtime_credentials = runtime_credentials
 
+    def _presign(self, request, ttl_seconds):
+        if self._runtime_credentials is None:
+            result = self._client.presign(request, expires=timedelta(seconds=ttl_seconds))
+        else:
+            provider, expiry = self._runtime_credentials.signing_snapshot(ttl_seconds)
+            # SDK 1.3.2 presign ignores operation-level credentials_provider.
+            # A dedicated client pins this signature's checked identity without
+            # mutating the shared HEAD/PUT client during concurrent requests.
+            config = self._oss.config.load_default()
+            config.region = self._region
+            config.signature_version = "v4"
+            config.credentials_provider = provider
+            result = self._oss.Client(config).presign(request, expiration=expiry)
+            if result.expiration is None or result.expiration > expiry:
+                raise FileStorageError("OSS signature lifetime exceeds credential lifetime")
+        if (not isinstance(result.expiration, datetime) or result.expiration.tzinfo is None
+                or result.expiration <= datetime.now(timezone.utc)):
+            raise FileStorageError("OSS signature lifetime is unavailable")
+        return result
+
+    @_public_storage_boundary("OSS upload intent is unavailable")
     def create_upload_intent(
         self,
         *,
@@ -123,12 +191,7 @@ class AliyunOssV2StorageAdapter:
                 metadata={"sha256": sha256, "file-id": file_id},
                 forbid_overwrite=True,
             )
-            result = self._client.presign(
-                request,
-                self._oss.PresignOptions(
-                    expires=timedelta(seconds=ttl_seconds),
-                ),
-            )
+            result = self._presign(request, ttl_seconds)
             signed_headers = {
                 str(key): str(value)
                 for key, value in dict(result.signed_headers or {}).items()
@@ -150,8 +213,7 @@ class AliyunOssV2StorageAdapter:
             return UploadIntent(
                 storage_key=storage_key,
                 url=str(result.url),
-                expires_at=datetime.now(timezone.utc)
-                + timedelta(seconds=ttl_seconds),
+                expires_at=result.expiration,
                 headers=required,
             )
         except FileStorageError:
@@ -159,6 +221,7 @@ class AliyunOssV2StorageAdapter:
         except Exception as exc:  # pragma: no cover - deployment-only adapter
             raise FileStorageError("OSS upload intent is unavailable") from exc
 
+    @_public_storage_boundary("OSS object verification is unavailable")
     def head_object(self, *, storage_key: str) -> StoredObjectHead:
         try:
             result = self._client.head_object(
@@ -180,6 +243,7 @@ class AliyunOssV2StorageAdapter:
         except Exception as exc:  # pragma: no cover - deployment-only adapter
             raise FileStorageError("OSS object verification is unavailable") from exc
 
+    @_public_storage_boundary("OSS opening count source is unavailable")
     def read_opening_count_source(
         self, *, storage_key: str, file_id: str, sha256: str, size_bytes: int
     ) -> bytes:
@@ -266,6 +330,7 @@ class AliyunOssV2StorageAdapter:
                 except Exception as exc:
                     raise FileStorageError("OSS opening count source close failed") from exc
 
+    @_public_storage_boundary("OSS report object verification failed")
     def put_report_object(
         self, *, storage_key: str, file_id: str, sha256: str, payload: bytes
     ) -> StoredObjectHead:
@@ -273,6 +338,7 @@ class AliyunOssV2StorageAdapter:
             sha256=sha256, payload=payload, purpose="inventory_report_export",
             maximum_bytes=self._REPORT_MAX_BYTES)
 
+    @_public_storage_boundary("OSS report object verification failed")
     def put_opening_count_error(
         self, *, storage_key: str, file_id: str, sha256: str, payload: bytes
     ) -> StoredObjectHead:
@@ -345,6 +411,7 @@ class AliyunOssV2StorageAdapter:
             raise FileStorageError("OSS report object verification failed")
         return head
 
+    @_public_storage_boundary("OSS download intent is unavailable")
     def create_download_intent(
         self,
         *,
@@ -352,20 +419,17 @@ class AliyunOssV2StorageAdapter:
         ttl_seconds: int,
     ) -> DownloadIntent:
         try:
-            result = self._client.presign(
+            result = self._presign(
                 self._oss.GetObjectRequest(
                     bucket=self._bucket,
                     key=storage_key,
                 ),
-                self._oss.PresignOptions(
-                    expires=timedelta(seconds=ttl_seconds),
-                ),
+                ttl_seconds,
             )
             return DownloadIntent(
                 storage_key=storage_key,
                 url=str(result.url),
-                expires_at=datetime.now(timezone.utc)
-                + timedelta(seconds=ttl_seconds),
+                expires_at=result.expiration,
             )
         except Exception as exc:  # pragma: no cover - deployment-only adapter
             raise FileStorageError("OSS download intent is unavailable") from exc

@@ -44,6 +44,11 @@ def test_forward_catalog_matches_runtime_and_exact_predecessor():
             assert sha256(change[side].encode()).hexdigest() == change[side+'Sha256'] == ready[side+'Sha256']
         predecessor = ready
     assert key_provider['previousRevision'] == routing['revision']
+    from app.material_request_contact_envelope_security import DATA as contact
+    assert contact['previousRevision'] == predecessor['revision']
+    assert contact['readiness']['before'] == predecessor['after']
+    assert contact['readiness']['beforeSha256'] == predecessor['afterSha256']
+    predecessor = contact['readiness']
     current_ready = security._stock_scrap_readiness.DATA
     assert current_ready['revision'] == predecessor['revision']
     assert current_ready['after'] == predecessor['after']

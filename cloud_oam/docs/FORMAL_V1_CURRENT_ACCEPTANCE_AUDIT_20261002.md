@@ -1,3 +1,56 @@
+## 2026-10-09 最新接续：真实 Linux Agent 与修复后 0181 定向实库通过
+
+**试点 MVP，不等同完整 V1；`not_ready`，未上线。** 目标服务器新增一次性 Linux 证明 **19 项通过、exit 0**：三个非 root UID、两个只读 tmpfs 目录、实际 peercred、Agent 自然换 token/inode、sealed/解封/到期拒绝均用真实生产 transport 验证。临时资源精确清理，原六个服务身份与健康保持。此为合成隔离证明，不表示正式 Bao/Agent 已常驻启用。
+
+部署预检已补 OpenBao/显式 OSS OIDC，发布器已区分动态 token/socket 目录与静态 wrapped registry，防止把令牌复制进发布快照。旧 HEAD PG16 已失败终态（68 success / 7 failure，含汇总）；新候选仍待独立 hosted 证据。新增本机 PG16.15 0181 leg 首次发现两段 `IF CASE` 语法错误；最小括号修复后，精确恢复原任务隔离库、仅续失败边界，**32.732 秒 exit 0**。66 种信封守卫拒绝、14 项权限拒绝、迁移并发锁、v1 保留及仅历史 v2 拒降实测通过；1972 输入稳定，原 0→0180/ACL/草稿未重做，首次失败保留。
+
+
+最后独立审查发现恢复介质的 3 个既有安全测试未进入 CI，已新增 `backend/tests/test_recovery_vault.py` 包装入口；原实现和原测试不变，`collect-only` 精确收集 3 项，且只进入 static shard 0。此处仅补收集，不重复执行已终态测试。部署代码另补精确 Bao 容器/PID 绑定、能力与挂载检查、Agent 临时投影文件的有限复查、独立 PNVS OIDC 配置；新增 103 个不同专项节点已有分阶段通过证据，真实云端身份和短信仍未验收。
+
+目标机纯 Compose 解析还发现重复安全选项，已用 `!override` 修复；真实合成合并回读 22 项结构检查通过。对 `false` 被规范省略的兼容补修新增 14 项通过，保留缺声明/自动建目录等拒绝边界；具体失败、原输出回读和摘要见上述接续文档，未启动正式服务。
+
+用户更新恢复决定：由本人单独保管，目标为已连接希捷移动硬盘；不再要求第二名人员，不冒称双人复核/第二副本。外盘可写但未加密，空加密映像创建未成功、无正式恢复密钥；电脑操作工具尚未获准访问磁盘工具。阿里云原 Edge RAM 页返回 `ConsoleNeedLogin`，云端权限/OSS/短信核对待用户恢复该会话；SSH 与 GitHub 不需重登。
+
+完整运行回执、失败保留、当前边界与下一步见 [Linux Agent 与上线条件接续](LINUX_AGENT_RELEASE_PROGRESS_20261009.md)。旧段落仅描述各自时点，不覆盖本节；不重跑已终态无关套件，不 reset/revert/丢弃已有工作，不以配置或局部通过替代正式部署验收。
+
+## 2026-10-09 接续：采用开源复用，官方 Agent 已完成新增隔离验证
+
+**试点 MVP，不等同完整 V1；`not_ready`，仍未上线。** 按用户要求完成 GitHub 开源筛选，库存优先参考 InvenTree，后续通用组件优先直接使用成熟依赖。本批实际采用 OpenBao 2.7.1 官方 Agent，准备 AppRole 自动认证与文件投递候选，替代尚未完成的自写令牌生命周期进程；来源提交、原许可证和摘要已保存。
+
+新增 Agent 隔离实验最终 21 项实际行为检查通过（attempt-06，exit 0，清理完成、运行前后输入一致），保持两条 decrypt 权限且无 default/renew-self；验证原子换 token、权限负例及同 token 正例、策略撤权和自然过期。首轮配置解析、Mac 目录继承组失败保留。batch 不能按单 token 立即撤销，撤销 SecretID 不等于已发 token 即时失效；真实 Linux 三 UID、只读目录挂载、正式 bootstrap 与撤权流程仍待验。
+
+具体选型、复用文件、验证和下一步见 [开源复用记录](OPEN_SOURCE_REUSE_20261009.md)。未修改业务实现/历史迁移/既有 policy，未重跑旧 Transit、库存、PG16 或客户端终态套件；本批没有提交、推送或部署。真实 Transit/STS/OSS、最新候选 hosted PG16/0181、短信登录/角色真机 UAT、恢复及发布回滚仍是独立门禁。试点角色隐藏和后续迭代范围保持。
+
+## 2026-10-09 最新接续：提供方运行入口已接通，部署未放行
+
+**试点 MVP，不等同完整 V1；`not_ready`，仍未上线。** 本批已经把独立 provider claims/pins 和存量引用检查接入 Settings、认证/联系人请求工厂、API 启动、readiness 与 CLI。九项 OpenBao 非密配置由 API/gate 同源映射，默认仍关闭；请求只使用启动审核后的不可变快照，不跨请求缓存明文，不新增短信限流前的数据库事务。全部启动门禁通过后才发布 runtime；缺失/漂移/不可解仍失败关闭。
+
+完整实现、逐阶段本地/本机 PG16 证据、失败保留、联系人预检补修与受控停机换钥限制见 [运行入口接线交接](PROVIDER_RUNTIME_WIRING_20261009.md)。本批不代表真实 Linux 身份/挂载、Transit/STS/OSS、0181 hosted PG16、SMS-only/UAT、恢复或部署已通过；未提交、推送或变更生产。后文“未接线”等旧记录是各时点历史，当前代码状态以本节和新交接为准。
+
+## 2026-10-09 C2 与附件身份接续：仍未上线
+
+> **历史快照边界**：本节及其紧邻的早期部署/CI 记录是当时的只读观测，后文更新的当前树证据覆盖其中的旧计数和旧运行进度。当前验收判断以文末最新接续段落为准；历史快照不作为当前候选或发布证据。
+
+**试点 MVP，不等同完整 V1；`not_ready`。** 本地已补联系人 v2/旧 v1 历史读取、认证 claim 分流及独立只读 pin reader、0181 前向 contact guard、显式 OSS OIDC 与真实 SDK 签名兼容修复。新变更仍未提交，生产 Settings/factory/readiness 的 OpenBao 接线和真实身份尚未完成。源码边界、逐项聚焦结果、首次失败与待办见 [C2/OSS 接续](C2_OSS_INTEGRATION_20261009.md)。
+
+00:59:31 的 041cb6974 hosted PG16 快照为 65 success / 4 failure / 5 running；四项已读取失败均为旧 `generic_key_races` 等待共因，尚无全局终态；Client 已成功。冻结 0180 的隔离验证已完成真实迁移、部署 ACL 与完整 runtime security，业务 fixture 因测试包依赖/布局问题停在导入阶段；修复的是测试运行包，没有更改生产 SQL 或重跑已成功迁移。后续业务竞态与 0181 实测结果仍须独立登记。
+
+用户同意手动解封、离机分开保管的推荐方向；实际第二名人员和介质就绪状态待回复，未生成正式恢复秘密。真实 STS/OSS、SMS-only 登录、角色/真机 UAT、密钥/数据库/附件恢复及最终部署门禁继续保留。现有生产服务未切换。
+
+01:11 后续：quantity 真实夹具在 count COMMIT 触及 PG512MiB 上限，竞态尚未运行。精确回读证明 count 未提交，库存/申请/发运/收货事实为0，已有合成基础行和 counting 任务保留；随后自建资源已正常清理，保留 OOM 历史，原六服务未变。0181 改用独立最小申请基础夹具与不增加总上限的资源分配继续；详见上述 C2 接续的资源阻断章节，不能把这次运行记成业务通过。
+
+客户端重启后的旧候选复核已把 `pg16_runtime (migrations)` 失败归类为门禁测试的历史 hash 比较遗漏：0177/0178 合法地连续更新了 `rsc_guard_material_request_supply_task_0059()`，但 `_assert_0061_empty_event_key_downgrade_and_reupgrade` 未把索引 3 纳入允许变化集合。0092/0093 日志属于该门禁主动注入并确认拒绝漂移的负向分支；四个 `pg16_loss` 失败仍为旧夹具超时。当前只在测试断言中补 `(0, 1, 3, 4)`，生产 SQL/迁移不变；新候选 PG16 仍待验证，不能把旧 run 或此本地修复写成通过。
+
+OpenBao C2 继续采用“代码先准备、运行证据后放行”的边界：认证 claim 路由和 contact-v2 显式组合已新增，18 项组合测试与 registry/transit 候选合计 149 项通过，受影响 C2 聚焦回归为 262 项通过；回执见 `artifacts/openbao-c2-20261009/production-openbao-composition-receipt.json`。模块未注册进 `Settings/main`，不改变当前 Aliyun 生产路径，也未访问真实 OpenBao、数据库、OSS、短信或服务器；发布判定仍为 `not_ready`。
+
+## 2026-10-09 00:14 上线部署核查：暂不具备切换条件
+
+**试点 MVP，不等同完整 V1，仍未上线。** 用户已授权上线部署；本轮先完成真实服务器和准确 SHA 的回读。`041cb6974d20d352e1a5149701fa2e9ab4d4b3e3` 的 Client run `37805075684` 已成功，PG16 run `37805075682` 尚在运行且已有两项失败，不能发布。不是 GitHub 登录阻塞，也不能继续写为“没有 hosted DB”。
+
+目标服务器原六容器保持，域名仍为短信关闭、密码开启的旧 API，新版 live/ready 均404。低成本 OpenBao 方案尚缺 C2 业务加密/生产接线；受控身份、私有 OSS、真实短信/角色 UAT 和恢复证据继续分别待验。本轮未迁移生产、启动候选或接管端口。具体现场结果、备份目标守卫及下一步见 [本轮部署核查](DEPLOYMENT_PREFLIGHT_20261009.md)。后续本地修复与该 SHA 的远端结果分开记录，不重跑无关终态套件。
+
+00:29 补充：两项失败已确认存在旧夹具与0167库存锁规则的冲突；本地按现行锁语义完成有限夹具更正，新增分支4 passed/8 deselected。首版不安全调整已审查拒绝并独立留档，生产SQL未改；真实PG16复验尚未完成，改动保留未提交。00:25的当前SHA CI为32成功/2失败/20运行/20排队，仍无终态。详见上述部署核查及其证据。
+
 ## 2026-10-08 23:54 接续：CI 共因修复，候选待新 SHA 验收
 
 **试点 MVP，不等同完整 V1，仍未上线。** `9f7ae10` 的 Client 已成功，PG16 run `37799249651` 已失败终态（75 job：71 failure / 4 success）。全部失败日志已归因，不取消或重跑旧 run。本批只修 0180 显式 `public`、SQLite 新约束的解析深度、0051 夹具时间线及漏列的两张只读表期望；PG 冻结 SQL/权限及001–0179保持。
@@ -666,6 +719,14 @@ PNVS 脱敏身份预检及部署配置组 122 passed；候选 Compose 已解析�
 - 配置层对 `password_login_enabled=true` 或 `wechat_login_enabled=true` 在任何环境都失败关闭；生产 API 只接受完整短信通道，`sms_configuration_ready()` 同时要求真实 provider、签名/模板/方案、凭证和独立登录限流 HMAC。未完整配置时 `/auth/login-options` 不开放短信，发送/登录也拒绝。
 - 已确认使用阿里云号码认证服务 PNVS/Dypnsapi（不是 Dysmsapi），现有短信认证套餐余量 1000 条；适配器调用 SendSmsVerifyCode/CheckSmsVerifyCode。额度不硬编码余额，仍须由用户完成方案/签名/模板、RAM 最小权限、来源限制、真实隔离号码回执和登录回读，未完成前不能宣称短信 UAT 或上线。服务端不写入密钥、不伪造短信、不自动重放超时未知请求；现有幂等、限频、一次性验证码、审计、会话刷新/退出/撤销/恢复约束保留。
 - 本轮只做源码静态/聚焦配置与负向路由验证；不重跑此前已终态的认证、前端或完整门禁测试。PG16 hosted DB 仍是外部阻塞，未提交、未部署。
+
+## 2026-10-09 当前树复核、C2 证据边界与 0181 聚合回执
+
+- 当前未提交树 HEAD 为 `041cb6974d20d352e1a5149701fa2e9ab4d4b3e3`，工作分支为 `codex/notification-delivery-worker`；本轮没有 reset、revert、提交、推送或部署，`git diff --check` 通过。
+- 当前树受影响 C2 聚焦回归为 **262 passed**；当前头 SMS/迁移静态契约审计为 **PASS**，回执 `artifacts/deployment-20261009/current-head-sms-contract-20261009.json`，其摘要 SHA256 为 `4feb661eed85e419b779265e6eafd8214c5e597b2d5b8721e16f23311e674721`。审计确认 Alembic、控制 CLI 和 PG16 gate 均为 `20261230_0181`，但 `releaseDecision=not_ready`，不构成 hosted PostgreSQL 16 或真实 PNVS/SMS 通过。
+- 仓库安全扫描在当前树通过：`3174` 个候选文件，输出见 `artifacts/deployment-20261009/current-tree-safety-20261009.log`（SHA256 `bf6acb1ac25ce48d3b117d2f2af2aa88610729d844d6af0fd736d1c68ffaf279`）。这是仓库路径/凭证静态安全证据，不替代运行时安全、PG16、UAT 或部署回滚。
+- 0181 静态聚合回执为 `artifacts/deployment-20261009/contact-0181-static-evidence-receipt.json`，绑定当前 HEAD、迁移、catalog、三份测试源码、runner 和 XML/log 摘要。SQL/SQLite **69 passed**、迁移结构 **11 passed**；admission 首轮 **10 passed/4 failed**，修复后对同 4 个失败节点复验 **4 passed**。该回执明确首轮 admission XML 不是全绿，并将 hosted PG16、ACL、并发、回滚标为未验证。
+- C2 additive composition 已实现并经过本地证据，但仍默认关闭、未接入 `Settings/main` 或生产工厂；真实 OpenBao/运行身份、数据库 ACL、投影 token、Transit/STS、私有 OSS、SMS/UAT、部署、恢复和回滚未形成证据。当前范围继续冻结为“试点 MVP，不等同完整 V1”，发布状态保持 `not_ready`。
 - 新增证据：`cloud_oam/backend/tests/test_sms_only_policy.py` 使用现有 `.venv` 聚焦运行 **7 passed, 1 warning**；`cloud_oam/miniprogram/tests/sms-only-policy.test.js` 通过；前端 TypeScript 增量检查通过；`git diff --check` 通过。初次 shell 缺少 `node`/`pytest` 仅是工具入口问题，未安装依赖；没有重跑既有终态测试。
 
 ## 2026-10-07 SMS-only 客户端一致性收口
@@ -2166,7 +2227,9 @@ catalog生成17649 exit=0，`artifacts/local-scrap-catalog-pg16/run-p3xwlzwy`已
 
 补充当前头一致性证据：使用仓库规定的 `cache_migration_compilation` 读取 Alembic 图，结果为单头 `20261227_0178`；控制 CLI `REQUIRED_HEAD`、PG16 gate `HEAD_REVISION` 与当前 readiness manifest hash 均一致。改动脚本编译和 `git diff --check` 通过。首次复核仅因测试模块 import path 漏配退出 1，修正路径后通过，不影响产品代码，也未重跑已终态业务测试。
 
-## 2026-10-11 当前树安全扫描修复
+## 历史快照（北京时间 2026-10-08）当前树安全扫描修复
+
+> 日期按指定收据正文 `observedAt=20261007T225930Z` 换算为北京时间 2026-10-08 06:59:30。下方旧过程文案的 `75,817,630` 字节没有定位到对应原始扫描日志；指定收据实际记录 `75,824,128` 字节，二者不视为同次扫描摘要。历史文件和数字保留，差异见本轮追加复核收据。
 
 当前树仓库安全扫描首次发现交接文档含两处个人 macOS 绝对路径，按个人路径门禁以 exit 1 拒绝；未发现 AccessKey 或其他凭证。已将路径改为不含个人目录的占位描述，随后同一 `bash scripts/verify_repository_safety.sh` 复核通过：**3062 candidate files、75,817,630 bytes、exit 0**。这是当前未提交树的安全证据，不替代 hosted PostgreSQL 16、真实 PNVS/UAT、部署或回滚验收。
 
@@ -2197,3 +2260,53 @@ catalog生成17649 exit=0，`artifacts/local-scrap-catalog-pg16/run-p3xwlzwy`已
 - 当前台账：`artifacts/formal-0165-integration/current-release-gate-ledger-20261008.json`，SHA256 `44b8f8583767caac3480915a34b6e0d5cdd417e56c1795b3a08e50fbd0cedb56`。
 - 台账一致性校验读取当前 HEAD、工作树状态计数及四份独立证据文件并逐一核对 SHA：**PASS，exit 0**。台账结论为 `releaseDecision=not_ready`，明确分开记录源码、迁移/权限、HTTP/API、客户端、当前 CI、PNVS/UAT 和部署回滚状态。
 - 台账不改变任何业务状态，不替代 hosted PostgreSQL 16、真实 PNVS/UAT 或部署回滚证据。
+
+## 2026-10-09 hosted PG16 run 最新只读回读
+
+- 同一 hosted run `37805075682` 经 GitHub 代理重新只读回读，回执为 `artifacts/deployment-20261009/pg16-run-37805075682-live-20261008T184722Z.json`。该 run 绑定 HEAD `041cb6974d20d352e1a5149701fa2e9ab4d4b3e3`，仍为 `in_progress`，阶段计数 **67 completed/success、6 completed/failure、1 in_progress**；唯一未完成作业为 `static_safety (0)`，六个失败为 inventory、migrations 和四个 loss 分片。
+- 该 run 没有终态结论，不能作为 hosted PostgreSQL 16 通过证据；本轮未取消、未重跑、未推送、未部署。当前候选仍须在工作树稳定并取得新 SHA 后重新完成完整 hosted 门禁；该历史 run 不覆盖当前未提交工作树。
+
+## 2026-10-09 当前树有限里程碑：试点预检与 OSS/OIDC 异常边界
+
+- 当前工作树 HEAD `041cb6974d20d352e1a5149701fa2e9ab4d4b3e3`、分支 `codex/notification-delivery-worker`，状态项 79；未 reset、revert、提交、推送或部署，`git diff --check` 通过。
+- `backend/tests/test_pilot_preflight.py` 为 **72 passed / exit 0**；OSS/OIDC、文件存储和 SDK 异常边界聚焦组为 **115 passed、1 warning / exit 0**；`compileall` 通过。
+- 原始收据 `artifacts/deployment-20261009/focused-runtime-preflight-20261009.json`，SHA256 `e7115bd0120597c086607f05f3ec97ac471f3ca6f17c042d843b4156ec4c6807`，绑定测试 XML、当时测试文件和 v2 安全扫描；其交接 hash 为生成时快照。后续 `artifacts/deployment-20261009/current-tree-safety-20261009-v5.log` 独立记录 **3174 candidate files / PASS**，原收据未绑定 v5。追加复核见 `artifacts/openbao-pin-binding-fix-20261009/prior-evidence-reconciliation.json`；保留原始记录，不将补采的产品源码 hash 当作测试时证据。
+- 证据仅覆盖当前树的离线/合成边界，不覆盖真实 OIDC/RAM/STS、私有 OSS ACL/BPA/SSE/ownership、真实短信、hosted PostgreSQL 16、UAT、部署、恢复或回滚；OpenBao C2 仍默认关闭、未接入生产工厂，正式验收结论继续为 `not_ready`。
+
+## 2026-10-09 最新增量：认证 OpenBao pin 绑定修复验收
+
+**试点 MVP，不等同完整 V1；发布判定仍为 `not_ready`。** HEAD 保持 `041cb6974d20d352e1a5149701fa2e9ab4d4b3e3`，修复在原未提交工作树内完成；未 reset、revert、提交、推送或部署。
+
+| 验收项 | 本轮证据 | 结论边界 |
+| --- | --- | --- |
+| 同坐标不同密文、claim 三摘要分歧 | 原产品新增反例 31 failed / 8 passed，修复后组合文件 57 passed | 复用完整 pin 校验，构造/readiness/请求均拒绝不一致，不调用 provider |
+| 精确版本与历史来源 | 额外/缺失 entry、额外用途、历史 pin/环境/实例/Transit 变化、provider 双向切换和未声明 Aliyun 版本均覆盖 | 冻结全部声明 bindings；合法混合历史读取保留，无 fallback |
+| 可变候选与 active binding | 核验后快照解析、原注入对象变更隔离、active pin 分歧反例通过 | 未更改通用 provider 路由器、联系人逻辑、Settings/main 或迁移 |
+| 真实 registry loader 的反例有效性 | 独立审查后补同文件同 pin 的成功构造控制，仅该节点 1 passed | 这是 57 项中一个节点的增强复验，不增加独立节点总数；两次测试源码摘要分别保留 |
+| 旧证据绑定纠正 | 旧收据实际绑定 v2；v3/v5 与历史时区、字节差异另存追加复核 | 不覆盖旧收据，不把后采 hash 当成旧测试时源码，不重跑旧 149/262、72/115 套件 |
+
+证据目录 `artifacts/openbao-pin-binding-fix-20261009/` 保留 `red-receipt.json`、`green-receipt.json`、`registry-positive-control-receipt.json`、原日志/XML及原产品快照。独立审查的唯一测试证据建议已补齐；最终源码、文档、仓库安全扫描和 diff 检查绑定于 `repair-receipt.json`，扫描实际终态以该收据为准。
+
+未证明项目：provider-aware 存量引用准入及生产工厂接线、真实运行身份/数据库 ACL/投影/Transit/STS/私有 OSS、0181 真实 PG16 与准确候选 hosted 门禁、SMS-only 登录/角色及真机 UAT、恢复保管/备份恢复/回滚。C2 仍默认关闭；本轮没有刷新远端 CI，早先 run 状态仅为历史。试点主链、角色隐藏、不可变流水/幂等/审计/权限/安全和取消关闭守卫、最小站内通知及后续迭代清单保持。
+
+## 2026-10-09 最新增量：存量引用目录与现有生产入口准入
+
+**试点 MVP，不等同完整 V1；`not_ready`。** 上节尚未证明的“provider-aware 存量引用准入”现完成本地实现与以下限定验证；新 provider 的生产请求工厂和 Settings/readiness 接线仍未完成。HEAD 保持 `041cb6974d20d352e1a5149701fa2e9ab4d4b3e3`，保留未提交工作树，未推送或部署。
+
+| 验收范围 | 已取得证据 | 准确边界 |
+| --- | --- | --- |
+| 当前/历史联系人与未过期终态认证 | 新 scanner 124 passed / exit 0 | Aliyun/OpenBao 独立 claim/pin 目录；JSON 类型保真、未知/缺失/歧义/冲突拒绝、无 autoflush/写入/解密；SQLite 与 PG 编译 |
+| API/CLI 共用的现有准入函数 | 聚焦 18 passed / 15 deselected / exit 0 | required 与 mounted 全 pin 比较，保留所有 mounted DB pin 检查；历史 contact CMK 可读；未接线 OpenBao 和旧工厂不能读的历史 auth CMK 拒绝 |
+| 真实 PostgreSQL 16.15 查询/API 只读角色 | 独立本机空库 44/44 场景通过，exit 0；64 文件摘要稳定 | 6 张合成元数据表；实际非超级用户、SELECT-only、READ ONLY；扫描前后表摘要不变；不是 0181 迁移、正式全 ACL、hosted 门禁或 UAT |
+| 资源终态与审查 | 自有集群 stopped/passed/serverExitCode=0，pid 文件不存在，数据日志保留；独立审查无具体阻断项 | 原生产和业务系统未访问；没有复跑无关已终态套件 |
+
+原始证据在 `artifacts/provider-reference-scan-20261009/`，聚合收据为 `milestone-receipt.json`，真实 PG 收据在其 `local-pg16-checks-zhqbhc2y/` 子目录。聚合收据绑定最终源、文档、仓库安全扫描及 diff 检查；原证据不覆盖或回填。
+
+扫描仅证明所需密钥元数据与独立登记一致，完整 envelope/AAD、canonical context/wrap AAD hash、实际挂载和在线解密仍由各自边界证明。生产接线、真实运行身份/服务/附件/短信、0181 与候选 hosted 门禁、角色/真机主链、保管/恢复/回滚和部署仍待验收；全部试点范围限制继续有效。
+
+
+## 2026-10-09 本批最终接续：请求、启动与就绪入口已接通
+
+当前代码以 [提供方运行入口交接](PROVIDER_RUNTIME_WIRING_20261009.md) 为准，覆盖前文未接线的历史状态。Settings/Compose、认证及联系人 HTTP 工厂、不可变启动快照、完整 binding readiness 与结构 pin gate 已连接；冷导入与联系人真实预检遗漏均已修复。新增/受影响聚焦验证分阶段通过，真实本机 PG16 接线原14项和修复聚焦4项分别通过，源码和停止回执独立留存；未重跑完整终态套件。聚合证据为 `artifacts/provider-runtime-wiring-20261009/milestone-receipt.json`。
+
+**试点 MVP，不等同完整 V1；仍未提交、未上线，`not_ready`。** 真实 Linux 运行身份及只读挂载、Transit/STS/私有 OSS、0181 hosted PG16 完整门禁、真实短信与角色/真机 UAT、恢复保管及部署回滚仍待验收。现有业务范围、角色隐藏与后续迭代清单保持；不因局部通过直接启用生产。

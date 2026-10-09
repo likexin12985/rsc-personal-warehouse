@@ -1,4 +1,8 @@
-"""Exercise real deployment coordination against stateful synthetic Docker only."""
+"""Real coordinator with synthetic Docker and Linux projection metadata.
+
+Projection filesystem admission is tested separately against real temporary
+directories; this harness does not claim a real Linux tmpfs/container proof.
+"""
 import fcntl
 import json
 import os
@@ -56,11 +60,19 @@ def create(name, running):
     image = execution['services'][name]['image']
     assert image.startswith('sha256:'), 'mutation did not use immutable image'
     state['containers'][name] = {'Id':identity,'Image':image,
-        'Config':{'Labels':{'com.docker.compose.project':config['name'],'com.docker.compose.service':name}},
+        'Config':{'Labels':{'com.docker.compose.project':config['name'],'com.docker.compose.service':name},
+            'User':execution['services'][name].get('user','')},
+        'HostConfig':{'GroupAdd':execution['services'][name].get('group_add',[]),
+            'CapDrop':execution['services'][name].get('cap_drop',[]), 'CapAdd':execution['services'][name].get('cap_add',[]),
+            'Privileged':execution['services'][name].get('privileged',False),
+            'SecurityOpt':execution['services'][name].get('security_opt',[])},
         'State':{'Running':running,'Status':'running' if running else 'exited','ExitCode':0},
         'Mounts':[{'Type':'volume','Destination':'/var/lib/postgresql/data',
             'Name':config['volumes']['postgres_data']['name'],
-            'Source':'/var/lib/docker/volumes/synthetic/_data'}] if name=='db' else []}
+            'Source':'/var/lib/docker/volumes/synthetic/_data'}] if name=='db' else [
+                {'Type':'bind','Source':m['source'].replace('$$','$'),'Destination':m['target'],
+                 'RW':not m.get('read_only',False),'Propagation':'rprivate'}
+                for m in execution['services'][name].get('volumes',[]) if m.get('type')=='bind']}
 if stage=='config':
     if os.environ.get('FAKE_ROUNDTRIP_BAD') and execution is not config:
         execution['services']['api']['environment']['OAM_SMS_SCHEME_NAME']='changed-by-reparse'
@@ -121,13 +133,29 @@ class Deployment:
         (self.root/'.env').write_text('# synthetic only\n')
         (self.root/'docker-compose.yml').write_text('# synthetic resolved fixture\n')
         document,_=deployment_document(tmp_path)
+        api = document['services']['api']
+        api.update(user='41001:41001', group_add=['41004'], cap_drop=['ALL'], cap_add=[],
+                   privileged=False, security_opt=['no-new-privileges:true'])
+        api['environment'].update(RSC_OSS_OIDC_PROJECTOR_UID='41003', RSC_OSS_OIDC_SHARED_GID='41004')
+        api['volumes'][1]['bind'] = {'create_host_path': False}
         for name in ('db','api','web'):
             document['services'][name]['build']={'context':str(self.root if name=='db' else self.root/('frontend' if name=='web' else 'backend')), 'dockerfile':'deployment/backup/Postgres.Dockerfile' if name=='db' else 'Dockerfile'}
         document['services']['web']['build']['args']={'RELEASE_PROFILE':'pilot'}
         self.config=tmp_path/'config.json';self.config.write_text(json.dumps(document))
         self.state=tmp_path/'docker-state.json';self.state.write_text(json.dumps({'images':{},'containers':{},'head':''}))
         binary=tmp_path/'bin';binary.mkdir()
-        (binary/'python3').symlink_to(sys.executable)
+        # Production has no mock flag. The test-only interpreter imports the
+        # actual copied entry point and injects the synthetic host boundary.
+        (binary/'python3').write_text(f'#!{sys.executable}\n'
+            'import importlib.util,sys\n'
+            'from pathlib import Path\n'
+            'path=Path(sys.argv[1]);sys.path.insert(0,str(path.parent))\n'
+            'spec=importlib.util.spec_from_file_location("pilot_test_entry",path)\n'
+            'module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)\n'
+            'module.live_directory_metadata=lambda row: {"syntheticLinuxMetadata":row}\n'
+            'sys.argv=sys.argv[1:]\n'
+            'raise SystemExit(module.main())\n')
+        (binary/'python3').chmod(0o700)
         (binary/'docker').write_text(f'#!{sys.executable}\n'+FAKE_DOCKER)
         (binary/'docker').chmod(0o700)
         (binary/'ss').write_text(f'#!{sys.executable}\nimport os,sys\n'

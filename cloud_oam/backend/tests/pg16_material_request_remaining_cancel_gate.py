@@ -43,7 +43,7 @@ def run(engines, *, request_id, actor_id_for_close, directory):
     api, owner = engines['star_oam_api'], engines['star_oam_migrator']
     request_id = UUID(request_id)
     with owner.connect() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261229_0180'
+        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '20261230_0181'
         columns = {k:v for k,v in original_columns(db).items()
                    if not k.startswith('audit_') and not k.startswith('material_request_remaining_cancel')
                    and k != 'material_request_closures'}
@@ -327,7 +327,7 @@ def run(engines, *, request_id, actor_id_for_close, directory):
             assert db.scalar(text("SELECT has_table_privilege('star_oam_api',:name,'SELECT,INSERT')"),{'name':table})
             for privilege in ('UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'):
                 assert not db.scalar(text("SELECT has_table_privilege('star_oam_api',:name,:privilege)"),{'name':table,'privilege':privilege})
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261229_0180'
+        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='20261230_0181'
     from app.formal_services.material_request_closure import close_material_request, closure_command_status
     with Session(api) as db:
         db.execute(text('SET TRANSACTION READ ONLY'))

@@ -1,6 +1,8 @@
 """Real API-role loss seals, commit proofs and observed ledger-lock races."""
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime,timedelta,timezone
+import json
 from threading import Event
 import time
 from unittest.mock import patch
@@ -177,52 +179,151 @@ def generic_key_checks(context,value):
         assert all_facts(owner)==before
 
 
+def generic_probe_diagnostics(owner,kind,phases,pids):
+    """Report only race coordinates and lock state, never SQL or parameters."""
+    evidence={'kind':kind,'phases':dict(phases),'pids':dict(pids)}
+    try:
+        with owner.connect() as observer:
+            observer.execute(text("SET LOCAL statement_timeout = '3s'"))
+            evidence['backends']=[dict(row) for row in observer.execute(text(
+                'SELECT pid,state,wait_event_type,wait_event,pg_blocking_pids(pid) AS blockers '
+                'FROM pg_stat_activity WHERE pid = ANY(:pids) ORDER BY pid'),
+                {'pids':list(pids.values())}).mappings()]
+    except Exception as error:
+        evidence['diagnostic_error_type']=type(error).__name__
+    print('PG16 generic loss-key race: '+json.dumps(evidence,sort_keys=True),flush=True)
+
+
+@contextmanager
+def prepared_generic_key_probe(context,value,kind,*,flush_before_ready=True):
+    """Stage a real probe at the selected INSERT or deferred-fence boundary.
+
+    With flush_before_ready=False, publish the PID before INSERT so a real seal
+    can own the ledger first. The default flushes every immediate guard first;
+    callers must then acquire only an advisory key, never the worker's ledger.
+    The readiness result propagates setup failures. Scope exit abandons a paused
+    worker, and every path rolls back the incomplete probe.
+    """
+    owner,api=(context['engines'][k] for k in ('star_oam_migrator','star_oam_api'))
+    prepared=Future();execute=Event();abandon=Event()
+    phases={'worker':'preparing','leader':'not_started'};pids={}
+
+    def probe():
+        try:
+            with Session(api) as db:
+                try:
+                    db.execute(text("SET LOCAL statement_timeout = '15s'"))
+                    pids['waiter']=db.scalar(text('SELECT pg_backend_pid()'))
+                    if flush_before_ready:
+                        generic_probe(db,context,value,kind)
+                    phases['worker']='prepared' if flush_before_ready else 'awaiting_insert'
+                    prepared.set_result(pids['waiter'])
+                    assert execute.wait(30),'loss key probe was not released after preparation'
+                    if abandon.is_set():return 'abandoned'
+                    if not flush_before_ready:
+                        phases['worker']='inserting'
+                        generic_probe(db,context,value,kind)
+                    phases['worker']='constraint'
+                    try:
+                        db.execute(text('SET CONSTRAINTS trg_'+kind+'_loss_seal_0146 IMMEDIATE'))
+                        return 'allowed'
+                    except DBAPIError as error:
+                        assert error.orig.sqlstate=='23514'
+                        assert '0146 sealed loss key cannot execute' in str(error.orig)
+                        return 'sealed'
+                finally:
+                    db.rollback()
+                    phases['worker']='rolled_back'
+        except BaseException as error:
+            if not prepared.done():prepared.set_exception(error)
+            raise
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future=pool.submit(probe)
+        try:
+            try:prepared.result(timeout=30)
+            except Exception:
+                generic_probe_diagnostics(owner,kind,phases,pids)
+                raise
+            yield future,execute,phases,pids
+        finally:
+            abandon.set()
+            execute.set()
+
+
 def generic_key_races(context,fresh):
-    """Observe exact advisory blockers and prove unrelated probes stay free."""
+    """Prove the current insert barrier and the distinct 0146 advisory fence."""
     owner,api=(context['engines'][k] for k in ('star_oam_migrator','star_oam_api'))
 
-    def probe(value,kind,ready,pids):
-        with Session(api) as db:
-            db.execute(text("SET LOCAL statement_timeout = '15s'"))
-            pids['waiter']=db.scalar(text('SELECT pg_backend_pid()'))
-            generic_probe(db,context,value,kind)
-            ready.set()
-            try:
-                db.execute(text('SET CONSTRAINTS trg_'+kind+'_loss_seal_0146 IMMEDIATE'))
-                return 'allowed'
-            except DBAPIError as error:
-                assert error.orig.sqlstate=='23514'
-                assert '0146 sealed loss key cannot execute' in str(error.orig)
-                return 'sealed'
-            finally:db.rollback()
-
     for kind in ('shipments','receipts'):
-        before=all_facts(owner)
-        with ThreadPoolExecutor(max_workers=1) as pool,Session(api) as leader:
-            posting._lock_inventory_ledger_head_for_atomic_batch(leader)
-            try:
-                # Must finish while the ledger is still held, not after release.
-                future=pool.submit(probe,fresh(),kind,Event(),{})
-                assert future.result(timeout=10)=='allowed'
-            finally:leader.rollback()
-        assert all_facts(owner)==before
+        # 0167 requires these INSERTs to own the ledger. After preparation the
+        # worker owns that row, so this isolated fence holder takes ONLY a key
+        # advisory lock: it must never ask for the ledger or create a seal.
+        for same_key in (False,True):
+            value=fresh();before=all_facts(owner)
+            with prepared_generic_key_probe(context,value,kind) as (future,execute,phases,pids):
+                with Session(api) as leader:
+                    try:
+                        leader.execute(text("SET LOCAL lock_timeout = '10s'"))
+                        leader.execute(text("SET LOCAL statement_timeout = '15s'"))
+                        pids['leader']=leader.scalar(text('SELECT pg_backend_pid()'))
+                        phases['leader']='advisory_lock'
+                        key=posting._storage_hash(value.idempotency_key if same_key else uuid4().hex)
+                        leader.execute(text('SELECT pg_advisory_xact_lock(hashtextextended(:key,0))'),
+                            {'key':'cloud_oam.loss_request_key.v1:'+key})
+                        phases['leader']='advisory_held'
+                        execute.set()
+                        if same_key:
+                            wait_blocked(owner,pids['leader'],execute,pids,future)
+                            with owner.connect() as observer:
+                                assert observer.scalar(text("SELECT count(*) FROM pg_locks WHERE pid=:pid "
+                                    "AND locktype='advisory' AND NOT granted"),dict(pid=pids['waiter']))==1
+                        else:
+                            # Different keys must finish while the other key
+                            # remains held; the 10-second assertion is unchanged.
+                            assert future.result(timeout=10)=='allowed'
+                    except Exception:
+                        generic_probe_diagnostics(owner,kind,phases,pids)
+                        raise
+                    finally:leader.rollback()
+                try:assert future.result(timeout=20)=='allowed'
+                except Exception:
+                    generic_probe_diagnostics(owner,kind,phases,pids)
+                    raise
+            assert all_facts(owner)==before
 
-        value=fresh();before=stock_facts(owner);ready=Event();pids={}
-        with ThreadPoolExecutor(max_workers=1) as pool,Session(api) as leader:
-            seals.seal_loss_request(leader,actor=load_formal_principal(leader,context['engineer_id']),
-                request=request(context,value))
-            # Acquire the seal's exact key lock before dispatching the waiter.
-            leader.execute(text('SET CONSTRAINTS trg_stock_loss_request_seals_loss_seal_0146 IMMEDIATE'))
-            pid=leader.scalar(text('SELECT pg_backend_pid()'))
-            future=pool.submit(probe,value,kind,ready,pids)
-            try:
-                wait_blocked(owner,pid,ready,pids,future)
-                with owner.connect() as observer:
-                    assert observer.scalar(text("SELECT count(*) FROM pg_locks WHERE pid=:pid "
-                        "AND locktype='advisory' AND NOT granted"),dict(pid=pids['waiter']))==1
-                leader.commit()
-            finally:leader.rollback()
-            assert future.result(timeout=20)=='sealed'
+        value=fresh();before=stock_facts(owner)
+        # Publish PID before raw INSERT. The actual seal owns the ledger first;
+        # the current immediate 0167 barrier must block INSERT until COMMIT.
+        with prepared_generic_key_probe(context,value,kind,flush_before_ready=False) as (future,execute,phases,pids):
+            with Session(api) as leader:
+                try:
+                    leader.execute(text("SET LOCAL lock_timeout = '10s'"))
+                    leader.execute(text("SET LOCAL statement_timeout = '15s'"))
+                    pids['leader']=leader.scalar(text('SELECT pg_backend_pid()'))
+                    phases['leader']='sealing'
+                    seals.seal_loss_request(leader,actor=load_formal_principal(leader,context['engineer_id']),
+                        request=request(context,value))
+                    leader.execute(text('SET CONSTRAINTS trg_stock_loss_request_seals_loss_seal_0146 IMMEDIATE'))
+                    phases['leader']='seal_and_ledger_held'
+                    execute.set()
+                    wait_blocked(owner,pids['leader'],execute,pids,future)
+                    assert phases['worker']=='inserting'
+                    with owner.connect() as observer:
+                        assert observer.scalar(text("SELECT count(*) FROM pg_locks WHERE pid=:pid "
+                            "AND locktype='advisory' AND NOT granted"),dict(pid=pids['waiter']))==0
+                        assert observer.scalar(text("SELECT count(*) FROM pg_locks WHERE pid=:pid "
+                            "AND locktype='transactionid' AND NOT granted"),dict(pid=pids['waiter']))==1
+                    leader.commit()
+                    phases['leader']='committed'
+                except Exception:
+                    generic_probe_diagnostics(owner,kind,phases,pids)
+                    raise
+                finally:leader.rollback()
+            try:assert future.result(timeout=20)=='sealed'
+            except Exception:
+                generic_probe_diagnostics(owner,kind,phases,pids)
+                raise
         assert stock_facts(owner)==before
         with Session(api) as db:
             assert db.scalar(select(Seal.id).where(Seal.request_id==value.request_id)) is not None

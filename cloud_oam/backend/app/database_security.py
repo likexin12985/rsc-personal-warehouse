@@ -4830,6 +4830,8 @@ from . import return_receipt_routing_security as _return_receipt_routing_catalog
 _return_receipt_routing_catalog.overlay(_stock_scrap_readiness)
 from . import key_provider_readiness_security as _key_provider_readiness_catalog
 _key_provider_readiness_catalog.overlay(_stock_scrap_readiness)
+from . import material_request_contact_envelope_security as _contact_envelope_catalog
+_contact_envelope_catalog.overlay(_stock_scrap_readiness)
 _stock_scrap_catalog.register(globals())
 _stock_scrap_readiness.register(globals())
 from . import return_condition_security as _condition_catalog
@@ -4855,6 +4857,7 @@ _key_provider_binding_catalog.register(globals())
 _supply_allocation_catalog.register(globals())
 _supply_capacity_catalog.register(globals())
 _return_receipt_routing_catalog.register(globals())
+_contact_envelope_catalog.register(globals())
 
 _ROLE_EVIDENCE_SQL = text(
     """

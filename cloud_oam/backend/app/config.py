@@ -5,7 +5,7 @@ import os
 import re
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     auth_idempotency_ttl_seconds: int = Field(default=90, ge=30, le=120)
     auth_idempotency_hmac_secret: str = ""
     auth_idempotency_encryption_provider: Literal[
-        "disabled", "aliyun_kms"
+        "disabled", "aliyun_kms", "openbao_transit_v1"
     ] = "disabled"
     auth_idempotency_kms_key_id: str = ""
     auth_idempotency_encryption_key_version: int = Field(
@@ -102,6 +102,18 @@ class Settings(BaseSettings):
     kms_endpoint: str = ""
     kms_region: str = ""
     kms_encrypted_data_key_registry_path: str = ""
+    # OpenBao is selected explicitly per purpose. These are public runtime
+    # coordinates only: the registry contains encrypted keys and the token is
+    # separately projected read-only. Configuration is not runtime evidence.
+    openbao_provider_instance_id: str = ""
+    openbao_encrypted_data_key_registry_path: str = ""
+    openbao_socket_path: str = ""
+    openbao_token_file: str = ""
+    openbao_api_uid: int = 0
+    openbao_bao_uid: int = 0
+    openbao_bao_gid: int = 0
+    openbao_shared_gid: int = 0
+    openbao_token_projector_uid: int = 0
     kms_readiness_success_ttl_seconds: int = Field(default=60, ge=30, le=300)
     kms_readiness_failure_ttl_seconds: int = Field(default=10, ge=1, le=30)
     # Health first spends at most 2.5s on its isolated PostgreSQL probe.  Keep
@@ -137,7 +149,7 @@ class Settings(BaseSettings):
         default=1, ge=1, le=2_147_483_647
     )
     material_request_contact_encryption_provider: Literal[
-        "disabled", "aliyun_kms"
+        "disabled", "aliyun_kms", "openbao_transit_v1"
     ] = "disabled"
     material_request_contact_kms_key_id: str = ""
     material_request_contact_encryption_key_version: int = Field(
@@ -149,14 +161,20 @@ class Settings(BaseSettings):
     stocktake_writes_enabled: bool = False
     stocktake_idempotency_hmac_secret: str = ""
     # Formal attachments use private OSS through short V4 presigned requests.
-    # Credentials are resolved only by the SDK environment provider; there are
-    # deliberately no OSS access-key settings in this application model.
+    # OIDC uses explicit reviewed coordinates and a read-only token projection.
+    # The older environment path remains explicit for legacy compatibility;
+    # it is never a fallback after an OIDC resolution failure.
     file_storage_enabled: bool = False
     inventory_report_export_enabled: bool = False
     opening_count_import_enabled: bool = False
     file_storage_provider: Literal["disabled", "aliyun_oss_v2"] = "disabled"
     file_storage_region: str = ""
     file_storage_bucket: str = ""
+    file_storage_credential_mode: Literal["environment", "oidc_role_arn"] = "environment"
+    file_storage_oidc_role_arn: str = ""
+    file_storage_oidc_provider_arn: str = ""
+    file_storage_oidc_token_file: str = ""
+    file_storage_oidc_session_name: str = "rsc-pilot-files"
     file_upload_intent_ttl_seconds: int = Field(default=600, ge=60, le=900)
     file_download_intent_ttl_seconds: int = Field(default=300, ge=30, le=600)
     file_idempotency_hmac_secret: str = ""
@@ -226,6 +244,20 @@ class Settings(BaseSettings):
         le=32 * 1024 * 1024,
     )
     edge_sync_max_records_per_batch: int = Field(default=500, ge=1, le=1000)
+
+    @field_validator(
+        "openbao_api_uid", "openbao_bao_uid", "openbao_bao_gid",
+        "openbao_shared_gid", "openbao_token_projector_uid", mode="before",
+    )
+    @classmethod
+    def validate_openbao_identity_types(cls, value: object) -> object:
+        # Accept canonical decimal environment strings, but do not let
+        # Pydantic turn True or 1.0 into a reviewed operating-system identity.
+        if type(value) is int or (
+            type(value) is str and re.fullmatch(r"0|[1-9][0-9]*", value)
+        ):
+            return value
+        raise ValueError("OpenBao runtime identities must be integers")
 
     @model_validator(mode="after")
     def validate_runtime_security_boundary(self) -> "Settings":
@@ -407,8 +439,8 @@ class Settings(BaseSettings):
             )
         if not self.authentication_idempotency_kms_configuration_ready():
             errors.append(
-                "production API requires the aliyun_kms authentication "
-                "idempotency encryption provider and a non-placeholder KMS key ID"
+                "production API requires configured aliyun_kms authentication "
+                "idempotency encryption or an openbao_transit_v1 provider"
             )
         if self.material_request_writes_enabled:
             if not _is_configured_secret(
@@ -429,12 +461,14 @@ class Settings(BaseSettings):
                 )
             if not self.material_request_contact_kms_configuration_ready():
                 errors.append(
-                    "enabled production material-request writes require the "
-                    "aliyun_kms contact encryption provider and a non-placeholder "
-                    "KMS key ID"
+                    "enabled production material-request writes require a "
+                    "configured aliyun_kms contact encryption or an "
+                    "openbao_transit_v1 provider"
                 )
             if (
-                self.material_request_contact_kms_key_id.strip()
+                self.auth_idempotency_encryption_provider == "aliyun_kms"
+                and self.material_request_contact_encryption_provider == "aliyun_kms"
+                and self.material_request_contact_kms_key_id.strip()
                 and self.material_request_contact_kms_key_id.strip()
                 == self.auth_idempotency_kms_key_id.strip()
             ):
@@ -605,16 +639,20 @@ class Settings(BaseSettings):
         return False
 
     def authentication_idempotency_kms_configuration_ready(self) -> bool:
-        """Return whether formal authentication replay encryption is KMS-bound."""
+        """Validate explicit replay-encryption provider coordinates only."""
 
+        if self.auth_idempotency_encryption_provider == "openbao_transit_v1":
+            return self.openbao_configuration_ready()
         return (
             self.auth_idempotency_encryption_provider == "aliyun_kms"
             and _is_configured_secret(self.auth_idempotency_kms_key_id, min_length=3)
         )
 
     def material_request_contact_kms_configuration_ready(self) -> bool:
-        """Return whether the write-only contact envelope is KMS-bound."""
+        """Validate explicit contact-encryption provider coordinates only."""
 
+        if self.material_request_contact_encryption_provider == "openbao_transit_v1":
+            return self.openbao_configuration_ready()
         return (
             self.material_request_contact_encryption_provider == "aliyun_kms"
             and _is_configured_secret(
@@ -622,6 +660,39 @@ class Settings(BaseSettings):
                 min_length=3,
             )
         )
+
+    def openbao_configuration_ready(self) -> bool:
+        """Validate shared coordinates without reading files or proving readiness.
+
+        Exact active and historical versions come from reviewed provider claims
+        at the composition boundary, never from a second settings allowlist.
+        The fixed version here only exercises the shared structural validator.
+        """
+
+        from .openbao_settings import OpenBaoProductionSettings
+
+        if not all(_is_configured_secret(value) for value in (
+            self.openbao_provider_instance_id,
+            self.openbao_encrypted_data_key_registry_path,
+            self.openbao_socket_path,
+            self.openbao_token_file,
+        )):
+            return False
+        return OpenBaoProductionSettings(
+            enabled=True,
+            environment=self.environment,
+            provider_instance_id=self.openbao_provider_instance_id,
+            registry_path=self.openbao_encrypted_data_key_registry_path,
+            socket_path=self.openbao_socket_path,
+            token_file=self.openbao_token_file,
+            api_uid=self.openbao_api_uid,
+            bao_uid=self.openbao_bao_uid,
+            bao_gid=self.openbao_bao_gid,
+            shared_gid=self.openbao_shared_gid,
+            token_projector_uid=self.openbao_token_projector_uid,
+            application_key_versions=(1,),
+            active_application_key_version=1,
+        ).is_complete()
 
     def kms_envelope_configuration_ready(self) -> bool:
         """Return whether ciphertext-only KMS runtime coordinates are present."""
@@ -651,11 +722,32 @@ class Settings(BaseSettings):
             and self.file_storage_provider == "aliyun_oss_v2"
             and OSS_REGION_PATTERN.fullmatch(region) is not None
             and OSS_BUCKET_PATTERN.fullmatch(bucket) is not None
+            and self.file_storage_identity_configuration_ready()
             and _is_configured_secret(
                 self.file_idempotency_hmac_secret,
                 min_length=32,
             )
         )
+
+    def file_storage_identity_configuration_ready(self) -> bool:
+        """Validate coordinates only; this does not prove a live cloud identity."""
+
+        if self.file_storage_credential_mode == "environment":
+            return not any((self.file_storage_oidc_role_arn,
+                            self.file_storage_oidc_provider_arn,
+                            self.file_storage_oidc_token_file))
+        if self.file_storage_credential_mode != "oidc_role_arn":
+            return False
+        from .oss_runtime_credentials import OssOidcIdentity, OssRuntimeCredentialUnavailable
+        try:
+            OssOidcIdentity(role_arn=self.file_storage_oidc_role_arn,
+                            provider_arn=self.file_storage_oidc_provider_arn,
+                            token_file=self.file_storage_oidc_token_file,
+                            region=self.file_storage_region.strip(),
+                            session_name=self.file_storage_oidc_session_name)
+        except OssRuntimeCredentialUnavailable:
+            return False
+        return True
 
     def edge_sync_allowed_source_set(self) -> set[str]:
         return {

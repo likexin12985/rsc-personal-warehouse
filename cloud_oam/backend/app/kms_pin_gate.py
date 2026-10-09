@@ -2,8 +2,10 @@
 
 The command never inserts, updates, or deletes a pin.  ``--plan`` emits only
 non-secret coordinates and SHA-256 fingerprints for two-person review.  The
-default command reuses the API's exact structural/persisted-reference proof and
-returns a fixed, desensitized failure when provisioning is incomplete.
+default command reuses the API's exact structural/persisted-reference proof.
+Success establishes structural binding only, not live provider availability or
+release approval. The legacy ``--plan`` format covers Aliyun only and rejects
+every OpenBao declaration before opening a registry or database.
 """
 
 from __future__ import annotations
@@ -15,11 +17,20 @@ import sys
 from typing import Sequence
 
 from .config import get_settings
-from .database import SessionLocal
+from .database import SessionLocal, engine
+from .database_security import validate_production_database_security
 from .production_adapters import (
     get_configured_kms_loader,
-    validate_persisted_kms_key_references,
     validate_production_adapter_installation,
+)
+from .production_key_runtime import build_production_key_runtime
+
+
+_OPENBAO_DECLARATION_FIELDS = (
+    "openbao_provider_instance_id", "openbao_encrypted_data_key_registry_path",
+    "openbao_socket_path", "openbao_token_file", "openbao_api_uid",
+    "openbao_bao_uid", "openbao_bao_gid", "openbao_shared_gid",
+    "openbao_token_projector_uid",
 )
 
 
@@ -27,6 +38,12 @@ def _plan_document() -> dict[str, object]:
     settings = get_settings()
     if settings.environment != "production":
         raise RuntimeError("KMS pin planning is production-only")
+    if (
+        getattr(settings, "auth_idempotency_encryption_provider", None) == "openbao_transit_v1"
+        or getattr(settings, "material_request_contact_encryption_provider", None) == "openbao_transit_v1"
+        or any(getattr(settings, name, None) for name in _OPENBAO_DECLARATION_FIELDS)
+    ):
+        raise RuntimeError("legacy KMS pin plan cannot attest OpenBao declarations")
     # Keep planning database-free, but reject a registry that cannot satisfy
     # the exact active production coordinates before people sign its digest.
     validate_production_adapter_installation(settings)
@@ -58,9 +75,13 @@ def _verify() -> None:
     settings = get_settings()
     if settings.environment != "production":
         raise RuntimeError("KMS pin gate is production-only")
-    validate_production_adapter_installation(settings)
+    validate_production_database_security(
+        engine,
+        expected_runtime_role=settings.database_expected_runtime_role,
+        expected_migration_role=settings.database_expected_migration_role,
+    )
     with SessionLocal() as db:
-        validate_persisted_kms_key_references(db, settings)
+        build_production_key_runtime(db, settings)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -83,7 +104,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         else:
             _verify()
-            print("kms-pin-gate: ready")
+            print("kms-pin-gate: structural ready; provider decrypt and release approval not verified")
     except Exception:
         print("kms-pin-gate: not ready", file=sys.stderr)
         return 1

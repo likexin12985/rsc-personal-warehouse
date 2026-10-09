@@ -34,7 +34,7 @@ def run(engines, *, return_id, directory, mixed_split=False):
     return_id = UUID(return_id)
     from app import material_request_rejection_receipt_security as catalog
     with owner.connect() as db:
-        assert db.scalar(text('SELECT version_num FROM public.alembic_version'))=='20261229_0180'
+        assert db.scalar(text('SELECT version_num FROM public.alembic_version'))=='20261230_0181'
         catalog.verify(db)
     token = 'native-warehouse-' + uuid4().hex
     with Session(api) as db:

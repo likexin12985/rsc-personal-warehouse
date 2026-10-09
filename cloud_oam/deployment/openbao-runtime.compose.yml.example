@@ -1,0 +1,44 @@
+# Requires Docker Compose >= 2.24.4 for exact security-list replacement.
+# DRAFT: only after the external Bao container and host directories are
+# independently verified. This does not provision/start Bao or the Agent.
+# The complete 64-hex container ID is mandatory; never use a name/host PID.
+x-rsc-openbao-runtime: &rsc-openbao-runtime
+  user: ${RSC_API_UID:?reviewed API uid required}:${RSC_API_GID:?reviewed API gid required}
+  pid: container:${RSC_OPENBAO_CONTAINER_ID:?reviewed full Bao container ID required}
+  cap_drop: !override [ALL]
+  cap_add: !override []
+  privileged: false
+  security_opt: !override ["no-new-privileges:true"]
+  group_add:
+    - ${OAM_OPENBAO_SHARED_GID:?reviewed shared read group required}
+  environment:
+    RSC_OPENBAO_CONTAINER_ID: ${RSC_OPENBAO_CONTAINER_ID:?reviewed full Bao container ID required}
+    RSC_OPENBAO_IMAGE_ID: ${RSC_OPENBAO_IMAGE_ID:?reviewed immutable Bao image ID required}
+    OAM_OPENBAO_API_UID: ${RSC_API_UID:?reviewed API uid required}
+    OAM_OPENBAO_ENCRYPTED_DATA_KEY_REGISTRY_PATH: /run/rsc-bao-registry/registry.json
+    OAM_OPENBAO_SOCKET_PATH: /run/rsc-bao/api.sock
+    OAM_OPENBAO_TOKEN_FILE: /run/rsc-bao-token/api.token
+  volumes:
+    - type: bind
+      source: ${RSC_OPENBAO_REGISTRY_HOST_DIR:?reviewed private wrapped registry directory required}
+      target: /run/rsc-bao-registry
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${RSC_OPENBAO_SOCKET_HOST_DIR:?reviewed Bao tmpfs socket directory required}
+      target: /run/rsc-bao
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${RSC_OPENBAO_TOKEN_HOST_DIR:?reviewed Agent tmpfs token directory required}
+      target: /run/rsc-bao-token
+      read_only: true
+      bind:
+        create_host_path: false
+services:
+  api:
+    <<: *rsc-openbao-runtime
+  kms-pin-gate:
+    <<: *rsc-openbao-runtime

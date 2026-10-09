@@ -358,7 +358,32 @@ def test_failures_close_all_fds_and_have_no_raw_exception_chain(private_director
     assert str(path) not in str(caught.value)
 
 
-def test_production_composition_has_not_registered_file_candidate():
-    app = Path(__file__).resolve().parents[1] / "app"
-    for filename in ("config.py", "production_adapters.py", "kms_readiness.py", "kms_pin_gate.py"):
-        assert "openbao_registry_candidate" not in (app / filename).read_text()
+def test_file_candidate_requires_explicit_inputs_and_provider_defaults_stay_disabled():
+    import ast
+    import inspect
+    from app.config import Settings
+
+    for field in (
+        "auth_idempotency_encryption_provider",
+        "material_request_contact_encryption_provider",
+    ):
+        assert Settings.model_fields[field].default == "disabled"
+    parameters = inspect.signature(registry.load_openbao_registry_candidate).parameters
+    for field in (
+        "registry_path", "environment", "provider_instance_id", "reviewed_pins", "transport",
+    ):
+        assert parameters[field].default is inspect.Parameter.empty
+        assert parameters[field].kind is inspect.Parameter.KEYWORD_ONLY
+    source = inspect.getsource(registry)
+    imported = {
+        alias.name.split(".")[0]
+        for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        (node.module or "").split(".")[0]
+        for node in ast.walk(ast.parse(source)) if isinstance(node, ast.ImportFrom)
+    }
+    assert not imported.intersection({
+        "socket", "http", "requests", "httpx", "config", "database", "sqlalchemy",
+        "production_adapters", "production_key_runtime", "openbao_runtime_transport",
+    })

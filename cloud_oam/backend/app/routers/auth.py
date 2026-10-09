@@ -313,19 +313,26 @@ def _consume_formal_login_rate_limits(
 
 
 def _configured_authentication_response_cipher(
+    request: Request,
 ) -> Aes256GcmAuthenticationResponseCipher:
-    """Return one request-scoped, ciphertext-registry-backed KMS cipher."""
+    """Use the startup-reviewed key catalog without opening a DB transaction."""
 
-    return create_production_authentication_cipher(settings)
+    key_runtime = getattr(request.app.state, "provider_key_runtime", None)
+    if _production() and key_runtime is None:
+        raise AuthenticationEncryptionKeyUnavailable(
+            "authentication encryption key is unavailable"
+        )
+    return create_production_authentication_cipher(settings, key_runtime=key_runtime)
 
 
 def _preflight_formal_authentication_encryption(
     db: Session,
+    request: Request,
 ) -> Aes256GcmAuthenticationResponseCipher:
     """Resolve and return one cipher before any provider or write side effect."""
 
     try:
-        cipher = _configured_authentication_response_cipher()
+        cipher = _configured_authentication_response_cipher(request)
         cipher.active_key_version()
     except (AuthenticationIdempotencyError, AuthenticationEncryptionKeyUnavailable) as exc:
         _raise_authentication_encryption_unavailable(db, exc)
@@ -373,7 +380,7 @@ def _begin_formal_authentication_write(
     idempotency_key = _formal_idempotency_key(request)
     now = datetime.now(timezone.utc)
     try:
-        cipher = preflight_cipher or _configured_authentication_response_cipher()
+        cipher = preflight_cipher or _configured_authentication_response_cipher(request)
         # A fresh begin does not encrypt yet.  Resolve the active version before
         # any challenge/provider/session mutation so KMS loss fails closed.
         cipher.active_key_version()
@@ -1160,7 +1167,7 @@ def _request_formal_sms_code(
     # Provider-managed verification can spend a paid SMS before login.  Prove
     # that terminal authentication responses can be sealed first; no challenge,
     # audit or provider mutation is allowed when KMS is unavailable.
-    _preflight_formal_authentication_encryption(db)
+    _preflight_formal_authentication_encryption(db, request)
     mobile_hash = _formal_mobile_hash(mobile)
     dispatch_request_profile_sha256 = sms_dispatch_request_profile_sha256(
         mobile_hash=mobile_hash
@@ -1980,7 +1987,7 @@ def login_with_sms_code(
             scope=scope,
             request_document=request_document,
         )
-        cipher = _preflight_formal_authentication_encryption(db)
+        cipher = _preflight_formal_authentication_encryption(db, request)
         if not existing_operation:
             _consume_formal_login_rate_limits(
                 db,
@@ -2067,7 +2074,7 @@ def miniprogram_sms_login(
             scope=scope,
             request_document=request_document,
         )
-        cipher = _preflight_formal_authentication_encryption(db)
+        cipher = _preflight_formal_authentication_encryption(db, request)
         if not existing_operation:
             _consume_formal_login_rate_limits(
                 db,
@@ -2168,7 +2175,7 @@ def miniprogram_wechat_login(
             scope=scope,
             request_document=request_document,
         )
-        cipher = _preflight_formal_authentication_encryption(db)
+        cipher = _preflight_formal_authentication_encryption(db, request)
         if not existing_operation:
             _consume_formal_login_rate_limits(
                 db,

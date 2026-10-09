@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import Annotated
 from uuid import UUID
 
@@ -24,10 +23,10 @@ from ..formal_file_schemas import (
 )
 from ..formal_services import formal_files as file_service
 from ..formal_services.file_storage import (
-    AliyunOssV2StorageAdapter,
     FileStorageAdapter,
     FileStorageError,
 )
+from ..file_storage_composition import create_file_storage_adapter
 
 
 router = APIRouter(prefix="/v1/files", tags=["formal-files"])
@@ -39,32 +38,12 @@ _SAFETY_HEADERS = {
 }
 
 
-@lru_cache(maxsize=8)
-def _production_storage_adapter(
-    provider: str,
-    region: str,
-    bucket: str,
-) -> FileStorageAdapter | None:
-    if provider != "aliyun_oss_v2":
-        return None
-    try:
-        return AliyunOssV2StorageAdapter(region=region, bucket=bucket)
-    except FileStorageError:
-        return None
-
-
 def get_formal_file_storage_adapter(
     runtime_settings: Settings = Depends(get_settings),
 ) -> FileStorageAdapter | None:
     """Deployment composition point; disabled/misconfigured means no adapter."""
 
-    if not runtime_settings.file_storage_configuration_ready():
-        return None
-    return _production_storage_adapter(
-        runtime_settings.file_storage_provider,
-        runtime_settings.file_storage_region.strip(),
-        runtime_settings.file_storage_bucket.strip(),
-    )
+    return create_file_storage_adapter(runtime_settings)
 
 
 @router.post(

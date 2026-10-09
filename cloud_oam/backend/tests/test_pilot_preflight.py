@@ -139,12 +139,17 @@ def _document(tmp_path: Path) -> tuple[dict, Path]:
             "OAM_FILE_STORAGE_PROVIDER": "aliyun_oss_v2",
             "OAM_FILE_STORAGE_REGION": "cn-shanghai",
             "OAM_FILE_STORAGE_BUCKET": "rsc-private-pilot",
+            "OAM_FILE_STORAGE_CREDENTIAL_MODE": "oidc_role_arn",
+            "OAM_FILE_STORAGE_OIDC_ROLE_ARN": "acs:ram::1234567890123456:role/rsc-files",
+            "OAM_FILE_STORAGE_OIDC_PROVIDER_ARN": "acs:ram::1234567890123456:oidc-provider/rsc-pilot",
+            "OAM_FILE_STORAGE_OIDC_TOKEN_FILE": "/run/rsc-identity/files/oidc.jwt",
             "OAM_TRUSTED_PROXY_IPS": "172.18.0.4",
             "OAM_KMS_ENDPOINT": "kms.cn-shanghai.aliyuncs.com",
             "OAM_KMS_REGION": "cn-shanghai",
             "OAM_KMS_ENCRYPTED_DATA_KEY_REGISTRY_PATH": str(registry),
         },
-        "volumes": [{"type": "bind", "source": str(registry), "target": str(registry), "read_only": True}],
+        "volumes": [{"type": "bind", "source": str(registry), "target": str(registry), "read_only": True},
+                    {"type": "bind", "source": "/run/rsc-identity/files", "target": "/run/rsc-identity/files", "read_only": True}],
         "networks": {"backend": {"ipv4_address": "172.18.0.4"}},
     }
     document = {

@@ -18,7 +18,7 @@ from __future__ import annotations
 import base64
 import binascii
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from functools import lru_cache
 import hashlib
 import json
@@ -27,12 +27,11 @@ import re
 import threading
 from typing import Any, Callable, Final, Mapping, Protocol
 
-from sqlalchemy import select, union
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import Settings
 from .aliyun_sdk_logging import silence_aliyun_sdk_loggers as _silence_aliyun_sdk_loggers
-from .demand_models import MaterialRequest, MaterialRequestRevision
 from .formal_services.authentication_idempotency import (
     Aes256GcmAuthenticationResponseCipher,
     AuthenticationEncryptionKeyUnavailable,
@@ -40,7 +39,10 @@ from .formal_services.authentication_idempotency import (
     create_authentication_response_cipher,
     create_configured_authentication_response_cipher,
 )
-from .foundation_models import AuthIdempotencyOperation, KmsDataKeyPin
+from .foundation_models import KmsDataKeyPin
+from .persisted_key_references import (
+    PersistedKeyReferenceUnavailable, scan_persisted_key_references,
+)
 
 
 REGISTRY_SCHEMA: Final[str] = "rsc.kms.encrypted-data-key-registry.v1"
@@ -382,9 +384,17 @@ def get_configured_kms_loader(settings: Settings) -> AliyunKmsEnvelopeKeyLoader:
 
 def create_production_authentication_cipher(
     settings: Settings,
+    *, key_runtime=None,
 ) -> Aes256GcmAuthenticationResponseCipher:
     """Create one request-scoped authentication cipher."""
 
+    if key_runtime is not None:
+        from .production_key_runtime import ProviderKeyRuntime
+        if type(key_runtime) is not ProviderKeyRuntime:
+            raise AuthenticationEncryptionKeyUnavailable("authentication encryption key is unavailable")
+        return key_runtime.authentication_cipher(settings)
+    if settings.auth_idempotency_encryption_provider != "aliyun_kms":
+        raise AuthenticationEncryptionKeyUnavailable("authentication encryption key is unavailable")
     try:
         loader = get_configured_kms_loader(settings)
         return create_configured_authentication_response_cipher(
@@ -405,9 +415,17 @@ def create_production_authentication_cipher(
 
 def create_production_material_request_contact_cipher(
     settings: Settings,
+    *, key_runtime=None,
 ) -> _MaterialRequestContactCipherRing:
     """Create one request-scoped contact cipher with its independent key."""
 
+    if key_runtime is not None:
+        from .production_key_runtime import ProviderKeyRuntime
+        if type(key_runtime) is not ProviderKeyRuntime:
+            raise AuthenticationEncryptionKeyUnavailable("material request contact encryption key is unavailable")
+        return key_runtime.contact_cipher(settings)
+    if settings.material_request_contact_encryption_provider != "aliyun_kms":
+        raise AuthenticationEncryptionKeyUnavailable("material request contact encryption key is unavailable")
     try:
         loader = get_configured_kms_loader(settings)
         return _MaterialRequestContactCipherRing(
@@ -543,105 +561,61 @@ def validate_persisted_kms_key_references(
     *,
     now: datetime | None = None,
 ) -> frozenset[tuple[str, str, int]]:
-    """Prove every still-decryptable database envelope has a registry key.
+    """Admit only references that the currently deployed Aliyun route can read.
 
     Authentication replay evidence needs its historical data key only while
     its short replay window is live.  Material-request contact envelopes are
     durable business records, so every version referenced by either the
     current projection or an immutable revision remains required indefinitely
     until a separately audited re-encryption migration proves otherwise.
-    Only key coordinates are selected; ciphertext and contact data never cross
-    this startup boundary.
+    Provider ownership comes from immutable claims, never the active setting.
+    This retained Aliyun-only helper rejects OpenBao references. The production
+    API/CLI now use build_production_key_runtime for provider-aware admission.
+    Only key metadata is selected; ciphertext and contact data never cross
+    this startup boundary. Mounted material still needs the independent pins.
     """
 
     if settings.environment != "production":
         return frozenset()
-    checked_now = now or datetime.now(timezone.utc)
-    if checked_now.tzinfo is None or checked_now.utcoffset() is None:
-        raise ProductionAdapterConfigurationError(
-            "KMS persisted-reference validation time is invalid"
+    catalog = None
+    try:
+        catalog = scan_persisted_key_references(
+            db, environment=settings.environment, now=now,
         )
-    loader = get_configured_kms_loader(settings)
-    auth_versions = set(
-        db.scalars(
-            select(AuthIdempotencyOperation.encryption_key_version)
-            .where(
-                AuthIdempotencyOperation.status.in_(("completed", "failed")),
-                AuthIdempotencyOperation.expires_at > checked_now,
-                AuthIdempotencyOperation.encryption_key_version.is_not(None),
-            )
-            .distinct()
-        )
-    )
-    contact_coordinates = set(
-        db.execute(
-            union(
-                select(
-                    MaterialRequest.contact_snapshot_jsonb["kms_key_id"]
-                    .as_string()
-                    .label("kms_key_id"),
-                    MaterialRequest.contact_snapshot_jsonb["key_version"]
-                    .as_integer()
-                    .label("key_version"),
-                ),
-                select(
-                    MaterialRequestRevision.contact_snapshot_jsonb["kms_key_id"]
-                    .as_string()
-                    .label("kms_key_id"),
-                    MaterialRequestRevision.contact_snapshot_jsonb["key_version"]
-                    .as_integer()
-                    .label("key_version"),
-                ),
-            )
-        ).all()
-    )
-
-    missing: list[tuple[str, str, object]] = []
-    required_coordinates = set(_active_coordinates(settings))
-    for version in auth_versions:
-        try:
-            coordinate = _coordinate(
-                AUTHENTICATION_PURPOSE,
-                settings.auth_idempotency_kms_key_id,
-                version,
-            )
-        except ProductionAdapterConfigurationError:
-            missing.append(
-                (
-                    AUTHENTICATION_PURPOSE,
-                    settings.auth_idempotency_kms_key_id,
-                    version,
-                )
-            )
-            continue
-        if not loader.has_entry(*coordinate):
-            missing.append(coordinate)
-        else:
-            required_coordinates.add(coordinate)
-
-    for key_id, version in contact_coordinates:
-        try:
-            coordinate = _coordinate(
-                MATERIAL_REQUEST_CONTACT_PURPOSE,
-                key_id,
-                version,
-            )
-        except ProductionAdapterConfigurationError:
-            missing.append((MATERIAL_REQUEST_CONTACT_PURPOSE, str(key_id), version))
-            continue
-        if not loader.has_entry(*coordinate):
-            missing.append(coordinate)
-        else:
-            required_coordinates.add(coordinate)
-    if missing:
+    except PersistedKeyReferenceUnavailable:
+        pass
+    if catalog is None or catalog.openbao:
+        # This compatibility helper remains explicitly Aliyun only; production
+        # startup uses the separately reviewed provider-aware runtime.
         raise ProductionAdapterConfigurationError(
             "persisted KMS key references are unavailable"
         )
-    _validate_database_kms_pins(
-        db,
-        loader=loader,
-        required_coordinates=required_coordinates,
-    )
+    loader = get_configured_kms_loader(settings)
+    mounted = loader.pin_manifest()
+    required_coordinates = set(_active_coordinates(settings))
+    for pin in catalog.aliyun:
+        coordinate = (pin.purpose, pin.kms_key_id, pin.application_key_version)
+        mounted_pin = mounted.get(coordinate)
+        if (
+            # The legacy no-runtime cipher can read only its configured CMK.
+            # Cross-CMK admission belongs to the provider-aware runtime.
+            (pin.purpose == AUTHENTICATION_PURPOSE
+             and pin.kms_key_id != settings.auth_idempotency_kms_key_id)
+            or not loader.has_entry(*coordinate)
+            or mounted_pin is None
+            or mounted_pin.kms_key_version_id != pin.kms_key_version_id
+            or mounted_pin.ciphertext_sha256 != pin.ciphertext_sha256
+        ):
+            raise ProductionAdapterConfigurationError(
+                "persisted KMS key references are unavailable"
+            )
+        required_coordinates.add(coordinate)
+    with db.no_autoflush:
+        _validate_database_kms_pins(
+            db,
+            loader=loader,
+            required_coordinates=required_coordinates,
+        )
     return frozenset(required_coordinates)
 
 

@@ -50,7 +50,7 @@ def run(owner, api, *, original, source, directory, receipt_history_only=False, 
     if formal:
         assert complete_schema and not receipt_history_only
         with owner.connect() as connection:
-            assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '20261229_0180'
+            assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '20261230_0181'
         from app.database_security import validate_production_database_security
         validate_production_database_security(api, expected_runtime_role='star_oam_api',
             expected_migration_role='star_oam_migrator')

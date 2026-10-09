@@ -23,14 +23,23 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from urllib.parse import urlsplit
 
 if __package__:
     from .pilot_preflight import checks_for, strict_object, PILOT_PROJECT_RE, IMAGE_TAG_RE, PILOT_MVP_SCOPE
+    from .pilot_preflight import OPENBAO_ENV_FIELDS, _openbao_settings, _readonly_source, private_oss_oidc_configured
+    from .pilot_preflight import pnvs_oidc_declared, pnvs_oidc_configuration_checks
+    from .pilot_preflight import OPENBAO_DEPLOYMENT_FIELDS, openbao_peer_declaration, restricted_process_configuration
+    from .pilot_preflight import bind_disables_host_path_creation
     from .pilot_network_preflight import check_networks
 else:
     from pilot_preflight import checks_for, strict_object, PILOT_PROJECT_RE, IMAGE_TAG_RE, PILOT_MVP_SCOPE
+    from pilot_preflight import OPENBAO_ENV_FIELDS, _openbao_settings, _readonly_source, private_oss_oidc_configured
+    from pilot_preflight import pnvs_oidc_declared, pnvs_oidc_configuration_checks
+    from pilot_preflight import OPENBAO_DEPLOYMENT_FIELDS, openbao_peer_declaration, restricted_process_configuration
+    from pilot_preflight import bind_disables_host_path_creation
     from pilot_network_preflight import check_networks
 
 ID = re.compile(r"sha256:[0-9a-f]{64}$")
@@ -182,6 +191,215 @@ def host_image_architecture():
     require(architecture is not None, 'host_architecture_unsupported')
     return architecture
 
+
+def numeric_identity(service):
+    match = re.fullmatch(r'([1-9][0-9]{0,9}):([1-9][0-9]{0,9})', str(service.get('user', '')))
+    require(match is not None, 'runtime_numeric_identity_required')
+    uid, gid = map(int, match.groups())
+    require(uid <= 2_147_483_647 and gid <= 2_147_483_647, 'runtime_numeric_identity_required')
+    groups = service.get('group_add', [])
+    require(isinstance(groups, list) and all(re.fullmatch(r'[1-9][0-9]{0,9}', str(g)) for g in groups),
+            'runtime_groups_invalid')
+    return uid, gid, {gid, *(int(g) for g in groups)}
+
+
+def live_bind_specs(document):
+    """Only exact declared runtime paths qualify; no name-based exceptions."""
+    services = document.get('services', {})
+    api = services.get('api', {})
+    environment = api.get('environment', {})
+    specs = {}
+    def add(name, target, kind, owner, group):
+        service = services.get(name, {})
+        require(restricted_process_configuration(service), 'runtime_process_isolation_required')
+        api_uid, _, groups = numeric_identity(service)
+        require(owner > 0 and owner != api_uid and group > 0 and group in groups,
+                'runtime_projection_identity_invalid')
+        source_file = _readonly_source(service, target, directory=True)
+        source = source_file.parent
+        require(str(source).startswith('/run/') and len(source.parts) >= 3,
+                'runtime_projection_source_invalid')
+        row = dict(kind=kind, owner=owner, group=group, leaf=source_file.name,
+                   source=str(source), target=str(Path(target).parent))
+        require((name, row['target']) not in specs, 'runtime_projection_overlap')
+        specs[name, row['target']] = row
+    bao_declared = any(environment.get(key, '') not in ('', '0')
+                       for key in (*OPENBAO_ENV_FIELDS, *OPENBAO_DEPLOYMENT_FIELDS))
+    if bao_declared:
+        openbao_peer_declaration(document)
+        settings = _openbao_settings(environment, 'authentication_idempotency', '1')
+        gate = services.get('kms-pin-gate', {})
+        providers = ('OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER', 'OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_PROVIDER')
+        require(all(environment.get(key) in ('aliyun_kms', 'openbao_transit_v1') for key in providers),
+                'runtime_provider_invalid')
+        require(all(environment.get(key, '') == gate.get('environment', {}).get(key, '')
+                    for key in (*OPENBAO_ENV_FIELDS, *providers, 'OAM_ENVIRONMENT',
+                                'OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION',
+                                'OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_KEY_VERSION')),
+                'runtime_gate_configuration_mismatch')
+        for name in ('api', 'kms-pin-gate'):
+            require(numeric_identity(services.get(name, {}))[0] == settings.api_uid,
+                    'runtime_api_identity_mismatch')
+            add(name, settings.socket_path, 'openbao_socket', settings.bao_uid, settings.shared_gid)
+            add(name, settings.token_file, 'openbao_token', settings.token_projector_uid, settings.shared_gid)
+        for target in (str(Path(settings.socket_path).parent), str(Path(settings.token_file).parent)):
+            require(specs['api', target] == specs['kms-pin-gate', target], 'runtime_gate_mount_mismatch')
+    if environment.get('OAM_FILE_STORAGE_CREDENTIAL_MODE') == 'oidc_role_arn':
+        require(private_oss_oidc_configured(api), 'runtime_oss_configuration_invalid')
+        raw = [environment.get(key, '') for key in
+               ('RSC_OSS_OIDC_PROJECTOR_UID', 'RSC_OSS_OIDC_SHARED_GID')]
+        require(all(re.fullmatch(r'[1-9][0-9]{0,9}', str(v)) and int(v) <= 2_147_483_647 for v in raw),
+                'runtime_oss_identity_declaration_required')
+        add('api', environment['OAM_FILE_STORAGE_OIDC_TOKEN_FILE'], 'oss_oidc', *map(int, raw))
+    if any(pnvs_oidc_declared(service.get('environment', {})) for service in services.values()):
+        require(all(pnvs_oidc_configuration_checks(document).values()), 'runtime_pnvs_configuration_invalid')
+        add('api', environment['RSC_PNVS_OIDC_TOKEN_FILE'], 'pnvs_oidc',
+            int(environment['RSC_PNVS_OIDC_PROJECTOR_UID']), int(environment['RSC_PNVS_OIDC_SHARED_GID']))
+    # A second service, nested static source or alternate target must not gain
+    # access to a live directory by escaping the allowlisted mount selection.
+    sources = {row['source'] for row in specs.values()}
+    for source in sources:
+        bindings = [row for row in specs.values() if row['source'] == source]
+        require(all(row == bindings[0] for row in bindings), 'runtime_projection_overlap')
+    for name, service in services.items():
+        for mount in service.get('volumes', []):
+            if mount.get('type') != 'bind':
+                continue
+            source = str(Path(mount.get('source', '')))
+            related = [root for root in sources if source == root or source.startswith(root + '/') or root.startswith(source + '/')]
+            if related:
+                row = specs.get((name, mount.get('target')))
+                require(len(related) == 1 and row is not None and source == row['source'],
+                        'runtime_projection_overlap')
+                require(mount.get('read_only') is True and bind_disables_host_path_creation(mount)
+                        and mount.get('bind', {}).get('propagation', 'rprivate') == 'rprivate',
+                        'runtime_projection_mount_invalid')
+    return specs
+
+
+def linux_tmpfs_mount(path):
+    require(sys.platform == 'linux', 'runtime_linux_required')
+    text = Path('/proc/self/mountinfo').read_text()
+    require(len(text) <= 1024 * 1024, 'runtime_mountinfo_invalid')
+    matches = []
+    for line in text.splitlines():
+        fields = line.split()
+        require('-' in fields and len(fields) >= 10, 'runtime_mountinfo_invalid')
+        split = fields.index('-')
+        require(split >= 6 and len(fields) >= split + 4, 'runtime_mountinfo_invalid')
+        mountpoint = fields[4]
+        # Configured paths are canonical ASCII; escaped mount names cannot be
+        # an ancestor of them and need not be unescaped into ambiguous paths.
+        if '\\' in mountpoint:
+            continue
+        if str(path) == mountpoint or str(path).startswith(mountpoint.rstrip('/') + '/'):
+            matches.append((len(mountpoint), fields))
+    require(bool(matches), 'runtime_mountinfo_missing')
+    fields = max(matches, key=lambda row: row[0])[1]
+    split = fields.index('-')
+    require(fields[split + 1] == 'tmpfs' and {'nosuid', 'nodev'} <= set(fields[5].split(',')),
+            'runtime_projection_not_private_tmpfs')
+    return fields  # public mount attributes only; never token data
+
+
+def live_directory_metadata(row):
+    """Check real dirfd metadata; token bytes/inode/mtime/size are not bound."""
+    source = Path(row['source'])
+    require(source.is_absolute() and source == source.resolve(), 'runtime_projection_path_invalid')
+    mount_before = linux_tmpfs_mount(source)
+    fds, chain = [], []
+    def stable(info):
+        return [info.st_dev, info.st_ino, info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)]
+    try:
+        descriptor = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        fds.append(descriptor)
+        root = stable(os.fstat(descriptor))
+        for name in source.parts[1:]:
+            parent = descriptor
+            descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            fds.append(descriptor)
+            info = os.fstat(descriptor)
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid in (0, row['owner'])
+                    and not (info.st_mode & 0o022), 'runtime_projection_ancestor_invalid')
+            chain.append((parent, name, descriptor, stable(info)))
+        info = os.fstat(descriptor)
+        require(info.st_uid == row['owner'] and info.st_gid == row['group']
+                and stat.S_IMODE(info.st_mode) == 0o750, 'runtime_projection_directory_invalid')
+        leaf = os.stat(row['leaf'], dir_fd=descriptor, follow_symlinks=False)
+        socket_type = row['kind'] == 'openbao_socket'
+        require((stat.S_ISSOCK(leaf.st_mode) if socket_type else stat.S_ISREG(leaf.st_mode))
+                and leaf.st_uid == row['owner'] and leaf.st_gid == row['group']
+                and stat.S_IMODE(leaf.st_mode) == (0o660 if socket_type else 0o440)
+                and leaf.st_nlink == 1 and (socket_type or 10 <= leaf.st_size <= (4096 if row['kind']=='openbao_token' else 16384)),
+                'runtime_projection_leaf_invalid')
+        # Official OpenBao 2.7.1 file sink creates <leaf>.tmp.<UUID first
+        # eight hex characters> at configured mode before atomic rename. Only
+        # that exact single temporary shape can trigger a bounded metadata
+        # recheck. It never becomes an admitted persistent extra file.
+        for attempt in range(4):
+            extras = set(os.listdir(descriptor)) - {row['leaf']}
+            if not extras:
+                break
+            require(row['kind'] == 'openbao_token' and len(extras) == 1,
+                    'runtime_projection_extra_file')
+            temporary = next(iter(extras))
+            require(re.fullmatch(re.escape(row['leaf']) + r'\.tmp\.[0-9a-f]{8}', temporary),
+                    'runtime_projection_extra_file')
+            try:
+                info = os.stat(temporary, dir_fd=descriptor, follow_symlinks=False)
+            except FileNotFoundError:
+                continue  # concurrent rename/remove, no object contents read
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == row['owner']
+                    and info.st_gid == row['group'] and stat.S_IMODE(info.st_mode) == 0o440
+                    and info.st_nlink == 1 and 0 <= info.st_size <= 4096,
+                    'runtime_projection_temporary_invalid')
+            require(attempt < 3, 'runtime_projection_rotation_pending')
+            time.sleep(0.025)
+        else:
+            raise Refused('runtime_projection_rotation_pending')
+        require(root == stable(os.fstat(fds[0])), 'runtime_projection_directory_changed')
+        for parent, name, current, expected in chain:
+            require(stable(os.fstat(current)) == expected
+                    and stable(os.stat(name, dir_fd=parent, follow_symlinks=False)) == expected,
+                    'runtime_projection_directory_changed')
+        require(linux_tmpfs_mount(source) == mount_before, 'runtime_projection_mount_changed')
+        return dict(ancestors=[root, *(item[3] for item in chain)], mount=mount_before,
+                    owner=row['owner'], group=row['group'], leafKind=row['kind'])
+    finally:
+        for descriptor in reversed(fds):
+            os.close(descriptor)
+
+
+def registry_bind_specs(document):
+    """The OpenBao wrapped registry stays static and belongs to the API UID."""
+    services = document.get('services', {})
+    api = services.get('api', {})
+    environment = api.get('environment', {})
+    if not any(environment.get(key, '') not in ('', '0') for key in OPENBAO_ENV_FIELDS):
+        return {}
+    settings = _openbao_settings(environment, 'authentication_idempotency', '1')
+    uid, gid, _ = numeric_identity(api)
+    require(uid == settings.api_uid, 'registry_api_identity_mismatch')
+    path = _readonly_source(api, settings.registry_path, directory=True)
+    gate_path = _readonly_source(services.get('kms-pin-gate', {}), settings.registry_path, directory=True)
+    require(path == gate_path and numeric_identity(services['kms-pin-gate'])[:2] == (uid, gid),
+            'registry_gate_identity_mismatch')
+    return {str(path.parent): dict(owner=uid, group=gid, leaf=path.name)}
+
+
+def registry_owner_metadata(source, row):
+    require(source.is_dir() and source == source.resolve() and set(os.listdir(source)) == {row['leaf']},
+            'registry_private_directory_required')
+    values = []
+    for path, mode, directory in ((source, 0o700, True), (source/row['leaf'], 0o600, False)):
+        info = path.lstat()
+        require((stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode))
+                and info.st_uid == row['owner'] and info.st_gid == row['group']
+                and stat.S_IMODE(info.st_mode) == mode and (directory or info.st_nlink == 1),
+                'registry_identity_invalid')
+        values.append([info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)])
+    return values
+
 class Release:
     def __init__(self, root, action):
         self.root = root.resolve(); self.action = action; self.stage = 'prerequisites'
@@ -282,29 +500,87 @@ class Release:
             require(build.get('args',{}) == ({'RELEASE_PROFILE':'pilot'} if name=='web' else {}), 'build_topology_invalid')
 
     def fingerprint(self, document):
+        runtime = decoded_config(document)
+        live_specs = live_bind_specs(runtime)
+        live = {}
+        for key, row in sorted(live_specs.items()):
+            live['/'.join(key)] = dict(binding=row, metadata=live_directory_metadata(row))
+        registry_specs = registry_bind_specs(runtime)
+        registry_owners = {source: registry_owner_metadata(Path(source), row)
+                           for source, row in registry_specs.items()}
         mounts = {}
-        for service in document['services'].values():
+        for name, service in document['services'].items():
             for mount in service.get('volumes', []):
                 if mount.get('type') == 'bind':
                     require(mount.get('read_only') is True, 'writable_static_bind_refused')
                     source = Path(decoded_config(mount['source']))
                     require(source.is_absolute() and source == source.resolve(), 'bind_source_invalid')
-                    mounts[str(source)] = tree_digest(source)
+                    if (name, decoded_config(mount.get('target', ''))) not in live_specs:
+                        mounts[str(source)] = tree_digest(source)
         source_hash = tree_digest(self.root, candidate=True)
         config_hash = digest(encoded(document))
         all_inputs = dict(source=source_hash, config=config_hash,
                           env=digest(plain_file(self.env_file)), compose=digest(plain_file(self.compose_file)),
                           mounts=mounts, origin=self.origin, private_path=self.private_path, smoke_target=self.smoke_target)
+        if live:
+            all_inputs['live_mounts'] = live
+        if registry_owners:
+            all_inputs['registry_owners'] = registry_owners
+        if any(row['kind'] == 'openbao_socket' for row in live_specs.values()):
+            all_inputs['openbao_peer'] = self.openbao_peer_metadata(runtime)
         return dict(input_sha256=digest(encoded(all_inputs)), source_sha256=source_hash,
                     configuration_sha256=config_hash), mounts
+
+    def openbao_peer_metadata(self, document):
+        """Inspect only the exact external peer; return public whitelist only."""
+        declaration = openbao_peer_declaration(document)
+        environment = document['services']['api']['environment']
+        settings = _openbao_settings(environment, 'authentication_idempotency', '1')
+        rows = json.loads(self.run(['docker', 'inspect', '--type', 'container', declaration['container_id']], diagnostic=True))
+        require(isinstance(rows, list) and len(rows) == 1, 'openbao_peer_inspection_invalid')
+        row = rows[0]
+        host, state, config = (row.get(key, {}) for key in ('HostConfig', 'State', 'Config'))
+        require(row.get('Id') == declaration['container_id'] and row.get('Image') == declaration['image_id'],
+                'openbao_peer_identity_changed')
+        require(state.get('Running') is True and state.get('Status') == 'running'
+                and not any(state.get(key) for key in ('Paused', 'Restarting', 'OOMKilled'))
+                and type(state.get('Pid')) is int and state['Pid'] > 0
+                and isinstance(state.get('StartedAt'), str)
+                and re.fullmatch(r'[1-9][0-9]{3}-[0-9TZ:.+-]+', state['StartedAt']) is not None,
+                'openbao_peer_state_invalid')
+        require(config.get('User') == f'{settings.bao_uid}:{settings.bao_gid}'
+                and settings.shared_gid in {settings.bao_gid, *(int(g) for g in host.get('GroupAdd') or [])},
+                'openbao_peer_user_invalid')
+        require(restricted_process_configuration(host, inspected=True)
+                and host.get('ReadonlyRootfs') is True and host.get('NetworkMode') == 'none'
+                and host.get('PidMode', '') in ('', 'private') and host.get('IpcMode', '') in ('', 'private')
+                and not host.get('UsernsMode') and not host.get('Devices')
+                and not host.get('PortBindings') and not row.get('NetworkSettings', {}).get('Ports'),
+                'openbao_peer_isolation_invalid')
+        mounts = []
+        for mount in row.get('Mounts', []):
+            target = mount.get('Destination', '')
+            require(isinstance(target, str) and target.startswith('/') and target != '/'
+                    and not any(target == path or target.startswith(path + '/')
+                                for path in ('/proc', '/dev', '/sys', '/var/run/docker.sock', '/run/docker.sock')),
+                    'openbao_peer_mount_invalid')
+            mounts.append({key: mount.get(key) for key in ('Type', 'Name', 'Source', 'Destination', 'RW', 'Propagation')})
+        return dict(container_id=row['Id'], image_id=row['Image'], running=True,
+                    started_at=state['StartedAt'], pid=state['Pid'], user=config['User'],
+                    host={key: host.get(key) for key in ('GroupAdd', 'CapDrop', 'CapAdd', 'Privileged', 'SecurityOpt',
+                        'ReadonlyRootfs', 'NetworkMode', 'PidMode', 'IpcMode', 'UsernsMode', 'Devices', 'PortBindings')},
+                    mounts=sorted(mounts, key=lambda mount: mount['Destination']))
 
     def stable(self):
         current = self.resolve()
         fingerprint, mounts = self.fingerprint(current)
         require(fingerprint == self.fingerprints and mounts == self.mounts, 'prepared_inputs_changed')
         if hasattr(self, 'static_mounts'):
+            registry_specs = registry_bind_specs(decoded_config(current))
             for original, row in self.static_mounts.items():
                 require(tree_digest(Path(row['snapshot'])) == self.mounts[original], 'frozen_mount_changed')
+                if original in registry_specs:
+                    registry_owner_metadata(Path(row['snapshot']), registry_specs[original])
 
     def network_check(self):
         ids = self.run(['docker','network','ls','--quiet','--no-trunc'], diagnostic=True).split()
@@ -327,11 +603,12 @@ class Release:
 
     def frozen_document(self):
         document = copy.deepcopy(self.document)
+        live_specs = live_bind_specs(decoded_config(document))
         for name, service in document['services'].items():
             if name in ('db','api','web','migrate','kms-pin-gate','kms-pin-plan'):
                 service['image'] = self.images['db' if name=='db' else 'web' if name=='web' else 'api']
             for mount in service.get('volumes', []):
-                if mount.get('type') == 'bind':
+                if mount.get('type') == 'bind' and (name, decoded_config(mount.get('target', ''))) not in live_specs:
                     mount['source'] = self.static_mounts[decoded_config(mount['source'])]['snapshot'].replace('$', '$$')
         return document
 
@@ -382,6 +659,28 @@ class Release:
         state = row.get('State',{})
         require((state.get('Status')=='exited' and state.get('ExitCode')==0) if exited
                 else state.get('Running') is True, 'container_state_invalid')
+        live_specs = live_bind_specs(decoded_config(self.document))
+        if any(name == service for name, _ in live_specs):
+            declared = decoded_config(self.document)['services'][service]
+            require(restricted_process_configuration(row.get('HostConfig', {}), inspected=True),
+                    'container_runtime_process_isolation_mismatch')
+            require(row.get('Config', {}).get('User') == declared.get('user')
+                    and {str(group) for group in row.get('HostConfig', {}).get('GroupAdd', [])}
+                        == {str(group) for group in declared.get('group_add', [])},
+                    'container_runtime_identity_mismatch')
+            if any(name == service and binding['kind'] == 'openbao_socket' for (name, _), binding in live_specs.items()):
+                require(row.get('HostConfig', {}).get('PidMode') == declared.get('pid'),
+                        'container_runtime_peer_namespace_mismatch')
+        for (name, target), binding in live_specs.items():
+            if name != service:
+                continue
+            matches = [mount for mount in row.get('Mounts', []) if isinstance(mount.get('Destination'), str)
+                       and (mount['Destination'] == target or mount['Destination'].startswith(target + '/')
+                            or target.startswith(mount['Destination'].rstrip('/') + '/'))]
+            require(len(matches) == 1 and matches[0].get('Type') == 'bind'
+                    and matches[0].get('Destination') == target and matches[0].get('Source') == binding['source']
+                    and matches[0].get('RW') is False and matches[0].get('Propagation') == 'rprivate',
+                    'container_runtime_mount_mismatch')
         return row
 
     def database_identity(self):
@@ -402,12 +701,21 @@ class Release:
     def capture_mounts(self):
         attempt = private_directory(self.project_state/('attempt-'+uuid.uuid4().hex))
         self.static_mounts = {}
+        registry_specs = registry_bind_specs(decoded_config(self.document))
         for index,(original, expected) in enumerate(sorted(self.mounts.items())):
             source = Path(original); destination = attempt/str(index)
             if source.is_dir():
                 shutil.copytree(source,destination,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
             else:
                 shutil.copy2(source,destination)
+            if original in registry_specs:
+                row = registry_specs[original]
+                registry_owner_metadata(source, row)
+                # Preserve only this exactly admitted private registry. A
+                # deployment account without ownership privileges fails closed.
+                for path in (destination, destination/row['leaf']):
+                    os.chown(path, row['owner'], row['group'], follow_symlinks=False)
+                registry_owner_metadata(destination, row)
             require(tree_digest(destination)==expected, 'mount_changed_during_copy')
             self.static_mounts[original] = dict(snapshot=str(destination), sha256=expected)
         self.stable()

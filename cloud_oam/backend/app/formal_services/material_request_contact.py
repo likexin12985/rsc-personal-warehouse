@@ -20,6 +20,18 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 import uuid
 
+from ..openbao_transit_candidate import OpenBaoKeyCoordinate
+from .material_request_contact_openbao import (
+    OpenBaoContactBinding,
+    OpenBaoMaterialRequestContactCipher,
+    V2_ENVELOPE_KEYS,
+    V2_KEY_PATH,
+    V2_PROVIDER,
+    V2_PURPOSE,
+    V2_SCHEMA,
+    contact_v2_aad,
+)
+
 
 CONTACT_ENVELOPE_SCHEMA = "rsc.material_request_contact.v1"
 CONTACT_ENCRYPTION_PROVIDER = "aliyun_kms"
@@ -78,7 +90,7 @@ class MaterialRequestContactCipher(Protocol):
 
 def protect_material_request_contact(
     *,
-    cipher: MaterialRequestContactCipher,
+    cipher: MaterialRequestContactCipher | OpenBaoMaterialRequestContactCipher,
     kms_key_id: str,
     mobile_hmac_secret: bytes | str,
     mobile_hash_version: int,
@@ -89,7 +101,8 @@ def protect_material_request_contact(
 ) -> dict[str, Any]:
     """Return an encryption-only JSON envelope for one contact snapshot."""
 
-    checked_key_id = _kms_key_id(kms_key_id)
+    binding = cipher.active_binding() if isinstance(cipher, OpenBaoMaterialRequestContactCipher) else None
+    checked_key_id = _kms_key_id(kms_key_id) if binding is None else None
     checked_secret = _hmac_secret(mobile_hmac_secret)
     checked_hash_version = _positive_integer(
         "mobile_hash_version", mobile_hash_version
@@ -98,7 +111,10 @@ def protect_material_request_contact(
     checked_person_id = _uuid("requester_person_id", requester_person_id)
     checked_name = _text("name", name, 120)
     checked_mobile = _mobile(mobile)
-    aad = _contact_aad(checked_request_id, checked_person_id)
+    aad = (
+        _contact_aad(checked_request_id, checked_person_id) if binding is None
+        else contact_v2_aad(binding, checked_request_id, checked_person_id)
+    )
     plaintext = json.dumps(
         {"mobile": checked_mobile, "name": checked_name},
         ensure_ascii=False,
@@ -144,11 +160,14 @@ def protect_material_request_contact(
         b"cloud_oam.material_request.contact.identity.v1\0" + plaintext,
         hashlib.sha256,
     ).hexdigest()
-    envelope = {
+    metadata = {
         "schema": CONTACT_ENVELOPE_SCHEMA,
         "provider": CONTACT_ENCRYPTION_PROVIDER,
         "kms_key_id": checked_key_id,
         "key_version": key_version,
+    } if binding is None else binding.envelope_metadata()
+    envelope = {
+        **metadata,
         "ciphertext_b64": base64.b64encode(encrypted.ciphertext).decode("ascii"),
         "nonce_b64": base64.b64encode(encrypted.nonce).decode("ascii"),
         "aad_sha256": hashlib.sha256(aad).hexdigest(),
@@ -160,7 +179,7 @@ def protect_material_request_contact(
 
 def reveal_material_request_contact(
     *,
-    cipher: MaterialRequestContactCipher,
+    cipher: MaterialRequestContactCipher | OpenBaoMaterialRequestContactCipher,
     kms_key_id: str,
     mobile_hmac_secret: bytes | str,
     mobile_hash_version: int,
@@ -178,7 +197,14 @@ def reveal_material_request_contact(
     """
 
     checked_envelope = validate_material_request_contact_envelope(envelope)
-    checked_key_id = _kms_key_id(kms_key_id)
+    binding = _v2_binding(checked_envelope) if checked_envelope["schema"] == V2_SCHEMA else None
+    legacy_cipher = cipher
+    if binding is None and isinstance(cipher, OpenBaoMaterialRequestContactCipher):
+        legacy_cipher = cipher.legacy_cipher
+        if legacy_cipher is None:
+            raise MaterialRequestContactProtectionError("legacy contact key is unavailable")
+        kms_key_id = cipher.legacy_kms_key_id
+    checked_key_id = _kms_key_id(kms_key_id) if binding is None else None
     checked_secret = _hmac_secret(mobile_hmac_secret)
     checked_hash_version = _positive_integer(
         "mobile_hash_version", mobile_hash_version
@@ -186,8 +212,10 @@ def reveal_material_request_contact(
     checked_request_id = _uuid("request_id", request_id)
     checked_person_id = _uuid("requester_person_id", requester_person_id)
     historical_decrypt = None
-    if checked_envelope["kms_key_id"] != checked_key_id:
-        historical_decrypt = getattr(cipher, "decrypt_for_kms_key_id", None)
+    if binding is not None and not isinstance(cipher, OpenBaoMaterialRequestContactCipher):
+        raise MaterialRequestContactProtectionError("contact v2 reader is unavailable")
+    if binding is None and checked_envelope["kms_key_id"] != checked_key_id:
+        historical_decrypt = getattr(legacy_cipher, "decrypt_for_kms_key_id", None)
         if not callable(historical_decrypt):
             raise MaterialRequestContactProtectionError(
                 "material request contact KMS binding is invalid"
@@ -204,7 +232,10 @@ def reveal_material_request_contact(
             "material request contact hash version is unavailable"
         )
 
-    aad = _contact_aad(checked_request_id, checked_person_id)
+    aad = (
+        _contact_aad(checked_request_id, checked_person_id) if binding is None
+        else contact_v2_aad(binding, checked_request_id, checked_person_id)
+    )
     if not hmac.compare_digest(
         checked_envelope["aad_sha256"], hashlib.sha256(aad).hexdigest()
     ):
@@ -216,8 +247,10 @@ def reveal_material_request_contact(
     )
     nonce = _strict_base64("nonce_b64", checked_envelope["nonce_b64"])
     try:
-        if historical_decrypt is None:
-            plaintext = cipher.decrypt(
+        if binding is not None:
+            plaintext = cipher.decrypt_for_binding(binding, ciphertext, nonce=nonce, aad=aad)
+        elif historical_decrypt is None:
+            plaintext = legacy_cipher.decrypt(
                 ciphertext,
                 nonce=nonce,
                 aad=aad,
@@ -289,20 +322,32 @@ def validate_material_request_contact_envelope(
 ) -> dict[str, Any]:
     """Validate and detach an envelope before it is assigned to an ORM row."""
 
-    if not isinstance(value, Mapping) or set(value) != _EXPECTED_KEYS:
+    if not isinstance(value, Mapping):
         raise MaterialRequestContactProtectionError(
             "material request contact envelope shape is invalid"
         )
-    if value.get("schema") != CONTACT_ENVELOPE_SCHEMA:
+    is_v2 = value.get("schema") == V2_SCHEMA
+    if set(value) != (V2_ENVELOPE_KEYS if is_v2 else _EXPECTED_KEYS):
+        raise MaterialRequestContactProtectionError(
+            "material request contact envelope shape is invalid"
+        )
+    if not is_v2 and value.get("schema") != CONTACT_ENVELOPE_SCHEMA:
         raise MaterialRequestContactProtectionError(
             "material request contact envelope schema is invalid"
         )
-    if value.get("provider") != CONTACT_ENCRYPTION_PROVIDER:
+    if value.get("provider") != (V2_PROVIDER if is_v2 else CONTACT_ENCRYPTION_PROVIDER):
         raise MaterialRequestContactProtectionError(
             "material request contact envelope provider is invalid"
         )
-    key_id = _kms_key_id(value.get("kms_key_id"))
-    key_version = _positive_integer("key_version", value.get("key_version"))
+    if is_v2:
+        metadata = _v2_binding(value).envelope_metadata()
+    else:
+        metadata = {
+            "schema": CONTACT_ENVELOPE_SCHEMA,
+            "provider": CONTACT_ENCRYPTION_PROVIDER,
+            "kms_key_id": _kms_key_id(value.get("kms_key_id")),
+            "key_version": _positive_integer("key_version", value.get("key_version")),
+        }
     ciphertext = _strict_base64("ciphertext_b64", value.get("ciphertext_b64"))
     nonce = _strict_base64("nonce_b64", value.get("nonce_b64"))
     if len(ciphertext) < 17 or len(nonce) != 12:
@@ -327,16 +372,47 @@ def validate_material_request_contact_envelope(
     # Construct a fresh object so a mutable caller mapping cannot change the
     # already-validated document after it is assigned to the persistence row.
     return {
-        "schema": CONTACT_ENVELOPE_SCHEMA,
-        "provider": CONTACT_ENCRYPTION_PROVIDER,
-        "kms_key_id": key_id,
-        "key_version": key_version,
+        **metadata,
         "ciphertext_b64": base64.b64encode(ciphertext).decode("ascii"),
         "nonce_b64": base64.b64encode(nonce).decode("ascii"),
         "aad_sha256": aad_sha256,
         "mobile_hmac": mobile_hmac,
         "contact_hmac": contact_hmac,
     }
+
+
+def _v2_binding(value: Mapping[str, Any]) -> OpenBaoContactBinding:
+    binding = None
+    try:
+        if (
+            value.get("schema") != V2_SCHEMA or value.get("provider") != V2_PROVIDER
+            or value.get("purpose") != V2_PURPOSE or value.get("key_path") != V2_KEY_PATH
+        ):
+            raise ValueError("invalid binding")
+        binding = OpenBaoContactBinding(
+            OpenBaoKeyCoordinate(
+                V2_PURPOSE, value.get("environment"), value.get("provider_instance_id"),
+                value.get("application_key_version"),
+            ),
+            value.get("transit_key_version"),
+        )
+    except Exception:
+        pass
+    if binding is None:
+        raise MaterialRequestContactProtectionError("contact v2 binding is invalid")
+    return binding
+
+
+def material_request_contact_aad(
+    envelope: Mapping[str, Any], *, request_id: uuid.UUID, requester_person_id: uuid.UUID,
+) -> bytes:
+    """Recompute the schema-specific business binding for persistence checks."""
+    checked = validate_material_request_contact_envelope(envelope)
+    checked_request = _uuid("request_id", request_id)
+    checked_person = _uuid("requester_person_id", requester_person_id)
+    if checked["schema"] == V2_SCHEMA:
+        return contact_v2_aad(_v2_binding(checked), checked_request, checked_person)
+    return _contact_aad(checked_request, checked_person)
 
 
 def _contact_aad(request_id: uuid.UUID, person_id: uuid.UUID) -> bytes:
@@ -411,5 +487,6 @@ __all__ = [
     "MaterialRequestContactProtectionError",
     "protect_material_request_contact",
     "reveal_material_request_contact",
+    "material_request_contact_aad",
     "validate_material_request_contact_envelope",
 ]

@@ -26,7 +26,7 @@ def _opening_import_job_worker(payload, expires):
     from sqlalchemy.pool import NullPool
     from .config import get_settings
     from .database_security import validate_production_database_security
-    from .formal_services.file_storage import AliyunOssV2StorageAdapter
+    from .file_storage_composition import create_file_storage_adapter
     from .opening_import_worker_database import opening_import_worker_session_factory
     from .opening_count_import_worker import process_one_opening_count_import
 
@@ -51,8 +51,9 @@ def _opening_import_job_worker(payload, expires):
             expected_runtime_role=settings.database_expected_runtime_role,
             expected_migration_role=settings.database_expected_migration_role)
         factory = opening_import_worker_session_factory(engine)
-        storage = AliyunOssV2StorageAdapter(region=settings.file_storage_region.strip(),
-                                          bucket=settings.file_storage_bucket.strip())
+        storage = create_file_storage_adapter(settings)
+        if storage is None:
+            raise ProcessEntryError("opening_import_worker_not_configured")
         result = process_one_opening_count_import(factory, storage=storage, job_id=identifier)
         return {"job_id": str(result.job_id), "status": result.status, "recovered": result.recovered}
     finally:

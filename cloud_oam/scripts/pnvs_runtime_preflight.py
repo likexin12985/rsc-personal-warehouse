@@ -21,6 +21,7 @@ import sys
 from pilot_preflight import (
     PILOT_SMS_SCHEME_NAME, PILOT_SMS_SIGN_NAME, PILOT_SMS_TEMPLATE_CODE,
     bool_value, sms_default_credential_chain_configured,
+    pnvs_oidc_declared, pnvs_oidc_environment_configured,
 )
 
 INJECTED_KEYS = ('ALIBABA_CLOUD_ACCESS_KEY_ID', 'ALIBABA_CLOUD_ACCESS_KEY_SECRET',
@@ -44,10 +45,12 @@ def configuration(environment):
         'sms_only': all(bool_value(environment.get(key, 'false')) is False for key in (
             'OAM_WECHAT_LOGIN_ENABLED', 'OAM_PASSWORD_LOGIN_ENABLED')),
     }
+    if pnvs_oidc_declared(environment):
+        checks['selected_oidc_contract'] = pnvs_oidc_environment_configured(environment)
     return checks
 
 
-def resolve_identity(factory=None):
+def resolve_identity(factory=None, *, expected_provider=None):
     # Isolated child only: do not restore SDK loggers or return exceptions whose
     # text may contain Authorization headers, URI credentials or SDK payloads.
     logging.disable(logging.CRITICAL)
@@ -57,7 +60,8 @@ def resolve_identity(factory=None):
                 from alibabacloud_credentials.client import Client
                 factory = Client
             credential = factory().get_credential()
-            if credential.provider_name not in DYNAMIC_PROVIDERS:
+            if (credential.provider_name not in DYNAMIC_PROVIDERS
+                    or expected_provider is not None and credential.provider_name != expected_provider):
                 return 'unreviewed_identity_source'
             if not all((credential.access_key_id, credential.access_key_secret, credential.security_token)):
                 return 'incomplete_identity'
@@ -83,6 +87,7 @@ def inspect_runtime(environment, *, resolve=False, runner=subprocess.run):
     return dict(configurationChecks=checks, identityResolution=state,
         configurationAndIdentityResolved=all(checks.values()) and state == 'dynamic_identity_resolved',
         providerPermissionsVerified=False, credentialRefreshVerified=False,
+        issuerClaimsVerified=False, expectedRoleVerified=False, projectionVerified=False,
         smsSent=False, pnvsRoundTripVerified=False, releaseReady=False)
 
 
@@ -95,7 +100,8 @@ def main():
         # The parent and worker independently refuse static/incomplete config.
         if not all(configuration(os.environ).values()):
             return 1
-        print(resolve_identity())
+        expected = 'default/oidc_role_arn' if pnvs_oidc_declared(os.environ) else None
+        print(resolve_identity(expected_provider=expected))
         return 0
     report = inspect_runtime(os.environ, resolve=args.resolve_default_chain)
     print(json.dumps(report, sort_keys=True))

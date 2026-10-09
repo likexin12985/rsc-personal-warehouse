@@ -48,7 +48,7 @@ def run_checks(cloud, postgres_bin):
                 expected_runtime_role='star_oam_api', expected_migration_role='star_oam_migrator')
         migrate('upgrade', 'head', 'upgrade')
         with owner.connect() as db:
-            assert db.scalar(text('SELECT version_num FROM public.alembic_version')) == '20261229_0180'
+            assert db.scalar(text('SELECT version_num FROM public.alembic_version')) == '20261230_0181'
         validate()
         print('0168 real Alembic full upgrade and API startup PASS', flush=True)
         # All mutations below are committed only inside this newly owned test
@@ -82,7 +82,7 @@ def run_checks(cloud, postgres_bin):
         from app.daily_reconciliation.capture_security import CaptureRoleSecurityError
         from app.daily_reconciliation.capture_role_contract import ROLES
         from app.daily_reconciliation import mapping_entry
-        assert mapping_entry.REQUIRED_HEAD == '20261229_0180'
+        assert mapping_entry.REQUIRED_HEAD == '20261230_0181'
         for rejected_head in ('20261215_0166', '20261216_0167', '20261220_0171'):
             with owner.connect() as db:
                 tx=db.begin()
@@ -96,7 +96,7 @@ def run_checks(cloud, postgres_bin):
             with bootstrap.begin() as db:
                 result=provision_capture_roles(db, database=owner.url.database,
                     passwords={role: 'local-0168-only-' + role + '-test-password' for role in ROLES}, apply=True)
-                assert result['head']=='20261229_0180' and result['configured'] and result['changed']
+                assert result['head']=='20261230_0181' and result['configured'] and result['changed']
             validate()
             with bootstrap.begin() as db:
                 result=provision_capture_roles(db, database=owner.url.database, apply=True)
@@ -106,7 +106,7 @@ def run_checks(cloud, postgres_bin):
         print('0168 capture role provisioning and API full catalog PASS', flush=True)
         assert all(sha256(Path(p).read_bytes()).hexdigest() == digest for p,digest in source.items())
         (directory/'checks.json').write_text(json.dumps(dict(passed=True, source=source,
-             realAlembicFullUpgrade=True, exactHead='20261229_0180', emptyDowngradeReupgrade=True,
+             realAlembicFullUpgrade=True, exactHead='20261230_0181', emptyDowngradeReupgrade=True,
              apiStartupCatalogVerified=True, optionalCaptureRolesVerified=True, oldCaptureHeadRejected=True, applicationMetadataRegistered=True, runtimeDriftRejections=2,
              businessLifecycleVerified=False,
              productionAcceptance=False), indent=2)+'\n')

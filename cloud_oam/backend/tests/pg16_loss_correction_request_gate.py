@@ -56,7 +56,7 @@ def release(engines, *, tracking, migrate, provision, scenario):
         raise ValueError('explicit correction request tracking and scenario required')
     # 0168 adds shipment projection after the 0167 condition facts/defaults;
     # existing history and empty roundtrip still use the actual current catalog.
-    if HEAD_REVISION != '20261229_0180':
+    if HEAD_REVISION != '20261230_0181':
         raise ValueError('correction request gate requires review for the new migration head')
     owner,api = (engines[key] for key in ('star_oam_migrator','star_oam_api'))
     if scenario == 'seals':

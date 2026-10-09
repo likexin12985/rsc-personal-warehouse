@@ -15,6 +15,8 @@ from app.database import (
 from app.kms_readiness import DEFAULT_PROBE_BUDGET_SECONDS
 import app.main as main
 from app.config import Settings
+from app.persisted_key_references import AliyunPersistedKeyReference
+from app.production_key_runtime import ProviderKeyRuntime, _configuration
 
 
 AUTH_COORDINATE = (
@@ -40,6 +42,42 @@ def _body(response):
     return json.loads(response.body.decode("utf-8"))
 
 
+@pytest.fixture
+def provider_runtime(monkeypatch):
+    gates = []
+
+    def install(probe):
+        settings = main.settings.model_copy(update={
+            "environment": "production",
+            "auth_idempotency_encryption_provider": "aliyun_kms",
+            "auth_idempotency_kms_key_id": AUTH_COORDINATE[1],
+            "auth_idempotency_encryption_key_version": AUTH_COORDINATE[2],
+            "material_request_contact_encryption_provider": "disabled",
+            "material_request_writes_enabled": False,
+        })
+        pin = AliyunPersistedKeyReference(
+            AUTH_COORDINATE[0], AUTH_COORDINATE[2], AUTH_COORDINATE[1],
+            "synthetic-provider-version", "a" * 64,
+        )
+        loader = SimpleNamespace(
+            pin_manifest=lambda: {AUTH_COORDINATE: pin}, probe=probe,
+        )
+        runtime = ProviderKeyRuntime(_configuration(settings), (pin,), (), None, loader)
+        gate = KmsReadinessGate(loader=runtime.probe)
+        gates.append(gate)
+        monkeypatch.setattr(main, "settings", settings)
+        monkeypatch.setattr(main, "app", SimpleNamespace(state=SimpleNamespace(
+            provider_key_runtime=runtime,
+            kms_readiness_gate=gate,
+            required_kms_coordinates=runtime.required_coordinates,
+        )))
+        return runtime
+
+    yield install
+    for gate in gates:
+        gate.close()
+
+
 def test_liveness_never_calls_database_or_kms(monkeypatch) -> None:
     calls = 0
 
@@ -58,7 +96,7 @@ def test_liveness_never_calls_database_or_kms(monkeypatch) -> None:
 
 
 def test_readiness_database_failure_is_desensitized_and_skips_kms(
-    monkeypatch,
+    monkeypatch, provider_runtime,
 ) -> None:
     kms_calls = 0
 
@@ -70,14 +108,12 @@ def test_readiness_database_failure_is_desensitized_and_skips_kms(
     def database_failure():
         raise RuntimeError("postgresql hostname and credentials")
 
-    monkeypatch.setattr(main.settings, "environment", "production")
     monkeypatch.setattr(
         main,
         "health_engine",
         SimpleNamespace(connect=database_failure),
     )
-    main.app.state.kms_readiness_gate = KmsReadinessGate(loader=kms_loader)
-    main.app.state.required_kms_coordinates = frozenset({AUTH_COORDINATE})
+    provider_runtime(kms_loader)
 
     response = main._readiness_response()
 
@@ -93,24 +129,29 @@ def test_readiness_database_failure_is_desensitized_and_skips_kms(
 
 
 def test_production_readiness_uses_ttl_kms_gate_after_database(
-    monkeypatch,
+    monkeypatch, provider_runtime,
 ) -> None:
     kms_calls = 0
+    events = []
 
     def kms_loader(*coordinate):
         nonlocal kms_calls
         kms_calls += 1
+        events.append("provider")
         assert coordinate == AUTH_COORDINATE
         return bytes(range(32))
 
-    monkeypatch.setattr(main.settings, "environment", "production")
+    def database_connection():
+        events.append("database")
+        return _HealthyConnection()
+
     monkeypatch.setattr(
         main,
         "health_engine",
-        SimpleNamespace(connect=lambda: _HealthyConnection()),
+        SimpleNamespace(connect=database_connection),
     )
-    main.app.state.kms_readiness_gate = KmsReadinessGate(loader=kms_loader)
-    main.app.state.required_kms_coordinates = frozenset({AUTH_COORDINATE})
+    runtime = provider_runtime(kms_loader)
+    assert main.app.state.required_kms_coordinates == runtime.required_coordinates
 
     first = main._readiness_response()
     second = main._readiness_response()
@@ -119,6 +160,7 @@ def test_production_readiness_uses_ttl_kms_gate_after_database(
     assert _body(first)["status"] == "ready"
     assert _body(first)["release_scope"] == main.settings.release_scope
     assert kms_calls == 1
+    assert events == ["database", "provider", "database"]
 
 
 def test_health_reports_the_isolated_trial_scope_without_secrets(monkeypatch) -> None:
@@ -140,23 +182,26 @@ def test_settings_rejects_an_unreviewed_release_scope() -> None:
         Settings(_env_file=None, environment="test", database_url="sqlite+pysqlite:///:memory:", release_scope="formal-v1")
 
 
-def test_production_readiness_never_exposes_kms_failure(monkeypatch) -> None:
+def test_production_readiness_never_exposes_kms_failure(monkeypatch, provider_runtime) -> None:
+    kms_calls = 0
+
     def kms_failure(*_coordinate):
+        nonlocal kms_calls
+        kms_calls += 1
         raise RuntimeError("secret endpoint key-id ciphertext sdk detail")
 
-    monkeypatch.setattr(main.settings, "environment", "production")
     monkeypatch.setattr(
         main,
         "health_engine",
         SimpleNamespace(connect=lambda: _HealthyConnection()),
     )
-    main.app.state.kms_readiness_gate = KmsReadinessGate(loader=kms_failure)
-    main.app.state.required_kms_coordinates = frozenset({AUTH_COORDINATE})
+    provider_runtime(kms_failure)
 
     response = main._readiness_response()
     serialized = response.body.decode("utf-8")
 
     assert response.status_code == 503
+    assert kms_calls == 1
     assert _body(response)["status"] == "not_ready"
     for forbidden in ("endpoint", "key-id", "ciphertext", "sdk"):
         assert forbidden not in serialized

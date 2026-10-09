@@ -43,7 +43,7 @@ def test_runtime_loss_and_static_jobs_are_independent_and_named_check_requires_a
     assert not re.search(r'^    (needs|if|continue-on-error):',runtime+'\n'+static+'\n'+loss+'\n'+condition,re.MULTILINE)
     assert 'python -m pytest -q tests/test_postgresql16_release_gate.py -s' in runtime
     assert '    timeout-minutes: 360\n' in runtime
-    assert '    strategy:\n      fail-fast: false\n      matrix:\n        suite: [migrations, inventory, control]\n' in runtime
+    assert '    strategy:\n      fail-fast: false\n      matrix:\n        suite: [migrations, inventory, control, contact_envelope]\n' in runtime
     assert 'RSC_PG16_RUNTIME_SUITE: ${{ matrix.suite }}' in runtime
     assert 'continue-on-error:' not in runtime and 'exclude:' not in runtime
     assert 'RSC_PG16_GATE_ACKNOWLEDGE_DISPOSABLE: I_UNDERSTAND_THIS_DATABASE_IS_EPHEMERAL' in runtime
@@ -155,13 +155,13 @@ def test_runtime_dispatch_rejects_missing_or_unknown_suite_before_database(monke
         monkeypatch.setenv('RSC_PG16_RUNTIME_SUITE', suite)
     def forbidden(*args, **kwargs):
         raise AssertionError('invalid runtime selection reached database')
-    for name in ('_run_migration_suite', '_run_inventory_suite', '_run_control_suite'):
+    for name in ('_run_migration_suite', '_run_inventory_suite', '_run_control_suite', '_run_contact_envelope_suite'):
         monkeypatch.setattr(gate, name, forbidden)
-    with pytest.raises(ValueError, match='explicit migrations, inventory or control'):
+    with pytest.raises(ValueError, match='explicit migrations, inventory, control or contact_envelope'):
         gate.test_postgresql16_migration_acl_concurrency_and_kill_gate()
 
 
-@pytest.mark.parametrize('suite', ['migrations', 'inventory', 'control'])
+@pytest.mark.parametrize('suite', ['migrations', 'inventory', 'control', 'contact_envelope'])
 def test_runtime_dispatch_runs_only_selected_suite_and_propagates_failure(monkeypatch, suite):
     import test_postgresql16_release_gate as gate
     monkeypatch.setattr(gate, '_gate_enabled', lambda: True)
@@ -173,14 +173,15 @@ def test_runtime_dispatch_runs_only_selected_suite_and_propagates_failure(monkey
     def forbidden():
         raise AssertionError('executed an unselected suite')
     for key, name in (('migrations', '_run_migration_suite'),
-                      ('inventory', '_run_inventory_suite'), ('control', '_run_control_suite')):
+                      ('inventory', '_run_inventory_suite'), ('control', '_run_control_suite'),
+                      ('contact_envelope', '_run_contact_envelope_suite')):
         monkeypatch.setattr(gate, name, selected if key == suite else forbidden)
     with pytest.raises(RuntimeError, match='selected suite failed'):
         gate.test_postgresql16_migration_acl_concurrency_and_kill_gate()
     assert calls == [suite]
 
 
-@pytest.mark.parametrize('suite', ['migrations', 'inventory', 'control'])
+@pytest.mark.parametrize('suite', ['migrations', 'inventory', 'control', 'contact_envelope'])
 def test_runtime_suite_proves_fresh_database_before_bootstrap(monkeypatch, suite):
     import test_postgresql16_release_gate as gate
     class BoundaryReached(Exception):
@@ -193,7 +194,7 @@ def test_runtime_suite_proves_fresh_database_before_bootstrap(monkeypatch, suite
     monkeypatch.setattr(gate, '_bootstrap_roles', forbidden)
     monkeypatch.setattr(gate, 'create_engine', forbidden)
     entry = {'migrations': gate._run_migration_suite, 'inventory': gate._run_inventory_suite,
-             'control': gate._run_control_suite}[suite]
+             'control': gate._run_control_suite, 'contact_envelope': gate._run_contact_envelope_suite}[suite]
     with pytest.raises(BoundaryReached):
         entry()
 

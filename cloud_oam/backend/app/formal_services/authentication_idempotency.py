@@ -346,8 +346,8 @@ def create_authentication_response_cipher(
 ) -> Aes256GcmAuthenticationResponseCipher:
     """Create the response cipher while rejecting plaintext production modes.
 
-    Production accepts exactly :class:`KmsAuthenticationKeyProvider`.  Static
-    keys can be injected only in development/test/staging and there is no
+    Production accepts the exact KMS adapter or the explicit C1-claim router.
+    Static keys can be injected only in development/test/staging and there is no
     parameter that accepts a plaintext key or environment variable value.
     """
 
@@ -358,7 +358,13 @@ def create_authentication_response_cipher(
             "认证幂等加密配置无效",
             error_type=AuthenticationCipherConfigurationError,
         )
-    if environment == "production" and type(key_provider) is not KmsAuthenticationKeyProvider:
+    # Local import keeps the claim router's typed key contract acyclic while
+    # preserving exact-class production admission (no arbitrary duck types).
+    from .authentication_key_claims import ClaimRoutedAuthenticationKeyProvider
+
+    if environment == "production" and type(key_provider) not in (
+        KmsAuthenticationKeyProvider, ClaimRoutedAuthenticationKeyProvider,
+    ):
         _fail(
             "authentication_kms_required",
             "service_unavailable",

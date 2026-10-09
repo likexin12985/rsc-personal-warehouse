@@ -65,6 +65,7 @@ from . import formal_files as formal_file_service
 from .audit_chain import AuditChainError, append_audit_event
 from .material_request_contact import (
     MaterialRequestContactProtectionError,
+    material_request_contact_aad,
     validate_material_request_contact_envelope,
 )
 from .material_request_policy import (
@@ -1207,10 +1208,9 @@ def _validate_draft(
     contact = validate_material_request_contact_envelope(value.contact_envelope)
     contact_masked = _validate_contact_masked(value.contact_masked)
     expected_aad = hashlib.sha256(
-        (
-            "cloud_oam.material_request.contact.envelope.v1\0"
-            f"request_id={request_id}\0requester_person_id={requester.person.id}"
-        ).encode("ascii")
+        material_request_contact_aad(
+            contact, request_id=request_id, requester_person_id=requester.person.id,
+        )
     ).hexdigest()
     if not hmac.compare_digest(contact["aad_sha256"], expected_aad):
         _fail(
@@ -1327,10 +1327,10 @@ def _revalidate_persisted_draft(
     _assert_current_projection(request, revision)
     validate_material_request_contact_envelope(revision.contact_snapshot_jsonb)
     expected_aad = hashlib.sha256(
-        (
-            "cloud_oam.material_request.contact.envelope.v1\0"
-            f"request_id={request.id}\0requester_person_id={requester.person.id}"
-        ).encode("ascii")
+        material_request_contact_aad(
+            revision.contact_snapshot_jsonb,
+            request_id=request.id, requester_person_id=requester.person.id,
+        )
     ).hexdigest()
     if not hmac.compare_digest(
         revision.contact_snapshot_jsonb.get("aad_sha256", ""), expected_aad

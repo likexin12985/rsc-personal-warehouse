@@ -116,7 +116,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from .database import SessionLocal, engine
         from .database_security import validate_production_database_security
-        from .formal_services.file_storage import AliyunOssV2StorageAdapter, FileStorageError
+        from .formal_services.file_storage import FileStorageError
+        from .file_storage_composition import create_file_storage_adapter
         from .formal_services.inventory_query import InventoryReadError
 
         inventory_error_type = InventoryReadError
@@ -127,10 +128,9 @@ def main(argv: list[str] | None = None) -> int:
             expected_migration_role=settings.database_expected_migration_role,
         )
 
-        storage = AliyunOssV2StorageAdapter(
-            region=settings.file_storage_region.strip(),
-            bucket=settings.file_storage_bucket.strip(),
-        )
+        storage = create_file_storage_adapter(settings)
+        if storage is None:
+            raise FileStorageError("OSS storage adapter is unavailable")
         if args.poll_seconds is not None:
             stop_event = Event()
 

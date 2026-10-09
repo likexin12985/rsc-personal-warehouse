@@ -12,10 +12,13 @@ import argparse
 from datetime import datetime, timedelta, timezone
 import ipaddress
 import json
-from pathlib import Path
+import os
+from pathlib import Path, PurePosixPath
 import re
 import shutil
+import stat
 import subprocess
+import sys
 from urllib.parse import unquote, urlsplit
 
 
@@ -57,6 +60,45 @@ DATABASE_URL_RE = re.compile(
     r"postgresql\+psycopg://(?P<role>[^:/?#@\s]+):"
     r"(?P<password>[^@/?#\s]+)@db:5432/(?P<database>[^/?#\s]+)"
 )
+
+
+def private_oss_oidc_configured(api: dict) -> bool:
+    """Configuration-only proof; ownership, STS and renewal need live evidence."""
+    environment = api.get("environment", {})
+    if not isinstance(environment, dict):
+        return False
+    role = re.fullmatch(r"acs:ram::([0-9]{16}):role/[A-Za-z0-9.@_-]{1,64}",
+                        str(environment.get("OAM_FILE_STORAGE_OIDC_ROLE_ARN", "")))
+    provider = re.fullmatch(r"acs:ram::([0-9]{16}):oidc-provider/[A-Za-z0-9._-]{1,128}",
+                            str(environment.get("OAM_FILE_STORAGE_OIDC_PROVIDER_ARN", "")))
+    token = environment.get("OAM_FILE_STORAGE_OIDC_TOKEN_FILE", "")
+    if (environment.get("OAM_FILE_STORAGE_CREDENTIAL_MODE") != "oidc_role_arn"
+            or role is None or provider is None or role[1] != provider[1]
+            or re.fullmatch(r"[A-Za-z0-9.@_-]{2,64}", str(environment.get(
+                "OAM_FILE_STORAGE_OIDC_SESSION_NAME", "rsc-pilot-files"))) is None
+            or not isinstance(token, str) or not token.startswith("/run/")
+            or str(PurePosixPath(token)) != token or ".." in PurePosixPath(token).parts
+            or any(ord(c) < 33 or ord(c) == 127 for c in token)
+            or any(environment.get(key) for key in (
+                "OSS_ACCESS_KEY_ID", "OSS_ACCESS_KEY_SECRET", "OSS_SESSION_TOKEN", "OSS_SECURITY_TOKEN",
+                "ALIBABA_CLOUD_ACCESS_KEY_ID", "ALIBABA_CLOUD_ACCESS_KEY_SECRET", "ALIBABA_CLOUD_SECURITY_TOKEN",
+                "OAM_FILE_STORAGE_ACCESS_KEY_ID", "OAM_FILE_STORAGE_ACCESS_KEY_SECRET", "OAM_FILE_STORAGE_SESSION_TOKEN"))):
+        return False
+    parent = str(PurePosixPath(token).parent)
+    mounts = api.get("volumes", [])
+    if not isinstance(mounts, list) or any(not isinstance(item, dict) for item in mounts):
+        return False
+    covering = [item for item in mounts if isinstance(item.get("target"), str)
+                and (token == item["target"] or token.startswith(item["target"].rstrip("/") + "/"))]
+    if len(covering) != 1:
+        return False
+    mount = covering[0]
+    source = mount.get("source", "")
+    return (mount.get("target") == parent and parent != "/run"
+            and mount.get("type") == "bind" and mount.get("read_only") is True
+            and isinstance(source, str) and source.startswith("/run/")
+            and str(PurePosixPath(source)) == source and ".." not in PurePosixPath(source).parts
+            and not any(ord(c) < 33 or ord(c) == 127 for c in source))
 
 
 def strict_object(pairs):
@@ -128,6 +170,120 @@ def sms_default_credential_chain_configured(environment: dict[str, str]) -> bool
             )
         )
     )
+
+
+PNVS_OIDC_COORDINATES = (
+    ("RSC_PNVS_OIDC_ROLE_ARN", "ALIBABA_CLOUD_ROLE_ARN"),
+    ("RSC_PNVS_OIDC_PROVIDER_ARN", "ALIBABA_CLOUD_OIDC_PROVIDER_ARN"),
+    ("RSC_PNVS_OIDC_TOKEN_FILE", "ALIBABA_CLOUD_OIDC_TOKEN_FILE"),
+    ("RSC_PNVS_OIDC_SESSION_NAME", "ALIBABA_CLOUD_ROLE_SESSION_NAME"),
+)
+PNVS_OIDC_IDENTITY_FIELDS = (
+    "RSC_PNVS_OIDC_PROJECTOR_UID", "RSC_PNVS_OIDC_SHARED_GID",
+    "RSC_PNVS_OIDC_SUBJECT", "RSC_PNVS_OIDC_AUDIENCE",
+)
+PNVS_STATIC_FIELDS = (
+    "OAM_SMS_ACCESS_KEY_ID", "OAM_SMS_ACCESS_KEY_SECRET", "OAM_SMS_SECURITY_TOKEN",
+    "OAM_SMS_SECURITY_TOKEN_EXPIRES_AT", "ALIBABA_CLOUD_ACCESS_KEY_ID",
+    "ALIBABA_CLOUD_ACCESS_KEY_SECRET", "ALIBABA_CLOUD_SECURITY_TOKEN",
+    "OSS_ACCESS_KEY_ID", "OSS_ACCESS_KEY_SECRET", "OSS_SESSION_TOKEN", "OSS_SECURITY_TOKEN",
+    "OAM_FILE_STORAGE_ACCESS_KEY_ID", "OAM_FILE_STORAGE_ACCESS_KEY_SECRET", "OAM_FILE_STORAGE_SESSION_TOKEN",
+)
+
+
+def pnvs_oidc_declared(environment):
+    return any(environment.get(key, "") for key in (
+        *(key for pair in PNVS_OIDC_COORDINATES for key in pair), *PNVS_OIDC_IDENTITY_FIELDS))
+
+
+def pnvs_oidc_environment_configured(environment):
+    """Public declarations only; no token, profile, socket, STS or DB reads."""
+    try:
+        account = environment.get("RSC_OIDC_EXPECTED_ACCOUNT_ID", "")
+        if (re.fullmatch(r"[0-9]{16}", account) is None
+                or not sms_default_credential_chain_configured(environment)
+                or any(environment.get(key, "").strip() for key in PNVS_STATIC_FIELDS)
+                or any(not environment.get(left) or environment[left] != environment.get(right)
+                       for left, right in PNVS_OIDC_COORDINATES)):
+            return False
+        for prefix in ("RSC_PNVS", "OAM_FILE_STORAGE"):
+            role = re.fullmatch(r"acs:ram::([0-9]{16}):role/[A-Za-z0-9.@_-]{1,64}",
+                               environment.get(prefix + "_OIDC_ROLE_ARN", ""))
+            provider = re.fullmatch(r"acs:ram::([0-9]{16}):oidc-provider/[A-Za-z0-9._-]{1,128}",
+                                   environment.get(prefix + "_OIDC_PROVIDER_ARN", ""))
+            token = environment.get(prefix + "_OIDC_TOKEN_FILE", "")
+            if (not role or not provider or role[1] != account or provider[1] != account
+                    or not token.startswith("/run/") or len(PurePosixPath(token).parts) < 4
+                    or str(PurePosixPath(token)) != token or ".." in PurePosixPath(token).parts
+                    or any(ord(c) < 33 or ord(c) > 126 for c in token)):
+                return False
+        token = environment["RSC_PNVS_OIDC_TOKEN_FILE"]
+        if (environment.get("OAM_FILE_STORAGE_CREDENTIAL_MODE") != "oidc_role_arn"
+                or environment["RSC_PNVS_OIDC_ROLE_ARN"] == environment["OAM_FILE_STORAGE_OIDC_ROLE_ARN"]
+                or PurePosixPath(token).parent == PurePosixPath(environment["OAM_FILE_STORAGE_OIDC_TOKEN_FILE"]).parent
+                or re.fullmatch(r"[A-Za-z0-9.@_-]{2,64}", environment["RSC_PNVS_OIDC_SESSION_NAME"]) is None
+                or any(not positive_integer(environment.get(key), maximum=2_147_483_647)
+                       for key in PNVS_OIDC_IDENTITY_FIELDS[:2])):
+            return False
+        # This deployment selects OpenBao for both protected purposes. Giving
+        # the PNVS default chain to a remaining Aliyun KMS adapter is forbidden.
+        if any(environment.get(key) != "openbao_transit_v1" for key in (
+                "OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER", "OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_PROVIDER")):
+            return False
+        if (any(environment.get(key) != "true" for key in (
+                "ALIBABA_CLOUD_CLI_PROFILE_DISABLED", "ALIBABA_CLOUD_ECS_METADATA_DISABLED"))
+                or environment.get("ALIBABA_CLOUD_CREDENTIALS_FILE") != "/dev/null"
+                or any(environment.get(key, "") for key in (
+                    "ALIBABA_CLOUD_CREDENTIALS_URI", "ALIBABA_CLOUD_PROFILE", "ALIBABA_CLOUD_ECS_METADATA"))
+                or REGION_RE.fullmatch(environment.get("ALIBABA_CLOUD_STS_REGION", "")) is None
+                or environment.get("ALIBABA_CLOUD_VPC_ENDPOINT_ENABLED") != "false"):
+            return False
+        # Reuse the existing OpenBao issuer/audience/UUID-subject contract.
+        projection = str(Path(__file__).resolve().parents[1] / "deployment" / "openbao-pilot")
+        if projection not in sys.path:
+            sys.path.insert(0, projection)
+        from identity_contract import IdentityContract
+        for prefix in ("RSC_PNVS", "RSC_OSS"):
+            IdentityContract(environment.get("RSC_OIDC_ISSUER_URL", ""),
+                environment.get(prefix + "_OIDC_AUDIENCE", ""), environment.get(prefix + "_OIDC_SUBJECT", ""))
+        return all(environment["RSC_PNVS_OIDC_" + key] != environment["RSC_OSS_OIDC_" + key]
+                   for key in ("AUDIENCE", "SUBJECT"))
+    except (TypeError, ValueError, AttributeError, KeyError):
+        return False
+
+
+def pnvs_oidc_configuration_checks(document):
+    services = document.get("services", {})
+    api = services.get("api", {})
+    environment = service_env(api)
+    result = dict(pnvs_oidc_public_contract=pnvs_oidc_environment_configured(environment),
+                  pnvs_oidc_readonly_projection=False, pnvs_oidc_api_only_chain=False)
+    try:
+        if not result["pnvs_oidc_public_contract"] or not private_oss_oidc_configured(api):
+            return result
+        token = environment["RSC_PNVS_OIDC_TOKEN_FILE"]
+        source = _readonly_source(api, token, directory=True)
+        oss = _readonly_source(api, environment["OAM_FILE_STORAGE_OIDC_TOKEN_FILE"], directory=True)
+        uid, gid = str(api.get("user", "")).split(":")
+        projector, shared = (environment[key] for key in PNVS_OIDC_IDENTITY_FIELDS[:2])
+        groups = {str(item) for item in api.get("group_add", [])} | {gid}
+        mounts = api.get("volumes", [])
+        # A mounted replacement for /dev/null would reopen the old profile
+        # chain. Check every declared destination, not just bind mounts.
+        null_isolated = all(not (str(item.get("target", "")).rstrip("/") in ("", "/dev", "/dev/null"))
+                            for item in mounts)
+        result["pnvs_oidc_readonly_projection"] = (
+            source.parent != oss.parent and str(source.parent).startswith("/run/")
+            and positive_integer(uid, maximum=2_147_483_647) and uid != projector
+            and positive_integer(gid, maximum=2_147_483_647) and shared in groups
+            and null_isolated and not api.get("devices") and not api.get("cap_add")
+            and not api.get("privileged", False))
+        result["pnvs_oidc_api_only_chain"] = all(
+            not pnvs_oidc_declared(service_env(service))
+            for name, service in services.items() if name != "api")
+    except (TypeError, ValueError, AttributeError, KeyError):
+        pass
+    return result
 
 
 def service_env(service: dict[str, object]) -> dict[str, str]:
@@ -216,6 +372,204 @@ def registry_entries(path: Path) -> set[tuple[str, str, int]]:
         coordinates.add(coordinate)
         purpose_versions.add(purpose_version)
     return coordinates
+
+
+OPENBAO_ENV_FIELDS = (
+    "OAM_OPENBAO_PROVIDER_INSTANCE_ID", "OAM_OPENBAO_ENCRYPTED_DATA_KEY_REGISTRY_PATH",
+    "OAM_OPENBAO_SOCKET_PATH", "OAM_OPENBAO_TOKEN_FILE", "OAM_OPENBAO_API_UID",
+    "OAM_OPENBAO_BAO_UID", "OAM_OPENBAO_BAO_GID", "OAM_OPENBAO_SHARED_GID",
+    "OAM_OPENBAO_TOKEN_PROJECTOR_UID",
+)
+OPENBAO_DEPLOYMENT_FIELDS = ("RSC_OPENBAO_CONTAINER_ID", "RSC_OPENBAO_IMAGE_ID")
+
+
+def restricted_process_configuration(service, *, inspected=False):
+    """Exact capability/privilege contract, for Compose and Docker inspect."""
+    fields = ("CapDrop", "CapAdd", "Privileged", "SecurityOpt") if inspected else (
+        "cap_drop", "cap_add", "privileged", "security_opt")
+    drop, add, privileged, options = (service.get(key) for key in fields)
+    return (drop == ["ALL"] and not add and (privileged is False if inspected else privileged in (None, False))
+            and isinstance(options, list) and len(options) == 1
+            and options[0] in ("no-new-privileges=true", "no-new-privileges:true"))
+
+
+def openbao_peer_declaration(document):
+    """Bind an existing external Bao container by full immutable identity."""
+    services = document.get("services", {})
+    api, gate = services.get("api", {}), services.get("kms-pin-gate", {})
+    environment, gate_environment = service_env(api), service_env(gate)
+    identifier, image = (environment.get(key, "") for key in OPENBAO_DEPLOYMENT_FIELDS)
+    if (re.fullmatch(r"[0-9a-f]{64}", identifier) is None
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", image) is None
+            or any(environment.get(key) != gate_environment.get(key) for key in OPENBAO_DEPLOYMENT_FIELDS)
+            or any(service.get("pid") != "container:" + identifier or not restricted_process_configuration(service)
+                   for service in (api, gate))):
+        raise ValueError("OpenBao peer declaration unavailable")
+    return {"container_id": identifier, "image_id": image}
+
+
+def _backend_modules():
+    # Import only pure coordinates/parsing modules, never Settings/global DB.
+    backend = str(Path(__file__).resolve().parents[1] / "backend")
+    if backend not in sys.path:
+        sys.path.insert(0, backend)
+    from app.openbao_settings import OpenBaoProductionSettings
+    from app.openbao_registry_candidate import _parse_entries
+    return OpenBaoProductionSettings, _parse_entries
+
+
+def _openbao_settings(environment, purpose, version):
+    settings_type, _ = _backend_modules()
+    values = [environment.get(key, "") for key in OPENBAO_ENV_FIELDS]
+    if (any(not configured(value) for value in values[:4])
+            or any(not positive_integer(value, maximum=2_147_483_647) for value in values[4:])
+            or not positive_integer(version, maximum=MAX_APPLICATION_KEY_VERSION)):
+        raise ValueError("OpenBao configuration unavailable")
+    result = settings_type(
+        enabled=True, environment=environment.get("OAM_ENVIRONMENT", ""), purpose=purpose,
+        provider_instance_id=values[0], registry_path=values[1], socket_path=values[2],
+        token_file=values[3], api_uid=int(values[4]), bao_uid=int(values[5]),
+        bao_gid=int(values[6]), shared_gid=int(values[7]), token_projector_uid=int(values[8]),
+        application_key_versions=(int(version),), active_application_key_version=int(version),
+    )
+    if not result.is_complete():
+        raise ValueError("OpenBao configuration unavailable")
+    for value in (result.socket_path, result.token_file):
+        if (not value.startswith("/run/") or str(PurePosixPath(value)) != value
+                or any(ord(char) < 33 or ord(char) > 126 for char in value)):
+            raise ValueError("OpenBao configuration unavailable")
+    return result
+
+
+def bind_disables_host_path_creation(mount):
+    """Accept explicit false or its verified Compose long-map canonical form.
+
+    Compose 2.40.3 emits ``bind: {}`` for an explicit false and preserves
+    this on JSON roundtrip. Short syntax emits true; an omitted long-syntax
+    bind remains absent. Keep that distinction instead of defaulting a
+    missing/null/non-object bind to an empty object.
+    """
+    return (isinstance(mount, dict) and mount.get("type") == "bind"
+            and isinstance(mount.get("bind"), dict)
+            and mount["bind"].get("create_host_path", False) is False)
+
+
+def _readonly_source(service, target, *, directory=False):
+    """Resolve a declared read-only bind without reading its socket/token."""
+    mounts = service.get("volumes", [])
+    if not isinstance(mounts, list) or any(not isinstance(item, dict) for item in mounts):
+        raise ValueError("OpenBao mount unavailable")
+    relevant = [item for item in mounts if isinstance(item.get("target"), str)
+                and (target == item["target"] or target.startswith(item["target"].rstrip("/") + "/")
+                     or item["target"].startswith(target.rstrip("/") + "/"))]
+    if len(relevant) != 1:
+        raise ValueError("OpenBao mount unavailable")
+    mount = relevant[0]
+    source, destination = mount.get("source", ""), mount.get("target", "")
+    if (not bind_disables_host_path_creation(mount) or mount.get("read_only") is not True
+            or not isinstance(source, str) or not source.startswith("/")
+            or str(PurePosixPath(source)) != source or ".." in PurePosixPath(source).parts
+            or any(ord(char) < 33 or ord(char) > 126 for char in source)
+            or (directory and destination != str(PurePosixPath(target).parent))):
+        raise ValueError("OpenBao mount unavailable")
+    suffix = str(PurePosixPath(target).relative_to(destination))
+    return Path(source) if suffix == "." else Path(source) / suffix
+
+
+def _openbao_registry_coordinates(path, settings):
+    """Read wrapped material only; no DB pins inferred and no decrypt.
+
+    The host checker may run as root while the file belongs to the API UID.
+    Runtime's stricter dirfd/identity/ACL checks remain independent admission.
+    """
+    _, parse_entries = _backend_modules()
+    for ancestor in (path, *path.parents):
+        if ancestor.is_symlink():
+            raise ValueError("OpenBao registry unavailable")
+    parent = path.parent.stat()
+    if (parent.st_uid != settings.api_uid or stat.S_IMODE(parent.st_mode) != 0o700):
+        raise ValueError("OpenBao registry unavailable")
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode) != 0o600
+                or before.st_uid != settings.api_uid or before.st_nlink != 1
+                or not 1 <= before.st_size <= 1024 * 1024):
+            raise ValueError("OpenBao registry unavailable")
+        pieces, remaining = [], before.st_size + 1
+        while remaining:
+            piece = os.read(descriptor, min(remaining, 65536))
+            if not piece:
+                break
+            pieces.append(piece)
+            remaining -= len(piece)
+        content = b"".join(pieces)
+        def stable(info):
+            return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+                    info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        if (stable(before) != stable(os.fstat(descriptor)) or stable(before) != stable(path.stat())
+                or len(content) != before.st_size):
+            raise ValueError("OpenBao registry unavailable")
+    finally:
+        os.close(descriptor)
+    entries = parse_entries(content)
+    coordinates = {(entry.coordinate.purpose, entry.coordinate.application_key_version) for entry in entries}
+    if (len(coordinates) != len(entries) or len({entry.ciphertext for entry in entries}) != len(entries)
+            or any(entry.coordinate.environment != settings.environment
+                   or entry.coordinate.provider_instance_id != settings.provider_instance_id for entry in entries)):
+        raise ValueError("OpenBao registry unavailable")
+    return coordinates
+
+
+def openbao_configuration_checks(api, gate, active):
+    """Static OpenBao configuration only; missing mounts/registry block.
+
+    Historical versions/exact entry sets require immutable DB claims at runtime.
+    Never read the token, touch the socket, create a provider, or claim readiness.
+    """
+    names = ("openbao_coordinates", "openbao_runtime_identity_declarations",
+             "openbao_readonly_mounts", "openbao_gate_same_configuration",
+             "openbao_registry_structure_and_active_keys")
+    result = dict.fromkeys(names, False)
+    try:
+        openbao_peer_declaration({"services": {"api": api, "kms-pin-gate": gate}})
+        result["openbao_bound_peer_and_process_isolation"] = True
+    except (TypeError, ValueError, AttributeError):
+        result["openbao_bound_peer_and_process_isolation"] = False
+    try:
+        environment = service_env(api)
+        purpose, version = active[0] if active else (AUTH_PURPOSE, "1")
+        settings = _openbao_settings(environment, purpose, version)
+        for selected_purpose, selected_version in active:
+            _openbao_settings(environment, selected_purpose, selected_version)
+        result[names[0]] = True
+        if not isinstance(gate, dict):
+            return result
+        uid, group = str(settings.api_uid), str(settings.shared_gid)
+        def identity(service):
+            parts = str(service.get("user", "")).split(":")
+            return (1 <= len(parts) <= 2 and parts[0] == uid
+                    and (len(parts) == 2 and parts[1] == group
+                         or group in {str(item) for item in service.get("group_add", [])}))
+        result[names[1]] = identity(api) and identity(gate)
+        targets = (settings.registry_path, settings.socket_path, settings.token_file)
+        api_sources = tuple(_readonly_source(api, target, directory=index > 0)
+                            for index, target in enumerate(targets))
+        gate_sources = tuple(_readonly_source(gate, target, directory=index > 0)
+                             for index, target in enumerate(targets))
+        result[names[2]] = (len(set(api_sources)) == 3
+                           and all(path.parent.is_dir() for path in (*api_sources, *gate_sources)))
+        fields = (*OPENBAO_ENV_FIELDS, "OAM_ENVIRONMENT",
+                  "OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER", "OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION",
+                  "OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_PROVIDER", "OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_KEY_VERSION")
+        gate_environment = service_env(gate)
+        result[names[3]] = (api_sources == gate_sources
+                           and all(environment.get(key, "") == gate_environment.get(key, "") for key in fields))
+        coordinates = _openbao_registry_coordinates(api_sources[0], settings)
+        result[names[4]] = {(p, int(v)) for p, v in active}.issubset(coordinates)
+    except Exception:
+        pass
+    return result
 
 
 def checks_for(document: dict[str, object], compose_file: Path, *,
@@ -329,6 +683,9 @@ def checks_for(document: dict[str, object], compose_file: Path, *,
           and api_env.get("OAM_SMS_SCHEME_NAME") == PILOT_SMS_SCHEME_NAME
           and sms_sts_configured(api_env))
     check("sms_static_credentials_empty", sms_default_credential_chain_configured(api_env))
+    if any(pnvs_oidc_declared(service_env(service)) for service in services.values()):
+        for name, ok in pnvs_oidc_configuration_checks(document).items():
+            check(name, ok)
     check("sms_login_rate_limits", configured(
         api_env.get("OAM_AUTH_LOGIN_RATE_LIMIT_HMAC_SECRET"), 32
     ) and positive_integer(api_env.get("OAM_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS"), minimum=10, maximum=3600)
@@ -344,24 +701,43 @@ def checks_for(document: dict[str, object], compose_file: Path, *,
     auth_key = api_env.get("OAM_AUTH_IDEMPOTENCY_KMS_KEY_ID", "")
     contact_key = api_env.get("OAM_MATERIAL_REQUEST_CONTACT_KMS_KEY_ID", "")
     endpoint = api_env.get("OAM_KMS_ENDPOINT", "").lower()
-    check("authentication_kms_coordinates", api_env.get("OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER") == "aliyun_kms"
+    auth_provider = api_env.get("OAM_AUTH_IDEMPOTENCY_ENCRYPTION_PROVIDER")
+    contact_provider = api_env.get("OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_PROVIDER")
+    auth_version = api_env.get("OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION", "1")
+    contact_version = api_env.get("OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_KEY_VERSION", "1")
+    active_openbao = [(purpose, version) for purpose, provider, version in (
+        (AUTH_PURPOSE, auth_provider, auth_version), (CONTACT_PURPOSE, contact_provider, contact_version)
+    ) if provider == "openbao_transit_v1"]
+    bao_declared = bool(active_openbao) or any(api_env.get(key, "") not in ("", "0")
+                                             for key in (*OPENBAO_ENV_FIELDS, *OPENBAO_DEPLOYMENT_FIELDS))
+    bao_checks = (openbao_configuration_checks(api, services.get("kms-pin-gate"), active_openbao)
+                  if bao_declared else {})
+    bao_coordinates = bao_checks.get("openbao_coordinates", False)
+    check("authentication_kms_coordinates", (auth_provider == "openbao_transit_v1" and bao_coordinates)
+          or (auth_provider == "aliyun_kms"
           and KMS_KEY_RE.fullmatch(auth_key) is not None
           and not any(marker in auth_key.lower() for marker in PLACEHOLDERS)
           and KMS_ENDPOINT_RE.fullmatch(endpoint) is not None
           and ".." not in endpoint
-          and REGION_RE.fullmatch(api_env.get("OAM_KMS_REGION", "")) is not None)
+          and REGION_RE.fullmatch(api_env.get("OAM_KMS_REGION", "")) is not None))
     check("material_request_writes", bool_value(api_env.get("OAM_MATERIAL_REQUEST_WRITES_ENABLED")) is True
           and configured(api_env.get("OAM_MATERIAL_REQUEST_IDEMPOTENCY_HMAC_SECRET"), 32)
           and configured(api_env.get("OAM_MATERIAL_REQUEST_CONTACT_MOBILE_HMAC_SECRET"), 32)
-          and api_env.get("OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_PROVIDER") == "aliyun_kms"
+          and ((contact_provider == "openbao_transit_v1" and bao_coordinates)
+               or (contact_provider == "aliyun_kms"
           and KMS_KEY_RE.fullmatch(contact_key) is not None
           and not any(marker in contact_key.lower() for marker in PLACEHOLDERS)
-          and contact_key != auth_key)
+          and KMS_ENDPOINT_RE.fullmatch(endpoint) is not None and ".." not in endpoint
+          and REGION_RE.fullmatch(api_env.get("OAM_KMS_REGION", "")) is not None
+          and (auth_provider != "aliyun_kms" or contact_key != auth_key))))
+    for name, ok in bao_checks.items():
+        check(name, ok)
     check("private_oss", bool_value(api_env.get("OAM_FILE_STORAGE_ENABLED")) is True
           and api_env.get("OAM_FILE_STORAGE_PROVIDER") == "aliyun_oss_v2"
           and REGION_RE.fullmatch(api_env.get("OAM_FILE_STORAGE_REGION", "")) is not None
           and BUCKET_RE.fullmatch(api_env.get("OAM_FILE_STORAGE_BUCKET", "")) is not None
           and configured(api_env.get("OAM_FILE_IDEMPOTENCY_HMAC_SECRET"), 32))
+    check("private_oss_oidc_identity", private_oss_oidc_configured(api))
 
     proxy = api_env.get("OAM_TRUSTED_PROXY_IPS", "")
     try:
@@ -384,6 +760,12 @@ def checks_for(document: dict[str, object], compose_file: Path, *,
     check("trusted_proxy_peer", proxy_ok and web_peer_ok and web_peer in {str(value) for value in proxy_values})
 
     target = api_env.get("OAM_KMS_ENCRYPTED_DATA_KEY_REGISTRY_PATH", "")
+    # A declared historical Aliyun registry remains checked even when both
+    # active purposes use OpenBao. Its exact DB/history set is the pin gate's
+    # responsibility, never inferred from an empty active-key set here.
+    aliyun_required = auth_provider == "aliyun_kms" or contact_provider == "aliyun_kms" or bool(target)
+    if not aliyun_required:
+        return checks
     mounts = [item for item in api.get("volumes", []) if isinstance(item, dict) and item.get("target") == target]
     mount_ok = len(mounts) == 1 and mounts[0].get("type") == "bind" and mounts[0].get("read_only") is True
     check("kms_registry_readonly_mount", mount_ok)
@@ -396,9 +778,11 @@ def checks_for(document: dict[str, object], compose_file: Path, *,
         registry_source = source
         try:
             coordinates = registry_entries(source)
-            required = {(AUTH_PURPOSE, auth_key, int(api_env.get("OAM_AUTH_IDEMPOTENCY_ENCRYPTION_KEY_VERSION", "1")))}
-            if bool_value(api_env.get("OAM_MATERIAL_REQUEST_WRITES_ENABLED")) is True:
-                required.add((CONTACT_PURPOSE, contact_key, int(api_env.get("OAM_MATERIAL_REQUEST_CONTACT_ENCRYPTION_KEY_VERSION", "1"))))
+            required = set()
+            if auth_provider == "aliyun_kms":
+                required.add((AUTH_PURPOSE, auth_key, int(auth_version)))
+            if contact_provider == "aliyun_kms":
+                required.add((CONTACT_PURPOSE, contact_key, int(contact_version)))
             registry_ok = required.issubset(coordinates)
         except Exception:
             registry_ok = False
@@ -447,7 +831,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             checks.append({"name": "compose_resolution", "ok": False})
     errors = [item["name"] for item in checks if not item["ok"]]
-    output = {"check": "pilot-preflight", "status": "fail" if errors else "pass", "deploymentReady": False, "errors": errors, "checks": checks, "unverified": ["target engine/images", "HTTPS certificate and proxy peer", "SMS send/verify", "KMS decrypt and persisted pins", "OSS policy/access", "database migration/roles", "identity/opening data", "backup restore and business UAT"], "pilotScope": PILOT_MVP_SCOPE, "scope": "configuration only; no container, network or business writes"}
+    output = {"check": "pilot-preflight", "status": "fail" if errors else "pass", "deploymentReady": False, "errors": errors, "checks": checks, "unverified": ["target engine/images", "HTTPS certificate and proxy peer", "SMS send/verify", "KMS decrypt and persisted pins", "OpenBao Linux identity, mounts, token lifecycle and exact DB claims", "OSS policy/access", "database migration/roles", "identity/opening data", "backup restore and business UAT"], "pilotScope": PILOT_MVP_SCOPE, "scope": "configuration only; no container, network or business writes"}
     print(json.dumps(output, ensure_ascii=False, separators=(",", ":")))
     return 1 if errors else 0
 

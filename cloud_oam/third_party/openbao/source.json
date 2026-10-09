@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/openbao/openbao",
+  "version": "2.7.1",
+  "commit": "a5db72cef75c24b920ade02065b18dd8eb666bac",
+  "license": "MPL-2.0",
+  "reuse": "Unmodified official external Agent binary; adapted auto-auth configuration. No upstream Go implementation vendored.",
+  "licensePath": "LICENSE",
+  "sources": [
+    {
+      "repository": "https://github.com/openbao/openbao",
+      "commit": "a5db72cef75c24b920ade02065b18dd8eb666bac",
+      "path": "LICENSE",
+      "sha256": "d6b1a865f1c8c697d343bd4e0ce61025f91898486a1f00d727f32e8644af77d3",
+      "bytes": 15958
+    },
+    {
+      "repository": "https://github.com/openbao/openbao",
+      "commit": "a5db72cef75c24b920ade02065b18dd8eb666bac",
+      "path": "website/content/docs/agent-and-proxy/autoauth/methods/approle.mdx",
+      "sha256": "64a38debe8470e7c288e953cada6649509339ad3c3e443a6f13997e7c1026a7e",
+      "bytes": 2572
+    },
+    {
+      "repository": "https://github.com/openbao/openbao",
+      "commit": "a5db72cef75c24b920ade02065b18dd8eb666bac",
+      "path": "website/content/docs/agent-and-proxy/autoauth/sinks/file.mdx",
+      "sha256": "6cc17b00d523709ebd57d532abb5823542d950fb2d7a5c5395b203a47bae5492",
+      "bytes": 1453
+    },
+    {
+      "repository": "https://github.com/openbao/openbao",
+      "commit": "a5db72cef75c24b920ade02065b18dd8eb666bac",
+      "path": "internal/command/agentproxyshared/sink/file/file_sink.go",
+      "sha256": "b1748240e138b05c7c1d5812f07522274d3c0d2e2728babb2a4afb9299b2025a",
+      "bytes": 4514
+    },
+    {
+      "repository": "https://github.com/openbao/openbao",
+      "commit": "a5db72cef75c24b920ade02065b18dd8eb666bac",
+      "path": "internal/command/agentproxyshared/auth/auth.go",
+      "sha256": "c230266555077d7ffe28aa0ce5c29c1512805d9759edb53617ee4832b6153bad",
+      "bytes": 15476
+    },
+    {
+      "repository": "https://github.com/openbao/openbao",
+      "commit": "a5db72cef75c24b920ade02065b18dd8eb666bac",
+      "path": "api/lifetime_watcher.go",
+      "sha256": "76be2818ae4497a25f85e7ce211d0538f1e632c2faea9b14a6b232702b875d1e",
+      "bytes": 13210
+    }
+  ],
+  "releaseLock": "../../deployment/openbao-pilot/official_release_2.7.1.json",
+  "productionEnabled": false
+}

@@ -97,6 +97,7 @@ def test_release_retention_detects_newer_evidence_before_old_guards(monkeypatch,
     # Bind each synthetic fact to its exact query. A positional list silently
     # shifts existing meanings when a newer retention guard adds a query.
     query_facts = {
+        "SELECT EXISTS (SELECT 1 FROM public.material_requests WHERE shipment_status <> 'not_started')": False,
         'SELECT EXISTS (SELECT 1 FROM public.stock_loss_dispositions)': False,
         'SELECT EXISTS (SELECT 1 FROM public.stock_operation_return_inbounds)': False,
         'SELECT EXISTS (SELECT 1 FROM public.opening_start_command_seals)': has_seals,

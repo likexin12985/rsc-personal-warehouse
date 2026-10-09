@@ -1,0 +1,28 @@
+{
+  "exit_after_auth": false,
+  "vault": {
+    "address": "unix:///run/rsc-bao/api.sock"
+  },
+  "auto_auth": {
+    "method": [{
+      "type": "approle",
+      "mount_path": "auth/rsc-pilot",
+      "min_backoff": "1s",
+      "max_backoff": "5s",
+      "config": {
+        "role_id_file_path": "/run/rsc-bao-bootstrap/role-id",
+        "secret_id_file_path": "/run/rsc-bao-bootstrap/secret-id",
+        "remove_secret_id_file_after_reading": true
+      }
+    }],
+    "sinks": [{"sink": {
+      "type": "file",
+      "config": {
+        "path": "/run/rsc-bao-token/api.token",
+        "mode": 288,
+        "uid": -1,
+        "gid": -1
+      }
+    }}]
+  }
+}

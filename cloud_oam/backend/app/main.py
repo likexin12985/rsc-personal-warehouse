@@ -12,11 +12,7 @@ from .auth_sessions import validate_active_production_session_ip_evidence
 from .database import Base, SessionLocal, engine, health_engine
 from .database_security import validate_production_database_security
 from .kms_readiness import KmsReadinessGate
-from .production_adapters import (
-    get_configured_kms_loader,
-    validate_persisted_kms_key_references,
-    validate_production_adapter_installation,
-)
+from .production_key_runtime import ProviderKeyRuntime, build_production_key_runtime
 from .routers import (
     access,
     audit,
@@ -172,12 +168,12 @@ async def lifespan(application: FastAPI):
     runtime_app = application or app
     runtime_app.state.kms_readiness_gate = None
     runtime_app.state.required_kms_coordinates = frozenset()
+    runtime_app.state.provider_key_runtime = None
     if settings.environment == "production":
         # Structural, network-free proof: the ciphertext-only key registry and
         # every enabled logical key coordinate must exist before the process can
         # advertise health.  Online KMS availability is re-proved before each
         # paid SMS or protected write.
-        validate_production_adapter_installation(settings)
         validate_production_database_security(
             engine,
             expected_runtime_role=settings.database_expected_runtime_role,
@@ -187,7 +183,7 @@ async def lifespan(application: FastAPI):
         # but no active session with plaintext or a stale HMAC version may be
         # accepted by the formal API.
         with SessionLocal() as db:
-            required_kms_coordinates = validate_persisted_kms_key_references(
+            key_runtime = build_production_key_runtime(
                 db,
                 settings,
             )
@@ -195,26 +191,31 @@ async def lifespan(application: FastAPI):
                 db,
                 hash_version=settings.identity_hash_version,
             )
-        runtime_app.state.required_kms_coordinates = required_kms_coordinates
-        runtime_app.state.kms_readiness_gate = KmsReadinessGate(
-            loader=get_configured_kms_loader(settings).probe,
-            success_ttl_seconds=settings.kms_readiness_success_ttl_seconds,
-            failure_ttl_seconds=settings.kms_readiness_failure_ttl_seconds,
-            wait_budget_seconds=settings.kms_readiness_wait_budget_seconds,
-            probe_budget_seconds=settings.kms_readiness_probe_budget_seconds,
-        )
     Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
     _run_startup_database_boundary(
         schema_mode=settings.database_schema_mode,
         create_schema=_create_bootstrap_schema,
         seed_data=_seed_bootstrap_data,
     )
+    if settings.environment == "production":
+        runtime_app.state.required_kms_coordinates = key_runtime.required_coordinates
+        runtime_app.state.kms_readiness_gate = KmsReadinessGate(
+            loader=key_runtime.probe,
+            success_ttl_seconds=settings.kms_readiness_success_ttl_seconds,
+            failure_ttl_seconds=settings.kms_readiness_failure_ttl_seconds,
+            wait_budget_seconds=settings.kms_readiness_wait_budget_seconds,
+            probe_budget_seconds=settings.kms_readiness_probe_budget_seconds,
+        )
+        runtime_app.state.provider_key_runtime = key_runtime
     try:
         yield
     finally:
         readiness_gate = getattr(runtime_app.state, "kms_readiness_gate", None)
         if isinstance(readiness_gate, KmsReadinessGate):
             readiness_gate.close()
+        runtime_app.state.provider_key_runtime = None
+        runtime_app.state.kms_readiness_gate = None
+        runtime_app.state.required_kms_coordinates = frozenset()
 
 
 app = FastAPI(
@@ -440,6 +441,13 @@ def _readiness_response() -> JSONResponse:
     if settings.environment == "production":
         gate = getattr(app.state, "kms_readiness_gate", None)
         coordinates = getattr(app.state, "required_kms_coordinates", ())
+        runtime = getattr(app.state, "provider_key_runtime", None)
+        try:
+            if type(runtime) is not ProviderKeyRuntime or coordinates != runtime.required_coordinates:
+                raise ValueError("key runtime unavailable")
+            runtime._check_settings(settings)
+        except Exception:
+            return _health_response(ready=False, status="not_ready")
         if not isinstance(gate, KmsReadinessGate) or not gate.is_ready(coordinates):
             return _health_response(ready=False, status="not_ready")
     return _health_response(ready=True, status="ready")

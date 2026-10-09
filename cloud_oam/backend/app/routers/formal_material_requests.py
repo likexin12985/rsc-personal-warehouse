@@ -7,8 +7,8 @@ reservation, outbound, shipment, signature, OAM receipt, personal inbound,
 notification or reconciliation state.
 
 The production composition root supplies one request-scoped
-:class:`MaterialRequestContactCipher` from a ciphertext-only KMS data-key
-registry.  Missing or unavailable KMS material still fails closed while read
+:class:`MaterialRequestContactCipher` from its independently reviewed key
+catalog. Missing or unavailable key material still fails closed while read
 routes remain usable.
 """
 
@@ -455,12 +455,18 @@ class _MaterialRequestAdapterError(RuntimeError):
 
 
 def get_material_request_contact_cipher(
+    request: Request,
     runtime_settings: Settings = Depends(get_settings),
 ) -> MaterialRequestContactCipher | None:
-    """Return one request-scoped KMS cipher with no plaintext-key fallback."""
+    """Use the startup-reviewed catalog with no registry-only fallback."""
 
     try:
-        return create_production_material_request_contact_cipher(runtime_settings)
+        key_runtime = getattr(request.app.state, "provider_key_runtime", None)
+        if runtime_settings.environment == "production" and key_runtime is None:
+            return None
+        return create_production_material_request_contact_cipher(
+            runtime_settings, key_runtime=key_runtime
+        )
     except Exception:
         # The formal write adapter maps absence/unavailability to its stable,
         # non-sensitive 503 response before any business mutation.
@@ -2670,8 +2676,12 @@ def _require_write_runtime(
         )
     if (
         not settings.material_request_contact_kms_configuration_ready()
-        or settings.material_request_contact_kms_key_id.strip()
-        == settings.auth_idempotency_kms_key_id.strip()
+        or (
+            settings.material_request_contact_encryption_provider == "aliyun_kms"
+            and settings.auth_idempotency_encryption_provider == "aliyun_kms"
+            and settings.material_request_contact_kms_key_id.strip()
+            == settings.auth_idempotency_kms_key_id.strip()
+        )
     ):
         raise _MaterialRequestAdapterError(
             "material_request_contact_kms_unavailable",
@@ -2687,7 +2697,10 @@ def _require_write_runtime(
             status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     try:
-        active_version = cipher.active_key_version()
+        preflight = getattr(cipher, "preflight_active_key", None)
+        active_version = (
+            preflight() if callable(preflight) else cipher.active_key_version()
+        )
     except Exception:
         raise _MaterialRequestAdapterError(
             "material_request_contact_kms_unavailable",

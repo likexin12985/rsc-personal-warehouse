@@ -228,7 +228,7 @@ def test_child_owns_engine_storage_and_original_job_and_disposes(monkeypatch):
     import sqlalchemy
     from sqlalchemy.pool import NullPool
     from app import config, database_security, opening_import_worker_database
-    from app.formal_services import file_storage
+    from app import file_storage_composition
     engine = SimpleNamespace(dispose=Mock())
     create = Mock(return_value=engine)
     factory, storage = object(), object()
@@ -237,7 +237,8 @@ def test_child_owns_engine_storage_and_original_job_and_disposes(monkeypatch):
     validate = Mock()
     monkeypatch.setattr(database_security, 'validate_production_database_security', validate)
     monkeypatch.setattr(opening_import_worker_database, 'opening_import_worker_session_factory', lambda item: factory if item is engine else pytest.fail('wrong engine'))
-    monkeypatch.setattr(file_storage, 'AliyunOssV2StorageAdapter', lambda **k: storage)
+    compose = Mock(return_value=storage)
+    monkeypatch.setattr(file_storage_composition, 'create_file_storage_adapter', compose)
     process = Mock(return_value=worker.OpeningImportWorkerResult(FIRST, 'awaiting_confirmation'))
     monkeypatch.setattr(worker, 'process_one_opening_count_import', process)
     result = entry._opening_import_job_worker({'job_id': str(FIRST)}, time.monotonic()+60)
@@ -245,3 +246,4 @@ def test_child_owns_engine_storage_and_original_job_and_disposes(monkeypatch):
     assert process.call_args.args == (factory,) and process.call_args.kwargs == {'storage': storage, 'job_id': FIRST}
     assert result == {'job_id': str(FIRST), 'status': 'awaiting_confirmation', 'recovered': False}
     assert validate.call_count == engine.dispose.call_count == 1
+    assert compose.call_count == 1
