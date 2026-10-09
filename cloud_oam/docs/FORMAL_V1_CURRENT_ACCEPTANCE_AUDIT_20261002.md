@@ -11,9 +11,17 @@
 
 用户恢复安排为本人单独保管、已连接希捷移动硬盘，无第二名人员或第二副本。专用 100 MB AES-256 空映像已经本人改密并在自己的终端输入新密码成功打开；实际回读确认唯一目标映像、同一宗卷 UUID、Writable=false 与内核 ST_RDONLY。随后仅精确关闭该映像，外盘仍挂载，映像摘要前后不变。**空容器的本人密码解锁和只读挂载验证已通过**，回执为 `recovery-vault-01/manual-unlock-verified.json`；正式恢复材料尚未生成，正式封存、受控重启/离机恢复和 UAT 仍待独立验收。原 Edge 阿里云会话已恢复：北京时间 18:04:30 刷新 RAM 角色页后真实显示 3 个服务关联角色，没有 RSC 专用角色，`ConsoleNeedLogin` 已消失；该历史登录阻断不再有效。云端身份、私有 OSS 和短信仍分别待配置/验收。
 
-官方 OIDC template 三轮合成实验尚无模板运行通过证据，第三轮定位 `PUT /v1/sys/audit/template → HTTP 400`。锁定 OpenBao 2.7.1 源码与实验配置交叉核验，确认默认禁用 API 创建审计设备的守卫先于文件后端执行，并映射 HTTP 400；原运行错误正文未采集。下一候选改用独立 server JSON 声明式 audit，保留 unsafe 开关 false，移除 API enable 并要求只读审计列表/文件回读；运行证明仍待新证据。原三轮资源已精确清理，原六服务保持，不放宽权限。
+官方 OIDC template 三轮合成实验尚无模板运行通过证据，第三轮定位 `PUT /v1/sys/audit/template → HTTP 400`。锁定 OpenBao 2.7.1 源码与实验配置交叉核验，确认默认禁用 API 创建审计设备的守卫先于文件后端执行，并映射 HTTP 400；原运行错误正文未采集。后续候选 04 已改用独立 server JSON 声明式 audit，保留 unsafe 开关 false，移除 API enable 并要求只读审计列表/文件回读；尚无该阶段运行通过证据，启动结果见下文。原三轮资源已精确清理，原六服务保持，不放宽权限。
 
-候选 04 新增 19 项离线检查和 61 输入冻结双审已通过，但实际 Linux 续验 `64d47c8f1705` 在 server_start 等待就绪超时，26.822 秒、0 项通过，未到初始化/审计/模板阶段，当前根因未知。2 容器/5 卷/上传目录已精确清理，旧六服务保持；未自动第五次重试。当前 PG16 于北京时间 18:17:49 仍为 66 success / 5 failure / 4 running，没有新失败。RAM 的 OIDC 标签实际为空，云身份仍待建设；试点保持 not_ready。
+候选 04 新增 19 项离线检查和 61 输入冻结双审已通过，但实际 Linux 续验 `64d47c8f1705` 在 server_start 等待就绪超时，26.822 秒、0 项通过，未到初始化/审计/模板阶段。该次未保存足够启动错误，原始根因记录保持 unknown；不能用后续证据回填为当时已观测。2 容器/5 卷/上传目录已精确清理，旧六服务保持，未自动重放原尝试。
+
+后续固定 HCL 源码核对已发现配置缺陷：`v1.0.1-vault-7` 的 JSON flatten 将仅含 options 对象的 template 层继续压平，导致 audit 类型/路径层级不满足 OpenBao 校验；官方示例的 description 标量可阻止该层继续压平。独立 startup-only 诊断 `0403aa17a5bc` 随后真实失败终态：**20.134 秒、Bao exit 1、OOM=false、0 项通过**，捕获完整且未超限的非密分类为 `config_parse_audit=1`、`audit_type_missing=1`，socket/连接均为 ENOENT。2 容器、1 卷及上传目录已清理，原六服务保持、24 个冻结输入核验通过；没有初始化、解封、身份创建或 Agent 启动。回执 `experiment/startup-diagnostic/attempt-01/terminal-receipt.json`，SHA-256 `48afe3e4aa9c84372115e3ddfcde345e469ec83ca05e026cdcb9dca1a8f9ed80`。新诊断已确定运行失败类别，原 attempt-04 未采集错误正文的历史限制仍保留。
+
+仅补 description 标量后的独立 startup-only 验证 `07ce8a508e73` 已真实通过：**15.117 秒、exit 0、1 项通过**；seal-status 返回 HTTP 200，`initialized=false`、`sealed=true`、`versionMatches=true`，清理前 Bao 存活且 OOM=false。启动输出完整采集且未超限，37 个冻结输入稳定；2 个容器、1 个卷及上传目录精确清理，原六服务保持。没有初始化、解封、创建身份或启动 Agent。回执 `experiment/startup-fix/attempt-01/terminal-receipt.json`，SHA-256 `1eb009b865c52a52d68015bf6c4f1e8e919bb8b9f9b5445f3f7c3ad2210d999d`。此处仅验收配置修复后的启动与未初始化密封状态可达性；声明式审计实际注册、Identity、Agent template 和正式运行身份均未因此通过。该启动证明与后续模板链的独立结果分别验收。
+
+修正后的官方 Agent template 合成链已在真实 Linux 上通过：run `0f6c2982debd`，**90.209 秒、exit 0、14 项通过**。声明式审计实际注册、独立身份/最小 ACL、跨用途 403、JWT 签名/claims、最终 0440 文件及只读挂载、自然刷新/再认证、取令牌失败后的保留与同一令牌自然过期拒绝均有实际证据。两个用途各有 3 次成功登录，扣除 1 次人工基线后为 2 次 Agent 登录，各 4 次成功 GET；各观察到 5 对原子 rename。日志采集完整、未超限，无 JWT/已知合成秘密匹配，原文未保存。5 个容器、5 个卷及上传目录已清理，原六服务不变，88 个冻结输入保持。回执 `experiment/template-description-candidate/attempt-01/terminal-receipt.json`，SHA-256 `e7eed7ca260575aea792558d5653b87ddddf230fa2100f225b095601e43aba5e`。瞬时临时文件的 0600 模式没有采到，不得描述为已实测；正式投影读取守卫适配仍待完成。此为合成隔离证明，未配置正式 Bao/Agent 或真实 RAM/STS/OSS/PNVS，未生成正式恢复材料，试点仍为 not_ready。
+
+北京时间 **2026-10-09 19:29:50** 的 PG16 精确回读为 **67 success / 6 failure / 2 running**，run `37908563226` 仍为 `in_progress`：migrations 新近成功，inventory 新增失败，仅 static_safety (0)/(2) 尚未终态。新失败是直接耦合入库负例已被 0169 守卫拒绝，而测试仍只期待旧错误码；原日志有精确消息，23503 由未改动的固定 SQL 源码确认，不能说日志已直接打印 SQLSTATE。仅测试侧改为精确 `23503` + 完整 `diag.message_primary`，保留 raises、rollback 和事实回读。新增 **14 项 mock 聚焦通过、6.82 秒**，真实诊断插件 42 个阶段通过；冻结回执 `candidate-ci-2a49cbc/inventory-receipt-boundary-fix/freeze-receipt.json`（SHA-256 `977e737f03cd472e7cddf610054dfeadac8ed3dcd063a86fd8a2979c1ceade30`）已双审。没有重跑旧 inventory 全链或修改生产守卫；新候选真实 PG16 仍待验收。最新 CI 回读报告 `20261009T112943Z-bounded-readback-report.json` 的 SHA-256 为 `11bc15d5e0166d37d204786bfada903990a02f269ba9f2f6844d25ab0f3c989e`；不取消旧 run、不在其终态前推送。 RAM OIDC/私有 OSS 与短信仍待正式配置和验收。
 
 完整运行回执、失败保留、当前边界与下一步见 [Linux Agent 与上线条件接续](LINUX_AGENT_RELEASE_PROGRESS_20261009.md)。旧段落仅描述各自时点，不覆盖本节；不重跑已终态无关套件，不 reset/revert/丢弃已有工作，不以配置或局部通过替代正式部署验收。
 
@@ -33,7 +41,7 @@
 
 ## 2026-10-09 C2 与附件身份接续：仍未上线
 
-> **历史快照边界**：本节及其紧邻的早期部署/CI 记录是当时的只读观测，后文更新的当前树证据覆盖其中的旧计数和旧运行进度。当前验收判断以文末最新接续段落为准；历史快照不作为当前候选或发布证据。
+> **历史快照边界**：本节及其紧邻的早期部署/CI 记录是当时的只读观测，后续更新的当前树证据覆盖其中的旧计数和旧运行进度。当前验收判断以文首最新接续及其链接的运行回执为准；历史快照不作为当前候选或发布证据。
 
 **试点 MVP，不等同完整 V1；`not_ready`。** 本地已补联系人 v2/旧 v1 历史读取、认证 claim 分流及独立只读 pin reader、0181 前向 contact guard、显式 OSS OIDC 与真实 SDK 签名兼容修复。新变更仍未提交，生产 Settings/factory/readiness 的 OpenBao 接线和真实身份尚未完成。源码边界、逐项聚焦结果、首次失败与待办见 [C2/OSS 接续](C2_OSS_INTEGRATION_20261009.md)。
 

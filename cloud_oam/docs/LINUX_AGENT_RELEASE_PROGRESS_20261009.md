@@ -68,6 +68,10 @@ provider 接线独立复核未发现新增明确代码阻塞：启动先校验 D
 
 北京时间 18:17:49 再次有界回读仍为 66 success / 5 failure / 4 running，没有新增状态变化；不能据此断言剩余任务卡住或超时。最终全局结论仍待；快照 `candidate-ci-2a49cbc/20261009T101744Z-pg16.json` 与回读报告已保存，没有反复下载旧失败日志。
 
+北京时间 **2026-10-09 18:44:40** 的一次有界精确回读仍为 **66 success / 5 failure / 4 running**，run `37908563226` 为 `in_progress`；与 18:17 快照无 job 状态变化，没有新增失败，仍不能推断剩余任务卡死或超时。余下 migrations、inventory、static_safety (0)/(2) 尚未终态。原始快照 `candidate-ci-2a49cbc/20261009T104433Z-pg16.json`，有界报告 `20261009T104433Z-bounded-readback-report.json`（SHA-256 `97490a5b4cff2328236fe9effaff05e2901fe14c15f20b2d5be9e9fde9f31092`）绑定 `2a49cbc0f9d7715f492719affd8d659433ed9a6c`；没有重下旧日志、取消、重跑或推送，不替本地修复提交验收。
+
+北京时间 **2026-10-09 19:29:50** 的 PG16 精确回读为 **67 success / 6 failure / 2 running**，run `37908563226` 仍为 `in_progress`：migrations 新近成功，inventory 新增失败，仅 static_safety (0)/(2) 尚未终态。新失败是直接耦合入库负例已被 0169 守卫拒绝，而测试仍只期待旧错误码；原日志有精确消息，23503 由未改动的固定 SQL 源码确认，不能说日志已直接打印 SQLSTATE。仅测试侧改为精确 `23503` + 完整 `diag.message_primary`，保留 raises、rollback 和事实回读。新增 **14 项 mock 聚焦通过、6.82 秒**，真实诊断插件 42 个阶段通过；冻结回执 `candidate-ci-2a49cbc/inventory-receipt-boundary-fix/freeze-receipt.json`（SHA-256 `977e737f03cd472e7cddf610054dfeadac8ed3dcd063a86fd8a2979c1ceade30`）已双审。没有重跑旧 inventory 全链或修改生产守卫；新候选真实 PG16 仍待验收。最新 CI 回读报告 `20261009T112943Z-bounded-readback-report.json` 的 SHA-256 为 `11bc15d5e0166d37d204786bfada903990a02f269ba9f2f6844d25ab0f3c989e`；不取消旧 run、不在其终态前推送。
+
 GitHub 传输使用当前系统代理 `127.0.0.1:7890`。第一次 generic `http.proxy` 覆盖未生效，仓库旧 URL 专用代理 `11304` 优先而连接拒绝；精确回读确认远端未变后，使用单次 `http.https://github.com.proxy` 覆盖正常推送成功。未改变永久代理配置，后续仍须先核对当前有效代理。原失败和成功/远端 SHA 回执分别保留。
 
 ## 官方 Agent template 的独立有限实验
@@ -82,7 +86,19 @@ GitHub 传输使用当前系统代理 `127.0.0.1:7890`。第一次 generic `http
 
 三轮临时容器/卷和上传目录都已精确清理并独立回读，原六个服务的 ID、StartedAt、health 和 OOM 状态保持；各轮源摘要稳定，诊断文件均为空，合成秘密仅使用内存/私有管道/tmpfs。没有正式初始化、云端资源操作或第四次启动。实验源全部位于 ignored artifact，不修改产品配置；原 sink 的 19 项终态证明未重跑。完整收尾为 `artifacts/agent-template-oidc-review-20261009/experiment/outcome.md` 与 `bounded-outcome.json`（SHA-256 `526ec41a61dd0045503367421da81fd73d3a48bd6c0c9e1f867d09fdfc3ca111`）。正式 OIDC 投影、真实 RAM→STS→OSS/PNVS、短信/UAT 门禁仍未通过。
 
-候选 04 随后单次有界执行为 `64d47c8f1705`，**26.822 秒、exit 1、0 项通过**；停在 `server_start / server_deadline`，20 秒等待期未得到就绪回执，尚未进入初始化、声明式审计、身份或 Agent。没有保存足以判定根因的启动状态/错误正文，不能把它归因为配置解析或声称前一 API 400 已在运行中解决。2 个容器、5 个卷与上传目录都已精确清理，原六服务的 ID、StartedAt、health/OOM 前后一致，61 个冻结输入稳定。原三轮证据没有覆盖；本轮源与关闭回执保存于 `experiment/attempt-04/`，`terminal-receipt.json` SHA-256 `4ce24b9bd4a1754dd3cb5e46dbd48ee12231a93cabae0a743dfadff48758bb3a`。后续只读核对未发现可确定根因的新静态问题：新配置上传/hash/只读挂载/启动路径一致，二进制匹配原官方清单。当前缺少启动时的白名单容器退出/OOM 状态、UDS 元数据和连接 errno；detached Bao 的日志关闭，通用轮询吞并错误，不能从空 RPC 回执区分这些原因。最小诊断方案已存 `experiment/startup-diagnostic-plan-04.md`（SHA-256 `19f69f5b7e9c609532ef3f6a79b724e8955d720dd2ea04efdbb0030d85d91329`），后续仅到启动/seal-status，原始输出只在内存分类；不初始化/解封/建身份，不自动第五次启动，不扩权限或关闭审计。
+候选 04 随后单次有界执行为 `64d47c8f1705`，**26.822 秒、exit 1、0 项通过**；停在 `server_start / server_deadline`，20 秒等待期未得到就绪回执，尚未进入初始化、声明式审计、身份或 Agent。该次没有保存足以判定根因的启动状态/错误正文，原始根因记录保持 unknown；不能用后续证据回填为当时已观测配置解析错误，或声称前一 API 400 已在该次运行中解决。2 个容器、5 个卷与上传目录都已精确清理，原六服务的 ID、StartedAt、health/OOM 前后一致，61 个冻结输入稳定。原三轮证据没有覆盖；本轮源与关闭回执保存于 `experiment/attempt-04/`，`terminal-receipt.json` SHA-256 `4ce24b9bd4a1754dd3cb5e46dbd48ee12231a93cabae0a743dfadff48758bb3a`。截至该次初步只读核对，仅确认新配置上传/hash/只读挂载/启动路径一致、二进制匹配原官方清单，尚未发现可确定根因的新静态问题；此后发现的固定 HCL 缺陷及新诊断见下文。原 attempt-04 缺少启动时的白名单容器退出/OOM 状态、UDS 元数据和连接 errno；detached Bao 的日志关闭，通用轮询吞并错误，不能从空 RPC 回执区分这些原因。最小诊断方案已存 `experiment/startup-diagnostic-plan-04.md`（SHA-256 `19f69f5b7e9c609532ef3f6a79b724e8955d720dd2ea04efdbb0030d85d91329`）；当时仅准备后续启动/seal-status 诊断，不自动重放原尝试，不初始化/解封/建身份，不扩权限或关闭审计。
+
+后续对 OpenBao 锁定的 `github.com/hashicorp/hcl v1.0.1-vault-7`（commit `02db4972906a1b43a46e2ffb0d2aae2c71875d94`）继续只读核对，已经发现原审查遗漏的配置缺陷：JSON flatten 对值全部为对象的层继续压平，原 template 层仅含 options 对象，因而形成 `audit/file/template/options` 四级 keys；过滤 audit 后余下三级，不能满足 OpenBao `parseAuditDevices` 的两级类型/路径要求。官方示例的 description 标量会阻止 options 继续升格。六份固定来源及 Git blob 已核验，回执为 `experiment/startup-diagnostic/upstream/hcl-source-receipt.json`；未伪称执行了 Go parser 或验证整个模块归档。此新静态发现不改写原 attempt-04 未保存错误正文的事实。
+
+随后独立 startup-only 诊断 `0403aa17a5bc` 已取得真实失败终态：**20.134 秒、Bao exit 1、OOM=false、0 项通过**，固定错误分类 `config_parse_audit=1`、`audit_type_missing=1`，清理前 socket 不存在且连接为 ENOENT。启动输出采集完整、未超限，原始正文仅在内存分类，没有持久化；本次已确认运行失败类别，不能继续描述为尚无新静态问题或当前完全未知。2 个容器、1 个卷及上传目录精确清理，原六服务保持，24 个冻结输入核验通过；没有初始化、解封、创建身份或启动 Agent。新回执 `experiment/startup-diagnostic/attempt-01/terminal-receipt.json`，SHA-256 `48afe3e4aa9c84372115e3ddfcde345e469ec83ca05e026cdcb9dca1a8f9ed80`，与原 attempt-04 的历史回执分别保留。
+
+随后仅在 template 审计配置补 description 标量，保持 unsafe 开关 false、原权限/资源限制和审计配置；独立 startup-only 验证 `07ce8a508e73` 已真实通过：**15.117 秒、exit 0、1 项通过**。seal-status 返回 HTTP 200，`initialized=false`、`sealed=true`、`versionMatches=true`，清理前 Bao 存活且 OOM=false。启动输出采集完整、未超限，37 个冻结输入稳定；2 个容器、1 个卷及上传目录精确清理，原六服务保持。没有初始化、解封、创建身份或启动 Agent。新回执 `experiment/startup-fix/attempt-01/terminal-receipt.json`，SHA-256 `1eb009b865c52a52d68015bf6c4f1e8e919bb8b9f9b5445f3f7c3ad2210d999d`；原失败回执保留。
+
+上述 startup-only 的 1 项检查仅验收启动；后续模板链已在新的独立合成实例中完成，结果如下。
+
+修正后的官方 Agent template 合成链已在真实 Linux 上通过：run `0f6c2982debd`，**90.209 秒、exit 0、14 项通过**。声明式审计实际注册、独立身份/最小 ACL、跨用途 403、JWT 签名/claims、最终 0440 文件及只读挂载、自然刷新/再认证、取令牌失败后的保留与同一令牌自然过期拒绝均有实际证据。两个用途各有 3 次成功登录，扣除 1 次人工基线后为 2 次 Agent 登录，各 4 次成功 GET；各观察到 5 对原子 rename。日志采集完整、未超限，无 JWT/已知合成秘密匹配，原文未保存。5 个容器、5 个卷及上传目录已清理，原六服务不变，88 个冻结输入保持。回执 `experiment/template-description-candidate/attempt-01/terminal-receipt.json`，SHA-256 `e7eed7ca260575aea792558d5653b87ddddf230fa2100f225b095601e43aba5e`。瞬时临时文件的 0600 模式没有采到，不得描述为已实测；正式投影读取守卫适配仍待完成。此为合成隔离证明，未配置正式 Bao/Agent 或真实 RAM/STS/OSS/PNVS，未生成正式恢复材料，试点仍为 not_ready。
+
+为保证本次验收可靠，候选另补两项验证脚本缺口：日志读取/关闭异常必须阻断通过，审计响应存在 data.error 或缺少有效 token 字段不得计为 GET 成功。固定源码确认 EntityID 不做 HMAC，data.token 可为 HMAC 字符串，只检查其存在性而不输出值。13 项第一阶段离线证据原样保留，第二阶段仅运行新增审计反例和受影响来源绑定的 23 项检查；两者均不冒充实际 Linux 的 14 项结果，旧终态套件没有重跑。
 
 ## 用户恢复安排与现场依赖
 
@@ -116,8 +132,8 @@ GitHub 传输使用当前系统代理 `127.0.0.1:7890`。第一次 generic `http
 
 ## 后续执行顺序
 
-1. 已推送的 `2a49cbc` 客户端及 0181 hosted leg 已成功；收齐该候选 PG16 全局终态，完成新增 loss 测试守卫修复的聚焦验证和独立审查。旧 run 结束后再推送下一候选，不以局部通过放行。
-2. 空加密恢复容器的本人解锁和只读挂载已验收；先解决并验收 Bao 启动及正式运行配置，再初始化正式 Bao、登记恢复材料及两用途 wrapped registry/pins/运行身份，完成封存、受控重启和离机恢复演练。
+1. 已推送的 `2a49cbc` 客户端及 0181 hosted leg 已成功；保留本地 `122e5b8` 的 24+1 项直接证据、本批库存修复的 14 项 mock 与各自双审，收齐旧候选 PG16 全局终态后再推送下一候选，验收新 SHA 的独立 hosted 结果，不重跑无关终态检查或以局部通过放行。
+2. 空加密恢复容器的本人解锁和只读挂载已验收；保留已通过的 startup-only 和合成 template 证据，完成正式投影读取守卫适配与正式运行配置验收，再初始化正式 Bao、登记恢复材料及两用途 wrapped registry/pins/运行身份，完成封存、受控重启和离机恢复演练。
 3. 利用已恢复的原 Edge 阿里云会话核验或配置公开 issuer/JWKS、精确信任的 RAM OIDC、独立 PNVS/OSS 角色和私有 Bucket，实测身份回读、跨窗口刷新及拒绝边界。配置解析不是云身份通过。
 4. 最后完成真实 SMS-only 登录、正式人员唯一映射、分角色/真机主链 UAT、附件私有访问、DB/密钥/附件恢复及发布回滚，证据绑定后执行 prepare/start 和域名切换。
 

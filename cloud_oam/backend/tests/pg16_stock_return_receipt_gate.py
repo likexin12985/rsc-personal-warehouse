@@ -262,9 +262,11 @@ def assert_receipt_sql_rejections(api_engine,candidate,kind):
                 db.add(InboundOrder(id=uuid4(),receipt_id=result.receipt_id,inbound_no='SYNTHETIC-INBOUND-'+uuid4().hex,status='pending',
                     target_location_id=context.package.target_location_id,target_person_id=context.actor.person_id))
                 _checkpoint(db)
-            # The existing 0087 inbound boundary may reject first; either path
-            # must block the attempted coupling before any posting exists.
-            assert getattr(rejected.value.orig,'sqlstate',None) in {'23514','P0001'}
+            # At the current migration head the 0169 BEFORE barrier rejects
+            # this unsupported receipt root before the older inbound boundary.
+            assert getattr(rejected.value.orig,'sqlstate',None)=='23503'
+            assert getattr(getattr(rejected.value.orig,'diag',None),'message_primary',None)==(
+                '0169 fulfillment request reference missing')
         finally:db.rollback()
     assert receipt_snapshot(api_engine)==before
     print(f'PG16 {kind} receipt immutable facts and unsupported direct inbound rejection PASS',flush=True)
