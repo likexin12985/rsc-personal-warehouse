@@ -57,13 +57,15 @@ def candidate():
 def test_same_ram_provider_binds_separate_roles_entities_audiences_and_live_directories(monkeypatch):
     value = candidate()
     # No runtime access is needed to validate these public declarations.
-    monkeypatch.setattr(Path, 'read_bytes', lambda *_: pytest.fail('unexpected file read'))
-    monkeypatch.setattr(Path, 'read_text', lambda *_: pytest.fail('unexpected file read'))
-    assert all(preflight.pnvs_oidc_configuration_checks(value).values())
-    assert all(probe.configuration(value['services']['api']['environment']).values())
-    specs = release.live_bind_specs(value)
-    assert {row['kind'] for row in specs.values()} == {'oss_oidc', 'pnvs_oidc'}
-    assert specs['api', '/run/synthetic/pnvs']['owner'] == 41005
+    # Restore shared pathlib methods before pytest's resource-reporting hooks.
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, 'read_bytes', lambda *_: pytest.fail('unexpected file read'))
+        patch.setattr(Path, 'read_text', lambda *_: pytest.fail('unexpected file read'))
+        assert all(preflight.pnvs_oidc_configuration_checks(value).values())
+        assert all(probe.configuration(value['services']['api']['environment']).values())
+        specs = release.live_bind_specs(value)
+        assert {row['kind'] for row in specs.values()} == {'oss_oidc', 'pnvs_oidc'}
+        assert specs['api', '/run/synthetic/pnvs']['owner'] == 41005
 
 
 @pytest.mark.parametrize('key', preflight.PNVS_STATIC_FIELDS)

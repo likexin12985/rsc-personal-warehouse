@@ -74,6 +74,7 @@ def test_postgresql16_stock_loss_release_gate():
             completed = gate._run_alembic(action, revision, expect_success=expected is None)
             if expected:
                 assert expected in completed.stdout + completed.stderr, label
+            return completed
 
         result = run(
             engines, tracking=tracking, migrate=migrate,

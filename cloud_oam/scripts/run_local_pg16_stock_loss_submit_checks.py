@@ -33,11 +33,12 @@ def main(argv=None):
                     OAM_DATABASE_EXPECTED_MIGRATION_ROLE='star_oam_migrator',OAM_DATABASE_EXPECTED_RUNTIME_ROLE='star_oam_api')
                 def migrate(label,action,revision,expected=None):
                     path=directory/(label+'.log')
-                    with path.open('wb') as log:
-                        result=subprocess.run([sys.executable,'-m','alembic','-c','alembic.ini',action,revision],
-                            cwd=CLOUD,env=environment,stdout=log,stderr=subprocess.STDOUT,timeout=600)
+                    result=subprocess.run([sys.executable,'-m','alembic','-c','alembic.ini',action,revision],
+                        cwd=CLOUD,env=environment,capture_output=True,text=True,timeout=600)
+                    path.write_text(result.stdout+result.stderr)
                     if expected: assert result.returncode!=0 and expected in path.read_text(),label
                     else: assert result.returncode==0,label
+                    return result
                 def provision():
                     command=[str(Path(args.postgres_bin).resolve()/'psql'),'-X','-w','--set=ON_ERROR_STOP=1',
                         '--dbname',url.replace('postgresql+psycopg:','postgresql:',1),'-v','edge_role=edge_inbox']
