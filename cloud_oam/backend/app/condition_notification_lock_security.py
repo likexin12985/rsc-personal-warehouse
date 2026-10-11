@@ -15,7 +15,7 @@ from pathlib import Path
 REVISION = "20261231_0182"
 SIGNATURE = "rsc_condition_decision_seal_lock()"
 LEGACY_SHA256 = "3e954671d1f03deb037d6cf7c70ce7f171e12a44c2402cb44e2c30c1d2a44d7c"
-SUCCESSOR_SHA256 = "5413f2f5b383d9754cfd326a70d18e988c94cf2f94eb21ebc2ba9080dfab6278"
+SUCCESSOR_SHA256 = "cbbbb786f5a92b9e463b1334d0a60a1842eb145ec70fa78bcaf15a2b831f2a13"
 
 # Keep this fragment byte-for-byte identical to the reviewed successor
 # migration.  The deferred fence remains broad; only ordinary notification
@@ -34,7 +34,7 @@ SUCCESSOR_FRAGMENT = """    -- Notification projections remain under the deferre
           OR COALESCE(COALESCE(next_row->>'event_type',prior->>'event_type') LIKE 'stock_condition.%',false)
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'schema_version',prior->'payload_jsonb'->>'schema_version')='condition_result/1',false)
           OR COALESCE(COALESCE(next_row->>'action',prior->>'action')='seal_condition_decision_request',false)
-          OR COALESCE(COALESCE(next_row->>'request_id',prior->'request_id') LIKE 'condition-decision-seal:%',false)
+          OR COALESCE(COALESCE(next_row->>'request_id',prior->>'request_id') LIKE 'condition-decision-seal:%',false)
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'aggregate_type',prior->'payload_jsonb'->>'aggregate_type')='stock_condition_decision_seal',false)
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'action',prior->'payload_jsonb'->>'action')='seal_condition_decision_request',false)
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id') LIKE 'condition-decision-seal:%',false)
