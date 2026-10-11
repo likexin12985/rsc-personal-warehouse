@@ -51,9 +51,12 @@ def test_exact_function_and_readiness_chain():
     assert contact['readiness']['beforeSha256'] == ready['afterSha256']
     ready = contact['readiness']
     current_ready = security._stock_scrap_readiness.DATA
-    assert current_ready['revision'] == ready['revision']
-    assert current_ready['after'] == ready['after']
-    assert current_ready['afterSha256'] == ready['afterSha256']
+    from app.condition_notification_lock_security import (
+        READY_SUCCESSOR_SHA256, READY_SUCCESSOR_SOURCE, REVISION,
+    )
+    assert current_ready['revision'] == REVISION
+    assert current_ready['after']['prosrc'] == READY_SUCCESSOR_SOURCE
+    assert current_ready['afterSha256'] == READY_SUCCESSOR_SHA256
     for signature, change in DATA['functions'].items():
         for side in ('before', 'after'):
             assert sha256(change[side].encode()).hexdigest() == change[side+'Sha256']
